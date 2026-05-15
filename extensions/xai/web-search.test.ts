@@ -10,6 +10,34 @@ import { wrapXaiWebSearchError } from "./src/web-search-shared.js";
 import { __testing } from "./test-api.js";
 import { createXaiWebSearchProvider } from "./web-search.js";
 
+vi.mock("openclaw/plugin-sdk/provider-web-search", async (importOriginal) => {
+  const original = await importOriginal<typeof import("openclaw/plugin-sdk/provider-web-search")>();
+  return {
+    ...original,
+    postTrustedWebToolsJson: async (
+      params: {
+        url: string;
+        apiKey: string;
+        body: Record<string, unknown>;
+        extraHeaders?: Record<string, string>;
+      },
+      parseResponse: (response: Response) => Promise<unknown>,
+    ) => {
+      const response = await globalThis.fetch(params.url, {
+        method: "POST",
+        headers: {
+          ...params.extraHeaders,
+          Accept: "application/json",
+          Authorization: `Bearer ${params.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(params.body),
+      });
+      return await parseResponse(response);
+    },
+  };
+});
+
 const {
   extractXaiWebSearchContent,
   resolveXaiInlineCitations,
@@ -349,10 +377,46 @@ describe("xai web search config resolution", () => {
       },
       searchConfig: { provider: "grok" },
     });
+    if (!tool) {
+      throw new Error("Expected xAI web search tool");
+    }
 
-    await tool?.execute({ query: "OpenClaw Grok proxy test" });
+    await tool.execute({ query: "OpenClaw Grok proxy test" });
 
     expect(firstFetchUrl(mockFetch)).toBe("https://api.x.ai/proxy/v1/responses");
+  });
+
+  it("reports malformed xAI web search JSON as a provider error", async () => {
+    const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.reject(new SyntaxError("Unexpected token")),
+      } as Response),
+    );
+    global.fetch = withFetchPreconnect(mockFetch);
+    const provider = createXaiWebSearchProvider();
+    const tool = provider.createTool({
+      config: {
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                webSearch: {
+                  apiKey: "xai-test-key", // pragma: allowlist secret
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    await expect(tool.execute({ query: "OpenClaw" })).rejects.toThrow(
+      "xAI web search failed: malformed JSON response",
+    );
   });
 
   it("normalizes deprecated grok 4.20 beta model ids to GA ids", () => {

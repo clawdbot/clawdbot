@@ -502,6 +502,22 @@ describe("discordPlugin outbound", () => {
     expect(runtimeMonitorDiscordProvider).not.toHaveBeenCalled();
   });
 
+  it("fails loudly before provider startup when a token SecretRef is configured but unresolved", async () => {
+    const cfg = {
+      channels: {
+        discord: {
+          token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    await expect(startDiscordAccount(cfg)).rejects.toThrow(
+      'Discord bot token configured for account "default" is unavailable',
+    );
+    expect(probeDiscordMock).not.toHaveBeenCalled();
+    expect(monitorDiscordProviderMock).not.toHaveBeenCalled();
+  });
+
   it("does not block Discord monitor startup on the startup probe", async () => {
     let resolveProbe:
       | ((value: {

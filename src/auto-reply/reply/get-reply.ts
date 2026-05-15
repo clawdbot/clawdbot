@@ -217,16 +217,17 @@ export async function getReplyFromConfig(
     cfg,
     isFastTestEnv,
   });
+  const finalized = finalizeInboundContext(ctx);
   const targetSessionKey =
-    ctx.CommandSource === "native"
-      ? normalizeOptionalString(ctx.CommandTargetSessionKey)
+    finalized.CommandSource === "native"
+      ? normalizeOptionalString(finalized.CommandTargetSessionKey)
       : undefined;
-  const agentSessionKey = targetSessionKey || ctx.SessionKey;
+  const agentSessionKey = targetSessionKey || finalized.SessionKey;
   const traceAttributes = {
-    surface: normalizeOptionalString(ctx.Surface ?? ctx.Provider) ?? "unknown",
+    surface: normalizeOptionalString(finalized.Surface ?? finalized.Provider) ?? "unknown",
     hasSessionKey: Boolean(agentSessionKey),
     isHeartbeat: opts?.isHeartbeat === true,
-    hasMedia: hasInboundMedia(ctx),
+    hasMedia: hasInboundMedia(finalized),
   };
   const traceGetReplyPhase = <T>(name: string, run: () => Promise<T> | T): Promise<T> =>
     measureDiagnosticsTimelineSpan(name, run, {
@@ -291,7 +292,6 @@ export async function getReplyFromConfig(
   });
   opts?.onTypingController?.(typing);
 
-  const finalized = finalizeInboundContext(ctx);
   const nativeSlashCommandFastReply = await traceGetReplyPhase(
     "reply.native_slash_command_fast_path",
     () =>

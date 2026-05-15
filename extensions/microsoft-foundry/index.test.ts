@@ -235,6 +235,19 @@ function mockAzureCliToken(params: { accessToken: string; expiresInMs: number; d
   );
 }
 
+function mockAzureCliTokenRaw(stdout: string) {
+  execFileMock.mockImplementationOnce(
+    (
+      _file: unknown,
+      _args: unknown,
+      _options: unknown,
+      callback: (error: Error | null, stdout: string, stderr: string) => void,
+    ) => {
+      callback(null, stdout, "");
+    },
+  );
+}
+
 function mockAzureCliLoginFailure(delayMs?: number) {
   execFileMock.mockImplementationOnce(
     (
@@ -304,6 +317,14 @@ describe("microsoft-foundry plugin", () => {
     });
 
     expect(config.auth?.order?.["microsoft-foundry"]).toEqual(["microsoft-foundry:default"]);
+  });
+
+  it("reports malformed Azure CLI token JSON with an owned error", async () => {
+    mockAzureCliTokenRaw("{not json");
+
+    await expect(getAccessTokenResultAsync()).rejects.toThrow(
+      "Azure CLI returned malformed access token JSON.",
+    );
   });
 
   it("fails clearly when the selected Azure subscription is not in the enabled list", async () => {

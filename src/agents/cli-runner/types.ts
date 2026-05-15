@@ -8,7 +8,9 @@ import type { CliBackendConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
+import type { BootstrapContextMode } from "../bootstrap-files.js";
 import type { ResolvedCliBackend } from "../cli-backends.js";
+import type { ContextWindowInfo } from "../context-window-guard.js";
 import type {
   CurrentTurnPromptContext,
   EmbeddedRunTrigger,
@@ -48,6 +50,8 @@ export type RunCliAgentParams = {
   authProfileId?: string;
   bootstrapPromptWarningSignaturesSeen?: string[];
   bootstrapPromptWarningSignature?: string;
+  bootstrapContextMode?: BootstrapContextMode;
+  bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
   skillsSnapshot?: SkillSnapshot;
@@ -111,6 +115,7 @@ export type PreparedCliRunContext = {
   reusableCliSession: CliReusableSession;
   modelId: string;
   normalizedModel: string;
+  contextWindowInfo?: ContextWindowInfo;
   systemPrompt: string;
   systemPromptReport: SessionSystemPromptReport;
   bootstrapPromptWarningLines: string[];

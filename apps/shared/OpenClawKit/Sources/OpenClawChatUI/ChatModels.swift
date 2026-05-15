@@ -144,6 +144,7 @@ public struct OpenClawChatMessage: Codable, Identifiable, Sendable {
     public let toolName: String?
     public let usage: OpenClawChatUsage?
     public let stopReason: String?
+    public let errorMessage: String?
 
     enum CodingKeys: String, CodingKey {
         case role
@@ -155,6 +156,7 @@ public struct OpenClawChatMessage: Codable, Identifiable, Sendable {
         case tool_name
         case usage
         case stopReason
+        case errorMessage
     }
 
     public init(
@@ -165,7 +167,8 @@ public struct OpenClawChatMessage: Codable, Identifiable, Sendable {
         toolCallId: String? = nil,
         toolName: String? = nil,
         usage: OpenClawChatUsage? = nil,
-        stopReason: String? = nil)
+        stopReason: String? = nil,
+        errorMessage: String? = nil)
     {
         self.id = id
         self.role = role
@@ -175,20 +178,30 @@ public struct OpenClawChatMessage: Codable, Identifiable, Sendable {
         self.toolName = toolName
         self.usage = usage
         self.stopReason = stopReason
+        self.errorMessage = errorMessage
     }
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.role = try container.decode(String.self, forKey: .role)
-        self.timestamp = try container.decodeIfPresent(Double.self, forKey: .timestamp)
-        self.toolCallId =
+        let decodedRole = try container.decode(String.self, forKey: .role)
+        let decodedTimestamp = try container.decodeIfPresent(Double.self, forKey: .timestamp)
+        let decodedToolCallId =
             try container.decodeIfPresent(String.self, forKey: .toolCallId) ??
             container.decodeIfPresent(String.self, forKey: .tool_call_id)
-        self.toolName =
+        let decodedToolName =
             try container.decodeIfPresent(String.self, forKey: .toolName) ??
             container.decodeIfPresent(String.self, forKey: .tool_name)
-        self.usage = try container.decodeIfPresent(OpenClawChatUsage.self, forKey: .usage)
-        self.stopReason = try container.decodeIfPresent(String.self, forKey: .stopReason)
+        let decodedUsage = try container.decodeIfPresent(OpenClawChatUsage.self, forKey: .usage)
+        let decodedStopReason = try container.decodeIfPresent(String.self, forKey: .stopReason)
+        let decodedErrorMessage = try container.decodeIfPresent(String.self, forKey: .errorMessage)
+
+        self.role = decodedRole
+        self.timestamp = decodedTimestamp
+        self.toolCallId = decodedToolCallId
+        self.toolName = decodedToolName
+        self.usage = decodedUsage
+        self.stopReason = decodedStopReason
+        self.errorMessage = decodedErrorMessage
 
         if let decoded = try? container.decode([OpenClawChatMessageContent].self, forKey: .content) {
             self.content = decoded
@@ -216,6 +229,41 @@ public struct OpenClawChatMessage: Codable, Identifiable, Sendable {
         self.content = []
     }
 
+    static func displayText(
+        contentText: String,
+        role: String,
+        stopReason: String?,
+        errorMessage: String?) -> String
+    {
+        let text = contentText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let errorText = Self.errorDisplayText(
+            role: role,
+            stopReason: stopReason,
+            errorMessage: errorMessage)
+        else {
+            return text
+        }
+        if text.isEmpty || text == Self.streamErrorFallbackText {
+            return errorText
+        }
+        return text
+    }
+
+    static func errorDisplayText(role: String, stopReason: String?, errorMessage: String?) -> String? {
+        let normalizedRole = role.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalizedStopReason = stopReason?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard normalizedRole == "assistant",
+              normalizedStopReason == "error",
+              let text = errorMessage?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !text.isEmpty
+        else {
+            return nil
+        }
+        return text
+    }
+
+    private static let streamErrorFallbackText = "[assistant turn failed before producing content]"
+
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(self.role, forKey: .role)
@@ -224,6 +272,7 @@ public struct OpenClawChatMessage: Codable, Identifiable, Sendable {
         try container.encodeIfPresent(self.toolName, forKey: .toolName)
         try container.encodeIfPresent(self.usage, forKey: .usage)
         try container.encodeIfPresent(self.stopReason, forKey: .stopReason)
+        try container.encodeIfPresent(self.errorMessage, forKey: .errorMessage)
         try container.encode(self.content, forKey: .content)
     }
 }

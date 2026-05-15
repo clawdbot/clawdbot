@@ -656,13 +656,17 @@ export function buildStatusMessage(args: StatusArgs): string {
     typeof args.runtimeContextTokens === "number" && args.runtimeContextTokens > 0
       ? args.runtimeContextTokens
       : undefined;
+  const resolvedActiveContextTokens = resolveContextTokensForModel({
+    cfg: contextConfig,
+    ...(contextLookupProvider ? { provider: contextLookupProvider } : {}),
+    model: contextLookupModel,
+    allowAsyncLoad: false,
+  });
   const activeContextTokens =
-    resolveContextTokensForModel({
-      cfg: contextConfig,
-      ...(contextLookupProvider ? { provider: contextLookupProvider } : {}),
-      model: contextLookupModel,
-      allowAsyncLoad: false,
-    }) ?? explicitRuntimeContextTokens;
+    typeof explicitRuntimeContextTokens === "number" &&
+    typeof resolvedActiveContextTokens === "number"
+      ? Math.min(explicitRuntimeContextTokens, resolvedActiveContextTokens)
+      : (explicitRuntimeContextTokens ?? resolvedActiveContextTokens);
   const channelModelNote = resolveChannelModelNote({
     config: args.config,
     entry,
@@ -674,6 +678,10 @@ export function buildStatusMessage(args: StatusArgs): string {
     typeof entry?.contextTokens === "number" && entry.contextTokens > 0
       ? entry.contextTokens
       : undefined;
+  const cappedPersistedContextTokens =
+    typeof persistedContextTokens === "number" && typeof activeContextTokens === "number"
+      ? Math.min(persistedContextTokens, activeContextTokens)
+      : persistedContextTokens;
   const agentContextTokens =
     typeof args.agent?.contextTokens === "number" && args.agent.contextTokens > 0
       ? args.agent.contextTokens
@@ -750,7 +758,7 @@ export function buildStatusMessage(args: StatusArgs): string {
         model: contextLookupModel,
         contextTokensOverride:
           channelOverrideContextTokens ??
-          persistedContextTokens ??
+          cappedPersistedContextTokens ??
           cappedConfiguredContextTokens ??
           cappedAgentContextTokens ??
           explicitRuntimeContextTokens,

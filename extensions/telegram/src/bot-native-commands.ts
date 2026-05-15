@@ -407,6 +407,13 @@ export type RegisterTelegramHandlerParams = {
   allowFrom?: Array<string | number>;
   groupAllowFrom?: Array<string | number>;
   resolveGroupPolicy: (chatId: string | number) => ChannelGroupPolicy;
+  resolveGroupActivation: (params: {
+    chatId: string | number;
+    agentId?: string;
+    messageThreadId?: number;
+    sessionKey?: string;
+  }) => boolean | undefined;
+  resolveGroupRequireMention: (chatId: string | number) => boolean;
   resolveTelegramGroupConfig: (
     chatId: string | number,
     messageThreadId?: number,
@@ -732,7 +739,7 @@ export const registerTelegramNativeCommands = ({
   const pluginCommandSpecs =
     (
       telegramDeps.getPluginCommandSpecs ?? defaultTelegramNativeCommandDeps.getPluginCommandSpecs
-    )?.("telegram") ?? [];
+    )?.("telegram", { config: cfg }) ?? [];
   const existingCommands = new Set(
     [
       ...nativeCommands.map((command) => normalizeTelegramCommandName(command.name)),
@@ -1156,6 +1163,12 @@ export const registerTelegramNativeCommands = ({
           Timestamp: msg.date ? msg.date * 1000 : undefined,
           WasMentioned: true,
           CommandAuthorized: commandAuthorized,
+          CommandTurn: {
+            kind: "native" as const,
+            source: "native" as const,
+            authorized: commandAuthorized,
+            body: prompt,
+          },
           CommandSource: "native" as const,
           SessionKey: commandSessionKey,
           AccountId: route.accountId,

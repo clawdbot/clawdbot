@@ -71,7 +71,7 @@ function loadAgentModelIds(): string[] {
 }
 
 function resolveRequestPath(req: IncomingMessage): string {
-  return new URL(req.url ?? "/", `http://${req.headers.host || "localhost"}`).pathname;
+  return new URL(req.url ?? "/", "http://localhost").pathname;
 }
 
 export async function handleOpenAiModelsHttpRequest(

@@ -46,7 +46,12 @@ function decodeExportTrajectoryRequest(encoded: string): Partial<ExportTrajector
   if (!ENCODED_EXPORT_REQUEST_RE.test(trimmed)) {
     throw new Error("Encoded trajectory export request is invalid");
   }
-  const decoded = JSON.parse(Buffer.from(trimmed, "base64url").toString("utf8")) as unknown;
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(Buffer.from(trimmed, "base64url").toString("utf8")) as unknown;
+  } catch {
+    throw new Error("Encoded trajectory export request is invalid JSON");
+  }
   if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) {
     throw new Error("Encoded trajectory export request must be a JSON object");
   }

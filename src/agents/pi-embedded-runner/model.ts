@@ -508,10 +508,12 @@ function mergeConfiguredRuntimeModelParams(params: {
   provider: string;
   modelId: string;
   discoveredParams?: unknown;
+  providerParams?: unknown;
   configuredParams?: unknown;
 }): Record<string, unknown> | undefined {
   return mergeModelParams(
     readModelParams(params.discoveredParams),
+    readModelParams(params.providerParams),
     findConfiguredAgentModelParams({
       cfg: params.cfg,
       provider: params.provider,
@@ -569,6 +571,7 @@ function applyConfiguredProviderOverrides(params: {
   const configuredHeaders = sanitizeModelHeaders(configuredModel?.headers, {
     stripSecretRefMarkers: true,
   });
+  const providerParams = readModelParams(providerConfig.params);
   if (
     !configuredModel &&
     !providerConfig.baseUrl &&
@@ -579,6 +582,7 @@ function applyConfiguredProviderOverrides(params: {
     requestTimeoutMs === undefined &&
     !providerHeaders &&
     !providerRequest &&
+    !providerParams &&
     !providerConfig.localService
   ) {
     const resolvedParams = mergeModelParams(
@@ -594,6 +598,7 @@ function applyConfiguredProviderOverrides(params: {
   }
   const resolvedParams = mergeModelParams(
     readModelParams(discoveredModel.params),
+    providerParams,
     defaultModelParams,
     readModelParams(configuredModel?.params),
   );
@@ -695,6 +700,7 @@ function resolveExplicitModelWithRegistry(params: {
       cfg,
       provider,
       modelId,
+      providerParams: providerConfig?.params,
       configuredParams: inlineMatch.params,
     });
     return {
@@ -758,6 +764,7 @@ function resolveExplicitModelWithRegistry(params: {
       cfg,
       provider,
       modelId,
+      providerParams: providerConfig?.params,
       configuredParams: fallbackInlineMatch.params,
     });
     return {
@@ -860,6 +867,7 @@ function resolveConfiguredFallbackModel(params: {
     cfg,
     provider,
     modelId,
+    providerParams: providerConfig?.params,
     configuredParams: configuredModel?.params,
   });
   if (!providerConfig && !modelId.startsWith("mock-")) {

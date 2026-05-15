@@ -22,9 +22,14 @@ export const LIVE_CACHE_TEST_ENABLED =
 const DEFAULT_HEARTBEAT_MS = 20_000;
 const DEFAULT_TIMEOUT_MS = 90_000;
 
-type LiveResolvedModel = {
+export type LiveResolvedModel = {
   apiKey: string;
   model: Model<Api>;
+};
+
+export type LiveResolvedModelPool = {
+  apiKeys: string[];
+  fixture: LiveResolvedModel;
 };
 
 function toInt(value: string | undefined, fallback: number): number {
@@ -161,12 +166,12 @@ export function computeCacheHitRate(usage: {
   return cacheRead / totalPrompt;
 }
 
-export async function resolveLiveDirectModel(params: {
+export async function resolveLiveDirectModelPool(params: {
   provider: "anthropic" | "openai";
   api: "anthropic-messages" | "openai-responses";
   envVar: string;
   preferredModelIds: readonly string[];
-}): Promise<LiveResolvedModel> {
+}): Promise<LiveResolvedModelPool> {
   const liveKeys = collectProviderApiKeys(params.provider);
   const rawModel = process.env[params.envVar]?.trim();
   const parsed = rawModel ? parseModelRef(rawModel, params.provider) : null;
@@ -187,8 +192,11 @@ export async function resolveLiveDirectModel(params: {
     }
     logLiveCache(`resolved ${params.provider} model ${selectedModel.id} from live env key`);
     return {
-      model: selectedModel,
-      apiKey: liveKeys[0] ?? "",
+      apiKeys: liveKeys,
+      fixture: {
+        model: selectedModel,
+        apiKey: liveKeys[0] ?? "",
+      },
     };
   }
 
@@ -235,7 +243,23 @@ export async function resolveLiveDirectModel(params: {
     `resolved ${params.provider} model ${resolvedModel.id} from configured auth storage`,
   );
   return {
-    model: resolvedModel,
-    apiKey,
+    apiKeys: [apiKey],
+    fixture: {
+      model: resolvedModel,
+      apiKey,
+    },
   };
+}
+
+export async function resolveLiveDirectModel(
+  params: Parameters<typeof resolveLiveDirectModelPool>[0],
+): Promise<LiveResolvedModel> {
+  return (await resolveLiveDirectModelPool(params)).fixture;
+}
+
+export function withLiveDirectModelApiKey(
+  fixture: LiveResolvedModel,
+  apiKey: string,
+): LiveResolvedModel {
+  return { ...fixture, apiKey };
 }

@@ -42,7 +42,7 @@ Prove the touched surface first. Do not reflexively run the whole suite.
   `pnpm test*`, `pnpm check*`, `pnpm crabbox:run`, or `scripts/committer` until
   you have verified pnpm will not reconcile or reinstall dependencies. Use
   `node scripts/run-vitest.mjs` for tiny local proof, `node
-  scripts/crabbox-wrapper.mjs` for Testbox, and `git commit --no-verify` only
+scripts/crabbox-wrapper.mjs` for Testbox, and `git commit --no-verify` only
   after the relevant remote or node-wrapper proof is already clean.
 - For Blacksmith Testbox proof, use Crabbox first. `pnpm crabbox:run -- --provider
 blacksmith-testbox --timing-json -- <command...>` warms, claims, syncs, runs,

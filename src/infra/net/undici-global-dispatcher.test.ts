@@ -164,6 +164,7 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
     expect(next.options).toEqual({
       bodyTimeout: 1_900_000,
       headersTimeout: 1_900_000,
+      allowH2: false,
       connect: {
         autoSelectFamily: false,
         autoSelectFamilyAttemptTimeout: 300,
@@ -184,6 +185,7 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
     expect(next).toBeInstanceOf(EnvHttpProxyAgent);
     expect(next.options?.bodyTimeout).toBe(DEFAULT_UNDICI_STREAM_TIMEOUT_MS);
     expect(next.options?.headersTimeout).toBe(DEFAULT_UNDICI_STREAM_TIMEOUT_MS);
+    expect(next.options?.allowH2).toBe(false);
     expect(next.options?.connect).toEqual({
       autoSelectFamily: false,
       autoSelectFamilyAttemptTimeout: 300,
@@ -207,6 +209,7 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
     expect(next.options?.httpsProxy).toBe("socks5://proxy.test:1080");
     expect(next.options?.bodyTimeout).toBe(DEFAULT_UNDICI_STREAM_TIMEOUT_MS);
     expect(next.options?.headersTimeout).toBe(DEFAULT_UNDICI_STREAM_TIMEOUT_MS);
+    expect(next.options?.allowH2).toBe(false);
   });
 
   it("records timeout bridge but does not override unsupported custom proxy dispatcher types", () => {
@@ -281,6 +284,7 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
       autoSelectFamily: false,
       autoSelectFamilyAttemptTimeout: 300,
     });
+    expect(next.options?.allowH2).toBe(false);
   });
 });
 
@@ -299,7 +303,9 @@ describe("ensureGlobalUndiciEnvProxyDispatcher", () => {
     ensureGlobalUndiciEnvProxyDispatcher();
 
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
-    expect(getCurrentDispatcher()).toBeInstanceOf(EnvHttpProxyAgent);
+    const next = getCurrentDispatcher() as { options?: Record<string, unknown> };
+    expect(next).toBeInstanceOf(EnvHttpProxyAgent);
+    expect(next.options?.allowH2).toBe(false);
   });
 
   it("installs EnvHttpProxyAgent with explicit ALL_PROXY fallback options", () => {
@@ -317,6 +323,7 @@ describe("ensureGlobalUndiciEnvProxyDispatcher", () => {
     expect(next.options).toEqual({
       httpProxy: "socks5://proxy.test:1080",
       httpsProxy: "socks5://proxy.test:1080",
+      allowH2: false,
     });
   });
 
@@ -413,6 +420,7 @@ describe("forceResetGlobalDispatcher", () => {
     expect((getCurrentDispatcher() as { options?: Record<string, unknown> }).options).toEqual({
       httpProxy: "http://proxy-b.example:8080",
       httpsProxy: "http://proxy-b.example:8080",
+      allowH2: false,
     });
   });
 
@@ -431,6 +439,7 @@ describe("forceResetGlobalDispatcher", () => {
     expect((getCurrentDispatcher() as { options?: Record<string, unknown> }).options).toEqual({
       httpProxy: "http://proxy-all.example:3128",
       httpsProxy: "http://proxy-all.example:3128",
+      allowH2: false,
     });
   });
 });

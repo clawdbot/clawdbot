@@ -71,6 +71,24 @@ async function requestThroughProxy(proxyUrl: string, targetUrl: string): Promise
   return data;
 }
 
+async function requestRawThroughProxy(proxyUrl: string, request: string): Promise<string> {
+  const proxy = new URL(proxyUrl);
+  const socket = new Socket();
+  let data = "";
+  socket.setEncoding("utf8");
+  socket.on("data", (chunk) => {
+    data += chunk;
+  });
+  await new Promise<void>((resolve, reject) => {
+    socket.once("error", reject);
+    socket.connect(Number(proxy.port), proxy.hostname, resolve);
+  });
+  socket.write(request);
+  await new Promise<void>((resolve) => socket.once("end", resolve));
+  socket.destroy();
+  return data;
+}
+
 async function startCanaryOrigin(): Promise<{
   requestCount: () => number;
   stop: () => Promise<void>;
@@ -186,6 +204,22 @@ describe("debug proxy managed-proxy direct upstream policy", () => {
     } finally {
       await server.stop();
       await origin.stop();
+    }
+  });
+
+  it("rejects malformed relative-form HTTP proxy targets before upstream handling", async () => {
+    const server = await startDebugProxyServer({ settings: await makeSettings() });
+    try {
+      const response = await requestRawThroughProxy(
+        server.proxyUrl,
+        "GET /capture HTTP/1.1\r\nHost: [\r\nConnection: close\r\n\r\n",
+      );
+
+      expect(response).toContain("400 Bad Request");
+      expect(response).toContain("Connection: close");
+      expect(response).toContain("Invalid proxy target URL");
+    } finally {
+      await server.stop();
     }
   });
 });

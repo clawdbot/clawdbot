@@ -26,6 +26,78 @@ struct MacNodeRuntimeTests {
         }
     }
 
+    @MainActor
+    final class ScreenSnapshotProbeServices: MacNodeRuntimeMainActorServices, @unchecked Sendable {
+        typealias SnapshotResult = (
+            data: Data,
+            format: OpenClawScreenSnapshotFormat,
+            width: Int,
+            height: Int)
+
+        var snapshotCallCount = 0
+        var receivedSnapshotParams: MacNodeScreenSnapshotParams?
+        var snapshotResult: SnapshotResult
+        var snapshotError: Error?
+
+        init(
+            snapshotResult: SnapshotResult = (Data("ok".utf8), .jpeg, 10, 10),
+            snapshotError: Error? = nil)
+        {
+            self.snapshotResult = snapshotResult
+            self.snapshotError = snapshotError
+        }
+
+        func snapshotScreen(
+            screenIndex: Int?,
+            maxWidth: Int?,
+            quality: Double?,
+            format: OpenClawScreenSnapshotFormat?) async throws -> SnapshotResult
+        {
+            self.snapshotCallCount += 1
+            self.receivedSnapshotParams = MacNodeScreenSnapshotParams(
+                screenIndex: screenIndex,
+                maxWidth: maxWidth,
+                quality: quality,
+                format: format)
+            if let snapshotError {
+                throw snapshotError
+            }
+            return self.snapshotResult
+        }
+
+        func recordScreen(
+            screenIndex: Int?,
+            durationMs: Int?,
+            fps: Double?,
+            includeAudio: Bool?,
+            outPath: String?) async throws -> (path: String, hasAudio: Bool)
+        {
+            let url = FileManager().temporaryDirectory
+                .appendingPathComponent("openclaw-test-screen-record-\(UUID().uuidString).mp4")
+            try Data("ok".utf8).write(to: url)
+            return (path: url.path, hasAudio: false)
+        }
+
+        func locationAuthorizationStatus() -> CLAuthorizationStatus {
+            .authorizedAlways
+        }
+
+        func locationAccuracyAuthorization() -> CLAccuracyAuthorization {
+            .fullAccuracy
+        }
+
+        func currentLocation(
+            desiredAccuracy: OpenClawLocationAccuracy,
+            maxAgeMs: Int?,
+            timeoutMs: Int?) async throws -> CLLocation
+        {
+            _ = desiredAccuracy
+            _ = maxAgeMs
+            _ = timeoutMs
+            return CLLocation(latitude: 0, longitude: 0)
+        }
+    }
+
     @Test func `handle invoke rejects unknown command`() async {
         let runtime = MacNodeRuntime()
         let response = await runtime.handleInvoke(
@@ -296,6 +368,199 @@ struct MacNodeRuntimeTests {
         let snapshotCalledAtMs = await MainActor.run { services.snapshotCalledAtMs }
         #expect(snapshotCalledAtMs != nil)
         #expect(payload.capturedAtMs <= snapshotCalledAtMs!)
+    }
+
+    @Test func `handle invoke screen snapshot rejects malformed params before capture`() async throws {
+        let services = await MainActor.run { ScreenSnapshotProbeServices() }
+        let runtime = MacNodeRuntime(makeMainActorServices: { services })
+
+        let response = await runtime.handleInvoke(
+            BridgeInvokeRequest(
+                id: "req-screen-snapshot-invalid",
+                command: MacNodeScreenCommand.snapshot.rawValue,
+                paramsJSON: #"{"screenIndex":"#))
+
+        #expect(response.ok == false)
+        #expect(response.error?.code == .invalidRequest)
+        #expect(response.error?.message == "INVALID_REQUEST: invalid screen snapshot params")
+        let snapshotCallCount = await MainActor.run { services.snapshotCallCount }
+        #expect(snapshotCallCount == 0)
+    }
+
+    @Test func `handle invoke screen snapshot keeps nil params as defaults`() async throws {
+        let services = await MainActor.run { ScreenSnapshotProbeServices() }
+        let runtime = MacNodeRuntime(makeMainActorServices: { services })
+
+        let response = await runtime.handleInvoke(
+            BridgeInvokeRequest(
+                id: "req-screen-snapshot-defaults",
+                command: MacNodeScreenCommand.snapshot.rawValue))
+
+        #expect(response.ok == true)
+        let received = await MainActor.run { services.receivedSnapshotParams }
+        #expect(received == MacNodeScreenSnapshotParams())
+    }
+
+    @Test func `handle invoke screen snapshot sanitizes capture failures`() async throws {
+        struct SensitiveError: LocalizedError {
+            let detail: String
+            var errorDescription: String? { detail }
+        }
+
+        let services = await MainActor.run {
+            ScreenSnapshotProbeServices(snapshotError: SensitiveError(detail: "TCC_DENIED display-id=ABC123"))
+        }
+        let runtime = MacNodeRuntime(makeMainActorServices: { services })
+
+        let response = await runtime.handleInvoke(
+            BridgeInvokeRequest(
+                id: "req-screen-snapshot-error",
+                command: MacNodeScreenCommand.snapshot.rawValue))
+
+        #expect(response.ok == false)
+        #expect(response.error?.code == .unavailable)
+        #expect(response.error?.message == "UNAVAILABLE: screen snapshot failed")
+    }
+
+    @Test func `handle invoke screen snapshot reports validation failures as invalid request`() async throws {
+        let invalidIndexServices = await MainActor.run {
+            ScreenSnapshotProbeServices(
+                snapshotError: ScreenSnapshotService.ScreenSnapshotError.invalidScreenIndex(4))
+        }
+        let invalidIndexRuntime = MacNodeRuntime(makeMainActorServices: { invalidIndexServices })
+        let invalidIndexResponse = await invalidIndexRuntime.handleInvoke(
+            BridgeInvokeRequest(
+                id: "req-screen-snapshot-bad-index",
+                command: MacNodeScreenCommand.snapshot.rawValue))
+
+        #expect(invalidIndexResponse.ok == false)
+        #expect(invalidIndexResponse.error?.code == .invalidRequest)
+        #expect(invalidIndexResponse.error?.message == "INVALID_REQUEST: invalid screen index 4")
+
+        let noDisplaysServices = await MainActor.run {
+            ScreenSnapshotProbeServices(snapshotError: ScreenSnapshotService.ScreenSnapshotError.noDisplays)
+        }
+        let noDisplaysRuntime = MacNodeRuntime(makeMainActorServices: { noDisplaysServices })
+        let noDisplaysResponse = await noDisplaysRuntime.handleInvoke(
+            BridgeInvokeRequest(
+                id: "req-screen-snapshot-no-displays",
+                command: MacNodeScreenCommand.snapshot.rawValue))
+
+        #expect(noDisplaysResponse.ok == false)
+        #expect(noDisplaysResponse.error?.code == .invalidRequest)
+        #expect(
+            noDisplaysResponse.error?.message ==
+                "INVALID_REQUEST: no displays available for screen snapshot")
+    }
+
+    @Test func `handle invoke screen snapshot rejects raw payloads above base64 ceiling`() async throws {
+        let payloadSize = 19_660_801
+        let services = await MainActor.run {
+            ScreenSnapshotProbeServices(snapshotResult: (
+                Data(repeating: 0x41, count: payloadSize),
+                .jpeg,
+                4000,
+                3000))
+        }
+        let runtime = MacNodeRuntime(makeMainActorServices: { services })
+
+        let response = await runtime.handleInvoke(
+            BridgeInvokeRequest(
+                id: "req-screen-snapshot-too-large",
+                command: MacNodeScreenCommand.snapshot.rawValue))
+
+        #expect(response.ok == false)
+        #expect(response.payloadJSON == nil)
+        #expect(response.error?.code == .unavailable)
+        #expect(
+            response.error?.message ==
+                "UNAVAILABLE: screen snapshot payload too large; reduce maxWidth or use jpeg")
+    }
+
+    @Test func `handle invoke screen snapshot rejects escaped oversized outer frames`() async throws {
+        let payloadSize = 12 * 1024 * 1024
+        let services = await MainActor.run {
+            ScreenSnapshotProbeServices(snapshotResult: (
+                Data(repeating: 0xFF, count: payloadSize),
+                .png,
+                4000,
+                3000))
+        }
+        let runtime = MacNodeRuntime(makeMainActorServices: { services })
+
+        let response = await runtime.handleInvoke(
+            BridgeInvokeRequest(
+                id: "req-screen-snapshot-slash-heavy",
+                command: MacNodeScreenCommand.snapshot.rawValue,
+                nodeId: "node-slash-heavy"))
+
+        #expect(response.ok == false)
+        #expect(response.error?.code == .unavailable)
+        #expect(
+            response.error?.message ==
+                "UNAVAILABLE: screen snapshot payload too large; reduce maxWidth or use jpeg")
+    }
+
+    @Test func `handle invoke screen snapshot accepts near-limit frames that fit`() async throws {
+        let payloadSize = 19_660_100
+        let services = await MainActor.run {
+            ScreenSnapshotProbeServices(snapshotResult: (
+                Data(repeating: 0x00, count: payloadSize),
+                .jpeg,
+                4000,
+                3000))
+        }
+        let runtime = MacNodeRuntime(makeMainActorServices: { services })
+
+        let response = await runtime.handleInvoke(
+            BridgeInvokeRequest(
+                id: "req-fit",
+                command: MacNodeScreenCommand.snapshot.rawValue,
+                nodeId: "node-fit"))
+
+        #expect(response.ok == true)
+        let payloadJSON = try #require(response.payloadJSON)
+        let projected = try MacNodeRuntime.projectedOuterFrameBytes(
+            forPayloadJSON: payloadJSON,
+            requestId: "req-fit",
+            nodeId: "node-fit")
+        #expect(projected < 25 * 1024 * 1024)
+    }
+
+    @Test func `projected outer frame bytes accounts for dynamic node id escaping`() throws {
+        let inner = "{\"format\":\"png\",\"note\":\"\u{0001}\u{0002}\n\t\\\"raw\\\"\",\"width\":1,\"height\":1,\"capturedAtMs\":0}"
+        let projected = try MacNodeRuntime.projectedOuterFrameBytes(
+            forPayloadJSON: inner,
+            requestId: "req-control",
+            nodeId: "node-\u{0001}\u{0002}\u{0003}\n\t-id")
+
+        struct Frame: Encodable {
+            let type = "req"
+            let id = "00000000-0000-0000-0000-000000000000"
+            let method = "node.invoke.result"
+            let params: Params
+
+            struct Params: Encodable {
+                let id: String
+                let nodeId: String
+                let ok: Bool
+                let payloadJSON: String
+            }
+        }
+        let serialized = try JSONEncoder().encode(Frame(params: Frame.Params(
+            id: "req-control",
+            nodeId: "node-\u{0001}\u{0002}\u{0003}\n\t-id",
+            ok: true,
+            payloadJSON: inner)))
+
+        #expect(projected == serialized.count)
+
+        let controlHeavyNodeId = String(repeating: "\u{0001}", count: 5 * 1024 * 1024)
+        let controlHeavyProjection = try MacNodeRuntime.projectedOuterFrameBytes(
+            forPayloadJSON: "{}",
+            requestId: "req-control",
+            nodeId: controlHeavyNodeId)
+        #expect(controlHeavyProjection > 25 * 1024 * 1024)
     }
 
     @Test func `handle invoke browser proxy uses injected request`() async {

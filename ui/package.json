@@ -11,9 +11,9 @@
   "dependencies": {
     "@create-markdown/preview": "2.0.3",
     "@noble/ed25519": "3.1.0",
-    "dompurify": "3.4.2",
+    "dompurify": "3.4.3",
     "json5": "2.2.3",
-    "lit": "3.3.2",
+    "lit": "3.3.3",
     "markdown-it": "14.1.1",
     "markdown-it-task-lists": "2.1.1",
     "marked": "18.0.3"
@@ -23,7 +23,7 @@
     "@vitest/browser-playwright": "4.1.6",
     "jsdom": "29.1.1",
     "playwright": "1.60.0",
-    "vite": "8.0.12",
+    "vite": "8.0.13",
     "vitest": "4.1.6"
   }
 }

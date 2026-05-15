@@ -1,3 +1,4 @@
+import type { BootstrapContextMode } from "../../agents/bootstrap-files.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
 import type { SkillSnapshot } from "../../agents/skills.js";
 import { normalizeToolList } from "../../agents/tool-policy.js";
@@ -58,6 +59,29 @@ function resolveCronOwnerOnlyToolAllowlist(toolsAllow: string[] | undefined): st
     return undefined;
   }
   return ["cron"];
+}
+
+const COMMAND_STYLE_CRON_PREFIX =
+  /^(?:(?:[A-Z_][A-Z0-9_]*=\S+\s+)+)?(?:cd\s+\S+|(?:\.{1,2}|~)?\/\S+|[A-Za-z]:[\\/]\S+|(?:bash|bun|cargo|deno|docker|gh|git|go|make|node|npm|npx|pnpm|python|python3|ruby|sh|tsx|uv|zsh)\b)/u;
+
+export function isCommandStyleCronMessage(message: string): boolean {
+  const trimmed = message.trim();
+  if (!trimmed || trimmed.includes("\n")) {
+    return false;
+  }
+  return COMMAND_STYLE_CRON_PREFIX.test(trimmed);
+}
+
+function resolveCronBootstrapContextMode(
+  payload: AgentTurnPayload,
+): BootstrapContextMode | undefined {
+  if (payload?.lightContext === true) {
+    return "lightweight";
+  }
+  if (payload?.lightContext === false) {
+    return undefined;
+  }
+  return isCommandStyleCronMessage(payload?.message ?? "") ? "lightweight" : undefined;
 }
 
 export type CronExecutionResult = {
@@ -128,6 +152,7 @@ export function createCronPromptExecutor(params: {
   let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
     params.cronSession.sessionEntry.systemPromptReport,
   );
+  const bootstrapContextMode = resolveCronBootstrapContextMode(params.agentPayload);
 
   const runPrompt = async (promptText: string) => {
     const fallbackResult = await runWithModelFallback({
@@ -178,6 +203,8 @@ export function createCronPromptExecutor(params: {
             abortSignal: params.abortSignal,
             onExecutionStarted: params.onExecutionStarted,
             onExecutionPhase: params.onExecutionPhase,
+            bootstrapContextMode,
+            bootstrapContextRunKind: "cron",
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature,
             senderIsOwner: params.senderIsOwner,
@@ -234,7 +261,7 @@ export function createCronPromptExecutor(params: {
           verboseLevel: params.resolvedVerboseLevel,
           timeoutMs: params.timeoutMs,
           runTimeoutOverrideMs: params.runTimeoutOverrideMs,
-          bootstrapContextMode: params.agentPayload?.lightContext ? "lightweight" : undefined,
+          bootstrapContextMode,
           bootstrapContextRunKind: "cron",
           toolsAllow: params.agentPayload?.toolsAllow,
           execOverrides: params.suppressExecNotifyOnExit

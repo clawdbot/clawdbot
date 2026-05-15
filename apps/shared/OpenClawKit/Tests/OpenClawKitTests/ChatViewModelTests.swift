@@ -11,6 +11,16 @@ private func chatTextMessage(role: String, text: String, timestamp: Double) -> A
     ])
 }
 
+private func chatErrorMessage(role: String, errorMessage: String, timestamp: Double) -> AnyCodable {
+    AnyCodable([
+        "role": role,
+        "content": [],
+        "timestamp": timestamp,
+        "stopReason": "error",
+        "errorMessage": errorMessage,
+    ])
+}
+
 private func historyPayload(
     sessionKey: String = "main",
     sessionId: String? = "sess-main",
@@ -454,6 +464,76 @@ extension TestChatTransportState {
 }
 
 @Suite struct ChatViewModelTests {
+    @Test func displaysErrorMessageFallbackOnlyForAssistantErrorTurns() throws {
+        func decodeMessage(role: String, stopReason: String, contentText: String? = nil) throws -> OpenClawChatMessage {
+            let contentJSON = contentText.map { #"[{"type":"text","text":"\#($0)"}]"# } ?? "[]"
+            let data = """
+            {
+              "role": "\(role)",
+              "content": \(contentJSON),
+              "timestamp": 1,
+              "stopReason": "\(stopReason)",
+              "errorMessage": "stale provider failure"
+            }
+            """.data(using: .utf8)!
+            return try JSONDecoder().decode(OpenClawChatMessage.self, from: data)
+        }
+
+        let assistantError = try decodeMessage(role: "assistant", stopReason: "error")
+        #expect(assistantError.content.isEmpty)
+        #expect(
+            OpenClawChatMessage.errorDisplayText(
+                role: assistantError.role,
+                stopReason: assistantError.stopReason,
+                errorMessage: assistantError.errorMessage) == "stale provider failure")
+        #expect(
+            OpenClawChatMessage.displayText(
+                contentText: "",
+                role: assistantError.role,
+                stopReason: assistantError.stopReason,
+                errorMessage: assistantError.errorMessage) == "stale provider failure")
+
+        let sentinelAssistant = try decodeMessage(
+            role: "assistant",
+            stopReason: "error",
+            contentText: "[assistant turn failed before producing content]")
+        #expect(
+            OpenClawChatMessage.displayText(
+                contentText: sentinelAssistant.content.compactMap(\.text).joined(separator: "\n"),
+                role: sentinelAssistant.role,
+                stopReason: sentinelAssistant.stopReason,
+                errorMessage: sentinelAssistant.errorMessage) == "stale provider failure")
+
+        let partialAssistant = try decodeMessage(
+            role: "assistant",
+            stopReason: "error",
+            contentText: "partial answer")
+        #expect(
+            OpenClawChatMessage.displayText(
+                contentText: partialAssistant.content.compactMap(\.text).joined(separator: "\n"),
+                role: partialAssistant.role,
+                stopReason: partialAssistant.stopReason,
+                errorMessage: partialAssistant.errorMessage) == "partial answer")
+
+        let stoppedAssistant = try decodeMessage(role: "assistant", stopReason: "stop")
+        #expect(stoppedAssistant.errorMessage == "stale provider failure")
+        #expect(stoppedAssistant.content.isEmpty)
+        #expect(
+            OpenClawChatMessage.errorDisplayText(
+                role: stoppedAssistant.role,
+                stopReason: stoppedAssistant.stopReason,
+                errorMessage: stoppedAssistant.errorMessage) == nil)
+
+        let toolUseAssistant = try decodeMessage(role: "assistant", stopReason: "toolUse")
+        #expect(toolUseAssistant.errorMessage == "stale provider failure")
+        #expect(toolUseAssistant.content.isEmpty)
+        #expect(
+            OpenClawChatMessage.errorDisplayText(
+                role: toolUseAssistant.role,
+                stopReason: toolUseAssistant.stopReason,
+                errorMessage: toolUseAssistant.errorMessage) == nil)
+    }
+
     @Test func streamsAssistantAndClearsOnFinal() async throws {
         let sessionId = "sess-main"
         let history1 = historyPayload(sessionId: sessionId)
@@ -662,6 +742,51 @@ extension TestChatTransportState {
         try await waitUntil("pending run clears") { await MainActor.run { vm.pendingRunCount == 0 } }
         try await waitUntil("history refresh") {
             await MainActor.run { vm.messages.contains(where: { $0.role == "assistant" }) }
+        }
+    }
+
+    @Test func surfacesAssistantErrorMessageAfterOwnRunRefresh() async throws {
+        let now = Date().timeIntervalSince1970 * 1000
+        let history1 = historyPayload()
+        let history2 = historyPayload(
+            messages: [
+                chatErrorMessage(
+                    role: "assistant",
+                    errorMessage: "You have hit your ChatGPT usage limit (plus plan). Try again in ~28 min.",
+                    timestamp: now),
+            ])
+
+        let (transport, vm) = await makeViewModel(historyResponses: [history1, history2])
+        try await loadAndWaitBootstrap(vm: vm)
+
+        await sendUserMessage(vm)
+        try await waitUntil("pending run starts") { await MainActor.run { vm.pendingRunCount == 1 } }
+
+        let runId = try #require(await transport.lastSentRunId())
+        transport.emit(
+            .chat(
+                OpenClawChatEventPayload(
+                    runId: runId,
+                    sessionKey: "main",
+                    state: "error",
+                    message: nil,
+                    errorMessage: "You have hit your ChatGPT usage limit (plus plan). Try again in ~28 min.")))
+
+        try await waitUntil("pending run clears after error") {
+            await MainActor.run { vm.pendingRunCount == 0 }
+        }
+        try await waitUntil("history refresh shows assistant error message") {
+            await MainActor.run {
+                vm.messages.contains(where: { message in
+                    message.role == "assistant" &&
+                        OpenClawChatMessage.displayText(
+                            contentText: message.content.compactMap(\.text).joined(separator: "\n"),
+                            role: message.role,
+                            stopReason: message.stopReason,
+                            errorMessage: message.errorMessage)
+                        .contains("You have hit your ChatGPT usage limit")
+                })
+            }
         }
     }
 

@@ -411,6 +411,40 @@ describeBrowserLayout("chat responsive browser layout", () => {
     },
   );
 
+  it.each([
+    [320, 568],
+    [1366, 900],
+  ] as const)("wraps long inline code without clipping at %sx%s", async (width, height) => {
+    const page = await browser.newPage({ viewport: { width, height } });
+    try {
+      await page.setContent(
+        `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+          <div class="chat-thread" role="log">
+            <div class="chat-thread-inner">
+              <div class="chat-group assistant">
+                <div class="chat-avatar assistant">A</div>
+                <div class="chat-group-messages">
+                  <div class="chat-bubble">
+                    <div class="chat-text">
+                      <p><code>openclaw_message_send_channel_webchat_target_example_com_thread_very_long_identifier_without_spaces_1234567890abcdefghijklmnopqrstuvwxyz</code></p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </body></html>`,
+      );
+
+      await expectNoHorizontalOverflow(page);
+      const bubble = await getRect(page, ".chat-bubble");
+      const inlineCode = await getRect(page, ".chat-text p code");
+      expect(inlineCode.right).toBeLessThanOrEqual(bubble.right + 1);
+    } finally {
+      await page.close();
+    }
+  });
+
   it.each(["dark", "light"] as const)(
     "keeps mobile controls inside the viewport with touch targets in %s mode",
     async (themeMode) => {

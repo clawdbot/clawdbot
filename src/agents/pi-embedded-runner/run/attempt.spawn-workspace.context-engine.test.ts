@@ -548,6 +548,34 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(systemPrompt).toContain("Ask who I am before continuing.");
   });
 
+  it("skips bootstrap preload on completed continuation-skip turns", async () => {
+    hoisted.resolveContextInjectionModeMock.mockReturnValue("continuation-skip");
+    hoisted.hasCompletedBootstrapTurnMock.mockResolvedValue(true);
+    hoisted.isWorkspaceBootstrapPendingMock.mockResolvedValue(false);
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        prompt: "visible ask",
+        transcriptPrompt: "visible ask",
+        trigger: "user",
+      },
+      sessionPrompt: async (session) => {
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: "done", timestamp: 2 },
+        ];
+      },
+    });
+
+    expect(hoisted.hasCompletedBootstrapTurnMock).toHaveBeenCalledOnce();
+    expect(hoisted.isWorkspaceBootstrapPendingMock).toHaveBeenCalledOnce();
+    expect(hoisted.resolveBootstrapFilesForRunMock).not.toHaveBeenCalled();
+    expect(hoisted.resolveBootstrapContextForRunMock).not.toHaveBeenCalled();
+  });
+
   it("adds current-turn context to the current model input without exposing internal runtime context", async () => {
     let seenPrompt: string | undefined;
 

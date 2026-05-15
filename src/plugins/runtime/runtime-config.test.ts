@@ -32,8 +32,11 @@ describe("createRuntimeConfig", () => {
     replaceConfigFileMock.mockReset();
     logWarnMock.mockClear();
     getRuntimeConfigMock.mockReturnValue({ plugins: {} });
-    mutateConfigFileMock.mockResolvedValue({ previousHash: null, nextHash: "next" });
-    replaceConfigFileMock.mockResolvedValue({ previousHash: null, nextHash: "next" });
+    mutateConfigFileMock.mockResolvedValue({ previousHash: null, persistedHash: "persisted-hash" });
+    replaceConfigFileMock.mockResolvedValue({
+      previousHash: null,
+      persistedHash: "persisted-hash",
+    });
   });
 
   it("reads config from the runtime snapshot for current and deprecated loadConfig", () => {

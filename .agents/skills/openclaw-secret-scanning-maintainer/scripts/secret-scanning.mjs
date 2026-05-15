@@ -581,6 +581,8 @@ function cmdNotify(target, author, locationType, secretTypes, replyToNodeId) {
   }
 
   const body = [
+    `> **Note:** This is an automated message sent by the OpenClaw maintainer team. **NO_REPLY.**`,
+    "",
     `@${author} :warning: **Security Notice: Secret Leakage Detected**`,
     "",
     `GitHub Secret Scanning detected the following exposed secret types in ${locationDesc}:`,

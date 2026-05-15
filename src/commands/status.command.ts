@@ -5,6 +5,7 @@ import {
   readPairingConnectErrorDetails,
   type ConnectPairingRequiredReason,
 } from "../gateway/protocol/connect-error-details.js";
+import { readRestartSentinel } from "../infra/restart-sentinel.js";
 import { type RuntimeEnv } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
@@ -17,6 +18,7 @@ import {
   resolveStatusRuntimeSnapshot,
   resolveStatusUsageSummary,
 } from "./status-runtime-shared.ts";
+import { formatUpdateRestartStatusValue } from "./status-update-restart.ts";
 import { buildStatusCommandReportData } from "./status.command-report-data.ts";
 import { buildStatusCommandReportLines } from "./status.command-report.ts";
 import { logGatewayConnectionDetails } from "./status.gateway-connection.ts";
@@ -283,6 +285,15 @@ export async function statusCommand(
     nodeService: nodeDaemon,
     nodeOnlyGateway,
   });
+  const updateRestartValue = formatUpdateRestartStatusValue(
+    (await readRestartSentinel().catch(() => null))?.payload,
+    {
+      ok,
+      warn,
+      muted,
+      formatTimeAgo,
+    },
+  );
   const lines = await buildStatusCommandReportLines(
     await buildStatusCommandReportData({
       opts,
@@ -322,6 +333,7 @@ export async function statusCommand(
       updateValue: updateSurface.updateAvailable
         ? warn(`available · ${updateSurface.updateLine}`)
         : updateSurface.updateLine,
+      updateRestartValue,
     }),
   );
   for (const line of lines) {

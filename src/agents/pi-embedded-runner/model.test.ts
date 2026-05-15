@@ -1020,6 +1020,38 @@ describe("resolveModel", () => {
     });
   });
 
+  it("applies configured provider params to resolved models", () => {
+    mockDiscoveredModel(discoverModels, {
+      provider: "ollama",
+      modelId: "qwen3:32b",
+      templateModel: {
+        ...makeModel("qwen3:32b"),
+        provider: "ollama",
+        params: { keep_alive: "1m" },
+      },
+    });
+    const cfg = {
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://localhost:11434",
+            params: { num_ctx: 65536, top_p: 0.9 },
+            models: [],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("ollama", "qwen3:32b", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect((result.model as { params?: Record<string, unknown> } | undefined)?.params).toEqual({
+      keep_alive: "1m",
+      num_ctx: 65536,
+      top_p: 0.9,
+    });
+  });
+
   it("resolves provider request timeout metadata for configured provider models", () => {
     mockDiscoveredModel(discoverModels, {
       provider: "ollama",

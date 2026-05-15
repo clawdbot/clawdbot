@@ -2,12 +2,12 @@ import { normalizeConfiguredMcpServers } from "../../config/mcp-config-normalize
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { BundleMcpConfig, BundleMcpServerConfig } from "../../plugins/bundle-mcp.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
+import { buildCodexMcpServersConfig } from "../codex-mcp-config.js";
 import {
   applyCommonServerConfig,
   decodeHeaderEnvPlaceholder,
   normalizeStringRecord,
 } from "./bundle-mcp-adapter-shared.js";
-import { buildCodexMcpServersConfig } from "../codex-mcp-config.js";
 import { serializeTomlInlineValue } from "./toml-inline.js";
 
 // Mutable JSON shape structurally compatible with the bundled Codex

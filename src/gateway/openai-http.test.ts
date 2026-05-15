@@ -112,7 +112,12 @@ type FirstAgentCommandOptions = {
   model?: string;
   senderIsOwner?: boolean;
   sessionKey?: string;
-  streamParams?: { maxTokens?: number; temperature?: number; topP?: number };
+  streamParams?: {
+    maxTokens?: number;
+    responseFormat?: Record<string, unknown>;
+    temperature?: number;
+    topP?: number;
+  };
 };
 
 function firstAgentCommandOptions() {
@@ -1428,6 +1433,81 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     expect(json.error?.code).toBe("decimal_above_max_value");
     expect(json.error?.message).toContain("Invalid 'temperature'");
     expect(agentCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it("forwards response_format into streamParams", async () => {
+    const port = enabledPort;
+    const mockAgentOnce = (payloads: Array<{ text: string }>) => {
+      agentCommand.mockClear();
+      agentCommand.mockResolvedValueOnce({ payloads } as never);
+    };
+    const getStreamParams = () => firstAgentCommandOptions()?.streamParams;
+
+    {
+      mockAgentOnce([{ text: "{}" }]);
+      const res = await postChatCompletions(port, {
+        model: "openclaw",
+        response_format: { type: "json_object" },
+        messages: [{ role: "user", content: "hi" }],
+      });
+      expect(res.status).toBe(200);
+      expect(getStreamParams()).toMatchObject({ responseFormat: { type: "json_object" } });
+      await res.text();
+    }
+
+    {
+      mockAgentOnce([{ text: "{}" }]);
+      const res = await postChatCompletions(port, {
+        model: "openclaw",
+        response_format: {
+          type: "json_schema",
+          json_schema: { name: "test", schema: { type: "object" } },
+        },
+        messages: [{ role: "user", content: "hi" }],
+      });
+      expect(res.status).toBe(200);
+      expect(getStreamParams()).toMatchObject({
+        responseFormat: { type: "json_schema" },
+      });
+      await res.text();
+    }
+
+    {
+      mockAgentOnce([{ text: "hello" }]);
+      const res = await postChatCompletions(port, {
+        model: "openclaw",
+        response_format: { type: "text" },
+        messages: [{ role: "user", content: "hi" }],
+      });
+      expect(res.status).toBe(200);
+      expect(getStreamParams()).toMatchObject({ responseFormat: { type: "text" } });
+      await res.text();
+    }
+
+    {
+      mockAgentOnce([{ text: "hello" }]);
+      const res = await postChatCompletions(port, {
+        model: "openclaw",
+        messages: [{ role: "user", content: "hi" }],
+      });
+      expect(res.status).toBe(200);
+      expect(getStreamParams()).toBeUndefined();
+      await res.text();
+    }
+
+    {
+      agentCommand.mockClear();
+      const res = await postChatCompletions(port, {
+        model: "openclaw",
+        response_format: { type: "xml" },
+        messages: [{ role: "user", content: "hi" }],
+      });
+      expect(res.status).toBe(400);
+      const json = (await res.json()) as { error?: { type?: string; message?: string } };
+      expect(json.error?.type).toBe("invalid_request_error");
+      expect(json.error?.message).toMatch(/response_format/);
+      expect(agentCommand).toHaveBeenCalledTimes(0);
+    }
   });
 
   it("returns 429 for repeated failed auth when gateway.auth.rateLimit is configured", async () => {

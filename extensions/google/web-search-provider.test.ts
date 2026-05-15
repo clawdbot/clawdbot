@@ -166,6 +166,34 @@ describe("google web search provider", () => {
     );
   });
 
+  it("reports malformed Gemini API JSON with a stable provider error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      withFetchPreconnect(vi.fn(() => Promise.resolve(new Response("{ nope")))),
+    );
+    const provider = createGeminiWebSearchProvider();
+    const tool = provider.createTool({
+      config: {
+        plugins: {
+          entries: {
+            google: {
+              config: {
+                webSearch: {
+                  apiKey: "AIza-plugin-test",
+                },
+              },
+            },
+          },
+        },
+      },
+      searchConfig: { provider: "gemini" },
+    });
+
+    await expect(tool?.execute({ query: "OpenClaw docs" })).rejects.toThrow(
+      "Gemini API error: malformed JSON response",
+    );
+  });
+
   it("passes provider execution abort signals into the Gemini fetch", async () => {
     const mockFetch = installGeminiFetch();
     const controller = new AbortController();

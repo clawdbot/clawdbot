@@ -2344,13 +2344,6 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/config-quick.ts",
-      "text": "Browser enabled"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/config-quick.ts",
       "text": "Choose a built-in profile to replace the current custom values."
     },
     {
@@ -2555,13 +2548,6 @@
       "name": "text",
       "path": "ui/src/ui/views/config-quick.ts",
       "text": "Thinking"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/config-quick.ts",
-      "text": "Tool profile"
     },
     {
       "count": 1,

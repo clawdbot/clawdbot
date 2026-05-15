@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { VERSION } from "../version.js";
 import {
   createRequestCaptureJsonFetch,
@@ -70,5 +70,22 @@ describe("transcribeOpenAiCompatibleAudio", () => {
     const file = (form as FormData).get("file");
     expect(file).toBeInstanceOf(File);
     expect((file as File).name).toBe("voice-note.m4a");
+  });
+
+  it("wraps malformed transcription JSON with a stable provider error", async () => {
+    const fetchFn = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response("{ nope"));
+
+    await expect(
+      transcribeOpenAiCompatibleAudio({
+        buffer: Buffer.from("audio"),
+        fileName: "note.mp3",
+        apiKey: "test-key",
+        timeoutMs: 1000,
+        fetchFn,
+        provider: "openai",
+        defaultBaseUrl: "https://api.openai.com/v1",
+        defaultModel: "gpt-4o-transcribe",
+      }),
+    ).rejects.toThrow("Audio transcription failed: malformed JSON response");
   });
 });

@@ -149,6 +149,7 @@ export type ChannelProgressDraftLineInput =
     }
   | {
       event: "item";
+      itemId?: string;
       itemKind?: string;
       title?: string;
       name?: string;
@@ -195,6 +196,7 @@ export type ChannelProgressDraftLineInput =
 export type ChannelProgressDraftLineKind = ChannelProgressDraftLineInput["event"];
 
 export type ChannelProgressDraftLine = {
+  id?: string;
   kind: ChannelProgressDraftLineKind;
   text: string;
   label: string;
@@ -371,6 +373,7 @@ export function buildChannelProgressDraftLine(
       const text = compactStrings([meta, input.title]).at(0);
       return text
         ? {
+            ...(input.itemId ? { id: input.itemId } : {}),
             kind: input.event,
             text,
             label: input.title?.trim() || input.itemKind?.trim() || "Update",
@@ -796,6 +799,44 @@ function getProgressDraftLineText(line: string | ChannelProgressDraftLine): stri
     return text;
   }
   return `${prefix}${label}`.trim();
+}
+
+export function normalizeChannelProgressDraftLineIdentity(
+  line: string | ChannelProgressDraftLine | undefined,
+): string {
+  const text = typeof line === "string" ? line : line?.text;
+  return text?.replace(/\s+/g, " ").trim() ?? "";
+}
+
+export function mergeChannelProgressDraftLine<TLine extends string | ChannelProgressDraftLine>(
+  lines: TLine[],
+  line: TLine,
+  params: { maxLines: number },
+): TLine[] {
+  const normalized = normalizeChannelProgressDraftLineIdentity(line);
+  if (!normalized) {
+    return lines;
+  }
+  const maxLines = Math.max(1, params.maxLines);
+  const lineId = typeof line === "object" ? line.id?.trim() : undefined;
+  if (lineId) {
+    const existingIndex = lines.findIndex(
+      (entry) => typeof entry === "object" && entry.id?.trim() === lineId,
+    );
+    if (existingIndex >= 0) {
+      if (normalizeChannelProgressDraftLineIdentity(lines[existingIndex]) === normalized) {
+        return lines;
+      }
+      const next = [...lines];
+      next[existingIndex] = line;
+      return next.slice(-maxLines);
+    }
+  }
+  const previous = normalizeChannelProgressDraftLineIdentity(lines.at(-1));
+  if (previous === normalized) {
+    return lines;
+  }
+  return [...lines, line].slice(-maxLines);
 }
 
 export function formatChannelProgressDraftText(params: {

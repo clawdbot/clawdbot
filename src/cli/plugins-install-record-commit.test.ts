@@ -32,7 +32,15 @@ describe("commitConfigWithPendingPluginInstalls", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({});
-    mocks.replaceConfigFile.mockResolvedValue(undefined);
+    mocks.replaceConfigFile.mockImplementation(async (params: { nextConfig: OpenClawConfig }) => ({
+      path: "/tmp/openclaw.json",
+      previousHash: null,
+      snapshot: {} as never,
+      nextConfig: params.nextConfig,
+      persistedHash: "test-config-hash",
+      afterWrite: { mode: "auto" },
+      followUp: { mode: "auto", requiresRestart: false },
+    }));
     mocks.writePersistedInstalledPluginIndexInstallRecords.mockResolvedValue(undefined);
   });
 
@@ -95,6 +103,7 @@ describe("commitConfigWithPendingPluginInstalls", () => {
         ...pendingRecords,
       },
       movedInstallRecords: true,
+      persistedHash: "test-config-hash",
     });
   });
 
@@ -184,6 +193,7 @@ describe("commitConfigWithPendingPluginInstalls", () => {
       config: nextConfig,
       installRecords: {},
       movedInstallRecords: false,
+      persistedHash: "test-config-hash",
     });
   });
 
@@ -205,6 +215,7 @@ describe("commitConfigWithPendingPluginInstalls", () => {
       config: nextConfig,
       installRecords: {},
       movedInstallRecords: false,
+      persistedHash: null,
     });
   });
 });

@@ -75,7 +75,7 @@ PI runtime config remains available as an opt-in compatibility route. When PI is
 explicitly selected with an `openai-codex` auth profile, OpenClaw keeps the
 public model ref as `openai/*` and routes PI internally through the legacy
 Codex-auth transport. Run `openclaw doctor --fix` to repair stale
-`openai-codex/*` model refs or old PI session pins that do not come from
+`openai-codex/*`, `codex-cli/*`, or old PI session pins that do not come from
 explicit runtime config.
 </Note>
 
@@ -85,7 +85,7 @@ explicit runtime config.
 | ------------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------ |
 | Chat / Responses          | `openai/<model>` model provider                                                  | Yes                                                    |
 | Codex subscription models | `openai/<model>` with `openai-codex` OAuth                                       | Yes                                                    |
-| Legacy Codex model refs   | `openai-codex/<model>`                                                           | Repaired by doctor to `openai/<model>`                 |
+| Legacy Codex model refs   | `openai-codex/<model>` or `codex-cli/<model>`                                    | Repaired by doctor to `openai/<model>`                 |
 | Codex app-server harness  | `openai/<model>` with omitted runtime or provider/model `agentRuntime.id: codex` | Yes                                                    |
 | Server-side web search    | Native OpenAI Responses tool                                                     | Yes, when web search is enabled and no provider pinned |
 | Images                    | `image_generate`                                                                 | Yes                                                    |
@@ -245,6 +245,7 @@ Choose your preferred auth method and follow the setup steps.
     | `openai/gpt-5.5` | omitted / provider/model `agentRuntime.id: "codex"` | Native Codex app-server harness | Codex sign-in or ordered `openai` auth profile |
     | `openai/gpt-5.5` | provider/model `agentRuntime.id: "pi"` | PI embedded runtime with internal Codex-auth transport | Selected `openai-codex` profile |
     | `openai-codex/gpt-5.5` | repaired by doctor | Legacy route rewritten to `openai/gpt-5.5` | Existing `openai-codex` profile |
+    | `codex-cli/gpt-5.5` | repaired by doctor | Legacy CLI route rewritten to `openai/gpt-5.5` | Codex app-server auth |
 
     <Warning>
     Do not configure older `openai-codex/gpt-5.1*`, `openai-codex/gpt-5.2*`, or

@@ -788,6 +788,85 @@ describe("saveConfig", () => {
     expect(parsed.gateway.port).toBe("18789");
     expect(params.baseHash).toBe("hash-save-2");
   });
+
+  it("drops stale loaded redacted placeholders before config.set in form mode", async () => {
+    const request = createRequestWithConfigGet();
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+    state.configFormMode = "form";
+    state.configForm = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          token: "__OPENCLAW_REDACTED__",
+        },
+      },
+    };
+    state.configFormOriginal = {
+      gateway: {
+        mode: "remote",
+        remote: {
+          token: "__OPENCLAW_REDACTED__",
+        },
+      },
+    };
+    state.configRawOriginal = '{\n  gateway: {\n    mode: "remote"\n  }\n}\n';
+    state.configSnapshot = { hash: "hash-save-redacted" };
+
+    await saveConfig(state);
+
+    const call = requireRequestCall(request);
+    expect(call[0]).toBe("config.set");
+    const params = call[1] as { raw: string; baseHash: string };
+    const parsed = JSON.parse(params.raw) as {
+      gateway: { mode: string; remote?: { token?: string } };
+    };
+    expect(parsed).toEqual({
+      gateway: {
+        mode: "remote",
+      },
+    });
+    expect(params.baseHash).toBe("hash-save-redacted");
+  });
+
+  it("drops stale loaded redacted placeholders before config.apply and keeps session key", async () => {
+    const request = createRequestWithConfigGet();
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+    state.applySessionKey = "agent:main:web:dm:test";
+    state.configFormMode = "form";
+    state.configForm = {
+      gateway: {
+        remote: {
+          token: "__OPENCLAW_REDACTED__",
+        },
+      },
+      ui: { theme: "dark" },
+    };
+    state.configFormOriginal = {
+      gateway: {
+        remote: {
+          token: "__OPENCLAW_REDACTED__",
+        },
+      },
+      ui: { theme: "dark" },
+    };
+    state.configRawOriginal = '{\n  ui: { theme: "dark" }\n}\n';
+    state.configSnapshot = { hash: "hash-apply-redacted" };
+
+    await applyConfig(state);
+
+    const call = requireRequestCall(request);
+    expect(call[0]).toBe("config.apply");
+    const params = call[1] as { raw: string; baseHash: string; sessionKey: string };
+    expect(JSON.parse(params.raw)).toEqual({
+      ui: { theme: "dark" },
+    });
+    expect(params.baseHash).toBe("hash-apply-redacted");
+    expect(params.sessionKey).toBe("agent:main:web:dm:test");
+  });
 });
 
 describe("runUpdate", () => {

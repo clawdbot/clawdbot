@@ -178,6 +178,11 @@ describe("resolveCommandsSystemPromptBundle", () => {
     );
     expect(toolParams.agentId).toBe("target");
     expect(toolParams.sessionKey).toBe("agent:target:telegram:direct:target-session");
+    const bootstrapParams = requireFirstArg(
+      vi.mocked(resolveBootstrapContextForRun),
+      "resolveBootstrapContextForRun",
+    );
+    expect(bootstrapParams.agentId).toBe("target");
   });
 
   it("prefers the target session entry for bootstrap and tool metadata", async () => {

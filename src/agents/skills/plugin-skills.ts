@@ -220,11 +220,19 @@ function publishPluginSkills(skillDirs: string[], opts?: { pluginSkillsDir?: str
       // best-effort; symlink will fail below if dir is truly unusable
     }
     try {
-      const existingTarget = fs.readlinkSync(linkPath);
-      if (existingTarget === target) {
+      const existingEntry = fs.lstatSync(linkPath);
+      if (existingEntry.isSymbolicLink()) {
+        const existingTarget = fs.readlinkSync(linkPath);
+        if (existingTarget === target) {
+          continue;
+        }
+        removeGeneratedPluginSkillEntry(linkPath);
+      } else if (isGeneratedPluginSkillEntry(existingEntry)) {
+        removeGeneratedPluginSkillEntry(linkPath);
+      } else {
+        log.warn(`plugin skill entry is not a generated symlink: ${linkPath}`);
         continue;
       }
-      removeGeneratedPluginSkillEntry(linkPath);
     } catch (err) {
       if (!isNotFoundError(err)) {
         log.warn(`failed to inspect plugin skill symlink "${linkPath}": ${String(err)}`);
@@ -259,7 +267,10 @@ function publishPluginSkills(skillDirs: string[], opts?: { pluginSkillsDir?: str
   }
 }
 
-function isGeneratedPluginSkillEntry(entry: fs.Dirent): boolean {
+function isGeneratedPluginSkillEntry(
+  entry: Pick<fs.Dirent, "isDirectory" | "isSymbolicLink">,
+): boolean {
+  // Windows directory symlinks are junctions and lstat reports them as directories.
   return entry.isSymbolicLink() || (process.platform === "win32" && entry.isDirectory());
 }
 

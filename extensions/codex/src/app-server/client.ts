@@ -29,6 +29,8 @@ const CODEX_APP_SERVER_PARSE_BUFFER_MAX = 1_000_000;
 const CODEX_APP_SERVER_PARSE_BUFFER_MAX_LINES = 1_000;
 const CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS = 600_000;
 const CODEX_APP_SERVER_STDERR_TAIL_MAX = 2_000;
+const UNPAIRED_SURROGATE_RE =
+  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
 
 type PendingRequest = {
   method: string;
@@ -300,11 +302,14 @@ export class CodexAppServerClient {
     }
     const id = "id" in message ? message.id : undefined;
     const method = "method" in message ? message.method : undefined;
-    this.child.stdin.write(`${JSON.stringify(message)}\n`, (error?: Error | null) => {
-      if (error) {
-        embeddedAgentLog.warn("codex app-server write failed", { error, id, method });
-      }
-    });
+    this.child.stdin.write(
+      `${stringifyCodexAppServerMessage(message)}\n`,
+      (error?: Error | null) => {
+        if (error) {
+          embeddedAgentLog.warn("codex app-server write failed", { error, id, method });
+        }
+      },
+    );
   }
 
   private handleLine(line: string): void {
@@ -536,6 +541,14 @@ function defaultServerRequestResponse(
     };
   }
   return {};
+}
+
+function stringifyCodexAppServerMessage(message: RpcRequest | RpcResponse): string {
+  return (
+    JSON.stringify(message, (_key, value) =>
+      typeof value === "string" ? value.replace(UNPAIRED_SURROGATE_RE, "") : value,
+    ) ?? "null"
+  );
 }
 
 function timeoutServerRequestResponse(

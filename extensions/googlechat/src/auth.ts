@@ -15,6 +15,14 @@ const ADDON_ISSUER_PATTERN = /^service-\d+@gcp-sa-gsuiteaddons\.iam\.gserviceacc
 const CHAT_CERTS_URL =
   "https://www.googleapis.com/service_accounts/v1/metadata/x509/chat@system.gserviceaccount.com";
 
+async function readGoogleChatCertsResponse(response: Response): Promise<Record<string, string>> {
+  try {
+    return (await response.json()) as Record<string, string>;
+  } catch (cause) {
+    throw new Error("Google Chat cert fetch failed: malformed JSON response", { cause });
+  }
+}
+
 // Size-capped to prevent unbounded growth in long-running deployments (#4948)
 const MAX_AUTH_CACHE_SIZE = 32;
 type GoogleAuthModule = typeof import("google-auth-library");
@@ -122,7 +130,7 @@ async function fetchChatCerts(): Promise<Record<string, string>> {
     if (!response.ok) {
       throw new Error(`Failed to fetch Chat certs (${response.status})`);
     }
-    const certs = (await response.json()) as Record<string, string>;
+    const certs = await readGoogleChatCertsResponse(response);
     cachedCerts = { fetchedAt: now, certs };
     return certs;
   } finally {

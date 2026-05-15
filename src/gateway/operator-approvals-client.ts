@@ -3,6 +3,7 @@ import { isLoopbackIpAddress } from "../shared/net/ip.js";
 import { resolveGatewayClientBootstrap } from "./client-bootstrap.js";
 import { startGatewayClientWhenEventLoopReady } from "./client-start-readiness.js";
 import { GatewayClient, type GatewayClientOptions } from "./client.js";
+import { getOperatorApprovalRuntimeToken } from "./operator-approval-runtime-token.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "./protocol/client-info.js";
 
 function isLoopbackGatewayUrl(rawUrl: string): boolean {
@@ -48,6 +49,7 @@ export async function createOperatorApprovalsGatewayClient(
     url: bootstrap.url,
     token: bootstrap.auth.token,
     password: bootstrap.auth.password,
+    ...(params.gatewayUrl ? {} : { approvalRuntimeToken: getOperatorApprovalRuntimeToken() }),
     preauthHandshakeTimeoutMs: bootstrap.preauthHandshakeTimeoutMs,
     clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
     clientDisplayName: params.clientDisplayName,

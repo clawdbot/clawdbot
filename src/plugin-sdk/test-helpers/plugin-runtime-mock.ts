@@ -306,6 +306,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       mutateConfigFile: vi.fn(async () => ({
         path: "/tmp/openclaw.json",
         previousHash: null,
+        persistedHash: null,
         snapshot: {} as never,
         nextConfig: {},
         afterWrite: { mode: "auto" },
@@ -315,6 +316,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       replaceConfigFile: vi.fn(async ({ nextConfig }) => ({
         path: "/tmp/openclaw.json",
         previousHash: null,
+        persistedHash: null,
         snapshot: {} as never,
         nextConfig,
         afterWrite: { mode: "auto" },

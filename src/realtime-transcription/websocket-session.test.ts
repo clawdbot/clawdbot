@@ -15,6 +15,7 @@ afterEach(async () => {
 async function createRealtimeServer(params?: {
   closeOnConnection?: boolean;
   initialEvent?: unknown;
+  initialText?: string;
   onUpgrade?: (headers: Record<string, string | string[] | undefined>) => void;
   onBinary?: (payload: Buffer) => void;
   onText?: (payload: unknown) => void;
@@ -34,6 +35,9 @@ async function createRealtimeServer(params?: {
       }
       if (params?.initialEvent) {
         ws.send(JSON.stringify(params.initialEvent));
+      }
+      if (params?.initialText) {
+        ws.send(params.initialText);
       }
       ws.on("message", (data, isBinary) => {
         const buffer = Buffer.isBuffer(data)
@@ -255,6 +259,32 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
     const setupError = requireFirstMockArg(onError, "provider setup error");
     expect(setupError).toBeInstanceOf(Error);
     expect(setupError.message).toBe("nope");
+  });
+
+  it("reports malformed websocket JSON with an owned parser error", async () => {
+    const server = await createRealtimeServer({ initialText: "{not json" });
+    const onError = vi.fn();
+    const session = createRealtimeTranscriptionWebSocketSession({
+      providerId: "test",
+      callbacks: { onError },
+      url: server.url,
+      readyOnOpen: true,
+      onMessage: () => {
+        throw new Error("malformed payload should not reach provider handler");
+      },
+      sendAudio: (audio, transport) => {
+        transport.sendBinary(audio);
+      },
+    });
+
+    await session.connect();
+    await vi.waitFor(() => {
+      expect(onError).toHaveBeenCalledTimes(1);
+    });
+    const parseError = requireFirstMockArg(onError, "malformed websocket json error");
+    expect(parseError).toBeInstanceOf(Error);
+    expect(parseError.message).toBe("Realtime transcription websocket received malformed JSON.");
+    session.close();
   });
 
   it("reports pre-ready closes separately from connection timeouts", async () => {

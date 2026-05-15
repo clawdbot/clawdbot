@@ -42,6 +42,7 @@ function createApi(params: {
           return {
             path: "/tmp/openclaw.json",
             previousHash: null,
+            persistedHash: null,
             snapshot: {},
             nextConfig,
             afterWrite: { mode: "auto" },

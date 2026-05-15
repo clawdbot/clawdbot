@@ -479,10 +479,7 @@ function readConfiguredProviderCredential(params: {
   config: OpenClawConfig;
   search: Record<string, unknown> | undefined;
 }): unknown {
-  return (
-    params.provider.getConfiguredCredentialValue?.(params.config) ??
-    params.provider.getCredentialValue(params.search)
-  );
+  return params.provider.getConfiguredCredentialValue?.(params.config);
 }
 
 function readConfiguredProviderCredentialFallback(params: {

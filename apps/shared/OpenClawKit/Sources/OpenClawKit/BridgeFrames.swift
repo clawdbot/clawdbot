@@ -13,12 +13,20 @@ public struct BridgeInvokeRequest: Codable, Sendable {
     public let id: String
     public let command: String
     public let paramsJSON: String?
+    public let nodeId: String?
 
-    public init(type: String = "invoke", id: String, command: String, paramsJSON: String? = nil) {
+    public init(
+        type: String = "invoke",
+        id: String,
+        command: String,
+        paramsJSON: String? = nil,
+        nodeId: String? = nil)
+    {
         self.type = type
         self.id = id
         self.command = command
         self.paramsJSON = paramsJSON
+        self.nodeId = nodeId
     }
 }
 

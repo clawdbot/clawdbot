@@ -1,4 +1,4 @@
-import type { Chat, Message } from "@grammyjs/types";
+import type { Chat, Message } from "grammy/types";
 import { describe, expect, it } from "vitest";
 import { getTelegramSequentialKey } from "./sequential-key.js";
 

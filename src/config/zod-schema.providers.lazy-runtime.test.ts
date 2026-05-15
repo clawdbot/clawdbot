@@ -17,9 +17,9 @@ describe("ChannelsSchema bundled runtime loading", () => {
   });
 
   it("skips bundled channel runtime discovery when only core channel keys are present", async () => {
-    const runtime = await importFreshModule<typeof import("./zod-schema.providers.js")>(
+    const runtime = await importFreshModule<typeof import("./zod-schema.channels-config.js")>(
       import.meta.url,
-      "./zod-schema.providers.js?scope=channels-core-only",
+      "./zod-schema.channels-config.js?scope=channels-core-only",
     );
 
     const parsed = runtime.ChannelsSchema.parse({
@@ -45,9 +45,9 @@ describe("ChannelsSchema bundled runtime loading", () => {
   });
 
   it("does not discover bundled channel runtime metadata during raw schema parsing", async () => {
-    const runtime = await importFreshModule<typeof import("./zod-schema.providers.js")>(
+    const runtime = await importFreshModule<typeof import("./zod-schema.channels-config.js")>(
       import.meta.url,
-      "./zod-schema.providers.js?scope=channels-plugin-owned",
+      "./zod-schema.channels-config.js?scope=channels-plugin-owned",
     );
 
     runtime.ChannelsSchema.parse({

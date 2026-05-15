@@ -124,6 +124,31 @@ describe("handleQaInbound", () => {
     expect(ctxPayload?.SenderId).toBe("alice");
   });
 
+  it("skips malformed inline attachment base64 without dropping the message", async () => {
+    const runtime = createPluginRuntimeMock();
+    setQaChannelRuntime(runtime);
+
+    await handleQaInbound(
+      createQaInboundParams({
+        message: {
+          attachments: [
+            {
+              id: "attachment-1",
+              kind: "image",
+              mimeType: "image/png",
+              contentBase64: "AAA@@@",
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(runtime.channel.turn.runAssembled).toHaveBeenCalledTimes(1);
+    const ctxPayload = firstRunAssembledParams(runtime).ctxPayload;
+    expect(ctxPayload.MediaPath).toBeUndefined();
+    expect(ctxPayload.MediaPaths).toBeUndefined();
+  });
+
   it("uses allowFrom as the group sender fallback for allowlist policy", async () => {
     const runtime = createPluginRuntimeMock();
     setQaChannelRuntime(runtime);

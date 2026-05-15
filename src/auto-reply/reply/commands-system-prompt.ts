@@ -42,6 +42,7 @@ export async function resolveCommandsSystemPromptBundle(
     config: params.cfg,
     sessionKey: params.sessionKey,
     sessionId: targetSessionEntry?.sessionId,
+    agentId: sessionAgentId,
   });
   const sandboxRuntime = resolveSandboxRuntimeStatus({
     cfg: params.cfg,

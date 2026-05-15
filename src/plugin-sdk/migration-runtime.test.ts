@@ -38,6 +38,7 @@ describe("withCachedMigrationConfigRuntime", () => {
         return {
           path: "/tmp/openclaw.json",
           previousHash: null,
+          persistedHash: "test-persisted-hash",
           snapshot: {} as never,
           nextConfig: runtimeConfig,
           afterWrite: { mode: "auto" },
@@ -52,6 +53,7 @@ describe("withCachedMigrationConfigRuntime", () => {
         return {
           path: "/tmp/openclaw.json",
           previousHash: null,
+          persistedHash: "test-persisted-hash",
           snapshot: {} as never,
           nextConfig: runtimeConfig,
           afterWrite: { mode: "auto" },

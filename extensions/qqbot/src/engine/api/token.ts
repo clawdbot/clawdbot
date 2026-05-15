@@ -228,16 +228,22 @@ export class TokenManager {
       `[qqbot:token:${appId}] <<< ${response.status}${traceId ? ` | TraceId: ${traceId}` : ""}`,
     );
 
-    let data: { access_token?: string; expires_in?: number };
+    let rawBody: string;
     try {
-      const rawBody = await response.text();
-      const logBody = rawBody.replace(/"access_token"\s*:\s*"[^"]+"/g, '"access_token": "***"');
-      this.logger?.debug?.(`[qqbot:token:${appId}] <<< Body: ${logBody}`);
-      data = JSON.parse(rawBody);
+      rawBody = await response.text();
     } catch (err) {
-      throw new Error(`Failed to parse access_token response: ${formatErrorMessage(err)}`, {
+      throw new Error(`Failed to read access_token response: ${formatErrorMessage(err)}`, {
         cause: err,
       });
+    }
+    const logBody = rawBody.replace(/"access_token"\s*:\s*"[^"]+"/g, '"access_token": "***"');
+    this.logger?.debug?.(`[qqbot:token:${appId}] <<< Body: ${logBody}`);
+
+    let data: { access_token?: string; expires_in?: number };
+    try {
+      data = JSON.parse(rawBody);
+    } catch {
+      throw new Error("QQBot access_token response was malformed JSON");
     }
 
     if (!data.access_token) {

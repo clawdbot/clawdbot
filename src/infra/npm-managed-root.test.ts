@@ -3,12 +3,14 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { CommandOptions } from "../process/exec.js";
 import {
   repairManagedNpmRootOpenClawPeer,
   removeManagedNpmRootDependency,
   readManagedNpmRootInstalledDependency,
   readOpenClawManagedNpmRootOverrides,
   resolveManagedNpmRootDependencySpec,
+  syncManagedNpmRootPeerDependencies,
   upsertManagedNpmRootDependency,
 } from "./npm-managed-root.js";
 
@@ -53,12 +55,25 @@ async function expectPathMissing(targetPath: string): Promise<void> {
   throw new Error(`Expected path to be missing: ${targetPath}`);
 }
 
-function requireFirstMockCall<T>(mock: { mock: { calls: T[][] } }, label: string): T[] {
+function requireFirstMockCall<T extends unknown[]>(
+  mock: { mock: { calls: T[] } },
+  label: string,
+): T {
   const call = mock.mock.calls[0];
   if (!call) {
     throw new Error(`expected ${label} call`);
   }
   return call;
+}
+
+function requireCommandOptions(
+  options: number | CommandOptions | undefined,
+  label: string,
+): CommandOptions {
+  if (!options || typeof options === "number") {
+    throw new Error(`expected ${label} command options`);
+  }
+  return options;
 }
 
 describe("managed npm root", () => {
@@ -358,6 +373,334 @@ describe("managed npm root", () => {
     });
   });
 
+  it("syncs managed peer dependencies from npm's resolved lockfile plan", async () => {
+    const npmRoot = await makeTempRoot();
+    await fs.writeFile(
+      path.join(npmRoot, "package.json"),
+      `${JSON.stringify(
+        {
+          private: true,
+          dependencies: {
+            "existing-root": "1.0.0",
+            "old-peer": "1.0.0",
+            plugin: "1.0.0",
+          },
+          devDependencies: {
+            "dev-plugin": "1.0.0",
+          },
+          openclaw: {
+            managedPeerDependencies: ["old-peer"],
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    const runCommand = vi.fn(async (_args: string[], optionsOrTimeout: number | CommandOptions) => {
+      const options = requireCommandOptions(optionsOrTimeout, "npm peer plan");
+      if (!options.cwd) {
+        throw new Error("expected npm peer plan cwd");
+      }
+      const tempManifest = JSON.parse(
+        await fs.readFile(path.join(options.cwd, "package.json"), "utf8"),
+      ) as {
+        dependencies?: Record<string, string>;
+      };
+      expect(tempManifest.dependencies).toEqual({
+        "existing-root": "1.0.0",
+        plugin: "1.0.0",
+      });
+      await fs.writeFile(
+        path.join(options.cwd, "package-lock.json"),
+        `${JSON.stringify(
+          {
+            lockfileVersion: 3,
+            packages: {
+              "": {
+                dependencies: tempManifest.dependencies,
+              },
+              "node_modules/existing-root": {
+                version: "1.0.0",
+              },
+              "node_modules/dev-peer": {
+                dev: true,
+                version: "3.0.0",
+              },
+              "node_modules/dev-plugin": {
+                dev: true,
+                peerDependencies: {
+                  "dev-peer": "^3.0.0",
+                },
+                version: "1.0.0",
+              },
+              "node_modules/new-peer": {
+                peer: true,
+                version: "2.1.0",
+              },
+              "node_modules/openclaw": {
+                peer: true,
+                version: "2026.5.12",
+              },
+              "node_modules/plugin": {
+                peerDependencies: {
+                  "existing-root": "^1.0.0",
+                  "new-peer": "^2.0.0",
+                  openclaw: ">=2026.5.0",
+                },
+                version: "1.0.0",
+              },
+              "node_modules/unsupported-optional": {
+                optional: true,
+                os: [process.platform === "win32" ? "darwin" : "win32"],
+                peerDependencies: {
+                  "unsupported-peer": "^9.0.0",
+                },
+                version: "1.0.0",
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      return successfulSpawn;
+    });
+
+    await expect(syncManagedNpmRootPeerDependencies({ npmRoot, runCommand })).resolves.toBe(true);
+
+    const [args, rawOptions] = requireFirstMockCall(runCommand, "npm peer plan command");
+    const options = requireCommandOptions(rawOptions, "npm peer plan");
+    expect(args).toEqual([
+      "npm",
+      "install",
+      "--package-lock-only",
+      "--force",
+      "--omit=dev",
+      "--omit=peer",
+      "--loglevel=error",
+      "--ignore-scripts",
+      "--workspaces=false",
+      "--no-audit",
+      "--no-fund",
+    ]);
+    expect(options?.cwd).not.toBe(npmRoot);
+    expect(options?.env?.npm_config_legacy_peer_deps).toBe("false");
+
+    await expect(
+      fs.readFile(path.join(npmRoot, "package.json"), "utf8").then((raw) => JSON.parse(raw)),
+    ).resolves.toEqual({
+      private: true,
+      dependencies: {
+        "existing-root": "1.0.0",
+        "new-peer": "2.1.0",
+        plugin: "1.0.0",
+      },
+      devDependencies: {
+        "dev-plugin": "1.0.0",
+      },
+      openclaw: {
+        managedPeerDependencies: ["new-peer"],
+      },
+    });
+  });
+
+  it("preserves existing managed peer dependencies when npm cannot plan third-party peers", async () => {
+    const npmRoot = await makeTempRoot();
+    await fs.writeFile(
+      path.join(npmRoot, "package.json"),
+      `${JSON.stringify(
+        {
+          private: true,
+          dependencies: {
+            plugin: "1.0.0",
+            "runtime-peer": "2.0.0",
+          },
+          openclaw: {
+            managedPeerDependencies: ["runtime-peer"],
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    const runCommand = vi.fn(async () => ({
+      code: 1,
+      stdout: "",
+      stderr: "npm ERR! ERESOLVE could not resolve third-party peer dependency",
+      signal: null,
+      killed: false,
+      termination: "exit" as const,
+    }));
+
+    await expect(syncManagedNpmRootPeerDependencies({ npmRoot, runCommand })).resolves.toBe(false);
+    expect(runCommand).toHaveBeenCalledTimes(1);
+    await expect(
+      fs.readFile(path.join(npmRoot, "package.json"), "utf8").then((raw) => JSON.parse(raw)),
+    ).resolves.toEqual({
+      private: true,
+      dependencies: {
+        plugin: "1.0.0",
+        "runtime-peer": "2.0.0",
+      },
+      openclaw: {
+        managedPeerDependencies: ["runtime-peer"],
+      },
+    });
+  });
+
+  it("uses lockfile metadata to preserve non-host peers when host peer planning fails", async () => {
+    const npmRoot = await makeTempRoot();
+    await fs.writeFile(
+      path.join(npmRoot, "package.json"),
+      `${JSON.stringify(
+        {
+          private: true,
+          dependencies: {
+            plugin: "1.0.0",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    const runCommand = vi.fn(async (_args: string[], optionsOrTimeout: number | CommandOptions) => {
+      const options = requireCommandOptions(optionsOrTimeout, "npm peer plan");
+      if (!options.cwd) {
+        throw new Error("expected npm peer plan cwd");
+      }
+      if (runCommand.mock.calls.length === 1) {
+        return {
+          code: 1,
+          stdout: "",
+          stderr: "npm ERR! notarget No matching version found for openclaw@2026.5.99-beta.1",
+          signal: null,
+          killed: false,
+          termination: "exit" as const,
+        };
+      }
+      await fs.writeFile(
+        path.join(options.cwd, "package-lock.json"),
+        `${JSON.stringify(
+          {
+            lockfileVersion: 3,
+            packages: {
+              "": {
+                dependencies: {
+                  plugin: "1.0.0",
+                },
+              },
+              "node_modules/plugin": {
+                peerDependencies: {
+                  openclaw: "2026.5.99-beta.1",
+                  "runtime-peer": "^2.0.0",
+                },
+                version: "1.0.0",
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      return successfulSpawn;
+    });
+
+    await expect(syncManagedNpmRootPeerDependencies({ npmRoot, runCommand })).resolves.toBe(true);
+    expect(runCommand).toHaveBeenCalledTimes(2);
+    const [strictArgs, rawStrictOptions] = runCommand.mock.calls[0] ?? [];
+    const [fallbackArgs, rawFallbackOptions] = runCommand.mock.calls[1] ?? [];
+    const strictOptions = requireCommandOptions(rawStrictOptions, "strict npm peer plan");
+    const fallbackOptions = requireCommandOptions(rawFallbackOptions, "fallback npm peer plan");
+    expect(strictArgs).not.toContain("--legacy-peer-deps");
+    expect(strictOptions.env?.npm_config_legacy_peer_deps).toBe("false");
+    expect(fallbackArgs).toContain("--legacy-peer-deps");
+    expect(fallbackOptions.env?.npm_config_legacy_peer_deps).toBe("true");
+    await expect(
+      fs.readFile(path.join(npmRoot, "package.json"), "utf8").then((raw) => JSON.parse(raw)),
+    ).resolves.toEqual({
+      private: true,
+      dependencies: {
+        plugin: "1.0.0",
+        "runtime-peer": "^2.0.0",
+      },
+      openclaw: {
+        managedPeerDependencies: ["runtime-peer"],
+      },
+    });
+  });
+
+  it("does not promote nested transitive lockfile versions into managed root peers", async () => {
+    const npmRoot = await makeTempRoot();
+    await fs.writeFile(
+      path.join(npmRoot, "package.json"),
+      `${JSON.stringify(
+        {
+          private: true,
+          dependencies: {
+            plugin: "1.0.0",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    const runCommand = vi.fn(async (_args: string[], optionsOrTimeout: number | CommandOptions) => {
+      const options = requireCommandOptions(optionsOrTimeout, "npm peer plan");
+      if (!options.cwd) {
+        throw new Error("expected npm peer plan cwd");
+      }
+      await fs.writeFile(
+        path.join(options.cwd, "package-lock.json"),
+        `${JSON.stringify(
+          {
+            lockfileVersion: 3,
+            packages: {
+              "": {
+                dependencies: {
+                  plugin: "1.0.0",
+                },
+              },
+              "node_modules/plugin": {
+                peerDependencies: {
+                  "runtime-peer": "^2.0.0",
+                },
+                version: "1.0.0",
+              },
+              "node_modules/transitive": {
+                version: "1.0.0",
+              },
+              "node_modules/transitive/node_modules/runtime-peer": {
+                version: "1.0.0",
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      return successfulSpawn;
+    });
+
+    await expect(syncManagedNpmRootPeerDependencies({ npmRoot, runCommand })).resolves.toBe(true);
+
+    await expect(
+      fs.readFile(path.join(npmRoot, "package.json"), "utf8").then((raw) => JSON.parse(raw)),
+    ).resolves.toEqual({
+      private: true,
+      dependencies: {
+        plugin: "1.0.0",
+        "runtime-peer": "^2.0.0",
+      },
+      openclaw: {
+        managedPeerDependencies: ["runtime-peer"],
+      },
+    });
+  });
+
   it("removes one managed dependency without dropping unrelated metadata", async () => {
     const npmRoot = await makeTempRoot();
     await fs.writeFile(
@@ -469,7 +812,8 @@ describe("managed npm root", () => {
     const runCommand = vi.fn().mockResolvedValue(successfulSpawn);
     await expect(repairManagedNpmRootOpenClawPeer({ npmRoot, runCommand })).resolves.toBe(true);
     expect(runCommand).toHaveBeenCalledTimes(1);
-    const [repairArgs, repairOptions] = requireFirstMockCall(runCommand, "repair command");
+    const [repairArgs, rawRepairOptions] = requireFirstMockCall(runCommand, "repair command");
+    const repairOptions = requireCommandOptions(rawRepairOptions, "repair");
     expect(repairArgs).toEqual([
       "npm",
       "uninstall",
@@ -507,5 +851,72 @@ describe("managed npm root", () => {
       await expectPathMissing(path.join(npmRoot, "node_modules", ".bin", binName));
     }
     await expectPathMissing(path.join(npmRoot, "node_modules", ".package-lock.json"));
+  });
+
+  it("does not repair the active OpenClaw host package in a root-managed install", async () => {
+    const npmRoot = await makeTempRoot();
+    const hostPackageRoot = path.join(npmRoot, "node_modules", "openclaw");
+    await fs.mkdir(path.join(hostPackageRoot, "dist"), { recursive: true });
+    await fs.writeFile(
+      path.join(npmRoot, "package.json"),
+      `${JSON.stringify(
+        {
+          private: true,
+          dependencies: {
+            openclaw: "2026.5.12-beta.6",
+            "@xdarkicex/openclaw-memory-libravdb": "1.4.69",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await fs.writeFile(
+      path.join(npmRoot, "package-lock.json"),
+      `${JSON.stringify(
+        {
+          lockfileVersion: 3,
+          packages: {
+            "": {
+              dependencies: {
+                openclaw: "2026.5.12-beta.6",
+                "@xdarkicex/openclaw-memory-libravdb": "1.4.69",
+              },
+            },
+            "node_modules/openclaw": {
+              version: "2026.5.12-beta.6",
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    await fs.writeFile(
+      path.join(hostPackageRoot, "package.json"),
+      `${JSON.stringify({ name: "openclaw", version: "2026.5.12-beta.6" })}\n`,
+    );
+
+    const runCommand = vi.fn().mockResolvedValue(successfulSpawn);
+    await expect(
+      repairManagedNpmRootOpenClawPeer({
+        npmRoot,
+        packageRoot: hostPackageRoot,
+        runCommand,
+      }),
+    ).resolves.toBe(false);
+
+    expect(runCommand).not.toHaveBeenCalled();
+    await expect(
+      fs.readFile(path.join(npmRoot, "package.json"), "utf8").then((raw) => JSON.parse(raw)),
+    ).resolves.toMatchObject({
+      dependencies: {
+        openclaw: "2026.5.12-beta.6",
+        "@xdarkicex/openclaw-memory-libravdb": "1.4.69",
+      },
+    });
+    await expect(
+      fs.readFile(path.join(hostPackageRoot, "package.json"), "utf8"),
+    ).resolves.toContain("2026.5.12-beta.6");
   });
 });

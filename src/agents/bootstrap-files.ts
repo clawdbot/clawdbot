@@ -3,7 +3,7 @@ import path from "node:path";
 import type { AgentContextInjection } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { resolveSessionAgentIds } from "./agent-scope.js";
+import { resolveAgentConfig, resolveSessionAgentIds } from "./agent-scope.js";
 import { getOrLoadBootstrapFiles } from "./bootstrap-cache.js";
 import { applyBootstrapHookOverrides } from "./bootstrap-hooks.js";
 import { shouldIncludeHeartbeatGuidanceForSystemPrompt } from "./heartbeat-system-prompt.js";
@@ -51,7 +51,15 @@ export function _resetBootstrapWarningCacheForTest(): void {
   bootstrapWarningOrder.length = 0;
 }
 
-export function resolveContextInjectionMode(config?: OpenClawConfig): AgentContextInjection {
+export function resolveContextInjectionMode(
+  config?: OpenClawConfig,
+  agentId?: string | null,
+): AgentContextInjection {
+  const agentMode =
+    config && agentId ? resolveAgentConfig(config, agentId)?.contextInjection : undefined;
+  if (agentMode === "always" || agentMode === "continuation-skip" || agentMode === "never") {
+    return agentMode;
+  }
   return config?.agents?.defaults?.contextInjection ?? "always";
 }
 
@@ -287,12 +295,13 @@ export function buildBootstrapContextForFiles(
   bootstrapFiles: WorkspaceBootstrapFile[],
   params: {
     config?: OpenClawConfig;
+    agentId?: string | null;
     warn?: (message: string) => void;
   },
 ): EmbeddedContextFile[] {
   const contextFiles = buildBootstrapContextFiles(bootstrapFiles, {
-    maxChars: resolveBootstrapMaxChars(params.config),
-    totalMaxChars: resolveBootstrapTotalMaxChars(params.config),
+    maxChars: resolveBootstrapMaxChars(params.config, params.agentId),
+    totalMaxChars: resolveBootstrapTotalMaxChars(params.config, params.agentId),
     warn: params.warn,
   });
   return contextFiles;

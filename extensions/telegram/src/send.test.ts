@@ -686,6 +686,38 @@ describe("sendMessageTelegram", () => {
     }
   });
 
+  it("derives plain-text fallback from html-mode anchors when Telegram rejects HTML", async () => {
+    const chatId = "123";
+    const htmlText =
+      'Created: <a href="https://example.com/a?x=1&amp;y=2">Task &amp; One</a> <code>file.md</code>';
+    const parseErr = new Error(
+      "400: Bad Request: can't parse entities: Can't find end of the entity starting at byte offset 9",
+    );
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(parseErr)
+      .mockResolvedValueOnce({ message_id: 43, chat: { id: chatId } });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    const res = await sendMessageTelegram(chatId, htmlText, {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      api,
+      textMode: "html",
+    });
+
+    expect(sendMessage).toHaveBeenNthCalledWith(1, chatId, htmlText, { parse_mode: "HTML" });
+    expect(sendMessage).toHaveBeenNthCalledWith(
+      2,
+      chatId,
+      "Created: Task & One (https://example.com/a?x=1&y=2) file.md",
+    );
+    expect(res.chatId).toBe(chatId);
+    expect(res.messageId).toBe("43");
+  });
+
   it("keeps link_preview_options disabled for both html and plain-text fallback", async () => {
     const parseErr = new Error(
       "400: Bad Request: can't parse entities: Can't find end of the entity starting at byte offset 9",
@@ -2802,6 +2834,28 @@ describe("editMessageTelegram", () => {
       }),
     ).resolves.toEqual({ ok: true, messageId: "1", chatId: "123" });
     expect(botApi.editMessageText).toHaveBeenCalledTimes(1);
+  });
+
+  it("derives readable plain text when Telegram rejects edited HTML", async () => {
+    botApi.editMessageText
+      .mockRejectedValueOnce(new Error("400: Bad Request: can't parse entities"))
+      .mockResolvedValueOnce({ message_id: 1, chat: { id: "123" } });
+
+    await editMessageTelegram(
+      "123",
+      1,
+      'Created: <a href="https://example.com/a?x=1&amp;y=2">Task &lt;id&gt;</a>',
+      {
+        token: "tok",
+        cfg: {},
+        textMode: "html",
+      },
+    );
+
+    expect(botApi.editMessageText).toHaveBeenCalledTimes(2);
+    expect(mockCall(botApi.editMessageText, 1, "plain edit fallback")[2]).toBe(
+      "Created: Task <id> (https://example.com/a?x=1&y=2)",
+    );
   });
 
   it("retries editMessageTelegram on Telegram 5xx errors", async () => {

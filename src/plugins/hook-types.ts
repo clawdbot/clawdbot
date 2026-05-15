@@ -196,7 +196,19 @@ export type PluginHookAgentContext = {
   messageProvider?: string;
   trigger?: string;
   channelId?: string;
+  /** Resolved effective context-token budget after model/config/agent caps. */
+  contextTokenBudget?: number;
+  /** Source that supplied the resolved context-token budget. */
+  contextWindowSource?: PluginHookContextWindowSource;
+  /** Native/configured reference window when a lower cap wins. */
+  contextWindowReferenceTokens?: number;
 };
+
+export type PluginHookContextWindowSource =
+  | "model"
+  | "modelsConfig"
+  | "agentContextTokens"
+  | "default";
 
 export type PluginHookBeforeAgentReplyEvent = {
   cleanedBody: string;
@@ -229,6 +241,12 @@ export type PluginHookModelCallBaseEvent = {
   model: string;
   api?: string;
   transport?: string;
+  /** Resolved effective context-token budget after model/config/agent caps. */
+  contextTokenBudget?: number;
+  /** Source that supplied the resolved context-token budget. */
+  contextWindowSource?: PluginHookContextWindowSource;
+  /** Native/configured reference window when a lower cap wins. */
+  contextWindowReferenceTokens?: number;
 };
 
 export type PluginHookModelCallStartedEvent = PluginHookModelCallBaseEvent;
@@ -249,6 +267,12 @@ export type PluginHookLlmOutputEvent = {
   sessionId: string;
   provider: string;
   model: string;
+  /** Resolved effective context-token budget after model/config/agent caps. */
+  contextTokenBudget?: number;
+  /** Source that supplied the resolved context-token budget. */
+  contextWindowSource?: PluginHookContextWindowSource;
+  /** Native/configured reference window when a lower cap wins. */
+  contextWindowReferenceTokens?: number;
   /**
    * Fully resolved provider/model ref used for the call.
    *

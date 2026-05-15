@@ -27,6 +27,25 @@ Healthy baseline:
 - `Capability: read-only`, `write-capable`, or `admin-capable`
 - Channel probe shows transport connected and, where supported, `works` or `audit ok`
 
+## After an update
+
+Use this when Telegram, iMessage, BlueBubbles-era configs, or another plugin
+channel disappears after updating.
+
+```bash
+openclaw status --all
+openclaw doctor --fix
+openclaw gateway restart
+openclaw status --all
+```
+
+Look for `plugin load failed: dependency tree corrupted; run openclaw doctor
+--fix` in `openclaw status --all`. That means the channel is configured, but
+the plugin setup/load path hit a corrupt dependency tree instead of registering
+the channel. `openclaw doctor --fix` removes stale plugin dependency staging
+directories and stale auth shadows, then `openclaw gateway restart` reloads the
+clean state.
+
 ## WhatsApp
 
 ### WhatsApp failure signatures

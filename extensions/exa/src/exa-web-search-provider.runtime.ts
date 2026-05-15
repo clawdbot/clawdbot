@@ -66,6 +66,14 @@ type ExaSearchResponse = {
   results?: unknown;
 };
 
+async function readExaSearchResults(response: Response): Promise<ExaSearchResult[]> {
+  try {
+    return normalizeExaResults(await response.json());
+  } catch (cause) {
+    throw new Error("Exa API returned malformed JSON", { cause });
+  }
+}
+
 function normalizeExaFreshness(value: string | undefined): ExaFreshness | undefined {
   const trimmed = normalizeOptionalLowercaseString(value);
   if (!trimmed) {
@@ -400,11 +408,7 @@ async function runExaSearch(params: {
         const detail = await res.text();
         throw new Error(`Exa API error (${res.status}): ${detail || res.statusText}`);
       }
-      try {
-        return normalizeExaResults(await res.json());
-      } catch (error) {
-        throw new Error(`Exa API returned invalid JSON: ${String(error)}`, { cause: error });
-      }
+      return readExaSearchResults(res);
     },
   );
 }
@@ -596,4 +600,5 @@ export const __testing = {
   resolveExaSearchCount,
   resolveExaSearchEndpoint,
   resolveFreshnessStartDate,
+  readExaSearchResults,
 } as const;

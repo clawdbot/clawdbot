@@ -7,7 +7,7 @@ import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { WizardSession } from "../../wizard/session.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
-import type { ExecApprovalManager } from "../exec-approval-manager.js";
+import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
 import type { NodeRegistry } from "../node-registry.js";
 import type { PluginNodeCapabilitySurface } from "../plugin-node-capability.js";
 import type { ConnectParams, ErrorShape, RequestFrame } from "../protocol/index.js";
@@ -29,6 +29,7 @@ export type GatewayClient = {
   isDeviceTokenAuth?: boolean;
   internal?: {
     allowModelOverride?: boolean;
+    approvalRuntime?: boolean;
     pluginRuntimeOwnerId?: string;
   };
 };
@@ -66,6 +67,11 @@ export type GatewayRequestContext = {
   nodeUnsubscribeAll: (nodeId: string) => void;
   hasConnectedTalkNode: () => boolean;
   hasExecApprovalClients?: (excludeConnId?: string) => boolean;
+  getApprovalClientConnIds?: <TPayload>(params?: {
+    excludeConnId?: string;
+    filter?: (client: GatewayClient, record?: ExecApprovalRecord<TPayload>) => boolean;
+    record?: ExecApprovalRecord<TPayload>;
+  }) => ReadonlySet<string>;
   disconnectClientsForDevice?: (deviceId: string, opts?: { role?: string }) => void;
   disconnectClientsUsingSharedGatewayAuth?: () => void;
   enforceSharedGatewayAuthGenerationForConfigWrite?: (nextConfig: OpenClawConfig) => void;

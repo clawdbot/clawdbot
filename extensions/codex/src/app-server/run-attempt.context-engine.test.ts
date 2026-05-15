@@ -9,12 +9,37 @@ import {
   type HarnessContextEngine as ContextEngine,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { CodexAppServerClientFactory } from "./client-factory.js";
 import type { CodexServerNotification } from "./protocol.js";
-import { runCodexAppServerAttempt, __testing } from "./run-attempt.js";
+import { runCodexAppServerAttempt as runCodexAppServerAttemptImpl } from "./run-attempt.js";
 import { readCodexAppServerBinding, writeCodexAppServerBinding } from "./session-binding.js";
 import { createCodexTestModel } from "./test-support.js";
 
 let tempDir: string;
+let codexAppServerClientFactoryForTest: CodexAppServerClientFactory | undefined;
+
+type RunCodexAppServerAttemptOptions = NonNullable<
+  Parameters<typeof runCodexAppServerAttemptImpl>[1]
+>;
+
+function setCodexAppServerClientFactoryForTest(factory: CodexAppServerClientFactory): void {
+  codexAppServerClientFactoryForTest = factory;
+}
+
+function resetCodexAppServerClientFactoryForTest(): void {
+  codexAppServerClientFactoryForTest = undefined;
+}
+
+function runCodexAppServerAttempt(
+  params: EmbeddedRunAttemptParams,
+  options: RunCodexAppServerAttemptOptions = {},
+) {
+  const clientFactory = options.clientFactory ?? codexAppServerClientFactoryForTest;
+  return runCodexAppServerAttemptImpl(
+    params,
+    clientFactory ? { ...options, clientFactory } : options,
+  );
+}
 
 function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAttemptParams {
   return {
@@ -133,7 +158,7 @@ function createStartedThreadHarness(
     return {};
   });
 
-  __testing.setCodexAppServerClientFactoryForTests(
+  setCodexAppServerClientFactoryForTest(
     async () =>
       ({
         request,
@@ -258,7 +283,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   });
 
   afterEach(async () => {
-    __testing.resetCodexAppServerClientFactoryForTests();
+    resetCodexAppServerClientFactoryForTest();
     vi.restoreAllMocks();
     await fs.rm(tempDir, { recursive: true, force: true });
   });

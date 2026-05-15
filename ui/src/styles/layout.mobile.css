@@ -4,10 +4,11 @@
 
 @media (max-width: 1320px) {
   .content--chat .content-header {
-    align-items: stretch;
+    align-items: center;
     gap: 8px;
     row-gap: 0;
-    max-height: 56px;
+    min-height: 44px;
+    max-height: 44px;
     overflow: visible;
   }
 
@@ -16,6 +17,9 @@
   }
 
   .content--chat .page-meta {
+    align-self: center;
+    height: 36px;
+    align-items: center;
     min-width: 0;
     justify-content: flex-end;
     flex-wrap: nowrap;
@@ -505,28 +509,18 @@
   }
 
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__thinking {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    justify-content: flex-end;
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    align-items: center;
+    justify-content: stretch;
+    gap: 8px;
     width: 100%;
     padding: 0;
   }
 
-  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__autoscroll {
-    flex: 1 1 100%;
-    max-width: none;
-    min-width: 0;
-  }
-
-  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__autoscroll-select {
-    width: 100%;
-    height: 40px;
-  }
-
   .chat-mobile-controls-wrapper .chat-controls-dropdown .btn--icon {
-    width: 44px;
-    min-width: 44px;
+    width: 100%;
+    min-width: 0;
     height: 44px;
   }
 

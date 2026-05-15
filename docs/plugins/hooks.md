@@ -114,7 +114,7 @@ observation-only.
 
 - `model_call_started` / `model_call_ended` - observe sanitized provider/model call metadata, timing, outcome, and bounded request-id hashes without prompt or response content
 - `llm_input` - observe provider input (system prompt, prompt, history)
-- `llm_output` - observe provider output
+- `llm_output` - observe provider output, usage, and the resolved `contextTokenBudget` when available
 
 **Tools**
 
@@ -287,7 +287,11 @@ that should not receive raw prompts, history, responses, headers, request
 bodies, or provider request IDs. These hooks include stable metadata such as
 `runId`, `callId`, `provider`, `model`, optional `api`/`transport`, terminal
 `durationMs`/`outcome`, and `upstreamRequestIdHash` when OpenClaw can derive a
-bounded provider request-id hash.
+bounded provider request-id hash. When the runtime has resolved context-window
+metadata, the hook event and context also include `contextTokenBudget`, the
+effective token budget after model/config/agent caps, plus
+`contextWindowSource` and `contextWindowReferenceTokens` when a lower cap was
+applied.
 
 `before_agent_finalize` runs only when a harness is about to accept a natural
 final assistant answer. It is not the `/stop` cancellation path and does not

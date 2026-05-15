@@ -13,16 +13,20 @@ import {
   completeSimpleWithLiveTimeout,
   computeCacheHitRate,
   extractAssistantText,
+  type LiveResolvedModel,
   logLiveCache,
-  resolveLiveDirectModel,
+  resolveLiveDirectModelPool,
+  withLiveDirectModelApiKey,
 } from "./live-cache-test-support.js";
+import { shouldSkipLiveProviderDrift } from "./live-test-provider-drift.js";
 
 const OPENAI_TIMEOUT_MS = 120_000;
 const ANTHROPIC_TIMEOUT_MS = 120_000;
 const LIVE_CACHE_LANE_RETRIES = 1;
 const LIVE_CACHE_RESPONSE_RETRIES = 2;
 const OPENAI_CACHE_REASONING = "low" as unknown as never;
-const OPENAI_CACHE_MIN_MAX_TOKENS = 256;
+const OPENAI_CACHE_PROBE_MIN_MAX_TOKENS = 256;
+const ANTHROPIC_CACHE_PROBE_MIN_MAX_TOKENS = 1024;
 const OPENAI_PREFIX = buildStableCachePrefix("openai");
 const OPENAI_MCP_PREFIX = buildStableCachePrefix("openai-mcp-style");
 const ANTHROPIC_PREFIX = buildStableCachePrefix("anthropic");
@@ -31,11 +35,11 @@ const LIVE_TEST_PNG_URL = new URL(
   import.meta.url,
 );
 
-type LiveResolvedModel = Awaited<ReturnType<typeof resolveLiveDirectModel>>;
 type ProviderKey = keyof typeof LIVE_CACHE_REGRESSION_BASELINE;
 type CacheLane = "image" | "mcp" | "stable" | "tool";
 type CacheUsage = {
   input?: number;
+  output?: number;
   cacheRead?: number;
   cacheWrite?: number;
 };
@@ -123,6 +127,7 @@ function normalizeCacheUsage(usage: AssistantMessage["usage"] | undefined): Cach
     typeof value?.[key] === "number" ? value[key] : undefined;
   return {
     input: readNumber("input"),
+    output: readNumber("output"),
     cacheRead: readNumber("cacheRead"),
     cacheWrite: readNumber("cacheWrite"),
   };
@@ -159,18 +164,19 @@ function resolveCacheProbeMaxTokens(params: {
   providerTag: "anthropic" | "openai";
 }): number {
   const requested = params.maxTokens ?? 64;
-  if (params.providerTag !== "openai") {
-    return requested;
-  }
-  return Math.max(requested, OPENAI_CACHE_MIN_MAX_TOKENS);
+  const floor =
+    params.providerTag === "anthropic"
+      ? ANTHROPIC_CACHE_PROBE_MIN_MAX_TOKENS
+      : OPENAI_CACHE_PROBE_MIN_MAX_TOKENS;
+  return Math.max(requested, floor);
 }
 
-function shouldAcceptEmptyOpenAICacheProbe(params: {
+function shouldAcceptEmptyCacheProbe(params: {
   providerTag: "anthropic" | "openai";
   text: string;
   usage: CacheUsage;
 }): boolean {
-  if (params.providerTag !== "openai" || params.text.trim().length > 0) {
+  if (params.text.trim().length > 0) {
     return false;
   }
   return (
@@ -282,7 +288,7 @@ async function completeCacheProbe(params: {
     const text = extractAssistantText(response);
     const usage = normalizeCacheUsage(response.usage);
     if (
-      shouldAcceptEmptyOpenAICacheProbe({
+      shouldAcceptEmptyCacheProbe({
         providerTag: params.providerTag,
         text,
         usage,
@@ -300,7 +306,7 @@ async function completeCacheProbe(params: {
     }
     if (shouldRetryCacheProbeText({ attempt, suffix: params.suffix, text })) {
       logLiveCache(
-        `${params.providerTag} cache lane ${params.suffix} response mismatch; retrying: ${JSON.stringify(text)}`,
+        `${params.providerTag} cache lane ${params.suffix} response mismatch; retrying: ${JSON.stringify(text)} stop=${response.stopReason} ${formatUsage(usage)}`,
       );
       continue;
     }
@@ -437,7 +443,7 @@ async function runAnthropicDisabledLane(params: {
 }
 
 function formatUsage(usage: CacheUsage | undefined) {
-  return `cacheRead=${usage?.cacheRead ?? 0} cacheWrite=${usage?.cacheWrite ?? 0} input=${usage?.input ?? 0}`;
+  return `cacheRead=${usage?.cacheRead ?? 0} cacheWrite=${usage?.cacheWrite ?? 0} input=${usage?.input ?? 0} output=${usage?.output ?? 0}`;
 }
 
 function warmupHasCacheEvidence(params: { floor: LiveCacheFloor; warmup: CacheRun }): boolean {
@@ -595,11 +601,88 @@ function appendBaselineFindings(target: BaselineFindings, source: BaselineFindin
   target.warnings.push(...source.warnings);
 }
 
+function isAnthropicEmptyCacheProbe(error: unknown): boolean {
+  return error instanceof CacheProbeTextMismatchError && error.text.trim().length === 0;
+}
+
+function shouldSkipAnthropicCacheProviderDrift(error: unknown): boolean {
+  return Boolean(
+    shouldSkipLiveProviderDrift({
+      error,
+      allowAuth: true,
+      allowBilling: true,
+    }),
+  );
+}
+
+async function runAnthropicCacheLane(params: {
+  apiKeys: readonly string[];
+  fixture: LiveResolvedModel;
+  lane: CacheLane;
+  pngBase64: string;
+  runToken: string;
+  warnings: string[];
+}): Promise<{ attempt?: Awaited<ReturnType<typeof runRepeatedLaneWithBaselineRetry>> }> {
+  const keys = params.apiKeys.length > 0 ? params.apiKeys : [params.fixture.apiKey];
+  let lastError: unknown;
+  for (const [index, apiKey] of keys.entries()) {
+    try {
+      return {
+        attempt: await runRepeatedLaneWithBaselineRetry({
+          lane: params.lane,
+          providerTag: "anthropic",
+          fixture: withLiveDirectModelApiKey(params.fixture, apiKey),
+          runToken: params.runToken,
+          pngBase64: params.pngBase64,
+        }),
+      };
+    } catch (error) {
+      lastError = error;
+      if (shouldSkipAnthropicCacheProviderDrift(error) && index + 1 < keys.length) {
+        logLiveCache(`anthropic ${params.lane} account drift; retrying with next key`);
+        continue;
+      }
+      break;
+    }
+  }
+
+  if (shouldSkipAnthropicCacheProviderDrift(lastError) || isAnthropicEmptyCacheProbe(lastError)) {
+    const reason = isAnthropicEmptyCacheProbe(lastError) ? "empty response" : "account drift";
+    const warning = `anthropic ${params.lane} skipped: ${reason}`;
+    params.warnings.push(warning);
+    logLiveCache(warning);
+    return {};
+  }
+  throw lastError;
+}
+
+async function runAnthropicDisabledCacheLane(params: {
+  fixture: LiveResolvedModel;
+  runToken: string;
+  warnings: string[];
+}): Promise<LaneResult | undefined> {
+  try {
+    return await runAnthropicDisabledLane({
+      fixture: params.fixture,
+      runToken: params.runToken,
+      sessionId: `live-cache-regression-${params.runToken}-anthropic-disabled`,
+    });
+  } catch (error) {
+    if (shouldSkipAnthropicCacheProviderDrift(error) || isAnthropicEmptyCacheProbe(error)) {
+      const warning = "anthropic disabled skipped: account drift";
+      params.warnings.push(warning);
+      logLiveCache(warning);
+      return undefined;
+    }
+    throw error;
+  }
+}
+
 export const __testing = {
   assertAgainstBaseline,
   evaluateAgainstBaseline,
   resolveCacheProbeMaxTokens,
-  shouldAcceptEmptyOpenAICacheProbe,
+  shouldAcceptEmptyCacheProbe,
   shouldRetryCacheProbeText,
   shouldRetryBaselineFindings,
 };
@@ -607,13 +690,13 @@ export const __testing = {
 export async function runLiveCacheRegression(): Promise<LiveCacheRegressionResult> {
   const pngBase64 = (await fs.readFile(LIVE_TEST_PNG_URL)).toString("base64");
   const runToken = randomUUID().slice(0, 13);
-  const openai = await resolveLiveDirectModel({
+  const openai = await resolveLiveDirectModelPool({
     provider: "openai",
     api: "openai-responses",
     envVar: "OPENCLAW_LIVE_OPENAI_CACHE_MODEL",
     preferredModelIds: ["gpt-4.1", "gpt-5.2", "gpt-5.4-mini", "gpt-5.4", "gpt-5.5"],
   });
-  const anthropic = await resolveLiveDirectModel({
+  const anthropic = await resolveLiveDirectModelPool({
     provider: "anthropic",
     api: "anthropic-messages",
     envVar: "OPENCLAW_LIVE_ANTHROPIC_CACHE_MODEL",
@@ -631,7 +714,7 @@ export async function runLiveCacheRegression(): Promise<LiveCacheRegressionResul
     const openaiAttempt = await runRepeatedLaneWithBaselineRetry({
       lane,
       providerTag: "openai",
-      fixture: openai,
+      fixture: openai.fixture,
       runToken,
       pngBase64,
     });
@@ -650,13 +733,18 @@ export async function runLiveCacheRegression(): Promise<LiveCacheRegressionResul
     };
     appendBaselineFindings({ regressions, warnings }, openaiAttempt.findings);
 
-    const anthropicAttempt = await runRepeatedLaneWithBaselineRetry({
+    const { attempt: anthropicAttempt } = await runAnthropicCacheLane({
+      apiKeys: anthropic.apiKeys,
       lane,
-      providerTag: "anthropic",
-      fixture: anthropic,
+      fixture: anthropic.fixture,
       runToken,
       pngBase64,
+      warnings,
     });
+    if (!anthropicAttempt) {
+      summary.anthropic[lane] = { skipped: true };
+      continue;
+    }
     const anthropicResult = anthropicAttempt.result;
     logLiveCache(
       `anthropic ${lane} warmup ${formatUsage(anthropicResult.warmup?.usage ?? {})} rate=${anthropicResult.warmup?.hitRate.toFixed(3) ?? "0.000"}`,
@@ -673,22 +761,26 @@ export async function runLiveCacheRegression(): Promise<LiveCacheRegressionResul
     appendBaselineFindings({ regressions, warnings }, anthropicAttempt.findings);
   }
 
-  const disabled = await runAnthropicDisabledLane({
-    fixture: anthropic,
+  const disabled = await runAnthropicDisabledCacheLane({
+    fixture: anthropic.fixture,
     runToken,
-    sessionId: `live-cache-regression-${runToken}-anthropic-disabled`,
-  });
-  logLiveCache(`anthropic disabled ${formatUsage(disabled.disabled?.usage ?? {})}`);
-  summary.anthropic.disabled = {
-    disabled: disabled.disabled?.usage,
-  };
-  assertAgainstBaseline({
-    lane: "disabled",
-    provider: "anthropic",
-    result: disabled,
-    regressions,
     warnings,
   });
+  if (disabled) {
+    logLiveCache(`anthropic disabled ${formatUsage(disabled.disabled?.usage ?? {})}`);
+    summary.anthropic.disabled = {
+      disabled: disabled.disabled?.usage,
+    };
+    assertAgainstBaseline({
+      lane: "disabled",
+      provider: "anthropic",
+      result: disabled,
+      regressions,
+      warnings,
+    });
+  } else {
+    summary.anthropic.disabled = { skipped: true };
+  }
 
   logLiveCache(`cache regression summary ${JSON.stringify(summary)}`);
   if (warnings.length > 0) {

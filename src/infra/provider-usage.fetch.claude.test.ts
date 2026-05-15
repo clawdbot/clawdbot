@@ -128,6 +128,15 @@ describe("fetchClaudeUsage", () => {
     expect(result.windows).toHaveLength(0);
   });
 
+  it("returns a stable error for malformed successful oauth usage JSON", async () => {
+    const mockFetch = createProviderUsageFetch(async () => makeResponse(200, "{not json"));
+
+    const result = await fetchClaudeUsage("token", 5000, mockFetch);
+
+    expect(result.error).toBe("Malformed usage response");
+    expect(result.windows).toHaveLength(0);
+  });
+
   it("falls back to claude web usage when oauth scope is missing", async () => {
     vi.stubEnv("CLAUDE_AI_SESSION_KEY", "sk-ant-session-key");
 

@@ -341,6 +341,22 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     spacer();
   }
 
+  if (service.staleUpdateLaunchdJobs?.length) {
+    defaultRuntime.error(errorText("Stale OpenClaw updater launchd job(s) detected."));
+    for (const job of service.staleUpdateLaunchdJobs) {
+      const exitStatus =
+        job.lastExitStatus !== undefined ? `, last exit ${job.lastExitStatus}` : "";
+      const pid = job.pid !== undefined ? `, pid ${job.pid}` : "";
+      defaultRuntime.error(errorText(`- ${job.label}${pid}${exitStatus}`));
+    }
+    defaultRuntime.error(
+      errorText(
+        `Fix after confirming no update is running: launchctl remove <label>, then run ${formatCliCommand("openclaw gateway restart")}.`,
+      ),
+    );
+    spacer();
+  }
+
   for (const line of renderPortDiagnosticsForCli(status, rpc?.ok)) {
     defaultRuntime.error(errorText(line));
   }

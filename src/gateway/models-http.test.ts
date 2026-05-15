@@ -83,6 +83,14 @@ describe("OpenAI-compatible models HTTP API (e2e)", () => {
     ).toBe(true);
   });
 
+  it("serves /v1/models without trusting malformed Host headers", async () => {
+    const res = await getModels("/v1/models", { Host: "[" });
+    expect(res.status).toBe(200);
+    const json = (await res.json()) as { object?: string; data?: Array<{ id?: string }> };
+    expect(json.object).toBe("list");
+    expect(json.data?.map((entry) => entry.id)).toContain("openclaw/default");
+  });
+
   it("serves /v1/models/{id}", async () => {
     const firstId = await expectFirstModelId();
     const res = await getModels(`/v1/models/${encodeURIComponent(firstId)}`);

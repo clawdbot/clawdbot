@@ -468,6 +468,28 @@ File contents here`,
     expect(extractAssistantText(msg)).toBe("Prefix\n\nSuffix");
   });
 
+  it("strips raw <function_response> workflow blocks from assistant text", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: [
+            "Prefix",
+            "<function_response>",
+            'Searching for: "what skills matter most in the age of AI"',
+            "...",
+            "</function_response>",
+            "Suffix",
+          ].join("\n"),
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    expect(extractAssistantText(msg)).toBe("Prefix\n\nSuffix");
+  });
+
   it("strips dangling <tool_call> XML content to end-of-string", () => {
     const msg = makeAssistantMessage({
       role: "assistant",

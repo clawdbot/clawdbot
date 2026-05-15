@@ -61,4 +61,71 @@ describe("getReplyFromConfig fast-path runtime", () => {
       expect(seenPrompt).toContain("hello");
     });
   });
+
+  it("routes structured native command turns through the target session before legacy sync", async () => {
+    await withTempHome(async (home) => {
+      agentMocks.runEmbeddedPiAgent.mockResolvedValue(makeEmbeddedTextResult("ok"));
+
+      await getReplyFromConfig(
+        {
+          Body: "hello",
+          BodyForAgent: "hello",
+          RawBody: "hello",
+          CommandBody: "hello",
+          CommandTurn: {
+            kind: "native",
+            source: "native",
+            authorized: true,
+          },
+          CommandTargetSessionKey: "agent:main:telegram:direct:target",
+          SessionKey: "telegram:slash:source",
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "direct",
+        },
+        {},
+        makeReplyConfig(home) as OpenClawConfig,
+      );
+
+      expect(agentMocks.runEmbeddedPiAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey: "agent:main:telegram:direct:target",
+        }),
+      );
+    });
+  });
+
+  it("ignores stale native legacy source for structured normal turns before routing", async () => {
+    await withTempHome(async (home) => {
+      agentMocks.runEmbeddedPiAgent.mockResolvedValue(makeEmbeddedTextResult("ok"));
+
+      await getReplyFromConfig(
+        {
+          Body: "hello",
+          BodyForAgent: "hello",
+          RawBody: "hello",
+          CommandBody: "hello",
+          CommandSource: "native",
+          CommandTurn: {
+            kind: "normal",
+            source: "message",
+            authorized: false,
+          },
+          CommandTargetSessionKey: "agent:main:telegram:direct:stale-target",
+          SessionKey: "agent:main:telegram:direct:source",
+          Provider: "telegram",
+          Surface: "telegram",
+          ChatType: "direct",
+        },
+        {},
+        makeReplyConfig(home) as OpenClawConfig,
+      );
+
+      expect(agentMocks.runEmbeddedPiAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey: "agent:main:telegram:direct:source",
+        }),
+      );
+    });
+  });
 });

@@ -96,7 +96,7 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
-  it("treats classified assistant-side 429s as rotation candidates even without error stopReason", () => {
+  it("ignores stale classified assistant-side 429 text without error stopReason", () => {
     expect(
       resolveRunFailoverDecision({
         stage: "assistant",
@@ -112,8 +112,7 @@ describe("resolveRunFailoverDecision", () => {
         profileRotated: false,
       }),
     ).toEqual({
-      action: "rotate_profile",
-      reason: "rate_limit",
+      action: "continue_normal",
     });
   });
 
@@ -167,7 +166,7 @@ describe("resolveRunFailoverDecision", () => {
         aborted: false,
         externalAbort: false,
         fallbackConfigured: true,
-        failoverFailure: false,
+        failoverFailure: true,
         failoverReason: "rate_limit",
         timedOut: false,
         idleTimedOut: false,
@@ -178,6 +177,26 @@ describe("resolveRunFailoverDecision", () => {
     ).toEqual({
       action: "fallback_model",
       reason: "rate_limit",
+    });
+  });
+
+  it("does not fall back on stale classified assistant text after rotation is exhausted", () => {
+    expect(
+      resolveRunFailoverDecision({
+        stage: "assistant",
+        aborted: false,
+        externalAbort: false,
+        fallbackConfigured: true,
+        failoverFailure: false,
+        failoverReason: "billing",
+        timedOut: false,
+        idleTimedOut: false,
+        timedOutDuringCompaction: false,
+        timedOutDuringToolExecution: false,
+        profileRotated: true,
+      }),
+    ).toEqual({
+      action: "continue_normal",
     });
   });
 

@@ -452,6 +452,47 @@ describe("model-pricing-cache", () => {
     });
   });
 
+  it("records malformed remote pricing catalog JSON as source failures", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "custom/gpt-remote" },
+        },
+      },
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://models.example/v1",
+            api: "openai-completions",
+            models: [{ id: "gpt-remote" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const fetchImpl = withFetchPreconnect(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("openrouter.ai")) {
+        return new Response("{not json", {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+
+    await refreshGatewayModelPricingCache({ config, fetchImpl });
+
+    const health = getGatewayModelPricingHealth();
+    expect(health.state).toBe("degraded");
+    expect(health.sources).toHaveLength(1);
+    expect(health.sources[0]?.source).toBe("openrouter");
+    expect(health.sources[0]?.state).toBe("degraded");
+    expect(health.sources[0]?.detail).toContain("OpenRouter pricing response is malformed JSON");
+  });
+
   it("records and clears scheduled refresh rejections for health surfaces", async () => {
     vi.useFakeTimers();
     try {

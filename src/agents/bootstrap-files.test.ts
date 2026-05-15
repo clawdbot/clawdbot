@@ -512,4 +512,32 @@ describe("resolveContextInjectionMode", () => {
       } as never),
     ).toBe("continuation-skip");
   });
+
+  it("uses per-agent contextInjection before defaults", () => {
+    expect(
+      resolveContextInjectionMode(
+        {
+          agents: {
+            defaults: { contextInjection: "continuation-skip" },
+            list: [{ id: "strict", contextInjection: "always" }],
+          },
+        } as never,
+        "strict",
+      ),
+    ).toBe("always");
+  });
+
+  it("falls back to defaults when the agent has no contextInjection override", () => {
+    expect(
+      resolveContextInjectionMode(
+        {
+          agents: {
+            defaults: { contextInjection: "never" },
+            list: [{ id: "worker" }],
+          },
+        } as never,
+        "worker",
+      ),
+    ).toBe("never");
+  });
 });

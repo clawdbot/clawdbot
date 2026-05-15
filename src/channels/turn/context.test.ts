@@ -96,6 +96,12 @@ describe("buildChannelTurnContext", () => {
           wasMentioned: true,
         },
       },
+      commandTurn: {
+        kind: "text-slash",
+        source: "text",
+        authorized: true,
+        body: "/status",
+      },
       media: [
         {
           path: "/tmp/image.png",
@@ -163,6 +169,14 @@ describe("buildChannelTurnContext", () => {
       Surface: "test-surface",
       WasMentioned: true,
       CommandAuthorized: true,
+      CommandSource: "text",
+      CommandTurn: {
+        kind: "text-slash",
+        source: "text",
+        authorized: true,
+        commandName: "status",
+        body: "/status",
+      },
       MessageThreadId: "thread-1",
       NativeChannelId: "native-room-1",
       OriginatingChannel: "test",

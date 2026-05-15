@@ -20,7 +20,7 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
     tmpDir = undefined;
   });
 
-  it("embeds a local audio file as a base64 gateway chat block when it is under localRoots", async () => {
+  it("exposes a local audio file as a media-ticketed attachment when it is under localRoots", async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-webchat-audio-"));
     const audioPath = path.join(tmpDir, "clip.mp3");
     fs.writeFileSync(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
@@ -33,15 +33,34 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
     expect(blocks).toHaveLength(1);
     const block = blocks[0] as {
       type?: string;
-      source?: { type?: string; media_type?: string; data?: string };
+      attachment?: { url?: string; kind?: string; label?: string; mimeType?: string };
     };
-    expect(block.type).toBe("audio");
-    expect(block.source?.type).toBe("base64");
-    expect(block.source?.media_type).toBe("audio/mpeg");
-    expect(block.source?.data?.includes("data:")).toBe(false);
-    expect(Buffer.from(block.source?.data ?? "", "base64")).toEqual(
-      Buffer.from([0xff, 0xfb, 0x90, 0x00]),
+    expect(block.type).toBe("attachment");
+    expect(block.attachment).toEqual({
+      url: fs.realpathSync(audioPath),
+      kind: "audio",
+      label: "clip.mp3",
+      mimeType: "audio/mpeg",
+    });
+  });
+
+  it("preserves voice-note metadata on local audio attachments", async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-webchat-audio-"));
+    const audioPath = path.join(tmpDir, "clip.mp3");
+    fs.writeFileSync(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
+
+    const blocks = await buildWebchatAudioContentBlocksFromReplyPayloads(
+      [{ mediaUrl: audioPath, trustedLocalMedia: true, audioAsVoice: true }],
+      { localRoots: [tmpDir] },
     );
+
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]).toMatchObject({
+      type: "attachment",
+      attachment: {
+        isVoiceNote: true,
+      },
+    });
   });
 
   it("suppresses reasoning payload audio", async () => {
@@ -113,7 +132,7 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
     );
 
     expect(blocks).toHaveLength(1);
-    expect((blocks[0] as { type?: string }).type).toBe("audio");
+    expect((blocks[0] as { type?: string }).type).toBe("attachment");
   });
 
   it("drops tool-result file:// URLs with remote hosts before touching the filesystem", async () => {
@@ -171,7 +190,7 @@ describe("buildWebchatAudioContentBlocksFromReplyPayloads", () => {
     ]);
 
     expect(blocks).toHaveLength(1);
-    expect((blocks[0] as { type?: string }).type).toBe("audio");
+    expect((blocks[0] as { type?: string }).type).toBe("attachment");
   });
 
   it("skips local audio when the opened file stat is over the cap", async () => {

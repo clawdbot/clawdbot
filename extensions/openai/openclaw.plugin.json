@@ -756,7 +756,6 @@
       }
     ]
   },
-  "cliBackends": ["codex-cli"],
   "providerAuthEnvVars": {
     "openai": ["OPENAI_API_KEY"]
   },

@@ -16,6 +16,7 @@ import {
 } from "./bundled-load-path-aliases.js";
 import { listBundledSourceOverlayDirs } from "./bundled-source-overlays.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
+import { readLegacyNpmPluginDeclaration } from "./legacy-npm-declaration.js";
 import type { PluginBundleFormat, PluginDiagnostic, PluginFormat } from "./manifest-types.js";
 import {
   DEFAULT_PLUGIN_ENTRY_CANDIDATES,
@@ -692,6 +693,23 @@ function discoverBundleInRoot(params: {
   return "added";
 }
 
+function addLegacyNpmDeclarationDiagnostic(params: {
+  pluginDir: string;
+  diagnostics: PluginDiagnostic[];
+}): boolean {
+  const declaration = readLegacyNpmPluginDeclaration(params.pluginDir);
+  if (!declaration) {
+    return false;
+  }
+  params.diagnostics.push({
+    level: "warn",
+    pluginId: declaration.pluginId,
+    source: declaration.source,
+    message: `legacy npm plugin declaration ignored for "${declaration.pluginId}"; run "openclaw doctor --fix" to install ${declaration.npmSpec} into the managed plugin root`,
+  });
+  return true;
+}
+
 function discoverInDirectory(params: {
   dir: string;
   origin: PluginOrigin;
@@ -875,6 +893,15 @@ function discoverInDirectory(params: {
         packageDir: fullPath,
         realpathCache: params.realpathCache,
       });
+      continue;
+    }
+
+    if (
+      addLegacyNpmDeclarationDiagnostic({
+        pluginDir: fullPath,
+        diagnostics: params.diagnostics,
+      })
+    ) {
       continue;
     }
 
@@ -1101,6 +1128,15 @@ function discoverFromPath(params: {
         packageDir: resolved,
         realpathCache: params.realpathCache,
       });
+      return;
+    }
+
+    if (
+      addLegacyNpmDeclarationDiagnostic({
+        pluginDir: resolved,
+        diagnostics: params.diagnostics,
+      })
+    ) {
       return;
     }
 

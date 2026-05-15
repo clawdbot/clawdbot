@@ -133,6 +133,7 @@ type ResolveApiKeyForProfileParams = {
   store: AuthProfileStore;
   profileId: string;
   agentDir?: string;
+  forceRefresh?: boolean;
 };
 
 type SecretDefaults = NonNullable<OpenClawConfig["secrets"]>["defaults"];
@@ -215,6 +216,7 @@ async function tryResolveOAuthProfile(
     credential: cred,
     agentDir: params.agentDir,
     cfg,
+    forceRefresh: params.forceRefresh,
   });
   if (!resolved) {
     return null;
@@ -354,6 +356,7 @@ export async function resolveApiKeyForProfile(
       profileId,
       credential: cred,
       cfg,
+      forceRefresh: params.forceRefresh,
     });
     if (!resolved) {
       return null;
@@ -387,6 +390,7 @@ export async function resolveApiKeyForProfile(
           store: refreshedStore,
           profileId: fallbackProfileId,
           agentDir: params.agentDir,
+          forceRefresh: params.forceRefresh,
         });
         if (fallbackResolved) {
           return fallbackResolved;

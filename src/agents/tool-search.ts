@@ -991,7 +991,7 @@ function sanitizeToolCallIdPart(value: string): string {
   return safe || "call";
 }
 
-class ToolSearchRuntime {
+export class ToolSearchRuntime {
   private callSequence = 0;
 
   constructor(
@@ -1010,6 +1010,11 @@ class ToolSearchRuntime {
       .toSorted((a, b) => b.score - a.score || a.entry.id.localeCompare(b.entry.id))
       .slice(0, limit)
       .map((hit) => compactEntry(hit.entry));
+  };
+
+  all = () => {
+    const catalog = resolveCatalog(this.ctx);
+    return catalog.entries.map((entry) => compactEntry(entry));
   };
 
   describe = async (id: string) => {
@@ -1060,6 +1065,97 @@ class ToolSearchRuntime {
   telemetry() {
     return getTelemetry(resolveCatalog(this.ctx));
   }
+}
+
+export function applyToolCatalogCompaction(params: {
+  tools: AnyAgentTool[];
+  enabled: boolean;
+  sessionId?: string;
+  sessionKey?: string;
+  agentId?: string;
+  runId?: string;
+  catalogRef?: ToolSearchCatalogRef;
+  toolHookContext?: HookContext;
+  isVisibleControlTool: (tool: AnyAgentTool) => boolean;
+  shouldCatalogTool?: (tool: AnyAgentTool) => boolean;
+}): {
+  tools: AnyAgentTool[];
+  compacted: boolean;
+  catalogToolCount: number;
+  catalogRegistered: boolean;
+} {
+  if (!params.enabled) {
+    return { tools: params.tools, compacted: false, catalogToolCount: 0, catalogRegistered: false };
+  }
+  const hasControlTool = params.tools.some((tool) => params.isVisibleControlTool(tool));
+  const key = sessionCatalogKey(params);
+  if (!hasControlTool || (!key && !params.catalogRef)) {
+    return {
+      tools: params.tools.filter((tool) => !TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name)),
+      compacted: false,
+      catalogToolCount: 0,
+      catalogRegistered: false,
+    };
+  }
+
+  const visible: AnyAgentTool[] = [];
+  const catalog: ToolSearchCatalogEntry[] = [];
+  const shouldCatalog = params.shouldCatalogTool ?? shouldCatalogTool;
+  for (const tool of params.tools) {
+    if (params.isVisibleControlTool(tool)) {
+      visible.push(tool);
+      continue;
+    }
+    if (shouldCatalog(tool)) {
+      catalog.push(toCatalogEntry(tool, undefined, params.toolHookContext));
+      continue;
+    }
+    visible.push(tool);
+  }
+  registerToolSearchCatalog({
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+    runId: params.runId,
+    catalogRef: params.catalogRef,
+    entries: catalog,
+    append: false,
+  });
+  return {
+    tools: visible,
+    compacted: catalog.length > 0,
+    catalogToolCount: catalog.length,
+    catalogRegistered: true,
+  };
+}
+
+export function addClientToolsToToolCatalog(params: {
+  tools: ToolDefinition[];
+  enabled: boolean;
+  sessionId?: string;
+  sessionKey?: string;
+  agentId?: string;
+  runId?: string;
+  catalogRef?: ToolSearchCatalogRef;
+}): { tools: ToolDefinition[]; compacted: boolean; catalogToolCount: number } {
+  const key = sessionCatalogKey(params);
+  if (!params.enabled || (!key && !params.catalogRef)) {
+    return { tools: params.tools, compacted: false, catalogToolCount: 0 };
+  }
+  const existing = params.catalogRef?.current ?? (key ? sessionCatalogs.get(key) : undefined);
+  if (!existing) {
+    return { tools: params.tools, compacted: false, catalogToolCount: 0 };
+  }
+  registerToolSearchCatalog({
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+    runId: params.runId,
+    catalogRef: params.catalogRef,
+    entries: params.tools.map((tool) => toCatalogEntry(tool, "client")),
+    append: true,
+  });
+  return { tools: [], compacted: params.tools.length > 0, catalogToolCount: params.tools.length };
 }
 
 function toJsonSafe(value: unknown): unknown {

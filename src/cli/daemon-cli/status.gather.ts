@@ -14,6 +14,7 @@ import type {
 } from "../../config/types.js";
 import { readLastGatewayErrorLine } from "../../daemon/diagnostics.js";
 import type { FindExtraGatewayServicesOptions } from "../../daemon/inspect.js";
+import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import { resolveGatewayService } from "../../daemon/service.js";
@@ -97,6 +98,7 @@ const gatewayProbeAuthModuleLoader = createLazyImportLoader(
   () => import("../../gateway/probe-auth.js"),
 );
 const daemonInspectModuleLoader = createLazyImportLoader(() => import("../../daemon/inspect.js"));
+const launchdModuleLoader = createLazyImportLoader(() => import("../../daemon/launchd.js"));
 const serviceAuditModuleLoader = createLazyImportLoader(
   () => import("../../daemon/service-audit.js"),
 );
@@ -110,6 +112,10 @@ function loadGatewayProbeAuthModule() {
 
 function loadDaemonInspectModule() {
   return daemonInspectModuleLoader.load();
+}
+
+function loadLaunchdModule() {
+  return launchdModuleLoader.load();
 }
 
 function loadServiceAuditModule() {
@@ -268,6 +274,7 @@ export type DaemonStatus = {
     runtime?: GatewayServiceRuntime;
     configAudit?: ServiceConfigAudit;
     restartHandoff?: GatewayRestartHandoff;
+    staleUpdateLaunchdJobs?: StaleOpenClawUpdateLaunchdJob[];
   };
   config?: {
     cli: ConfigSummary;
@@ -511,6 +518,12 @@ export async function gatherDaemonStatus(
         )
         .catch(() => [])
     : [];
+  const staleUpdateLaunchdJobs =
+    opts.deep && process.platform === "darwin"
+      ? await loadLaunchdModule()
+          .then(({ findStaleOpenClawUpdateLaunchdJobs }) => findStaleOpenClawUpdateLaunchdJobs())
+          .catch(() => [])
+      : [];
 
   const timeoutMs =
     parseStrictPositiveInteger(opts.rpc.timeout ?? undefined) ??
@@ -595,6 +608,7 @@ export async function gatherDaemonStatus(
       runtime,
       configAudit,
       ...(restartHandoff ? { restartHandoff } : {}),
+      ...(staleUpdateLaunchdJobs.length > 0 ? { staleUpdateLaunchdJobs } : {}),
     },
     config: {
       cli: cliConfigSummary,

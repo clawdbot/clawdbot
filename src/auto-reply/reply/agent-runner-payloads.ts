@@ -1,11 +1,16 @@
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers/sanitize-user-facing-text.js";
 import type { MessagingToolSend } from "../../agents/pi-embedded-messaging.types.js";
 import type { ReplyToMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { stripLegacyBracketToolCallBlocks } from "../../shared/text/assistant-visible-text.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
-import { copyReplyPayloadMetadata } from "../reply-payload.js";
+import {
+  copyReplyPayloadMetadata,
+  getReplyPayloadMetadata,
+  setReplyPayloadMetadata,
+} from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload, ReplyThreadingPolicy } from "../types.js";
@@ -97,17 +102,52 @@ function shouldKeepPayloadDuringSilentTurn(payload: ReplyPayload): boolean {
   return payload.audioAsVoice === true && resolveSendableOutboundReplyParts(payload).hasMedia;
 }
 
+function sanitizeFinalReplyText(
+  payload: ReplyPayload,
+  text: string | undefined,
+): string | undefined {
+  if (!text) {
+    return text;
+  }
+  return sanitizeUserFacingText(text, { errorContext: Boolean(payload.isError) });
+}
+
 function sanitizeHeartbeatPayload(payload: ReplyPayload): ReplyPayload {
   const text = payload.text;
   if (!text) {
     return payload;
   }
-  const cleaned = stripLegacyBracketToolCallBlocks(text);
+  const withoutLegacyBlocks = stripLegacyBracketToolCallBlocks(text);
+  const cleaned = sanitizeFinalReplyText(payload, withoutLegacyBlocks);
   if (cleaned === text) {
     return payload;
   }
-  logVerbose("Stripped legacy tool-call block from heartbeat reply");
-  return copyReplyPayloadMetadata(payload, { ...payload, text: cleaned });
+  if (withoutLegacyBlocks !== text) {
+    logVerbose("Stripped legacy tool-call block from heartbeat reply");
+  }
+  return copyPayloadWithSanitizedText(payload, cleaned);
+}
+
+function copyPayloadWithSanitizedText(
+  payload: ReplyPayload,
+  text: string | undefined,
+): ReplyPayload {
+  const sanitizedText = sanitizeFinalReplyText(payload, text);
+  const next = copyReplyPayloadMetadata(payload, {
+    ...payload,
+    text: sanitizedText,
+  });
+  const mirror = getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror;
+  if (!mirror?.text) {
+    return next;
+  }
+  setReplyPayloadMetadata(next, {
+    sourceReplyTranscriptMirror: {
+      ...mirror,
+      text: sanitizeFinalReplyText(payload, mirror.text) || undefined,
+    },
+  });
+  return next;
 }
 
 export async function buildReplyPayloads(params: {
@@ -148,7 +188,7 @@ export async function buildReplyPayloads(params: {
       }
 
       if (!text || !text.includes("HEARTBEAT_OK")) {
-        sanitizedPayloads.push(copyReplyPayloadMetadata(payload, { ...payload, text }));
+        sanitizedPayloads.push(copyPayloadWithSanitizedText(payload, text));
         continue;
       }
       const stripped = stripHeartbeatToken(text, { mode: "message" });
@@ -160,9 +200,7 @@ export async function buildReplyPayloads(params: {
       if (stripped.shouldSkip && !hasMedia) {
         continue;
       }
-      sanitizedPayloads.push(
-        copyReplyPayloadMetadata(payload, { ...payload, text: stripped.text }),
-      );
+      sanitizedPayloads.push(copyPayloadWithSanitizedText(payload, stripped.text));
     }
   }
 

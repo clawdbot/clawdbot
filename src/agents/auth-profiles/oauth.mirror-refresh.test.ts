@@ -438,6 +438,48 @@ describe("resolveApiKeyForProfile OAuth refresh mirror-to-main (#26322)", () => 
     expect(JSON.stringify(subRaw)).not.toContain("cached-access-token");
   });
 
+  it("does not satisfy forced refresh from unchanged main-agent credentials after refresh fails", async () => {
+    const profileId = "openai-codex:default";
+    const provider = "openai-codex";
+    const accountId = "acct-shared";
+
+    const subAgentDir = path.join(tempRoot, "agents", "sub-force-catch", "agent");
+    await fs.mkdir(subAgentDir, { recursive: true });
+    saveAuthProfileStore(createExpiredOauthStore({ profileId, provider, accountId }), subAgentDir);
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [profileId]: {
+            type: "oauth",
+            provider,
+            access: "main-existing-access",
+            refresh: "main-existing-refresh",
+            expires: Date.now() + 60 * 60 * 1000,
+            accountId,
+          },
+        },
+      },
+      mainAgentDir,
+    );
+
+    refreshProviderOAuthCredentialWithPluginMock.mockImplementationOnce(async (params) => {
+      const context = params?.context as OAuthCredential;
+      expect(context.access).toBe("main-existing-access");
+      throw new Error("upstream 503 service unavailable");
+    });
+
+    await expect(
+      resolveApiKeyForProfileInTest(resolveApiKeyForProfile, {
+        store: ensureAuthProfileStore(subAgentDir),
+        profileId,
+        agentDir: subAgentDir,
+        forceRefresh: true,
+      }),
+    ).rejects.toThrow(/OAuth token refresh failed for openai-codex/);
+    expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
+  });
+
   it("mirrors refreshed credentials produced by the plugin-refresh path", async () => {
     // The plugin-refreshed branch in doRefreshOAuthTokenWithLock has its own
     // mirror call; cover it separately so the branch is not orphaned.

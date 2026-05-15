@@ -1,7 +1,9 @@
 import type { IncomingMessage } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
+import type { HealthSummary } from "../../../commands/health.types.js";
 import type { ResolvedGatewayAuth } from "../../auth.js";
+import { getOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
 import { PROTOCOL_VERSION } from "../../protocol/index.js";
 import type { GatewayRequestContext } from "../../server-methods/types.js";
 
@@ -74,6 +76,25 @@ function createLogger() {
   };
 }
 
+function createHealthSummary(): HealthSummary {
+  return {
+    ok: true,
+    ts: 1,
+    durationMs: 1,
+    channels: {},
+    channelOrder: [],
+    channelLabels: {},
+    heartbeatSeconds: 0,
+    defaultAgentId: "main",
+    agents: [],
+    sessions: {
+      path: "",
+      count: 0,
+      recent: [],
+    },
+  };
+}
+
 describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -81,12 +102,12 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
 
   it("uses the injected runtime-aware health refresh after hello", async () => {
     let resolveRefresh: (() => void) | undefined;
-    const refreshHealthSnapshot = vi.fn(
+    const refreshHealthSnapshot = vi.fn<GatewayRequestContext["refreshHealthSnapshot"]>(
       () =>
         new Promise((resolve) => {
-          resolveRefresh = () => resolve({} as never);
+          resolveRefresh = () => resolve(createHealthSummary());
         }),
-    ) as GatewayRequestContext["refreshHealthSnapshot"];
+    );
     const socketSend = vi.fn((_payload: string, cb?: (err?: Error) => void) => {
       cb?.();
     });
@@ -179,5 +200,198 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       expect(refreshHealthSnapshot).toHaveBeenCalledWith({ probe: true });
     });
     resolveRefresh?.();
+  });
+
+  it("does not mark local backend self-pairing clients as approval runtimes", async () => {
+    const refreshHealthSnapshot = vi.fn<GatewayRequestContext["refreshHealthSnapshot"]>(async () =>
+      createHealthSummary(),
+    );
+    const socketSend = vi.fn((_payload: string, cb?: (err?: Error) => void) => {
+      cb?.();
+    });
+    let onMessage: ((data: string) => void) | undefined;
+    const socket = {
+      _receiver: {},
+      send: socketSend,
+      on: vi.fn((event: string, handler: (data: string) => void) => {
+        if (event === "message") {
+          onMessage = handler;
+        }
+        return socket;
+      }),
+    } as unknown as WebSocket;
+    const send = vi.fn();
+    let client: unknown = null;
+    const resolvedAuth: ResolvedGatewayAuth = {
+      mode: "none",
+      allowTailscale: false,
+    };
+
+    attachGatewayWsMessageHandler({
+      socket,
+      upgradeReq: {
+        headers: { host: "127.0.0.1:19001" },
+        socket: { localAddress: "127.0.0.1", remoteAddress: "127.0.0.1" },
+      } as unknown as IncomingMessage,
+      connId: "conn-approval-runtime-spoof",
+      remoteAddr: "127.0.0.1",
+      localAddr: "127.0.0.1",
+      requestHost: "127.0.0.1:19001",
+      connectNonce: "nonce-approval-runtime-spoof",
+      getResolvedAuth: () => resolvedAuth,
+      gatewayMethods: [],
+      events: [],
+      extraHandlers: {},
+      buildRequestContext: () => ({}) as GatewayRequestContext,
+      refreshHealthSnapshot,
+      send,
+      close: vi.fn(),
+      isClosed: vi.fn(() => false),
+      clearHandshakeTimer: vi.fn(),
+      getClient: () => client as never,
+      setClient: (next) => {
+        client = next;
+        return true;
+      },
+      setHandshakeState: vi.fn(),
+      setCloseCause: vi.fn(),
+      setLastFrameMeta: vi.fn(),
+      originCheckMetrics: { hostHeaderFallbackAccepted: 0 },
+      logGateway: createLogger() as never,
+      logHealth: createLogger() as never,
+      logWsControl: createLogger() as never,
+    });
+
+    if (onMessage === undefined) {
+      throw new Error("expected websocket message handler");
+    }
+
+    onMessage(
+      JSON.stringify({
+        type: "req",
+        id: "connect-approval-runtime-spoof",
+        method: "connect",
+        params: {
+          minProtocol: PROTOCOL_VERSION,
+          maxProtocol: PROTOCOL_VERSION,
+          client: {
+            id: "gateway-client",
+            version: "dev",
+            platform: "test",
+            mode: "backend",
+          },
+          role: "operator",
+          scopes: ["operator.approvals"],
+          caps: [],
+        },
+      }),
+    );
+
+    await vi.waitFor(() => {
+      expect(socketSend).toHaveBeenCalled();
+    });
+    const connectedClient = client as {
+      connect?: { scopes?: string[] };
+      internal?: { approvalRuntime?: boolean };
+    } | null;
+    expect(connectedClient?.connect?.scopes).toEqual(["operator.approvals"]);
+    expect(connectedClient?.internal?.approvalRuntime).not.toBe(true);
+  });
+
+  it("marks operator approval clients with the server runtime token", async () => {
+    const refreshHealthSnapshot = vi.fn<GatewayRequestContext["refreshHealthSnapshot"]>(async () =>
+      createHealthSummary(),
+    );
+    const socketSend = vi.fn((_payload: string, cb?: (err?: Error) => void) => {
+      cb?.();
+    });
+    let onMessage: ((data: string) => void) | undefined;
+    const socket = {
+      _receiver: {},
+      send: socketSend,
+      on: vi.fn((event: string, handler: (data: string) => void) => {
+        if (event === "message") {
+          onMessage = handler;
+        }
+        return socket;
+      }),
+    } as unknown as WebSocket;
+    const send = vi.fn();
+    let client: unknown = null;
+    const resolvedAuth: ResolvedGatewayAuth = {
+      mode: "none",
+      allowTailscale: false,
+    };
+
+    attachGatewayWsMessageHandler({
+      socket,
+      upgradeReq: {
+        headers: { host: "127.0.0.1:19001" },
+        socket: { localAddress: "127.0.0.1", remoteAddress: "127.0.0.1" },
+      } as unknown as IncomingMessage,
+      connId: "conn-approval-runtime-token",
+      remoteAddr: "127.0.0.1",
+      localAddr: "127.0.0.1",
+      requestHost: "127.0.0.1:19001",
+      connectNonce: "nonce-approval-runtime-token",
+      getResolvedAuth: () => resolvedAuth,
+      gatewayMethods: [],
+      events: [],
+      extraHandlers: {},
+      buildRequestContext: () => ({}) as GatewayRequestContext,
+      refreshHealthSnapshot,
+      send,
+      close: vi.fn(),
+      isClosed: vi.fn(() => false),
+      clearHandshakeTimer: vi.fn(),
+      getClient: () => client as never,
+      setClient: (next) => {
+        client = next;
+        return true;
+      },
+      setHandshakeState: vi.fn(),
+      setCloseCause: vi.fn(),
+      setLastFrameMeta: vi.fn(),
+      originCheckMetrics: { hostHeaderFallbackAccepted: 0 },
+      logGateway: createLogger() as never,
+      logHealth: createLogger() as never,
+      logWsControl: createLogger() as never,
+    });
+
+    if (onMessage === undefined) {
+      throw new Error("expected websocket message handler");
+    }
+
+    onMessage(
+      JSON.stringify({
+        type: "req",
+        id: "connect-approval-runtime-token",
+        method: "connect",
+        params: {
+          minProtocol: PROTOCOL_VERSION,
+          maxProtocol: PROTOCOL_VERSION,
+          client: {
+            id: "gateway-client",
+            version: "dev",
+            platform: "test",
+            mode: "backend",
+          },
+          role: "operator",
+          scopes: ["operator.approvals"],
+          caps: [],
+          auth: {
+            approvalRuntimeToken: getOperatorApprovalRuntimeToken(),
+          },
+        },
+      }),
+    );
+
+    await vi.waitFor(() => {
+      expect(socketSend).toHaveBeenCalled();
+    });
+    const connectedClient = client as {
+      internal?: { approvalRuntime?: boolean };
+    } | null;
+    expect(connectedClient?.internal?.approvalRuntime).toBe(true);
   });
 });

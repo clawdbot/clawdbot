@@ -155,7 +155,7 @@ order and tells you what it chose:
 - `OPENAI_API_KEY` -> `openai/gpt-5.5`
 - `ANTHROPIC_API_KEY` -> `anthropic/claude-opus-4-7`
 - Claude Code CLI -> `claude-cli/claude-opus-4-7`
-- Codex CLI -> `codex-cli/gpt-5.5`
+- Codex -> `openai/gpt-5.5` through the Codex app-server harness
 
 If none are available, setup still writes the default workspace and leaves the
 model unset. Install or log into Codex/Claude Code, or expose
@@ -171,7 +171,6 @@ back to local runtimes already present on the machine:
 
 - Claude Code CLI: `claude-cli/claude-opus-4-7`
 - Codex app-server harness: `openai/gpt-5.5`
-- Codex CLI: `codex-cli/gpt-5.5`
 
 The model-assisted planner cannot mutate config directly. It must translate the
 request into one of Crestodian's typed commands, then the normal approval and

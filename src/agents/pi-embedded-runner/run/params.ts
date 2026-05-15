@@ -23,6 +23,7 @@ import type {
 import type { SkillSnapshot } from "../../skills.js";
 import type { SilentReplyPromptMode } from "../../system-prompt.types.js";
 import type { PromptMode } from "../../system-prompt.types.js";
+import type { EmbeddedAgentExecutionPhase } from "../execution-phase.js";
 import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
 export type { ClientToolDefinition } from "../../command/shared-types.js";
 
@@ -163,20 +164,7 @@ export type RunEmbeddedPiAgentParams = {
   abortSignal?: AbortSignal;
   onExecutionStarted?: () => void;
   onExecutionPhase?: (info: {
-    phase:
-      | "runner_entered"
-      | "workspace"
-      | "runtime_plugins"
-      | "model_resolution"
-      | "auth"
-      | "context_engine"
-      | "attempt_dispatch"
-      | "context_assembled"
-      | "turn_accepted"
-      | "process_spawned"
-      | "tool_execution_started"
-      | "assistant_output_started"
-      | "model_call_started";
+    phase: EmbeddedAgentExecutionPhase;
     provider?: string;
     model?: string;
     backend?: string;

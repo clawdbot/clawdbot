@@ -22,6 +22,7 @@ export type RestartSentinelStep = {
 export type RestartSentinelStats = {
   mode?: string;
   root?: string;
+  handoffId?: string;
   before?: Record<string, unknown> | null;
   after?: Record<string, unknown> | null;
   steps?: RestartSentinelStep[];
@@ -142,10 +143,12 @@ export async function markUpdateRestartSentinelFailure(
     if (payload.kind !== "update") {
       return null;
     }
+    const payloadWithoutContinuation = { ...payload };
+    delete payloadWithoutContinuation.continuation;
     const stats = payload.stats ? { ...payload.stats } : {};
     stats.reason = reason;
     return {
-      ...payload,
+      ...payloadWithoutContinuation,
       status: "error",
       stats,
     };

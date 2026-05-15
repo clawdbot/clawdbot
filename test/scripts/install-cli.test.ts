@@ -47,8 +47,42 @@ describe("install-cli.sh", () => {
     expect(result.stdout).toContain("main=main");
   });
 
-  it("uses frozen lockfile installs for git installs", () => {
-    expect(script).toContain('run_pnpm -C "$repo_dir" install --frozen-lockfile');
+  it("fetches moving git refs without tags for git installs", () => {
+    expect(script).toContain('git -C "$repo_dir" fetch --no-tags origin main');
+    expect(script).toContain(
+      'git -C "$repo_dir" fetch --no-tags origin "refs/heads/${ref}:refs/remotes/origin/${ref}"',
+    );
+    expect(script).toContain('git -C "$repo_dir" pull --rebase --no-tags || true');
+
+    const branchCheckIndex = script.indexOf('ls-remote --exit-code --heads origin "$ref"');
+    const tagFetchIndex = script.indexOf("fetch --tags origin");
+    expect(branchCheckIndex).toBeGreaterThan(-1);
+    expect(tagFetchIndex).toBeGreaterThan(-1);
+    expect(branchCheckIndex).toBeLessThan(tagFetchIndex);
+  });
+
+  it("uses non-frozen lockfile installs only for moving git refs", () => {
+    const result = runInstallCliShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      git() {
+        if [[ "$1" == "-C" && "$3" == "ls-remote" && "\${7:-}" == "feature" ]]; then
+          return 0
+        fi
+        return 1
+      }
+      printf 'main=%s\\n' "$(git_install_lockfile_flag /repo main)"
+      printf 'branch=%s\\n' "$(git_install_lockfile_flag /repo feature)"
+      printf 'tag=%s\\n' "$(git_install_lockfile_flag /repo v2026.5.12)"
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("main=--no-frozen-lockfile");
+    expect(result.stdout).toContain("branch=--no-frozen-lockfile");
+    expect(result.stdout).toContain("tag=--frozen-lockfile");
+    expect(script).toContain(
+      'CI="${CI:-true}" SHARP_IGNORE_GLOBAL_LIBVIPS="$SHARP_IGNORE_GLOBAL_LIBVIPS" run_pnpm -C "$repo_dir" install "$install_lockfile_flag"',
+    );
   });
 
   it("aligns pnpm to the checked-out repo packageManager before installing", () => {

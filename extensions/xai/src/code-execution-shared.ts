@@ -1,3 +1,4 @@
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { postTrustedWebToolsJson } from "openclaw/plugin-sdk/provider-web-search";
 import {
   buildXaiResponsesToolBody,
@@ -81,7 +82,10 @@ export async function requestXaiCodeExecution(params: {
       errorLabel: "xAI",
     },
     async (response) => {
-      const data = (await response.json()) as XaiCodeExecutionResponse;
+      const data = await readProviderJsonResponse<XaiCodeExecutionResponse>(
+        response,
+        "xAI code execution failed",
+      );
       const { content, citations } = resolveXaiResponseTextAndCitations(data);
       const outputTypes = Array.isArray(data.output)
         ? [

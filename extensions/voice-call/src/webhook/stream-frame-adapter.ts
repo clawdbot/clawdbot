@@ -42,6 +42,15 @@ function tryParseJson(rawMessage: string): Record<string, unknown> | null {
   return null;
 }
 
+function normalizeBase64ForCompare(value: string): string {
+  return value.replace(/=+$/u, "").replace(/-/gu, "+").replace(/_/gu, "/");
+}
+
+function isValidBase64Payload(value: string): boolean {
+  const buffer = Buffer.from(value, "base64");
+  return normalizeBase64ForCompare(buffer.toString("base64")) === normalizeBase64ForCompare(value);
+}
+
 export class TwilioStreamFrameAdapter implements StreamFrameAdapter {
   readonly providerName = "twilio" as const;
   private streamSid = "";
@@ -71,7 +80,7 @@ export class TwilioStreamFrameAdapter implements StreamFrameAdapter {
           ? (msg.media as Record<string, unknown>)
           : undefined;
       const payload = typeof mediaData?.payload === "string" ? mediaData.payload : undefined;
-      if (!payload) {
+      if (!payload || !isValidBase64Payload(payload)) {
         return { kind: "ignored" };
       }
       return {
@@ -151,7 +160,7 @@ export class TelnyxStreamFrameAdapter implements StreamFrameAdapter {
           ? (msg.media as Record<string, unknown>)
           : undefined;
       const payload = typeof mediaData?.payload === "string" ? mediaData.payload : undefined;
-      if (!payload) {
+      if (!payload || !isValidBase64Payload(payload)) {
         return { kind: "ignored" };
       }
       return {

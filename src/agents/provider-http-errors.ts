@@ -163,3 +163,11 @@ export async function assertOkOrThrowHttpError(response: Response, label: string
   }
   throw await createProviderHttpError(response, label, { statusPrefix: "HTTP " });
 }
+
+export async function readProviderJsonResponse<T>(response: Response, label: string): Promise<T> {
+  try {
+    return (await response.json()) as T;
+  } catch (cause) {
+    throw new Error(`${label}: malformed JSON response`, { cause });
+  }
+}

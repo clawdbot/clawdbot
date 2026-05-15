@@ -234,6 +234,55 @@ describe("codex conversation binding", () => {
     expect(result).toEqual({ handled: true });
   });
 
+  it("routes bound Codex CLI node sessions through node resume", async () => {
+    const resumeCodexCliSessionOnNode = vi.fn(async () => ({
+      ok: true as const,
+      sessionId: "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd",
+      text: "done",
+    }));
+
+    const result = await handleCodexConversationInboundClaim(
+      {
+        content: "continue the task",
+        channel: "discord",
+        isGroup: true,
+        commandAuthorized: true,
+      },
+      {
+        channelId: "discord",
+        pluginBinding: {
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: tempDir,
+          channel: "discord",
+          accountId: "default",
+          conversationId: "channel-1",
+          boundAt: Date.now(),
+          data: {
+            kind: "codex-cli-node-session",
+            version: 1,
+            nodeId: "mb-m5",
+            sessionId: "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd",
+            cwd: "/repo",
+          },
+        },
+      },
+      {
+        resumeCodexCliSessionOnNode,
+        timeoutMs: 1234,
+      },
+    );
+
+    expect(result).toEqual({ handled: true, reply: { text: "done" } });
+    expect(resumeCodexCliSessionOnNode).toHaveBeenCalledWith({
+      nodeId: "mb-m5",
+      sessionId: "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd",
+      prompt: "continue the task",
+      cwd: "/repo",
+      timeoutMs: 1234,
+    });
+  });
+
   it("recreates a missing bound thread and preserves auth plus turn overrides", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     agentRuntimeMocks.ensureAuthProfileStore.mockReturnValue({

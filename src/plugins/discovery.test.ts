@@ -1010,6 +1010,32 @@ describe("discoverOpenClawPlugins", () => {
     );
   });
 
+  it("warns on legacy npm declaration stubs without loading workspace node_modules", async () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "extensions", "guardrail-bridge");
+    mkdirSafe(pluginDir);
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.extension.json"),
+      JSON.stringify({
+        name: "guardrail-bridge",
+        type: "npm",
+        npmSpec: "@guardrail-bridge/guardrail-bridge@1.0.0",
+      }),
+      "utf-8",
+    );
+
+    const result = await discoverWithStateDir(stateDir, {});
+
+    expectCandidateIds(result.candidates, { excludes: ["guardrail-bridge"] });
+    expectDiagnostic({
+      diagnostics: result.diagnostics,
+      level: "warn",
+      pluginId: "guardrail-bridge",
+      source: path.join(pluginDir, "openclaw.extension.json"),
+      messageIncludes: 'run "openclaw doctor --fix"',
+    });
+  });
+
   it("keeps explicit runtime extension entries strict for untracked global packages", async () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "extensions", "missing-runtime-pack");

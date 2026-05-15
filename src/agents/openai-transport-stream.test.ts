@@ -604,7 +604,7 @@ describe("openai transport stream", () => {
   });
 
   it("uses a valid Azure API version default when the environment is unset", () => {
-    expect(resolveAzureOpenAIApiVersion({})).toBe("2024-12-01-preview");
+    expect(resolveAzureOpenAIApiVersion({})).toBe("preview");
     expect(resolveAzureOpenAIApiVersion({ AZURE_OPENAI_API_VERSION: "2025-01-01-preview" })).toBe(
       "2025-01-01-preview",
     );
@@ -1403,6 +1403,46 @@ describe("openai transport stream", () => {
     expect(params.top_p).toBe(0.9);
   });
 
+  it("forwards response_format to chat completions request params", () => {
+    const model = {
+      id: "gpt-5.4",
+      name: "GPT-5.4",
+      api: "openai-completions",
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    const context = {
+      systemPrompt: "system",
+      messages: [{ role: "user", content: "hi", timestamp: 1 }],
+      tools: [],
+    } as never;
+
+    {
+      const params = buildOpenAICompletionsParams(model, context, {
+        responseFormat: { type: "json_object" },
+      });
+      expect(params.response_format).toEqual({ type: "json_object" });
+    }
+
+    {
+      const params = buildOpenAICompletionsParams(model, context, {
+        responseFormat: { type: "json_schema", json_schema: {} },
+      });
+      expect(params.response_format).toEqual({ type: "json_schema", json_schema: {} });
+    }
+
+    {
+      const params = buildOpenAICompletionsParams(model, context, {});
+      expect(params).not.toHaveProperty("response_format");
+    }
+  });
+
   it("does not build OpenRouter reasoning params for Hunter Alpha when reasoning is disabled", () => {
     const params = buildOpenAICompletionsParams(
       {
@@ -1569,6 +1609,7 @@ describe("openai transport stream", () => {
       prompt_cache_retention: "24h",
       service_tier: "auto",
       temperature: 0.2,
+      text: { format: { type: "json_object" }, verbosity: "low" },
       top_p: 0.85,
     };
 
@@ -1594,6 +1635,7 @@ describe("openai transport stream", () => {
     expect(sanitized).not.toHaveProperty("prompt_cache_retention");
     expect(sanitized).not.toHaveProperty("service_tier");
     expect(sanitized).not.toHaveProperty("temperature");
+    expect(sanitized.text).toEqual({ verbosity: "low" });
     expect(sanitized).not.toHaveProperty("top_p");
   });
 
@@ -1638,6 +1680,51 @@ describe("openai transport stream", () => {
     expect(params.max_output_tokens).toBe(1024);
     expect(params.temperature).toBe(0.2);
     expect(params.top_p).toBe(0.85);
+  });
+
+  it("forwards response_format to responses text format request params", () => {
+    const model = {
+      id: "gpt-5.4",
+      name: "GPT-5.4",
+      api: "openai-responses",
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 65_536,
+    } satisfies Model<"openai-responses">;
+
+    const context = {
+      systemPrompt: "system",
+      messages: [{ role: "user", content: "hi", timestamp: 1 }],
+      tools: [],
+    } as never;
+
+    {
+      const params = buildOpenAIResponsesParams(model, context, {
+        responseFormat: { type: "json_object" },
+      }) as Record<string, unknown>;
+      expect(params.text).toEqual({ format: { type: "json_object" } });
+    }
+
+    {
+      const params = buildOpenAIResponsesParams(model, context, {
+        responseFormat: {
+          type: "json_schema",
+          json_schema: { name: "test", schema: { type: "object" } },
+        },
+      }) as Record<string, unknown>;
+      expect(params.text).toEqual({
+        format: { type: "json_schema", name: "test", schema: { type: "object" } },
+      });
+    }
+
+    {
+      const params = buildOpenAIResponsesParams(model, context, {}) as Record<string, unknown>;
+      expect(params).not.toHaveProperty("text");
+    }
   });
 
   it("preserves custom Codex-compatible responses params after payload hooks mutate them", () => {

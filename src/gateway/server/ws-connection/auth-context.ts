@@ -17,6 +17,7 @@ type HandshakeConnectAuth = {
   bootstrapToken?: string;
   deviceToken?: string;
   password?: string;
+  approvalRuntimeToken?: string;
 };
 
 export type DeviceTokenCandidateSource = "explicit-device-token" | "shared-token-fallback";

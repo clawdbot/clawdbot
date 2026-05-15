@@ -108,6 +108,8 @@ type ToolTranscriptResultInput = {
 export class CodexAppServerEventProjector {
   private readonly assistantTextByItem = new Map<string, string>();
   private readonly assistantItemOrder: string[] = [];
+  private readonly assistantPhaseByItem = new Map<string, string>();
+  private readonly lastCommentaryProgressTextByItem = new Map<string, string>();
   private readonly reasoningTextByItem = new Map<string, string>();
   private readonly planTextByItem = new Map<string, string>();
   private readonly activeItemIds = new Set<string>();
@@ -395,6 +397,9 @@ export class CodexAppServerEventProjector {
     this.rememberAssistantItem(itemId);
     const text = `${this.assistantTextByItem.get(itemId) ?? ""}${delta}`;
     this.assistantTextByItem.set(itemId, text);
+    if (this.isCommentaryAssistantItem(itemId)) {
+      this.emitCommentaryProgress({ itemId, text });
+    }
     // Codex app-server can emit multiple agentMessage items per turn, including
     // intermediate coordination/progress prose. Keep those deltas internal until
     // turn completion chooses the last assistant item as the user-visible reply.
@@ -445,6 +450,7 @@ export class CodexAppServerEventProjector {
   private async handleItemStarted(params: JsonObject): Promise<void> {
     const item = readItem(params.item);
     const itemId = item?.id ?? readString(params, "itemId") ?? readString(params, "id");
+    this.rememberAssistantPhase(item);
     if (itemId) {
       this.activeItemIds.add(itemId);
     }
@@ -492,9 +498,13 @@ export class CodexAppServerEventProjector {
       this.activeItemIds.delete(itemId);
       this.completedItemIds.add(itemId);
     }
+    this.rememberAssistantPhase(item);
     if (item?.type === "agentMessage" && typeof item.text === "string" && item.text) {
       this.rememberAssistantItem(item.id);
       this.assistantTextByItem.set(item.id, item.text);
+      if (this.isCommentaryAssistantItem(item.id)) {
+        this.emitCommentaryProgress({ itemId: item.id, text: item.text });
+      }
     }
     this.recordNativeGeneratedMedia(item);
     if (item?.type === "plan" && typeof item.text === "string" && item.text) {
@@ -628,6 +638,7 @@ export class CodexAppServerEventProjector {
       this.promptErrorSource = "prompt";
     }
     for (const item of turn.items ?? []) {
+      this.rememberAssistantPhase(item);
       if (item.type === "agentMessage" && typeof item.text === "string" && item.text) {
         this.rememberAssistantItem(item.id);
         this.assistantTextByItem.set(item.id, item.text);
@@ -751,6 +762,42 @@ export class CodexAppServerEventProjector {
         source: "codex-app-server",
         ...(params.explanation ? { explanation: params.explanation } : {}),
         ...(params.steps && params.steps.length > 0 ? { steps: params.steps } : {}),
+      },
+    });
+  }
+
+  private rememberAssistantPhase(item: CodexThreadItem | undefined): void {
+    if (item?.type !== "agentMessage") {
+      return;
+    }
+    const phase = readItemString(item, "phase");
+    if (phase) {
+      this.assistantPhaseByItem.set(item.id, phase);
+    }
+  }
+
+  private isCommentaryAssistantItem(itemId: string): boolean {
+    return this.assistantPhaseByItem.get(itemId) === "commentary";
+  }
+
+  private emitCommentaryProgress(params: { itemId: string; text: string }): void {
+    const progressText = params.text.replace(/\s+/g, " ").trim();
+    if (
+      !progressText ||
+      this.lastCommentaryProgressTextByItem.get(params.itemId) === progressText
+    ) {
+      return;
+    }
+    this.lastCommentaryProgressTextByItem.set(params.itemId, progressText);
+    this.emitAgentEvent({
+      stream: "item",
+      data: {
+        itemId: params.itemId,
+        kind: "preamble",
+        title: "Preamble",
+        phase: "update",
+        progressText,
+        source: "codex-app-server",
       },
     });
   }
@@ -1118,6 +1165,9 @@ export class CodexAppServerEventProjector {
         continue;
       }
       const text = this.assistantTextByItem.get(itemId)?.trim();
+      if (this.assistantPhaseByItem.get(itemId) === "commentary") {
+        continue;
+      }
       if (text && !this.toolProgressTexts.has(text)) {
         return text;
       }

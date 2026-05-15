@@ -515,6 +515,17 @@ describe("msteams inline image limits", () => {
     }
   });
 
+  it("rejects inline data images with malformed base64 padding", () => {
+    const attachments = [
+      {
+        contentType: "text/html",
+        content: `<img src="data:image/png;base64,aGV=sbG8=" />`,
+      },
+    ];
+    const out = extractInlineImageCandidates(attachments, { maxInlineBytes: 10 });
+    expect(out).toStrictEqual([]);
+  });
+
   it("enforces cumulative inline size limit across attachments", () => {
     const attachments = [
       {

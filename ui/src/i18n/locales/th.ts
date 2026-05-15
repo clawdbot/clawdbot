@@ -346,6 +346,12 @@ export const th: TranslationMap = {
     eventLogSubtitle: "Latest gateway events.",
     noEvents: "No events yet.",
   },
+  quickSettings: {
+    security: {
+      browserEnabled: "Browser enabled",
+      toolProfile: "Tool profile",
+    },
+  },
   execApproval: {
     expiresIn: "expires in {time}",
     expired: "expired",
@@ -683,9 +689,6 @@ export const th: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle: "ดูว่าโทเค็นถูกใช้ไปที่ไหน เซสชันพุ่งขึ้นเมื่อใด และอะไรเป็นตัวขับเคลื่อนค่าใช้จ่าย",
-    },
     common: {
       emptyValue: "—",
       unknown: "ไม่ทราบ",
@@ -1011,10 +1014,10 @@ export const th: TranslationMap = {
     settings: "การตั้งค่าแชท",
     thinkingToggle: "สลับการแสดงผลการคิด/การทำงานของผู้ช่วย",
     toolCallsToggle: "สลับการแสดงการเรียกใช้ tool และผลลัพธ์ของ tool",
-    autoScrollMode: "Auto-scroll mode",
-    autoScrollAlways: "Always",
-    autoScrollNearBottom: "Near bottom",
-    autoScrollOff: "Off",
+    autoScrollMode: "โหมดเลื่อนอัตโนมัติ",
+    autoScrollAlways: "เสมอ",
+    autoScrollNearBottom: "ใกล้ด้านล่าง",
+    autoScrollOff: "ปิด",
     focusToggle: "สลับโหมดโฟกัส (ซ่อนแถบด้านข้าง + ส่วนหัวหน้า)",
     hideCronSessions: "ซ่อนเซสชัน cron",
     showCronSessions: "แสดงเซสชัน cron",

@@ -11,10 +11,9 @@ import {
 import { doctorCommand } from "../../commands/doctor.js";
 import { createPreUpdateConfigSnapshot } from "../../config/backup-rotation.js";
 import {
-  ConfigMutationConflictError,
   assertConfigWriteAllowedInCurrentMode,
+  mutateConfigFileWithRetry,
   readConfigFileSnapshot,
-  replaceConfigFile,
   resolveGatewayPort,
 } from "../../config/config.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
@@ -49,6 +48,13 @@ import {
   checkUpdateStatus,
 } from "../../infra/update-check.js";
 import {
+  buildControlPlaneUpdateRestartHealthPendingResult,
+  markControlPlaneUpdateRestartSentinelFailure,
+  readControlPlaneUpdateSentinelMeta,
+  writeControlPlaneUpdateRestartSentinel,
+  type ControlPlaneUpdateSentinelMetaFile,
+} from "../../infra/update-control-plane-sentinel.js";
+import {
   canResolveRegistryVersionForPackageTarget,
   createGlobalInstallEnv,
   cleanupGlobalRenameDirs,
@@ -57,6 +63,7 @@ import {
   resolveGlobalInstallSpec,
   resolvePnpmGlobalDirFromGlobalRoot,
 } from "../../infra/update-global.js";
+import { cleanupStaleManagedServiceUpdateHandoffs } from "../../infra/update-managed-service-handoff-cleanup.js";
 import { runGatewayUpdate, type UpdateRunResult } from "../../infra/update-runner.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../../plugins/config-state.js";
 import {
@@ -114,6 +121,7 @@ import {
   runUpdateStep,
   tryWriteCompletionCache,
   type UpdateCommandOptions,
+  type UpdateFinalizeOptions,
 } from "./shared.js";
 import { suppressDeprecations } from "./suppress-deprecations.js";
 
@@ -1039,6 +1047,7 @@ async function runPackageInstallUpdate(params: {
         return await runUpdateStep({
           name: `${CLI_NAME} doctor`,
           argv: [resolveNodeRunner(), entryPath, "doctor", "--non-interactive", "--fix"],
+          cwd: verifiedPackageRoot,
           env: {
             ...resolvePostInstallDoctorEnv({
               serviceEnv: params.managedServiceEnv,
@@ -1564,6 +1573,9 @@ async function maybeRestartService(params: {
     }
 
     if (health.healthy) {
+      if (!params.opts.json) {
+        defaultRuntime.log(theme.success("Gateway: restarted and verified."));
+      }
       return true;
     }
 
@@ -1674,7 +1686,7 @@ async function maybeRestartService(params: {
         await createUpdateConfigSnapshot();
         restarted = await runDaemonRestart();
       } else if (!refreshedGatewayAlreadyHealthy && !params.opts.json) {
-        defaultRuntime.log(theme.muted("No installed gateway service found; skipped restart."));
+        defaultRuntime.log(theme.muted("Gateway: restart skipped (no installed service found)."));
       }
 
       const shouldVerifyRestart =
@@ -1716,7 +1728,7 @@ async function maybeRestartService(params: {
       }
     } catch (err) {
       if (!params.opts.json) {
-        defaultRuntime.log(theme.warn(`Daemon restart failed: ${String(err)}`));
+        defaultRuntime.log(theme.warn(`Gateway: restart failed: ${String(err)}`));
         defaultRuntime.log(
           theme.muted(
             `You may need to restart the service manually: ${replaceCliName(formatCliCommand("openclaw gateway restart"), CLI_NAME)}`,
@@ -1732,6 +1744,7 @@ async function maybeRestartService(params: {
 
   if (!params.opts.json) {
     defaultRuntime.log("");
+    defaultRuntime.log(theme.muted("Gateway: restart skipped (--no-restart)."));
     if (params.result.mode === "npm" || params.result.mode === "pnpm") {
       defaultRuntime.log(
         theme.muted(
@@ -1767,6 +1780,138 @@ async function runPostCorePluginUpdate(params: {
   });
 }
 
+type UpdateFinalizeResult = {
+  status: "ok" | "warning" | "error";
+  mode: "finalize";
+  root: string;
+  channel: "stable" | "beta" | "dev";
+  restart: false;
+  postUpdate: {
+    doctor: {
+      status: "ok";
+    };
+    plugins: PostCorePluginUpdateResult;
+  };
+};
+
+function withUpdateFinalizationEnv<T>(run: () => Promise<T>): Promise<T> {
+  const previousUpdateInProgress = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+  const previousParentSupportsDoctorConfigWrite =
+    process.env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV];
+  process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
+  process.env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV] = "1";
+  return run().finally(() => {
+    if (previousUpdateInProgress === undefined) {
+      delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+    } else {
+      process.env.OPENCLAW_UPDATE_IN_PROGRESS = previousUpdateInProgress;
+    }
+    if (previousParentSupportsDoctorConfigWrite === undefined) {
+      delete process.env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV];
+    } else {
+      process.env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV] =
+        previousParentSupportsDoctorConfigWrite;
+    }
+  });
+}
+
+export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promise<void> {
+  suppressDeprecations();
+  const timeoutMs = parseTimeoutMsOrExit(opts.timeout);
+  if (timeoutMs === null) {
+    return;
+  }
+  assertConfigWriteAllowedInCurrentMode();
+
+  const root = await resolveUpdateRoot();
+  let configSnapshot = await readConfigFileSnapshot();
+  const requestedChannel = normalizeUpdateChannel(opts.channel);
+  if (opts.channel && !requestedChannel) {
+    defaultRuntime.error(`--channel must be "stable", "beta", or "dev" (got "${opts.channel}")`);
+    defaultRuntime.exit(1);
+    return;
+  }
+  const storedChannel = configSnapshot.valid
+    ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
+    : null;
+  const channel = requestedChannel ?? storedChannel ?? DEFAULT_PACKAGE_CHANNEL;
+  if (requestedChannel) {
+    configSnapshot = await persistRequestedUpdateChannel({
+      configSnapshot,
+      requestedChannel,
+    });
+  }
+
+  const pluginUpdate = await withUpdateFinalizationEnv(async () => {
+    await createUpdateConfigSnapshot();
+    await doctorCommand(defaultRuntime, {
+      nonInteractive: true,
+      repair: true,
+      yes: opts.yes === true,
+    });
+    configSnapshot = await readConfigFileSnapshot();
+    if (requestedChannel) {
+      configSnapshot = await persistRequestedUpdateChannel({
+        configSnapshot,
+        requestedChannel,
+      });
+    }
+    const postDoctorStoredChannel = configSnapshot.valid
+      ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
+      : null;
+    const postDoctorChannel =
+      requestedChannel ?? postDoctorStoredChannel ?? storedChannel ?? DEFAULT_PACKAGE_CHANNEL;
+    const pluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
+    return await runPostCorePluginUpdate({
+      root,
+      channel: postDoctorChannel,
+      configSnapshot,
+      opts: {
+        json: opts.json,
+        timeout: opts.timeout,
+        yes: opts.yes,
+        restart: false,
+      },
+      timeoutMs: timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
+      pluginInstallRecords,
+    });
+  });
+
+  const result: UpdateFinalizeResult = {
+    status:
+      pluginUpdate.status === "error"
+        ? "error"
+        : pluginUpdate.status === "warning"
+          ? "warning"
+          : "ok",
+    mode: "finalize",
+    root,
+    channel:
+      requestedChannel ??
+      (configSnapshot.valid
+        ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
+        : null) ??
+      channel,
+    restart: false,
+    postUpdate: {
+      doctor: {
+        status: "ok",
+      },
+      plugins: pluginUpdate,
+    },
+  };
+
+  await tryWriteCompletionCache(root, Boolean(opts.json));
+  if (opts.json) {
+    defaultRuntime.writeJson(result);
+  } else if (result.status === "ok") {
+    defaultRuntime.log(theme.muted("Update finalization completed."));
+  }
+  if (result.status === "error") {
+    defaultRuntime.exit(1);
+  }
+}
+
 async function persistRequestedUpdateChannel(params: {
   configSnapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>;
   requestedChannel: "stable" | "beta" | "dev" | null;
@@ -1778,46 +1923,17 @@ async function persistRequestedUpdateChannel(params: {
   if (params.requestedChannel === storedChannel) {
     return params.configSnapshot;
   }
+  const requestedChannel = params.requestedChannel;
 
-  const next = {
-    ...params.configSnapshot.sourceConfig,
-    update: {
-      ...params.configSnapshot.sourceConfig.update,
-      channel: params.requestedChannel,
+  const mutation = await mutateConfigFileWithRetry({
+    mutate: (draft) => {
+      draft.update = {
+        ...draft.update,
+        channel: requestedChannel,
+      };
     },
-  };
-  try {
-    await replaceConfigFile({
-      nextConfig: next,
-      baseHash: params.configSnapshot.hash,
-    });
-    return createUpdatedChannelSnapshot(params.configSnapshot, next);
-  } catch (error) {
-    if (!(error instanceof ConfigMutationConflictError)) {
-      throw error;
-    }
-  }
-
-  const refreshed = await readConfigFileSnapshot();
-  if (!refreshed.valid) {
-    return refreshed;
-  }
-  const refreshedChannel = normalizeUpdateChannel(refreshed.config.update?.channel);
-  if (refreshedChannel === params.requestedChannel) {
-    return refreshed;
-  }
-  const refreshedNext = {
-    ...refreshed.sourceConfig,
-    update: {
-      ...refreshed.sourceConfig.update,
-      channel: params.requestedChannel,
-    },
-  };
-  await replaceConfigFile({
-    nextConfig: refreshedNext,
-    baseHash: refreshed.hash,
   });
-  return createUpdatedChannelSnapshot(refreshed, refreshedNext);
+  return createUpdatedChannelSnapshot(mutation.snapshot, mutation.nextConfig);
 }
 
 function createUpdatedChannelSnapshot(
@@ -2084,8 +2200,52 @@ function shouldResumePostCoreUpdateInFreshProcess(params: {
   return Boolean(beforeVersion && afterVersion && beforeVersion !== afterVersion);
 }
 
+async function writeControlPlaneUpdateRestartSentinelBestEffort(params: {
+  meta: ControlPlaneUpdateSentinelMetaFile["meta"] | null;
+  result: UpdateRunResult;
+  jsonMode: boolean;
+}): Promise<void> {
+  if (!params.meta) {
+    return;
+  }
+  try {
+    await writeControlPlaneUpdateRestartSentinel({
+      meta: params.meta,
+      result: params.result,
+    });
+  } catch (err) {
+    const message = `Failed to write update.run restart sentinel: ${String(err)}`;
+    if (params.jsonMode) {
+      defaultRuntime.error(message);
+    } else {
+      defaultRuntime.log(theme.warn(message));
+    }
+  }
+}
+
+async function markControlPlaneUpdateRestartSentinelFailureBestEffort(params: {
+  meta: ControlPlaneUpdateSentinelMetaFile["meta"] | null;
+  reason: string;
+  jsonMode: boolean;
+}): Promise<void> {
+  if (!params.meta) {
+    return;
+  }
+  try {
+    await markControlPlaneUpdateRestartSentinelFailure(params.reason);
+  } catch (err) {
+    const message = `Failed to mark update.run restart sentinel failed: ${String(err)}`;
+    if (params.jsonMode) {
+      defaultRuntime.error(message);
+    } else {
+      defaultRuntime.log(theme.warn(message));
+    }
+  }
+}
+
 export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   suppressDeprecations();
+  await cleanupStaleManagedServiceUpdateHandoffs().catch(() => undefined);
   const invocationCwd = tryResolveInvocationCwd();
   const postCoreUpdateResume = process.env[POST_CORE_UPDATE_ENV] === "1";
   const postCoreUpdateChannel = process.env[POST_CORE_UPDATE_CHANNEL_ENV]?.trim();
@@ -2160,6 +2320,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     return;
   }
 
+  const controlPlaneUpdateSentinelMeta = await readControlPlaneUpdateSentinelMeta();
   const updateStatus = await checkUpdateStatus({
     root,
     timeoutMs: timeoutMs ?? 3500,
@@ -2451,6 +2612,11 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   }
 
   if (result.status === "error") {
+    await writeControlPlaneUpdateRestartSentinelBestEffort({
+      meta: controlPlaneUpdateSentinelMeta,
+      result,
+      jsonMode: Boolean(opts.json),
+    });
     await maybeRestartServiceAfterFailedPackageUpdate({
       prePackageServiceStop,
       jsonMode: Boolean(opts.json),
@@ -2460,6 +2626,11 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   }
 
   if (result.status === "skipped") {
+    await writeControlPlaneUpdateRestartSentinelBestEffort({
+      meta: controlPlaneUpdateSentinelMeta,
+      result,
+      jsonMode: Boolean(opts.json),
+    });
     await maybeRestartServiceAfterFailedPackageUpdate({
       prePackageServiceStop,
       jsonMode: Boolean(opts.json),
@@ -2496,10 +2667,11 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     downgradeRisk,
   });
 
-  let postUpdateConfigSnapshot = configSnapshot;
+  let postUpdateConfigSnapshot =
+    result.status === "ok" && !opts.dryRun ? await readConfigFileSnapshot() : configSnapshot;
   if (!shouldResumePostCoreInFreshProcess) {
     postUpdateConfigSnapshot = await persistRequestedUpdateChannel({
-      configSnapshot,
+      configSnapshot: postUpdateConfigSnapshot,
       requestedChannel,
     });
   }
@@ -2540,7 +2712,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   if (!pluginsUpdatedInFreshProcess) {
     if (shouldResumePostCoreInFreshProcess) {
       postUpdateConfigSnapshot = await persistRequestedUpdateChannel({
-        configSnapshot,
+        configSnapshot: postUpdateConfigSnapshot,
         requestedChannel,
       });
     }
@@ -2567,6 +2739,11 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     : result;
 
   if (postCorePluginUpdate?.status === "error") {
+    await writeControlPlaneUpdateRestartSentinelBestEffort({
+      meta: controlPlaneUpdateSentinelMeta,
+      result: resultWithPostUpdate,
+      jsonMode: Boolean(opts.json),
+    });
     if (opts.json) {
       defaultRuntime.writeJson(resultWithPostUpdate);
     } else {
@@ -2615,6 +2792,12 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     skipPrompt: Boolean(opts.yes),
   });
 
+  await writeControlPlaneUpdateRestartSentinelBestEffort({
+    meta: controlPlaneUpdateSentinelMeta,
+    result: buildControlPlaneUpdateRestartHealthPendingResult(resultWithPostUpdate),
+    jsonMode: Boolean(opts.json),
+  });
+
   const restartOk = await maybeRestartService({
     shouldRestart,
     result: resultWithPostUpdate,
@@ -2626,9 +2809,20 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     invocationCwd,
   });
   if (!restartOk) {
+    await markControlPlaneUpdateRestartSentinelFailureBestEffort({
+      meta: controlPlaneUpdateSentinelMeta,
+      reason: "restart-unhealthy",
+      jsonMode: Boolean(opts.json),
+    });
     defaultRuntime.exit(1);
     return;
   }
+
+  await writeControlPlaneUpdateRestartSentinelBestEffort({
+    meta: controlPlaneUpdateSentinelMeta,
+    result: resultWithPostUpdate,
+    jsonMode: Boolean(opts.json),
+  });
 
   if (!opts.json) {
     defaultRuntime.log(theme.muted(pickUpdateQuip()));

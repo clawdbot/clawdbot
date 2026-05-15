@@ -5,11 +5,15 @@ import {
   type MessageReceipt,
 } from "openclaw/plugin-sdk/channel-message";
 import {
+  buildChannelProgressDraftLineForEntry,
   createChannelProgressDraftGate,
+  type ChannelProgressDraftLine,
   formatChannelProgressDraftLine,
   formatChannelProgressDraftLineForEntry,
   formatChannelProgressDraftText,
   isChannelProgressDraftWorkToolName,
+  mergeChannelProgressDraftLine,
+  normalizeChannelProgressDraftLineIdentity,
   resolveChannelProgressDraftMaxLines,
 } from "openclaw/plugin-sdk/channel-streaming";
 import {
@@ -1493,7 +1497,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const latestQueuedDraftBoundaryOffsets = new Map<number, number>();
       let currentDraftReplyToId = draftReplyToId;
       let previewToolProgressSuppressed = false;
-      let previewToolProgressLines: string[] = [];
+      let previewToolProgressLines: Array<string | ChannelProgressDraftLine> = [];
       const progressConfigEntry = params.accountConfig ?? cfg.channels?.matrix;
       const progressSeed = `${_route.accountId}:${roomId}`;
       // Set after the first final payload consumes or discards the draft event
@@ -1519,7 +1523,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         onStart: renderProgressDraft,
       });
 
-      const pushPreviewToolProgress = async (line?: string, options?: { toolName?: string }) => {
+      const pushPreviewToolProgress = async (
+        line?: string | ChannelProgressDraftLine,
+        options?: { toolName?: string },
+      ) => {
         if (!draftStream) {
           return;
         }
@@ -1529,18 +1536,19 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         ) {
           return;
         }
-        const normalized = line?.replace(/\s+/g, " ").trim();
+        const normalized = normalizeChannelProgressDraftLineIdentity(line);
+        const progressLine = typeof line === "object" && line !== undefined ? line : normalized;
         if (!progressDraftStreaming) {
           if (!shouldStreamPreviewToolProgress || previewToolProgressSuppressed || !normalized) {
             return;
           }
-          const previous = previewToolProgressLines.at(-1);
-          if (previous === normalized) {
+          const nextLines = mergeChannelProgressDraftLine(previewToolProgressLines, progressLine, {
+            maxLines: resolveChannelProgressDraftMaxLines(progressConfigEntry),
+          });
+          if (nextLines === previewToolProgressLines) {
             return;
           }
-          previewToolProgressLines = [...previewToolProgressLines, normalized].slice(
-            -resolveChannelProgressDraftMaxLines(progressConfigEntry),
-          );
+          previewToolProgressLines = nextLines;
           draftStream.update(
             formatChannelProgressDraftText({
               entry: progressConfigEntry,
@@ -1553,12 +1561,13 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           return;
         }
         if (shouldStreamPreviewToolProgress && !previewToolProgressSuppressed && normalized) {
-          const previous = previewToolProgressLines.at(-1);
-          if (previous !== normalized) {
-            previewToolProgressLines = [...previewToolProgressLines, normalized].slice(
-              -resolveChannelProgressDraftMaxLines(progressConfigEntry),
-            );
-          }
+          previewToolProgressLines = mergeChannelProgressDraftLine(
+            previewToolProgressLines,
+            progressLine,
+            {
+              maxLines: resolveChannelProgressDraftMaxLines(progressConfigEntry),
+            },
+          );
         }
         const alreadyStarted = progressDraftGate.hasStarted;
         await progressDraftGate.noteWork();
@@ -1610,8 +1619,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           },
           onItemEvent: async (payload) => {
             await pushPreviewToolProgress(
-              formatChannelProgressDraftLineForEntry(progressConfigEntry, {
+              buildChannelProgressDraftLineForEntry(progressConfigEntry, {
                 event: "item",
+                itemId: payload.itemId,
                 itemKind: payload.kind,
                 title: payload.title,
                 name: payload.name,

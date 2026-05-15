@@ -4,6 +4,11 @@ import { buildChannelsTable } from "./channels.js";
 const mocks = vi.hoisted(() => ({
   resolveInspectedChannelAccount: vi.fn(),
   listReadOnlyChannelPluginsForConfig: vi.fn(),
+  readOnlyChannelLoadFailures: [] as Array<{
+    channelId: string;
+    pluginId: string;
+    message: string;
+  }>,
   missingOfficialExternalChannels: new Set<string>(),
 }));
 
@@ -23,7 +28,10 @@ vi.mock("../../channels/plugins/read-only.js", () => ({
   resolveReadOnlyChannelPluginsForConfig: () => ({
     plugins: mocks.listReadOnlyChannelPluginsForConfig(),
     configuredChannelIds: [],
-    missingConfiguredChannelIds: [],
+    missingConfiguredChannelIds: mocks.readOnlyChannelLoadFailures.map(
+      (failure) => failure.channelId,
+    ),
+    loadFailures: mocks.readOnlyChannelLoadFailures,
   }),
 }));
 
@@ -46,6 +54,7 @@ vi.mock("../../plugins/official-external-plugin-repair-hints.js", () => ({
 describe("buildChannelsTable", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.readOnlyChannelLoadFailures = [];
     mocks.missingOfficialExternalChannels.clear();
     mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([discordPlugin]);
     mocks.resolveInspectedChannelAccount.mockResolvedValue({
@@ -108,6 +117,33 @@ describe("buildChannelsTable", () => {
           state: "warn",
           detail:
             "plugin not installed - run openclaw plugins install @openclaw/feishu or openclaw doctor --fix",
+        },
+      ],
+      details: [],
+    });
+    expect(mocks.resolveInspectedChannelAccount).not.toHaveBeenCalled();
+  });
+
+  it("shows plugin load failures for configured channels whose setup registration fails", async () => {
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([]);
+    mocks.readOnlyChannelLoadFailures = [
+      {
+        channelId: "telegram",
+        pluginId: "telegram",
+        message: 'failed to load setup entry: Cannot find module "ansi-escapes"',
+      },
+    ];
+
+    const table = await buildChannelsTable({ channels: { telegram: { botToken: "123:abc" } } });
+
+    expect(table).toStrictEqual({
+      rows: [
+        {
+          id: "telegram",
+          label: "telegram",
+          enabled: true,
+          state: "warn",
+          detail: "plugin load failed: dependency tree corrupted; run openclaw doctor --fix",
         },
       ],
       details: [],

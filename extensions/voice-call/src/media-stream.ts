@@ -121,6 +121,15 @@ function normalizeWsMessageData(data: RawData): Buffer {
   return Buffer.from(data);
 }
 
+export function parseTwilioMediaMessage(data: RawData): TwilioMediaMessage {
+  const raw = normalizeWsMessageData(data);
+  try {
+    return JSON.parse(raw.toString("utf8")) as TwilioMediaMessage;
+  } catch (cause) {
+    throw new Error("Twilio media stream message was malformed JSON", { cause });
+  }
+}
+
 /**
  * Manages WebSocket connections for Twilio media streams.
  */
@@ -219,8 +228,7 @@ export class MediaStreamHandler {
 
     ws.on("message", async (data: RawData) => {
       try {
-        const raw = normalizeWsMessageData(data);
-        const message = JSON.parse(raw.toString("utf8")) as TwilioMediaMessage;
+        const message = parseTwilioMediaMessage(data);
 
         switch (message.event) {
           case "connected":

@@ -284,6 +284,23 @@ describe("registerTelegramNativeCommands", () => {
     expect(registeredHandlers).not.toContain("export-session");
   });
 
+  it("resolves plugin commands with the Telegram runtime config", () => {
+    const cfg: OpenClawConfig = {
+      commands: { native: true },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+        },
+      },
+    };
+
+    registerTelegramNativeCommands(createNativeCommandTestParams(cfg));
+
+    expect(pluginCommandMocks.getPluginCommandSpecs).toHaveBeenCalledWith("telegram", {
+      config: cfg,
+    });
+  });
+
   it("registers only Telegram-safe command names across native, custom, and plugin sources", async () => {
     const setMyCommands = vi.fn().mockResolvedValue(undefined);
 

@@ -14,6 +14,7 @@ import {
   __testing,
   filterRecallEntriesWithinLookback,
   runDreamingSweepPhases,
+  seedHistoricalDailyMemorySignals,
 } from "./dreaming-phases.js";
 import { previewRemHarness } from "./rem-harness.js";
 import {
@@ -227,6 +228,13 @@ async function writeDailyNote(workspaceDir: string, lines: string[]): Promise<vo
     lines.join("\n"),
     "utf-8",
   );
+}
+
+function dailyCapStressLines(label: string): string[] {
+  return Array.from({ length: 8 }).flatMap((_, index) => [
+    `- ${label} durable memory item ${index + 1} has enough detail to create a chunk.`,
+    "",
+  ]);
 }
 
 async function createDreamingWorkspace(): Promise<string> {
@@ -691,6 +699,98 @@ describe("memory-core dreaming phases", () => {
     expect(
       after.some((entry) => entry.snippet.includes("Vendor pitch: prefer the multi-year SLA.")),
     ).toBe(true);
+  });
+
+  it("prioritizes the date-only daily file before same-day slugged files when ingestion is capped", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    await fs.writeFile(
+      path.join(workspaceDir, "memory", "2026-04-05.md"),
+      dailyCapStressLines("Canonical daily note").join("\n"),
+      "utf-8",
+    );
+    for (const slug of ["alpha", "beta", "gamma", "delta"]) {
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", `2026-04-05-${slug}.md`),
+        dailyCapStressLines(`Slugged ${slug}`).join("\n"),
+        "utf-8",
+      );
+    }
+
+    const { beforeAgentReply } = createHarness(
+      {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  phases: {
+                    light: {
+                      enabled: true,
+                      limit: 1,
+                      lookbackDays: 2,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      workspaceDir,
+    );
+
+    await withDreamingTestClock(async () => {
+      await triggerLightDreaming(beforeAgentReply, workspaceDir, 5);
+    });
+
+    const after = await rankShortTermPromotionCandidates({
+      workspaceDir,
+      minScore: 0,
+      minRecallCount: 0,
+      minUniqueQueries: 0,
+      nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
+    });
+    expect(after.some((entry) => entry.path === "memory/2026-04-05.md")).toBe(true);
+    expect(after.some((entry) => entry.snippet.includes("Canonical daily note"))).toBe(true);
+  });
+
+  it("prioritizes the date-only daily file before same-day slugged files during historical seeding", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    const canonicalPath = path.join(workspaceDir, "memory", "2026-04-05.md");
+    await fs.writeFile(
+      canonicalPath,
+      dailyCapStressLines("Canonical seeded note").join("\n"),
+      "utf-8",
+    );
+    const sluggedPaths: string[] = [];
+    for (const slug of ["alpha", "beta", "gamma", "delta"]) {
+      const sluggedPath = path.join(workspaceDir, "memory", `2026-04-05-${slug}.md`);
+      sluggedPaths.push(sluggedPath);
+      await fs.writeFile(
+        sluggedPath,
+        dailyCapStressLines(`Seeded slugged ${slug}`).join("\n"),
+        "utf-8",
+      );
+    }
+
+    await seedHistoricalDailyMemorySignals({
+      workspaceDir,
+      filePaths: [...sluggedPaths, canonicalPath],
+      limit: 1,
+      nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
+      timezone: "UTC",
+    });
+
+    const after = await rankShortTermPromotionCandidates({
+      workspaceDir,
+      minScore: 0,
+      minRecallCount: 0,
+      minUniqueQueries: 0,
+      nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
+    });
+    expect(after.some((entry) => entry.path === "memory/2026-04-05.md")).toBe(true);
+    expect(after.some((entry) => entry.snippet.includes("Canonical seeded note"))).toBe(true);
   });
 
   it("renders non-zero light-sleep confidence for dreaming-ingested candidates", async () => {

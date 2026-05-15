@@ -229,7 +229,12 @@ export function buildDeepInfraVideoGenerationProvider(): VideoGenerationProvider
       });
       try {
         await assertOkOrThrowHttpError(response, "DeepInfra video generation failed");
-        const payload = (await response.json()) as DeepInfraVideoResponse;
+        let payload: DeepInfraVideoResponse;
+        try {
+          payload = (await response.json()) as DeepInfraVideoResponse;
+        } catch (cause) {
+          throw new Error("DeepInfra video generation failed: malformed JSON response", { cause });
+        }
         const failed = failureMessage(payload);
         if (failed) {
           throw new Error(failed);

@@ -351,6 +351,12 @@ export const de: TranslationMap = {
     eventLogSubtitle: "Latest gateway events.",
     noEvents: "No events yet.",
   },
+  quickSettings: {
+    security: {
+      browserEnabled: "Browser enabled",
+      toolProfile: "Tool profile",
+    },
+  },
   execApproval: {
     expiresIn: "expires in {time}",
     expired: "expired",
@@ -699,9 +705,6 @@ export const de: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle: "Sieh, wohin Tokens gehen, wann Sitzungen zunehmen und was die Kosten antreibt.",
-    },
     common: {
       emptyValue: "—",
       unknown: "unbekannt",
@@ -1050,10 +1053,10 @@ export const de: TranslationMap = {
     settings: "Chat-Einstellungen",
     thinkingToggle: "Ausgabe des Assistenten ein-/ausblenden",
     toolCallsToggle: "Tool-Aufrufe und Tool-Ergebnisse umschalten",
-    autoScrollMode: "Auto-scroll mode",
-    autoScrollAlways: "Always",
-    autoScrollNearBottom: "Near bottom",
-    autoScrollOff: "Off",
+    autoScrollMode: "Automatischer Scrollmodus",
+    autoScrollAlways: "Immer",
+    autoScrollNearBottom: "Nahe am unteren Rand",
+    autoScrollOff: "Aus",
     focusToggle: "Fokusmodus ein-/ausschalten (Seitenleiste + Kopfzeile ausblenden)",
     hideCronSessions: "Cron-Sitzungen ausblenden",
     showCronSessions: "Cron-Sitzungen anzeigen",

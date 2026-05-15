@@ -5,6 +5,8 @@ import {
   createThreadDiscord,
   deleteMessageDiscord,
   editMessageDiscord,
+  editChannelDiscord,
+  fetchChannelInfoDiscord,
   fetchChannelPermissionsDiscord,
   fetchMessageDiscord,
   fetchReactionsDiscord,
@@ -28,7 +30,9 @@ import { resolveDiscordChannelId } from "../targets.js";
 export const discordMessagingActionRuntime = {
   createThreadDiscord,
   deleteMessageDiscord,
+  editChannelDiscord,
   editMessageDiscord,
+  fetchChannelInfoDiscord,
   fetchChannelPermissionsDiscord,
   fetchMessageDiscord,
   fetchReactionsDiscord,

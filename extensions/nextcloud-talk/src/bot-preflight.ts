@@ -1,4 +1,5 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "../runtime-api.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 import { resolveNextcloudTalkApiCredentials } from "./api-credentials.js";
@@ -135,9 +136,9 @@ export async function probeNextcloudTalkBotResponseFeature(params: {
         };
       }
 
-      const payload = (await response.json()) as {
+      const payload = await readProviderJsonResponse<{
         ocs?: { data?: NextcloudTalkBotAdminEntry[] };
-      };
+      }>(response, "Nextcloud Talk bot response feature probe failed");
       const bots = Array.isArray(payload.ocs?.data) ? payload.ocs.data : [];
       const bot = bots.find((entry) => normalizeUrlForMatch(entry.url) === webhookUrl);
       if (!bot) {
@@ -172,10 +173,11 @@ export async function probeNextcloudTalkBotResponseFeature(params: {
       await release();
     }
   } catch (error) {
+    const detail = error instanceof Error ? error.message : formatErrorMessage(error);
     return {
       ok: false,
       code: "request_failed",
-      message: `Nextcloud Talk bot response feature probe failed: ${formatErrorMessage(error)}`,
+      message: `Nextcloud Talk bot response feature probe failed: ${detail}`,
     };
   }
 }

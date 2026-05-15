@@ -122,7 +122,7 @@ async function fetchOpenAiBatchResource<T>(params: {
   });
 }
 
-function parseOpenAiBatchOutput(text: string): OpenAiBatchOutputLine[] {
+export function parseOpenAiBatchOutput(text: string): OpenAiBatchOutputLine[] {
   if (!text.trim()) {
     return [];
   }
@@ -130,7 +130,13 @@ function parseOpenAiBatchOutput(text: string): OpenAiBatchOutputLine[] {
     .split("\n")
     .map((line) => line.trim())
     .filter(Boolean)
-    .map((line) => JSON.parse(line) as OpenAiBatchOutputLine);
+    .map((line) => {
+      try {
+        return JSON.parse(line) as OpenAiBatchOutputLine;
+      } catch {
+        throw new Error("OpenAI embedding batch output contained malformed JSONL");
+      }
+    });
 }
 
 async function readOpenAiBatchError(params: {

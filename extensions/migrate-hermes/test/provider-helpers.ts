@@ -58,6 +58,7 @@ export function makeConfigRuntime(
         const next = structuredClone(config);
         const result = await mutate(next, {
           previousHash: null,
+          persistedHash: null,
           snapshot: { config, raw: "", hash: null },
         });
         commitConfig(next);

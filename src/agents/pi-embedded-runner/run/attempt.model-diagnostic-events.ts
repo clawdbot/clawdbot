@@ -19,6 +19,7 @@ import {
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type {
   PluginHookAgentContext,
+  PluginHookContextWindowSource,
   PluginHookModelCallEndedEvent,
   PluginHookModelCallStartedEvent,
 } from "../../../plugins/hook-types.js";
@@ -33,6 +34,9 @@ type ModelCallDiagnosticContext = {
   model: string;
   api?: string;
   transport?: string;
+  contextTokenBudget?: number;
+  contextWindowSource?: PluginHookContextWindowSource;
+  contextWindowReferenceTokens?: number;
   trace: DiagnosticTraceContext;
   nextCallId: () => string;
   onStarted?: () => void;
@@ -150,6 +154,11 @@ function baseModelCallEvent(
     model: ctx.model,
     ...(ctx.api && { api: ctx.api }),
     ...(ctx.transport && { transport: ctx.transport }),
+    ...(ctx.contextTokenBudget ? { contextTokenBudget: ctx.contextTokenBudget } : {}),
+    ...(ctx.contextWindowSource ? { contextWindowSource: ctx.contextWindowSource } : {}),
+    ...(ctx.contextWindowReferenceTokens
+      ? { contextWindowReferenceTokens: ctx.contextWindowReferenceTokens }
+      : {}),
     trace,
   };
 }
@@ -189,6 +198,13 @@ function modelCallHookEventBase(eventBase: ModelCallEventBase): PluginHookModelC
     model: eventBase.model,
     ...(eventBase.api ? { api: eventBase.api } : {}),
     ...(eventBase.transport ? { transport: eventBase.transport } : {}),
+    ...(eventBase.contextTokenBudget ? { contextTokenBudget: eventBase.contextTokenBudget } : {}),
+    ...(eventBase.contextWindowSource
+      ? { contextWindowSource: eventBase.contextWindowSource }
+      : {}),
+    ...(eventBase.contextWindowReferenceTokens
+      ? { contextWindowReferenceTokens: eventBase.contextWindowReferenceTokens }
+      : {}),
   };
 }
 
@@ -200,6 +216,13 @@ function modelCallHookContext(eventBase: ModelCallEventBase): PluginHookAgentCon
     ...(eventBase.sessionId ? { sessionId: eventBase.sessionId } : {}),
     modelProviderId: eventBase.provider,
     modelId: eventBase.model,
+    ...(eventBase.contextTokenBudget ? { contextTokenBudget: eventBase.contextTokenBudget } : {}),
+    ...(eventBase.contextWindowSource
+      ? { contextWindowSource: eventBase.contextWindowSource }
+      : {}),
+    ...(eventBase.contextWindowReferenceTokens
+      ? { contextWindowReferenceTokens: eventBase.contextWindowReferenceTokens }
+      : {}),
   }) as PluginHookAgentContext;
 }
 

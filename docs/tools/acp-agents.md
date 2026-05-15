@@ -60,7 +60,7 @@ an unavailable backend.
   <Accordion title="First-run gotchas">
     - If `plugins.allow` is set, it is a restrictive plugin inventory and **must** include `acpx`; otherwise the installed ACP backend is intentionally blocked and `/acp doctor` reports the missing allowlist entry.
     - The Codex ACP adapter is staged with the `acpx` plugin and launched locally when possible.
-    - Codex ACP runs with an isolated `CODEX_HOME`; OpenClaw copies only trusted project entries from the host Codex config and trusts the active workspace, leaving auth, notifications, and hooks on the host config.
+    - Codex ACP runs with an isolated `CODEX_HOME`; OpenClaw copies trusted project entries plus safe model/provider routing config from the host Codex config, while auth, notifications, and hooks stay on the host config.
     - Other target harness adapters may still be fetched on demand with `npx` the first time you use them.
     - Vendor auth still has to exist on the host for that harness.
     - If the host has no npm or network access, first-run adapter fetches fail until caches are pre-warmed or the adapter is installed another way.

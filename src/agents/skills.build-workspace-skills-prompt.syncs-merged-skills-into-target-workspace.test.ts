@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { withEnv } from "../test-utils/env.js";
+import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import { writeSkill } from "./skills.e2e-test-helpers.js";
 import { buildWorkspaceSkillsPrompt, syncSkillsToWorkspace } from "./skills/workspace.js";
 
@@ -356,5 +356,46 @@ describe("buildWorkspaceSkillsPrompt", () => {
     expect(await pathExists(path.join(targetWorkspace, "skills", "remote-only", "SKILL.md"))).toBe(
       true,
     );
+  });
+
+  it("syncs managed symlinked skills as real directories in the target workspace", async () => {
+    const sourceWorkspace = await createCaseDir("source");
+    const targetWorkspace = await createCaseDir("target");
+    const managedDir = path.join(sourceWorkspace, ".managed");
+    const skillName = "managed-linked";
+    const targetSkillDir = path.join(await createCaseDir("manager-cache"), ".hidden-target");
+    await writeSkill({
+      dir: targetSkillDir,
+      name: skillName,
+      description: "Managed symlink target",
+    });
+    await fs.mkdir(managedDir, { recursive: true });
+    await fs.symlink(
+      targetSkillDir,
+      path.join(managedDir, skillName),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+
+    await withEnvAsync({ HOME: sourceWorkspace }, () =>
+      syncSkillsToWorkspace({
+        sourceWorkspaceDir: sourceWorkspace,
+        targetWorkspaceDir: targetWorkspace,
+        bundledSkillsDir: path.join(sourceWorkspace, ".bundled"),
+        managedSkillsDir: managedDir,
+        skillFilter: [skillName],
+      }),
+    );
+
+    const syncedSkillDir = path.join(targetWorkspace, "skills", skillName);
+    expect(await pathExists(path.join(syncedSkillDir, "SKILL.md"))).toBe(true);
+    expect((await fs.lstat(syncedSkillDir)).isSymbolicLink()).toBe(false);
+    expect(await pathExists(path.join(targetWorkspace, "skills", ".hidden-target"))).toBe(false);
+    expect(
+      buildWorkspaceSkillsPrompt(targetWorkspace, {
+        bundledSkillsDir: path.join(targetWorkspace, ".bundled"),
+        managedSkillsDir: path.join(targetWorkspace, ".managed"),
+        skillFilter: [skillName],
+      }),
+    ).toContain("Managed symlink target");
   });
 });

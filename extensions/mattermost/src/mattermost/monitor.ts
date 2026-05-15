@@ -2,7 +2,10 @@ import {
   defineFinalizableLivePreviewAdapter,
   deliverWithFinalizableLivePreviewAdapter,
 } from "openclaw/plugin-sdk/channel-message";
-import { resolveChannelStreamingPreviewToolProgress } from "openclaw/plugin-sdk/channel-streaming";
+import {
+  formatChannelProgressDraftLineForEntry,
+  resolveChannelStreamingPreviewToolProgress,
+} from "openclaw/plugin-sdk/channel-streaming";
 import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
 import { createClaimableDedupe, type ClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 import { isReasoningReplyPayload } from "openclaw/plugin-sdk/reply-payload";
@@ -1861,6 +1864,29 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                                 config: account.config,
                               }),
                             );
+                          },
+                          onItemEvent: async (payload) => {
+                            if (!draftToolProgressEnabled) {
+                              return;
+                            }
+                            const progressText = formatChannelProgressDraftLineForEntry(
+                              account.config,
+                              {
+                                event: "item",
+                                itemId: payload.itemId,
+                                itemKind: payload.kind,
+                                title: payload.title,
+                                name: payload.name,
+                                phase: payload.phase,
+                                status: payload.status,
+                                summary: payload.summary,
+                                progressText: payload.progressText,
+                                meta: payload.meta,
+                              },
+                            );
+                            if (progressText) {
+                              draftStream.update(progressText);
+                            }
                           },
                         },
                       }),

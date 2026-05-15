@@ -399,6 +399,7 @@ export function createMSTeamsReplyDispatcher(params: {
               );
             },
             onItemEvent: async (payload: {
+              itemId?: string;
               kind?: string;
               progressText?: string;
               meta?: string;
@@ -411,6 +412,7 @@ export function createMSTeamsReplyDispatcher(params: {
               await streamController.pushProgressLine(
                 buildChannelProgressDraftLineForEntry(msteamsCfg, {
                   event: "item",
+                  itemId: payload.itemId,
                   itemKind: payload.kind,
                   title: payload.title,
                   name: payload.name,

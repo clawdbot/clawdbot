@@ -494,10 +494,16 @@ test("sessions.list configuredAgentsOnly hides disk-discovered unregistered agen
       "agent:main:main",
     ]);
     expect(
-      readFileSyncSpy.mock.calls.some(
-        ([file]) =>
-          typeof file === "string" && fsSync.realpathSync.native(file) === realDiskOnlyStorePath,
-      ),
+      readFileSyncSpy.mock.calls.some(([file]) => {
+        if (typeof file !== "string") {
+          return false;
+        }
+        try {
+          return fsSync.realpathSync.native(file) === realDiskOnlyStorePath;
+        } catch {
+          return false;
+        }
+      }),
     ).toBe(false);
   } finally {
     readFileSyncSpy.mockRestore();

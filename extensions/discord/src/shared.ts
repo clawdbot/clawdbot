@@ -15,7 +15,11 @@ import {
   resolveDiscordAccountDisabledReason,
   type ResolvedDiscordAccount,
 } from "./accounts.js";
-import { getChatChannelMeta, type ChannelPlugin } from "./channel-api.js";
+import {
+  getChatChannelMeta,
+  resolveConfiguredFromCredentialStatuses,
+  type ChannelPlugin,
+} from "./channel-api.js";
 import { DiscordChannelConfigSchema } from "./config-schema.js";
 import { normalizeCompatibilityConfig } from "./doctor-contract.js";
 import { DISCORD_LEGACY_CONFIG_RULES } from "./doctor-shared.js";
@@ -149,11 +153,13 @@ export function createDiscordPluginBase(params: {
         typeof env?.DISCORD_BOT_TOKEN === "string" && env.DISCORD_BOT_TOKEN.trim().length > 0,
       isEnabled: (account, cfg) => isDiscordAccountEnabledForRuntime(account, cfg),
       disabledReason: (account, cfg) => resolveDiscordAccountDisabledReason(account, cfg),
-      isConfigured: (account) => Boolean(account.token?.trim()),
+      isConfigured: (account) =>
+        resolveConfiguredFromCredentialStatuses(account) ?? Boolean(account.token?.trim()),
       describeAccount: (account) =>
         describeAccountSnapshot({
           account,
-          configured: Boolean(account.token?.trim()),
+          configured:
+            resolveConfiguredFromCredentialStatuses(account) ?? Boolean(account.token?.trim()),
           extra: {
             tokenSource: account.tokenSource,
             tokenStatus: account.tokenStatus,

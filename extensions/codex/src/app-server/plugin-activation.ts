@@ -62,6 +62,14 @@ export async function ensureCodexPluginActivation(
   } satisfies v2.PluginListParams)) as v2.PluginListResponse;
   const resolved = findOpenAiCuratedPluginSummary(listed, params.identity.pluginName);
   if (!resolved) {
+    const hasCuratedMarketplace = listed.marketplaces.some(
+      (marketplace) => marketplace.name === CODEX_PLUGINS_MARKETPLACE_NAME,
+    );
+    if (!hasCuratedMarketplace) {
+      return activationFailure(params.identity, "marketplace_missing", {
+        message: `Codex marketplace ${CODEX_PLUGINS_MARKETPLACE_NAME} was not found.`,
+      });
+    }
     return activationFailure(params.identity, "plugin_missing", {
       message: `${params.identity.pluginName} was not found in ${CODEX_PLUGINS_MARKETPLACE_NAME}.`,
     });

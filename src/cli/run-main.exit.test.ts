@@ -1,6 +1,7 @@
 import process from "node:process";
 import { CommanderError } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { loggingState } from "../logging/state.js";
 import { runCli, shouldStartProxyForCli } from "./run-main.js";
 
 const tryRouteCliMock = vi.hoisted(() => vi.fn());
@@ -269,6 +270,7 @@ describe("runCli exit behavior", () => {
     resolveManifestCliCommandSurfaceOwnerMock.mockReturnValue(undefined);
     delete process.env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH;
     delete process.env.OPENCLAW_HIDE_BANNER;
+    loggingState.forceConsoleToStderr = false;
   });
 
   it("does not force process.exit after successful routed command", async () => {
@@ -594,6 +596,68 @@ describe("runCli exit behavior", () => {
     expect(registerSubCliByNameMock.mock.calls).toEqual([[program, argv[2], argv]]);
     expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
     expect(parseAsync).toHaveBeenCalledWith(argv);
+  });
+
+  it("routes lazy plugin registration logs to stderr only during --json registration", async () => {
+    tryRouteCliMock.mockResolvedValueOnce(false);
+    resolvePluginCliRootOwnerIdsMock.mockImplementation(
+      ({ primaryCommand }: { primaryCommand?: string }) =>
+        primaryCommand === "memory" ? ["memory"] : [],
+    );
+    let stderrDuringPluginRegistration = false;
+    let stderrDuringParse = true;
+    registerPluginCliCommandsFromValidatedConfigMock.mockImplementationOnce(async () => {
+      stderrDuringPluginRegistration = loggingState.forceConsoleToStderr;
+      return {};
+    });
+    const parseAsync = vi.fn().mockImplementationOnce(async () => {
+      stderrDuringParse = loggingState.forceConsoleToStderr;
+    });
+    buildProgramMock.mockReturnValueOnce({
+      commands: [],
+      parseAsync,
+    });
+
+    await runCli(["node", "openclaw", "memory", "search", "query", "--json"]);
+
+    expect(registerPluginCliCommandsFromValidatedConfigMock).toHaveBeenCalledWith(
+      expect.anything(),
+      undefined,
+      undefined,
+      { mode: "lazy", primary: "memory" },
+    );
+    expect(stderrDuringPluginRegistration).toBe(true);
+    expect(stderrDuringParse).toBe(false);
+    expect(loggingState.forceConsoleToStderr).toBe(false);
+  });
+
+  it("does not route lazy plugin registration logs for pass-through --json after terminator", async () => {
+    tryRouteCliMock.mockResolvedValueOnce(false);
+    resolvePluginCliRootOwnerIdsMock.mockImplementation(
+      ({ primaryCommand }: { primaryCommand?: string }) =>
+        primaryCommand === "memory" ? ["memory"] : [],
+    );
+    let stderrDuringPluginRegistration = true;
+    registerPluginCliCommandsFromValidatedConfigMock.mockImplementationOnce(async () => {
+      stderrDuringPluginRegistration = loggingState.forceConsoleToStderr;
+      return {};
+    });
+    const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
+    buildProgramMock.mockReturnValueOnce({
+      commands: [],
+      parseAsync,
+    });
+
+    await runCli(["node", "openclaw", "memory", "--", "--json"]);
+
+    expect(registerPluginCliCommandsFromValidatedConfigMock).toHaveBeenCalledWith(
+      expect.anything(),
+      undefined,
+      undefined,
+      { mode: "lazy", primary: "memory" },
+    );
+    expect(stderrDuringPluginRegistration).toBe(false);
+    expect(loggingState.forceConsoleToStderr).toBe(false);
   });
 
   it("fails protected commands when managed proxy activation fails", async () => {

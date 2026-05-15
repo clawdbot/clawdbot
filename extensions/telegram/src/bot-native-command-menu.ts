@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import type { LanguageCode } from "@grammyjs/types";
 import type { Bot } from "grammy";
+import type { LanguageCode } from "grammy/types";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {

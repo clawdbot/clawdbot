@@ -8,6 +8,7 @@ import {
   formatChannelProgressDraftText,
   getChannelStreamingConfigObject,
   isChannelProgressDraftWorkToolName,
+  mergeChannelProgressDraftLine,
   resolveChannelPreviewStreamMode,
   resolveChannelProgressDraftLabel,
   resolveChannelProgressDraftMaxLines,
@@ -393,6 +394,42 @@ describe("channel-streaming", () => {
         progressText: "Reading the code path",
       }),
     ).toBe("Reading the code path");
+  });
+
+  it("updates keyed progress lines in place", () => {
+    const first = buildChannelProgressDraftLine({
+      event: "item",
+      itemId: "preamble-1",
+      itemKind: "preamble",
+      title: "Preamble",
+      progressText: "Checking the",
+    });
+    const second = buildChannelProgressDraftLine({
+      event: "item",
+      itemId: "preamble-1",
+      itemKind: "preamble",
+      title: "Preamble",
+      progressText: "Checking the app-server stream",
+    });
+    if (!first || !second) {
+      throw new Error("expected preamble progress lines");
+    }
+
+    const initialLines: Array<string | typeof first> = ["🛠️ Exec"];
+    const lines = mergeChannelProgressDraftLine(initialLines, first, { maxLines: 4 });
+    const updated = mergeChannelProgressDraftLine(lines, second, { maxLines: 4 });
+
+    expect(updated).toHaveLength(2);
+    expect(updated.at(-1)).toMatchObject({
+      id: "preamble-1",
+      text: "Checking the app-server stream",
+    });
+    expect(
+      formatChannelProgressDraftText({
+        lines: updated,
+        entry: { streaming: { progress: { label: false } } },
+      }),
+    ).toBe("🛠️ Exec\n• Checking the app-server stream");
   });
 
   it("starts progress drafts after five seconds or a second work event", async () => {

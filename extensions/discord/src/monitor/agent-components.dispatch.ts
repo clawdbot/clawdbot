@@ -223,6 +223,12 @@ export async function dispatchDiscordComponentEvent(params: {
     Surface: "discord" as const,
     WasMentioned: true,
     CommandAuthorized: commandAuthorized,
+    CommandTurn: {
+      kind: "text-slash" as const,
+      source: "text" as const,
+      authorized: commandAuthorized,
+      body: eventText,
+    },
     CommandSource: "text" as const,
     MessageSid: interaction.rawData.id,
     Timestamp: timestamp,

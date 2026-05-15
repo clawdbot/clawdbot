@@ -115,7 +115,9 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain("update-channel-switch skill-install update-corrupt-plugin");
     expect(workflow).toContain("update-corrupt-plugin upgrade-survivor");
     expect(workflow).toContain("published-upgrade-survivor");
-    expect(workflow).toContain("published-upgrade-survivor root-managed-vps-upgrade update-restart-auth");
+    expect(workflow).toContain(
+      "published-upgrade-survivor root-managed-vps-upgrade update-restart-auth",
+    );
     expect(workflow).toContain("plugins-offline plugin-update");
     expect(workflow).toContain("include_release_path_suites=true");
     expect(workflow).not.toContain("telegram_mode requires source=npm");
@@ -382,10 +384,12 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go,openrouter");
     expect(workflow).toContain("OPENCLAW_LIVE_GATEWAY_PROVIDERS=xai,zai");
     expect(workflow).toContain("inputs.live_suite_filter == 'live-gateway-advisory-docker'");
-    expect(workflow).toContain("OPENCLAW_LIVE_CLI_BACKEND_MODEL=codex-cli/gpt-5.4");
+    expect(workflow).toContain("OPENCLAW_LIVE_CLI_BACKEND_MODEL=claude-cli/claude-sonnet-4-6");
     expect(workflow).toContain("OPENCLAW_LIVE_CLI_BACKEND_AUTH=api-key");
-    expect(workflow).toContain("OPENCLAW_LIVE_CLI_BACKEND_USE_CI_SAFE_CODEX_CONFIG=1");
-    expect((workflow.match(/service_tier=\\"fast\\"/g) ?? []).length).toBeGreaterThanOrEqual(2);
+    expect(workflow).not.toContain("OPENCLAW_LIVE_CLI_BACKEND_USE_CI_SAFE_CODEX_CONFIG=1");
+    expect(workflow).not.toContain('service_tier=\\"fast\\"');
+    expect(workflow).not.toContain("OPENCLAW_LIVE_CLI_BACKEND_ARGS=");
+    expect(workflow).not.toContain("OPENCLAW_LIVE_CLI_BACKEND_RESUME_ARGS=");
     expect(workflow).not.toContain(
       'OPENCLAW_LIVE_CLI_BACKEND_ARGS=["exec","--json","--color","never","--sandbox","danger-full-access","--skip-git-repo-check"]',
     );

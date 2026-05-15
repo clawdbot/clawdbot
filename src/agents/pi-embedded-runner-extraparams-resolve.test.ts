@@ -193,6 +193,41 @@ describe("resolveExtraParams", () => {
     });
   });
 
+  it("canonicalizes response format alias styles with agent override precedence", () => {
+    const result = resolveExtraParams({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.4": {
+                params: {
+                  response_format: { type: "text" },
+                },
+              },
+            },
+          },
+          list: [
+            {
+              id: "main",
+              params: {
+                responseFormat: { type: "json_object" },
+              },
+            },
+          ],
+        },
+      },
+      provider: "openai",
+      modelId: "gpt-5.4",
+      agentId: "main",
+    });
+
+    expect(result).toEqual({
+      parallel_tool_calls: true,
+      response_format: { type: "json_object" },
+      text_verbosity: "low",
+    });
+  });
+
   it("ignores per-agent params when agentId does not match", () => {
     const result = resolveExtraParams({
       cfg: {

@@ -38,6 +38,12 @@ describe("buildControlUiCspHeader", () => {
     expect(csp).not.toContain("img-src 'self' data: blob: https:");
   });
 
+  it("allows same-origin and inline audio/video playback", () => {
+    const csp = buildControlUiCspHeader();
+    expect(csp).toContain("media-src 'self' data: blob:");
+    expect(csp).not.toContain("media-src 'self' data: blob: https:");
+  });
+
   it("includes inline script hashes in script-src when provided", () => {
     const csp = buildControlUiCspHeader({
       inlineScriptHashes: ["sha256-abc123"],

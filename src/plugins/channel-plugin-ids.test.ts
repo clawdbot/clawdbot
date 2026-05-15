@@ -164,7 +164,7 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         origin: "bundled",
         enabledByDefault: true,
         providers: ["openai", "openai-codex"],
-        cliBackends: ["codex-cli"],
+        cliBackends: [],
         contracts: {
           imageGenerationProviders: ["openai"],
           videoGenerationProviders: ["openai"],

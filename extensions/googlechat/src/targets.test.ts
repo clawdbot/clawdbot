@@ -249,6 +249,26 @@ describe("sendGoogleChatMessage", () => {
     const url = mockCallArg(fetchMock);
     expect(String(url)).not.toContain("messageReplyOption=");
   });
+
+  it("reports malformed send JSON with a stable API error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response("{ nope", {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+    );
+
+    await expect(
+      sendGoogleChatMessage({
+        account,
+        space: "spaces/AAA",
+        text: "hello",
+      }),
+    ).rejects.toThrow("Google Chat API request failed: malformed JSON response");
+  });
 });
 
 function mockTicket(payload: Record<string, unknown>) {
@@ -404,6 +424,27 @@ describe("verifyGoogleChatRequest", () => {
       "123456789",
       ["chat@system.gserviceaccount.com"],
     );
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("reports malformed Chat cert JSON with a stable auth error", async () => {
+    authTesting.resetGoogleChatAuthForTests();
+    const release = vi.fn(async () => {});
+    mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+      response: new Response("{ nope", {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+      release,
+    });
+
+    await expect(
+      verifyGoogleChatRequest({
+        bearer: "token",
+        audienceType: "project-number",
+        audience: "123456789",
+      }),
+    ).rejects.toThrow("Google Chat cert fetch failed: malformed JSON response");
     expect(release).toHaveBeenCalledOnce();
   });
 });

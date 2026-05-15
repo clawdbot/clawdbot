@@ -60,9 +60,12 @@ vi.mock("./runtime-api.js", () => ({
         groupChat?: { visibleReplies?: "automatic" | "message_tool" };
       };
     };
-    ctx: { ChatType?: string; CommandSource?: "native" };
+    ctx: { ChatType?: string; CommandSource?: "native" | "text"; CommandAuthorized?: boolean };
   }) => {
-    if (ctx.CommandSource === "native") {
+    if (
+      ctx.CommandSource === "native" ||
+      (ctx.CommandSource === "text" && ctx.CommandAuthorized === true)
+    ) {
       return "automatic";
     }
     if (ctx.ChatType === "group" || ctx.ChatType === "channel") {
@@ -377,6 +380,48 @@ describe("whatsapp inbound dispatch", () => {
       CommandBody: "<media:audio>",
       RawBody: "<media:audio>",
       Transcript: "spoken transcript",
+    });
+  });
+
+  it("marks authorized text slash commands as text command turns", () => {
+    const ctx = buildWhatsAppInboundContext({
+      combinedBody: "/status",
+      commandBody: "/status",
+      commandAuthorized: true,
+      commandTurn: {
+        kind: "text-slash",
+        source: "text",
+        authorized: true,
+        body: "/status",
+      },
+      conversationId: "+1000",
+      msg: makeMsg({
+        body: "/status",
+      }),
+      rawBody: "/status",
+      route: makeRoute(),
+      sender: {
+        e164: "+1000",
+      },
+    });
+
+    expectRecordFields(requireRecord(ctx, "slash command context"), {
+      Body: "/status",
+      BodyForAgent: "/status",
+      BodyForCommands: "/status",
+      CommandBody: "/status",
+      RawBody: "/status",
+      CommandAuthorized: true,
+      CommandSource: "text",
+      CommandTurn: {
+        kind: "text-slash",
+        source: "text",
+        authorized: true,
+        body: "/status",
+      },
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      OriginatingChannel: "whatsapp",
     });
   });
 
@@ -827,6 +872,31 @@ describe("whatsapp inbound dispatch", () => {
     expectRecordFields(requireRecord(getCapturedReplyOptions(), "reply options"), {
       sourceReplyDeliveryMode: "message_tool_only",
       disableBlockStreaming: true,
+    });
+  });
+
+  it("delivers authorized WhatsApp group text slash command replies visibly", async () => {
+    await dispatchBufferedReply({
+      cfg: {
+        channels: { whatsapp: { blockStreaming: true } },
+        messages: { groupChat: { visibleReplies: "message_tool" } },
+      } as never,
+      context: {
+        Body: "/status",
+        ChatType: "group",
+        CommandAuthorized: true,
+        CommandSource: "text",
+      },
+      msg: makeMsg({
+        body: "/status",
+        from: "120363000000000000@g.us",
+        chatType: "group",
+      }),
+    });
+
+    expectRecordFields(requireRecord(getCapturedReplyOptions(), "reply options"), {
+      sourceReplyDeliveryMode: "automatic",
+      disableBlockStreaming: false,
     });
   });
 

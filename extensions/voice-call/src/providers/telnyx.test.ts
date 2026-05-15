@@ -249,6 +249,31 @@ describe("TelnyxProvider.parseWebhookEvent", () => {
     expect(event?.to).toBe("+15550000000");
   });
 
+  it("uses raw client_state fallback when client_state is malformed base64", () => {
+    const provider = new TelnyxProvider({
+      apiKey: "KEY123",
+      connectionId: "CONN456",
+      publicKey: undefined,
+    });
+    const result = provider.parseWebhookEvent(
+      createCtx({
+        rawBody: JSON.stringify({
+          data: {
+            id: "evt-client-state",
+            event_type: "call.initiated",
+            payload: {
+              call_control_id: "call-fallback",
+              client_state: "call-1@@@",
+            },
+          },
+        }),
+      }),
+    );
+
+    expect(result.events).toHaveLength(1);
+    expect(result.events[0]?.callId).toBe("call-1@@@");
+  });
+
   it("reads transcription text from Telnyx transcription_data payloads", () => {
     const provider = new TelnyxProvider({
       apiKey: "KEY123",

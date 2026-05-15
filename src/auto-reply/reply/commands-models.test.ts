@@ -241,10 +241,9 @@ describe("handleModelsCommand", () => {
     expect(result?.reply?.text).not.toContain("- anthropic");
   });
 
-  it("hides bare backwards-compat aliases but surfaces CLI runtime providers in /models lists", async () => {
+  it("hides bare backwards-compat aliases but surfaces supported CLI runtime providers in /models lists", async () => {
     modelCatalogMocks.loadModelCatalog.mockResolvedValueOnce([
       { provider: "codex", id: "gpt-5.5", name: "GPT-5.5" },
-      { provider: "codex-cli", id: "gpt-5.5", name: "GPT-5.5" },
       { provider: "claude-cli", id: "claude-opus-4-7", name: "Claude Opus" },
       { provider: "google-gemini-cli", id: "gemini-3.1-pro-preview", name: "Gemini Pro" },
       { provider: "anthropic", id: "claude-opus-4-7", name: "Claude Opus" },
@@ -256,7 +255,6 @@ describe("handleModelsCommand", () => {
       "google",
       "openai",
       "claude-cli",
-      "codex-cli",
       "google-gemini-cli",
     ]);
 
@@ -271,9 +269,9 @@ describe("handleModelsCommand", () => {
     expect(result?.reply?.text).toContain("- google (1)");
     expect(result?.reply?.text).toContain("- openai (1)");
     expect(result?.reply?.text).toContain("- claude-cli (1)");
-    expect(result?.reply?.text).toContain("- codex-cli (1)");
     expect(result?.reply?.text).toContain("- google-gemini-cli (1)");
     expect(result?.reply?.text).not.toMatch(/^- codex \(/m);
+    expect(result?.reply?.text).not.toMatch(/^- codex-cli \(/m);
   });
 
   it("sources CLI runtime provider model lists from the catalog, not user agents.defaults.models", async () => {

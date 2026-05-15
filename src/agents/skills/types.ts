@@ -81,6 +81,8 @@ export type SkillEntry = {
   metadata?: OpenClawSkillMetadata;
   invocation?: SkillInvocationPolicy;
   exposure?: SkillExposure;
+  syncSourceDir?: string;
+  syncDirName?: string;
 };
 
 export type SkillEligibilityContext = {

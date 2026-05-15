@@ -24,6 +24,7 @@ setupRunCronIsolatedAgentTurnSuite();
 
 function lastEmbeddedAgentCall(): {
   agentDir?: string;
+  bootstrapContextMode?: "full" | "lightweight";
   prompt?: string;
   sessionKey?: string;
   workspaceDir?: string;
@@ -40,6 +41,7 @@ function lastEmbeddedAgentCall(): {
   }
   return value as {
     agentDir?: string;
+    bootstrapContextMode?: "full" | "lightweight";
     prompt?: string;
     sessionKey?: string;
     workspaceDir?: string;
@@ -137,6 +139,43 @@ describe("runCronIsolatedAgentTurn session identity", () => {
         path.join(home, ".openclaw", "agents", "main", "sessions"),
       );
       expect(String(call.sessionFile).endsWith(".jsonl")).toBe(true);
+    });
+  });
+
+  it("uses lightweight bootstrap context for command-style cron payloads", async () => {
+    await withTempHome(async (home) => {
+      await runCronTurn(home, {
+        jobPayload: {
+          kind: "agentTurn",
+          message: "cd /srv/openclaw && ./scripts/nightly-report.sh",
+        },
+      });
+
+      expect(lastEmbeddedAgentCall().bootstrapContextMode).toBe("lightweight");
+    });
+  });
+
+  it("does not force lightweight bootstrap context for natural-language cron payloads", async () => {
+    await withTempHome(async (home) => {
+      await runCronTurn(home, {
+        jobPayload: { kind: "agentTurn", message: "Prepare the nightly status summary" },
+      });
+
+      expect(lastEmbeddedAgentCall().bootstrapContextMode).toBeUndefined();
+    });
+  });
+
+  it("honors explicit full bootstrap context for command-style cron payloads", async () => {
+    await withTempHome(async (home) => {
+      await runCronTurn(home, {
+        jobPayload: {
+          kind: "agentTurn",
+          message: "pnpm run nightly-report",
+          lightContext: false,
+        },
+      });
+
+      expect(lastEmbeddedAgentCall().bootstrapContextMode).toBeUndefined();
     });
   });
 

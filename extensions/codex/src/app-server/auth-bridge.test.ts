@@ -75,7 +75,7 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", async (importOriginal) => {
         return null;
       }
       let oauthCredential = credential;
-      if ((oauthCredential.expires ?? 0) <= Date.now()) {
+      if (params.forceRefresh || (oauthCredential.expires ?? 0) <= Date.now()) {
         const refreshed = await providerRuntimeMocks.refreshProviderOAuthCredentialWithPlugin({
           provider: oauthCredential.provider,
           context: oauthCredential,
@@ -1194,6 +1194,60 @@ describe("bridgeCodexAppServerStartOptions", () => {
         chatgptPlanType: null,
       });
       expect(oauthMocks.refreshOpenAICodexToken).toHaveBeenCalledWith("refresh-token");
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not persist an expired stale credential before forced token refresh succeeds", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const currentExpiry = Date.now() + 60_000;
+    oauthMocks.refreshOpenAICodexToken.mockImplementationOnce(async () => {
+      const persistedProfile = expectOAuthProfile(
+        loadAuthProfileStoreForSecretsRuntime(agentDir).profiles["openai-codex:work"],
+      );
+      expect(persistedProfile).toMatchObject({
+        access: "current-access-token",
+        expires: currentExpiry,
+      });
+      return {
+        access: "refreshed-access-token",
+        refresh: "refreshed-refresh-token",
+        expires: Date.now() + 60_000,
+        accountId: "account-789",
+      };
+    });
+    try {
+      upsertAuthProfile({
+        agentDir,
+        profileId: "openai-codex:work",
+        credential: {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "current-access-token",
+          refresh: "refresh-token",
+          expires: currentExpiry,
+          accountId: "account-123",
+          email: "codex@example.test",
+        },
+      });
+
+      await expect(
+        refreshCodexAppServerAuthTokens({
+          agentDir,
+          authProfileId: "openai-codex:work",
+        }),
+      ).resolves.toEqual({
+        accessToken: "refreshed-access-token",
+        chatgptAccountId: "account-789",
+        chatgptPlanType: null,
+      });
+      expect(oauthMocks.refreshOpenAICodexToken).toHaveBeenCalledWith("refresh-token");
+      const refreshedProfile = expectOAuthProfile(
+        loadAuthProfileStoreForSecretsRuntime(agentDir).profiles["openai-codex:work"],
+      );
+      expect(refreshedProfile?.access).toBe("refreshed-access-token");
+      expect(refreshedProfile?.refresh).toBe("refreshed-refresh-token");
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }

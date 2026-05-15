@@ -1,5 +1,5 @@
 import { readFile, rm, writeFile } from "node:fs/promises";
-import type { Message } from "@grammyjs/types";
+import type { Message } from "grammy/types";
 import { describe, expect, it } from "vitest";
 import {
   buildTelegramConversationContext,

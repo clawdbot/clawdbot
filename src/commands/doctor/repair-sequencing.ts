@@ -22,6 +22,7 @@ import { maybeRepairLegacyToolsBySenderKeys } from "./shared/legacy-tools-by-sen
 import { repairMissingConfiguredPluginInstalls } from "./shared/missing-configured-plugin-install.js";
 import { maybeRepairOpenPolicyAllowFrom } from "./shared/open-policy-allowfrom.js";
 import { cleanupLegacyPluginDependencyState } from "./shared/plugin-dependency-cleanup.js";
+import { repairStaleOAuthProfileShadows } from "./shared/stale-oauth-profile-shadows.js";
 import { maybeRepairStalePluginConfig } from "./shared/stale-plugin-config.js";
 import { isUpdatePackageSwapInProgress } from "./shared/update-phase.js";
 
@@ -122,6 +123,16 @@ export async function runDoctorRepairSequence(params: {
   }
   if (pluginDependencyCleanup.warnings.length > 0) {
     warningNotes.push(sanitizeLines(pluginDependencyCleanup.warnings));
+  }
+  const staleOAuthShadowRepair = await repairStaleOAuthProfileShadows({
+    cfg: state.candidate,
+    env,
+  });
+  if (staleOAuthShadowRepair.changes.length > 0) {
+    changeNotes.push(sanitizeLines(staleOAuthShadowRepair.changes));
+  }
+  if (staleOAuthShadowRepair.warnings.length > 0) {
+    warningNotes.push(sanitizeLines(staleOAuthShadowRepair.warnings));
   }
 
   return { state, changeNotes, warningNotes };

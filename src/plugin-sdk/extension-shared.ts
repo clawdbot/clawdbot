@@ -1,6 +1,6 @@
+import { createAmbientNodeProxyAgent, hasAmbientNodeProxyConfigured } from "@openclaw/proxyline";
 import type { z } from "zod";
 import type { OpenClawConfig } from "../config/config.js";
-import { hasEnvHttpProxyConfigured } from "../infra/net/proxy-env.js";
 import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
 import { runPassiveAccountLifecycle } from "./channel-lifecycle.core.js";
 import { createLoggerBackedRuntime } from "./runtime-logger.js";
@@ -227,25 +227,22 @@ export function readPluginPackageVersion(params: {
   return params.fallback ?? "unknown";
 }
 
-let proxyAgentConstructorPromise: Promise<typeof import("proxy-agent").ProxyAgent> | null = null;
-
-async function loadProxyAgentConstructor(): Promise<typeof import("proxy-agent").ProxyAgent> {
-  proxyAgentConstructorPromise ??= import("proxy-agent").then(({ ProxyAgent }) => ProxyAgent);
-  return proxyAgentConstructorPromise;
-}
-
 export async function resolveAmbientNodeProxyAgent<TAgent>(params?: {
   onError?: (error: unknown) => void;
   onUsingProxy?: () => void;
   protocol?: "http" | "https";
 }): Promise<TAgent | undefined> {
-  if (!hasEnvHttpProxyConfigured(params?.protocol ?? "https")) {
+  const protocol = params?.protocol ?? "https";
+  if (!hasAmbientNodeProxyConfigured({ protocol })) {
     return undefined;
   }
   try {
-    const ProxyAgent = await loadProxyAgentConstructor();
+    const agent = createAmbientNodeProxyAgent({ protocol });
+    if (agent === undefined) {
+      return undefined;
+    }
     params?.onUsingProxy?.();
-    return new ProxyAgent() as TAgent;
+    return agent as TAgent;
   } catch (error) {
     params?.onError?.(error);
     return undefined;

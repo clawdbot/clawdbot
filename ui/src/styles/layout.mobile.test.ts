@@ -16,11 +16,28 @@ function readGroupedChatCss(): string {
 describe("chat header responsive mobile styles", () => {
   it("keeps the chat header and session controls from clipping on narrow widths", () => {
     const css = readMobileCss();
+    const layoutCss = readLayoutCss();
 
     expect(css).toContain("@media (max-width: 1320px)");
     expect(css).toContain(".content--chat .content-header");
+    expect(css).toContain("max-height: 44px;");
+    expect(layoutCss).toContain(".content--chat .content-header .chat-controls__session-notice");
+    expect(layoutCss).toContain("position: absolute;");
     expect(css).toContain(".chat-controls__session-row");
     expect(css).toContain(".chat-controls__thinking-select");
+  });
+
+  it("lays out mobile chat header action icons as an even full-width grid", () => {
+    const css = readMobileCss();
+
+    expect(css).toContain(
+      ".chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__thinking",
+    );
+    expect(css).toContain("grid-template-columns: repeat(5, minmax(0, 1fr));");
+    expect(css).toContain(
+      ".chat-mobile-controls-wrapper .chat-controls-dropdown .btn--icon {\n    width: 100%;",
+    );
+    expect(css).toContain("height: 44px;");
   });
 });
 

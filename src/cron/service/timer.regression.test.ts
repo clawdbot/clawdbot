@@ -14,6 +14,7 @@ import {
 import { HEARTBEAT_SKIP_LANES_BUSY, type HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import * as schedule from "../schedule.js";
 import type {
+  CronAgentExecutionPhase,
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
   CronJob,
@@ -1605,6 +1606,109 @@ describe("cron service timer regressions", () => {
       vi.useRealTimers();
     }
   });
+
+  it.each([
+    {
+      phase: "attempt_dispatch",
+      phaseText: "attempt-dispatch",
+      id: "isolated-attempt-dispatch-81368",
+      name: "attempt dispatch regression",
+    },
+    {
+      phase: "context_assembled",
+      phaseText: "context-assembled",
+      id: "isolated-context-assembled-81368",
+      name: "context assembled regression",
+    },
+  ] satisfies Array<{
+    phase: CronAgentExecutionPhase;
+    phaseText: string;
+    id: string;
+    name: string;
+  }>)(
+    "clears the pre-execution watchdog when isolated cron reaches $phaseText (#81368)",
+    async ({ phase, phaseText, id, name }) => {
+      vi.useFakeTimers();
+      try {
+        const store = timerRegressionFixtures.makeStorePath();
+        const scheduledAt = Date.parse("2026-05-13T09:56:00.000Z");
+        const cronJob = createIsolatedRegressionJob({
+          id,
+          name,
+          scheduledAt,
+          schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
+          payload: { kind: "agentTurn", message: "work", timeoutSeconds: 1_200 },
+          state: { nextRunAtMs: scheduledAt },
+        });
+        await writeCronJobs(store.storePath, [cronJob]);
+
+        vi.setSystemTime(scheduledAt);
+        let now = scheduledAt;
+        const started = createDeferred<void>();
+        let abortObserved = false;
+        const cleanupTimedOutAgentRun = vi.fn(async () => {});
+        const state = createCronServiceState({
+          cronEnabled: true,
+          storePath: store.storePath,
+          log: noopLogger,
+          nowMs: () => now,
+          enqueueSystemEvent: vi.fn(),
+          requestHeartbeat: vi.fn(),
+          cleanupTimedOutAgentRun,
+          runIsolatedAgentJob: vi.fn(
+            async ({
+              abortSignal,
+              onExecutionStarted,
+              onExecutionPhase,
+            }: {
+              abortSignal?: AbortSignal;
+              onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
+              onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
+            }) => {
+              onExecutionStarted?.({
+                jobId: id,
+                phase: "runner_entered",
+              });
+              onExecutionPhase?.({
+                jobId: id,
+                phase,
+                backend: "codex-app-server",
+              });
+              started.resolve();
+              abortSignal?.addEventListener(
+                "abort",
+                () => {
+                  abortObserved = true;
+                },
+                { once: true },
+              );
+              return await new Promise<never>(() => {});
+            },
+          ),
+        });
+
+        const timerPromise = onTimer(state);
+        await started.promise;
+        await vi.advanceTimersByTimeAsync(60_100);
+        now += 60_100;
+        expect(abortObserved).toBe(false);
+        expect(cleanupTimedOutAgentRun).not.toHaveBeenCalled();
+
+        await vi.advanceTimersByTimeAsync(1_140_000);
+        now += 1_140_000;
+        await timerPromise;
+
+        const job = requireJob(state, id);
+        expect(abortObserved).toBe(true);
+        expect(job.state.lastStatus).toBe("error");
+        expect(job.state.lastError).toContain("job execution timed out");
+        expect(job.state.lastError).toContain(phaseText);
+        expect(cleanupTimedOutAgentRun).toHaveBeenCalledTimes(1);
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("keeps state updates when cron next-run computation throws after a successful run (#30905)", () => {
     const startedAt = Date.parse("2026-03-02T12:00:00.000Z");

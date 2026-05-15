@@ -5,6 +5,12 @@ import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read
 import { buildChannelAccountSnapshot } from "../../channels/plugins/status.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
+import {
+  normalizeRuntimeChannelAccountSnapshots,
+  resolveChannelAccountStatusRows,
+  type RuntimeChannelStatusPayload,
+} from "../../channels/status/read-model.js";
+import { callGateway } from "../../gateway/call.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
@@ -16,6 +22,18 @@ export type ChannelsListOptions = {
   json?: boolean;
   all?: boolean;
 };
+
+async function readGatewayChannelStatus(): Promise<RuntimeChannelStatusPayload | null> {
+  try {
+    return (await callGateway({
+      method: "channels.status",
+      params: { probe: false, timeoutMs: 5_000 },
+      timeoutMs: 5_000,
+    })) as RuntimeChannelStatusPayload;
+  } catch {
+    return null;
+  }
+}
 
 const colorValue = (value: string) => {
   if (value === "none") {
@@ -39,14 +57,20 @@ function formatInstalled(value: boolean): string {
   return value ? theme.success("installed") : theme.warn("not installed");
 }
 
-function formatTokenSource(source?: string): string {
+function formatCredentialSource(source?: string, status?: string): string {
   const value = source || "none";
-  return `token=${colorValue(value)}`;
+  if (status === "configured_unavailable" && value !== "none") {
+    return theme.warn(`${value}-unavailable`);
+  }
+  return colorValue(value);
 }
 
-function formatSource(label: string, source?: string): string {
-  const value = source || "none";
-  return `${label}=${colorValue(value)}`;
+function formatTokenSource(source?: string, status?: string): string {
+  return `token=${formatCredentialSource(source, status)}`;
+}
+
+function formatSource(label: string, source?: string, status?: string): string {
+  return `${label}=${formatCredentialSource(source, status)}`;
 }
 
 function formatLinked(value: boolean): string {
@@ -83,13 +107,13 @@ function formatAccountLine(params: {
     bits.push(formatLinked(snapshot.linked));
   }
   if (snapshot.tokenSource) {
-    bits.push(formatTokenSource(snapshot.tokenSource));
+    bits.push(formatTokenSource(snapshot.tokenSource, snapshot.tokenStatus));
   }
   if (snapshot.botTokenSource) {
-    bits.push(formatSource("bot", snapshot.botTokenSource));
+    bits.push(formatSource("bot", snapshot.botTokenSource, snapshot.botTokenStatus));
   }
   if (snapshot.appTokenSource) {
-    bits.push(formatSource("app", snapshot.appTokenSource));
+    bits.push(formatSource("app", snapshot.appTokenSource, snapshot.appTokenStatus));
   }
   if (snapshot.baseUrl) {
     bits.push(`base=${theme.muted(snapshot.baseUrl)}`);
@@ -129,6 +153,10 @@ export async function channelsListCommand(
     cfg,
     ...(workspaceDir ? { workspaceDir } : {}),
   });
+  const runtimeAccountsByChannel =
+    opts.json === true
+      ? new Map<string, ChannelAccountSnapshot[]>()
+      : normalizeRuntimeChannelAccountSnapshots(await readGatewayChannelStatus());
   const installedByChannelId = new Map<string, boolean>();
   for (const entry of catalogEntries) {
     installedByChannelId.set(
@@ -158,11 +186,17 @@ export async function channelsListCommand(
     const accountIds = plugin.config.listAccountIds(cfg);
     if (accountIds && accountIds.length > 0) {
       renderedChannelIds.add(plugin.id);
-      for (const accountId of accountIds) {
-        const snapshot = await buildChannelAccountSnapshot({ plugin, cfg, accountId });
+      const runtimeAccounts = runtimeAccountsByChannel.get(plugin.id) ?? [];
+      const rows = await resolveChannelAccountStatusRows({
+        localAccountIds: accountIds,
+        runtimeAccounts,
+        resolveLocalSnapshot: (accountId) =>
+          buildChannelAccountSnapshot({ plugin, cfg, accountId }),
+      });
+      for (const row of rows) {
         accountLines.push({
           plugin,
-          snapshot,
+          snapshot: row.snapshot,
           installed: isInstalled(plugin.id),
         });
       }
@@ -184,10 +218,13 @@ export async function channelsListCommand(
       cfg,
       accountId: "default",
     });
+    const runtimeSnapshot = runtimeAccountsByChannel
+      .get(plugin.id)
+      ?.find((account) => account.accountId === "default");
     renderedChannelIds.add(plugin.id);
     accountLines.push({
       plugin,
-      snapshot,
+      snapshot: runtimeSnapshot ?? snapshot,
       installed: isInstalled(plugin.id),
     });
   }

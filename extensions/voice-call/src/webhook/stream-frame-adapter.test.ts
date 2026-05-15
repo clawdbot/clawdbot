@@ -39,6 +39,9 @@ describe("TwilioStreamFrameAdapter", () => {
     expect(
       adapter.parseInbound(JSON.stringify({ event: "start", start: { streamSid: "MZ-only" } })),
     ).toEqual({ kind: "ignored" });
+    expect(
+      adapter.parseInbound(JSON.stringify({ event: "media", media: { payload: "AAA@@@" } })),
+    ).toEqual({ kind: "ignored" });
   });
 
   it("serializes outbound frames with the streamSid captured at start", () => {
@@ -174,6 +177,9 @@ describe("TelnyxStreamFrameAdapter", () => {
     const adapter = new TelnyxStreamFrameAdapter();
     expect(adapter.parseInbound("not json")).toEqual({ kind: "ignored" });
     expect(adapter.parseInbound(JSON.stringify({ event: "media" }))).toEqual({ kind: "ignored" });
+    expect(
+      adapter.parseInbound(JSON.stringify({ event: "media", media: { payload: "AAA@@@" } })),
+    ).toEqual({ kind: "ignored" });
     expect(adapter.parseInbound(JSON.stringify({ event: "something-else" }))).toEqual({
       kind: "ignored",
     });

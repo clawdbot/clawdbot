@@ -1313,7 +1313,7 @@ export function renderChat(props: ChatProps) {
                 .label=${t("nav.resize")}
                 @resize=${(e: CustomEvent) => props.onSplitRatioChange?.(e.detail.splitRatio)}
               ></resizable-divider>
-              <div class="chat-sidebar">
+              <div class="chat-sidebar" @click=${handleCodeBlockCopy}>
                 ${renderMarkdownSidebar({
                   content: props.sidebarContent ?? null,
                   error: props.sidebarError ?? null,

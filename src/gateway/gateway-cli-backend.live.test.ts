@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveCliBackendConfig, resolveCliBackendLiveTest } from "../agents/cli-backends.js";
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
+import { shouldSkipLiveProviderDrift } from "../agents/live-test-provider-drift.js";
 import { parseModelRef } from "../agents/model-selection.js";
 import { clearRuntimeConfigSnapshot, type OpenClawConfig } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -133,6 +134,16 @@ async function requestWithProviderCapacityRetry<T>(
       return await request();
     } catch (error) {
       if (!isProviderCapacityError(error) || attempt >= maxAttempts) {
+        if (
+          shouldSkipLiveProviderDrift({
+            error,
+            allowAuth: true,
+            allowBilling: true,
+          })
+        ) {
+          console.warn(`SKIP: ${label} skipped because provider account/auth drift blocked it.`);
+          return undefined;
+        }
         if (providerId === "claude-cli" && isProviderCapacityError(error)) {
           console.warn(`SKIP: ${label} skipped because Claude API stayed overloaded.`);
           return undefined;

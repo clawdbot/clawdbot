@@ -22,25 +22,6 @@
   line-height: 1.15;
 }
 
-.usage-page-header {
-  display: grid;
-  gap: 4px;
-}
-
-.usage-page-title {
-  font-size: 22px;
-  font-weight: 700;
-  letter-spacing: -0.025em;
-  color: var(--text-strong);
-}
-
-.usage-page-subtitle {
-  max-width: 720px;
-  color: var(--muted);
-  font-size: 13px;
-  line-height: 1.5;
-}
-
 .usage-section-title {
   margin: 0;
 }

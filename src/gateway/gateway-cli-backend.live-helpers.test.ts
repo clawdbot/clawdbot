@@ -114,22 +114,21 @@ describe("gateway cli backend live helpers", () => {
     expect(shouldRunCliModelSwitchProbe("codex-cli", "codex-cli/gpt-5.5")).toBe(false);
   });
 
-  it("configures legacy CLI model refs as canonical provider models plus CLI runtime", async () => {
+  it("rejects removed Codex CLI refs for live CLI backend selection", async () => {
     const { resolveCliBackendLiveModelSelection } =
       await import("./gateway-cli-backend.live-helpers.js");
 
-    expect(
+    expect(() =>
       resolveCliBackendLiveModelSelection({
         rawModel: "codex-cli/gpt-5.4",
         defaultProvider: "claude-cli",
       }),
-    ).toEqual({
-      providerId: "codex-cli",
-      cliModelKey: "codex-cli/gpt-5.4",
-      configModelKey: "openai/gpt-5.4",
-      configModelSwitchTarget: undefined,
-      agentRuntime: { id: "codex-cli" },
-    });
+    ).toThrow(/codex-cli\/\.\.\. is no longer supported/u);
+  });
+
+  it("configures legacy CLI model refs as canonical provider models plus CLI runtime", async () => {
+    const { resolveCliBackendLiveModelSelection } =
+      await import("./gateway-cli-backend.live-helpers.js");
 
     expect(
       resolveCliBackendLiveModelSelection({

@@ -1687,6 +1687,7 @@
                   "reference/rpc",
                   "concepts/openclaw-sdk",
                   "reference/openclaw-sdk-api-design",
+                  "reference/code-mode",
                   "reference/device-models"
                 ]
               },

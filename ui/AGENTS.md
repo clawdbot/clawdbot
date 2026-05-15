@@ -11,6 +11,7 @@ This directory owns Control UI-specific guidance that should not live in the rep
   - `ui/src/i18n/lib/types.ts`
   - `ui/src/i18n/lib/registry.ts`
 - Pipeline: update English strings and locale wiring here, then run `pnpm ui:i18n:sync` and commit the regenerated locale bundles plus `.i18n` metadata.
+- Prioritization report: `pnpm ui:i18n:report [--surface <name>] [--locale <locale>] [--top <n>]` shows current hardcoded-copy focus areas and locale fallback metadata. It is not a drift gate; use `pnpm ui:i18n:check` for that.
 - If locale outputs drift, regenerate them. Do not manually translate or hand-maintain generated locale files by default.
 
 ## Scope

@@ -18,12 +18,13 @@ const LEGACY_BRACKET_TOOL_BLOCK_QUICK_RE = /\[\s*\/?\s*TOOL_(?:CALL|RESULT)\s*\]
  * closing tag, or to end-of-string if the stream was truncated mid-tag.
  */
 const TOOL_CALL_QUICK_RE =
-  /<\s*\/?\s*(?:tool_call|tool_result|function_calls?|function|tool_calls)\b/i;
+  /<\s*\/?\s*(?:tool_call|tool_result|function_calls?|function_response|function|tool_calls)\b/i;
 const TOOL_CALL_TAG_NAMES = new Set([
   "tool_call",
   "tool_result",
   "function_call",
   "function_calls",
+  "function_response",
   "function",
   "tool_calls",
 ]);
@@ -168,6 +169,25 @@ function isLikelyStandaloneFunctionToolCall(
   return idx < 0 || text[idx] === "\n" || text[idx] === "\r" || /[.!?:]/.test(text[idx]);
 }
 
+function isStandaloneOpeningTagLine(
+  text: string,
+  tagStart: number,
+  tag: ParsedToolCallTag,
+): boolean {
+  let idx = tagStart - 1;
+  while (idx >= 0 && (text[idx] === " " || text[idx] === "\t")) {
+    idx -= 1;
+  }
+  if (!(idx < 0 || text[idx] === "\n" || text[idx] === "\r")) {
+    return false;
+  }
+  let after = tag.end;
+  while (after < text.length && (text[after] === " " || text[after] === "\t")) {
+    after += 1;
+  }
+  return after >= text.length || text[after] === "\n" || text[after] === "\r";
+}
+
 function parseToolCallTagAt(text: string, start: number): ParsedToolCallTag | null {
   if (text[start] !== "<") {
     return null;
@@ -288,7 +308,12 @@ export function stripToolCallXmlTags(
           : null;
       const shouldStripStandaloneFunction =
         tag.tagName !== "function" || isLikelyStandaloneFunctionToolCall(text, idx, tag);
-      if (!tag.isClose && payloadKind && shouldStripStandaloneFunction) {
+      const shouldStripStandaloneResult =
+        tag.tagName === "function_response" && isStandaloneOpeningTagLine(text, idx, tag);
+      if (
+        !tag.isClose &&
+        ((payloadKind && shouldStripStandaloneFunction) || shouldStripStandaloneResult)
+      ) {
         inToolCallBlock = true;
         toolCallBlockContentStart = tag.end;
         toolCallBlockNeedsQuoteBalance =

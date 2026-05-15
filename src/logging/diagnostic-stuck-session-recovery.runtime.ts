@@ -89,7 +89,7 @@ export async function recoverStuckDiagnosticSession(
       params.sessionId && isEmbeddedPiRunHandleActive(params.sessionId)
         ? params.sessionId
         : undefined;
-    const activeSessionId = params.sessionKey
+    let activeSessionId = params.sessionKey
       ? (resolveActiveEmbeddedRunHandleSessionId(params.sessionKey) ?? fallbackActiveSessionId)
       : fallbackActiveSessionId;
     const activeWorkSessionId = params.sessionKey
@@ -131,17 +131,31 @@ export async function recoverStuckDiagnosticSession(
     }
 
     if (!activeSessionId && activeWorkSessionId && isEmbeddedPiRunActive(activeWorkSessionId)) {
-      const outcome: StuckSessionRecoveryOutcome = {
-        status: "skipped",
-        action: "keep_lane",
-        reason: "active_reply_work",
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        activeSessionId: activeWorkSessionId,
-        activeWorkKind: "embedded_run",
-      };
-      diag.warn(`stuck session recovery outcome: ${formatRecoveryOutcome(outcome)}`);
-      return outcome;
+      if (params.allowActiveAbort === true) {
+        const result = await abortAndDrainEmbeddedPiRun({
+          sessionId: activeWorkSessionId,
+          sessionKey: params.sessionKey,
+          settleMs: STUCK_SESSION_ABORT_SETTLE_MS,
+          forceClear: true,
+          reason: "stuck_recovery",
+        });
+        aborted = result.aborted;
+        drained = result.drained;
+        forceCleared = result.forceCleared;
+        activeSessionId = activeWorkSessionId;
+      } else {
+        const outcome: StuckSessionRecoveryOutcome = {
+          status: "skipped",
+          action: "keep_lane",
+          reason: "active_reply_work",
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          activeSessionId: activeWorkSessionId,
+          activeWorkKind: "embedded_run",
+        };
+        diag.warn(`stuck session recovery outcome: ${formatRecoveryOutcome(outcome)}`);
+        return outcome;
+      }
     }
 
     if (!activeSessionId && sessionLane) {
@@ -167,8 +181,8 @@ export async function recoverStuckDiagnosticSession(
 
     const clearStaleQueuedSession = !aborted && released === 0 && (params.queueDepth ?? 0) > 0;
 
-    if (aborted || released > 0 || clearStaleQueuedSession) {
-      const action = aborted ? "abort_embedded_run" : "release_lane";
+    if (aborted || forceCleared || released > 0 || clearStaleQueuedSession) {
+      const action = aborted || forceCleared ? "abort_embedded_run" : "release_lane";
       const stoppedFields = formatStoppedCronSessionDiagnosticFields(
         resolveCronSessionDiagnosticContext({ sessionKey: params.sessionKey, activeSessionId }),
       );
@@ -179,28 +193,29 @@ export async function recoverStuckDiagnosticSession(
           stoppedFields ? ` ${stoppedFields}` : ""
         }`,
       );
-      const outcome: StuckSessionRecoveryOutcome = aborted
-        ? {
-            status: "aborted",
-            action: "abort_embedded_run",
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-            activeSessionId,
-            activeWorkKind: "embedded_run",
-            aborted,
-            drained,
-            forceCleared,
-            released,
-            lane: sessionLane ?? undefined,
-          }
-        : {
-            status: "released",
-            action: "release_lane",
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-            released,
-            lane: sessionLane ?? undefined,
-          };
+      const outcome: StuckSessionRecoveryOutcome =
+        aborted || forceCleared
+          ? {
+              status: "aborted",
+              action: "abort_embedded_run",
+              sessionId: params.sessionId,
+              sessionKey: params.sessionKey,
+              activeSessionId,
+              activeWorkKind: "embedded_run",
+              aborted,
+              drained,
+              forceCleared,
+              released,
+              lane: sessionLane ?? undefined,
+            }
+          : {
+              status: "released",
+              action: "release_lane",
+              sessionId: params.sessionId,
+              sessionKey: params.sessionKey,
+              released,
+              lane: sessionLane ?? undefined,
+            };
       diag.warn(`stuck session recovery outcome: ${formatRecoveryOutcome(outcome)}`);
       return outcome;
     }

@@ -5,7 +5,7 @@ const CRESTODIAN_CLAUDE_CLI_MODEL = "claude-opus-4-7";
 const CRESTODIAN_CODEX_MODEL = "gpt-5.5";
 
 type CrestodianLocalPlannerBackend = {
-  kind: "claude-cli" | "codex-app-server" | "codex-cli";
+  kind: "claude-cli" | "codex-app-server";
   label: string;
   runner: "cli" | "embedded";
   provider: string;
@@ -32,16 +32,6 @@ const CODEX_APP_SERVER_BACKEND: CrestodianLocalPlannerBackend = {
   buildConfig: buildCodexAppServerPlannerConfig,
 };
 
-const CODEX_CLI_BACKEND: CrestodianLocalPlannerBackend = {
-  kind: "codex-cli",
-  label: `codex-cli/${CRESTODIAN_CODEX_MODEL}`,
-  runner: "cli",
-  provider: "codex-cli",
-  model: CRESTODIAN_CODEX_MODEL,
-  buildConfig: (workspaceDir) =>
-    buildCliPlannerConfig(workspaceDir, `codex-cli/${CRESTODIAN_CODEX_MODEL}`),
-};
-
 export function selectCrestodianLocalPlannerBackends(
   overview: CrestodianOverview,
 ): CrestodianLocalPlannerBackend[] {
@@ -50,7 +40,7 @@ export function selectCrestodianLocalPlannerBackends(
     backends.push(CLAUDE_CLI_BACKEND);
   }
   if (overview.tools.codex.found) {
-    backends.push(CODEX_APP_SERVER_BACKEND, CODEX_CLI_BACKEND);
+    backends.push(CODEX_APP_SERVER_BACKEND);
   }
   return backends;
 }

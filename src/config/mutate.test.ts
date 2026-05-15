@@ -361,6 +361,33 @@ describe("config mutate helpers", () => {
     );
   });
 
+  it("returns the canonical persisted config from replace writes", async () => {
+    const snapshot = createSnapshot({
+      hash: "hash-persisted",
+      sourceConfig: { gateway: { auth: { mode: "token" } } },
+    });
+    ioMocks.writeConfigFile.mockResolvedValue({
+      persistedHash: "hash-after",
+      persistedConfig: {
+        gateway: { auth: { mode: "token", token: "minted" } },
+        meta: { lastTouchedVersion: "test" },
+      },
+    });
+
+    const result = await replaceConfigFile({
+      baseHash: snapshot.hash,
+      nextConfig: { gateway: { auth: { mode: "token", token: "minted" } } },
+      snapshot,
+      writeOptions: { expectedConfigPath: snapshot.path },
+    });
+
+    expect(result.persistedHash).toBe("hash-after");
+    expect(result.nextConfig).toEqual({
+      gateway: { auth: { mode: "token", token: "minted" } },
+      meta: { lastTouchedVersion: "test" },
+    });
+  });
+
   it("writes through a single-file top-level plugins include", async () => {
     const home = await suiteRootTracker.make("include");
     const configPath = path.join(home, ".openclaw", "openclaw.json");

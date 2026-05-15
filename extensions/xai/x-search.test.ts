@@ -290,6 +290,40 @@ describe("xai x_search tool", () => {
     expect(firstAuthorizationHeader(mockFetch)).toBe("Bearer xai-plugin-key");
   });
 
+  it("reports malformed x_search JSON as a provider error", async () => {
+    const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.reject(new SyntaxError("Unexpected token")),
+      } as Response),
+    );
+    global.fetch = withFetchPreconnect(mockFetch);
+    const tool = createXSearchTool({
+      config: {
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                webSearch: {
+                  apiKey: "xai-plugin-key", // pragma: allowlist secret
+                },
+                xSearch: {
+                  enabled: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    await expect(
+      tool?.execute?.("x-search:malformed-json", {
+        query: "latest post from huntharo",
+      }),
+    ).rejects.toThrow("xAI X search failed: malformed JSON response");
+  });
+
   it("prefers the active runtime config for shared xAI keys", async () => {
     const mockFetch = installXSearchFetch();
     const tool = createXSearchTool({

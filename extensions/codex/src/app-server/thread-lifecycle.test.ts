@@ -11,6 +11,8 @@ function createAttemptParams(params: {
   authProfileId?: string;
   authProfileProvider?: string;
   authProfileProviders?: Record<string, string>;
+  bootstrapContextMode?: "full" | "lightweight";
+  bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
 }): EmbeddedRunAttemptParams {
   const authProfileProviders =
     params.authProfileProviders ??
@@ -21,6 +23,10 @@ function createAttemptParams(params: {
     provider: params.provider,
     modelId: "gpt-5.4",
     authProfileId: params.authProfileId,
+    ...(params.bootstrapContextMode ? { bootstrapContextMode: params.bootstrapContextMode } : {}),
+    ...(params.bootstrapContextRunKind
+      ? { bootstrapContextRunKind: params.bootstrapContextRunKind }
+      : {}),
     authProfileStore: {
       version: 1,
       profiles: Object.fromEntries(
@@ -76,6 +82,53 @@ describe("Codex app-server native code mode config", () => {
     });
 
     expect(request.config).toEqual({
+      "features.code_mode": true,
+      "features.code_mode_only": true,
+    });
+  });
+
+  it("disables native Codex project docs for lightweight context threads", () => {
+    const request = buildThreadStartParams(
+      createAttemptParams({
+        provider: "openai",
+        bootstrapContextMode: "lightweight",
+        bootstrapContextRunKind: "cron",
+      }),
+      {
+        cwd: "/repo",
+        dynamicTools: [],
+        appServer: createAppServerOptions() as never,
+        developerInstructions: "test instructions",
+        config: {
+          project_doc_max_bytes: 64_000,
+          "features.codex_hooks": true,
+        },
+      },
+    );
+
+    expect(request.config).toEqual({
+      project_doc_max_bytes: 0,
+      "features.codex_hooks": true,
+      "features.code_mode": true,
+      "features.code_mode_only": true,
+    });
+  });
+
+  it("keeps native Codex project docs enabled when context is not lightweight", () => {
+    const request = buildThreadResumeParams(
+      createAttemptParams({ provider: "openai", bootstrapContextRunKind: "cron" }),
+      {
+        threadId: "thread-1",
+        appServer: createAppServerOptions() as never,
+        developerInstructions: "test instructions",
+        config: {
+          project_doc_max_bytes: 64_000,
+        },
+      },
+    );
+
+    expect(request.config).toEqual({
+      project_doc_max_bytes: 64_000,
       "features.code_mode": true,
       "features.code_mode_only": true,
     });

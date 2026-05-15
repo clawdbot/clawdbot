@@ -389,7 +389,8 @@ public struct OpenClawChatView: View {
                 toolCallId: last.toolCallId,
                 toolName: last.toolName,
                 usage: last.usage,
-                stopReason: last.stopReason)
+                stopReason: last.stopReason,
+                errorMessage: last.errorMessage)
             result[result.count - 1] = merged
         }
 
@@ -433,7 +434,11 @@ public struct OpenClawChatView: View {
             guard kind == "text" || kind.isEmpty else { return nil }
             return content.text
         }
-        return parts.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        return OpenClawChatMessage.displayText(
+            contentText: parts.joined(separator: "\n"),
+            role: message.role,
+            stopReason: message.stopReason,
+            errorMessage: message.errorMessage)
     }
 
     private func hasInlineAttachments(in message: OpenClawChatMessage) -> Bool {

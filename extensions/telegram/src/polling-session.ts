@@ -16,10 +16,12 @@ import { TelegramPollingLivenessTracker } from "./polling-liveness.js";
 import { createTelegramPollingStatusPublisher } from "./polling-status.js";
 import { TelegramPollingTransportState } from "./polling-transport-state.js";
 import { TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS } from "./request-timeouts.js";
+import { getTelegramSequentialKey } from "./sequential-key.js";
 import {
   deleteTelegramSpooledUpdate,
   listTelegramSpooledUpdates,
   resolveTelegramIngressSpoolDir,
+  type TelegramSpooledUpdate,
 } from "./telegram-ingress-spool.js";
 import {
   createTelegramIngressWorker,
@@ -108,6 +110,7 @@ export class TelegramPollingSession {
   #forceRestarted = false;
   #activeRunner: ReturnType<typeof run> | undefined;
   #activeFetchAbort: AbortController | undefined;
+  #spooledUpdateHandlersByLane = new Map<string, Promise<boolean>>();
   #transportState: TelegramPollingTransportState;
   #status: ReturnType<typeof createTelegramPollingStatusPublisher>;
   #stallThresholdMs: number;
@@ -258,33 +261,68 @@ export class TelegramPollingSession {
     }
   }
 
+  async #handleSpooledUpdate(params: {
+    bot: TelegramBot;
+    update: TelegramSpooledUpdate;
+  }): Promise<boolean> {
+    try {
+      await params.bot.handleUpdate(
+        params.update.update as Parameters<typeof params.bot.handleUpdate>[0],
+      );
+      await deleteTelegramSpooledUpdate(params.update);
+      return true;
+    } catch (err) {
+      this.opts.log(
+        `[telegram][diag] spooled update ${params.update.updateId} failed; keeping for retry: ${formatErrorMessage(err)}`,
+      );
+      return false;
+    }
+  }
+
+  async #waitForSpooledUpdateHandlers(): Promise<void> {
+    await Promise.allSettled(this.#spooledUpdateHandlersByLane.values());
+  }
+
   async #drainSpooledUpdates(params: { bot: TelegramBot; spoolDir: string }): Promise<number> {
-    let handled = 0;
     const updates = await listTelegramSpooledUpdates({ spoolDir: params.spoolDir, limit: 100 });
+    let started = 0;
     for (const update of updates) {
+      const laneKey = getTelegramSequentialKey({
+        update: update.update as Parameters<typeof getTelegramSequentialKey>[0]["update"],
+        ...(this.opts.botInfo ? { me: this.opts.botInfo } : {}),
+      });
       if (this.opts.abortSignal?.aborted) {
         break;
       }
-      try {
-        await params.bot.handleUpdate(
-          update.update as Parameters<typeof params.bot.handleUpdate>[0],
-        );
-        await deleteTelegramSpooledUpdate(update);
-        handled += 1;
-      } catch (err) {
-        this.opts.log(
-          `[telegram][diag] spooled update ${update.updateId} handler failed; keeping for retry: ${formatErrorMessage(err)}`,
-        );
-        break;
+      if (this.#spooledUpdateHandlersByLane.has(laneKey)) {
+        continue;
       }
+      const handler = this.#handleSpooledUpdate({
+        bot: params.bot,
+        update,
+      });
+      this.#spooledUpdateHandlersByLane.set(laneKey, handler);
+      void handler.finally(() => {
+        this.#spooledUpdateHandlersByLane.delete(laneKey);
+      });
+      started += 1;
     }
-    return handled;
+    return started;
   }
 
   async #runIsolatedIngressCycle(bot: TelegramBot): Promise<"continue" | "exit"> {
     const ingress = this.opts.isolatedIngress;
     if (!ingress?.enabled) {
       return this.#runPollingCycle(bot);
+    }
+    try {
+      await bot.init();
+    } catch (err) {
+      const shouldRetry = await this.#waitBeforeRetryOnRecoverableSetupError(
+        err,
+        "Telegram bot init failed",
+      );
+      return shouldRetry ? "continue" : "exit";
     }
     const spoolDir =
       ingress.spoolDir ?? resolveTelegramIngressSpoolDir({ accountId: this.opts.accountId });
@@ -383,6 +421,7 @@ export class TelegramPollingSession {
       this.opts.abortSignal?.removeEventListener("abort", stopOnAbort);
       await worker.stop();
       await drainOnce();
+      await waitForGracefulStop(() => this.#waitForSpooledUpdateHandlers());
       await waitForGracefulStop(stopBot);
     }
   }

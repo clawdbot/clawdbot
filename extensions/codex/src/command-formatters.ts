@@ -2,6 +2,7 @@ import type { CodexComputerUseStatus } from "./app-server/computer-use.js";
 import type { CodexAppServerModelListResult } from "./app-server/models.js";
 import { isJsonObject, type JsonObject, type JsonValue } from "./app-server/protocol.js";
 import {
+  hasCodexRateLimitSnapshots,
   summarizeCodexAccountRateLimits,
   summarizeCodexRateLimits,
 } from "./app-server/rate-limits.js";
@@ -301,7 +302,9 @@ export function buildHelp(): string {
     "- /codex status",
     "- /codex models",
     "- /codex threads [filter]",
+    "- /codex sessions --host <node> [filter]",
     "- /codex resume <thread-id>",
+    "- /codex resume <session-id> --host <node> --bind here",
     "- /codex bind [thread-id] [--cwd <path>] [--model <model>] [--provider <provider>]",
     "- /codex binding",
     "- /codex stop",
@@ -347,13 +350,21 @@ function summarizeArrayLike(value: JsonValue | undefined): string {
 }
 
 function formatCodexRateLimitSummary(value: JsonValue | undefined): string {
-  return formatCodexDisplayText(summarizeCodexRateLimits(value) ?? summarizeRateLimits(value));
+  const summary = summarizeCodexRateLimits(value);
+  if (summary) {
+    return formatCodexDisplayText(summary);
+  }
+  return formatCodexDisplayText(
+    hasCodexRateLimitSnapshots(value) ? "none returned" : summarizeRateLimits(value),
+  );
 }
 
 function formatCodexRateLimitDetails(value: JsonValue | undefined): string {
   const lines = summarizeCodexAccountRateLimits(value);
   if (!lines) {
-    return formatCodexDisplayText(summarizeRateLimits(value));
+    return formatCodexDisplayText(
+      hasCodexRateLimitSnapshots(value) ? "none returned" : summarizeRateLimits(value),
+    );
   }
   return lines.map(formatCodexDisplayText).join("\n");
 }

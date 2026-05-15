@@ -61,6 +61,17 @@ type FirecrawlSearchItem = {
   siteName?: string;
 };
 
+async function readFirecrawlJsonResponse(
+  response: Response,
+  label: string,
+): Promise<Record<string, unknown>> {
+  try {
+    return (await response.json()) as Record<string, unknown>;
+  } catch (cause) {
+    throw new Error(`${label}: malformed JSON response`, { cause });
+  }
+}
+
 export type FirecrawlSearchParams = {
   cfg?: OpenClawConfig;
   query: string;
@@ -406,7 +417,7 @@ export async function runFirecrawlSearch(
       errorLabel: "Firecrawl Search",
     },
     async (response) => {
-      const payload = (await response.json()) as Record<string, unknown>;
+      const payload = await readFirecrawlJsonResponse(response, "Firecrawl Search API error");
       if (payload.success === false) {
         const error =
           typeof payload.error === "string"
@@ -562,7 +573,7 @@ export async function runFirecrawlScrape(
       },
     },
     async (response) => {
-      const payload = (await response.json()) as Record<string, unknown>;
+      const payload = await readFirecrawlJsonResponse(response, "Firecrawl fetch failed");
       if (payload.success === false) {
         const detail =
           typeof payload.error === "string"

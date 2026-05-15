@@ -85,7 +85,7 @@ export function isAzCliInstalled(): boolean {
 
 export function getLoggedInAccount(): AzAccount | null {
   try {
-    return JSON.parse(execAz(["account", "show", "--output", "json"])) as AzAccount;
+    return parseAzJson(execAz(["account", "show", "--output", "json"]), "account") as AzAccount;
   } catch {
     return null;
   }
@@ -93,12 +93,21 @@ export function getLoggedInAccount(): AzAccount | null {
 
 export function listSubscriptions(): AzAccount[] {
   try {
-    const subs = JSON.parse(
+    const subs = parseAzJson(
       execAz(["account", "list", "--output", "json", "--all"]),
+      "subscriptions",
     ) as AzAccount[];
     return subs.filter((sub) => sub.state === "Enabled");
   } catch {
     return [];
+  }
+}
+
+function parseAzJson(raw: string, label: string): unknown {
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    throw new Error(`Azure CLI returned malformed ${label} JSON.`);
   }
 }
 
@@ -125,13 +134,16 @@ function buildAccessTokenArgs(params?: AccessTokenParams): string[] {
 }
 
 export function getAccessTokenResult(params?: AccessTokenParams): AzAccessToken {
-  return JSON.parse(execAz(buildAccessTokenArgs(params))) as AzAccessToken;
+  return parseAzJson(execAz(buildAccessTokenArgs(params)), "access token") as AzAccessToken;
 }
 
 export async function getAccessTokenResultAsync(
   params?: AccessTokenParams,
 ): Promise<AzAccessToken> {
-  return JSON.parse(await execAzAsync(buildAccessTokenArgs(params))) as AzAccessToken;
+  return parseAzJson(
+    await execAzAsync(buildAccessTokenArgs(params)),
+    "access token",
+  ) as AzAccessToken;
 }
 
 export async function azLoginDeviceCode(): Promise<void> {

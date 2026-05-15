@@ -21,6 +21,7 @@ import {
   handleApprovalWaitDecision,
   handlePendingApprovalRequest,
   isApprovalDecision,
+  isApprovalRecordVisibleToClient,
 } from "./approval-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -29,15 +30,18 @@ export function createPluginApprovalHandlers(
   opts?: { forwarder?: ExecApprovalForwarder },
 ): GatewayRequestHandlers {
   return {
-    "plugin.approval.list": async ({ respond }) => {
+    "plugin.approval.list": async ({ respond, client }) => {
       respond(
         true,
-        manager.listPendingRecords().map((record) => ({
-          id: record.id,
-          request: record.request,
-          createdAtMs: record.createdAtMs,
-          expiresAtMs: record.expiresAtMs,
-        })),
+        manager
+          .listPendingRecords()
+          .filter((record) => isApprovalRecordVisibleToClient({ record, client }))
+          .map((record) => ({
+            id: record.id,
+            request: record.request,
+            createdAtMs: record.createdAtMs,
+            expiresAtMs: record.expiresAtMs,
+          })),
         undefined,
       );
     },
@@ -106,6 +110,10 @@ export function createPluginApprovalHandlers(
       // Always server-generate the ID — never accept plugin-provided IDs.
       // Kind-prefix so /approve routing can distinguish plugin vs exec IDs deterministically.
       const record = manager.create(request, timeoutMs, `plugin:${randomUUID()}`);
+      record.requestedByConnId = client?.connId ?? null;
+      record.requestedByDeviceId = client?.connect?.device?.id ?? null;
+      record.requestedByClientId = client?.connect?.client?.id ?? null;
+      record.requestedByDeviceTokenAuth = client?.isDeviceTokenAuth === true;
 
       let decisionPromise: Promise<ExecApprovalDecision | null>;
       try {
@@ -148,10 +156,11 @@ export function createPluginApprovalHandlers(
       });
     },
 
-    "plugin.approval.waitDecision": async ({ params, respond }) => {
+    "plugin.approval.waitDecision": async ({ params, respond, client }) => {
       await handleApprovalWaitDecision({
         manager,
         inputId: (params as { id?: string }).id,
+        client,
         respond,
       });
     },

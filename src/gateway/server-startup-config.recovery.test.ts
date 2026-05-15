@@ -155,7 +155,10 @@ function installConfigIoMockDefaults() {
     }
     return snapshot.valid ? { snapshot, pluginMetadataSnapshot } : { snapshot };
   });
-  writeConfig.mockResolvedValue(undefined);
+  writeConfig.mockResolvedValue({
+    persistedHash: "test-persisted-hash",
+    persistedConfig: validConfig,
+  });
 }
 
 describe("gateway startup config validation", () => {

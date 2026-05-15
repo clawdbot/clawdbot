@@ -212,6 +212,22 @@ describe("node.invoke approval bypass", () => {
     }
   };
 
+  const approvePendingNodePairings = async (nodeId: string) => {
+    const { approveNodePairing, listNodePairing } = await import("../infra/node-pairing.js");
+    const list = await listNodePairing();
+    let approved = false;
+    for (const pending of list.pending) {
+      if (pending.nodeId !== nodeId) {
+        continue;
+      }
+      const result = await approveNodePairing(pending.requestId, {
+        callerScopes: ["operator.pairing", "operator.write", "operator.admin"],
+      });
+      approved ||= Boolean(result && "node" in result);
+    }
+    return approved;
+  };
+
   const connectOperatorWithRetry = async (
     scopes: string[],
     resolveDevice?: (nonce: string) => NonNullable<Parameters<typeof connectReq>[1]>["device"],
@@ -382,10 +398,12 @@ describe("node.invoke approval bypass", () => {
       return client;
     };
 
-    const pendingClient = await startNodeClient();
-    await approveAllPendingPairings();
-    pendingClient.stop();
-    return await startNodeClient();
+    let client = await startNodeClient();
+    if (await approvePendingNodePairings(resolvedDeviceIdentity.deviceId)) {
+      client.stop();
+      client = await startNodeClient();
+    }
+    return client;
   };
 
   test("rejects malformed/forbidden node.invoke payloads before forwarding", async () => {

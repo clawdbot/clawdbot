@@ -50,3 +50,17 @@ export function buildUsageHttpErrorSnapshot(
   const suffix = options.message?.trim() ? `: ${options.message.trim()}` : "";
   return buildUsageErrorSnapshot(options.provider, `HTTP ${options.status}${suffix}`);
 }
+
+export async function readUsageJson(
+  provider: UsageProviderId,
+  response: Response,
+): Promise<{ ok: true; data: unknown } | { ok: false; snapshot: ProviderUsageSnapshot }> {
+  try {
+    return { ok: true, data: await response.json() };
+  } catch {
+    return {
+      ok: false,
+      snapshot: buildUsageErrorSnapshot(provider, "Malformed usage response"),
+    };
+  }
+}

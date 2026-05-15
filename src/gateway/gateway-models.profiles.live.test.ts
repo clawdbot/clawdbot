@@ -21,11 +21,7 @@ import {
   saveAuthProfileStore,
 } from "../agents/auth-profiles/store.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
-import {
-  collectAnthropicApiKeys,
-  isAnthropicBillingError,
-  isAnthropicRateLimitError,
-} from "../agents/live-auth-keys.js";
+import { collectAnthropicApiKeys } from "../agents/live-auth-keys.js";
 import { isModelNotFoundErrorMessage } from "../agents/live-model-errors.js";
 import {
   DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT,
@@ -37,12 +33,15 @@ import {
 } from "../agents/live-model-filter.js";
 import { createLiveTargetMatcher } from "../agents/live-target-matcher.js";
 import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "../agents/live-test-helpers.js";
+import {
+  isLiveBillingDrift,
+  isLiveRateLimitDrift,
+  shouldSkipLiveProviderDrift,
+} from "../agents/live-test-provider-drift.js";
 import { getApiKeyForModel, resolveEnvApiKey } from "../agents/model-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { shouldSuppressBuiltInModel } from "../agents/model-suppression.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
-import { isRateLimitErrorMessage } from "../agents/pi-embedded-helpers/errors.js";
-import { isBillingErrorMessage } from "../agents/pi-embedded-helpers/failover-matches.js";
 import { discoverAuthStorage, discoverModels } from "../agents/pi-model-discovery.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
 import { clearRuntimeConfigSnapshot, getRuntimeConfig } from "../config/io.js";
@@ -849,20 +848,6 @@ function isAccountIdExtractionError(error: string): boolean {
 function isChatGPTUsageLimitErrorMessage(raw: string): boolean {
   const msg = raw.toLowerCase();
   return msg.includes("hit your chatgpt usage limit") && msg.includes("try again in");
-}
-
-function isProviderUnavailableErrorMessage(raw: string): boolean {
-  const msg = raw.toLowerCase();
-  return (
-    msg.includes("no allowed providers are available") ||
-    msg.includes("provider unavailable") ||
-    msg.includes("upstream provider unavailable") ||
-    msg.includes("upstream error from google") ||
-    msg.includes("temporarily rate-limited upstream") ||
-    msg.includes("unable to access non-serverless model") ||
-    msg.includes("create and start a new dedicated endpoint") ||
-    msg.includes("no available capacity was found for the model")
-  );
 }
 
 function isOllamaUnavailableErrorMessage(raw: string): boolean {
@@ -2404,18 +2389,18 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
           const message = String(err);
           if (
             model.provider === "anthropic" &&
-            isAnthropicRateLimitError(message) &&
+            isLiveRateLimitDrift(message) &&
             attempt + 1 < attemptMax
           ) {
             logProgress(`${progressLabel}: rate limit, retrying with next key`);
             continue;
           }
-          if (model.provider === "anthropic" && isAnthropicRateLimitError(message)) {
+          if (model.provider === "anthropic" && isLiveRateLimitDrift(message)) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (anthropic rate limit)`);
             break;
           }
-          if (model.provider === "anthropic" && isAnthropicBillingError(message)) {
+          if (model.provider === "anthropic" && isLiveBillingDrift(message)) {
             if (attempt + 1 < attemptMax) {
               logProgress(`${progressLabel}: billing issue, retrying with next key`);
               continue;
@@ -2447,14 +2432,20 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
             logProgress(`${progressLabel}: skip (${model.provider} empty response)`);
             break;
           }
-          if (isGoogleishProvider(model.provider) && isRateLimitErrorMessage(message)) {
+          if (isGoogleishProvider(model.provider) && isLiveRateLimitDrift(message)) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (google rate limit)`);
             break;
           }
-          if (isBillingErrorMessage(message)) {
+          const driftSkip = shouldSkipLiveProviderDrift({
+            error: message,
+            allowAuth: true,
+            allowBilling: true,
+            allowProviderUnavailable: true,
+          });
+          if (driftSkip) {
             skippedCount += 1;
-            logProgress(`${progressLabel}: skip (billing drift)`);
+            logProgress(`${progressLabel}: skip (${driftSkip.label})`);
             break;
           }
           if (
@@ -2462,15 +2453,10 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
               model.provider === "opencode" ||
               model.provider === "opencode-go" ||
               model.provider === "zai") &&
-            isRateLimitErrorMessage(message)
+            isLiveRateLimitDrift(message)
           ) {
             skippedCount += 1;
             logProgress(`${progressLabel}: skip (rate limit)`);
-            break;
-          }
-          if (isProviderUnavailableErrorMessage(message)) {
-            skippedCount += 1;
-            logProgress(`${progressLabel}: skip (provider unavailable)`);
             break;
           }
           if (isAudioOnlyModelErrorMessage(message)) {

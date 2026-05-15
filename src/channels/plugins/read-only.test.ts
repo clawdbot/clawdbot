@@ -12,6 +12,7 @@ import {
 import {
   listPluginLoaderModuleCandidateUrls,
   listReadOnlyChannelPluginsForConfig,
+  resolveReadOnlyChannelPluginsForConfig,
 } from "./read-only.js";
 
 const moduleLoaderParams = vi.hoisted(
@@ -92,6 +93,12 @@ vi.mock("../../plugins/plugin-module-loader-cache.js", async (importOriginal) =>
 
   function loadOpenClawPlugins(params: LoaderParams) {
     const onlyPluginIds = new Set(params.onlyPluginIds ?? []);
+    const diagnostics: Array<{
+      level: "error";
+      pluginId: string;
+      source: string;
+      message: string;
+    }> = [];
     const channelSetups = listCandidatePluginDirs(params).flatMap((pluginDir) => {
       const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
       const packagePath = path.join(pluginDir, "package.json");
@@ -111,12 +118,26 @@ vi.mock("../../plugins/plugin-module-loader-cache.js", async (importOriginal) =>
       if (typeof setupEntry !== "string") {
         return [];
       }
-      const setupModule = require(path.join(pluginDir, setupEntry));
-      const entry = setupModule.default ?? setupModule;
+      const setupPath = path.join(pluginDir, setupEntry);
+      let setupModule: unknown;
+      try {
+        setupModule = require(setupPath);
+      } catch (error) {
+        diagnostics.push({
+          level: "error",
+          pluginId: manifest.id,
+          source: setupPath,
+          message: `failed to load setup entry: ${String(error)}`,
+        });
+        return [];
+      }
+      const entry = ((setupModule as { default?: unknown }).default ?? setupModule) as {
+        plugin?: unknown;
+      };
       const plugin = entry.plugin;
       return plugin ? [{ pluginId: manifest.id, plugin }] : [];
     });
-    return { channelSetups };
+    return { channelSetups, diagnostics };
   }
 
   return {
@@ -666,7 +687,16 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
     );
 
     const plugin = plugins.find((entry) => entry.id === "external-chat");
-    expect(plugin).toBeUndefined();
+    expect(plugin?.meta.label).toBe("@example/openclaw-external-chat");
+    expect(plugin?.meta.blurb).toBe("");
+    expect(plugin?.configSchema).toBeUndefined();
+    expect(
+      plugin?.config.listAccountIds({
+        channels: {
+          "external-chat": { token: "configured" },
+        },
+      } as never),
+    ).toEqual(["default"]);
     expect(fs.existsSync(setupMarker)).toBe(false);
     expect(fs.existsSync(fullMarker)).toBe(false);
   });
@@ -1114,6 +1144,46 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
     expect(pluginIds(plugins)).not.toContain("spoofed-chat");
     expect(pluginIds(plugins)).not.toContain("external-chat");
     expect(fs.existsSync(setupMarker)).toBe(true);
+    expect(fs.existsSync(fullMarker)).toBe(false);
+  });
+
+  it("reports setup-entry load failures for configured channel plugins", () => {
+    const { pluginDir, fullMarker, setupMarker } = writeExternalSetupChannelPlugin({
+      pluginId: "external-chat-plugin",
+      channelId: "external-chat",
+    });
+    fs.writeFileSync(
+      path.join(pluginDir, "setup-entry.cjs"),
+      `throw new Error("Cannot find module 'ansi-escapes'");`,
+      "utf-8",
+    );
+
+    const result = resolveReadOnlyChannelPluginsForConfig(
+      {
+        channels: {
+          "external-chat": { token: "configured" },
+        },
+        plugins: {
+          load: { paths: [pluginDir] },
+          allow: ["external-chat-plugin"],
+        },
+      } as never,
+      {
+        env: { ...process.env },
+        includeSetupFallbackPlugins: true,
+      },
+    );
+
+    expect(pluginIds(result.plugins)).not.toContain("external-chat");
+    expect(result.missingConfiguredChannelIds).toContain("external-chat");
+    expect(result.loadFailures).toEqual([
+      expect.objectContaining({
+        channelId: "external-chat",
+        pluginId: "external-chat-plugin",
+        message: expect.stringContaining("Cannot find module"),
+      }),
+    ]);
+    expect(fs.existsSync(setupMarker)).toBe(false);
     expect(fs.existsSync(fullMarker)).toBe(false);
   });
 });

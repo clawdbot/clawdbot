@@ -1,4 +1,7 @@
-import type { PluginHookAgentContext } from "../../plugins/hook-types.js";
+import type {
+  PluginHookAgentContext,
+  PluginHookContextWindowSource,
+} from "../../plugins/hook-types.js";
 
 export type AgentHarnessHookContext = {
   runId: string;
@@ -12,6 +15,9 @@ export type AgentHarnessHookContext = {
   messageProvider?: string;
   trigger?: string;
   channelId?: string;
+  contextTokenBudget?: number;
+  contextWindowSource?: PluginHookContextWindowSource;
+  contextWindowReferenceTokens?: number;
 };
 
 export function buildAgentHookContext(params: AgentHarnessHookContext): PluginHookAgentContext {
@@ -27,5 +33,10 @@ export function buildAgentHookContext(params: AgentHarnessHookContext): PluginHo
     ...(params.messageProvider ? { messageProvider: params.messageProvider } : {}),
     ...(params.trigger ? { trigger: params.trigger } : {}),
     ...(params.channelId ? { channelId: params.channelId } : {}),
+    ...(params.contextTokenBudget ? { contextTokenBudget: params.contextTokenBudget } : {}),
+    ...(params.contextWindowSource ? { contextWindowSource: params.contextWindowSource } : {}),
+    ...(params.contextWindowReferenceTokens
+      ? { contextWindowReferenceTokens: params.contextWindowReferenceTokens }
+      : {}),
   };
 }

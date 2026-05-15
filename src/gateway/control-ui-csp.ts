@@ -45,6 +45,7 @@ export function buildControlUiCspHeader(opts?: { inlineScriptHashes?: string[] }
     scriptSrc,
     "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
     "img-src 'self' data: blob:",
+    "media-src 'self' data: blob:",
     "font-src 'self' https://fonts.gstatic.com",
     "worker-src 'self'",
     "connect-src 'self' ws: wss: https://api.openai.com https://tweakcn.com",

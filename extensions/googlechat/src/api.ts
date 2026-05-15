@@ -9,6 +9,14 @@ import type { GoogleChatReaction } from "./types.js";
 const CHAT_API_BASE = "https://chat.googleapis.com/v1";
 const CHAT_UPLOAD_BASE = "https://chat.googleapis.com/upload/v1";
 
+async function readGoogleChatJsonResponse<T>(response: Response, label: string): Promise<T> {
+  try {
+    return (await response.json()) as T;
+  } catch (cause) {
+    throw new Error(`${label}: malformed JSON response`, { cause });
+  }
+}
+
 const headersToObject = (headers?: HeadersInit): Record<string, string> =>
   headers instanceof Headers
     ? Object.fromEntries(headers.entries())
@@ -71,7 +79,8 @@ async function fetchJson<T>(
       },
     },
     auditContext: "googlechat.api.json",
-    handleResponse: async (response) => (await response.json()) as T,
+    handleResponse: async (response) =>
+      await readGoogleChatJsonResponse<T>(response, "Google Chat API request failed"),
   });
 }
 
@@ -217,9 +226,9 @@ export async function uploadGoogleChatAttachment(params: {
     auditContext: "googlechat.upload",
     errorPrefix: "Google Chat upload",
     handleResponse: async (response) =>
-      (await response.json()) as {
+      await readGoogleChatJsonResponse<{
         attachmentDataRef?: { attachmentUploadToken?: string };
-      },
+      }>(response, "Google Chat upload failed"),
   });
   return {
     attachmentUploadToken: payload.attachmentDataRef?.attachmentUploadToken,

@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   isCatalogChannelInstalled: vi.fn<(params: { entry: ChannelPluginCatalogEntry }) => boolean>(
     () => true,
   ),
+  callGateway: vi.fn(),
   resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
   resolveDefaultAgentId: vi.fn(() => "main"),
 }));
@@ -27,6 +28,10 @@ vi.mock("../config/config.js", () => ({
 
 vi.mock("../cli/command-config-resolution.js", () => ({
   resolveCommandConfigWithSecrets: mocks.resolveCommandConfigWithSecrets,
+}));
+
+vi.mock("../gateway/call.js", () => ({
+  callGateway: mocks.callGateway,
 }));
 
 vi.mock("../cli/command-secret-targets.js", () => ({
@@ -115,6 +120,8 @@ describe("channels list", () => {
     mocks.listTrustedChannelPluginCatalogEntries.mockReturnValue([]);
     mocks.isCatalogChannelInstalled.mockReset();
     mocks.isCatalogChannelInstalled.mockReturnValue(true);
+    mocks.callGateway.mockReset();
+    mocks.callGateway.mockRejectedValue(new Error("gateway unavailable"));
   });
 
   it("does not include auth providers in JSON output (auth section was removed)", async () => {
@@ -219,6 +226,112 @@ describe("channels list", () => {
     expect(output).toContain("configured");
     expect(output).toContain("enabled");
     expect(output).not.toContain("Auth providers");
+  });
+
+  it("prefers reachable gateway account snapshots over command-local token state", async () => {
+    const runtime = createTestRuntime();
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([
+      createMockChannelPlugin({ id: "discord", label: "Discord", accountIds: ["default"] }),
+    ]);
+    mocks.buildChannelAccountSnapshot.mockResolvedValue({
+      accountId: "default",
+      configured: false,
+      tokenSource: "none",
+      enabled: true,
+    });
+    mocks.callGateway.mockResolvedValue({
+      channelAccounts: {
+        discord: [
+          {
+            accountId: "default",
+            name: "clawsweeper",
+            configured: true,
+            tokenSource: "env",
+            tokenStatus: "available",
+            enabled: true,
+          },
+        ],
+      },
+    });
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {
+        channels: {
+          discord: { enabled: true },
+        },
+      },
+    });
+
+    await channelsListCommand({ all: true }, runtime);
+
+    expect(mocks.callGateway).toHaveBeenCalledWith({
+      method: "channels.status",
+      params: { probe: false, timeoutMs: 5000 },
+      timeoutMs: 5000,
+    });
+    const output = stripAnsi(loggedText(runtime));
+    expect(output).toContain("Discord default (clawsweeper):");
+    expect(output).toContain("configured");
+    expect(output).toContain("token=env");
+    expect(output).not.toContain("not configured");
+    expect(output).not.toContain("token=none");
+  });
+
+  it("falls back to command-local account snapshots when gateway status is unavailable", async () => {
+    const runtime = createTestRuntime();
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([
+      createMockChannelPlugin({ id: "discord", label: "Discord", accountIds: ["default"] }),
+    ]);
+    mocks.buildChannelAccountSnapshot.mockResolvedValue({
+      accountId: "default",
+      configured: false,
+      tokenSource: "none",
+      enabled: true,
+    });
+    mocks.callGateway.mockRejectedValue(new Error("gateway unavailable"));
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {
+        channels: {
+          discord: { enabled: true },
+        },
+      },
+    });
+
+    await channelsListCommand({ all: true }, runtime);
+
+    const output = stripAnsi(loggedText(runtime));
+    expect(output).toContain("Discord default:");
+    expect(output).toContain("not configured");
+    expect(output).toContain("token=none");
+  });
+
+  it("marks configured-but-unavailable credential sources in text output", async () => {
+    const runtime = createTestRuntime();
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([
+      createMockChannelPlugin({ id: "discord", label: "Discord", accountIds: ["default"] }),
+    ]);
+    mocks.buildChannelAccountSnapshot.mockResolvedValue({
+      accountId: "default",
+      configured: true,
+      tokenSource: "config",
+      tokenStatus: "configured_unavailable",
+      enabled: true,
+    });
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {
+        channels: {
+          discord: { enabled: true },
+        },
+      },
+    });
+
+    await channelsListCommand({ all: true }, runtime);
+
+    const output = stripAnsi(loggedText(runtime));
+    expect(output).toContain("configured");
+    expect(output).toContain("token=config-unavailable");
   });
 
   it("default output does NOT show installable catalog channels (only configured ones)", async () => {

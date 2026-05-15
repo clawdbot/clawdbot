@@ -1,6 +1,7 @@
 import {
   createProviderHttpError,
   formatProviderHttpErrorMessage,
+  readProviderJsonResponse,
 } from "openclaw/plugin-sdk/provider-http";
 import {
   buildSearchCacheKey,
@@ -196,13 +197,7 @@ async function runGeminiSearch(params: {
         throw new Error(error.message.replace(/key=[^&\s]+/giu, "key=***"));
       }
 
-      let data: GeminiGroundingResponse;
-      try {
-        data = (await res.json()) as GeminiGroundingResponse;
-      } catch (error) {
-        const safeError = String(error).replace(/key=[^&\s]+/giu, "key=***");
-        throw new Error(`Gemini API returned invalid JSON: ${safeError}`, { cause: error });
-      }
+      const data = await readProviderJsonResponse<GeminiGroundingResponse>(res, "Gemini API error");
 
       if (data.error) {
         const rawMessage = data.error.message || data.error.status || "unknown";

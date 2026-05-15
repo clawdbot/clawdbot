@@ -58,7 +58,7 @@ async function writeWizardConfigFile(config: OpenClawConfig): Promise<OpenClawCo
   const committed = await commitConfigWriteWithPendingPluginInstalls({
     nextConfig: config,
     commit: async (nextConfig, writeOptions) => {
-      await replaceConfigFile({
+      return await replaceConfigFile({
         nextConfig,
         writeOptions: { ...writeOptions, allowConfigSizeDrop: true },
         afterWrite: { mode: "auto" },

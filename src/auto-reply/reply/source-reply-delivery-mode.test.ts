@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { CommandTurnContext } from "../command-turn-context.js";
 import {
   resolveSourceReplyDeliveryMode,
   resolveSourceReplyVisibilityPolicy,
@@ -122,6 +123,56 @@ describe("resolveSourceReplyDeliveryMode", () => {
           CommandSource: "text",
           CommandAuthorized: false,
           CommandBody: "/status",
+        },
+      }),
+    ).toBe("message_tool_only");
+  });
+
+  it("uses structured command-turn context for cross-channel visible command replies", () => {
+    const entries: Array<{ surface: string; commandTurn: CommandTurnContext }> = [
+      {
+        surface: "whatsapp",
+        commandTurn: { kind: "text-slash", source: "text", authorized: true, body: "/status" },
+      },
+      {
+        surface: "telegram",
+        commandTurn: { kind: "native", source: "native", authorized: true, body: "/status" },
+      },
+      {
+        surface: "discord",
+        commandTurn: { kind: "text-slash", source: "text", authorized: true, body: "/status" },
+      },
+      {
+        surface: "webchat",
+        commandTurn: { kind: "text-slash", source: "text", authorized: true, body: "/status" },
+      },
+    ];
+    for (const entry of entries) {
+      expect(
+        resolveSourceReplyDeliveryMode({
+          cfg: emptyConfig,
+          ctx: {
+            ChatType: "group",
+            CommandTurn: entry.commandTurn,
+          },
+        }),
+        entry.surface,
+      ).toBe("automatic");
+    }
+  });
+
+  it("does not make unauthorized text slash command turns visible in groups", () => {
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: emptyConfig,
+        ctx: {
+          ChatType: "group",
+          CommandTurn: {
+            kind: "text-slash",
+            source: "text",
+            authorized: false,
+            body: "/status",
+          },
         },
       }),
     ).toBe("message_tool_only");

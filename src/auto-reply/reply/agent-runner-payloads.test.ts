@@ -4,6 +4,7 @@ import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
   getReplyPayloadMetadata,
   markReplyPayloadForSourceSuppressionDelivery,
+  setReplyPayloadMetadata,
 } from "../reply-payload.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
 
@@ -85,6 +86,37 @@ describe("buildReplyPayloads media filter integration", () => {
     expectFields(getReplyPayloadMetadata(replyPayloads[0]), {
       deliverDespiteSourceReplySuppression: true,
     });
+  });
+
+  it("sanitizes source reply transcript mirror text with final payload text", async () => {
+    const text = [
+      "Visible",
+      "<function_response>",
+      'Searching for: "what skills matter most in the age of AI"',
+      "...",
+      "</function_response>",
+      "Done",
+    ].join("\n");
+    const payload = setReplyPayloadMetadata(
+      { text },
+      {
+        sourceReplyTranscriptMirror: {
+          sessionKey: "agent:main",
+          text,
+        },
+      },
+    );
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      payloads: [payload],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]?.text).toBe("Visible\n\nDone");
+    expect(getReplyPayloadMetadata(replyPayloads[0])?.sourceReplyTranscriptMirror?.text).toBe(
+      "Visible\n\nDone",
+    );
   });
 
   it("strips media URL from payload when in messagingToolSentMediaUrls", async () => {

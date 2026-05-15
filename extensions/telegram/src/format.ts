@@ -165,6 +165,11 @@ const AUTO_LINKED_ANCHOR_PATTERN = /<a\s+href="https?:\/\/([^"]+)"[^>]*>\1<\/a>/
 const HTML_TAG_PATTERN = /(<\/?)([a-zA-Z][a-zA-Z0-9-]*)\b[^>]*?>/gi;
 const HTML_MODE_TAG_PATTERN = /^<(\/?)([a-zA-Z][a-zA-Z0-9-]*)([^<>]*)>$/;
 const ESCAPED_HTML_TAG_PATTERN = /&lt;(\/?)([a-zA-Z][a-zA-Z0-9-]*)(.*?)&gt;/g;
+const TELEGRAM_HTML_ANCHOR_PATTERN =
+  /<a\b[^>]*\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))[^>]*>([\s\S]*?)<\/a\s*>/gi;
+const TELEGRAM_HTML_BREAK_PATTERN = /<br\s*\/?>/gi;
+const TELEGRAM_HTML_ENTITY_PATTERN = /&(#x[0-9A-Fa-f]+|#\d+|amp|lt|gt|quot|apos);/g;
+const TELEGRAM_HTML_TAG_PATTERN = /<[^>]*>/g;
 const TELEGRAM_SIMPLE_HTML_TAGS = new Set([
   "b",
   "strong",
@@ -272,6 +277,88 @@ function escapeUnsupportedTelegramHtml(text: string): string {
     index += 1;
   }
   return result;
+}
+
+function decodeTelegramHtmlEntity(entity: string, fallback: string): string {
+  if (entity.startsWith("#x") || entity.startsWith("#X")) {
+    const codePoint = Number.parseInt(entity.slice(2), 16);
+    return Number.isInteger(codePoint) && codePoint >= 0 && codePoint <= 0x10ffff
+      ? String.fromCodePoint(codePoint)
+      : fallback;
+  }
+  if (entity.startsWith("#")) {
+    const codePoint = Number.parseInt(entity.slice(1), 10);
+    return Number.isInteger(codePoint) && codePoint >= 0 && codePoint <= 0x10ffff
+      ? String.fromCodePoint(codePoint)
+      : fallback;
+  }
+  switch (entity) {
+    case "amp":
+      return "&";
+    case "lt":
+      return "<";
+    case "gt":
+      return ">";
+    case "quot":
+      return '"';
+    case "apos":
+      return "'";
+    default:
+      return fallback;
+  }
+}
+
+function decodeTelegramHtmlEntities(text: string): string {
+  return text.replace(TELEGRAM_HTML_ENTITY_PATTERN, (match, entity: string) =>
+    decodeTelegramHtmlEntity(entity, match),
+  );
+}
+
+function stripTelegramHtmlForPlainText(html: string): string {
+  return decodeTelegramHtmlEntities(
+    html.replace(TELEGRAM_HTML_BREAK_PATTERN, "\n").replace(TELEGRAM_HTML_TAG_PATTERN, ""),
+  );
+}
+
+function encodePlainTextForTelegramHtmlStrip(text: string): string {
+  return text.replace(/[&<>]/g, (char) => {
+    switch (char) {
+      case "&":
+        return "&amp;";
+      case "<":
+        return "&lt;";
+      case ">":
+        return "&gt;";
+      default:
+        return char;
+    }
+  });
+}
+
+export function telegramHtmlToPlainTextFallback(html: string): string {
+  TELEGRAM_HTML_ANCHOR_PATTERN.lastIndex = 0;
+  const withPlainLinks = html.replace(
+    TELEGRAM_HTML_ANCHOR_PATTERN,
+    (
+      _match: string,
+      doubleQuotedHref: string | undefined,
+      singleQuotedHref: string | undefined,
+      unquotedHref: string | undefined,
+      labelHtml: string,
+    ) => {
+      const href = decodeTelegramHtmlEntities(
+        doubleQuotedHref ?? singleQuotedHref ?? unquotedHref ?? "",
+      ).trim();
+      const label = stripTelegramHtmlForPlainText(labelHtml).trim();
+      if (!href) {
+        return encodePlainTextForTelegramHtmlStrip(label);
+      }
+      return encodePlainTextForTelegramHtmlStrip(
+        !label || label === href ? href : `${label} (${href})`,
+      );
+    },
+  );
+  return stripTelegramHtmlForPlainText(withPlainLinks);
 }
 
 function promoteEscapedSupportedTelegramTags(text: string, openTags: string[]): string {

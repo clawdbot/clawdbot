@@ -181,6 +181,7 @@ type ConfigHealthState = {
 };
 
 export type ParseConfigJson5Result = { ok: true; parsed: unknown } | { ok: false; error: string };
+export type ConfigWriteResult = { persistedHash: string; persistedConfig: OpenClawConfig };
 export type ConfigWriteOptions = {
   /**
    * Read-time env snapshot used to validate `${VAR}` restoration decisions.
@@ -2415,7 +2416,7 @@ export async function readSourceConfigSnapshotForWrite(): Promise<ReadConfigFile
 export async function writeConfigFile(
   cfg: OpenClawConfig,
   options: ConfigWriteOptions = {},
-): Promise<void> {
+): Promise<ConfigWriteResult> {
   const io = createConfigIO(options.skipPluginValidation ? { pluginValidation: "skip" } : {});
   assertConfigWriteAllowedInCurrentMode({ configPath: io.configPath });
   let nextCfg = cfg;
@@ -2451,7 +2452,7 @@ export async function writeConfigFile(
     !hadRuntimeSnapshot &&
     !getRuntimeConfigSnapshotRefreshHandlerState()
   ) {
-    return;
+    return writeResult;
   }
   // Re-read the freshly persisted file so the sourceConfig we publish matches
   // exactly what readConfigFileSnapshot() will produce when the file-watcher
@@ -2505,4 +2506,5 @@ export async function writeConfigFile(
         { cause },
       ),
   });
+  return { ...writeResult, persistedConfig: canonicalSourceConfig };
 }

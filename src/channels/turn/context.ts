@@ -1,3 +1,4 @@
+import type { CommandTurnContext } from "../../auto-reply/command-turn-context.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { ContextVisibilityMode } from "../../config/types.base.js";
@@ -28,6 +29,7 @@ export type BuildChannelTurnContextParams = {
   reply: ReplyPlanFacts;
   message: MessageFacts;
   access?: AccessFacts;
+  commandTurn?: CommandTurnContext;
   media?: InboundMediaFacts[];
   supplemental?: SupplementalContextFacts;
   contextVisibility?: ContextVisibilityMode;
@@ -182,6 +184,7 @@ export function buildChannelTurnContext(
     Surface: params.surface ?? params.provider ?? params.channel,
     WasMentioned: params.access?.mentions?.wasMentioned,
     CommandAuthorized: resolveAccessFactsCommandAuthorized(params.access) === true,
+    CommandTurn: params.commandTurn,
     MessageThreadId: params.reply.messageThreadId ?? params.conversation.threadId,
     NativeChannelId: params.reply.nativeChannelId ?? params.conversation.nativeChannelId,
     OriginatingChannel: params.channel,

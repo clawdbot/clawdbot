@@ -35,6 +35,7 @@ type HandshakeConnectAuth = {
   bootstrapToken?: string;
   deviceToken?: string;
   password?: string;
+  approvalRuntimeToken?: string;
 };
 
 function resolveBrowserOriginRateLimitKey(requestOrigin?: string): string {

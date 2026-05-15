@@ -388,7 +388,7 @@ Prefer the narrowest metadata that already describes ownership. Use
 when those fields express the relationship. Use `activation` for extra planner
 hints that cannot be represented by those ownership fields.
 Use top-level `cliBackends` for CLI runtime aliases such as `claude-cli`,
-`codex-cli`, or `google-gemini-cli`; `activation.onAgentHarnesses` is only for
+`my-cli`, or `google-gemini-cli`; `activation.onAgentHarnesses` is only for
 embedded agent harness ids that do not already have an ownership field.
 
 This block is metadata only. It does not register runtime behavior, and it does

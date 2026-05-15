@@ -1313,9 +1313,8 @@ describe("migrateApplyCommand", () => {
     expect(mocks.backupCreateCommand).not.toHaveBeenCalled();
   });
 
-  it("includes Codex app verification warnings in JSON dry-run output", async () => {
-    const warning =
-      "Codex app-backed plugins were planned without source app accessibility verification.";
+  it("includes provider warnings in JSON dry-run output", async () => {
+    const warning = "Provider warning.";
     const planned = codexPluginPlan({ warnings: [warning] });
     const logs: string[] = [];
     const errors: string[] = [];
@@ -1340,46 +1339,5 @@ describe("migrateApplyCommand", () => {
     expect(errors).toEqual([]);
     const logPayload = JSON.parse(logs[0] ?? "{}") as { warnings?: unknown };
     expect(logPayload.warnings).toEqual([warning]);
-  });
-
-  it("drops Codex app verification warning after plugin selection excludes app-backed items", async () => {
-    const warning =
-      "Codex app-backed plugins were planned without source app accessibility verification.";
-    const base = codexPluginPlan();
-    const items = [...base.items];
-    const gmailIndex = items.findIndex((item) => item.id === "plugin:gmail");
-    const gmailItem = items[gmailIndex];
-    if (!gmailItem) {
-      throw new Error("Expected gmail plugin item");
-    }
-    items[gmailIndex] = {
-      ...gmailItem,
-      details: {
-        ...gmailItem.details,
-        sourceAppVerification: "not_run",
-      },
-    };
-    const planned = codexPluginPlan({
-      warnings: [warning],
-      items,
-    });
-    const logs: string[] = [];
-    const jsonRuntime: RuntimeEnv = {
-      ...runtime,
-      log(message) {
-        logs.push(String(message));
-      },
-    };
-    mocks.provider.plan.mockResolvedValue(planned);
-
-    await migrateDefaultCommand(jsonRuntime, {
-      provider: "codex",
-      plugins: ["google-calendar"],
-      dryRun: true,
-      json: true,
-    });
-
-    const logPayload = JSON.parse(logs[0] ?? "{}") as { warnings?: unknown };
-    expect(logPayload.warnings).toBeUndefined();
   });
 });

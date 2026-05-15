@@ -42,6 +42,7 @@ const transformConfigWithPendingPluginInstallsMock = vi.hoisted(() =>
       return {
         path: snapshot.path ?? "/tmp/openclaw.json",
         previousHash: snapshot.hash ?? null,
+        persistedHash: "persisted-hash",
         snapshot,
         nextConfig: transformed.nextConfig,
         result: transformed.result,

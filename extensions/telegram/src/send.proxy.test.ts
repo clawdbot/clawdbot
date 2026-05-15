@@ -18,8 +18,8 @@ const { makeProxyFetch } = vi.hoisted(() => ({
   makeProxyFetch: vi.fn(),
 }));
 
-const { resolveTelegramFetch } = vi.hoisted(() => ({
-  resolveTelegramFetch: vi.fn(),
+const { resolveTelegramTransport } = vi.hoisted(() => ({
+  resolveTelegramTransport: vi.fn(),
 }));
 
 const resolveTelegramApiBase = vi.hoisted(
@@ -41,7 +41,7 @@ vi.mock("./proxy.js", () => ({
 }));
 
 vi.mock("./fetch.js", () => ({
-  resolveTelegramFetch,
+  resolveTelegramTransport,
   resolveTelegramApiBase,
 }));
 
@@ -81,17 +81,22 @@ describe("telegram proxy client", () => {
     const proxyFetch = vi.fn();
     const fetchImpl = vi.fn();
     makeProxyFetch.mockReturnValue(proxyFetch as unknown as typeof fetch);
-    resolveTelegramFetch.mockReturnValue(fetchImpl as unknown as typeof fetch);
+    resolveTelegramTransport.mockReturnValue({
+      fetch: fetchImpl as unknown as typeof fetch,
+      sourceFetch: fetchImpl as unknown as typeof fetch,
+      close: vi.fn(async () => undefined),
+    });
     return { proxyFetch, fetchImpl };
   };
 
-  const expectProxyClient = (params: {
-    proxyFetch: ReturnType<typeof vi.fn>;
-    fetchImpl: ReturnType<typeof vi.fn>;
-  }) => {
+  const expectProxyClient = (params: { proxyFetch: ReturnType<typeof vi.fn> }) => {
     expect(makeProxyFetch).toHaveBeenCalledWith(proxyUrl);
-    expect(resolveTelegramFetch).toHaveBeenCalledWith(params.proxyFetch, { network: undefined });
-    expect(botCtorSpy).toHaveBeenCalledWith("tok", { client: { fetch: params.fetchImpl } });
+    expect(resolveTelegramTransport).toHaveBeenCalledWith(params.proxyFetch, {
+      network: undefined,
+    });
+    expect(botCtorSpy).toHaveBeenCalledWith("tok", {
+      client: { fetch: expect.any(Function) },
+    });
   };
 
   beforeAll(async () => {
@@ -113,7 +118,7 @@ describe("telegram proxy client", () => {
     botCtorSpy.mockClear();
     loadConfig.mockReturnValue(TELEGRAM_PROXY_CFG);
     makeProxyFetch.mockClear();
-    resolveTelegramFetch.mockClear();
+    resolveTelegramTransport.mockClear();
   });
 
   it("reuses cached Telegram client options for repeated sends with same account transport settings", async () => {
@@ -133,11 +138,12 @@ describe("telegram proxy client", () => {
     });
 
     expect(makeProxyFetch).toHaveBeenCalledTimes(1);
-    expect(resolveTelegramFetch).toHaveBeenCalledTimes(1);
+    expect(resolveTelegramTransport).toHaveBeenCalledTimes(1);
     expect(botCtorSpy).toHaveBeenCalledTimes(2);
-    expect(resolveTelegramFetch).toHaveBeenCalledWith(proxyFetch, { network: undefined });
-    expect(botCtorSpy).toHaveBeenNthCalledWith(1, "tok", { client: { fetch: fetchImpl } });
-    expect(botCtorSpy).toHaveBeenNthCalledWith(2, "tok", { client: { fetch: fetchImpl } });
+    expect(resolveTelegramTransport).toHaveBeenCalledWith(proxyFetch, { network: undefined });
+    const firstOptions = botCtorSpy.mock.calls[0]?.[1];
+    expect(firstOptions).toEqual({ client: { fetch: expect.any(Function) } });
+    expect(botCtorSpy).toHaveBeenNthCalledWith(2, "tok", firstOptions);
   });
 
   it.each([
@@ -169,10 +175,40 @@ describe("telegram proxy client", () => {
         }),
     },
   ])("uses proxy fetch for $name", async (testCase) => {
-    const { proxyFetch, fetchImpl } = prepareProxyFetch();
+    const { proxyFetch } = prepareProxyFetch();
 
     await testCase.run();
 
-    expectProxyClient({ proxyFetch, fetchImpl });
+    expectProxyClient({ proxyFetch });
+  });
+
+  it("wraps direct delete clients with the Telegram deleteMessage request timeout", async () => {
+    vi.useFakeTimers();
+    const { fetchImpl } = prepareProxyFetch();
+    fetchImpl.mockImplementation(
+      (_input: RequestInfo | URL, init?: RequestInit) =>
+        new Promise((_resolve, reject) => {
+          const signal = init?.signal as AbortSignal;
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        }),
+    );
+
+    await deleteMessageTelegram("123", "456", {
+      cfg: TELEGRAM_PROXY_CFG,
+      token: "tok",
+      accountId: "foo",
+    });
+    const clientFetch = (botCtorSpy.mock.calls.at(-1)?.[1] as { client?: { fetch?: unknown } })
+      ?.client?.fetch as (input: RequestInfo | URL, init?: RequestInit) => Promise<unknown>;
+
+    const resultPromise = clientFetch("https://api.telegram.org/bot123456:ABC/deleteMessage");
+    const rejection = expect(resultPromise).rejects.toThrow(
+      "Telegram deletemessage timed out after 15000ms",
+    );
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    await rejection;
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
   });
 });

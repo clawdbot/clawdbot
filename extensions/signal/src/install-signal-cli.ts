@@ -297,7 +297,14 @@ export async function installSignalCliFromRelease(
         error: `Failed to fetch release info (${response.status})`,
       };
     }
-    payload = (await response.json()) as ReleaseResponse;
+    try {
+      payload = (await response.json()) as ReleaseResponse;
+    } catch {
+      return {
+        ok: false,
+        error: "Failed to parse signal-cli release info.",
+      };
+    }
   } finally {
     await release();
   }

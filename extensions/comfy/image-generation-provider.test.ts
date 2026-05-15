@@ -201,6 +201,36 @@ describe("comfy image-generation provider", () => {
     });
   });
 
+  it("reports malformed local workflow submit JSON as a provider error", async () => {
+    _setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response("{ nope", {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+      release,
+    });
+
+    const provider = buildComfyImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "comfy",
+        model: "workflow",
+        prompt: "draw a lobster",
+        cfg: buildComfyConfig({
+          workflow: {
+            "6": { inputs: { text: "" } },
+            "9": { inputs: {} },
+          },
+          promptNodeId: "6",
+          outputNodeId: "9",
+        }),
+      }),
+    ).rejects.toThrow("Comfy workflow submit failed: malformed JSON response");
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("uploads reference images for local edit workflows", async () => {
     _setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
     fetchWithSsrFGuardMock

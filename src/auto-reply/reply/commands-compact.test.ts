@@ -20,8 +20,12 @@ vi.mock("./commands-compact.runtime.js", () => ({
   waitForEmbeddedPiRunEnd: vi.fn().mockResolvedValue(undefined),
 }));
 
-const { compactEmbeddedPiSession, incrementCompactionCount, resolveSessionFilePathOptions } =
-  await import("./commands-compact.runtime.js");
+const {
+  compactEmbeddedPiSession,
+  formatContextUsageShort,
+  incrementCompactionCount,
+  resolveSessionFilePathOptions,
+} = await import("./commands-compact.runtime.js");
 const { handleCompactCommand } = await import("./commands-compact.js");
 
 function buildCompactParams(
@@ -341,5 +345,55 @@ describe("handleCompactCommand", () => {
     }
     expect(call.sessionEntry.sessionId).toBe("target-session");
     expect(call.tokensAfter).toBe(321);
+  });
+
+  it("resolves /compact context budget from the active Codex runtime config instead of stale session metadata", async () => {
+    vi.mocked(compactEmbeddedPiSession).mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      result: {
+        summary: "compacted",
+        firstKeptEntryId: "first-kept",
+        tokensBefore: 199_000,
+        tokensAfter: 56_000,
+      },
+    });
+
+    await handleCompactCommand(
+      {
+        ...buildCompactParams("/compact", {
+          agents: {
+            defaults: {
+              models: {
+                "openai/gpt-5.5": {
+                  agentRuntime: { id: "codex" },
+                },
+              },
+            },
+          },
+          commands: { text: true },
+          channels: { whatsapp: { allowFrom: ["*"] } },
+          models: {
+            providers: {
+              "openai-codex": {
+                models: [{ id: "gpt-5.5", contextWindow: 258_000 }],
+              },
+            },
+          },
+        } as unknown as OpenClawConfig),
+        provider: "openai",
+        model: "openai/gpt-5.5",
+        contextTokens: 0,
+        sessionEntry: {
+          sessionId: "live-session",
+          updatedAt: Date.now(),
+          contextTokens: 400_000,
+        },
+      } as HandleCommandsParams,
+      true,
+    );
+
+    expect(requireCompactEmbeddedPiSessionCall().contextTokenBudget).toBe(258_000);
+    expect(vi.mocked(formatContextUsageShort)).toHaveBeenLastCalledWith(56_000, 258_000);
   });
 });

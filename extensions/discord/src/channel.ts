@@ -651,6 +651,11 @@ export const discordPlugin: ChannelPlugin<ResolvedDiscordAccount, DiscordProbe> 
       gateway: {
         startAccount: async (ctx) => {
           const account = ctx.account;
+          if (account.tokenStatus === "configured_unavailable") {
+            throw new Error(
+              `Discord bot token configured for account "${account.accountId}" is unavailable; resolve SecretRefs against the active runtime snapshot before using this account.`,
+            );
+          }
           const startupDelayMs = resolveDiscordStartupDelayMs(ctx.cfg, account.accountId);
           if (startupDelayMs > 0) {
             ctx.log?.info(

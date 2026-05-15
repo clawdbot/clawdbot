@@ -175,6 +175,37 @@ describe("xai code_execution tool", () => {
     expect(firstAuthorizationHeader(mockFetch)).toBe("Bearer xai-plugin-key");
   });
 
+  it("reports malformed code_execution JSON as a provider error", async () => {
+    const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.reject(new SyntaxError("Unexpected token")),
+      } as Response),
+    );
+    global.fetch = withFetchPreconnect(mockFetch);
+    const tool = createCodeExecutionTool({
+      config: {
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                webSearch: {
+                  apiKey: "xai-plugin-key", // pragma: allowlist secret
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    await expect(
+      tool?.execute?.("code-execution:malformed-json", {
+        task: "Calculate the mean of [40, 42, 44]",
+      }),
+    ).rejects.toThrow("xAI code execution failed: malformed JSON response");
+  });
+
   it("reuses the legacy grok web search key for code_execution requests", async () => {
     const mockFetch = installCodeExecutionFetch();
     const tool = createCodeExecutionTool({

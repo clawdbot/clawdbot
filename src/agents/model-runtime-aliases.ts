@@ -8,23 +8,52 @@ type LegacyRuntimeModelProviderAlias = {
   legacyProvider: string;
   /** Canonical provider id that should own model selection. */
   provider: string;
-  /** Runtime/backend id that preserves the old execution behavior. */
+  /** Runtime/backend id selected for the migrated ref. */
   runtime: string;
   /** True when the runtime is a CLI backend rather than an embedded harness. */
   cli: boolean;
+  /** True when doctor must write a runtime policy even if the target runtime is the default. */
+  requiresRuntimePolicy: boolean;
 };
 
 const LEGACY_RUNTIME_MODEL_PROVIDER_ALIASES = [
-  { legacyProvider: "codex", provider: "openai", runtime: "codex", cli: false },
-  { legacyProvider: "codex-cli", provider: "openai", runtime: "codex-cli", cli: true },
-  { legacyProvider: "claude-cli", provider: "anthropic", runtime: "claude-cli", cli: true },
+  {
+    legacyProvider: "codex",
+    provider: "openai",
+    runtime: "codex",
+    cli: false,
+    requiresRuntimePolicy: false,
+  },
+  {
+    legacyProvider: "codex-cli",
+    provider: "openai",
+    runtime: "codex",
+    cli: false,
+    requiresRuntimePolicy: true,
+  },
+  {
+    legacyProvider: "claude-cli",
+    provider: "anthropic",
+    runtime: "claude-cli",
+    cli: true,
+    requiresRuntimePolicy: true,
+  },
   {
     legacyProvider: "google-gemini-cli",
     provider: "google",
     runtime: "google-gemini-cli",
     cli: true,
+    requiresRuntimePolicy: true,
   },
 ] as const satisfies readonly LegacyRuntimeModelProviderAlias[];
+
+export function legacyRuntimeModelAliasRequiresRuntimePolicy(provider: string): boolean {
+  return (
+    LEGACY_RUNTIME_MODEL_PROVIDER_ALIASES.find(
+      (entry) => normalizeProviderId(entry.legacyProvider) === normalizeProviderId(provider),
+    )?.requiresRuntimePolicy === true
+  );
+}
 
 const LEGACY_ALIAS_BY_PROVIDER = new Map(
   LEGACY_RUNTIME_MODEL_PROVIDER_ALIASES.map((entry) => [
@@ -56,7 +85,7 @@ export function listLegacyRuntimeModelProviderAliases(): readonly LegacyRuntimeM
   return LEGACY_RUNTIME_MODEL_PROVIDER_ALIASES;
 }
 
-/** True for CLI runtime provider ids such as `claude-cli` and `codex-cli`. */
+/** True for CLI runtime provider ids such as `claude-cli` and `google-gemini-cli`. */
 export function isCliRuntimeProvider(provider: string): boolean {
   return CLI_RUNTIME_PROVIDER_IDS.has(normalizeProviderId(provider));
 }

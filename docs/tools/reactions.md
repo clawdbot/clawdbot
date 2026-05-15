@@ -50,6 +50,7 @@ tool with the `react` action. Reaction behavior varies by channel and transport.
   <Accordion title="WhatsApp">
     - Empty `emoji` removes the bot reaction.
     - `remove: true` maps to empty emoji internally (still requires `emoji` in the tool call).
+    - WhatsApp has one bot reaction slot per message; status reaction updates replace that slot rather than stacking multiple emoji.
 
   </Accordion>
 

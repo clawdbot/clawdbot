@@ -62,6 +62,7 @@ import {
   shouldPreferExplicitConfigApiKeyAuth,
 } from "../model-auth.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
+import { resolveContextConfigProviderForRuntime } from "../openai-codex-routing.js";
 import {
   retireSessionMcpRuntime,
   retireSessionMcpRuntimeForSessionKey,
@@ -188,16 +189,6 @@ const MID_TURN_PRECHECK_CONTINUATION_PROMPT =
 const COMPACTION_CONTINUATION_RETRY_INSTRUCTION =
   "The previous attempt compacted the conversation context before producing a final user-visible answer. Continue from the compacted transcript and produce the final answer now. Do not restart from scratch, do not repeat completed work, and do not rerun tools unless the transcript clearly lacks required evidence.";
 type EmbeddedRunAttemptForRunner = Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
-
-function resolveHarnessContextConfigProvider(params: {
-  provider: string;
-  harnessId: string;
-}): string {
-  if (params.harnessId === "codex" && params.provider.trim().toLowerCase() === "openai") {
-    return "openai-codex";
-  }
-  return params.provider;
-}
 
 function resolveEmbeddedRunLaneTimeoutMs(timeoutMs: number): number | undefined {
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
@@ -597,9 +588,9 @@ export async function runEmbeddedPiAgent(
       const resolvedRuntimeModel = resolveEffectiveRuntimeModel({
         cfg: params.config,
         provider,
-        contextConfigProvider: resolveHarnessContextConfigProvider({
+        contextConfigProvider: resolveContextConfigProviderForRuntime({
           provider,
-          harnessId: agentHarness.id,
+          runtimeId: agentHarness.id,
         }),
         modelId,
         runtimeModel,
@@ -1297,6 +1288,7 @@ export async function runEmbeddedPiAgent(
             allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
             contextEngine,
             contextTokenBudget: ctxInfo.tokens,
+            contextWindowInfo: ctxInfo,
             skillsSnapshot: params.skillsSnapshot,
             prompt,
             transcriptPrompt: params.transcriptPrompt,

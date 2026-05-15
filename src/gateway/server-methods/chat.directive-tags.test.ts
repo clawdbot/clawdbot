@@ -756,7 +756,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
 
     await waitForAssertion(() => {
-      const assistantUpdate = findAssistantUpdateWithBlock((block) => block.type === "audio");
+      const assistantUpdate = findAssistantUpdateWithBlock((block) => block.type === "attachment");
       const message = assistantUpdate?.message as Record<string, any> | undefined;
       const content = Array.isArray(message?.content)
         ? (message.content as Array<Record<string, any>>)
@@ -764,9 +764,15 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(message?.role).toBe("assistant");
       expect(message?.idempotencyKey).toBe("idem-agent-audio:assistant-media");
       expect(content[0]).toEqual({ type: "text", text: "Audio reply" });
-      expect(content[1]?.type).toBe("audio");
-      expect(content[1]?.source?.type).toBe("base64");
-      expect(content[1]?.source?.media_type).toBe("audio/mpeg");
+      expect(content[1]).toEqual({
+        type: "attachment",
+        attachment: {
+          url: fs.realpathSync(audioPath),
+          kind: "audio",
+          label: "reply.mp3",
+          mimeType: "audio/mpeg",
+        },
+      });
     });
   });
 
@@ -820,9 +826,16 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(message?.role).toBe("assistant");
     expect(message?.idempotencyKey).toBe("idem-agent-tts:assistant-media");
     expect(content[0]).toEqual({ type: "text", text: "Audio reply" });
-    expect(content[1]?.type).toBe("audio");
-    expect(content[1]?.source?.type).toBe("base64");
-    expect(content[1]?.source?.media_type).toBe("audio/mpeg");
+    expect(content[1]).toEqual({
+      type: "attachment",
+      attachment: {
+        url: fs.realpathSync(audioPath),
+        kind: "audio",
+        label: "tts.mp3",
+        mimeType: "audio/mpeg",
+        isVoiceNote: true,
+      },
+    });
     expect(JSON.stringify(assistantUpdates[0]?.message)).not.toContain(
       "This text is already in the model transcript.",
     );
@@ -957,9 +970,16 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const content = getMessageContent(payload);
     expect(getMessage(payload)?.role).toBe("assistant");
     expect(content[0]).toEqual({ type: "text", text: "Command result with TTS." });
-    expect(content[1]?.type).toBe("audio");
-    expect(content[1]?.source?.type).toBe("base64");
-    expect(content[1]?.source?.media_type).toBe("audio/mpeg");
+    expect(content[1]).toEqual({
+      type: "attachment",
+      attachment: {
+        url: fs.realpathSync(audioPath),
+        kind: "audio",
+        label: "tts.mp3",
+        mimeType: "audio/mpeg",
+        isVoiceNote: true,
+      },
+    });
     const assistantUpdates = mockState.emittedTranscriptUpdates.filter(
       (update) =>
         typeof update.message === "object" &&

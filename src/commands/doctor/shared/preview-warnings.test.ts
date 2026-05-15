@@ -22,6 +22,10 @@ const manifestState = vi.hoisted(
     },
 );
 
+const staleOAuthShadowState = vi.hoisted(() => ({
+  warnings: [] as string[],
+}));
+
 vi.mock("../channel-capabilities.js", () => {
   const fallback = {
     dmAllowFromMode: "topOnly",
@@ -156,6 +160,13 @@ vi.mock("./bundled-plugin-load-paths.js", () => ({
     ),
 }));
 
+vi.mock("./stale-oauth-profile-shadows.js", () => ({
+  scanStaleOAuthProfileShadows: () =>
+    staleOAuthShadowState.warnings.map((warning, index) => ({ profileId: String(index), warning })),
+  collectStaleOAuthProfileShadowWarnings: ({ hits }: { hits: Array<{ warning: string }> }) =>
+    hits.map((hit) => hit.warning),
+}));
+
 function manifest(id: string): TestManifestRecord {
   return {
     id,
@@ -199,6 +210,7 @@ describe("doctor preview warnings", () => {
   beforeEach(() => {
     manifestState.plugins = [manifest("discord")];
     manifestState.diagnostics = [];
+    staleOAuthShadowState.warnings = [];
   });
 
   afterEach(() => {
@@ -306,6 +318,19 @@ describe("doctor preview warnings", () => {
       `plugins.load.paths: legacy bundled plugin path "${legacyPath}"`,
     );
     expect(warning).toContain('Run "openclaw doctor --fix"');
+  });
+
+  it("includes stale OAuth profile shadow warnings", async () => {
+    staleOAuthShadowState.warnings = [
+      '- ~/.openclaw/agents/telegram/agent/auth-profiles.json has stale OAuth auth profile openai-codex:default. Run "openclaw doctor --fix".',
+    ];
+
+    const warnings = await collectDoctorPreviewWarnings({
+      cfg: {},
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expectSingleWarningContaining(warnings, "stale OAuth auth profile openai-codex:default");
   });
 
   it("warns but skips auto-removal when plugin discovery has errors", async () => {
@@ -436,7 +461,7 @@ describe("doctor preview warnings", () => {
         },
       },
       tools: {
-        profile: "coding",
+        allow: ["read"],
       },
     });
 
@@ -446,6 +471,99 @@ describe("doctor preview warnings", () => {
     );
     expect(warning).toContain("normal replies may post to the source chat");
     expect(warning).toContain('set messages.groupChat.visibleReplies to "automatic"');
+  });
+
+  it("does not warn when source reply delivery grants message at runtime", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.5",
+          },
+        },
+        list: [
+          {
+            id: "main",
+          },
+        ],
+      },
+      channels: {
+        discord: {},
+        telegram: {},
+      },
+      tools: {
+        profile: "coding" as const,
+      },
+    };
+
+    expect(collectVisibleReplyToolPolicyWarnings(cfg)).toStrictEqual([]);
+    expect(collectChannelBoundMessageToolPolicyWarnings(cfg)).toStrictEqual([]);
+  });
+
+  it("still warns when provider policy blocks the runtime message grant", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.5",
+          },
+        },
+        list: [
+          {
+            id: "main",
+          },
+        ],
+      },
+      channels: {
+        discord: {},
+      },
+      tools: {
+        profile: "coding" as const,
+        byProvider: {
+          openai: {
+            allow: ["read"],
+          },
+        },
+      },
+    };
+
+    expectWarningsContaining(collectVisibleReplyToolPolicyWarnings(cfg), [
+      'messages.groupChat.visibleReplies defaults to "message_tool"',
+    ]);
+    expect(collectChannelBoundMessageToolPolicyWarnings(cfg)).toEqual([
+      '- Agent "main" is routed from channel "discord", but the message tool is unavailable for that agent; explicit channel actions such as sendAttachment, upload-file, thread-reply, or reply can fail. Add "message" to the agent tool allowlist, add "group:messaging", or switch the agent to a profile that includes messaging tools.',
+    ]);
+  });
+
+  it("keeps provider-specific message grants when checking provider policy", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.5",
+          },
+        },
+        list: [
+          {
+            id: "main",
+          },
+        ],
+      },
+      channels: {
+        discord: {},
+      },
+      tools: {
+        profile: "coding" as const,
+        byProvider: {
+          openai: {
+            alsoAllow: ["message"],
+          },
+        },
+      },
+    };
+
+    expect(collectVisibleReplyToolPolicyWarnings(cfg)).toStrictEqual([]);
+    expect(collectChannelBoundMessageToolPolicyWarnings(cfg)).toStrictEqual([]);
   });
 
   it("warns for direct chats when global visible replies are tool-only but groups override automatic", () => {

@@ -225,7 +225,7 @@ describe("buildBootstrapContextFiles", () => {
 
 type BootstrapLimitResolverCase = {
   name: "bootstrapMaxChars" | "bootstrapTotalMaxChars";
-  resolve: (cfg?: OpenClawConfig) => number;
+  resolve: (cfg?: OpenClawConfig, agentId?: string | null) => number;
   defaultValue: number;
 };
 
@@ -255,6 +255,30 @@ describe("bootstrap limit resolvers", () => {
         agents: { defaults: { [resolver.name]: 12345 } },
       } as OpenClawConfig;
       expect(resolver.resolve(cfg)).toBe(12345);
+    }
+  });
+
+  it("uses per-agent values before defaults", () => {
+    for (const resolver of BOOTSTRAP_LIMIT_RESOLVERS) {
+      const cfg = {
+        agents: {
+          defaults: { [resolver.name]: 12345 },
+          list: [{ id: "worker", [resolver.name]: 6789 }],
+        },
+      } as OpenClawConfig;
+      expect(resolver.resolve(cfg, "worker")).toBe(6789);
+    }
+  });
+
+  it("falls back to defaults when the agent has no override", () => {
+    for (const resolver of BOOTSTRAP_LIMIT_RESOLVERS) {
+      const cfg = {
+        agents: {
+          defaults: { [resolver.name]: 12345 },
+          list: [{ id: "worker" }],
+        },
+      } as OpenClawConfig;
+      expect(resolver.resolve(cfg, "worker")).toBe(12345);
     }
   });
 

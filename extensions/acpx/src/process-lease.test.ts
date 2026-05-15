@@ -2,7 +2,15 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { createAcpxProcessLeaseStore, type AcpxProcessLease } from "./process-lease.js";
+import {
+  createAcpxProcessLeaseStore,
+  OPENCLAW_ACPX_LEASE_ID_ARG,
+  OPENCLAW_ACPX_LEASE_ID_ENV,
+  OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
+  OPENCLAW_GATEWAY_INSTANCE_ID_ENV,
+  withAcpxLeaseEnvironment,
+  type AcpxProcessLease,
+} from "./process-lease.js";
 
 function makeLease(index: number): AcpxProcessLease {
   return {
@@ -32,5 +40,50 @@ describe("createAcpxProcessLeaseStore", () => {
     } finally {
       await rm(stateDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("withAcpxLeaseEnvironment", () => {
+  it("adds lease environment and wrapper args on POSIX", () => {
+    const command = withAcpxLeaseEnvironment({
+      command: "node /tmp/openclaw/acpx/codex-acp-wrapper.mjs",
+      leaseId: "lease-test",
+      gatewayInstanceId: "gateway-test",
+      platform: "darwin",
+    });
+
+    expect(command).toBe(
+      [
+        "env",
+        `${OPENCLAW_ACPX_LEASE_ID_ENV}=lease-test`,
+        `${OPENCLAW_GATEWAY_INSTANCE_ID_ENV}=gateway-test`,
+        "node /tmp/openclaw/acpx/codex-acp-wrapper.mjs",
+        OPENCLAW_ACPX_LEASE_ID_ARG,
+        "lease-test",
+        OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
+        "gateway-test",
+      ].join(" "),
+    );
+  });
+
+  it("keeps Windows logs keyed by lease id with wrapper args", () => {
+    const command = withAcpxLeaseEnvironment({
+      command: "node C:/openclaw/acpx/codex-acp-wrapper.mjs",
+      leaseId: "lease-test",
+      gatewayInstanceId: "gateway-test",
+      platform: "win32",
+    });
+
+    expect(command).toBe(
+      [
+        "node C:/openclaw/acpx/codex-acp-wrapper.mjs",
+        OPENCLAW_ACPX_LEASE_ID_ARG,
+        "lease-test",
+        OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
+        "gateway-test",
+      ].join(" "),
+    );
+    expect(command).not.toContain(`${OPENCLAW_ACPX_LEASE_ID_ENV}=`);
+    expect(command).not.toContain(`${OPENCLAW_GATEWAY_INSTANCE_ID_ENV}=`);
   });
 });

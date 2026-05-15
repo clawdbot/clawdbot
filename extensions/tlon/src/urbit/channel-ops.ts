@@ -88,7 +88,11 @@ export async function scryUrbitPath(
     if (!response.ok) {
       throw new Error(`Scry failed: ${response.status} for path ${params.path}`);
     }
-    return await response.json();
+    try {
+      return await response.json();
+    } catch (cause) {
+      throw new Error(`Urbit scry response was malformed JSON for path ${params.path}`, { cause });
+    }
   } finally {
     await release();
   }

@@ -171,6 +171,31 @@ describe("createExecApprovalIosPushDelivery", () => {
     expect(sendApnsExecApprovalAlertMock).toHaveBeenCalledTimes(1);
   });
 
+  it("does not target iOS devices rejected by the approval visibility filter", async () => {
+    mockPairedIosOperator(["operator.approvals", "operator.read"]);
+    const isTargetVisible = vi.fn(() => false);
+
+    const delivery = createExecApprovalIosPushDelivery({ log: {} });
+
+    const accepted = await delivery.handleRequested(
+      {
+        id: "approval-filtered",
+        request: { command: "echo ok", host: "gateway", allowedDecisions: ["allow-once"] },
+        createdAtMs: 1,
+        expiresAtMs: 2,
+      },
+      { isTargetVisible },
+    );
+
+    expect(accepted).toBe(false);
+    expect(isTargetVisible).toHaveBeenCalledWith({
+      deviceId: "ios-device-1",
+      scopes: ["operator.approvals", "operator.read"],
+    });
+    expect(loadApnsRegistrationMock).not.toHaveBeenCalled();
+    expect(sendApnsExecApprovalAlertMock).not.toHaveBeenCalled();
+  });
+
   it("does not treat iOS as a live approval route when every push fails", async () => {
     const warn = vi.fn();
     mockPairedIosOperator(["operator.approvals", "operator.read"]);

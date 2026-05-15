@@ -158,6 +158,17 @@ describe("kimi web search provider", () => {
     });
   });
 
+  it("reports malformed Kimi API JSON with a stable provider error", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response("{ nope"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await withEnvAsync({ KIMI_API_KEY: "kimi-test-key" }, async () => {
+      await expect(executeKimiSearch("kimi malformed response")).rejects.toThrow(
+        "Kimi API error: malformed JSON response",
+      );
+    });
+  });
+
   it("accepts final responses backed by Kimi web search tool replay", async () => {
     const toolArguments = JSON.stringify({
       query: "OpenClaw GitHub repository",

@@ -100,8 +100,13 @@ export async function fetchLmstudioModels(params: {
           models: [],
         };
       }
-      // External service payload is untrusted JSON; parse with a permissive wire type.
-      const payload = (await response.json()) as LmstudioModelsResponseWire;
+      let payload: LmstudioModelsResponseWire;
+      try {
+        // External service payload is untrusted JSON; parse with a permissive wire type.
+        payload = (await response.json()) as LmstudioModelsResponseWire;
+      } catch (cause) {
+        throw new Error("LM Studio model list returned malformed JSON", { cause });
+      }
       return {
         reachable: true,
         status: response.status,
@@ -255,7 +260,12 @@ export async function ensureLmstudioModelLoaded(params: {
       const body = await response.text();
       throw new Error(`LM Studio model load failed (${response.status})${body ? `: ${body}` : ""}`);
     }
-    const payload = (await response.json()) as LmstudioLoadResponse;
+    let payload: LmstudioLoadResponse;
+    try {
+      payload = (await response.json()) as LmstudioLoadResponse;
+    } catch (cause) {
+      throw new Error("LM Studio model load returned malformed JSON", { cause });
+    }
     if (typeof payload.status === "string" && payload.status.toLowerCase() !== "loaded") {
       throw new Error(`LM Studio model load returned unexpected status: ${payload.status}`);
     }

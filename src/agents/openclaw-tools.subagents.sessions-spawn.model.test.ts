@@ -121,6 +121,29 @@ describe("subagent spawn model + thinking plan", () => {
     expect(plan.initialSessionPatch.modelOverrideSource).toBe("auto");
   });
 
+  it("prefers default subagent model over target agent primary model", () => {
+    const cfg = createConfig({
+      agents: {
+        defaults: { subagents: { model: "minimax/MiniMax-M2.7" } },
+        list: [{ id: "research", model: { primary: "opencode/claude" } }],
+      },
+    });
+    const targetAgentConfig = {
+      id: "research",
+      model: { primary: "opencode/claude" },
+    };
+    const plan = expectOkPlan(
+      resolveSubagentModelAndThinkingPlan({
+        cfg,
+        targetAgentId: "research",
+        targetAgentConfig,
+      }),
+    );
+    expect(plan.resolvedModel).toBe("minimax/MiniMax-M2.7");
+    expect(plan.initialSessionPatch.model).toBe("minimax/MiniMax-M2.7");
+    expect(plan.initialSessionPatch.modelOverrideSource).toBe("auto");
+  });
+
   it("prefers target agent primary model over global default", () => {
     const cfg = createConfig({
       agents: {

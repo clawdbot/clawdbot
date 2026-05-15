@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   maybeRepairManagedNpmOpenClawPeerLinks: vi.fn(),
   maybeRepairStaleManagedNpmBundledPlugins: vi.fn(),
   maybeRepairStalePluginConfig: vi.fn(),
+  repairStaleOAuthProfileShadows: vi.fn(),
   repairMissingConfiguredPluginInstalls: vi.fn(),
   resolveAuthProfileOrder: vi.fn(),
   resolveProfileUnusableUntilForDisplay: vi.fn(),
@@ -118,6 +119,10 @@ vi.mock("./shared/stale-plugin-config.js", () => ({
   maybeRepairStalePluginConfig: mocks.maybeRepairStalePluginConfig,
 }));
 
+vi.mock("./shared/stale-oauth-profile-shadows.js", () => ({
+  repairStaleOAuthProfileShadows: mocks.repairStaleOAuthProfileShadows,
+}));
+
 vi.mock("./shared/invalid-plugin-config.js", () => ({
   maybeRepairInvalidPluginConfig: (cfg: OpenClawConfig) => ({
     config: cfg,
@@ -190,6 +195,10 @@ describe("doctor repair sequencing", () => {
     mocks.maybeRepairManagedNpmOpenClawPeerLinks.mockResolvedValue(false);
     mocks.maybeRepairStaleManagedNpmBundledPlugins.mockReturnValue(false);
     mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
+      changes: [],
+      warnings: [],
+    });
+    mocks.repairStaleOAuthProfileShadows.mockResolvedValue({
       changes: [],
       warnings: [],
     });

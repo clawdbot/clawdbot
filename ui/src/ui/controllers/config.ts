@@ -6,6 +6,7 @@ import { coerceFormValues } from "./config/form-coerce.ts";
 import {
   cloneConfigObject,
   removePathValue,
+  sanitizeRedactedFormForSubmit,
   serializeConfigForm,
   setPathValue,
 } from "./config/form-utils.ts";
@@ -152,7 +153,12 @@ function serializeFormForSubmit(state: ConfigState): string {
   const form = schema
     ? (coerceFormValues(state.configForm, schema) as Record<string, unknown>)
     : state.configForm;
-  return serializeConfigForm(form);
+  const sanitized = sanitizeRedactedFormForSubmit(
+    form,
+    state.configFormOriginal,
+    state.configRawOriginal,
+  );
+  return serializeConfigForm(sanitized);
 }
 
 type ConfigSubmitMethod = "config.set" | "config.apply";

@@ -33,15 +33,6 @@ DOCKER_TRUSTED_HARNESS_MOUNT=(-v "$TRUSTED_HARNESS_DIR":"$DOCKER_TRUSTED_HARNESS
 if [[ -z "$CLI_PROVIDER" || "$CLI_PROVIDER" == "$CLI_MODEL" ]]; then
   CLI_PROVIDER="$DEFAULT_PROVIDER"
 fi
-CLI_USE_CI_SAFE_CODEX_CONFIG="${OPENCLAW_LIVE_CLI_BACKEND_USE_CI_SAFE_CODEX_CONFIG:-}"
-if [[ -z "$CLI_USE_CI_SAFE_CODEX_CONFIG" ]]; then
-  if [[ "$CLI_PROVIDER" == "codex-cli" ]]; then
-    CLI_USE_CI_SAFE_CODEX_CONFIG="1"
-  else
-    CLI_USE_CI_SAFE_CODEX_CONFIG="0"
-  fi
-fi
-
 if [[ -f "$PROFILE_FILE" && -r "$PROFILE_FILE" ]]; then
   set -a
   # shellcheck disable=SC1090
@@ -63,11 +54,9 @@ if [[ "$CLI_AUTH_MODE" == "subscription" && "$CLI_PROVIDER" != "claude-cli" ]]; 
   exit 1
 fi
 
-if [[ "$CLI_AUTH_MODE" == "api-key" && "$CLI_PROVIDER" == "codex-cli" ]]; then
-  if [[ -z "${OPENAI_API_KEY:-}" ]]; then
-    echo "ERROR: OPENCLAW_LIVE_CLI_BACKEND_AUTH=api-key for codex-cli requires OPENAI_API_KEY." >&2
-    exit 1
-  fi
+if [[ "$CLI_PROVIDER" == "codex-cli" ]]; then
+  echo "ERROR: codex-cli is no longer a bundled CLI backend. Use openai/* with the Codex app-server runtime instead." >&2
+  exit 1
 fi
 
 CLI_METADATA_JSON="$(node --import tsx "$ROOT_DIR/scripts/print-cli-backend-live-metadata.ts" "$CLI_PROVIDER")"
@@ -187,9 +176,7 @@ fi
 
 AUTH_DIRS=()
 AUTH_FILES=()
-if [[ "$CLI_AUTH_MODE" == "api-key" && "$CLI_PROVIDER" == "codex-cli" ]]; then
-  AUTH_FILES+=(".codex/config.toml")
-elif [[ -n "${OPENCLAW_DOCKER_AUTH_DIRS:-}" ]]; then
+if [[ -n "${OPENCLAW_DOCKER_AUTH_DIRS:-}" ]]; then
   while IFS= read -r auth_dir; do
     [[ -n "$auth_dir" ]] || continue
     AUTH_DIRS+=("$auth_dir")
@@ -285,10 +272,6 @@ provider="${OPENCLAW_DOCKER_CLI_BACKEND_PROVIDER:-claude-cli}"
 default_command="${OPENCLAW_DOCKER_CLI_BACKEND_COMMAND_DEFAULT:-}"
 docker_package="${OPENCLAW_DOCKER_CLI_BACKEND_NPM_PACKAGE:-}"
 binary_name="${OPENCLAW_DOCKER_CLI_BACKEND_BINARY_NAME:-}"
-if [ "$provider" = "codex-cli" ] && [ "${OPENCLAW_LIVE_CLI_BACKEND_AUTH:-auto}" != "api-key" ]; then
-  unset OPENAI_API_KEY
-  unset OPENAI_BASE_URL
-fi
 if [ -z "$binary_name" ] && [ -n "$default_command" ]; then
   binary_name="$(basename "$default_command")"
 fi
@@ -309,13 +292,6 @@ if [ -n "${OPENCLAW_LIVE_CLI_BACKEND_COMMAND:-}" ] && [ ! -x "${OPENCLAW_LIVE_CL
   run_setup_command npm install -g "$docker_package"
 elif [ -n "$docker_package" ] && package_has_explicit_version "$docker_package"; then
   run_setup_command npm install -g "$docker_package"
-fi
-if [ "$provider" = "codex-cli" ] && [ "${OPENCLAW_LIVE_CLI_BACKEND_AUTH:-auto}" = "api-key" ]; then
-  codex_login_command="${OPENCLAW_LIVE_CLI_BACKEND_COMMAND:-$NPM_CONFIG_PREFIX/bin/codex}"
-  if [ ! -x "$codex_login_command" ] && [ -x "$NPM_CONFIG_PREFIX/bin/codex" ]; then
-    codex_login_command="$NPM_CONFIG_PREFIX/bin/codex"
-  fi
-  printf '%s\n' "$OPENAI_API_KEY" | "$codex_login_command" login --with-api-key >/dev/null
 fi
 if [ -n "${OPENCLAW_LIVE_CLI_BACKEND_COMMAND:-}" ] && [ -x "${OPENCLAW_LIVE_CLI_BACKEND_COMMAND}" ]; then
   echo "==> CLI backend binary: ${OPENCLAW_LIVE_CLI_BACKEND_COMMAND}"
@@ -403,42 +379,6 @@ openclaw_live_link_runtime_tree "$tmp_dir"
 openclaw_live_stage_state_dir "$tmp_dir/.openclaw-state"
 openclaw_live_prepare_staged_config
 cd "$tmp_dir"
-if [ "${OPENCLAW_LIVE_CLI_BACKEND_USE_CI_SAFE_CODEX_CONFIG:-0}" = "1" ]; then
-  node --import tsx "$trusted_scripts_dir/prepare-codex-ci-config.ts" "$HOME/.codex/config.toml" "$tmp_dir"
-fi
-if [ "$provider" = "codex-cli" ] && [ "${OPENCLAW_LIVE_CLI_BACKEND_AUTH:-auto}" = "api-key" ]; then
-  codex_probe_model="${OPENCLAW_LIVE_CLI_BACKEND_MODEL#*/}"
-  codex_probe_token="OPENCLAW-CODEX-DIRECT-PROBE"
-  codex_probe_stdout="$tmp_dir/codex-direct-probe.stdout"
-  codex_probe_stderr="$tmp_dir/codex-direct-probe.stderr"
-  if ! timeout --foreground --kill-after=10s 180s \
-    "${OPENCLAW_LIVE_CLI_BACKEND_COMMAND:-codex}" \
-    exec \
-    --json \
-    --color \
-    never \
-    --sandbox \
-    danger-full-access \
-    -c \
-    'service_tier="fast"' \
-    --skip-git-repo-check \
-    --model \
-    "$codex_probe_model" \
-    "Reply exactly: $codex_probe_token" \
-    >"$codex_probe_stdout" 2>"$codex_probe_stderr" </dev/null; then
-    echo "ERROR: direct Codex CLI probe failed before OpenClaw gateway smoke." >&2
-    sed -n '1,120p' "$codex_probe_stdout" >&2 || true
-    sed -n '1,120p' "$codex_probe_stderr" >&2 || true
-    exit 1
-  fi
-  if ! grep -q "$codex_probe_token" "$codex_probe_stdout"; then
-    echo "ERROR: direct Codex CLI probe did not return expected token." >&2
-    sed -n '1,120p' "$codex_probe_stdout" >&2 || true
-    sed -n '1,120p' "$codex_probe_stderr" >&2 || true
-    exit 1
-  fi
-  echo "==> Direct Codex CLI probe ok"
-fi
 node scripts/test-live.mjs -- src/gateway/gateway-cli-backend.live.test.ts
 EOF
 
@@ -450,9 +390,6 @@ echo "==> Provider: $CLI_PROVIDER"
 echo "==> Auth mode: $CLI_AUTH_MODE"
 echo "==> Setup timeout: ${CLI_SETUP_TIMEOUT_SECONDS}s"
 echo "==> Profile file: $PROFILE_STATUS"
-if [[ "$CLI_PROVIDER" == "codex-cli" ]]; then
-  echo "==> CI-safe Codex config: $CLI_USE_CI_SAFE_CODEX_CONFIG"
-fi
 if [[ "$CLI_PROVIDER" == "claude-cli" && "$CLI_AUTH_MODE" == "subscription" ]]; then
   echo "==> Claude subscription: $CLAUDE_SUBSCRIPTION_TYPE"
   echo "==> Claude subscription source: $CLAUDE_SUBSCRIPTION_AUTH_SOURCE"
@@ -462,18 +399,7 @@ echo "==> External auth files: ${AUTH_FILES_CSV:-none}"
 DOCKER_AUTH_ENV=(
   -e OPENCLAW_LIVE_CLI_BACKEND_AUTH="$CLI_AUTH_MODE"
 )
-if [[ "$CLI_PROVIDER" == "codex-cli" && "$CLI_AUTH_MODE" == "api-key" ]]; then
-  docker_env_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-cli-backend-env.XXXXXX")"
-  TEMP_DIRS+=("$docker_env_dir")
-  docker_env_file="$docker_env_dir/openai.env"
-  {
-    printf 'OPENAI_API_KEY=%s\n' "${OPENAI_API_KEY}"
-    if [[ -n "${OPENAI_BASE_URL:-}" ]]; then
-      printf 'OPENAI_BASE_URL=%s\n' "${OPENAI_BASE_URL}"
-    fi
-  } >"$docker_env_file"
-  DOCKER_EXTRA_ENV_FILES+=(--env-file "$docker_env_file")
-elif [[ "$CLI_PROVIDER" == "claude-cli" && "$CLI_AUTH_MODE" == "subscription" ]]; then
+if [[ "$CLI_PROVIDER" == "claude-cli" && "$CLI_AUTH_MODE" == "subscription" ]]; then
   DOCKER_AUTH_ENV+=(
     -e CLAUDE_CODE_OAUTH_TOKEN="${CLAUDE_CODE_OAUTH_TOKEN:-}"
     -e OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV="$OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV"
@@ -501,7 +427,6 @@ DOCKER_RUN_ARGS=(docker run --rm -t \
   -e OPENCLAW_DOCKER_AUTH_FILES_RESOLVED="$AUTH_FILES_CSV" \
   -e OPENCLAW_LIVE_DOCKER_SCRIPTS_DIR="${DOCKER_TRUSTED_HARNESS_CONTAINER_DIR}/scripts" \
   -e OPENCLAW_LIVE_DOCKER_SOURCE_STAGE_MODE="${OPENCLAW_LIVE_DOCKER_SOURCE_STAGE_MODE:-copy}" \
-  -e OPENCLAW_LIVE_CLI_BACKEND_USE_CI_SAFE_CODEX_CONFIG="$CLI_USE_CI_SAFE_CODEX_CONFIG" \
   -e OPENCLAW_LIVE_CLI_BACKEND_SETUP_TIMEOUT_SECONDS="$CLI_SETUP_TIMEOUT_SECONDS" \
   -e OPENCLAW_DOCKER_CLI_BACKEND_PROVIDER="$CLI_PROVIDER" \
   -e OPENCLAW_DOCKER_CLI_BACKEND_COMMAND_DEFAULT="$CLI_DEFAULT_COMMAND" \

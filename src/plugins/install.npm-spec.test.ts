@@ -57,10 +57,20 @@ function resolveManagedFileDependency(npmRoot: string, dependencySpec: string): 
   return path.isAbsolute(rawPath) ? rawPath : path.resolve(npmRoot, rawPath);
 }
 
+function isNpmInstallCommand(argv: unknown): argv is string[] {
+  return Array.isArray(argv) && argv[0] === "npm" && argv[1] === "install";
+}
+
+function isNpmPeerPlannerInstallCommand(argv: unknown): argv is string[] {
+  return isNpmInstallCommand(argv) && argv.includes("--package-lock-only");
+}
+
+function isManagedNpmInstallCommand(argv: unknown): argv is string[] {
+  return isNpmInstallCommand(argv) && !isNpmPeerPlannerInstallCommand(argv);
+}
+
 function expectNpmInstallIntoRoot(params: { calls: unknown[][]; npmRoot: string }) {
-  const installCalls = params.calls.filter(
-    (call) => Array.isArray(call[0]) && call[0][0] === "npm" && call[0][1] === "install",
-  );
+  const installCalls = params.calls.filter((call) => isManagedNpmInstallCommand(call[0]));
   expect(installCalls).toHaveLength(1);
   expect((installCalls[0]?.[1] as { cwd?: unknown } | undefined)?.cwd).toBe(params.npmRoot);
   expect(installCalls[0]?.[0]).toEqual([
@@ -291,10 +301,29 @@ function mockNpmViewAndInstallMany(packages: MockNpmPackage[]) {
           JSON.stringify(versionsPackage.versions ?? [versionsPackage.version]),
         );
       }
-      if (argv[0] === "npm" && argv[1] === "install") {
+      if (isNpmPeerPlannerInstallCommand(argv)) {
         const npmRoot = options?.cwd;
         if (!npmRoot) {
-          throw new Error(`unexpected npm install command: ${argv.join(" ")}`);
+          throw new Error(`unexpected npm peer planner command: ${argv.join(" ")}`);
+        }
+        const manifest = JSON.parse(
+          fs.readFileSync(path.join(npmRoot, "package.json"), "utf8"),
+        ) as {
+          dependencies?: Record<string, string>;
+        };
+        writeNpmRootPackageLock({
+          npmRoot,
+          dependencies: manifest.dependencies ?? {},
+          packages: Object.keys(manifest.dependencies ?? {})
+            .map((packageName) => packagesByName.get(packageName))
+            .filter((pkg): pkg is MockNpmPackage => Boolean(pkg)),
+        });
+        return successfulSpawn();
+      }
+      if (isManagedNpmInstallCommand(argv)) {
+        const npmRoot = options?.cwd;
+        if (!npmRoot) {
+          throw new Error(`unexpected npm install command: ${(argv as string[]).join(" ")}`);
         }
         const manifest = JSON.parse(
           fs.readFileSync(path.join(npmRoot, "package.json"), "utf8"),
@@ -353,11 +382,11 @@ function mockNpmViewAndInstallMany(packages: MockNpmPackage[]) {
         return successfulSpawn();
       }
       if (argv[0] === "npm" && argv[1] === "uninstall") {
-        const packageName = argv.at(-1);
+        const packageName = (argv as string[]).at(-1);
         if (packageName === "openclaw") {
           const npmRoot = options?.cwd;
           if (!npmRoot) {
-            throw new Error(`unexpected npm uninstall command: ${argv.join(" ")}`);
+            throw new Error(`unexpected npm uninstall command: ${(argv as string[]).join(" ")}`);
           }
           fs.rmSync(path.join(npmRoot, "node_modules", "openclaw"), {
             recursive: true,
@@ -375,7 +404,7 @@ function mockNpmViewAndInstallMany(packages: MockNpmPackage[]) {
         });
         return successfulSpawn();
       }
-      throw new Error(`unexpected command: ${argv.join(" ")}`);
+      throw new Error(`unexpected command: ${(argv as string[]).join(" ")}`);
     },
   );
 }
@@ -949,6 +978,89 @@ describe("installPluginFromNpmSpec", () => {
     expect(lockfile.dependencies?.openclaw).toBeUndefined();
   });
 
+  it("preserves the active host openclaw runtime package during npm plugin installs", async () => {
+    const stateDir = suiteTempRootTracker.makeTempDir();
+    const npmRoot = path.join(stateDir, "npm");
+    const hostPackageRoot = path.join(npmRoot, "node_modules", "openclaw");
+    fs.mkdirSync(hostPackageRoot, { recursive: true });
+    fs.writeFileSync(
+      path.join(npmRoot, "package.json"),
+      JSON.stringify(
+        {
+          private: true,
+          dependencies: {
+            openclaw: "2026.5.12-beta.6",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(npmRoot, "package-lock.json"),
+      `${JSON.stringify(
+        {
+          lockfileVersion: 3,
+          packages: {
+            "": {
+              dependencies: {
+                openclaw: "2026.5.12-beta.6",
+              },
+            },
+            "node_modules/openclaw": {
+              version: "2026.5.12-beta.6",
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(hostPackageRoot, "package.json"),
+      JSON.stringify({
+        name: "openclaw",
+        version: "2026.5.12-beta.6",
+      }),
+      "utf-8",
+    );
+
+    resolveOpenClawPackageRootSyncMock.mockReturnValue(hostPackageRoot);
+    mockNpmViewAndInstall({
+      spec: "@xdarkicex/openclaw-memory-libravdb@1.4.69",
+      packageName: "@xdarkicex/openclaw-memory-libravdb",
+      version: "1.4.69",
+      pluginId: "libravdb-memory",
+      npmRoot,
+      expectedDependencySpec: "1.4.69",
+    });
+
+    const result = await installPluginFromNpmSpec({
+      spec: "@xdarkicex/openclaw-memory-libravdb@1.4.69",
+      npmDir: npmRoot,
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+    expect(result.ok).toBe(true);
+    const manifest = JSON.parse(fs.readFileSync(path.join(npmRoot, "package.json"), "utf8")) as {
+      dependencies?: Record<string, string>;
+    };
+    expect(manifest.dependencies?.openclaw).toBe("2026.5.12-beta.6");
+    expect(manifest.dependencies?.["@xdarkicex/openclaw-memory-libravdb"]).toBe("1.4.69");
+    expect(fs.existsSync(hostPackageRoot)).toBe(true);
+    expect(
+      runCommandWithTimeoutMock.mock.calls.some(
+        ([argv]) =>
+          Array.isArray(argv) &&
+          argv[0] === "npm" &&
+          argv[1] === "uninstall" &&
+          argv.includes("openclaw"),
+      ),
+    ).toBe(false);
+  });
+
   it("allows npm-spec installs with dangerous code patterns when forced unsafe install is set", async () => {
     const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
     const warnings: string[] = [];
@@ -1000,38 +1112,57 @@ describe("installPluginFromNpmSpec", () => {
       "utf8",
     );
     fs.symlinkSync(suiteTempRootTracker.makeTempDir(), peerLink, "junction");
-    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
-      if (JSON.stringify(argv) === JSON.stringify(npmViewArgv("@openclaw/voice-call@0.0.1"))) {
-        return successfulSpawn(
-          JSON.stringify({
-            name: "@openclaw/voice-call",
-            version: "0.0.1",
-            dist: {
-              integrity: "sha512-plugin-test",
-              shasum: "pluginshasum",
-            },
-          }),
-        );
-      }
-      if (argv[0] === "npm" && argv[1] === "install") {
-        fs.rmSync(peerLink, { recursive: true, force: true });
-        return {
-          code: 1,
-          stdout: "",
-          stderr: "registry unavailable",
-          signal: null,
-          killed: false,
-          termination: "exit" as const,
-        };
-      }
-      if (argv[0] === "npm" && argv[1] === "uninstall") {
-        if (!argv.includes("--legacy-peer-deps")) {
-          fs.mkdirSync(path.join(npmRoot, "node_modules", "openclaw"), { recursive: true });
+    runCommandWithTimeoutMock.mockImplementation(
+      async (argv: string[], options?: { cwd?: string }) => {
+        if (JSON.stringify(argv) === JSON.stringify(npmViewArgv("@openclaw/voice-call@0.0.1"))) {
+          return successfulSpawn(
+            JSON.stringify({
+              name: "@openclaw/voice-call",
+              version: "0.0.1",
+              dist: {
+                integrity: "sha512-plugin-test",
+                shasum: "pluginshasum",
+              },
+            }),
+          );
         }
-        return successfulSpawn("");
-      }
-      throw new Error(`unexpected command: ${argv.join(" ")}`);
-    });
+        if (isNpmPeerPlannerInstallCommand(argv)) {
+          const npmRoot = options?.cwd;
+          if (!npmRoot) {
+            throw new Error(`unexpected npm peer planner command: ${argv.join(" ")}`);
+          }
+          const manifest = JSON.parse(
+            fs.readFileSync(path.join(npmRoot, "package.json"), "utf8"),
+          ) as {
+            dependencies?: Record<string, string>;
+          };
+          writeNpmRootPackageLock({
+            npmRoot,
+            dependencies: manifest.dependencies ?? {},
+            packages: [],
+          });
+          return successfulSpawn();
+        }
+        if (isManagedNpmInstallCommand(argv)) {
+          fs.rmSync(peerLink, { recursive: true, force: true });
+          return {
+            code: 1,
+            stdout: "",
+            stderr: "registry unavailable",
+            signal: null,
+            killed: false,
+            termination: "exit" as const,
+          };
+        }
+        if (argv[0] === "npm" && argv[1] === "uninstall") {
+          if (!(argv as string[]).includes("--legacy-peer-deps")) {
+            fs.mkdirSync(path.join(npmRoot, "node_modules", "openclaw"), { recursive: true });
+          }
+          return successfulSpawn("");
+        }
+        throw new Error(`unexpected command: ${(argv as string[]).join(" ")}`);
+      },
+    );
 
     const result = await installPluginFromNpmSpec({
       spec: "@openclaw/voice-call@0.0.1",
@@ -1087,7 +1218,7 @@ describe("installPluginFromNpmSpec", () => {
     let installAttempts = 0;
     runCommandWithTimeoutMock.mockImplementation(
       async (argv: string[], options?: { cwd?: string }) => {
-        if (argv[0] === "npm" && argv[1] === "install") {
+        if (isManagedNpmInstallCommand(argv)) {
           installAttempts += 1;
           const manifest = JSON.parse(
             fs.readFileSync(path.join(npmRoot, "package.json"), "utf8"),

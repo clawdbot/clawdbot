@@ -80,9 +80,12 @@ function shouldEscalateRetryLimit(reason: FailoverReason | null): boolean {
 
 function isTerminalFormatFailure(params: {
   allowFormatRetry?: boolean;
+  failoverFailure: boolean;
   failoverReason: FailoverReason | null;
 }): boolean {
-  return params.failoverReason === "format" && params.allowFormatRetry !== true;
+  return (
+    params.failoverFailure && params.failoverReason === "format" && params.allowFormatRetry !== true
+  );
 }
 
 function shouldRotatePrompt(params: PromptDecisionParams): boolean {
@@ -104,10 +107,7 @@ function shouldRotateAssistant(params: AssistantDecisionParams): boolean {
   if (isTerminalFormatFailure(params)) {
     return false;
   }
-  return (
-    (!params.aborted && (params.failoverFailure || params.failoverReason !== null)) ||
-    isAssistantTimeoutFailure(params)
-  );
+  return (!params.aborted && params.failoverFailure) || isAssistantTimeoutFailure(params);
 }
 
 export function mergeRetryFailoverReason(params: {

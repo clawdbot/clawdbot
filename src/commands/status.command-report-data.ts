@@ -82,6 +82,7 @@ export async function buildStatusCommandReportData(
     formatUpdateAvailableHint: (update: StatusOverviewSurface["update"]) => string | null;
     accentDim: (value: string) => string;
     updateValue?: string;
+    updateRestartValue?: string | null;
     theme: {
       heading: (value: string) => string;
       muted: (value: string) => string;
@@ -111,6 +112,7 @@ export async function buildStatusCommandReportData(
     resolveMemoryFtsState: params.resolveMemoryFtsState,
     resolveMemoryCacheSummary: params.resolveMemoryCacheSummary,
     updateValue: params.updateValue,
+    updateRestartValue: params.updateRestartValue,
   });
 
   const sessionsColumns = [

@@ -1,4 +1,4 @@
-import type { ReactionTypeEmoji } from "@grammyjs/types";
+import type { ReactionTypeEmoji } from "grammy/types";
 import {
   resolveAckReaction,
   shouldAckReaction as shouldAckReactionGate,

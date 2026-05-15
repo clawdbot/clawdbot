@@ -9,6 +9,9 @@ import {
 } from "./undici-runtime.js";
 
 export const DEFAULT_UNDICI_STREAM_TIMEOUT_MS = 30 * 60 * 1000;
+const HTTP1_ONLY_DISPATCHER_OPTIONS = Object.freeze({
+  allowH2: false as const,
+});
 
 /**
  * Module-level bridge so `resolveDispatcherTimeoutMs` in fetch-guard.ts
@@ -93,7 +96,12 @@ export function ensureGlobalUndiciEnvProxyDispatcher(): void {
     return;
   }
   try {
-    setGlobalDispatcher(new EnvHttpProxyAgent(resolveEnvHttpProxyAgentOptions()));
+    setGlobalDispatcher(
+      new EnvHttpProxyAgent({
+        ...resolveEnvHttpProxyAgentOptions(),
+        ...HTTP1_ONLY_DISPATCHER_OPTIONS,
+      }),
+    );
     lastAppliedProxyBootstrap = true;
   } catch {
     // Best-effort bootstrap only.
@@ -120,6 +128,7 @@ function applyGlobalDispatcherStreamTimeouts(params: {
         bodyTimeout: timeoutMs,
         headersTimeout: timeoutMs,
         ...(connect ? { connect } : {}),
+        ...HTTP1_ONLY_DISPATCHER_OPTIONS,
       } as ConstructorParameters<UndiciGlobalDispatcherDeps["EnvHttpProxyAgent"]>[0];
       runtime.setGlobalDispatcher(new runtime.EnvHttpProxyAgent(proxyOptions));
     } else {
@@ -128,6 +137,7 @@ function applyGlobalDispatcherStreamTimeouts(params: {
           bodyTimeout: timeoutMs,
           headersTimeout: timeoutMs,
           ...(connect ? { connect } : {}),
+          ...HTTP1_ONLY_DISPATCHER_OPTIONS,
         }),
       );
     }
@@ -192,7 +202,7 @@ export function forceResetGlobalDispatcher(): void {
     lastAppliedProxyBootstrap = false;
     try {
       const { Agent, setGlobalDispatcher } = loadUndiciGlobalDispatcherDeps();
-      setGlobalDispatcher(new Agent());
+      setGlobalDispatcher(new Agent(HTTP1_ONLY_DISPATCHER_OPTIONS));
     } catch {
       // Best-effort reset only.
     }
@@ -203,9 +213,10 @@ export function forceResetGlobalDispatcher(): void {
     const { EnvHttpProxyAgent, setGlobalDispatcher } = loadUndiciGlobalDispatcherDeps();
     const proxyOptions = resolveEnvHttpProxyAgentOptions();
     setGlobalDispatcher(
-      new EnvHttpProxyAgent(
-        proxyOptions as ConstructorParameters<UndiciGlobalDispatcherDeps["EnvHttpProxyAgent"]>[0],
-      ),
+      new EnvHttpProxyAgent({
+        ...proxyOptions,
+        ...HTTP1_ONLY_DISPATCHER_OPTIONS,
+      } as ConstructorParameters<UndiciGlobalDispatcherDeps["EnvHttpProxyAgent"]>[0]),
     );
     lastAppliedProxyBootstrap = true;
   } catch {

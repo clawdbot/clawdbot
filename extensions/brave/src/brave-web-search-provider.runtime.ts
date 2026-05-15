@@ -1,3 +1,4 @@
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import type { SearchConfigRecord } from "openclaw/plugin-sdk/provider-web-search";
 import {
   buildSearchCacheKey,
@@ -231,7 +232,10 @@ async function runBraveLlmContextSearch(params: {
         );
       }
 
-      const data = (await response.json()) as BraveLlmContextResponse;
+      const data = await readProviderJsonResponse<BraveLlmContextResponse>(
+        response,
+        "Brave LLM Context API error",
+      );
       return { results: mapBraveLlmContextResults(data), sources: data.sources };
     },
   );
@@ -315,7 +319,10 @@ async function runBraveWebSearch(params: {
         );
       }
 
-      const data = (await response.json()) as BraveSearchResponse;
+      const data = await readProviderJsonResponse<BraveSearchResponse>(
+        response,
+        "Brave Search API error",
+      );
       const results = Array.isArray(data.web?.results) ? (data.web?.results ?? []) : [];
       return results.map((entry) => {
         const description = entry.description ?? "";

@@ -463,6 +463,25 @@ vi.mock("openclaw/plugin-sdk/channel-streaming", () => ({
   resolveChannelProgressDraftMaxLines: (entry?: {
     streaming?: { progress?: { maxLines?: number } };
   }) => entry?.streaming?.progress?.maxLines ?? 8,
+  mergeChannelProgressDraftLine: <TLine extends string | { id?: string; text: string }>(
+    lines: TLine[],
+    line: TLine,
+    params: { maxLines: number },
+  ) => {
+    const normalized = typeof line === "string" ? line.trim() : line.text.trim();
+    const lineId = typeof line === "object" ? line.id : undefined;
+    if (lineId) {
+      const index = lines.findIndex((entry) => typeof entry === "object" && entry.id === lineId);
+      if (index >= 0) {
+        const next = [...lines];
+        next[index] = line;
+        return next.slice(-params.maxLines);
+      }
+    }
+    const previous = lines.at(-1);
+    const previousText = typeof previous === "string" ? previous.trim() : previous?.text.trim();
+    return previousText === normalized ? lines : [...lines, line].slice(-params.maxLines);
+  },
   resolveChannelProgressDraftRender: (entry?: {
     streaming?: { progress?: { render?: "text" | "rich" } };
   }) => entry?.streaming?.progress?.render ?? "text",

@@ -1,5 +1,5 @@
-import type { Message } from "@grammyjs/types";
 import type { Bot } from "grammy";
+import type { Message } from "grammy/types";
 import { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import type { DmPolicy } from "openclaw/plugin-sdk/config-contracts";
 import { upsertChannelPairingRequest } from "openclaw/plugin-sdk/conversation-runtime";

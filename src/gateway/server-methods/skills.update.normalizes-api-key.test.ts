@@ -36,6 +36,7 @@ vi.mock("../../config/config.js", () => {
       return {
         path: snapshot.path,
         previousHash: "test-hash",
+        persistedHash: "persisted-hash",
         snapshot,
         nextConfig: draft,
         result,

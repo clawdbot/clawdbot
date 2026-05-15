@@ -18,7 +18,7 @@ const wsClientCtorMock = vi.hoisted(() =>
   }),
 );
 const proxyAgentCtorMock = vi.hoisted(() =>
-  vi.fn(function proxyAgentCtor() {
+  vi.fn(function createAmbientNodeProxyAgent() {
     return { proxied: true };
   }),
 );
@@ -158,8 +158,16 @@ beforeAll(async () => {
     EventDispatcher: vi.fn(),
     defaultHttpInstance: mockBaseHttpInstance,
   }));
-  vi.doMock("proxy-agent", () => ({
-    ProxyAgent: proxyAgentCtorMock,
+  vi.doMock("@openclaw/proxyline", () => ({
+    createAmbientNodeProxyAgent: proxyAgentCtorMock,
+    hasAmbientNodeProxyConfigured: vi.fn(() =>
+      Boolean(
+        process.env.HTTPS_PROXY ??
+        process.env.https_proxy ??
+        process.env.HTTP_PROXY ??
+        process.env.http_proxy,
+      ),
+    ),
   }));
 
   ({
@@ -227,7 +235,7 @@ afterAll(() => {
   vi.doUnmock("./runtime.js");
   vi.doUnmock("./subagent-hooks.js");
   vi.doUnmock("@larksuiteoapi/node-sdk");
-  vi.doUnmock("proxy-agent");
+  vi.doUnmock("@openclaw/proxyline");
   vi.resetModules();
 });
 

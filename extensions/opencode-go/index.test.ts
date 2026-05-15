@@ -185,6 +185,42 @@ describe("opencode-go provider plugin", () => {
     ]);
   });
 
+  it("strips unsupported Kimi reasoning payloads on OpenCode Go", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const capturedPayloads: Record<string, unknown>[] = [];
+    const baseStreamFn = (_model: unknown, _context: unknown, options: unknown) => {
+      const payload = {
+        model: "kimi-k2.6",
+        reasoning_effort: "high",
+        reasoning: { effort: "high" },
+        reasoningEffort: "high",
+      };
+      (options as { onPayload?: (payload: Record<string, unknown>) => void })?.onPayload?.(payload);
+      capturedPayloads.push(payload);
+      return {} as never;
+    };
+
+    const streamFn = provider.wrapStreamFn?.({
+      streamFn: baseStreamFn as never,
+      providerId: "opencode-go",
+      modelId: "kimi-k2.6",
+      thinkingLevel: "high",
+    } as never);
+
+    expect(streamFn).toBeTypeOf("function");
+    await streamFn?.(
+      { provider: "opencode-go", id: "kimi-k2.6", api: "openai-completions" } as never,
+      {} as never,
+      {},
+    );
+
+    expect(capturedPayloads).toEqual([
+      {
+        model: "kimi-k2.6",
+      },
+    ]);
+  });
+
   it("canonicalizes stale OpenCode Go base URLs", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 
@@ -220,6 +256,29 @@ describe("opencode-go provider plugin", () => {
       "normalized model",
     );
     expect(normalizedModel.baseUrl).toBe("https://opencode.ai/zen/go/v1");
+
+    const normalizedKimi = requireRecord(
+      provider.normalizeResolvedModel?.({
+        provider: "opencode-go",
+        model: {
+          provider: "opencode-go",
+          id: "kimi-k2.6",
+          name: "Kimi K2.6",
+          api: "openai-completions",
+          baseUrl: "https://opencode.ai/zen/go/v1",
+          reasoning: true,
+          input: ["text", "image"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 262_144,
+          maxTokens: 65_536,
+        },
+      } as never),
+      "normalized Kimi model",
+    );
+    expect(normalizedKimi.reasoning).toBe(false);
+    expect(requireRecord(normalizedKimi.compat, "normalized Kimi compat")).toMatchObject({
+      supportsReasoningEffort: false,
+    });
 
     expect(
       provider.normalizeTransport?.({

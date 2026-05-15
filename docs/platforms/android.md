@@ -8,14 +8,14 @@ title: "Android app"
 ---
 
 <Note>
-The Android app has not been publicly released yet. The source code is available in the [OpenClaw repository](https://github.com/openclaw/openclaw) under `apps/android`. You can build it yourself using Java 17 and the Android SDK (`./gradlew :app:assemblePlayDebug`). See [apps/android/README.md](https://github.com/openclaw/openclaw/blob/main/apps/android/README.md) for build instructions.
+The official Android app is available on [Google Play](https://play.google.com/store/apps/details?id=ai.openclaw.app&hl=en_IN). It is a companion node and requires a running OpenClaw Gateway. The source code is also available in the [OpenClaw repository](https://github.com/openclaw/openclaw) under `apps/android`; see [apps/android/README.md](https://github.com/openclaw/openclaw/blob/main/apps/android/README.md) for build instructions.
 </Note>
 
 ## Support snapshot
 
 - Role: companion node app (Android does not host the Gateway).
 - Gateway required: yes (run it on macOS, Linux, or Windows via WSL2).
-- Install: [Getting Started](/start/getting-started) + [Pairing](/channels/pairing).
+- Install: [Google Play](https://play.google.com/store/apps/details?id=ai.openclaw.app&hl=en_IN) for the app, [Getting Started](/start/getting-started) for the Gateway, then [Pairing](/channels/pairing).
 - Gateway: [Runbook](/gateway) + [Configuration](/gateway/configuration).
   - Protocols: [Gateway protocol](/gateway/protocol) (nodes + control plane).
 

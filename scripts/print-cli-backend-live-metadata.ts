@@ -7,15 +7,27 @@ if (!provider) {
   process.exit(1);
 }
 
+if (provider === "codex-cli") {
+  process.stdout.write(
+    JSON.stringify(
+      {
+        provider,
+        unsupported: true,
+        reason:
+          "codex-cli is no longer a bundled CLI backend. Use openai/* with the Codex app-server runtime instead.",
+      },
+      null,
+      2,
+    ),
+  );
+  process.exit(0);
+}
+
 async function loadFallbackBackend(id: string) {
   switch (id) {
     case "claude-cli": {
       const mod = await import("../extensions/anthropic/cli-backend.ts");
       return mod.buildAnthropicCliBackend();
-    }
-    case "codex-cli": {
-      const mod = await import("../extensions/openai/cli-backend.ts");
-      return mod.buildOpenAICodexCliBackend();
     }
     case "google-gemini-cli": {
       const mod = await import("../extensions/google/cli-backend.ts");

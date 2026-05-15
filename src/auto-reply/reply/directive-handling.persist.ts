@@ -7,6 +7,7 @@ import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import { listLegacyRuntimeModelProviderAliases } from "../../agents/model-runtime-aliases.js";
 import { normalizeProviderId, type ModelAliasIndex } from "../../agents/model-selection.js";
+import { resolveContextConfigProviderForRuntime } from "../../agents/openai-codex-routing.js";
 import { updateSessionStore } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -66,18 +67,6 @@ function resolveModelRuntimeOverride(params: {
   }
 
   return { kind: "invalid", runtime: rawRuntime };
-}
-
-function resolveContextConfigProviderForRuntime(params: {
-  provider: string;
-  runtimeId?: string;
-}): string {
-  const provider = normalizeProviderId(params.provider);
-  const runtimeId = normalizeProviderId(params.runtimeId ?? "");
-  if (provider === "openai" && runtimeId === "codex") {
-    return "openai-codex";
-  }
-  return params.provider;
 }
 
 export async function persistInlineDirectives(params: {

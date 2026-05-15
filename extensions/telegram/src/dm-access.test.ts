@@ -31,7 +31,7 @@ vi.mock("./api-logging.js", () => ({
   withTelegramApiErrorLogging: withTelegramApiErrorLoggingMock,
 }));
 
-import type { Message } from "@grammyjs/types";
+import type { Message } from "grammy/types";
 import { normalizeAllowFrom } from "./bot-access.js";
 let enforceTelegramDmAccess: typeof import("./dm-access.js").enforceTelegramDmAccess;
 

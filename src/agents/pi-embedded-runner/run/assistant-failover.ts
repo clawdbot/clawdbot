@@ -229,24 +229,10 @@ export async function handleAssistantFailover(params: {
       return sameModelIdleTimeoutRetry();
     }
     params.logAssistantFailoverDecision("surface_error");
-    // Two surface_error shapes already have downstream synthesis and
-    // must keep falling through to `continue_normal`:
-    //   1. External abort (user pressed stop) — partial assistant
-    //      output carries the turn; no provider error to synthesize.
-    //   2. Timeout without an idle-retry — run.ts emits a dedicated
-    //      timeout payload when buildEmbeddedRunPayloads produces no
-    //      assistant content (see the `timedOut &&
-    //      !timedOutDuringCompaction && !payloadsWithToolMedia.length`
-    //      block in run.ts). Throwing here would short-circuit that
-    //      synthesis and break timeout-compaction retry coverage.
-    // Every other surface_error is a concrete provider failure that
-    // continue_normal would silently drop before the payload builder
-    // sees it (openclaw#70124: billing errors reached the gateway
-    // but never the webchat because stopReason was not "error" and
-    // no other synthesis path caught them). Throw a FailoverError so
-    // the client surface can render it the same way it already
-    // renders fallback_model failures.
-    if (!params.externalAbort && !params.timedOut) {
+    // Only current provider failures throw here. External aborts, timeout
+    // payload synthesis, and stale classified text without failoverFailure
+    // keep the normal payload path.
+    if (!params.externalAbort && !params.timedOut && params.failoverFailure) {
       const message = resolveAssistantFailoverErrorMessage(params);
       const reason = resolveSurfaceErrorReason(decision.reason, params);
       const status =
@@ -313,12 +299,6 @@ function resolveAssistantFailoverErrorMessage(params: {
   );
 }
 
-// surface_error decisions can arrive with `reason: null` when
-// shouldRotateAssistant fired on `failoverFailure` without a classified
-// upstream reason. FailoverError requires a concrete reason, so map
-// null onto the most specific failure the run observed, falling back
-// to "unknown" when no signal is set. Callers only hit this helper on
-// the non-timeout throw branch, so timeouts don't need a case here.
 function resolveSurfaceErrorReason(
   declared: FailoverReason | null,
   params: {

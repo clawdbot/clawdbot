@@ -94,6 +94,9 @@ Controls when workspace bootstrap files are injected into the system prompt. Def
 }
 ```
 
+Per-agent override: `agents.list[].contextInjection`. Omitted values inherit
+`agents.defaults.contextInjection`.
+
 ### `agents.defaults.bootstrapMaxChars`
 
 Max characters per workspace bootstrap file before truncation. Default: `12000`.
@@ -104,6 +107,9 @@ Max characters per workspace bootstrap file before truncation. Default: `12000`.
 }
 ```
 
+Per-agent override: `agents.list[].bootstrapMaxChars`. Omitted values inherit
+`agents.defaults.bootstrapMaxChars`.
+
 ### `agents.defaults.bootstrapTotalMaxChars`
 
 Max total characters injected across all workspace bootstrap files. Default: `60000`.
@@ -111,6 +117,35 @@ Max total characters injected across all workspace bootstrap files. Default: `60
 ```json5
 {
   agents: { defaults: { bootstrapTotalMaxChars: 60000 } },
+}
+```
+
+Per-agent override: `agents.list[].bootstrapTotalMaxChars`. Omitted values
+inherit `agents.defaults.bootstrapTotalMaxChars`.
+
+### Per-agent bootstrap profile overrides
+
+Use per-agent bootstrap profile overrides when one agent needs different prompt
+injection behavior from the shared defaults. Omitted fields inherit from
+`agents.defaults`.
+
+```json5
+{
+  agents: {
+    defaults: {
+      contextInjection: "continuation-skip",
+      bootstrapMaxChars: 12000,
+      bootstrapTotalMaxChars: 60000,
+    },
+    list: [
+      {
+        id: "strict-worker",
+        contextInjection: "always",
+        bootstrapMaxChars: 50000,
+        bootstrapTotalMaxChars: 300000,
+      },
+    ],
+  },
 }
 ```
 
@@ -157,6 +192,9 @@ Use the matching per-agent override only when one agent needs a different
 budget:
 
 - `agents.list[].skillsLimits.maxSkillsPromptChars`
+- `agents.list[].contextInjection`
+- `agents.list[].bootstrapMaxChars`
+- `agents.list[].bootstrapTotalMaxChars`
 - `agents.list[].contextLimits.*`
 
 #### `agents.defaults.startupContext`
@@ -461,8 +499,8 @@ Optional CLI backends for text-only fallback runs (no tool calls). Useful as a b
   agents: {
     defaults: {
       cliBackends: {
-        "codex-cli": {
-          command: "/opt/homebrew/bin/codex",
+        "claude-cli": {
+          command: "/opt/homebrew/bin/claude",
         },
         "my-cli": {
           command: "my-cli",
@@ -1325,9 +1363,14 @@ Variables are case-insensitive. `{think}` is an alias for `{thinkingLevel}`.
 - Resolution order: account → channel → `messages.ackReaction` → identity fallback.
 - Scope: `group-mentions` (default), `group-all`, `direct`, `all`.
 - `removeAckAfterReply`: removes ack after reply on reaction-capable channels such as Slack, Discord, Telegram, WhatsApp, and iMessage.
-- `messages.statusReactions.enabled`: enables lifecycle status reactions on Slack, Discord, and Telegram.
+- `messages.statusReactions.enabled`: enables lifecycle status reactions on Slack, Discord, Telegram, and WhatsApp.
   On Slack and Discord, unset keeps status reactions enabled when ack reactions are active.
-  On Telegram, set it explicitly to `true` to enable lifecycle status reactions.
+  On Telegram and WhatsApp, set it explicitly to `true` to enable lifecycle status reactions.
+- `messages.statusReactions.emojis`: overrides lifecycle emoji keys:
+  `queued`, `thinking`, `compacting`, `tool`, `coding`, `web`, `deploy`, `build`,
+  `concierge`, `done`, `error`, `stallSoft`, and `stallHard`.
+  Telegram only allows a fixed reaction set, so unsupported configured emoji fall back
+  to the nearest supported status variant for that chat.
 
 ### Inbound debounce
 

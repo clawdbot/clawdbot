@@ -73,6 +73,35 @@ function createPluginConfigSchemaRegistry(): PluginManifestRegistry {
   };
 }
 
+function createExternalFeishuSchemaRegistry(): PluginManifestRegistry {
+  return {
+    diagnostics: [],
+    plugins: [
+      createPluginManifestRecord({
+        id: "openclaw-lark",
+        origin: "global",
+        channels: ["feishu"],
+        channelConfigs: {
+          feishu: {
+            schema: {
+              type: "object",
+              properties: {
+                appId: { type: "string" },
+                appSecret: { type: "string" },
+                replyMode: { type: "string", enum: ["thread", "direct"] },
+                footer: { type: "string" },
+              },
+              required: ["appId", "appSecret"],
+              additionalProperties: false,
+            },
+            uiHints: {},
+          },
+        },
+      }),
+    ],
+  };
+}
+
 function createCompatPluginConfigSchemaRegistry(): PluginManifestRegistry {
   return {
     diagnostics: [],
@@ -199,6 +228,23 @@ describe("validateConfigObjectRawWithPlugins channel metadata", () => {
       // This is intentional — see comment above.
       expect(result.config.channels?.telegram?.dmPolicy).toBe("pairing");
     }
+  });
+
+  it("uses external plugin channel schemas for raw validation", () => {
+    mockLoadPluginManifestRegistry.mockReturnValue(createExternalFeishuSchemaRegistry());
+
+    const result = validateConfigObjectRawWithPlugins({
+      channels: {
+        feishu: {
+          appId: "app-id",
+          appSecret: "secret",
+          replyMode: "thread",
+          footer: "OpenClaw",
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
   });
 });
 

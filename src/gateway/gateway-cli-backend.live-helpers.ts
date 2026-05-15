@@ -73,6 +73,11 @@ export function resolveCliBackendLiveModelSelection(params: {
   }
 
   const migrated = migrateLegacyRuntimeModelRef(params.rawModel);
+  if (migrated?.legacyProvider === "codex-cli") {
+    throw new Error(
+      "OPENCLAW_LIVE_CLI_BACKEND_MODEL=codex-cli/... is no longer supported. Use a supported CLI backend such as claude-cli or google-gemini-cli.",
+    );
+  }
   if (migrated?.cli) {
     return {
       providerId: migrated.runtime,

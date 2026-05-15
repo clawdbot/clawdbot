@@ -3,12 +3,35 @@ import os from "node:os";
 import path from "node:path";
 import type { HarnessContextEngine as ContextEngine } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { CodexAppServerClientFactory } from "./client-factory.js";
 import type { CodexAppServerClient } from "./client.js";
-import { maybeCompactCodexAppServerSession, __testing } from "./compact.js";
+import { maybeCompactCodexAppServerSession as maybeCompactCodexAppServerSessionImpl } from "./compact.js";
 import type { CodexServerNotification } from "./protocol.js";
 import { writeCodexAppServerBinding } from "./session-binding.js";
 
 let tempDir: string;
+let codexAppServerClientFactoryForTest: CodexAppServerClientFactory | undefined;
+
+type MaybeCompactOptions = NonNullable<Parameters<typeof maybeCompactCodexAppServerSessionImpl>[1]>;
+
+function setCodexAppServerClientFactoryForTest(factory: CodexAppServerClientFactory): void {
+  codexAppServerClientFactoryForTest = factory;
+}
+
+function resetCodexAppServerClientFactoryForTest(): void {
+  codexAppServerClientFactoryForTest = undefined;
+}
+
+function maybeCompactCodexAppServerSession(
+  params: Parameters<typeof maybeCompactCodexAppServerSessionImpl>[0],
+  options: MaybeCompactOptions = {},
+) {
+  const clientFactory = options.clientFactory ?? codexAppServerClientFactoryForTest;
+  return maybeCompactCodexAppServerSessionImpl(
+    params,
+    clientFactory ? { ...options, clientFactory } : options,
+  );
+}
 
 async function writeTestBinding(options: { authProfileId?: string } = {}): Promise<string> {
   const sessionFile = path.join(tempDir, "session.jsonl");
@@ -49,13 +72,13 @@ describe("maybeCompactCodexAppServerSession", () => {
   });
 
   afterEach(async () => {
-    __testing.resetCodexAppServerClientFactoryForTests();
+    resetCodexAppServerClientFactoryForTest();
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
   it("waits for native app-server compaction before reporting success", async () => {
     const fake = createFakeCodexClient();
-    __testing.setCodexAppServerClientFactoryForTests(async () => fake.client);
+    setCodexAppServerClientFactoryForTest(async () => fake.client);
     const sessionFile = await writeTestBinding();
 
     const pendingResult = startCompaction(sessionFile, { currentTokenCount: 123 });
@@ -88,7 +111,7 @@ describe("maybeCompactCodexAppServerSession", () => {
 
   it("accepts native context-compaction item completion as success", async () => {
     const fake = createFakeCodexClient();
-    __testing.setCodexAppServerClientFactoryForTests(async () => fake.client);
+    setCodexAppServerClientFactoryForTest(async () => fake.client);
     const sessionFile = await writeTestBinding();
 
     const pendingResult = startCompaction(sessionFile);
@@ -115,7 +138,7 @@ describe("maybeCompactCodexAppServerSession", () => {
   it("reuses the bound auth profile for native compaction", async () => {
     const fake = createFakeCodexClient();
     let seenAuthProfileId: string | undefined;
-    __testing.setCodexAppServerClientFactoryForTests(async (_startOptions, authProfileId) => {
+    setCodexAppServerClientFactoryForTest(async (_startOptions, authProfileId) => {
       seenAuthProfileId = authProfileId;
       return fake.client;
     });
@@ -137,7 +160,7 @@ describe("maybeCompactCodexAppServerSession", () => {
   it("fails closed when the persisted binding auth profile disagrees with the runtime request", async () => {
     const fake = createFakeCodexClient();
     const factory = vi.fn(async () => fake.client);
-    __testing.setCodexAppServerClientFactoryForTests(factory);
+    setCodexAppServerClientFactoryForTest(factory);
     const sessionFile = path.join(tempDir, "session.jsonl");
     await writeCodexAppServerBinding(sessionFile, {
       threadId: "thread-1",
@@ -163,7 +186,7 @@ describe("maybeCompactCodexAppServerSession", () => {
 
   it("prefers owning context-engine compaction and records native status separately", async () => {
     const fake = createFakeCodexClient();
-    __testing.setCodexAppServerClientFactoryForTests(async () => fake.client);
+    setCodexAppServerClientFactoryForTest(async () => fake.client);
     const sessionFile = await writeTestBinding();
     const compact = vi.fn(async (_params: unknown) => ({
       ok: true,
@@ -260,7 +283,7 @@ describe("maybeCompactCodexAppServerSession", () => {
 
   it("still runs native compaction when context-engine maintenance fails", async () => {
     const fake = createFakeCodexClient();
-    __testing.setCodexAppServerClientFactoryForTests(async () => fake.client);
+    setCodexAppServerClientFactoryForTest(async () => fake.client);
     const sessionFile = await writeTestBinding();
     const contextEngine: ContextEngine = {
       info: { id: "lossless-claw", name: "Lossless Claw", ownsCompaction: true },
@@ -307,7 +330,7 @@ describe("maybeCompactCodexAppServerSession", () => {
 
   it("records native compaction status when primary compaction has no result payload", async () => {
     const fake = createFakeCodexClient();
-    __testing.setCodexAppServerClientFactoryForTests(async () => fake.client);
+    setCodexAppServerClientFactoryForTest(async () => fake.client);
     const sessionFile = await writeTestBinding();
     const contextEngine: ContextEngine = {
       info: { id: "lossless-claw", name: "Lossless Claw", ownsCompaction: true },
@@ -350,7 +373,7 @@ describe("maybeCompactCodexAppServerSession", () => {
 
   it("reports context-engine compaction errors without skipping native compaction", async () => {
     const fake = createFakeCodexClient();
-    __testing.setCodexAppServerClientFactoryForTests(async () => fake.client);
+    setCodexAppServerClientFactoryForTest(async () => fake.client);
     const sessionFile = await writeTestBinding();
     const contextEngine: ContextEngine = {
       info: { id: "lossless-claw", name: "Lossless Claw", ownsCompaction: true },

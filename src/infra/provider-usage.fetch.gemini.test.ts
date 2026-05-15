@@ -15,6 +15,14 @@ describe("fetchGeminiUsage", () => {
     expect(result.windows).toHaveLength(0);
   });
 
+  it("returns a stable error for malformed successful usage JSON", async () => {
+    const mockFetch = createProviderUsageFetch(async () => makeResponse(200, "{not json"));
+    const result = await fetchGeminiUsage("token", 5000, mockFetch, usageProvider);
+
+    expect(result.error).toBe("Malformed usage response");
+    expect(result.windows).toHaveLength(0);
+  });
+
   it("selects the lowest remaining fraction per model family", async () => {
     const mockFetch = createProviderUsageFetch(async (_url, init) => {
       const headers = (init?.headers as Record<string, string> | undefined) ?? {};

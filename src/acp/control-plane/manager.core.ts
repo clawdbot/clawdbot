@@ -1003,7 +1003,10 @@ export class AcpSessionManager {
                 sawOutput: sawTurnOutput,
               };
               backendAttempts.push(backendAttempt);
-              if (!isFailoverWorthyBackendError(backendAttempt) || !shouldAttemptFailover(backendIdx)) {
+              if (
+                !isFailoverWorthyBackendError(backendAttempt) ||
+                !shouldAttemptFailover(backendIdx)
+              ) {
                 await recordBackendFailure(acpError);
               }
               break;
@@ -1014,13 +1017,7 @@ export class AcpSessionManager {
               if (activeTurn && this.activeTurnBySession.get(actorKey) === activeTurn) {
                 this.activeTurnBySession.delete(actorKey);
               }
-              if (
-                !retryFreshHandle &&
-                !skipPostTurnCleanup &&
-                runtime &&
-                handle &&
-                meta
-              ) {
+              if (!retryFreshHandle && !skipPostTurnCleanup && runtime && handle && meta) {
                 ({ handle, meta } = await this.reconcileRuntimeSessionIdentifiers({
                   cfg: input.cfg,
                   sessionKey,

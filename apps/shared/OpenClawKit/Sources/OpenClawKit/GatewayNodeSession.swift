@@ -457,7 +457,8 @@ public actor GatewayNodeSession {
             let req = BridgeInvokeRequest(
                 id: request.id,
                 command: request.command,
-                paramsJSON: request.paramsJSON)
+                paramsJSON: request.paramsJSON,
+                nodeId: request.nodeId)
             self.logger.info("node invoke executing id=\(request.id, privacy: .public)")
             let response = await Self.invokeWithTimeout(
                 request: req,

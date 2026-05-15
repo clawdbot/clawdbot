@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import type { Message } from "@grammyjs/types";
+import type { Message } from "grammy/types";
 import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";

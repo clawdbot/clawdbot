@@ -2271,6 +2271,19 @@ export const chatHandlers: GatewayRequestHandlers = {
         ChatType: "direct",
         ...(commandSource ? { CommandSource: commandSource } : {}),
         CommandAuthorized: true,
+        CommandTurn: commandSource
+          ? {
+              kind: "text-slash",
+              source: commandSource,
+              authorized: true,
+              body: commandBody,
+            }
+          : {
+              kind: "normal",
+              source: "message",
+              authorized: false,
+              body: commandBody,
+            },
         MessageSid: clientRunId,
         ...(!isOperatorUiClient(clientInfo)
           ? {

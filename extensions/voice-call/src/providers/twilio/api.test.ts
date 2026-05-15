@@ -128,6 +128,25 @@ describe("twilioApiRequest", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it("wraps malformed json success responses with an owned error", async () => {
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response("{not json", { status: 200 }),
+      release,
+    });
+
+    await expect(
+      twilioApiRequest({
+        baseUrl: "https://api.twilio.com",
+        accountSid: "AC123",
+        authToken: "secret",
+        endpoint: "/Calls.json",
+        body: {},
+      }),
+    ).rejects.toThrow("Twilio API returned malformed JSON.");
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("exposes structured Twilio error codes from json error bodies", async () => {
     const release = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockResolvedValue({

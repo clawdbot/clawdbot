@@ -35,15 +35,17 @@ import {
   readCodexConversationBindingData,
   readCodexConversationBindingDataRecord,
   resolveCodexDefaultWorkspaceDir,
-  type CodexConversationBindingData,
+  type CodexAppServerConversationBindingData,
 } from "./conversation-binding-data.js";
 import { trackCodexConversationActiveTurn } from "./conversation-control.js";
 import { createCodexConversationTurnCollector } from "./conversation-turn-collector.js";
 import { buildCodexConversationTurnInput } from "./conversation-turn-input.js";
+import { resumeCodexCliSessionOnNode } from "./node-cli-sessions.js";
 
 const DEFAULT_BOUND_TURN_TIMEOUT_MS = 20 * 60_000;
 
 export {
+  createCodexCliNodeConversationBindingData,
   readCodexConversationBindingData,
   resolveCodexDefaultWorkspaceDir,
 } from "./conversation-binding-data.js";
@@ -51,7 +53,12 @@ export {
 type CodexConversationRunOptions = {
   pluginConfig?: unknown;
   timeoutMs?: number;
+  resumeCodexCliSessionOnNode?: ResumeCodexCliSessionOnNodeFn;
 };
+
+type ResumeCodexCliSessionOnNodeFn = (
+  params: Omit<Parameters<typeof resumeCodexCliSessionOnNode>[0], "runtime">,
+) => ReturnType<typeof resumeCodexCliSessionOnNode>;
 
 type CodexConversationStartParams = {
   pluginConfig?: unknown;
@@ -87,7 +94,7 @@ function getGlobalState(): CodexConversationGlobalState {
 
 export async function startCodexConversationThread(
   params: CodexConversationStartParams,
-): Promise<CodexConversationBindingData> {
+): Promise<CodexAppServerConversationBindingData> {
   const workspaceDir =
     params.workspaceDir?.trim() || resolveCodexDefaultWorkspaceDir(params.pluginConfig);
   const existingBinding = await readCodexAppServerBinding(params.sessionFile, {
@@ -147,6 +154,37 @@ export async function handleCodexConversationInboundClaim(
   if (!prompt) {
     return { handled: true };
   }
+  if (data.kind === "codex-cli-node-session") {
+    const resume = options.resumeCodexCliSessionOnNode;
+    if (!resume) {
+      return {
+        handled: true,
+        reply: {
+          text: "Codex CLI node binding is unavailable because Gateway node runtime is not attached.",
+        },
+      };
+    }
+    try {
+      const result = await enqueueBoundTurn(`${data.nodeId}:${data.sessionId}`, async () => {
+        const resumed = await resume({
+          nodeId: data.nodeId,
+          sessionId: data.sessionId,
+          prompt,
+          cwd: data.cwd,
+          timeoutMs: options.timeoutMs,
+        });
+        return { reply: { text: resumed.text.trim() || "Codex completed without a text reply." } };
+      });
+      return { handled: true, reply: result.reply };
+    } catch (error) {
+      return {
+        handled: true,
+        reply: {
+          text: `Codex CLI node turn failed: ${formatCodexDisplayText(formatErrorMessage(error))}`,
+        },
+      };
+    }
+  }
   try {
     const result = await enqueueBoundTurn(data.sessionFile, () =>
       runBoundTurnWithMissingThreadRecovery({
@@ -175,7 +213,7 @@ export async function handleCodexConversationBindingResolved(
     return;
   }
   const data = readCodexConversationBindingDataRecord(event.request.data ?? {});
-  if (!data) {
+  if (!data || data.kind !== "codex-app-server-session") {
     return;
   }
   await clearCodexAppServerBinding(data.sessionFile);
@@ -317,7 +355,7 @@ async function createThread(params: {
 }
 
 async function runBoundTurn(params: {
-  data: CodexConversationBindingData;
+  data: CodexAppServerConversationBindingData;
   prompt: string;
   event: PluginHookInboundClaimEvent;
   pluginConfig?: unknown;
@@ -425,7 +463,7 @@ async function runBoundTurn(params: {
 }
 
 async function runBoundTurnWithMissingThreadRecovery(params: {
-  data: CodexConversationBindingData;
+  data: CodexAppServerConversationBindingData;
   prompt: string;
   event: PluginHookInboundClaimEvent;
   pluginConfig?: unknown;

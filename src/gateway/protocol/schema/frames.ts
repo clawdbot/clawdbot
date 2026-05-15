@@ -59,6 +59,7 @@ export const ConnectParamsSchema = Type.Object(
           bootstrapToken: Type.Optional(Type.String()),
           deviceToken: Type.Optional(Type.String()),
           password: Type.Optional(Type.String()),
+          approvalRuntimeToken: Type.Optional(Type.String()),
         },
         { additionalProperties: false },
       ),

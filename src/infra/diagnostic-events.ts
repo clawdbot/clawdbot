@@ -458,6 +458,9 @@ type DiagnosticModelCallBaseEvent = DiagnosticBaseEvent & {
   model: string;
   api?: string;
   transport?: string;
+  contextTokenBudget?: number;
+  contextWindowSource?: "model" | "modelsConfig" | "agentContextTokens" | "default";
+  contextWindowReferenceTokens?: number;
   upstreamRequestIdHash?: string;
 };
 

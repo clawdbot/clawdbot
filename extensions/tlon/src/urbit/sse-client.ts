@@ -23,6 +23,14 @@ type UrbitSseOptions = {
   logger?: UrbitSseLogger;
 };
 
+function parseUrbitSsePayload(data: string): { id?: number; json?: unknown; response?: string } {
+  try {
+    return JSON.parse(data) as { id?: number; json?: unknown; response?: string };
+  } catch (cause) {
+    throw new Error("Tlon Urbit SSE event was malformed JSON", { cause });
+  }
+}
+
 export class UrbitSSEClient {
   url: string;
   cookie: string;
@@ -276,7 +284,7 @@ export class UrbitSSEClient {
     }
 
     try {
-      const parsed = JSON.parse(data) as { id?: number; json?: unknown; response?: string };
+      const parsed = parseUrbitSsePayload(data);
 
       if (parsed.response === "quit") {
         if (parsed.id) {

@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
       return {
         path: "/tmp/openclaw.json",
         previousHash: "test-hash",
+        persistedHash: "test-hash",
         snapshot: { path: "/tmp/openclaw.json" },
         nextConfig: draft,
         result,

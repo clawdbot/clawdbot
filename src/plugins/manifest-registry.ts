@@ -610,7 +610,7 @@ function pushNonBundledChannelConfigDescriptorDiagnostic(params: {
     level: "warn",
     pluginId: sanitizeForLog(params.record.id),
     source: sanitizeForLog(params.record.manifestPath),
-    message: `channel plugin manifest declares ${safeMissingChannels.join(", ")} without channelConfigs metadata; add openclaw.plugin.json#channelConfigs so config schema and setup surfaces work before runtime loads`,
+    message: `channel plugin manifest declares ${safeMissingChannels.join(", ")} without channelConfigs metadata; add openclaw.plugin.json#channelConfigs so config schema and setup surfaces work before runtime loads. Channels without channelConfigs still appear in channel listings, but setup UI may be limited.`,
   });
 }
 

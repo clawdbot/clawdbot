@@ -1,3 +1,11 @@
+changelog_helper_root() {
+  cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd
+}
+
+changelog_attribution_script() {
+  printf '%s\n' "$(changelog_helper_root)/scripts/check-changelog-attributions.mjs"
+}
+
 normalize_pr_changelog_entries() {
   local pr="$1"
   local changelog_path="CHANGELOG.md"
@@ -156,21 +164,21 @@ EOF_NODE
 }
 
 validate_changelog_attribution_policy() {
-  node scripts/check-changelog-attributions.mjs CHANGELOG.md
+  node "$(changelog_attribution_script)" CHANGELOG.md
 }
 
 changelog_thanks_required_for_contributor() {
   local contrib="${1:-}"
-  local normalized
-  normalized=$(printf '%s' "$contrib" | tr '[:upper:]' '[:lower:]')
-
-  case "$normalized" in
-    ""|"null"|"app/"*|"codex"|"openclaw"|"clawsweeper"|"openclaw-clawsweeper"|"clawsweeper[bot]"|"openclaw-clawsweeper[bot]"|"steipete")
-      return 1
-      ;;
-  esac
+  [ -n "$contrib" ] || return 1
+  node "$(changelog_attribution_script)" --is-forbidden-handle "$contrib" && return 1
 
   return 0
+}
+
+changelog_explicit_human_thanks_required_for_contributor() {
+  local contrib="${1:-}"
+  [ -n "$contrib" ] || return 1
+  node "$(changelog_attribution_script)" --requires-explicit-human-thanks "$contrib"
 }
 
 validate_changelog_entry_for_pr() {
@@ -339,7 +347,20 @@ END {
     return 0
   fi
 
-  echo "changelog validated: found PR #$pr (no eligible human contributor handle, skipping thanks check)"
+  if ! changelog_explicit_human_thanks_required_for_contributor "$contrib"; then
+    echo "changelog validated: found PR #$pr (no eligible human contributor handle, skipping thanks check)"
+    return 0
+  fi
+
+  local with_pr_and_any_thanks
+  with_pr_and_any_thanks=$(printf '%s\n' "$added_lines" | rg -in "$pr_pattern" | rg -i '\bthanks[[:space:]]+@' || true)
+  if [ -z "$with_pr_and_any_thanks" ]; then
+    echo "CHANGELOG.md update for bot/app/non-creditable author $contrib must include an explicit human Thanks @handle on the PR #$pr entry line."
+    echo "Choose the credited original contributor, or stop for maintainer input if authorship is unclear."
+    exit 1
+  fi
+
+  echo "changelog validated: found PR #$pr + explicit thanks for bot/app/non-creditable author $contrib"
 }
 
 validate_changelog_merge_hygiene() {

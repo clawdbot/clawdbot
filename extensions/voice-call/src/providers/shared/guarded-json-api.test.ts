@@ -103,4 +103,25 @@ describe("guardedJsonApiRequest", () => {
 
     expect(release).toHaveBeenCalledTimes(1);
   });
+
+  it("throws prefixed errors for malformed json success responses", async () => {
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response("{not json", { status: 200 }),
+      release,
+    });
+
+    await expect(
+      guardedJsonApiRequest({
+        url: "https://api.example.com/v1/calls/4",
+        method: "GET",
+        headers: {},
+        allowedHostnames: ["api.example.com"],
+        auditContext: "voice-call:test",
+        errorPrefix: "provider error",
+      }),
+    ).rejects.toThrow("provider error: malformed JSON response");
+
+    expect(release).toHaveBeenCalledTimes(1);
+  });
 });

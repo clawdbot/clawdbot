@@ -980,7 +980,11 @@ async function* parseGoogleSseChunks(
         if (!data || data === "[DONE]") {
           continue;
         }
-        yield JSON.parse(data) as GoogleSseChunk;
+        try {
+          yield JSON.parse(data) as GoogleSseChunk;
+        } catch {
+          throw new Error("Google SSE stream returned malformed JSON");
+        }
       }
     }
   } finally {

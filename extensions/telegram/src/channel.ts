@@ -58,6 +58,7 @@ import * as monitorModule from "./monitor.js";
 import { looksLikeTelegramTargetId, normalizeTelegramMessagingTarget } from "./normalize.js";
 import { createTelegramOutboundAdapter } from "./outbound-adapter.js";
 import { parseTelegramThreadId } from "./outbound-params.js";
+import { releaseStoppedTelegramPollingLease } from "./polling-lease.js";
 import type { TelegramProbe } from "./probe.js";
 import * as probeModule from "./probe.js";
 import { resolveTelegramReactionLevel } from "./reaction-level.js";
@@ -952,6 +953,19 @@ export const telegramPlugin = createChatChannelPlugin({
           botInfo,
           setStatus,
         });
+      },
+      stopAccount: async ({ account, accountId, log }) => {
+        const token = (account.token ?? "").trim();
+        if (!token) {
+          return;
+        }
+        const released = await releaseStoppedTelegramPollingLease({
+          token,
+          accountId,
+        });
+        if (released) {
+          log?.info?.(`[${accountId}] released stopped Telegram polling lease`);
+        }
       },
       logoutAccount: async ({ accountId, cfg }) => {
         const envToken = process.env.TELEGRAM_BOT_TOKEN?.trim() ?? "";

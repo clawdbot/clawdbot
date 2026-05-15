@@ -4,6 +4,8 @@ import OpenClawIPC
 import OpenClawKit
 
 actor MacNodeRuntime {
+    private static let maxGatewayPayloadBytes = 25 * 1024 * 1024
+    private static let maxScreenSnapshotRawBytesBeforeBase64 = (maxGatewayPayloadBytes / 4) * 3
     private let cameraCapture = CameraCaptureService()
     private let makeMainActorServices: () async -> any MacNodeRuntimeMainActorServices
     private let browserProxyRequest: @Sendable (String?) async throws -> String
@@ -363,15 +365,55 @@ actor MacNodeRuntime {
     }
 
     private func handleScreenSnapshotInvoke(_ req: BridgeInvokeRequest) async throws -> BridgeInvokeResponse {
-        let params = (try? Self.decodeParams(MacNodeScreenSnapshotParams.self, from: req.paramsJSON)) ??
-            MacNodeScreenSnapshotParams()
+        let params: MacNodeScreenSnapshotParams
+        if let paramsJSON = req.paramsJSON {
+            do {
+                params = try Self.decodeParams(MacNodeScreenSnapshotParams.self, from: paramsJSON)
+            } catch {
+                return Self.errorResponse(
+                    req,
+                    code: .invalidRequest,
+                    message: "INVALID_REQUEST: invalid screen snapshot params")
+            }
+        } else {
+            params = MacNodeScreenSnapshotParams()
+        }
         let services = await self.mainActorServices()
         let capturedAtMs = Int64(Date().timeIntervalSince1970 * 1000)
-        let res = try await services.snapshotScreen(
-            screenIndex: params.screenIndex,
-            maxWidth: params.maxWidth,
-            quality: params.quality,
-            format: params.format)
+        let res: (data: Data, format: OpenClawScreenSnapshotFormat, width: Int, height: Int)
+        do {
+            res = try await services.snapshotScreen(
+                screenIndex: params.screenIndex,
+                maxWidth: params.maxWidth,
+                quality: params.quality,
+                format: params.format)
+        } catch let error as ScreenSnapshotService.ScreenSnapshotError {
+            switch error {
+            case .noDisplays:
+                return Self.errorResponse(
+                    req,
+                    code: .invalidRequest,
+                    message: "INVALID_REQUEST: no displays available for screen snapshot")
+            case let .invalidScreenIndex(idx):
+                return Self.errorResponse(
+                    req,
+                    code: .invalidRequest,
+                    message: "INVALID_REQUEST: invalid screen index \(idx)")
+            case .captureFailed, .encodeFailed:
+                return Self.errorResponse(
+                    req,
+                    code: .unavailable,
+                    message: "UNAVAILABLE: screen snapshot failed")
+            }
+        } catch {
+            return Self.errorResponse(
+                req,
+                code: .unavailable,
+                message: "UNAVAILABLE: screen snapshot failed")
+        }
+        if res.data.count > Self.maxScreenSnapshotRawBytesBeforeBase64 {
+            return Self.screenSnapshotPayloadTooLarge(req)
+        }
         struct ScreenSnapshotPayload: Encodable {
             var format: String
             var base64: String
@@ -387,6 +429,13 @@ actor MacNodeRuntime {
             height: res.height,
             screenIndex: params.screenIndex,
             capturedAtMs: capturedAtMs))
+        if try Self.projectedOuterFrameBytes(
+            forPayloadJSON: payload,
+            requestId: req.id,
+            nodeId: req.nodeId) > Self.maxGatewayPayloadBytes
+        {
+            return Self.screenSnapshotPayloadTooLarge(req)
+        }
         return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: payload)
     }
 
@@ -1002,6 +1051,40 @@ extension MacNodeRuntime {
             ])
         }
         return json
+    }
+
+    static func projectedOuterFrameBytes(
+        forPayloadJSON payloadJSON: String,
+        requestId: String,
+        nodeId: String?) throws -> Int
+    {
+        struct InvokeResultFrame: Encodable {
+            let type = "req"
+            let id = "00000000-0000-0000-0000-000000000000"
+            let method = "node.invoke.result"
+            let params: Params
+
+            struct Params: Encodable {
+                let id: String
+                let nodeId: String
+                let ok: Bool
+                let payloadJSON: String
+            }
+        }
+
+        let frame = InvokeResultFrame(params: InvokeResultFrame.Params(
+            id: requestId,
+            nodeId: nodeId ?? "",
+            ok: true,
+            payloadJSON: payloadJSON))
+        return try JSONEncoder().encode(frame).count
+    }
+
+    private static func screenSnapshotPayloadTooLarge(_ req: BridgeInvokeRequest) -> BridgeInvokeResponse {
+        self.errorResponse(
+            req,
+            code: .unavailable,
+            message: "UNAVAILABLE: screen snapshot payload too large; reduce maxWidth or use jpeg")
     }
 
     private nonisolated static func canvasEnabled() -> Bool {

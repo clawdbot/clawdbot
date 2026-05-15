@@ -449,6 +449,29 @@ describe("createWebhookHandler", () => {
     expect(message.chatUserId).toBe("123");
   });
 
+  it("rejects malformed application/json with a stable parser error", async () => {
+    const deliver = vi.fn().mockResolvedValue(null);
+    const handler = createWebhookHandler({
+      account: makeAccount({ accountId: "json-malformed-" + Date.now() }),
+      deliver,
+      log,
+    });
+
+    const req = makeReq("POST", "{not json", {
+      headers: { "content-type": "application/json" },
+    });
+    const res = makeRes();
+    await handler(req, res);
+
+    expect(res._status).toBe(400);
+    expect(res._body).toContain("Invalid request body");
+    expect(deliver).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalledWith(
+      "Failed to parse webhook payload",
+      expect.objectContaining({ message: "Invalid JSON body" }),
+    );
+  });
+
   it("accepts token from query when body token is absent", async () => {
     await expectTokenlessBodyAccepted({
       accountIdSuffix: "query-token-test",

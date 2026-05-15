@@ -138,6 +138,14 @@ describe("tsdown config", () => {
     );
   });
 
+  it("keeps Telegram ingress worker behind one root stable dist entry", () => {
+    const distGraph = requireUnifiedDistGraph();
+
+    expect(entrySources(distGraph)["telegram-ingress-worker.runtime"]).toBe(
+      "extensions/telegram/src/telegram-ingress-worker.runtime.ts",
+    );
+  });
+
   it("routes gateway run-loop lifecycle imports through the stable runtime boundary", () => {
     const importSpecifiers = [
       ...readGatewayRunLoopSource().matchAll(/import\(["']([^"']+)["']\)/gu),

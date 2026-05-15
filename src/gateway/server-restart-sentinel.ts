@@ -36,6 +36,7 @@ import {
   type SessionDeliveryRoute,
 } from "../infra/session-delivery-queue.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
+import { isPendingControlPlaneUpdateRestartSentinel } from "../infra/update-control-plane-sentinel.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import type { OutboundReplyPayload } from "../plugin-sdk/reply-payload.js";
@@ -53,6 +54,8 @@ const OUTBOUND_RETRY_DELAY_MS = 1_000;
 const OUTBOUND_MAX_ATTEMPTS = 45;
 const RESTART_CONTINUATION_BUSY_RETRY_DELAY_MS = process.env.VITEST ? 1 : 6_000;
 const RESTART_CONTINUATION_BUSY_MAX_ATTEMPTS = 20;
+const CONTROL_PLANE_UPDATE_PENDING_RETRY_DELAY_MS = process.env.VITEST ? 1 : 2_000;
+const CONTROL_PLANE_UPDATE_PENDING_MAX_ATTEMPTS = 900;
 const RESTART_CONTINUATION_BUSY_RETRY_ERROR =
   "restart continuation deferred because previous run is still shutting down";
 let latestUpdateRestartSentinel: RestartSentinelPayload | null = null;
@@ -492,6 +495,7 @@ export async function recoverPendingRestartContinuationDeliveries(params: {
 
 async function loadRestartSentinelStartupTask(params: {
   deps: CliDeps;
+  attempt?: number;
 }): Promise<StartupTask | null> {
   const sentinel = await readRestartSentinel();
   if (!sentinel) {
@@ -510,6 +514,26 @@ async function loadRestartSentinelStartupTask(params: {
   );
 
   const run = async () => {
+    if (isPendingControlPlaneUpdateRestartSentinel(payload)) {
+      const attempt = params.attempt ?? 0;
+      if (attempt < CONTROL_PLANE_UPDATE_PENDING_MAX_ATTEMPTS) {
+        const timer = setTimeout(() => {
+          void scheduleRestartSentinelWakeAttempt({
+            deps: params.deps,
+            attempt: attempt + 1,
+          }).catch((err: unknown) => {
+            log.warn(`restart sentinel pending update retry failed: ${formatErrorMessage(err)}`);
+          });
+        }, CONTROL_PLANE_UPDATE_PENDING_RETRY_DELAY_MS);
+        timer.unref?.();
+        return { status: "skipped" as const, reason: "update-restart-pending" };
+      }
+      log.warn(`${summary}: update restart sentinel remained pending after retry window`, {
+        sessionKey,
+        reason: payload.stats?.reason ?? null,
+      });
+    }
+
     if (!sessionKey) {
       const mainSessionKey = resolveMainSessionKeyFromConfig();
       enqueueSystemEvent(message, { sessionKey: mainSessionKey });
@@ -658,12 +682,16 @@ async function loadRestartSentinelStartupTask(params: {
   };
 }
 
-export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
+async function scheduleRestartSentinelWakeAttempt(params: { deps: CliDeps; attempt: number }) {
   const task = await loadRestartSentinelStartupTask(params);
   if (!task) {
     return;
   }
   await runStartupTasks({ tasks: [task], log });
+}
+
+export async function scheduleRestartSentinelWake(params: { deps: CliDeps }) {
+  await scheduleRestartSentinelWakeAttempt({ ...params, attempt: 0 });
 }
 
 export function shouldWakeFromRestartSentinel() {

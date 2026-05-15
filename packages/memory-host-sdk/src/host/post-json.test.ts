@@ -70,4 +70,20 @@ describe("postJson", () => {
     expect((error as Error).message).toBe("post failed: 502 bad gateway");
     expect((error as { status?: unknown }).status).toBe(502);
   });
+
+  it("wraps malformed success JSON with the request error prefix", async () => {
+    remoteHttpMock.mockImplementationOnce(async (params) => {
+      return await params.onResponse(textResponse("{ nope", 200));
+    });
+
+    await expect(
+      postJson({
+        url: "https://memory.example/v1/post",
+        headers: {},
+        body: {},
+        errorPrefix: "post failed",
+        parse: () => ({}),
+      }),
+    ).rejects.toThrow("post failed: malformed JSON response");
+  });
 });

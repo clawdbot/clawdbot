@@ -16,29 +16,37 @@ permissions:
 jobs:
   sync-publish-repo:
     runs-on: ubuntu-latest
+    env:
+      OPENCLAW_DOCS_SYNC_TOKEN: ${{ secrets.OPENCLAW_DOCS_SYNC_TOKEN }}
     steps:
+      - name: Skip publish sync without token
+        if: env.OPENCLAW_DOCS_SYNC_TOKEN == ''
+        run: echo "OPENCLAW_DOCS_SYNC_TOKEN is not configured; skipping docs publish repo sync."
+
       - name: Checkout source repo
+        if: env.OPENCLAW_DOCS_SYNC_TOKEN != ''
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
       - name: Checkout ClawHub docs source
+        if: env.OPENCLAW_DOCS_SYNC_TOKEN != ''
         uses: actions/checkout@v6
         with:
           repository: openclaw/clawhub
           path: clawhub-source
           fetch-depth: 1
           persist-credentials: false
-          token: ${{ secrets.OPENCLAW_DOCS_SYNC_TOKEN || github.token }}
+          token: ${{ env.OPENCLAW_DOCS_SYNC_TOKEN || github.token }}
 
       - name: Setup Node
+        if: env.OPENCLAW_DOCS_SYNC_TOKEN != ''
         uses: actions/setup-node@v6
         with:
           node-version: "22.18.0"
 
       - name: Clone publish repo
-        env:
-          OPENCLAW_DOCS_SYNC_TOKEN: ${{ secrets.OPENCLAW_DOCS_SYNC_TOKEN }}
+        if: env.OPENCLAW_DOCS_SYNC_TOKEN != ''
         run: |
           set -euo pipefail
           for attempt in 1 2 3 4 5; do
@@ -56,6 +64,7 @@ jobs:
           exit 1
 
       - name: Sync docs into publish repo
+        if: env.OPENCLAW_DOCS_SYNC_TOKEN != ''
         run: |
           clawhub_sha="$(git -C "$GITHUB_WORKSPACE/clawhub-source" rev-parse HEAD)"
           node scripts/docs-sync-publish.mjs \
@@ -67,13 +76,16 @@ jobs:
             --clawhub-source-sha "$clawhub_sha"
 
       - name: Install docs MDX checker dependency
+        if: env.OPENCLAW_DOCS_SYNC_TOKEN != ''
         working-directory: publish
         run: npm install --no-save --package-lock=false @mdx-js/mdx@3.1.1
 
       - name: Check publish docs MDX
+        if: env.OPENCLAW_DOCS_SYNC_TOKEN != ''
         run: node "$GITHUB_WORKSPACE/publish/.openclaw-sync/check-docs-mdx.mjs" "$GITHUB_WORKSPACE/publish/docs"
 
       - name: Commit publish repo sync
+        if: env.OPENCLAW_DOCS_SYNC_TOKEN != ''
         working-directory: publish
         run: |
           set -euo pipefail

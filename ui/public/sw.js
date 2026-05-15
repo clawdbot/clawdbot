@@ -1,7 +1,17 @@
 // OpenClaw Control – Service Worker
 // Handles offline caching and push notifications.
 
-const CACHE_NAME = "openclaw-control-v1";
+const CACHE_PREFIX = "openclaw-control-";
+const EMBEDDED_CACHE_VERSION = "__OPENCLAW_CONTROL_UI_BUILD_ID__";
+const URL_CACHE_VERSION = new URL(self.location.href).searchParams
+  .get("v")
+  ?.replace(/[^a-zA-Z0-9._-]/g, "-");
+const CACHE_VERSION =
+  (EMBEDDED_CACHE_VERSION !== "__OPENCLAW_CONTROL_UI_BUILD_ID__"
+    ? EMBEDDED_CACHE_VERSION
+    : URL_CACHE_VERSION) || "dev";
+const CACHE_NAME = `${CACHE_PREFIX}${CACHE_VERSION}`;
+const CONTROL_CACHE_LIMIT = 3;
 
 // Minimal app-shell files to precache.
 const PRECACHE_URLS = ["./"];
@@ -12,14 +22,23 @@ self.addEventListener("install", (event) => {
 });
 
 self.addEventListener("activate", (event) => {
+  // Keep a small prior-build window so open tabs can still load old hashed chunks after updates.
   event.waitUntil(
-    caches
-      .keys()
-      .then((keys) =>
-        Promise.all(keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))),
-      ),
+    Promise.all([
+      self.clients.claim(),
+      caches.keys().then((keys) => {
+        const controlKeys = keys.filter((key) => key.startsWith(CACHE_PREFIX));
+        const priorCacheLimit = Math.max(0, CONTROL_CACHE_LIMIT - 1);
+        const retained = new Set([
+          ...controlKeys.filter((key) => key !== CACHE_NAME).slice(-priorCacheLimit),
+          CACHE_NAME,
+        ]);
+        return Promise.all(
+          controlKeys.filter((key) => !retained.has(key)).map((key) => caches.delete(key)),
+        );
+      }),
+    ]),
   );
-  self.clients.claim();
 });
 
 self.addEventListener("fetch", (event) => {

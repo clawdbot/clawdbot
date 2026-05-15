@@ -98,7 +98,34 @@ export async function startDebugProxyServer(params: {
 
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     const flowId = randomUUID();
-    const target = normalizeTargetUrl(req);
+    let target: URL;
+    try {
+      target = normalizeTargetUrl(req);
+    } catch (error) {
+      const message = "Invalid proxy target URL";
+      store.recordEvent({
+        sessionId: params.settings.sessionId,
+        ts: Date.now(),
+        sourceScope: "openclaw",
+        sourceProcess: params.settings.sourceProcess,
+        protocol: "http",
+        direction: "local",
+        kind: "error",
+        flowId,
+        method: req.method,
+        host: req.headers.host,
+        path: req.url ?? "",
+        errorText: error instanceof Error ? error.message : String(error),
+      });
+      const responseBody = `${message}\n`;
+      res.writeHead(400, {
+        Connection: "close",
+        "Content-Type": "text/plain; charset=utf-8",
+        "Content-Length": Buffer.byteLength(responseBody),
+      });
+      res.end(responseBody);
+      return;
+    }
     try {
       assertDebugProxyDirectUpstreamAllowed();
     } catch (error) {

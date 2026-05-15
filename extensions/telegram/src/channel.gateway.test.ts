@@ -6,6 +6,10 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { telegramPlugin } from "./channel.js";
 import type { TelegramMonitorFn } from "./monitor.types.js";
+import {
+  acquireTelegramPollingLease,
+  resetTelegramPollingLeasesForTests,
+} from "./polling-lease.js";
 import { clearTelegramRuntime, setTelegramRuntime } from "./runtime.js";
 import type { TelegramProbeFn } from "./runtime.types.js";
 import type { TelegramRuntime } from "./runtime.types.js";
@@ -115,6 +119,7 @@ async function waitForCondition(check: () => boolean, message: string, attempts 
 
 afterEach(() => {
   clearTelegramRuntime();
+  resetTelegramPollingLeasesForTests();
   resetTelegramStartupProbeLimiterForTests();
   probeTelegram.mockReset();
   monitorTelegramProvider.mockReset();
@@ -332,6 +337,44 @@ describe("telegramPlugin gateway startup", () => {
     await Promise.all([first.task, second.task]);
     expect(probeTelegram).toHaveBeenCalledTimes(2);
     expect(monitorTelegramProvider).toHaveBeenCalledTimes(2);
+  });
+
+  it("releases a stopped stale polling lease for the account token", async () => {
+    vi.useFakeTimers();
+    try {
+      const cfg = createTelegramConfig();
+      const account = telegramPlugin.config.resolveAccount(cfg, "default");
+      const stopAccount = telegramPlugin.gateway?.stopAccount;
+      if (!stopAccount) {
+        throw new Error("expected Telegram stopAccount gateway handler");
+      }
+
+      const abort = new AbortController();
+      await acquireTelegramPollingLease({
+        token: "123456:bad-token",
+        accountId: "default",
+        abortSignal: abort.signal,
+      });
+      abort.abort();
+
+      const stop = stopAccount(
+        createStartAccountContext({
+          account,
+          abortSignal: abort.signal,
+          cfg,
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(5_000);
+      await stop;
+
+      const next = await acquireTelegramPollingLease({
+        token: "123456:bad-token",
+        accountId: "default",
+      });
+      next.release();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

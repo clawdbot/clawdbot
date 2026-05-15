@@ -8,7 +8,7 @@ import type {
 import { createTalkSessionController, type TalkEvent } from "openclaw/plugin-sdk/realtime-voice";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
-import { MediaStreamHandler, sanitizeLogText } from "./media-stream.js";
+import { MediaStreamHandler, parseTwilioMediaMessage, sanitizeLogText } from "./media-stream.js";
 import {
   connectWs,
   startUpgradeWsServer,
@@ -183,6 +183,20 @@ describe("MediaStreamHandler TTS queue", () => {
 });
 
 describe("MediaStreamHandler security hardening", () => {
+  it("wraps malformed Twilio media stream JSON with an owned parser error", () => {
+    let error: unknown;
+    try {
+      parseTwilioMediaMessage(Buffer.from("{not json"));
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe("Twilio media stream message was malformed JSON");
+    expect(error).not.toBeInstanceOf(SyntaxError);
+    expect((error as Error).cause).toBeInstanceOf(SyntaxError);
+  });
+
   it("emits common Talk events for telephony STT/TTS sessions", async () => {
     let callbacks: RealtimeTranscriptionSessionCreateRequest | undefined;
     const sentAudio: Buffer[] = [];

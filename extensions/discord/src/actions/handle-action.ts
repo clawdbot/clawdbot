@@ -104,12 +104,14 @@ export async function handleDiscordMessageAction(
     const silent = readBooleanParam(params, "silent") === true;
     const sessionKey = readStringParam(params, "__sessionKey");
     const agentId = readStringParam(params, "__agentId");
+    const threadName = readStringParam(params, "threadName");
     return await handleDiscordAction(
       {
         action: "sendMessage",
         accountId: accountId ?? undefined,
         to,
         content: content ?? "",
+        ...(threadName ? { threadName } : {}),
         mediaUrl: mediaUrl ?? undefined,
         filename: filename ?? undefined,
         replyTo: replyTo ?? undefined,

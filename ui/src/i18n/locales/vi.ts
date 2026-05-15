@@ -348,6 +348,12 @@ export const vi: TranslationMap = {
     eventLogSubtitle: "Các sự kiện gateway mới nhất.",
     noEvents: "Chưa có sự kiện nào.",
   },
+  quickSettings: {
+    security: {
+      browserEnabled: "Browser enabled",
+      toolProfile: "Tool profile",
+    },
+  },
   execApproval: {
     expiresIn: "hết hạn sau {time}",
     expired: "đã hết hạn",
@@ -691,9 +697,6 @@ export const vi: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle: "Xem token đi đâu, khi nào phiên tăng đột biến và điều gì thúc đẩy chi phí.",
-    },
     common: {
       emptyValue: "—",
       unknown: "không rõ",
@@ -1033,10 +1036,10 @@ export const vi: TranslationMap = {
     settings: "Cài đặt trò chuyện",
     thinkingToggle: "Bật/tắt đầu ra suy nghĩ/đang xử lý của trợ lý",
     toolCallsToggle: "Bật/tắt lượt gọi công cụ và kết quả công cụ",
-    autoScrollMode: "Auto-scroll mode",
-    autoScrollAlways: "Always",
-    autoScrollNearBottom: "Near bottom",
-    autoScrollOff: "Off",
+    autoScrollMode: "Chế độ tự động cuộn",
+    autoScrollAlways: "Luôn luôn",
+    autoScrollNearBottom: "Gần cuối",
+    autoScrollOff: "Tắt",
     focusToggle: "Bật/tắt chế độ tập trung (ẩn thanh bên + tiêu đề trang)",
     hideCronSessions: "Ẩn phiên cron",
     showCronSessions: "Hiển thị phiên cron",

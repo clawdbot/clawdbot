@@ -374,11 +374,7 @@ describe("buildCodexMigrationProvider", () => {
       action: "merge",
       status: "planned",
     });
-    expect(plan.warnings).toEqual([
-      "Codex source-installed openai-curated plugins are planned for native activation; cached plugin bundles remain manual-review only.",
-      "Codex app-backed plugins were planned without source app accessibility verification. Re-run with --verify-plugin-apps to force a fresh source app/list check before planning native plugin activation.",
-      "Codex config and hook files are archive-only. They are preserved in the migration report, not loaded into OpenClaw automatically.",
-    ]);
+    expect(plan.warnings).toEqual([]);
     expect(appServerRequest.mock.calls.filter(([arg]) => arg.method === "app/list")).toHaveLength(
       0,
     );
@@ -434,7 +430,6 @@ describe("buildCodexMigrationProvider", () => {
     ]);
     expect(plan.warnings).toEqual([
       "Codex app-backed plugin migration requires the Codex app-server source account to be logged in with a ChatGPT subscription account. Log in to the Codex app with subscription auth; OpenClaw auth or API-key auth does not satisfy Codex app connector access.",
-      "Codex config and hook files are archive-only. They are preserved in the migration report, not loaded into OpenClaw automatically.",
     ]);
     expect(appServerRequest.mock.calls.filter(([arg]) => arg.method === "app/list")).toHaveLength(
       0,
@@ -1037,7 +1032,7 @@ describe("buildCodexMigrationProvider", () => {
       kind: "plugin",
       action: "install",
       status: "warning",
-      reason: "marketplace_missing",
+      reason: "plugin_missing",
     });
     expect(result.warnings).toContain(
       "Some Codex plugins could not be migrated. Run `openclaw migrate codex` after onboarding.",
@@ -1648,6 +1643,7 @@ function createConfigRuntime(
         return {
           path: "/tmp/openclaw.json",
           previousHash: null,
+          persistedHash: "test-persisted-hash",
           snapshot: {} as never,
           nextConfig: configState,
           afterWrite: { mode: "auto" },

@@ -262,6 +262,32 @@ describe("stuck session recovery", () => {
     ]);
   });
 
+  it("aborts stale reply work without an embedded handle when active abort recovery is enabled", async () => {
+    mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("queued-reply-session");
+    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
+    mocks.isEmbeddedPiRunActive.mockReturnValue(true);
+    mocks.isEmbeddedPiRunHandleActive.mockReturnValue(false);
+    mocks.abortEmbeddedPiRun.mockReturnValue(true);
+    mocks.waitForEmbeddedPiRunEnd.mockResolvedValue(true);
+
+    await recoverStuckDiagnosticSession({
+      sessionId: "queued-reply-session",
+      sessionKey: "agent:main:main",
+      ageMs: 720_000,
+      queueDepth: 1,
+      allowActiveAbort: true,
+    });
+
+    expect(mocks.abortEmbeddedPiRun).toHaveBeenCalledWith("queued-reply-session");
+    expect(mocks.waitForEmbeddedPiRunEnd).toHaveBeenCalledWith("queued-reply-session", 15_000);
+    expect(mocks.forceClearEmbeddedPiRun).not.toHaveBeenCalled();
+    expect(mocks.resetCommandLane).not.toHaveBeenCalled();
+    expect(warnLogMessages()).toEqual([
+      "stuck session recovery: sessionId=queued-reply-session sessionKey=agent:main:main age=720s action=abort_embedded_run aborted=true drained=true released=0",
+      "stuck session recovery outcome: status=aborted action=abort_embedded_run sessionId=queued-reply-session sessionKey=agent:main:main activeSessionId=queued-reply-session activeWorkKind=embedded_run lane=session:agent:main:main aborted=true drained=true forceCleared=false released=0",
+    ]);
+  });
+
   it("does not release the session lane while unregistered lane work is active", async () => {
     mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue(undefined);
     mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);

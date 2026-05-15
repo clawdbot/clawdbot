@@ -139,4 +139,16 @@ describe("perplexity web search provider", () => {
       transport: "search_api",
     });
   });
+
+  it("reports malformed Search API JSON with a stable provider error", async () => {
+    await expect(
+      __testing.readPerplexityJsonResponse(new Response("{ nope"), "Perplexity Search"),
+    ).rejects.toThrow("Perplexity Search: malformed JSON response");
+  });
+
+  it("reports malformed chat completion JSON with a stable provider error", async () => {
+    await expect(
+      __testing.readPerplexityJsonResponse(new Response("{ nope"), "Perplexity"),
+    ).rejects.toThrow("Perplexity: malformed JSON response");
+  });
 });

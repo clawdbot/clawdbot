@@ -4,6 +4,7 @@ import { t } from "../../i18n/index.ts";
 import { formatCost, formatTokens, formatRelativeTimestamp } from "../format.ts";
 import { isMonitoredAuthProvider } from "../model-auth-helpers.ts";
 import { formatNextRun } from "../presenter.ts";
+import { resolveSessionDisplayName } from "../session-display.ts";
 import type {
   SessionsUsageResult,
   SessionsListResult,
@@ -244,7 +245,7 @@ export function renderOverviewCards(props: OverviewCardsProps) {
                 (s) => html`
                   <li class="ov-recent__row">
                     <span class="ov-recent__key"
-                      >${blurDigits(s.displayName || s.label || s.key)}</span
+                      >${blurDigits(resolveSessionDisplayName(s.key, s))}</span
                     >
                     <span class="ov-recent__model">${s.model ?? ""}</span>
                     <span class="ov-recent__time"

@@ -68,6 +68,34 @@ export function selectQaRunnerModelOptions(rows: ModelRow[]): QaRunnerModelOptio
   });
 }
 
+function isModelRow(value: unknown): value is ModelRow {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const row = value as Partial<ModelRow>;
+  return (
+    typeof row.key === "string" &&
+    typeof row.name === "string" &&
+    typeof row.input === "string" &&
+    (row.available === true || row.available === false || row.available === null) &&
+    typeof row.missing === "boolean"
+  );
+}
+
+export function parseQaRunnerModelOptionsOutput(stdout: string): QaRunnerModelOption[] {
+  let payload: unknown;
+  try {
+    payload = JSON.parse(stdout) as unknown;
+  } catch {
+    throw new Error("qa model catalog returned malformed JSON");
+  }
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error("qa model catalog returned invalid JSON payload");
+  }
+  const rows = (payload as { models?: unknown }).models;
+  return selectQaRunnerModelOptions(Array.isArray(rows) ? rows.filter(isModelRow) : []);
+}
+
 const CATALOG_ABORT_ERROR_MESSAGE = "qa model catalog aborted";
 
 function createCatalogAbortError() {
@@ -199,8 +227,7 @@ export async function loadQaRunnerModelOptions(params: { repoRoot: string; signa
       });
     });
 
-    const payload = JSON.parse(Buffer.concat(stdout).toString("utf8")) as { models?: ModelRow[] };
-    return selectQaRunnerModelOptions(payload.models ?? []);
+    return parseQaRunnerModelOptionsOutput(Buffer.concat(stdout).toString("utf8"));
   } finally {
     await fs.rm(tempRoot, { recursive: true, force: true });
   }

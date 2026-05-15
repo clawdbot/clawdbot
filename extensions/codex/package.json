@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/codex",
-  "version": "2026.5.12-beta.1",
+  "version": "2026.5.14",
   "description": "OpenClaw Codex harness and model provider plugin",
   "repository": {
     "type": "git",
@@ -11,7 +11,7 @@
     "@earendil-works/pi-coding-agent": "0.74.0",
     "@openai/codex": "0.130.0",
     "ajv": "8.20.0",
-    "ws": "8.20.0",
+    "ws": "8.20.1",
     "zod": "4.4.3"
   },
   "devDependencies": {
@@ -27,10 +27,10 @@
       "minHostVersion": ">=2026.5.1-beta.1"
     },
     "compat": {
-      "pluginApi": ">=2026.5.12-beta.1"
+      "pluginApi": ">=2026.5.14"
     },
     "build": {
-      "openclawVersion": "2026.5.12-beta.1"
+      "openclawVersion": "2026.5.14"
     },
     "release": {
       "publishToClawHub": true,

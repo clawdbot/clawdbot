@@ -43,6 +43,7 @@ export type ObserveRecoveryDeps = {
       mkdir(path: string, options?: { recursive?: boolean; mode?: number }): Promise<unknown>;
       readdir(path: string): Promise<string[]>;
       rmdir(path: string): Promise<unknown>;
+      unlink(path: string): Promise<unknown>;
       appendFile(
         path: string,
         data: string,
@@ -73,6 +74,7 @@ export type ObserveRecoveryDeps = {
     mkdirSync(path: string, options?: { recursive?: boolean; mode?: number }): unknown;
     readdirSync(path: string): string[];
     rmdirSync(path: string): unknown;
+    unlinkSync(path: string): unknown;
     appendFileSync(
       path: string,
       data: string,

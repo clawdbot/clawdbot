@@ -7,8 +7,10 @@ import {
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { ExecApprovalManager } from "../exec-approval-manager.js";
 import type { AuthorizedGatewayHttpRequest } from "../http-utils.js";
 import { authorizeOperatorScopesForMethod, CLI_DEFAULT_OPERATOR_SCOPES } from "../method-scopes.js";
+import { isApprovalRecordVisibleToClient } from "../server-methods/approval-shared.js";
 import { makeMockHttpResponse } from "../test-http-response.js";
 import { createTestRegistry } from "./__tests__/test-utils.js";
 import { createGatewayPluginRequestHandler } from "./plugins-http.js";
@@ -138,6 +140,47 @@ describe("plugin HTTP route runtime scopes", () => {
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(200);
     expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("does not give approval-scoped gateway-auth routes global approval visibility", async () => {
+    const manager = new ExecApprovalManager<{ command: string }>();
+    const record = manager.create({ command: "echo ok" }, 60_000, "route-hidden-approval");
+    record.requestedByDeviceId = "device-owner";
+    record.requestedByConnId = "conn-owner";
+    record.requestedByClientId = "client-owner";
+    let observedApprovalRuntime: boolean | undefined;
+    let observedVisibility: boolean | undefined;
+    const handler = createGatewayPluginRequestHandler({
+      registry: createTestRegistry({
+        httpRoutes: [
+          createRoute({
+            path: "/secure-hook",
+            auth: "gateway",
+            handler: async () => {
+              const runtimeClient = getPluginRuntimeGatewayRequestScope()?.client;
+              observedApprovalRuntime = runtimeClient?.internal?.approvalRuntime;
+              observedVisibility = isApprovalRecordVisibleToClient({
+                record,
+                client: runtimeClient ?? null,
+              });
+              return true;
+            },
+          }),
+        ],
+      }),
+      log: createMockLogger(),
+    });
+
+    const { res } = makeMockHttpResponse();
+    const handled = await handler({ url: "/secure-hook" } as IncomingMessage, res, undefined, {
+      gatewayAuthSatisfied: true,
+      gatewayRequestOperatorScopes: ["operator.approvals"],
+    });
+
+    expect(handled).toBe(true);
+    expect(res.statusCode).toBe(200);
+    expect(observedApprovalRuntime).not.toBe(true);
+    expect(observedVisibility).toBe(false);
   });
 
   it("fails closed when gateway-auth route runtime scopes are missing", async () => {

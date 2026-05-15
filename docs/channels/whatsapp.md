@@ -482,6 +482,32 @@ Behavior notes:
 - group mode `mentions` reacts on mention-triggered turns; group activation `always` acts as bypass for this check
 - WhatsApp uses `channels.whatsapp.ackReaction` (legacy `messages.ackReaction` is not used here)
 
+## Lifecycle status reactions
+
+Set `messages.statusReactions.enabled: true` to let WhatsApp replace the ack reaction during a turn instead of leaving a static receipt emoji. When enabled, OpenClaw uses the same inbound message reaction slot for lifecycle states such as queued, thinking, tool activity, compaction, done, and error.
+
+```json5
+{
+  messages: {
+    statusReactions: {
+      enabled: true,
+      emojis: {
+        deploy: "🛫",
+        build: "🏗️",
+        concierge: "💁",
+      },
+    },
+  },
+}
+```
+
+Behavior notes:
+
+- `channels.whatsapp.ackReaction` still controls whether status reactions are eligible for direct messages and groups.
+- WhatsApp has one bot reaction slot per message, so lifecycle updates replace the current reaction in place.
+- `messages.removeAckAfterReply: true` clears the final status reaction after the configured done/error hold.
+- Tool emoji categories include `tool`, `coding`, `web`, `deploy`, `build`, and `concierge`.
+
 ## Multi-account and credentials
 
 <AccordionGroup>

@@ -817,6 +817,75 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     expectWarnMessageWith("empty response detected");
   });
 
+  it("retries empty Anthropic-compatible stop turns even when the provider is not Kimi", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedResolveModelAsync.mockResolvedValue({
+      model: {
+        id: "claude-opus-4-7",
+        provider: "sub2api",
+        contextWindow: 200000,
+        api: "anthropic-messages",
+      },
+      error: null,
+      authStorage: {
+        setRuntimeApiKey: vi.fn(),
+      },
+      modelRegistry: {},
+    });
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          api: "anthropic-messages",
+          stopReason: "stop",
+          provider: "sub2api",
+          model: "claude-opus-4-7",
+          content: [],
+          usage: {
+            input: 2048,
+            output: 3100,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 5148,
+          },
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Visible Anthropic-compatible answer."],
+        lastAssistant: {
+          role: "assistant",
+          api: "anthropic-messages",
+          stopReason: "stop",
+          provider: "sub2api",
+          model: "claude-opus-4-7",
+          content: [{ type: "text", text: "Visible Anthropic-compatible answer." }],
+          usage: {
+            input: 2300,
+            output: 8,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 2308,
+          },
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      provider: "sub2api",
+      model: "claude-opus-4-7",
+      runId: "run-empty-anthropic-compatible-stop-continuation",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    const secondCall = runAttemptCall(1);
+    expect(secondCall.prompt).toContain(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+    expectWarnMessageWith("empty response detected");
+  });
+
   it("surfaces an error after exhausting empty-response retries", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
     mockedRunEmbeddedAttempt.mockResolvedValue(

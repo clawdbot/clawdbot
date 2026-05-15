@@ -65,6 +65,10 @@ export const CODEX_CODE_MODE_THREAD_CONFIG: JsonObject = {
   "features.code_mode_only": true,
 };
 
+const CODEX_LIGHTWEIGHT_CONTEXT_THREAD_CONFIG: JsonObject = {
+  project_doc_max_bytes: 0,
+};
+
 export async function startOrResumeThread(params: {
   client: CodexAppServerClient;
   params: EmbeddedRunAttemptParams;
@@ -472,7 +476,7 @@ export function buildThreadStartParams(
     sandbox: options.appServer.sandbox,
     ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
     serviceName: "OpenClaw",
-    config: buildCodexRuntimeThreadConfig(options.config),
+    config: buildCodexRuntimeThreadConfigForRun(params, options.config),
     developerInstructions: options.developerInstructions ?? buildDeveloperInstructions(params),
     dynamicTools: options.dynamicTools,
     experimentalRawEvents: true,
@@ -505,16 +509,31 @@ export function buildThreadResumeParams(
     approvalsReviewer: options.appServer.approvalsReviewer,
     sandbox: options.appServer.sandbox,
     ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
-    config: buildCodexRuntimeThreadConfig(options.config),
+    config: buildCodexRuntimeThreadConfigForRun(params, options.config),
     developerInstructions: options.developerInstructions ?? buildDeveloperInstructions(params),
     persistExtendedHistory: true,
   };
 }
 
 export function buildCodexRuntimeThreadConfig(config: JsonObject | undefined): JsonObject {
+  const runtimeConfig = mergeCodexThreadConfigs(config, CODEX_CODE_MODE_THREAD_CONFIG) ?? {
+    ...CODEX_CODE_MODE_THREAD_CONFIG,
+  };
+  return runtimeConfig;
+}
+
+function buildCodexRuntimeThreadConfigForRun(
+  params: EmbeddedRunAttemptParams,
+  config: JsonObject | undefined,
+): JsonObject {
+  const runtimeConfig = buildCodexRuntimeThreadConfig(config);
+  if (params.bootstrapContextMode !== "lightweight") {
+    return runtimeConfig;
+  }
   return (
-    mergeCodexThreadConfigs(config, CODEX_CODE_MODE_THREAD_CONFIG) ?? {
-      ...CODEX_CODE_MODE_THREAD_CONFIG,
+    mergeCodexThreadConfigs(runtimeConfig, CODEX_LIGHTWEIGHT_CONTEXT_THREAD_CONFIG) ?? {
+      ...runtimeConfig,
+      ...CODEX_LIGHTWEIGHT_CONTEXT_THREAD_CONFIG,
     }
   );
 }
@@ -571,7 +590,7 @@ function buildCronCollaborationInstructions(): string {
   return [
     "This is an OpenClaw cron automation turn. Apply these instructions only to this scheduled job; ordinary chat turns should stay in Codex Default mode.",
     "Execute the cron payload directly. If it asks you to run an exact command, run that command before doing any investigation, planning, memory review, or workspace bootstrap.",
-    "Do not read AGENTS.md, SOUL.md, USER.md, PROJECTS.md, MEMORY.md, day logs, entity summaries, or other workspace memory/bootstrap files unless the cron payload explicitly asks you to inspect them or the requested command fails and the file is needed to diagnose that failure.",
+    "Use context already provided by the runtime, but do not spend time loading or re-reading workspace bootstrap, memory, or project-doc files before executing the cron payload. Inspect those files only if the payload asks for them or the command fails and they are needed to diagnose it.",
     "Keep output concise and automation-oriented. Prefer the final command result or a short failure summary over status narration.",
   ].join("\n\n");
 }

@@ -1,4 +1,4 @@
-import type { ReactionTypeEmoji } from "@grammyjs/types";
+import type { ReactionTypeEmoji } from "grammy/types";
 import { DEFAULT_EMOJIS, type StatusReactionEmojis } from "openclaw/plugin-sdk/channel-feedback";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { TelegramChatDetails, TelegramGetChat } from "./bot/types.js";
@@ -94,6 +94,9 @@ const TELEGRAM_STATUS_REACTION_VARIANTS: Record<StatusReactionEmojiKey, string[]
   tool: ["🔥", "⚡", "👍"],
   coding: ["👨‍💻", "🔥", "⚡"],
   web: ["⚡", "🔥", "👍"],
+  deploy: ["🔥", "⚡", "👍"],
+  build: ["🔥", "👨‍💻", "⚡"],
+  concierge: ["👀", "🔥", "⚡"],
   done: ["👍", "🎉", "💯"],
   error: ["😱", "😨", "🤯"],
   stallSoft: ["🥱", "😴", "🤔"],
@@ -107,6 +110,9 @@ const STATUS_REACTION_EMOJI_KEYS: StatusReactionEmojiKey[] = [
   "tool",
   "coding",
   "web",
+  "deploy",
+  "build",
+  "concierge",
   "done",
   "error",
   "stallSoft",
@@ -130,6 +136,9 @@ export function resolveTelegramStatusReactionEmojis(params: {
     tool: normalizeOptionalString(overrides?.tool) ?? DEFAULT_EMOJIS.tool,
     coding: normalizeOptionalString(overrides?.coding) ?? DEFAULT_EMOJIS.coding,
     web: normalizeOptionalString(overrides?.web) ?? DEFAULT_EMOJIS.web,
+    deploy: normalizeOptionalString(overrides?.deploy) ?? DEFAULT_EMOJIS.deploy,
+    build: normalizeOptionalString(overrides?.build) ?? DEFAULT_EMOJIS.build,
+    concierge: normalizeOptionalString(overrides?.concierge) ?? DEFAULT_EMOJIS.concierge,
     done: normalizeOptionalString(overrides?.done) ?? DEFAULT_EMOJIS.done,
     error: normalizeOptionalString(overrides?.error) ?? DEFAULT_EMOJIS.error,
     stallSoft: normalizeOptionalString(overrides?.stallSoft) ?? DEFAULT_EMOJIS.stallSoft,

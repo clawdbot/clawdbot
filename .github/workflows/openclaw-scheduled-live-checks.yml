@@ -6,6 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: read
   packages: write
   pull-requests: read
@@ -20,6 +21,7 @@ env:
 jobs:
   live_and_openwebui_checks:
     permissions:
+      actions: read
       contents: read
       packages: write
       pull-requests: read

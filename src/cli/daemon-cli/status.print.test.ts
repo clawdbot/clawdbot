@@ -126,6 +126,40 @@ describe("printDaemonStatus", () => {
     expectMockLineContains(runtime.error, formatCliCommand("openclaw gateway restart"));
   });
 
+  it("prints stale updater launchd job guidance", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: { status: "running", pid: 8000 },
+          staleUpdateLaunchdJobs: [
+            {
+              label: "ai.openclaw.update.2026.5.12",
+              lastExitStatus: 127,
+            },
+          ],
+        },
+        gateway: {
+          bindMode: "loopback",
+          bindHost: "127.0.0.1",
+          port: 18789,
+          portSource: "env/config",
+          probeUrl: "ws://127.0.0.1:18789",
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    expectMockLineContains(runtime.error, "Stale OpenClaw updater launchd job(s) detected.");
+    expectMockLineContains(runtime.error, "ai.openclaw.update.2026.5.12");
+    expectMockLineContains(runtime.error, "launchctl remove <label>");
+    expectMockLineContains(runtime.error, formatCliCommand("openclaw gateway restart"));
+  });
+
   it("prints probe kind and capability separately", () => {
     printDaemonStatus(
       {

@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { noteMacLaunchctlGatewayEnvOverrides } from "./doctor-platform-notes.js";
+import {
+  noteMacLaunchctlGatewayEnvOverrides,
+  noteMacStaleOpenClawUpdateLaunchdJobs,
+} from "./doctor-platform-notes.js";
 
 function requireNoteCall(noteFn: { mock: { calls: unknown[][] } }, index = 0): unknown[] {
   const call = noteFn.mock.calls[index];
@@ -88,6 +91,45 @@ describe("noteMacLaunchctlGatewayEnvOverrides", () => {
     await noteMacLaunchctlGatewayEnvOverrides(cfg, { platform: "linux", getenv, noteFn });
 
     expect(getenv).not.toHaveBeenCalled();
+    expect(noteFn).not.toHaveBeenCalled();
+  });
+});
+
+describe("noteMacStaleOpenClawUpdateLaunchdJobs", () => {
+  it("prints stale updater job cleanup guidance on macOS", async () => {
+    const noteFn = vi.fn();
+    const findJobs = vi.fn(async () => [
+      {
+        label: "ai.openclaw.update.2026.5.12",
+        lastExitStatus: 127,
+      },
+    ]);
+
+    await noteMacStaleOpenClawUpdateLaunchdJobs({
+      platform: "darwin",
+      findJobs,
+      noteFn,
+    });
+
+    expect(findJobs).toHaveBeenCalledTimes(1);
+    const [message, title] = requireNoteCall(noteFn);
+    expect(title).toBe("Gateway (macOS)");
+    expect(message).toContain("Stale OpenClaw updater launchd job(s) detected");
+    expect(message).toContain("ai.openclaw.update.2026.5.12");
+    expect(message).toContain("launchctl remove <label>");
+    expect(message).toContain("openclaw gateway restart");
+  });
+
+  it("does nothing when no stale updater jobs exist", async () => {
+    const noteFn = vi.fn();
+    const findJobs = vi.fn(async () => []);
+
+    await noteMacStaleOpenClawUpdateLaunchdJobs({
+      platform: "darwin",
+      findJobs,
+      noteFn,
+    });
+
     expect(noteFn).not.toHaveBeenCalled();
   });
 });

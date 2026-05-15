@@ -9,6 +9,67 @@ import {
 const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
 
 describe("secrets runtime snapshot discord surface", () => {
+  it("resolves active Discord token refs for the default account", async () => {
+    const topLevelSnapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        channels: {
+          discord: {
+            token: {
+              source: "env",
+              provider: "default",
+              id: "DISCORD_BOT_TOKEN",
+            },
+          },
+        },
+      }),
+      env: {
+        DISCORD_BOT_TOKEN: "base-token",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => loadAuthStoreWithProfiles({}),
+    });
+    expect(topLevelSnapshot.config.channels?.discord?.token).toBe("base-token");
+
+    const accountSnapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        channels: {
+          discord: {
+            token: {
+              source: "env",
+              provider: "default",
+              id: "DISCORD_BOT_TOKEN",
+            },
+            accounts: {
+              default: {
+                enabled: true,
+                token: {
+                  source: "env",
+                  provider: "default",
+                  id: "DISCORD_DEFAULT_ACCOUNT_TOKEN",
+                },
+              },
+            },
+          },
+        },
+      }),
+      env: {
+        DISCORD_BOT_TOKEN: "base-token",
+        DISCORD_DEFAULT_ACCOUNT_TOKEN: "default-account-token",
+      },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore: () => loadAuthStoreWithProfiles({}),
+    });
+
+    expect(accountSnapshot.config.channels?.discord?.token).toEqual({
+      source: "env",
+      provider: "default",
+      id: "DISCORD_BOT_TOKEN",
+    });
+    expect(accountSnapshot.config.channels?.discord?.accounts?.default?.token).toBe(
+      "default-account-token",
+    );
+  });
+
   it("fails when non-default Discord account inherits an unresolved top-level token ref", async () => {
     await expect(
       prepareSecretsRuntimeSnapshot({

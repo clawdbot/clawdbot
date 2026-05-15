@@ -473,6 +473,22 @@ describe("publishPluginSkills", () => {
     expect(fsSync.readlinkSync(path.join(managedDir, "my-skill"))).toBe(dir2);
   });
 
+  it("replaces generated Windows directory entries before publishing a current skill", async () => {
+    const skillParent = await tempDirs.make("plugin-skills-");
+    const managedDir = await tempDirs.make("managed-skills-");
+
+    const dir = await writeSkillDir(skillParent, "my-skill");
+    const existingDir = path.join(managedDir, "my-skill");
+    await fs.mkdir(existingDir, { recursive: true });
+    await fs.writeFile(path.join(existingDir, "stale.txt"), "stale");
+
+    withPlatform("win32", () => {
+      publishPluginSkills([dir], { pluginSkillsDir: managedDir });
+    });
+
+    expect(fsSync.readlinkSync(existingDir)).toBe(dir);
+  });
+
   it("cleans up stale symlinks whose targets still exist", async () => {
     const skillParent = await tempDirs.make("plugin-skills-");
     const managedDir = await tempDirs.make("managed-skills-");

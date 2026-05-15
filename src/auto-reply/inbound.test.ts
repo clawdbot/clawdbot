@@ -118,8 +118,79 @@ describe("finalizeInboundContext", () => {
     expect(out.BodyForAgent).toBe("raw\nline");
     expect(out.BodyForCommands).toBe("raw\nline");
     expect(out.CommandAuthorized).toBe(false);
+    expect(out.CommandTurn).toMatchObject({
+      kind: "normal",
+      source: "message",
+      authorized: false,
+    });
     expect(out.ChatType).toBe("channel");
     expect(out.ConversationLabel).toContain("Test");
+  });
+
+  it("normalizes structured command turn context and legacy command fields together", () => {
+    const out = finalizeInboundContext({
+      Body: "/status",
+      CommandBody: "/status",
+      CommandAuthorized: false,
+      CommandTurn: {
+        kind: "text-slash" as const,
+        source: "text" as const,
+        authorized: true,
+      },
+    });
+
+    expect(out.CommandTurn).toMatchObject({
+      kind: "text-slash",
+      source: "text",
+      authorized: true,
+      commandName: "status",
+      body: "/status",
+    });
+    expect(out.CommandSource).toBe("text");
+    expect(out.CommandAuthorized).toBe(true);
+  });
+
+  it("clears stale legacy command source without dropping normal-turn command auth", () => {
+    const out = finalizeInboundContext({
+      Body: "hello",
+      CommandSource: "native",
+      CommandAuthorized: true,
+      CommandTurn: {
+        kind: "normal" as const,
+        source: "message" as const,
+        authorized: false,
+      },
+    });
+
+    expect(out.CommandTurn).toMatchObject({
+      kind: "normal",
+      source: "message",
+      authorized: false,
+    });
+    expect(out.CommandSource).toBeUndefined();
+    expect(out.CommandAuthorized).toBe(true);
+  });
+
+  it("keeps normal command authorization stable across repeated finalization", () => {
+    const out = finalizeInboundContext({
+      Body: "please inspect `/tmp/foo`",
+      CommandAuthorized: true,
+      CommandTurn: {
+        kind: "normal" as const,
+        source: "message" as const,
+        authorized: false,
+      },
+    });
+
+    const refinalized = finalizeInboundContext(out);
+
+    expect(refinalized.CommandTurn).toMatchObject({
+      kind: "normal",
+      source: "message",
+      authorized: false,
+    });
+    expect(refinalized.CommandSource).toBeUndefined();
+    expect(refinalized.CommandAuthorized).toBe(true);
   });
 
   it("sanitizes spoofed system markers in user-controlled text fields", () => {

@@ -11,6 +11,14 @@ describe("fetchZaiUsage", () => {
     expect(result.windows).toHaveLength(0);
   });
 
+  it("returns a stable error for malformed successful usage JSON", async () => {
+    const mockFetch = createProviderUsageFetch(async () => makeResponse(200, "{not json"));
+    const result = await fetchZaiUsage("key", 5000, mockFetch);
+
+    expect(result.error).toBe("Malformed usage response");
+    expect(result.windows).toHaveLength(0);
+  });
+
   it("returns API message errors for unsuccessful payloads", async () => {
     const mockFetch = createProviderUsageFetch(async () =>
       makeResponse(200, {

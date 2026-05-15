@@ -66,6 +66,7 @@ async function transformConfigFileWithRetryMock<T = unknown>(
   return {
     path: snapshot.path ?? "/tmp/openclaw.json",
     previousHash,
+    persistedHash: "persisted-hash",
     snapshot,
     nextConfig: transformed.nextConfig,
     result: transformed.result,

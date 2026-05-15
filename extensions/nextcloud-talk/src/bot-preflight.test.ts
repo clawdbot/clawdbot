@@ -94,6 +94,24 @@ describe("probeNextcloudTalkBotResponseFeature", () => {
     });
   });
 
+  it("reports malformed bot admin JSON with a stable channel error", async () => {
+    hoisted.fetchWithSsrFGuard.mockResolvedValueOnce({
+      response: new Response("{ nope", {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+      release: async () => {},
+      finalUrl: "https://cloud.example.com/ocs/v2.php/apps/spreed/api/v1/bot/admin",
+    });
+
+    await expect(probeNextcloudTalkBotResponseFeature({ account: account() })).resolves.toEqual({
+      ok: false,
+      code: "request_failed",
+      message:
+        "Nextcloud Talk bot response feature probe failed: Nextcloud Talk bot response feature probe failed: malformed JSON response",
+    });
+  });
+
   it("skips when API credentials are absent", async () => {
     await expect(
       probeNextcloudTalkBotResponseFeature({

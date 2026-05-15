@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sanitizeGoogleAssistantFirstOrdering } from "../../shared/google-turn-ordering.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { truncateUtf16Safe } from "../../utils.js";
+import { resolveAgentConfig } from "../agent-scope.js";
 import type { WorkspaceBootstrapFile } from "../workspace.js";
 import type { EmbeddedContextFile } from "./types.js";
 
@@ -103,16 +104,27 @@ type TrimBootstrapResult = {
   originalLength: number;
 };
 
-export function resolveBootstrapMaxChars(cfg?: OpenClawConfig): number {
-  const raw = cfg?.agents?.defaults?.bootstrapMaxChars;
+export function resolveBootstrapMaxChars(cfg?: OpenClawConfig, agentId?: string | null): number {
+  const raw =
+    cfg && agentId
+      ? (resolveAgentConfig(cfg, agentId)?.bootstrapMaxChars ??
+        cfg.agents?.defaults?.bootstrapMaxChars)
+      : cfg?.agents?.defaults?.bootstrapMaxChars;
   if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
     return Math.floor(raw);
   }
   return DEFAULT_BOOTSTRAP_MAX_CHARS;
 }
 
-export function resolveBootstrapTotalMaxChars(cfg?: OpenClawConfig): number {
-  const raw = cfg?.agents?.defaults?.bootstrapTotalMaxChars;
+export function resolveBootstrapTotalMaxChars(
+  cfg?: OpenClawConfig,
+  agentId?: string | null,
+): number {
+  const raw =
+    cfg && agentId
+      ? (resolveAgentConfig(cfg, agentId)?.bootstrapTotalMaxChars ??
+        cfg.agents?.defaults?.bootstrapTotalMaxChars)
+      : cfg?.agents?.defaults?.bootstrapTotalMaxChars;
   if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) {
     return Math.floor(raw);
   }

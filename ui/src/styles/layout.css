@@ -983,6 +983,7 @@
 .content--chat .content-header.content-header--chat-hidden {
   opacity: 0;
   transform: translateY(-10px);
+  min-height: 0;
   max-height: 0px;
   padding-top: 0;
   padding-bottom: 0;
@@ -1108,19 +1109,30 @@
   grid-template-columns: minmax(0, 1fr) max-content;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding-bottom: 0;
+  gap: 10px;
+  min-height: 44px;
+  padding: 4px 8px;
   overflow: visible;
-  max-height: 56px;
+  max-height: 44px;
 }
 
 .content--chat .content-header > div:first-child {
+  display: grid;
+  align-items: center;
+  position: relative;
   text-align: left;
   min-width: 0;
 }
 
+.shell--chat-focus .content--chat .content-header {
+  min-height: 0;
+}
+
 .content--chat .page-meta {
+  align-self: center;
   justify-content: flex-end;
+  height: 36px;
+  align-items: center;
   min-width: max-content;
   overflow: visible;
 }
@@ -1128,6 +1140,19 @@
 .content--chat .chat-controls {
   flex-shrink: 0;
   flex-wrap: nowrap;
+  gap: 6px;
+}
+
+.content--chat .content-header .chat-controls__session-notice {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  width: min(100%, 680px);
+  min-height: 0;
+  overflow: hidden;
+  pointer-events: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ===========================================

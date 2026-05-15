@@ -15,11 +15,14 @@ import {
   deriveDurableFinalDeliveryRequirements,
 } from "openclaw/plugin-sdk/channel-message";
 import {
+  buildChannelProgressDraftLineForEntry,
   createChannelProgressDraftGate,
+  type ChannelProgressDraftLine,
   formatChannelProgressDraftLine,
   formatChannelProgressDraftLineForEntry,
   formatChannelProgressDraftText,
   isChannelProgressDraftWorkToolName,
+  mergeChannelProgressDraftLine,
   resolveChannelProgressDraftMaxLines,
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingPreviewToolProgress,
@@ -586,7 +589,7 @@ export const dispatchTelegramMessage = async ({
   const streamToolProgressEnabled =
     Boolean(answerLane.stream) && resolveChannelStreamingPreviewToolProgress(telegramCfg);
   let streamToolProgressSuppressed = false;
-  let streamToolProgressLines: string[] = [];
+  let streamToolProgressLines: Array<string | ChannelProgressDraftLine> = [];
   let lastAnswerPartialText = "";
   let activeAnswerDraftIsToolProgressOnly = false;
   function resetAnswerToolProgressDraft() {
@@ -627,7 +630,7 @@ export const dispatchTelegramMessage = async ({
     onStart: () => renderProgressDraft({ flush: true }),
   });
   const pushStreamToolProgress = async (
-    line?: string,
+    line?: string | ChannelProgressDraftLine,
     options?: { toolName?: string; startImmediately?: boolean },
   ) => {
     if (!answerLane.stream) {
@@ -636,18 +639,21 @@ export const dispatchTelegramMessage = async ({
     if (options?.toolName !== undefined && !isChannelProgressDraftWorkToolName(options.toolName)) {
       return;
     }
-    const normalized = sanitizeProgressMarkdownText(line?.replace(/\s+/g, " ").trim() ?? "");
+    const rawText = typeof line === "string" ? line : line?.text;
+    const normalized = sanitizeProgressMarkdownText(rawText?.replace(/\s+/g, " ").trim() ?? "");
+    const progressLine =
+      typeof line === "object" && line !== undefined ? { ...line, text: normalized } : normalized;
     if (streamMode !== "progress") {
       if (!streamToolProgressEnabled || streamToolProgressSuppressed || !normalized) {
         return;
       }
-      const previous = streamToolProgressLines.at(-1);
-      if (previous === normalized) {
+      const nextLines = mergeChannelProgressDraftLine(streamToolProgressLines, progressLine, {
+        maxLines: resolveChannelProgressDraftMaxLines(telegramCfg),
+      });
+      if (nextLines === streamToolProgressLines) {
         return;
       }
-      streamToolProgressLines = [...streamToolProgressLines, normalized].slice(
-        -resolveChannelProgressDraftMaxLines(telegramCfg),
-      );
+      streamToolProgressLines = nextLines;
       const streamText = formatChannelProgressDraftText({
         entry: telegramCfg,
         lines: streamToolProgressLines,
@@ -662,12 +668,13 @@ export const dispatchTelegramMessage = async ({
       return;
     }
     if (streamToolProgressEnabled && !streamToolProgressSuppressed && normalized) {
-      const previous = streamToolProgressLines.at(-1);
-      if (previous !== normalized) {
-        streamToolProgressLines = [...streamToolProgressLines, normalized].slice(
-          -resolveChannelProgressDraftMaxLines(telegramCfg),
-        );
-      }
+      streamToolProgressLines = mergeChannelProgressDraftLine(
+        streamToolProgressLines,
+        progressLine,
+        {
+          maxLines: resolveChannelProgressDraftMaxLines(telegramCfg),
+        },
+      );
     }
     if (
       options?.startImmediately &&
@@ -1490,8 +1497,9 @@ export const dispatchTelegramMessage = async ({
                   },
                   onItemEvent: async (payload) => {
                     await pushStreamToolProgress(
-                      formatChannelProgressDraftLineForEntry(telegramCfg, {
+                      buildChannelProgressDraftLineForEntry(telegramCfg, {
                         event: "item",
+                        itemId: payload.itemId,
                         itemKind: payload.kind,
                         title: payload.title,
                         name: payload.name,

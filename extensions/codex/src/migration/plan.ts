@@ -429,18 +429,6 @@ export async function buildCodexMigrationPlan(
           "Conflicts were found. Re-run with --overwrite to replace conflicting migration targets after item-level backups.",
         ]
       : []),
-    ...(source.plugins.some((plugin) => plugin.migratable)
-      ? [
-          "Codex source-installed openai-curated plugins are planned for native activation; cached plugin bundles remain manual-review only.",
-        ]
-      : []),
-    ...(source.plugins.some(
-      (plugin) => plugin.migratable && plugin.apps && plugin.apps.length > 0,
-    ) && !shouldVerifyPluginApps(ctx)
-      ? [
-          "Codex app-backed plugins were planned without source app accessibility verification. Re-run with --verify-plugin-apps to force a fresh source app/list check before planning native plugin activation.",
-        ]
-      : []),
     ...(source.pluginDiscoveryError
       ? [
           `Codex app-server plugin inventory discovery failed: ${source.pluginDiscoveryError}. Cached plugin bundles, if any, are advisory only.`,
@@ -450,11 +438,6 @@ export async function buildCodexMigrationPlan(
       (plugin) => plugin.migrationBlock?.code === "codex_subscription_required",
     )
       ? [codexPluginMigrationSubscriptionWarning()]
-      : []),
-    ...(source.archivePaths.length > 0
-      ? [
-          "Codex config and hook files are archive-only. They are preserved in the migration report, not loaded into OpenClaw automatically.",
-        ]
       : []),
   ];
   return {

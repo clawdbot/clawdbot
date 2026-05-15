@@ -391,6 +391,20 @@ describe("ollama web search provider", () => {
     );
   });
 
+  it("reports malformed Ollama web search JSON with a stable provider error", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response("{ nope", { status: 200 }),
+      release: vi.fn(async () => {}),
+    });
+
+    await expect(
+      runOllamaWebSearch({
+        config: createOllamaConfig(),
+        query: "openclaw",
+      }),
+    ).rejects.toThrow("Ollama web search returned malformed JSON");
+  });
+
   it("warns when Ollama is not reachable during setup without cancelling", async () => {
     fetchWithSsrFGuardMock.mockRejectedValueOnce(new Error("connect failed"));
 

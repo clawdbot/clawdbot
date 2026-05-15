@@ -81,6 +81,7 @@ vi.mock("../../config/config.js", async () => {
       return {
         path: "/tmp/openclaw/config.json",
         previousHash: "test-hash",
+        persistedHash: "persisted-hash",
         snapshot: { path: "/tmp/openclaw/config.json" },
         nextConfig: draft,
         result,

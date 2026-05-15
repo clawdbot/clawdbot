@@ -131,6 +131,28 @@ describe("handshake auth helpers", () => {
       }),
     ).toBe(false);
   });
+
+  it("requires explicit pairing for browser-origin clients even when locality resolves local", () => {
+    expect(
+      shouldAllowSilentLocalPairing({
+        locality: "browser_container_local",
+        hasBrowserOriginHeader: true,
+        isControlUi: true,
+        isWebchat: true,
+        reason: "not-paired",
+      }),
+    ).toBe(false);
+    expect(
+      shouldAllowSilentLocalPairing({
+        locality: "shared_secret_loopback_local",
+        hasBrowserOriginHeader: true,
+        isControlUi: false,
+        isWebchat: true,
+        reason: "scope-upgrade",
+      }),
+    ).toBe(false);
+  });
+
   it("rejects silent role-upgrade for remote clients", () => {
     expect(
       shouldAllowSilentLocalPairing({

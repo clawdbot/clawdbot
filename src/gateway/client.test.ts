@@ -737,6 +737,7 @@ describe("GatewayClient connect auth payload", () => {
         bootstrapToken?: string;
         deviceToken?: string;
         password?: string;
+        approvalRuntimeToken?: string;
       };
     };
   };
@@ -811,6 +812,7 @@ describe("GatewayClient connect auth payload", () => {
     ws: MockWebSocket,
     connectId: string | undefined,
     details: Record<string, unknown>,
+    message = "unauthorized",
   ) {
     ws.emitMessage(
       JSON.stringify({
@@ -819,7 +821,7 @@ describe("GatewayClient connect auth payload", () => {
         ok: false,
         error: {
           code: "INVALID_REQUEST",
-          message: "unauthorized",
+          message,
           details,
         },
       }),
@@ -844,8 +846,14 @@ describe("GatewayClient connect auth payload", () => {
     firstWs: MockWebSocket;
     connectId: string | undefined;
     failureDetails: Record<string, unknown>;
+    failureMessage?: string;
   }) {
-    emitConnectFailure(params.firstWs, params.connectId, params.failureDetails);
+    emitConnectFailure(
+      params.firstWs,
+      params.connectId,
+      params.failureDetails,
+      params.failureMessage,
+    );
     await vi.waitFor(() => expect(wsInstances.length).toBeGreaterThan(1), { timeout: 3_000 });
     const ws = getLatestWs();
     ws.emitOpen();
@@ -884,6 +892,42 @@ describe("GatewayClient connect auth payload", () => {
 
     expectConnectAuthFields(ws, { token: "shared-token" });
     expect(connectFrameFrom(ws).deviceToken).toBeUndefined();
+    client.stop();
+  });
+
+  it("retries without approval runtime token when a gateway rejects the auth field", async () => {
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-token",
+      approvalRuntimeToken: "runtime-token",
+      deviceIdentity: null,
+    });
+
+    const { ws: ws1, connect: firstConnect } = startClientAndConnect({ client });
+    expectRecordFields(
+      firstConnect.params?.auth ?? {},
+      {
+        token: "shared-token",
+        approvalRuntimeToken: "runtime-token",
+      },
+      "initial connect auth",
+    );
+
+    const retriedAuth = await expectRetriedConnectAuth({
+      firstWs: ws1,
+      connectId: firstConnect.id,
+      failureDetails: {},
+      failureMessage:
+        "invalid connect params: at /auth: unexpected property 'approvalRuntimeToken'",
+    });
+    expectRecordFields(
+      retriedAuth,
+      {
+        token: "shared-token",
+      },
+      "retried connect auth",
+    );
+    expect(retriedAuth.approvalRuntimeToken).toBeUndefined();
     client.stop();
   });
 
@@ -1181,6 +1225,29 @@ describe("GatewayClient connect auth payload", () => {
       code: 1008,
       reason: "connect failed",
       detailCode: "AUTH_TOKEN_MISSING",
+    });
+  });
+
+  it("does not auto-reconnect on token mismatch when no device-token retry is available", async () => {
+    loadDeviceAuthTokenMock.mockReturnValue(null);
+    const onReconnectPaused = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-token",
+      onReconnectPaused,
+    });
+
+    const { ws: ws1, connect: firstConnect } = startClientAndConnect({ client });
+    await expectNoReconnectAfterConnectFailure({
+      client,
+      firstWs: ws1,
+      connectId: firstConnect.id,
+      failureDetails: { code: "AUTH_TOKEN_MISMATCH", canRetryWithDeviceToken: true },
+    });
+    expect(onReconnectPaused).toHaveBeenCalledWith({
+      code: 1008,
+      reason: "connect failed",
+      detailCode: "AUTH_TOKEN_MISMATCH",
     });
   });
 

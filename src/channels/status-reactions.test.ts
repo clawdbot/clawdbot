@@ -56,6 +56,24 @@ const createSetOnlyController = () => {
   return { calls, controller };
 };
 
+const createSingleSlotController = () => {
+  const calls: { method: string; emoji: string }[] = [];
+  const adapter: StatusReactionAdapter = {
+    setReaction: vi.fn(async (emoji: string) => {
+      calls.push({ method: "set", emoji });
+    }),
+    clearReaction: vi.fn(async () => {
+      calls.push({ method: "clear", emoji: "" });
+    }),
+  };
+  const controller = createStatusReactionController({
+    enabled: true,
+    adapter,
+    initialEmoji: "👀",
+  });
+  return { calls, controller };
+};
+
 function expectSetEmojiCall(calls: Array<{ method: string; emoji: string }>, emoji: string) {
   expect(collectEmojisForMethod(calls, "set")).toContain(emoji);
 }
@@ -408,6 +426,30 @@ describe("createStatusReactionController", () => {
     ]);
   });
 
+  it("uses clearReaction only for explicit clear on single-slot adapters", async () => {
+    const { calls, controller } = createSingleSlotController();
+
+    void controller.setQueued();
+    await vi.runAllTimersAsync();
+    void controller.setThinking();
+    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
+
+    await controller.setDone();
+    await controller.restoreInitial();
+
+    expect(calls).toEqual([
+      { method: "set", emoji: "👀" },
+      { method: "set", emoji: DEFAULT_EMOJIS.stallSoft },
+      { method: "set", emoji: DEFAULT_EMOJIS.stallHard },
+      { method: "set", emoji: DEFAULT_EMOJIS.thinking },
+      { method: "set", emoji: DEFAULT_EMOJIS.done },
+      { method: "set", emoji: "👀" },
+    ]);
+
+    await controller.clear();
+    expect(calls.at(-1)).toEqual({ method: "clear", emoji: "" });
+  });
+
   it("should not re-add an already active reaction when returning to it", async () => {
     const { calls, controller } = createEnabledController();
 
@@ -599,6 +641,9 @@ describe("constants", () => {
       "tool",
       "coding",
       "web",
+      "deploy",
+      "build",
+      "concierge",
       "done",
       "error",
       "stallSoft",

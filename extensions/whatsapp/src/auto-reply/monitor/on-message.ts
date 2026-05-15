@@ -20,6 +20,10 @@ import { applyGroupGating } from "./group-gating.js";
 import { updateLastRouteInBackground } from "./last-route.js";
 import { resolvePeerId } from "./peer.js";
 import { processMessage } from "./process-message.js";
+import {
+  createWhatsAppStatusReactionController,
+  type StatusReactionController,
+} from "./status-reaction.js";
 
 export function createWebOnMessageHandler(params: {
   cfg: OpenClawConfig;
@@ -48,6 +52,7 @@ export function createWebOnMessageHandler(params: {
       preflightAudioTranscript?: string | null;
       ackAlreadySent?: boolean;
       ackReaction?: AckReactionHandle | null;
+      statusReactionController?: StatusReactionController | null;
     },
   ) => {
     const processParams: Parameters<typeof processMessage>[0] = {
@@ -82,6 +87,9 @@ export function createWebOnMessageHandler(params: {
     }
     if (opts?.ackReaction !== undefined) {
       processParams.ackReaction = opts.ackReaction;
+    }
+    if (opts?.statusReactionController !== undefined) {
+      processParams.statusReactionController = opts.statusReactionController;
     }
     return processMessage(processParams);
   };
@@ -141,6 +149,7 @@ export function createWebOnMessageHandler(params: {
     const canRunEarlyAudioPreflight = msg.chatType === "group" || msg.accessControlPassed === true;
     let ackAlreadySent = false;
     let ackReaction: AckReactionHandle | null = null;
+    let statusReactionController: StatusReactionController | null = null;
     const runAudioPreflightOnce = async () => {
       if (
         preflightAudioTranscript !== undefined ||
@@ -150,18 +159,33 @@ export function createWebOnMessageHandler(params: {
       ) {
         return;
       }
-      ackReaction = await maybeSendAckReaction({
-        cfg,
-        msg,
-        agentId: route.agentId,
-        sessionKey: route.sessionKey,
-        conversationId,
-        verbose: params.verbose,
-        accountId: route.accountId,
-        info: params.replyLogger.info.bind(params.replyLogger),
-        warn: params.replyLogger.warn.bind(params.replyLogger),
-      });
-      ackAlreadySent = ackReaction !== null;
+      if (cfg.messages?.statusReactions?.enabled === true) {
+        statusReactionController = await createWhatsAppStatusReactionController({
+          cfg,
+          msg,
+          agentId: route.agentId,
+          sessionKey: route.sessionKey,
+          conversationId,
+          verbose: params.verbose,
+          accountId: route.accountId,
+        });
+        if (statusReactionController) {
+          await statusReactionController.setQueued();
+        }
+      } else {
+        ackReaction = await maybeSendAckReaction({
+          cfg,
+          msg,
+          agentId: route.agentId,
+          sessionKey: route.sessionKey,
+          conversationId,
+          verbose: params.verbose,
+          accountId: route.accountId,
+          info: params.replyLogger.info.bind(params.replyLogger),
+          warn: params.replyLogger.warn.bind(params.replyLogger),
+        });
+        ackAlreadySent = ackReaction !== null;
+      }
       try {
         const { transcribeFirstAudio } = await import("./audio-preflight.runtime.js");
         // transcribeFirstAudio returns undefined on failure/disabled; store null so
@@ -292,6 +316,7 @@ export function createWebOnMessageHandler(params: {
         // per-agent checks during broadcast fan-out.
         ...(ackAlreadySent && msg.chatType !== "group" ? { ackAlreadySent: true } : {}),
         ...(ackReaction && msg.chatType !== "group" ? { ackReaction } : {}),
+        ...(statusReactionController && msg.chatType !== "group" ? { ackAlreadySent: true } : {}),
         processMessage: (m, r, k, opts) => processForRoute(cfg, m, r, k, opts),
       })
     ) {
@@ -302,6 +327,7 @@ export function createWebOnMessageHandler(params: {
       ...(preflightAudioTranscript !== undefined ? { preflightAudioTranscript } : {}),
       ...(ackAlreadySent ? { ackAlreadySent: true } : {}),
       ...(ackReaction ? { ackReaction } : {}),
+      ...(statusReactionController ? { statusReactionController } : {}),
     });
   };
 }

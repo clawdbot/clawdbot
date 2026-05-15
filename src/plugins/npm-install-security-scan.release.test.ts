@@ -26,6 +26,7 @@ const REQUIRED_REVIEWED_PUBLISHABLE_CRITICAL_FINDINGS = new Set([
   "@openclaw/acpx:dangerous-exec:src/codex-auth-bridge.ts",
   "@openclaw/acpx:dangerous-exec:src/runtime-internals/mcp-proxy.mjs",
   "@openclaw/codex:dangerous-exec:src/app-server/transport-stdio.ts",
+  "@openclaw/codex:dangerous-exec:src/node-cli-sessions.ts",
   "@openclaw/google-meet:dangerous-exec:src/node-host.ts",
   "@openclaw/google-meet:dangerous-exec:src/realtime.ts",
   "@openclaw/matrix:dangerous-exec:src/matrix/deps.ts",
@@ -38,6 +39,7 @@ const OPTIONAL_REVIEWED_PUBLISHABLE_DIST_CRITICAL_FINDINGS = new Set([
   "@openclaw/acpx:dangerous-exec:dist/service-<hash>.js",
   "@openclaw/codex:dangerous-exec:dist/client-<hash>.js",
   "@openclaw/google-meet:dangerous-exec:dist/index.js",
+  "@openclaw/slack:dynamic-code-execution:dist/outbound-payload.test-harness-<hash>.js",
   "@openclaw/voice-call:dangerous-exec:dist/runtime-entry-<hash>.js",
 ]);
 
@@ -89,12 +91,22 @@ function isScannerWalkedPackedPath(packedPath: string): boolean {
 }
 
 function normalizePackedFindingPath(packedPath: string): string {
-  for (const prefix of ["client", "runtime-entry", "service"]) {
+  for (const prefix of ["client", "outbound-payload.test-harness", "runtime-entry", "service"]) {
     if (packedPath.startsWith(`dist/${prefix}-`) && packedPath.endsWith(".js")) {
       return `dist/${prefix}-<hash>.js`;
     }
   }
   return packedPath;
+}
+
+function expectedOptionalReviewedFindingsForPackedPath(
+  packageName: string,
+  packedPath: string,
+): string[] {
+  const normalizedPath = normalizePackedFindingPath(packedPath);
+  return [...OPTIONAL_REVIEWED_PUBLISHABLE_DIST_CRITICAL_FINDINGS].filter(
+    (key) => key.startsWith(`${packageName}:`) && key.endsWith(`:${normalizedPath}`),
+  );
 }
 
 function stageScannerRelevantPackedFiles(
@@ -180,8 +192,10 @@ async function scanPublishablePluginPackage(plugin: PublishablePluginPackage): P
   const unexpectedCriticalFindings: string[] = [];
   const packedFiles = await collectNpmPackedFiles(plugin.packageDir, plugin.packageName);
   for (const packedFile of packedFiles) {
-    const key = `${plugin.packageName}:dangerous-exec:${normalizePackedFindingPath(packedFile)}`;
-    if (OPTIONAL_REVIEWED_PUBLISHABLE_DIST_CRITICAL_FINDINGS.has(key)) {
+    for (const key of expectedOptionalReviewedFindingsForPackedPath(
+      plugin.packageName,
+      packedFile,
+    )) {
       expectedReviewedCriticalFindings.push(key);
     }
   }

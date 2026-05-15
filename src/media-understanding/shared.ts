@@ -2,8 +2,12 @@ import path from "node:path";
 import {
   assertOkOrThrowHttpError,
   createProviderHttpError,
+  readProviderJsonResponse,
 } from "../agents/provider-http-errors.js";
-export { assertOkOrThrowHttpError } from "../agents/provider-http-errors.js";
+export {
+  assertOkOrThrowHttpError,
+  readProviderJsonResponse,
+} from "../agents/provider-http-errors.js";
 import type {
   ProviderRequestCapability,
   ProviderRequestTransport,
@@ -161,7 +165,7 @@ export async function pollProviderOperationJson<TPayload>(params: {
       fetchFn: params.fetchFn,
       requestFailedMessage: params.requestFailedMessage,
     });
-    const payload = (await response.json()) as TPayload;
+    const payload = await readProviderJsonResponse<TPayload>(response, params.requestFailedMessage);
     if (params.isComplete(payload)) {
       return payload;
     }

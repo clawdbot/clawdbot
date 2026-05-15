@@ -762,6 +762,34 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(blockOptions.timeoutMs).toBeTypeOf("number");
   });
 
+  it("strips workflow function response scaffolding from final delivery", async () => {
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => ({
+      payloads: [
+        {
+          text: [
+            "Visible intro.",
+            "<function_calls>",
+            '<invoke name="exec"><parameter name="command">node scripts/search.mjs</parameter></invoke>',
+            "</function_calls>",
+            "<function_response>",
+            'Searching for: "what skills matter most in the age of AI"',
+            "...",
+            "</function_response>",
+            "Visible answer.",
+          ].join("\n"),
+        },
+      ],
+      meta: {},
+    }));
+
+    const { run } = createMinimalRun();
+    const res = await run();
+    const payloads = Array.isArray(res) ? res : res ? [res] : [];
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("Visible intro.\n\n\nVisible answer.");
+  });
+
   it("handles typing for normal and silent tool results", async () => {
     const cases = [
       {

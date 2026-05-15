@@ -8,6 +8,7 @@ import {
   patchCodexNativeWebSearchPayload,
   resolveCodexNativeSearchActivation,
 } from "../codex-native-web-search-core.js";
+import { emitModelTransportDebug } from "../model-transport-debug.js";
 import {
   flattenCompletionMessagesToStringContent,
   stripCompletionMessagesToRoleContent,
@@ -25,6 +26,9 @@ import { mapThinkingLevelToReasoningEffort } from "./reasoning-effort-utils.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 
 type OpenAIServiceTier = "auto" | "default" | "flex" | "priority";
+type OpenClawSimpleStreamOptions = SimpleStreamOptions & {
+  openclawCodeModeToolSurface?: boolean;
+};
 export { resolveOpenAITextVerbosity };
 
 function resolveOpenAITextVerbosityForModel(
@@ -77,6 +81,55 @@ function shouldApplyOpenAIServiceTier(model: {
   baseUrl?: unknown;
 }): boolean {
   return resolveOpenAIResponsesPayloadPolicy(model, { storeMode: "disable" }).allowsServiceTier;
+}
+
+function isCodeModeEnabled(config?: OpenClawConfig): boolean {
+  const tools = config?.tools;
+  if (!tools || typeof tools !== "object") {
+    return false;
+  }
+  const codeMode = (tools as { codeMode?: unknown }).codeMode;
+  if (codeMode === true) {
+    return true;
+  }
+  return Boolean(
+    codeMode &&
+    typeof codeMode === "object" &&
+    (codeMode as { enabled?: unknown }).enabled === true,
+  );
+}
+
+function readPayloadToolName(tool: unknown): string | undefined {
+  if (!tool || typeof tool !== "object") {
+    return undefined;
+  }
+  const record = tool as { name?: unknown; function?: { name?: unknown } };
+  if (typeof record.name === "string") {
+    return record.name;
+  }
+  return typeof record.function?.name === "string" ? record.function.name : undefined;
+}
+
+function filterCodeModePayloadTools(payload: unknown): void {
+  if (!payload || typeof payload !== "object") {
+    return;
+  }
+  const record = payload as { tools?: unknown };
+  if (!Array.isArray(record.tools)) {
+    return;
+  }
+  record.tools = record.tools.filter((tool) => {
+    const name = readPayloadToolName(tool);
+    return name === "exec" || name === "wait";
+  });
+}
+
+function hasCodeModeVisibleTools(context: { tools?: unknown }): boolean {
+  if (!Array.isArray(context.tools)) {
+    return false;
+  }
+  const names = new Set(context.tools.map(readPayloadToolName).filter(Boolean));
+  return names.has("exec") && names.has("wait");
 }
 
 function shouldApplyOpenAIReasoningCompatibility(model: {
@@ -500,6 +553,31 @@ export function createCodexNativeWebSearchWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
+    if (isCodeModeEnabled(params.config) && hasCodeModeVisibleTools(context)) {
+      emitModelTransportDebug(
+        log,
+        `skipping Codex native web search because code mode owns the model tool surface for ${
+          model.provider ?? "unknown"
+        }/${model.id ?? "unknown"}`,
+      );
+      const originalOnPayload = options?.onPayload;
+      const codeModeOptions: OpenClawSimpleStreamOptions = {
+        ...options,
+        openclawCodeModeToolSurface: true,
+        onPayload: (payload) => {
+          filterCodeModePayloadTools(payload);
+          const nextPayload = originalOnPayload?.(payload, model);
+          if (nextPayload !== undefined) {
+            filterCodeModePayloadTools(nextPayload);
+            return nextPayload;
+          }
+          filterCodeModePayloadTools(payload);
+          return undefined;
+        },
+      };
+      return underlying(model, context, codeModeOptions);
+    }
+
     const activation = resolveCodexNativeSearchActivation({
       config: params.config,
       modelProvider: readStringValue(model.provider),

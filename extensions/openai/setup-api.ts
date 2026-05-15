@@ -17,7 +17,6 @@ import {
   OPENAI_CODEX_LOGIN_LABEL,
   OPENAI_CODEX_WIZARD_GROUP,
 } from "./auth-choice-copy.js";
-import { buildOpenAICodexCliBackend } from "./cli-backend.js";
 
 async function runOpenAIProviderAuthMethod(
   methodId: string,
@@ -159,6 +158,5 @@ export default definePluginEntry({
   register(api) {
     api.registerProvider(buildOpenAISetupProvider());
     api.registerProvider(buildOpenAICodexSetupProvider());
-    api.registerCliBackend(buildOpenAICodexCliBackend());
   },
 });

@@ -1125,7 +1125,7 @@ describe("uninstallPlugin", () => {
       path.join(runtimePeerDir, "package.json"),
       `${JSON.stringify({ name: "runtime-peer", version: "1.0.0" }, null, 2)}\n`,
     );
-    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
+    runCommandWithTimeoutMock.mockImplementation(async (argv: string[], options?: unknown) => {
       if (argv[1] === "uninstall") {
         expect(argv).toContain("--legacy-peer-deps");
         await fs.rm(removedPluginDir, { recursive: true, force: true });
@@ -1136,6 +1136,22 @@ describe("uninstallPlugin", () => {
         await fs.writeFile(
           path.join(npmRoot, "package.json"),
           `${JSON.stringify(rootManifest, null, 2)}\n`,
+        );
+        return {
+          code: 0,
+          stdout: "",
+          stderr: "",
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      }
+      if (argv[1] === "install" && argv.includes("--package-lock-only")) {
+        const cwd = (options as { cwd?: string } | undefined)?.cwd;
+        expect(cwd).toBeTruthy();
+        await fs.writeFile(
+          path.join(cwd as string, "package-lock.json"),
+          `${JSON.stringify({ lockfileVersion: 3, packages: { "": {} } }, null, 2)}\n`,
         );
         return {
           code: 0,
@@ -1183,7 +1199,7 @@ describe("uninstallPlugin", () => {
     expect(rootManifest.dependencies?.["removed-plugin"]).toBeUndefined();
     expect(rootManifest.dependencies?.["runtime-peer"]).toBeUndefined();
     expect(rootManifest.openclaw?.managedPeerDependencies ?? []).not.toContain("runtime-peer");
-    expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(2);
+    expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(3);
   });
 
   it("runs npm cleanup when the managed package directory is already absent", async () => {

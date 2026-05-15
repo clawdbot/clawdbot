@@ -47,6 +47,18 @@ function normalizeTelnyxDirection(
   }
 }
 
+function normalizeBase64ForCompare(value: string): string {
+  return value.replace(/=+$/u, "").replace(/-/gu, "+").replace(/_/gu, "/");
+}
+
+function decodeClientStateBase64(value: string): string | null {
+  const buffer = Buffer.from(value, "base64");
+  if (normalizeBase64ForCompare(buffer.toString("base64")) !== normalizeBase64ForCompare(value)) {
+    return null;
+  }
+  return buffer.toString("utf8");
+}
+
 export class TelnyxProvider implements VoiceCallProvider {
   readonly name = "telnyx" as const;
 
@@ -142,12 +154,7 @@ export class TelnyxProvider implements VoiceCallProvider {
     // Decode client_state from Base64 (we encode it in initiateCall)
     let callId = "";
     if (data.payload?.client_state) {
-      try {
-        callId = Buffer.from(data.payload.client_state, "base64").toString("utf8");
-      } catch {
-        // Fallback if not valid Base64
-        callId = data.payload.client_state;
-      }
+      callId = decodeClientStateBase64(data.payload.client_state) ?? data.payload.client_state;
     }
     if (!callId) {
       callId = data.payload?.call_control_id || "";

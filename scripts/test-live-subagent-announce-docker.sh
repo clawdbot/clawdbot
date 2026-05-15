@@ -55,16 +55,22 @@ if [[ -f "$PROFILE_FILE" && -r "$PROFILE_FILE" ]]; then
   PROFILE_STATUS="$PROFILE_FILE"
 fi
 
-if [[ -n "${OPENAI_API_KEY:-}" || -n "${OPENAI_BASE_URL:-}" ]]; then
+if [[ -n "${OPENAI_API_KEY:-}" || -n "${OPENAI_BASE_URL:-}" || -n "${GEMINI_API_KEY:-}" || -n "${GOOGLE_API_KEY:-}" ]]; then
   docker_env_dir="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-subagent-live-env.XXXXXX")"
   TEMP_DIRS+=("$docker_env_dir")
-  docker_env_file="$docker_env_dir/openai.env"
+  docker_env_file="$docker_env_dir/provider.env"
   {
     if [[ -n "${OPENAI_API_KEY:-}" ]]; then
       printf 'OPENCLAW_DOCKER_LIVE_OPENAI_API_KEY=%s\n' "${OPENAI_API_KEY}"
     fi
     if [[ -n "${OPENAI_BASE_URL:-}" ]]; then
       printf 'OPENCLAW_DOCKER_LIVE_OPENAI_BASE_URL=%s\n' "${OPENAI_BASE_URL}"
+    fi
+    if [[ -n "${GEMINI_API_KEY:-}" ]]; then
+      printf 'OPENCLAW_DOCKER_LIVE_GEMINI_API_KEY=%s\n' "${GEMINI_API_KEY}"
+    fi
+    if [[ -n "${GOOGLE_API_KEY:-}" ]]; then
+      printf 'OPENCLAW_DOCKER_LIVE_GOOGLE_API_KEY=%s\n' "${GOOGLE_API_KEY}"
     fi
   } >"$docker_env_file"
   DOCKER_EXTRA_ENV_FILES+=(--env-file "$docker_env_file")
@@ -86,6 +92,14 @@ fi
 if [ -n "${OPENCLAW_DOCKER_LIVE_OPENAI_BASE_URL:-}" ]; then
   export OPENAI_BASE_URL="$OPENCLAW_DOCKER_LIVE_OPENAI_BASE_URL"
   unset OPENCLAW_DOCKER_LIVE_OPENAI_BASE_URL
+fi
+if [ -n "${OPENCLAW_DOCKER_LIVE_GEMINI_API_KEY:-}" ]; then
+  export GEMINI_API_KEY="$OPENCLAW_DOCKER_LIVE_GEMINI_API_KEY"
+  unset OPENCLAW_DOCKER_LIVE_GEMINI_API_KEY
+fi
+if [ -n "${OPENCLAW_DOCKER_LIVE_GOOGLE_API_KEY:-}" ]; then
+  export GOOGLE_API_KEY="$OPENCLAW_DOCKER_LIVE_GOOGLE_API_KEY"
+  unset OPENCLAW_DOCKER_LIVE_GOOGLE_API_KEY
 fi
 export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
 export COREPACK_HOME="${COREPACK_HOME:-$XDG_CACHE_HOME/node/corepack}"

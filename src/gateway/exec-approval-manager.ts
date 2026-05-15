@@ -199,7 +199,10 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
 
   lookupApprovalId(
     input: string,
-    opts: { includeResolved?: boolean } = {},
+    opts: {
+      includeResolved?: boolean;
+      filter?: (record: ExecApprovalRecord<TPayload>) => boolean;
+    } = {},
   ): ExecApprovalIdLookupResult {
     const normalized = input.trim();
     if (!normalized) {
@@ -208,7 +211,8 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
 
     const exact = this.pending.get(normalized);
     if (exact) {
-      return opts.includeResolved || exact.record.resolvedAtMs === undefined
+      return (opts.includeResolved || exact.record.resolvedAtMs === undefined) &&
+        (opts.filter?.(exact.record) ?? true)
         ? { kind: "exact", id: normalized }
         : { kind: "none" };
     }
@@ -217,6 +221,9 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     const matches: string[] = [];
     for (const [id, entry] of this.pending.entries()) {
       if (!opts.includeResolved && entry.record.resolvedAtMs !== undefined) {
+        continue;
+      }
+      if (opts.filter && !opts.filter(entry.record)) {
         continue;
       }
       if (normalizeLowercaseStringOrEmpty(id).startsWith(lowerPrefix)) {

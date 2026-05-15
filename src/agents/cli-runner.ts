@@ -166,6 +166,15 @@ export async function runPreparedCliAgent(
     sessionId: params.sessionId,
     workspaceDir: params.workspaceDir,
     trigger: params.trigger,
+    ...(context.contextWindowInfo?.tokens
+      ? { contextTokenBudget: context.contextWindowInfo.tokens }
+      : {}),
+    ...(context.contextWindowInfo?.source
+      ? { contextWindowSource: context.contextWindowInfo.source }
+      : {}),
+    ...(context.contextWindowInfo?.referenceTokens
+      ? { contextWindowReferenceTokens: context.contextWindowInfo.referenceTokens }
+      : {}),
     ...buildAgentHookContextChannelFields(params),
   } as const;
 
@@ -308,6 +317,15 @@ export async function runPreparedCliAgent(
           sessionId: params.sessionId,
           provider: params.provider,
           model: context.modelId,
+          ...(context.contextWindowInfo?.tokens
+            ? { contextTokenBudget: context.contextWindowInfo.tokens }
+            : {}),
+          ...(context.contextWindowInfo?.source
+            ? { contextWindowSource: context.contextWindowInfo.source }
+            : {}),
+          ...(context.contextWindowInfo?.referenceTokens
+            ? { contextWindowReferenceTokens: context.contextWindowInfo.referenceTokens }
+            : {}),
           resolvedRef: `${params.provider}/${context.modelId}`,
           assistantTexts,
           ...(lastAssistant ? { lastAssistant } : {}),

@@ -757,9 +757,9 @@ describe("monitorSlackProvider tool results", () => {
 
     expect(sendMock).not.toHaveBeenCalled();
     expectReactionFlow({
-      startsWith: ["eyes", "scream"],
-      includes: "scream",
-      endsWith: "scream",
+      startsWith: ["eyes", "x"],
+      includes: "x",
+      endsWith: "x",
     });
   });
 

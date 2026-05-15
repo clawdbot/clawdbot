@@ -110,6 +110,39 @@ describe("nextcloud talk room info", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it("reports malformed room info JSON with a stable channel error", async () => {
+    const release = vi.fn(async () => {});
+    const log = vi.fn();
+    const error = vi.fn();
+    const exit = vi.fn();
+    fetchWithSsrFGuard.mockResolvedValue({
+      response: new Response("{ nope", {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+      release,
+    });
+
+    const kind = await resolveNextcloudTalkRoomKind({
+      account: {
+        accountId: "acct-malformed",
+        baseUrl: "https://nc.example.com",
+        config: {
+          apiUser: "bot",
+          apiPassword: "secret",
+        },
+      } as never,
+      roomToken: "room-malformed",
+      runtime: { log, error, exit },
+    });
+
+    expect(kind).toBeUndefined();
+    expect(error).toHaveBeenCalledWith(
+      "nextcloud-talk: room lookup error: Error: Nextcloud Talk room info failed: malformed JSON response",
+    );
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("returns undefined from room info without credentials or base url", async () => {
     await expect(
       resolveNextcloudTalkRoomKind({

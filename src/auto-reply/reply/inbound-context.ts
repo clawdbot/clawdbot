@@ -1,6 +1,7 @@
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveConversationLabel } from "../../channels/conversation-label.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { resolveCommandTurnContext } from "../command-turn-context.js";
 import type { FinalizedMsgContext, MsgContext } from "../templating.js";
 import { normalizeInboundTextNewlines, sanitizeInboundSystemTags } from "./inbound-text.js";
 
@@ -94,6 +95,13 @@ export function finalizeInboundContext<T extends Record<string, unknown>>(
 
   // Always set. Default-deny when upstream forgets to populate it.
   normalized.CommandAuthorized = normalized.CommandAuthorized === true;
+  normalized.CommandTurn = resolveCommandTurnContext(normalized);
+  if (normalized.CommandTurn.source === "native" || normalized.CommandTurn.source === "text") {
+    normalized.CommandSource = normalized.CommandTurn.source;
+    normalized.CommandAuthorized = normalized.CommandTurn.authorized;
+  } else {
+    normalized.CommandSource = undefined;
+  }
 
   // MediaType/MediaTypes alignment:
   // - No media: do not inject defaults.

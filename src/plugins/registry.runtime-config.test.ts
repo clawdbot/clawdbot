@@ -26,14 +26,20 @@ describe("plugin registry runtime config scope", () => {
     let replaceScope = getPluginRuntimeGatewayRequestScope();
     const config = {} as OpenClawConfig;
     const replaceResult = {
+      path: "/tmp/openclaw.json",
       previousHash: null,
-      nextHash: "next",
+      persistedHash: "persisted-hash",
+      snapshot: { path: "/tmp/openclaw.json" },
+      nextConfig: config,
+      afterWrite: { mode: "auto" },
+      followUp: { mode: "auto", requiresRestart: false },
     } as unknown as Awaited<ReturnType<PluginRuntime["config"]["replaceConfigFile"]>>;
     const mutateConfigFile: PluginRuntime["config"]["mutateConfigFile"] = async () => {
       mutateScope = getPluginRuntimeGatewayRequestScope();
       return {
         ...replaceResult,
         result: undefined,
+        attempts: 1,
       };
     };
     const replaceConfigFile: PluginRuntime["config"]["replaceConfigFile"] = async () => {

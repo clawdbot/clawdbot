@@ -405,6 +405,14 @@ export function createMattermostInteractionHandler(params: {
   const { client, accountId, log } = params;
   const core = getMattermostRuntime();
 
+  function parseInteractionPayload(raw: string): MattermostInteractionPayload {
+    try {
+      return JSON.parse(raw) as MattermostInteractionPayload;
+    } catch {
+      throw new Error("Mattermost interaction body was malformed JSON");
+    }
+  }
+
   return async (req: IncomingMessage, res: ServerResponse) => {
     // Only accept POST
     if (req.method !== "POST") {
@@ -435,7 +443,7 @@ export function createMattermostInteractionHandler(params: {
     let payload: MattermostInteractionPayload;
     try {
       const raw = await readInteractionBody(req);
-      payload = JSON.parse(raw) as MattermostInteractionPayload;
+      payload = parseInteractionPayload(raw);
     } catch (err) {
       log?.(`mattermost interaction: failed to parse body: ${String(err)}`);
       res.statusCode = 400;

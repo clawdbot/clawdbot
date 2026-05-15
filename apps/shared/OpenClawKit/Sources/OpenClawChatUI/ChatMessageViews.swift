@@ -253,7 +253,11 @@ private struct ChatMessageBody: View {
             guard kind == "text" || kind.isEmpty else { return nil }
             return content.text
         }
-        return parts.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        return OpenClawChatMessage.displayText(
+            contentText: parts.joined(separator: "\n"),
+            role: self.message.role,
+            stopReason: self.message.stopReason,
+            errorMessage: self.message.errorMessage)
     }
 
     private var inlineAttachments: [OpenClawChatMessageContent] {

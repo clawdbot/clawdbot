@@ -54,6 +54,11 @@ describe("broadcast dispatch", () => {
     return {
       ...ctx,
       CommandAuthorized: typeof ctx.CommandAuthorized === "boolean" ? ctx.CommandAuthorized : false,
+      CommandTurn: {
+        kind: "normal",
+        source: "message",
+        authorized: false,
+      },
     };
   };
   const mockDispatchReplyFromConfig = vi

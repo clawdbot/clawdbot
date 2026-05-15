@@ -499,11 +499,10 @@ export class GatewayBrowserClient {
       this.flushPending(new Error(`gateway closed (${ev.code}): ${reason}`));
       this.opts.onClose?.({ code: ev.code, reason, error: connectError });
       const connectErrorCode = resolveGatewayErrorDetailCode(connectError);
-      if (
-        connectErrorCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH &&
-        this.deviceTokenRetryBudgetUsed &&
-        !this.pendingDeviceTokenRetry
-      ) {
+      if (connectErrorCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH) {
+        if (this.pendingDeviceTokenRetry) {
+          this.scheduleReconnect();
+        }
         return;
       }
       if (!isNonRecoverableAuthError(connectError)) {

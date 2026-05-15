@@ -1,5 +1,8 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { AcpRuntimeError, type AcpRuntime } from "../runtime-api.js";
+import { AcpRuntimeError, type AcpRuntime, type AcpRuntimeEvent } from "../runtime-api.js";
 import { OPENCLAW_ACPX_LEASE_ID_ARG, OPENCLAW_GATEWAY_INSTANCE_ID_ARG } from "./process-lease.js";
 import { AcpxRuntime, __testing } from "./runtime.js";
 
@@ -25,6 +28,7 @@ function makeRuntime(
     cancel: AcpRuntime["cancel"];
     close: AcpRuntime["close"];
     ensureSession: AcpRuntime["ensureSession"];
+    runTurn: AcpRuntime["runTurn"];
     getStatus: NonNullable<AcpRuntime["getStatus"]>;
     setConfigOption: NonNullable<AcpRuntime["setConfigOption"]>;
     isHealthy(): boolean;
@@ -66,6 +70,7 @@ function makeRuntime(
           cancel: AcpRuntime["cancel"];
           close: AcpRuntime["close"];
           ensureSession: AcpRuntime["ensureSession"];
+          runTurn: AcpRuntime["runTurn"];
           getStatus: NonNullable<AcpRuntime["getStatus"]>;
           setConfigOption: NonNullable<AcpRuntime["setConfigOption"]>;
           isHealthy(): boolean;
@@ -234,6 +239,166 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
     expect(ensureInput).not.toHaveProperty("model");
     expect(ensureInput).not.toHaveProperty("thinking");
+  });
+
+  it("adds Codex wrapper stderr tail to generic session initialization failures", async () => {
+    const wrapperRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acpx-runtime-"));
+    const leaseStore = makeLeaseStore();
+    const wrapperCommand = `node "${path.join(wrapperRoot, "codex-acp-wrapper.mjs")}"`;
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore, {
+      openclawGatewayInstanceId: "gateway-test",
+      openclawProcessLeaseStore: leaseStore.store,
+      openclawWrapperRoot: wrapperRoot,
+      agentRegistry: {
+        resolve: (agentName: string) => (agentName === "codex" ? wrapperCommand : agentName),
+        list: () => ["codex"],
+      },
+    });
+    vi.spyOn(delegate, "ensureSession").mockImplementation(async () => {
+      const leaseId = String(Array.from(leaseStore.leases.values())[0]?.leaseId);
+      await fs.writeFile(
+        path.join(wrapperRoot, `codex-acp-wrapper.stderr.${leaseId}.log`),
+        "noise\nUnhandled error during session/new: deployment missing token=[REDACTED] sk-testsecret1234567890\n",
+        "utf8",
+      );
+      throw new Error("Internal error");
+    });
+
+    const outcome = await runtime
+      .ensureSession({
+        sessionKey: "agent:codex:acp:test",
+        agent: "codex",
+        mode: "oneshot",
+      })
+      .then(
+        () => ({ status: "resolved" as const }),
+        (error) => ({ status: "rejected" as const, error }),
+      );
+
+    expect(outcome.status).toBe("rejected");
+    if (outcome.status !== "rejected") {
+      return;
+    }
+    expect(outcome.error).toMatchObject({
+      name: "AcpRuntimeError",
+      code: "ACP_SESSION_INIT_FAILED",
+      message: expect.stringContaining("deployment missing"),
+    });
+    expect(outcome.error.message).not.toContain("sk-testsecret1234567890");
+  });
+
+  it("adds Codex wrapper stderr tail to generic first-turn failures", async () => {
+    const wrapperRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acpx-runtime-"));
+    await fs.writeFile(
+      path.join(wrapperRoot, "codex-acp-wrapper.stderr.lease-turn.log"),
+      "Unhandled error during turn: upstream model returned 404\n",
+      "utf8",
+    );
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:codex:acp:test",
+        agentCommand: CODEX_ACP_WRAPPER_COMMAND,
+        openclawLeaseId: "lease-turn",
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore, {
+      openclawWrapperRoot: wrapperRoot,
+      agentRegistry: {
+        resolve: (agentName: string) =>
+          agentName === "codex" ? CODEX_ACP_WRAPPER_COMMAND : agentName,
+        list: () => ["codex"],
+      },
+    });
+    vi.spyOn(delegate, "runTurn").mockImplementation(async function* () {
+      const emptyAsyncIterable: AsyncIterable<never> = {
+        [Symbol.asyncIterator]: () => ({
+          next: async () => ({ done: true, value: undefined as never }),
+        }),
+      };
+      yield* emptyAsyncIterable;
+      throw new Error("Internal error");
+    });
+
+    await expect(async () => {
+      for await (const _event of runtime.runTurn({
+        handle: {
+          sessionKey: "agent:codex:acp:test",
+          backend: "acpx",
+          runtimeSessionName: "agent:codex:acp:test",
+          acpxRecordId: "agent:codex:acp:test",
+        },
+        text: "Reply exactly OK",
+        mode: "prompt",
+        requestId: "turn-1",
+      })) {
+        // no-op
+      }
+    }).rejects.toMatchObject({
+      name: "AcpRuntimeError",
+      code: "ACP_TURN_FAILED",
+      message: expect.stringContaining("upstream model returned 404"),
+    });
+  });
+
+  it("adds Codex wrapper stderr tail to generic terminal turn error events", async () => {
+    const wrapperRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acpx-runtime-"));
+    await fs.writeFile(
+      path.join(wrapperRoot, "codex-acp-wrapper.stderr.lease-turn-event.log"),
+      "Unhandled error during turn: profile missing OPENAI_API_KEY\n",
+      "utf8",
+    );
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:codex:acp:test",
+        agentCommand: CODEX_ACP_WRAPPER_COMMAND,
+        openclawLeaseId: "lease-turn-event",
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore, {
+      openclawWrapperRoot: wrapperRoot,
+      agentRegistry: {
+        resolve: (agentName: string) =>
+          agentName === "codex" ? CODEX_ACP_WRAPPER_COMMAND : agentName,
+        list: () => ["codex"],
+      },
+    });
+    vi.spyOn(delegate, "runTurn").mockImplementation(async function* () {
+      yield {
+        type: "error",
+        message: "Internal error",
+        retryable: false,
+      };
+    });
+
+    const events: AcpRuntimeEvent[] = [];
+    for await (const event of runtime.runTurn({
+      handle: {
+        sessionKey: "agent:codex:acp:test",
+        backend: "acpx",
+        runtimeSessionName: "agent:codex:acp:test",
+        acpxRecordId: "agent:codex:acp:test",
+      },
+      text: "Reply exactly OK",
+      mode: "prompt",
+      requestId: "turn-1",
+    })) {
+      events.push(event);
+    }
+
+    expect(events).toEqual([
+      {
+        type: "error",
+        code: "ACP_TURN_FAILED",
+        message: expect.stringContaining("profile missing OPENAI_API_KEY"),
+        retryable: false,
+      },
+    ]);
   });
 
   it("does not normalize model startup for non-Codex ACP agents", async () => {

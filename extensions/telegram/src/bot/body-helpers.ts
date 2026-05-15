@@ -1,4 +1,4 @@
-import type { Chat, Message, MessageOrigin, User } from "@grammyjs/types";
+import type { Chat, Message, MessageOrigin, User } from "grammy/types";
 import type { NormalizedLocation } from "openclaw/plugin-sdk/channel-inbound";
 import {
   normalizeLowercaseStringOrEmpty,

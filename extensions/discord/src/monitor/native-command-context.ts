@@ -87,6 +87,12 @@ export function buildDiscordNativeCommandContext(params: BuildDiscordNativeComma
     MessageThreadId: params.isThreadChannel ? params.channelId : undefined,
     Timestamp: params.timestampMs ?? Date.now(),
     CommandAuthorized: params.commandAuthorized,
+    CommandTurn: {
+      kind: "native" as const,
+      source: "native" as const,
+      authorized: params.commandAuthorized,
+      body: params.prompt,
+    },
     CommandSource: "native" as const,
     // Native slash contexts use To=slash:<user> for interaction routing.
     // For follow-up delivery (for example subagent completion announces),

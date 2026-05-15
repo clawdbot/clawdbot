@@ -93,8 +93,8 @@
   background: rgba(0, 0, 0, 0.15);
   padding: 0.15em 0.4em;
   border-radius: var(--radius-sm);
-  overflow-wrap: normal;
-  word-break: keep-all;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .chat-text :where(pre) {

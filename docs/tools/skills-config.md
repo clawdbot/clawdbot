@@ -90,9 +90,13 @@ Rules:
   bundled skills in the list are eligible (managed, agent, and workspace skills unaffected).
 - `load.extraDirs`: additional skill directories to scan (lowest precedence).
 - `load.allowSymlinkTargets`: trusted real target directories that symlinked
-  skill folders may resolve into even when the symlink lives outside that
-  target root. Use this for intentional sibling-repo layouts such as
-  `~/.agents/skills/manager -> ~/Projects/manager/skills`.
+  workspace, project-agent, or extra-dir skill folders may resolve into even
+  when the symlink lives outside that target root. Use this for intentional
+  sibling-repo layouts such as
+  `<workspace>/skills/manager -> ~/Projects/manager/skills`. Managed
+  `~/.openclaw/skills` and personal `~/.agents/skills` roots may follow
+  skill-directory symlinks from local skill managers by default, but every
+  `SKILL.md` still has to resolve inside its own skill directory.
 - `load.watch`: watch skill folders and refresh the skills snapshot (default: true).
 - `load.watchDebounceMs`: debounce for skill watcher events in milliseconds (default: 250).
 - `install.preferBrew`: prefer brew installers when available (default: true).
@@ -114,10 +118,10 @@ Rules:
 
 ## Symlinked sibling repos
 
-By default, each skill root is a containment boundary. If a skill folder under
-`~/.agents/skills` is a symlink that resolves outside `~/.agents/skills`,
-OpenClaw skips it and logs `Skipping escaped skill path outside its configured
-root`.
+By default, workspace, project-agent, extra-dir, and bundled skill roots are
+containment boundaries. If a skill folder under `<workspace>/skills` is a
+symlink that resolves outside `<workspace>/skills`, OpenClaw skips it and logs
+`Skipping escaped skill path outside its configured root`.
 
 Keep the symlink layout and allow only the trusted target root:
 
@@ -133,10 +137,13 @@ Keep the symlink layout and allow only the trusted target root:
 ```
 
 With this config, a symlink such as
-`~/.agents/skills/manager -> ~/Projects/manager/skills` is accepted after
+`<workspace>/skills/manager -> ~/Projects/manager/skills` is accepted after
 realpath resolution. `extraDirs` also scans the sibling repo directly, while
-`allowSymlinkTargets` preserves the symlinked path for existing agent-skill
-layouts. Keep target entries narrow; do not point at broad roots such as `~` or
+`allowSymlinkTargets` preserves the symlinked path for existing workspace-skill
+layouts. Managed `~/.openclaw/skills` and personal `~/.agents/skills`
+directories already accept skill-directory symlinks because those roots are
+user-owned local skill-manager surfaces; per-skill `SKILL.md` containment still
+applies. Keep target entries narrow; do not point at broad roots such as `~` or
 `~/Projects` unless every skill tree under that root is trusted.
 
 Per-skill fields:

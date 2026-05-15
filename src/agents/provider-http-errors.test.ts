@@ -4,6 +4,7 @@ import {
   assertOkOrThrowHttpError,
   extractProviderErrorDetail,
   extractProviderRequestId,
+  readProviderJsonResponse,
 } from "./provider-http-errors.js";
 
 describe("provider error utils", () => {
@@ -52,6 +53,17 @@ describe("provider error utils", () => {
 
     await expect(assertOkOrThrowHttpError(response, "Legacy provider error")).rejects.toThrow(
       "Legacy provider error (HTTP 400): Bad request [code=invalid_request] [request_id=req_legacy]",
+    );
+  });
+
+  it("wraps malformed successful JSON responses with provider labels", async () => {
+    const response = new Response("{ nope", {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+
+    await expect(readProviderJsonResponse(response, "Provider catalog failed")).rejects.toThrow(
+      "Provider catalog failed: malformed JSON response",
     );
   });
 });

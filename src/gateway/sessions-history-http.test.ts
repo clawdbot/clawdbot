@@ -317,6 +317,22 @@ describe("session history HTTP endpoints", () => {
     });
   });
 
+  test("matches direct REST history paths without trusting malformed Host headers", async () => {
+    await seedSession({ text: "history with bad host" });
+    await withGatewayHarness(async (harness) => {
+      const res = await fetchSessionHistory(harness.port, "agent:main:main", {
+        headers: { Host: "[" },
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as {
+        sessionKey?: string;
+        messages?: Array<{ content?: Array<{ text?: string }> }>;
+      };
+      expect(body.sessionKey).toBe("agent:main:main");
+      expect(body.messages?.[0]?.content?.[0]?.text).toBe("history with bad host");
+    });
+  });
+
   test("returns 404 for unknown sessions", async () => {
     await createSessionStoreFile();
     await withGatewayHarness(async (harness) => {

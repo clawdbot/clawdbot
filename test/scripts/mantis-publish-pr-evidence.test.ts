@@ -76,32 +76,32 @@ function writeFixtureManifest() {
 }
 
 describe("scripts/mantis/publish-pr-evidence", () => {
-  it("renders a manifest-driven PR comment with inline screenshots and video links", () => {
+  it("renders a manifest-driven PR comment that points at the Actions artifact bundle", () => {
     const manifest = loadEvidenceManifest(writeFixtureManifest());
     const body = renderEvidenceComment({
-      artifactRoot: "mantis/discord/pr-1/run-1",
       artifactUrl: "https://github.com/openclaw/openclaw/actions/runs/1/artifacts/2",
       manifest,
       marker: "<!-- mantis-discord-status-reactions -->",
-      rawBase:
-        "https://raw.githubusercontent.com/openclaw/openclaw/qa-artifacts/mantis/discord/pr-1/run-1",
       requestSource: "workflow_dispatch",
       runUrl: "https://github.com/openclaw/openclaw/actions/runs/1",
-      treeUrl: "https://github.com/openclaw/openclaw/tree/qa-artifacts/mantis/discord/pr-1/run-1",
     });
 
     expect(body).toContain("<!-- mantis-discord-status-reactions -->");
     expect(body).toContain("Summary: Mantis reran the scenario.");
-    expect(body).toContain('<table width="100%">');
-    expect(body).toContain('<th width="50%">Baseline queued-only</th>');
-    expect(body).toContain('<th width="50%">Candidate queued -> thinking -> done</th>');
     expect(body).toContain(
-      '<td width="50%" align="center"><img src="https://raw.githubusercontent.com/openclaw/openclaw/qa-artifacts/mantis/discord/pr-1/run-1/baseline.png" width="100%"',
+      "- Artifact: https://github.com/openclaw/openclaw/actions/runs/1/artifacts/2",
     );
+    expect(body).toContain("Artifact files:");
+    expect(body).toContain("- Baseline queued-only: `baseline.png`");
+    expect(body).toContain("- Candidate queued -> thinking -> done: `candidate.png`");
+    expect(body).toContain("- Baseline change MP4: `baseline-change.mp4`");
     expect(body).toContain(
-      "[Baseline change MP4](https://raw.githubusercontent.com/openclaw/openclaw/qa-artifacts/mantis/discord/pr-1/run-1/baseline-change.mp4)",
+      "Raw QA files: https://github.com/openclaw/openclaw/actions/runs/1/artifacts/2",
     );
     expect(body).toContain("- Overall: `true`");
+    expect(body).not.toContain("qa-artifacts");
+    expect(body).not.toContain("raw.githubusercontent.com");
+    expect(body).not.toContain("<img ");
   });
 
   it("allows failure manifests to omit optional visual artifacts", () => {
@@ -162,20 +162,17 @@ describe("scripts/mantis/publish-pr-evidence", () => {
       "mantis-evidence.json",
     ]);
     const body = renderEvidenceComment({
-      artifactRoot: "mantis/slack/pr-1/run-1",
       artifactUrl: "https://github.com/openclaw/openclaw/actions/runs/1/artifacts/2",
       manifest,
       marker: "<!-- mantis-slack-desktop-smoke -->",
-      rawBase:
-        "https://raw.githubusercontent.com/openclaw/openclaw/qa-artifacts/mantis/slack/pr-1/run-1",
       requestSource: "workflow_dispatch",
       runUrl: "https://github.com/openclaw/openclaw/actions/runs/1",
-      treeUrl: "https://github.com/openclaw/openclaw/tree/qa-artifacts/mantis/slack/pr-1/run-1",
     });
 
     expect(body).toContain("Summary: Mantis could not finish VM setup.");
     expect(body).toContain("- Overall: `false`");
     expect(body).not.toContain("<img ");
+    expect(body).not.toContain("qa-artifacts");
   });
 
   it("rejects artifact paths that escape the manifest directory", () => {

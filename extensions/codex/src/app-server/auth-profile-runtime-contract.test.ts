@@ -7,9 +7,35 @@ import {
 } from "openclaw/plugin-sdk/agent-harness";
 import { AUTH_PROFILE_RUNTIME_CONTRACT } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { runCodexAppServerAttempt, __testing } from "./run-attempt.js";
+import type { CodexAppServerClientFactory } from "./client-factory.js";
+import { runCodexAppServerAttempt as runCodexAppServerAttemptImpl } from "./run-attempt.js";
 import { readCodexAppServerBinding, writeCodexAppServerBinding } from "./session-binding.js";
 import { createCodexTestModel } from "./test-support.js";
+
+let codexAppServerClientFactoryForTest: CodexAppServerClientFactory | undefined;
+
+type RunCodexAppServerAttemptOptions = NonNullable<
+  Parameters<typeof runCodexAppServerAttemptImpl>[1]
+>;
+
+function setCodexAppServerClientFactoryForTest(factory: CodexAppServerClientFactory): void {
+  codexAppServerClientFactoryForTest = factory;
+}
+
+function resetCodexAppServerClientFactoryForTest(): void {
+  codexAppServerClientFactoryForTest = undefined;
+}
+
+function runCodexAppServerAttempt(
+  params: EmbeddedRunAttemptParams,
+  options: RunCodexAppServerAttemptOptions = {},
+) {
+  const clientFactory = options.clientFactory ?? codexAppServerClientFactoryForTest;
+  return runCodexAppServerAttemptImpl(
+    params,
+    clientFactory ? { ...options, clientFactory } : options,
+  );
+}
 
 function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAttemptParams {
   return {
@@ -85,29 +111,27 @@ function createCodexAuthProfileHarness(params: { startMethod: "thread/start" | "
   const seenAgentDirs: Array<string | undefined> = [];
   const requests: Array<{ method: string; params: unknown }> = [];
   let notify: (notification: unknown) => Promise<void> = async () => undefined;
-  __testing.setCodexAppServerClientFactoryForTests(
-    async (_startOptions, authProfileId, agentDir) => {
-      seenAuthProfileIds.push(authProfileId);
-      seenAgentDirs.push(agentDir);
-      return {
-        request: vi.fn(async (method: string, requestParams?: unknown) => {
-          requests.push({ method, params: requestParams });
-          if (method === params.startMethod) {
-            return threadStartResult();
-          }
-          if (method === "turn/start") {
-            return turnStartResult();
-          }
-          throw new Error(`unexpected method: ${method}`);
-        }),
-        addNotificationHandler: (handler: (notification: unknown) => Promise<void>) => {
-          notify = handler;
-          return () => undefined;
-        },
-        addRequestHandler: () => () => undefined,
-      } as never;
-    },
-  );
+  setCodexAppServerClientFactoryForTest(async (_startOptions, authProfileId, agentDir) => {
+    seenAuthProfileIds.push(authProfileId);
+    seenAgentDirs.push(agentDir);
+    return {
+      request: vi.fn(async (method: string, requestParams?: unknown) => {
+        requests.push({ method, params: requestParams });
+        if (method === params.startMethod) {
+          return threadStartResult();
+        }
+        if (method === "turn/start") {
+          return turnStartResult();
+        }
+        throw new Error(`unexpected method: ${method}`);
+      }),
+      addNotificationHandler: (handler: (notification: unknown) => Promise<void>) => {
+        notify = handler;
+        return () => undefined;
+      },
+      addRequestHandler: () => () => undefined,
+    } as never;
+  });
   return {
     seenAuthProfileIds,
     seenAgentDirs,
@@ -138,7 +162,7 @@ describe("Auth profile runtime contract - Codex app-server adapter", () => {
 
   afterEach(async () => {
     abortAgentHarnessRun(AUTH_PROFILE_RUNTIME_CONTRACT.sessionId);
-    __testing.resetCodexAppServerClientFactoryForTests();
+    resetCodexAppServerClientFactoryForTest();
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 

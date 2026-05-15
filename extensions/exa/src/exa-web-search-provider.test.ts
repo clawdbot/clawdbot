@@ -231,4 +231,10 @@ describe("exa web search provider", () => {
       docs: "https://docs.openclaw.ai/tools/web",
     });
   });
+
+  it("reports malformed Exa API JSON with a stable provider error", async () => {
+    await expect(__testing.readExaSearchResults(new Response("{ nope"))).rejects.toThrow(
+      "Exa API returned malformed JSON",
+    );
+  });
 });

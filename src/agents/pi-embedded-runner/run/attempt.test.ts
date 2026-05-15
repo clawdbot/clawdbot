@@ -238,6 +238,23 @@ describe("buildToolSearchRunPlan", () => {
     expect(plan.emptyAllowlistCallableNames).toEqual(["tool-search-client:client_pick_file"]);
   });
 
+  it("keeps code-mode control tools in replay-safe names", () => {
+    const plan = buildToolSearchRunPlan({
+      visibleTools: [{ name: "exec" }, { name: "wait" }] as never,
+      uncompactedTools: [{ name: "fake_plugin_tool" }] as never,
+      clientTools: [],
+      catalogRegistered: true,
+      catalogToolCount: 1,
+      controlsEnabled: true,
+      controlNames: ["exec", "wait"],
+      explicitAllowlistSources: [{ entries: ["missing_tool"] }],
+    });
+
+    expect([...plan.visibleAllowedToolNames]).toEqual(["exec", "wait"]);
+    expect([...plan.replayAllowedToolNames]).toEqual(["fake_plugin_tool", "exec", "wait"]);
+    expect(plan.emptyAllowlistCallableNames).toEqual(["tool-search:0"]);
+  });
+
   it("does not let unrelated client tools mask a bad explicit allowlist", () => {
     const plan = buildToolSearchRunPlan({
       visibleTools: [{ name: "tool_search_code" }] as never,

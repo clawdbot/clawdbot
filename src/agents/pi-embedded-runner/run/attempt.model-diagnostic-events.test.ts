@@ -390,6 +390,9 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
         model: "gpt-5.4",
         api: "openai-responses",
         transport: "http",
+        contextTokenBudget: 150_000,
+        contextWindowSource: "agentContextTokens",
+        contextWindowReferenceTokens: 200_000,
         trace: createDiagnosticTraceContext(),
         nextCallId: () => "call-hook",
       },
@@ -413,16 +416,25 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     expect(startedEvent.model).toBe("gpt-5.4");
     expect(startedEvent.api).toBe("openai-responses");
     expect(startedEvent.transport).toBe("http");
+    expect(startedEvent.contextTokenBudget).toBe(150_000);
+    expect(startedEvent.contextWindowSource).toBe("agentContextTokens");
+    expect(startedEvent.contextWindowReferenceTokens).toBe(200_000);
     const startedCtx = requireMockRecordArg(started, 0, 1, "started hook context");
     expect(startedCtx.runId).toBe("run-1");
     expect(startedCtx.sessionKey).toBe("session-key");
     expect(startedCtx.sessionId).toBe("session-id");
     expect(startedCtx.modelProviderId).toBe("openai");
     expect(startedCtx.modelId).toBe("gpt-5.4");
+    expect(startedCtx.contextTokenBudget).toBe(150_000);
+    expect(startedCtx.contextWindowSource).toBe("agentContextTokens");
+    expect(startedCtx.contextWindowReferenceTokens).toBe(200_000);
     const endedEvent = requireMockRecordArg(ended, 0, 0, "ended hook event");
     expect(endedEvent.runId).toBe("run-1");
     expect(endedEvent.callId).toBe("call-hook");
     expect(endedEvent.outcome).toBe("completed");
+    expect(endedEvent.contextTokenBudget).toBe(150_000);
+    expect(endedEvent.contextWindowSource).toBe("agentContextTokens");
+    expect(endedEvent.contextWindowReferenceTokens).toBe(200_000);
     expectNumberField(endedEvent, "durationMs");
     expectNumberField(endedEvent, "responseStreamBytes");
     expectNumberField(endedEvent, "timeToFirstByteMs");

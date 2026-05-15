@@ -1,9 +1,7 @@
 #!/usr/bin/env node
-import { execFileSync, spawnSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import {
-  copyFileSync,
   existsSync,
-  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -121,86 +119,12 @@ export function loadEvidenceManifest(manifestPath) {
   };
 }
 
-function encodePathForUrl(input) {
-  return input
-    .split("/")
-    .filter(Boolean)
-    .map((part) => encodeURIComponent(part))
-    .join("/");
-}
-
-function artifactUrl(rawBase, artifact) {
-  return `${rawBase}/${encodePathForUrl(artifact.targetPath)}`;
-}
-
-function byLane(artifacts, kind) {
-  const lanes = new Map();
-  for (const artifact of artifacts) {
-    if (artifact.kind !== kind) {
-      continue;
-    }
-    lanes.set(artifact.lane, artifact);
-  }
-  return lanes;
-}
-
-function findPair(artifacts, kind, leftLane, rightLane) {
-  const lanes = byLane(artifacts, kind);
-  const left = lanes.get(leftLane);
-  const right = lanes.get(rightLane);
-  return left && right ? { left, right } : null;
-}
-
-function renderPairTable({ pair, rawBase }) {
-  const { left, right } = pair;
-  if (!left || !right) {
-    return "";
-  }
-  return [
-    '<table width="100%">',
-    "  <thead>",
-    "    <tr>",
-    `      <th width="50%">${left.label}</th>`,
-    `      <th width="50%">${right.label}</th>`,
-    "    </tr>",
-    "  </thead>",
-    "  <tbody>",
-    "    <tr>",
-    `      <td width="50%" align="center"><img src="${artifactUrl(rawBase, left)}" width="100%" alt="${left.alt ?? left.label}"></td>`,
-    `      <td width="50%" align="center"><img src="${artifactUrl(rawBase, right)}" width="100%" alt="${right.alt ?? right.label}"></td>`,
-    "    </tr>",
-    "  </tbody>",
-    "</table>",
-    "",
-  ].join("\n");
-}
-
-function renderSingleImageTables({ artifacts, rawBase, pairedKeys }) {
-  const renderedPairs = new Set(pairedKeys);
-  return artifacts
-    .filter(
-      (artifact) => artifact.inline && !renderedPairs.has(`${artifact.kind}:${artifact.lane}`),
-    )
-    .map((artifact) => {
-      const width = Math.min(Number(artifact.width ?? 720) || 720, 900);
-      return [
-        `**${artifact.label}**`,
-        "",
-        `<img src="${artifactUrl(rawBase, artifact)}" width="${width}" alt="${artifact.alt ?? artifact.label}">`,
-        "",
-      ].join("\n");
-    })
-    .join("\n");
-}
-
-function renderLinkList({ artifacts, kind, rawBase, title }) {
-  const links = artifacts
-    .filter((artifact) => artifact.kind === kind)
-    .map((artifact) => `- [${artifact.label}](${artifactUrl(rawBase, artifact)})`);
+function renderArtifactFileList(artifacts) {
+  const links = artifacts.map((artifact) => `- ${artifact.label}: \`${artifact.targetPath}\``);
   if (links.length === 0) {
     return "";
   }
-  return [`${title}:`, ...links, ""].join("\n");
+  return ["Artifact files:", ...links, ""].join("\n");
 }
 
 function laneLine(label, lane) {
@@ -220,27 +144,15 @@ function laneLine(label, lane) {
 }
 
 export function renderEvidenceComment({
-  artifactRoot,
   artifactUrl: actionsArtifactUrl,
   manifest,
   marker,
-  rawBase,
   requestSource,
   runUrl,
-  treeUrl,
 }) {
   const comparison = manifest.comparison ?? {};
   const baseline = comparison.baseline;
   const candidate = comparison.candidate;
-  const pairs = [
-    findPair(manifest.artifacts, "timeline", "baseline", "candidate"),
-    findPair(manifest.artifacts, "desktopScreenshot", "baseline", "candidate"),
-    findPair(manifest.artifacts, "motionPreview", "baseline", "candidate"),
-  ].filter(Boolean);
-  const pairedKeys = pairs.flatMap((pair) => [
-    `${pair.left.kind}:${pair.left.lane}`,
-    `${pair.right.kind}:${pair.right.lane}`,
-  ]);
   const lines = [
     marker,
     `## ${manifest.title}`,
@@ -270,39 +182,8 @@ export function renderEvidenceComment({
     lines.push(`- Overall: \`${comparison.pass}\``);
   }
   lines.push("");
-
-  const pairedSections = pairs.map((pair) => renderPairTable({ pair, rawBase }));
-
-  lines.push(...pairedSections);
-  const singleTables = renderSingleImageTables({
-    artifacts: manifest.artifacts,
-    pairedKeys,
-    rawBase,
-  });
-  if (singleTables) {
-    lines.push(singleTables);
-  }
-  const motionClips = renderLinkList({
-    artifacts: manifest.artifacts,
-    kind: "motionClip",
-    rawBase,
-    title: "Motion-trimmed clips",
-  });
-  if (motionClips) {
-    lines.push(motionClips);
-  }
-  const fullVideos = renderLinkList({
-    artifacts: manifest.artifacts,
-    kind: "fullVideo",
-    rawBase,
-    title: "Full videos",
-  });
-  if (fullVideos) {
-    lines.push(fullVideos);
-  }
-  lines.push(
-    `Raw QA files: ${treeUrl ?? `https://github.com/${process.env.GITHUB_REPOSITORY}/tree/qa-artifacts/${artifactRoot}`}`,
-  );
+  lines.push(renderArtifactFileList(manifest.artifacts));
+  lines.push(`Raw QA files: ${actionsArtifactUrl}`);
   return `${lines.join("\n").replace(/\n{3,}/gu, "\n\n")}\n`;
 }
 
@@ -312,77 +193,6 @@ function run(command, args, options = {}) {
     stdio: options.stdio ?? ["ignore", "pipe", "inherit"],
     ...options,
   });
-}
-
-function runStatus(command, args, options = {}) {
-  const result = spawnSync(command, args, {
-    stdio: "ignore",
-    ...options,
-  });
-  if (result.error) {
-    throw result.error;
-  }
-  return result.status ?? 1;
-}
-
-function publishArtifactFiles({ artifactRoot, ghToken, manifest, repo }) {
-  const worktree = mkdtempSync(path.join(tmpdir(), "mantis-qa-artifacts-"));
-  const safeArtifactRoot = normalizeTargetPath(artifactRoot);
-  try {
-    run("git", ["init", "--quiet", worktree]);
-    run("git", ["-C", worktree, "config", "user.name", "github-actions[bot]"]);
-    run("git", [
-      "-C",
-      worktree,
-      "config",
-      "user.email",
-      "41898282+github-actions[bot]@users.noreply.github.com",
-    ]);
-    run("git", [
-      "-C",
-      worktree,
-      "remote",
-      "add",
-      "origin",
-      `https://x-access-token:${ghToken}@github.com/${repo}.git`,
-    ]);
-    try {
-      run("git", ["-C", worktree, "fetch", "--quiet", "origin", "qa-artifacts"]);
-      run("git", ["-C", worktree, "checkout", "--quiet", "-B", "qa-artifacts", "FETCH_HEAD"]);
-    } catch {
-      run("git", ["-C", worktree, "checkout", "--quiet", "--orphan", "qa-artifacts"]);
-    }
-
-    const destinationRoot = path.join(worktree, safeArtifactRoot);
-    for (const artifact of manifest.artifacts) {
-      const destination = assertInside(
-        destinationRoot,
-        path.resolve(destinationRoot, artifact.targetPath),
-        `Artifact target ${artifact.targetPath}`,
-      );
-      mkdirSync(path.dirname(destination), { recursive: true });
-      copyFileSync(artifact.source, destination);
-    }
-
-    run("git", ["-C", worktree, "add", safeArtifactRoot]);
-    const hasChanges = runStatus("git", ["-C", worktree, "diff", "--cached", "--quiet"]) !== 0;
-    if (hasChanges) {
-      run("git", [
-        "-C",
-        worktree,
-        "commit",
-        "--quiet",
-        "-m",
-        `qa: publish Mantis evidence for ${manifest.id}`,
-      ]);
-      run("git", ["-C", worktree, "push", "--quiet", "origin", "HEAD:qa-artifacts"]);
-    } else {
-      console.log("No QA evidence artifact changes to publish.");
-    }
-  } finally {
-    rmSync(worktree, { force: true, recursive: true });
-  }
-  return safeArtifactRoot;
 }
 
 function upsertPrComment({ body, marker, prNumber, repo }) {
@@ -446,25 +256,18 @@ export function publishEvidence(rawArgs = process.argv.slice(2)) {
   if (!ghToken) {
     throw new Error("Missing GH_TOKEN or GITHUB_TOKEN.");
   }
+  if (!args.artifact_url) {
+    throw new Error("Missing --artifact-url. Mantis evidence must use Actions artifacts, not Git.");
+  }
 
   const manifest = loadEvidenceManifest(args.manifest);
-  const artifactRoot = publishArtifactFiles({
-    artifactRoot: args.artifact_root,
-    ghToken,
-    manifest,
-    repo,
-  });
-  const rawBase = `https://raw.githubusercontent.com/${repo}/qa-artifacts/${encodePathForUrl(artifactRoot)}`;
-  const treeUrl = `https://github.com/${repo}/tree/qa-artifacts/${encodePathForUrl(artifactRoot)}`;
+  normalizeTargetPath(args.artifact_root);
   const body = renderEvidenceComment({
-    artifactRoot,
     artifactUrl: args.artifact_url,
     manifest,
     marker: args.marker,
-    rawBase,
     requestSource: args.request_source,
     runUrl: args.run_url,
-    treeUrl,
   });
   upsertPrComment({
     body,

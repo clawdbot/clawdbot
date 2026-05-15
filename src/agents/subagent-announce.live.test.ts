@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { clearRuntimeConfigSnapshot, type OpenClawConfig } from "../config/config.js";
@@ -38,12 +39,90 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function openAiConfig(
+type LiveSubagentModelConfig = {
+  modelKey: string;
+  provider: "openai" | "google";
+  requiredEnv: "OPENAI_API_KEY" | "GEMINI_API_KEY" | "GOOGLE_API_KEY";
+};
+type LiveSubagentModelProviders = NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>;
+
+function resolveLiveSubagentModelConfig(): LiveSubagentModelConfig {
+  const modelKey = process.env.OPENCLAW_LIVE_SUBAGENT_E2E_MODEL?.trim() || "openai/gpt-5.5";
+  if (modelKey.startsWith("google/")) {
+    return {
+      modelKey,
+      provider: "google",
+      requiredEnv: process.env.GEMINI_API_KEY?.trim() ? "GEMINI_API_KEY" : "GOOGLE_API_KEY",
+    };
+  }
+  return { modelKey, provider: "openai", requiredEnv: "OPENAI_API_KEY" };
+}
+
+function requireLiveSubagentAuth(config: LiveSubagentModelConfig): void {
+  expect(process.env[config.requiredEnv]?.trim(), config.requiredEnv).toBeTruthy();
+}
+
+function liveSubagentConfig(
   modelKey: string,
   workspace: string,
   port: number,
   token: string,
+  options?: { toolAllow?: string[] },
 ): OpenClawConfig {
+  const providerConfig = resolveLiveSubagentModelConfig();
+  const modelId = modelKey.replace(/^(openai|google)\//u, "");
+  const providers: LiveSubagentModelProviders = {};
+  if (providerConfig.provider === "google") {
+    providers.google = {
+      api: "google-generative-ai" as const,
+      agentRuntime: { id: "pi" },
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      apiKey: {
+        source: "env" as const,
+        provider: "default" as const,
+        id: providerConfig.requiredEnv,
+      },
+      timeoutSeconds: 300,
+      models: [
+        {
+          id: modelId,
+          name: modelId,
+          api: "google-generative-ai" as const,
+          agentRuntime: { id: "pi" },
+          input: ["text" as const],
+          reasoning: true,
+          contextWindow: 1_048_576,
+          maxTokens: 8_192,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        },
+      ],
+    };
+  } else {
+    providers.openai = {
+      api: "openai-responses" as const,
+      agentRuntime: { id: "pi" },
+      apiKey: {
+        source: "env" as const,
+        provider: "default" as const,
+        id: "OPENAI_API_KEY",
+      },
+      baseUrl: "https://api.openai.com/v1",
+      timeoutSeconds: 300,
+      models: [
+        {
+          id: modelId,
+          name: modelId,
+          api: "openai-responses" as const,
+          agentRuntime: { id: "pi" },
+          input: ["text" as const],
+          reasoning: true,
+          contextWindow: 1_047_576,
+          maxTokens: 8_192,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        },
+      ],
+    };
+  }
   return {
     gateway: {
       mode: "local",
@@ -52,32 +131,9 @@ function openAiConfig(
       controlUi: { enabled: false },
     },
     plugins: { enabled: false },
-    tools: {
-      allow: ["sessions_spawn", "sessions_yield", "subagents"],
-    },
+    tools: { allow: options?.toolAllow ?? ["sessions_spawn", "sessions_yield", "subagents"] },
     models: {
-      providers: {
-        openai: {
-          api: "openai-responses",
-          agentRuntime: { id: "pi" },
-          apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-          baseUrl: "https://api.openai.com/v1",
-          timeoutSeconds: 300,
-          models: [
-            {
-              id: modelKey.replace(/^openai\//u, ""),
-              name: modelKey.replace(/^openai\//u, ""),
-              api: "openai-responses",
-              agentRuntime: { id: "pi" },
-              input: ["text"],
-              reasoning: true,
-              contextWindow: 1_047_576,
-              maxTokens: 8_192,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            },
-          ],
-        },
-      },
+      providers,
     },
     agents: {
       defaults: {
@@ -155,11 +211,12 @@ describeLive("subagent announce live", () => {
   it(
     "lets a parent steer a subagent and receives completion through in-process agent dispatch",
     async () => {
-      expect(process.env.OPENAI_API_KEY?.trim(), "OPENAI_API_KEY").toBeTruthy();
+      const modelConfig = resolveLiveSubagentModelConfig();
+      requireLiveSubagentAuth(modelConfig);
 
       const token = `subagent-live-${randomUUID()}`;
       const port = 30_000 + Math.floor(Math.random() * 10_000);
-      const modelKey = process.env.OPENCLAW_LIVE_SUBAGENT_E2E_MODEL?.trim() || "openai/gpt-5.5";
+      const modelKey = modelConfig.modelKey;
       const nonce = randomBytes(3).toString("hex").toUpperCase();
       const childToken = `CHILD_STEERED_${nonce}`;
       const parentToken = `PARENT_SAW_${childToken}`;
@@ -226,7 +283,7 @@ describeLive("subagent announce live", () => {
           OPENCLAW_PLUGINS_PATHS: undefined,
         },
       });
-      await state.writeConfig(openAiConfig(modelKey, state.workspaceDir, port, token));
+      await state.writeConfig(liveSubagentConfig(modelKey, state.workspaceDir, port, token));
       clearRuntimeConfigSnapshot();
       clearCurrentPluginMetadataSnapshot();
 
@@ -313,5 +370,147 @@ describeLive("subagent announce live", () => {
       expect(inProcessAgentDispatches.length).toBeGreaterThanOrEqual(1);
     },
     10 * 60_000,
+  );
+
+  it(
+    "runs parallel isolated Gemini subagents with tool-heavy schemas",
+    async () => {
+      const modelConfig = resolveLiveSubagentModelConfig();
+      if (!modelConfig.modelKey.startsWith("google/")) {
+        console.warn(
+          "[subagent-stress] skip: set OPENCLAW_LIVE_SUBAGENT_E2E_MODEL=google/gemini-3.1-pro-preview",
+        );
+        return;
+      }
+      requireLiveSubagentAuth(modelConfig);
+
+      const token = `subagent-stress-${randomUUID()}`;
+      const port = 30_000 + Math.floor(Math.random() * 10_000);
+      const nonce = randomBytes(3).toString("hex").toUpperCase();
+      const sessionKey = `agent:main:live-subagent-stress-${nonce.toLowerCase()}`;
+      const childTokens = [1, 2, 3].map((index) => `GEMINI_STRESS_${nonce}_${index}`);
+      const parentToken = `GEMINI_STRESS_PARENT_${nonce}`;
+
+      state = await createOpenClawTestState({
+        label: "subagent-gemini-stress-live",
+        layout: "split",
+        env: {
+          OPENCLAW_SKIP_CHANNELS: "1",
+          OPENCLAW_SKIP_CRON: "1",
+          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+          OPENCLAW_SKIP_CANVAS_HOST: "1",
+          OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+          OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY: "1",
+          OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
+          OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+          OPENCLAW_PLUGIN_CATALOG_PATHS: undefined,
+          OPENCLAW_PLUGINS_PATHS: undefined,
+          OPENCLAW_DEBUG_MODEL_TRANSPORT: "1",
+          OPENCLAW_DEBUG_MODEL_PAYLOAD: "tools",
+          OPENCLAW_DEBUG_SSE: "events",
+        },
+      });
+      await fs.writeFile(
+        path.join(state.workspaceDir, "package.json"),
+        `${JSON.stringify({ name: "openclaw-gemini-stress-live", private: true }, null, 2)}\n`,
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(state.workspaceDir, "AGENTS.md"),
+        "OpenClaw live stress test workspace. Keep responses concise.\n",
+        "utf8",
+      );
+      await state.writeConfig(
+        liveSubagentConfig(modelConfig.modelKey, state.workspaceDir, port, token, {
+          toolAllow: [
+            "sessions_spawn",
+            "sessions_yield",
+            "subagents",
+            "bash",
+            "read",
+            "web_search",
+            "memory_search",
+          ],
+        }),
+      );
+      clearRuntimeConfigSnapshot();
+      clearCurrentPluginMetadataSnapshot();
+
+      server = await startGatewayServer(port, {
+        bind: "loopback",
+        auth: { mode: "token", token },
+        controlUiEnabled: false,
+      });
+      client = await createGatewayClient({ port, token });
+
+      let initialError: unknown;
+      const initialRequest = client.request<AgentPayload>(
+        "agent",
+        {
+          sessionKey,
+          idempotencyKey: `live-subagent-stress-${randomUUID()}`,
+          deliver: false,
+          timeout: 420,
+          message: [
+            "Run this exact OpenClaw Gemini subagent stress scenario. Use tool calls, not prose.",
+            `Use nonce ${nonce}.`,
+            "Spawn all three children before waiting for any child result.",
+            ...childTokens.map((childToken, index) => {
+              const childNumber = index + 1;
+              return `Call sessions_spawn for child ${childNumber} with exactly this JSON input: ${JSON.stringify(
+                {
+                  task: [
+                    `You are stress child ${childNumber}.`,
+                    "Use available tools for a tiny multi-tool check.",
+                    "First read package.json if the read tool is available.",
+                    "Then run a tiny shell command if the bash tool is available: printf openclaw.",
+                    "If web_search or memory_search is available, use at most one small query.",
+                    `After the tool work, reply exactly ${childToken}.`,
+                  ].join(" "),
+                  taskName: `gemini_stress_${childNumber}`,
+                  cleanup: "keep",
+                  context: "isolated",
+                  runTimeoutSeconds: 300,
+                },
+              )}.`;
+            }),
+            `After the three spawn calls are accepted, call sessions_yield with message="waiting for ${childTokens.join(
+              ",",
+            )}" and wait for all child completion events.`,
+            `Reply exactly ${parentToken} only after all three child tokens are visible.`,
+          ].join("\n"),
+        },
+        { expectFinal: true, timeoutMs: REQUEST_TIMEOUT_MS },
+      );
+      initialRequest.catch((error: unknown) => {
+        initialError = error;
+      });
+
+      const completedRuns = await waitFor("three Gemini stress child completions", () => {
+        if (initialError) {
+          throw initialError;
+        }
+        const runs = listSubagentRunsForRequester(sessionKey).filter((run) =>
+          run.taskName?.startsWith("gemini_stress_"),
+        );
+        const completed = childTokens.every((childToken) =>
+          runs.some(
+            (run) =>
+              run.frozenResultText?.includes(childToken) === true && run.outcome?.status === "ok",
+          ),
+        );
+        return completed ? runs : undefined;
+      });
+
+      expect(completedRuns).toHaveLength(3);
+      for (const childToken of childTokens) {
+        expect(completedRuns.some((run) => run.frozenResultText?.includes(childToken))).toBe(true);
+      }
+
+      const parent = await initialRequest;
+      expect(extractPayloadText(parent.result)).toContain(parentToken);
+    },
+    12 * 60_000,
   );
 });

@@ -69,6 +69,7 @@ describe("isTransientNetworkError", () => {
       "UND_ERR_SOCKET",
       "UND_ERR_HEADERS_TIMEOUT",
       "UND_ERR_BODY_TIMEOUT",
+      "ERR_HTTP2_INVALID_SESSION",
       "ERR_SSL_WRONG_VERSION_NUMBER",
       "ERR_SSL_PROTOCOL_RETURNED_AN_ERROR",
     ];
@@ -101,6 +102,17 @@ describe("isTransientNetworkError", () => {
     const outerCause = Object.assign(new Error("wrapper"), { cause: innerCause });
     const error = Object.assign(new TypeError("fetch failed"), { cause: outerCause });
     expect(isTransientNetworkError(error)).toBe(true);
+  });
+
+  it("returns true for destroyed HTTP/2 sessions from undici", () => {
+    const innerCause = Object.assign(new Error("The session has been destroyed"), {
+      code: "ERR_HTTP2_INVALID_SESSION",
+    });
+    const outerCause = Object.assign(new Error("model call failed"), { cause: innerCause });
+
+    expect(isTransientNetworkError(innerCause)).toBe(true);
+    expect(isTransientNetworkError(outerCause)).toBe(true);
+    expect(isTransientNetworkError(new Error("ERR_HTTP2_INVALID_SESSION"))).toBe(true);
   });
 
   it("returns true for Slack request errors that wrap network codes in .original", () => {
@@ -375,6 +387,12 @@ describe("isTransientUnhandledRejectionError", () => {
     const rawAddressUnavailable = new Error(
       "connect EADDRNOTAVAIL 2607:6bc0::10:443 - Local (:::0)",
     );
+    const destroyedHttp2Session = Object.assign(new Error("The session has been destroyed"), {
+      code: "ERR_HTTP2_INVALID_SESSION",
+    });
+    const wrappedDestroyedHttp2Session = Object.assign(new Error("model call failed"), {
+      cause: destroyedHttp2Session,
+    });
     const generic = new Error("boom");
 
     expect(isBenignUncaughtExceptionError(epipe)).toBe(true);
@@ -384,6 +402,9 @@ describe("isTransientUnhandledRejectionError", () => {
     expect(isBenignUncaughtExceptionError(rawHostUnreachable)).toBe(true);
     expect(isBenignUncaughtExceptionError(addressUnavailable)).toBe(true);
     expect(isBenignUncaughtExceptionError(rawAddressUnavailable)).toBe(true);
+    expect(isBenignUncaughtExceptionError(destroyedHttp2Session)).toBe(true);
+    expect(isBenignUncaughtExceptionError(wrappedDestroyedHttp2Session)).toBe(true);
+    expect(isBenignUncaughtExceptionError(new Error("ERR_HTTP2_INVALID_SESSION"))).toBe(true);
     expect(isBenignUncaughtExceptionError(generic)).toBe(false);
   });
   it("returns true for transient SQLite errors", () => {

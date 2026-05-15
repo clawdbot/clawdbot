@@ -31,7 +31,15 @@ export async function postJson<T>(params: {
         }
         throw err;
       }
-      return await params.parse(await res.json());
+      return await params.parse(await readJsonResponse(res, params.errorPrefix));
     },
   });
+}
+
+async function readJsonResponse(res: Response, errorPrefix: string): Promise<unknown> {
+  try {
+    return await res.json();
+  } catch (cause) {
+    throw new Error(`${errorPrefix}: malformed JSON response`, { cause });
+  }
 }

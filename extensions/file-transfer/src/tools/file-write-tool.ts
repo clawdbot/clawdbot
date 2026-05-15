@@ -21,6 +21,18 @@ import {
   FILE_WRITE_TOOL_DESCRIPTOR,
 } from "./descriptors.js";
 
+function normalizeBase64ForCompare(value: string): string {
+  return value.replace(/=+$/u, "").replace(/-/gu, "+").replace(/_/gu, "/");
+}
+
+function decodeStrictBase64(value: string): Buffer {
+  const buffer = Buffer.from(value, "base64");
+  if (normalizeBase64ForCompare(buffer.toString("base64")) !== normalizeBase64ForCompare(value)) {
+    throw new Error("contentBase64 is not valid base64");
+  }
+  return buffer;
+}
+
 async function readSourceBytes(input: {
   contentBase64?: string;
   sourceMediaId?: string;
@@ -37,7 +49,7 @@ async function readSourceBytes(input: {
   if (input.contentBase64 === undefined) {
     throw new Error("contentBase64 or sourceMediaId required");
   }
-  const buffer = Buffer.from(input.contentBase64, "base64");
+  const buffer = decodeStrictBase64(input.contentBase64);
   return { buffer, contentBase64: input.contentBase64, source: "inline" };
 }
 

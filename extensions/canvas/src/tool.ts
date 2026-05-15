@@ -9,25 +9,11 @@ import {
 import {
   imageResultFromFile,
   jsonResult,
-  optionalStringEnum,
   readStringParam,
-  stringEnum,
 } from "openclaw/plugin-sdk/channel-actions";
 import type { AnyAgentTool, OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { Type } from "typebox";
-
-const CANVAS_ACTIONS = [
-  "present",
-  "hide",
-  "navigate",
-  "eval",
-  "snapshot",
-  "a2ui_push",
-  "a2ui_reset",
-] as const;
-
-const CANVAS_SNAPSHOT_FORMATS = ["png", "jpg", "jpeg"] as const;
+import { CanvasToolSchema } from "./tool-schema.js";
 
 type CanvasToolOptions = {
   config?: OpenClawConfig;
@@ -114,28 +100,6 @@ function resolveCanvasImageSanitizationLimits(
   }
   return { maxDimensionPx: Math.max(1, Math.floor(configured)) };
 }
-
-// Flattened schema: runtime validates per-action requirements.
-const CanvasToolSchema = Type.Object({
-  action: stringEnum(CANVAS_ACTIONS),
-  gatewayUrl: Type.Optional(Type.String()),
-  gatewayToken: Type.Optional(Type.String()),
-  timeoutMs: Type.Optional(Type.Number()),
-  node: Type.Optional(Type.String()),
-  target: Type.Optional(Type.String()),
-  x: Type.Optional(Type.Number()),
-  y: Type.Optional(Type.Number()),
-  width: Type.Optional(Type.Number()),
-  height: Type.Optional(Type.Number()),
-  url: Type.Optional(Type.String()),
-  javaScript: Type.Optional(Type.String()),
-  outputFormat: optionalStringEnum(CANVAS_SNAPSHOT_FORMATS),
-  maxWidth: Type.Optional(Type.Number()),
-  quality: Type.Optional(Type.Number()),
-  delayMs: Type.Optional(Type.Number()),
-  jsonl: Type.Optional(Type.String()),
-  jsonlPath: Type.Optional(Type.String()),
-});
 
 export function createCanvasTool(options?: CanvasToolOptions): AnyAgentTool {
   const imageSanitization = resolveCanvasImageSanitizationLimits(options?.config);

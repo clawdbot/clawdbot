@@ -35,6 +35,7 @@ function createHarness(initialConfig: OpenClawConfig = {}) {
         return {
           path: "/tmp/openclaw.json",
           previousHash: null,
+          persistedHash: null,
           snapshot: {},
           nextConfig: runtimeConfig,
           afterWrite: { mode: "auto" },

@@ -821,6 +821,55 @@ describe("buildStatusReply subagent summary", () => {
     expect(normalized).toContain("Context: 25k/1.0m");
   });
 
+  it("caps stale persisted /status context limits with the active Codex runtime window", async () => {
+    registerStatusCodexHarness();
+
+    const text = await buildStatusText({
+      cfg: {
+        ...baseCfg,
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [{ ...codexStatusModel, contextWindow: 400_000 }],
+            },
+            "openai-codex": {
+              baseUrl: "https://chatgpt.com/backend-api/codex",
+              models: [{ ...codexStatusModel, contextWindow: 258_000, contextTokens: 258_000 }],
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            agentRuntime: { id: "codex" },
+          },
+        },
+      },
+      sessionEntry: {
+        sessionId: "sess-status-codex-stale-context",
+        updatedAt: 0,
+        totalTokens: 181_000,
+        contextTokens: 400_000,
+      },
+      sessionKey: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      statusChannel: "mobilechat",
+      provider: "openai",
+      model: "gpt-5.5",
+      resolvedFastMode: false,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      modelAuthOverride: "oauth",
+      activeModelAuthOverride: "oauth",
+    });
+
+    expect(normalizeTestText(text)).toContain("Context: 181k/258k");
+  });
+
   it("uses workspace-scoped auth evidence in /status auth labels", async () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-status-auth-label-"));
     const workspaceDir = path.join(tempRoot, "workspace");

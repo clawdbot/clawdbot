@@ -212,16 +212,17 @@ export async function commitGatewayConfigWrite(params: {
   nextConfig: OpenClawConfig;
   context?: GatewayRequestContext;
   disconnectSharedAuthClients?: boolean;
-}): Promise<{ path: string; queueFollowUp: () => void }> {
-  await replaceConfigFile({
+}): Promise<{ path: string; config: OpenClawConfig; queueFollowUp: () => void }> {
+  const result = await replaceConfigFile({
     nextConfig: params.nextConfig,
     writeOptions: params.writeOptions,
     afterWrite: { mode: "auto" },
   });
   return {
     path: resolveGatewayConfigPath(params.snapshot),
+    config: result.nextConfig,
     queueFollowUp: () => {
-      queueSharedGatewayAuthGenerationRefresh(true, params.nextConfig, params.context);
+      queueSharedGatewayAuthGenerationRefresh(true, result.nextConfig, params.context);
       queueSharedGatewayAuthDisconnect(Boolean(params.disconnectSharedAuthClients), params.context);
     },
   };

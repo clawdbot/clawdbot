@@ -10,6 +10,7 @@ import {
 } from "../infra/diagnostics-timeline.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { SilentReplyConversationType } from "../shared/silent-reply-policy.js";
+import { resolveCommandTurnContext } from "./command-turn-context.js";
 import { withReplyDispatcher } from "./dispatch-dispatcher.js";
 import { dispatchReplyFromConfig } from "./reply/dispatch-from-config.js";
 import type { DispatchFromConfigResult } from "./reply/dispatch-from-config.types.js";
@@ -186,6 +187,7 @@ function buildMessageSendingBeforeDeliver(
 }
 
 function buildDispatchTimelineAttributes(ctx: MsgContext | FinalizedMsgContext) {
+  const commandTurn = resolveCommandTurnContext(ctx);
   return {
     surface:
       typeof ctx.Surface === "string"
@@ -195,7 +197,7 @@ function buildDispatchTimelineAttributes(ctx: MsgContext | FinalizedMsgContext) 
           : "unknown",
     hasSessionKey:
       typeof ctx.SessionKey === "string" || typeof ctx.CommandTargetSessionKey === "string",
-    commandSource: typeof ctx.CommandSource === "string" ? ctx.CommandSource : "message",
+    commandSource: commandTurn.source,
   };
 }
 

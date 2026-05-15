@@ -349,6 +349,12 @@ export const fa: TranslationMap = {
     eventLogSubtitle: "آخرین رویدادهای gateway.",
     noEvents: "هنوز رویدادی وجود ندارد.",
   },
+  quickSettings: {
+    security: {
+      browserEnabled: "Browser enabled",
+      toolProfile: "Tool profile",
+    },
+  },
   execApproval: {
     expiresIn: "تا {time} دیگر منقضی می‌شود",
     expired: "منقضی شده",
@@ -693,10 +699,6 @@ export const fa: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle:
-        "ببینید توکن‌ها کجا مصرف می‌شوند، نشست‌ها چه زمانی جهش می‌کنند و چه چیزی هزینه را افزایش می‌دهد.",
-    },
     common: {
       emptyValue: "—",
       unknown: "نامشخص",
@@ -1044,10 +1046,10 @@ export const fa: TranslationMap = {
     settings: "تنظیمات چت",
     thinkingToggle: "تغییر وضعیت خروجی فکر/کار دستیار",
     toolCallsToggle: "تغییر وضعیت نمایش فراخوانی‌های ابزار و نتایج ابزار",
-    autoScrollMode: "Auto-scroll mode",
-    autoScrollAlways: "Always",
-    autoScrollNearBottom: "Near bottom",
-    autoScrollOff: "Off",
+    autoScrollMode: "حالت پیمایش خودکار",
+    autoScrollAlways: "همیشه",
+    autoScrollNearBottom: "نزدیک پایین",
+    autoScrollOff: "خاموش",
     focusToggle: "تغییر وضعیت حالت تمرکز (پنهان کردن نوار کناری + سرصفحه صفحه)",
     hideCronSessions: "پنهان کردن نشست‌های cron",
     showCronSessions: "نمایش نشست‌های cron",

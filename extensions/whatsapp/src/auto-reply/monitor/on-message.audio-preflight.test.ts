@@ -5,6 +5,20 @@ const transcribeFirstAudioMock = vi.fn();
 const maybeSendAckReactionMock = vi.fn();
 const processMessageMock = vi.fn();
 const maybeBroadcastMessageMock = vi.fn();
+const createStatusReactionControllerMock = vi.fn();
+const statusReactionController = {
+  setQueued: vi.fn(async () => {
+    events.push("status-queued");
+  }),
+  setThinking: vi.fn(async () => undefined),
+  setTool: vi.fn(async () => undefined),
+  setCompacting: vi.fn(async () => undefined),
+  cancelPending: vi.fn(),
+  setDone: vi.fn(async () => undefined),
+  setError: vi.fn(async () => undefined),
+  clear: vi.fn(async () => undefined),
+  restoreInitial: vi.fn(async () => undefined),
+};
 const ackReactionHandle = {
   ackReactionPromise: Promise.resolve(true),
   ackReactionValue: "👀",
@@ -26,6 +40,11 @@ vi.mock("./process-message.js", () => ({
 
 vi.mock("./broadcast.js", () => ({
   maybeBroadcastMessage: (...args: unknown[]) => maybeBroadcastMessageMock(...args),
+}));
+
+vi.mock("./status-reaction.js", () => ({
+  createWhatsAppStatusReactionController: (...args: unknown[]) =>
+    createStatusReactionControllerMock(...args),
 }));
 
 vi.mock("./group-gating.js", () => ({
@@ -140,6 +159,9 @@ describe("createWebOnMessageHandler audio preflight", () => {
     });
     processMessageMock.mockReset();
     processMessageMock.mockResolvedValue(true);
+    createStatusReactionControllerMock.mockReset();
+    createStatusReactionControllerMock.mockResolvedValue(statusReactionController);
+    Object.values(statusReactionController).forEach((mock) => mock.mockClear());
     applyGroupGatingMock.mockReset();
     applyGroupGatingMock.mockResolvedValue({ shouldProcess: true });
   });
@@ -180,6 +202,47 @@ describe("createWebOnMessageHandler audio preflight", () => {
     expect(processParams.preflightAudioTranscript).toBe("transcribed voice note");
     expect(processParams.ackAlreadySent).toBe(true);
     expect(processParams.ackReaction).toBe(ackReactionHandle);
+  });
+
+  it("sends queued status reaction before audio preflight when status reactions are enabled", async () => {
+    const handler = createWebOnMessageHandler({
+      cfg: {
+        messages: { statusReactions: { enabled: true } },
+        channels: {
+          whatsapp: {
+            ackReaction: { enabled: true },
+          },
+        },
+      } as never,
+      verbose: false,
+      connectionId: "conn-1",
+      maxMediaBytes: 1024 * 1024,
+      groupHistoryLimit: 20,
+      groupHistories: new Map(),
+      groupMemberNames: new Map(),
+      echoTracker: makeEchoTracker() as never,
+      backgroundTasks: new Set(),
+      replyResolver: vi.fn() as never,
+      replyLogger: {
+        info: () => {},
+        warn: () => {},
+        debug: () => {},
+        error: () => {},
+      } as never,
+      baseMentionConfig: {} as never,
+      account: { authDir: "/tmp/auth", accountId: "default" },
+    });
+
+    await handler(makeAudioMsg());
+
+    expect(events).toEqual(["status-queued", "stt"]);
+    expect(maybeSendAckReactionMock).not.toHaveBeenCalled();
+    expect(createStatusReactionControllerMock).toHaveBeenCalledTimes(1);
+    expect(processMessageMock).toHaveBeenCalledTimes(1);
+    const processParams = mockObjectArg(processMessageMock, "processMessage");
+    expect(processParams.preflightAudioTranscript).toBe("transcribed voice note");
+    expect(processParams.statusReactionController).toBe(statusReactionController);
+    expect(processParams.ackAlreadySent).toBeUndefined();
   });
 
   it("skips early DM ack/preflight when access-control was not explicitly passed through", async () => {

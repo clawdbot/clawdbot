@@ -63,7 +63,7 @@ final class ScreenSnapshotService {
                 contentFilter: filter,
                 configuration: config)
         } catch {
-            throw ScreenSnapshotError.captureFailed(error.localizedDescription)
+            throw ScreenSnapshotError.captureFailed("screen capture failed")
         }
 
         let bitmap = NSBitmapImageRep(cgImage: cgImage)

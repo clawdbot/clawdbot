@@ -58,7 +58,7 @@ function installBraveLlmContextFetch() {
         },
         sources: [],
       }),
-    } as Response;
+    } as unknown as Response;
   });
   global.fetch = mockFetch as typeof global.fetch;
   return mockFetch;
@@ -104,6 +104,34 @@ describe("brave web search provider", () => {
     expect(createBraveWebSearchContractProvider().docsUrl).toBe(
       "https://docs.openclaw.ai/tools/brave-search",
     );
+  });
+
+  it("exposes legacy top-level apiKey as a Brave-owned compatibility fallback", () => {
+    const apiKey = { source: "env", provider: "default", id: "BRAVE_API_KEY" } as const;
+    const config = {
+      tools: {
+        web: {
+          search: {
+            apiKey,
+          },
+        },
+      },
+    };
+
+    expect(createBraveWebSearchProvider().getConfiguredCredentialValue?.(config)).toEqual(apiKey);
+    expect(createBraveWebSearchContractProvider().getConfiguredCredentialValue?.(config)).toEqual(
+      apiKey,
+    );
+    expect(createBraveWebSearchProvider().getConfiguredCredentialFallback?.(config)).toEqual({
+      path: "tools.web.search.apiKey",
+      value: apiKey,
+    });
+    expect(
+      createBraveWebSearchContractProvider().getConfiguredCredentialFallback?.(config),
+    ).toEqual({
+      path: "tools.web.search.apiKey",
+      value: apiKey,
+    });
   });
 
   it("points missing-key users to fetch/browser alternatives", async () => {
@@ -215,7 +243,7 @@ describe("brave web search provider", () => {
       return {
         ok: true,
         json: async () => ({ web: { results: [] } }),
-      } as Response;
+      } as unknown as Response;
     });
     global.fetch = mockFetch as typeof global.fetch;
 
@@ -265,13 +293,71 @@ describe("brave web search provider", () => {
     expect(requestUrl.pathname).toBe("/proxy/res/v1/llm/context");
   });
 
+  it("reports malformed Brave web search JSON as a provider error", async () => {
+    vi.stubEnv("BRAVE_API_KEY", "");
+    const mockFetch = vi.fn(async (_input?: unknown, _init?: unknown) => {
+      return {
+        ok: true,
+        json: async () => {
+          throw new SyntaxError("Unexpected token");
+        },
+      } as unknown as Response;
+    });
+    global.fetch = mockFetch as typeof global.fetch;
+
+    const provider = createBraveWebSearchProvider();
+    const tool = provider.createTool({
+      config: {},
+      searchConfig: {
+        apiKey: "brave-test-key",
+        brave: { mode: "web" },
+      },
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    await expect(tool.execute({ query: "latest ai news" })).rejects.toThrow(
+      "Brave Search API error: malformed JSON response",
+    );
+  });
+
+  it("reports malformed Brave llm-context JSON as a provider error", async () => {
+    vi.stubEnv("BRAVE_API_KEY", "");
+    const mockFetch = vi.fn(async (_input?: unknown, _init?: unknown) => {
+      return {
+        ok: true,
+        json: async () => {
+          throw new SyntaxError("Unexpected token");
+        },
+      } as unknown as Response;
+    });
+    global.fetch = mockFetch as typeof global.fetch;
+
+    const provider = createBraveWebSearchProvider();
+    const tool = provider.createTool({
+      config: {},
+      searchConfig: {
+        apiKey: "brave-test-key",
+        brave: { mode: "llm-context" },
+      },
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    await expect(tool.execute({ query: "latest ai news" })).rejects.toThrow(
+      "Brave LLM Context API error: malformed JSON response",
+    );
+  });
+
   it("keeps Brave cache entries isolated by baseUrl", async () => {
     vi.stubEnv("BRAVE_API_KEY", "");
     const mockFetch = vi.fn(async (_input?: unknown, _init?: unknown) => {
       return {
         ok: true,
         json: async () => ({ web: { results: [] } }),
-      } as Response;
+      } as unknown as Response;
     });
     global.fetch = mockFetch as typeof global.fetch;
 
@@ -416,7 +502,7 @@ describe("brave web search provider", () => {
       return {
         ok: true,
         json: async () => ({ web: { results: [] } }),
-      } as Response;
+      } as unknown as Response;
     });
     global.fetch = mockFetch as typeof global.fetch;
 
@@ -575,7 +661,7 @@ describe("brave web search provider", () => {
       return {
         ok: true,
         json: async () => ({ web: { results: [] } }),
-      } as Response;
+      } as unknown as Response;
     });
     global.fetch = mockFetch as typeof global.fetch;
 
@@ -617,7 +703,7 @@ describe("brave web search provider", () => {
             ],
           },
         }),
-      } as Response;
+      } as unknown as Response;
     });
     global.fetch = mockFetch as typeof global.fetch;
 

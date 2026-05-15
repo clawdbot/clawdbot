@@ -41,6 +41,7 @@ apps/macos/.build/
 apps/macos-mlx-tts/.build/
 apps/shared/MoltbotKit/.build/
 apps/shared/OpenClawKit/.build/
+apps/shared/*/.build/
 apps/shared/OpenClawKit/Package.resolved
 **/ModuleCache/
 bin/
@@ -50,6 +51,7 @@ apps/macos/.build-local/
 apps/macos/.swiftpm/
 apps/shared/MoltbotKit/.swiftpm/
 apps/shared/OpenClawKit/.swiftpm/
+apps/shared/*/.swiftpm/
 Core/
 apps/ios/*.xcodeproj/
 apps/ios/*.xcworkspace/
@@ -108,6 +110,9 @@ USER.md
 # local tooling
 .serena/
 
+# local QA evidence mirrors; CI publishes canonical Mantis files as Actions artifacts
+mantis/
+
 # Local project-agent skill installs. Only repo-owned skills are visible by
 # default; promoting a new repo skill should require an intentional `git add -f`.
 .agents/skills/*
@@ -134,6 +139,8 @@ USER.md
 !.agents/skills/openclaw-refactor-docs/**
 !.agents/skills/openclaw-qa-testing/
 !.agents/skills/openclaw-qa-testing/**
+!.agents/skills/openclaw-release-ci/
+!.agents/skills/openclaw-release-ci/**
 !.agents/skills/openclaw-release-maintainer/
 !.agents/skills/openclaw-release-maintainer/**
 !.agents/skills/openclaw-secret-scanning-maintainer/

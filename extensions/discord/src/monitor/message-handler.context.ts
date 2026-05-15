@@ -350,6 +350,12 @@ export async function buildDiscordMessageProcessContext(params: {
     ...mediaPayload,
     ...(preflightAudioIndex >= 0 ? { MediaTranscribedIndexes: [preflightAudioIndex] } : {}),
     CommandAuthorized: commandAuthorized,
+    CommandTurn: {
+      kind: "text-slash" as const,
+      source: "text" as const,
+      authorized: commandAuthorized,
+      body: preflightAudioTranscript ?? baseText,
+    },
     CommandSource: "text" as const,
     OriginatingChannel: "discord" as const,
     OriginatingTo: originatingTo,

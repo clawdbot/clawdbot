@@ -144,6 +144,59 @@ describe("status-all diagnosis port checks", () => {
     expect(output).toContain("Port 18789 is already in use.");
   });
 
+  it("adds direct update restart guidance for failed update sentinels", async () => {
+    const params = createBaseParams([]);
+    params.sentinel = {
+      payload: {
+        kind: "update",
+        status: "error",
+        ts: Date.now() - 60_000,
+        stats: {
+          mode: "npm",
+          reason: "managed-service-handoff-failed",
+          steps: [],
+        },
+      },
+    };
+
+    await appendStatusAllDiagnosis(params);
+
+    const output = params.lines.join("\n");
+    expect(output).toContain(
+      "Update restart: failed · managed-service-handoff-failed · run openclaw gateway status --deep",
+    );
+    expect(output).toContain("Update restart failed; run openclaw gateway status --deep.");
+    expect(output).toContain(
+      "If the service is down, run openclaw gateway restart or openclaw gateway install --force.",
+    );
+  });
+
+  it("adds direct update restart guidance for pending update sentinels", async () => {
+    const params = createBaseParams([]);
+    params.sentinel = {
+      payload: {
+        kind: "update",
+        status: "skipped",
+        ts: Date.now() - 60_000,
+        stats: {
+          mode: "npm",
+          reason: "restart-health-pending",
+          steps: [],
+        },
+      },
+    };
+
+    await appendStatusAllDiagnosis(params);
+
+    const output = params.lines.join("\n");
+    expect(output).toContain(
+      "Update restart: restart pending health verification · run openclaw gateway status --deep",
+    );
+    expect(output).toContain(
+      "Update restart is still pending; run openclaw update status --json for handoff state.",
+    );
+  });
+
   it("avoids unreachable gateway diagnosis in node-only mode", async () => {
     const params = createBaseParams([]);
     params.connectionDetailsForReport = [

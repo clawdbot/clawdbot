@@ -73,6 +73,10 @@ function buildGoogleVertexModel(
 
 function buildSseResponse(events: unknown[]): Response {
   const sse = `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`;
+  return buildRawSseResponse(sse);
+}
+
+function buildRawSseResponse(sse: string): Response {
   const encoder = new TextEncoder();
   const body = new ReadableStream<Uint8Array>({
     start(controller) {
@@ -349,6 +353,28 @@ describe("google transport stream", () => {
         thinkingLevel: "LOW",
       },
     });
+  });
+
+  it("wraps malformed Gemini SSE JSON", async () => {
+    guardedFetchMock.mockResolvedValueOnce(buildRawSseResponse("data: {not json\n\n"));
+
+    const streamFn = createGoogleGenerativeAiTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        buildGeminiModel(),
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        } as unknown as Parameters<typeof streamFn>[1],
+        {
+          apiKey: "gemini-api-key",
+        } as Parameters<typeof streamFn>[2],
+      ),
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toBe("Google SSE stream returned malformed JSON");
   });
 
   it("retries Gemini 3 requests with lean thinking when the first attempt has no first response", async () => {

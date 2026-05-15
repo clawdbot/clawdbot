@@ -65,6 +65,14 @@ describe("run-additional-boundary-checks", () => {
     });
   });
 
+  it("keeps the Telegram grammY type import guard in source boundary checks", () => {
+    expect(BOUNDARY_CHECKS).toContainEqual({
+      label: "lint:extensions:telegram-grammy-types",
+      command: "pnpm",
+      args: ["run", "lint:extensions:telegram-grammy-types"],
+    });
+  });
+
   it("buffers grouped output and reports aggregate failures", async () => {
     const buffer = createOutputBuffer();
     const failures = await runChecks(

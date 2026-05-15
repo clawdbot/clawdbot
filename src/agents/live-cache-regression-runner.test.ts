@@ -122,7 +122,7 @@ describe("live cache regression runner", () => {
     ).toBe(false);
   });
 
-  it("keeps OpenAI cache probes above the reasoning output floor", () => {
+  it("keeps cache probes above the provider empty-output floor", () => {
     expect(
       __testing.resolveCacheProbeMaxTokens({
         maxTokens: 32,
@@ -140,40 +140,40 @@ describe("live cache regression runner", () => {
         maxTokens: 32,
         providerTag: "anthropic",
       }),
-    ).toBe(32);
+    ).toBe(1024);
   });
 
-  it("accepts empty OpenAI cache probe text only when usage is observable", () => {
+  it("accepts empty cache probe text only when usage is observable", () => {
     expect(
-      __testing.shouldAcceptEmptyOpenAICacheProbe({
+      __testing.shouldAcceptEmptyCacheProbe({
         providerTag: "openai",
         text: "",
         usage: { input: 5_000 },
       }),
     ).toBe(true);
     expect(
-      __testing.shouldAcceptEmptyOpenAICacheProbe({
+      __testing.shouldAcceptEmptyCacheProbe({
         providerTag: "openai",
         text: "",
         usage: { cacheRead: 4_608 },
       }),
     ).toBe(true);
     expect(
-      __testing.shouldAcceptEmptyOpenAICacheProbe({
+      __testing.shouldAcceptEmptyCacheProbe({
         providerTag: "openai",
         text: "wrong",
         usage: { input: 5_000 },
       }),
     ).toBe(false);
     expect(
-      __testing.shouldAcceptEmptyOpenAICacheProbe({
+      __testing.shouldAcceptEmptyCacheProbe({
         providerTag: "anthropic",
         text: "",
         usage: { input: 5_000 },
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
-      __testing.shouldAcceptEmptyOpenAICacheProbe({
+      __testing.shouldAcceptEmptyCacheProbe({
         providerTag: "openai",
         text: "",
         usage: {},

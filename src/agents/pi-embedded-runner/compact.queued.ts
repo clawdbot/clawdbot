@@ -20,7 +20,11 @@ import { resolveUserPath } from "../../utils.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
-import { maybeCompactAgentHarnessSession } from "../harness/selection.js";
+import {
+  maybeCompactAgentHarnessSession,
+  resolveAgentHarnessPolicy,
+} from "../harness/selection.js";
+import { resolveContextConfigProviderForRuntime } from "../openai-codex-routing.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
 import type { CompactEmbeddedPiSessionParams } from "./compact.types.js";
 import { asCompactionHookRunner, runPostCompactionSideEffects } from "./compaction-hooks.js";
@@ -83,9 +87,19 @@ export async function compactEmbeddedPiSession(
       params.config,
     );
     const ceRuntimeModel = ceModel as ProviderRuntimeModel | undefined;
+    const ceHarnessPolicy = resolveAgentHarnessPolicy({
+      provider: ceProvider,
+      modelId: ceModelId,
+      config: params.config,
+      agentId: agentIds.sessionAgentId,
+      sessionKey: params.sessionKey,
+    });
     contextTokenBudget = resolveContextWindowInfo({
       cfg: params.config,
-      provider: ceProvider,
+      provider: resolveContextConfigProviderForRuntime({
+        provider: ceProvider,
+        runtimeId: ceHarnessPolicy.runtime,
+      }),
       modelId: ceModelId,
       modelContextTokens: readPiModelContextTokens(ceModel),
       modelContextWindow: ceRuntimeModel?.contextWindow,

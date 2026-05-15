@@ -133,6 +133,24 @@ describe("stripAssistantInternalScaffolding", () => {
       expectVisibleText('Result:\n<tool_result>\n{"output": "data"}\n', "Result:\n");
     });
 
+    it("strips workflow <function_response> blocks with plain output", () => {
+      expectVisibleText(
+        [
+          "Before",
+          "<function_response>",
+          'Searching for: "what skills matter most in the age of AI"',
+          "...",
+          "</function_response>",
+          "After",
+        ].join("\n"),
+        "Before\n\nAfter",
+      );
+    });
+
+    it("strips dangling workflow <function_response> content to end-of-string", () => {
+      expectVisibleText("Before\n<function_response>\nraw command output\n", "Before\n");
+    });
+
     it("strips <tool_result> closed with mismatched </tool_call> and preserves trailing text", () => {
       expectVisibleText(
         'Prefix\n<tool_result> {"output": "data"} </tool_call>\nSuffix',
@@ -383,6 +401,20 @@ describe("stripAssistantInternalScaffolding", () => {
       expectVisibleText(
         'prefix <function_calls><invoke name="find">secret</invoke></function_calls> suffix',
         'prefix <function_calls><invoke name="find">secret</invoke></function_calls> suffix',
+      );
+    });
+
+    it("preserves inline function_response examples in prose", () => {
+      expectVisibleText(
+        "Use <function_response> to describe the response wrapper.",
+        "Use <function_response> to describe the response wrapper.",
+      );
+    });
+
+    it("preserves line-leading function_response prose examples", () => {
+      expectVisibleText(
+        "<function_response> is the response wrapper.",
+        "<function_response> is the response wrapper.",
       );
     });
 

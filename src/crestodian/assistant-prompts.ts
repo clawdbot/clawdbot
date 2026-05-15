@@ -67,7 +67,7 @@ export function buildCrestodianAssistantUserPrompt(params: {
     `Default model: ${params.overview.defaultModel ?? "not configured"}`,
     `Config valid: ${params.overview.config.valid}`,
     `Gateway reachable: ${params.overview.gateway.reachable}`,
-    `Codex CLI: ${params.overview.tools.codex.found ? "found" : "not found"}`,
+    `Codex binary: ${params.overview.tools.codex.found ? "found" : "not found"}`,
     `Claude Code CLI: ${params.overview.tools.claude.found ? "found" : "not found"}`,
     `OpenAI API key: ${params.overview.tools.apiKeys.openai ? "found" : "not found"}`,
     `Anthropic API key: ${params.overview.tools.apiKeys.anthropic ? "found" : "not found"}`,

@@ -4,7 +4,11 @@ import {
 } from "openclaw/plugin-sdk/provider-setup";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH } from "./defaults.js";
-import { discoverLmstudioModels, ensureLmstudioModelLoaded } from "./models.fetch.js";
+import {
+  discoverLmstudioModels,
+  ensureLmstudioModelLoaded,
+  fetchLmstudioModels,
+} from "./models.fetch.js";
 import {
   normalizeLmstudioProviderConfig,
   resolveLmstudioInferenceBase,
@@ -294,6 +298,24 @@ describe("lmstudio-models", () => {
     });
   });
 
+  it("reports malformed model list JSON with an owned error", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw new SyntaxError("bad json");
+      },
+    }));
+
+    const result = await fetchLmstudioModels({
+      baseUrl: "http://localhost:1234/v1",
+      fetchImpl: asFetch(fetchMock),
+    });
+
+    expect(result.reachable).toBe(false);
+    expect((result.error as Error).message).toBe("LM Studio model list returned malformed JSON");
+  });
+
   it("skips model load when already loaded", async () => {
     const fetchMock = createModelLoadFetchMock({ loadedContextLength: 64000 });
     vi.stubGlobal("fetch", asFetch(fetchMock));
@@ -327,6 +349,36 @@ describe("lmstudio-models", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expectLoadContextLength(fetchMock, 8192);
+  });
+
+  it("reports malformed model load JSON with an owned error", async () => {
+    const fetchMock = vi.fn(async (url: string | URL) => {
+      if (String(url).endsWith("/api/v1/models")) {
+        return {
+          ok: true,
+          json: async () => ({
+            models: [{ type: "llm", key: "qwen3-8b-instruct", loaded_instances: [] }],
+          }),
+        };
+      }
+      if (String(url).endsWith("/api/v1/models/load")) {
+        return {
+          ok: true,
+          json: async () => {
+            throw new SyntaxError("bad json");
+          },
+        };
+      }
+      throw new Error(`Unexpected fetch URL: ${String(url)}`);
+    });
+    vi.stubGlobal("fetch", asFetch(fetchMock));
+
+    await expect(
+      ensureLmstudioModelLoaded({
+        baseUrl: "http://localhost:1234/v1",
+        modelKey: "qwen3-8b-instruct",
+      }),
+    ).rejects.toThrow("LM Studio model load returned malformed JSON");
   });
 
   it("reloads model to the clamped default target when already loaded below the default window", async () => {

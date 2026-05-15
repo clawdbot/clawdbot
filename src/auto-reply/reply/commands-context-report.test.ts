@@ -12,6 +12,9 @@ function makeParams(
     contextTokens?: number | null;
     totalTokens?: number | null;
     totalTokensFresh?: boolean;
+    cfg?: Record<string, unknown>;
+    sessionKey?: string;
+    agentId?: string;
   },
 ): HandleCommandsParams {
   return {
@@ -20,7 +23,7 @@ function makeParams(
       channel: "forum",
       senderIsOwner: true,
     },
-    sessionKey: "agent:default:main",
+    sessionKey: options?.sessionKey ?? "agent:default:main",
     workspaceDir: "/tmp/workspace",
     contextTokens: options?.contextTokens ?? null,
     provider: "openai",
@@ -66,7 +69,8 @@ function makeParams(
         },
       },
     },
-    cfg: {},
+    cfg: options?.cfg ?? {},
+    agentId: options?.agentId,
     ctx: {},
     commandBody: "",
     commandArgs: [],
@@ -80,6 +84,8 @@ describe("buildContextReply", () => {
     expect(result.text).toContain("Bootstrap max/total: 60,000 chars");
     expect(result.text).toContain("⚠ Bootstrap context is over configured limits");
     expect(result.text).toContain("Causes: 1 file(s) exceeded max/file.");
+    expect(result.text).toContain("agents.list[].bootstrapMaxChars");
+    expect(result.text).toContain("agents.defaults.*");
   });
 
   it("does not show bootstrap truncation warning when there is no truncation", async () => {
@@ -96,6 +102,32 @@ describe("buildContextReply", () => {
     expect(result.text).toContain("Bootstrap max/file: 12,000 chars");
     expect(result.text).toContain("Bootstrap max/total: 60,000 chars");
     expect(result.text).not.toContain("Bootstrap max/file: ? chars");
+  });
+
+  it("uses the session agent profile when legacy reports are missing bootstrap limits", async () => {
+    const result = await buildContextReply(
+      makeParams("/context list", false, {
+        omitBootstrapLimits: true,
+        sessionKey: "agent:scout:main",
+        cfg: {
+          agents: {
+            defaults: {
+              bootstrapMaxChars: 12_000,
+              bootstrapTotalMaxChars: 60_000,
+            },
+            list: [
+              {
+                id: "scout",
+                bootstrapMaxChars: 32_000,
+                bootstrapTotalMaxChars: 96_000,
+              },
+            ],
+          },
+        },
+      }),
+    );
+    expect(result.text).toContain("Bootstrap max/file: 32,000 chars");
+    expect(result.text).toContain("Bootstrap max/total: 96,000 chars");
   });
 
   it("shows tracked estimate and cached context delta in detail output", async () => {

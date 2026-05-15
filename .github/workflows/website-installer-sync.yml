@@ -134,20 +134,29 @@ jobs:
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_dispatch' && inputs.sync_website)
     runs-on: ubuntu-24.04
+    env:
+      OPENCLAW_GH_TOKEN: ${{ secrets.OPENCLAW_GH_TOKEN }}
     steps:
+      - name: Skip website sync without token
+        if: env.OPENCLAW_GH_TOKEN == ''
+        run: echo "OPENCLAW_GH_TOKEN is not configured; installer verification passed, skipping website sync."
+
       - name: Checkout OpenClaw
+        if: env.OPENCLAW_GH_TOKEN != ''
         uses: actions/checkout@v6
         with:
           path: openclaw
 
       - name: Checkout openclaw.ai
+        if: env.OPENCLAW_GH_TOKEN != ''
         uses: actions/checkout@v6
         with:
           repository: openclaw/openclaw.ai
-          token: ${{ secrets.OPENCLAW_GH_TOKEN }}
+          token: ${{ env.OPENCLAW_GH_TOKEN }}
           path: openclaw.ai
 
       - name: Sync installer scripts
+        if: env.OPENCLAW_GH_TOKEN != ''
         run: |
           cp openclaw/scripts/install.sh openclaw.ai/public/install.sh
           cp openclaw/scripts/install-cli.sh openclaw.ai/public/install-cli.sh
@@ -156,6 +165,7 @@ jobs:
           chmod +x openclaw.ai/public/install.sh openclaw.ai/public/install-cli.sh
 
       - name: Check for changes
+        if: env.OPENCLAW_GH_TOKEN != ''
         id: changes
         working-directory: openclaw.ai
         run: |

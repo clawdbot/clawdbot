@@ -100,6 +100,12 @@ export type AgentConfig = {
   reasoningDefault?: "on" | "off" | "stream";
   /** Optional per-agent default for fast mode. */
   fastModeDefault?: boolean;
+  /** Optional per-agent bootstrap/context injection mode override. */
+  contextInjection?: AgentDefaultsConfig["contextInjection"];
+  /** Optional per-agent max chars for each injected bootstrap file. */
+  bootstrapMaxChars?: AgentDefaultsConfig["bootstrapMaxChars"];
+  /** Optional per-agent max total chars across injected bootstrap files. */
+  bootstrapTotalMaxChars?: AgentDefaultsConfig["bootstrapTotalMaxChars"];
   /** Optional allowlist of skills for this agent; omitting it inherits agents.defaults.skills when set, and an explicit list replaces defaults instead of merging. */
   skills?: string[];
   memorySearch?: MemorySearchConfig;

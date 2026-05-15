@@ -473,7 +473,14 @@ function stopChrome(params: Record<string, unknown>) {
 }
 
 export async function handleGoogleMeetNodeHostCommand(paramsJSON?: string | null): Promise<string> {
-  const raw = paramsJSON ? JSON.parse(paramsJSON) : {};
+  let raw: unknown = {};
+  if (paramsJSON) {
+    try {
+      raw = JSON.parse(paramsJSON) as unknown;
+    } catch {
+      throw new Error("Google Meet node host received malformed params JSON.");
+    }
+  }
   const params = asRecord(raw);
   const action = readString(params.action);
   let result: unknown;

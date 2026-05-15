@@ -224,36 +224,68 @@ function buildCohereBody(
 // Response parsers
 // ---------------------------------------------------------------------------
 
+type BedrockEmbeddingResponseJson = {
+  embedding?: unknown;
+  embeddings?: unknown;
+  data?: unknown;
+};
+
+function parseBedrockEmbeddingResponseJson(raw: string): BedrockEmbeddingResponseJson {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as BedrockEmbeddingResponseJson)
+      : {};
+  } catch {
+    throw new Error("Amazon Bedrock embedding response returned malformed JSON");
+  }
+}
+
+function asNumberArray(value: unknown): number[] {
+  return Array.isArray(value) ? (value as number[]) : [];
+}
+
+function asNumberArrayBatch(value: unknown): number[][] {
+  return Array.isArray(value) ? (value.filter(Array.isArray) as number[][]) : [];
+}
+
 function parseSingle(family: Family, raw: string): number[] {
-  const data = JSON.parse(raw);
+  const data = parseBedrockEmbeddingResponseJson(raw);
   switch (family) {
     case "nova":
-      return data.embeddings?.[0]?.embedding ?? [];
+      return asNumberArray(Array.isArray(data.embeddings) ? data.embeddings[0]?.embedding : null);
     case "twelvelabs": {
       if (Array.isArray(data.data)) {
-        return data.data[0]?.embedding ?? [];
+        return asNumberArray(data.data[0]?.embedding);
       }
-      if (Array.isArray(data.data?.embedding)) {
-        return data.data.embedding;
+      if (data.data && typeof data.data === "object") {
+        return asNumberArray((data.data as { embedding?: unknown }).embedding);
       }
-      return data.embedding ?? [];
+      return asNumberArray(data.embedding);
     }
     default:
-      return data.embedding ?? [];
+      return asNumberArray(data.embedding);
   }
 }
 
 function parseCohereBatch(family: Family, raw: string): number[][] {
-  const data = JSON.parse(raw);
+  const data = parseBedrockEmbeddingResponseJson(raw);
   const embeddings = data.embeddings;
   if (!embeddings) {
     return [];
   }
   if (family === "cohere-v4" && !Array.isArray(embeddings)) {
-    return embeddings.float ?? [];
+    return embeddings && typeof embeddings === "object"
+      ? asNumberArrayBatch((embeddings as { float?: unknown }).float)
+      : [];
   }
-  return embeddings;
+  return asNumberArrayBatch(embeddings);
 }
+
+export const __testing = {
+  parseCohereBatch,
+  parseSingle,
+};
 
 // ---------------------------------------------------------------------------
 // Provider

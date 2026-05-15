@@ -58,7 +58,11 @@ function rawWsDataToBuffer(data: RawData): Buffer {
 }
 
 function defaultParseMessage(payload: Buffer): unknown {
-  return JSON.parse(payload.toString());
+  try {
+    return JSON.parse(payload.toString()) as unknown;
+  } catch {
+    throw new Error("Realtime transcription websocket received malformed JSON.");
+  }
 }
 
 class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscriptionSession {

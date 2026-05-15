@@ -4,6 +4,8 @@ import path from "node:path";
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
+import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { createCliRuntimeCapture, mockRuntimeModule } from "./test-runtime-capture.js";
 
 /**
@@ -21,6 +23,7 @@ const mockWriteConfigFile = vi.fn<
 >(async () => {});
 const mockResolveSecretRefValue = vi.fn();
 const mockReadBestEffortRuntimeConfigSchema = vi.fn();
+const mockLoadPluginMetadataSnapshot = vi.fn((_config: unknown) => createPluginMetadataSnapshot());
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
@@ -45,6 +48,14 @@ vi.mock("../secrets/resolve.js", () => ({
 vi.mock("../config/runtime-schema.js", () => ({
   readBestEffortRuntimeConfigSchema: () => mockReadBestEffortRuntimeConfigSchema(),
 }));
+
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>();
+  return {
+    ...actual,
+    loadPluginMetadataSnapshot: (config: unknown) => mockLoadPluginMetadataSnapshot(config),
+  };
+});
 
 const { defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
 const mockLog = defaultRuntime.log;
@@ -105,6 +116,98 @@ function withRuntimeDefaults(resolved: OpenClawConfig): OpenClawConfig {
       } as never,
     } as never,
   };
+}
+
+function createPluginManifestRecord(
+  overrides: Partial<PluginManifestRecord> & Pick<PluginManifestRecord, "id">,
+): PluginManifestRecord {
+  return {
+    channels: [],
+    cliBackends: [],
+    hooks: [],
+    manifestPath: `/tmp/${overrides.id}/openclaw.plugin.json`,
+    origin: "bundled",
+    providers: [],
+    rootDir: `/tmp/${overrides.id}`,
+    skills: [],
+    source: `/tmp/${overrides.id}/index.js`,
+    ...overrides,
+  };
+}
+
+function createPluginMetadataSnapshot(
+  manifestRegistry: PluginManifestRegistry = { diagnostics: [], plugins: [] },
+): PluginMetadataSnapshot {
+  const plugins = manifestRegistry.plugins;
+  return {
+    policyHash: "test-policy",
+    index: {
+      version: 1,
+      hostContractVersion: "test",
+      compatRegistryVersion: "test",
+      migrationVersion: 1,
+      policyHash: "test-policy",
+      generatedAtMs: 0,
+      installRecords: {},
+      plugins: [],
+      diagnostics: [],
+    },
+    registryDiagnostics: [],
+    manifestRegistry,
+    plugins,
+    diagnostics: manifestRegistry.diagnostics,
+    byPluginId: new Map(plugins.map((plugin) => [plugin.id, plugin])),
+    normalizePluginId: (pluginId: string) => pluginId.trim().toLowerCase(),
+    owners: {
+      channels: new Map(),
+      channelConfigs: new Map(),
+      providers: new Map(),
+      modelCatalogProviders: new Map(),
+      cliBackends: new Map(),
+      setupProviders: new Map(),
+      commandAliases: new Map(),
+      contracts: new Map(),
+    },
+    metrics: {
+      registrySnapshotMs: 0,
+      manifestRegistryMs: 0,
+      ownerMapsMs: 0,
+      totalMs: 0,
+      indexPluginCount: 0,
+      manifestPluginCount: plugins.length,
+    },
+  };
+}
+
+function setExternalFeishuSchema() {
+  mockLoadPluginMetadataSnapshot.mockReturnValue(
+    createPluginMetadataSnapshot({
+      diagnostics: [],
+      plugins: [
+        createPluginManifestRecord({
+          id: "openclaw-lark",
+          origin: "global",
+          channels: ["feishu"],
+          channelConfigs: {
+            feishu: {
+              schema: {
+                type: "object",
+                properties: {
+                  appId: { type: "string" },
+                  appSecret: { type: "string" },
+                  replyMode: { type: "string", enum: ["thread", "direct"] },
+                  footer: { type: "string" },
+                },
+                required: ["appId", "appSecret"],
+                additionalProperties: false,
+              },
+              uiHints: {},
+            },
+          },
+        }),
+      ],
+    }),
+  );
 }
 
 function makeInvalidSnapshot(params: {
@@ -233,6 +336,7 @@ describe("config cli", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetRuntimeCapture();
+    mockLoadPluginMetadataSnapshot.mockReturnValue(createPluginMetadataSnapshot());
     mockReadBestEffortRuntimeConfigSchema.mockResolvedValue({
       schema: {
         $schema: "http://json-schema.org/draft-07/schema#",
@@ -1268,6 +1372,35 @@ describe("config cli", () => {
       expectErrorIncludes("Dry run failed: config schema validation failed.");
     });
 
+    it("dry-runs config patch channel fields against plugin-owned schemas", async () => {
+      setExternalFeishuSchema();
+      const resolved: OpenClawConfig = {
+        channels: {
+          feishu: {
+            appId: "app-id",
+            appSecret: "secret",
+          },
+        },
+      };
+      setSnapshot(resolved, resolved);
+      const pathname = writeTempJson5File("openclaw-config-plugin-channel-schema", {
+        channels: {
+          feishu: {
+            appId: "app-id",
+            appSecret: "secret",
+            replyMode: "thread",
+            footer: "OpenClaw",
+          },
+        },
+      });
+
+      await runConfigCommand(["config", "patch", "--file", pathname, "--dry-run"]);
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expect(mockError).not.toHaveBeenCalledWith(expect.stringContaining("replyMode"));
+      expect(mockError).not.toHaveBeenCalledWith(expect.stringContaining("footer"));
+    });
+
     it("fails dry-run when unsupported mutable paths receive SecretRef objects in value/json mode", async () => {
       const resolved: OpenClawConfig = {
         gateway: { port: 18789 },
@@ -1837,6 +1970,43 @@ describe("config cli", () => {
       expect((written.channels as Record<string, unknown>).slack).toEqual({
         enabled: true,
         mode: "socket",
+      });
+    });
+
+    it("keeps numeric config patch object keys as object keys", async () => {
+      const resolved = {
+        channels: {
+          discord: {
+            enabled: true,
+          },
+        },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      const pathname = writeTempJson5File("openclaw-config-patch-numeric-object-key", {
+        channels: {
+          discord: {
+            guilds: {
+              "123456789012345678": {
+                token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
+              },
+            },
+          },
+        },
+      });
+      try {
+        await runConfigCommand(["config", "patch", "--file", pathname]);
+      } finally {
+        fs.rmSync(pathname, { force: true });
+      }
+
+      const written = firstWrittenConfig() as {
+        channels?: { discord?: { guilds?: unknown } };
+      };
+      expect(written.channels?.discord?.guilds).toEqual({
+        "123456789012345678": {
+          token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
+        },
       });
     });
 

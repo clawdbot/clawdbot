@@ -91,6 +91,7 @@ export function buildStatusCommandOverviewRows(
     formatTimeAgo: (ageMs: number) => string;
     formatKTokens: (value: number) => string;
     updateValue?: string;
+    updateRestartValue?: string | null;
   } & StatusMemoryStateResolvers,
 ) {
   const agentsValue = buildStatusAgentsValue({
@@ -156,6 +157,9 @@ export function buildStatusCommandOverviewRows(
     agentsValue,
     suffixRows: [
       ...(modelPricingValue ? [{ Item: "Model pricing", Value: modelPricingValue }] : []),
+      ...(params.updateRestartValue
+        ? [{ Item: "Update restart", Value: params.updateRestartValue }]
+        : []),
       { Item: "Memory", Value: memoryValue },
       { Item: "Plugin compatibility", Value: pluginCompatibilityValue },
       { Item: "Probes", Value: probesValue },
@@ -182,6 +186,7 @@ export function buildStatusAllOverviewRows(params: {
   osLabel: string;
   configPath: string;
   secretDiagnosticsCount: number;
+  updateRestartValue?: string | null;
   agentStatus: {
     bootstrapPendingCount: number;
     totalSessions: number;
@@ -205,6 +210,9 @@ export function buildStatusAllOverviewRows(params: {
       { Item: "Config", Value: params.configPath },
     ],
     middleRows: [
+      ...(params.updateRestartValue
+        ? [{ Item: "Update restart", Value: params.updateRestartValue }]
+        : []),
       { Item: "Security", Value: `Run: ${formatCliCommand("openclaw security audit --deep")}` },
     ],
     agentsValue: buildStatusAllAgentsValue({

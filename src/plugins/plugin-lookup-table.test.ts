@@ -196,7 +196,7 @@ describe("loadPluginLookUpTable", () => {
             },
           },
         },
-        cliBackends: ["codex-cli"],
+        cliBackends: [],
         setup: {
           providers: [{ id: "openai" }],
         },
@@ -248,7 +248,7 @@ describe("loadPluginLookUpTable", () => {
     expect(table.owners.providers.get("openai")).toEqual(["openai"]);
     expect(table.owners.modelCatalogProviders.get("openai")).toEqual(["openai"]);
     expect(table.owners.modelCatalogProviders.get("azure-openai-responses")).toEqual(["openai"]);
-    expect(table.owners.cliBackends.get("codex-cli")).toEqual(["openai"]);
+    expect(table.owners.cliBackends.get("codex-cli")).toBeUndefined();
     expect(table.owners.setupProviders.get("openai")).toEqual(["openai"]);
     expect(table.owners.commandAliases.get("telegram-send")).toEqual(["telegram"]);
     expect(table.owners.contracts.get("tools")).toEqual(["telegram"]);

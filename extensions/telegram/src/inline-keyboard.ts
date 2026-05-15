@@ -1,4 +1,4 @@
-import type { InlineKeyboardButton, InlineKeyboardMarkup } from "@grammyjs/types";
+import type { InlineKeyboardButton, InlineKeyboardMarkup } from "grammy/types";
 import type { TelegramInlineButtons } from "./button-types.js";
 
 function toInlineKeyboardButton(

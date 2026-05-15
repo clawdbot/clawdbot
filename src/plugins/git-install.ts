@@ -287,7 +287,7 @@ export async function installPluginFromGitSpec(
 
     if (parsed.ref) {
       const checkout = await runGitCommand({
-        argv: ["git", "checkout", "--detach", parsed.ref],
+        argv: ["git", "switch", "--detach", "--", parsed.ref],
         action: `checkout ${parsed.ref}`,
         source: parsed,
         cwd: repoDir,

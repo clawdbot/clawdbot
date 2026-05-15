@@ -139,6 +139,14 @@ function buildPerplexityRequestHeaders(apiKey: string, acceptJson = false): Reco
   };
 }
 
+async function readPerplexityJsonResponse<T>(response: Response, label: string): Promise<T> {
+  try {
+    return (await response.json()) as T;
+  } catch (cause) {
+    throw new Error(`${label}: malformed JSON response`, { cause });
+  }
+}
+
 function resolvePerplexityTransport(perplexity?: PerplexityConfig): {
   apiKey?: string;
   source: "config" | "perplexity_env" | "openrouter_env" | "none";
@@ -246,7 +254,10 @@ async function runPerplexitySearchApi(params: {
       if (!res.ok) {
         return await throwWebSearchApiError(res, "Perplexity Search");
       }
-      const data = (await res.json()) as PerplexitySearchApiResponse;
+      const data = await readPerplexityJsonResponse<PerplexitySearchApiResponse>(
+        res,
+        "Perplexity Search",
+      );
       return (data.results ?? []).map((entry) => ({
         title: entry.title ? wrapWebContent(entry.title, "web_search") : "",
         url: entry.url ?? "",
@@ -289,7 +300,7 @@ async function runPerplexitySearch(params: {
       if (!res.ok) {
         return await throwWebSearchApiError(res, "Perplexity");
       }
-      const data = (await res.json()) as PerplexitySearchResponse;
+      const data = await readPerplexityJsonResponse<PerplexitySearchResponse>(res, "Perplexity");
       return {
         content: data.choices?.[0]?.message?.content ?? "No response",
         citations: extractPerplexityCitations(data),
@@ -533,6 +544,7 @@ export const __testing = {
   isDirectPerplexityBaseUrl,
   resolvePerplexityRequestModel,
   resolvePerplexityApiKey,
+  readPerplexityJsonResponse,
   normalizeToIsoDate,
   isoToPerplexityDate,
 } as const;

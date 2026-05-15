@@ -44,6 +44,7 @@ const providerRuntimeDeps = {
 };
 
 let preparedExtraParamsCache = new WeakMap<OpenClawConfig, Map<string, Record<string, unknown>>>();
+const REQUEST_SCOPED_EXTRA_PARAM_KEYS = new Set(["response_format", "responseFormat"]);
 
 export const __testing = {
   setProviderRuntimeDepsForTest(
@@ -112,6 +113,16 @@ export function resolveExtraParams(params: {
     delete merged.textVerbosity;
   }
 
+  const resolvedResponseFormat = resolveAliasedParamValue(
+    [defaultParams, globalParams, agentParams],
+    "response_format",
+    "responseFormat",
+  );
+  if (resolvedResponseFormat !== undefined) {
+    merged.response_format = resolvedResponseFormat;
+    delete merged.responseFormat;
+  }
+
   const resolvedCachedContent = resolveAliasedParamValue(
     [defaultParams, globalParams, agentParams],
     "cached_content",
@@ -134,6 +145,7 @@ type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
   cacheRetention?: "none" | "short" | "long";
   cachedContent?: string;
   topP?: number;
+  responseFormat?: Record<string, unknown>;
 };
 export type SupportedTransport = AgentRuntimeTransport;
 
@@ -193,7 +205,8 @@ function resolvePreparedExtraParamsCacheKey(params: {
     workspaceDir: params.workspaceDir ?? "",
     thinkingLevel: params.thinkingLevel ?? "",
     resolvedTransport: params.resolvedTransport ?? "",
-    extraParamsOverride: params.extraParamsOverride ?? null,
+    extraParamsOverride:
+      stripRequestScopedExtraParams(sanitizeExtraParamsRecord(params.extraParamsOverride)) ?? null,
     resolvedExtraParams: params.resolvedExtraParams ?? null,
     model: fingerprintPreparedExtraParamsModel(params.model),
   });
@@ -223,9 +236,11 @@ export function resolvePreparedExtraParams(params: {
     });
   const override =
     params.extraParamsOverride && Object.keys(params.extraParamsOverride).length > 0
-      ? sanitizeExtraParamsRecord(
-          Object.fromEntries(
-            Object.entries(params.extraParamsOverride).filter(([, value]) => value !== undefined),
+      ? stripRequestScopedExtraParams(
+          sanitizeExtraParamsRecord(
+            Object.fromEntries(
+              Object.entries(params.extraParamsOverride).filter(([, value]) => value !== undefined),
+            ),
           ),
         )
       : undefined;
@@ -311,6 +326,24 @@ function sanitizeExtraParamsRecord(
   );
 }
 
+function stripRequestScopedExtraParams(
+  value: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const filtered = Object.fromEntries(
+    Object.entries(value).filter(([key]) => !REQUEST_SCOPED_EXTRA_PARAM_KEYS.has(key)),
+  );
+  return Object.keys(filtered).length > 0 ? filtered : undefined;
+}
+
+function hasRequestScopedExtraParams(value: Record<string, unknown> | undefined): boolean {
+  if (!value) {
+    return false;
+  }
+  return [...REQUEST_SCOPED_EXTRA_PARAM_KEYS].some((key) => Object.hasOwn(value, key));
+}
 function shouldApplyDefaultOpenAIGptRuntimeParams(params: {
   provider: string;
   modelId: string;
@@ -385,6 +418,18 @@ function createStreamFnWithExtraParams(
   }
   if (typeof extraParams.maxTokens === "number") {
     streamParams.maxTokens = extraParams.maxTokens;
+  }
+  const resolvedResponseFormat = resolveAliasedParamValue(
+    [extraParams],
+    "response_format",
+    "responseFormat",
+  );
+  if (
+    resolvedResponseFormat &&
+    typeof resolvedResponseFormat === "object" &&
+    !Array.isArray(resolvedResponseFormat)
+  ) {
+    streamParams.responseFormat = resolvedResponseFormat as Record<string, unknown>;
   }
   const transport = resolveSupportedTransport(extraParams.transport);
   if (transport) {
@@ -661,9 +706,14 @@ type ApplyExtraParamsContext = {
 };
 
 function applyPrePluginStreamWrappers(ctx: ApplyExtraParamsContext): void {
+  const baseExtraParams =
+    ctx.override && hasRequestScopedExtraParams(ctx.override)
+      ? stripRequestScopedExtraParams(ctx.effectiveExtraParams)
+      : ctx.effectiveExtraParams;
+  const streamParams = ctx.override ? { ...baseExtraParams, ...ctx.override } : baseExtraParams;
   const wrappedStreamFn = createStreamFnWithExtraParams(
     ctx.agent.streamFn,
-    ctx.effectiveExtraParams,
+    streamParams,
     ctx.provider,
     ctx.model,
   );
@@ -809,8 +859,10 @@ export function applyExtraParamsToAgent(
   });
   const override =
     extraParamsOverride && Object.keys(extraParamsOverride).length > 0
-      ? Object.fromEntries(
-          Object.entries(extraParamsOverride).filter(([, value]) => value !== undefined),
+      ? sanitizeExtraParamsRecord(
+          Object.fromEntries(
+            Object.entries(extraParamsOverride).filter(([, value]) => value !== undefined),
+          ),
         )
       : undefined;
   const effectiveExtraParams =

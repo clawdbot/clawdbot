@@ -27,6 +27,30 @@ Expected healthy signals:
 - `openclaw doctor` reports no blocking config/service issues.
 - `openclaw channels status --probe` shows live per-account transport status and, where supported, probe/audit results such as `works` or `audit ok`.
 
+## After an update
+
+Use this when an update finishes but the Gateway is down, channels are empty, or
+model calls start failing with 401s.
+
+```bash
+openclaw status --all
+openclaw update status --json
+openclaw gateway status --deep
+openclaw doctor --fix
+openclaw gateway restart
+```
+
+Look for:
+
+- `Update restart` in `openclaw status` / `openclaw status --all`. Pending or
+  failed handoffs include the next command to run.
+- `plugin load failed: dependency tree corrupted; run openclaw doctor --fix`
+  under Channels. That means the channel config still exists, but plugin
+  registration failed before the channel could load.
+- provider 401s after re-auth. `openclaw doctor --fix` checks for stale
+  per-agent OAuth auth shadows and removes the old copies so all agents resolve
+  the current shared profile.
+
 ## Split brain installs and newer config guard
 
 Use this when a gateway service unexpectedly stops after an update, or logs show that one `openclaw` binary is older than the version that last wrote `openclaw.json`.
@@ -370,6 +394,7 @@ Look for:
 - `Config write rejected: ...`
 - A timestamped `openclaw.json.rejected.*` file beside the active config
 - A timestamped `openclaw.json.clobbered.*` file if `doctor --fix` repaired a broken direct edit
+- OpenClaw keeps the latest 32 `.clobbered.*` files for each config path and rotates older ones
 
 <AccordionGroup>
   <Accordion title="What happened">
@@ -378,6 +403,7 @@ Look for:
     - Hot reload skips invalid external edits and keeps the current runtime config active.
     - OpenClaw-owned writes reject invalid/destructive payloads before commit and save `.rejected.*`.
     - `openclaw doctor --fix` owns repair. It can remove non-JSON prefixes or restore the last-known-good copy while preserving the rejected payload as `.clobbered.*`.
+    - When many repairs happen for one config path, OpenClaw rotates older `.clobbered.*` files so the newest repaired payload is still available.
 
   </Accordion>
   <Accordion title="Inspect and repair">

@@ -11,6 +11,8 @@ import {
   type ChannelProgressDraftLine,
   formatChannelProgressDraftText,
   isChannelProgressDraftWorkToolName,
+  mergeChannelProgressDraftLine,
+  normalizeChannelProgressDraftLineIdentity,
   resolveChannelPreviewStreamMode,
   resolveChannelProgressDraftMaxLines,
   resolveChannelProgressDraftLabel,
@@ -136,16 +138,13 @@ export function createTeamsReplyStreamController(params: {
       return;
     }
     if (shouldStreamPreviewToolProgress) {
-      const normalized = normalizeProgressLineIdentity(line);
+      const normalized = normalizeChannelProgressDraftLineIdentity(line);
       if (normalized) {
-        const previous = normalizeProgressLineIdentity(progressLines.at(-1));
-        if (previous !== normalized) {
-          const progressLine: string | ChannelProgressDraftLine =
-            typeof line === "object" && line !== undefined ? line : normalized;
-          progressLines = [...progressLines, progressLine].slice(
-            -resolveChannelProgressDraftMaxLines(params.msteamsConfig),
-          );
-        }
+        const progressLine: string | ChannelProgressDraftLine =
+          typeof line === "object" && line !== undefined ? line : normalized;
+        progressLines = mergeChannelProgressDraftLine(progressLines, progressLine, {
+          maxLines: resolveChannelProgressDraftMaxLines(params.msteamsConfig),
+        });
       }
     }
     await noteProgressWork();
@@ -332,11 +331,4 @@ export function createTeamsReplyStreamController(params: {
       return streamReceivedTokens;
     },
   };
-}
-
-function normalizeProgressLineIdentity(
-  line: string | ChannelProgressDraftLine | undefined,
-): string {
-  const text = typeof line === "string" ? line : line?.text;
-  return text?.replace(/\s+/g, " ").trim() ?? "";
 }

@@ -3,22 +3,49 @@ import type { PluginConversationBinding } from "openclaw/plugin-sdk/plugin-entry
 
 const BINDING_DATA_VERSION = 1;
 
-export type CodexConversationBindingData = {
+export type CodexAppServerConversationBindingData = {
   kind: "codex-app-server-session";
   version: 1;
   sessionFile: string;
   workspaceDir: string;
 };
 
+export type CodexCliNodeConversationBindingData = {
+  kind: "codex-cli-node-session";
+  version: 1;
+  nodeId: string;
+  sessionId: string;
+  cwd?: string;
+};
+
+export type CodexConversationBindingData =
+  | CodexAppServerConversationBindingData
+  | CodexCliNodeConversationBindingData;
+
 export function createCodexConversationBindingData(params: {
   sessionFile: string;
   workspaceDir: string;
-}): CodexConversationBindingData {
+}): CodexAppServerConversationBindingData {
   return {
     kind: "codex-app-server-session",
     version: BINDING_DATA_VERSION,
     sessionFile: params.sessionFile,
     workspaceDir: params.workspaceDir,
+  };
+}
+
+export function createCodexCliNodeConversationBindingData(params: {
+  nodeId: string;
+  sessionId: string;
+  cwd?: string;
+}): CodexCliNodeConversationBindingData {
+  const cwd = params.cwd?.trim();
+  return {
+    kind: "codex-cli-node-session",
+    version: BINDING_DATA_VERSION,
+    nodeId: params.nodeId,
+    sessionId: params.sessionId,
+    ...(cwd ? { cwd } : {}),
   };
 }
 
@@ -35,8 +62,28 @@ export function readCodexConversationBindingData(
 export function readCodexConversationBindingDataRecord(
   data: Record<string, unknown>,
 ): CodexConversationBindingData | undefined {
+  if (data.kind === "codex-cli-node-session") {
+    if (
+      data.version !== BINDING_DATA_VERSION ||
+      typeof data.nodeId !== "string" ||
+      !data.nodeId.trim() ||
+      typeof data.sessionId !== "string" ||
+      !data.sessionId.trim()
+    ) {
+      return undefined;
+    }
+    return {
+      kind: "codex-cli-node-session",
+      version: BINDING_DATA_VERSION,
+      nodeId: data.nodeId.trim(),
+      sessionId: data.sessionId.trim(),
+      cwd: typeof data.cwd === "string" && data.cwd.trim() ? data.cwd.trim() : undefined,
+    };
+  }
+  if (data.kind !== "codex-app-server-session") {
+    return undefined;
+  }
   if (
-    data.kind !== "codex-app-server-session" ||
     data.version !== BINDING_DATA_VERSION ||
     typeof data.sessionFile !== "string" ||
     !data.sessionFile.trim()

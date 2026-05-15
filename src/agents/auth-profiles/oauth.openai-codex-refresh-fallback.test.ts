@@ -226,6 +226,40 @@ describe("resolveApiKeyForProfile openai-codex refresh fallback", () => {
     expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
   });
 
+  it("forces refresh for unexpired openai-codex credentials through the exported resolver", async () => {
+    const profileId = "openai-codex:default";
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [profileId]: {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "fresh-access-token",
+            refresh: "fresh-refresh-token",
+            expires: Date.now() + 86_400_000,
+          },
+        },
+      },
+      agentDir,
+    );
+    mockRotatedOpenAICodexRefresh();
+
+    const result = await resolveApiKeyForProfile({
+      store: ensureAuthProfileStore(agentDir),
+      profileId,
+      agentDir,
+      forceRefresh: true,
+    });
+
+    expect(result).toEqual({
+      apiKey: "rotated-access-token",
+      provider: "openai-codex",
+      email: undefined,
+    });
+    expect(refreshProviderOAuthCredentialWithPluginMock).toHaveBeenCalledTimes(1);
+  });
+
   it("persists plugin-refreshed openai-codex metadata before returning", async () => {
     const profileId = "openai-codex:default";
     saveAuthProfileStore(

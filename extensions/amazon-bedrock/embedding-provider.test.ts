@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { hasAwsCredentials } from "./embedding-provider.js";
+import { __testing, hasAwsCredentials } from "./embedding-provider.js";
 
 describe("hasAwsCredentials", () => {
   it("accepts static AWS key credentials without loading the credential chain", async () => {
@@ -61,5 +61,19 @@ describe("hasAwsCredentials", () => {
     const loadCredentialProvider = vi.fn().mockResolvedValue(null);
 
     await expect(hasAwsCredentials({}, loadCredentialProvider)).resolves.toBe(false);
+  });
+});
+
+describe("bedrock embedding response parsers", () => {
+  it("wraps malformed single embedding JSON", () => {
+    expect(() => __testing.parseSingle("titan-v2", "{not json")).toThrow(
+      "Amazon Bedrock embedding response returned malformed JSON",
+    );
+  });
+
+  it("wraps malformed batch embedding JSON", () => {
+    expect(() => __testing.parseCohereBatch("cohere-v3", "{not json")).toThrow(
+      "Amazon Bedrock embedding response returned malformed JSON",
+    );
   });
 });

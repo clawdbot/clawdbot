@@ -9,6 +9,18 @@ vi.mock("./runtime.js", () => ({
   getMSTeamsRuntime: vi.fn(() => mockRuntime),
 }));
 
+vi.mock("../runtime-api.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../runtime-api.js")>();
+  return {
+    ...original,
+    fetchWithSsrFGuard: async (params: { url: string; init?: RequestInit }) => ({
+      response: await globalThis.fetch(params.url, params.init),
+      finalUrl: params.url,
+      release: async () => undefined,
+    }),
+  };
+});
+
 import { fetchGraphJson } from "./graph.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 import { buildUserAgent, ensureUserAgentHeader, resetUserAgentCache } from "./user-agent.js";
@@ -66,10 +78,11 @@ describe("buildUserAgent", () => {
   });
 
   it("sends the generated User-Agent in Graph requests by default", async () => {
-    const mockFetch = vi.fn().mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ value: [] }),
-    });
+    const mockFetch = vi.fn().mockResolvedValueOnce(
+      new Response(JSON.stringify({ value: [] }), {
+        headers: { "content-type": "application/json" },
+      }),
+    );
     vi.stubGlobal("fetch", mockFetch);
 
     await fetchGraphJson({ token: "test-token", path: "/groups" });
@@ -81,10 +94,11 @@ describe("buildUserAgent", () => {
   });
 
   it("lets caller headers override the default Graph User-Agent", async () => {
-    const mockFetch = vi.fn().mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ value: [] }),
-    });
+    const mockFetch = vi.fn().mockResolvedValueOnce(
+      new Response(JSON.stringify({ value: [] }), {
+        headers: { "content-type": "application/json" },
+      }),
+    );
     vi.stubGlobal("fetch", mockFetch);
 
     await fetchGraphJson({

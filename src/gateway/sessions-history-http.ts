@@ -43,7 +43,7 @@ const log = createSubsystemLogger("gateway/sessions-history-sse");
 const MAX_SESSION_HISTORY_LIMIT = 1000;
 
 function resolveSessionHistoryPath(req: IncomingMessage): string | null {
-  const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+  const url = new URL(req.url ?? "/", "http://localhost");
   const match = url.pathname.match(/^\/sessions\/([^/]+)\/history$/);
   if (!match) {
     return null;
@@ -61,7 +61,7 @@ function shouldStreamSse(req: IncomingMessage): boolean {
 }
 
 function getRequestUrl(req: IncomingMessage): URL {
-  return new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+  return new URL(req.url ?? "/", "http://localhost");
 }
 
 function resolveLimit(req: IncomingMessage): number | undefined {

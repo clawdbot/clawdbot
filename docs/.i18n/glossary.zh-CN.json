@@ -132,6 +132,10 @@
     "target": "Agent Runtimes"
   },
   {
+    "source": "Code mode",
+    "target": "代码模式"
+  },
+  {
     "source": "Codex harness",
     "target": "Codex harness"
   },
@@ -954,6 +958,10 @@
   {
     "source": "Tool Search",
     "target": "工具搜索"
+  },
+  {
+    "source": "Code execution",
+    "target": "代码执行"
   },
   {
     "source": "Tools and plugins",

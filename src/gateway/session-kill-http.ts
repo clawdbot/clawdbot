@@ -56,7 +56,7 @@ export async function handleSessionKillHttpRequest(
   },
 ): Promise<boolean> {
   const cfg = getRuntimeConfig();
-  const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`);
+  const url = new URL(req.url ?? "/", "http://localhost");
   const sessionKeyResolution = resolveSessionKeyFromPath(url.pathname);
   if (!sessionKeyResolution.matched) {
     return false;

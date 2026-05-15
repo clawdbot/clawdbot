@@ -167,6 +167,40 @@ describe("handleDiscordMessageAction", () => {
     });
   });
 
+  it("forwards threadName on sends", async () => {
+    const cfg = discordConfig();
+    await handleDiscordMessageAction({
+      action: "send",
+      params: {
+        target: "channel:thread-1",
+        message: "hello",
+        threadName: "Renamed thread",
+      },
+      cfg,
+    });
+
+    expectDiscordActionCall({
+      payload: {
+        action: "sendMessage",
+        accountId: undefined,
+        to: "channel:thread-1",
+        content: "hello",
+        threadName: "Renamed thread",
+        mediaUrl: undefined,
+        filename: undefined,
+        replyTo: undefined,
+        components: undefined,
+        embeds: undefined,
+        asVoice: false,
+        silent: false,
+        __sessionKey: undefined,
+        __agentId: undefined,
+      },
+      cfg,
+      options: defaultActionOptions(),
+    });
+  });
+
   it("maps upload-file to Discord sendMessage with media read context", async () => {
     const mediaReadFile = vi.fn(async () => Buffer.from("image"));
     const mediaAccess = {

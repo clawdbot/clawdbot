@@ -499,7 +499,12 @@ describe("createMattermostInteractionHandler", () => {
     remoteAddress?: string;
     headers?: Record<string, string>;
   }): IncomingMessage {
-    const body = params.body === undefined ? "" : JSON.stringify(params.body);
+    const body =
+      params.body === undefined
+        ? ""
+        : typeof params.body === "string"
+          ? params.body
+          : JSON.stringify(params.body);
     const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
 
     const req = {
@@ -715,6 +720,26 @@ describe("createMattermostInteractionHandler", () => {
     });
 
     expectSuccessfulApprovalUpdate(res, requestLog);
+  });
+
+  it("rejects malformed JSON callback requests with a stable parser error", async () => {
+    const log = vi.fn();
+    const handler = createMattermostInteractionHandler({
+      client: createMattermostClientMock(async () => {
+        throw new Error("unexpected client request");
+      }),
+      botUserId: "bot",
+      accountId: "acct",
+      log,
+    });
+
+    const res = await runHandler(handler, { body: "{not json" });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.body).toBe(JSON.stringify({ error: "Invalid request body" }));
+    expect(log).toHaveBeenCalledWith(
+      "mattermost interaction: failed to parse body: Error: Mattermost interaction body was malformed JSON",
+    );
   });
 
   it("accepts forwarded Mattermost source IPs from a trusted proxy", async () => {

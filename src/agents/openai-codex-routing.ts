@@ -149,3 +149,15 @@ export function resolveOpenAIRuntimeProviderForPi(params: {
     ? OPENAI_CODEX_PROVIDER_ID
     : params.provider;
 }
+
+export function resolveContextConfigProviderForRuntime(params: {
+  provider: string;
+  runtimeId?: string;
+}): string {
+  const provider = normalizeProviderId(params.provider);
+  const runtimeId = normalizeEmbeddedAgentRuntime(params.runtimeId);
+  if (provider === OPENAI_PROVIDER_ID && runtimeId === "codex") {
+    return OPENAI_CODEX_PROVIDER_ID;
+  }
+  return params.provider;
+}

@@ -79,6 +79,28 @@ function resolveProviderWebSearchPluginConfig(
   return isRecord(pluginConfig?.webSearch) ? pluginConfig.webSearch : undefined;
 }
 
+function resolveLegacyTopLevelBraveCredential(
+  config: unknown,
+): { path: string; value: unknown } | undefined {
+  if (!isRecord(config)) {
+    return undefined;
+  }
+  const tools = isRecord(config.tools) ? config.tools : undefined;
+  const web = isRecord(tools?.web) ? tools.web : undefined;
+  const search = isRecord(web?.search) ? web.search : undefined;
+  if (!search || !("apiKey" in search)) {
+    return undefined;
+  }
+  return { path: "tools.web.search.apiKey", value: search.apiKey };
+}
+
+function resolveConfiguredBraveCredential(config: unknown): unknown {
+  return (
+    resolveProviderWebSearchPluginConfig(config, "brave")?.apiKey ??
+    resolveLegacyTopLevelBraveCredential(config)?.value
+  );
+}
+
 function mergeScopedSearchConfig(
   searchConfig: Record<string, unknown> | undefined,
   key: string,
@@ -148,6 +170,8 @@ export function createBraveWebSearchProvider(): WebSearchProviderPlugin {
       searchCredential: { type: "top-level" },
       configuredCredential: { pluginId: "brave" },
     }),
+    getConfiguredCredentialValue: resolveConfiguredBraveCredential,
+    getConfiguredCredentialFallback: resolveLegacyTopLevelBraveCredential,
     createTool: (ctx) =>
       createBraveToolDefinition(
         mergeScopedSearchConfig(

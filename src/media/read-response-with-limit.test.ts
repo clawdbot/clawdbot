@@ -15,13 +15,14 @@ function makeStream(chunks: Uint8Array[], delayMs?: number) {
   });
 }
 
-function makeStallingStream(initialChunks: Uint8Array[]) {
+function makeStallingStream(initialChunks: Uint8Array[], onCancel?: (reason?: unknown) => void) {
   return new ReadableStream<Uint8Array>({
     start(controller) {
       for (const chunk of initialChunks) {
         controller.enqueue(chunk);
       }
     },
+    cancel: onCancel,
   });
 }
 
@@ -153,6 +154,29 @@ describe("readResponseWithLimit", () => {
       await vi.advanceTimersByTimeAsync(25);
       const buf = await readPromise;
       expect(buf).toEqual(expected);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("passes the idle-timeout error to stream cancellation", async () => {
+    vi.useFakeTimers();
+    try {
+      const cancel = vi.fn();
+      const body = makeStallingStream([new Uint8Array([1, 2])], cancel);
+      const res = new Response(body);
+      const readPromise = expect(
+        readResponseWithLimit(res, 1024, {
+          chunkTimeoutMs: 50,
+          onIdleTimeout: ({ chunkTimeoutMs }) => new Error(`custom idle ${chunkTimeoutMs}`),
+        }),
+      ).rejects.toThrow("custom idle 50");
+
+      await vi.advanceTimersByTimeAsync(60);
+      await readPromise;
+      expect(cancel).toHaveBeenCalledTimes(1);
+      expect(cancel.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+      expect((cancel.mock.calls[0]?.[0] as Error | undefined)?.message).toBe("custom idle 50");
     } finally {
       vi.useRealTimers();
     }

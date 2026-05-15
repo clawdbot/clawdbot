@@ -3,6 +3,7 @@ import type {
   MediaUnderstandingOutput,
 } from "../media-understanding/types.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
+import type { CommandTurnContext } from "./command-turn-context.js";
 import type { CommandArgs } from "./commands-args.types.js";
 import type { ReplyThreadingPolicy } from "./types.js";
 
@@ -226,6 +227,7 @@ export type MsgContext = {
   /** Provider-native source that caused the current mention decision. */
   MentionSource?: MentionSource;
   CommandAuthorized?: boolean;
+  CommandTurn?: CommandTurnContext;
   CommandSource?: "text" | "native";
   CommandTargetSessionKey?: string;
   /**
@@ -283,6 +285,11 @@ export type FinalizedMsgContext = Omit<MsgContext, "CommandAuthorized"> & {
    * Default-deny: missing/undefined becomes false.
    */
   CommandAuthorized: boolean;
+  /**
+   * Populated by finalizeInboundContext(); optional for public SDK
+   * compatibility with existing plugin-constructed finalized contexts.
+   */
+  CommandTurn?: CommandTurnContext;
 };
 
 export type TemplateContext = MsgContext & {

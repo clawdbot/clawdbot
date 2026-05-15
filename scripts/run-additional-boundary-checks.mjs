@@ -54,6 +54,11 @@ export const BOUNDARY_CHECKS = [
     "pnpm",
     ["run", "lint:extensions:no-relative-outside-package"],
   ],
+  [
+    "lint:extensions:telegram-grammy-types",
+    "pnpm",
+    ["run", "lint:extensions:telegram-grammy-types"],
+  ],
   ["lint:ui:no-raw-window-open", "pnpm", ["lint:ui:no-raw-window-open"]],
 ].map(([label, command, args]) => ({ label, command, args }));
 

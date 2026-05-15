@@ -36,6 +36,7 @@ describe("firecrawl tools", () => {
   let createFirecrawlSearchTool: typeof import("./firecrawl-search-tool.js").createFirecrawlSearchTool;
   let createFirecrawlScrapeTool: typeof import("./firecrawl-scrape-tool.js").createFirecrawlScrapeTool;
   let firecrawlClientTesting: typeof import("./firecrawl-client.js").__testing;
+  let runActualFirecrawlSearch: typeof import("./firecrawl-client.js").runFirecrawlSearch;
   let runActualFirecrawlScrape: typeof import("./firecrawl-client.js").runFirecrawlScrape;
   let ssrfMock: { mockRestore: () => void } | undefined;
 
@@ -45,8 +46,11 @@ describe("firecrawl tools", () => {
     ({ createFirecrawlWebSearchProvider } = await import("./firecrawl-search-provider.js"));
     ({ createFirecrawlSearchTool } = await import("./firecrawl-search-tool.js"));
     ({ createFirecrawlScrapeTool } = await import("./firecrawl-scrape-tool.js"));
-    ({ __testing: firecrawlClientTesting, runFirecrawlScrape: runActualFirecrawlScrape } =
-      await vi.importActual<typeof import("./firecrawl-client.js")>("./firecrawl-client.js"));
+    ({
+      __testing: firecrawlClientTesting,
+      runFirecrawlSearch: runActualFirecrawlSearch,
+      runFirecrawlScrape: runActualFirecrawlScrape,
+    } = await vi.importActual<typeof import("./firecrawl-client.js")>("./firecrawl-client.js"));
   });
 
   beforeEach(() => {
@@ -727,6 +731,67 @@ describe("firecrawl tools", () => {
 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(result.success).toBe(true);
+  });
+
+  it("reports malformed Firecrawl search JSON with a stable provider error", async () => {
+    global.fetch = vi.fn(
+      async () =>
+        new Response("{ nope", {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    ) as typeof fetch;
+
+    await expect(
+      runActualFirecrawlSearch({
+        cfg: {
+          plugins: {
+            entries: {
+              firecrawl: {
+                config: {
+                  webSearch: {
+                    apiKey: "firecrawl-key",
+                    baseUrl: "https://api.firecrawl.dev",
+                  },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        query: "openclaw malformed search",
+      }),
+    ).rejects.toThrow("Firecrawl Search API error: malformed JSON response");
+  });
+
+  it("reports malformed Firecrawl scrape JSON with a stable provider error", async () => {
+    global.fetch = vi.fn(
+      async () =>
+        new Response("{ nope", {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        }),
+    ) as typeof fetch;
+
+    await expect(
+      runActualFirecrawlScrape({
+        cfg: {
+          plugins: {
+            entries: {
+              firecrawl: {
+                config: {
+                  webFetch: {
+                    apiKey: "firecrawl-key",
+                    baseUrl: "https://api.firecrawl.dev",
+                  },
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        url: "https://example.com/firecrawl-malformed-scrape",
+        extractMode: "markdown",
+      }),
+    ).rejects.toThrow("Firecrawl fetch failed: malformed JSON response");
   });
 
   it("respects positive numeric overrides for scrape and cache behavior", () => {

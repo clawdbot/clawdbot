@@ -133,7 +133,7 @@ openclaw models list --json
 
 </Tip>
 
-## Live: CLI backend smoke (Claude, Codex, Gemini, or other local CLIs)
+## Live: CLI backend smoke (Claude, Gemini, or other local CLIs)
 
 - Test: `src/gateway/gateway-cli-backend.live.test.ts`
 - Goal: validate the Gateway + agent pipeline using a local CLI backend, without touching your default config.
@@ -145,9 +145,9 @@ openclaw models list --json
   - Default provider/model: `claude-cli/claude-sonnet-4-6`
   - Command/args/image behavior come from the owning CLI backend plugin metadata.
 - Overrides (optional):
-  - `OPENCLAW_LIVE_CLI_BACKEND_MODEL="codex-cli/gpt-5.5"`
-  - `OPENCLAW_LIVE_CLI_BACKEND_COMMAND="/full/path/to/codex"`
-  - `OPENCLAW_LIVE_CLI_BACKEND_ARGS='["exec","--json","--color","never","--sandbox","read-only","--skip-git-repo-check"]'`
+  - `OPENCLAW_LIVE_CLI_BACKEND_MODEL="claude-cli/claude-sonnet-4-6"`
+  - `OPENCLAW_LIVE_CLI_BACKEND_COMMAND="/full/path/to/claude"`
+  - `OPENCLAW_LIVE_CLI_BACKEND_ARGS='["-p","--output-format","json"]'`
   - `OPENCLAW_LIVE_CLI_BACKEND_IMAGE_PROBE=1` to send a real image attachment (paths are injected into the prompt). Docker recipes default this off unless explicitly requested.
   - `OPENCLAW_LIVE_CLI_BACKEND_IMAGE_ARG="--image"` to pass image file paths as CLI args instead of prompt injection.
   - `OPENCLAW_LIVE_CLI_BACKEND_IMAGE_MODE="repeat"` (or `"list"`) to control how image args are passed when `IMAGE_ARG` is set.
@@ -158,8 +158,8 @@ openclaw models list --json
 Example:
 
 ```bash
-OPENCLAW_LIVE_CLI_BACKEND=1 \
-  OPENCLAW_LIVE_CLI_BACKEND_MODEL="codex-cli/gpt-5.5" \
+  OPENCLAW_LIVE_CLI_BACKEND=1 \
+  OPENCLAW_LIVE_CLI_BACKEND_MODEL="claude-cli/claude-sonnet-4-6" \
   pnpm test:live src/gateway/gateway-cli-backend.live.test.ts
 ```
 
@@ -186,7 +186,6 @@ Single-provider Docker recipes:
 ```bash
 pnpm test:docker:live-cli-backend:claude
 pnpm test:docker:live-cli-backend:claude-subscription
-pnpm test:docker:live-cli-backend:codex
 pnpm test:docker:live-cli-backend:gemini
 ```
 
@@ -194,9 +193,9 @@ Notes:
 
 - The Docker runner lives at `scripts/test-live-cli-backend-docker.sh`.
 - It runs the live CLI-backend smoke inside the repo Docker image as the non-root `node` user.
-- It resolves CLI smoke metadata from the owning extension, then installs the matching Linux CLI package (`@anthropic-ai/claude-code`, `@openai/codex`, or `@google/gemini-cli`) into a cached writable prefix at `OPENCLAW_DOCKER_CLI_TOOLS_DIR` (default: `~/.cache/openclaw/docker-cli-tools`).
+- It resolves CLI smoke metadata from the owning extension, then installs the matching Linux CLI package (`@anthropic-ai/claude-code` or `@google/gemini-cli`) into a cached writable prefix at `OPENCLAW_DOCKER_CLI_TOOLS_DIR` (default: `~/.cache/openclaw/docker-cli-tools`).
 - `pnpm test:docker:live-cli-backend:claude-subscription` requires portable Claude Code subscription OAuth through either `~/.claude/.credentials.json` with `claudeAiOauth.subscriptionType` or `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`. It first proves direct `claude -p` in Docker, then runs two Gateway CLI-backend turns without preserving Anthropic API-key env vars. This subscription lane disables the Claude MCP/tool and image probes by default because Claude currently routes third-party app usage through extra-usage billing instead of normal subscription plan limits.
-- The live CLI-backend smoke now exercises the same end-to-end flow for Claude, Codex, and Gemini: text turn, image classification turn, then MCP `cron` tool call verified through the gateway CLI.
+- The live CLI-backend smoke now exercises the same end-to-end flow for Claude and Gemini: text turn, image classification turn, then MCP `cron` tool call verified through the gateway CLI.
 - Claude's default smoke also patches the session from Sonnet to Opus and verifies the resumed session still remembers an earlier note.
 
 ## Live: APNs HTTP/2 proxy reachability

@@ -95,6 +95,10 @@ const GPT_CHAT_BREVITY_ACK_MAX_SENTENCES = 3;
 const GPT_CHAT_BREVITY_SOFT_MAX_CHARS = 900;
 const GPT_CHAT_BREVITY_SOFT_MAX_SENTENCES = 6;
 
+function shouldBridgeCliAssistantTextToReasoning(provider: string): boolean {
+  return normalizeLowercaseStringOrEmpty(provider) === "claude-cli";
+}
+
 function readApprovalScopeValue(value: unknown): "turn" | "session" | undefined {
   return value === "turn" || value === "session" ? value : undefined;
 }
@@ -1508,45 +1512,53 @@ export async function runAgentTurnWithFallback(params: {
             });
             return (async () => {
               let lifecycleTerminalEmitted = false;
-              let lastBridgedAssistantText: string | undefined;
-              let assistantBridgeUnsubscribed = false;
-              let assistantBridgeDelivery: Promise<void> = Promise.resolve();
-              const deliverBridgedAssistantText = async (text: string): Promise<void> => {
+              const createAssistantTextBridge = (deliver: (text: string) => Promise<void>) => {
+                let lastText: string | undefined;
+                let unsubscribed = false;
+                let delivery = Promise.resolve();
+                const rawUnsubscribe = onAgentEvent((evt) => {
+                  if (evt.runId !== runId || evt.stream !== "assistant") {
+                    return;
+                  }
+                  if (params.followupRun.run.silentExpected) {
+                    return;
+                  }
+                  const text = typeof evt.data.text === "string" ? evt.data.text : undefined;
+                  if (text === undefined || text === lastText) {
+                    return;
+                  }
+                  lastText = text;
+                  delivery = delivery.then(() => deliver(text)).catch(() => undefined);
+                });
+                return {
+                  unsubscribe() {
+                    if (unsubscribed) {
+                      return;
+                    }
+                    unsubscribed = true;
+                    rawUnsubscribe();
+                  },
+                  async drain(): Promise<void> {
+                    await delivery;
+                  },
+                };
+              };
+              const noopBridge = {
+                unsubscribe: () => undefined,
+                drain: async (): Promise<void> => undefined,
+              };
+              const assistantBridge = createAssistantTextBridge(async (text) => {
                 const textForTyping = await handlePartialForTyping({ text } as ReplyPayload);
                 if (textForTyping === undefined || !params.opts?.onPartialReply) {
                   return;
                 }
                 await params.opts.onPartialReply({ text: textForTyping });
-              };
-              const queueBridgedAssistantText = (text: string) => {
-                assistantBridgeDelivery = assistantBridgeDelivery
-                  .then(() => deliverBridgedAssistantText(text))
-                  .catch(() => undefined);
-              };
-              const drainAssistantBridgeDelivery = async (): Promise<void> => {
-                await assistantBridgeDelivery;
-              };
-              const rawUnsubscribeAssistantBridge = onAgentEvent((evt) => {
-                if (evt.runId !== runId || evt.stream !== "assistant") {
-                  return;
-                }
-                if (params.followupRun.run.silentExpected) {
-                  return;
-                }
-                const text = typeof evt.data.text === "string" ? evt.data.text : undefined;
-                if (text === undefined || text === lastBridgedAssistantText) {
-                  return;
-                }
-                lastBridgedAssistantText = text;
-                queueBridgedAssistantText(text);
               });
-              const unsubscribeAssistantBridge = () => {
-                if (assistantBridgeUnsubscribed) {
-                  return;
-                }
-                assistantBridgeUnsubscribed = true;
-                rawUnsubscribeAssistantBridge();
-              };
+              const reasoningBridge = shouldBridgeCliAssistantTextToReasoning(cliExecutionProvider)
+                ? createAssistantTextBridge(async (text) => {
+                    await params.opts?.onReasoningStream?.({ text });
+                  })
+                : noopBridge;
               try {
                 const result = await runCliAgent({
                   sessionId: params.followupRun.run.sessionId,
@@ -1594,8 +1606,10 @@ export async function runAgentTurnWithFallback(params: {
                   result.meta?.systemPromptReport,
                 );
 
-                unsubscribeAssistantBridge();
-                await drainAssistantBridgeDelivery();
+                assistantBridge.unsubscribe();
+                reasoningBridge.unsubscribe();
+                await assistantBridge.drain();
+                await reasoningBridge.drain();
 
                 // CLI backends don't emit streaming assistant events, so we need to
                 // emit one with the final text so server-chat can populate its buffer
@@ -1622,8 +1636,10 @@ export async function runAgentTurnWithFallback(params: {
 
                 return result;
               } catch (err) {
-                unsubscribeAssistantBridge();
-                await drainAssistantBridgeDelivery();
+                assistantBridge.unsubscribe();
+                reasoningBridge.unsubscribe();
+                await assistantBridge.drain();
+                await reasoningBridge.drain();
                 if (rollbackFallbackCandidateSelection) {
                   try {
                     await rollbackFallbackCandidateSelection();
@@ -1647,7 +1663,8 @@ export async function runAgentTurnWithFallback(params: {
                 lifecycleTerminalEmitted = true;
                 throw err;
               } finally {
-                unsubscribeAssistantBridge();
+                assistantBridge.unsubscribe();
+                reasoningBridge.unsubscribe();
                 // Defensive backstop: never let a CLI run complete without a terminal
                 // lifecycle event, otherwise downstream consumers can hang.
                 if (!lifecycleTerminalEmitted) {

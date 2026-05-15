@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -182,13 +181,7 @@ type CodexSystemPromptReport = NonNullable<EmbeddedRunAttemptResult["systemPromp
 type CodexToolReportEntry = CodexSystemPromptReport["tools"]["entries"][number];
 type CodexWorkspaceBootstrapContext = CodexBootstrapContext & { instructions?: string };
 
-const testClientFactoryStorage = new AsyncLocalStorage<CodexAppServerClientFactory | undefined>();
-const clientFactory = defaultCodexAppServerClientFactory;
 let openClawCodingToolsFactoryForTests: OpenClawCodingToolsFactory | undefined;
-
-function resolveCodexAppServerClientFactory(): CodexAppServerClientFactory {
-  return testClientFactoryStorage.getStore() ?? clientFactory;
-}
 
 function emitCodexAppServerEvent(
   params: EmbeddedRunAttemptParams,
@@ -443,10 +436,11 @@ export async function runCodexAppServerAttempt(
     turnCompletionIdleTimeoutMs?: number;
     turnAssistantCompletionIdleTimeoutMs?: number;
     turnTerminalIdleTimeoutMs?: number;
+    clientFactory?: CodexAppServerClientFactory;
   } = {},
 ): Promise<EmbeddedRunAttemptResult> {
   const attemptStartedAt = Date.now();
-  const attemptClientFactory = resolveCodexAppServerClientFactory();
+  const attemptClientFactory = options.clientFactory ?? defaultCodexAppServerClientFactory;
   const pluginConfig = readCodexPluginConfig(options.pluginConfig);
   const configuredAppServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
@@ -561,6 +555,19 @@ export async function runCodexAppServerAttempt(
   });
   const hadSessionFile = await pathExists(params.sessionFile);
   let historyMessages = (await readMirroredSessionHistoryMessages(params.sessionFile)) ?? [];
+  const hookContextWindowFields = {
+    ...(params.contextWindowInfo?.tokens
+      ? { contextTokenBudget: params.contextWindowInfo.tokens }
+      : params.contextTokenBudget
+        ? { contextTokenBudget: params.contextTokenBudget }
+        : {}),
+    ...(params.contextWindowInfo?.source
+      ? { contextWindowSource: params.contextWindowInfo.source }
+      : {}),
+    ...(params.contextWindowInfo?.referenceTokens
+      ? { contextWindowReferenceTokens: params.contextWindowInfo.referenceTokens }
+      : {}),
+  };
   const hookContext = {
     runId: params.runId,
     agentId: sessionAgentId,
@@ -570,6 +577,7 @@ export async function runCodexAppServerAttempt(
     messageProvider: params.messageProvider ?? undefined,
     trigger: params.trigger,
     channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+    ...hookContextWindowFields,
   };
   if (activeContextEngine) {
     await bootstrapHarnessContextEngine({
@@ -1557,6 +1565,7 @@ export async function runCodexAppServerAttempt(
           sessionId: params.sessionId,
           provider: params.provider,
           model: params.modelId,
+          ...hookContextWindowFields,
           resolvedRef:
             params.runtimePlan?.observability.resolvedRef ?? `${params.provider}/${params.modelId}`,
           ...(params.runtimePlan?.observability.harnessId
@@ -1798,6 +1807,7 @@ export async function runCodexAppServerAttempt(
         sessionId: params.sessionId,
         provider: params.provider,
         model: params.modelId,
+        ...hookContextWindowFields,
         resolvedRef:
           params.runtimePlan?.observability.resolvedRef ?? `${params.provider}/${params.modelId}`,
         ...(params.runtimePlan?.observability.harnessId
@@ -3247,11 +3257,5 @@ export const __testing = {
   },
   resetOpenClawCodingToolsFactoryForTests(): void {
     openClawCodingToolsFactoryForTests = undefined;
-  },
-  setCodexAppServerClientFactoryForTests(factory: CodexAppServerClientFactory): void {
-    testClientFactoryStorage.enterWith(factory);
-  },
-  resetCodexAppServerClientFactoryForTests(): void {
-    testClientFactoryStorage.enterWith(undefined);
   },
 } as const;

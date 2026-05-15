@@ -51,6 +51,14 @@ describe("google-meet node host bridge sessions", () => {
     vi.resetModules();
   });
 
+  it("reports malformed params JSON with an owned error", async () => {
+    const { handleGoogleMeetNodeHostCommand } = await import("./src/node-host.js");
+
+    await expect(handleGoogleMeetNodeHostCommand("{not json")).rejects.toThrow(
+      "Google Meet node host received malformed params JSON.",
+    );
+  });
+
   it("starts observe-only Chrome without BlackHole or bridge processes", async () => {
     const { handleGoogleMeetNodeHostCommand } = await import("./src/node-host.js");
     const originalPlatform = process.platform;

@@ -6,6 +6,7 @@ import type {
   ExecApprovalManager,
   ExecApprovalRecord,
 } from "../exec-approval-manager.js";
+import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../method-scopes.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -77,9 +78,64 @@ function resolvePendingApprovalLookupError(params: {
   };
 }
 
+function normalizeApprovalIdentity(value: string | null | undefined): string | null {
+  return normalizeOptionalString(value) ?? null;
+}
+
+export function isApprovalRecordVisibleToClient<TPayload>(params: {
+  record: ExecApprovalRecord<TPayload>;
+  client: GatewayClient | null;
+}): boolean {
+  const scopes = Array.isArray(params.client?.connect?.scopes) ? params.client.connect.scopes : [];
+  if (scopes.includes(ADMIN_SCOPE)) {
+    return true;
+  }
+
+  const requestedByDeviceId = normalizeApprovalIdentity(params.record.requestedByDeviceId);
+  const requestedByClientId = normalizeApprovalIdentity(params.record.requestedByClientId);
+  const hasApprovalsScope = scopes.includes(APPROVALS_SCOPE);
+  if (hasApprovalsScope && params.client?.internal?.approvalRuntime === true) {
+    return true;
+  }
+
+  if (requestedByDeviceId) {
+    return requestedByDeviceId === normalizeApprovalIdentity(params.client?.connect?.device?.id);
+  }
+
+  const requestedByConnId = normalizeApprovalIdentity(params.record.requestedByConnId);
+  if (requestedByConnId) {
+    return requestedByConnId === normalizeApprovalIdentity(params.client?.connId);
+  }
+
+  if (requestedByClientId) {
+    return false;
+  }
+
+  return true;
+}
+
+export function resolveApprovalRequestRecipientConnIds<TPayload>(params: {
+  context: GatewayRequestContext;
+  record: ExecApprovalRecord<TPayload>;
+  excludeConnId?: string;
+}): ReadonlySet<string> | null {
+  return (
+    params.context.getApprovalClientConnIds?.({
+      excludeConnId: params.excludeConnId,
+      record: params.record,
+      filter: (client) =>
+        isApprovalRecordVisibleToClient({
+          record: params.record,
+          client,
+        }),
+    }) ?? null
+  );
+}
+
 export function resolvePendingApprovalRecord<TPayload>(params: {
   manager: ExecApprovalManager<TPayload>;
   inputId: string;
+  client?: GatewayClient | null;
   exposeAmbiguousPrefixError?: boolean;
 }):
   | {
@@ -91,7 +147,13 @@ export function resolvePendingApprovalRecord<TPayload>(params: {
       ok: false;
       response: PendingApprovalLookupError;
     } {
-  const resolvedId = params.manager.lookupPendingId(params.inputId);
+  const resolvedId = params.manager.lookupApprovalId(params.inputId, {
+    filter: (record) =>
+      isApprovalRecordVisibleToClient({
+        record,
+        client: params.client ?? null,
+      }),
+  });
   if (resolvedId.kind !== "exact" && resolvedId.kind !== "prefix") {
     return {
       ok: false,
@@ -111,6 +173,7 @@ export function resolvePendingApprovalRecord<TPayload>(params: {
 function resolveResolvedApprovalRecord<TPayload>(params: {
   manager: ExecApprovalManager<TPayload>;
   inputId: string;
+  client?: GatewayClient | null;
   exposeAmbiguousPrefixError?: boolean;
 }):
   | {
@@ -122,7 +185,14 @@ function resolveResolvedApprovalRecord<TPayload>(params: {
       ok: false;
       response: PendingApprovalLookupError;
     } {
-  const resolvedId = params.manager.lookupApprovalId(params.inputId, { includeResolved: true });
+  const resolvedId = params.manager.lookupApprovalId(params.inputId, {
+    includeResolved: true,
+    filter: (record) =>
+      isApprovalRecordVisibleToClient({
+        record,
+        client: params.client ?? null,
+      }),
+  });
   if (resolvedId.kind !== "exact" && resolvedId.kind !== "prefix") {
     return {
       ok: false,
@@ -153,11 +223,27 @@ export function respondPendingApprovalLookupError(params: {
 export async function handleApprovalWaitDecision<TPayload>(params: {
   manager: ExecApprovalManager<TPayload>;
   inputId: unknown;
+  client?: GatewayClient | null;
   respond: RespondFn;
 }): Promise<void> {
   const id = normalizeOptionalString(params.inputId) ?? "";
   if (!id) {
     params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "id is required"));
+    return;
+  }
+  const snapshot = params.manager.getSnapshot(id);
+  if (
+    !snapshot ||
+    !isApprovalRecordVisibleToClient({
+      record: snapshot,
+      client: params.client ?? null,
+    })
+  ) {
+    params.respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, "approval expired or not found"),
+    );
     return;
   }
   const decisionPromise = params.manager.awaitDecision(id);
@@ -169,7 +255,6 @@ export async function handleApprovalWaitDecision<TPayload>(params: {
     );
     return;
   }
-  const snapshot = params.manager.getSnapshot(id);
   const decision = await decisionPromise;
   params.respond(
     true,
@@ -202,9 +287,28 @@ export async function handlePendingApprovalRequest<
   ) => Promise<void> | void;
   afterDecisionErrorLabel?: string;
 }): Promise<void> {
-  params.context.broadcast(params.requestEventName, params.requestEvent, { dropIfSlow: true });
+  const approvalClientConnIds = resolveApprovalRequestRecipientConnIds({
+    context: params.context,
+    record: params.record,
+    excludeConnId: params.clientConnId,
+  });
+  if (approvalClientConnIds) {
+    params.context.broadcastToConnIds(
+      params.requestEventName,
+      params.requestEvent,
+      approvalClientConnIds,
+      {
+        dropIfSlow: true,
+      },
+    );
+  } else {
+    params.context.broadcast(params.requestEventName, params.requestEvent, { dropIfSlow: true });
+  }
 
-  const hasApprovalClients = params.context.hasExecApprovalClients?.(params.clientConnId) ?? false;
+  const hasApprovalClients =
+    approvalClientConnIds !== null
+      ? approvalClientConnIds.size > 0
+      : (params.context.hasExecApprovalClients?.(params.clientConnId) ?? false);
   const deliveredResult = params.deliverRequest();
   const delivered = isPromiseLike(deliveredResult) ? await deliveredResult : deliveredResult;
   const hasTurnSourceRoute =
@@ -298,12 +402,14 @@ export async function handleApprovalResolve<TPayload, TResolvedEvent extends obj
   const resolved = resolvePendingApprovalRecord({
     manager: params.manager,
     inputId: params.inputId,
+    client: params.client,
     exposeAmbiguousPrefixError: params.exposeAmbiguousPrefixError,
   });
   if (!resolved.ok) {
     const resolvedRepeat = resolveResolvedApprovalRecord({
       manager: params.manager,
       inputId: params.inputId,
+      client: params.client,
       exposeAmbiguousPrefixError: params.exposeAmbiguousPrefixError,
     });
     if (resolvedRepeat.ok) {
@@ -353,7 +459,22 @@ export async function handleApprovalResolve<TPayload, TResolvedEvent extends obj
     snapshot: resolved.snapshot,
     nowMs: Date.now(),
   });
-  params.context.broadcast(params.resolvedEventName, resolvedEvent, { dropIfSlow: true });
+  const resolvedEventConnIds = resolveApprovalRequestRecipientConnIds({
+    context: params.context,
+    record: resolved.snapshot,
+  });
+  if (resolvedEventConnIds) {
+    params.context.broadcastToConnIds(
+      params.resolvedEventName,
+      resolvedEvent,
+      resolvedEventConnIds,
+      {
+        dropIfSlow: true,
+      },
+    );
+  } else {
+    params.context.broadcast(params.resolvedEventName, resolvedEvent, { dropIfSlow: true });
+  }
 
   const followUps = [
     params.forwardResolved

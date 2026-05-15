@@ -2,6 +2,7 @@ import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
 
 const CODEX_LIMIT_ID = "codex";
 const LIMIT_WINDOW_KEYS = ["primary", "secondary"] as const;
+const ONE_SECOND_MS = 1000;
 const ONE_MINUTE_MS = 60_000;
 const ONE_HOUR_MS = 60 * ONE_MINUTE_MS;
 const ONE_DAY_MS = 24 * ONE_HOUR_MS;
@@ -70,14 +71,19 @@ export function summarizeCodexRateLimits(
   value: JsonValue | undefined,
   nowMs = Date.now(),
 ): string | undefined {
-  const snapshots = collectCodexRateLimitSnapshots(value);
+  const snapshots = collectCodexRateLimitSnapshots(value).filter(snapshotHasDisplayableData);
   if (snapshots.length === 0) {
     return undefined;
   }
-  return snapshots
+  const summaries = snapshots
     .slice(0, 4)
     .map((snapshot) => summarizeRateLimitSnapshot(snapshot, nowMs))
-    .join("; ");
+    .filter((summary): summary is string => summary !== undefined);
+  return summaries.length > 0 ? summaries.join("; ") : undefined;
+}
+
+export function hasCodexRateLimitSnapshots(value: JsonValue | undefined): boolean {
+  return collectCodexRateLimitSnapshots(value).length > 0;
 }
 
 export function summarizeCodexAccountRateLimits(
@@ -112,7 +118,7 @@ export function summarizeCodexAccountUsage(
   value: JsonValue | undefined,
   nowMs = Date.now(),
 ): CodexAccountUsageSummary | undefined {
-  const snapshots = collectCodexRateLimitSnapshots(value);
+  const snapshots = collectCodexRateLimitSnapshots(value).filter(snapshotHasDisplayableData);
   if (snapshots.length === 0) {
     return undefined;
   }
@@ -191,7 +197,7 @@ function selectBlockingRateLimitReset(
   return blockingSnapshot ? selectSnapshotBlockingReset(blockingSnapshot, nowMs) : undefined;
 }
 
-function summarizeRateLimitSnapshot(snapshot: JsonObject, nowMs: number): string {
+function summarizeRateLimitSnapshot(snapshot: JsonObject, nowMs: number): string | undefined {
   const label = formatLimitLabel(snapshot);
   const windows = LIMIT_WINDOW_KEYS.flatMap((key) => {
     const window = readRateLimitWindow(snapshot, key);
@@ -200,7 +206,13 @@ function summarizeRateLimitSnapshot(snapshot: JsonObject, nowMs: number): string
   const reachedType =
     readString(snapshot, "rateLimitReachedType") ?? readString(snapshot, "rate_limit_reached_type");
   const suffix = reachedType ? ` (${formatReachedType(reachedType)})` : "";
-  return `${label}: ${windows.join(", ") || "available"}${suffix}`;
+  if (windows.length > 0) {
+    return `${label}: ${windows.join(" · ")}${suffix}`;
+  }
+  if (reachedType) {
+    return `${label}: ${formatReachedType(reachedType)}`;
+  }
+  return undefined;
 }
 
 function collectCodexRateLimitSnapshots(value: JsonValue | undefined): JsonObject[] {
@@ -313,6 +325,18 @@ function readRateLimitWindow(
   };
 }
 
+function snapshotHasDisplayableData(snapshot: JsonObject): boolean {
+  if (
+    readString(snapshot, "rateLimitReachedType") ??
+    readString(snapshot, "rate_limit_reached_type")
+  ) {
+    return true;
+  }
+  return readWindowEntries(snapshot).some(
+    (entry) => entry.window.usedPercent !== undefined || entry.window.resetsAtMs > 0,
+  );
+}
+
 function readOptionalNumberField(
   record: JsonObject,
   ...keys: string[]
@@ -331,11 +355,13 @@ function formatRateLimitWindow(key: LimitWindowKey, window: RateLimitReset, nowM
 }
 
 function formatRateLimitWindowDetails(window: RateLimitReset, nowMs: number): string {
-  const usedPercent =
-    window.usedPercent === undefined ? "usage unknown" : `${Math.round(window.usedPercent)}%`;
+  const remainingPercent =
+    window.usedPercent === undefined
+      ? "usage unknown"
+      : `${Math.max(0, 100 - Math.round(window.usedPercent))}% left`;
   const reset =
-    window.resetsAtMs > nowMs ? `, resets ${formatResetTime(window.resetsAtMs, nowMs)}` : "";
-  return `${usedPercent}${reset}`;
+    window.resetsAtMs > nowMs ? ` ⏱${formatResetDuration(window.resetsAtMs, nowMs)}` : "";
+  return `${remainingPercent}${reset}`;
 }
 
 function formatLimitLabel(snapshot: JsonObject): string {
@@ -493,6 +519,25 @@ function formatRelativeDuration(durationMs: number): string {
   }
   const days = Math.ceil(safeMs / ONE_DAY_MS);
   return `${days} ${days === 1 ? "day" : "days"}`;
+}
+
+function formatResetDuration(resetsAtMs: number, nowMs: number): string {
+  const durationMs =
+    Math.round(Math.max(ONE_SECOND_MS, resetsAtMs - nowMs) / ONE_SECOND_MS) * ONE_SECOND_MS;
+  const days = Math.floor(durationMs / ONE_DAY_MS);
+  const hours = Math.floor((durationMs % ONE_DAY_MS) / ONE_HOUR_MS);
+  const minutes = Math.floor((durationMs % ONE_HOUR_MS) / ONE_MINUTE_MS);
+  const seconds = Math.floor((durationMs % ONE_MINUTE_MS) / ONE_SECOND_MS);
+  if (days > 0) {
+    return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
+  }
+  if (hours > 0) {
+    return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
+  }
+  if (minutes > 0) {
+    return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
+  }
+  return `${seconds}s`;
 }
 
 function formatWindowSignature(value: JsonValue | undefined): string {

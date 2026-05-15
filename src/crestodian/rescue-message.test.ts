@@ -63,6 +63,7 @@ const mockConfig = vi.hoisted(() => {
         return {
           path: state.path,
           previousHash: before.hash ?? null,
+          persistedHash: before.hash ?? null,
           snapshot: before,
           nextConfig: cloneConfig(),
           result: undefined,

@@ -122,6 +122,7 @@ const mocks = vi.hoisted(() => {
       return {
         path: "/tmp/openclaw.json",
         previousHash: "hash-1",
+        persistedHash: "hash-1",
         snapshot: { path: "/tmp/openclaw.json" },
         nextConfig: draft,
         result: undefined,
@@ -133,6 +134,7 @@ const mocks = vi.hoisted(() => {
         return {
           path: "/tmp/openclaw.json",
           previousHash: "hash-1",
+          persistedHash: "hash-1",
           snapshot: { path: "/tmp/openclaw.json" },
           nextConfig,
         };
@@ -234,6 +236,7 @@ describe("exec-policy CLI", () => {
         return {
           path: "/tmp/openclaw.json",
           previousHash: "hash-1",
+          persistedHash: "hash-1",
           snapshot: { path: "/tmp/openclaw.json" },
           nextConfig: draft,
           result: undefined,
@@ -247,6 +250,7 @@ describe("exec-policy CLI", () => {
         return {
           path: "/tmp/openclaw.json",
           previousHash: "hash-1",
+          persistedHash: "hash-1",
           snapshot: { path: "/tmp/openclaw.json" },
           nextConfig,
         };

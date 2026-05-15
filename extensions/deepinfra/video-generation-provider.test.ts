@@ -112,6 +112,29 @@ describe("deepinfra video generation provider", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
+  it("reports malformed native video JSON as a provider error", async () => {
+    const release = vi.fn(async () => {});
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => {
+          throw new SyntaxError("Unexpected token");
+        },
+      },
+      release,
+    });
+
+    const provider = buildDeepInfraVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "deepinfra",
+        model: "deepinfra/Pixverse/Pixverse-T2V",
+        prompt: "A bicycle weaving through a rainy neon street",
+        cfg: {},
+      }),
+    ).rejects.toThrow("DeepInfra video generation failed: malformed JSON response");
+    expect(release).toHaveBeenCalledOnce();
+  });
+
   it("names base64 WebM data URL outputs from the MIME type", async () => {
     postJsonRequestMock.mockResolvedValue({
       response: {

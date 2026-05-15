@@ -39,6 +39,14 @@ export type UpdateStatusOptions = {
   timeout?: string;
 };
 
+export type UpdateFinalizeOptions = {
+  json?: boolean;
+  channel?: string;
+  timeout?: string;
+  yes?: boolean;
+  restart?: boolean;
+};
+
 export type UpdateWizardOptions = {
   timeout?: string;
 };

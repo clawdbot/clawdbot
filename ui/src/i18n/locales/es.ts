@@ -348,6 +348,12 @@ export const es: TranslationMap = {
     eventLogSubtitle: "Latest gateway events.",
     noEvents: "No events yet.",
   },
+  quickSettings: {
+    security: {
+      browserEnabled: "Browser enabled",
+      toolProfile: "Tool profile",
+    },
+  },
   execApproval: {
     expiresIn: "expires in {time}",
     expired: "expired",
@@ -695,10 +701,6 @@ export const es: TranslationMap = {
     },
   },
   usage: {
-    page: {
-      subtitle:
-        "Consulta adónde van los tokens, cuándo aumentan las sesiones y qué impulsa el costo.",
-    },
     common: {
       emptyValue: "—",
       unknown: "desconocido",
@@ -1048,10 +1050,10 @@ export const es: TranslationMap = {
     settings: "Configuración del chat",
     thinkingToggle: "Alternar salida de pensamiento/trabajo del asistente",
     toolCallsToggle: "Alternar llamadas a herramientas y resultados de herramientas",
-    autoScrollMode: "Auto-scroll mode",
-    autoScrollAlways: "Always",
-    autoScrollNearBottom: "Near bottom",
-    autoScrollOff: "Off",
+    autoScrollMode: "Modo de desplazamiento automático",
+    autoScrollAlways: "Siempre",
+    autoScrollNearBottom: "Cerca del final",
+    autoScrollOff: "Desactivado",
     focusToggle: "Alternar modo de enfoque (ocultar barra lateral + cabecera)",
     hideCronSessions: "Ocultar sesiones de cron",
     showCronSessions: "Mostrar sesiones de cron",

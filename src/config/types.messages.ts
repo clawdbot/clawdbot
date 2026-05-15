@@ -59,6 +59,9 @@ export type StatusReactionsEmojiConfig = {
   tool?: string;
   coding?: string;
   web?: string;
+  deploy?: string;
+  build?: string;
+  concierge?: string;
   done?: string;
   error?: string;
   stallSoft?: string;
