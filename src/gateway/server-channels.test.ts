@@ -2928,10 +2928,12 @@ describe("server-channels auto restart", () => {
   it("does not resurrect stopped stale accounts from the known-account safety net", async () => {
     let accountIds = ["account-a"];
     const startAccount = vi.fn(
-      async ({ abortSignal }: { abortSignal: AbortSignal }) =>
+      async ({ abortSignal, accountId, setStatus }: ChannelGatewayContext<TestAccount>) => {
+        setStatus({ accountId, running: true, connected: true });
         await new Promise<void>((resolve) => {
           abortSignal.addEventListener("abort", () => resolve(), { once: true });
-        }),
+        });
+      },
     );
     installTestRegistry(createTestPlugin({ startAccount, listAccountIds: () => accountIds }));
     const manager = createManager();
