@@ -363,7 +363,9 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           channels: [...channelsStoppedBeforePluginReload],
           run: async (channel) => {
             params.logChannels.info(`restarting ${channel} channel after ${reason}`);
-            await startGatewayChannelFromActiveRegistry(params, channel);
+            await runOutsideGatewayRootWorkAdmission(() =>
+              params.startChannel(channel, undefined, { includeKnownAccounts: true }),
+            );
             channelsStoppedBeforePluginReload.delete(channel);
           },
           onFailure: (channel, err) => {
