@@ -5550,6 +5550,64 @@ describe("gateway plugin hot reload handlers", () => {
     );
     expect(setState).toHaveBeenCalledTimes(1);
   });
+
+  it("restarts hot-reloaded channels with the known-account safety net", async () => {
+    const startChannel = vi.fn(async () => {});
+    const stopChannel = vi.fn(async () => {});
+    const { applyHotReload } = createGatewayReloadHandlers({
+      deps: {} as never,
+      broadcast: vi.fn(),
+      getState: () => ({
+        hooksConfig: {} as never,
+        hookClientIpConfig: {} as never,
+        heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() } as never,
+        cronState: {
+          cron: { start: vi.fn(async () => {}), stop: vi.fn() },
+          storePath: "/tmp/cron.json",
+          cronEnabled: false,
+        } as never,
+        channelHealthMonitor: null,
+      }),
+      setState: vi.fn(),
+      startChannel,
+      stopChannel,
+      reloadPlugins: vi.fn(
+        async (): Promise<GatewayPluginReloadResult> => ({
+          restartChannels: new Set(),
+          activeChannels: new Set(),
+        }),
+      ),
+      logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      logChannels: { info: vi.fn(), error: vi.fn() },
+      logCron: { error: vi.fn() },
+      logReload: { info: vi.fn(), warn: vi.fn() },
+      createHealthMonitor: () => null,
+    });
+
+    await applyHotReload(
+      {
+        changedPaths: ["channels.openclaw-weixin.channelConfigUpdatedAt"],
+        restartGateway: false,
+        restartReasons: [],
+        hotReasons: ["channels.openclaw-weixin.channelConfigUpdatedAt"],
+        reloadHooks: false,
+        restartGmailWatcher: false,
+        restartCron: false,
+        restartHeartbeat: false,
+        restartHealthMonitor: false,
+        reloadPlugins: false,
+        restartChannels: new Set(["openclaw-weixin"]),
+        disposeMcpRuntimes: false,
+        noopPaths: [],
+      },
+      { channels: { "openclaw-weixin": { channelConfigUpdatedAt: "2026-05-16T00:00:00Z" } } },
+    );
+
+    expect(stopChannel).toHaveBeenCalledWith("openclaw-weixin", undefined, { manual: false });
+    expect(startChannel).toHaveBeenCalledWith("openclaw-weixin", undefined, {
+      includeKnownAccounts: true,
+    });
+  });
 });
 
 describe("deferred channel reload abort generation", () => {

@@ -188,7 +188,9 @@ export async function restartGatewayChannels(options: {
           if (isLifecycleReloadAborted()) {
             return;
           }
-          await startGatewayChannelFromActiveRegistry(params, name);
+          await runOutsideGatewayRootWorkAdmission(() =>
+            params.startChannel(name, undefined, { includeKnownAccounts: true }),
+          );
         };
         const restartFailures = await collectChannelOperationFailures({
           channels: channelsToRestart,

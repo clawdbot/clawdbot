@@ -234,7 +234,25 @@ type ChannelManagerOptions = {
   tryRecoverAutostartSuppression?: () => boolean;
 };
 
-type StopChannelOptions = {
+export type StartChannelOptions = {
+  /**
+   * Include accounts that the manager already knows about in addition to the
+   * plugin's current account listing.
+   *
+   * Channel hot-reload uses this as a safety net for externally-managed
+   * account stores. Some channel plugins refresh their on-disk account index
+   * asynchronously during login; the Gateway must not tear down an already
+   * running account just because the freshly-loaded plugin account list only
+   * exposes the account that triggered the reload.
+   */
+  includeKnownAccounts?: boolean;
+  preserveRestartAttempts?: boolean;
+  preserveManualStop?: boolean;
+  deferAccountStartUntil?: Promise<void>;
+  manual?: boolean;
+};
+
+export type StopChannelOptions = {
   manual?: boolean;
 };
 
@@ -297,6 +315,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   const restarts = new Map<string, RetrySupervisor>();
   // Tracks accounts that were manually stopped so we don't auto-restart them.
   const manuallyStopped = new Set<string>();
+  // Tracks stop/restart handoffs where the caller owns the restart, such as hot reload.
+  const restartDeferredToCaller = new Set<string>();
   const recoveryStopTimedOut = new Set<string>();
   const recoveryStartRequested = new Set<string>();
   // Accounts whose crash recovery is already owned by the retry supervisor below
@@ -472,6 +492,20 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     return startupTrace ? startupTrace.measure(name, run) : await run();
   };
 
+  const listKnownLiveAccountIds = (store: ChannelRuntimeStore): string[] => {
+    const known = new Set<string>([
+      ...store.aborts.keys(),
+      ...store.starting.keys(),
+      ...store.tasks.keys(),
+    ]);
+    for (const [id, snapshot] of store.runtimes.entries()) {
+      if (snapshot.running || snapshot.restartPending || snapshot.connected) {
+        known.add(id);
+      }
+    }
+    return [...known];
+  };
+
   const evictStaleChannelAccountState = (
     channelId: ChannelId,
     store: ChannelRuntimeStore,
@@ -492,6 +526,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       store.pluginCommandCatalogOwners.delete(id);
       restarts.delete(restartKey(channelId, id));
       manuallyStopped.delete(restartKey(channelId, id));
+      restartDeferredToCaller.delete(restartKey(channelId, id));
       recoveryStartRequested.delete(restartKey(channelId, id));
     }
   };
@@ -499,7 +534,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   const startChannelInternal = async (
     channelId: ChannelId,
     accountId?: string,
-    optsValue: StartChannelOptions = {},
+    opts: StartChannelOptions = {},
   ) => {
     const registration = resolveChannelPluginRegistration(channelId);
     const plugin = registration?.plugin;
@@ -507,22 +542,30 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     if (!startAccount) {
       return;
     }
-    const { preserveRestartAttempts = false, preserveManualStop = false } = optsValue;
+    const {
+      includeKnownAccounts = false,
+      preserveRestartAttempts = false,
+      preserveManualStop = false,
+    } = opts;
     const cfg = getRuntimeConfig();
     resetDirectoryCache({ cfg, channel: channelId, accountId });
     const store = getStore(channelId);
-    const accountIds = accountId
+    const listedAccountIds = accountId
       ? [accountId]
       : await measureStartup(`channels.${channelId}.list-accounts`, () =>
           plugin.config.listAccountIds(cfg),
         );
+    const accountIds =
+      accountId || !includeKnownAccounts
+        ? listedAccountIds
+        : Array.from(new Set([...listedAccountIds, ...listKnownLiveAccountIds(store)]));
     if (!accountId) {
       evictStaleChannelAccountState(channelId, store, accountIds);
     }
     if (accountIds.length === 0) {
       return;
     }
-    if (autostartSuppression && optsValue.manual !== true) {
+    if (autostartSuppression && opts.manual !== true) {
       // Safe mode must block every automatic channel start surface; otherwise
       // config reloads can undo the crash-loop breaker while operators inspect.
       const suffix = accountId ? ` account ${accountId}` : "";
@@ -635,6 +678,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         };
 
         try {
+          restartDeferredToCaller.delete(rKey);
           // Reject the account before plugin resolution so an explicit failed SecretRef cannot
           // drift into a channel-specific environment or file fallback.
           const secretOwnerId = `${channelId}:${normalizeAccountId(id)}`;
@@ -769,8 +813,8 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             reconnectAttempts: preserveRestartAttempts ? (restarts.get(rKey)?.attempts ?? 0) : 0,
           });
           const task = Promise.resolve().then(async () => {
-            if (optsValue.deferAccountStartUntil) {
-              await waitForDeferredAccountStart(optsValue.deferAccountStartUntil, abort.signal);
+            if (opts.deferAccountStartUntil) {
+              await waitForDeferredAccountStart(opts.deferAccountStartUntil, abort.signal);
             } else if (startupTrace) {
               await waitForChannelStartupHandoff();
             }
@@ -971,6 +1015,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
                 }
                 return;
               }
+              if (restartDeferredToCaller.has(rKey)) {
+                return;
+              }
               // Only plugin task lifetime counts. Deferred handoff and cleanup must not
               // make a short crash look stable and erase crash-loop attempts.
               if (
@@ -1071,9 +1118,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
   const startChannel = async (
     channelId: ChannelId,
     accountId?: string,
-    optsValue: StartChannelOptions = {},
+    startOptions: StartChannelOptions = {},
   ) => {
-    await startChannelInternal(channelId, accountId, optsValue);
+    await startChannelInternal(channelId, accountId, startOptions);
   };
 
   const stopChannel = async (
@@ -1099,7 +1146,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     }
     const cfg = getRuntimeConfig();
     const knownIds = new Set<string>([
-      ...lifecycleIds,
+      ...listKnownLiveAccountIds(store),
       ...(plugin ? plugin.config.listAccountIds(cfg) : []),
     ]);
     if (accountId) {
@@ -1114,6 +1161,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
         const rKey = restartKey(channelId, id);
         if (manual) {
           manuallyStopped.add(rKey);
+          restartDeferredToCaller.delete(rKey);
+        } else {
+          restartDeferredToCaller.add(rKey);
         }
 
         const runStopAttempt = async (
@@ -1224,6 +1274,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             } else {
               clearPluginCommandCatalogOwner(store, id, abort);
               setStoppedRuntime(channelId, id, stoppedPatch);
+              restartDeferredToCaller.delete(rKey);
               recoveryStopTimedOut.add(rKey);
             }
             return outcome;
@@ -1238,7 +1289,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             store.tasks.delete(id);
           }
           setStoppedRuntime(channelId, id, {
-            restartPending: false,
+            restartPending: !manual,
             lastStopAt: Date.now(),
           });
           return outcome;
@@ -1343,7 +1394,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
     const channelAccounts: ChannelRuntimeSnapshot["channelAccounts"] = {};
     for (const plugin of listChannelPlugins()) {
       const store = getStore(plugin.id);
-      const accountIds = plugin.config.listAccountIds(cfg);
+      const accountIds = Array.from(
+        new Set([...plugin.config.listAccountIds(cfg), ...listKnownLiveAccountIds(store)]),
+      );
       const defaultAccountId = resolveChannelDefaultAccountId({
         plugin,
         cfg,

@@ -2891,6 +2891,61 @@ describe("server-channels auto restart", () => {
     await manager.stopChannel("discord");
   });
 
+  it("can include already-known accounts during channel hot reload", async () => {
+    let accountIds = ["account-a"];
+    const startAccount = vi.fn(
+      async ({ abortSignal }: { accountId: string; abortSignal: AbortSignal }) =>
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        }),
+    );
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+        listAccountIds: () => accountIds,
+        resolveAccount: () => ({ enabled: true, configured: true }),
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannel("discord");
+
+    accountIds = ["account-b"];
+    await manager.stopChannel("discord", undefined, { manual: false });
+    await manager.startChannel("discord", undefined, { includeKnownAccounts: true });
+
+    const startedAccountIds = startAccount.mock.calls.map(([ctx]) => ctx?.accountId);
+    expect(startedAccountIds).toEqual(["account-a", "account-b", "account-a"]);
+
+    const snapshot = manager.getRuntimeSnapshot();
+    expect(snapshot.channelAccounts.discord?.["account-a"]?.running).toBe(true);
+    expect(snapshot.channelAccounts.discord?.["account-b"]?.running).toBe(true);
+    expect(manager.isManuallyStopped("discord", "account-a")).toBe(false);
+
+    await manager.stopChannel("discord");
+  });
+
+  it("does not resurrect stopped stale accounts from the known-account safety net", async () => {
+    let accountIds = ["account-a"];
+    const startAccount = vi.fn(
+      async ({ abortSignal }: { abortSignal: AbortSignal }) =>
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        }),
+    );
+    installTestRegistry(createTestPlugin({ startAccount, listAccountIds: () => accountIds }));
+    const manager = createManager();
+
+    await manager.startChannel("discord");
+    await manager.stopChannel("discord");
+
+    accountIds = [];
+    await manager.startChannel("discord", undefined, { includeKnownAccounts: true });
+
+    expect(startAccount).toHaveBeenCalledTimes(1);
+    expect(manager.getRuntimeSnapshot().channelAccounts.discord?.["account-a"]).toBeUndefined();
+  });
+
   it("reuses plugin account resolution for health monitor overrides", () => {
     installTestRegistry(
       createTestPlugin({
