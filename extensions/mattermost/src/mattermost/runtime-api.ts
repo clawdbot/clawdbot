@@ -28,8 +28,12 @@ export {
 } from "openclaw/plugin-sdk/runtime-group-policy";
 export { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/media-runtime";
 export { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
+// Legacy map-helper exports stay for older plugin consumers. New message-turn
+// code should use createChannelHistoryWindow.
 export {
   DEFAULT_GROUP_HISTORY_LIMIT,
+  createChannelHistoryWindow,
+  buildInboundHistoryFromMap,
   buildPendingHistoryContextFromMap,
   recordPendingHistoryEntryIfEnabled,
 } from "openclaw/plugin-sdk/reply-history";

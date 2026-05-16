@@ -105,6 +105,29 @@ function emptyPluginMetadataSnapshot() {
   };
 }
 
+function modelIdNormalizationSnapshot() {
+  return {
+    ...emptyPluginMetadataSnapshot(),
+    configFingerprint: "model-id-normalizers",
+    plugins: [
+      {
+        id: "external-normalizer",
+        modelIdNormalization: {
+          providers: {
+            custom: {
+              aliases: {
+                latest: "modern-model",
+              },
+              stripPrefixes: ["legacy/"],
+              prefixWhenBare: "vendor",
+            },
+          },
+        },
+      },
+    ],
+  };
+}
+
 type ModelCatalogEntry = Awaited<
   ReturnType<typeof import("./model-catalog.js").loadModelCatalog>
 >[number];
@@ -485,6 +508,52 @@ describe("loadModelCatalog", () => {
     ]);
     expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
     expect(augmentCatalogMock).not.toHaveBeenCalled();
+  });
+
+  it("normalizes persisted read-only catalog rows with manifest model id policies", async () => {
+    currentPluginMetadataSnapshotMock.mockReturnValueOnce(modelIdNormalizationSnapshot());
+    readFileMock.mockResolvedValueOnce(
+      JSON.stringify({
+        providers: {
+          custom: {
+            models: [
+              { id: "latest", name: "Latest Alias" },
+              { id: "legacy/trimmed" },
+              { id: "vendor/already-prefixed" },
+            ],
+          },
+        },
+      }),
+    );
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig, readOnly: true });
+
+    expect(requireCatalogEntry(result, "custom", "vendor/modern-model").name).toBe("Latest Alias");
+    expect(requireCatalogEntry(result, "custom", "vendor/trimmed").name).toBe("vendor/trimmed");
+    expect(requireCatalogEntry(result, "custom", "vendor/already-prefixed").name).toBe(
+      "vendor/already-prefixed",
+    );
+    expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
+  });
+
+  it("loads manifest model id policies once for persisted read-only catalog rows", async () => {
+    currentPluginMetadataSnapshotMock.mockReturnValue(undefined);
+    loadPluginMetadataSnapshotMock.mockReturnValue(modelIdNormalizationSnapshot());
+    readFileMock.mockResolvedValueOnce(
+      JSON.stringify({
+        providers: {
+          custom: {
+            models: [{ id: "model-a" }, { id: "model-b" }, { id: "model-c" }, { id: "model-d" }],
+          },
+        },
+      }),
+    );
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig, readOnly: true });
+
+    expect(requireCatalogEntry(result, "custom", "vendor/model-a").name).toBe("vendor/model-a");
+    expect(requireCatalogEntry(result, "custom", "vendor/model-d").name).toBe("vendor/model-d");
+    expect(loadPluginMetadataSnapshotMock).toHaveBeenCalledTimes(1);
   });
 
   it("preserves provider context defaults for persisted read-only catalog rows", async () => {

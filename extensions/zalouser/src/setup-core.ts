@@ -1,8 +1,11 @@
 import {
   createDelegatedSetupWizardProxy,
   createPatchedAccountSetupAdapter,
+  createSetupTranslator,
   type ChannelSetupWizard,
 } from "openclaw/plugin-sdk/setup-runtime";
+
+const t = createSetupTranslator();
 
 const channel = "zalouser" as const;
 
@@ -19,10 +22,10 @@ export function createZalouserSetupWizardProxy(
     channel,
     loadWizard,
     status: {
-      configuredLabel: "logged in",
-      unconfiguredLabel: "needs QR login",
-      configuredHint: "recommended · logged in",
-      unconfiguredHint: "recommended · QR login",
+      configuredLabel: t("wizard.channels.statusLoggedIn"),
+      unconfiguredLabel: t("wizard.channels.statusNeedsQrLogin"),
+      configuredHint: t("wizard.channels.statusRecommendedLoggedIn"),
+      unconfiguredHint: t("wizard.channels.statusRecommendedQrLogin"),
       configuredScore: 1,
       unconfiguredScore: 15,
     },

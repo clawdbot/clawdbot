@@ -247,7 +247,7 @@ describe("gateway auth browser hardening", () => {
       client: {
         id: GATEWAY_CLIENT_NAMES.TUI,
         version: "1.0.0",
-        platform: "darwin",
+        platform: "macos",
         mode: GATEWAY_CLIENT_MODES.UI,
       },
     });

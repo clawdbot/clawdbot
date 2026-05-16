@@ -54,6 +54,14 @@ export type CodexAppServerContextEngineBinding = {
   schemaVersion: 1;
   engineId: string;
   policyFingerprint: string;
+  projection?: CodexAppServerContextEngineProjectionBinding;
+};
+
+export type CodexAppServerContextEngineProjectionBinding = {
+  schemaVersion: 1;
+  mode: "thread_bootstrap";
+  epoch: string;
+  fingerprint?: string;
 };
 
 export function resolveCodexAppServerBindingPath(sessionFile: string): string {
@@ -182,6 +190,30 @@ function readContextEngineBinding(value: unknown): CodexAppServerContextEngineBi
     schemaVersion: 1,
     engineId: record.engineId,
     policyFingerprint: record.policyFingerprint,
+    projection: readContextEngineProjectionBinding(record.projection),
+  };
+}
+
+function readContextEngineProjectionBinding(
+  value: unknown,
+): CodexAppServerContextEngineProjectionBinding | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  if (
+    record.schemaVersion !== 1 ||
+    record.mode !== "thread_bootstrap" ||
+    typeof record.epoch !== "string" ||
+    !record.epoch.trim()
+  ) {
+    return undefined;
+  }
+  return {
+    schemaVersion: 1,
+    mode: "thread_bootstrap",
+    epoch: record.epoch,
+    fingerprint: typeof record.fingerprint === "string" ? record.fingerprint : undefined,
   };
 }
 

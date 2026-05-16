@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/setup";
 import { describe, expect, it, vi } from "vitest";
+import { promptTelegramAllowFromForAccount } from "./setup-core.js";
 import {
   buildTelegramDmAccessWarningLines,
   ensureTelegramDefaultGroupMentionGate,
@@ -188,6 +189,59 @@ describe("telegramSetupWizard allowFrom", () => {
       expect(globalFetch).not.toHaveBeenCalled();
     } finally {
       vi.unstubAllGlobals();
+    }
+  });
+
+  it("localizes setup wizard allowFrom copy when loaded under zh-CN", async () => {
+    const previousLocale = process.env.OPENCLAW_LOCALE;
+    process.env.OPENCLAW_LOCALE = "zh-CN";
+
+    try {
+      vi.resetModules();
+      const { telegramSetupWizard: localizedWizard } = await import("./setup-surface.js");
+
+      expect(localizedWizard.allowFrom?.helpTitle).toBe("Telegram 用户 ID");
+      expect(localizedWizard.allowFrom?.message).toBe("Telegram allowFrom（数字发送者 ID）");
+      expect(localizedWizard.allowFrom?.invalidWithoutCredentialNote).toBe(
+        "Telegram allowFrom 需要数字发送者 ID。先给 bot 发一条 DM，然后从日志或 getUpdates 中复制 from.id。",
+      );
+    } finally {
+      if (previousLocale === undefined) {
+        delete process.env.OPENCLAW_LOCALE;
+      } else {
+        process.env.OPENCLAW_LOCALE = previousLocale;
+      }
+    }
+  });
+
+  it("localizes legacy allowFrom prompt copy", async () => {
+    const previousLocale = process.env.OPENCLAW_LOCALE;
+    process.env.OPENCLAW_LOCALE = "zh-CN";
+    const note = vi.fn(async () => {});
+    const text = vi.fn(async () => "123456789");
+
+    try {
+      await promptTelegramAllowFromForAccount({
+        cfg: {},
+        prompter: { note, text } as never,
+      });
+
+      expect(note).toHaveBeenCalledWith(
+        expect.stringContaining("先给你的 bot 发送 DM"),
+        "Telegram 用户 ID",
+      );
+      expect(text).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: "Telegram allowFrom（数字发送者 ID）",
+          placeholder: "123456789",
+        }),
+      );
+    } finally {
+      if (previousLocale === undefined) {
+        delete process.env.OPENCLAW_LOCALE;
+      } else {
+        process.env.OPENCLAW_LOCALE = previousLocale;
+      }
     }
   });
 });

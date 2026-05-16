@@ -437,6 +437,23 @@ describe("openai image generation provider", () => {
     expect(jsonRequestCall().ssrfPolicy).toEqual({ allowRfc2544BenchmarkRange: true });
   });
 
+  it("wraps malformed successful OpenAI image responses", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: { json: async () => ({ data: { b64_json: "not-an-array" } }) },
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildOpenAIImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "openai",
+        model: "gpt-image-2",
+        prompt: "bad shape",
+        cfg: {},
+      }),
+    ).rejects.toThrow("OpenAI image generation response malformed");
+  });
+
   it("forwards generation count and custom size overrides", async () => {
     mockGeneratedPngResponse();
 

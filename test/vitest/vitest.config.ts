@@ -74,6 +74,10 @@ export const rootVitestProjects = [
   "test/vitest/vitest.extension-voice-call.config.ts",
   "test/vitest/vitest.extension-whatsapp.config.ts",
   "test/vitest/vitest.extension-zalo.config.ts",
+  "test/vitest/vitest.extension-browser.config.ts",
+  "test/vitest/vitest.extension-qa.config.ts",
+  "test/vitest/vitest.extension-media.config.ts",
+  "test/vitest/vitest.extension-misc.config.ts",
   "test/vitest/vitest.extensions.config.ts",
 ] as const;
 

@@ -509,6 +509,15 @@ function isEmptyTextOnlyContent(content: unknown): boolean {
   return sawText;
 }
 
+function hasTranscriptMediaPaths(message: Record<string, unknown>): boolean {
+  const mediaPaths = Array.isArray(message.MediaPaths)
+    ? message.MediaPaths
+    : typeof message.MediaPath === "string"
+      ? [message.MediaPath]
+      : [];
+  return mediaPaths.some((value) => typeof value === "string" && value.trim());
+}
+
 function extractProjectedText(content: unknown): string {
   if (typeof content === "string") {
     return content;
@@ -548,7 +557,11 @@ function shouldHideProjectedHistoryMessage(message: Record<string, unknown>): bo
   if (roleContent.role === "user" && isSubagentAnnounceInterSessionUserMessage(message)) {
     return true;
   }
-  if (roleContent.role === "user" && isEmptyTextOnlyContent(message.content ?? message.text)) {
+  if (
+    roleContent.role === "user" &&
+    isEmptyTextOnlyContent(message.content ?? message.text) &&
+    !hasTranscriptMediaPaths(message)
+  ) {
     return true;
   }
   if (roleContent.role === "assistant" && isEmptyTextOnlyContent(message.content ?? message.text)) {

@@ -17,7 +17,7 @@ import {
   implicitMentionKindWhen,
   normalizeE164,
   parseActivationCommand,
-  recordPendingHistoryEntryIfEnabled,
+  createChannelHistoryWindow,
   resolveInboundMentionDecision,
 } from "./group-gating.runtime.js";
 import { noteGroupMember } from "./group-members.js";
@@ -73,8 +73,7 @@ function recordPendingGroupHistoryEntry(params: {
         senderIdentity.e164 ??
         getPrimaryIdentityId(senderIdentity) ??
         "Unknown");
-  recordPendingHistoryEntryIfEnabled({
-    historyMap: params.groupHistories,
+  createChannelHistoryWindow({ historyMap: params.groupHistories }).record({
     historyKey: params.groupHistoryKey,
     limit: params.groupHistoryLimit,
     entry: {

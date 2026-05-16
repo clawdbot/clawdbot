@@ -44,6 +44,8 @@ const LEGACY_ROOT_RUNTIME_COMPAT_ALIASES = [
   // gateway may resolve these only after an npm package tree replacement.
   ["server-close-DsVPJDIx.js", "server-close.runtime.js"],
   ["server-close-DvAvfgr8.js", "server-close.runtime.js"],
+  // v2026.5.12-beta.8 gateway shutdown hook chunks.
+  ["hook-runner-global-B8rMIo8I.js", "plugins/hook-runner-global.js"],
   // v2026.5.3 beta reply-dispatch lazy chunks.
   ["provider-dispatcher-6EQEtc-t.js", "provider-dispatcher.runtime.js"],
   ["provider-dispatcher-BpL2E92x.js", "provider-dispatcher.runtime.js"],

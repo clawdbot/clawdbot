@@ -56,6 +56,7 @@ export function resolveOutboundTarget(params: {
   channel: GatewayMessageChannel;
   to?: string;
   allowFrom?: string[];
+  allowBootstrap?: boolean;
   cfg?: OpenClawConfig;
   accountId?: string | null;
   mode?: ChannelOutboundTargetMode;
@@ -65,6 +66,7 @@ export function resolveOutboundTarget(params: {
       plugin: resolveOutboundChannelPlugin({
         channel: params.channel,
         cfg: params.cfg,
+        allowBootstrap: params.allowBootstrap,
       }),
       target: params,
       onMissingPlugin: () =>

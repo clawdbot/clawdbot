@@ -7,6 +7,7 @@ import {
   assertOkOrThrowHttpError,
   buildAudioTranscriptionFormData,
   postTranscriptionRequest,
+  readProviderJsonObjectResponse,
   resolveProviderHttpRequestConfig,
   requireTranscriptionText,
 } from "openclaw/plugin-sdk/provider-http";
@@ -61,9 +62,12 @@ export async function transcribeElevenLabsAudio(
 
   try {
     await assertOkOrThrowHttpError(response, "ElevenLabs audio transcription failed");
-    const payload = (await response.json()) as { text?: string };
+    const payload = await readProviderJsonObjectResponse(
+      response,
+      "ElevenLabs audio transcription failed",
+    );
     const text = requireTranscriptionText(
-      payload.text,
+      typeof payload.text === "string" ? payload.text : undefined,
       "ElevenLabs audio transcription response missing text",
     );
     return { text, model };

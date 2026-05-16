@@ -408,6 +408,139 @@ describe("handleTelegramAction", () => {
     end();
   });
 
+  it("marks room-event delivery correlations separately", async () => {
+    let roomEventCount = 0;
+    let userRequestCount = 0;
+    const endRoomEvent = beginTelegramInboundTurnDeliveryCorrelation(
+      "telegram-session",
+      {
+        outboundTo: "@testchannel",
+        markInboundTurnDelivered: () => {
+          roomEventCount += 1;
+        },
+      },
+      { inboundTurnKind: "room_event" },
+    );
+    const endUserRequest = beginTelegramInboundTurnDeliveryCorrelation("telegram-session", {
+      outboundTo: "@testchannel",
+      markInboundTurnDelivered: () => {
+        userRequestCount += 1;
+      },
+    });
+
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "@testchannel",
+        content: "Hello from a room event",
+      },
+      telegramConfig(),
+      { sessionKey: "telegram-session", inboundTurnKind: "room_event" },
+    );
+
+    expect(roomEventCount).toBe(1);
+    expect(userRequestCount).toBe(0);
+    endRoomEvent();
+    endUserRequest();
+  });
+
+  it("marks topic room-event delivery when send uses a separate thread id", async () => {
+    let count = 0;
+    const end = beginTelegramInboundTurnDeliveryCorrelation(
+      "telegram-session",
+      {
+        outboundTo: "-100123:topic:77",
+        markInboundTurnDelivered: () => {
+          count += 1;
+        },
+      },
+      { inboundTurnKind: "room_event" },
+    );
+
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "-100123",
+        threadId: 77,
+        content: "Hello from a room event topic",
+      },
+      telegramConfig(),
+      { sessionKey: "telegram-session", inboundTurnKind: "room_event" },
+    );
+
+    expect(count).toBe(1);
+    end();
+  });
+
+  it("marks topic room-event delivery when send uses topic shorthand", async () => {
+    let count = 0;
+    const end = beginTelegramInboundTurnDeliveryCorrelation(
+      "telegram-session",
+      {
+        outboundTo: "-100123:topic:77",
+        markInboundTurnDelivered: () => {
+          count += 1;
+        },
+      },
+      { inboundTurnKind: "room_event" },
+    );
+
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "-100123:77",
+        content: "Hello from a room event topic",
+      },
+      telegramConfig(),
+      { sessionKey: "telegram-session", inboundTurnKind: "room_event" },
+    );
+
+    expect(count).toBe(1);
+    end();
+  });
+
+  it.each([
+    {
+      name: "poll",
+      params: {
+        action: "poll",
+        to: "@testchannel",
+        question: "Ready?",
+        answers: ["Yes", "No"],
+      },
+      cfg: telegramConfig(),
+    },
+    {
+      name: "sticker",
+      params: {
+        action: "sendSticker",
+        to: "@testchannel",
+        fileId: "sticker-1",
+      },
+      cfg: telegramConfig({ actions: { sticker: true } }),
+    },
+  ])("marks room-event delivery after successful $name actions", async ({ params, cfg }) => {
+    let count = 0;
+    const end = beginTelegramInboundTurnDeliveryCorrelation(
+      "telegram-session",
+      {
+        outboundTo: "@testchannel",
+        markInboundTurnDelivered: () => {
+          count += 1;
+        },
+      },
+      { inboundTurnKind: "room_event" },
+    );
+
+    await handleTelegramAction(params, cfg, {
+      sessionKey: "telegram-session",
+      inboundTurnKind: "room_event",
+    });
+
+    expect(count).toBe(1);
+    end();
+  });
+
   it("accepts shared send action aliases", async () => {
     await handleTelegramAction(
       {

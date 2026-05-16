@@ -26,7 +26,12 @@ import {
 } from "./agent-runner-utils.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
-import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
+import {
+  completeFollowupRunLifecycle,
+  isFollowupRunAborted,
+  refreshQueuedFollowupSession,
+  type FollowupRun,
+} from "./queue.js";
 import { createReplyOperation } from "./reply-run-registry.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
@@ -196,28 +201,38 @@ export function createFollowupRunner(params: {
   };
 
   return async (queued: FollowupRun) => {
+    if (isFollowupRunAborted(queued)) {
+      completeFollowupRunLifecycle(queued);
+      typing.markRunComplete();
+      typing.markDispatchIdle();
+      return;
+    }
+    const endDeliveryCorrelations = (queued.deliveryCorrelations ?? [])
+      .map((correlation) => correlation.begin())
+      .filter((end): end is () => void => typeof end === "function");
     const queuedImages = queued.images ?? opts?.images;
     const queuedImageOrder = queued.imageOrder ?? opts?.imageOrder;
-    queued.run.config = await resolveQueuedReplyExecutionConfig(queued.run.config, {
-      originatingChannel: queued.originatingChannel,
-      messageProvider: queued.run.messageProvider,
-      originatingAccountId: queued.originatingAccountId,
-      agentAccountId: queued.run.agentAccountId,
-    });
-    const replySessionKey = queued.run.sessionKey ?? sessionKey;
-    const runtimeConfig = resolveQueuedReplyRuntimeConfig(queued.run.config);
-    const effectiveQueued =
-      runtimeConfig === queued.run.config
-        ? queued
-        : { ...queued, run: { ...queued.run, config: runtimeConfig } };
-    const run = effectiveQueued.run;
-    const replyOperation = createReplyOperation({
-      sessionId: run.sessionId,
-      sessionKey: replySessionKey ?? "",
-      resetTriggered: false,
-      upstreamAbortSignal: opts?.abortSignal,
-    });
+    let replyOperation: ReturnType<typeof createReplyOperation> | undefined;
     try {
+      queued.run.config = await resolveQueuedReplyExecutionConfig(queued.run.config, {
+        originatingChannel: queued.originatingChannel,
+        messageProvider: queued.run.messageProvider,
+        originatingAccountId: queued.originatingAccountId,
+        agentAccountId: queued.run.agentAccountId,
+      });
+      const replySessionKey = queued.run.sessionKey ?? sessionKey;
+      const runtimeConfig = resolveQueuedReplyRuntimeConfig(queued.run.config);
+      const effectiveQueued =
+        runtimeConfig === queued.run.config
+          ? queued
+          : { ...queued, run: { ...queued.run, config: runtimeConfig } };
+      const run = effectiveQueued.run;
+      replyOperation = createReplyOperation({
+        sessionId: run.sessionId,
+        sessionKey: replySessionKey ?? "",
+        resetTriggered: false,
+        upstreamAbortSignal: queued.abortSignal ?? opts?.abortSignal,
+      });
       const runId = crypto.randomUUID();
       const shouldSurfaceToControlUi = isInternalMessageChannel(
         resolveOriginMessageProvider({
@@ -299,11 +314,15 @@ export function createFollowupRunner(params: {
                 skillsSnapshot: run.skillsSnapshot,
                 prompt: queued.prompt,
                 transcriptPrompt: queued.transcriptPrompt,
+                currentTurnKind: queued.currentTurnKind,
                 currentTurnContext: queued.currentTurnContext,
                 extraSystemPrompt: run.extraSystemPrompt,
                 silentReplyPromptMode: run.silentReplyPromptMode,
                 sourceReplyDeliveryMode: run.sourceReplyDeliveryMode,
                 forceMessageTool: run.sourceReplyDeliveryMode === "message_tool_only",
+                suppressNextUserMessagePersistence: run.suppressNextUserMessagePersistence,
+                suppressTranscriptOnlyAssistantPersistence:
+                  run.suppressTranscriptOnlyAssistantPersistence,
                 ownerNumbers: run.ownerNumbers,
                 enforceFinalTag: run.enforceFinalTag,
                 allowEmptyAssistantReplyAsSilent: run.allowEmptyAssistantReplyAsSilent,
@@ -318,6 +337,7 @@ export function createFollowupRunner(params: {
                 bashElevated: run.bashElevated,
                 timeoutMs: run.timeoutMs,
                 runId,
+                abortSignal: queued.abortSignal ?? opts?.abortSignal,
                 images: queuedImages,
                 imageOrder: queuedImageOrder,
                 allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
@@ -467,7 +487,17 @@ export function createFollowupRunner(params: {
         modelId: modelUsed,
       });
     } finally {
-      replyOperation.complete();
+      for (const end of endDeliveryCorrelations.toReversed()) {
+        try {
+          end();
+        } catch (err) {
+          defaultRuntime.error?.(
+            `followup queue: delivery correlation cleanup failed: ${formatErrorMessage(err)}`,
+          );
+        }
+      }
+      completeFollowupRunLifecycle(queued);
+      replyOperation?.complete();
       // Both signals are required for the typing controller to clean up.
       // The main inbound dispatch path calls markDispatchIdle() from the
       // buffered dispatcher's finally block, but followup turns bypass the

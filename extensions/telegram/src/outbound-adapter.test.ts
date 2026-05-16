@@ -150,6 +150,33 @@ describe("telegramOutbound", () => {
     expect(result).toEqual({ channel: "telegram", messageId: "tg-buttons", chatId: "12345" });
   });
 
+  it("uses presentation button labels as fallback text for presentation-only payloads", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({
+      messageId: "tg-presentation-buttons",
+      chatId: "12345",
+    });
+
+    const result = await telegramOutbound.sendPayload!({
+      cfg: {} as never,
+      to: "12345",
+      text: "",
+      payload: {
+        presentation: {
+          blocks: [{ type: "buttons", buttons: [{ label: "Retry", value: "cmd:retry" }] }],
+        },
+      },
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    const options = callOptionsAt(sendMessageTelegramMock, 0, "12345", "- Retry");
+    expect(options.buttons).toEqual([[{ text: "Retry", callback_data: "cmd:retry" }]]);
+    expect(result).toEqual({
+      channel: "telegram",
+      messageId: "tg-presentation-buttons",
+      chatId: "12345",
+    });
+  });
+
   it("renders presentation web app buttons for payload sends", async () => {
     sendMessageTelegramMock.mockResolvedValueOnce({ messageId: "tg-web-app", chatId: "12345" });
     const presentation = {

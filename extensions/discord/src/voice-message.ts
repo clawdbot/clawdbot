@@ -23,7 +23,7 @@ import { MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS } from "openclaw/plugin-sdk/media-
 import { unlinkIfExists } from "openclaw/plugin-sdk/media-runtime";
 import type { RetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { DiscordError, RateLimitError, type RequestClient } from "./internal/discord.js";
@@ -33,6 +33,10 @@ const DISCORD_VOICE_MESSAGE_FLAG = 1 << 13;
 const SUPPRESS_NOTIFICATIONS_FLAG = 1 << 12;
 const WAVEFORM_SAMPLES = 256;
 const DISCORD_OPUS_SAMPLE_RATE_HZ = 48_000;
+const DISCORD_VOICE_UPLOAD_SSRF_POLICY: SsrFPolicy = {
+  allowRfc2544BenchmarkRange: true,
+  allowIpv6UniqueLocalRange: true,
+};
 
 async function runFfmpegToOutput(params: {
   outputPath: string;
@@ -250,6 +254,8 @@ export async function ensureOggOpus(filePath: string): Promise<{ path: string; c
       "libopus",
       "-b:a",
       "64k",
+      "-f",
+      "ogg",
       tempPath,
     ],
   });
@@ -333,6 +339,7 @@ async function requestVoiceUploadUrl(params: {
   const { response: res, release } = await fetchWithSsrFGuard({
     url,
     init: uploadUrlInit,
+    policy: DISCORD_VOICE_UPLOAD_SSRF_POLICY,
     auditContext: "discord.voice.upload-url",
   });
   try {
@@ -358,6 +365,7 @@ async function uploadVoiceAttachment(params: {
       },
       body: new Uint8Array(params.audioBuffer),
     },
+    policy: DISCORD_VOICE_UPLOAD_SSRF_POLICY,
     auditContext: "discord.voice.attachment-upload",
   });
 

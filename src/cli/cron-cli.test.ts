@@ -227,6 +227,8 @@ async function expectCronEditWithScheduleLookupExit(
 async function runCronRunAndCaptureExit(params: {
   ran?: boolean;
   enqueued?: boolean;
+  runId?: string;
+  runStatus?: "ok" | "error" | "skipped";
   args?: string[];
 }) {
   resetGatewayMock();
@@ -241,6 +243,12 @@ async function runCronRunAndCaptureExit(params: {
           params: callParams,
           ...(typeof params.ran === "boolean" ? { ran: params.ran } : {}),
           ...(typeof params.enqueued === "boolean" ? { enqueued: params.enqueued } : {}),
+          ...(typeof params.runId === "string" ? { runId: params.runId } : {}),
+        };
+      }
+      if (method === "cron.runs") {
+        return {
+          entries: params.runStatus ? [{ status: params.runStatus }] : [],
         };
       }
       return { ok: true, params: callParams };
@@ -261,6 +269,7 @@ async function runCronRunAndCaptureExit(params: {
   return {
     exitSpy,
     runOpts: (runCall?.[1] ?? {}) as { timeout?: string },
+    calls: callGatewayFromCli.mock.calls,
   };
 }
 
@@ -294,6 +303,57 @@ describe("cron cli", () => {
   ])("$name", async ({ ran, enqueued, expectedExitCode }) => {
     const { exitSpy } = await runCronRunAndCaptureExit({ ran, enqueued });
     expect(exitSpy).toHaveBeenCalledWith(expectedExitCode);
+  });
+
+  it.each([
+    { status: "ok" as const, expectedExitCode: 0 },
+    { status: "error" as const, expectedExitCode: 1 },
+    { status: "skipped" as const, expectedExitCode: 1 },
+  ])(
+    "waits for queued cron run completion with status $status",
+    async ({ status, expectedExitCode }) => {
+      const { calls, exitSpy } = await runCronRunAndCaptureExit({
+        enqueued: true,
+        runId: "manual:job-1:123:0",
+        runStatus: status,
+        args: [
+          "cron",
+          "run",
+          "job-1",
+          "--wait",
+          "--wait-timeout",
+          "1s",
+          "--poll-interval",
+          "1ms",
+        ],
+      });
+
+      expect(exitSpy).toHaveBeenCalledWith(expectedExitCode);
+      const runsCall = calls.find((call) => call[0] === "cron.runs");
+      expect(runsCall?.[2]).toMatchObject({
+        id: "job-1",
+        runId: "manual:job-1:123:0",
+        limit: 1,
+      });
+      expect(stdoutText()).toContain('"completed": true');
+      expect(stdoutText()).toContain(`"status": "${status}"`);
+    },
+  );
+
+  it("rejects zero poll interval for cron run wait before enqueueing", async () => {
+    await expectCronCommandExit([
+      "cron",
+      "run",
+      "job-1",
+      "--wait",
+      "--wait-timeout",
+      "1s",
+      "--poll-interval",
+      "0ms",
+    ]);
+
+    expectRuntimeErrorContaining("invalid --poll-interval");
+    expect(callGatewayFromCli.mock.calls.some((call) => call[0] === "cron.run")).toBe(false);
   });
 
   it("trims model and thinking on cron add", { timeout: CRON_CLI_TEST_TIMEOUT_MS }, async () => {

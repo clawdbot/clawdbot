@@ -61,7 +61,7 @@ describe("collectClawHubPublishablePluginPackages", () => {
     });
 
     expect(() => collectClawHubPublishablePluginPackages(repoDir)).toThrow(
-      "openclaw.compat.pluginApi is required for external code plugins published to ClawHub.",
+      "openclaw.compat.pluginApi is required for external code plugin packages.",
     );
   });
 

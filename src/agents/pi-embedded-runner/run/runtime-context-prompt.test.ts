@@ -69,6 +69,18 @@ describe("runtime context prompt submission", () => {
     });
   });
 
+  it("submits empty-transcript model prompts when persistence is suppressed separately", () => {
+    expect(
+      resolveRuntimeContextPromptParts({
+        effectivePrompt: "[OpenClaw room event]",
+        transcriptPrompt: "",
+        emptyTranscriptMode: "model-prompt",
+      }),
+    ).toEqual({
+      prompt: "[OpenClaw room event]",
+    });
+  });
+
   it("uses current-turn context as prompt-local text", () => {
     expect(
       buildCurrentTurnPromptContextPrefix({

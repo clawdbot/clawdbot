@@ -516,6 +516,9 @@ jobs:
       candidate_version: ${{ needs.prepare_release_package.outputs.package_version }}
       candidate_source_sha: ${{ needs.prepare_release_package.outputs.source_sha }}
       openai_model: openai/gpt-5.4
+      ubuntu_runner: ubuntu-24.04
+      windows_runner: windows-2025
+      macos_runner: macos-26
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -685,7 +688,7 @@ jobs:
     needs: [resolve_target]
     if: contains(fromJSON('["all","qa","qa-parity"]'), needs.resolve_target.outputs.rerun_group)
     continue-on-error: true
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: read
@@ -772,7 +775,7 @@ jobs:
     needs: [resolve_target, qa_lab_parity_lane_release_checks]
     if: contains(fromJSON('["all","qa","qa-parity"]'), needs.resolve_target.outputs.rerun_group)
     continue-on-error: true
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
       contents: read
@@ -831,7 +834,7 @@ jobs:
     needs: [resolve_target]
     if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_matrix_enabled == 'true'
     continue-on-error: true
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
       contents: read
@@ -911,7 +914,7 @@ jobs:
     needs: [resolve_target]
     if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_telegram_enabled == 'true'
     continue-on-error: true
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
       contents: read
@@ -1007,7 +1010,7 @@ jobs:
     needs: [resolve_target]
     if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_discord_enabled == 'true' && vars.OPENCLAW_RELEASE_QA_DISCORD_LIVE_CI_ENABLED == 'true'
     continue-on-error: true
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
       contents: read
@@ -1103,7 +1106,7 @@ jobs:
     needs: [resolve_target]
     if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_whatsapp_enabled == 'true' && vars.OPENCLAW_RELEASE_QA_WHATSAPP_LIVE_CI_ENABLED == 'true'
     continue-on-error: true
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
       contents: read
@@ -1199,7 +1202,7 @@ jobs:
     needs: [resolve_target]
     if: contains(fromJSON('["all","qa","qa-live"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.qa_live_slack_enabled == 'true' && vars.OPENCLAW_RELEASE_QA_SLACK_LIVE_CI_ENABLED == 'true'
     continue-on-error: true
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
       contents: read

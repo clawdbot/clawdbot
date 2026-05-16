@@ -1,4 +1,5 @@
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
+import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
@@ -67,8 +68,12 @@ function parseVideoDataUrl(url: string): GeneratedVideoAsset | undefined {
   }
   const mimeType = match[1] ?? "video/mp4";
   const ext = extensionForMime(mimeType)?.slice(1) ?? "mp4";
+  const canonicalBase64 = canonicalizeBase64(match[2] ?? "");
+  if (!canonicalBase64) {
+    throw new Error("DeepInfra video response returned malformed data URL base64");
+  }
   return {
-    buffer: Buffer.from(match[2] ?? "", "base64"),
+    buffer: Buffer.from(canonicalBase64, "base64"),
     mimeType,
     fileName: `video-1.${ext}`,
   };

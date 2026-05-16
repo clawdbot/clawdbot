@@ -139,6 +139,30 @@ describe("openclaw launcher", () => {
     cleanupTempDirs(fixtureRoots);
   });
 
+  it("keeps the bootstrap Node floor aligned with package and runtime guards", async () => {
+    const [launcher, runtimeGuard, packageJsonRaw] = await Promise.all([
+      fs.readFile(path.resolve(process.cwd(), "openclaw.mjs"), "utf8"),
+      fs.readFile(path.resolve(process.cwd(), "src/infra/runtime-guard.ts"), "utf8"),
+      fs.readFile(path.resolve(process.cwd(), "package.json"), "utf8"),
+    ]);
+    const packageJson = JSON.parse(packageJsonRaw) as { engines?: { node?: string } };
+    const launcherMatch = launcher.match(
+      /const MIN_NODE_MAJOR = (\d+);\s+const MIN_NODE_MINOR = (\d+);/u,
+    );
+    const runtimeMatch = runtimeGuard.match(
+      /const MIN_NODE: Semver = \{ major: (\d+), minor: (\d+), patch: (\d+) \};/u,
+    );
+    const engineMatch = packageJson.engines?.node?.match(/^>=(\d+)\.(\d+)\.(\d+)$/u);
+
+    expect(launcherMatch).not.toBeNull();
+    expect(runtimeMatch).not.toBeNull();
+    expect(engineMatch).not.toBeNull();
+    expect(`${launcherMatch?.[1]}.${launcherMatch?.[2]}.0`).toBe(
+      `${engineMatch?.[1]}.${engineMatch?.[2]}.${engineMatch?.[3]}`,
+    );
+    expect(runtimeMatch?.slice(1, 4)).toEqual(engineMatch?.slice(1, 4));
+  });
+
   it("surfaces transitive entry import failures instead of masking them as missing dist", async () => {
     const fixtureRoot = await makeLauncherFixture(fixtureRoots);
     await fs.writeFile(

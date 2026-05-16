@@ -10,6 +10,13 @@ import { mergeScopedSearchConfig } from "./web-search-provider-config.js";
 import { createWebSearchTool } from "./web-search.js";
 
 describe("web_search tool schema", () => {
+  it("marks query as required for model tool-call schemas", () => {
+    const tool = createWebSearchTool();
+    const parameters = tool?.parameters as { required?: unknown } | undefined;
+
+    expect(parameters?.required).toEqual(["query"]);
+  });
+
   it("advertises the shared runtime count limit", () => {
     const tool = createWebSearchTool();
     const parameters = tool?.parameters as

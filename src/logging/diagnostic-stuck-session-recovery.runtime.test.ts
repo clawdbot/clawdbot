@@ -139,6 +139,36 @@ describe("stuck session recovery", () => {
     expect(mocks.resetCommandLane).not.toHaveBeenCalled();
   });
 
+  it("returns an abort outcome for a stale tool call on an active embedded run", async () => {
+    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue("session-tool");
+    mocks.abortEmbeddedPiRun.mockReturnValue(true);
+    mocks.waitForEmbeddedPiRunEnd.mockResolvedValue(true);
+
+    const outcome = await recoverStuckDiagnosticSession({
+      sessionId: "session-tool",
+      sessionKey: "agent:main:telegram:group:-1003821464158:topic:4836",
+      ageMs: 147_000,
+      queueDepth: 1,
+      allowActiveAbort: true,
+    });
+
+    expect(outcome).toMatchObject({
+      status: "aborted",
+      action: "abort_embedded_run",
+      sessionId: "session-tool",
+      sessionKey: "agent:main:telegram:group:-1003821464158:topic:4836",
+      activeSessionId: "session-tool",
+      activeWorkKind: "embedded_run",
+      aborted: true,
+      drained: true,
+      forceCleared: false,
+      released: 0,
+    });
+    expect(mocks.abortEmbeddedPiRun).toHaveBeenCalledWith("session-tool");
+    expect(mocks.waitForEmbeddedPiRunEnd).toHaveBeenCalledWith("session-tool", 15_000);
+    expect(mocks.resetCommandLane).not.toHaveBeenCalled();
+  });
+
   it("logs stopped cron context when aborting an active embedded run", async () => {
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-recovery-context-"));

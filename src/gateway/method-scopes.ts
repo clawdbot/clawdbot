@@ -1,6 +1,12 @@
 import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import { resolveReservedGatewayMethodScope } from "../shared/gateway-method-policy.js";
 import {
+  isCoreGatewayMethodClassified,
+  isCoreNodeGatewayMethod,
+  isDynamicOperatorGatewayMethod,
+  resolveCoreOperatorGatewayMethodScope,
+} from "./methods/core-descriptors.js";
+import {
   ADMIN_SCOPE,
   APPROVALS_SCOPE,
   PAIRING_SCOPE,
@@ -30,208 +36,8 @@ export const CLI_DEFAULT_OPERATOR_SCOPES: OperatorScope[] = [
   TALK_SECRETS_SCOPE,
 ];
 
-const NODE_ROLE_METHODS = new Set([
-  "node.invoke.result",
-  "node.event",
-  "node.pluginSurface.refresh",
-  "node.pending.drain",
-  "node.pending.pull",
-  "node.pending.ack",
-  "skills.bins",
-]);
-
-const DYNAMIC_OPERATOR_SCOPE_METHODS = new Set(["plugins.sessionAction"]);
-
-const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
-  [APPROVALS_SCOPE]: [
-    "exec.approval.get",
-    "exec.approval.list",
-    "exec.approval.request",
-    "exec.approval.waitDecision",
-    "exec.approval.resolve",
-    "plugin.approval.list",
-    "plugin.approval.request",
-    "plugin.approval.waitDecision",
-    "plugin.approval.resolve",
-  ],
-  [PAIRING_SCOPE]: [
-    "node.pair.request",
-    "node.pair.list",
-    "node.pair.reject",
-    "node.pair.remove",
-    "node.pair.verify",
-    "node.pair.approve",
-    "device.pair.list",
-    "device.pair.approve",
-    "device.pair.reject",
-    "device.pair.remove",
-    "device.token.rotate",
-    "device.token.revoke",
-    "node.rename",
-  ],
-  [READ_SCOPE]: [
-    "assistant.media.get",
-    "health",
-    "diagnostics.stability",
-    "doctor.memory.status",
-    "doctor.memory.dreamDiary",
-    "doctor.memory.remHarness",
-    "logs.tail",
-    "channels.status",
-    "status",
-    "usage.status",
-    "usage.cost",
-    "tts.status",
-    "tts.providers",
-    "tts.personas",
-    "commands.list",
-    "models.list",
-    "models.authStatus",
-    "tools.catalog",
-    "tools.effective",
-    "tasks.list",
-    "tasks.get",
-    "plugins.uiDescriptors",
-    "agents.list",
-    "agent.identity.get",
-    "skills.status",
-    "skills.search",
-    "skills.detail",
-    "voicewake.get",
-    "voicewake.routing.get",
-    "sessions.list",
-    "sessions.get",
-    "sessions.preview",
-    "sessions.describe",
-    "sessions.resolve",
-    "sessions.compaction.list",
-    "sessions.compaction.get",
-    "sessions.subscribe",
-    "sessions.unsubscribe",
-    "sessions.messages.subscribe",
-    "sessions.messages.unsubscribe",
-    "sessions.usage",
-    "sessions.usage.timeseries",
-    "sessions.usage.logs",
-    "cron.get",
-    "cron.list",
-    "cron.status",
-    "cron.runs",
-    "gateway.identity.get",
-    "gateway.restart.preflight",
-    "system-presence",
-    "last-heartbeat",
-    "node.list",
-    "node.describe",
-    "environments.list",
-    "environments.status",
-    "chat.history",
-    "config.get",
-    "config.schema.lookup",
-    "talk.catalog",
-    "talk.config",
-    "agents.files.list",
-    "agents.files.get",
-    "artifacts.list",
-    "artifacts.get",
-    "artifacts.download",
-  ],
-  [WRITE_SCOPE]: [
-    "message.action",
-    "send",
-    "poll",
-    "agent",
-    "agent.wait",
-    "wake",
-    "talk.mode",
-    "talk.client.create",
-    "talk.client.toolCall",
-    "talk.session.create",
-    "talk.session.join",
-    "talk.session.appendAudio",
-    "talk.session.startTurn",
-    "talk.session.endTurn",
-    "talk.session.cancelTurn",
-    "talk.session.cancelOutput",
-    "talk.session.submitToolResult",
-    "talk.session.close",
-    "talk.speak",
-    "tts.enable",
-    "tts.disable",
-    "tts.convert",
-    "tts.setProvider",
-    "tts.setPersona",
-    "voicewake.set",
-    "voicewake.routing.set",
-    "node.invoke",
-    "tools.invoke",
-    "chat.send",
-    "chat.abort",
-    "sessions.create",
-    "sessions.send",
-    "sessions.steer",
-    "sessions.abort",
-    "tasks.cancel",
-    "sessions.compaction.branch",
-    "doctor.memory.backfillDreamDiary",
-    "doctor.memory.resetDreamDiary",
-    "doctor.memory.resetGroundedShortTerm",
-    "doctor.memory.repairDreamingArtifacts",
-    "doctor.memory.dedupeDreamDiary",
-    "push.test",
-    "push.web.vapidPublicKey",
-    "push.web.subscribe",
-    "push.web.unsubscribe",
-    "push.web.test",
-    "node.pending.enqueue",
-  ],
-  [ADMIN_SCOPE]: [
-    "channels.start",
-    "channels.stop",
-    "channels.logout",
-    "agents.create",
-    "agents.update",
-    "agents.delete",
-    "skills.upload.begin",
-    "skills.upload.chunk",
-    "skills.upload.commit",
-    "skills.install",
-    "skills.update",
-    "secrets.reload",
-    "secrets.resolve",
-    "cron.add",
-    "cron.update",
-    "cron.remove",
-    "cron.run",
-    "sessions.patch",
-    "sessions.pluginPatch",
-    "sessions.cleanup",
-    "sessions.reset",
-    "sessions.delete",
-    "sessions.compact",
-    "sessions.compaction.restore",
-    "connect",
-    "chat.inject",
-    "nativeHook.invoke",
-    "web.login.start",
-    "web.login.wait",
-    "set-heartbeats",
-    "system-event",
-    "agents.files.set",
-    "update.status",
-    "gateway.restart.request",
-  ],
-  [TALK_SECRETS_SCOPE]: [],
-};
-
-const METHOD_SCOPE_BY_NAME = new Map<string, OperatorScope>(
-  Object.entries(METHOD_SCOPE_GROUPS).flatMap(([scope, methods]) =>
-    methods.map((method) => [method, scope as OperatorScope]),
-  ),
-);
-
 function resolveScopedMethod(method: string): OperatorScope | undefined {
-  const explicitScope = METHOD_SCOPE_BY_NAME.get(method);
+  const explicitScope = resolveCoreOperatorGatewayMethodScope(method);
   if (explicitScope) {
     return explicitScope;
   }
@@ -239,11 +45,11 @@ function resolveScopedMethod(method: string): OperatorScope | undefined {
   if (reservedScope) {
     return reservedScope;
   }
-  const pluginScope = getPluginRegistryState()?.activeRegistry?.gatewayMethodScopes?.[method];
-  if (pluginScope) {
-    return pluginScope;
-  }
-  return undefined;
+  const pluginDescriptor = getPluginRegistryState()?.activeRegistry?.gatewayMethodDescriptors?.find(
+    (descriptor) => descriptor.name === method,
+  );
+  const pluginScope = pluginDescriptor?.scope;
+  return pluginScope === "node" || pluginScope === "dynamic" ? undefined : pluginScope;
 }
 
 export function isApprovalMethod(method: string): boolean {
@@ -263,7 +69,7 @@ export function isWriteMethod(method: string): boolean {
 }
 
 export function isNodeRoleMethod(method: string): boolean {
-  return NODE_ROLE_METHODS.has(method);
+  return isCoreNodeGatewayMethod(method);
 }
 
 export function isAdminOnlyMethod(method: string): boolean {
@@ -330,7 +136,7 @@ export function resolveLeastPrivilegeOperatorScopesForMethod(
   method: string,
   params?: unknown,
 ): OperatorScope[] {
-  if (DYNAMIC_OPERATOR_SCOPE_METHODS.has(method)) {
+  if (isDynamicOperatorGatewayMethod(method)) {
     return resolveDynamicLeastPrivilegeOperatorScopesForMethod(method, params);
   }
   const requiredScope = resolveRequiredOperatorScopeForMethod(method);
@@ -349,7 +155,7 @@ export function authorizeOperatorScopesForMethod(
   if (scopes.includes(ADMIN_SCOPE)) {
     return { allowed: true };
   }
-  if (DYNAMIC_OPERATOR_SCOPE_METHODS.has(method)) {
+  if (isDynamicOperatorGatewayMethod(method)) {
     const registeredScopes = resolveSessionActionRegisteredScopes(params);
     if (!registeredScopes && params && typeof params === "object" && !Array.isArray(params)) {
       const pluginId = normalizeSessionActionParam((params as { pluginId?: unknown }).pluginId);
@@ -383,8 +189,11 @@ export function isGatewayMethodClassified(method: string): boolean {
   if (isNodeRoleMethod(method)) {
     return true;
   }
-  if (DYNAMIC_OPERATOR_SCOPE_METHODS.has(method)) {
+  if (isDynamicOperatorGatewayMethod(method)) {
     return true;
   }
-  return resolveRequiredOperatorScopeForMethod(method) !== undefined;
+  return (
+    isCoreGatewayMethodClassified(method) ||
+    resolveRequiredOperatorScopeForMethod(method) !== undefined
+  );
 }

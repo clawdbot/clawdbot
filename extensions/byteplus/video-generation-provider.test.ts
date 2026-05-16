@@ -144,4 +144,80 @@ describe("byteplus video generation provider", () => {
     expect(body.resolution).toBe("480p");
     expect(body.camera_fixed).toBe(false);
   });
+
+  it("reports malformed create JSON with a provider-owned error", async () => {
+    const release = vi.fn(async () => {});
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => {
+          throw new SyntaxError("bad json");
+        },
+      },
+      release,
+    });
+
+    const provider = buildBytePlusVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "byteplus",
+        model: "seedance-1-0-lite-t2v-250428",
+        prompt: "bad create response",
+        cfg: {},
+      }),
+    ).rejects.toThrow("BytePlus video generation failed: malformed JSON response");
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("rejects status responses missing a task status", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({ id: "task_missing_status" }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock.mockResolvedValueOnce({
+      json: async () => ({
+        id: "task_missing_status",
+        content: {
+          video_url: "https://example.com/byteplus.mp4",
+        },
+      }),
+    });
+
+    const provider = buildBytePlusVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "byteplus",
+        model: "seedance-1-0-lite-t2v-250428",
+        prompt: "missing status",
+        cfg: {},
+      }),
+    ).rejects.toThrow("BytePlus video status response missing task status");
+  });
+
+  it("rejects malformed completed content", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({ id: "task_malformed_content" }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock.mockResolvedValueOnce({
+      json: async () => ({
+        id: "task_malformed_content",
+        status: "succeeded",
+        content: ["https://example.com/byteplus.mp4"],
+      }),
+    });
+
+    const provider = buildBytePlusVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "byteplus",
+        model: "seedance-1-0-lite-t2v-250428",
+        prompt: "malformed content",
+        cfg: {},
+      }),
+    ).rejects.toThrow("BytePlus video generation completed with malformed content");
+  });
 });

@@ -318,10 +318,9 @@ This schema is the handoff between scenario code and GitHub comments:
 ```
 
 Artifact `path` values are relative to the manifest directory. `targetPath`
-values are relative paths inside the uploaded Actions artifact bundle. Mantis
-must not publish evidence to Git branches; Git history is not artifact storage.
-The publisher rejects path traversal and skips entries marked
-`"required": false` when optional previews or videos are unavailable.
+values are relative paths under the configured Mantis R2/S3 artifact prefix. The
+publisher rejects path traversal and skips entries marked `"required": false`
+when optional previews or videos are unavailable.
 
 Supported artifact kinds:
 
@@ -334,11 +333,20 @@ Supported artifact kinds:
 - `report`: Markdown report.
 
 The reusable publisher is `scripts/mantis/publish-pr-evidence.mjs`. Workflows
-call it with the manifest, target PR, artifact root, comment marker, Actions
-artifact URL, run URL, and request source. The workflow uploads the declared
-files through `actions/upload-artifact`; the publisher builds a summary-first PR
-comment that links to that artifact and lists the bundled file names. It never
-commits or pushes evidence files.
+call it with the manifest, target PR, artifact target root, comment marker,
+Actions artifact URL, run URL, and request source. It uploads declared artifacts
+to the configured Mantis R2/S3 bucket, builds a summary-first PR comment with
+inline images/previews and linked videos, then updates the existing marker
+comment or creates one. The workflows publish to `openclaw-crabbox-artifacts`
+with public URLs under `https://artifacts.openclaw.ai`. They provide bucket,
+region, and public URL values directly. The reusable publisher requires:
+
+- `MANTIS_ARTIFACT_R2_ACCESS_KEY_ID`
+- `MANTIS_ARTIFACT_R2_SECRET_ACCESS_KEY`
+- `MANTIS_ARTIFACT_R2_BUCKET`
+- `MANTIS_ARTIFACT_R2_ENDPOINT`
+- `MANTIS_ARTIFACT_R2_REGION`
+- `MANTIS_ARTIFACT_R2_PUBLIC_BASE_URL`
 
 You can also trigger the status-reactions run directly from a PR comment:
 
@@ -628,11 +636,10 @@ after the new secret has been stored.
 
 Mantis workflows should upload the full evidence bundle as a short-lived Actions
 artifact. When the workflow is run for a bug report or fix PR, it should also
-upsert a comment on that bug or fix PR with a short summary and a link to the
-Actions artifact. Do not post the primary proof only on a generic QA automation
-PR. Do not use Git branches, tags, or commits as Mantis artifact storage. Raw
-logs, screenshots, recordings, observed messages, and other bulky evidence stay
-in the Actions artifact.
+publish redacted inline media to the configured Mantis R2/S3 bucket and upsert a
+comment on that bug or fix PR with inline before/after screenshots. Do not post
+the primary proof only on a generic QA automation PR. Raw logs, observed
+messages, and other bulky evidence stay in the Actions artifact.
 
 Production workflows should post those comments with the Mantis GitHub App, not
 with `github-actions[bot]`. Store the app id and private key as

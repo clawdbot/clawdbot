@@ -33,6 +33,7 @@ const DEFAULT_HTTP_TIMEOUT_MS = 60_000;
 const POLL_INTERVAL_MS = 5_000;
 const MAX_POLL_ATTEMPTS = 120;
 const SUPPORTED_ASPECT_RATIOS = ["16:9", "9:16"] as const;
+const OPENROUTER_VIDEO_MALFORMED_RESPONSE = "OpenRouter video generation response malformed";
 const SUPPORTED_DURATION_SECONDS = [4, 6, 8] as const;
 // Runtime sets this after normalizing against live model capabilities.
 const SUPPORTED_DURATIONS_HINT = Symbol.for("openclaw.videoGeneration.supportedDurations");
@@ -60,6 +61,57 @@ type OpenRouterImagePart = {
 type OpenRouterFrameImagePart = OpenRouterImagePart & {
   frame_type: "first_frame" | "last_frame";
 };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+async function readOpenRouterVideoJson(response: Response): Promise<Record<string, unknown>> {
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    throw new Error(OPENROUTER_VIDEO_MALFORMED_RESPONSE);
+  }
+  if (!isRecord(payload)) {
+    throw new Error(OPENROUTER_VIDEO_MALFORMED_RESPONSE);
+  }
+  return payload;
+}
+
+function readOpenRouterVideoResponse(payload: Record<string, unknown>): OpenRouterVideoResponse {
+  const unsignedUrls = payload.unsigned_urls;
+  if (unsignedUrls !== undefined && unsignedUrls !== null && !Array.isArray(unsignedUrls)) {
+    throw new Error(OPENROUTER_VIDEO_MALFORMED_RESPONSE);
+  }
+  const usage = payload.usage;
+  if (usage !== undefined && usage !== null && !isRecord(usage)) {
+    throw new Error(OPENROUTER_VIDEO_MALFORMED_RESPONSE);
+  }
+  return {
+    id: normalizeOptionalString(payload.id),
+    generation_id: normalizeOptionalString(payload.generation_id) ?? null,
+    polling_url: normalizeOptionalString(payload.polling_url),
+    status: normalizeOptionalString(payload.status),
+    unsigned_urls: Array.isArray(unsignedUrls)
+      ? unsignedUrls.map((url) => {
+          const normalized = normalizeOptionalString(url);
+          if (!normalized) {
+            throw new Error(OPENROUTER_VIDEO_MALFORMED_RESPONSE);
+          }
+          return normalized;
+        })
+      : undefined,
+    error: normalizeOptionalString(payload.error) ?? null,
+    model: normalizeOptionalString(payload.model) ?? null,
+    usage: isRecord(usage)
+      ? {
+          cost: typeof usage.cost === "number" ? usage.cost : null,
+          is_byok: typeof usage.is_byok === "boolean" ? usage.is_byok : undefined,
+        }
+      : undefined,
+  };
+}
 
 function toDataUrl(asset: VideoGenerationSourceAsset): string {
   if (asset.buffer) {
@@ -223,7 +275,7 @@ async function fetchOpenRouterJson(params: {
   const { response, release } = await fetchOpenRouterVideoGet(params);
   try {
     await assertOkOrThrowHttpError(response, params.errorContext);
-    return (await response.json()) as OpenRouterVideoResponse;
+    return readOpenRouterVideoResponse(await readOpenRouterVideoJson(response));
   } finally {
     await release();
   }
@@ -257,6 +309,13 @@ async function pollOpenRouterVideo(params: {
       auditContext: "openrouter-video-status",
     });
     const status = normalizeOptionalString(payload.status);
+    if (
+      !status ||
+      (!["queued", "pending", "processing", "running", "completed"].includes(status) &&
+        !isTerminalFailure(status))
+    ) {
+      throw new Error(OPENROUTER_VIDEO_MALFORMED_RESPONSE);
+    }
     if (status === "completed") {
       return payload;
     }
@@ -401,14 +460,28 @@ export function buildOpenRouterVideoGenerationProvider(): VideoGenerationProvide
 
       try {
         await assertOkOrThrowHttpError(response, "OpenRouter video generation failed");
-        const submitted = (await response.json()) as OpenRouterVideoResponse;
+        const submitted = readOpenRouterVideoResponse(await readOpenRouterVideoJson(response));
         const jobId = normalizeOptionalString(submitted.id);
         const pollingUrl = normalizeOptionalString(submitted.polling_url);
         if (!jobId || !pollingUrl) {
           throw new Error("OpenRouter video generation response missing job details");
         }
+        const submittedStatus = normalizeOptionalString(submitted.status);
+        if (
+          submittedStatus &&
+          !["queued", "pending", "processing", "running", "completed"].includes(submittedStatus) &&
+          !isTerminalFailure(submittedStatus)
+        ) {
+          throw new Error(OPENROUTER_VIDEO_MALFORMED_RESPONSE);
+        }
+        if (isTerminalFailure(submittedStatus)) {
+          throw new Error(
+            normalizeOptionalString(submitted.error) ??
+              `OpenRouter video generation ${submittedStatus}`,
+          );
+        }
         const completed =
-          normalizeOptionalString(submitted.status) === "completed"
+          submittedStatus === "completed"
             ? submitted
             : await pollOpenRouterVideo({
                 pollingUrl,

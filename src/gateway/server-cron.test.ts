@@ -847,8 +847,8 @@ describe("buildGatewayCronService", () => {
     }
   });
 
-  it("preserves trust downgrades when cron enqueues system events", () => {
-    const cfg = createCronConfig("server-cron-untrusted");
+  it("forwards cron system events with owner-downgrade metadata", () => {
+    const cfg = createCronConfig("server-cron-system-event");
     loadConfigMock.mockReturnValue(cfg);
 
     const state = buildGatewayCronService({
@@ -867,6 +867,7 @@ describe("buildGatewayCronService", () => {
                   agentId?: string;
                   sessionKey?: string;
                   contextKey?: string;
+                  forceSenderIsOwnerFalse?: boolean;
                   trusted?: boolean;
                 },
               ) => void;
@@ -878,12 +879,13 @@ describe("buildGatewayCronService", () => {
       cronDeps?.enqueueSystemEvent?.("hello", {
         sessionKey: "discord:channel:ops",
         contextKey: "cron:test",
-        trusted: false,
+        forceSenderIsOwnerFalse: true,
       });
 
       expect(enqueueSystemEventMock).toHaveBeenCalledWith("hello", {
         sessionKey: "agent:main:discord:channel:ops",
         contextKey: "cron:test",
+        forceSenderIsOwnerFalse: true,
         trusted: false,
       });
     } finally {

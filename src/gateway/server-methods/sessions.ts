@@ -32,8 +32,6 @@ import {
   createInternalHookEvent,
   hasInternalHookListeners,
   triggerInternalHook,
-  type SessionPatchHookContext,
-  type SessionPatchHookEvent,
 } from "../../hooks/internal-hooks.js";
 import {
   measureDiagnosticsTimelineSpan,
@@ -84,6 +82,7 @@ import {
   getSessionCompactionCheckpoint,
   listSessionCompactionCheckpoints,
 } from "../session-compaction-checkpoints.js";
+import { triggerSessionPatchHook } from "../session-patch-hooks.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import {
   archiveFileOnDisk,
@@ -1785,22 +1784,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    if (hasInternalHookListeners("session", "patch")) {
-      const hookContext: SessionPatchHookContext = structuredClone({
-        sessionEntry: applied.entry,
-        patch: p,
-        cfg,
-      });
-      const hookEvent: SessionPatchHookEvent = {
-        type: "session",
-        action: "patch",
-        sessionKey: target.canonicalKey ?? key,
-        context: hookContext,
-        timestamp: new Date(),
-        messages: [],
-      };
-      void triggerInternalHook(hookEvent);
-    }
+    triggerSessionPatchHook({
+      cfg,
+      sessionEntry: applied.entry,
+      sessionKey: target.canonicalKey ?? key,
+      patch: p,
+    });
 
     const parsed = parseAgentSessionKey(target.canonicalKey ?? key);
     const agentId = normalizeAgentId(parsed?.agentId ?? resolveDefaultAgentId(cfg));

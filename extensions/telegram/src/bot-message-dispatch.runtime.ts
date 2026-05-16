@@ -1,5 +1,6 @@
 export {
   loadSessionStore,
+  readLatestAssistantTextFromSessionTranscript,
   resolveAndPersistSessionFile,
   resolveSessionStoreEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";

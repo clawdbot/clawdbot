@@ -613,7 +613,7 @@ describe("chat voice controls", () => {
       "localized Start Talk button",
     );
     expect(talkButton.getAttribute("title")).toBe(startTalkLabel);
-    expect(talkButton.textContent?.trim()).toBe("");
+    expect(talkButton.textContent?.trim()).toBe(startTalkLabel);
     expect(container.querySelector('[aria-label="Start Talk"]')).toBeNull();
     requireElement(
       container,
@@ -623,6 +623,40 @@ describe("chat voice controls", () => {
     expect(container.querySelector("textarea")?.getAttribute("placeholder")).toBe(
       t("chat.composer.placeholder", { name: "Val" }),
     );
+  });
+
+  it("focuses the composer from non-control input chrome", () => {
+    const container = renderChatView();
+    const toolbar = requireElement(container, ".agent-chat__toolbar", "composer toolbar");
+    const textarea = requireElement(
+      container,
+      ".agent-chat__composer-combobox > textarea",
+      "composer textarea",
+    ) as HTMLTextAreaElement;
+    const focusSpy = vi.spyOn(textarea, "focus");
+
+    toolbar.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(focusSpy).toHaveBeenCalledWith({ preventScroll: true });
+  });
+
+  it("keeps composer control clicks on the clicked control", () => {
+    const container = renderChatView();
+    const attachButton = requireElement(
+      container,
+      `[aria-label="${t("chat.composer.attachFile")}"]`,
+      "attach button",
+    );
+    const textarea = requireElement(
+      container,
+      ".agent-chat__composer-combobox > textarea",
+      "composer textarea",
+    ) as HTMLTextAreaElement;
+    const focusSpy = vi.spyOn(textarea, "focus");
+
+    attachButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+
+    expect(focusSpy).not.toHaveBeenCalled();
   });
 
   it("lets users dismiss Talk start errors", () => {

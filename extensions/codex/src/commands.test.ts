@@ -647,6 +647,17 @@ describe("codex command", () => {
     const limits = {
       ok: true as const,
       value: {
+        rateLimits: [
+          {
+            limitId: "codex",
+            limitName: "Codex",
+            primary: null,
+            secondary: null,
+            credits: null,
+            planType: "plus",
+            rateLimitReachedType: null,
+          },
+        ],
         rateLimitsByLimitId: {
           premium: {
             limitId: "premium",
@@ -655,6 +666,15 @@ describe("codex command", () => {
             secondary: null,
             credits: null,
             planType: "pro",
+            rateLimitReachedType: null,
+          },
+          codex: {
+            limitId: "codex",
+            limitName: "Codex",
+            primary: null,
+            secondary: null,
+            credits: null,
+            planType: "plus",
             rateLimitReachedType: null,
           },
         },

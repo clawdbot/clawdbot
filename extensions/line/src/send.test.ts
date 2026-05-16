@@ -358,6 +358,33 @@ describe("LINE send helpers", () => {
     );
   });
 
+  it("rejects lowercased LINE-shaped recipients (#81628 safety net)", async () => {
+    // 33-char value with lowercase leading char — what an upstream session-key
+    // fragment looked like before the cron-tool fix. LINE rejects with HTTP 400
+    // anyway; throwing locally keeps the failure permanent so delivery-recovery
+    // moves the entry to failed/ immediately instead of silently retrying 5×.
+    await expect(
+      sendModule.pushMessagesLine(
+        "cabcdef0123456789abcdef0123456789",
+        [{ type: "text", text: "hello" }],
+        { cfg: LINE_TEST_CFG },
+      ),
+    ).rejects.toThrow(/Recipient is not a valid LINE id/);
+    expect(pushMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts case-exact LINE recipients with the leading capital preserved", async () => {
+    await sendModule.pushMessagesLine(
+      "Cabcdef0123456789abcdef0123456789",
+      [{ type: "text", text: "hello" }],
+      { cfg: LINE_TEST_CFG },
+    );
+    expect(pushMessageMock).toHaveBeenCalledWith({
+      to: "Cabcdef0123456789abcdef0123456789",
+      messages: [{ type: "text", text: "hello" }],
+    });
+  });
+
   it("logs HTTP body when push fails", async () => {
     const err = new Error("LINE push failed") as Error & {
       status: number;

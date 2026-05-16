@@ -1316,6 +1316,53 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("reports generated media completions when the announce agent replies text-only", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [
+          {
+            text: "The track is ready.",
+          },
+        ],
+      },
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      sourceTool: "music_generate",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "music_generation",
+          childSessionKey: "music_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "music generation task",
+          taskLabel: "night-drive synthwave",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 track.",
+          attachments: [
+            {
+              type: "audio",
+              path: "/tmp/generated-night-drive.mp3",
+              mimeType: "audio/mpeg",
+              name: "generated-night-drive.mp3",
+            },
+          ],
+          replyInstruction: "Deliver the generated music.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: false,
+      path: "direct",
+      error: "completion agent did not deliver generated media",
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("reports generated media group completions that miss required message-tool delivery", async () => {
     const callGateway = createGatewayMock({
       result: {
@@ -1364,6 +1411,80 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       accountId: "acct-1",
       to: "channel:C123",
       threadId: undefined,
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("falls back to a forced message-tool handoff when the active requester run cannot accept one", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [],
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            accountId: "acct-1",
+            to: "channel:C123",
+            text: "The track is ready.",
+            mediaUrls: ["/tmp/generated-night-drive.mp3"],
+          },
+        ],
+      },
+    });
+    const queueEmbeddedPiMessageWithOutcome = vi.fn((sessionId: string) => ({
+      queued: false as const,
+      sessionId,
+      reason: "source_reply_delivery_mode_mismatch" as const,
+      gatewayHealth: "live" as const,
+    }));
+    const sendMessage = createSendMessageMock();
+    const result = await deliverSlackChannelAnnouncement({
+      callGateway,
+      sendMessage,
+      sessionId: "requester-session-channel",
+      isActive: true,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-channel-media-message-tool-active-mismatch",
+      sourceTool: "music_generate",
+      queueEmbeddedPiMessageWithOutcome,
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "music_generation",
+          childSessionKey: "music_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "music generation task",
+          taskLabel: "night-drive synthwave",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 track.\nMEDIA:/tmp/generated-night-drive.mp3",
+          mediaUrls: ["/tmp/generated-night-drive.mp3"],
+          replyInstruction:
+            "Tell the user the music is ready. If visible source delivery requires the message tool, send it there with the generated media attached.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenCalledWith(
+      "requester-session-channel",
+      "child done",
+      expect.objectContaining({
+        steeringMode: "all",
+        sourceReplyDeliveryMode: "message_tool_only",
+      }),
+    );
+    expectGatewayAgentParams(callGateway, {
+      deliver: false,
+      channel: "slack",
+      accountId: "acct-1",
+      to: "channel:C123",
+      threadId: undefined,
+      sourceReplyDeliveryMode: "message_tool_only",
     });
     expect(sendMessage).not.toHaveBeenCalled();
   });
@@ -1431,6 +1552,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         accountId: "acct-1",
         to: origin.to,
         threadId: undefined,
+        sourceReplyDeliveryMode: "message_tool_only",
       });
       expect(sendMessage).not.toHaveBeenCalled();
     },

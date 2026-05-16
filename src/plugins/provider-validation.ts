@@ -121,6 +121,7 @@ function buildNormalizedWizardSetup(params: {
     params.setup.assistantVisibility === "visible"
       ? { assistantVisibility: params.setup.assistantVisibility }
       : {}),
+    ...(params.setup.onboardingFeatured === true ? { onboardingFeatured: true } : {}),
     ...(groupId ? { groupId } : {}),
     ...(groupLabel ? { groupLabel } : {}),
     ...(groupHint ? { groupHint } : {}),

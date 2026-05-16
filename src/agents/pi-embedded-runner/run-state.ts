@@ -1,3 +1,4 @@
+import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import {
   getActiveReplyRunCount,
   listActiveReplyRunSessionIds,
@@ -11,11 +12,13 @@ export type EmbeddedPiQueueHandle = {
   isCompacting: () => boolean;
   cancel?: (reason?: "user_abort" | "restart" | "superseded") => void;
   abort: () => void;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
 };
 
 export type EmbeddedPiQueueMessageOptions = {
   steeringMode?: "all";
   debounceMs?: number;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
 };
 
 export type ActiveEmbeddedRunSnapshot = {

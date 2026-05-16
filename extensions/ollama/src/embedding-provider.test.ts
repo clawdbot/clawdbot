@@ -251,6 +251,56 @@ describe("ollama embedding provider", () => {
     expect(inputs).toEqual([["a", "bb", "ccc"]]);
   });
 
+  it("reports malformed embed JSON with a provider-owned error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response("{not json", {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    );
+
+    const { provider } = await createOllamaEmbeddingProvider({
+      config: {} as OpenClawConfig,
+      provider: "ollama",
+      model: "nomic-embed-text",
+      fallback: "none",
+      remote: { baseUrl: "http://127.0.0.1:11434" },
+    });
+
+    await expect(provider.embedQuery("hello")).rejects.toThrow(
+      "Ollama embed response returned malformed JSON",
+    );
+  });
+
+  it("rejects non-number embedding values instead of zeroing them", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ embeddings: [["0.1", 0.2]] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    );
+
+    const { provider } = await createOllamaEmbeddingProvider({
+      config: {} as OpenClawConfig,
+      provider: "ollama",
+      model: "nomic-embed-text",
+      fallback: "none",
+      remote: { baseUrl: "http://127.0.0.1:11434" },
+    });
+
+    await expect(provider.embedQuery("hello")).rejects.toThrow(
+      "Ollama embed response contains a non-number embedding value",
+    );
+  });
+
   it("uses a retrieval query prefix for qwen3 embedding queries", async () => {
     const fetchMock = mockEmbeddingFetch([1, 0]);
 

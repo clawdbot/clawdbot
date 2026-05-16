@@ -64,6 +64,178 @@ describe("buildCodexUserMcpServersThreadConfigPatch", () => {
     });
   });
 
+  it("projects Codex-specific default tool approval mode", () => {
+    const patch = buildCodexUserMcpServersThreadConfigPatch({
+      mcp: {
+        servers: {
+          search: {
+            transport: "streamable-http",
+            url: "https://mcp.example.com/mcp",
+            codex: {
+              defaultToolsApprovalMode: "approve",
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+    expect(patch).toStrictEqual({
+      mcp_servers: {
+        search: {
+          url: "https://mcp.example.com/mcp",
+          default_tools_approval_mode: "approve",
+        },
+      },
+    });
+  });
+
+  it("uses the Codex-native approval spelling when configured", () => {
+    const patch = buildCodexUserMcpServersThreadConfigPatch({
+      mcp: {
+        servers: {
+          search: {
+            transport: "streamable-http",
+            url: "https://mcp.example.com/mcp",
+            codex: {
+              default_tools_approval_mode: "prompt",
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+    expect(patch?.mcp_servers.search).toMatchObject({
+      url: "https://mcp.example.com/mcp",
+      default_tools_approval_mode: "prompt",
+    });
+  });
+
+  it("filters Codex-scoped user MCP servers by OpenClaw agent id", () => {
+    const cfg = {
+      mcp: {
+        servers: {
+          atlas: {
+            transport: "streamable-http",
+            url: "https://atlas.example.com/mcp",
+            codex: { agents: ["atlas"] },
+          },
+          apolo: {
+            transport: "streamable-http",
+            url: "https://apolo.example.com/mcp",
+            codex: { agents: ["apolo"] },
+          },
+          global: {
+            transport: "stdio",
+            command: "node",
+            args: ["global-mcp.js"],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const atlasPatch = buildCodexUserMcpServersThreadConfigPatch(cfg, { agentId: "atlas" });
+    expect(Object.keys(atlasPatch!.mcp_servers).toSorted()).toEqual(["atlas", "global"]);
+    expect(atlasPatch!.mcp_servers.atlas).toMatchObject({ url: "https://atlas.example.com/mcp" });
+    expect(atlasPatch!.mcp_servers.global).toMatchObject({
+      command: "node",
+      args: ["global-mcp.js"],
+    });
+
+    const apoloPatch = buildCodexUserMcpServersThreadConfigPatch(cfg, { agentId: "apolo" });
+    expect(Object.keys(apoloPatch!.mcp_servers).toSorted()).toEqual(["apolo", "global"]);
+    expect(apoloPatch!.mcp_servers.apolo).toMatchObject({ url: "https://apolo.example.com/mcp" });
+  });
+
+  it("returns undefined when all user MCP servers are scoped to other agents", () => {
+    const patch = buildCodexUserMcpServersThreadConfigPatch(
+      {
+        mcp: {
+          servers: {
+            atlas: {
+              transport: "streamable-http",
+              url: "https://atlas.example.com/mcp",
+              codex: { agents: ["atlas"] },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      { agentId: "apolo" },
+    );
+    expect(patch).toBeUndefined();
+  });
+
+  it("normalizes Codex agent scopes before matching", () => {
+    const patch = buildCodexUserMcpServersThreadConfigPatch(
+      {
+        mcp: {
+          servers: {
+            atlas: {
+              transport: "streamable-http",
+              url: "https://atlas.example.com/mcp",
+              codex: { agents: ["Atlas"] },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      { agentId: "ATLAS" },
+    );
+    expect(patch?.mcp_servers.atlas).toMatchObject({
+      url: "https://atlas.example.com/mcp",
+    });
+  });
+
+  it("fails closed for empty or invalid Codex agent scopes", () => {
+    const cfg = {
+      mcp: {
+        servers: {
+          empty: {
+            transport: "streamable-http",
+            url: "https://empty.example.com/mcp",
+            codex: { agents: [] },
+          },
+          blank: {
+            transport: "streamable-http",
+            url: "https://blank.example.com/mcp",
+            codex: { agents: ["  "] },
+          },
+          invalid: {
+            transport: "streamable-http",
+            url: "https://invalid.example.com/mcp",
+            codex: { agents: ["", 1, null, "!!!", "-main-"] },
+          },
+          global: {
+            transport: "stdio",
+            command: "node",
+            args: ["global-mcp.js"],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const patch = buildCodexUserMcpServersThreadConfigPatch(cfg, { agentId: "atlas" });
+    expect(patch).toStrictEqual({
+      mcp_servers: {
+        global: {
+          command: "node",
+          args: ["global-mcp.js"],
+        },
+      },
+    });
+  });
+
+  it("omits scoped Codex MCP servers when no OpenClaw agent id is available", () => {
+    const patch = buildCodexUserMcpServersThreadConfigPatch({
+      mcp: {
+        servers: {
+          atlas: {
+            transport: "streamable-http",
+            url: "https://atlas.example.com/mcp",
+            codex: { agents: ["atlas"] },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+    expect(patch).toBeUndefined();
+  });
+
   it("preserves multiple user MCP servers as independent mcp_servers entries", () => {
     const patch = buildCodexUserMcpServersThreadConfigPatch({
       mcp: {

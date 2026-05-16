@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { AgentGeneratedAttachment } from "../generated-attachments.js";
 import { VIDEO_GENERATION_TASK_KIND } from "../video-generation-task-status.js";
 import {
   createMediaGenerationTaskLifecycle,
@@ -41,6 +42,7 @@ export async function wakeVideoGenerationTaskCompletion(params: {
   status: "ok" | "error";
   statusLabel: string;
   result: string;
+  attachments?: AgentGeneratedAttachment[];
   mediaUrls?: string[];
   statsLine?: string;
 }) {

@@ -324,6 +324,172 @@ describe("session store writer queue", () => {
     expect((store[key] as Record<string, unknown>).counter).toBe(N);
   });
 
+  it("drops non-object persisted session entries on load", async () => {
+    const { storePath } = await makeTmpStore({
+      "agent:main:good": { sessionId: "s-good", updatedAt: Date.now() },
+      "agent:main:string": "not-a-session-entry",
+      "agent:main:array": [{ sessionId: "s-array", updatedAt: Date.now() }],
+    } as unknown as Record<string, SessionEntry>);
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+
+    expect(store["agent:main:good"]?.sessionId).toBe("s-good");
+    expect(store["agent:main:string"]).toBeUndefined();
+    expect(store["agent:main:array"]).toBeUndefined();
+  });
+
+  it("strips malformed pending final-delivery fields on load", async () => {
+    const { storePath } = await makeTmpStore({
+      "agent:main:bad-pending": {
+        sessionId: "s-bad-pending",
+        updatedAt: 100,
+        pendingFinalDelivery: "yes",
+        pendingFinalDeliveryText: { text: "would crash display sanitizers" },
+        pendingFinalDeliveryCreatedAt: "100",
+        pendingFinalDeliveryLastAttemptAt: -1,
+        pendingFinalDeliveryAttemptCount: "2",
+        pendingFinalDeliveryLastError: { message: "boom" },
+        pendingFinalDeliveryContext: {
+          channel: "telegram",
+          to: ["chat"],
+          accountId: { id: "default" },
+          threadId: {},
+        },
+        pendingFinalDeliveryIntentId: 123,
+      },
+      "agent:main:good-pending": {
+        sessionId: "s-good-pending",
+        updatedAt: 100,
+        pendingFinalDelivery: true,
+        pendingFinalDeliveryText: "hello",
+        pendingFinalDeliveryCreatedAt: 10,
+        pendingFinalDeliveryLastAttemptAt: 20,
+        pendingFinalDeliveryAttemptCount: 2,
+        pendingFinalDeliveryLastError: null,
+        pendingFinalDeliveryContext: {
+          channel: "Telegram",
+          to: " chat-1 ",
+          accountId: "Default",
+          threadId: 42.5,
+        },
+        pendingFinalDeliveryIntentId: "intent-1",
+      },
+    } as unknown as Record<string, SessionEntry>);
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+    const bad = store["agent:main:bad-pending"];
+    const good = store["agent:main:good-pending"];
+
+    expect(bad).toMatchObject({
+      sessionId: "s-bad-pending",
+      updatedAt: 100,
+    });
+    expect(bad?.pendingFinalDelivery).toBeUndefined();
+    expect(bad?.pendingFinalDeliveryText).toBeUndefined();
+    expect(bad?.pendingFinalDeliveryCreatedAt).toBeUndefined();
+    expect(bad?.pendingFinalDeliveryLastAttemptAt).toBeUndefined();
+    expect(bad?.pendingFinalDeliveryAttemptCount).toBeUndefined();
+    expect(bad?.pendingFinalDeliveryLastError).toBeUndefined();
+    expect(bad?.pendingFinalDeliveryContext).toBeUndefined();
+    expect(bad?.pendingFinalDeliveryIntentId).toBeUndefined();
+
+    expect(good).toMatchObject({
+      pendingFinalDelivery: true,
+      pendingFinalDeliveryText: "hello",
+      pendingFinalDeliveryCreatedAt: 10,
+      pendingFinalDeliveryLastAttemptAt: 20,
+      pendingFinalDeliveryAttemptCount: 2,
+      pendingFinalDeliveryLastError: null,
+      pendingFinalDeliveryContext: {
+        channel: "telegram",
+        to: "chat-1",
+        accountId: "default",
+        threadId: 42,
+      },
+      pendingFinalDeliveryIntentId: "intent-1",
+    });
+  });
+
+  it("strips malformed plugin extension state on load", async () => {
+    const { storePath } = await makeTmpStore({
+      "agent:main:plugins": {
+        sessionId: "s-plugins",
+        updatedAt: 100,
+        pluginExtensions: {
+          " workflow-plugin ": {
+            " approval ": { state: "waiting" },
+            scalar: true,
+            huge: "x".repeat(70 * 1024),
+            emptyNamespace: undefined,
+          },
+          "bad-shape": "not-a-namespace-record",
+          "array-shape": [{ workflow: { state: "bad" } }],
+          "": { workflow: { state: "bad" } },
+        },
+        pluginExtensionSlotKeys: {
+          " workflow-plugin ": {
+            " approval ": " approvalSnapshot ",
+            reserved: "sessionId",
+            dotted: "approval.snapshot",
+            empty: "",
+          },
+          "bad-shape": "approvalSnapshot",
+          "": { workflow: "ignoredSlot" },
+        },
+      },
+    } as unknown as Record<string, SessionEntry>);
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+    expect(store["agent:main:plugins"]?.pluginExtensions).toEqual({
+      "workflow-plugin": {
+        approval: { state: "waiting" },
+        scalar: true,
+      },
+    });
+    expect(store["agent:main:plugins"]?.pluginExtensionSlotKeys).toEqual({
+      "workflow-plugin": {
+        approval: "approvalSnapshot",
+      },
+    });
+  });
+
+  it("normalizes malformed persisted session entry fields on load", async () => {
+    const { storePath } = await makeTmpStore({
+      "agent:main:good": {
+        sessionId: " s-good ",
+        updatedAt: "definitely-not-a-time",
+        sessionFile: { path: "bad.jsonl" },
+      },
+      "agent:main:object-id": { sessionId: { nested: "bad" }, updatedAt: Date.now() },
+      "agent:main:unsafe-id": { sessionId: "../etc/passwd", updatedAt: Date.now() },
+    } as unknown as Record<string, SessionEntry>);
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+
+    expect(store["agent:main:good"]?.sessionId).toBe("s-good");
+    expect(store["agent:main:good"]?.updatedAt).toBe(0);
+    expect(store["agent:main:good"]?.sessionFile).toBeUndefined();
+    expect(store["agent:main:object-id"]).toBeUndefined();
+    expect(store["agent:main:unsafe-id"]).toBeUndefined();
+  });
+
+  it("keeps metadata-only canonical sessions without treating their ids as transcript ids", async () => {
+    const { storePath } = await makeTmpStore({
+      "agent:main:metadata": {
+        sessionId: "agent:main:metadata",
+        updatedAt: Date.now(),
+        groupActivation: "always",
+      },
+    } as unknown as Record<string, SessionEntry>);
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+
+    expect(store["agent:main:metadata"]).toMatchObject({
+      groupActivation: "always",
+    });
+    expect(store["agent:main:metadata"]?.sessionId).toBeUndefined();
+  });
+
   it("skips session store disk writes when payload is unchanged", async () => {
     const key = "agent:main:no-op-save";
     const { storePath } = await makeTmpStore({

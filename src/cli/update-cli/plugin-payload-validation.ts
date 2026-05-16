@@ -101,7 +101,18 @@ export async function runPluginPayloadSmokeCheck(params: {
     }
 
     const extensionResolution = resolvePackageExtensionEntries(manifest);
-    if (extensionResolution.status === "ok") {
+    if (extensionResolution.status === "invalid" || extensionResolution.status === "empty") {
+      failures.push({
+        pluginId,
+        installPath,
+        reason: "missing-extension-entry",
+        detail: `Plugin extension entry validation failed: ${
+          extensionResolution.status === "invalid"
+            ? extensionResolution.error
+            : "package.json openclaw.extensions is empty"
+        }`,
+      });
+    } else if (extensionResolution.status === "ok") {
       const extensionValidation = await validatePackageExtensionEntriesForInstall({
         packageDir: installPath,
         extensions: extensionResolution.entries,

@@ -1,4 +1,4 @@
-import { Routes } from "discord-api-types/v10";
+import { MessageFlags, Routes } from "discord-api-types/v10";
 import { describe, expect, it, vi } from "vitest";
 import { createDiscordDraftStream } from "./draft-stream.js";
 
@@ -84,6 +84,40 @@ describe("createDiscordDraftStream", () => {
       body: {
         content: "still working @here",
         allowed_mentions: { parse: [] },
+      },
+    });
+  });
+
+  it("suppresses link embeds in preview creates and edits when requested", async () => {
+    const rest = {
+      post: vi.fn(async () => ({ id: "m1" })),
+      patch: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined),
+    };
+    const stream = createDiscordDraftStream({
+      rest: rest as never,
+      channelId: "c1",
+      throttleMs: 250,
+      suppressEmbeds: true,
+    });
+
+    stream.update("https://example.com");
+    await stream.flush();
+    stream.update("https://example.com/final");
+    await stream.flush();
+
+    expect(rest.post).toHaveBeenCalledWith(Routes.channelMessages("c1"), {
+      body: {
+        content: "https://example.com",
+        allowed_mentions: { parse: [] },
+        flags: MessageFlags.SuppressEmbeds,
+      },
+    });
+    expect(rest.patch).toHaveBeenCalledWith(Routes.channelMessage("c1", "m1"), {
+      body: {
+        content: "https://example.com/final",
+        allowed_mentions: { parse: [] },
+        flags: MessageFlags.SuppressEmbeds,
       },
     });
   });

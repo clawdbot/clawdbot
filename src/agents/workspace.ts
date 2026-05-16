@@ -299,9 +299,14 @@ async function reconcileWorkspaceBootstrapCompletionState(params: {
     bootstrapSeededAt: params.state.bootstrapSeededAt ?? now,
     setupCompletedAt: now,
   };
-  await fs.rm(params.bootstrapPath, { force: true });
   await writeWorkspaceSetupState(params.statePath, repairedState);
-  return { repaired: true, bootstrapExists: false, state: repairedState };
+  try {
+    await fs.rm(params.bootstrapPath, { force: true });
+    return { repaired: true, bootstrapExists: false, state: repairedState };
+  } catch {
+    // Completion state is authoritative; stale BOOTSTRAP cleanup is best-effort.
+    return { repaired: true, bootstrapExists: true, state: repairedState };
+  }
 }
 
 function resolveWorkspaceStatePath(dir: string): string {

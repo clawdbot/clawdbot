@@ -2701,7 +2701,7 @@ rules:
       - javascript
     severity: ERROR
     message: |
-      enqueueSystemEvent() is called with interpolated or variable text without `trusted: false`. The default is `trusted: true`, which injects the text as a privileged `System:` prefix in the agent's context window. External content — channel messages, user IDs, event payloads, exec output — MUST be explicitly downgraded with `trusted: false` to prevent prompt injection. See GHSA-GFMX-PPH7-G46X.
+      enqueueSystemEvent() is called with interpolated or variable text without an explicit owner downgrade. External content — channel messages, user IDs, event payloads, exec output — MUST be explicitly downgraded with `forceSenderIsOwnerFalse: true` (or legacy `trusted: false`) to prevent prompt injection. See GHSA-GFMX-PPH7-G46X.
       TRIAGE NOTE: If ALL interpolated values in the template literal are boolean flags or enum/const expressions (e.g. `${x ? "on" : "off"}`), or if the variable text is formatted from fully-internal state (not external channel content), the finding may be low-risk. Add `trusted: true` explicitly to self-document that the text is intentionally trusted.
     metadata:
       category: security
@@ -2731,15 +2731,23 @@ rules:
               enqueueSystemEvent(`...${$X}...`, $OPTS)
           - pattern-not: |
               enqueueSystemEvent(`...${$X}...`, { ..., trusted: $V, ... })
+          - pattern-not: |
+              enqueueSystemEvent(`...${$X}...`, { ..., forceSenderIsOwnerFalse: true, ... })
           - pattern-not-inside: |
               enqueueSystemEvent(`...${$X}...`, { ..., trusted: $V, ... })
+          - pattern-not-inside: |
+              enqueueSystemEvent(`...${$X}...`, { ..., forceSenderIsOwnerFalse: true, ... })
       - patterns:
           - pattern: |
               enqueueSystemEvent($TEXT, $OPTS)
           - pattern-not: |
               enqueueSystemEvent($TEXT, { ..., trusted: $V, ... })
+          - pattern-not: |
+              enqueueSystemEvent($TEXT, { ..., forceSenderIsOwnerFalse: true, ... })
           - pattern-not-inside: |
               enqueueSystemEvent($TEXT, { ..., trusted: $V, ... })
+          - pattern-not-inside: |
+              enqueueSystemEvent($TEXT, { ..., forceSenderIsOwnerFalse: true, ... })
           - metavariable-regex:
               metavariable: $TEXT
               regex: ^[a-zA-Z_$][a-zA-Z0-9_$]*$

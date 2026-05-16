@@ -1,6 +1,20 @@
 import { describe, expect, it, vi } from "vitest";
 import { setupWizardShellCompletion } from "./setup.completion.js";
 
+async function withLocale(locale: string, run: () => Promise<void>): Promise<void> {
+  const previousLocale = process.env.OPENCLAW_LOCALE;
+  process.env.OPENCLAW_LOCALE = locale;
+  try {
+    await run();
+  } finally {
+    if (previousLocale === undefined) {
+      delete process.env.OPENCLAW_LOCALE;
+    } else {
+      process.env.OPENCLAW_LOCALE = previousLocale;
+    }
+  }
+}
+
 function createPrompter(confirmValue = false) {
   return {
     confirm: vi.fn(async () => confirmValue),
@@ -47,5 +61,24 @@ describe("setupWizardShellCompletion", () => {
     expect(deps.ensureCompletionCacheExists).not.toHaveBeenCalled();
     expect(deps.installCompletion).not.toHaveBeenCalled();
     expect(prompter.note).not.toHaveBeenCalled();
+  });
+
+  it("localizes advanced prompts and install notes", async () => {
+    await withLocale("zh-CN", async () => {
+      const prompter = createPrompter(true);
+      const deps = createDeps();
+
+      await setupWizardShellCompletion({ flow: "advanced", prompter, deps });
+
+      expect(prompter.confirm).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: "为 openclaw 启用 zsh shell completion？",
+        }),
+      );
+      expect(prompter.note).toHaveBeenCalledWith(
+        "Shell completion 已安装。重启 shell 或运行：source ~/.zshrc",
+        "Shell completion",
+      );
+    });
   });
 });

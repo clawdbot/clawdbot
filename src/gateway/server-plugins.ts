@@ -299,17 +299,20 @@ function mergeGatewayClientInternal(
 
 type DispatchGatewayMethodInProcessOptions = {
   allowSyntheticModelOverride?: boolean;
+  disableSyntheticClient?: boolean;
   expectFinal?: boolean;
   forceSyntheticClient?: boolean;
   pluginRuntimeOwnerId?: string;
+  requireScopedClient?: boolean;
   syntheticScopes?: string[];
   timeoutMs?: number;
 };
 
-type GatewayMethodDispatchResponse = {
+export type GatewayMethodDispatchResponse = {
   ok: boolean;
   payload?: unknown;
   error?: ErrorShape;
+  meta?: Record<string, unknown>;
 };
 
 function unwrapGatewayMethodDispatchResponse(
@@ -322,17 +325,22 @@ function unwrapGatewayMethodDispatchResponse(
   return response.payload;
 }
 
-async function dispatchGatewayMethod<T>(
+export async function dispatchGatewayMethodInProcessRaw(
   method: string,
-  params: Record<string, unknown>,
+  params: unknown,
   options?: DispatchGatewayMethodInProcessOptions,
-): Promise<T> {
+): Promise<GatewayMethodDispatchResponse> {
   const scope = getPluginRuntimeGatewayRequestScope();
   const context = scope?.context ?? getFallbackGatewayContext();
   const isWebchatConnect = scope?.isWebchatConnect ?? (() => false);
   if (!context) {
     throw new Error(
       `In-process gateway dispatch requires a gateway request scope (method: ${method}). No scope set and no fallback context available.`,
+    );
+  }
+  if (options?.requireScopedClient === true && !scope?.client) {
+    throw new Error(
+      `In-process gateway dispatch requires an authenticated plugin request scope (method: ${method}).`,
     );
   }
 
@@ -353,6 +361,9 @@ async function dispatchGatewayMethod<T>(
     scope?.client,
     pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : undefined,
   );
+  if (options?.disableSyntheticClient === true && !scopedClient) {
+    throw new Error(`In-process gateway dispatch requires a scoped client (method: ${method}).`);
+  }
   await handleGatewayRequest({
     req: {
       type: "req",
@@ -361,10 +372,12 @@ async function dispatchGatewayMethod<T>(
       params,
     },
     client:
-      options?.forceSyntheticClient === true ? syntheticClient : (scopedClient ?? syntheticClient),
+      options?.forceSyntheticClient === true
+        ? syntheticClient
+        : (scopedClient ?? (options?.disableSyntheticClient === true ? null : syntheticClient)),
     isWebchatConnect,
-    respond: (ok, payload, error) => {
-      const response = { ok, payload, error };
+    respond: (ok, payload, error, meta) => {
+      const response = { ok, payload, error, ...(meta ? { meta } : {}) };
       if (!firstResponse) {
         firstResponse = response;
         return;
@@ -382,7 +395,7 @@ async function dispatchGatewayMethod<T>(
   }
   const firstPayload = firstResponse.payload as { status?: unknown } | undefined;
   if (options?.expectFinal !== true || firstPayload?.status !== "accepted") {
-    return unwrapGatewayMethodDispatchResponse(method, firstResponse) as T;
+    return firstResponse;
   }
   const final =
     finalResponse ??
@@ -412,7 +425,16 @@ async function dispatchGatewayMethod<T>(
         resolve(response);
       };
     }));
-  return unwrapGatewayMethodDispatchResponse(method, final) as T;
+  return final;
+}
+
+async function dispatchGatewayMethod<T>(
+  method: string,
+  params: unknown,
+  options?: DispatchGatewayMethodInProcessOptions,
+): Promise<T> {
+  const response = await dispatchGatewayMethodInProcessRaw(method, params, options);
+  return unwrapGatewayMethodDispatchResponse(method, response) as T;
 }
 
 export async function dispatchGatewayMethodInProcess<T>(

@@ -828,6 +828,16 @@ function isAutomationActor(context) {
   return isAutomationUser(context.payload.sender, context.actor ?? "");
 }
 
+function isClawSweeperProofSufficientLabelEvent(context) {
+  const senderLogin = context.payload.sender?.login ?? context.actor ?? "";
+  return (
+    context.payload.action === "labeled" &&
+    context.payload.label?.name === PROOF_SUFFICIENT_LABEL &&
+    isAutomationUser(context.payload.sender, senderLogin) &&
+    /clawsweeper/i.test(senderLogin)
+  );
+}
+
 function isGitHubAppPullRequestAuthor(pullRequest) {
   return isAutomationUser(pullRequest.user);
 }
@@ -1071,6 +1081,13 @@ export async function runBarnacleAutoResponse({ github, context, core = console 
     if (labelSet.has(badBarnacleLabel)) {
       core.info(
         `Skipping PR auto-response checks for #${pullRequest.number} because ${badBarnacleLabel} is present.`,
+      );
+      return;
+    }
+
+    if (isClawSweeperProofSufficientLabelEvent(context)) {
+      core.info(
+        `Skipping PR auto-response checks for #${pullRequest.number} because ClawSweeper owns ${PROOF_SUFFICIENT_LABEL}.`,
       );
       return;
     }

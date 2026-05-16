@@ -141,7 +141,10 @@ OpenClaw chooses an embedded runtime after provider and model resolution:
 
 1. Model-scoped runtime policy wins. This can live in a configured provider
    model entry or in `agents.defaults.models["provider/model"].agentRuntime` /
-   `agents.list[].models["provider/model"].agentRuntime`.
+   `agents.list[].models["provider/model"].agentRuntime`. A provider wildcard
+   such as `agents.defaults.models["vllm/*"].agentRuntime` applies after exact
+   model policy, so dynamically discovered provider models can share one
+   runtime without overriding exact per-model exceptions.
 2. Provider-scoped runtime policy comes next at
    `models.providers.<provider>.agentRuntime`.
 3. In `auto` mode, registered plugin runtimes can claim supported provider/model

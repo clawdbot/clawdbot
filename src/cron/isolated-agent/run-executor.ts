@@ -123,6 +123,7 @@ export function createCronPromptExecutor(params: {
   };
   skillsSnapshot: SkillSnapshot;
   agentPayload: AgentTurnPayload;
+  useSubagentFallbacks: boolean;
   liveSelection: CronLiveSelection;
   cronSession: MutableCronSession;
   abortSignal?: AbortSignal;
@@ -144,6 +145,7 @@ export function createCronPromptExecutor(params: {
     cfg: params.cfg,
     job: params.job,
     agentId: params.agentId,
+    useSubagentFallbacks: params.useSubagentFallbacks,
   });
   let runResult: CronPromptRunResult | undefined;
   let fallbackProvider = params.liveSelection.provider;
@@ -246,6 +248,7 @@ export function createCronPromptExecutor(params: {
           lane: resolveCronAgentLane(params.lane),
           provider: providerOverride,
           model: modelOverride,
+          modelFallbacksOverride: cronFallbacksOverride,
           authProfileId: params.liveSelection.authProfileId,
           authProfileIdSource: params.liveSelection.authProfileId
             ? params.liveSelection.authProfileIdSource
@@ -330,6 +333,7 @@ export async function executeCronRun(params: {
   };
   skillsSnapshot: SkillSnapshot;
   agentPayload: AgentTurnPayload;
+  useSubagentFallbacks: boolean;
   agentVerboseDefault: AgentDefaultsConfig["verboseDefault"];
   liveSelection: CronLiveSelection;
   cronSession: MutableCronSession;
@@ -379,6 +383,7 @@ export async function executeCronRun(params: {
     toolPolicy: params.toolPolicy,
     skillsSnapshot: params.skillsSnapshot,
     agentPayload: params.agentPayload,
+    useSubagentFallbacks: params.useSubagentFallbacks,
     liveSelection: params.liveSelection,
     cronSession: params.cronSession,
     abortSignal: params.abortSignal,

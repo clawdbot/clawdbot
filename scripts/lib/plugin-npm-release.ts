@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { validateExternalCodePluginPackageJson } from "../../packages/plugin-package-contract/src/index.ts";
 import { normalizeOptionalString } from "../../src/shared/string-coerce.ts";
 import { parseReleaseVersion } from "../openclaw-npm-release-check.ts";
 import { resolveNpmPublishPlan } from "./npm-publish-plan.mjs";
@@ -22,6 +23,14 @@ export type PluginPackageJson = {
       defaultChoice?: string;
       minHostVersion?: string;
       npmSpec?: string;
+    };
+    compat?: {
+      pluginApi?: string;
+      minGatewayVersion?: string;
+    };
+    build?: {
+      openclawVersion?: string;
+      pluginSdkVersion?: string;
     };
     release?: {
       publishToNpm?: boolean;
@@ -256,6 +265,9 @@ export function collectPublishablePluginPackageErrors(
   if (!installNpmSpec) {
     errors.push("openclaw.install.npmSpec must be a non-empty string for publishable plugins.");
   }
+  errors.push(
+    ...validateExternalCodePluginPackageJson(packageJson).issues.map((issue) => issue.message),
+  );
 
   return errors;
 }

@@ -11,6 +11,7 @@ import type { DmPolicy } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import { formatDocsLink } from "../terminal/links.js";
+import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
 
 type ConfiguredChannelAction = "update" | "disable" | "delete" | "skip";
@@ -29,13 +30,13 @@ export async function promptConfiguredAction(params: {
   const options: Array<WizardSelectOption<ConfiguredChannelAction>> = [
     {
       value: "update",
-      label: "Modify settings",
+      label: t("wizard.channels.modifySettings"),
     },
     ...(supportsDisable
       ? [
           {
             value: "disable" as const,
-            label: "Disable (keeps config)",
+            label: t("wizard.channels.disableKeepConfig"),
           },
         ]
       : []),
@@ -43,17 +44,17 @@ export async function promptConfiguredAction(params: {
       ? [
           {
             value: "delete" as const,
-            label: "Delete config",
+            label: t("wizard.channels.deleteConfig"),
           },
         ]
       : []),
     {
       value: "skip",
-      label: "Skip (leave as-is)",
+      label: t("wizard.channels.skipLeaveAsIs"),
     },
   ];
   return await prompter.select({
-    message: `${label} already configured. What do you want to do?`,
+    message: t("wizard.channels.configuredAction", { label }),
     options,
     initialValue: "update",
   });
@@ -77,7 +78,7 @@ export async function promptRemovalAccountId(params: {
     return defaultAccountId;
   }
   const selected = await prompter.select({
-    message: `${label} account`,
+    message: t("wizard.channels.account", { label }),
     options: accountIds.map((accountId) => ({
       value: accountId,
       label: formatAccountLabel(accountId),
@@ -104,7 +105,7 @@ export async function maybeConfigureDmPolicies(params: {
   }
 
   const wants = await prompter.confirm({
-    message: "Configure DM access policies now? (default: pairing)",
+    message: t("wizard.channels.configureDmPolicies"),
     initialValue: false,
   });
   if (!wants) {
@@ -120,24 +121,28 @@ export async function maybeConfigureDmPolicies(params: {
     };
     await prompter.note(
       [
-        "Default: pairing (unknown DMs get a pairing code).",
-        `Approve: ${formatCliCommand(`openclaw pairing approve ${policy.channel} <code>`)}`,
-        `Allowlist DMs: ${policyKey}="allowlist" + ${allowFromKey} entries.`,
-        `Public DMs: ${policyKey}="open" + ${allowFromKey} includes "*".`,
-        "Multi-user DMs: run: " +
-          formatCliCommand('openclaw config set session.dmScope "per-channel-peer"') +
-          ' (or "per-account-channel-peer" for multi-account channels) to isolate sessions.',
-        `Docs: ${formatDocsLink("/channels/pairing", "channels/pairing")}`,
+        t("wizard.channels.dmPolicyDefault"),
+        t("wizard.channels.dmPolicyApprove", {
+          command: formatCliCommand(`openclaw pairing approve ${policy.channel} <code>`),
+        }),
+        t("wizard.channels.dmPolicyAllowlist", { allowFromKey, policyKey }),
+        t("wizard.channels.dmPolicyOpen", { allowFromKey, policyKey }),
+        t("wizard.channels.dmPolicyMultiUser", {
+          command: formatCliCommand('openclaw config set session.dmScope "per-channel-peer"'),
+        }),
+        t("wizard.channels.docs", {
+          link: formatDocsLink("/channels/pairing", "channels/pairing"),
+        }),
       ].join("\n"),
-      `${policy.label} DM access`,
+      t("wizard.channels.dmAccessTitle", { label: policy.label }),
     );
     const nextPolicy = (await prompter.select({
-      message: `${policy.label} DM policy`,
+      message: t("wizard.channels.dmPolicy", { label: policy.label }),
       options: [
-        { value: "pairing", label: "Pairing (recommended)" },
-        { value: "allowlist", label: "Allowlist (specific users only)" },
-        { value: "open", label: "Open (public inbound DMs)" },
-        { value: "disabled", label: "Disabled (ignore DMs)" },
+        { value: "pairing", label: t("wizard.channels.dmPolicyPairing") },
+        { value: "allowlist", label: t("wizard.channels.dmPolicyAllowlistOption") },
+        { value: "open", label: t("wizard.channels.dmPolicyOpenOption") },
+        { value: "disabled", label: t("wizard.channels.dmPolicyDisabledOption") },
       ],
     })) as DmPolicy;
     const current = policy.getCurrent(cfg, accountId);

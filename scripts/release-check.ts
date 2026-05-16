@@ -38,6 +38,10 @@ import {
   runInstalledWorkspaceBootstrapSmoke,
   WORKSPACE_TEMPLATE_PACK_PATHS,
 } from "./lib/workspace-bootstrap-smoke.mjs";
+import {
+  collectInstalledPackageErrors,
+  normalizeInstalledBinaryVersion,
+} from "./openclaw-npm-postpublish-verify.ts";
 import { listStaticExtensionAssetOutputs } from "./runtime-postbuild.mjs";
 import { sparkleBuildFloorsFromShortVersion, type SparkleBuildFloors } from "./sparkle-build.ts";
 import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
@@ -330,6 +334,58 @@ function runPackedBundledPluginPostinstall(packageRoot: string): void {
   });
 }
 
+export function collectPackedInstalledPackageVerificationErrors(params: {
+  expectedVersion: string;
+  installedBinaryVersion?: string;
+  packageRoot: string;
+}): string[] {
+  const packageJson = JSON.parse(
+    readFileSync(join(params.packageRoot, "package.json"), "utf8"),
+  ) as { version?: string };
+  const errors = collectInstalledPackageErrors({
+    expectedVersion: params.expectedVersion,
+    installedVersion: packageJson.version?.trim() ?? "",
+    packageRoot: params.packageRoot,
+  });
+  if (
+    params.installedBinaryVersion !== undefined &&
+    normalizeInstalledBinaryVersion(params.installedBinaryVersion) !== params.expectedVersion
+  ) {
+    errors.push(
+      `installed openclaw binary version mismatch: expected ${params.expectedVersion}, found ${params.installedBinaryVersion || "<missing>"}.`,
+    );
+  }
+  return errors;
+}
+
+function verifyPackedInstalledPackage(params: {
+  expectedVersion: string;
+  packageRoot: string;
+  prefixDir: string;
+  tmpRoot: string;
+}): void {
+  const installedBinaryVersion = execFileSync(
+    resolveInstalledBinaryPath(params.prefixDir),
+    ["--version"],
+    {
+      cwd: params.tmpRoot,
+      encoding: "utf8",
+      shell: process.platform === "win32",
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  ).trim();
+  const errors = collectPackedInstalledPackageVerificationErrors({
+    expectedVersion: params.expectedVersion,
+    installedBinaryVersion,
+    packageRoot: params.packageRoot,
+  });
+  if (errors.length > 0) {
+    throw new Error(
+      `release-check: packed installed package verification failed:\n- ${errors.join("\n- ")}`,
+    );
+  }
+}
+
 export function writePackedBundledPluginActivationConfig(homeDir: string): void {
   const configPath = join(homeDir, ".openclaw", "openclaw.json");
   mkdirSync(join(homeDir, ".openclaw"), { recursive: true });
@@ -464,6 +520,14 @@ function runPackedCliSmoke(params: {
 function runPackedBundledChannelEntrySmoke(): void {
   const tmpRoot = mkdtempSync(join(tmpdir(), "openclaw-release-pack-smoke-"));
   try {
+    const expectedVersion = (
+      JSON.parse(readFileSync(resolve("package.json"), "utf8")) as {
+        version?: string;
+      }
+    ).version;
+    if (!expectedVersion) {
+      throw new Error("release-check: root package.json is missing version.");
+    }
     const packDir = join(tmpRoot, "pack");
     mkdirSync(packDir);
 
@@ -473,6 +537,12 @@ function runPackedBundledChannelEntrySmoke(): void {
     installPackedTarball(prefixDir, tarballPath, tmpRoot);
 
     const packageRoot = join(resolveGlobalRoot(prefixDir, tmpRoot), "openclaw");
+    verifyPackedInstalledPackage({
+      expectedVersion,
+      packageRoot,
+      prefixDir,
+      tmpRoot,
+    });
     const homeDir = join(tmpRoot, "home");
     const stateDir = join(tmpRoot, "state");
     mkdirSync(homeDir, { recursive: true });

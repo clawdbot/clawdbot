@@ -442,9 +442,6 @@ function createScenarios(): PromptScenario[] {
         chatContext: buildDirectChatContext({
           sessionCtx: telegramDirectCtx,
           sourceReplyDeliveryMode: "message_tool_only",
-          silentReplyPolicy: "disallow",
-          silentReplyRewrite: false,
-          silentToken: SILENT_REPLY_TOKEN,
         }),
       }),
       dynamicTools: telegramDirectTools,
@@ -469,7 +466,6 @@ function createScenarios(): PromptScenario[] {
           sessionCtx: discordGroupCtx,
           sourceReplyDeliveryMode: "message_tool_only",
           silentReplyPolicy: "allow",
-          silentReplyRewrite: false,
           silentToken: SILENT_REPLY_TOKEN,
         }),
         intro: buildGroupIntro({
@@ -478,7 +474,6 @@ function createScenarios(): PromptScenario[] {
           defaultActivation: "mention",
           silentToken: SILENT_REPLY_TOKEN,
           silentReplyPolicy: "allow",
-          silentReplyRewrite: false,
         }),
       }),
       dynamicTools: discordGroupTools,
@@ -499,9 +494,6 @@ function createScenarios(): PromptScenario[] {
         chatContext: buildDirectChatContext({
           sessionCtx: heartbeatCtx,
           sourceReplyDeliveryMode: "message_tool_only",
-          silentReplyPolicy: "disallow",
-          silentReplyRewrite: false,
-          silentToken: SILENT_REPLY_TOKEN,
         }),
       }),
       dynamicTools: heartbeatTools,

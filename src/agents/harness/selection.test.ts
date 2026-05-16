@@ -220,6 +220,18 @@ describe("runAgentHarnessAttempt", () => {
     expect(piRunAttempt).toHaveBeenCalledTimes(1);
   });
 
+  it("honors provider wildcard PI runtime policy for OpenAI agent model runs", async () => {
+    registerSuccessfulCodexHarness();
+
+    const result = await runAgentHarnessAttempt({
+      ...createAttemptParams(agentModelRuntimeConfig("openai/*", "pi")),
+      provider: "openai",
+      modelId: "gpt-5.4",
+    });
+    expect(result.sessionIdUsed).toBe("pi");
+    expect(piRunAttempt).toHaveBeenCalledTimes(1);
+  });
+
   it("annotates non-ok harness result classifications for outer model fallback", async () => {
     const classify = vi.fn<NonNullable<AgentHarness["classify"]>>(() => "empty" as const);
     registerAgentHarness(

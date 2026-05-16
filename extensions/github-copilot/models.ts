@@ -3,6 +3,7 @@ import type {
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/core";
 import { buildCopilotIdeHeaders, COPILOT_INTEGRATION_ID } from "openclaw/plugin-sdk/provider-auth";
+import { readProviderJsonArrayFieldResponse } from "openclaw/plugin-sdk/provider-http";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -191,6 +192,13 @@ function mapCopilotApiModelToDefinition(
   return definition;
 }
 
+function asCopilotApiModelEntry(value: unknown): CopilotApiModelEntry {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("Copilot /models: malformed JSON response");
+  }
+  return value as CopilotApiModelEntry;
+}
+
 export type FetchCopilotModelCatalogParams = {
   /** Short-lived Copilot API token (from `resolveCopilotApiToken`). */
   copilotApiToken: string;
@@ -242,11 +250,11 @@ export async function fetchCopilotModelCatalog(
     if (!res.ok) {
       throw new Error(`Copilot /models fetch failed: HTTP ${res.status}`);
     }
-    const json = (await res.json()) as { data?: CopilotApiModelEntry[] };
-    const data = Array.isArray(json?.data) ? json.data : [];
+    const data = await readProviderJsonArrayFieldResponse(res, "Copilot /models", "data");
     const seen = new Set<string>();
     const out: ModelDefinitionConfig[] = [];
-    for (const entry of data) {
+    for (const rawEntry of data) {
+      const entry = asCopilotApiModelEntry(rawEntry);
       const def = mapCopilotApiModelToDefinition(entry);
       if (!def) {
         continue;

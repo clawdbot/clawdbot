@@ -250,6 +250,25 @@ function buildLocationContextPayload(ctx: TemplateContext): Record<string, unkno
   return Object.values(payload).some((value) => value !== undefined) ? payload : undefined;
 }
 
+function buildInboundHistoryMediaPromptPayload(value: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.flatMap((entry) => {
+    if (!isRecord(entry)) {
+      return [];
+    }
+    const payload = {
+      kind: normalizePromptMetadataString(entry["kind"]),
+      content_type: normalizePromptMetadataString(entry["contentType"]),
+      message_id: normalizePromptMetadataString(entry["messageId"]),
+      has_local_path: normalizePromptMetadataString(entry["path"]) ? true : undefined,
+      has_url: normalizePromptMetadataString(entry["url"]) ? true : undefined,
+    };
+    return Object.values(payload).some((field) => field !== undefined) ? [payload] : [];
+  });
+}
+
 function buildReplyChainPayload(ctx: TemplateContext): Array<Record<string, unknown>> {
   if (!Array.isArray(ctx.ReplyChain)) {
     return [];
@@ -437,6 +456,10 @@ export function buildInboundUserContextPrefix(
   const timestampStr = formatConversationTimestamp(ctx.Timestamp, envelope);
   const inboundHistory = Array.isArray(ctx.InboundHistory) ? ctx.InboundHistory : [];
   const boundedHistory = inboundHistory.slice(-MAX_UNTRUSTED_HISTORY_ENTRIES);
+  const historyMediaCount = boundedHistory.reduce(
+    (count, entry) => count + buildInboundHistoryMediaPromptPayload(entry.media).length,
+    0,
+  );
   const replyChainPayload = buildReplyChainPayload(ctx);
   const structuredContext = Array.isArray(ctx.UntrustedStructuredContext)
     ? ctx.UntrustedStructuredContext
@@ -477,6 +500,7 @@ export function buildInboundUserContextPrefix(
     group_space: normalizePromptMetadataString(ctx.GroupSpace),
     group_members: sanitizePromptBody(ctx.GroupMembers),
     thread_label: normalizePromptMetadataString(ctx.ThreadLabel),
+    turn_kind: ctx.InboundTurnKind,
     topic_id:
       ctx.MessageThreadId != null
         ? (normalizePromptMetadataString(String(ctx.MessageThreadId)) ?? undefined)
@@ -489,6 +513,7 @@ export function buildInboundUserContextPrefix(
     has_forwarded_context: normalizePromptMetadataString(ctx.ForwardedFrom) ? true : undefined,
     has_thread_starter: sanitizePromptBody(ctx.ThreadStarterBody) ? true : undefined,
     history_count: boundedHistory.length > 0 ? boundedHistory.length : undefined,
+    history_media_count: historyMediaCount > 0 ? historyMediaCount : undefined,
     history_truncated: inboundHistory.length > MAX_UNTRUSTED_HISTORY_ENTRIES ? true : undefined,
   };
   if (Object.values(conversationInfo).some((v) => v !== undefined)) {
@@ -585,11 +610,16 @@ export function buildInboundUserContextPrefix(
     blocks.push(
       formatUntrustedJsonBlock(
         "Chat history since last reply (untrusted, for context):",
-        boundedHistory.map((entry) => ({
-          sender: sanitizePromptBody(entry.sender),
-          timestamp_ms: entry.timestamp,
-          body: sanitizePromptBody(entry.body),
-        })),
+        boundedHistory.map((entry) => {
+          const media = buildInboundHistoryMediaPromptPayload(entry.media);
+          return {
+            sender: sanitizePromptBody(entry.sender),
+            timestamp_ms: entry.timestamp,
+            message_id: normalizePromptMetadataString(entry.messageId),
+            body: sanitizePromptBody(entry.body),
+            media: media.length > 0 ? media : undefined,
+          };
+        }),
       ),
     );
   }

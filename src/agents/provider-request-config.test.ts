@@ -522,6 +522,7 @@ describe("provider request config", () => {
 
     expect(resolved.baseUrl).toBe("https://api.openai.com/v1");
     expect(resolved.allowPrivateNetwork).toBe(false);
+    expect(resolved.privateNetworkExplicitlyDenied).toBe(false);
     expect(resolved.policy.endpointClass).toBe("openai-public");
     expect(resolved.capabilities.allowsResponsesStore).toBe(true);
     expect(resolved.headers?.authorization).toBe("Bearer test-key");
@@ -531,7 +532,7 @@ describe("provider request config", () => {
     expect(resolved.headers?.["X-Custom"]).toBe("1");
   });
 
-  it("auto-allows loopback model-provider stream requests", () => {
+  it("does not convert implicit loopback model requests into broad private-network trust", () => {
     const resolved = resolveProviderRequestPolicyConfig({
       provider: "local-agent-proxy",
       api: "openai-completions",
@@ -540,7 +541,8 @@ describe("provider request config", () => {
       transport: "stream",
     });
 
-    expect(resolved.allowPrivateNetwork).toBe(true);
+    expect(resolved.allowPrivateNetwork).toBe(false);
+    expect(resolved.privateNetworkExplicitlyDenied).toBe(false);
   });
 
   it("keeps explicit private-network denial for loopback model requests", () => {
@@ -554,6 +556,7 @@ describe("provider request config", () => {
     });
 
     expect(resolved.allowPrivateNetwork).toBe(false);
+    expect(resolved.privateNetworkExplicitlyDenied).toBe(true);
   });
 
   it("does not auto-allow non-loopback private model-provider hosts", () => {
@@ -566,5 +569,41 @@ describe("provider request config", () => {
     });
 
     expect(resolved.allowPrivateNetwork).toBe(false);
+    expect(resolved.privateNetworkExplicitlyDenied).toBe(false);
+  });
+
+  it.each([
+    {
+      provider: "lmstudio",
+      baseUrl: "http://127.0.0.1:1234/v1",
+      expectedEndpointClass: "local",
+    },
+    {
+      provider: "vllm",
+      baseUrl: "http://192.168.1.20:8000/v1",
+      expectedEndpointClass: "custom",
+    },
+    {
+      provider: "ollama",
+      baseUrl: "http://ollama-host:11434",
+      expectedEndpointClass: "custom",
+    },
+    {
+      provider: "anthropic",
+      api: "anthropic-messages",
+      baseUrl: "http://anthropic-proxy.lan:8080",
+      expectedEndpointClass: "custom",
+    },
+  ])("classifies $provider configured baseUrl as exact-origin trusted endpoint class", (entry) => {
+    const resolved = resolveProviderRequestPolicyConfig({
+      provider: entry.provider,
+      api: entry.api ?? (entry.provider === "ollama" ? "ollama" : "openai-completions"),
+      baseUrl: entry.baseUrl,
+      capability: "llm",
+      transport: "stream",
+    });
+
+    expect(resolved.policy.endpointClass).toBe(entry.expectedEndpointClass);
+    expect(resolved.privateNetworkExplicitlyDenied).toBe(false);
   });
 });

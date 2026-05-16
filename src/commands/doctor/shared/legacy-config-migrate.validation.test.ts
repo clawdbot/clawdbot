@@ -62,7 +62,7 @@ describe("legacy config migrate validation", () => {
 
     expect(res.partiallyValid).toBe(true);
     expect(res.changes).toStrictEqual([
-      "Removed agents.defaults.llm; model idle timeout now follows models.providers.<id>.timeoutSeconds.",
+      "Removed agents.defaults.llm; model idle timeout now follows models.providers.<id>.timeoutSeconds within the agent/run timeout ceiling.",
       "Migration applied; other validation issues remain — run doctor to review.",
     ]);
     expect(res.config?.agents?.defaults).toEqual({

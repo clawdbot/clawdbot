@@ -141,6 +141,10 @@ vi.mock("./server-methods-list.js", () => ({
   listGatewayMethods: () => ["ping"],
 }));
 
+vi.mock("./methods/core-descriptors.js", () => ({
+  listCoreGatewayMethodNames: () => ["ping", "config.openFile"],
+}));
+
 vi.mock("./server-methods.js", () => ({
   coreGatewayHandlers: {},
 }));
@@ -284,8 +288,12 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
     const startupInput = firstCallArg<{
       activationSourceConfig?: OpenClawConfig;
       cfg?: OpenClawConfig;
+      baseMethods?: string[];
+      coreGatewayMethodNames?: string[];
     }>(loadGatewayStartupPlugins);
     expect(startupInput.activationSourceConfig).toBe(sourceConfig);
+    expect(startupInput.baseMethods).toEqual(["ping"]);
+    expect(startupInput.coreGatewayMethodNames).toEqual(["ping", "config.openFile"]);
     expect(startupInput.cfg?.channels?.telegram?.enabled).toBe(true);
     expect(startupInput.cfg?.channels?.telegram?.dmPolicy).toBe("pairing");
     expect(startupInput.cfg?.channels?.telegram?.groupPolicy).toBe("allowlist");

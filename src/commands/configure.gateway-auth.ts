@@ -104,6 +104,12 @@ function resolveSingleConfiguredProvider(cfg: OpenClawConfig): string | undefine
   return configuredProviders.length === 1 ? configuredProviders[0] : undefined;
 }
 
+function resolveProviderFromModelRef(model: string | undefined): string | undefined {
+  const trimmed = model?.trim();
+  const slashIndex = trimmed?.indexOf("/") ?? -1;
+  return slashIndex > 0 ? trimmed?.slice(0, slashIndex) : undefined;
+}
+
 function resolveConfiguredProviderFromAuthChange(params: {
   before: OpenClawConfig;
   after: OpenClawConfig;
@@ -210,7 +216,8 @@ export async function promptAuthConfig(
         allowKeep: true,
         ignoreAllowlist: true,
         includeProviderPluginSetups: false,
-        loadCatalog: false,
+        loadCatalog: true,
+        browseCatalogOnDemand: true,
         preferredProvider,
         workspaceDir: resolveDefaultAgentWorkspaceDir(),
         runtime,
@@ -220,6 +227,7 @@ export async function promptAuthConfig(
       }
       if (modelSelection.model) {
         next = applyPrimaryModel(next, modelSelection.model);
+        preferredProvider = resolveProviderFromModelRef(modelSelection.model) ?? preferredProvider;
       }
       break;
     }

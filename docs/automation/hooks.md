@@ -133,7 +133,32 @@ lifecycle, not an agent-finalization gate. Plugins that need to inspect a
 natural final answer and ask the agent for one more pass should use the typed
 plugin hook `before_agent_finalize` instead. See [Plugin hooks](/plugins/hooks).
 
-**Gateway lifecycle events**: `gateway:shutdown` includes `reason` and `restartExpectedMs` and fires when gateway shutdown begins. `gateway:pre-restart` includes the same context but only fires when shutdown is part of an expected restart and a finite `restartExpectedMs` value is supplied. During shutdown, each lifecycle hook wait is best-effort and bounded so shutdown continues if a handler stalls.
+**Gateway lifecycle events**: `gateway:shutdown` includes `reason` and `restartExpectedMs` and fires when gateway shutdown begins. `gateway:pre-restart` includes the same context but only fires when shutdown is part of an expected restart and a finite `restartExpectedMs` value is supplied. During shutdown, each lifecycle hook wait is best-effort and bounded so shutdown continues if a handler stalls. The default wait budget is 5 seconds for `gateway:shutdown` and 10 seconds for `gateway:pre-restart`.
+
+Use `gateway:pre-restart` for short restart notices while channels are still available:
+
+```typescript
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
+
+export default async function handler(event) {
+  if (event.type !== "gateway" || event.action !== "pre-restart") {
+    return;
+  }
+
+  const restartInSeconds = Math.ceil(event.context.restartExpectedMs / 1000);
+  await execFileAsync("openclaw", [
+    "system",
+    "event",
+    "--mode",
+    "now",
+    "--text",
+    `Gateway restarting in ~${restartInSeconds}s (${event.context.reason}). Checkpoint now.`,
+  ]);
+}
+```
 
 Between the `gateway:shutdown` (or `gateway:pre-restart`) event and the rest of the shutdown sequence, the gateway also fires a typed `session_end` plugin hook for every session that was still active when the process stopped. The event's `reason` is `shutdown` for a plain SIGTERM/SIGINT stop and `restart` when the close was scheduled as part of an expected restart. This drain is bounded so a slow `session_end` handler cannot block process exit, and sessions that have already been finalized through replace / reset / delete / compaction are skipped to avoid double-firing.
 

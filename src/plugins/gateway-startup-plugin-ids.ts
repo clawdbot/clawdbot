@@ -214,6 +214,28 @@ function manifestOwnsConfiguredSpeechProvider(params: {
   });
 }
 
+function collectConfiguredWebSearchProviderIds(config: OpenClawConfig): ReadonlySet<string> {
+  const search = config.tools?.web?.search;
+  if (search?.enabled === false || typeof search?.provider !== "string") {
+    return new Set();
+  }
+  const providerId = normalizeOptionalLowercaseString(search.provider);
+  return providerId ? new Set([providerId]) : new Set();
+}
+
+function manifestOwnsConfiguredWebSearchProvider(params: {
+  manifest: PluginManifestRecord | undefined;
+  configuredWebSearchProviderIds: ReadonlySet<string>;
+}): boolean {
+  if (params.configuredWebSearchProviderIds.size === 0) {
+    return false;
+  }
+  return (params.manifest?.contracts?.webSearchProviders ?? []).some((providerId) => {
+    const normalized = normalizeOptionalLowercaseString(providerId);
+    return normalized ? params.configuredWebSearchProviderIds.has(normalized) : false;
+  });
+}
+
 function listModelProviderRefs(value: unknown): string[] {
   if (typeof value === "string") {
     return [value];
@@ -431,6 +453,52 @@ function canStartConfiguredSpeechProviderPlugin(params: {
     activationSource: params.activationSource,
   });
   return activationState.enabled && activationState.explicitlyEnabled;
+}
+
+function canStartConfiguredWebSearchProviderPlugin(params: {
+  plugin: InstalledPluginIndexRecord;
+  manifest: PluginManifestRecord | undefined;
+  config: OpenClawConfig;
+  pluginsConfig: ReturnType<typeof normalizePluginsConfigWithRegistry>;
+  activationSource: {
+    plugins: ReturnType<typeof normalizePluginsConfigWithRegistry>;
+    rootConfig?: OpenClawConfig;
+  };
+  configuredWebSearchProviderIds: ReadonlySet<string>;
+  platform?: NodeJS.Platform;
+}): boolean {
+  if (
+    !manifestOwnsConfiguredWebSearchProvider({
+      manifest: params.manifest,
+      configuredWebSearchProviderIds: params.configuredWebSearchProviderIds,
+    })
+  ) {
+    return false;
+  }
+  if (!params.pluginsConfig.enabled || !params.activationSource.plugins.enabled) {
+    return false;
+  }
+  if (
+    params.pluginsConfig.deny.includes(params.plugin.pluginId) ||
+    params.activationSource.plugins.deny.includes(params.plugin.pluginId)
+  ) {
+    return false;
+  }
+  if (
+    params.pluginsConfig.entries[params.plugin.pluginId]?.enabled === false ||
+    params.activationSource.plugins.entries[params.plugin.pluginId]?.enabled === false
+  ) {
+    return false;
+  }
+  const activationState = resolveEffectivePluginActivationState({
+    id: params.plugin.pluginId,
+    origin: params.plugin.origin,
+    config: params.pluginsConfig,
+    rootConfig: params.config,
+    enabledByDefault: isPluginEnabledByDefaultForPlatform(params.plugin, params.platform),
+    activationSource: params.activationSource,
+  });
+  return activationState.enabled;
 }
 
 function canStartConfiguredRootPlugin(params: {
@@ -693,6 +761,8 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
   const startupDreamingPluginIds = resolveGatewayStartupDreamingPluginIds(params.config);
   const manifestLookup = createManifestRegistryLookup(params.manifestRegistry);
   const configuredSpeechProviderIds = collectConfiguredSpeechProviderIds(activationSourceConfig);
+  const configuredWebSearchProviderIds =
+    collectConfiguredWebSearchProviderIds(activationSourceConfig);
   const configuredGenerationProviderIds =
     collectConfiguredGenerationProviderIds(activationSourceConfig);
   const normalizePluginId = createPluginRegistryIdNormalizer(params.index, {
@@ -758,6 +828,19 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
           pluginsConfig,
           activationSource,
           configuredSpeechProviderIds,
+          platform: params.platform,
+        })
+      ) {
+        return true;
+      }
+      if (
+        canStartConfiguredWebSearchProviderPlugin({
+          plugin,
+          manifest,
+          config: params.config,
+          pluginsConfig,
+          activationSource,
+          configuredWebSearchProviderIds,
           platform: params.platform,
         })
       ) {

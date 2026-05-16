@@ -59,6 +59,17 @@
       "xiaomi": "static"
     }
   },
+  "providerEndpoints": [
+    {
+      "endpointClass": "xiaomi-native",
+      "hosts": [
+        "api.xiaomimimo.com",
+        "token-plan-ams.xiaomimimo.com",
+        "token-plan-cn.xiaomimimo.com",
+        "token-plan-sgp.xiaomimimo.com"
+      ]
+    }
+  ],
   "contracts": {
     "speechProviders": ["xiaomi"]
   },

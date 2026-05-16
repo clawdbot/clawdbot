@@ -1052,35 +1052,40 @@ function validateConfigObjectWithPluginsBase(
     ].toSorted((left, right) => left.localeCompare(right));
   };
 
+  const hasPluginEvidenceForWebSearchProvider = (
+    ...pluginOrProviderIds: readonly string[]
+  ): boolean => {
+    const candidateIds = new Set(
+      pluginOrProviderIds.map((id) => normalizePluginId(id)).filter((id) => id.length > 0),
+    );
+    if (candidateIds.size === 0) {
+      return false;
+    }
+    const matches = (pluginId: string) => candidateIds.has(normalizePluginId(pluginId));
+    const pluginConfig = config.plugins;
+    if (Array.isArray(pluginConfig?.allow) && pluginConfig.allow.some(matches)) {
+      return true;
+    }
+    if (isRecord(pluginConfig?.entries) && Object.keys(pluginConfig.entries).some(matches)) {
+      return true;
+    }
+    if (isRecord(pluginConfig?.installs) && Object.keys(pluginConfig.installs).some(matches)) {
+      return true;
+    }
+    for (const pluginId of candidateIds) {
+      if (ensureInstalledPluginRecordIds().has(pluginId)) {
+        return true;
+      }
+    }
+    return false;
+  };
+
   const hasStalePluginEvidenceForUnknownWebSearchProvider = (providerId: string): boolean => {
     const normalizedProviderId = normalizePluginId(providerId);
     if (!normalizedProviderId || ensureKnownIds().has(normalizedProviderId)) {
       return false;
     }
-    const pluginConfig = config.plugins;
-    if (
-      Array.isArray(pluginConfig?.allow) &&
-      pluginConfig.allow.some((pluginId) => normalizePluginId(pluginId) === normalizedProviderId)
-    ) {
-      return true;
-    }
-    if (
-      isRecord(pluginConfig?.entries) &&
-      Object.keys(pluginConfig.entries).some(
-        (pluginId) => normalizePluginId(pluginId) === normalizedProviderId,
-      )
-    ) {
-      return true;
-    }
-    if (
-      isRecord(pluginConfig?.installs) &&
-      Object.keys(pluginConfig.installs).some(
-        (pluginId) => normalizePluginId(pluginId) === normalizedProviderId,
-      )
-    ) {
-      return true;
-    }
-    return ensureInstalledPluginRecordIds().has(normalizedProviderId);
+    return hasPluginEvidenceForWebSearchProvider(providerId);
   };
 
   const validateWebSearchProvider = () => {
@@ -1102,11 +1107,19 @@ function validateConfigObjectWithPluginsBase(
       (entry) => entry.provider.id === trimmed,
     );
     if (installCatalogEntry) {
-      issues.push({
+      const issue = {
         path,
         message: `web_search provider is not available: ${trimmed} (install or enable plugin "${installCatalogEntry.pluginId}", then run openclaw doctor --fix)`,
         allowedValues: collectKnownWebSearchProviderIds(),
-      });
+      };
+      if (hasPluginEvidenceForWebSearchProvider(trimmed, installCatalogEntry.pluginId)) {
+        warnings.push({
+          ...issue,
+          message: `web_search provider is not available: ${trimmed} (configured plugin "${installCatalogEntry.pluginId}" is unavailable; Gateway will ignore this optional provider until the plugin is installed/enabled or openclaw doctor --fix repairs the config)`,
+        });
+        return;
+      }
+      issues.push(issue);
       return;
     }
     const allowedValues = collectKnownWebSearchProviderIds();

@@ -270,6 +270,7 @@ import { abortable as abortableWithSignal } from "./abortable.js";
 import { createEmbeddedAgentSessionWithResourceLoader } from "./attempt-session.js";
 import {
   applyEmbeddedAttemptToolsAllow,
+  mergeForcedEmbeddedAttemptToolsAllow,
   resolveEmbeddedAttemptToolConstructionPlan,
   shouldCreateBundleLspRuntimeForAttempt,
   shouldCreateBundleMcpRuntimeForAttempt,
@@ -989,10 +990,18 @@ export async function runEmbeddedAttempt(
       });
     };
     const corePluginToolStages = createEmbeddedRunStageTracker();
+    const toolsAllowWithForcedRuntimeTools = mergeForcedEmbeddedAttemptToolsAllow(
+      params.toolsAllow,
+      {
+        forceMessageTool:
+          params.forceMessageTool === true ||
+          params.sourceReplyDeliveryMode === "message_tool_only",
+      },
+    );
     const toolConstructionPlan = resolveEmbeddedAttemptToolConstructionPlan({
       disableTools: params.disableTools,
       isRawModelRun,
-      toolsAllow: params.toolsAllow,
+      toolsAllow: toolsAllowWithForcedRuntimeTools,
     });
     const toolsEnabled = supportsModelTools(params.model);
     const codeModeConfig = resolveCodeModeConfig(params.config);
@@ -1010,9 +1019,14 @@ export async function runEmbeddedAttempt(
       !codeModeControlsEnabledForRun &&
       resolveToolSearchConfig(params.config).enabled;
     const effectiveToolsAllow =
-      toolSearchControlsEnabledForRun && params.toolsAllow
-        ? [...new Set([...params.toolsAllow, ...TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES])]
-        : params.toolsAllow;
+      toolSearchControlsEnabledForRun && toolsAllowWithForcedRuntimeTools
+        ? [
+            ...new Set([
+              ...toolsAllowWithForcedRuntimeTools,
+              ...TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES,
+            ]),
+          ]
+        : toolsAllowWithForcedRuntimeTools;
     const shouldConstructTools =
       toolConstructionPlan.constructTools ||
       toolSearchControlsEnabledForRun ||
@@ -1097,6 +1111,7 @@ export async function runEmbeddedAttempt(
             requireExplicitMessageTarget:
               params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
             sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+            inboundTurnKind: params.currentTurnKind,
             disableMessageTool: params.disableMessageTool,
             forceMessageTool: params.forceMessageTool,
             enableHeartbeatTool: params.enableHeartbeatTool,
@@ -1740,6 +1755,8 @@ export async function runEmbeddedAttempt(
             : undefined,
         allowedToolNames: replayAllowedToolNames,
         suppressNextUserMessagePersistence: params.suppressNextUserMessagePersistence,
+        suppressTranscriptOnlyAssistantPersistence:
+          params.suppressTranscriptOnlyAssistantPersistence,
         onUserMessagePersisted: (message) => {
           params.onUserMessagePersisted?.(message);
         },
@@ -2888,6 +2905,7 @@ export async function runEmbeddedAttempt(
         },
         isStreaming: () => activeSession.isStreaming,
         isCompacting: () => subscription.isCompacting(),
+        sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
         cancel: () => {
           abortRun();
         },
@@ -3245,6 +3263,9 @@ export async function runEmbeddedAttempt(
           const promptSubmission = resolveRuntimeContextPromptParts({
             effectivePrompt,
             transcriptPrompt: effectiveTranscriptPrompt,
+            emptyTranscriptMode: params.suppressNextUserMessagePersistence
+              ? "model-prompt"
+              : "runtime-event",
           });
           const promptForModel = buildCurrentTurnPrompt({
             context: promptSubmission.runtimeOnly ? undefined : params.currentTurnContext,
@@ -3270,6 +3291,15 @@ export async function runEmbeddedAttempt(
                 appendSystemContext: buildRuntimeContextSystemContext(runtimeContextForHook),
               })
             : undefined;
+          if (systemPromptReport) {
+            systemPromptReport.currentTurn = {
+              ...(params.currentTurnKind ? { kind: params.currentTurnKind } : {}),
+              promptChars: promptForModel.length,
+              runtimeContextChars: promptSubmission.runtimeOnly
+                ? (runtimeSystemContext?.length ?? 0)
+                : (runtimeContextForHook?.length ?? 0),
+            };
+          }
           const systemPromptForHook = runtimeSystemPromptForHook ?? systemPromptText;
 
           const persistBlockedBeforeAgentRun = async (block: {

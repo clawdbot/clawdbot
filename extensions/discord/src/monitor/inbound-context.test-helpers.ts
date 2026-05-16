@@ -25,7 +25,7 @@ export function buildFinalizedDiscordDirectInboundContext() {
     SenderUsername: "alice",
     GroupSystemPrompt: groupSystemPrompt,
     OwnerAllowFrom: ownerAllowFrom,
-    UntrustedContext: untrustedContext,
+    UntrustedStructuredContext: untrustedContext,
     Provider: "discord",
     Surface: "discord",
     WasMentioned: false,

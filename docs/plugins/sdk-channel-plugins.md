@@ -197,7 +197,7 @@ surface.
 For setup specifically:
 
 - `openclaw/plugin-sdk/setup-runtime` covers the runtime-safe setup helpers:
-  import-safe setup patch adapters (`createPatchedAccountSetupAdapter`,
+  `createSetupTranslator`, import-safe setup patch adapters (`createPatchedAccountSetupAdapter`,
   `createEnvPatchedAccountSetupAdapter`,
   `createSetupInputPresenceValidator`), lookup-note output,
   `promptResolvedAllowFrom`, `splitSetupEntries`, and the delegated

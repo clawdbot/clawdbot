@@ -40,7 +40,10 @@ export type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
 } from "../agents/pi-embedded-runner/run/types.js";
-export type { ContextEngine as HarnessContextEngine } from "../context-engine/types.js";
+export type {
+  ContextEngine as HarnessContextEngine,
+  ContextEngineProjection,
+} from "../context-engine/types.js";
 export type { CompactEmbeddedPiSessionParams } from "../agents/pi-embedded-runner/compact.js";
 export type { EmbeddedPiCompactResult } from "../agents/pi-embedded-runner/types.js";
 export type { AnyAgentTool } from "../agents/tools/common.js";
@@ -162,7 +165,9 @@ export {
 export { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.js";
 export { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 export {
+  hasBeforeToolCallPolicy,
   isToolWrappedWithBeforeToolCallHook,
+  runBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "../agents/pi-tools.before-tool-call.js";
 export {
@@ -181,6 +186,7 @@ export {
   isActiveHarnessContextEngine,
   runHarnessContextEngineMaintenance,
 } from "../agents/harness/context-engine-lifecycle.js";
+export { resolveContextEngineOwnerPluginId } from "../context-engine/registry.js";
 export {
   runAgentHarnessAfterToolCallHook,
   runAgentHarnessBeforeMessageWriteHook,

@@ -1,3 +1,5 @@
+// Legacy map-helper exports in this facade stay for older plugin consumers.
+// New message-turn code should use createChannelHistoryWindow.
 export {
   applyAccountNameToChannelSection,
   applySetupAccountConfigPatch,
@@ -16,6 +18,7 @@ export {
   type ChatType,
   chunkTextForOutbound,
   clearHistoryEntriesIfEnabled,
+  createChannelHistoryWindow,
   createAccountStatusSink,
   createChannelPairingController,
   createChannelMessageReplyPipeline,

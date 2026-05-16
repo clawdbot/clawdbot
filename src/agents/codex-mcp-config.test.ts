@@ -53,6 +53,26 @@ describe("buildCodexMcpServersConfig", () => {
       },
     });
   });
+
+  it("preserves Codex-specific MCP approval mode metadata", () => {
+    expect(
+      buildCodexMcpServersConfig({
+        mcpServers: {
+          search: {
+            url: "https://mcp.example.com/mcp",
+            codex: {
+              defaultToolsApprovalMode: "prompt",
+            },
+          },
+        },
+      }),
+    ).toEqual({
+      search: {
+        url: "https://mcp.example.com/mcp",
+        default_tools_approval_mode: "prompt",
+      },
+    });
+  });
 });
 
 describe("loadCodexBundleMcpThreadConfig", () => {

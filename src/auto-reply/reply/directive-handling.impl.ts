@@ -4,6 +4,7 @@ import { resolveExecDefaults } from "../../agents/exec-defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import { updateSessionStore } from "../../config/sessions.js";
+import { triggerSessionPatchHook } from "../../gateway/session-patch-hooks.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { applyTraceOverride, applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
@@ -475,6 +476,16 @@ export async function handleDirectiveOnly(
       });
     }
     if (modelSelection && modelSelectionUpdated && sessionKey) {
+      triggerSessionPatchHook({
+        cfg: params.cfg,
+        sessionEntry,
+        sessionKey,
+        patch: {
+          key: sessionKey,
+          model:
+            directives.rawModelDirective ?? `${modelSelection.provider}/${modelSelection.model}`,
+        },
+      });
       // `/model` should retarget queued/future work without interrupting the
       // active run. Refresh queued followups so they pick up the persisted
       // selection once the current turn finishes.

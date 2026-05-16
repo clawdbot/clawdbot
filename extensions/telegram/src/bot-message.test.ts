@@ -138,6 +138,28 @@ describe("telegram bot message processor", () => {
     );
   });
 
+  it("does not send early typing cues for room events", async () => {
+    const sendTyping = vi.fn().mockResolvedValue(undefined);
+    buildTelegramMessageContext.mockResolvedValue(
+      createMessageContext({
+        sendTyping,
+        ctxPayload: {
+          From: "telegram:123",
+          To: "telegram:123",
+          ChatType: "group",
+          RawBody: "ambient",
+          InboundTurnKind: "room_event",
+        },
+      }),
+    );
+
+    const processMessage = createTelegramMessageProcessor(baseDeps);
+    await processSampleMessage(processMessage);
+
+    expect(sendTyping).not.toHaveBeenCalled();
+    expect(dispatchTelegramMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("skips dispatch when no context is produced", async () => {
     buildTelegramMessageContext.mockResolvedValue(null);
     const processMessage = createTelegramMessageProcessor(baseDeps);

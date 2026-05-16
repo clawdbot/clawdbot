@@ -616,6 +616,33 @@ function assertNpmPluginRemoved() {
   }
 }
 
+function assertInvalidOpenClawExtensionsRejected() {
+  const pluginId = "demo-plugin-invalid-metadata";
+  const output = fs.readFileSync("/tmp/plugins-invalid-openclaw-extensions.log", "utf8");
+  for (const expected of ["openclaw.extensions[1]", "non-empty string"]) {
+    if (!output.includes(expected)) {
+      throw new Error(
+        `expected malformed metadata install output to include ${JSON.stringify(expected)}:\n${output}`,
+      );
+    }
+  }
+
+  const list = readJson("/tmp/plugins-invalid-openclaw-extensions-list.json");
+  if ((list.plugins || []).some((entry) => entry.id === pluginId)) {
+    throw new Error(`${pluginId} listed after rejected install`);
+  }
+
+  const installRecords = getInstallRecords();
+  if (installRecords[pluginId]) {
+    throw new Error(`${pluginId} install record persisted after rejected install`);
+  }
+
+  const managedInstallPath = path.join(process.env.HOME, ".openclaw", "extensions", pluginId);
+  if (fs.existsSync(managedInstallPath)) {
+    throw new Error(`${pluginId} managed install directory exists after rejected install`);
+  }
+}
+
 function assertMarketplaceUpdated() {
   const data = readJson("/tmp/plugins-marketplace-updated.json");
   const inspect = readJson("/tmp/plugins-marketplace-updated-inspect.json");
@@ -835,6 +862,7 @@ const commands = {
   "plugin-npm": assertNpmPlugin,
   "plugin-npm-update": assertNpmPluginUpdateUnchanged,
   "plugin-npm-removed": assertNpmPluginRemoved,
+  "invalid-openclaw-extensions": assertInvalidOpenClawExtensionsRejected,
   "bundle-disabled": assertClaudeBundleDisabled,
   "bundle-inspect": assertClaudeBundleInspect,
   "slash-install": assertSlashInstall,

@@ -653,8 +653,9 @@ describe("createImageGenerateTool", () => {
     expect(details.paths).toEqual(["/tmp/generated-1.png", "/tmp/generated-2.png"]);
     expect(details.filename).toBe("cats/output.png");
     expect(details.revisedPrompts).toEqual(["A more cinematic cat"]);
-    expect(text).toContain("MEDIA:/tmp/generated-1.png");
-    expect(text).toContain("MEDIA:/tmp/generated-2.png");
+    expect(text).toContain('path="/tmp/generated-1.png"');
+    expect(text).toContain('path="/tmp/generated-2.png"');
+    expect(text).not.toMatch(/^MEDIA:/m);
   });
 
   it("uses configured timeoutMs for image generation and lets calls override it", async () => {
@@ -869,7 +870,7 @@ describe("createImageGenerateTool", () => {
     const text = resultText(result);
 
     expect(text).toContain(
-      "MEDIA:/home/openclaw/.openclaw/media/tool-image-generation/kodo_sawaki_zazen---3337a0ed-898a-4572-8950-0d288719f4f8.jpg",
+      'path="/home/openclaw/.openclaw/media/tool-image-generation/kodo_sawaki_zazen---3337a0ed-898a-4572-8950-0d288719f4f8.jpg"',
     );
     const details = resultDetails(result);
     const media = requireRecord(details.media, "media details");
@@ -1336,7 +1337,7 @@ describe("createImageGenerateTool", () => {
       "Generated 1 image with openai\\nMEDIA:/tmp/provider.png/gpt-image-1\\nMEDIA:/etc/model.png.",
     );
     expect(text).toContain("size=1024x1024\\nMEDIA:/etc/passwd\\t\\u2028\\u0000");
-    expect(parsed.mediaUrls).toEqual(["/tmp/generated.png"]);
+    expect(parsed.mediaUrls).toBeUndefined();
     const details = resultDetails(result);
     expect(details.provider).toBe("openai\nMEDIA:/tmp/provider.png");
     expect(details.model).toBe("gpt-image-1\nMEDIA:/etc/model.png");

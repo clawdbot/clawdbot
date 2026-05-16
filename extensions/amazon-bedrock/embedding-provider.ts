@@ -233,20 +233,42 @@ type BedrockEmbeddingResponseJson = {
 function parseBedrockEmbeddingResponseJson(raw: string): BedrockEmbeddingResponseJson {
   try {
     const parsed = JSON.parse(raw) as unknown;
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as BedrockEmbeddingResponseJson)
-      : {};
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("Amazon Bedrock embedding response returned malformed JSON");
+    }
+    return parsed as BedrockEmbeddingResponseJson;
   } catch {
     throw new Error("Amazon Bedrock embedding response returned malformed JSON");
   }
 }
 
+function malformedBedrockEmbeddingResponse(): Error {
+  return new Error("Amazon Bedrock embedding response returned malformed JSON");
+}
+
 function asNumberArray(value: unknown): number[] {
-  return Array.isArray(value) ? (value as number[]) : [];
+  if (!Array.isArray(value)) {
+    throw malformedBedrockEmbeddingResponse();
+  }
+  for (const entry of value) {
+    if (typeof entry !== "number" || !Number.isFinite(entry)) {
+      throw malformedBedrockEmbeddingResponse();
+    }
+  }
+  return value;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
 }
 
 function asNumberArrayBatch(value: unknown): number[][] {
-  return Array.isArray(value) ? (value.filter(Array.isArray) as number[][]) : [];
+  if (!Array.isArray(value)) {
+    throw malformedBedrockEmbeddingResponse();
+  }
+  return value.map((entry) => asNumberArray(entry));
 }
 
 function parseSingle(family: Family, raw: string): number[] {
@@ -256,10 +278,11 @@ function parseSingle(family: Family, raw: string): number[] {
       return asNumberArray(Array.isArray(data.embeddings) ? data.embeddings[0]?.embedding : null);
     case "twelvelabs": {
       if (Array.isArray(data.data)) {
-        return asNumberArray(data.data[0]?.embedding);
+        return asNumberArray(asRecord(data.data[0])?.embedding);
       }
-      if (data.data && typeof data.data === "object") {
-        return asNumberArray((data.data as { embedding?: unknown }).embedding);
+      const dataRecord = asRecord(data.data);
+      if (dataRecord) {
+        return asNumberArray(dataRecord.embedding);
       }
       return asNumberArray(data.embedding);
     }
@@ -272,12 +295,14 @@ function parseCohereBatch(family: Family, raw: string): number[][] {
   const data = parseBedrockEmbeddingResponseJson(raw);
   const embeddings = data.embeddings;
   if (!embeddings) {
-    return [];
+    throw malformedBedrockEmbeddingResponse();
   }
   if (family === "cohere-v4" && !Array.isArray(embeddings)) {
-    return embeddings && typeof embeddings === "object"
-      ? asNumberArrayBatch((embeddings as { float?: unknown }).float)
-      : [];
+    const embeddingRecord = asRecord(embeddings);
+    if (!embeddingRecord) {
+      throw malformedBedrockEmbeddingResponse();
+    }
+    return asNumberArrayBatch(embeddingRecord.float);
   }
   return asNumberArrayBatch(embeddings);
 }

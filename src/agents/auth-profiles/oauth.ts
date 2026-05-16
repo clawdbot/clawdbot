@@ -19,7 +19,10 @@ import { refreshChutesTokens } from "../chutes-oauth.js";
 import { log } from "./constants.js";
 import { resolveTokenExpiryState } from "./credential-state.js";
 import { formatAuthDoctorHint } from "./doctor.js";
-import { readManagedExternalCliCredential } from "./external-cli-sync.js";
+import {
+  readExternalCliFallbackCredential,
+  readManagedExternalCliCredential,
+} from "./external-cli-sync.js";
 import { createOAuthManager, OAuthManagerRefreshError } from "./oauth-manager.js";
 import { assertNoOAuthSecretRefPolicyViolations } from "./policy.js";
 import { suggestOAuthProfileIdForLegacyDefault } from "./repair.js";
@@ -184,6 +187,14 @@ const oauthManager = createOAuthManager({
       profileId,
       credential,
     }),
+  readFallbackCredential: ({ profileId, credential }) =>
+    credential.provider === "openai-codex"
+      ? readExternalCliFallbackCredential({
+          profileId,
+          credential,
+          allowKeychainPrompt: false,
+        })
+      : null,
   isRefreshTokenReusedError,
 });
 

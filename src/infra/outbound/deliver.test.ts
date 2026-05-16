@@ -2604,13 +2604,12 @@ describe("deliverOutboundPayloads", () => {
     expect(queuedDelivery?.renderedBatchPlan).toBe(renderedBatchPlan);
   });
 
-  it("applies silent-reply rewrite policy from the outbound session", async () => {
+  it("suppresses direct silent replies from the outbound session", async () => {
     const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m-silent", roomId: "!room" });
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
           silentReply: {
-            direct: "disallow",
             group: "allow",
             internal: "allow",
           },
@@ -2630,9 +2629,7 @@ describe("deliverOutboundPayloads", () => {
       },
     });
 
-    expect(sendMatrix).toHaveBeenCalledTimes(1);
-    const deliveredText = requireMatrixSendCall(sendMatrix)[1];
-    expect(deliveredText).toBe("No extra update from me.");
+    expect(sendMatrix).not.toHaveBeenCalled();
   });
 
   it("keeps allowed group silent replies silent during outbound delivery", async () => {

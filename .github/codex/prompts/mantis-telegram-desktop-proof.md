@@ -2,10 +2,9 @@
 
 You are Mantis running native Telegram Desktop visual proof for an OpenClaw PR.
 
-Goal: inspect the pull request, decide the best Telegram-visible behavior to
-prove, run before/after native Telegram Desktop sessions, iterate until the GIFs
-are visually good, and leave a Mantis evidence manifest for the workflow to
-publish.
+Goal: inspect the pull request, decide whether it has an honest
+Telegram-visible before/after behavior, then either run native Telegram Desktop
+proof or leave a no-visual-proof manifest for the workflow to publish.
 
 Hard limits:
 
@@ -16,6 +15,9 @@ Hard limits:
 - Do not use fixed `/status` proof unless it genuinely proves the PR.
 - Do not finish with tiny, cropped-wrong, off-bottom, or sidebar-heavy GIFs.
 - Do not invent a generic proof. The proof must match the PR behavior.
+- Do not force GIFs for internal-only, workflow-only, test-only, docs-only, or
+  otherwise non-visual PRs. A no-visual-proof manifest is a successful outcome
+  when GIFs would be misleading.
 
 Inputs are provided as environment variables:
 
@@ -36,10 +38,45 @@ Required workflow:
 1. Read `.agents/skills/telegram-crabbox-e2e-proof/SKILL.md`.
 2. Inspect the PR with `gh pr view "$MANTIS_PR_NUMBER"` and
    `gh pr diff "$MANTIS_PR_NUMBER"`.
-3. Decide what Telegram message, mock model response, command, callback, button,
+3. Decide whether the PR has a visibly reproducible Telegram Desktop
+   before/after. If it does not, write
+   `${MANTIS_OUTPUT_DIR}/mantis-evidence.json` with `comparison.pass: true`, no
+   artifacts, and a summary that starts with
+   `Mantis did not generate before/after GIFs because`. Include the concrete
+   reason in the summary. Use this manifest shape and do not create worktrees
+   or start Crabbox for this case:
+
+   ```json
+   {
+     "schemaVersion": 1,
+     "id": "telegram-desktop-proof",
+     "title": "Mantis Telegram Desktop Proof",
+     "summary": "Mantis did not generate before/after GIFs because <reason>.",
+     "scenario": "telegram-desktop-proof",
+     "comparison": {
+       "baseline": {
+         "ref": "<BASELINE_REF>",
+         "sha": "<BASELINE_SHA>",
+         "expected": "no visible Telegram Desktop delta",
+         "status": "skipped"
+       },
+       "candidate": {
+         "ref": "<CANDIDATE_REF>",
+         "sha": "<CANDIDATE_SHA>",
+         "expected": "no visible Telegram Desktop delta",
+         "status": "skipped",
+         "fixed": true
+       },
+       "pass": true
+     },
+     "artifacts": []
+   }
+   ```
+
+4. Decide what Telegram message, mock model response, command, callback, button,
    media, or sequence best proves the PR. Use `MANTIS_INSTRUCTIONS` as extra
    maintainer guidance, not as a replacement for reading the PR.
-4. Create detached worktrees under
+5. Create detached worktrees under
    `.artifacts/qa-e2e/mantis/telegram-desktop-proof-worktrees/baseline` and
    `.artifacts/qa-e2e/mantis/telegram-desktop-proof-worktrees/candidate`, then
    install and build each worktree with the repo's normal `pnpm` commands.
@@ -49,7 +86,7 @@ Required workflow:
    runtime commands. The candidate SUT may receive only the proof runner's
    short-lived Telegram bot token, generated local config/state paths, and mock
    model key needed for this isolated proof.
-5. In each worktree, run the real-user Telegram Crabbox proof flow from the
+6. In each worktree, run the real-user Telegram Crabbox proof flow from the
    skill with `$OPENCLAW_TELEGRAM_USER_PROOF_CMD`; do not run
    `pnpm qa:telegram-user:crabbox` directly. The proof command comes from the
    trusted workflow checkout while the current directory controls which
@@ -59,11 +96,11 @@ Required workflow:
    install, or patch replacement proof tooling during the run. Use the same
    proof idea for baseline and candidate. You may iterate and rerun if the
    visual result is not convincing.
-6. Open Telegram Desktop directly to the newest relevant message with the
+7. Open Telegram Desktop directly to the newest relevant message with the
    runner `view` command before finishing each recording. Keep the chat scrolled
    to the bottom so new proof messages appear in-frame.
-7. Finish each session with `--preview-crop telegram-window`.
-8. Build `${MANTIS_OUTPUT_DIR}/mantis-evidence.json` with:
+8. Finish each session with `--preview-crop telegram-window`.
+9. Build `${MANTIS_OUTPUT_DIR}/mantis-evidence.json` with:
 
    ```bash
    node scripts/mantis/build-telegram-desktop-proof-evidence.mjs \
@@ -93,6 +130,8 @@ Visual acceptance:
 Expected final state:
 
 - `${MANTIS_OUTPUT_DIR}/mantis-evidence.json` exists.
-- The manifest contains paired `motionPreview` artifacts labeled `Main` and
-  `This PR`.
+- Visual proof manifests contain paired `motionPreview` artifacts labeled
+  `Main` and `This PR`.
+- No-visual-proof manifests contain no artifacts and have `comparison.pass:
+true`.
 - The worktree can be dirty only under `.artifacts/`.

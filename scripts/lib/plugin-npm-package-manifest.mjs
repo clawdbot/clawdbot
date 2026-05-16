@@ -31,6 +31,68 @@ function packageRelativePathExists(packageDir, relativePath) {
   return fs.existsSync(path.join(packageDir, relativePath));
 }
 
+function normalizePackPath(value) {
+  return value.trim().replaceAll("\\", "/").replace(/^\.\//u, "");
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[|\\{}()[\]^$+?.]/gu, "\\$&");
+}
+
+function packFilePatternMatchesPath(pattern, relativePath) {
+  const normalizedPattern = normalizePackPath(pattern).replace(/^!/u, "");
+  const normalizedPath = normalizePackPath(relativePath);
+  if (!normalizedPattern || !normalizedPath) {
+    return false;
+  }
+  if (normalizedPattern === normalizedPath) {
+    return true;
+  }
+
+  let source = "";
+  for (let index = 0; index < normalizedPattern.length; index += 1) {
+    const char = normalizedPattern[index];
+    const next = normalizedPattern[index + 1];
+    const afterNext = normalizedPattern[index + 2];
+    if (char === "*" && next === "*" && afterNext === "/") {
+      source += "(?:.*/)?";
+      index += 2;
+      continue;
+    }
+    if (char === "*" && next === "*") {
+      source += ".*";
+      index += 1;
+      continue;
+    }
+    if (char === "*") {
+      source += "[^/]*";
+      continue;
+    }
+    source += escapeRegExp(char ?? "");
+  }
+  return new RegExp(`^${source}$`, "u").test(normalizedPath);
+}
+
+function assertPackageFilesDoNotExcludeRequiredRuntimeArtifacts(plan) {
+  const fileRules = Array.isArray(plan.packageJson.files)
+    ? plan.packageJson.files.filter((entry) => typeof entry === "string")
+    : [];
+  const exclusions = fileRules.filter((entry) => normalizePackPath(entry).startsWith("!"));
+  if (exclusions.length === 0) {
+    return;
+  }
+
+  for (const requiredPath of listPluginNpmRuntimeBuildOutputs(plan)) {
+    for (const exclusion of exclusions) {
+      if (packFilePatternMatchesPath(exclusion, requiredPath)) {
+        throw new Error(
+          `package file rule '${exclusion}' excludes required package-local runtime file '${requiredPath}' for ${plan.pluginDir}. Remove the negation or publish would advertise a missing runtime entry.`,
+        );
+      }
+    }
+  }
+}
+
 function assertPluginNpmRuntimeBuildExists(plan) {
   const missing = listPluginNpmRuntimeBuildOutputs(plan).filter(
     (runtimePath) => !packageRelativePathExists(plan.packageDir, runtimePath.replace(/^\.\//u, "")),
@@ -43,6 +105,7 @@ function assertPluginNpmRuntimeBuildExists(plan) {
       ].join("\n"),
     );
   }
+  assertPackageFilesDoNotExcludeRequiredRuntimeArtifacts(plan);
 }
 
 export function resolveAugmentedPluginNpmPackageJson(params) {

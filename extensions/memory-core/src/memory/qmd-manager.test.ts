@@ -493,6 +493,7 @@ describe("QmdMemoryManager", () => {
     const initialUpdateCalls = spawnMock.mock.calls.filter((call) => call[1]?.[0] === "update");
     expect(initialUpdateCalls).toHaveLength(0);
     const watchOptions = firstWatchOptions();
+    expect(watchOptions).not.toHaveProperty("awaitWriteFinish");
     expect(watchOptions.ignored?.(path.join(workspaceDir, "node_modules", "pkg", "note.md"))).toBe(
       true,
     );
@@ -502,7 +503,14 @@ describe("QmdMemoryManager", () => {
     expect(watchOptions.ignored?.(path.join(workspaceDir, "build", "note.md"))).toBe(true);
     expect(watchOptions.ignored?.(path.join(workspaceDir, "notes.md"))).toBe(false);
 
-    watcher.emit("change", path.join(workspaceDir, "notes.md"));
+    const notesPath = path.join(workspaceDir, "notes.md");
+    await fs.writeFile(notesPath, "hello");
+    const initialStats = await fs.stat(notesPath);
+    watcher.emit("change", notesPath, {
+      size: initialStats.size,
+      mtimeMs: initialStats.mtimeMs,
+      isDirectory: () => false,
+    });
     expect(manager.status().dirty).toBe(true);
 
     await vi.advanceTimersByTimeAsync(25);
@@ -510,6 +518,55 @@ describe("QmdMemoryManager", () => {
     const updateCalls = spawnMock.mock.calls.filter((call) => call[1]?.[0] === "update");
     expect(updateCalls).toHaveLength(1);
     expect(manager.status().dirty).toBe(false);
+
+    await manager.close();
+  });
+
+  it("delays qmd watch sync until changed file stats settle", async () => {
+    vi.useFakeTimers();
+    cfg = {
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          memorySearch: {
+            provider: "openai",
+            model: "mock-embed",
+            store: { path: path.join(workspaceDir, "index.sqlite"), vector: { enabled: false } },
+            sync: { watch: true, watchDebounceMs: 25, onSessionStart: false, onSearch: false },
+          },
+        },
+        list: [{ id: agentId, default: true, workspace: workspaceDir }],
+      },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 0, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    const notesPath = path.join(workspaceDir, "notes.md");
+    await fs.writeFile(notesPath, "hello");
+    const initialStats = await fs.stat(notesPath);
+    const { manager } = await createManager({ mode: "full" });
+    const watcher = watchMock.mock.results[0]?.value as {
+      emit: (event: string, ...args: unknown[]) => boolean;
+    };
+
+    watcher.emit("change", notesPath, {
+      size: initialStats.size,
+      mtimeMs: initialStats.mtimeMs,
+      isDirectory: () => false,
+    });
+    await fs.writeFile(notesPath, "hello updated");
+
+    await vi.advanceTimersByTimeAsync(25);
+    expect(spawnMock.mock.calls.filter((call) => call[1]?.[0] === "update")).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(25);
+    expect(spawnMock.mock.calls.filter((call) => call[1]?.[0] === "update")).toHaveLength(1);
 
     await manager.close();
   });

@@ -35,11 +35,12 @@ export const BUILD_ALL_STEPS = [
         "tsconfig.json",
         "tsconfig.plugin-sdk.dts.json",
         "src/plugin-sdk",
+        "packages/memory-host-sdk/src",
         "src/types",
         "src/video-generation/dashscope-compatible.ts",
         "src/video-generation/types.ts",
       ],
-      outputs: ["dist/plugin-sdk/.tsbuildinfo", "dist/plugin-sdk/src"],
+      outputs: ["dist/plugin-sdk/.tsbuildinfo", "dist/plugin-sdk/packages", "dist/plugin-sdk/src"],
     },
   },
   {

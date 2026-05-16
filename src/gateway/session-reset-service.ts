@@ -23,6 +23,10 @@ import {
 } from "../config/sessions.js";
 import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../config/sessions/paths.js";
 import { resolveResetPreservedSelection } from "../config/sessions/reset-preserved-selection.js";
+import {
+  canonicalizeAbsoluteSessionFilePath,
+  rewriteSessionFileForNewSessionId,
+} from "../config/sessions/session-file-rotation.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
@@ -57,6 +61,35 @@ import {
 } from "./session-utils.js";
 
 const ACP_RUNTIME_CLEANUP_TIMEOUT_MS = 15_000;
+
+function resolveResetSessionFile(params: {
+  nextSessionId: string;
+  currentEntry?: SessionEntry;
+  storePath: string;
+  agentId: string;
+}): string {
+  const currentEntry = params.currentEntry;
+  const rewrittenSessionFile = currentEntry?.sessionId
+    ? rewriteSessionFileForNewSessionId({
+        sessionFile: currentEntry.sessionFile,
+        previousSessionId: currentEntry.sessionId,
+        nextSessionId: params.nextSessionId,
+      })
+    : undefined;
+  const normalizedRewrittenSessionFile =
+    rewrittenSessionFile && path.isAbsolute(rewrittenSessionFile)
+      ? canonicalizeAbsoluteSessionFilePath(rewrittenSessionFile)
+      : rewrittenSessionFile;
+  const preservedSessionFile = normalizedRewrittenSessionFile ?? currentEntry?.sessionFile;
+  return resolveSessionFilePath(
+    params.nextSessionId,
+    preservedSessionFile ? { sessionFile: preservedSessionFile } : undefined,
+    resolveSessionFilePathOptions({
+      storePath: params.storePath,
+      agentId: params.agentId,
+    }),
+  );
+}
 
 function stripRuntimeModelState(entry?: SessionEntry): SessionEntry | undefined {
   if (!entry) {
@@ -683,14 +716,12 @@ export async function performGatewaySessionReset(params: {
     oldSessionFile = currentEntry?.sessionFile;
     const now = Date.now();
     const nextSessionId = randomUUID();
-    const sessionFile = resolveSessionFilePath(
+    const sessionFile = resolveResetSessionFile({
       nextSessionId,
-      currentEntry?.sessionFile ? { sessionFile: currentEntry.sessionFile } : undefined,
-      resolveSessionFilePathOptions({
-        storePath,
-        agentId: sessionAgentId,
-      }),
-    );
+      currentEntry,
+      storePath,
+      agentId: sessionAgentId,
+    });
     const nextEntry: SessionEntry = {
       sessionId: nextSessionId,
       sessionFile,

@@ -86,6 +86,27 @@ pack_fixture_plugin() {
   tar -czf "$output_tgz" -C "$pack_dir" package
 }
 
+pack_fixture_plugin_with_invalid_extension_entry() {
+  local pack_dir="$1"
+  local output_tgz="$2"
+  local id="$3"
+  local version="$4"
+  local method="$5"
+  local name="$6"
+
+  mkdir -p "$pack_dir/package"
+  write_fixture_plugin "$pack_dir/package" "$id" "$version" "$method" "$name"
+  node --input-type=module - "$pack_dir/package/package.json" <<'NODE'
+import fs from "node:fs";
+
+const packageJsonPath = process.argv[2];
+const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
+packageJson.openclaw.extensions = ["./index.js", " "];
+fs.writeFileSync(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`, "utf8");
+NODE
+  tar -czf "$output_tgz" -C "$pack_dir" package
+}
+
 start_npm_fixture_registry() {
   local package_name="$1"
   local version="$2"

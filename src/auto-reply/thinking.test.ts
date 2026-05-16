@@ -160,6 +160,38 @@ describe("listThinkingLevels", () => {
     expect(listThinkingLevelLabels("demo", "demo-model")).toEqual(["off", "on"]);
   });
 
+  it("treats catalog reasoning=false as an explicit thinking opt-out", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
+      levels: [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }],
+      defaultLevel: "medium",
+    });
+    const catalog = [
+      {
+        provider: "google",
+        id: "gemma-4-26b-a4b-it",
+        name: "Gemma 4 26B",
+        reasoning: false,
+      },
+    ];
+
+    expect(listThinkingLevels("google", "gemma-4-26b-a4b-it", catalog)).toEqual(["off"]);
+    expect(
+      isThinkingLevelSupported({
+        provider: "google",
+        model: "gemma-4-26b-a4b-it",
+        level: "medium",
+        catalog,
+      }),
+    ).toBe(false);
+    expect(
+      resolveThinkingDefaultForModel({
+        provider: "google",
+        model: "gemma-4-26b-a4b-it",
+        catalog,
+      }),
+    ).toBe("off");
+  });
+
   it("passes catalog reasoning into provider thinking profiles for support checks", () => {
     providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(({ context }) => ({
       levels:

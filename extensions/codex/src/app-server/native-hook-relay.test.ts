@@ -13,10 +13,9 @@ describe("Codex native hook relay config", () => {
     });
 
     expect(config).toEqual({
-      "features.codex_hooks": true,
+      "features.hooks": true,
       "hooks.PreToolUse": [
         {
-          matcher: null,
           hooks: [
             {
               type: "command",
@@ -31,7 +30,6 @@ describe("Codex native hook relay config", () => {
       ],
       "hooks.PostToolUse": [
         {
-          matcher: null,
           hooks: [
             {
               type: "command",
@@ -46,7 +44,6 @@ describe("Codex native hook relay config", () => {
       ],
       "hooks.PermissionRequest": [
         {
-          matcher: null,
           hooks: [
             {
               type: "command",
@@ -61,7 +58,6 @@ describe("Codex native hook relay config", () => {
       ],
       "hooks.Stop": [
         {
-          matcher: null,
           hooks: [
             {
               type: "command",
@@ -74,8 +70,43 @@ describe("Codex native hook relay config", () => {
           ],
         },
       ],
+      "hooks.state": {
+        "/<session-flags>/config.toml:pre_tool_use:0:0": {
+          enabled: true,
+          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        },
+        "<session-flags>/config.toml:pre_tool_use:0:0": {
+          enabled: true,
+          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        },
+        "/<session-flags>/config.toml:post_tool_use:0:0": {
+          enabled: true,
+          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        },
+        "<session-flags>/config.toml:post_tool_use:0:0": {
+          enabled: true,
+          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        },
+        "/<session-flags>/config.toml:permission_request:0:0": {
+          enabled: true,
+          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        },
+        "<session-flags>/config.toml:permission_request:0:0": {
+          enabled: true,
+          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        },
+        "/<session-flags>/config.toml:stop:0:0": {
+          enabled: true,
+          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        },
+        "<session-flags>/config.toml:stop:0:0": {
+          enabled: true,
+          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        },
+      },
     });
     expect(JSON.stringify(config)).not.toContain("timeoutSec");
+    expect(JSON.stringify(config)).not.toContain('"matcher":null');
     expect(config).not.toHaveProperty("hooks.SessionStart");
     expect(config).not.toHaveProperty("hooks.UserPromptSubmit");
   });
@@ -87,10 +118,9 @@ describe("Codex native hook relay config", () => {
         events: ["permission_request"],
       }),
     ).toEqual({
-      "features.codex_hooks": true,
+      "features.hooks": true,
       "hooks.PermissionRequest": [
         {
-          matcher: null,
           hooks: [
             {
               type: "command",
@@ -103,22 +133,36 @@ describe("Codex native hook relay config", () => {
           ],
         },
       ],
+      "hooks.state": {
+        "/<session-flags>/config.toml:permission_request:0:0": {
+          enabled: true,
+          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        },
+        "<session-flags>/config.toml:permission_request:0:0": {
+          enabled: true,
+          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        },
+      },
     });
   });
 
-  it("leaves matchers open so Codex MCP tool names reach the relay", () => {
+  it("omits matchers so Codex MCP tool names reach the relay with a stable trust hash", () => {
     const config = buildCodexNativeHookRelayConfig({
       relay: createRelay(),
       events: ["pre_tool_use", "post_tool_use"],
     });
 
-    expect((config["hooks.PreToolUse"] as Array<{ matcher: unknown }>)[0]?.matcher).toBeNull();
-    expect((config["hooks.PostToolUse"] as Array<{ matcher: unknown }>)[0]?.matcher).toBeNull();
+    expect((config["hooks.PreToolUse"] as Array<{ matcher?: unknown }>)[0]).not.toHaveProperty(
+      "matcher",
+    );
+    expect((config["hooks.PostToolUse"] as Array<{ matcher?: unknown }>)[0]).not.toHaveProperty(
+      "matcher",
+    );
   });
 
   it("builds deterministic clearing config when the relay is disabled", () => {
     expect(buildCodexNativeHookRelayDisabledConfig()).toEqual({
-      "features.codex_hooks": false,
+      "features.hooks": false,
       "hooks.PreToolUse": [],
       "hooks.PostToolUse": [],
       "hooks.PermissionRequest": [],

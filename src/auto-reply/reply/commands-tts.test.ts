@@ -214,6 +214,22 @@ describe("handleTtsCommands status fallback reporting", () => {
     );
   });
 
+  it("uses the channel-derived audioAsVoice decision for /tts audio", async () => {
+    ttsMocks.textToSpeech.mockResolvedValue({
+      success: true,
+      audioPath: "/tmp/channel-voice.ogg",
+      provider: PRIMARY_TTS_PROVIDER,
+      voiceCompatible: false,
+      audioAsVoice: true,
+    });
+
+    const result = await handleTtsCommands(buildTtsParams("/tts audio hello channel"), true);
+    const reply = expectReply(result);
+
+    expect(reply.mediaUrl).toBe("/tmp/channel-voice.ogg");
+    expect(reply.audioAsVoice).toBe(true);
+  });
+
   it("treats bare /tts as status", async () => {
     const result = await handleTtsCommands(
       buildTtsParams("/tts", {

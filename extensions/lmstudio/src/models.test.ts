@@ -313,7 +313,25 @@ describe("lmstudio-models", () => {
     });
 
     expect(result.reachable).toBe(false);
-    expect((result.error as Error).message).toBe("LM Studio model list returned malformed JSON");
+    expect((result.error as Error).message).toBe("LM Studio model list: malformed JSON response");
+  });
+
+  it("reports wrong-shaped model list payloads with owned errors", async () => {
+    for (const payload of [[], { models: {} }, { models: [null] }]) {
+      const fetchMock = vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => payload,
+      }));
+
+      const result = await fetchLmstudioModels({
+        baseUrl: "http://localhost:1234/v1",
+        fetchImpl: asFetch(fetchMock),
+      });
+
+      expect(result.reachable).toBe(false);
+      expect((result.error as Error).message).toBe("LM Studio model list: malformed JSON response");
+    }
   });
 
   it("skips model load when already loaded", async () => {

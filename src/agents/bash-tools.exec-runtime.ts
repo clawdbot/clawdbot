@@ -343,6 +343,7 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
   enqueueSystemEvent(summary, {
     sessionKey: resolveEventSessionKey(sessionKey, session.mainKey, session.sessionScope),
     deliveryContext: session.notifyDeliveryContext,
+    forceSenderIsOwnerFalse: true,
     trusted: false,
   });
   // Subagent sessions receive exec results via process poll and announce flow;
@@ -446,6 +447,7 @@ export function emitExecSystemEvent(
     sessionKey: resolveEventSessionKey(sessionKey, opts.mainKey, opts.sessionScope),
     contextKey: opts.contextKey,
     deliveryContext: opts.deliveryContext,
+    forceSenderIsOwnerFalse: true,
     trusted: false,
   });
   // Subagent sessions receive exec results via process poll and announce flow;

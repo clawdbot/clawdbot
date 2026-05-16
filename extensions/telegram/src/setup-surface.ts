@@ -6,15 +6,16 @@ import {
   patchChannelConfigForAccount,
   setSetupChannelEnabled,
   splitSetupEntries,
+  createSetupTranslator,
 } from "openclaw/plugin-sdk/setup";
 import type { ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { inspectTelegramAccount } from "./account-inspect.js";
 import { listTelegramAccountIds, resolveTelegramAccount } from "./accounts.js";
 import {
+  getTelegramTokenHelpLines,
+  getTelegramUserIdHelpLines,
   parseTelegramAllowFromId,
-  TELEGRAM_TOKEN_HELP_LINES,
-  TELEGRAM_USER_ID_HELP_LINES,
 } from "./setup-core.js";
 import {
   buildTelegramDmAccessWarningLines,
@@ -23,16 +24,18 @@ import {
   telegramSetupDmPolicy,
 } from "./setup-surface.helpers.js";
 
+const t = createSetupTranslator();
+
 const channel = "telegram" as const;
 
 export const telegramSetupWizard: ChannelSetupWizard = {
   channel,
   status: createStandardChannelSetupStatus({
     channelLabel: "Telegram",
-    configuredLabel: "configured",
-    unconfiguredLabel: "needs token",
-    configuredHint: "recommended · configured",
-    unconfiguredHint: "recommended · newcomer-friendly",
+    configuredLabel: t("wizard.channels.statusConfigured"),
+    unconfiguredLabel: t("wizard.channels.statusNeedsToken"),
+    configuredHint: t("wizard.channels.statusRecommendedConfigured"),
+    unconfiguredHint: t("wizard.channels.statusRecommendedNewcomerFriendly"),
     configuredScore: 1,
     unconfiguredScore: 10,
     resolveConfigured: ({ cfg, accountId }) =>
@@ -49,13 +52,13 @@ export const telegramSetupWizard: ChannelSetupWizard = {
     {
       inputKey: "token",
       providerHint: channel,
-      credentialLabel: "Telegram bot token",
+      credentialLabel: t("wizard.telegram.botToken"),
       preferredEnvVar: "TELEGRAM_BOT_TOKEN",
-      helpTitle: "Telegram bot token",
-      helpLines: TELEGRAM_TOKEN_HELP_LINES,
-      envPrompt: "TELEGRAM_BOT_TOKEN detected. Use env var?",
-      keepPrompt: "Telegram token already configured. Keep it?",
-      inputPrompt: "Enter Telegram bot token",
+      helpTitle: t("wizard.telegram.botToken"),
+      helpLines: getTelegramTokenHelpLines(),
+      envPrompt: t("wizard.telegram.tokenEnvPrompt"),
+      keepPrompt: t("wizard.telegram.tokenKeepPrompt"),
+      inputPrompt: t("wizard.telegram.tokenInputPrompt"),
       allowEnv: ({ accountId }) => accountId === DEFAULT_ACCOUNT_ID,
       inspect: ({ cfg, accountId }) => {
         const resolved = resolveTelegramAccount({ cfg, accountId });
@@ -75,12 +78,11 @@ export const telegramSetupWizard: ChannelSetupWizard = {
     },
   ],
   allowFrom: createAllowFromSection({
-    helpTitle: "Telegram user id",
-    helpLines: TELEGRAM_USER_ID_HELP_LINES,
-    message: "Telegram allowFrom (numeric sender id)",
+    helpTitle: t("wizard.telegram.userIdTitle"),
+    helpLines: getTelegramUserIdHelpLines(),
+    message: t("wizard.telegram.allowFromPrompt"),
     placeholder: "123456789",
-    invalidWithoutCredentialNote:
-      "Telegram allowFrom requires numeric sender ids. DM your bot first, then copy from.id from logs or getUpdates.",
+    invalidWithoutCredentialNote: t("wizard.telegram.allowFromInvalid"),
     parseInputs: splitSetupEntries,
     parseId: parseTelegramAllowFromId,
     resolveEntries: async ({ entries }) =>

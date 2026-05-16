@@ -102,6 +102,7 @@ export async function handleDiscordMessageAction(
     const rawEmbeds = params.embeds;
     const embeds = Array.isArray(rawEmbeds) ? rawEmbeds : undefined;
     const silent = readBooleanParam(params, "silent") === true;
+    const suppressEmbeds = readBooleanParam(params, "suppressEmbeds");
     const sessionKey = readStringParam(params, "__sessionKey");
     const agentId = readStringParam(params, "__agentId");
     const threadName = readStringParam(params, "threadName");
@@ -119,6 +120,7 @@ export async function handleDiscordMessageAction(
         embeds,
         asVoice,
         silent,
+        ...(suppressEmbeds === undefined ? {} : { suppressEmbeds }),
         __sessionKey: sessionKey ?? undefined,
         __agentId: agentId ?? undefined,
       },
@@ -142,6 +144,7 @@ export async function handleDiscordMessageAction(
     const filename = readStringParam(params, "filename");
     const replyTo = readStringParam(params, "replyTo");
     const silent = readBooleanParam(params, "silent") === true;
+    const suppressEmbeds = readBooleanParam(params, "suppressEmbeds");
     const sessionKey = readStringParam(params, "__sessionKey");
     const agentId = readStringParam(params, "__agentId");
     return await handleDiscordAction(
@@ -154,6 +157,7 @@ export async function handleDiscordMessageAction(
         filename: filename ?? undefined,
         replyTo: replyTo ?? undefined,
         silent,
+        ...(suppressEmbeds === undefined ? {} : { suppressEmbeds }),
         __sessionKey: sessionKey ?? undefined,
         __agentId: agentId ?? undefined,
       },

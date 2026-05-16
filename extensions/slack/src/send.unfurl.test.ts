@@ -47,7 +47,7 @@ function requireLastPostMessagePayload(client: SlackUnfurlTestClient) {
 }
 
 describe("sendMessageSlack unfurl controls", () => {
-  it("omits Slack unfurl flags when config is unset", async () => {
+  it("defaults unfurl_links to false when config is unset", async () => {
     const client = createSlackSendTestClient();
 
     await sendMessageSlack("channel:C123", "https://example.com", {
@@ -58,7 +58,7 @@ describe("sendMessageSlack unfurl controls", () => {
 
     expect(client.chat.postMessage).toHaveBeenCalledTimes(1);
     const payload = requirePostMessagePayload(client);
-    expect("unfurl_links" in payload).toBe(false);
+    expect(payload.unfurl_links).toBe(false);
     expect("unfurl_media" in payload).toBe(false);
   });
 

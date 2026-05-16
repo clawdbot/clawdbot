@@ -15,6 +15,10 @@ function createHarness(params?: {
   answerStream?: DraftLaneState["stream"] | null;
   draftMaxChars?: number;
   splitFinalTextForStream?: (text: string) => readonly string[];
+  resolveFinalTextCandidate?: (params: {
+    finalText: string;
+    laneName: LaneName;
+  }) => string | undefined;
 }) {
   const answer =
     params?.answerStream === null
@@ -59,6 +63,7 @@ function createHarness(params?: {
     stopDraftLane,
     clearDraftLane,
     editStreamMessage,
+    resolveFinalTextCandidate: params?.resolveFinalTextCandidate,
     log,
     markDelivered,
   });
@@ -149,6 +154,229 @@ describe("createLaneTextDeliverer", () => {
     expect(harness.sendPayload).toHaveBeenCalledWith({ text: "done" }, { durable: true });
     expect(harness.markDelivered).not.toHaveBeenCalled();
     expect(harness.lanes.answer.finalized).toBe(true);
+  });
+
+  it("keeps a longer partial preview when the final payload is an ellipsis-truncated snapshot", async () => {
+    const fullAnswer =
+      "Ja. Hier nochmal sauber Schritt fuer Schritt. Einen API Key kopiert man aus der Google Cloud Console. Danach pruefst du die Projekt- und API-Einstellungen.";
+    const truncatedFinal =
+      "Ja. Hier nochmal sauber Schritt fuer Schritt. Einen API Key kopiert man...";
+    const answer = createTestDraftStream({ messageId: 999 });
+    answer.lastDeliveredText.mockReturnValue(fullAnswer);
+    const harness = createHarness({
+      answerStream: answer,
+      resolveFinalTextCandidate: () => fullAnswer,
+    });
+
+    const result = await deliverFinalAnswer(harness, truncatedFinal);
+
+    const delivery = expectPreviewFinalized(result);
+    expect(delivery.content).toBe(fullAnswer);
+    expect(delivery.messageId).toBe(999);
+    expect(answer.update).not.toHaveBeenCalledWith(truncatedFinal);
+    expect(harness.stopDraftLane).toHaveBeenCalledTimes(1);
+    expect(harness.sendPayload).not.toHaveBeenCalled();
+    expect(harness.markDelivered).toHaveBeenCalledTimes(1);
+    expect(harness.lanes.answer.finalized).toBe(true);
+  });
+
+  it("keeps a longer delivered stream preview when transcript lookup misses", async () => {
+    const fullAnswer =
+      "Ja. Hier nochmal sauber Schritt fuer Schritt. Einen API Key kopiert man aus der Google Cloud Console. Danach pruefst du die Projekt- und API-Einstellungen.";
+    const truncatedFinal =
+      "Ja. Hier nochmal sauber Schritt fuer Schritt. Einen API Key kopiert man...";
+    const answer = createTestDraftStream({ messageId: 999 });
+    answer.lastDeliveredText.mockReturnValue(fullAnswer);
+    const harness = createHarness({ answerStream: answer });
+    harness.lanes.answer.lastPartialText = fullAnswer;
+    harness.lanes.answer.hasStreamedMessage = true;
+
+    const result = await deliverFinalAnswer(harness, truncatedFinal);
+
+    const delivery = expectPreviewFinalized(result);
+    expect(delivery.content).toBe(fullAnswer);
+    expect(answer.update).not.toHaveBeenCalledWith(truncatedFinal);
+    expect(harness.sendPayload).not.toHaveBeenCalled();
+    expect(harness.markDelivered).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a longer pending partial preview before it is delivered", async () => {
+    const fullAnswer =
+      "Ja. Hier nochmal sauber Schritt fuer Schritt. Einen API Key kopiert man aus der Google Cloud Console. Danach pruefst du die Projekt- und API-Einstellungen.";
+    const truncatedFinal =
+      "Ja. Hier nochmal sauber Schritt fuer Schritt. Einen API Key kopiert man...";
+    let deliveredText = "";
+    const answer = createTestDraftStream({
+      messageId: 999,
+      onStop: () => {
+        deliveredText = fullAnswer;
+      },
+    });
+    answer.lastDeliveredText.mockImplementation(() => deliveredText);
+    const harness = createHarness({
+      answerStream: answer,
+      resolveFinalTextCandidate: () => fullAnswer,
+    });
+
+    answer.update(fullAnswer);
+    harness.lanes.answer.lastPartialText = fullAnswer;
+    harness.lanes.answer.hasStreamedMessage = true;
+    const result = await deliverFinalAnswer(harness, truncatedFinal);
+
+    const delivery = expectPreviewFinalized(result);
+    expect(delivery.content).toBe(fullAnswer);
+    expect(answer.update).not.toHaveBeenCalledWith(truncatedFinal);
+    expect(harness.stopDraftLane).toHaveBeenCalledTimes(1);
+    expect(harness.markDelivered).toHaveBeenCalledTimes(1);
+  });
+
+  it("materializes a pending retained preview before reading the message id", async () => {
+    const fullAnswer =
+      "Ja. Hier nochmal sauber Schritt fuer Schritt. Einen API Key kopiert man aus der Google Cloud Console. Danach pruefst du die Projekt- und API-Einstellungen.";
+    const truncatedFinal =
+      "Ja. Hier nochmal sauber Schritt fuer Schritt. Einen API Key kopiert man...";
+    let answer: ReturnType<typeof createTestDraftStream>;
+    let deliveredText = "";
+    answer = createTestDraftStream({
+      onStop: () => {
+        answer.setMessageId(999);
+        deliveredText = fullAnswer;
+      },
+    });
+    answer.lastDeliveredText.mockImplementation(() => deliveredText);
+    const harness = createHarness({
+      answerStream: answer,
+      resolveFinalTextCandidate: () => fullAnswer,
+    });
+
+    answer.update(fullAnswer);
+    harness.lanes.answer.lastPartialText = fullAnswer;
+    harness.lanes.answer.hasStreamedMessage = true;
+    const result = await deliverFinalAnswer(harness, truncatedFinal);
+
+    const delivery = expectPreviewFinalized(result);
+    expect(delivery.content).toBe(fullAnswer);
+    expect(delivery.messageId).toBe(999);
+    expect(answer.update).not.toHaveBeenCalledWith(truncatedFinal);
+    expect(harness.sendPayload).not.toHaveBeenCalled();
+    expect(harness.markDelivered).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back when the retained pending preview does not land", async () => {
+    const fullAnswer =
+      "Ja. Hier nochmal sauber Schritt fuer Schritt. Einen API Key kopiert man aus der Google Cloud Console.";
+    const truncatedFinal = "Ja. Hier nochmal sauber Schritt fuer Schritt...";
+    const answer = createTestDraftStream({ messageId: 999 });
+    answer.lastDeliveredText.mockReturnValue("older preview");
+    const harness = createHarness({
+      answerStream: answer,
+      resolveFinalTextCandidate: () => fullAnswer,
+    });
+    harness.lanes.answer.lastPartialText = fullAnswer;
+    harness.lanes.answer.hasStreamedMessage = true;
+
+    const result = await deliverFinalAnswer(harness, truncatedFinal);
+
+    expect(result.kind).toBe("sent");
+    expect(harness.clearDraftLane).toHaveBeenCalledTimes(1);
+    expect(harness.sendPayload).toHaveBeenCalledWith({ text: truncatedFinal }, { durable: true });
+  });
+
+  it("uses the canonical final when the shorter final has no truncation marker", async () => {
+    const answer = createTestDraftStream({ messageId: 999 });
+    answer.lastDeliveredText.mockReturnValue("Hello world");
+    const harness = createHarness({ answerStream: answer });
+
+    const result = await deliverFinalAnswer(harness, "Hello");
+
+    expect(result.kind).toBe("sent");
+    expect(answer.update).toHaveBeenCalledWith("Hello");
+    expect(harness.sendPayload).toHaveBeenCalledWith({ text: "Hello" }, { durable: true });
+  });
+
+  it("uses the canonical final when the shorter final intentionally ends with ellipsis", async () => {
+    const answer = createTestDraftStream({ messageId: 999 });
+    answer.lastDeliveredText.mockReturnValue("Let's leave it... and continue");
+    const harness = createHarness({ answerStream: answer });
+
+    const result = await deliverFinalAnswer(harness, "Let's leave it...");
+
+    expect(result.kind).toBe("sent");
+    expect(answer.update).toHaveBeenCalledWith("Let's leave it...");
+    expect(harness.sendPayload).toHaveBeenCalledWith(
+      { text: "Let's leave it..." },
+      { durable: true },
+    );
+  });
+
+  it("uses the canonical final when an intentional ellipsis replaces a longer draft", async () => {
+    const answer = createTestDraftStream({ messageId: 999 });
+    answer.lastDeliveredText.mockReturnValue("I don't know the answer");
+    const harness = createHarness({ answerStream: answer });
+
+    const result = await deliverFinalAnswer(harness, "I don't know...");
+
+    expect(result.kind).toBe("sent");
+    expect(answer.update).toHaveBeenCalledWith("I don't know...");
+    expect(harness.sendPayload).toHaveBeenCalledWith(
+      { text: "I don't know..." },
+      { durable: true },
+    );
+  });
+
+  it("uses the canonical split final when only the first chunk ends with ellipsis", async () => {
+    const buttons = [[{ text: "OK", callback_data: "ok" }]];
+    const answer = createTestDraftStream({ messageId: 999 });
+    const harness = createHarness({
+      answerStream: answer,
+      draftMaxChars: 10,
+      splitFinalTextForStream: () => ["Hello...", " world"],
+    });
+    harness.lanes.answer.lastPartialText = "Hello retained preview";
+
+    const result = await harness.deliverLaneText({
+      laneName: "answer",
+      text: "Hello... world",
+      payload: { text: "Hello... world" },
+      infoKind: "final",
+      buttons,
+    });
+
+    const delivery = expectPreviewFinalized(result);
+    expect(delivery.content).toBe("Hello... world");
+    expect(answer.update).toHaveBeenCalledWith("Hello...");
+    expect(harness.editStreamMessage).toHaveBeenCalledWith({
+      laneName: "answer",
+      messageId: 999,
+      text: "Hello...",
+      buttons,
+    });
+    expect(harness.sendPayload).toHaveBeenCalledWith({ text: " world" });
+    expect(harness.markDelivered).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses normal final delivery when retained preview is too long for button edit", async () => {
+    const buttons = [[{ text: "OK", callback_data: "ok" }]];
+    const answer = createTestDraftStream({ messageId: 999 });
+    answer.lastDeliveredText.mockReturnValue("Hello retained preview");
+    const harness = createHarness({
+      answerStream: answer,
+      draftMaxChars: 10,
+      resolveFinalTextCandidate: () => "Hello retained preview",
+    });
+
+    const result = await harness.deliverLaneText({
+      laneName: "answer",
+      text: "Hello...",
+      payload: { text: "Hello..." },
+      infoKind: "final",
+      buttons,
+    });
+
+    expect(result.kind).toBe("sent");
+    expect(answer.update).toHaveBeenCalledWith("Hello...");
+    expect(harness.editStreamMessage).not.toHaveBeenCalled();
+    expect(harness.sendPayload).toHaveBeenCalledWith({ text: "Hello..." }, { durable: true });
   });
 
   it("falls back to normal delivery when no stream exists", async () => {

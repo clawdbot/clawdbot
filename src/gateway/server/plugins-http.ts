@@ -147,6 +147,11 @@ export function createGatewayPluginRequestHandler(params: {
           {
             client: runtimeClient,
             isWebchatConnect: () => false,
+            ...(route.pluginId ? { pluginId: route.pluginId } : {}),
+            ...(route.source ? { pluginSource: route.source } : {}),
+            ...(route.gatewayMethodDispatchAllowed === true
+              ? { gatewayMethodDispatchAllowed: true }
+              : {}),
           },
           async () => route.handler(req, res),
         );
@@ -243,6 +248,11 @@ export function createGatewayPluginUpgradeHandler(params: {
           {
             client: runtimeClient,
             isWebchatConnect: () => false,
+            ...(route.pluginId ? { pluginId: route.pluginId } : {}),
+            ...(route.source ? { pluginSource: route.source } : {}),
+            ...(route.gatewayMethodDispatchAllowed === true
+              ? { gatewayMethodDispatchAllowed: true }
+              : {}),
           },
           async () => route.handleUpgrade?.(req, socket, head),
         );

@@ -851,6 +851,12 @@ describe("telegram live qa runtime", () => {
     expect(__testing.isRecoverableTelegramQaPollError(new TypeError("fetch failed"))).toBe(true);
     expect(__testing.isRecoverableTelegramQaPollError(new Error("socket hang up"))).toBe(true);
     expect(
+      __testing.isRecoverableTelegramQaPollError(
+        new Error("The operation was aborted due to timeout"),
+      ),
+    ).toBe(true);
+    expect(__testing.isRecoverableTelegramQaPollError(new Error("AbortError"))).toBe(true);
+    expect(
       __testing.isRecoverableTelegramQaPollError(new Error("Bad Request: chat not found")),
     ).toBe(false);
   });

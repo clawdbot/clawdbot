@@ -67,7 +67,7 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     docsPath: "/gateway/config-agents",
     tests: ["src/commands/doctor/shared/legacy-config-migrate.test.ts"],
     notes:
-      "The old agent-level idle timeout knob was collapsed into provider request timeout handling.",
+      "The old agent-level idle timeout knob was collapsed into provider request timeout handling, bounded by the agent/run timeout ceiling.",
   }),
   deprecatedCompatRecord({
     code: "doctor-agent-runtime-embedded-harness",

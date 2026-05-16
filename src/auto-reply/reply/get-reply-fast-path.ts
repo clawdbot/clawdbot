@@ -11,6 +11,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import { normalizeCommandBody } from "../commands-registry.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import { parseSoftResetCommand } from "./commands-reset-mode.js";
@@ -38,8 +39,7 @@ function resolveFastSessionKey(params: {
   mainKey?: string;
 }): string {
   const { ctx } = params;
-  const nativeCommandTarget =
-    ctx.CommandSource === "native" ? normalizeOptionalString(ctx.CommandTargetSessionKey) : "";
+  const nativeCommandTarget = resolveCommandTurnTargetSessionKey(ctx) ?? "";
   if (nativeCommandTarget) {
     return nativeCommandTarget;
   }

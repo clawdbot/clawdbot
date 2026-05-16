@@ -31,6 +31,15 @@ export type ReplyThreadingPolicy = {
 
 export type SourceReplyDeliveryMode = "automatic" | "message_tool_only";
 
+export type QueuedReplyDeliveryCorrelation = {
+  begin: () => (() => void) | void;
+};
+
+export type QueuedReplyLifecycle = {
+  onEnqueued?: () => void;
+  onComplete?: () => void;
+};
+
 export type PartialReplyPayload = Pick<ReplyPayload, "text" | "mediaUrls"> & {
   delta?: string;
   replace?: true;
@@ -172,6 +181,10 @@ export type GetReplyOptions = {
    * output private; visible channel output must come from the message tool.
    */
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  /** Starts delivery tracking when this turn later drains as a queued followup. */
+  queuedDeliveryCorrelations?: QueuedReplyDeliveryCorrelation[];
+  /** Tracks ownership transfer when this turn later drains as a queued followup. */
+  queuedFollowupLifecycle?: QueuedReplyLifecycle;
   /** Allow channel-owned progress UI while final/source reply delivery remains message-tool-only. */
   allowProgressCallbacksWhenSourceDeliverySuppressed?: boolean;
   disableBlockStreaming?: boolean;

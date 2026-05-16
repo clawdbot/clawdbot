@@ -36,10 +36,10 @@ describe("moonshot provider plugin", () => {
 
     expect(policy).toEqual({
       applyAssistantFirstOrderingFix: true,
-      dropReasoningFromHistory: true,
       validateGeminiTurns: true,
       validateAnthropicTurns: true,
     });
+    expect(policy).not.toHaveProperty("dropReasoningFromHistory");
     expect(policy).not.toHaveProperty("sanitizeToolCallIds");
     expect(policy).not.toHaveProperty("toolCallIdMode");
   });

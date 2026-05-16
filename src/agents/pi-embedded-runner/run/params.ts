@@ -7,6 +7,7 @@ import type {
 import type { ReplyPayload } from "../../../auto-reply/reply-payload.js";
 import type { ReplyOperation } from "../../../auto-reply/reply/reply-run-registry.js";
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
+import type { InboundTurnKind } from "../../../channels/turn/kind.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import type { CommandQueueEnqueueFn } from "../../../process/command-queue.types.js";
@@ -110,7 +111,7 @@ export type RunEmbeddedPiAgentParams = {
   prompt: string;
   /** User-visible prompt body to submit and persist; runtime context travels separately. */
   transcriptPrompt?: string;
-  /** Explicit current-turn context that must be visible to the model but not persisted as user text. */
+  currentTurnKind?: InboundTurnKind;
   currentTurnContext?: CurrentTurnPromptContext;
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
@@ -218,6 +219,7 @@ export type RunEmbeddedPiAgentParams = {
    */
   allowTransientCooldownProbe?: boolean;
   suppressNextUserMessagePersistence?: boolean;
+  suppressTranscriptOnlyAssistantPersistence?: boolean;
   onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;
   /**
    * Dispose bundled MCP runtimes when the overall run ends instead of preserving

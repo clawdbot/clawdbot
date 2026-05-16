@@ -46,6 +46,9 @@ const loadInstalledPluginIndexInstallRecords = vi.fn(
 const legacyConfigRepairMocks = vi.hoisted(() => ({
   repairLegacyConfigForUpdateChannel: vi.fn(),
 }));
+const launchdUpdateCleanupMocks = vi.hoisted(() => ({
+  disableCurrentOpenClawUpdateLaunchdJob: vi.fn(async () => false),
+}));
 const nodeVersionSatisfiesEngine = vi.fn();
 const spawn = vi.fn();
 const { defaultRuntime: runtimeCapture, resetRuntimeCapture } = createCliRuntimeCapture();
@@ -231,6 +234,12 @@ vi.mock("../daemon/service.js", () => ({
     stop: (...args: unknown[]) => serviceStop(...args),
     restart: (...args: unknown[]) => serviceRestart(...args),
   })),
+}));
+
+vi.mock("../daemon/launchd.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/launchd.js")>()),
+  disableCurrentOpenClawUpdateLaunchdJob:
+    launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob,
 }));
 
 vi.mock("../infra/ports.js", () => ({
@@ -706,6 +715,8 @@ describe("update-cli", () => {
         repaired: false,
       }),
     );
+    launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob.mockReset();
+    launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob.mockResolvedValue(false);
     confirm.mockResolvedValue(false);
     select.mockResolvedValue("stable");
     vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
@@ -725,6 +736,14 @@ describe("update-cli", () => {
     tempDirsToCleanup.clear();
   });
 
+  it("reads the initial update config without plugin schema validation", async () => {
+    await updateCommand({ yes: true, restart: false });
+
+    expect(vi.mocked(readConfigFileSnapshot).mock.calls[0]?.[0]).toEqual({
+      skipPluginValidation: true,
+    });
+  });
+
   it("bounds completion cache refresh during update follow-up", async () => {
     const root = createCaseDir("openclaw-completion-timeout");
     pathExists.mockResolvedValue(true);
@@ -738,11 +757,12 @@ describe("update-cli", () => {
     expect(call?.[2]?.timeout).toBe(30_000);
   });
 
-  it("refuses mutating updates in Nix mode before update side effects", async () => {
+  it("disarms legacy launchd updater jobs before refusing mutating updates in Nix mode", async () => {
     await withEnvAsync({ OPENCLAW_NIX_MODE: "1" }, async () => {
       await expect(updateCommand({ yes: true })).rejects.toThrow("OPENCLAW_NIX_MODE=1");
     });
 
+    expect(launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob).toHaveBeenCalledOnce();
     expect(runGatewayUpdate).not.toHaveBeenCalled();
     expect(replaceConfigFile).not.toHaveBeenCalled();
     expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
@@ -1041,6 +1061,11 @@ describe("update-cli", () => {
       vi.mocked(runCommandWithTimeout).mock.calls as unknown as Array<[string[], unknown]>
     ).find(([argv]) => argv[0] === "npm" && argv[1] === "i" && argv[2] === "-g");
     expect(installCall).toBeUndefined();
+    expect(
+      vi
+        .mocked(readConfigFileSnapshot)
+        .mock.calls.some(([options]) => options?.skipPluginValidation === true),
+    ).toBe(true);
     expect(defaultRuntime.exit).toHaveBeenCalledWith(0);
     expect(syncPluginsForUpdateChannel).toHaveBeenCalledTimes(1);
     expect(updateNpmInstalledPlugins).toHaveBeenCalledTimes(1);
@@ -1141,6 +1166,11 @@ describe("update-cli", () => {
       },
       baseHash: "stable-hash",
     });
+    expect(mutateConfigFileWithRetry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        writeOptions: { skipPluginValidation: true },
+      }),
+    );
     expect(syncPluginCall()?.channel).toBe("dev");
     expect(syncPluginCall()?.config?.update?.channel).toBe("dev");
   });
@@ -1555,6 +1585,9 @@ describe("update-cli", () => {
         expect(runDaemonInstall).not.toHaveBeenCalled();
         expect(runRestartScript).not.toHaveBeenCalled();
         expect(runDaemonRestart).not.toHaveBeenCalled();
+        expect(
+          launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob,
+        ).not.toHaveBeenCalled();
 
         const logs = vi.mocked(defaultRuntime.log).mock.calls.map((call) => String(call[0]));
         expect(logs.join("\n")).toContain("Update dry-run");
@@ -1571,6 +1604,9 @@ describe("update-cli", () => {
       assert: () => {
         expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
         expect(runGatewayUpdate).not.toHaveBeenCalled();
+        expect(
+          launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob,
+        ).not.toHaveBeenCalled();
       },
     },
   ] as const)("updateCommand dry-run behavior: $name", runUpdateCliScenario);
@@ -2346,6 +2382,73 @@ describe("update-cli", () => {
     expect(requiredServiceStopCallOrder).toBeLessThan(requiredNpmInstallCallOrder);
   });
 
+  it("disarms legacy launchd updater jobs before stopping the gateway", async () => {
+    const tempDir = await createTrackedTempDir("openclaw-update-launchd-loop-");
+    const nodeModules = path.join(tempDir, "node_modules");
+    const pkgRoot = path.join(nodeModules, "openclaw");
+    const entryPath = path.join(pkgRoot, "dist", "index.js");
+    mockPackageInstallStatus(pkgRoot);
+    await fs.mkdir(path.dirname(entryPath), { recursive: true });
+    await fs.writeFile(
+      path.join(pkgRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.4.21" }),
+      "utf-8",
+    );
+    await fs.writeFile(entryPath, "export {};\n", "utf-8");
+    await writePackageDistInventory(pkgRoot);
+    serviceReadCommand.mockResolvedValue({
+      programArguments: ["openclaw", "gateway", "run"],
+      environment: {
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+      },
+    });
+    serviceLoaded.mockResolvedValue(true);
+    serviceReadRuntime.mockResolvedValue({
+      status: "running",
+      pid: 4242,
+      state: "running",
+    });
+    launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob.mockResolvedValue(true);
+    pathExists.mockImplementation(async (candidate: string) => {
+      try {
+        await fs.access(candidate);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+      if (Array.isArray(argv) && argv[0] === "npm" && argv[1] === "root" && argv[2] === "-g") {
+        return {
+          stdout: `${nodeModules}\n`,
+          stderr: "",
+          code: 0,
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      }
+      return {
+        stdout: "",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      };
+    });
+
+    await updateCommand({ yes: true });
+
+    const cleanupOrder =
+      launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob.mock.invocationCallOrder[0];
+    const serviceStopOrder = serviceStop.mock.invocationCallOrder[0];
+    expect(requireValue(cleanupOrder, "launchd updater cleanup order")).toBeLessThan(
+      requireValue(serviceStopOrder, "service stop order"),
+    );
+  });
+
   it("refreshes package installs even when the current version already matches the target", async () => {
     const tempDir = await createTrackedTempDir("openclaw-update-current-");
     const nodeModules = path.join(tempDir, "node_modules");
@@ -2905,6 +3008,7 @@ describe("update-cli", () => {
 
     expect(replaceConfigFile).not.toHaveBeenCalled();
     expect(runCommandWithTimeout).not.toHaveBeenCalled();
+    expect(launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob).not.toHaveBeenCalled();
     expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
   });
 
@@ -3743,6 +3847,11 @@ describe("update-cli", () => {
         });
         expect(syncPluginCall()?.channel).toBe("stable");
         expect(lastNpmPluginUpdateCall()?.timeoutMs).toBe(9_000);
+        expect(
+          vi
+            .mocked(readConfigFileSnapshot)
+            .mock.calls.some(([options]) => options?.skipPluginValidation === true),
+        ).toBe(true);
         const output = lastWriteJsonCall() as
           | {
               status?: string;

@@ -1,6 +1,7 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../../..");
 const SRC_ROOT = path.join(REPO_ROOT, "src");
@@ -14,6 +15,77 @@ const LEGACY_MIGRATION_MODULE_RE =
   /legacy-config-migrate(?:\.js)?|legacy-config-migrations(?:\.[\w-]+)?(?:\.js)?/;
 
 function collectSourceFiles(dir: string, acc: string[] = []): string[] {
+  const externalFiles = listExternalSourceFiles(dir);
+  if (externalFiles) {
+    acc.push(...externalFiles);
+    return acc;
+  }
+  return collectSourceFilesByDirectory(dir, acc);
+}
+
+function listExternalSourceFiles(dir: string): string[] | null {
+  return listGitSourceFiles(dir) ?? listFindSourceFiles(dir);
+}
+
+function listGitSourceFiles(dir: string): string[] | null {
+  const relativeRoot = path.relative(REPO_ROOT, dir).replaceAll(path.sep, "/");
+  const result = spawnSync("git", ["ls-files", "--", relativeRoot], {
+    cwd: REPO_ROOT,
+    encoding: "utf8",
+    maxBuffer: 1024 * 1024 * 4,
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((file) => path.join(REPO_ROOT, file))
+    .filter(isOwnedSourceFile)
+    .toSorted();
+}
+
+function listFindSourceFiles(dir: string): string[] | null {
+  const result = spawnSync(
+    "find",
+    [
+      dir,
+      "(",
+      "-name",
+      "dist",
+      "-o",
+      "-name",
+      "node_modules",
+      ")",
+      "-prune",
+      "-o",
+      "-type",
+      "f",
+      "-name",
+      "*.ts",
+      "-print",
+    ],
+    {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024 * 4,
+      stdio: ["ignore", "pipe", "ignore"],
+    },
+  );
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .filter(isOwnedSourceFile)
+    .toSorted();
+}
+
+function collectSourceFilesByDirectory(dir: string, acc: string[] = []): string[] {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     if (entry.name === "dist" || entry.name === "node_modules") {
       continue;
@@ -23,15 +95,24 @@ function collectSourceFiles(dir: string, acc: string[] = []): string[] {
       if (fullPath === DOCTOR_ROOT) {
         continue;
       }
-      collectSourceFiles(fullPath, acc);
+      collectSourceFilesByDirectory(fullPath, acc);
       continue;
     }
-    if (!entry.isFile() || !entry.name.endsWith(".ts") || entry.name.endsWith(".test.ts")) {
+    if (!entry.isFile() || !isOwnedSourceFile(fullPath)) {
       continue;
     }
     acc.push(fullPath);
   }
   return acc;
+}
+
+function isOwnedSourceFile(file: string): boolean {
+  return file.endsWith(".ts") && !file.endsWith(".test.ts") && !isUnderDoctorRoot(file);
+}
+
+function isUnderDoctorRoot(file: string): boolean {
+  const relativePath = path.relative(DOCTOR_ROOT, file);
+  return relativePath === "" || (!relativePath.startsWith("..") && !path.isAbsolute(relativePath));
 }
 
 function collectViolations(files: string[]): string[] {
@@ -58,6 +139,19 @@ function collectViolations(files: string[]): string[] {
 }
 
 describe("legacy config write ownership", () => {
+  it("lists ownership scan files without scanning source directories in-process", () => {
+    const readDir = vi.spyOn(fs, "readdirSync");
+    try {
+      const files = collectSourceFiles(SRC_ROOT);
+
+      expect(files.length).toBeGreaterThan(0);
+      expect(files.every(isOwnedSourceFile)).toBe(true);
+      expect(readDir).not.toHaveBeenCalled();
+    } finally {
+      readDir.mockRestore();
+    }
+  });
+
   it("keeps legacy config repair flags and migration modules under doctor", () => {
     const files = collectSourceFiles(SRC_ROOT);
     const violations = collectViolations(files);

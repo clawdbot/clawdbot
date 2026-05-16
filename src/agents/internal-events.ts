@@ -1,4 +1,8 @@
 import {
+  formatGeneratedAttachmentLines,
+  type AgentGeneratedAttachment,
+} from "./generated-attachments.js";
+import {
   AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION,
   type AgentInternalEventSource,
   type AgentInternalEventStatus,
@@ -20,6 +24,7 @@ type AgentTaskCompletionInternalEvent = {
   status: AgentInternalEventStatus;
   statusLabel: string;
   result: string;
+  attachments?: AgentGeneratedAttachment[];
   mediaUrls?: string[];
   statsLine?: string;
   replyInstruction: string;
@@ -57,6 +62,7 @@ function formatTaskCompletionEvent(event: AgentTaskCompletionInternalEvent): str
   const taskLabel = sanitizeSingleLineField(event.taskLabel, "unnamed task");
   const statusLabel = sanitizeSingleLineField(event.statusLabel, event.status);
   const result = formatChildResultDataBlock(event.result);
+  const attachmentLines = formatGeneratedAttachmentLines(event.attachments);
   const lines = [
     "[Internal task completion event]",
     `source: ${event.source}`,
@@ -68,6 +74,9 @@ function formatTaskCompletionEvent(event: AgentTaskCompletionInternalEvent): str
     "",
     result,
   ];
+  if (attachmentLines.length > 0) {
+    lines.push("", ...attachmentLines);
+  }
   if (event.statsLine?.trim()) {
     lines.push("", sanitizeMultilineField(event.statsLine, ""));
   }
@@ -82,6 +91,7 @@ function formatTaskCompletionEventForPlainPrompt(event: AgentTaskCompletionInter
   const taskLabel = sanitizeSingleLineField(event.taskLabel, "unnamed task");
   const statusLabel = sanitizeSingleLineField(event.statusLabel, event.status);
   const result = formatChildResultDataBlock(event.result);
+  const attachmentLines = formatGeneratedAttachmentLines(event.attachments);
   const lines = [
     "A background task completed. Use this result to reply to the user in your normal assistant voice.",
     "",
@@ -94,6 +104,9 @@ function formatTaskCompletionEventForPlainPrompt(event: AgentTaskCompletionInter
     "",
     result,
   ];
+  if (attachmentLines.length > 0) {
+    lines.push("", ...attachmentLines);
+  }
   if (event.statsLine?.trim()) {
     lines.push("", sanitizeMultilineField(event.statsLine, ""));
   }

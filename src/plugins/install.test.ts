@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import * as tar from "tar";
@@ -104,7 +105,7 @@ async function packToArchive({
 }) {
   const dest = path.join(outDir, outName);
   fs.rmSync(dest, { force: true });
-  const entries = flatRoot ? fs.readdirSync(pkgDir) : [path.basename(pkgDir)];
+  const entries = flatRoot ? listFlatRootArchiveEntries(pkgDir) : [path.basename(pkgDir)];
   await tar.c(
     {
       gzip: true,
@@ -114,6 +115,31 @@ async function packToArchive({
     entries,
   );
   return dest;
+}
+
+function listFlatRootArchiveEntries(pkgDir: string): string[] {
+  const externalEntries = listFindFlatRootArchiveEntries(pkgDir);
+  if (externalEntries) {
+    return externalEntries;
+  }
+  return fs.readdirSync(pkgDir).toSorted((left, right) => left.localeCompare(right));
+}
+
+function listFindFlatRootArchiveEntries(pkgDir: string): string[] | null {
+  const result = spawnSync("find", [pkgDir, "-mindepth", "1", "-maxdepth", "1"], {
+    encoding: "utf8",
+    maxBuffer: 1024 * 1024,
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((entry) => path.basename(entry))
+    .toSorted((left, right) => left.localeCompare(right));
 }
 
 function getArchiveFixturePath(params: {
@@ -656,6 +682,21 @@ beforeEach(() => {
 });
 
 describe("installPluginFromArchive", () => {
+  it("lists flat archive entries without scanning package dirs in-process", () => {
+    const pkgDir = suiteTempRootTracker.makeTempDir();
+    fs.writeFileSync(path.join(pkgDir, "package.json"), "{}\n");
+    fs.mkdirSync(path.join(pkgDir, "dist"));
+    fs.writeFileSync(path.join(pkgDir, "dist", "index.js"), "export {}\n");
+
+    const readDir = vi.spyOn(fs, "readdirSync");
+    try {
+      expect(listFlatRootArchiveEntries(pkgDir)).toEqual(["dist", "package.json"]);
+      expect(readDir).not.toHaveBeenCalled();
+    } finally {
+      readDir.mockRestore();
+    }
+  });
+
   it("installs package archive runtime dependencies", async () => {
     const result = await installArchivePackageAndReturnResult({
       packageJson: {
@@ -1154,6 +1195,32 @@ describe("installPluginFromArchive", () => {
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.pluginId).toBe("inferred-runtime-plugin");
+    }
+  });
+
+  it("rejects package installs when openclaw.extensions contains a blank entry", async () => {
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+    fs.mkdirSync(path.join(pluginDir, "dist"), { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "blank-extension-entry-plugin",
+        version: "1.0.0",
+        openclaw: { extensions: ["./dist/index.js", " "] },
+      }),
+    );
+    fs.writeFileSync(path.join(pluginDir, "dist", "index.js"), "export {};\n");
+
+    const result = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.INVALID_OPENCLAW_EXTENSIONS);
+      expect(result.error).toContain("openclaw.extensions[1]");
+      expect(result.error).toContain("non-empty string");
     }
   });
 

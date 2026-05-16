@@ -10,7 +10,10 @@ import {
 } from "../infra/diagnostics-timeline.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { SilentReplyConversationType } from "../shared/silent-reply-policy.js";
-import { resolveCommandTurnContext } from "./command-turn-context.js";
+import {
+  resolveCommandTurnContext,
+  resolveCommandTurnTargetSessionKey,
+} from "./command-turn-context.js";
 import { withReplyDispatcher } from "./dispatch-dispatcher.js";
 import { dispatchReplyFromConfig } from "./reply/dispatch-from-config.js";
 import type { DispatchFromConfigResult } from "./reply/dispatch-from-config.types.js";
@@ -118,15 +121,11 @@ function resolveDispatcherSilentReplyContext(
   cfg: OpenClawConfig,
 ) {
   const finalized = finalizeInboundContext(ctx);
-  const policySessionKey =
-    finalized.CommandSource === "native"
-      ? (finalized.CommandTargetSessionKey ?? finalized.SessionKey)
-      : finalized.SessionKey;
+  const commandTargetSessionKey = resolveCommandTurnTargetSessionKey(finalized);
+  const policySessionKey = commandTargetSessionKey ?? finalized.SessionKey;
   const chatType = normalizeChatType(finalized.ChatType);
   const conversationType: SilentReplyConversationType | undefined =
-    finalized.CommandSource === "native" &&
-    finalized.CommandTargetSessionKey &&
-    finalized.CommandTargetSessionKey !== finalized.SessionKey
+    commandTargetSessionKey && commandTargetSessionKey !== finalized.SessionKey
       ? undefined
       : chatType === "direct"
         ? "direct"

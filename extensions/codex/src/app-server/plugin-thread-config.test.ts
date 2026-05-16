@@ -624,11 +624,11 @@ describe("Codex plugin thread config", () => {
   it("merges app config with native hook config", () => {
     expect(
       mergeCodexThreadConfigs(
-        { "features.codex_hooks": true, hooks: { PreToolUse: [] } },
+        { "features.hooks": true, hooks: { PreToolUse: [] } },
         { apps: { _default: { enabled: false } } },
       ),
     ).toEqual({
-      "features.codex_hooks": true,
+      "features.hooks": true,
       hooks: { PreToolUse: [] },
       apps: { _default: { enabled: false } },
     });

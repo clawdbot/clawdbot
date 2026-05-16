@@ -49,6 +49,7 @@ Skills own workflows; root owns hard policy and routing.
 - Runtime: Node 22+. Keep Node + Bun paths working.
 - Package manager/runtime: repo defaults only. No swaps without approval.
 - Install: `pnpm install` (keep Bun lock/patches aligned if touched).
+- Sharp/Homebrew libvips source-build fail: `SHARP_IGNORE_GLOBAL_LIBVIPS=1 pnpm install`.
 - CLI: `pnpm openclaw ...` or `pnpm dev`; build: `pnpm build`.
 - Tests in a normal source checkout: `pnpm test <path-or-filter> [vitest args...]`, `pnpm test:changed`, `pnpm test:serial`, `pnpm test:coverage`; never raw `vitest`.
 - Tests in a Codex worktree or linked/sparse checkout: avoid direct local `pnpm test*`; use `node scripts/run-vitest.mjs <path-or-filter>` for tiny explicit-file proof, or Crabbox/Testbox for anything broader.
@@ -67,6 +68,7 @@ Skills own workflows; root owns hard policy and routing.
 - Full suites, broad changed gates, Docker/package/E2E/live/cross-OS proof, or anything that bogs down the Mac: Crabbox/Testbox.
 - One/few files local. If a local command fans out, stop and move broad proof to Crabbox/Testbox.
 - Before handoff/push: prove touched surface. Before landing to `main`: issue proof plus appropriate full/broad proof unless scope is clearly narrow.
+- Pre-land/pre-commit code changes: use `$codex-review` until no accepted/actionable findings remain, unless equivalent manual review already done, trivial/docs-only, or user opts out.
 - If proof is blocked, say exactly what is missing and why.
 - Do not land related failing format/lint/type/build/tests. If unrelated on latest `origin/main`, say so with scoped proof.
 - Docs/changelog-only and CI/workflow metadata-only: `git diff --check` plus relevant docs/workflow sanity; escalate only if scripts/config/generated/package/runtime behavior changed.
@@ -79,7 +81,7 @@ Skills own workflows; root owns hard policy and routing.
 - No unsolicited PR comments/reviews/labels/retitles/rebases/fixups/landing. Exception: close/duplicate action that needs a reason comment after explicit close/sweep/landing request.
 - Maintainer decision closes the cluster: if deciding reported behavior/proposed fix is not planned, comment+close all directly associated open issues/PRs unless explicitly told to keep one open. Associated means linked PRs/issues, duplicates, companion workaround PRs, and the canonical issue for the rejected behavior.
 - Do not leave associated issues open for hypothetical future repros. Close with rationale; ask for a new issue or reopen only if concrete new evidence appears. Close comment states: decision, why, supported alternative, and what evidence would change the decision.
-- PR review answer: bug/behavior, URL(s), affected surface, best-fix judgment, evidence from code/tests/CI/current or shipped behavior.
+- PR review answer: bug/behavior, URL(s), affected surface, provenance for regressions when traceable, best-fix judgment, evidence from code/tests/CI/current or shipped behavior.
 - Issue/PR final answer: last line is the full GitHub URL.
 - Changelog: PR landings/fixes need one unless pure test/internal. Do not mention missing changelog as a review finding; Codex handles it during fix/landing.
 - PR verification: before merge, post exact local commands, CI/Testbox run IDs, before/after proof when used, and known proof gaps.

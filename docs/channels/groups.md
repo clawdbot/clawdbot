@@ -35,7 +35,8 @@ Quick flow (what happens to a group message):
 groupPolicy? disabled -> drop
 groupPolicy? allowlist -> group allowed? no -> drop
 requireMention? yes -> mentioned? no -> store for context only
-otherwise -> reply
+mention/reply/command/DM -> user request
+always-on group chatter -> user request, or room event when configured
 ```
 
 ## Visible replies
@@ -50,7 +51,7 @@ privately instead of calling the message tool. That is not a
 Discord/Slack/Telegram send failure. Use a tool-call-reliable model for
 group/channel sessions, or set
 `messages.groupChat.visibleReplies: "automatic"` to restore legacy visible
-final replies.
+final replies for group requests.
 
 If the message tool is unavailable under the active tool policy, OpenClaw falls
 back to automatic visible replies instead of silently suppressing the response.
@@ -60,9 +61,23 @@ For direct chats and any other source turn, use `messages.visibleReplies: "messa
 
 This replaces the old pattern of forcing the model to answer `NO_REPLY` for most lurk-mode turns. In tool-only mode, doing nothing visible simply means not calling the message tool.
 
-Typing indicators are still sent while the agent works in tool-only mode. The default group typing mode is upgraded from "message" to "instant" for these turns because there may never be normal assistant message text before the agent decides whether to call the message tool. Explicit typing-mode config still wins.
+Typing indicators are still sent for direct group requests. Ambient always-on room events, when enabled, stay quiet unless the agent calls the message tool.
 
-To restore legacy automatic final replies for group/channel rooms:
+To submit always-on ambient group chatter as quiet room context instead of legacy user requests:
+
+```json5
+{
+  messages: {
+    groupChat: {
+      ambientTurns: "room_event",
+    },
+  },
+}
+```
+
+The default is `ambientTurns: "user_request"` for compatibility.
+
+To restore legacy automatic final replies for group/channel requests:
 
 ```json5
 {
@@ -349,8 +364,10 @@ Replying to a bot message counts as an implicit mention when the channel support
     - Per-agent override: `agents.list[].groupChat.mentionPatterns` (useful when multiple agents share a group).
     - Mention gating is only enforced when mention detection is possible (native mentions or `mentionPatterns` are configured).
     - Allowlisting a group or sender does not disable mention gating; set that group's `requireMention` to `false` when all messages should trigger.
-    - Group chat prompt context carries the resolved silent-reply instruction every turn; workspace files should not duplicate `NO_REPLY` mechanics.
-    - Groups where silent replies are allowed treat clean empty or reasoning-only model turns as silent, equivalent to `NO_REPLY`. Direct chats do the same only when direct silent replies are explicitly allowed; otherwise empty replies remain failed agent turns.
+    - Automatic group chat prompt context carries the resolved silent-reply instruction every turn; workspace files should not duplicate `NO_REPLY` mechanics.
+    - Groups where automatic silent replies are allowed treat clean empty or reasoning-only model turns as silent, equivalent to `NO_REPLY`. Direct chats never receive `NO_REPLY` guidance, and message-tool-only group replies stay quiet by not calling `message(action=send)`.
+    - Ambient always-on group chatter uses legacy user-request semantics by default. Set `messages.groupChat.ambientTurns: "room_event"` to submit it as quiet context instead.
+    - Room events are not stored as fake user requests, and private assistant text from no-message-tool room events is not replayed as chat history.
     - Discord defaults live in `channels.discord.guilds."*"` (overridable per guild/channel).
     - Group history context is wrapped uniformly across channels. Mention-gated groups keep pending skipped messages; always-on groups may also retain recent processed room messages when the channel supports it. Use `messages.groupChat.historyLimit` for the global default and `channels.<channel>.historyLimit` (or `channels.<channel>.accounts.*.historyLimit`) for overrides. Set `0` to disable.
 

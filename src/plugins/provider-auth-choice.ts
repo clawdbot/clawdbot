@@ -10,6 +10,7 @@ import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
+import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { enablePluginInConfig } from "./enable.js";
 import {
@@ -119,13 +120,19 @@ async function noteDefaultModelResult(params: {
     params.previousPrimary !== params.selectedModel
   ) {
     await params.prompter.note(
-      `Kept existing default model ${params.previousPrimary}; ${selectedModelDisplay} is available.`,
-      "Model configured",
+      t("wizard.model.keptExistingDefault", {
+        current: params.previousPrimary,
+        selected: selectedModelDisplay,
+      }),
+      t("wizard.model.configuredTitle"),
     );
     return;
   }
 
-  await params.prompter.note(`Default model set to ${selectedModelDisplay}`, "Model configured");
+  await params.prompter.note(
+    t("wizard.model.defaultSet", { model: selectedModelDisplay }),
+    t("wizard.model.configuredTitle"),
+  );
 }
 
 async function applyDefaultModelFromAuthChoice(params: {
@@ -568,8 +575,11 @@ export async function applyAuthChoicePluginProvider(
     }
     if (params.agentId) {
       await params.prompter.note(
-        `Default model set to ${selectedModelDisplay} for agent "${params.agentId}".`,
-        "Model configured",
+        t("wizard.model.defaultSetForAgent", {
+          agent: params.agentId,
+          model: selectedModelDisplay,
+        }),
+        t("wizard.model.configuredTitle"),
       );
     }
     nextConfig = restoreConfiguredPrimaryModel(nextConfig, params.config);

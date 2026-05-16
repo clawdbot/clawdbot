@@ -291,6 +291,64 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     expect(result.diagnostics).toStrictEqual([]);
   });
 
+  it.runIf(process.platform !== "win32")(
+    "treats persisted package metadata symlinks outside the plugin root as stale",
+    () => {
+      const tempRoot = makeTempDir();
+      const rootDir = path.join(tempRoot, "workspace");
+      const stateDir = path.join(tempRoot, "state");
+      const outsideDir = path.join(tempRoot, "outside");
+      const packageJsonPath = path.join(rootDir, "package.json");
+      const outsidePackageJsonPath = path.join(outsideDir, "package.json");
+      const env = { ...createHermeticEnv(tempRoot), OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" };
+      const config = {
+        plugins: {
+          load: { paths: [rootDir] },
+        },
+      };
+      writePackagePlugin(rootDir);
+      fs.mkdirSync(outsideDir, { recursive: true });
+      fs.rmSync(packageJsonPath);
+      fs.writeFileSync(
+        outsidePackageJsonPath,
+        JSON.stringify({ name: "demo", version: "1.0.0" }),
+        "utf8",
+      );
+      fs.symlinkSync(outsidePackageJsonPath, packageJsonPath);
+      const index = loadInstalledPluginIndex({ config, env });
+      const [plugin] = index.plugins;
+      if (!plugin) {
+        throw new Error("expected test plugin");
+      }
+      writePersistedInstalledPluginIndexSync(
+        {
+          ...index,
+          plugins: [
+            {
+              ...plugin,
+              packageJson: {
+                path: "package.json",
+                hash: fileHash(packageJsonPath),
+                fileSignature: fileSignature(packageJsonPath),
+              },
+            },
+            ...index.plugins.slice(1),
+          ],
+        },
+        { stateDir },
+      );
+
+      const result = loadPluginRegistrySnapshotWithMetadata({
+        config,
+        env,
+        stateDir,
+      });
+
+      expect(result.source).toBe("derived");
+      expectDiagnosticsContainCode(result.diagnostics, "persisted-registry-stale-source");
+    },
+  );
+
   it("detects same-size same-mtime manifest replacements", () => {
     const tempRoot = makeTempDir();
     const rootDir = path.join(tempRoot, "workspace");

@@ -45,7 +45,8 @@
         "install": {
           "npmSpec": "@openclaw/brave-plugin",
           "defaultChoice": "npm",
-          "minHostVersion": ">=2026.4.10"
+          "minHostVersion": ">=2026.4.10",
+          "allowInvalidConfigRecovery": true
         }
       }
     },

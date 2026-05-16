@@ -95,6 +95,54 @@ describe("projectContextEngineAssemblyForCodex", () => {
     expect(result.promptText).not.toContain("cat .env");
   });
 
+  it("preserves redacted tool payload context for thread bootstrap projections", () => {
+    const result = projectContextEngineAssemblyForCodex({
+      assembledMessages: [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              name: "exec",
+              input: {
+                token: "sk-1234567890abcdef",
+                cmd: "cat .env",
+                options: { recursive: true },
+              },
+            },
+          ],
+          timestamp: 1,
+        } as unknown as AgentMessage,
+        {
+          role: "toolResult",
+          content: [
+            {
+              type: "toolResult",
+              toolUseId: "call-1",
+              content: "OPENAI_API_KEY=sk-1234567890abcdef\nstatus ok",
+            },
+          ],
+          timestamp: 2,
+        } as unknown as AgentMessage,
+      ],
+      originalHistoryMessages: [],
+      prompt: "continue",
+      toolPayloadMode: "preserve",
+    });
+
+    expect(result.promptText).toContain("tool call: exec");
+    expect(result.promptText).toContain('"inputShape"');
+    expect(result.promptText).toContain('"token": "[string]"');
+    expect(result.promptText).toContain('"cmd": "[string]"');
+    expect(result.promptText).toContain('"recursive": "[boolean]"');
+    expect(result.promptText).toContain("tool result: call-1");
+    expect(result.promptText).toContain('"content"');
+    expect(result.promptText).toContain("OPENAI_API_KEY=");
+    expect(result.promptText).toContain("status ok");
+    expect(result.promptText).not.toContain("cat .env");
+    expect(result.promptText).not.toContain("sk-1234567890abcdef");
+  });
+
   it("bounds oversized text context", () => {
     const result = projectContextEngineAssemblyForCodex({
       assembledMessages: [textMessage("assistant", "x".repeat(30_000))],

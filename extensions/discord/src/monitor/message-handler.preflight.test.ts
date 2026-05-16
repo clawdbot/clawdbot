@@ -6,6 +6,7 @@ const transcribeFirstAudioMock = vi.hoisted(() => vi.fn());
 const fetchPluralKitMessageInfoMock = vi.hoisted(() => vi.fn());
 const resolveDiscordDmCommandAccessMock = vi.hoisted(() => vi.fn());
 const handleDiscordDmCommandDecisionMock = vi.hoisted(() => vi.fn(async () => {}));
+const saveRemoteMediaMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../pluralkit.js", () => ({
   fetchPluralKitMessageInfo: (...args: unknown[]) => fetchPluralKitMessageInfoMock(...args),
@@ -20,6 +21,15 @@ vi.mock("./dm-command-auth.js", async (importOriginal) => ({
 vi.mock("./dm-command-decision.js", () => ({
   handleDiscordDmCommandDecision: handleDiscordDmCommandDecisionMock,
 }));
+vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/media-runtime")>(
+    "openclaw/plugin-sdk/media-runtime",
+  );
+  return {
+    ...actual,
+    saveRemoteMedia: (...args: unknown[]) => saveRemoteMediaMock(...args),
+  };
+});
 import {
   __testing as sessionBindingTesting,
   registerSessionBindingAdapter,
@@ -52,6 +62,15 @@ beforeAll(async () => {
 
 beforeEach(() => {
   fetchPluralKitMessageInfoMock.mockReset();
+  saveRemoteMediaMock.mockReset();
+  saveRemoteMediaMock.mockImplementation(
+    async (options: { fallbackContentType?: string; filePathHint?: string }) => ({
+      id: "test-media",
+      path: `/tmp/openclaw-discord-test/${options.filePathHint ?? "media"}`,
+      size: 5,
+      contentType: options.fallbackContentType,
+    }),
+  );
 });
 
 function createThreadBinding(
@@ -1485,6 +1504,294 @@ describe("preflightDiscordMessage", () => {
     const result = await runIgnoreOtherMentionsPreflight({ channelId, guildId, message });
 
     expect(result).toBeNull();
+  });
+
+  it("records local image media for skipped mention-gated guild history", async () => {
+    const channelId = "channel-history-image";
+    const guildId = "guild-history-image";
+    const guildHistories = new Map();
+    saveRemoteMediaMock.mockResolvedValueOnce({
+      id: "test-media",
+      path: "C:\\openclaw\\media\\history.png",
+      size: 5,
+      contentType: "image/png",
+    });
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(Buffer.from("image"), {
+          headers: {
+            "content-type": "image/png",
+          },
+        }),
+    ) as unknown as typeof fetch;
+    const message = createDiscordMessage({
+      id: "m-history-image",
+      channelId,
+      content: "",
+      attachments: [
+        {
+          id: "att-history-image",
+          url: "https://cdn.discordapp.com/attachments/1/history.png",
+          filename: "history.png",
+          content_type: "image/png",
+        },
+      ],
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "Alice",
+      },
+    });
+
+    const result = await preflightDiscordMessage({
+      ...createPreflightArgs({
+        cfg: DEFAULT_PREFLIGHT_CFG,
+        discordConfig: {} as DiscordConfig,
+        data: createGuildEvent({
+          channelId,
+          guildId,
+          author: message.author,
+          message,
+        }),
+        client: createGuildTextClient(channelId),
+      }),
+      guildHistories,
+      historyLimit: 4,
+      discordRestFetch: fetchImpl,
+      guildEntries: {
+        [guildId]: {
+          channels: {
+            [channelId]: {
+              enabled: true,
+              requireMention: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(result).toBeNull();
+    const entries = guildHistories.get(channelId);
+    expect(entries).toHaveLength(1);
+    expect(entries?.[0]).toMatchObject({
+      sender: "Alice",
+      body: "<media:image> (1 image)",
+      messageId: "m-history-image",
+      media: [
+        {
+          contentType: "image/png",
+          kind: "image",
+          messageId: "m-history-image",
+        },
+      ],
+    });
+    expect(entries?.[0]?.media?.[0]?.path).toContain("history");
+    expect(entries?.[0]?.media?.[0]?.path).not.toMatch(/^https?:/);
+    expect(entries?.[0]?.media?.[0]?.path).toBe("C:\\openclaw\\media\\history.png");
+    expect(saveRemoteMediaMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not download non-image media for skipped mention-gated guild history", async () => {
+    const channelId = "channel-history-doc";
+    const guildId = "guild-history-doc";
+    const guildHistories = new Map();
+    const message = createDiscordMessage({
+      id: "m-history-doc",
+      channelId,
+      content: "",
+      attachments: [
+        {
+          id: "att-history-doc",
+          url: "https://cdn.discordapp.com/attachments/1/history.pdf",
+          filename: "history.pdf",
+          content_type: "application/pdf",
+        },
+      ],
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "Alice",
+      },
+    });
+
+    const result = await preflightDiscordMessage({
+      ...createPreflightArgs({
+        cfg: DEFAULT_PREFLIGHT_CFG,
+        discordConfig: {} as DiscordConfig,
+        data: createGuildEvent({
+          channelId,
+          guildId,
+          author: message.author,
+          message,
+        }),
+        client: createGuildTextClient(channelId),
+      }),
+      guildHistories,
+      historyLimit: 4,
+      guildEntries: {
+        [guildId]: {
+          channels: {
+            [channelId]: {
+              enabled: true,
+              requireMention: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(result).toBeNull();
+    expect(saveRemoteMediaMock).not.toHaveBeenCalled();
+    expect(guildHistories.get(channelId)).toEqual([
+      expect.objectContaining({
+        sender: "Alice",
+        body: "<media:document> (1 file)",
+        messageId: "m-history-doc",
+      }),
+    ]);
+    expect(guildHistories.get(channelId)?.[0]?.media).toBeUndefined();
+  });
+
+  it("records sticker image media for skipped mention-gated guild history", async () => {
+    const channelId = "channel-history-sticker";
+    const guildId = "guild-history-sticker";
+    const guildHistories = new Map();
+    saveRemoteMediaMock.mockResolvedValueOnce({
+      id: "test-sticker",
+      path: "/tmp/openclaw-discord-test/sticker.png",
+      size: 5,
+      contentType: "image/png",
+    });
+    const message = Object.assign(
+      createDiscordMessage({
+        id: "m-history-sticker",
+        channelId,
+        content: "",
+        author: {
+          id: "user-1",
+          bot: false,
+          username: "Alice",
+        },
+      }),
+      {
+        stickers: [
+          {
+            id: "sticker-history",
+            name: "history-sticker",
+            format_type: 1,
+          },
+        ],
+      },
+    );
+
+    const result = await preflightDiscordMessage({
+      ...createPreflightArgs({
+        cfg: DEFAULT_PREFLIGHT_CFG,
+        discordConfig: {} as DiscordConfig,
+        data: createGuildEvent({
+          channelId,
+          guildId,
+          author: message.author,
+          message,
+        }),
+        client: createGuildTextClient(channelId),
+      }),
+      guildHistories,
+      historyLimit: 4,
+      guildEntries: {
+        [guildId]: {
+          channels: {
+            [channelId]: {
+              enabled: true,
+              requireMention: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(result).toBeNull();
+    expect(guildHistories.get(channelId)).toEqual([
+      expect.objectContaining({
+        sender: "Alice",
+        body: "<media:sticker> (1 sticker)",
+        messageId: "m-history-sticker",
+        media: [
+          {
+            path: "/tmp/openclaw-discord-test/sticker.png",
+            contentType: "image/png",
+            kind: "image",
+            messageId: "m-history-sticker",
+          },
+        ],
+      }),
+    ]);
+    expect(saveRemoteMediaMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("caps skipped history media before falling back to raw Discord stickers", async () => {
+    const channelId = "channel-history-cap";
+    const guildId = "guild-history-cap";
+    const guildHistories = new Map();
+    const sticker = {
+      id: "sticker-history-cap",
+      name: "history-cap-sticker",
+      format_type: 1,
+    };
+    const message = Object.assign(
+      createDiscordMessage({
+        id: "m-history-cap",
+        channelId,
+        content: "",
+        attachments: Array.from({ length: 4 }, (_, index) => ({
+          id: `att-history-cap-${index}`,
+          url: `https://cdn.discordapp.com/attachments/1/history-${index}.png`,
+          filename: `history-${index}.png`,
+          content_type: "image/png",
+        })),
+        author: {
+          id: "user-1",
+          bot: false,
+          username: "Alice",
+        },
+      }),
+      {
+        rawData: {
+          sticker_items: [sticker],
+        },
+        stickers: [sticker],
+      },
+    );
+
+    const result = await preflightDiscordMessage({
+      ...createPreflightArgs({
+        cfg: DEFAULT_PREFLIGHT_CFG,
+        discordConfig: {} as DiscordConfig,
+        data: createGuildEvent({
+          channelId,
+          guildId,
+          author: message.author,
+          message,
+        }),
+        client: createGuildTextClient(channelId),
+      }),
+      guildHistories,
+      historyLimit: 4,
+      guildEntries: {
+        [guildId]: {
+          channels: {
+            [channelId]: {
+              enabled: true,
+              requireMention: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(result).toBeNull();
+    expect(guildHistories.get(channelId)?.[0]?.media).toHaveLength(4);
+    expect(saveRemoteMediaMock).toHaveBeenCalledTimes(4);
   });
 
   it("does not drop @everyone messages when ignoreOtherMentions=true", async () => {

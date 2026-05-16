@@ -365,16 +365,39 @@ function readToolResultDetailsMedia(
 
 function collectStructuredMediaUrls(media: Record<string, unknown>): string[] {
   const urls: string[] = [];
+  const pushString = (value: unknown) => {
+    if (typeof value !== "string") {
+      return;
+    }
+    const normalized = value.trim();
+    if (normalized) {
+      urls.push(normalized);
+    }
+  };
+  const pushAttachment = (value: unknown) => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      return;
+    }
+    const attachment = value as Record<string, unknown>;
+    pushString(attachment.media);
+    pushString(attachment.path);
+    pushString(attachment.url);
+    pushString(attachment.mediaUrl);
+    pushString(attachment.filePath);
+    pushString(attachment.fileUrl);
+  };
   if (typeof media.mediaUrl === "string" && media.mediaUrl.trim()) {
     urls.push(media.mediaUrl.trim());
   }
   if (Array.isArray(media.mediaUrls)) {
-    urls.push(
-      ...media.mediaUrls
-        .filter((value): value is string => typeof value === "string")
-        .map((value) => value.trim())
-        .filter(Boolean),
-    );
+    for (const value of media.mediaUrls) {
+      pushString(value);
+    }
+  }
+  if (Array.isArray(media.attachments)) {
+    for (const attachment of media.attachments) {
+      pushAttachment(attachment);
+    }
   }
   return Array.from(new Set(urls));
 }

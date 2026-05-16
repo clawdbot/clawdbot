@@ -2,6 +2,7 @@ import {
   type AgentApprovalEventData,
   formatApprovalDisplayPath,
   type EmbeddedRunAttemptParams,
+  runBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { formatCodexDisplayText } from "../command-formatters.js";
 import {
@@ -69,6 +70,26 @@ export async function handleCodexAppServerApprovalRequest(params: {
   });
 
   try {
+    const policyOutcome = await runOpenClawToolPolicyForApprovalRequest({
+      method: params.method,
+      requestParams,
+      paramsForRun: params.paramsForRun,
+      context,
+      signal: params.signal,
+    });
+    if (policyOutcome?.blocked) {
+      emitApprovalEvent(params.paramsForRun, {
+        phase: "resolved",
+        kind: context.kind,
+        status: "denied",
+        title: context.title,
+        ...context.eventDetails,
+        ...approvalEventScope(params.method, "denied"),
+        message: policyOutcome.reason,
+      });
+      return buildApprovalResponse(params.method, context.requestParams, "denied");
+    }
+
     const requestResult = await requestPluginApproval({
       paramsForRun: params.paramsForRun,
       title: context.title,
@@ -265,6 +286,117 @@ function buildApprovalContext(params: {
       ...(reasonPreview.omitted ? { reasonPreviewOmitted: true } : {}),
     },
   };
+}
+
+type ApprovalContext = ReturnType<typeof buildApprovalContext>;
+
+async function runOpenClawToolPolicyForApprovalRequest(params: {
+  method: string;
+  requestParams: JsonObject | undefined;
+  paramsForRun: EmbeddedRunAttemptParams;
+  context: ApprovalContext;
+  signal?: AbortSignal;
+}): Promise<{ blocked: true; reason: string } | undefined> {
+  const policyRequest = buildOpenClawToolPolicyRequest(params.method, params.requestParams);
+  if (!policyRequest) {
+    return undefined;
+  }
+  const cwd = readString(params.requestParams, "cwd") ?? params.paramsForRun.workspaceDir;
+  const outcome = await runBeforeToolCallHook({
+    toolName: policyRequest.toolName,
+    params: policyRequest.params,
+    ...(params.context.itemId ? { toolCallId: params.context.itemId } : {}),
+    approvalMode: "report",
+    signal: params.signal,
+    ctx: {
+      ...(params.paramsForRun.agentId ? { agentId: params.paramsForRun.agentId } : {}),
+      ...(params.paramsForRun.config ? { config: params.paramsForRun.config } : {}),
+      ...(cwd ? { cwd } : {}),
+      ...(params.paramsForRun.sessionKey ? { sessionKey: params.paramsForRun.sessionKey } : {}),
+      ...(params.paramsForRun.sessionId ? { sessionId: params.paramsForRun.sessionId } : {}),
+      ...(params.paramsForRun.runId ? { runId: params.paramsForRun.runId } : {}),
+      ...(params.paramsForRun.messageChannel || params.paramsForRun.messageProvider
+        ? { channelId: params.paramsForRun.messageChannel ?? params.paramsForRun.messageProvider }
+        : {}),
+    },
+  });
+  if (outcome.blocked) {
+    return { blocked: true, reason: outcome.reason };
+  }
+  if ("params" in outcome && toolPolicyParamsWereRewritten(policyRequest.params, outcome.params)) {
+    return {
+      blocked: true,
+      reason:
+        "OpenClaw tool policy rewrote Codex app-server approval params; refusing original request.",
+    };
+  }
+  return undefined;
+}
+
+function buildOpenClawToolPolicyRequest(
+  method: string,
+  requestParams: JsonObject | undefined,
+): { toolName: string; params: JsonObject } | undefined {
+  if (method === "item/commandExecution/requestApproval") {
+    const command = readPolicyCommand(requestParams);
+    return {
+      toolName: "bash",
+      params: {
+        ...(command ? { command } : {}),
+        ...(readString(requestParams, "cwd") ? { cwd: readString(requestParams, "cwd") } : {}),
+        approval: requestParams ?? {},
+      },
+    };
+  }
+  if (method === "item/fileChange/requestApproval") {
+    return { toolName: "apply_patch", params: requestParams ?? {} };
+  }
+  if (method === "item/permissions/requestApproval") {
+    return { toolName: "codex_permission_approval", params: requestParams ?? {} };
+  }
+  return undefined;
+}
+
+function toolPolicyParamsWereRewritten(original: JsonObject, candidate: unknown): boolean {
+  if (candidate === original) {
+    return false;
+  }
+  const originalText = stableJsonText(original);
+  const candidateText = stableJsonText(candidate);
+  return !candidateText || candidateText !== originalText;
+}
+
+function stableJsonText(value: unknown): string | undefined {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    const items = value.map((item) => stableJsonText(item));
+    return items.every((item): item is string => item !== undefined)
+      ? `[${items.join(",")}]`
+      : undefined;
+  }
+  if (isPlainRecord(value)) {
+    const entries = Object.entries(value)
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => {
+        const text = stableJsonText(item);
+        return text === undefined ? undefined : `${JSON.stringify(key)}:${text}`;
+      });
+    return entries.every((entry): entry is string => entry !== undefined)
+      ? `{${entries.join(",")}}`
+      : undefined;
+  }
+  return undefined;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function commandApprovalDecision(
@@ -758,19 +890,36 @@ function readDisplayCommandPreview(
   return readCommandPreview(record);
 }
 
+function readPolicyCommand(record: JsonObject | undefined): string | undefined {
+  const command = record?.command;
+  if (typeof command === "string") {
+    return command;
+  }
+  if (Array.isArray(command) && command.every((part): part is string => typeof part === "string")) {
+    return command.join(" ");
+  }
+  const actionCommands = readCommandActions(record);
+  if (actionCommands.length > 0) {
+    return actionCommands.join(" && ");
+  }
+  return undefined;
+}
+
+function readCommandActions(record: JsonObject | undefined): string[] {
+  const actions = record?.commandActions;
+  if (!Array.isArray(actions)) {
+    return [];
+  }
+  return actions
+    .map((action) => (isJsonObject(action) ? readString(action, "command") : undefined))
+    .filter((command): command is string => Boolean(command));
+}
+
 function readCommandActionsPreview(
   record: JsonObject | undefined,
 ): ApprovalPreviewSource | undefined {
-  const actions = record?.commandActions;
-  if (!Array.isArray(actions)) {
-    return undefined;
-  }
   let source: ApprovalPreviewSource | undefined;
-  for (const action of actions) {
-    const command = isJsonObject(action) ? readString(action, "command") : undefined;
-    if (!command) {
-      continue;
-    }
+  for (const command of readCommandActions(record)) {
     source = appendPreviewPart(source, command, " && ");
     if (source.clipped) {
       break;

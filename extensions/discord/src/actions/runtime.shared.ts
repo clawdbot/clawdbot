@@ -46,7 +46,10 @@ export function readDiscordChannelCreateParams(
   return {
     guildId: readStringParam(params, "guildId", { required: true }),
     name: readStringParam(params, "name", { required: true }),
-    type: readNumberParam(params, "type", { integer: true }) ?? undefined,
+    type:
+      readNumberParam(params, "channelType", { integer: true }) ??
+      readNumberParam(params, "type", { integer: true }) ??
+      undefined,
     parentId: parentId ?? undefined,
     topic: readStringParam(params, "topic") ?? undefined,
     position: readNumberParam(params, "position", { integer: true }) ?? undefined,

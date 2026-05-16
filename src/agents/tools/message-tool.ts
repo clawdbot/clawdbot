@@ -11,6 +11,7 @@ import {
 import { CHANNEL_MESSAGE_ACTION_NAMES } from "../../channels/plugins/message-action-names.js";
 import type { ChannelMessageCapability } from "../../channels/plugins/message-capabilities.js";
 import type { ChannelMessageActionName } from "../../channels/plugins/types.public.js";
+import type { InboundTurnKind } from "../../channels/turn/kind.js";
 import { resolveCommandSecretRefsViaGateway } from "../../cli/command-secret-gateway.js";
 import { getScopedChannelsCommandSecretTargets } from "../../cli/command-secret-targets.js";
 import { resolveMessageSecretScope } from "../../cli/message-secret-scope.js";
@@ -188,6 +189,25 @@ function buildSendSchema(options: { includePresentation: boolean; includeDeliver
     caption: Type.Optional(Type.String()),
     path: Type.Optional(Type.String()),
     filePath: Type.Optional(Type.String()),
+    attachments: Type.Optional(
+      Type.Array(
+        Type.Object({
+          type: Type.Optional(stringEnum(["image", "audio", "video", "file"])),
+          media: Type.Optional(Type.String()),
+          mediaUrl: Type.Optional(Type.String()),
+          path: Type.Optional(Type.String()),
+          filePath: Type.Optional(Type.String()),
+          fileUrl: Type.Optional(Type.String()),
+          url: Type.Optional(Type.String()),
+          name: Type.Optional(Type.String()),
+          mimeType: Type.Optional(Type.String()),
+        }),
+        {
+          description:
+            "Structured media attachments to send with the message. Each item needs media/mediaUrl/path/filePath/fileUrl/url.",
+        },
+      ),
+    ),
     replyTo: Type.Optional(Type.String()),
     threadId: Type.Optional(Type.String()),
     asVoice: Type.Optional(Type.Boolean()),
@@ -448,7 +468,12 @@ function buildPresenceSchema() {
 function buildChannelManagementSchema() {
   return {
     name: Type.Optional(Type.String()),
-    type: Type.Optional(Type.Number()),
+    channelType: Type.Optional(
+      Type.Number({
+        description:
+          "Numeric channel type (e.g. Discord channel type). Renamed from `type` to avoid JSON Schema keyword collisions that break some OpenAI-compatible providers (notably NVIDIA NIM).",
+      }),
+    ),
     parentId: Type.Optional(Type.String()),
     topic: Type.Optional(Type.String()),
     position: Type.Optional(Type.Number()),
@@ -546,6 +571,7 @@ type MessageToolOptions = {
   sandboxRoot?: string;
   requireExplicitTarget?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  inboundTurnKind?: InboundTurnKind;
   requesterSenderId?: string;
   senderIsOwner?: boolean;
 };
@@ -936,6 +962,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         agentId: resolvedAgentId,
         sandboxRoot: options?.sandboxRoot,
         sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
+        inboundTurnKind: options?.inboundTurnKind,
         abortSignal: signal,
       });
 

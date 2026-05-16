@@ -1,8 +1,9 @@
-import { readFileSync, readdirSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import fs, { readFileSync } from "node:fs";
 import { dirname, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 const SRC_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const REPO_ROOT = resolve(SRC_ROOT, "..");
@@ -120,14 +121,20 @@ type FileFilter = {
 function listTsFiles(rootRelativePath: string, filter: FileFilter = {}): string[] {
   const cacheKey = `${rootRelativePath}:${filter.excludeTests ? "exclude-tests" : ""}:${filter.testOnly ? "test-only" : ""}`;
   const cached = tsFilesCache.get(cacheKey);
-  if (cached) {
+  if (cached !== undefined) {
     return cached;
   }
+  const externalFiles = listExternalTsFiles(rootRelativePath, filter);
+  if (externalFiles) {
+    tsFilesCache.set(cacheKey, externalFiles);
+    return externalFiles;
+  }
+
   const root = resolve(REPO_ROOT, rootRelativePath);
   const files: string[] = [];
 
   function walk(directory: string) {
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
       const fullPath = resolve(directory, entry.name);
       if (entry.isDirectory()) {
         if (entry.name === "node_modules" || entry.name === "dist" || entry.name === ".git") {
@@ -154,6 +161,73 @@ function listTsFiles(rootRelativePath: string, filter: FileFilter = {}): string[
   const sorted = files.toSorted();
   tsFilesCache.set(cacheKey, sorted);
   return sorted;
+}
+
+function listExternalTsFiles(rootRelativePath: string, filter: FileFilter): string[] | null {
+  return listGitTrackedTsFiles(rootRelativePath, filter) ?? listFindTsFiles(rootRelativePath, filter);
+}
+
+function listGitTrackedTsFiles(rootRelativePath: string, filter: FileFilter): string[] | null {
+  if (!rootRelativePath || rootRelativePath.startsWith("..")) {
+    return null;
+  }
+  const result = spawnSync("git", ["ls-files", "--", rootRelativePath], {
+    cwd: REPO_ROOT,
+    encoding: "utf8",
+    maxBuffer: 16 * 1024 * 1024,
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout
+    .split("\n")
+    .map((line) => line.trim().replaceAll("\\", "/"))
+    .filter((line) => line.endsWith(".ts"))
+    .filter((line) => !(filter.excludeTests && line.endsWith(".test.ts")))
+    .filter((line) => !(filter.testOnly && !line.endsWith(".test.ts")))
+    .toSorted();
+}
+
+function listFindTsFiles(rootRelativePath: string, filter: FileFilter): string[] | null {
+  if (!rootRelativePath || rootRelativePath.startsWith("..")) {
+    return null;
+  }
+  const root = resolve(REPO_ROOT, rootRelativePath);
+  const result = spawnSync(
+    "find",
+    [
+      root,
+      "-type",
+      "f",
+      "-name",
+      "*.ts",
+      "-not",
+      "-path",
+      "*/node_modules/*",
+      "-not",
+      "-path",
+      "*/dist/*",
+    ],
+    {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+      maxBuffer: 16 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+    },
+  );
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((line) => relative(REPO_ROOT, line).split(sep).join("/"))
+    .filter((line) => line.endsWith(".ts"))
+    .filter((line) => !(filter.excludeTests && line.endsWith(".test.ts")))
+    .filter((line) => !(filter.testOnly && !line.endsWith(".test.ts")))
+    .toSorted();
 }
 
 function readRepoSource(file: string): string {
@@ -221,6 +295,22 @@ function collectTypedHookNames(source: string): string[] {
 }
 
 describe("plugin contract boundary invariants", () => {
+  it("lists boundary invariant source files without walking roots in-process", () => {
+    const readDir = vi.spyOn(fs, "readdirSync");
+    try {
+      tsFilesCache.clear();
+      const files = listTsFiles("src", { excludeTests: true });
+
+      expect(files.length).toBeGreaterThan(0);
+      expect(files.every((file) => file.startsWith("src/") && file.endsWith(".ts"))).toBe(true);
+      expect(files.some((file) => file.endsWith(".test.ts"))).toBe(false);
+      expect(readDir).not.toHaveBeenCalled();
+    } finally {
+      readDir.mockRestore();
+      tsFilesCache.clear();
+    }
+  });
+
   it("keeps bundled-capability-metadata confined to contract/test inventory", () => {
     const files = listTsFiles("src");
     const offenders = files.filter((file) => {

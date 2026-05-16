@@ -284,7 +284,7 @@ env:
 jobs:
   resolve_package:
     name: Resolve package candidate
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     outputs:
       docker_lanes: ${{ steps.profile.outputs.docker_lanes }}
@@ -588,7 +588,7 @@ jobs:
     name: Verify package acceptance
     needs: [resolve_package, docker_acceptance, package_telegram]
     if: always()
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
       - name: Verify package acceptance results

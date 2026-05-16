@@ -648,6 +648,7 @@ describe("buildInboundUserContextPrefix", () => {
   it("includes dynamic per-turn flags in conversation info", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "group",
+      InboundTurnKind: "room_event",
       WasMentioned: true,
       ExplicitlyMentionedBot: false,
       MentionedUserIds: [" U_OTHER ", "", "U_HELPER"],
@@ -661,6 +662,7 @@ describe("buildInboundUserContextPrefix", () => {
     } as TemplateContext);
 
     const conversationInfo = parseConversationInfoPayload(text);
+    expect(conversationInfo["turn_kind"]).toBe("room_event");
     expect(conversationInfo["is_group_chat"]).toBe(true);
     expect(conversationInfo["was_mentioned"]).toBe(true);
     expect(conversationInfo["explicitly_mentioned_bot"]).toBe(false);
@@ -961,5 +963,52 @@ describe("buildInboundUserContextPrefix", () => {
     expect(history).toHaveLength(20);
     expect(history[0]?.["body"]).toBe("body-5");
     expect(history.at(-1)?.["body"]).toBe("body-24");
+  });
+
+  it("includes inbound history media metadata without leaking paths or URLs", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      InboundHistory: [
+        {
+          sender: "Alice",
+          body: "<media:image> (1 image)",
+          timestamp: 1_736_380_700_000,
+          messageId: "m-1",
+          media: [
+            {
+              path: "/tmp/openclaw-secret-image.png",
+              url: "https://cdn.example.test/private-token",
+              contentType: "image/png",
+              kind: "image",
+              messageId: "m-1",
+            },
+          ],
+        },
+      ],
+    } as TemplateContext);
+
+    const conversationInfo = parseConversationInfoPayload(text);
+    expect(conversationInfo["history_media_count"]).toBe(1);
+
+    const history = parseHistoryPayload(text);
+    expect(history).toEqual([
+      {
+        sender: "Alice",
+        timestamp_ms: 1_736_380_700_000,
+        message_id: "m-1",
+        body: "<media:image> (1 image)",
+        media: [
+          {
+            kind: "image",
+            content_type: "image/png",
+            message_id: "m-1",
+            has_local_path: true,
+            has_url: true,
+          },
+        ],
+      },
+    ]);
+    expect(text).not.toContain("/tmp/openclaw-secret-image.png");
+    expect(text).not.toContain("private-token");
   });
 });

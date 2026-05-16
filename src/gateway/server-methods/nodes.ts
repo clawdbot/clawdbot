@@ -775,6 +775,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
         deviceFamily: approvedNode.deviceFamily,
         caps: approvedNode.caps,
         commands: approvedNode.commands,
+        approvedCommands: approvedNode.commands,
       });
       const currentAllowedCommands = normalizeDeclaredNodeCommands({
         declaredCommands: approvedNode.commands ?? [],
@@ -1179,7 +1180,10 @@ export const nodeHandlers: GatewayRequestHandlers = {
           `node wake done node=${nodeId} req=${wakeReqId} connected=true totalMs=${totalDurationMs}`,
         );
       }
-      const allowlist = resolveNodeCommandAllowlist(cfg, nodeSession);
+      const allowlist = resolveNodeCommandAllowlist(cfg, {
+        ...nodeSession,
+        approvedCommands: nodeSession.commands,
+      });
       const allowed = isNodeCommandAllowed({
         command,
         declaredCommands: nodeSession.commands,

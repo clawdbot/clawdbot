@@ -95,6 +95,7 @@
   "secret-ref-runtime",
   "secret-file-runtime",
   "security-runtime",
+  "gateway-method-runtime",
   "gateway-runtime",
   "cli-runtime",
   "cli-backend",

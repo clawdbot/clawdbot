@@ -10,14 +10,14 @@ import { withEnvAsync } from "../test-utils/env.js";
 
 const hoisted = vi.hoisted(() => {
   const startPluginServices = vi.fn(async () => null);
-  const startGmailWatcherWithLogs = vi.fn(async () => undefined);
+  const startGmailWatcherWithLogs = vi.fn(async () => {});
   const loadInternalHooks = vi.fn(async () => 0);
   const setInternalHooksEnabled = vi.fn();
   const hasInternalHookListeners = vi.fn(() => false);
   const startupHookEvent = { type: "gateway", action: "startup", sessionKey: "gateway:startup" };
   const createInternalHookEvent = vi.fn(() => startupHookEvent);
-  const triggerInternalHook = vi.fn(async () => undefined);
-  const startGatewayMemoryBackend = vi.fn(async () => undefined);
+  const triggerInternalHook = vi.fn(async () => {});
+  const startGatewayMemoryBackend = vi.fn(async () => {});
   const scheduleGatewayUpdateCheck = vi.fn(() => () => {});
   const startGatewayTailscaleExposure = vi.fn(async () => null);
   const logGatewayStartup = vi.fn();
@@ -41,8 +41,15 @@ const hoisted = vi.hoisted(() => {
     provider: "openai",
     model: "gpt-5.4",
   }));
+  const resolveHooksGmailModel = vi.fn<() => string | null>(() => null);
+  const loadModelCatalog = vi.fn(async () => ({}));
+  const getModelRefStatus = vi.fn(() => ({
+    key: "openai/gpt-5.4",
+    allowed: true,
+    inCatalog: true,
+  }));
   const resolveEmbeddedAgentRuntime = vi.fn(() => "pi");
-  const ensureOpenClawModelsJson = vi.fn(async () => undefined);
+  const ensureOpenClawModelsJson = vi.fn(async () => {});
   return {
     startPluginServices,
     startGmailWatcherWithLogs,
@@ -67,6 +74,9 @@ const hoisted = vi.hoisted(() => {
     resolveDefaultAgentDir,
     isCliProvider,
     resolveConfiguredModelRef,
+    resolveHooksGmailModel,
+    loadModelCatalog,
+    getModelRefStatus,
     resolveEmbeddedAgentRuntime,
     ensureOpenClawModelsJson,
   };
@@ -77,7 +87,7 @@ vi.mock("../agents/session-dirs.js", () => ({
 }));
 
 vi.mock("../agents/session-write-lock.js", () => ({
-  cleanStaleLockFiles: vi.fn(async () => undefined),
+  cleanStaleLockFiles: vi.fn(async () => {}),
 }));
 
 vi.mock("../agents/subagent-registry.js", () => ({
@@ -165,9 +175,15 @@ vi.mock("../agents/defaults.js", () => ({
   DEFAULT_PROVIDER: "openai",
 }));
 
+vi.mock("../agents/model-catalog.js", () => ({
+  loadModelCatalog: hoisted.loadModelCatalog,
+}));
+
 vi.mock("../agents/model-selection.js", () => ({
+  getModelRefStatus: hoisted.getModelRefStatus,
   isCliProvider: hoisted.isCliProvider,
   resolveConfiguredModelRef: hoisted.resolveConfiguredModelRef,
+  resolveHooksGmailModel: hoisted.resolveHooksGmailModel,
 }));
 
 vi.mock("../agents/pi-embedded-runner/runtime.js", () => ({
@@ -184,8 +200,7 @@ vi.mock("./server-tailscale.js", () => ({
 
 const { startGatewayPostAttachRuntime, startGatewaySidecars, __testing } =
   await import("./server-startup-post-attach.js");
-const { STARTUP_UNAVAILABLE_GATEWAY_METHODS } =
-  await import("./server-startup-unavailable-methods.js");
+const { STARTUP_UNAVAILABLE_GATEWAY_METHODS } = await import("./methods/core-descriptors.js");
 
 type PostAttachParams = Parameters<typeof startGatewayPostAttachRuntime>[0];
 type PostAttachRuntimeDeps = NonNullable<Parameters<typeof startGatewayPostAttachRuntime>[1]>;
@@ -269,6 +284,16 @@ describe("startGatewayPostAttachRuntime", () => {
     hoisted.isCliProvider.mockReset();
     hoisted.isCliProvider.mockReturnValue(false);
     hoisted.resolveConfiguredModelRef.mockClear();
+    hoisted.resolveHooksGmailModel.mockReset();
+    hoisted.resolveHooksGmailModel.mockReturnValue(null);
+    hoisted.loadModelCatalog.mockReset();
+    hoisted.loadModelCatalog.mockResolvedValue({});
+    hoisted.getModelRefStatus.mockReset();
+    hoisted.getModelRefStatus.mockReturnValue({
+      key: "openai/gpt-5.4",
+      allowed: true,
+      inCatalog: true,
+    });
     hoisted.resolveEmbeddedAgentRuntime.mockReset();
     hoisted.resolveEmbeddedAgentRuntime.mockReturnValue("pi");
     hoisted.ensureOpenClawModelsJson.mockReset();
@@ -312,7 +337,7 @@ describe("startGatewayPostAttachRuntime", () => {
     });
     const startGatewaySidecars = vi.fn(async () => {
       events.push("sidecars");
-      return { pluginServices: null };
+      return { pluginServices: null, postReadySidecars: [] };
     });
 
     await startGatewayPostAttachRuntime(
@@ -437,7 +462,7 @@ describe("startGatewayPostAttachRuntime", () => {
     const startGatewaySidecars = vi.fn(async (params) => {
       events.push("sidecars");
       expect(params.pluginRegistry).toBe(loadedPluginRegistry);
-      return { pluginServices: null };
+      return { pluginServices: null, postReadySidecars: [] };
     });
 
     await startGatewayPostAttachRuntime(
@@ -493,7 +518,7 @@ describe("startGatewayPostAttachRuntime", () => {
     });
     const startGatewaySidecars = vi.fn(async () => {
       events.push("sidecars");
-      return { pluginServices: null };
+      return { pluginServices: null, postReadySidecars: [] };
     });
 
     const runtimePromise = startGatewayPostAttachRuntime(
@@ -569,7 +594,7 @@ describe("startGatewayPostAttachRuntime", () => {
         pluginRegistry: createPostAttachParams().pluginRegistry,
         defaultWorkspaceDir: "/tmp/openclaw-workspace",
         deps: {} as never,
-        startChannels: vi.fn(async () => undefined),
+        startChannels: vi.fn(async () => {}),
         log: { warn: vi.fn() },
         logHooks: {
           info: vi.fn(),
@@ -597,9 +622,11 @@ describe("startGatewayPostAttachRuntime", () => {
 
   it("waits for sidecars by default before returning", async () => {
     let resumeSidecars: (() => void) | undefined;
-    const sidecarsReady = new Promise<{ pluginServices: null }>((resolve) => {
-      resumeSidecars = () => resolve({ pluginServices: null });
-    });
+    const sidecarsReady = new Promise<{ pluginServices: null; postReadySidecars: [] }>(
+      (resolve) => {
+        resumeSidecars = () => resolve({ pluginServices: null, postReadySidecars: [] });
+      },
+    );
     const startGatewaySidecars = vi.fn(async () => {
       return await sidecarsReady;
     });
@@ -692,7 +719,7 @@ describe("startGatewayPostAttachRuntime", () => {
               resolvePrewarm = () => resolve(undefined);
             }),
         );
-        const startChannels = vi.fn(async () => undefined);
+        const startChannels = vi.fn(async () => {});
 
         const sidecarsPromise = startGatewaySidecars({
           cfg: {
@@ -737,11 +764,269 @@ describe("startGatewayPostAttachRuntime", () => {
     );
   });
 
+  it("stops post-ready sidecars registered after close started", () => {
+    const postReadySidecar = { stop: vi.fn() };
+
+    __testing.stopPostReadySidecarsAfterCloseStarted({
+      postReadySidecars: [postReadySidecar],
+      closeStarted: true,
+    });
+
+    expect(postReadySidecar.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps post-ready sidecars running when close has not started", () => {
+    const postReadySidecar = { stop: vi.fn() };
+
+    __testing.stopPostReadySidecarsAfterCloseStarted({
+      postReadySidecars: [postReadySidecar],
+      closeStarted: false,
+    });
+
+    expect(postReadySidecar.stop).not.toHaveBeenCalled();
+  });
+
+  it("runs Gmail watcher after sidecars are ready", async () => {
+    let resolveWatcher: (() => void) | undefined;
+    let watcherSignal: AbortSignal | undefined;
+    hoisted.startGmailWatcherWithLogs.mockImplementationOnce(
+      async (...args: unknown[]) =>
+        await new Promise<void>((resolve) => {
+          const [params] = args as [{ signal?: AbortSignal }];
+          watcherSignal = params.signal;
+          resolveWatcher = resolve;
+        }),
+    );
+    const onPostReadySidecars = vi.fn();
+    const log = { warn: vi.fn() };
+
+    const result = await startGatewaySidecars({
+      cfg: {
+        hooks: { enabled: true, internal: { enabled: false }, gmail: { account: "me" } },
+      } as never,
+      pluginRegistry: createPostAttachParams().pluginRegistry,
+      defaultWorkspaceDir: "/tmp/openclaw-workspace",
+      deps: {} as never,
+      startChannels: vi.fn(async () => {}),
+      log,
+      logHooks: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+      logChannels: {
+        info: vi.fn(),
+        error: vi.fn(),
+      },
+    });
+
+    expect(result.postReadySidecars).toHaveLength(1);
+    expect(hoisted.startGmailWatcherWithLogs).not.toHaveBeenCalled();
+    onPostReadySidecars(result.postReadySidecars);
+    expect(onPostReadySidecars).toHaveBeenCalledWith(result.postReadySidecars);
+
+    await vi.waitFor(() => {
+      expect(hoisted.startGmailWatcherWithLogs).toHaveBeenCalledTimes(1);
+    });
+    expect(watcherSignal?.aborted).toBe(false);
+    expect(log.warn).not.toHaveBeenCalled();
+
+    if (!resolveWatcher) {
+      throw new Error("Expected gmail watcher resolver to be initialized");
+    }
+    result.postReadySidecars[0]?.stop();
+    expect(watcherSignal?.aborted).toBe(true);
+    resolveWatcher();
+  });
+
+  it("logs post-ready Gmail watcher failures without delaying sidecar readiness", async () => {
+    const log = { warn: vi.fn() };
+    hoisted.startGmailWatcherWithLogs.mockRejectedValueOnce(new Error("boom"));
+
+    const result = await startGatewaySidecars({
+      cfg: {
+        hooks: { enabled: true, internal: { enabled: false }, gmail: { account: "me" } },
+      } as never,
+      pluginRegistry: createPostAttachParams().pluginRegistry,
+      defaultWorkspaceDir: "/tmp/openclaw-workspace",
+      deps: {} as never,
+      startChannels: vi.fn(async () => {}),
+      log,
+      logHooks: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+      logChannels: {
+        info: vi.fn(),
+        error: vi.fn(),
+      },
+    });
+
+    expect(result.postReadySidecars).toHaveLength(1);
+    await vi.waitFor(() => {
+      expect(log.warn).toHaveBeenCalledWith(
+        "sidecars.gmail-watch failed after gateway ready: Error: boom",
+      );
+    });
+  });
+
+  it("cancels a post-ready Gmail watcher before the immediate starts", async () => {
+    const result = await startGatewaySidecars({
+      cfg: {
+        hooks: { enabled: true, internal: { enabled: false }, gmail: { account: "me" } },
+      } as never,
+      pluginRegistry: createPostAttachParams().pluginRegistry,
+      defaultWorkspaceDir: "/tmp/openclaw-workspace",
+      deps: {} as never,
+      startChannels: vi.fn(async () => {}),
+      log: { warn: vi.fn() },
+      logHooks: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+      logChannels: {
+        info: vi.fn(),
+        error: vi.fn(),
+      },
+    });
+
+    expect(result.postReadySidecars).toHaveLength(1);
+    result.postReadySidecars[0]?.stop();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(hoisted.startGmailWatcherWithLogs).not.toHaveBeenCalled();
+  });
+
+  it("cancels a post-ready Gmail watcher after the immediate enters", async () => {
+    let releaseImport: (() => void) | undefined;
+    vi.doMock("../hooks/gmail-watcher-lifecycle.js", async () => {
+      await new Promise<void>((resolve) => {
+        releaseImport = resolve;
+      });
+      return {
+        startGmailWatcherWithLogs: hoisted.startGmailWatcherWithLogs,
+      };
+    });
+    vi.resetModules();
+    try {
+      const { startGatewaySidecars: startGatewaySidecarsWithDelayedImport } =
+        await import("./server-startup-post-attach.js");
+
+      const result = await startGatewaySidecarsWithDelayedImport({
+        cfg: {
+          hooks: { enabled: true, internal: { enabled: false }, gmail: { account: "me" } },
+        } as never,
+        pluginRegistry: createPostAttachParams().pluginRegistry,
+        defaultWorkspaceDir: "/tmp/openclaw-workspace",
+        deps: {} as never,
+        startChannels: vi.fn(async () => {}),
+        log: { warn: vi.fn() },
+        logHooks: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+        },
+        logChannels: {
+          info: vi.fn(),
+          error: vi.fn(),
+        },
+      });
+
+      await vi.waitFor(() => {
+        expect(releaseImport).toBeDefined();
+      });
+      result.postReadySidecars[0]?.stop();
+      releaseImport?.();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(hoisted.startGmailWatcherWithLogs).not.toHaveBeenCalled();
+    } finally {
+      vi.doUnmock("../hooks/gmail-watcher-lifecycle.js");
+      vi.resetModules();
+    }
+  });
+
+  it("keeps already-started Gmail watcher cleanup on close", async () => {
+    const postReadySidecars = [{ stop: vi.fn() }];
+    const stopChannel = vi.fn(async () => {});
+    const pluginServices = { stop: vi.fn(async () => {}) };
+    const { createGatewayCloseHandler } = await import("./server-close.js");
+
+    const close = createGatewayCloseHandler({
+      bonjourStop: null,
+      tailscaleCleanup: null,
+      channelIds: [],
+      stopChannel,
+      pluginServices,
+      postReadySidecars,
+      cron: { stop: vi.fn() },
+      heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() },
+      nodePresenceTimers: new Map(),
+      broadcast: vi.fn(),
+      tickInterval: setInterval(() => {}, 1 << 30),
+      healthInterval: setInterval(() => {}, 1 << 30),
+      dedupeCleanup: setInterval(() => {}, 1 << 30),
+      mediaCleanup: null,
+      agentUnsub: null,
+      heartbeatUnsub: null,
+      transcriptUnsub: null,
+      lifecycleUnsub: null,
+      chatRunState: { clear: vi.fn() },
+      clients: new Set(),
+      configReloader: { stop: vi.fn(async () => {}) },
+      wss: { close: vi.fn((callback: () => void) => callback()) } as never,
+      httpServer: { close: vi.fn((callback: () => void) => callback()) } as never,
+    });
+
+    await close();
+
+    expect(postReadySidecars[0]?.stop).not.toHaveBeenCalled();
+    expect(pluginServices.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs Gmail model validation after sidecars are ready", async () => {
+    hoisted.resolveHooksGmailModel.mockReturnValueOnce("openai/gpt-5.4");
+
+    const result = await startGatewaySidecars({
+      cfg: {
+        hooks: { internal: { enabled: false }, gmail: { model: "openai/gpt-5.4" } },
+      } as never,
+      pluginRegistry: createPostAttachParams().pluginRegistry,
+      defaultWorkspaceDir: "/tmp/openclaw-workspace",
+      deps: {} as never,
+      startChannels: vi.fn(async () => {}),
+      log: { warn: vi.fn() },
+      logHooks: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+      logChannels: {
+        info: vi.fn(),
+        error: vi.fn(),
+      },
+    });
+
+    expect(result.postReadySidecars).toHaveLength(1);
+    expect(hoisted.loadModelCatalog).not.toHaveBeenCalled();
+
+    await vi.waitFor(() => {
+      expect(hoisted.loadModelCatalog).toHaveBeenCalledTimes(1);
+    });
+    expect(hoisted.getModelRefStatus).toHaveBeenCalledWith(
+      expect.objectContaining({ ref: "openai/gpt-5.4" }),
+    );
+  });
+
   it("keeps startup-gated methods unavailable while sidecars are still resuming", async () => {
     let resumeSidecars: (() => void) | undefined;
-    const sidecarsReady = new Promise<{ pluginServices: null }>((resolve) => {
-      resumeSidecars = () => resolve({ pluginServices: null });
-    });
+    const sidecarsReady = new Promise<{ pluginServices: null; postReadySidecars: [] }>(
+      (resolve) => {
+        resumeSidecars = () => resolve({ pluginServices: null, postReadySidecars: [] });
+      },
+    );
     const startGatewaySidecars = vi.fn(async () => {
       return await sidecarsReady;
     });
@@ -789,7 +1074,7 @@ describe("startGatewayPostAttachRuntime", () => {
         pluginRegistry: createPostAttachParams().pluginRegistry,
         defaultWorkspaceDir: "/tmp/openclaw-workspace",
         deps,
-        startChannels: vi.fn(async () => undefined),
+        startChannels: vi.fn(async () => {}),
         log: { warn: vi.fn() },
         logHooks: {
           info: vi.fn(),
@@ -839,7 +1124,7 @@ describe("startGatewayPostAttachRuntime", () => {
       pluginRegistry: createPostAttachParams().pluginRegistry,
       defaultWorkspaceDir: "/tmp/openclaw-workspace",
       deps: {} as never,
-      startChannels: vi.fn(async () => undefined),
+      startChannels: vi.fn(async () => {}),
       log: { warn: vi.fn() },
       logHooks: {
         info: vi.fn(),
@@ -866,7 +1151,7 @@ describe("startGatewayPostAttachRuntime", () => {
   it("passes typed gateway_start context with config, workspace dir, and a live cron getter", async () => {
     const runGatewayStart = vi.fn<
       (event: PluginHookGatewayStartEvent, ctx: PluginHookGatewayContext) => Promise<void>
-    >(async () => undefined);
+    >(async () => {});
     const hookRunner = {
       hasHooks: vi.fn((hookName: string) => hookName === "gateway_start"),
       runGatewayStart,
@@ -927,7 +1212,7 @@ describe("startGatewayPostAttachRuntime", () => {
   it("resolves gateway_start cron from the live runtime getter before deps fallback", async () => {
     const runGatewayStart = vi.fn<
       (event: PluginHookGatewayStartEvent, ctx: PluginHookGatewayContext) => Promise<void>
-    >(async () => undefined);
+    >(async () => {});
     const hookRunner = {
       hasHooks: vi.fn((hookName: string) => hookName === "gateway_start"),
       runGatewayStart,
@@ -976,7 +1261,7 @@ function createPostAttachRuntimeDeps(
     logGatewayStartup: hoisted.logGatewayStartup,
     refreshLatestUpdateRestartSentinel: hoisted.refreshLatestUpdateRestartSentinel,
     scheduleGatewayUpdateCheck: hoisted.scheduleGatewayUpdateCheck,
-    startGatewaySidecars: vi.fn(async () => ({ pluginServices: null })),
+    startGatewaySidecars: vi.fn(async () => ({ pluginServices: null, postReadySidecars: [] })),
     startGatewayTailscaleExposure: hoisted.startGatewayTailscaleExposure,
     ...overrides,
   };
@@ -1014,7 +1299,7 @@ function createPostAttachParams(overrides: Partial<PostAttachParams> = {}): Post
     } as never,
     defaultWorkspaceDir: "/tmp/openclaw-workspace",
     deps: {} as never,
-    startChannels: vi.fn(async () => undefined),
+    startChannels: vi.fn(async () => {}),
     logHooks: {
       info: vi.fn(),
       warn: vi.fn(),

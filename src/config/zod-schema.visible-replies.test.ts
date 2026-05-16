@@ -65,4 +65,48 @@ describe("visible reply config schema", () => {
       expect(visibleRepliesIssue?.path).toBe("messages.visibleReplies");
     }
   });
+
+  it("accepts enum ambient group turn values", () => {
+    const legacy = validateConfigObjectRaw({
+      messages: {
+        groupChat: {
+          ambientTurns: "user_request",
+        },
+      },
+    });
+    const roomEvent = validateConfigObjectRaw({
+      messages: {
+        groupChat: {
+          ambientTurns: "room_event",
+        },
+      },
+    });
+
+    expect(legacy.ok).toBe(true);
+    expect(roomEvent.ok).toBe(true);
+    if (legacy.ok) {
+      expect(legacy.config.messages?.groupChat?.ambientTurns).toBe("user_request");
+    }
+    if (roomEvent.ok) {
+      expect(roomEvent.config.messages?.groupChat?.ambientTurns).toBe("room_event");
+    }
+  });
+
+  it("rejects boolean ambient group turn values", () => {
+    const result = validateConfigObjectRaw({
+      messages: {
+        groupChat: {
+          ambientTurns: true,
+        },
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const issue = result.issues.find(
+        (candidate) => candidate.path === "messages.groupChat.ambientTurns",
+      );
+      expect(issue?.path).toBe("messages.groupChat.ambientTurns");
+    }
+  });
 });

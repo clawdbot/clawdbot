@@ -491,7 +491,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
       doctor: {
         dmAllowFromMode: "topOnly",
         groupModel: "hybrid",
-        groupAllowFromFallbackToAllowFrom: false,
+        groupAllowFromFallbackToAllowFrom: true,
         warnOnEmptyGroupSenderAllowlist: true,
         collectMutableAllowlistWarnings: collectMSTeamsMutableAllowlistWarnings,
       },

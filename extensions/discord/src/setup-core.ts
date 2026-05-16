@@ -1,7 +1,10 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import type { DiscordGuildEntry, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ChannelSetupDmPolicy, ChannelSetupWizard } from "openclaw/plugin-sdk/setup-runtime";
-import { createStandardChannelSetupStatus } from "openclaw/plugin-sdk/setup-runtime";
+import {
+  createSetupTranslator,
+  createStandardChannelSetupStatus,
+} from "openclaw/plugin-sdk/setup-runtime";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -17,14 +20,15 @@ import {
   setSetupChannelEnabled,
 } from "./setup-runtime-helpers.js";
 
-const channel = "discord" as const;
+const t = createSetupTranslator();
 
+const channel = "discord" as const;
 const DISCORD_TOKEN_HELP_LINES = [
-  "1) Discord Developer Portal -> Applications -> New Application",
-  "2) Bot -> Add Bot -> Reset Token -> copy token",
-  "3) OAuth2 -> URL Generator -> scope 'bot' -> invite to your server",
-  "Tip: enable Message Content Intent if you need message text. (Bot -> Privileged Gateway Intents -> Message Content Intent)",
-  `Docs: ${formatDocsLink("/discord", "discord")}`,
+  t("wizard.discord.tokenHelpCreateApplication"),
+  t("wizard.discord.tokenHelpCopyToken"),
+  t("wizard.discord.tokenHelpInviteBot"),
+  t("wizard.discord.tokenHelpMessageContentIntent"),
+  t("wizard.channels.docs", { link: formatDocsLink("/discord", "discord") }),
 ];
 
 type DiscordGuildChannelAllowlistEntry = {
@@ -118,10 +122,10 @@ export function createDiscordSetupWizardBase(handlers: {
     channel,
     status: createStandardChannelSetupStatus({
       channelLabel: "Discord",
-      configuredLabel: "configured",
-      unconfiguredLabel: "needs token",
-      configuredHint: "configured",
-      unconfiguredHint: "needs token",
+      configuredLabel: t("wizard.channels.statusConfigured"),
+      unconfiguredLabel: t("wizard.channels.statusNeedsToken"),
+      configuredHint: t("wizard.channels.statusConfigured"),
+      unconfiguredHint: t("wizard.channels.statusNeedsToken"),
       configuredScore: 2,
       unconfiguredScore: 1,
       resolveConfigured: ({ cfg, accountId }) =>
@@ -131,13 +135,13 @@ export function createDiscordSetupWizardBase(handlers: {
       {
         inputKey: "token",
         providerHint: channel,
-        credentialLabel: "Discord bot token",
+        credentialLabel: t("wizard.discord.botToken"),
         preferredEnvVar: "DISCORD_BOT_TOKEN",
-        helpTitle: "Discord bot token",
+        helpTitle: t("wizard.discord.botToken"),
         helpLines: DISCORD_TOKEN_HELP_LINES,
-        envPrompt: "DISCORD_BOT_TOKEN detected. Use env var?",
-        keepPrompt: "Discord token already configured. Keep it?",
-        inputPrompt: "Enter Discord bot token",
+        envPrompt: t("wizard.discord.tokenEnvPrompt"),
+        keepPrompt: t("wizard.discord.tokenKeepPrompt"),
+        inputPrompt: t("wizard.discord.tokenInputPrompt"),
         allowEnv: ({ accountId }: { accountId: string }) => accountId === DEFAULT_ACCOUNT_ID,
         inspect: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId: string }) => {
           const account = inspectDiscordSetupAccount({ cfg, accountId });
@@ -155,7 +159,7 @@ export function createDiscordSetupWizardBase(handlers: {
     ],
     groupAccess: createAccountScopedGroupAccessSection({
       channel,
-      label: "Discord channels",
+      label: t("wizard.discord.channelsLabel"),
       placeholder: "My Server/#general, guildId/channelId, #support",
       currentPolicy: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId: string }) =>
         resolveDiscordSetupAccountConfig({ cfg, accountId }).config.groupPolicy ?? "allowlist",
@@ -191,18 +195,17 @@ export function createDiscordSetupWizardBase(handlers: {
       credentialInputKey: "token",
       helpTitle: "Discord allowlist",
       helpLines: [
-        "Allowlist Discord DMs by username (we resolve to user ids).",
-        "Examples:",
+        t("wizard.discord.allowlistIntro"),
+        t("wizard.discord.examples"),
         "- 123456789012345678",
         "- @alice",
         "- alice#1234",
-        "Multiple entries: comma-separated.",
-        `Docs: ${formatDocsLink("/discord", "discord")}`,
+        t("wizard.discord.multipleEntries"),
+        t("wizard.channels.docs", { link: formatDocsLink("/discord", "discord") }),
       ],
-      message: "Discord allowFrom (usernames or ids)",
+      message: t("wizard.discord.allowFromPrompt"),
       placeholder: "@alice, 123456789012345678",
-      invalidWithoutCredentialNote:
-        "Bot token missing; use numeric user ids (or mention form) only.",
+      invalidWithoutCredentialNote: t("wizard.discord.allowFromInvalidWithoutToken"),
       parseId: parseDiscordAllowFromId,
       resolveEntries: handlers.resolveAllowFromEntries,
     }),

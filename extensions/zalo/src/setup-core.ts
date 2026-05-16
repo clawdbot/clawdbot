@@ -5,11 +5,14 @@ import {
   createSetupInputPresenceValidator,
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
+  createSetupTranslator,
   type ChannelSetupDmPolicy,
   type ChannelSetupWizard,
 } from "openclaw/plugin-sdk/setup";
 import { resolveDefaultZaloAccountId, resolveZaloAccount } from "./accounts.js";
 import { promptZaloAllowFrom } from "./setup-allow-from.js";
+
+const t = createSetupTranslator();
 
 const channel = "zalo" as const;
 
@@ -125,10 +128,10 @@ export function createZaloSetupWizardProxy(
     channel,
     loadWizard,
     status: {
-      configuredLabel: "configured",
-      unconfiguredLabel: "needs token",
-      configuredHint: "recommended · configured",
-      unconfiguredHint: "recommended · newcomer-friendly",
+      configuredLabel: t("wizard.channels.statusConfigured"),
+      unconfiguredLabel: t("wizard.channels.statusNeedsToken"),
+      configuredHint: t("wizard.channels.statusRecommendedConfigured"),
+      unconfiguredHint: t("wizard.channels.statusRecommendedNewcomerFriendly"),
       configuredScore: 1,
       unconfiguredScore: 10,
     },

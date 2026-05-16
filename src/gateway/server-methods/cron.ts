@@ -532,6 +532,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       scope?: "job" | "all";
       id?: string;
       jobId?: string;
+      runId?: string;
       limit?: number;
       offset?: number;
       statuses?: Array<"ok" | "error" | "skipped">;
@@ -565,6 +566,7 @@ export const cronHandlers: GatewayRequestHandlers = {
         offset: p.offset,
         statuses: p.statuses,
         status: p.status,
+        runId: p.runId,
         deliveryStatuses: p.deliveryStatuses,
         deliveryStatus: p.deliveryStatus,
         query: p.query,
@@ -594,6 +596,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       jobId: jobId as string,
       statuses: p.statuses,
       status: p.status,
+      runId: p.runId,
       deliveryStatuses: p.deliveryStatuses,
       deliveryStatus: p.deliveryStatus,
       query: p.query,

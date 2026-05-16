@@ -130,6 +130,28 @@ describe("runPluginPayloadSmokeCheck", () => {
     expect(result.failures).toEqual([]);
   });
 
+  it("reports a failure when `openclaw.extensions` contains invalid entries", async () => {
+    const dir = path.join(tmpRoot, "brave");
+    await writePackage(dir, {
+      name: "@openclaw/brave-plugin",
+      openclaw: { extensions: ["./index.js", " "] },
+    });
+    await fs.writeFile(path.join(dir, "index.js"), "export default {};\n", "utf8");
+    const result = await runPluginPayloadSmokeCheck({
+      records: { brave: { source: "npm", installPath: dir } },
+      env: {},
+    });
+    expect(result.failures).toStrictEqual([
+      {
+        pluginId: "brave",
+        installPath: dir,
+        reason: "missing-extension-entry",
+        detail:
+          "Plugin extension entry validation failed: package.json openclaw.extensions[1] must be a non-empty string",
+      },
+    ]);
+  });
+
   it("accepts a packaged TypeScript extension entry when compiled runtime output exists", async () => {
     const dir = path.join(tmpRoot, "codex");
     await writePackage(dir, {

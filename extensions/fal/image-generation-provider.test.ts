@@ -116,6 +116,35 @@ describe("fal image-generation provider", () => {
     });
   });
 
+  it("wraps wrong-shape successful fal image responses", async () => {
+    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "fal-test-key",
+      source: "env",
+      mode: "api-key",
+    });
+    _setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(
+        JSON.stringify({ images: { url: "https://example.test/image.png" } }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildFalImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "fal",
+        model: "fal-ai/flux/dev",
+        prompt: "draw a cat",
+        cfg: {},
+      }),
+    ).rejects.toThrow("fal image generation response malformed");
+  });
+
   it("uses image-to-image endpoint and data-uri input for edits", async () => {
     vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: "fal-test-key",

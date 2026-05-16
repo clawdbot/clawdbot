@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { normalizeCronJobIdentityFields } from "../normalize-job-identity.js";
 import { normalizeCronJobInput } from "../normalize.js";
+import { getInvalidPersistedCronJobReason } from "../persisted-shape.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { isInvalidCronSessionTargetIdError } from "../session-target.js";
 import { loadCronStore, saveCronStore } from "../store.js";
@@ -18,6 +19,29 @@ function invalidateStaleNextRunOnScheduleChange(params: {
   }
   params.hydrated.state ??= {};
   params.hydrated.state.nextRunAtMs = undefined;
+}
+
+function warnInvalidPersistedCronJob(params: {
+  state: CronServiceState;
+  raw: Record<string, unknown>;
+  index: number;
+  reason: string;
+}) {
+  const jobId = typeof params.raw.id === "string" ? params.raw.id : undefined;
+  const dedupeKey = jobId ?? `index:${params.index}`;
+  if (params.state.warnedInvalidPersistedJobKeys.has(dedupeKey)) {
+    return;
+  }
+  params.state.warnedInvalidPersistedJobKeys.add(dedupeKey);
+  params.state.deps.log.warn(
+    {
+      storePath: params.state.deps.storePath,
+      jobId,
+      jobIndex: params.index,
+      reason: params.reason,
+    },
+    "cron: skipped invalid persisted job; run openclaw doctor --fix to repair",
+  );
 }
 
 async function getFileMtimeMs(path: string): Promise<number | null> {
@@ -52,8 +76,9 @@ export async function ensureLoaded(
 
   const fileMtimeMs = await getFileMtimeMs(state.deps.storePath);
   const loaded = await loadCronStore(state.deps.storePath);
-  const jobs = (loaded.jobs ?? []) as unknown as CronJob[];
-  for (const [index, job] of jobs.entries()) {
+  const loadedJobs = (loaded.jobs ?? []) as unknown as CronJob[];
+  const jobs: CronJob[] = [];
+  for (const [index, job] of loadedJobs.entries()) {
     const raw = job as unknown as Record<string, unknown>;
     const { legacyJobIdIssue } = normalizeCronJobIdentityFields(raw);
     let normalized: Record<string, unknown> | null;
@@ -71,7 +96,14 @@ export async function ensureLoaded(
     }
     const hydrated =
       normalized && typeof normalized === "object" ? (normalized as unknown as CronJob) : job;
-    jobs[index] = hydrated;
+    const invalidReason = getInvalidPersistedCronJobReason(
+      hydrated as unknown as Record<string, unknown>,
+    );
+    if (invalidReason) {
+      warnInvalidPersistedCronJob({ state, raw, index, reason: invalidReason });
+      continue;
+    }
+    jobs.push(hydrated);
     if (legacyJobIdIssue) {
       const resolvedId = typeof hydrated.id === "string" ? hydrated.id : undefined;
       state.deps.log.warn(

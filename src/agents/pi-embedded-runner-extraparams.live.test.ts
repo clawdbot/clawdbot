@@ -14,7 +14,7 @@ const describeLive = LIVE && OPENAI_KEY ? describe : describe.skip;
 const describeAnthropicLive = ANTHROPIC_LIVE && ANTHROPIC_KEY ? describe : describe.skip;
 
 describeLive("pi embedded extra params (live)", () => {
-  it("applies config maxTokens to openai streamFn", async () => {
+  it("applies config max_completion_tokens alias to openai streamFn", async () => {
     const model = getModel("openai", "gpt-5.4") as unknown as Model<"openai-completions">;
 
     const cfg: OpenClawConfig = {
@@ -24,7 +24,7 @@ describeLive("pi embedded extra params (live)", () => {
             "openai/gpt-5.4": {
               // OpenAI Responses enforces a minimum max_output_tokens of 16.
               params: {
-                maxTokens: 16,
+                max_completion_tokens: 16,
               },
             },
           },
@@ -61,7 +61,7 @@ describeLive("pi embedded extra params (live)", () => {
 
     expect(stopReason).toBeTypeOf("string");
     expect(outputTokens).toBeTypeOf("number");
-    // Should respect maxTokens from config (16) — allow a small buffer for provider rounding.
+    // Should respect max_completion_tokens from config (16) — allow a small buffer for provider rounding.
     expect(outputTokens ?? 0).toBeLessThanOrEqual(20);
   }, 30_000);
 

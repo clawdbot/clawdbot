@@ -24,6 +24,7 @@ export {
   resolveHttpSenderIsOwner,
   resolveOpenAiCompatibleHttpOperatorScopes,
   resolveOpenAiCompatibleHttpSenderIsOwner,
+  resolveSharedSecretHttpOperatorScopes,
   resolveTrustedHttpOperatorScopes,
   type AuthorizedGatewayHttpRequest,
   type GatewayHttpRequestAuthCheckResult,

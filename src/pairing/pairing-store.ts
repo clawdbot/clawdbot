@@ -58,6 +58,10 @@ type PairingStore = {
   requests: PairingRequest[];
 };
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
 function resolvePairingPath(channel: PairingChannel, env: NodeJS.ProcessEnv = process.env): string {
   return path.join(resolvePairingCredentialsDir(env), `${safeChannelKey(channel)}-pairing.json`);
 }
@@ -86,7 +90,13 @@ async function readPairingRequests(filePath: string): Promise<PairingRequest[]> 
     version: 1,
     requests: [],
   });
-  return Array.isArray(value.requests) ? value.requests : [];
+  if (!Array.isArray(value.requests)) {
+    return [];
+  }
+  return value.requests.flatMap((request) => {
+    const normalized = normalizePersistedPairingRequest(request);
+    return normalized ? [normalized] : [];
+  });
 }
 
 async function readPrunedPairingRequests(filePath: string): Promise<{
@@ -124,6 +134,48 @@ function parseTimestamp(value: string | undefined): number | null {
     return null;
   }
   return parsed;
+}
+
+function normalizePersistedPairingMeta(value: unknown): Record<string, string> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const out: Record<string, string> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    const normalized = normalizeOptionalString(entry);
+    if (normalized) {
+      out[key] = normalized;
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function normalizePersistedPairingRequest(value: unknown): PairingRequest | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const id = normalizeOptionalString(value.id);
+  const code = normalizeOptionalString(value.code);
+  const createdAt = normalizeOptionalString(value.createdAt);
+  const lastSeenAt = normalizeOptionalString(value.lastSeenAt) ?? createdAt;
+  if (
+    !id ||
+    !code ||
+    !createdAt ||
+    !lastSeenAt ||
+    parseTimestamp(createdAt) === null ||
+    parseTimestamp(lastSeenAt) === null
+  ) {
+    return undefined;
+  }
+  const meta = normalizePersistedPairingMeta(value.meta);
+  return {
+    id,
+    code,
+    createdAt,
+    lastSeenAt,
+    ...(meta ? { meta } : {}),
+  };
 }
 
 function isExpired(entry: PairingRequest, nowMs: number): boolean {

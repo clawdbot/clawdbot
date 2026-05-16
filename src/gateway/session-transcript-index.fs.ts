@@ -146,7 +146,7 @@ function buildActiveTreeEntries(params: {
     seen.add(currentId);
     const entry = params.byId.get(currentId);
     if (!entry) {
-      return [];
+      break;
     }
     out.push(entry);
     currentId = entry.parentId ?? undefined;
@@ -206,10 +206,12 @@ async function buildSessionTranscriptIndex(
       record: parsed,
     };
     rawEntries.push(rawEntry);
-    if (isTreeTranscriptRecord(parsed) && id) {
-      hasTreeEntries = true;
-      leafId = id;
+    if (id) {
       byId.set(id, rawEntry);
+      if (isTreeTranscriptRecord(parsed)) {
+        hasTreeEntries = true;
+        leafId = id;
+      }
     }
   });
 

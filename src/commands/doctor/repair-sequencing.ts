@@ -4,6 +4,7 @@ import {
   maybeRepairManagedNpmOpenClawPeerLinks,
   maybeRepairStaleManagedNpmBundledPlugins,
 } from "../doctor-plugin-registry.js";
+import { maybeRepairGroupAllowFromFallback } from "./shared/allowfrom-fallback-migration.js";
 import { maybeRepairAllowlistPolicyAllowFrom } from "./shared/allowlist-policy-repair.js";
 import { maybeRepairBundledPluginLoadPaths } from "./shared/bundled-plugin-load-paths.js";
 import {
@@ -66,7 +67,6 @@ export async function runDoctorRepairSequence(params: {
   })) {
     applyMutation(mutation);
   }
-  applyMutation(maybeRepairOpenPolicyAllowFrom(state.candidate));
   applyMutation(maybeRepairBundledPluginLoadPaths(state.candidate, env));
   maybeRepairStaleManagedNpmBundledPlugins({
     config: state.candidate,
@@ -106,6 +106,8 @@ export async function runDoctorRepairSequence(params: {
   }
   applyMutation(maybeRepairInvalidPluginConfig(state.candidate));
   applyMutation(await maybeRepairAllowlistPolicyAllowFrom(state.candidate));
+  applyMutation(maybeRepairOpenPolicyAllowFrom(state.candidate));
+  applyMutation(maybeRepairGroupAllowFromFallback(state.candidate));
 
   const emptyAllowlistWarnings = scanEmptyAllowlistPolicyWarnings(state.candidate, {
     doctorFixCommand: params.doctorFixCommand,

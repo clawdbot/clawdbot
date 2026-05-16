@@ -25,6 +25,7 @@ import {
   resolveSharedVitestWorkerConfig,
   sharedVitestConfig,
 } from "./vitest/vitest.shared.config.ts";
+import { fullSuiteVitestShards } from "./vitest/vitest.test-shards.mjs";
 import { createUiVitestConfig, unitUiIncludePatterns } from "./vitest/vitest.ui.config.ts";
 import { createUnitFastVitestConfig } from "./vitest/vitest.unit-fast.config.ts";
 import unitUiConfig from "./vitest/vitest.unit-ui.config.ts";
@@ -56,6 +57,29 @@ afterEach(() => {
 describe("projects vitest config", () => {
   it("defines the native root project list for all non-live Vitest lanes", () => {
     expect(requireTestConfig(baseConfig).projects).toEqual([...rootVitestProjects]);
+  });
+
+  it("keeps root watch projects aligned with dedicated extension shard lanes", () => {
+    const extensionShard = fullSuiteVitestShards.find(
+      (shard) => shard.config === "test/vitest/vitest.full-extensions.config.ts",
+    );
+
+    expect(extensionShard?.projects).toEqual(
+      expect.arrayContaining([
+        "test/vitest/vitest.extension-browser.config.ts",
+        "test/vitest/vitest.extension-qa.config.ts",
+        "test/vitest/vitest.extension-media.config.ts",
+        "test/vitest/vitest.extension-misc.config.ts",
+      ]),
+    );
+    expect(rootVitestProjects).toEqual(
+      expect.arrayContaining([
+        "test/vitest/vitest.extension-browser.config.ts",
+        "test/vitest/vitest.extension-qa.config.ts",
+        "test/vitest/vitest.extension-media.config.ts",
+        "test/vitest/vitest.extension-misc.config.ts",
+      ]),
+    );
   });
 
   it("disables vite env-file loading for vitest lanes", () => {

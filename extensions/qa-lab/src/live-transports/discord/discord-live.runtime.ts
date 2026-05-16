@@ -152,6 +152,8 @@ type DiscordObservedMessage = {
   scenarioTitle?: string;
   matchedScenario?: boolean;
   text: string;
+  triggerMessageId?: string;
+  triggerTimestamp?: string;
   replyToMessageId?: string;
   timestamp?: string;
 };
@@ -167,6 +169,8 @@ type DiscordObservedMessageArtifact = {
   scenarioTitle?: string;
   matchedScenario?: boolean;
   text?: string;
+  triggerMessageId?: string;
+  triggerTimestamp?: string;
   replyToMessageId?: string;
   timestamp?: string;
 };
@@ -1096,6 +1100,8 @@ async function pollChannelMessages(params: {
   observedMessages: DiscordObservedMessage[];
   observationScenarioId: string;
   observationScenarioTitle: string;
+  triggerMessageId?: string;
+  triggerTimestamp?: string;
 }) {
   const startedAt = Date.now();
   let afterSnowflake = params.afterSnowflake;
@@ -1120,6 +1126,8 @@ async function pollChannelMessages(params: {
         scenarioId: params.observationScenarioId,
         scenarioTitle: params.observationScenarioTitle,
         matchedScenario,
+        triggerMessageId: params.triggerMessageId,
+        triggerTimestamp: params.triggerTimestamp,
       };
       params.observedMessages.push(observedMessage);
       if (matchedScenario) {
@@ -1423,6 +1431,8 @@ function buildObservedMessagesArtifact(params: {
           senderId: message.senderId,
           senderIsBot: message.senderIsBot,
           senderUsername: message.senderUsername,
+          triggerMessageId: message.triggerMessageId,
+          triggerTimestamp: message.triggerTimestamp,
           replyToMessageId: message.replyToMessageId,
           timestamp: message.timestamp,
         };
@@ -1737,6 +1747,8 @@ export async function runDiscordQaLive(params: {
             observedMessages,
             observationScenarioId: scenario.id,
             observationScenarioTitle: scenario.title,
+            triggerMessageId: sent.id,
+            triggerTimestamp: sent.timestamp,
             predicate: (message) =>
               matchesDiscordScenarioReply({
                 channelId: runtimeEnv.channelId,

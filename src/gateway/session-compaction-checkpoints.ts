@@ -155,7 +155,11 @@ async function readTranscriptEntriesForForkAsync(
   try {
     for await (const line of streamSessionTranscriptLines(sessionFile)) {
       try {
-        entries.push(JSON.parse(line) as PiSessionFileEntry);
+        const parsed = JSON.parse(line) as unknown;
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          continue;
+        }
+        entries.push(parsed as PiSessionFileEntry);
       } catch {
         // Match pi-coding-agent's loader: malformed JSONL entries are ignored.
       }

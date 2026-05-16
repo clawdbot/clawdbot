@@ -2,6 +2,8 @@ import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import type { DatabaseSync, StatementSync } from "node:sqlite";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { configureSqliteWalMaintenance, type SqliteWalMaintenance } from "../infra/sqlite-wal.js";
+import { isRecord } from "../utils.js";
+import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import {
   resolveTaskFlowRegistryDir,
@@ -74,6 +76,22 @@ function parseJsonValue<T>(raw: string | null): T | undefined {
   }
 }
 
+function parseDeliveryContextJson(raw: string | null): DeliveryContext | undefined {
+  const parsed = parseJsonValue<unknown>(raw);
+  if (!isRecord(parsed)) {
+    return undefined;
+  }
+  return normalizeDeliveryContext({
+    channel: typeof parsed.channel === "string" ? parsed.channel : undefined,
+    to: typeof parsed.to === "string" ? parsed.to : undefined,
+    accountId: typeof parsed.accountId === "string" ? parsed.accountId : undefined,
+    threadId:
+      typeof parsed.threadId === "string" || typeof parsed.threadId === "number"
+        ? parsed.threadId
+        : undefined,
+  });
+}
+
 function rowToSyncMode(row: FlowRegistryRow): TaskFlowSyncMode {
   if (row.sync_mode === "task_mirrored" || row.sync_mode === "managed") {
     return row.sync_mode;
@@ -84,7 +102,7 @@ function rowToSyncMode(row: FlowRegistryRow): TaskFlowSyncMode {
 function rowToFlowRecord(row: FlowRegistryRow): TaskFlowRecord {
   const endedAt = normalizeNumber(row.ended_at);
   const cancelRequestedAt = normalizeNumber(row.cancel_requested_at);
-  const requesterOrigin = parseJsonValue<DeliveryContext>(row.requester_origin_json);
+  const requesterOrigin = parseDeliveryContextJson(row.requester_origin_json);
   const stateJson = parseJsonValue<JsonValue>(row.state_json);
   const waitJson = parseJsonValue<JsonValue>(row.wait_json);
   return {

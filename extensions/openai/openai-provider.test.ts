@@ -132,7 +132,7 @@ describe("buildOpenAIProvider", () => {
       choiceHint: "Use your OpenAI API key directly",
       groupId: "openai",
       groupLabel: "OpenAI",
-      groupHint: "ChatGPT subscription or API key",
+      groupHint: "ChatGPT/Codex sign-in or API key",
     });
   });
 

@@ -185,6 +185,21 @@ function markActiveConfigMutationPath(configPath: string): void {
   activeConfigMutationLocks.getStore()?.add(path.resolve(configPath));
 }
 
+async function readConfigSnapshotForMutation(params: {
+  io?: ConfigMutationIO;
+  writeOptions?: ConfigWriteOptions;
+}): Promise<{
+  snapshot: ConfigFileSnapshot;
+  writeOptions: ConfigWriteOptions;
+}> {
+  if (params.io) {
+    return await params.io.readConfigFileSnapshotForWrite();
+  }
+  return await readConfigFileSnapshotForWrite({
+    skipPluginValidation: params.writeOptions?.skipPluginValidation,
+  });
+}
+
 function getChangedTopLevelKeys(base: unknown, next: unknown): string[] {
   if (!isRecord(base) || !isRecord(next)) {
     return isDeepStrictEqual(base, next) ? [] : ["<root>"];
@@ -259,13 +274,10 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
   }
   const nextConfigRecord = nextConfig as Record<string, unknown>;
 
-  if (params.writeOptions?.skipPluginValidation) {
-    // Skip the include fast path so the root writer handles the write with
-    // plugin validation disabled end-to-end (including the post-write readback).
-    return null;
-  }
-
-  const validated = validateConfigObjectWithPlugins(nextConfig);
+  const validated = validateConfigObjectWithPlugins(
+    nextConfig,
+    params.writeOptions?.skipPluginValidation ? { pluginValidation: "skip" } : undefined,
+  );
   if (!validated.ok) {
     throw createInvalidConfigError(
       params.snapshot.path,
@@ -288,7 +300,7 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
 
   const refreshed = await (
     params.io?.readConfigFileSnapshotForWrite ?? readConfigFileSnapshotForWrite
-  )();
+  )(params.writeOptions?.skipPluginValidation ? { skipPluginValidation: true } : undefined);
   const refreshedSnapshot = refreshed.snapshot;
   const persistedHash = resolveConfigSnapshotHash(refreshedSnapshot);
   if (!refreshedSnapshot.valid) {
@@ -372,7 +384,10 @@ async function replaceConfigFileUnlocked(params: {
   const prepared =
     params.snapshot && params.writeOptions
       ? { snapshot: params.snapshot, writeOptions: params.writeOptions }
-      : await (params.io?.readConfigFileSnapshotForWrite ?? readConfigFileSnapshotForWrite)();
+      : await readConfigSnapshotForMutation({
+          io: params.io,
+          writeOptions: params.writeOptions,
+        });
   const { snapshot, writeOptions } = prepared;
   assertConfigWriteAllowedInCurrentMode({ configPath: snapshot.path });
   markActiveConfigMutationPath(snapshot.path);
@@ -433,9 +448,10 @@ async function transformConfigFileAttempt<T>(
   params: TransformConfigFileParams<T>,
   attempt: number,
 ): Promise<ConfigMutationResult<T>> {
-  const { snapshot, writeOptions } = await (
-    params.io?.readConfigFileSnapshotForWrite ?? readConfigFileSnapshotForWrite
-  )();
+  const { snapshot, writeOptions } = await readConfigSnapshotForMutation({
+    io: params.io,
+    writeOptions: params.writeOptions,
+  });
   assertConfigWriteAllowedInCurrentMode({ configPath: snapshot.path });
   markActiveConfigMutationPath(snapshot.path);
   const previousHash = assertBaseHashMatches(snapshot, params.baseHash);

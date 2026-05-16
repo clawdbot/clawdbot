@@ -4,6 +4,7 @@ import {
   patchChannelConfigForAccount,
   promptResolvedAllowFrom,
   splitSetupEntries,
+  createSetupTranslator,
   type OpenClawConfig,
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup-runtime";
@@ -11,24 +12,35 @@ import { formatCliCommand, formatDocsLink } from "openclaw/plugin-sdk/setup-tool
 import { resolveDefaultTelegramAccountId, resolveTelegramAccount } from "./accounts.js";
 import { isNumericTelegramSenderUserId } from "./allow-from.js";
 
+const t = createSetupTranslator();
+
 const channel = "telegram" as const;
 
-export const TELEGRAM_TOKEN_HELP_LINES = [
-  "1) Open Telegram and chat with @BotFather",
-  "2) Run /newbot (or /mybots)",
-  "3) Copy the token (looks like 123456:ABC...)",
-  "Tip: you can also set TELEGRAM_BOT_TOKEN in your env.",
-  `Docs: ${formatDocsLink("/telegram")}`,
-  "Website: https://openclaw.ai",
-];
+export function getTelegramTokenHelpLines(): string[] {
+  return [
+    t("wizard.telegram.tokenHelpOpenBotFather"),
+    t("wizard.telegram.tokenHelpNewBot"),
+    t("wizard.telegram.tokenHelpCopyToken"),
+    t("wizard.telegram.tokenEnvTip"),
+    t("wizard.channels.docs", { link: formatDocsLink("/telegram") }),
+    t("wizard.telegram.website", { url: "https://openclaw.ai" }),
+  ];
+}
 
-export const TELEGRAM_USER_ID_HELP_LINES = [
-  `1) DM your bot, then read from.id in \`${formatCliCommand("openclaw logs --follow")}\` (safest)`,
-  "2) Or call https://api.telegram.org/bot<bot_token>/getUpdates and read message.from.id",
-  "3) Third-party: DM @userinfobot or @getidsbot",
-  `Docs: ${formatDocsLink("/telegram")}`,
-  "Website: https://openclaw.ai",
-];
+export function getTelegramUserIdHelpLines(): string[] {
+  return [
+    t("wizard.telegram.userIdHelpLogs", {
+      command: formatCliCommand("openclaw logs --follow"),
+    }),
+    t("wizard.telegram.userIdHelpGetUpdates"),
+    t("wizard.telegram.userIdHelpThirdParty"),
+    t("wizard.channels.docs", { link: formatDocsLink("/telegram") }),
+    t("wizard.telegram.website", { url: "https://openclaw.ai" }),
+  ];
+}
+
+export const TELEGRAM_TOKEN_HELP_LINES = getTelegramTokenHelpLines();
+export const TELEGRAM_USER_ID_HELP_LINES = getTelegramUserIdHelpLines();
 
 function normalizeTelegramAllowFromInput(raw: string): string {
   return raw
@@ -49,17 +61,19 @@ export async function promptTelegramAllowFromForAccount(params: {
 }) {
   const accountId = params.accountId ?? resolveDefaultTelegramAccountId(params.cfg);
   const resolved = resolveTelegramAccount({ cfg: params.cfg, accountId });
-  await params.prompter.note(TELEGRAM_USER_ID_HELP_LINES.join("\n"), "Telegram user id");
+  await params.prompter.note(
+    getTelegramUserIdHelpLines().join("\n"),
+    t("wizard.telegram.userIdTitle"),
+  );
   const unique = await promptResolvedAllowFrom({
     prompter: params.prompter,
     existing: resolved.config.allowFrom ?? [],
-    message: "Telegram allowFrom (numeric sender id)",
+    message: t("wizard.telegram.allowFromPrompt"),
     placeholder: "123456789",
-    label: "Telegram allowlist",
+    label: t("wizard.telegram.allowlistTitle"),
     parseInputs: splitSetupEntries,
     parseId: parseTelegramAllowFromId,
-    invalidWithoutTokenNote:
-      "Telegram allowFrom requires numeric sender ids. DM your bot first, then copy from.id from logs or getUpdates.",
+    invalidWithoutTokenNote: t("wizard.telegram.allowFromInvalid"),
     resolveEntries: async ({ entries }) =>
       entries.map((entry) => {
         const id = parseTelegramAllowFromId(entry);

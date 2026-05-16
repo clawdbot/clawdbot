@@ -24,6 +24,7 @@ import {
 } from "../plugins/bundled-sources.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
+import { t, wizardT } from "../wizard/i18n/index.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { FlowContribution } from "./types.js";
 
@@ -52,6 +53,33 @@ type ChannelSetupSelectionEntry = {
     showConfigured?: boolean;
     showInSetup?: boolean;
   };
+};
+
+const CHANNEL_PRIMER_BLURB_KEYS: Record<string, string> = {
+  clickclack: "wizard.channelsPrimer.blurbs.clickclack",
+  discord: "wizard.channelsPrimer.blurbs.discord",
+  feishu: "wizard.channelsPrimer.blurbs.feishu",
+  googlechat: "wizard.channelsPrimer.blurbs.googlechat",
+  imessage: "wizard.channelsPrimer.blurbs.imessage",
+  irc: "wizard.channelsPrimer.blurbs.irc",
+  line: "wizard.channelsPrimer.blurbs.line",
+  mattermost: "wizard.channelsPrimer.blurbs.mattermost",
+  matrix: "wizard.channelsPrimer.blurbs.matrix",
+  msteams: "wizard.channelsPrimer.blurbs.msteams",
+  "nextcloud-talk": "wizard.channelsPrimer.blurbs.nextcloudTalk",
+  nostr: "wizard.channelsPrimer.blurbs.nostr",
+  qqbot: "wizard.channelsPrimer.blurbs.qqbot",
+  signal: "wizard.channelsPrimer.blurbs.signal",
+  slack: "wizard.channelsPrimer.blurbs.slack",
+  "synology-chat": "wizard.channelsPrimer.blurbs.synologyChat",
+  telegram: "wizard.channelsPrimer.blurbs.telegram",
+  tlon: "wizard.channelsPrimer.blurbs.tlon",
+  twitch: "wizard.channelsPrimer.blurbs.twitch",
+  wecom: "wizard.channelsPrimer.blurbs.wecom",
+  whatsapp: "wizard.channelsPrimer.blurbs.whatsapp",
+  yuanbao: "wizard.channelsPrimer.blurbs.yuanbao",
+  zalo: "wizard.channelsPrimer.blurbs.zalo",
+  zalouser: "wizard.channelsPrimer.blurbs.zalouser",
 };
 
 function buildChannelSetupSelectionContribution(params: {
@@ -129,6 +157,124 @@ function formatSetupDisplayMeta(meta: ChannelMeta): ChannelMeta {
     blurb: formatSetupFreeText(meta.blurb),
     ...(safeSelectionDocsPrefix ? { selectionDocsPrefix: safeSelectionDocsPrefix } : {}),
     ...(safeSelectionExtras ? { selectionExtras: safeSelectionExtras } : {}),
+  };
+}
+
+function formatChannelPrimerBlurb(channel: { id: string; blurb: string }): string {
+  const key = CHANNEL_PRIMER_BLURB_KEYS[channel.id];
+  if (!key) {
+    return channel.blurb;
+  }
+  const englishBlurb = wizardT(key, undefined, { locale: "en" });
+  return channel.blurb === englishBlurb ? t(key) : channel.blurb;
+}
+
+function formatChannelSelectionMeta(meta: ChannelMeta): ChannelMeta {
+  return formatSetupDisplayMeta({
+    ...meta,
+    blurb: formatChannelPrimerBlurb(meta),
+    selectionDocsPrefix: meta.selectionDocsPrefix ?? t("common.docs"),
+  });
+}
+
+function localizeChannelStatusLabel(label: string): string {
+  switch (label) {
+    case "configured":
+      return t("wizard.channels.statusConfigured");
+    case "not configured":
+      return t("wizard.channels.statusNotConfigured");
+    case "configured (plugin disabled)":
+      return t("wizard.channels.statusConfiguredPluginDisabled");
+    case "installed":
+      return t("wizard.channels.statusInstalled");
+    case "installed (plugin disabled)":
+      return t("wizard.channels.statusInstalledPluginDisabled");
+    case "bundled · enable to use":
+      return t("wizard.channels.statusBundledEnable");
+    case "install plugin to enable":
+      return t("wizard.channels.statusInstallPluginEnable");
+    case "needs app credentials":
+      return t("wizard.channels.statusNeedsAppCredentials");
+    case "needs app creds":
+      return t("wizard.channels.statusNeedsAppCreds");
+    case "needs auth":
+      return t("wizard.channels.statusNeedsAuth");
+    case "needs host + nick":
+      return t("wizard.channels.statusNeedsHostNick");
+    case "needs private key":
+      return t("wizard.channels.statusNeedsPrivateKey");
+    case "needs QR login":
+      return t("wizard.channels.statusNeedsQrLogin");
+    case "needs service account":
+      return t("wizard.channels.statusNeedsServiceAccount");
+    case "needs setup":
+      return t("wizard.channels.statusNeedsSetup");
+    case "needs token":
+      return t("wizard.channels.statusNeedsToken");
+    case "needs tokens":
+      return t("wizard.channels.statusNeedsTokens");
+    case "needs token + incoming webhook":
+      return t("wizard.channels.statusNeedsTokenIncomingWebhook");
+    case "needs token + secret":
+      return t("wizard.channels.statusNeedsTokenSecret");
+    case "needs token + url":
+      return t("wizard.channels.statusNeedsTokenUrl");
+    case "needs username, token, and clientId":
+      return t("wizard.channels.statusNeedsUsernameTokenClientId");
+    case "linked":
+      return t("wizard.channels.statusLinked");
+    case "logged in":
+      return t("wizard.channels.statusLoggedIn");
+    case "not linked":
+      return t("wizard.channels.statusNotLinked");
+    case "recommended · configured":
+      return t("wizard.channels.statusRecommendedConfigured");
+    case "recommended · logged in":
+      return t("wizard.channels.statusRecommendedLoggedIn");
+    case "recommended · newcomer-friendly":
+      return t("wizard.channels.statusRecommendedNewcomerFriendly");
+    case "recommended · QR login":
+      return t("wizard.channels.statusRecommendedQrLogin");
+    case "self-hosted chat":
+      return t("wizard.channels.statusSelfHostedChat");
+    case "signal-cli found":
+      return t("wizard.channels.statusSignalCliFound");
+    case "signal-cli missing":
+      return t("wizard.channels.statusSignalCliMissing");
+    case "urbit messenger":
+      return t("wizard.channels.statusUrbitMessenger");
+    case "configured (connection not verified)":
+      return t("wizard.channels.statusConfiguredConnectionNotVerified");
+    default:
+      break;
+  }
+  const connectedAsPrefix = "connected as ";
+  if (label.startsWith(connectedAsPrefix)) {
+    return t("wizard.channels.statusConnectedAs", { name: label.slice(connectedAsPrefix.length) });
+  }
+  return label;
+}
+
+function localizeChannelStatusLine(line: string): string {
+  const separator = ": ";
+  const index = line.lastIndexOf(separator);
+  if (index < 0) {
+    return localizeChannelStatusLabel(line);
+  }
+  return `${line.slice(0, index + separator.length)}${localizeChannelStatusLabel(
+    line.slice(index + separator.length),
+  )}`;
+}
+
+function localizeChannelSetupStatus<T extends { selectionHint?: string; statusLines: string[] }>(
+  status: T,
+): T {
+  return {
+    ...status,
+    statusLines: status.statusLines.map(localizeChannelStatusLine),
+    ...(status.selectionHint
+      ? { selectionHint: localizeChannelStatusLabel(status.selectionHint) }
+      : {}),
   };
 }
 
@@ -283,7 +429,7 @@ export async function collectChannelStatus(params: {
     ...fallbackStatuses,
     ...discoveredPluginStatuses,
     ...catalogStatuses,
-  ];
+  ].map(localizeChannelSetupStatus);
   const mergedStatusByChannel = new Map(combinedStatuses.map((entry) => [entry.channel, entry]));
   const statusLines = combinedStatuses.flatMap((entry) => entry.statusLines);
   return {
@@ -311,7 +457,7 @@ export async function noteChannelStatus(params: {
     resolveAdapter: params.resolveAdapter,
   });
   if (statusLines.length > 0) {
-    await params.prompter.note(statusLines.join("\n"), "Channel status");
+    await params.prompter.note(statusLines.join("\n"), t("wizard.channels.statusTitle"));
   }
 }
 
@@ -326,23 +472,27 @@ export async function noteChannelPrimer(
         label: channel.label,
         selectionLabel: channel.label,
         docsPath: "/",
-        blurb: channel.blurb,
+        blurb: formatChannelPrimerBlurb(channel),
       }),
     ),
   );
   await prompter.note(
     [
-      "Inbound DM safety defaults to pairing: unknown senders get a pairing code first.",
-      `Approve with: ${formatCliCommand("openclaw pairing approve <channel> <code>")}`,
-      'Open/public DMs require dmPolicy="open" plus allowFrom=["*"].',
-      "For multi-user DMs, isolate sessions with: " +
-        formatCliCommand('openclaw config set session.dmScope "per-channel-peer"') +
-        ' (or "per-account-channel-peer" for multi-account channels).',
-      `Docs: ${formatDocsLink("/channels/pairing", "channels/pairing")}`,
+      t("wizard.channelsPrimer.inboundSafety"),
+      t("wizard.channelsPrimer.approveWith", {
+        command: formatCliCommand("openclaw pairing approve <channel> <code>"),
+      }),
+      t("wizard.channelsPrimer.openDm"),
+      t("wizard.channelsPrimer.multiUserDm", {
+        command: formatCliCommand('openclaw config set session.dmScope "per-channel-peer"'),
+      }),
+      t("wizard.channelsPrimer.docs", {
+        link: formatDocsLink("/channels/pairing", "channels/pairing"),
+      }),
       "",
       ...channelLines,
     ].join("\n"),
-    "How channels work",
+    t("wizard.channelsPrimer.title"),
   );
 }
 
@@ -375,7 +525,7 @@ export function resolveChannelSelectionNoteLines(params: {
   for (const entry of entries) {
     selectionNotes.set(
       entry.id,
-      formatChannelSelectionLine(formatSetupDisplayMeta(entry.meta), formatDocsLink),
+      formatChannelSelectionLine(formatChannelSelectionMeta(entry.meta), formatDocsLink),
     );
   }
   return params.selection

@@ -13,6 +13,7 @@ import type { AuthRateLimiter } from "../auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "../auth.js";
 import { resolvePreauthHandshakeTimeoutMs } from "../handshake-timeouts.js";
 import { resolveHostedPluginSurfaceUrl } from "../hosted-plugin-surface-url.js";
+import type { GatewayMethodRegistry } from "../methods/registry.js";
 import { isLoopbackAddress } from "../net.js";
 import type { PluginNodeCapabilitySurface } from "../plugin-node-capability.js";
 import { MAX_PAYLOAD_BYTES, MAX_PREAUTH_PAYLOAD_BYTES } from "../server-constants.js";
@@ -146,6 +147,7 @@ export type AttachGatewayWsConnectionHandlerParams = GatewayWsSharedHandlerParam
   logHealth: SubsystemLogger;
   logWsControl: SubsystemLogger;
   extraHandlers: GatewayRequestHandlers;
+  getMethodRegistry?: () => GatewayMethodRegistry;
   broadcast: (
     event: string,
     payload: unknown,
@@ -218,6 +220,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     logHealth,
     logWsControl,
     extraHandlers,
+    getMethodRegistry,
     broadcast,
     buildRequestContext,
   } = params;
@@ -462,6 +465,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       gatewayMethods,
       events,
       extraHandlers,
+      getMethodRegistry,
       buildRequestContext,
       refreshHealthSnapshot,
       send,

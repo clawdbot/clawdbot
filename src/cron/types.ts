@@ -70,6 +70,13 @@ export type CronDeliveryTrace = {
   delivered?: boolean;
 };
 
+export type CronFailureNotificationDelivery = {
+  /** Whether the last failed run's failure notification reached the target channel. */
+  delivered?: boolean;
+  status: CronDeliveryStatus;
+  error?: string;
+};
+
 export type CronDeliveryPreview = {
   label: string;
   detail: string;
@@ -220,6 +227,12 @@ export type CronJobState = {
   lastDeliveryError?: string;
   /** Whether the last run's output was delivered to the target channel. */
   lastDelivered?: boolean;
+  /** Whether the last failed run's failure notification was delivered to the target channel. */
+  lastFailureNotificationDelivered?: boolean;
+  /** Delivery outcome for the last failed run's failure notification. */
+  lastFailureNotificationDeliveryStatus?: CronDeliveryStatus;
+  /** Delivery-specific error for the last failed run's failure notification. */
+  lastFailureNotificationDeliveryError?: string;
 };
 
 export type CronJob = CronJobBase<

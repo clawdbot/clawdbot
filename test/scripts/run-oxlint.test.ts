@@ -34,6 +34,20 @@ describe("run-oxlint", () => {
     expect(shardedLintRunner).toContain('OPENCLAW_OXLINT_SKIP_PREPARE: "1"');
   });
 
+  it("holds one parent heavy-check lock for sharded lint runs", () => {
+    const shardedLintRunner = readFileSync("scripts/run-oxlint-shards.mjs", "utf8");
+    const skipLockIndex = shardedLintRunner.indexOf('env.OPENCLAW_OXLINT_SKIP_LOCK === "1"');
+    const lockIndex = shardedLintRunner.indexOf("acquireLocalHeavyCheckLockSync({");
+    const childSkipIndex = shardedLintRunner.indexOf('OPENCLAW_OXLINT_SKIP_LOCK: "1"');
+
+    expect(shardedLintRunner).toContain("resolveLocalHeavyCheckEnv");
+    expect(shardedLintRunner).toContain("shouldAcquireLocalHeavyCheckLockForOxlint");
+    expect(skipLockIndex).toBeGreaterThan(-1);
+    expect(lockIndex).toBeGreaterThan(-1);
+    expect(lockIndex).toBeGreaterThan(skipLockIndex);
+    expect(childSkipIndex).toBeGreaterThan(lockIndex);
+  });
+
   it("lets dev update preflight run oxlint shards serially", () => {
     const shardedLintRunner = readFileSync("scripts/run-oxlint-shards.mjs", "utf8");
 

@@ -1,5 +1,10 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
+import {
+  clearInternalHooks,
+  registerInternalHook,
+  type InternalHookEvent,
+} from "../hooks/internal-hooks.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../sessions/session-id-resolution.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { buildTaskStatusSnapshot } from "../tasks/task-status.js";
@@ -432,6 +437,7 @@ function getSessionStatusTool(
 describe("session_status tool", () => {
   beforeEach(() => {
     buildStatusMessageMock.mockClear();
+    clearInternalHooks();
   });
 
   it("returns a status card for the current session", async () => {
@@ -895,6 +901,41 @@ describe("session_status tool", () => {
       liveModelSwitchPending: true,
     });
     expect(saved.sessionId).toMatch(UUID_RE);
+  });
+
+  it("fires session:patch when session_status changes the persisted session model", async () => {
+    const events: InternalHookEvent[] = [];
+    registerInternalHook("session:patch", async (event) => {
+      events.push(event);
+    });
+    resetSessionStore({
+      main: {
+        sessionId: "s1",
+        updatedAt: 10,
+      },
+    });
+
+    const tool = getSessionStatusTool();
+
+    await tool.execute("call-session-status-model-hook", {
+      model: "anthropic/claude-sonnet-4-6",
+    });
+
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    const event = events[0];
+    expect(event.type).toBe("session");
+    expect(event.action).toBe("patch");
+    expect(event.sessionKey).toBe("main");
+    const context = event.context;
+    expect(context.patch).toMatchObject({
+      key: "main",
+      model: "anthropic/claude-sonnet-4-6",
+    });
+    expect(context.sessionEntry).toMatchObject({
+      providerOverride: "anthropic",
+      modelOverride: "claude-sonnet-4-6",
+      liveModelSwitchPending: true,
+    });
   });
 
   it("materializes a valid persisted session entry when the default implicit current fallback mutates model state", async () => {

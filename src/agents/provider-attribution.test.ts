@@ -355,6 +355,22 @@ describe("provider attribution", () => {
       endpointClass: "opencode-native",
       hostname: "opencode.ai",
     });
+    expectRecordFields(resolveProviderEndpoint("https://api.xiaomimimo.com/v1"), {
+      endpointClass: "xiaomi-native",
+      hostname: "api.xiaomimimo.com",
+    });
+    expectRecordFields(resolveProviderEndpoint("https://token-plan-ams.xiaomimimo.com/v1"), {
+      endpointClass: "xiaomi-native",
+      hostname: "token-plan-ams.xiaomimimo.com",
+    });
+    expectRecordFields(resolveProviderEndpoint("https://token-plan-cn.xiaomimimo.com/v1"), {
+      endpointClass: "xiaomi-native",
+      hostname: "token-plan-cn.xiaomimimo.com",
+    });
+    expectRecordFields(resolveProviderEndpoint("https://token-plan-sgp.xiaomimimo.com/v1"), {
+      endpointClass: "xiaomi-native",
+      hostname: "token-plan-sgp.xiaomimimo.com",
+    });
   });
 
   it("treats OpenRouter-hosted Responses routes as explicit proxy-like endpoints", () => {

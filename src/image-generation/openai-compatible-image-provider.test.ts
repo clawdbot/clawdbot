@@ -278,4 +278,21 @@ describe("OpenAI-compatible image provider helper", () => {
     const timeoutRequest = requireFirstCallArg(postJsonRequestMock) as { timeoutMs?: number };
     expect(timeoutRequest.timeoutMs).toBe(60_000);
   });
+
+  it("wraps malformed successful image responses with provider-owned errors", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: { json: async () => ({ data: { b64_json: "not-an-array" } }) },
+      release: vi.fn(async () => {}),
+    });
+    const provider = createProvider();
+
+    await expect(
+      provider.generateImage({
+        provider: "sample",
+        model: "sample-image",
+        prompt: "bad shape",
+        cfg: {} as never,
+      }),
+    ).rejects.toThrow("Sample image generation response malformed");
+  });
 });

@@ -66,6 +66,7 @@ function createTestMcpLoopbackServerConfig(port: number) {
           "x-openclaw-agent-id": "${OPENCLAW_MCP_AGENT_ID}",
           "x-openclaw-account-id": "${OPENCLAW_MCP_ACCOUNT_ID}",
           "x-openclaw-message-channel": "${OPENCLAW_MCP_MESSAGE_CHANNEL}",
+          "x-openclaw-inbound-turn-kind": "${OPENCLAW_MCP_INBOUND_TURN_KIND}",
         },
       },
     },
@@ -775,6 +776,64 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       expect(context.preparedBackend.mcpConfigHash).toBeUndefined();
       expect(context.preparedBackend.env).toBeUndefined();
       expect(context.preparedBackend.backend.args).toEqual(["--print"]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("passes current turn kind into bundle MCP loopback env", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      const getActiveMcpLoopbackRuntime = vi.fn(() => ({
+        port: 31783,
+        ownerToken: "owner-token",
+        nonOwnerToken: "non-owner-token",
+      }));
+      const ensureMcpLoopbackServer = vi.fn(createTestMcpLoopbackServer);
+      const createMcpLoopbackServerConfig = vi.fn(createTestMcpLoopbackServerConfig);
+      setCliRunnerPrepareTestDeps({
+        getActiveMcpLoopbackRuntime,
+        ensureMcpLoopbackServer,
+        createMcpLoopbackServerConfig,
+      });
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [
+          {
+            id: "native-cli",
+            pluginId: "native-plugin",
+            bundleMcp: true,
+            bundleMcpMode: "codex-config-overrides",
+            config: {
+              command: "native-cli",
+              args: ["--print"],
+              output: "text",
+              input: "arg",
+              sessionMode: "existing",
+            },
+          },
+        ],
+      });
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:telegram:group:chat123",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "native-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-room-event-tools",
+        config: createCliBackendConfig(),
+        currentTurnKind: "room_event",
+        messageChannel: "telegram",
+      });
+
+      expect(context.preparedBackend.env).toMatchObject({
+        OPENCLAW_MCP_MESSAGE_CHANNEL: "telegram",
+        OPENCLAW_MCP_INBOUND_TURN_KIND: "room_event",
+      });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

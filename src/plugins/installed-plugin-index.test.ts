@@ -532,6 +532,30 @@ describe("installed plugin index", () => {
     expect(index.plugins[0]?.packageJson?.path).toBe("package.json");
   });
 
+  it.runIf(process.platform !== "win32")(
+    "does not record packageJson metadata from symlinks outside the plugin root",
+    () => {
+      const fixture = createRichPluginFixture();
+      const outsideDir = makeTempDir();
+      const packageJsonPath = path.join(fixture.rootDir, "package.json");
+      const outsidePackageJsonPath = path.join(outsideDir, "package.json");
+      fs.rmSync(packageJsonPath);
+      fs.writeFileSync(
+        outsidePackageJsonPath,
+        JSON.stringify({ name: "@vendor/outside-plugin", version: "9.9.9" }),
+        "utf8",
+      );
+      fs.symlinkSync(outsidePackageJsonPath, packageJsonPath);
+
+      const index = loadInstalledPluginIndex({
+        candidates: [fixture.candidate],
+        env: hermeticEnv(),
+      });
+
+      expect(index.plugins[0]?.packageJson).toBeUndefined();
+    },
+  );
+
   it("exposes cold registry records for existing plugins without plugin runtimes", () => {
     const fixture = createRichPluginFixture();
     const index = loadInstalledPluginIndex({

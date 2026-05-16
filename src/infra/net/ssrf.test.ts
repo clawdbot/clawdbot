@@ -4,7 +4,9 @@ import {
   isBlockedHostnameOrIp,
   isPrivateIpAddress,
   isSameSsrFPolicy,
+  resolveSsrFPolicyForUrl,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
+  ssrfPolicyFromHttpBaseUrlAllowedOrigin,
   ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist,
 } from "./ssrf.js";
 
@@ -101,6 +103,10 @@ const httpBaseUrlPolicyBuilders = [
     build: ssrfPolicyFromHttpBaseUrlAllowedHostname,
   },
   {
+    name: "ssrfPolicyFromHttpBaseUrlAllowedOrigin",
+    build: ssrfPolicyFromHttpBaseUrlAllowedOrigin,
+  },
+  {
     name: "ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist",
     build: ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist,
   },
@@ -138,6 +144,102 @@ describe("ssrfPolicyFromHttpBaseUrlAllowedHostname", () => {
   it("builds an allowed-hostname policy from HTTP base URLs", () => {
     expect(ssrfPolicyFromHttpBaseUrlAllowedHostname(" https://api.example.com/v1 ")).toEqual({
       allowedHostnames: ["api.example.com"],
+    });
+  });
+});
+
+describe("ssrfPolicyFromHttpBaseUrlAllowedOrigin", () => {
+  it("builds an allowed-origin policy from HTTP base URLs", () => {
+    expect(ssrfPolicyFromHttpBaseUrlAllowedOrigin(" http://10.0.0.5:1234/v1 ")).toEqual({
+      allowedOrigins: ["http://10.0.0.5:1234"],
+    });
+    expect(
+      ssrfPolicyFromHttpBaseUrlAllowedOrigin("https://api.example.com/v1?token=redacted"),
+    ).toEqual({
+      allowedOrigins: ["https://api.example.com"],
+    });
+  });
+});
+
+describe("resolveSsrFPolicyForUrl", () => {
+  it("returns missing and originless policies unchanged", () => {
+    expect(
+      resolveSsrFPolicyForUrl(new URL("https://api.example.com/v1"), undefined),
+    ).toBeUndefined();
+    const policy = { allowedOrigins: [], hostnameAllowlist: ["api.example.com"] };
+    expect(resolveSsrFPolicyForUrl(new URL("https://api.example.com/v1"), policy)).toBe(policy);
+  });
+
+  it("converts matching allowed origins into per-request hostname trust", () => {
+    expect(
+      resolveSsrFPolicyForUrl(new URL("http://10.0.0.5:1234/v1/chat/completions"), {
+        allowedOrigins: ["http://10.0.0.5:1234"],
+      }),
+    ).toEqual({
+      allowedOrigins: ["http://10.0.0.5:1234"],
+      allowedHostnames: ["10.0.0.5"],
+    });
+  });
+
+  it("normalizes allowed origin case, path, query, and default ports before trusting hosts", () => {
+    expect(
+      resolveSsrFPolicyForUrl(new URL("https://api.example.com:443/v1/chat/completions"), {
+        allowedOrigins: ["https://API.EXAMPLE.com:443/base?debug=1"],
+      }),
+    ).toEqual({
+      allowedOrigins: ["https://API.EXAMPLE.com:443/base?debug=1"],
+      allowedHostnames: ["api.example.com"],
+    });
+  });
+
+  it("normalizes trailing hostname dots before trusting hosts", () => {
+    expect(
+      resolveSsrFPolicyForUrl(new URL("http://example.com:11434/v1/chat/completions"), {
+        allowedOrigins: ["http://example.com.:11434/v1"],
+      }),
+    ).toEqual({
+      allowedOrigins: ["http://example.com.:11434/v1"],
+      allowedHostnames: ["example.com"],
+    });
+
+    expect(
+      resolveSsrFPolicyForUrl(new URL("http://example.com.:11434/v1/chat/completions"), {
+        allowedOrigins: ["http://example.com:11434/v1"],
+      }),
+    ).toEqual({
+      allowedOrigins: ["http://example.com:11434/v1"],
+      allowedHostnames: ["example.com"],
+    });
+  });
+
+  it("does not trust the hostname when the port differs", () => {
+    expect(
+      resolveSsrFPolicyForUrl(new URL("http://10.0.0.5:4321/v1/chat/completions"), {
+        allowedOrigins: ["http://10.0.0.5:1234"],
+      }),
+    ).toEqual({
+      allowedOrigins: ["http://10.0.0.5:1234"],
+    });
+  });
+
+  it("supports IPv6 origins when the exact origin matches", () => {
+    expect(
+      resolveSsrFPolicyForUrl(new URL("http://[fd00::1]:11434/v1/chat/completions"), {
+        allowedOrigins: ["http://[fd00::1]:11434"],
+      }),
+    ).toEqual({
+      allowedOrigins: ["http://[fd00::1]:11434"],
+      allowedHostnames: ["fd00::1"],
+    });
+  });
+
+  it("does not trust IPv6 origins when the port differs", () => {
+    expect(
+      resolveSsrFPolicyForUrl(new URL("http://[fd00::1]:11435/v1/chat/completions"), {
+        allowedOrigins: ["http://[fd00::1]:11434"],
+      }),
+    ).toEqual({
+      allowedOrigins: ["http://[fd00::1]:11434"],
     });
   });
 });
@@ -225,12 +327,14 @@ describe("isSameSsrFPolicy", () => {
         {
           allowPrivateNetwork: true,
           allowRfc2544BenchmarkRange: true,
+          allowedOrigins: ["https://A.example.com/v1", "https://b.example.com"],
           allowedHostnames: ["b.example.com", "A.example.com"],
           hostnameAllowlist: ["*.example.com", "api.example.com"],
         },
         {
           allowPrivateNetwork: true,
           allowRfc2544BenchmarkRange: true,
+          allowedOrigins: ["https://b.example.com", "https://a.example.com/other"],
           allowedHostnames: ["a.example.com", "B.EXAMPLE.COM"],
           hostnameAllowlist: ["api.example.com", "*.example.com"],
         },

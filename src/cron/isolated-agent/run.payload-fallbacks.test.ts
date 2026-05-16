@@ -7,9 +7,11 @@ import {
 import {
   isCliProviderMock,
   loadRunCronIsolatedAgentTurn,
+  mockRunCronFallbackPassthrough,
   resolveConfiguredModelRefMock,
   resolveAgentModelFallbacksOverrideMock,
   runCliAgentMock,
+  runEmbeddedPiAgentMock,
   runWithModelFallbackMock,
 } from "./run.test-harness.js";
 
@@ -29,6 +31,20 @@ function requireModelFallbackRequest(): {
     | undefined;
   if (!request) {
     throw new Error("Expected model fallback request");
+  }
+  return request;
+}
+
+function requireEmbeddedRunRequest(): {
+  modelFallbacksOverride?: string[];
+} {
+  const request = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as
+    | {
+        modelFallbacksOverride?: string[];
+      }
+    | undefined;
+  if (!request) {
+    throw new Error("Expected embedded run request");
   }
   return request;
 }
@@ -123,5 +139,40 @@ describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
       ["claude-cli", "claude-opus-4-6"],
       ["claude-cli", "claude-sonnet-4-6"],
     ]);
+  });
+
+  it("forwards subagent fallbacks into the embedded runner for internal failover decisions", async () => {
+    mockRunCronFallbackPassthrough();
+
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentTurnParams({
+        cfg: {
+          agents: {
+            defaults: {
+              model: {
+                primary: "anthropic/claude-opus-4-6",
+                fallbacks: ["openai/gpt-5.4"],
+              },
+              subagents: {
+                model: {
+                  primary: "kimi/kimi-code",
+                  fallbacks: ["openai-codex/gpt-5.2", "zai/glm-5"],
+                },
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(requireModelFallbackRequest().fallbacksOverride).toEqual([
+      "openai-codex/gpt-5.2",
+      "zai/glm-5",
+    ]);
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
+    expect(runEmbeddedPiAgentMock.mock.calls[0]?.[0]).toMatchObject({
+      modelFallbacksOverride: ["openai-codex/gpt-5.2", "zai/glm-5"],
+    });
   });
 });

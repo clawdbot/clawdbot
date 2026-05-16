@@ -24,6 +24,29 @@ function parseDiscordMessageLink(link: string) {
   };
 }
 
+function describeDiscordMessageListResult(value: unknown): string {
+  if (Array.isArray(value)) {
+    return "array";
+  }
+  if (value === null) {
+    return "null";
+  }
+  if (value && typeof value === "object") {
+    const keys = Object.keys(value).toSorted();
+    return keys.length ? `object with keys ${keys.join(", ")}` : "object";
+  }
+  return typeof value;
+}
+
+function assertDiscordMessageListResult(value: unknown): Array<unknown> {
+  if (Array.isArray(value)) {
+    return value;
+  }
+  throw new Error(
+    `Discord message read returned ${describeDiscordMessageListResult(value)} instead of an array.`,
+  );
+}
+
 export async function handleDiscordMessageManagementAction(ctx: DiscordMessagingActionContext) {
   switch (ctx.action) {
     case "permissions": {
@@ -80,10 +103,8 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
         after: readStringParam(ctx.params, "after"),
         around: readStringParam(ctx.params, "around"),
       };
-      const messages = await discordMessagingActionRuntime.readMessagesDiscord(
-        channelId,
-        query,
-        ctx.withOpts(),
+      const messages = assertDiscordMessageListResult(
+        await discordMessagingActionRuntime.readMessagesDiscord(channelId, query, ctx.withOpts()),
       );
       return jsonResult({
         ok: true,

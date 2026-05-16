@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { makeTempWorkspace, writeWorkspaceFile } from "../test-helpers/workspace.js";
 import {
   DEFAULT_AGENTS_FILENAME,
@@ -30,6 +30,16 @@ describe("resolveDefaultAgentWorkspaceDir", () => {
     } as NodeJS.ProcessEnv);
 
     expect(dir).toBe(path.join(path.resolve("/srv/openclaw-home"), ".openclaw", "workspace"));
+  });
+
+  it("prefers OPENCLAW_WORKSPACE_DIR for default workspace resolution", () => {
+    const dir = resolveDefaultAgentWorkspaceDir({
+      OPENCLAW_WORKSPACE_DIR: "/srv/openclaw-workspace",
+      OPENCLAW_HOME: "/srv/openclaw-home",
+      HOME: "/home/other",
+    } as NodeJS.ProcessEnv);
+
+    expect(dir).toBe(path.resolve("/srv/openclaw-workspace"));
   });
 });
 
@@ -254,6 +264,35 @@ describe("ensureAgentWorkspace", () => {
     expect(state.setupCompletedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
     await expect(resolveWorkspaceBootstrapStatus(tempDir)).resolves.toBe("complete");
     await expect(isWorkspaceBootstrapPending(tempDir)).resolves.toBe(false);
+  });
+
+  it("records stale bootstrap completion when BOOTSTRAP.md cleanup fails", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+    await writeWorkspaceFile({
+      dir: tempDir,
+      name: DEFAULT_IDENTITY_FILENAME,
+      content: "# IDENTITY.md\n\n- **Name:** Example\n",
+    });
+    const bootstrapPath = path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME);
+    const rmSpy = vi
+      .spyOn(fs, "rm")
+      .mockRejectedValueOnce(Object.assign(new Error("not a directory"), { code: "ENOTDIR" }));
+
+    try {
+      const result = await reconcileWorkspaceBootstrapCompletion(tempDir);
+
+      expect(result.repaired).toBe(true);
+      expect(result.bootstrapExists).toBe(true);
+      expect(rmSpy).toHaveBeenCalledWith(bootstrapPath, { force: true });
+      await expect(fs.access(bootstrapPath)).resolves.toBeUndefined();
+      const state = await readWorkspaceState(tempDir);
+      expect(state.setupCompletedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
+      await expect(resolveWorkspaceBootstrapStatus(tempDir)).resolves.toBe("complete");
+      await expect(isWorkspaceBootstrapPending(tempDir)).resolves.toBe(false);
+    } finally {
+      rmSpy.mockRestore();
+    }
   });
 
   it("uses SOUL.md customization as stale bootstrap completion evidence", async () => {

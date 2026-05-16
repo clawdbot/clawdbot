@@ -1,5 +1,6 @@
 import {
   interactiveReplyToPresentation,
+  normalizeMessagePresentation,
   normalizeInteractiveReply,
   renderMessagePresentationFallbackText,
   resolveInteractiveTextFallback,
@@ -8,6 +9,7 @@ import {
 export function resolveTelegramInteractiveTextFallback(params: {
   text?: string | null;
   interactive?: unknown;
+  presentation?: unknown;
 }): string | undefined {
   const interactive = normalizeInteractiveReply(params.interactive);
   const text = resolveInteractiveTextFallback({
@@ -17,13 +19,23 @@ export function resolveTelegramInteractiveTextFallback(params: {
   if (text?.trim()) {
     return text;
   }
+  const presentation = normalizeMessagePresentation(params.presentation);
+  if (presentation) {
+    const fallback = renderMessagePresentationFallbackText({
+      text: params.text ?? undefined,
+      presentation,
+    });
+    if (fallback.trim()) {
+      return fallback;
+    }
+  }
   if (!interactive) {
     return text;
   }
-  const presentation = interactiveReplyToPresentation(interactive);
-  if (!presentation) {
+  const interactivePresentation = interactiveReplyToPresentation(interactive);
+  if (!interactivePresentation) {
     return text;
   }
-  const fallback = renderMessagePresentationFallbackText({ presentation });
+  const fallback = renderMessagePresentationFallbackText({ presentation: interactivePresentation });
   return fallback.trim() ? fallback : text;
 }

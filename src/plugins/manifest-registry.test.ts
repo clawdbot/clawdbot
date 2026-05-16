@@ -1427,6 +1427,243 @@ describe("loadPluginManifestRegistry", () => {
     );
   });
 
+  it("ignores legacy provider discovery entries outside the plugin root", () => {
+    const root = makeTempDir();
+    const pluginDir = path.join(root, "plugin");
+    const outsideDir = path.join(root, "outside");
+    mkdirSafe(pluginDir);
+    mkdirSafe(outsideDir);
+    writeManifest(pluginDir, {
+      id: "outside-provider",
+      providers: ["outside-provider"],
+      providerDiscoveryEntry: "../outside/provider-discovery.js",
+      configSchema: { type: "object" },
+    });
+    fs.writeFileSync(
+      path.join(outsideDir, "provider-discovery.js"),
+      "export default {};\n",
+      "utf8",
+    );
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "outside-provider",
+      rootDir: pluginDir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.providerDiscoverySource).toBeUndefined();
+    expectDiagnosticFields(registry, {
+      level: "warn",
+      pluginId: "outside-provider",
+      source: path.join(pluginDir, "openclaw.plugin.json"),
+      messageIncludes: "providerDiscoveryEntry must resolve inside the plugin root",
+    });
+  });
+
+  it("ignores absolute provider discovery entries", () => {
+    const dir = makeTempDir();
+    const outsideDir = makeTempDir();
+    const outsideEntry = path.join(outsideDir, "provider-discovery.js");
+    fs.writeFileSync(outsideEntry, "export default {};\n", "utf8");
+    writeManifest(dir, {
+      id: "absolute-provider",
+      providers: ["absolute-provider"],
+      providerDiscoveryEntry: outsideEntry,
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "absolute-provider",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.providerDiscoverySource).toBeUndefined();
+    expectDiagnosticFields(registry, {
+      level: "warn",
+      pluginId: "absolute-provider",
+      source: path.join(dir, "openclaw.plugin.json"),
+      messageIncludes: "providerDiscoveryEntry must resolve inside the plugin root",
+    });
+  });
+
+  it("ignores provider catalog entries that resolve outside the plugin root", () => {
+    const dir = makeTempDir();
+    const outsideDir = makeTempDir();
+    const outsideEntry = path.join(outsideDir, "provider-catalog.js");
+    fs.writeFileSync(outsideEntry, "export default {};\n", "utf8");
+    writeManifest(dir, {
+      id: "absolute-catalog",
+      providers: ["absolute-catalog"],
+      providerCatalogEntry: outsideEntry,
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "absolute-catalog",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.providerDiscoverySource).toBeUndefined();
+    expectDiagnosticFields(registry, {
+      level: "warn",
+      pluginId: "absolute-catalog",
+      source: path.join(dir, "openclaw.plugin.json"),
+      messageIncludes: "providerCatalogEntry must resolve inside the plugin root",
+    });
+  });
+
+  it("ignores provider discovery entries that resolve through a symlink outside the plugin root", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const outsideDir = makeTempDir();
+    const outsideEntry = path.join(outsideDir, "provider-discovery.js");
+    const linkedEntry = path.join(dir, "provider-discovery.js");
+    fs.writeFileSync(outsideEntry, "export default {};\n", "utf8");
+    try {
+      fs.symlinkSync(outsideEntry, linkedEntry);
+    } catch {
+      return;
+    }
+    writeManifest(dir, {
+      id: "symlink-provider",
+      providers: ["symlink-provider"],
+      providerDiscoveryEntry: "./provider-discovery.js",
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "symlink-provider",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.providerDiscoverySource).toBeUndefined();
+    expectDiagnosticFields(registry, {
+      level: "warn",
+      pluginId: "symlink-provider",
+      source: path.join(dir, "openclaw.plugin.json"),
+      messageIncludes: "providerDiscoveryEntry must resolve inside the plugin root",
+    });
+  });
+
+  it("ignores provider discovery .js fallbacks that resolve outside the plugin root", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const outsideDir = makeTempDir();
+    const outsideEntry = path.join(outsideDir, "provider-discovery.js");
+    const linkedEntry = path.join(dir, "provider-discovery.js");
+    fs.writeFileSync(outsideEntry, "export default {};\n", "utf8");
+    try {
+      fs.symlinkSync(outsideEntry, linkedEntry);
+    } catch {
+      return;
+    }
+    writeManifest(dir, {
+      id: "fallback-symlink-provider",
+      providers: ["fallback-symlink-provider"],
+      providerDiscoveryEntry: "./provider-discovery.ts",
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "fallback-symlink-provider",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.providerDiscoverySource).toBeUndefined();
+    expectDiagnosticFields(registry, {
+      level: "warn",
+      pluginId: "fallback-symlink-provider",
+      source: path.join(dir, "openclaw.plugin.json"),
+      messageIncludes: "providerDiscoveryEntry must resolve inside the plugin root",
+    });
+  });
+
+  it("ignores non-bundled provider discovery entries that are hardlinked", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const outsideDir = makeTempDir();
+    const outsideEntry = path.join(outsideDir, "provider-discovery.js");
+    const linkedEntry = path.join(dir, "provider-discovery.js");
+    fs.writeFileSync(outsideEntry, "export default {};\n", "utf8");
+    try {
+      fs.linkSync(outsideEntry, linkedEntry);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+        return;
+      }
+      throw err;
+    }
+    writeManifest(dir, {
+      id: "hardlink-provider",
+      providers: ["hardlink-provider"],
+      providerDiscoveryEntry: "./provider-discovery.js",
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "hardlink-provider",
+      rootDir: dir,
+      origin: "config",
+    });
+
+    expect(registry.plugins[0]?.providerDiscoverySource).toBeUndefined();
+    expectDiagnosticFields(registry, {
+      level: "warn",
+      pluginId: "hardlink-provider",
+      source: path.join(dir, "openclaw.plugin.json"),
+      messageIncludes: "providerDiscoveryEntry must resolve inside the plugin root",
+    });
+  });
+
+  it("ignores non-bundled provider discovery .js fallbacks that are hardlinked", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const outsideDir = makeTempDir();
+    const outsideEntry = path.join(outsideDir, "provider-discovery.js");
+    const linkedEntry = path.join(dir, "provider-discovery.js");
+    fs.writeFileSync(outsideEntry, "export default {};\n", "utf8");
+    try {
+      fs.linkSync(outsideEntry, linkedEntry);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+        return;
+      }
+      throw err;
+    }
+    writeManifest(dir, {
+      id: "fallback-hardlink-provider",
+      providers: ["fallback-hardlink-provider"],
+      providerDiscoveryEntry: "./provider-discovery.ts",
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "fallback-hardlink-provider",
+      rootDir: dir,
+      origin: "config",
+    });
+
+    expect(registry.plugins[0]?.providerDiscoverySource).toBeUndefined();
+    expectDiagnosticFields(registry, {
+      level: "warn",
+      pluginId: "fallback-hardlink-provider",
+      source: path.join(dir, "openclaw.plugin.json"),
+      messageIncludes: "providerDiscoveryEntry must resolve inside the plugin root",
+    });
+  });
+
   it("preserves activation and setup descriptors from plugin manifests", () => {
     const dir = makeTempDir();
     writeManifest(dir, {

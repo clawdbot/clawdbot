@@ -11,10 +11,7 @@ import {
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  parseOpenAiCompatibleImageResponse,
-  type OpenAiCompatibleImageResponsePayload,
-} from "./image-assets.js";
+import { parseOpenAiCompatibleImageResponse } from "./image-assets.js";
 import type {
   ImageGenerationProvider,
   ImageGenerationProviderCapabilities,
@@ -260,12 +257,20 @@ export function createOpenAiCompatibleImageGenerationProvider(
             ? (options.failureLabels?.edit ?? `${options.label} image edit failed`)
             : (options.failureLabels?.generate ?? `${options.label} image generation failed`),
         );
-        const images = parseOpenAiCompatibleImageResponse(
-          (await response.json()) as OpenAiCompatibleImageResponsePayload,
-          options.response,
-        );
-        if (options.emptyResponseError && images.length === 0) {
-          throw new Error(options.emptyResponseError);
+        const images = parseOpenAiCompatibleImageResponse(await response.json(), {
+          ...options.response,
+          malformedResponseError:
+            mode === "edit"
+              ? `${options.label} image edit response malformed`
+              : `${options.label} image generation response malformed`,
+        });
+        if (images.length === 0) {
+          throw new Error(
+            options.emptyResponseError ??
+              (mode === "edit"
+                ? `${options.label} image edit response missing image data`
+                : `${options.label} image generation response missing image data`),
+          );
         }
         return { images, model };
       } finally {

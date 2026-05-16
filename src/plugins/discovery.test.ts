@@ -1321,6 +1321,31 @@ describe("discoverOpenClawPlugins", () => {
     ).toBe(true);
   });
 
+  it("rejects blank package extensions instead of falling back to inferred entries", async () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "extensions", "extension-blank-pack");
+    mkdirSafe(path.join(pluginDir, "dist"));
+
+    writePluginPackageManifest({
+      packageDir: pluginDir,
+      packageName: "@openclaw/extension-blank-pack",
+      extensions: ["./dist/index.js", " "],
+    });
+    writePluginEntry(path.join(pluginDir, "dist", "index.js"));
+
+    const result = await discoverWithStateDir(stateDir, {});
+
+    expectCandidatePresence(result, { absent: ["extension-blank-pack"] });
+    expect(
+      result.diagnostics.some(
+        (entry) =>
+          entry.level === "error" &&
+          entry.message.includes("openclaw.extensions[1]") &&
+          entry.message.includes("non-empty string"),
+      ),
+    ).toBe(true);
+  });
+
   it("infers built dist entries for installed TypeScript package plugins", async () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "extensions", "built-peer-pack");

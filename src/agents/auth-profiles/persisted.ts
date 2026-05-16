@@ -73,6 +73,42 @@ type LoadPersistedAuthProfileStoreOptions = {
   repairOAuthSecretPayloads?: boolean;
 };
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeOptionalCredentialString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed ? value : undefined;
+}
+
+function normalizeOptionalCredentialBoolean(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function normalizeExpiryField(value: unknown): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function normalizeCredentialMetadata(value: unknown): Record<string, string> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const metadata: Record<string, string> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (typeof entry === "string") {
+      metadata[key] = entry;
+    }
+  }
+  return Object.keys(metadata).length > 0 ? metadata : undefined;
+}
+
 function normalizeSecretBackedField(params: {
   entry: Record<string, unknown>;
   valueField: "key" | "token";
@@ -89,6 +125,25 @@ function normalizeSecretBackedField(params: {
   delete params.entry[params.valueField];
 }
 
+function normalizeCommonCredentialFields(entry: Record<string, unknown>): Record<string, unknown> {
+  const normalized: Record<string, unknown> = {
+    provider: typeof entry.provider === "string" ? normalizeProviderId(entry.provider) : "",
+  };
+  const copyToAgents = normalizeOptionalCredentialBoolean(entry.copyToAgents);
+  if (copyToAgents !== undefined) {
+    normalized.copyToAgents = copyToAgents;
+  }
+  const email = normalizeOptionalCredentialString(entry.email);
+  if (email !== undefined) {
+    normalized.email = email;
+  }
+  const displayName = normalizeOptionalCredentialString(entry.displayName);
+  if (displayName !== undefined) {
+    normalized.displayName = displayName;
+  }
+  return normalized;
+}
+
 function normalizeRawCredentialEntry(raw: Record<string, unknown>): Partial<AuthProfileCredential> {
   const entry = { ...raw } as Record<string, unknown>;
   if (!("type" in entry) && typeof entry["mode"] === "string") {
@@ -99,6 +154,73 @@ function normalizeRawCredentialEntry(raw: Record<string, unknown>): Partial<Auth
   }
   normalizeSecretBackedField({ entry, valueField: "key", refField: "keyRef" });
   normalizeSecretBackedField({ entry, valueField: "token", refField: "tokenRef" });
+  if (entry.type === "api_key") {
+    const normalized: Record<string, unknown> = {
+      type: "api_key",
+      ...normalizeCommonCredentialFields(entry),
+    };
+    const key = normalizeOptionalCredentialString(entry.key);
+    const keyRef = coerceSecretRef(entry.keyRef);
+    const metadata = normalizeCredentialMetadata(entry.metadata);
+    if (key !== undefined) {
+      normalized.key = key;
+    }
+    if (keyRef) {
+      normalized.keyRef = keyRef;
+    }
+    if (metadata) {
+      normalized.metadata = metadata;
+    }
+    return normalized as Partial<AuthProfileCredential>;
+  }
+  if (entry.type === "token") {
+    const normalized: Record<string, unknown> = {
+      type: "token",
+      ...normalizeCommonCredentialFields(entry),
+    };
+    const token = normalizeOptionalCredentialString(entry.token);
+    const tokenRef = coerceSecretRef(entry.tokenRef);
+    const expires = normalizeExpiryField(entry.expires);
+    if (token !== undefined) {
+      normalized.token = token;
+    }
+    if (tokenRef) {
+      normalized.tokenRef = tokenRef;
+    }
+    if (expires !== undefined) {
+      normalized.expires = expires;
+    }
+    return normalized as Partial<AuthProfileCredential>;
+  }
+  if (entry.type === "oauth") {
+    const normalized: Record<string, unknown> = {
+      type: "oauth",
+      ...normalizeCommonCredentialFields(entry),
+    };
+    for (const field of [
+      "access",
+      "refresh",
+      "idToken",
+      "clientId",
+      "enterpriseUrl",
+      "projectId",
+      "accountId",
+      "chatgptPlanType",
+    ] as const) {
+      const value = normalizeOptionalCredentialString(entry[field]);
+      if (value !== undefined) {
+        normalized[field] = value;
+      }
+    }
+    const expires = normalizeExpiryField(entry.expires);
+    if (expires !== undefined) {
+      normalized.expires = expires;
+    }
+    if (isOAuthProfileSecretRef(entry.oauthRef)) {
+      normalized.oauthRef = entry.oauthRef;
+    }
+    return normalized;
+  }
   return entry as Partial<AuthProfileCredential>;
 }
 
@@ -524,22 +646,23 @@ function parseCredentialEntry(
   raw: unknown,
   fallbackProvider?: string,
 ): { ok: true; credential: AuthProfileCredential } | { ok: false; reason: CredentialRejectReason } {
-  if (!raw || typeof raw !== "object") {
+  if (!isRecord(raw)) {
     return { ok: false, reason: "non_object" };
   }
-  const typed = normalizeRawCredentialEntry(raw as Record<string, unknown>);
+  const typed = normalizeRawCredentialEntry(raw);
   if (!AUTH_PROFILE_TYPES.has(typed.type as AuthProfileCredential["type"])) {
     return { ok: false, reason: "invalid_type" };
   }
   const provider = typed.provider ?? fallbackProvider;
-  if (typeof provider !== "string" || provider.trim().length === 0) {
+  const normalizedProvider = typeof provider === "string" ? normalizeProviderId(provider) : "";
+  if (!normalizedProvider) {
     return { ok: false, reason: "missing_provider" };
   }
   return {
     ok: true,
     credential: {
       ...typed,
-      provider,
+      provider: normalizedProvider,
     } as AuthProfileCredential,
   };
 }
@@ -564,10 +687,10 @@ function warnRejectedCredentialEntries(source: string, rejected: RejectedCredent
 }
 
 function coerceLegacyAuthStore(raw: unknown): LegacyAuthStore | null {
-  if (!raw || typeof raw !== "object") {
+  if (!isRecord(raw)) {
     return null;
   }
-  const record = raw as Record<string, unknown>;
+  const record = raw;
   if ("profiles" in record) {
     return null;
   }
@@ -586,14 +709,14 @@ function coerceLegacyAuthStore(raw: unknown): LegacyAuthStore | null {
 }
 
 export function coercePersistedAuthProfileStore(raw: unknown): AuthProfileStore | null {
-  if (!raw || typeof raw !== "object") {
+  if (!isRecord(raw)) {
     return null;
   }
-  const record = raw as Record<string, unknown>;
-  if (!record.profiles || typeof record.profiles !== "object") {
+  const record = raw;
+  if (!isRecord(record.profiles)) {
     return null;
   }
-  const profiles = record.profiles as Record<string, unknown>;
+  const profiles = record.profiles;
   const normalized: Record<string, AuthProfileCredential> = {};
   const rejected: RejectedCredentialEntry[] = [];
   for (const [key, value] of Object.entries(profiles)) {
@@ -605,8 +728,9 @@ export function coercePersistedAuthProfileStore(raw: unknown): AuthProfileStore 
     normalized[key] = parsed.credential;
   }
   warnRejectedCredentialEntries("auth-profiles.json", rejected);
+  const version = Number(record.version ?? AUTH_STORE_VERSION);
   return {
-    version: Number(record.version ?? AUTH_STORE_VERSION),
+    version: Number.isFinite(version) && version > 0 ? version : AUTH_STORE_VERSION,
     profiles: normalized,
     ...coerceAuthProfileState(record),
   };

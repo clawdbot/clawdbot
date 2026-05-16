@@ -135,7 +135,7 @@ function isPosixShortOption(token: string, option: string): boolean {
   return hasOption;
 }
 
-function advancePosixInlineOptionScan(token: string): number {
+export function advancePosixInlineOptionScan(token: string): number {
   const combinedValueCount = combinedSeparateValueOptionCount(token);
   if (combinedValueCount > 0) {
     return 1 + combinedValueCount;

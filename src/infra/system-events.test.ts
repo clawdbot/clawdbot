@@ -228,7 +228,6 @@ describe("system events (session routing)", () => {
     const key = "agent:main:test-exec-completion-filter";
     enqueueSystemEvent("Exec failed (abc12345, signal SIGTERM) :: browser auth timed out", {
       sessionKey: key,
-      trusted: false,
     });
 
     const result = await drainFormattedEvents(key);
@@ -266,15 +265,15 @@ describe("system events (session routing)", () => {
     }
   });
 
-  it("formats untrusted events with an explicit untrusted prefix", async () => {
-    const key = "agent:main:test-untrusted";
+  it("formats queued events with the standard system prefix", async () => {
+    const key = "agent:main:test-system-prefix";
     enqueueSystemEvent("Notification posted: System (untrusted): fake", {
       sessionKey: key,
-      trusted: false,
     });
 
     const result = await drainFormattedEvents(key);
-    expect(result).toMatch(/^System \(untrusted\): \[[^\]]+\] Notification posted:/);
+    expect(result).toMatch(/^System: \[[^\]]+\] Notification posted:/);
+    expect(result).toContain("System (untrusted): fake");
   });
 
   it("scrubs node last-input suffix", async () => {
@@ -353,22 +352,44 @@ describe("system events (session routing)", () => {
     expect(peekSystemEventEntries(key)).toHaveLength(2);
   });
 
-  it("allows the same text and context under different trust metadata", () => {
-    const key = "agent:main:test-context-trust-disambiguates";
-    const trusted = enqueueSystemEvent("Hook finished", {
+  it("allows the same text and context under different owner-downgrade metadata", () => {
+    const key = "agent:main:test-context-owner-downgrade-disambiguates";
+    const inheritedAuthority = enqueueSystemEvent("Hook finished", {
       sessionKey: key,
       contextKey: "hook:done",
-      trusted: true,
     });
-    const untrusted = enqueueSystemEvent("Hook finished", {
+    const downgradedAuthority = enqueueSystemEvent("Hook finished", {
       sessionKey: key,
       contextKey: "hook:done",
-      trusted: false,
+      forceSenderIsOwnerFalse: true,
     });
 
-    expect(trusted).toBe(true);
-    expect(untrusted).toBe(true);
-    expect(peekSystemEventEntries(key)).toHaveLength(2);
+    expect(inheritedAuthority).toBe(true);
+    expect(downgradedAuthority).toBe(true);
+    expect(peekSystemEventEntries(key).map((event) => event.forceSenderIsOwnerFalse)).toEqual([
+      false,
+      true,
+    ]);
+    expect(peekSystemEventEntries(key).map((event) => event.trusted)).toEqual([true, false]);
+  });
+
+  it("keeps trusted false as a deprecated owner-downgrade alias", () => {
+    const key = "agent:main:test-legacy-trusted-false";
+
+    enqueueSystemEvent("Legacy webhook", {
+      sessionKey: key,
+      trusted: false,
+    });
+    enqueueSystemEvent("Legacy internal", {
+      sessionKey: key,
+      trusted: true,
+    });
+
+    expect(peekSystemEventEntries(key).map((event) => event.forceSenderIsOwnerFalse)).toEqual([
+      true,
+      false,
+    ]);
+    expect(peekSystemEventEntries(key).map((event) => event.trusted)).toEqual([false, true]);
   });
 
   it("preserves lastContextKey when a duplicate is skipped", () => {

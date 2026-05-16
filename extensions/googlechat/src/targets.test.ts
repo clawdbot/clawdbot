@@ -444,7 +444,10 @@ describe("verifyGoogleChatRequest", () => {
         audienceType: "project-number",
         audience: "123456789",
       }),
-    ).rejects.toThrow("Google Chat cert fetch failed: malformed JSON response");
+    ).resolves.toEqual({
+      ok: false,
+      reason: "Google Chat cert fetch failed: malformed JSON response",
+    });
     expect(release).toHaveBeenCalledOnce();
   });
 });

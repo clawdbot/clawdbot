@@ -6,9 +6,9 @@ import {
   type RegisteredInteractiveHandler,
 } from "./interactive-state.js";
 
-type InteractiveDispatchResult =
+type InteractiveDispatchResult<TResult = unknown> =
   | { matched: false; handled: false; duplicate: false }
-  | { matched: true; handled: boolean; duplicate: boolean };
+  | { matched: true; handled: boolean; duplicate: boolean; result?: TResult };
 
 type PluginInteractiveDispatchRegistration = {
   channel: string;
@@ -30,15 +30,14 @@ export type { InteractiveRegistrationResult } from "./interactive-registry.js";
 
 export async function dispatchPluginInteractiveHandler<
   TRegistration extends PluginInteractiveDispatchRegistration,
+  TResult extends { handled?: boolean } | void = { handled?: boolean } | void,
 >(params: {
   channel: TRegistration["channel"];
   data: string;
   dedupeId?: string;
   onMatched?: () => Promise<void> | void;
-  invoke: (
-    match: PluginInteractiveMatch<TRegistration>,
-  ) => Promise<{ handled?: boolean } | void> | { handled?: boolean } | void;
-}): Promise<InteractiveDispatchResult> {
+  invoke: (match: PluginInteractiveMatch<TRegistration>) => Promise<TResult> | TResult;
+}): Promise<InteractiveDispatchResult<TResult>> {
   const match = resolvePluginInteractiveNamespaceMatch(params.channel, params.data);
   if (!match) {
     return { matched: false, handled: false, duplicate: false };
@@ -55,11 +54,16 @@ export async function dispatchPluginInteractiveHandler<
     if (dedupeKey) {
       commitPluginInteractiveCallbackDedupe(dedupeKey);
     }
+    const shouldExposeResult =
+      !!resolved &&
+      typeof resolved === "object" &&
+      Object.keys(resolved as Record<string, unknown>).some((key) => key !== "handled");
 
     return {
       matched: true,
       handled: resolved?.handled ?? true,
       duplicate: false,
+      ...(shouldExposeResult ? { result: resolved } : {}),
     };
   } catch (error) {
     if (dedupeKey) {

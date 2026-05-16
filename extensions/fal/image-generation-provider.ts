@@ -20,7 +20,10 @@ import {
   type SsrFPolicy,
   ssrfPolicyFromDangerouslyAllowPrivateNetwork,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const DEFAULT_FAL_BASE_URL = "https://fal.run";
 const DEFAULT_FAL_IMAGE_MODEL = "fal-ai/flux/dev";
@@ -38,15 +41,7 @@ const FAL_SUPPORTED_SIZES = [
 ] as const;
 const FAL_SUPPORTED_ASPECT_RATIOS = ["1:1", "4:3", "3:4", "16:9", "9:16"] as const;
 
-type FalGeneratedImage = {
-  url?: string;
-  content_type?: string;
-};
-
-type FalImageGenerationResponse = {
-  images?: FalGeneratedImage[];
-  prompt?: string;
-};
+const FAL_IMAGE_MALFORMED_RESPONSE = "fal image generation response malformed";
 
 type FalImageSize = string | { width: number; height: number };
 type FalNetworkPolicy = {
@@ -65,6 +60,34 @@ function matchesTrustedHostSuffix(hostname: string, trustedSuffix: string): bool
   const normalizedHost = normalizeLowercaseStringOrEmpty(hostname);
   const normalizedSuffix = normalizeLowercaseStringOrEmpty(trustedSuffix);
   return normalizedHost === normalizedSuffix || normalizedHost.endsWith(`.${normalizedSuffix}`);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function parseFalImageGenerationResponse(payload: unknown): {
+  images: Record<string, unknown>[];
+  prompt?: string;
+} {
+  if (!isRecord(payload)) {
+    throw new Error(FAL_IMAGE_MALFORMED_RESPONSE);
+  }
+  const rawImages = payload.images;
+  if (rawImages === undefined || rawImages === null) {
+    return { images: [], prompt: normalizeOptionalString(payload.prompt) };
+  }
+  if (!Array.isArray(rawImages)) {
+    throw new Error(FAL_IMAGE_MALFORMED_RESPONSE);
+  }
+  const images: Record<string, unknown>[] = [];
+  for (const entry of rawImages) {
+    if (!isRecord(entry)) {
+      throw new Error(FAL_IMAGE_MALFORMED_RESPONSE);
+    }
+    images.push(entry);
+  }
+  return { images, prompt: normalizeOptionalString(payload.prompt) };
 }
 
 function resolveFalNetworkPolicy(params: {
@@ -404,13 +427,13 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
       try {
         await assertOkOrThrowHttpError(response, "fal image generation failed");
 
-        const payload = (await response.json()) as FalImageGenerationResponse;
+        const payload = parseFalImageGenerationResponse(await response.json());
         const images: GeneratedImageAsset[] = [];
         let imageIndex = 0;
-        for (const entry of payload.images ?? []) {
-          const url = entry.url?.trim();
+        for (const entry of payload.images) {
+          const url = normalizeOptionalString(entry.url);
           if (!url) {
-            continue;
+            throw new Error(FAL_IMAGE_MALFORMED_RESPONSE);
           }
           const downloaded = await fetchImageBuffer(url, networkPolicy);
           imageIndex += 1;
@@ -418,7 +441,7 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
             buffer: downloaded.buffer,
             mimeType: downloaded.mimeType,
             fileName: `image-${imageIndex}.${imageFileExtensionForMimeType(
-              downloaded.mimeType || entry.content_type,
+              downloaded.mimeType || normalizeOptionalString(entry.content_type),
             )}`,
           });
         }

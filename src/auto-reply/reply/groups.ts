@@ -222,7 +222,6 @@ export function buildGroupChatContext(params: {
   sessionCtx: TemplateContext;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   silentReplyPolicy?: SilentReplyPolicy;
-  silentReplyRewrite?: boolean;
   silentToken?: string;
 }): string {
   const providerLabel = resolveProviderLabel(params.sessionCtx.Provider);
@@ -253,25 +252,17 @@ export function buildGroupChatContext(params: {
     "When subagent or session-spawn tools are available and a directly requested group-chat task will require several tool calls, prefer delegating bounded side investigations early so the channel gets a responsive path forward. Keep the critical path local, avoid subagents for simple one-step work, and only surface concise group-visible updates when they add value.",
   );
   const canUseSilentReply =
-    !messageToolOnly &&
-    params.silentToken &&
-    (params.silentReplyPolicy !== "disallow" || params.silentReplyRewrite === true);
+    !messageToolOnly && params.silentToken && params.silentReplyPolicy !== "disallow";
   if (messageToolOnly) {
     lines.push(
       "If no visible group response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to the group.",
     );
   }
   if (canUseSilentReply) {
-    if (params.silentReplyPolicy === "allow") {
-      lines.push(
-        `If no response is needed, reply with exactly "${params.silentToken}" (and nothing else) so OpenClaw stays silent.`,
-      );
-      lines.push("Be extremely selective: reply only when directly addressed or clearly helpful.");
-    } else {
-      lines.push(
-        `If no response is needed, reply with exactly "${params.silentToken}" (and nothing else) so OpenClaw can send a short fallback reply.`,
-      );
-    }
+    lines.push(
+      `If no response is needed, reply with exactly "${params.silentToken}" (and nothing else) so OpenClaw stays silent.`,
+    );
+    lines.push("Be extremely selective: reply only when directly addressed or clearly helpful.");
     lines.push(
       "Do not add any other words, punctuation, tags, markdown/code blocks, or explanations.",
     );
@@ -288,9 +279,6 @@ export function buildGroupChatContext(params: {
 export function buildDirectChatContext(params: {
   sessionCtx: TemplateContext;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-  silentReplyPolicy?: SilentReplyPolicy;
-  silentReplyRewrite?: boolean;
-  silentToken: string;
 }): string {
   const providerLabel = resolveProviderLabel(params.sessionCtx.Provider);
   const messageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
@@ -306,17 +294,6 @@ export function buildDirectChatContext(params: {
     return lines.join(" ");
   }
   lines.push("Your replies are automatically sent to this conversation.");
-  if (params.silentReplyPolicy === "allow") {
-    lines.push(
-      `If no response is needed, reply with exactly "${params.silentToken}" (and nothing else) so OpenClaw stays silent.`,
-    );
-  } else if (params.silentReplyRewrite === true) {
-    lines.push(
-      `If no response is needed, reply with exactly "${params.silentToken}" (and nothing else) so OpenClaw can send a short fallback reply.`,
-    );
-  } else {
-    lines.push(`Do not use "${params.silentToken}" as your final answer in this conversation.`);
-  }
   return lines.join(" ");
 }
 
@@ -324,7 +301,6 @@ export function resolveGroupSilentReplyBehavior(params: {
   sessionEntry?: SessionEntry;
   defaultActivation: "always" | "mention";
   silentReplyPolicy?: SilentReplyPolicy;
-  silentReplyRewrite?: boolean;
 }): {
   activation: "always" | "mention";
   canUseSilentReply: boolean;
@@ -332,8 +308,7 @@ export function resolveGroupSilentReplyBehavior(params: {
 } {
   const activation =
     normalizeGroupActivation(params.sessionEntry?.groupActivation) ?? params.defaultActivation;
-  const canUseSilentReply =
-    params.silentReplyPolicy !== "disallow" || params.silentReplyRewrite === true;
+  const canUseSilentReply = params.silentReplyPolicy !== "disallow";
   return {
     activation,
     canUseSilentReply,
@@ -348,7 +323,6 @@ export function buildGroupIntro(params: {
   defaultActivation: "always" | "mention";
   silentToken: string;
   silentReplyPolicy?: SilentReplyPolicy;
-  silentReplyRewrite?: boolean;
 }): string {
   const { activation } = resolveGroupSilentReplyBehavior(params);
   const activationLine =

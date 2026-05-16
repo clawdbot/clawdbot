@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/voyage-provider",
-  "version": "2026.5.14",
+  "version": "2026.5.16",
   "private": true,
   "description": "OpenClaw Voyage embedding provider plugin",
   "type": "module",

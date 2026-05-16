@@ -78,7 +78,7 @@ export function hasOAuthIdentity(
   );
 }
 
-function hasMatchingOAuthIdentity(
+export function hasMatchingOAuthIdentity(
   existing: Pick<OAuthCredential, "accountId" | "email">,
   incoming: Pick<OAuthCredential, "accountId" | "email">,
 ): boolean {

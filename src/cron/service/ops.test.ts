@@ -72,6 +72,8 @@ function createInterruptedMainJob(now: number): CronJob {
     state: {
       nextRunAtMs: now - 60_000,
       runningAtMs: now - 30 * 60_000,
+      lastFailureNotificationDelivered: true,
+      lastFailureNotificationDeliveryStatus: "delivered",
     },
   };
 }
@@ -198,6 +200,9 @@ describe("cron service ops seam coverage", () => {
     expect(job.state.lastRunStatus).toBe("error");
     expect(job.state.lastRunAtMs).toBe(now - 30 * 60_000);
     expect(job.state.lastError).toBe("cron: job interrupted by gateway restart");
+    expect(job.state.lastFailureNotificationDelivered).toBeUndefined();
+    expect(job.state.lastFailureNotificationDeliveryStatus).toBe("not-requested");
+    expect(job.state.lastFailureNotificationDeliveryError).toBeUndefined();
     expect((job.state.nextRunAtMs ?? 0) > now).toBe(true);
 
     const delays = timeoutSpy.mock.calls

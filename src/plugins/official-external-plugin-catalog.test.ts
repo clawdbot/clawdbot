@@ -44,6 +44,21 @@ describe("official external plugin catalog", () => {
     );
   });
 
+  it("allows invalid-config recovery for externalized stock plugins", () => {
+    expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("brave"))).toMatchObject({
+      npmSpec: "@openclaw/brave-plugin",
+      allowInvalidConfigRecovery: true,
+    });
+    expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("slack"))).toMatchObject({
+      npmSpec: "@openclaw/slack",
+      allowInvalidConfigRecovery: true,
+    });
+    expect(resolveOfficialExternalPluginInstall(expectCatalogEntry("discord"))).toMatchObject({
+      npmSpec: "@openclaw/discord",
+      allowInvalidConfigRecovery: true,
+    });
+  });
+
   it("lists Matrix as an official external ClawHub channel after cutover", () => {
     const ids = new Set<string>();
     for (const entry of listOfficialExternalPluginCatalogEntries()) {

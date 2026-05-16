@@ -300,7 +300,7 @@ describe("timeout-triggered compaction", () => {
     expect(result.payloads?.[0]?.text).toContain("timed out");
   });
 
-  it("points idle-timeout errors at the provider timeout config key", async () => {
+  it("points idle-timeout errors at provider timeout and the agent runtime ceiling", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         timedOut: true,
@@ -316,7 +316,8 @@ describe("timeout-triggered compaction", () => {
     expect(mockedCompactDirect).not.toHaveBeenCalled();
     expect(result.payloads?.[0]?.isError).toBe(true);
     expect(result.payloads?.[0]?.text).toContain("models.providers.<id>.timeoutSeconds");
-    expect(result.payloads?.[0]?.text).not.toContain("agents.defaults.timeoutSeconds");
+    expect(result.payloads?.[0]?.text).toContain("agents.defaults.timeoutSeconds");
+    expect(result.payloads?.[0]?.text).toContain("provider timeouts cannot extend");
   });
 
   it("retries one silent idle timeout before surfacing an error", async () => {

@@ -846,12 +846,21 @@ describe("applyMediaUnderstanding", () => {
 
     expect(ctx.Transcript).toBe("whisper cpp ogg ok");
     const ffmpegArgs = getRunFfmpegArgs();
-    expect(ffmpegArgs).toHaveLength(10);
+    expect(ffmpegArgs).toHaveLength(12);
     expect(ffmpegArgs.slice(0, 2)).toEqual(["-y", "-i"]);
     expect(String(ffmpegArgs[2]).endsWith("telegram-voice.ogg")).toBe(true);
-    expect(ffmpegArgs.slice(3, 9)).toEqual(["-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le"]);
-    expect(String(ffmpegArgs[9])).toContain("telegram-voice.wav");
-    expect(String(ffmpegArgs[9]).endsWith(".part")).toBe(true);
+    expect(ffmpegArgs.slice(3, 11)).toEqual([
+      "-ac",
+      "1",
+      "-ar",
+      "16000",
+      "-c:a",
+      "pcm_s16le",
+      "-f",
+      "wav",
+    ]);
+    expect(String(ffmpegArgs[11])).toContain("telegram-voice.wav");
+    expect(String(ffmpegArgs[11]).endsWith(".part")).toBe(true);
 
     const [command, args, options] = getRunExecCall();
     expect(command).toBe("whisper-cli");

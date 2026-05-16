@@ -868,19 +868,35 @@ export function createSubagentRegistryLifecycleController(params: {
       return;
     }
 
-    const cleanupBrowserSessions =
-      params.cleanupBrowserSessionsForLifecycleEnd ??
-      (await loadCleanupBrowserSessionsForLifecycleEnd());
-    await cleanupBrowserSessions({
-      sessionKeys: [entry.childSessionKey],
-      onWarn: (msg) => params.warn(msg, { runId: entry.runId }),
-    });
+    try {
+      const cleanupBrowserSessions =
+        params.cleanupBrowserSessionsForLifecycleEnd ??
+        (await loadCleanupBrowserSessionsForLifecycleEnd());
+      await cleanupBrowserSessions({
+        sessionKeys: [entry.childSessionKey],
+        onWarn: (msg) => params.warn(msg, { runId: entry.runId }),
+      });
+    } catch (error) {
+      params.warn("failed to cleanup browser sessions for completed subagent", {
+        error: buildSafeLifecycleErrorMeta(error),
+        runId: maskRunId(completeParams.runId),
+        childSessionKey: maskSessionKey(entry.childSessionKey),
+      });
+    }
 
-    await retireRunModeBundleMcpRuntime({
-      runId: completeParams.runId,
-      entry,
-      reason: "subagent-run-complete",
-    });
+    try {
+      await retireRunModeBundleMcpRuntime({
+        runId: completeParams.runId,
+        entry,
+        reason: "subagent-run-complete",
+      });
+    } catch (error) {
+      params.warn("failed to retire subagent bundle MCP runtime after completion", {
+        error: buildSafeLifecycleErrorMeta(error),
+        runId: maskRunId(completeParams.runId),
+        childSessionKey: maskSessionKey(entry.childSessionKey),
+      });
+    }
 
     startSubagentAnnounceCleanupFlow(completeParams.runId, entry);
   };

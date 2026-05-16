@@ -58,6 +58,19 @@ import { resolveLocalUserName } from "../user-identity.ts";
 import { renderMarkdownSidebar } from "./markdown-sidebar.ts";
 import "../components/resizable-divider.ts";
 
+const COMPOSER_CHROME_INTERACTIVE_SELECTOR = [
+  "a[href]",
+  "button",
+  "input",
+  "select",
+  "textarea",
+  "summary",
+  "[contenteditable='true']",
+  "[role='button']",
+  "[role='listbox']",
+  "[role='option']",
+].join(",");
+
 export type ChatProps = {
   sessionKey: string;
   onSessionKeyChange: (next: string) => void;
@@ -322,6 +335,23 @@ export const cleanupChatModuleState = resetChatViewState;
 function adjustTextareaHeight(el: HTMLTextAreaElement) {
   el.style.height = "auto";
   el.style.height = `${Math.min(el.scrollHeight, 150)}px`;
+}
+
+function focusComposerFromChrome(event: MouseEvent, connected: boolean) {
+  if (!connected || event.defaultPrevented) {
+    return;
+  }
+  const target = event.target;
+  const currentTarget = event.currentTarget;
+  if (!(target instanceof Element) || !(currentTarget instanceof HTMLElement)) {
+    return;
+  }
+  if (target.closest(COMPOSER_CHROME_INTERACTIVE_SELECTOR)) {
+    return;
+  }
+  currentTarget
+    .querySelector<HTMLTextAreaElement>(".agent-chat__composer-combobox > textarea")
+    ?.focus({ preventScroll: true });
 }
 
 function restoreHistoryCaret(target: HTMLTextAreaElement, direction: "up" | "down") {
@@ -1359,7 +1389,10 @@ export function renderChat(props: ChatProps) {
         : nothing}
 
       <!-- Input bar -->
-      <div class="agent-chat__input">
+      <div
+        class="agent-chat__input"
+        @click=${(event: MouseEvent) => focusComposerFromChrome(event, props.connected)}
+      >
         ${renderSlashMenu(requestUpdate, props)} ${renderAttachmentPreview(props)}
 
         <input
@@ -1423,6 +1456,7 @@ export function renderChat(props: ChatProps) {
               ?disabled=${!props.connected}
             >
               ${icons.paperclip}
+              <span class="agent-chat__control-label">${t("chat.composer.attachFile")}</span>
             </button>
 
             ${props.onToggleRealtimeTalk
@@ -1441,6 +1475,11 @@ export function renderChat(props: ChatProps) {
                     ?disabled=${!props.connected}
                   >
                     ${props.realtimeTalkActive ? icons.volume2 : icons.radio}
+                    <span class="agent-chat__control-label"
+                      >${props.realtimeTalkActive
+                        ? t("chat.composer.stopTalk")
+                        : t("chat.composer.startTalk")}</span
+                    >
                   </button>
                   <button
                     class="agent-chat__input-btn ${props.realtimeTalkOptionsOpen

@@ -16,6 +16,9 @@ const DOCUMENTED_OPENCLAW_BRIDGE_COMMAND =
 const CODEX_ACP_COMMAND = "npx @zed-industries/codex-acp@0.13.0";
 const CODEX_ACP_WRAPPER_COMMAND = `node "/tmp/openclaw/acpx/codex-acp-wrapper.mjs"`;
 const CODEX_ACP_WRAPPER_COMMAND_WITH_LEASE = `${CODEX_ACP_WRAPPER_COMMAND} ${OPENCLAW_ACPX_LEASE_ID_ARG} lease-close ${OPENCLAW_GATEWAY_INSTANCE_ID_ARG} gateway-test`;
+const LOCAL_NODE_MODULES_CODEX_COMMAND = `node "${path.resolve(
+  "node_modules/@zed-industries/codex-acp/bin/codex-acp.js",
+)}"`;
 
 function makeRuntime(
   baseStore: TestSessionStore,
@@ -902,6 +905,50 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(savedRecords[0]?.agentCommand).toBe(CODEX_ACP_WRAPPER_COMMAND);
     expect(savedRecords[0]?.openclawGatewayInstanceId).toBe("gateway-test");
     expect(savedRecords[0]?.openclawLeaseId).toBe(lease?.leaseId);
+  });
+
+  it("does not create launch leases for direct plugin-local ACP adapter commands", async () => {
+    const launchCommands: string[] = [];
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const leaseStore = makeLeaseStore();
+    const { runtime, delegate, wrappedStore } = makeRuntime(baseStore, {
+      openclawGatewayInstanceId: "gateway-test",
+      openclawProcessLeaseStore: leaseStore.store,
+      openclawWrapperRoot: "/tmp/openclaw/acpx",
+      agentRegistry: {
+        resolve: (agentName: string) =>
+          agentName === "codex" ? LOCAL_NODE_MODULES_CODEX_COMMAND : agentName,
+        list: () => ["codex"],
+      },
+    });
+    vi.spyOn(delegate, "ensureSession").mockImplementation(async (input) => {
+      const command = (
+        runtime as unknown as { scopedAgentRegistry: { resolve(agent: string): string } }
+      ).scopedAgentRegistry.resolve("codex");
+      launchCommands.push(command);
+      await wrappedStore.save({
+        name: input.sessionKey,
+        agentCommand: command,
+        pid: 777,
+      });
+      return {
+        sessionKey: input.sessionKey,
+        backend: "acpx",
+        runtimeSessionName: input.sessionKey,
+      };
+    });
+
+    await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:binding:test",
+      agent: "codex",
+      mode: "persistent",
+    });
+
+    expect(leaseStore.store.save).not.toHaveBeenCalled();
+    expect(launchCommands).toEqual([LOCAL_NODE_MODULES_CODEX_COMMAND]);
   });
 
   it("keeps reusable persistent ACP launch commands stable across ensures", async () => {

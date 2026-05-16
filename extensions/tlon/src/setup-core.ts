@@ -4,6 +4,7 @@ import {
   normalizeAccountId,
   patchScopedAccountConfig,
   prepareScopedSetupConfig,
+  createSetupTranslator,
   createSetupInputPresenceValidator,
   type ChannelSetupAdapter,
   type ChannelSetupInput,
@@ -18,6 +19,8 @@ import { buildTlonAccountFields, type TlonAccountFieldsInput } from "./account-f
 import { normalizeShip } from "./targets.js";
 import { listTlonAccountIds, resolveTlonAccount, type TlonResolvedAccount } from "./types.js";
 import { validateUrbitBaseUrl } from "./urbit/base-url.js";
+
+const t = createSetupTranslator();
 
 function tlonChannelId() {
   return "tlon" as const;
@@ -46,10 +49,10 @@ export function createTlonSetupWizardBase(params: TlonSetupWizardBaseParams): Ch
   return {
     channel: tlonChannelId(),
     status: {
-      configuredLabel: "configured",
-      unconfiguredLabel: "needs setup",
-      configuredHint: "configured",
-      unconfiguredHint: "urbit messenger",
+      configuredLabel: t("wizard.channels.statusConfigured"),
+      unconfiguredLabel: t("wizard.channels.statusNeedsSetup"),
+      configuredHint: t("wizard.channels.statusConfigured"),
+      unconfiguredHint: t("wizard.channels.statusUrbitMessenger"),
       configuredScore: 1,
       unconfiguredScore: 4,
       resolveConfigured: ({ cfg, accountId }) => params.resolveConfigured({ cfg, accountId }),
@@ -57,12 +60,12 @@ export function createTlonSetupWizardBase(params: TlonSetupWizardBaseParams): Ch
         params.resolveStatusLines?.({ cfg, accountId, configured }) ?? [],
     },
     introNote: {
-      title: "Tlon setup",
+      title: t("wizard.tlon.setupTitle"),
       lines: [
-        "You need your Urbit ship URL and login code.",
-        "Example URL: https://your-ship-host",
-        "Example ship: ~sampel-palnet",
-        "If your ship URL is on a private network (LAN/localhost), you must explicitly allow it during setup.",
+        t("wizard.tlon.helpNeedsUrlCode"),
+        t("wizard.tlon.helpExampleUrl"),
+        t("wizard.tlon.helpExampleShip"),
+        t("wizard.tlon.helpPrivateNetwork"),
         `Docs: ${formatDocsLink("/channels/tlon", "channels/tlon")}`,
       ],
     },
@@ -70,7 +73,7 @@ export function createTlonSetupWizardBase(params: TlonSetupWizardBaseParams): Ch
     textInputs: [
       {
         inputKey: "ship",
-        message: "Ship name",
+        message: t("wizard.tlon.shipPrompt"),
         placeholder: "~sampel-palnet",
         currentValue: ({ cfg, accountId }) => resolveTlonAccount(cfg, accountId).ship ?? undefined,
         validate: ({ value }) =>
@@ -86,7 +89,7 @@ export function createTlonSetupWizardBase(params: TlonSetupWizardBaseParams): Ch
       },
       {
         inputKey: "url",
-        message: "Ship URL",
+        message: t("wizard.tlon.shipUrlPrompt"),
         placeholder: "https://your-ship-host",
         currentValue: ({ cfg, accountId }) => resolveTlonAccount(cfg, accountId).url ?? undefined,
         validate: ({ value }) => {
@@ -106,7 +109,7 @@ export function createTlonSetupWizardBase(params: TlonSetupWizardBaseParams): Ch
       },
       {
         inputKey: "code",
-        message: "Login code",
+        message: t("wizard.tlon.loginCodePrompt"),
         placeholder: "lidlut-tabwed-pillex-ridrup",
         currentValue: ({ cfg, accountId }) => resolveTlonAccount(cfg, accountId).code ?? undefined,
         validate: ({ value }) =>

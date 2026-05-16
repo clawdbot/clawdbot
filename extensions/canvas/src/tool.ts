@@ -13,16 +13,12 @@ import {
 } from "openclaw/plugin-sdk/channel-actions";
 import type { AnyAgentTool, OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { normalizeCanvasSnapshotFileExtension, parseCanvasSnapshotPayload } from "./cli-helpers.js";
 import { CanvasToolSchema } from "./tool-schema.js";
 
 type CanvasToolOptions = {
   config?: OpenClawConfig;
   workspaceDir?: string;
-};
-
-type CanvasSnapshotPayload = {
-  format: string;
-  base64: string;
 };
 
 type CanvasImageSanitizationLimits = {
@@ -45,23 +41,10 @@ async function resolveNodeId(
   return resolveNodeIdFromList(await listNodes(opts), query, allowDefault);
 }
 
-function parseCanvasSnapshotPayload(value: unknown): CanvasSnapshotPayload {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("invalid canvas.snapshot payload");
-  }
-  const record = value as Record<string, unknown>;
-  const format = typeof record.format === "string" ? record.format : "";
-  const base64 = typeof record.base64 === "string" ? record.base64 : "";
-  if (!format || !base64) {
-    throw new Error("invalid canvas.snapshot payload");
-  }
-  return { format, base64 };
-}
-
 async function writeBase64ToTempFile(params: { base64: string; ext: string }): Promise<string> {
   const dir = resolvePreferredOpenClawTmpDir();
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-  const ext = params.ext.startsWith(".") ? params.ext : `.${params.ext}`;
+  const ext = `.${normalizeCanvasSnapshotFileExtension(params.ext)}`;
   const filePath = path.join(dir, `openclaw-canvas-snapshot-${randomUUID()}${ext}`);
   await fs.writeFile(filePath, Buffer.from(params.base64, "base64"));
   return filePath;

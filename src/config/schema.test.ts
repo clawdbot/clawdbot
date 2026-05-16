@@ -139,6 +139,49 @@ describe("config schema", () => {
       | undefined;
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("headers");
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("transport");
+    expect(serversNode?.additionalProperties?.properties).toHaveProperty("codex");
+  });
+
+  it("rejects empty Codex MCP agent scopes", () => {
+    expect(() =>
+      OpenClawSchema.parse({
+        mcp: {
+          servers: {
+            scoped: {
+              url: "https://mcp.example.com/mcp",
+              transport: "streamable-http",
+              codex: { agents: [] },
+            },
+          },
+        },
+      }),
+    ).toThrow();
+    expect(() =>
+      OpenClawSchema.parse({
+        mcp: {
+          servers: {
+            scoped: {
+              url: "https://mcp.example.com/mcp",
+              transport: "streamable-http",
+              codex: { agents: ["  "] },
+            },
+          },
+        },
+      }),
+    ).toThrow();
+    expect(() =>
+      OpenClawSchema.parse({
+        mcp: {
+          servers: {
+            scoped: {
+              url: "https://mcp.example.com/mcp",
+              transport: "streamable-http",
+              codex: { agents: ["!!!"] },
+            },
+          },
+        },
+      }),
+    ).toThrow();
   });
 
   it("merges plugin ui hints", () => {

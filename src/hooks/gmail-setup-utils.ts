@@ -264,6 +264,7 @@ export async function ensureTailscaleEndpoint(params: {
   mode: "off" | "serve" | "funnel";
   path: string;
   port?: number;
+  signal?: AbortSignal;
   target?: string;
   token?: string;
 }): Promise<string> {
@@ -276,6 +277,7 @@ export async function ensureTailscaleEndpoint(params: {
   const statusCommand = formatCommand("tailscale", statusArgs);
   const status = await runCommandWithTimeout([tailscaleBin, ...statusArgs], {
     timeoutMs: 30_000,
+    signal: params.signal,
   });
   if (status.code !== 0) {
     throw new Error(formatCommandFailure(statusCommand, status));
@@ -305,6 +307,7 @@ export async function ensureTailscaleEndpoint(params: {
   const funnelCommand = formatCommand("tailscale", funnelArgs);
   const funnelResult = await runCommandWithTimeout([tailscaleBin, ...funnelArgs], {
     timeoutMs: 30_000,
+    signal: params.signal,
   });
   if (funnelResult.code !== 0) {
     throw new Error(formatCommandFailure(funnelCommand, funnelResult));

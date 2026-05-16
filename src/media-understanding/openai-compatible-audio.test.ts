@@ -88,4 +88,21 @@ describe("transcribeOpenAiCompatibleAudio", () => {
       }),
     ).rejects.toThrow("Audio transcription failed: malformed JSON response");
   });
+
+  it("rejects non-object successful transcription JSON with a stable provider error", async () => {
+    const fetchFn = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(JSON.stringify([])));
+
+    await expect(
+      transcribeOpenAiCompatibleAudio({
+        buffer: Buffer.from("audio"),
+        fileName: "note.mp3",
+        apiKey: "test-key",
+        timeoutMs: 1000,
+        fetchFn,
+        provider: "openai",
+        defaultBaseUrl: "https://api.openai.com/v1",
+        defaultModel: "gpt-4o-transcribe",
+      }),
+    ).rejects.toThrow("Audio transcription failed: malformed JSON response");
+  });
 });

@@ -105,6 +105,7 @@ export function buildSystemPromptReport(params: {
   injectedFiles: EmbeddedContextFile[];
   skillsPrompt: string;
   tools: AgentTool[];
+  currentTurn?: SessionSystemPromptReport["currentTurn"];
 }): SessionSystemPromptReport {
   const systemPromptChars = params.systemPrompt.length;
   const projectContextChars = measureRenderedProjectContextChars(params.systemPrompt);
@@ -129,6 +130,7 @@ export function buildSystemPromptReport(params: {
       projectContextChars,
       nonProjectContextChars: Math.max(0, systemPromptChars - projectContextChars),
     },
+    ...(params.currentTurn ? { currentTurn: params.currentTurn } : {}),
     injectedWorkspaceFiles: buildBootstrapInjectionStats({
       bootstrapFiles: params.bootstrapFiles,
       injectedFiles: params.injectedFiles,

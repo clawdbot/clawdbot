@@ -611,7 +611,8 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
       afterWrite: { mode: "auto" },
       writeOptions: {
         allowConfigSizeDrop: ctx.configResult.shouldWriteConfig === true || updateDoctorRun,
-        skipPluginValidation: ctx.configResult.skipPluginValidationOnWrite === true,
+        skipPluginValidation:
+          ctx.configResult.skipPluginValidationOnWrite === true || updateDoctorRun,
       },
     });
     logConfigUpdated(ctx.runtime);
@@ -649,14 +650,16 @@ async function runWorkspaceSuggestionsHealth(ctx: DoctorHealthFlowContext): Prom
   }
 }
 
-async function runFinalConfigValidationHealth(_ctx: DoctorHealthFlowContext): Promise<void> {
+async function runFinalConfigValidationHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { readConfigFileSnapshot } = await import("../config/config.js");
-  const finalSnapshot = await readConfigFileSnapshot();
+  const finalSnapshot = await readConfigFileSnapshot({
+    skipPluginValidation: isUpdateDoctorRun(ctx.env ?? process.env),
+  });
   if (finalSnapshot.exists && !finalSnapshot.valid) {
-    _ctx.runtime.error("Invalid config:");
+    ctx.runtime.error("Invalid config:");
     for (const issue of finalSnapshot.issues) {
       const path = issue.path || "<root>";
-      _ctx.runtime.error(`- ${path}: ${issue.message}`);
+      ctx.runtime.error(`- ${path}: ${issue.message}`);
     }
   }
 }

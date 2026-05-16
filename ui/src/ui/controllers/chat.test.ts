@@ -901,6 +901,29 @@ describe("loadChatHistory filtering", () => {
     expect(state.chatMessages).toEqual([messages[0], messages[2]]);
   });
 
+  it("keeps image-only user messages that carry transcript media paths", async () => {
+    const messages = [
+      { role: "user", content: "", MediaPath: "/tmp/openclaw/user-upload.png" },
+      {
+        role: "user",
+        content: "",
+        MediaPaths: ["/tmp/openclaw/first.png", "/tmp/openclaw/second.jpg"],
+      },
+      { role: "user", content: "" },
+    ];
+    const mockClient = {
+      request: vi.fn().mockResolvedValue({ messages }),
+    };
+    const state = createState({
+      client: mockClient as unknown as ChatState["client"],
+      connected: true,
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([messages[0], messages[1]]);
+  });
+
   it("keeps a user message even if it matches the synthetic repair text", async () => {
     const messages = [
       {
@@ -1073,6 +1096,76 @@ describe("sendChatMessage", () => {
         timestamp: expect.any(Number),
       },
     ]);
+  });
+
+  it("sends inline image payloads without copying data URLs into optimistic chat state", async () => {
+    const request = vi.fn().mockResolvedValue({ runId: "run-1", status: "started" });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+    const imageBase64 = "A".repeat(1024 * 1024);
+    const imageDataUrl = `data:image/png;base64,${imageBase64}`;
+
+    const result = await sendChatMessage(state, "", [
+      {
+        id: "att-image",
+        dataUrl: imageDataUrl,
+        mimeType: "image/png",
+        fileName: "photo.png",
+      },
+    ]);
+
+    expect(result).toMatch(UUID_V4_RE);
+    expect(request).toHaveBeenCalledTimes(1);
+    const [requestMethod, requestParams] = requireFirstRequestCall(request);
+    expect(requestMethod).toBe("chat.send");
+    const sendParams = requireRecord(requestParams);
+    expect(sendParams.message).toBe("");
+    expect(sendParams.attachments).toEqual([
+      {
+        type: "image",
+        mimeType: "image/png",
+        fileName: "photo.png",
+        content: imageBase64,
+      },
+    ]);
+    expect(state.chatMessages).toStrictEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "Attached image: photo.png" }],
+        timestamp: expect.any(Number),
+      },
+    ]);
+    expect(JSON.stringify(state.chatMessages)).not.toContain("data:image/png;base64");
+
+    const captionedRequest = vi.fn().mockResolvedValue({ runId: "run-2", status: "started" });
+    const captionedState = createState({
+      connected: true,
+      client: { request: captionedRequest } as unknown as ChatState["client"],
+    });
+
+    await expect(
+      sendChatMessage(captionedState, "describe", [
+        {
+          id: "att-captioned-image",
+          dataUrl: imageDataUrl,
+          mimeType: "image/png",
+          fileName: "photo.png",
+        },
+      ]),
+    ).resolves.toMatch(UUID_V4_RE);
+    expect(captionedState.chatMessages).toStrictEqual([
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "describe" },
+          { type: "text", text: "Attached image: photo.png" },
+        ],
+        timestamp: expect.any(Number),
+      },
+    ]);
+    expect(JSON.stringify(captionedState.chatMessages)).not.toContain("data:image/png;base64");
   });
 
   it("formats structured non-auth connect failures for chat send", async () => {

@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { VoiceCallConfigSchema, type VoiceCallConfig } from "./config.js";
 import { CallManager } from "./manager.js";
 import { createTestStorePath, FakeProvider } from "./manager.test-harness.js";
+import { flushPendingCallRecordWritesForTest } from "./manager/store.js";
 import type { WebhookContext, WebhookParseOptions } from "./types.js";
 import { VoiceCallWebhookServer } from "./webhook.js";
 
@@ -131,5 +132,48 @@ describe("Voice-call webhook hangup-once lifecycle", () => {
     const provider = new RejectInboundReplayWithHangupFailureProvider("plivo");
     const { first, second, manager } = await runDuplicateInboundReplayLifecycleTest(provider);
     expectSingleRejectedReplayHangup({ first, second, provider, manager });
+  });
+
+  it("keeps rejected inbound replay keys after manager restart", async () => {
+    const storePath = createTestStorePath();
+    const config = createConfig();
+    const firstProvider = new RejectInboundReplayProvider("plivo");
+    const firstManager = new CallManager(config, storePath);
+    await firstManager.initialize(firstProvider, "https://example.com/voice/webhook");
+    const firstServer = new VoiceCallWebhookServer(config, firstManager, firstProvider);
+
+    try {
+      const baseUrl = await firstServer.start();
+      const first = await postWebhookForm(
+        firstServer,
+        baseUrl,
+        "CallSid=CA123&From=%2B15552222222",
+      );
+      expect(first.status).toBe(200);
+    } finally {
+      await firstServer.stop();
+    }
+    await flushPendingCallRecordWritesForTest();
+    expect(firstProvider.hangupCalls).toHaveLength(1);
+
+    const secondProvider = new RejectInboundReplayProvider("plivo");
+    const secondManager = new CallManager(config, storePath);
+    await secondManager.initialize(secondProvider, "https://example.com/voice/webhook");
+    const secondServer = new VoiceCallWebhookServer(config, secondManager, secondProvider);
+
+    try {
+      const baseUrl = await secondServer.start();
+      const replay = await postWebhookForm(
+        secondServer,
+        baseUrl,
+        "CallSid=CA123&From=%2B15552222222",
+      );
+      expect(replay.status).toBe(200);
+    } finally {
+      await secondServer.stop();
+    }
+
+    expect(secondProvider.hangupCalls).toHaveLength(0);
+    expect(secondManager.getCallByProviderCallId("provider-inbound-1")).toBeUndefined();
   });
 });

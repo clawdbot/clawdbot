@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { channelTestRoots } from "../../test/vitest/vitest.channel-paths.mjs";
@@ -64,7 +65,46 @@ function normalizeRelative(inputPath) {
   return inputPath.split(path.sep).join("/");
 }
 
+function isPathInsideRepo(relativePath) {
+  return relativePath !== ".." && !relativePath.startsWith("../") && !path.isAbsolute(relativePath);
+}
+
+function isSkippedTrackedTestFile(relativePath) {
+  return relativePath.split("/").some((segment) => segment === "dist" || segment === "node_modules");
+}
+
+function listTrackedTestFiles(rootPath) {
+  const relativeRoot = normalizeRelative(path.relative(repoRoot, rootPath));
+  if (!isPathInsideRepo(relativeRoot)) {
+    return null;
+  }
+
+  const result = spawnSync("git", ["ls-files", "--", relativeRoot], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (result.status !== 0) {
+    return null;
+  }
+
+  return result.stdout
+    .split("\n")
+    .map((line) => line.trim().replaceAll("\\", "/"))
+    .filter(
+      (line) =>
+        line.length > 0 &&
+        !isSkippedTrackedTestFile(line) &&
+        (line.endsWith(".test.ts") || line.endsWith(".test.tsx")),
+    );
+}
+
 function countTestFiles(rootPath) {
+  const trackedFiles = listTrackedTestFiles(rootPath);
+  if (trackedFiles) {
+    return trackedFiles.length;
+  }
+
   let total = 0;
   const stack = [rootPath];
 

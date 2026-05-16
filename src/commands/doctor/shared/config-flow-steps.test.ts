@@ -105,7 +105,9 @@ describe("doctor config flow steps", () => {
     const migratedConfig = { agents: { defaults: { model: { primary: "openai/gpt-5.4" } } } };
     migrateLegacyConfigMock.mockReturnValueOnce({
       config: migratedConfig,
-      changes: ["Removed agents.defaults.llm; model idle timeout now follows models.providers."],
+      changes: [
+        "Removed agents.defaults.llm; model idle timeout now follows models.providers within the agent/run timeout ceiling.",
+      ],
       partiallyValid: true,
     });
 

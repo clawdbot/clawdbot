@@ -1,3 +1,4 @@
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
   type BuildChannelTurnContextParams,
   type BuiltChannelTurnContext,
@@ -6,6 +7,7 @@ import {
   toLocationContext,
   type NormalizedLocation,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
 import { normalizeCommandBody } from "openclaw/plugin-sdk/command-surface";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
@@ -14,10 +16,7 @@ import type {
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
-import {
-  buildPendingHistoryContextFromMap,
-  type HistoryEntry,
-} from "openclaw/plugin-sdk/reply-history";
+import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
@@ -67,6 +66,17 @@ const sessionRuntimeMethods = [
   "resolvePinnedMainDmOwnerFromAllowlist",
   "resolveStorePath",
 ] as const satisfies readonly (keyof TelegramMessageContextSessionRuntime)[];
+
+function resolveAmbientGroupTurnKind(
+  cfg: OpenClawConfig,
+  agentId: string,
+): BuildChannelTurnContextParams["message"]["inboundTurnKind"] {
+  const agentGroupChat = resolveAgentConfig(cfg, agentId)?.groupChat;
+  if (agentGroupChat && Object.hasOwn(agentGroupChat, "ambientTurns")) {
+    return agentGroupChat.ambientTurns ?? "user_request";
+  }
+  return cfg.messages?.groupChat?.ambientTurns ?? "user_request";
+}
 
 function hasCompleteSessionRuntime(
   runtime: TelegramMessageContextSessionRuntimeOverrides | undefined,
@@ -178,6 +188,7 @@ export async function buildTelegramInboundContextPayload(params: {
   topicConfig?: TelegramTopicConfig;
   stickerCacheHit: boolean;
   effectiveWasMentioned: boolean;
+  hasControlCommand: boolean;
   audioTranscribedMediaIndex?: number;
   commandAuthorized: boolean;
   locationData?: NormalizedLocation;
@@ -226,6 +237,7 @@ export async function buildTelegramInboundContextPayload(params: {
     topicConfig,
     stickerCacheHit,
     effectiveWasMentioned,
+    hasControlCommand,
     audioTranscribedMediaIndex,
     commandAuthorized,
     locationData,
@@ -371,10 +383,10 @@ export async function buildTelegramInboundContextPayload(params: {
     previousTimestamp,
     envelope: envelopeOptions,
   });
+  const channelHistory = createChannelHistoryWindow({ historyMap: groupHistories });
   let combinedBody = body;
   if (isGroup && historyKey && historyLimit > 0) {
-    combinedBody = buildPendingHistoryContextFromMap({
-      historyMap: groupHistories,
+    combinedBody = channelHistory.buildPendingContext({
       historyKey,
       limit: historyLimit,
       currentMessage: combinedBody,
@@ -400,11 +412,10 @@ export async function buildTelegramInboundContextPayload(params: {
   });
   const inboundHistory =
     isGroup && historyKey && historyLimit > 0
-      ? (groupHistories.get(historyKey) ?? []).map((entry) => ({
-          sender: entry.sender,
-          body: entry.body,
-          timestamp: entry.timestamp,
-        }))
+      ? channelHistory.buildInboundHistory({
+          historyKey,
+          limit: historyLimit,
+        })
       : undefined;
   const currentMediaForContext = stickerCacheHit ? [] : allMedia;
   const contextMedia = [...currentMediaForContext, ...replyMedia];
@@ -415,6 +426,19 @@ export async function buildTelegramInboundContextPayload(params: {
   const telegramTo = `telegram:${chatId}`;
   const locationContext = locationData ? toLocationContext(locationData) : undefined;
   const commandSource = options?.commandSource;
+  const ambientGroupTurnKind = resolveAmbientGroupTurnKind(cfg, route.agentId);
+  const hasAbortRequest = isAbortRequestText(rawBody, {
+    botUsername: normalizeOptionalLowercaseString(primaryCtx.me?.username),
+  });
+  const inboundTurnKind =
+    ambientGroupTurnKind === "room_event" &&
+    isGroup &&
+    !effectiveWasMentioned &&
+    !hasControlCommand &&
+    !hasAbortRequest &&
+    commandSource !== "native"
+      ? "room_event"
+      : "user_request";
   const ctxPayload = sessionRuntime.buildChannelTurnContext({
     channel: "telegram",
     accountId: route.accountId,
@@ -451,6 +475,7 @@ export async function buildTelegramInboundContextPayload(params: {
       messageThreadId: threadSpec.id,
     },
     message: {
+      inboundTurnKind,
       body: combinedBody,
       rawBody,
       bodyForAgent: bodyText,
@@ -466,18 +491,16 @@ export async function buildTelegramInboundContextPayload(params: {
         authorizers: [],
       },
     },
-    commandTurn:
+    command:
       commandSource === "native"
         ? {
             kind: "native",
-            source: "native",
             authorized: commandAuthorized,
             body: commandBody,
           }
         : commandSource === "text"
           ? {
               kind: "text-slash",
-              source: "text",
               authorized: commandAuthorized,
               body: commandBody,
             }
@@ -544,6 +567,18 @@ export async function buildTelegramInboundContextPayload(params: {
       TopicName: isForum && topicName ? topicName : undefined,
     },
   } satisfies BuildChannelTurnContextParams);
+  if (inboundTurnKind === "room_event" && historyKey) {
+    channelHistory.record({
+      historyKey,
+      limit: historyLimit,
+      entry: {
+        sender: buildSenderLabel(msg, senderId || chatId),
+        body: rawBody,
+        timestamp: msg.date ? msg.date * 1000 : undefined,
+        messageId: typeof msg.message_id === "number" ? String(msg.message_id) : undefined,
+      },
+    });
+  }
 
   const pinnedMainDmOwner = !isGroup
     ? sessionRuntime.resolvePinnedMainDmOwnerFromAllowlist({

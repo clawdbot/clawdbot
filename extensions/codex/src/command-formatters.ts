@@ -372,7 +372,8 @@ function formatCodexRateLimitDetails(value: JsonValue | undefined): string {
 function summarizeRateLimits(value: JsonValue | undefined): string {
   const entries = extractArray(value);
   if (entries.length > 0) {
-    return `${entries.length}`;
+    const count = entries.filter(isMeaningfulRateLimitSnapshot).length;
+    return count > 0 ? `${count}` : "none returned";
   }
   if (!isJsonObject(value)) {
     return "none returned";
@@ -388,7 +389,18 @@ function summarizeRateLimits(value: JsonValue | undefined): string {
 }
 
 function isMeaningfulRateLimitSnapshot(value: JsonValue | undefined): boolean {
-  return isJsonObject(value) && Object.values(value).some((entry) => entry != null);
+  if (!isJsonObject(value)) {
+    return false;
+  }
+  const reachedType =
+    readString(value, "rateLimitReachedType") ?? readString(value, "rate_limit_reached_type");
+  if (reachedType) {
+    return true;
+  }
+  return ["primary", "secondary"].some((key) => {
+    const window = value[key];
+    return isJsonObject(window) && Object.values(window).some((entry) => entry != null);
+  });
 }
 
 function extractArray(value: JsonValue | undefined): JsonValue[] {

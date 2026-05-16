@@ -75,6 +75,7 @@ vi.mock("../plugins/bundled-sources.js", () => ({
 }));
 
 let collectChannelStatus: ChannelSetupStatusModule["collectChannelStatus"];
+let noteChannelStatus: ChannelSetupStatusModule["noteChannelStatus"];
 let noteChannelPrimer: ChannelSetupStatusModule["noteChannelPrimer"];
 let resolveChannelSelectionNoteLines: ChannelSetupStatusModule["resolveChannelSelectionNoteLines"];
 let resolveChannelSetupSelectionContributions: ChannelSetupStatusModule["resolveChannelSetupSelectionContributions"];
@@ -106,6 +107,7 @@ describe("resolveChannelSetupSelectionContributions", () => {
     isChannelConfigured.mockReturnValue(false);
     ({
       collectChannelStatus,
+      noteChannelStatus,
       noteChannelPrimer,
       resolveChannelSelectionNoteLines,
       resolveChannelSetupSelectionContributions,
@@ -263,6 +265,67 @@ describe("resolveChannelSetupSelectionContributions", () => {
     ]);
   });
 
+  it("localizes channel status note labels", async () => {
+    const previousLocale = process.env.OPENCLAW_LOCALE;
+    process.env.OPENCLAW_LOCALE = "zh-CN";
+    listChatChannels.mockReturnValue([
+      makeMeta("discord", "Discord"),
+      makeMeta("telegram", "Telegram"),
+    ]);
+    isChannelConfigured.mockImplementation((_, channelId) => channelId === "discord");
+    resolveChannelSetupEntries.mockReturnValue(
+      makeChannelSetupEntries({
+        installedCatalogEntries: [makeCatalogEntry("matrix", "Matrix")],
+        installableCatalogEntries: [makeCatalogEntry("zalo", "Zalo")],
+      }),
+    );
+
+    try {
+      const summary = await collectChannelStatus({
+        cfg: {} as never,
+        accountOverrides: {},
+        installedPlugins: [],
+      });
+
+      expect(summary.statusLines).toEqual([
+        "Discord: 已配置（插件已禁用）",
+        "Telegram: 未配置",
+        "Matrix: 已安装",
+        "Zalo: 安装插件后启用",
+      ]);
+    } finally {
+      if (previousLocale === undefined) {
+        delete process.env.OPENCLAW_LOCALE;
+      } else {
+        process.env.OPENCLAW_LOCALE = previousLocale;
+      }
+    }
+  });
+
+  it("localizes channel status note title", async () => {
+    const previousLocale = process.env.OPENCLAW_LOCALE;
+    process.env.OPENCLAW_LOCALE = "zh-CN";
+    const note = vi.fn(async () => {});
+    listChatChannels.mockReturnValue([makeMeta("discord", "Discord")]);
+    isChannelConfigured.mockReturnValue(true);
+
+    try {
+      await noteChannelStatus({
+        cfg: {} as never,
+        prompter: { note } as never,
+        installedPlugins: [],
+      });
+
+      expect(note).toHaveBeenCalledWith(expect.any(String), "频道状态");
+    } finally {
+      if (previousLocale === undefined) {
+        delete process.env.OPENCLAW_LOCALE;
+      } else {
+        process.env.OPENCLAW_LOCALE = previousLocale;
+      }
+    }
+  });
+
   it("sanitizes channel metadata before primer notes", async () => {
     const note = vi.fn(async () => undefined);
 
@@ -294,6 +357,42 @@ describe("resolveChannelSetupSelectionContributions", () => {
         "bad\\nid: Blurb\\nline",
       ].join("\n"),
       "How channels work",
+    );
+  });
+
+  it("localizes built-in channel primer copy", async () => {
+    const previousLocale = process.env.OPENCLAW_LOCALE;
+    process.env.OPENCLAW_LOCALE = "zh-CN";
+    const note = vi.fn(async () => undefined);
+
+    try {
+      await noteChannelPrimer(
+        { note } as never,
+        [
+          {
+            id: "discord",
+            label: "Discord",
+            blurb: "very well supported right now.",
+          } satisfies NoteChannelPrimerChannels[number],
+        ] as NoteChannelPrimerChannels,
+      );
+    } finally {
+      if (previousLocale === undefined) {
+        delete process.env.OPENCLAW_LOCALE;
+      } else {
+        process.env.OPENCLAW_LOCALE = previousLocale;
+      }
+    }
+
+    expect(formatChannelPrimerLine).toHaveBeenCalledWith(
+      expect.objectContaining({
+        label: "Discord",
+        blurb: "目前支持很完善。",
+      }),
+    );
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("入站 DM 安全默认使用配对"),
+      "频道工作方式",
     );
   });
 
@@ -339,5 +438,51 @@ describe("resolveChannelSetupSelectionContributions", () => {
     }
     expect(docsLink("/channels/zalo", "Docs")).toBe("https://docs.openclaw.ai/channels/zalo");
     expect(lines).toEqual(["Zalo\\nBot — Setup\\nhelp"]);
+  });
+
+  it("localizes built-in channel blurbs before selection notes", () => {
+    const previousLocale = process.env.OPENCLAW_LOCALE;
+    process.env.OPENCLAW_LOCALE = "zh-CN";
+    resolveChannelSetupEntries.mockReturnValue(
+      makeChannelSetupEntries({
+        entries: [
+          {
+            id: "feishu",
+            meta: {
+              id: "feishu",
+              label: "Feishu",
+              selectionLabel: "Feishu",
+              docsPath: "/channels/feishu",
+              docsLabel: "feishu",
+              blurb: "飞书/Lark enterprise messaging.",
+            },
+          },
+        ],
+      }),
+    );
+
+    try {
+      const lines = resolveChannelSelectionNoteLines({
+        cfg: {} as never,
+        installedPlugins: [],
+        selection: ["feishu"],
+      });
+
+      expect(formatChannelSelectionLine).toHaveBeenCalledWith(
+        expect.objectContaining({
+          label: "Feishu",
+          blurb: "飞书/Lark 企业消息。",
+          selectionDocsPrefix: "文档：",
+        }),
+        expect.any(Function),
+      );
+      expect(lines).toEqual(["Feishu — 飞书/Lark 企业消息。"]);
+    } finally {
+      if (previousLocale === undefined) {
+        delete process.env.OPENCLAW_LOCALE;
+      } else {
+        process.env.OPENCLAW_LOCALE = previousLocale;
+      }
+    }
   });
 });

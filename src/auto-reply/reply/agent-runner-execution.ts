@@ -4,6 +4,7 @@ import {
   hasOutboundReplyContent,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
+import { hasSessionAutoModelFallbackProvenance } from "../../agents/agent-scope.js";
 import {
   buildOAuthRefreshFailureLoginCommand,
   classifyOAuthRefreshFailure,
@@ -39,6 +40,8 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
+import { resolveSilentReplyPolicy } from "../../config/silent-reply.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, onAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -250,7 +253,11 @@ function resolveFallbackSelectionOrigin(params: { entry: SessionEntry; run: Foll
   provider: string;
   model: string;
 } {
-  if (params.entry.modelOverrideSource === "auto") {
+  if (
+    params.entry.modelOverrideSource === "auto" ||
+    (params.entry.modelOverrideSource === undefined &&
+      hasSessionAutoModelFallbackProvenance(params.entry))
+  ) {
     const persistedOriginProvider = normalizeOptionalString(
       params.entry.modelOverrideFallbackOriginProvider,
     );
@@ -474,11 +481,23 @@ function resolveExternalRunFailureTextForConversation(params: {
   text: string;
   sessionCtx: TemplateContext;
   isGenericRunnerFailure: boolean;
+  cfg?: OpenClawConfig;
 }): string {
   if (!isNonDirectConversationContext(params.sessionCtx)) {
     return params.text;
   }
   if (!params.isGenericRunnerFailure && !params.text.includes(AGENT_FAILED_BEFORE_REPLY_TEXT)) {
+    return params.text;
+  }
+  // Match normal reply routing: default group/channel failures stay silent,
+  // while explicit default or per-surface policy can surface the failure copy.
+  const silentPolicy = resolveSilentReplyPolicy({
+    cfg: params.cfg,
+    sessionKey: params.sessionCtx.SessionKey,
+    surface: params.sessionCtx.Surface ?? params.sessionCtx.Provider,
+    conversationType: "group",
+  });
+  if (silentPolicy === "disallow") {
     return params.text;
   }
   return SILENT_REPLY_TOKEN;
@@ -589,6 +608,7 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
   err: unknown;
   sessionCtx: TemplateContext;
   resolvedVerboseLevel: VerboseLevel | undefined;
+  cfg?: OpenClawConfig;
 }): ReplyPayload | undefined {
   const message = formatErrorMessage(params.err);
   const isFallbackSummary = isFallbackSummaryError(params.err);
@@ -601,6 +621,7 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
         text: BILLING_ERROR_USER_MESSAGE,
         sessionCtx: params.sessionCtx,
         isGenericRunnerFailure: false,
+        cfg: params.cfg,
       }),
     });
   }
@@ -620,6 +641,7 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
         text: buildRateLimitCooldownMessage(params.err),
         sessionCtx: params.sessionCtx,
         isGenericRunnerFailure: false,
+        cfg: params.cfg,
       }),
     });
   }
@@ -630,6 +652,7 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
         text: rateLimitOrOverloadedCopy,
         sessionCtx: params.sessionCtx,
         isGenericRunnerFailure: false,
+        cfg: params.cfg,
       }),
     });
   }
@@ -645,6 +668,7 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
       text: externalRunFailureReply.text,
       sessionCtx: params.sessionCtx,
       isGenericRunnerFailure: false,
+      cfg: params.cfg,
     }),
   });
 }
@@ -1282,7 +1306,8 @@ export async function runAgentTurnWithFallback(params: {
     const isUserModelOverride =
       activeSessionEntry.modelOverrideSource === "user" ||
       (activeSessionEntry.modelOverrideSource === undefined &&
-        Boolean(normalizeOptionalString(activeSessionEntry.modelOverride)));
+        Boolean(normalizeOptionalString(activeSessionEntry.modelOverride)) &&
+        !hasSessionAutoModelFallbackProvenance(activeSessionEntry));
     if (isUserModelOverride) {
       return undefined;
     }
@@ -1495,10 +1520,10 @@ export async function runAgentTurnWithFallback(params: {
                 startedAt,
               },
             });
-            const cliSessionBinding = getCliSessionBinding(
-              params.getActiveSessionEntry(),
-              cliExecutionProvider,
-            );
+            const isRoomEventCliTurn = params.followupRun.currentTurnKind === "room_event";
+            const cliSessionBinding = isRoomEventCliTurn
+              ? undefined
+              : getCliSessionBinding(params.getActiveSessionEntry(), cliExecutionProvider);
             const authProfile = resolveRunAuthProfile(
               params.followupRun.run,
               cliExecutionProvider,
@@ -1560,7 +1585,7 @@ export async function runAgentTurnWithFallback(params: {
                   })
                 : noopBridge;
               try {
-                const result = await runCliAgent({
+                const rawResult = await runCliAgent({
                   sessionId: params.followupRun.run.sessionId,
                   sessionKey: params.sessionKey,
                   agentId: params.followupRun.run.agentId,
@@ -1570,6 +1595,7 @@ export async function runAgentTurnWithFallback(params: {
                   config: runtimeConfig,
                   prompt: params.commandBody,
                   transcriptPrompt: params.transcriptCommandBody,
+                  currentTurnKind: params.followupRun.currentTurnKind,
                   currentTurnContext: params.followupRun.currentTurnContext,
                   inputProvenance: params.followupRun.run.inputProvenance,
                   provider: cliExecutionProvider,
@@ -1602,6 +1628,23 @@ export async function runAgentTurnWithFallback(params: {
                   abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
                   replyOperation: params.replyOperation,
                 });
+                const result: EmbeddedAgentRunResult =
+                  isRoomEventCliTurn && rawResult.meta.agentMeta
+                    ? (() => {
+                        const { cliSessionBinding: _cliSessionBinding, ...agentMeta } =
+                          rawResult.meta.agentMeta;
+                        return {
+                          ...rawResult,
+                          meta: {
+                            ...rawResult.meta,
+                            agentMeta: {
+                              ...agentMeta,
+                              sessionId: "",
+                            },
+                          },
+                        };
+                      })()
+                    : rawResult;
                 bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
                   result.meta?.systemPromptReport,
                 );
@@ -1730,12 +1773,17 @@ export async function runAgentTurnWithFallback(params: {
                 sandboxSessionKey: params.runtimePolicySessionKey,
                 prompt: params.commandBody,
                 transcriptPrompt: params.transcriptCommandBody,
+                currentTurnKind: params.followupRun.currentTurnKind,
                 currentTurnContext: params.followupRun.currentTurnContext,
                 extraSystemPrompt: params.followupRun.run.extraSystemPrompt,
                 sourceReplyDeliveryMode: params.followupRun.run.sourceReplyDeliveryMode,
                 forceMessageTool:
                   params.followupRun.run.sourceReplyDeliveryMode === "message_tool_only",
                 silentReplyPromptMode: params.followupRun.run.silentReplyPromptMode,
+                suppressNextUserMessagePersistence:
+                  params.followupRun.run.suppressNextUserMessagePersistence,
+                suppressTranscriptOnlyAssistantPersistence:
+                  params.followupRun.run.suppressTranscriptOnlyAssistantPersistence,
                 toolResultFormat: (() => {
                   const channel = resolveMessageChannel(
                     params.sessionCtx.Surface,
@@ -2112,6 +2160,7 @@ export async function runAgentTurnWithFallback(params: {
                 text: switchErrorText,
                 sessionCtx: params.sessionCtx,
                 isGenericRunnerFailure: !shouldSurfaceToControlUi,
+                cfg: params.followupRun.run.config,
               }),
             }),
           };
@@ -2318,6 +2367,7 @@ export async function runAgentTurnWithFallback(params: {
         text: fallbackText,
         sessionCtx: params.sessionCtx,
         isGenericRunnerFailure: externalRunFailureReply?.isGenericRunnerFailure ?? false,
+        cfg: params.followupRun.run.config,
       });
 
       params.replyOperation?.fail("run_failed", err);

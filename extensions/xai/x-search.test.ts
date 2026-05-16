@@ -319,7 +319,7 @@ describe("xai x_search tool", () => {
 
     await expect(
       tool?.execute?.("x-search:malformed-json", {
-        query: "latest post from huntharo",
+        query: "malformed x_search response probe",
       }),
     ).rejects.toThrow("xAI X search failed: malformed JSON response");
   });

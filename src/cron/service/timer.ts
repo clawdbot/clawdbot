@@ -14,7 +14,7 @@ import {
   failTaskRunByRunId,
 } from "../../tasks/detached-task-runtime.js";
 import { clearCronJobActive, markCronJobActive } from "../active-jobs.js";
-import { resolveCronDeliveryPlan } from "../delivery-plan.js";
+import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-plan.js";
 import {
   createCronRunDiagnosticsFromError,
   normalizeCronRunDiagnostics,
@@ -28,6 +28,7 @@ import type {
   CronAgentExecutionStarted,
   CronDeliveryStatus,
   CronDeliveryTrace,
+  CronFailureNotificationDelivery,
   CronJob,
   CronMessageChannel,
   CronRunOutcome,
@@ -539,20 +540,94 @@ function resolveRetryConfig(cronConfig?: CronConfig) {
   };
 }
 
-function resolveDeliveryState(params: { job: CronJob; delivered?: boolean }): {
+function resolveDeliveryState(params: {
+  job: CronJob;
+  runStatus: CronRunStatus;
+  delivered?: boolean;
+  error?: string;
+  globalFailureDestination?: CronConfig["failureDestination"];
+}): {
   delivered?: boolean;
   status: CronDeliveryStatus;
+  error?: string;
+  failureNotification: CronFailureNotificationDelivery;
 } {
-  if (!resolveCronDeliveryPlan(params.job).requested) {
-    return { status: "not-requested" };
+  const primaryDeliveryRequested = resolveCronDeliveryPlan(params.job).requested;
+  const alternateFailureNotificationRequested =
+    params.runStatus === "error" &&
+    params.job.delivery?.bestEffort !== true &&
+    resolveFailureDestination(params.job, params.globalFailureDestination) !== null;
+  if (!primaryDeliveryRequested) {
+    return {
+      status: "not-requested",
+      failureNotification: {
+        status: alternateFailureNotificationRequested ? "unknown" : "not-requested",
+      },
+    };
+  }
+  if (params.runStatus === "error") {
+    const failureNotification: CronFailureNotificationDelivery =
+      alternateFailureNotificationRequested ? { status: "unknown" } : { status: "delivered" };
+    if (params.delivered === true) {
+      return {
+        delivered: false,
+        status: "not-delivered",
+        error: params.error,
+        failureNotification: alternateFailureNotificationRequested
+          ? failureNotification
+          : { delivered: true, status: "delivered" },
+      };
+    }
+    if (params.delivered === false) {
+      return {
+        delivered: false,
+        status: "not-delivered",
+        error: params.error,
+        failureNotification: alternateFailureNotificationRequested
+          ? failureNotification
+          : {
+              delivered: false,
+              status: "not-delivered",
+              ...(params.error ? { error: params.error } : {}),
+            },
+      };
+    }
+    return {
+      status: "unknown",
+      error: params.error,
+      failureNotification: { status: "unknown" },
+    };
   }
   if (params.delivered === true) {
-    return { delivered: true, status: "delivered" };
+    return {
+      delivered: true,
+      status: "delivered",
+      failureNotification: { status: "not-requested" },
+    };
   }
   if (params.delivered === false) {
-    return { delivered: false, status: "not-delivered" };
+    return {
+      delivered: false,
+      status: "not-delivered",
+      error: params.error,
+      failureNotification: { status: "not-requested" },
+    };
   }
-  return { status: "unknown" };
+  return { status: "unknown", failureNotification: { status: "not-requested" } };
+}
+
+export function failureNotificationDeliveryFromJobState(
+  job: CronJob,
+): CronFailureNotificationDelivery | undefined {
+  const status = job.state.lastFailureNotificationDeliveryStatus;
+  if (!status || status === "not-requested") {
+    return undefined;
+  }
+  return {
+    delivered: job.state.lastFailureNotificationDelivered,
+    status,
+    error: job.state.lastFailureNotificationDeliveryError,
+  };
 }
 
 function normalizeCronMessageChannel(input: unknown): CronMessageChannel | undefined {
@@ -757,11 +832,22 @@ export function applyJobResult(
       "cron: job run returned error status",
     );
   }
-  const deliveryState = resolveDeliveryState({ job, delivered: result.delivered });
+  const deliveryState = resolveDeliveryState({
+    job,
+    runStatus: result.status,
+    delivered: result.delivered,
+    error: result.error,
+    globalFailureDestination: state.deps.cronConfig?.failureDestination,
+  });
   job.state.lastDelivered = deliveryState.delivered;
   job.state.lastDeliveryStatus = deliveryState.status;
   job.state.lastDeliveryError =
-    deliveryState.status === "not-delivered" && result.error ? result.error : undefined;
+    deliveryState.status === "not-delivered" && deliveryState.error
+      ? deliveryState.error
+      : undefined;
+  job.state.lastFailureNotificationDelivered = deliveryState.failureNotification.delivered;
+  job.state.lastFailureNotificationDeliveryStatus = deliveryState.failureNotification.status;
+  job.state.lastFailureNotificationDeliveryError = deliveryState.failureNotification.error;
   job.updatedAtMs = result.endedAt;
 
   // Track consecutive errors for backoff / auto-disable; skipped runs use a
@@ -1825,9 +1911,10 @@ function emitJobFinished(
     error: result.error,
     summary: result.summary,
     diagnostics: result.diagnostics,
-    delivered: result.delivered,
+    delivered: job.state.lastDelivered,
     deliveryStatus: job.state.lastDeliveryStatus,
     deliveryError: job.state.lastDeliveryError,
+    failureNotificationDelivery: failureNotificationDeliveryFromJobState(job),
     delivery: result.delivery,
     sessionId: result.sessionId,
     sessionKey: result.sessionKey,

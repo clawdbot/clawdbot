@@ -4,7 +4,10 @@ import { streamSimple } from "@earendil-works/pi-ai";
 import type { SettingsManager } from "@earendil-works/pi-coding-agent";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createDeepSeekV4OpenAICompatibleThinkingWrapper } from "../../plugin-sdk/provider-stream-shared.js";
+import {
+  createDeepSeekV4OpenAICompatibleThinkingWrapper,
+  createThinkingOnlyFinalTextWrapper,
+} from "../../plugin-sdk/provider-stream-shared.js";
 import {
   prepareProviderExtraParams as prepareProviderExtraParamsRuntime,
   type ProviderRuntimePluginHandle,
@@ -12,6 +15,7 @@ import {
   wrapProviderStreamFn as wrapProviderStreamFnRuntime,
 } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
+import { canonicalizeMaxTokensParam, resolveMaxTokensParam } from "../model-max-tokens-params.js";
 import { legacyModelKey, modelKey } from "../model-selection-normalize.js";
 import { supportsGptParallelToolCallsPayload } from "../provider-api-families.js";
 import { resolveProviderRequestPolicyConfig } from "../provider-request-config.js";
@@ -122,6 +126,10 @@ export function resolveExtraParams(params: {
     merged.response_format = resolvedResponseFormat;
     delete merged.responseFormat;
   }
+  canonicalizeMaxTokensParam({
+    merged,
+    sources: [defaultParams, globalParams, agentParams],
+  });
 
   const resolvedCachedContent = resolveAliasedParamValue(
     [defaultParams, globalParams, agentParams],
@@ -248,6 +256,10 @@ export function resolvePreparedExtraParams(params: {
     ...sanitizeExtraParamsRecord(resolvedExtraParams),
     ...override,
   };
+  canonicalizeMaxTokensParam({
+    merged,
+    sources: [resolvedExtraParams, override],
+  });
   const resolvedCachedContent = resolveAliasedParamValue(
     [resolvedExtraParams, override],
     "cached_content",
@@ -302,6 +314,10 @@ export function resolvePreparedExtraParams(params: {
     },
   })?.patch;
   const result = transportPatch ? { ...prepared, ...transportPatch } : prepared;
+  canonicalizeMaxTokensParam({
+    merged: result,
+    sources: [prepared, transportPatch ?? undefined],
+  });
   if (cacheKey) {
     let bucket = preparedExtraParamsCache.get(cfg!);
     if (!bucket) {
@@ -416,8 +432,9 @@ function createStreamFnWithExtraParams(
   if (typeof extraParams.topP === "number") {
     streamParams.topP = extraParams.topP;
   }
-  if (typeof extraParams.maxTokens === "number") {
-    streamParams.maxTokens = extraParams.maxTokens;
+  const maxTokens = resolveMaxTokensParam(extraParams);
+  if (maxTokens !== undefined) {
+    streamParams.maxTokens = maxTokens;
   }
   const resolvedResponseFormat = resolveAliasedParamValue(
     [extraParams],
@@ -752,6 +769,23 @@ function applyPostPluginStreamWrappers(
       shouldPatchModel: isDeepSeekV4OpenAICompatibleModel,
     });
 
+    // MiMo reasoning models use the same DeepSeek-style reasoning_content wire
+    // format. When MiMo is reached through an unowned proxy/custom provider
+    // (e.g. `xiaomi-orbit` pointed at token-plan-*.xiaomimimo.com), the bundled
+    // xiaomi plugin's wrapStreamFn does not fire, so apply the shared wrapper
+    // here as a fallback so multi-turn tool calls succeed.
+    ctx.agent.streamFn = createDeepSeekV4OpenAICompatibleThinkingWrapper({
+      baseStreamFn: ctx.agent.streamFn,
+      thinkingLevel: ctx.thinkingLevel,
+      shouldPatchModel: isMiMoReasoningOpenAICompatibleModel,
+    });
+    // Legacy MiMo V2 can put final visible answers in reasoning_content. Apply
+    // the response-side fallback here for custom Xiaomi-compatible proxy routes.
+    ctx.agent.streamFn = createThinkingOnlyFinalTextWrapper({
+      baseStreamFn: ctx.agent.streamFn,
+      shouldPatchModel: isMiMoReasoningAsVisibleTextOpenAICompatibleModel,
+    });
+
     // Guard Google-family payloads against invalid negative thinking budgets
     // emitted by upstream model-ID heuristics for Gemini 3.1 variants.
     ctx.agent.streamFn = createGoogleThinkingPayloadWrapper(ctx.agent.streamFn, ctx.thinkingLevel);
@@ -828,6 +862,35 @@ function isDeepSeekV4OpenAICompatibleModel(model: Parameters<StreamFn>[0]): bool
   return (
     model.api === "openai-completions" &&
     (normalizedModelId === "deepseek-v4-flash" || normalizedModelId === "deepseek-v4-pro")
+  );
+}
+
+const MIMO_REASONING_OPENAI_COMPATIBLE_MODEL_IDS = new Set([
+  "mimo-v2-pro",
+  "mimo-v2-omni",
+  "mimo-v2.5",
+  "mimo-v2.5-pro",
+  "mimo-v2.6-pro",
+]);
+const MIMO_REASONING_AS_VISIBLE_TEXT_MODEL_IDS = new Set(["mimo-v2-pro", "mimo-v2-omni"]);
+
+function isMiMoReasoningOpenAICompatibleModel(model: Parameters<StreamFn>[0]): boolean {
+  const normalizedModelId = normalizeDeepSeekV4CandidateId(model.id);
+  return (
+    model.api === "openai-completions" &&
+    normalizedModelId !== undefined &&
+    MIMO_REASONING_OPENAI_COMPATIBLE_MODEL_IDS.has(normalizedModelId)
+  );
+}
+
+function isMiMoReasoningAsVisibleTextOpenAICompatibleModel(
+  model: Parameters<StreamFn>[0],
+): boolean {
+  const normalizedModelId = normalizeDeepSeekV4CandidateId(model.id);
+  return (
+    model.api === "openai-completions" &&
+    normalizedModelId !== undefined &&
+    MIMO_REASONING_AS_VISIBLE_TEXT_MODEL_IDS.has(normalizedModelId)
   );
 }
 

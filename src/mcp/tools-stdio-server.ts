@@ -14,8 +14,8 @@ export function createToolsMcpServer(params: { name: string; tools: AnyAgentTool
   );
 
   server.setRequestHandler(ListToolsRequestSchema, handlers.listTools);
-  server.setRequestHandler(CallToolRequestSchema, async (request) => {
-    return await handlers.callTool(request.params);
+  server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+    return await handlers.callTool(request.params, extra.signal);
   });
 
   return server;

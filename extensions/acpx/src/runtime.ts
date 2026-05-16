@@ -27,7 +27,7 @@ import {
 } from "./process-lease.js";
 import {
   cleanupOpenClawOwnedAcpxProcessTree,
-  isOpenClawOwnedAcpxProcessCommand,
+  isOpenClawLeaseAwareAcpxProcessCommand,
   type AcpxProcessCleanupDeps,
 } from "./process-reaper.js";
 
@@ -785,7 +785,7 @@ export class AcpxRuntime implements AcpRuntime {
       !this.wrapperRoot ||
       !this.gatewayInstanceId ||
       !this.processLeaseStore ||
-      !isOpenClawOwnedAcpxProcessCommand({
+      !isOpenClawLeaseAwareAcpxProcessCommand({
         command: params.command,
         wrapperRoot: this.wrapperRoot,
       })

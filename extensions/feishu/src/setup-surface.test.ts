@@ -310,6 +310,127 @@ describe("feishu setup wizard status", () => {
     });
   });
 
+  it("localizes existing bot setup prompts and status lines", async () => {
+    const previousLocale = process.env.OPENCLAW_LOCALE;
+    process.env.OPENCLAW_LOCALE = "zh-CN";
+    const confirm = vi.fn(async () => true);
+    const note = vi.fn(async () => {});
+    const prompter = createTestWizardPrompter({
+      confirm,
+      note,
+    });
+
+    try {
+      await runSetupWizardConfigure({
+        configure: feishuConfigure,
+        cfg: {
+          channels: {
+            feishu: {
+              appId: "cli_a123456",
+              appSecret: "sample-app-credential", // pragma: allowlist secret
+            },
+          },
+        } as never,
+        prompter,
+        runtime: createNonExitingRuntimeEnv(),
+      });
+
+      expect(confirm).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: "发现已有 bot（App ID：cli_a123456）。用于本次设置？",
+        }),
+      );
+      expect(note).toHaveBeenCalledWith("Bot 已配置。", "");
+    } finally {
+      if (previousLocale === undefined) {
+        delete process.env.OPENCLAW_LOCALE;
+      } else {
+        process.env.OPENCLAW_LOCALE = previousLocale;
+      }
+    }
+  });
+
+  it("localizes new bot setup prompts and progress", async () => {
+    const previousLocale = process.env.OPENCLAW_LOCALE;
+    process.env.OPENCLAW_LOCALE = "zh-CN";
+    const note = vi.fn(async () => {});
+    const stop = vi.fn();
+    const progress = vi.fn(() => ({ update: vi.fn(), stop }));
+    const select = vi.fn(async ({ message }: { message: string }) => {
+      if (message === "你想如何连接 Feishu？") {
+        return "manual";
+      }
+      if (message === "选择 Feishu 域名？") {
+        return "feishu";
+      }
+      if (message === "群聊策略") {
+        return "allowlist";
+      }
+      return "feishu";
+    });
+    const text = vi
+      .fn()
+      .mockResolvedValueOnce("cli_from_prompt")
+      .mockResolvedValueOnce("secret_from_prompt");
+    const prompter = createTestWizardPrompter({
+      note,
+      progress,
+      select: select as never,
+      text,
+    });
+
+    try {
+      await runSetupWizardConfigure({
+        configure: feishuConfigure,
+        cfg: {} as never,
+        prompter,
+        runtime: createNonExitingRuntimeEnv(),
+      });
+
+      expect(select).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: "你想如何连接 Feishu？",
+          options: [
+            { value: "manual", label: "手动输入 App ID 和 App Secret" },
+            { value: "scan", label: "扫描二维码自动创建 bot" },
+          ],
+        }),
+      );
+      expect(select).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: "选择 Feishu 域名？",
+          options: [
+            { value: "feishu", label: "Feishu (feishu.cn) - 中国" },
+            { value: "lark", label: "Lark (larksuite.com) - 国际版" },
+          ],
+        }),
+      );
+      expect(text).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: "输入 Feishu App ID",
+        }),
+      );
+      expect(select).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: "群聊策略",
+          options: [
+            { value: "allowlist", label: "允许列表 - 只在指定群中响应" },
+            { value: "open", label: "开放 - 在所有群中响应（需要提及）" },
+            { value: "disabled", label: "禁用 - 不响应群聊" },
+          ],
+        }),
+      );
+      expect(progress).toHaveBeenCalledWith("正在配置...");
+      expect(stop).toHaveBeenCalledWith("Bot 已配置。");
+    } finally {
+      if (previousLocale === undefined) {
+        delete process.env.OPENCLAW_LOCALE;
+      } else {
+        process.env.OPENCLAW_LOCALE = previousLocale;
+      }
+    }
+  });
+
   it("does not fallback to top-level appId when account explicitly sets empty appId", async () => {
     const status = await feishuGetStatus({
       cfg: {

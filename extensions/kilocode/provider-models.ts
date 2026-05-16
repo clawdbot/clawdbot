@@ -1,3 +1,4 @@
+import { readProviderJsonArrayFieldResponse } from "openclaw/plugin-sdk/provider-http";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -70,10 +71,6 @@ interface GatewayModelEntry {
   supported_parameters?: string[];
 }
 
-interface GatewayModelsResponse {
-  data: GatewayModelEntry[];
-}
-
 function toPricePerMillion(perToken: string | undefined): number {
   if (!perToken) {
     return 0;
@@ -133,6 +130,30 @@ function buildStaticCatalog(): ModelDefinitionConfig[] {
   }));
 }
 
+function asGatewayModelEntry(value: unknown): GatewayModelEntry {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("Kilocode model list: malformed JSON response");
+  }
+  const entry = value as Partial<GatewayModelEntry>;
+  if (
+    typeof entry.id !== "string" ||
+    typeof entry.pricing !== "object" ||
+    entry.pricing === null ||
+    Array.isArray(entry.pricing)
+  ) {
+    throw new Error("Kilocode model list: malformed JSON response");
+  }
+  return value as GatewayModelEntry;
+}
+
+function readGatewayModelId(value: unknown): string {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return "";
+  }
+  const id = (value as Partial<GatewayModelEntry>).id;
+  return typeof id === "string" ? id.trim() : "";
+}
+
 export async function discoverKilocodeModels(): Promise<ModelDefinitionConfig[]> {
   if (process.env.NODE_ENV === "test" || process.env.VITEST) {
     return buildStaticCatalog();
@@ -154,8 +175,12 @@ export async function discoverKilocodeModels(): Promise<ModelDefinitionConfig[]>
         return buildStaticCatalog();
       }
 
-      const data = (await response.json()) as GatewayModelsResponse;
-      if (!Array.isArray(data.data) || data.data.length === 0) {
+      const data = await readProviderJsonArrayFieldResponse(
+        response,
+        "Kilocode model list",
+        "data",
+      );
+      if (data.length === 0) {
         log.warn("No models found from gateway API, using static catalog");
         return buildStaticCatalog();
       }
@@ -163,15 +188,13 @@ export async function discoverKilocodeModels(): Promise<ModelDefinitionConfig[]>
       const models: ModelDefinitionConfig[] = [];
       const discoveredIds = new Set<string>();
 
-      for (const entry of data.data) {
-        if (!entry || typeof entry !== "object") {
-          continue;
-        }
-        const id = typeof entry.id === "string" ? entry.id.trim() : "";
-        if (!id || discoveredIds.has(id)) {
-          continue;
-        }
+      for (const rawEntry of data) {
+        const id = readGatewayModelId(rawEntry);
         try {
+          const entry = asGatewayModelEntry(rawEntry);
+          if (!id || discoveredIds.has(id)) {
+            continue;
+          }
           models.push(toModelDefinition(entry));
           discoveredIds.add(id);
         } catch (e) {

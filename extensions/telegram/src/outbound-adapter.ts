@@ -4,6 +4,7 @@ import {
   createAttachedChannelResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
 import {
+  normalizeMessagePresentation,
   presentationToInteractiveReply,
   renderMessagePresentationFallbackText,
 } from "openclaw/plugin-sdk/interactive-runtime";
@@ -116,15 +117,20 @@ export async function sendTelegramPayloadMessages(params: {
     | undefined;
   const quoteText =
     typeof telegramData?.quoteText === "string" ? telegramData.quoteText : undefined;
+  const presentation = normalizeMessagePresentation(params.payload.presentation);
+  const interactive =
+    params.payload.interactive ??
+    (presentation ? presentationToInteractiveReply(presentation) : undefined);
   const text =
     resolveTelegramInteractiveTextFallback({
       text: params.payload.text,
-      interactive: params.payload.interactive,
+      interactive,
+      presentation,
     }) ?? "";
   const mediaUrls = resolvePayloadMediaUrls(params.payload);
   const buttons = resolveTelegramInlineButtons({
     buttons: telegramData?.buttons,
-    interactive: params.payload.interactive,
+    interactive,
   });
   const payloadOpts = {
     ...params.baseOpts,

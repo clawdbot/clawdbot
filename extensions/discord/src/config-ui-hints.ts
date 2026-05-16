@@ -109,6 +109,10 @@ export const discordChannelConfigUiHints = {
     label: "Discord Max Lines Per Message",
     help: "Soft max line count per Discord message (default: 17).",
   },
+  suppressEmbeds: {
+    label: "Discord Suppress Link Embeds",
+    help: "Suppress Discord-generated link embeds on outbound messages by default. Explicit embeds still send normally. Default: true.",
+  },
   "thread.inheritParent": {
     label: "Discord Thread Parent Inheritance",
     help: "If true, Discord thread sessions inherit the parent channel transcript (default: false).",

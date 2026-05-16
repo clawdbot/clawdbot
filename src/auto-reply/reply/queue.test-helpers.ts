@@ -20,6 +20,7 @@ export function createQueueTestRun(params: {
   originatingTo?: string;
   originatingAccountId?: string;
   originatingThreadId?: string | number;
+  currentTurnKind?: FollowupRun["currentTurnKind"];
 }): FollowupRun {
   return {
     prompt: params.prompt,
@@ -29,6 +30,7 @@ export function createQueueTestRun(params: {
     originatingTo: params.originatingTo,
     originatingAccountId: params.originatingAccountId,
     originatingThreadId: params.originatingThreadId,
+    currentTurnKind: params.currentTurnKind,
     run: {
       agentId: "agent",
       agentDir: "/tmp",

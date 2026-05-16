@@ -37,3 +37,34 @@ export function resolveUndiciAutoSelectFamilyConnectOptions():
   | undefined {
   return createUndiciAutoSelectFamilyConnectOptions(resolveUndiciAutoSelectFamily());
 }
+
+export function withTemporaryUndiciAutoSelectFamily<T>(
+  autoSelectFamily: boolean | undefined,
+  run: () => T,
+): T {
+  if (
+    autoSelectFamily === undefined ||
+    typeof net.getDefaultAutoSelectFamily !== "function" ||
+    typeof net.setDefaultAutoSelectFamily !== "function"
+  ) {
+    return run();
+  }
+
+  let previous: boolean;
+  try {
+    previous = net.getDefaultAutoSelectFamily();
+    net.setDefaultAutoSelectFamily(autoSelectFamily);
+  } catch {
+    return run();
+  }
+
+  try {
+    return run();
+  } finally {
+    try {
+      net.setDefaultAutoSelectFamily(previous);
+    } catch {
+      // Best-effort restore; dispatcher setup is already best-effort.
+    }
+  }
+}

@@ -9,7 +9,9 @@ export {
   isPrivateIpAddress,
   resolvePinnedHostname,
   resolvePinnedHostnameWithPolicy,
+  resolveSsrFPolicyForUrl,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
+  ssrfPolicyFromHttpBaseUrlAllowedOrigin,
   type LookupFn,
   type SsrFPolicy,
 } from "../infra/net/ssrf.js";

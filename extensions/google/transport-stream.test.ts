@@ -830,6 +830,23 @@ describe("google transport stream", () => {
     expect(thinkingConfig).not.toHaveProperty("thinkingBudget");
   });
 
+  it("does not send thinkingConfig when the resolved Google model disables reasoning", () => {
+    const params = buildGoogleGenerativeAiParams(
+      buildGeminiModel({
+        id: "gemma-4-26b-a4b-it",
+        reasoning: false,
+      }),
+      {
+        messages: [{ role: "user", content: "hello", timestamp: 0 }],
+      } as never,
+      {
+        reasoning: "medium",
+      },
+    );
+
+    expect(params.generationConfig ?? {}).not.toHaveProperty("thinkingConfig");
+  });
+
   it("omits disabled thinkingBudget=0 for Gemini 2.5 Pro direct payloads", () => {
     const params = buildGoogleGenerativeAiParams(
       buildGeminiModel(),

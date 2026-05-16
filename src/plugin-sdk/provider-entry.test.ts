@@ -237,4 +237,55 @@ describe("defineSingleProviderPluginEntry", () => {
       },
     });
   });
+
+  it("registers extra non-api-key auth methods", async () => {
+    const entry = defineSingleProviderPluginEntry({
+      id: "demo",
+      name: "Demo Provider",
+      description: "Demo provider plugin",
+      provider: {
+        label: "Demo",
+        docsPath: "/providers/demo",
+        auth: [
+          {
+            methodId: "api-key",
+            label: "Demo API key",
+            hint: "Shared key",
+            optionKey: "demoApiKey",
+            flagName: "--demo-api-key",
+            envVar: "DEMO_API_KEY",
+            promptMessage: "Enter Demo API key",
+            defaultModel: "demo/default",
+          },
+        ],
+        extraAuth: [
+          {
+            id: "oauth",
+            label: "Demo OAuth",
+            hint: "OAuth",
+            kind: "oauth",
+            wizard: {
+              choiceId: "demo-oauth",
+              choiceLabel: "Demo OAuth",
+              groupId: "demo",
+              groupLabel: "Demo",
+              methodId: "oauth",
+            },
+            run: async () => ({ profiles: [] }),
+          },
+        ],
+        catalog: {
+          buildProvider: () => ({
+            api: "openai-completions",
+            baseUrl: "https://api.demo.test/v1",
+            models: [createModel("default", "Default")],
+          }),
+        },
+      },
+    });
+
+    const { provider } = await captureProviderEntry({ entry });
+    expect(provider?.auth.map((method) => method.id)).toEqual(["api-key", "oauth"]);
+    expect(provider?.auth[1]?.wizard?.choiceId).toBe("demo-oauth");
+  });
 });

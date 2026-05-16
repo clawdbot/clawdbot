@@ -787,6 +787,9 @@ function isRecoverableTelegramQaPollError(error: unknown): boolean {
   const message = formatErrorMessage(error).toLowerCase();
   return (
     message.includes("fetch failed") ||
+    message.includes("aborted due to timeout") ||
+    message.includes("operation was aborted") ||
+    message.includes("aborterror") ||
     message.includes("econnreset") ||
     message.includes("etimedout") ||
     message.includes("socket hang up") ||

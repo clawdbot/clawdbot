@@ -6,6 +6,7 @@ import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { rewriteTranscriptEntriesInSessionFile } from "../../agents/pi-embedded-runner/transcript-rewrite.js";
+import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox/context.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
@@ -62,6 +63,7 @@ import {
   type ChatAbortOps,
   isChatStopCommandText,
   registerChatAbortController,
+  updateChatRunProvider,
 } from "../chat-abort.js";
 import {
   type ChatImageContent,
@@ -1580,25 +1582,36 @@ function canRequesterAbortChatRun(
   return false;
 }
 
-function resolveAuthorizedRunIdsForSession(params: {
+function resolveAuthorizedRunsForSessionKeys(params: {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
-  sessionKey: string;
+  sessionKeys: Iterable<string>;
+  sessionIds?: Iterable<string | undefined>;
   requester: ChatAbortRequester;
 }) {
-  const authorizedRunIds: string[] = [];
+  const sessionKeys = new Set(
+    Array.from(params.sessionKeys, (sessionKey) => normalizeOptionalText(sessionKey)).filter(
+      (sessionKey): sessionKey is string => Boolean(sessionKey),
+    ),
+  );
+  const sessionIds = new Set(
+    Array.from(params.sessionIds ?? [], (sessionId) => normalizeOptionalText(sessionId)).filter(
+      (sessionId): sessionId is string => Boolean(sessionId),
+    ),
+  );
+  const authorizedRuns: Array<{ runId: string; sessionKey: string }> = [];
   let matchedSessionRuns = 0;
   for (const [runId, active] of params.chatAbortControllers) {
-    if (active.sessionKey !== params.sessionKey) {
+    if (!sessionKeys.has(active.sessionKey) && !sessionIds.has(active.sessionId)) {
       continue;
     }
     matchedSessionRuns += 1;
     if (canRequesterAbortChatRun(active, params.requester)) {
-      authorizedRunIds.push(runId);
+      authorizedRuns.push({ runId, sessionKey: active.sessionKey });
     }
   }
   return {
     matchedSessionRuns,
-    authorizedRunIds,
+    authorizedRuns,
   };
 }
 
@@ -1606,23 +1619,27 @@ async function abortChatRunsForSessionKeyWithPartials(params: {
   context: GatewayRequestContext;
   ops: ChatAbortOps;
   sessionKey: string;
+  sessionKeyAliases?: string[];
+  sessionId?: string;
+  persistSessionKey?: string;
   abortOrigin: AbortOrigin;
   stopReason?: string;
   requester: ChatAbortRequester;
 }): Promise<{ aborted: boolean; runIds: string[]; unauthorized: boolean }> {
-  const { matchedSessionRuns, authorizedRunIds } = resolveAuthorizedRunIdsForSession({
+  const { matchedSessionRuns, authorizedRuns } = resolveAuthorizedRunsForSessionKeys({
     chatAbortControllers: params.context.chatAbortControllers,
-    sessionKey: params.sessionKey,
+    sessionKeys: [params.sessionKey, ...(params.sessionKeyAliases ?? [])],
+    sessionIds: [params.sessionId],
     requester: params.requester,
   });
-  if (authorizedRunIds.length === 0) {
+  if (authorizedRuns.length === 0) {
     return {
       aborted: false,
       runIds: [],
       unauthorized: matchedSessionRuns > 0,
     };
   }
-  const authorizedRunIdSet = new Set(authorizedRunIds);
+  const authorizedRunIdSet = new Set(authorizedRuns.map((run) => run.runId));
   const snapshots = collectSessionAbortPartials({
     chatAbortControllers: params.context.chatAbortControllers,
     chatRunBuffers: params.context.chatRunBuffers,
@@ -1630,10 +1647,10 @@ async function abortChatRunsForSessionKeyWithPartials(params: {
     abortOrigin: params.abortOrigin,
   });
   const runIds: string[] = [];
-  for (const runId of authorizedRunIds) {
+  for (const { runId, sessionKey } of authorizedRuns) {
     const res = abortChatRunById(params.ops, {
       runId,
-      sessionKey: params.sessionKey,
+      sessionKey,
       stopReason: params.stopReason,
     });
     if (res.aborted) {
@@ -1644,7 +1661,7 @@ async function abortChatRunsForSessionKeyWithPartials(params: {
   if (res.aborted) {
     await persistAbortedPartials({
       context: params.context,
-      sessionKey: params.sessionKey,
+      sessionKey: params.persistSessionKey ?? params.sessionKey,
       snapshots,
     });
   }
@@ -2013,6 +2030,10 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionKey,
       config: cfg,
     });
+    const resolvedSessionModel = resolveSessionModelRef(cfg, entry, agentId);
+    const resolvedSessionAuthProvider = resolveProviderIdForAuth(resolvedSessionModel.provider, {
+      config: cfg,
+    });
     let parsedMessage = inboundMessage;
     let parsedImages: ChatImageContent[] = [];
     let imageOrder: PromptImageOrderEntry[] = [];
@@ -2048,6 +2069,9 @@ export const chatHandlers: GatewayRequestHandlers = {
         context,
         ops: createChatAbortOps(context),
         sessionKey: rawSessionKey,
+        sessionKeyAliases: sessionKey === rawSessionKey ? undefined : [sessionKey],
+        sessionId: entry?.sessionId,
+        persistSessionKey: sessionKey,
         abortOrigin: "stop-command",
         stopReason: "stop",
         requester: resolveChatAbortRequester(client),
@@ -2113,11 +2137,10 @@ export const chatHandlers: GatewayRequestHandlers = {
         await measureDiagnosticsTimelineSpan(
           "gateway.chat_send.prepare_attachments",
           async () => {
-            const modelRef = resolveSessionModelRef(cfg, entry, agentId);
             const supportsSessionModelImages = await resolveGatewayModelSupportsImages({
               loadGatewayModelCatalog: context.loadGatewayModelCatalog,
-              provider: modelRef.provider,
-              model: modelRef.model,
+              provider: resolvedSessionModel.provider,
+              model: resolvedSessionModel.model,
             });
             // Bound plugin sessions own the real recipient model, so keep image
             // attachments even when the parent OpenClaw session model is text-only.
@@ -2195,6 +2218,8 @@ export const chatHandlers: GatewayRequestHandlers = {
         now,
         ownerConnId: normalizeOptionalText(client?.connId),
         ownerDeviceId: normalizeOptionalText(client?.connect?.device?.id),
+        providerId: resolvedSessionModel.provider,
+        authProviderId: resolvedSessionAuthProvider,
         kind: "chat-send",
       });
       if (!activeRunAbort.registered) {
@@ -2545,7 +2570,16 @@ export const chatHandlers: GatewayRequestHandlers = {
                   }
                 }
               },
-              onModelSelected,
+              onModelSelected: (modelSelection) => {
+                updateChatRunProvider(context.chatAbortControllers, {
+                  runId: clientRunId,
+                  providerId: modelSelection.provider,
+                  authProviderId: resolveProviderIdForAuth(modelSelection.provider, {
+                    config: cfg,
+                  }),
+                });
+                onModelSelected(modelSelection);
+              },
             },
           }),
         {

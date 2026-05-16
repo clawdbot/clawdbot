@@ -62,6 +62,52 @@ describe("buildTelegramMessageContext reactions", () => {
     inboundBodyMock.mockClear();
   });
 
+  it("does not create ack or status reactions for room events", async () => {
+    const setMessageReaction = vi.fn(async () => undefined);
+    const { createStatusReactionController } = createStatusReactionControllerStub();
+
+    const ctx = await buildTelegramMessageContextForTest({
+      message: {
+        message_id: 12,
+        chat: { id: -1001234567890, type: "group", title: "Ops" },
+        date: 1_700_000_000,
+        text: "hello",
+        from: { id: 42, first_name: "Alice" },
+      },
+      cfg: {
+        agents: {
+          defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/openclaw" },
+        },
+        channels: {
+          telegram: {
+            groupPolicy: "open",
+            groups: { "*": { requireMention: false } },
+          },
+        },
+        messages: {
+          ackReaction: "👀",
+          groupChat: { ambientTurns: "room_event", mentionPatterns: [] },
+          statusReactions: { enabled: true },
+        },
+      },
+      ackReactionScope: "all",
+      botApi: { setMessageReaction },
+      runtime: { createStatusReactionController },
+      resolveGroupActivation: () => false,
+      resolveGroupRequireMention: () => false,
+      resolveTelegramGroupConfig: () => ({
+        groupConfig: { requireMention: false },
+        topicConfig: undefined,
+      }),
+    });
+
+    expect(ctx?.ctxPayload.InboundTurnKind).toBe("room_event");
+    expect(ctx?.ackReactionPromise).toBeNull();
+    expect(ctx?.statusReactionController).toBeNull();
+    expect(createStatusReactionController).not.toHaveBeenCalled();
+    expect(setMessageReaction).not.toHaveBeenCalled();
+  });
+
   it("does not create status reactions when the ack gate blocks an unmentioned group message", async () => {
     const setMessageReaction = vi.fn(async () => undefined);
     const { createStatusReactionController } = createStatusReactionControllerStub();

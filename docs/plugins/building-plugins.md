@@ -196,6 +196,11 @@ plugin-specific prefix. Core admin namespaces (`config.*`,
 `exec.approvals.*`, `wizard.*`, `update.*`) stay reserved and always resolve to
 `operator.admin`, even if a plugin asks for a narrower scope.
 
+`openclaw/plugin-sdk/gateway-method-runtime` is a reserved control-plane bridge
+for plugin HTTP routes that declare
+`contracts.gatewayMethodDispatch: ["authenticated-request"]`. It is an
+intentional-use guard for reviewed native plugins, not a sandbox boundary.
+
 Hook guard semantics to keep in mind:
 
 - `before_tool_call`: `{ block: true }` is terminal and stops lower-priority handlers.

@@ -3,7 +3,7 @@ import {
   createRequestCaptureJsonFetch,
   installPinnedHostnameTestHooks,
 } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { transcribeDeepgramAudio } from "./audio.js";
 
 installPinnedHostnameTestHooks();
@@ -82,5 +82,65 @@ describe("transcribeDeepgramAudio", () => {
         fetchFn,
       }),
     ).rejects.toThrow("Audio transcription response missing transcript");
+  });
+
+  it("wraps malformed successful transcription JSON with a stable provider error", async () => {
+    const fetchFn = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response("{ nope"));
+
+    await expect(
+      transcribeDeepgramAudio({
+        buffer: Buffer.from("audio-bytes"),
+        fileName: "voice.wav",
+        apiKey: "test-key",
+        timeoutMs: 1234,
+        fetchFn,
+      }),
+    ).rejects.toThrow("Audio transcription failed: malformed JSON response");
+  });
+
+  it("rejects non-object successful transcription JSON with a stable provider error", async () => {
+    const fetchFn = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(JSON.stringify([])));
+
+    await expect(
+      transcribeDeepgramAudio({
+        buffer: Buffer.from("audio-bytes"),
+        fileName: "voice.wav",
+        apiKey: "test-key",
+        timeoutMs: 1234,
+        fetchFn,
+      }),
+    ).rejects.toThrow("Audio transcription failed: malformed JSON response");
+  });
+
+  it("rejects wrong nested transcript shapes with a stable provider error", async () => {
+    const { fetchFn } = createRequestCaptureJsonFetch({
+      results: { channels: { alternatives: [{ transcript: "hello" }] } },
+    });
+
+    await expect(
+      transcribeDeepgramAudio({
+        buffer: Buffer.from("audio-bytes"),
+        fileName: "voice.wav",
+        apiKey: "test-key",
+        timeoutMs: 1234,
+        fetchFn,
+      }),
+    ).rejects.toThrow("Audio transcription failed: malformed JSON response");
+  });
+
+  it("rejects non-string transcript values with a stable provider error", async () => {
+    const { fetchFn } = createRequestCaptureJsonFetch({
+      results: { channels: [{ alternatives: [{ transcript: 123 }] }] },
+    });
+
+    await expect(
+      transcribeDeepgramAudio({
+        buffer: Buffer.from("audio-bytes"),
+        fileName: "voice.wav",
+        apiKey: "test-key",
+        timeoutMs: 1234,
+        fetchFn,
+      }),
+    ).rejects.toThrow("Audio transcription failed: malformed JSON response");
   });
 });

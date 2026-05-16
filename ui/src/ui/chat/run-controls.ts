@@ -29,6 +29,7 @@ export function renderChatRunControls(props: ChatRunControlsProps) {
               aria-label=${t("chat.runControls.newSession")}
             >
               ${icons.plus}
+              <span class="agent-chat__control-label">${t("chat.runControls.newSession")}</span>
             </button>
           `}
       <button
@@ -39,6 +40,7 @@ export function renderChatRunControls(props: ChatRunControlsProps) {
         ?disabled=${!props.hasMessages}
       >
         ${icons.download}
+        <span class="agent-chat__control-label">${t("chat.runControls.export")}</span>
       </button>
 
       ${props.canAbort
@@ -56,6 +58,7 @@ export function renderChatRunControls(props: ChatRunControlsProps) {
               aria-label=${t("chat.runControls.queueMessage")}
             >
               ${icons.send}
+              <span class="agent-chat__control-label">${t("chat.runControls.queue")}</span>
             </button>
             <button
               class="chat-send-btn chat-send-btn--stop"
@@ -64,6 +67,7 @@ export function renderChatRunControls(props: ChatRunControlsProps) {
               aria-label=${t("chat.runControls.stopGenerating")}
             >
               ${icons.stop}
+              <span class="agent-chat__control-label">${t("chat.runControls.stop")}</span>
             </button>
           `
         : html`
@@ -82,6 +86,9 @@ export function renderChatRunControls(props: ChatRunControlsProps) {
                 : t("chat.runControls.sendMessage")}
             >
               ${icons.send}
+              <span class="agent-chat__control-label"
+                >${props.isBusy ? t("chat.runControls.queue") : t("chat.runControls.send")}</span
+              >
             </button>
           `}
     </div>

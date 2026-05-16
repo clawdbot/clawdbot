@@ -525,6 +525,9 @@ vi.mock("openclaw/plugin-sdk/outbound-runtime", () => ({
 
 vi.mock("openclaw/plugin-sdk/reply-history", () => ({
   clearHistoryEntriesIfEnabled: () => {},
+  createChannelHistoryWindow: () => ({
+    clear: () => {},
+  }),
 }));
 
 vi.mock("openclaw/plugin-sdk/reply-payload", () => ({
@@ -1044,6 +1047,42 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       text: "✅",
     });
     expect(deliverRepliesMock).not.toHaveBeenCalled();
+    expect(draftStream.clear).not.toHaveBeenCalled();
+  });
+
+  it("does not clear a finalized Slack draft when a later tool warning is delivered", async () => {
+    const draftStream = {
+      ...createDraftStreamStub(),
+      flush: vi.fn(noopAsync),
+      clear: vi.fn(noopAsync),
+      discardPending: vi.fn(noopAsync),
+      seal: vi.fn(noopAsync),
+    };
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
+    mockedDispatchSequence = [
+      { kind: "final", payload: { text: "answer" } },
+      { kind: "final", payload: { text: "⚠️ Apply Patch failed", isError: true } },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: { streaming: { mode: "partial", preview: { toolProgress: false } } },
+      }),
+    );
+
+    expect(finalizeSlackPreviewEditMock).toHaveBeenCalledTimes(1);
+    expectMockCallArgFields(finalizeSlackPreviewEditMock, 0, "preview edit params", {
+      channelId: "C123",
+      messageId: "171234.567",
+      text: "answer",
+    });
+    const delivered = requireRecord(
+      requireMockCall(deliverRepliesMock, 0, "deliver replies")[0],
+      "deliver replies params",
+    );
+    expect(delivered.replies).toEqual([{ text: "⚠️ Apply Patch failed", isError: true }]);
+    expect(draftStream.seal).toHaveBeenCalledTimes(1);
     expect(draftStream.clear).not.toHaveBeenCalled();
   });
 

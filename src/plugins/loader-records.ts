@@ -69,7 +69,6 @@ export function createPluginRecord(params: {
     contextEngineIds: [],
     memoryEmbeddingProviderIds: [...(params.contracts?.memoryEmbeddingProviders ?? [])],
     agentHarnessIds: [],
-    gatewayMethods: [],
     cliCommands: [],
     services: [],
     gatewayDiscoveryServiceIds: [],

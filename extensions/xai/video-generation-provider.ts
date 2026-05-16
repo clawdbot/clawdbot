@@ -26,6 +26,7 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 const POLL_INTERVAL_MS = 5_000;
 const MAX_POLL_ATTEMPTS = 120;
 const XAI_VIDEO_ASPECT_RATIOS = new Set(["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"]);
+const XAI_VIDEO_MALFORMED_RESPONSE = "xAI video generation response malformed";
 
 type XaiVideoCreateResponse = {
   request_id?: string;
@@ -53,6 +54,58 @@ type VideoGenerationSourceInput = {
   mimeType?: string;
   role?: string;
 };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+async function readXaiVideoJson(response: Response): Promise<Record<string, unknown>> {
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    throw new Error(XAI_VIDEO_MALFORMED_RESPONSE);
+  }
+  if (!isRecord(payload)) {
+    throw new Error(XAI_VIDEO_MALFORMED_RESPONSE);
+  }
+  return payload;
+}
+
+function xaiErrorMessage(payload: Record<string, unknown>): string | undefined {
+  const error = payload.error;
+  if (error === undefined || error === null) {
+    return undefined;
+  }
+  if (!isRecord(error)) {
+    throw new Error(XAI_VIDEO_MALFORMED_RESPONSE);
+  }
+  return normalizeOptionalString(error.message);
+}
+
+function readXaiCreateResponse(payload: Record<string, unknown>): XaiVideoCreateResponse {
+  return {
+    request_id: normalizeOptionalString(payload.request_id),
+    error: xaiErrorMessage(payload) ? { message: xaiErrorMessage(payload) } : null,
+  };
+}
+
+function readXaiStatusResponse(payload: Record<string, unknown>): XaiVideoStatusResponse {
+  const status = normalizeOptionalString(payload.status);
+  if (!status || !["queued", "processing", "done", "failed", "expired"].includes(status)) {
+    throw new Error(XAI_VIDEO_MALFORMED_RESPONSE);
+  }
+  const video = payload.video;
+  if (video !== undefined && video !== null && !isRecord(video)) {
+    throw new Error(XAI_VIDEO_MALFORMED_RESPONSE);
+  }
+  return {
+    request_id: normalizeOptionalString(payload.request_id),
+    status: status as XaiVideoStatusResponse["status"],
+    video: isRecord(video) ? { url: normalizeOptionalString(video.url) } : null,
+    error: xaiErrorMessage(payload) ? { message: xaiErrorMessage(payload) } : null,
+  };
+}
 
 function resolveXaiVideoBaseUrl(req: VideoGenerationRequest): string {
   return (
@@ -279,7 +332,7 @@ async function pollXaiVideo(params: {
       provider: "xai",
       requestFailedMessage: "xAI video status request failed",
     });
-    const payload = (await response.json()) as XaiVideoStatusResponse;
+    const payload = readXaiStatusResponse(await readXaiVideoJson(response));
     switch (payload.status) {
       case "done":
         return payload;
@@ -403,7 +456,7 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
       });
       try {
         await assertOkOrThrowHttpError(response, "xAI video generation failed");
-        const submitted = (await response.json()) as XaiVideoCreateResponse;
+        const submitted = readXaiCreateResponse(await readXaiVideoJson(response));
         const requestId = normalizeOptionalString(submitted.request_id);
         if (!requestId) {
           throw new Error(
@@ -423,7 +476,7 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
         });
         const videoUrl = normalizeOptionalString(completed.video?.url);
         if (!videoUrl) {
-          throw new Error("xAI video generation completed without an output URL");
+          throw new Error(XAI_VIDEO_MALFORMED_RESPONSE);
         }
         const video = await downloadXaiVideo({
           url: videoUrl,

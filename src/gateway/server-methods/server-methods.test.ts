@@ -594,6 +594,28 @@ describe("projectRecentChatDisplayMessages", () => {
 
     expect(result).toEqual([{ role: "assistant", content: "older answer", timestamp: 2 }]);
   });
+
+  it("keeps media-only user messages while dropping empty text-only user messages", () => {
+    const mediaOnly = {
+      role: "user",
+      content: "",
+      MediaPath: "/tmp/openclaw/user-upload.png",
+      timestamp: 1,
+    };
+    const multiMediaOnly = {
+      role: "user",
+      content: "",
+      MediaPaths: ["/tmp/openclaw/first.png", "/tmp/openclaw/second.jpg"],
+      timestamp: 2,
+    };
+    const result = projectRecentChatDisplayMessages([
+      mediaOnly,
+      multiMediaOnly,
+      { role: "user", content: "", timestamp: 3 },
+    ]);
+
+    expect(result).toEqual([mediaOnly, multiMediaOnly]);
+  });
 });
 
 describe("resolveEffectiveChatHistoryMaxChars", () => {

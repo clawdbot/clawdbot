@@ -2,6 +2,7 @@ import type { ImageContent } from "@earendil-works/pi-ai";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import type { InboundTurnKind } from "../../channels/turn/kind.js";
 import type { CliSessionBinding } from "../../config/sessions.js";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import type { CliBackendConfig } from "../../config/types.js";
@@ -28,7 +29,7 @@ export type RunCliAgentParams = {
   config?: OpenClawConfig;
   prompt: string;
   transcriptPrompt?: string;
-  /** Runtime-only current-turn context visible to the model but excluded from transcript text. */
+  currentTurnKind?: InboundTurnKind;
   currentTurnContext?: CurrentTurnPromptContext;
   inputProvenance?: InputProvenance;
   provider: string;

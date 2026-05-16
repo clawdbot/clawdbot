@@ -337,7 +337,11 @@ async function loadFreshFollowupRunnerModuleForTest() {
   }));
   vi.doMock("./queue.js", () => ({
     clearFollowupQueue: clearFollowupQueueForFollowupTest,
+    completeFollowupRunLifecycle: (run: Pick<FollowupRun, "queuedLifecycle">) =>
+      run.queuedLifecycle?.onComplete?.(),
     enqueueFollowupRun: enqueueFollowupRunForFollowupTest,
+    isFollowupRunAborted: (run: Pick<FollowupRun, "abortSignal">) =>
+      run.abortSignal?.aborted === true,
     refreshQueuedFollowupSession: refreshQueuedFollowupSessionForFollowupTest,
   }));
   vi.doMock("./session-run-accounting.js", () => ({
@@ -581,6 +585,103 @@ describe("createFollowupRunner runtime config", () => {
 
     const call = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
     expect(call.config).toBe(runtimeConfig);
+  });
+
+  it("skips aborted queued room-event followups", async () => {
+    const abortController = new AbortController();
+    abortController.abort();
+    const onBlockReply = vi.fn(async () => {});
+    const typing = createMockTypingController();
+    const runner = createFollowupRunner({
+      opts: { onBlockReply },
+      typing,
+      typingMode: "instant",
+      defaultModel: "openai/gpt-5.4",
+    });
+
+    await runner(
+      createQueuedRun({
+        currentTurnKind: "room_event",
+        abortSignal: abortController.signal,
+        run: {
+          provider: "openai",
+          model: "gpt-5.4",
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      }),
+    );
+
+    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(typing.markRunComplete).toHaveBeenCalledTimes(1);
+    expect(typing.markDispatchIdle).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes queued room-event abort signals into followup agent runs", async () => {
+    const abortController = new AbortController();
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {},
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "openai/gpt-5.4",
+    });
+
+    await runner(
+      createQueuedRun({
+        currentTurnKind: "room_event",
+        abortSignal: abortController.signal,
+        run: {
+          provider: "openai",
+          model: "gpt-5.4",
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      }),
+    );
+
+    const call = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
+    expect(call.abortSignal).toBe(abortController.signal);
+  });
+
+  it("keeps queued delivery correlations active during followup agent runs", async () => {
+    const events: string[] = [];
+    runEmbeddedPiAgentMock.mockImplementationOnce(async () => {
+      events.push("run");
+      return {
+        payloads: [],
+        meta: {},
+      };
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "openai/gpt-5.4",
+    });
+
+    await runner(
+      createQueuedRun({
+        currentTurnKind: "room_event",
+        deliveryCorrelations: [
+          {
+            begin: () => {
+              events.push("begin");
+              return () => {
+                events.push("end");
+              };
+            },
+          },
+        ],
+        run: {
+          provider: "openai",
+          model: "gpt-5.4",
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      }),
+    );
+
+    expect(events).toEqual(["begin", "run", "end"]);
   });
 
   it("resolves queued embedded followups before preflight helpers read config", async () => {

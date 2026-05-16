@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -93,6 +94,11 @@ function collectBundledChannelEntrypointOffenders(
 
 function listSourceBundledPluginRoots(): string[] {
   const extensionsDir = path.resolve("extensions");
+  const externalRoots = listExternalSourceBundledPluginRoots(extensionsDir);
+  if (externalRoots) {
+    return externalRoots;
+  }
+
   return fs
     .readdirSync(extensionsDir, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
@@ -102,6 +108,73 @@ function listSourceBundledPluginRoots(): string[] {
         fs.existsSync(path.join(entryPath, "package.json")) ||
         fs.existsSync(path.join(entryPath, "openclaw.plugin.json")),
     );
+}
+
+function listExternalSourceBundledPluginRoots(extensionsDir: string): string[] | null {
+  return (
+    listGitSourceBundledPluginRoots(extensionsDir) ??
+    listFindSourceBundledPluginRoots(extensionsDir)
+  );
+}
+
+function listGitSourceBundledPluginRoots(extensionsDir: string): string[] | null {
+  const result = spawnSync(
+    "git",
+    ["ls-files", "--", "extensions/*/package.json", "extensions/*/openclaw.plugin.json"],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      maxBuffer: 4 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+    },
+  );
+  if (result.status !== 0) {
+    return null;
+  }
+  return packageMarkerPathsToRoots(result.stdout.split("\n"), extensionsDir);
+}
+
+function listFindSourceBundledPluginRoots(extensionsDir: string): string[] | null {
+  const result = spawnSync(
+    "find",
+    [
+      extensionsDir,
+      "-mindepth",
+      "2",
+      "-maxdepth",
+      "2",
+      "(",
+      "-name",
+      "package.json",
+      "-o",
+      "-name",
+      "openclaw.plugin.json",
+      ")",
+    ],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      maxBuffer: 4 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+    },
+  );
+  if (result.status !== 0) {
+    return null;
+  }
+  return packageMarkerPathsToRoots(result.stdout.split("\n"), extensionsDir);
+}
+
+function packageMarkerPathsToRoots(markerPaths: string[], extensionsDir: string): string[] {
+  return [
+    ...new Set(
+      markerPaths
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0)
+        .map((line) => path.resolve(line))
+        .map((line) => path.dirname(line))
+        .filter((line) => path.dirname(line) === extensionsDir),
+    ),
+  ].toSorted();
 }
 
 afterEach(() => {
@@ -119,6 +192,21 @@ afterEach(() => {
 
 describe("bundled channel entry shape guards", () => {
   const bundledPluginRoots = listSourceBundledPluginRoots();
+
+  it("lists source bundled plugin roots without in-process directory scans", () => {
+    const readDir = vi.spyOn(fs, "readdirSync");
+    try {
+      const roots = listSourceBundledPluginRoots();
+
+      expect(roots.length).toBeGreaterThan(0);
+      expect(roots.every((root) => path.dirname(root) === path.resolve("extensions"))).toBe(
+        true,
+      );
+      expect(readDir).not.toHaveBeenCalled();
+    } finally {
+      readDir.mockRestore();
+    }
+  });
 
   it("treats missing bundled discovery results as empty", async () => {
     vi.doMock("../../plugins/bundled-channel-runtime.js", async (importOriginal) => {

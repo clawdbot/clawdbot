@@ -6,6 +6,7 @@ import {
   editChannelMessage,
   type RequestClient,
 } from "./internal/discord.js";
+import { resolveDiscordMessageFlags } from "./send.shared.js";
 
 /** Discord messages cap at 2000 characters. */
 const DISCORD_STREAM_MAX_CHARS = 2000;
@@ -32,6 +33,7 @@ export function createDiscordDraftStream(params: {
   throttleMs?: number;
   /** Minimum chars before sending first message (debounce for push notifications) */
   minInitialChars?: number;
+  suppressEmbeds?: boolean;
   log?: (message: string) => void;
   warn?: (message: string) => void;
 }): DiscordDraftStream {
@@ -40,6 +42,7 @@ export function createDiscordDraftStream(params: {
   const minInitialChars = params.minInitialChars;
   const channelId = params.channelId;
   const rest = params.rest;
+  const flags = resolveDiscordMessageFlags({ suppressEmbeds: params.suppressEmbeds });
   const resolveReplyToMessageId = () =>
     typeof params.replyToMessageId === "function"
       ? params.replyToMessageId()
@@ -81,7 +84,11 @@ export function createDiscordDraftStream(params: {
       if (streamMessageId !== undefined) {
         // Edit existing message
         await editChannelMessage(rest, channelId, streamMessageId, {
-          body: { content: trimmed, allowed_mentions: DISCORD_PREVIEW_ALLOWED_MENTIONS },
+          body: {
+            content: trimmed,
+            allowed_mentions: DISCORD_PREVIEW_ALLOWED_MENTIONS,
+            ...(flags ? { flags } : {}),
+          },
         });
         return true;
       }
@@ -94,6 +101,7 @@ export function createDiscordDraftStream(params: {
         body: {
           content: trimmed,
           allowed_mentions: DISCORD_PREVIEW_ALLOWED_MENTIONS,
+          ...(flags ? { flags } : {}),
           ...(messageReference ? { message_reference: messageReference } : {}),
         },
       });

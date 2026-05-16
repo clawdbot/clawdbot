@@ -1,0 +1,21 @@
+export type ModalInputSummary = {
+  blockId: string;
+  actionId: string;
+  actionType?: string;
+  inputKind?: "text" | "number" | "email" | "url" | "rich_text";
+  value?: string;
+  selectedValues?: string[];
+  selectedUsers?: string[];
+  selectedChannels?: string[];
+  selectedConversations?: string[];
+  selectedLabels?: string[];
+  selectedDate?: string;
+  selectedTime?: string;
+  selectedDateTime?: number;
+  inputValue?: string;
+  inputNumber?: number;
+  inputEmail?: string;
+  inputUrl?: string;
+  richTextValue?: unknown;
+  richTextPreview?: string;
+};

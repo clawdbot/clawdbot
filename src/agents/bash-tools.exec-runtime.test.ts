@@ -489,6 +489,7 @@ describe("emitExecSystemEvent", () => {
         to: "telegram:-100123:topic:47",
         threadId: 47,
       },
+      forceSenderIsOwnerFalse: true,
       trusted: false,
     });
     const heartbeat = requireHeartbeatCall();
@@ -507,6 +508,7 @@ describe("emitExecSystemEvent", () => {
     expect(enqueueSystemEventMock).toHaveBeenCalledWith("Exec finished", {
       sessionKey: "agent:ops:primary",
       contextKey: "exec:run-cron",
+      forceSenderIsOwnerFalse: true,
       trusted: false,
     });
     expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
@@ -528,6 +530,7 @@ describe("emitExecSystemEvent", () => {
     expect(enqueueSystemEventMock).toHaveBeenCalledWith("Exec finished", {
       sessionKey: "global",
       contextKey: "exec:run-global",
+      forceSenderIsOwnerFalse: true,
       trusted: false,
     });
     expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
@@ -549,6 +552,7 @@ describe("emitExecSystemEvent", () => {
     expect(enqueueSystemEventMock).toHaveBeenCalledWith("Exec finished", {
       sessionKey: "global",
       contextKey: "exec:run-global",
+      forceSenderIsOwnerFalse: true,
       trusted: false,
     });
     const heartbeat = requireHeartbeatCall();
@@ -576,6 +580,7 @@ describe("emitExecSystemEvent", () => {
       sessionKey: "agent:main:subagent:abc-123",
       contextKey: "exec:run-sub",
       deliveryContext: undefined,
+      forceSenderIsOwnerFalse: true,
       trusted: false,
     });
     expect(requestHeartbeatMock).not.toHaveBeenCalled();

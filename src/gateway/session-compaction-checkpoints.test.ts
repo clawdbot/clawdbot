@@ -342,6 +342,74 @@ describe("session-compaction-checkpoints", () => {
     ]);
   });
 
+  test("async fork skips JSON-valid garbage transcript entries", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-checkpoint-garbage-fork-"));
+    tempDirs.push(dir);
+
+    const sourceFile = path.join(dir, "garbage.jsonl");
+    const firstMessage = {
+      type: "message",
+      id: "first",
+      parentId: null,
+      message: {
+        role: "user",
+        content: "first",
+        timestamp: 1,
+      },
+    };
+    const secondMessage = {
+      type: "message",
+      id: "second",
+      parentId: "first",
+      message: {
+        role: "assistant",
+        content: "second",
+        api: "responses",
+        provider: "openai",
+        model: "gpt-test",
+        timestamp: 2,
+      },
+    };
+    await fs.writeFile(
+      sourceFile,
+      [
+        JSON.stringify({
+          type: "session",
+          version: CURRENT_SESSION_VERSION,
+          id: "source-session",
+          timestamp: new Date(0).toISOString(),
+          cwd: dir,
+        }),
+        JSON.stringify(firstMessage),
+        "null",
+        "[]",
+        '"garbage"',
+        JSON.stringify(secondMessage),
+        "{truncated-json",
+        "",
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const forked = await forkCompactionCheckpointTranscriptAsync({
+      sourceFile,
+      sessionDir: dir,
+    });
+
+    if (!forked) {
+      throw new Error("expected forked checkpoint transcript");
+    }
+    const forkedEntries = (await fs.readFile(forked.sessionFile, "utf-8"))
+      .trim()
+      .split(/\r?\n/)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(forkedEntries.map((entry) => entry.type)).toEqual(["session", "message", "message"]);
+    expect(requireRecord(forkedEntries[1]?.message, "first forked message").content).toBe("first");
+    expect(requireRecord(forkedEntries[2]?.message, "second forked message").content).toBe(
+      "second",
+    );
+  });
+
   test("persist trims old checkpoint metadata and removes trimmed snapshot files", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-checkpoint-trim-"));
     tempDirs.push(dir);

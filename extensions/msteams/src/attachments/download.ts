@@ -1,5 +1,6 @@
 import {
   normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getMSTeamsRuntime } from "../runtime.js";
@@ -105,6 +106,18 @@ function scopeCandidatesForUrl(url: string): string[] {
 
 function isRedirectStatus(status: number): boolean {
   return status === 301 || status === 302 || status === 303 || status === 307 || status === 308;
+}
+
+async function resolveInlineDataImageMime(inline: {
+  data: Buffer;
+  contentType?: string;
+}): Promise<string | undefined> {
+  const detectedMime = await getMSTeamsRuntime().media.detectMime({
+    buffer: inline.data,
+    headerMime: inline.contentType,
+  });
+  const mime = normalizeOptionalLowercaseString(detectedMime ?? inline.contentType);
+  return mime?.startsWith("image/") ? mime : undefined;
 }
 
 async function fetchWithAuthFallback(params: {
@@ -245,17 +258,21 @@ export async function downloadMSTeamsAttachments(params: {
       continue;
     }
     try {
+      const contentType = await resolveInlineDataImageMime(inline);
+      if (!contentType) {
+        continue;
+      }
       // Data inline candidates (base64 data URLs) don't have original filenames
       const saved = await getMSTeamsRuntime().channel.media.saveMediaBuffer(
         inline.data,
-        inline.contentType,
+        contentType,
         "inbound",
         params.maxBytes,
       );
       out.push({
         path: saved.path,
         contentType: saved.contentType,
-        placeholder: inline.placeholder,
+        placeholder: inferPlaceholder({ contentType: saved.contentType ?? contentType }),
       });
     } catch (err) {
       params.logger?.warn?.("msteams inline attachment decode failed", {

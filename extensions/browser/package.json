@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/browser-plugin",
-  "version": "2026.5.14",
+  "version": "2026.5.16",
   "private": true,
   "description": "OpenClaw browser tool plugin",
   "type": "module",

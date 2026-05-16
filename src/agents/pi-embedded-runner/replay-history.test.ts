@@ -1,5 +1,11 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { describe, expect, it } from "vitest";
+import {
+  INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  INTERNAL_RUNTIME_CONTEXT_END,
+  OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER,
+  OPENCLAW_RUNTIME_CONTEXT_NOTICE,
+} from "../internal-runtime-context.js";
 import { normalizeAssistantReplayContent } from "./replay-history.js";
 
 const FALLBACK_TEXT = "[assistant turn failed before producing content]";
@@ -150,6 +156,36 @@ describe("normalizeAssistantReplayContent", () => {
     const out = normalizeAssistantReplayContent(messages);
     expect(out).toEqual([messages[0], messages[2]]);
     expect(JSON.stringify(out)).not.toContain("assistant copied inbound metadata omitted");
+  });
+
+  it("drops standalone silent assistant replay text", () => {
+    const messages = [userMessage("first"), bedrockAssistant("NO_REPLY"), userMessage("second")];
+    const out = normalizeAssistantReplayContent(messages);
+    expect(out).toEqual([messages[0], messages[2]]);
+  });
+
+  it("strips copied runtime context from assistant replay text", () => {
+    const messages = [
+      userMessage("first"),
+      bedrockAssistant([
+        {
+          type: "text",
+          text: [
+            "Visible before",
+            INTERNAL_RUNTIME_CONTEXT_BEGIN,
+            "keep this internal",
+            INTERNAL_RUNTIME_CONTEXT_END,
+            OPENCLAW_NEXT_TURN_RUNTIME_CONTEXT_HEADER,
+            OPENCLAW_RUNTIME_CONTEXT_NOTICE,
+            "",
+            "Visible after",
+          ].join("\n"),
+        },
+      ]),
+    ];
+    const out = normalizeAssistantReplayContent(messages);
+    const normalized = out[1] as AgentMessage & { content: unknown[] };
+    expect(normalized.content).toEqual([{ type: "text", text: "Visible before\n\nVisible after" }]);
   });
 
   it("drops metadata-only assistant text blocks without fabricating placeholder output", () => {

@@ -1,4 +1,4 @@
-import type { APIEmbed } from "discord-api-types/v10";
+import { MessageFlags, type APIEmbed } from "discord-api-types/v10";
 import {
   Embed,
   serializePayload,
@@ -7,7 +7,8 @@ import {
   type TopLevelComponents,
 } from "./internal/discord.js";
 
-export const SUPPRESS_NOTIFICATIONS_FLAG = 1 << 12;
+export const SUPPRESS_EMBEDS_FLAG = MessageFlags.SuppressEmbeds;
+export const SUPPRESS_NOTIFICATIONS_FLAG = MessageFlags.SuppressNotifications;
 
 export type DiscordSendComponentFactory = (text: string) => TopLevelComponents[];
 export type DiscordSendComponents = TopLevelComponents[] | DiscordSendComponentFactory;
@@ -69,6 +70,20 @@ export function buildDiscordMessagePayload(params: {
     payload.files = params.files;
   }
   return payload;
+}
+
+export function resolveDiscordMessageFlags(params: {
+  silent?: boolean;
+  suppressEmbeds?: boolean;
+}): number | undefined {
+  let flags = 0;
+  if (params.suppressEmbeds) {
+    flags |= SUPPRESS_EMBEDS_FLAG;
+  }
+  if (params.silent) {
+    flags |= SUPPRESS_NOTIFICATIONS_FLAG;
+  }
+  return flags || undefined;
 }
 
 export function buildDiscordMessageRequest(params: {

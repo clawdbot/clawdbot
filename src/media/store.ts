@@ -329,6 +329,34 @@ function extensionForAuthoritativeHeaderMime(contentType?: string): string | und
   return extensionForMime(mime);
 }
 
+function isGenericContainerMime(mime?: string): boolean {
+  return mime === "application/zip" || mime === "application/octet-stream";
+}
+
+function isImageHeaderMime(contentType?: string): boolean {
+  return normalizeOptionalString(contentType?.split(";")[0])?.startsWith("image/") === true;
+}
+
+function resolveSavedMediaExtension(params: {
+  detectedMime?: string;
+  headerExt?: string;
+  contentType?: string;
+  originalFilename?: string;
+}): string {
+  const trustedHeaderExt =
+    params.headerExt &&
+    isGenericContainerMime(params.detectedMime) &&
+    isImageHeaderMime(params.contentType)
+      ? undefined
+      : params.headerExt;
+  return (
+    trustedHeaderExt ??
+    extensionForMime(params.detectedMime) ??
+    safeOriginalFilenameExtension(params.originalFilename) ??
+    ""
+  );
+}
+
 function buildSavedMediaResult(params: {
   dir: string;
   id: string;
@@ -532,8 +560,12 @@ export async function saveMediaBuffer(
     headerMime: contentType,
     filePath: originalFilename ?? detectionFilePathHint,
   });
-  const ext =
-    headerExt ?? extensionForMime(mime) ?? safeOriginalFilenameExtension(originalFilename) ?? "";
+  const ext = resolveSavedMediaExtension({
+    detectedMime: mime,
+    headerExt,
+    contentType,
+    originalFilename,
+  });
   const id = buildSavedMediaId({ baseId: uuid, ext, originalFilename });
   await writeSavedMediaBuffer({ subdir, id, buffer });
   return buildSavedMediaResult({ dir, id, size: buffer.byteLength, contentType: mime });
@@ -567,11 +599,12 @@ export async function saveMediaStream(
           headerMime: contentType,
           filePath: originalFilename ?? detectionFilePathHint,
         });
-        const ext =
-          headerExt ??
-          extensionForMime(mime) ??
-          safeOriginalFilenameExtension(originalFilename) ??
-          "";
+        const ext = resolveSavedMediaExtension({
+          detectedMime: mime,
+          headerExt,
+          contentType,
+          originalFilename,
+        });
         const id = buildSavedMediaId({ baseId, ext, originalFilename });
         return { id, size, contentType: mime };
       },

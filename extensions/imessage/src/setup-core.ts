@@ -14,6 +14,7 @@ import {
   promptParsedAllowFromForAccount,
   setAccountAllowFromForChannel,
   setSetupChannelEnabled,
+  createSetupTranslator,
   type OpenClawConfig,
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup-runtime";
@@ -21,6 +22,8 @@ import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDefaultIMessageAccountId, resolveIMessageAccount } from "./accounts.js";
 import { normalizeIMessageHandle } from "./targets.js";
+
+const t = createSetupTranslator();
 
 const channel = "imessage" as const;
 
@@ -195,10 +198,10 @@ export const imessageSetupAdapter: ChannelSetupAdapter = createPatchedAccountSet
 });
 
 export const imessageSetupStatusBase = {
-  configuredLabel: "configured",
-  unconfiguredLabel: "needs setup",
-  configuredHint: "imsg found",
-  unconfiguredHint: "imsg missing",
+  configuredLabel: t("wizard.channels.statusConfigured"),
+  unconfiguredLabel: t("wizard.channels.statusNeedsSetup"),
+  configuredHint: t("wizard.imessage.imsgFound"),
+  unconfiguredHint: t("wizard.imessage.imsgMissing"),
   configuredScore: 1,
   unconfiguredScore: 0,
   resolveConfigured: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId?: string }) =>

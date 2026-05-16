@@ -164,6 +164,7 @@ type DiscordComponentSendOpts = {
   maxLinesPerMessage?: number;
   tableMode?: MarkdownTableMode;
   chunkMode?: ChunkMode;
+  suppressEmbeds?: boolean;
 };
 
 export function registerBuiltDiscordComponentMessage(params: {
@@ -271,6 +272,7 @@ export async function sendDiscordComponentMessage(
       maxLinesPerMessage: opts.maxLinesPerMessage,
       tableMode: opts.tableMode,
       chunkMode: opts.chunkMode,
+      ...(opts.suppressEmbeds === undefined ? {} : { suppressEmbeds: opts.suppressEmbeds }),
     });
   }
 

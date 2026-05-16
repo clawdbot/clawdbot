@@ -16,4 +16,12 @@ describe("DEFAULT_AGENT_WORKSPACE_DIR", () => {
       path.join(path.resolve(home), ".openclaw", "workspace"),
     );
   });
+
+  it("uses OPENCLAW_WORKSPACE_DIR before OPENCLAW_HOME", () => {
+    const workspaceDir = path.join(path.sep, "srv", "openclaw-workspace");
+    vi.stubEnv("OPENCLAW_WORKSPACE_DIR", workspaceDir);
+    vi.stubEnv("OPENCLAW_HOME", path.join(path.sep, "srv", "openclaw-home"));
+
+    expect(resolveDefaultAgentWorkspaceDir()).toBe(path.resolve(workspaceDir));
+  });
 });

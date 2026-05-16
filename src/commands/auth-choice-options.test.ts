@@ -55,6 +55,7 @@ vi.mock("../flows/provider-flow.js", () => ({
               ...(choice.assistantVisibility
                 ? { assistantVisibility: choice.assistantVisibility }
                 : {}),
+              ...(choice.onboardingFeatured ? { onboardingFeatured: true } : {}),
             },
           })),
         ...resolveProviderWizardOptions()
@@ -75,6 +76,7 @@ vi.mock("../flows/provider-flow.js", () => ({
               ...(option.assistantVisibility
                 ? { assistantVisibility: option.assistantVisibility }
                 : {}),
+              ...(option.onboardingFeatured ? { onboardingFeatured: true } : {}),
             },
           })),
       ];
@@ -455,25 +457,42 @@ describe("buildAuthChoiceOptions", () => {
     ]);
   });
 
-  it("orders OpenAI auth methods as api key, browser login, then device pairing", () => {
+  it("groups OpenAI auth methods under one provider entry", () => {
     resolveProviderWizardOptions.mockReturnValue([
+      {
+        value: "openai",
+        label: "ChatGPT Login",
+        groupId: "openai",
+        groupLabel: "OpenAI",
+        assistantPriority: -40,
+        assistantVisibility: "manual-only",
+      },
+      {
+        value: "openai-device-code",
+        label: "ChatGPT Device Pairing",
+        groupId: "openai",
+        groupLabel: "OpenAI",
+        assistantPriority: -10,
+        assistantVisibility: "manual-only",
+      },
       {
         value: "openai-api-key",
         label: "OpenAI API Key",
         groupId: "openai",
         groupLabel: "OpenAI",
-        assistantPriority: -40,
+        assistantPriority: 5,
       },
       {
         value: "openai-codex",
-        label: "OpenAI Codex Browser Login",
+        label: "ChatGPT/Codex Browser Login",
         groupId: "openai",
         groupLabel: "OpenAI",
         assistantPriority: -30,
+        onboardingFeatured: true,
       },
       {
         value: "openai-codex-device-code",
-        label: "OpenAI Codex Device Pairing",
+        label: "ChatGPT/Codex Device Pairing",
         groupId: "openai",
         groupLabel: "OpenAI",
         assistantPriority: -10,
@@ -487,10 +506,11 @@ describe("buildAuthChoiceOptions", () => {
     const openAIGroup = requireChoiceGroup(groups, "openai");
 
     expect(openAIGroup.options.map((option) => option.value)).toEqual([
-      "openai-api-key",
       "openai-codex",
       "openai-codex-device-code",
+      "openai-api-key",
     ]);
+    expect(openAIGroup.options[0]?.onboardingFeatured).toBe(true);
   });
 
   it("groups OpenCode Zen and Go under one OpenCode entry", () => {

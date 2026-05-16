@@ -84,27 +84,28 @@ describe("scripts/mantis/build-telegram-desktop-proof-evidence", () => {
     );
     const body = renderEvidenceComment({
       artifactUrl: "https://github.com/openclaw/openclaw/actions/runs/1/artifacts/2",
-      artifactRoot: "mantis/telegram-desktop/pr-1/run-1",
       manifest,
       marker: "<!-- mantis-telegram-desktop-proof -->",
+      rawBase: "https://qa.openclaw.ai/mantis/telegram-desktop/pr-1/run-1",
       requestSource: "workflow_dispatch",
       runUrl: "https://github.com/openclaw/openclaw/actions/runs/1",
-      treeUrl:
-        "https://github.com/openclaw/openclaw/tree/qa-artifacts/mantis/telegram-desktop/pr-1/run-1",
+      treeUrl: "https://qa.openclaw.ai/mantis/telegram-desktop/pr-1/run-1/index.json",
     });
 
     expect(body).toContain(
       "- Artifact: https://github.com/openclaw/openclaw/actions/runs/1/artifacts/2",
     );
-    expect(body).toContain("Artifact files:");
-    expect(body).toContain("- Main: `baseline/telegram-desktop-proof.gif`");
-    expect(body).toContain("- This PR: `candidate/telegram-desktop-proof.gif`");
-    expect(body).toContain("baseline/telegram-desktop-proof.gif");
-    expect(body).toContain("candidate/telegram-desktop-proof.gif");
+    expect(body).toContain('<table width="100%">');
     expect(body).toContain(
-      "Raw QA files: https://github.com/openclaw/openclaw/actions/runs/1/artifacts/2",
+      '<img src="https://qa.openclaw.ai/mantis/telegram-desktop/pr-1/run-1/baseline/telegram-desktop-proof.gif" width="100%"',
     );
-    expect(body).not.toContain("<img ");
+    expect(body).toContain(
+      '<img src="https://qa.openclaw.ai/mantis/telegram-desktop/pr-1/run-1/candidate/telegram-desktop-proof.gif" width="100%"',
+    );
+    expect(body).toContain(
+      "Raw QA files: https://qa.openclaw.ai/mantis/telegram-desktop/pr-1/run-1/index.json",
+    );
+    expect(body).not.toContain("undefined/");
     expect(body).not.toContain("| Main | This PR |");
   });
 });

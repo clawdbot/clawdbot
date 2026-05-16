@@ -9,6 +9,11 @@ type StaticModelRef = {
   model: string;
 };
 
+export type ProviderModelIdNormalizationOptions = {
+  allowManifestNormalization?: boolean;
+  manifestPlugins?: readonly Pick<PluginManifestRecord, "modelIdNormalization">[];
+};
+
 export function modelKey(provider: string, model: string): string {
   const providerId = provider.trim();
   const modelId = model.trim();
@@ -28,10 +33,7 @@ export function modelKey(provider: string, model: string): string {
 export function normalizeStaticProviderModelId(
   provider: string,
   model: string,
-  options: {
-    allowManifestNormalization?: boolean;
-    manifestPlugins?: readonly Pick<PluginManifestRecord, "modelIdNormalization">[];
-  } = {},
+  options: ProviderModelIdNormalizationOptions = {},
 ): string {
   const normalizedProvider = normalizeProviderId(provider);
   if (options.allowManifestNormalization === false) {
@@ -56,8 +58,12 @@ function normalizeBuiltInProviderModelId(provider: string, model: string): strin
   return model;
 }
 
-export function normalizeConfiguredProviderCatalogModelId(provider: string, model: string): string {
-  const providerModel = normalizeStaticProviderModelId(provider, model);
+export function normalizeConfiguredProviderCatalogModelId(
+  provider: string,
+  model: string,
+  options: ProviderModelIdNormalizationOptions = {},
+): string {
+  const providerModel = normalizeStaticProviderModelId(provider, model, options);
   const googlePrefix = "google/";
   if (!providerModel.startsWith(googlePrefix)) {
     const slash = providerModel.indexOf("/");

@@ -6,6 +6,19 @@ import type { VoiceMessageMetadata } from "./voice-message.js";
 
 const runFfprobeMock = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<string>>());
 const runFfmpegMock = vi.hoisted(() => vi.fn<(...args: unknown[]) => Promise<void>>());
+const fetchWithSsrFGuardMock = vi.hoisted(() =>
+  vi.fn(
+    async (params: {
+      url: string;
+      init?: RequestInit;
+      policy?: { allowRfc2544BenchmarkRange?: boolean; allowIpv6UniqueLocalRange?: boolean };
+      auditContext?: string;
+    }) => ({
+      response: await globalThis.fetch(params.url, params.init),
+      release: async () => {},
+    }),
+  ),
+);
 
 vi.mock("openclaw/plugin-sdk/temp-path", async () => {
   return {
@@ -31,10 +44,7 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
   return {
-    fetchWithSsrFGuard: async (params: { url: string; init?: RequestInit }) => ({
-      response: await globalThis.fetch(params.url, params.init),
-      release: async () => {},
-    }),
+    fetchWithSsrFGuard: fetchWithSsrFGuardMock,
   };
 });
 
@@ -136,6 +146,8 @@ describe("ensureOggOpus", () => {
       "libopus",
       "-b:a",
       "64k",
+      "-f",
+      "ogg",
     ]);
     const ffmpegOutputPath = ffmpegArgs.at(-1);
     expectStagedFfmpegOutput(ffmpegOutputPath, result.path);
@@ -173,6 +185,8 @@ describe("ensureOggOpus", () => {
       "libopus",
       "-b:a",
       "64k",
+      "-f",
+      "ogg",
     ]);
     const ffmpegOutputPath = ffmpegArgs.at(-1);
     expectStagedFfmpegOutput(ffmpegOutputPath, result.path);
@@ -192,6 +206,7 @@ describe("sendDiscordVoiceMessage", () => {
 
   beforeEach(() => {
     vi.restoreAllMocks();
+    fetchWithSsrFGuardMock.mockClear();
   });
 
   function createRest(post = vi.fn(async () => ({ id: "msg-1", channel_id: "channel-1" }))) {
@@ -265,6 +280,35 @@ describe("sendDiscordVoiceMessage", () => {
 
     expect(uploadUrlRequests).toBe(2);
     expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(4);
+    expect(
+      fetchWithSsrFGuardMock.mock.calls.map(([params]) => ({
+        auditContext: params.auditContext,
+        allowRfc2544BenchmarkRange: params.policy?.allowRfc2544BenchmarkRange,
+        allowIpv6UniqueLocalRange: params.policy?.allowIpv6UniqueLocalRange,
+      })),
+    ).toEqual([
+      {
+        auditContext: "discord.voice.upload-url",
+        allowRfc2544BenchmarkRange: true,
+        allowIpv6UniqueLocalRange: true,
+      },
+      {
+        auditContext: "discord.voice.attachment-upload",
+        allowRfc2544BenchmarkRange: true,
+        allowIpv6UniqueLocalRange: true,
+      },
+      {
+        auditContext: "discord.voice.upload-url",
+        allowRfc2544BenchmarkRange: true,
+        allowIpv6UniqueLocalRange: true,
+      },
+      {
+        auditContext: "discord.voice.attachment-upload",
+        allowRfc2544BenchmarkRange: true,
+        allowIpv6UniqueLocalRange: true,
+      },
+    ]);
     expect(post).toHaveBeenCalledWith("/channels/channel-1/messages", {
       body: {
         flags: 8192,

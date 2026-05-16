@@ -666,6 +666,12 @@ export type PluginHookGatewayCronJobState = {
   lastRunStatus?: PluginHookGatewayCronRunStatus;
   lastError?: string;
   lastDurationMs?: number;
+  lastDelivered?: boolean;
+  lastDeliveryStatus?: PluginHookGatewayCronDeliveryStatus;
+  lastDeliveryError?: string;
+  lastFailureNotificationDelivered?: boolean;
+  lastFailureNotificationDeliveryStatus?: PluginHookGatewayCronDeliveryStatus;
+  lastFailureNotificationDeliveryError?: string;
 };
 
 export type PluginHookGatewayCronJob = {

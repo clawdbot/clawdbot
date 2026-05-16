@@ -108,6 +108,10 @@
       "types": "./dist/src/plugin-sdk/cli-runtime.d.ts",
       "default": "./src/cli-runtime.ts"
     },
+    "./gateway-method-runtime": {
+      "types": "./dist/src/plugin-sdk/gateway-method-runtime.d.ts",
+      "default": "./src/gateway-method-runtime.ts"
+    },
     "./error-runtime": {
       "types": "./dist/src/plugin-sdk/error-runtime.d.ts",
       "default": "./src/error-runtime.ts"

@@ -51,6 +51,7 @@ const mocks = vi.hoisted(() => ({
     (entry: { label?: string; id?: string }) => entry.label ?? entry.id ?? "plugin",
   ),
   resolveDefaultPluginExtensionsDir: vi.fn(() => "/tmp/openclaw-plugins"),
+  resolveDefaultPluginNpmDir: vi.fn(() => "/tmp/openclaw-npm"),
   resolvePluginInstallDir: vi.fn(
     (pluginId: string, extensionsDir = "/tmp/openclaw-plugins") => `${extensionsDir}/${pluginId}`,
   ),
@@ -102,6 +103,7 @@ vi.mock("../../../plugins/installed-plugin-index.js", async (importOriginal) => 
 
 vi.mock("../../../plugins/install-paths.js", () => ({
   resolveDefaultPluginExtensionsDir: mocks.resolveDefaultPluginExtensionsDir,
+  resolveDefaultPluginNpmDir: mocks.resolveDefaultPluginNpmDir,
   resolvePluginInstallDir: mocks.resolvePluginInstallDir,
   validatePluginId: mocks.validatePluginId,
 }));
@@ -153,6 +155,8 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue({});
     mocks.listChannelPluginCatalogEntries.mockReturnValue([]);
     mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([]);
+    mocks.resolveDefaultPluginExtensionsDir.mockReturnValue("/tmp/openclaw-plugins");
+    mocks.resolveDefaultPluginNpmDir.mockReturnValue("/tmp/openclaw-npm");
     mocks.resolveProviderInstallCatalogEntries.mockReturnValue([]);
     mocks.installPluginFromClawHub.mockResolvedValue({
       ok: true,
@@ -2185,6 +2189,430 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       env: {},
     });
     expect(result.changes).toEqual(['Repaired missing configured plugin "brave".']);
+  });
+
+  it("replaces a configured official web search plugin when its installed package is source-only", async () => {
+    const extensionsDir = path.join(makeTempDir(), "extensions");
+    const installDir = path.join(extensionsDir, "brave");
+    mocks.resolveDefaultPluginExtensionsDir.mockReturnValue(extensionsDir);
+    fs.mkdirSync(installDir, { recursive: true });
+    fs.writeFileSync(path.join(installDir, "package.json"), JSON.stringify({ name: "brave" }));
+    const records = {
+      brave: {
+        source: "clawhub",
+        spec: "clawhub:@openclaw/brave-plugin@2026.5.1-beta.1",
+        installPath: installDir,
+        clawhubPackage: "@openclaw/brave-plugin",
+        clawhubChannel: "official",
+        clawhubUrl: "https://clawhub.ai",
+      },
+    };
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      plugins: [],
+      diagnostics: [
+        {
+          level: "error",
+          pluginId: "brave",
+          message:
+            "installed plugin package requires compiled runtime output for TypeScript entry index.ts: expected ./dist/index.js, ./dist/index.mjs, ./dist/index.cjs, index.js, index.mjs, index.cjs.",
+        },
+      ],
+    });
+    mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
+      {
+        id: "brave",
+        label: "Brave",
+        install: {
+          npmSpec: "@openclaw/brave-plugin",
+          defaultChoice: "npm",
+        },
+        openclaw: {
+          plugin: { id: "brave", label: "Brave" },
+          webSearchProviders: [
+            {
+              id: "brave",
+              label: "Brave Search",
+              hint: "Brave Search",
+              envVars: ["BRAVE_API_KEY"],
+              placeholder: "BSA...",
+              signupUrl: "https://example.test/brave",
+            },
+          ],
+        },
+      },
+    ]);
+    mocks.installPluginFromNpmSpec.mockResolvedValueOnce({
+      ok: true,
+      pluginId: "brave",
+      targetDir: "/tmp/openclaw-plugins/brave",
+      version: "2026.5.12",
+      npmResolution: {
+        name: "@openclaw/brave-plugin",
+        version: "2026.5.12",
+        resolvedSpec: "@openclaw/brave-plugin@2026.5.12",
+        integrity: "sha512-brave",
+        resolvedAt: "2026-05-01T00:00:00.000Z",
+      },
+    });
+
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingConfiguredPluginInstalls({
+      cfg: {
+        tools: {
+          web: {
+            search: {
+              provider: "brave",
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(mocks.updateNpmInstalledPlugins).not.toHaveBeenCalled();
+    expect(fs.existsSync(installDir)).toBe(false);
+    expectRecordFields(mockCallArg(mocks.installPluginFromNpmSpec), {
+      spec: expectedNpmInstallSpec("@openclaw/brave-plugin"),
+      expectedPluginId: "brave",
+      trustedSourceLinkedOfficialInstall: true,
+      mode: "update",
+    });
+    const persistedRecords = mockCallArg(
+      mocks.writePersistedInstalledPluginIndexInstallRecords,
+    ) as Record<string, unknown>;
+    expectRecordFields(persistedRecords.brave, {
+      source: "npm",
+      spec: "@openclaw/brave-plugin",
+      installPath: "/tmp/openclaw-plugins/brave",
+      version: "2026.5.12",
+    });
+    expect(result).toEqual({
+      changes: [
+        `Installed missing configured plugin "brave" from ${expectedNpmInstallSpec("@openclaw/brave-plugin")}.`,
+      ],
+      warnings: [],
+      records: persistedRecords,
+    });
+  });
+
+  it("replaces a configured official channel plugin when only its channel is configured", async () => {
+    const extensionsDir = path.join(makeTempDir(), "extensions");
+    const installDir = path.join(extensionsDir, "slack");
+    mocks.resolveDefaultPluginExtensionsDir.mockReturnValue(extensionsDir);
+    fs.mkdirSync(installDir, { recursive: true });
+    fs.writeFileSync(path.join(installDir, "package.json"), JSON.stringify({ name: "slack" }));
+    const records = {
+      slack: {
+        source: "clawhub",
+        spec: "clawhub:@openclaw/slack@2026.5.12-beta.1",
+        installPath: installDir,
+        clawhubPackage: "@openclaw/slack",
+        clawhubChannel: "official",
+        clawhubUrl: "https://clawhub.ai",
+      },
+    };
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      plugins: [],
+      diagnostics: [
+        {
+          level: "error",
+          pluginId: "slack",
+          message:
+            "installed plugin package requires compiled runtime output for TypeScript entry index.ts: expected ./dist/index.js.",
+        },
+      ],
+    });
+    mocks.listChannelPluginCatalogEntries.mockReturnValue([
+      {
+        id: "slack",
+        pluginId: "slack",
+        meta: { label: "Slack" },
+        install: {
+          npmSpec: "@openclaw/slack",
+          defaultChoice: "npm",
+        },
+        trustedSourceLinkedOfficialInstall: true,
+      },
+    ]);
+    mocks.installPluginFromNpmSpec.mockResolvedValueOnce({
+      ok: true,
+      pluginId: "slack",
+      targetDir: "/tmp/openclaw-npm/node_modules/@openclaw/slack",
+      version: "2026.5.12",
+      npmResolution: {
+        name: "@openclaw/slack",
+        version: "2026.5.12",
+        resolvedSpec: "@openclaw/slack@2026.5.12",
+        integrity: "sha512-slack",
+        resolvedAt: "2026-05-01T00:00:00.000Z",
+      },
+    });
+
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingConfiguredPluginInstalls({
+      cfg: {
+        channels: {
+          slack: {
+            enabled: true,
+            botToken: "xoxb-test",
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(mocks.updateNpmInstalledPlugins).not.toHaveBeenCalled();
+    expect(fs.existsSync(installDir)).toBe(false);
+    expectRecordFields(mockCallArg(mocks.installPluginFromNpmSpec), {
+      spec: expectedNpmInstallSpec("@openclaw/slack"),
+      expectedPluginId: "slack",
+      trustedSourceLinkedOfficialInstall: true,
+      mode: "update",
+    });
+    expect(result.changes).toEqual([
+      `Installed missing configured plugin "slack" from ${expectedNpmInstallSpec("@openclaw/slack")}.`,
+    ]);
+  });
+
+  it("does not delete an arbitrary recorded path when replacing a broken official plugin", async () => {
+    const installDir = makeTempDir();
+    fs.writeFileSync(path.join(installDir, "package.json"), JSON.stringify({ name: "brave" }));
+    const records = {
+      brave: {
+        source: "clawhub",
+        spec: "clawhub:@openclaw/brave-plugin@2026.5.1-beta.1",
+        installPath: installDir,
+        clawhubPackage: "@openclaw/brave-plugin",
+        clawhubChannel: "official",
+        clawhubUrl: "https://clawhub.ai",
+      },
+    };
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      plugins: [],
+      diagnostics: [
+        {
+          level: "error",
+          pluginId: "brave",
+          message:
+            "installed plugin package requires compiled runtime output for TypeScript entry index.ts: expected ./dist/index.js.",
+        },
+      ],
+    });
+    mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
+      {
+        id: "brave",
+        label: "Brave",
+        install: {
+          npmSpec: "@openclaw/brave-plugin",
+          defaultChoice: "npm",
+        },
+        openclaw: {
+          plugin: { id: "brave", label: "Brave" },
+          webSearchProviders: [
+            {
+              id: "brave",
+              label: "Brave Search",
+              hint: "Brave Search",
+              envVars: ["BRAVE_API_KEY"],
+              placeholder: "BSA...",
+              signupUrl: "https://example.test/brave",
+            },
+          ],
+        },
+      },
+    ]);
+    mocks.installPluginFromNpmSpec.mockResolvedValueOnce({
+      ok: true,
+      pluginId: "brave",
+      targetDir: "/tmp/openclaw-plugins/brave",
+      version: "2026.5.12",
+      npmResolution: {
+        name: "@openclaw/brave-plugin",
+        version: "2026.5.12",
+        resolvedSpec: "@openclaw/brave-plugin@2026.5.12",
+        integrity: "sha512-brave",
+        resolvedAt: "2026-05-01T00:00:00.000Z",
+      },
+    });
+
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    await repairMissingConfiguredPluginInstalls({
+      cfg: {
+        tools: {
+          web: {
+            search: {
+              provider: "brave",
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(fs.existsSync(installDir)).toBe(true);
+    expect(mocks.installPluginFromNpmSpec).toHaveBeenCalled();
+  });
+
+  it("keeps a broken official install record when replacement install fails", async () => {
+    const extensionsDir = path.join(makeTempDir(), "extensions");
+    const installDir = path.join(extensionsDir, "brave");
+    mocks.resolveDefaultPluginExtensionsDir.mockReturnValue(extensionsDir);
+    fs.mkdirSync(installDir, { recursive: true });
+    fs.writeFileSync(path.join(installDir, "package.json"), JSON.stringify({ name: "brave" }));
+    const records = {
+      brave: {
+        source: "clawhub",
+        spec: "clawhub:@openclaw/brave-plugin@2026.5.1-beta.1",
+        installPath: installDir,
+        clawhubPackage: "@openclaw/brave-plugin",
+        clawhubChannel: "official",
+        clawhubUrl: "https://clawhub.ai",
+      },
+    };
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      plugins: [],
+      diagnostics: [
+        {
+          level: "error",
+          pluginId: "brave",
+          message:
+            "installed plugin package requires compiled runtime output for TypeScript entry index.ts: expected ./dist/index.js.",
+        },
+      ],
+    });
+    mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
+      {
+        id: "brave",
+        label: "Brave",
+        install: {
+          npmSpec: "@openclaw/brave-plugin",
+          defaultChoice: "npm",
+        },
+        openclaw: {
+          plugin: { id: "brave", label: "Brave" },
+          webSearchProviders: [
+            {
+              id: "brave",
+              label: "Brave Search",
+              hint: "Brave Search",
+              envVars: ["BRAVE_API_KEY"],
+              placeholder: "BSA...",
+              signupUrl: "https://example.test/brave",
+            },
+          ],
+        },
+      },
+    ]);
+    mocks.installPluginFromNpmSpec.mockResolvedValueOnce({
+      ok: false,
+      error: "network unavailable",
+    });
+
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingConfiguredPluginInstalls({
+      cfg: {
+        tools: {
+          web: {
+            search: {
+              provider: "brave",
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(fs.existsSync(installDir)).toBe(true);
+    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      changes: [],
+      warnings: [
+        `Failed to install missing configured plugin "brave" from ${expectedNpmInstallSpec("@openclaw/brave-plugin")}: network unavailable`,
+      ],
+      records,
+    });
+  });
+
+  it("does not replace a non-official install that collides with an official plugin id", async () => {
+    const extensionsDir = path.join(makeTempDir(), "extensions");
+    const installDir = path.join(extensionsDir, "brave");
+    mocks.resolveDefaultPluginExtensionsDir.mockReturnValue(extensionsDir);
+    fs.mkdirSync(installDir, { recursive: true });
+    fs.writeFileSync(path.join(installDir, "package.json"), JSON.stringify({ name: "brave" }));
+    const records = {
+      brave: {
+        source: "path",
+        sourcePath: installDir,
+        installPath: installDir,
+      },
+    };
+    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
+    mocks.loadPluginMetadataSnapshot.mockReturnValue({
+      plugins: [],
+      diagnostics: [
+        {
+          level: "error",
+          pluginId: "brave",
+          message:
+            "installed plugin package requires compiled runtime output for TypeScript entry index.ts: expected ./dist/index.js.",
+        },
+      ],
+    });
+    mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
+      {
+        id: "brave",
+        label: "Brave",
+        install: {
+          npmSpec: "@openclaw/brave-plugin",
+          defaultChoice: "npm",
+        },
+        openclaw: {
+          plugin: { id: "brave", label: "Brave" },
+          webSearchProviders: [
+            {
+              id: "brave",
+              label: "Brave Search",
+              hint: "Brave Search",
+              envVars: ["BRAVE_API_KEY"],
+              placeholder: "BSA...",
+              signupUrl: "https://example.test/brave",
+            },
+          ],
+        },
+      },
+    ]);
+
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingConfiguredPluginInstalls({
+      cfg: {
+        tools: {
+          web: {
+            search: {
+              provider: "brave",
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(fs.existsSync(installDir)).toBe(true);
+    expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
+    expect(mocks.updateNpmInstalledPlugins).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      changes: [],
+      warnings: [],
+      records,
+    });
   });
 
   it("installs a configured external web search plugin from provider-only config", async () => {

@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import JSZip from "jszip";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { resolveStateDir } from "../config/paths.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
@@ -306,6 +307,19 @@ describe("loadWebMedia", () => {
     });
     expect(result.kind).toBe("image");
     expect(result.buffer.length).toBeGreaterThan(0);
+  });
+
+  it("does not treat image-named generic container bytes as local image media", async () => {
+    const zip = new JSZip();
+    zip.file("hello.txt", "hi");
+    const fakeImage = path.join(fixtureRoot, "fake.png");
+    await fs.writeFile(fakeImage, await zip.generateAsync({ type: "nodebuffer" }));
+
+    const result = await loadWebMedia(fakeImage, createLocalWebMediaOptions());
+
+    expect(result.kind).toBe("document");
+    expect(result.contentType).toBe("application/zip");
+    expect(result.fileName).toBe("fake.png");
   });
 
   it("uses only the leaf filename from Windows-style sandbox-validated media paths", async () => {

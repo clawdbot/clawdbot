@@ -930,6 +930,15 @@ describe("createOpenClawCodingTools", () => {
     expect(toolNameList(cronTools)).toContain("message");
   });
 
+  it("keeps message available for message-tool-only source replies under the coding profile", () => {
+    const tools = createOpenClawCodingTools({
+      config: { tools: { profile: "coding" } },
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    expect(toolNameList(tools)).toContain("message");
+  });
+
   it("keeps heartbeat response available for heartbeat runs under the coding profile", () => {
     const codingTools = createOpenClawCodingTools({
       config: { tools: { profile: "coding" } },

@@ -36,16 +36,13 @@ OpenClaw process
 
 The public contract is the routing behavior, not the internal Node hooks used to implement it. OpenClaw Gateway control-plane WebSocket clients use a narrow direct path for local loopback Gateway RPC traffic when the Gateway URL uses `localhost` or a literal loopback IP such as `127.0.0.1` or `[::1]`. That control-plane path must be able to reach loopback Gateways even when the operator proxy blocks loopback destinations. Normal runtime HTTP and WebSocket requests still use the configured proxy.
 
-Internally, OpenClaw uses two process-level routing hooks for this feature:
-
-- Undici dispatcher routing covers `fetch`, undici-backed clients, and transports that provide their own undici dispatcher.
-- `global-agent` routing covers Node core `node:http` and `node:https` callers, including many libraries layered on `http.request`, `https.request`, `http.get`, and `https.get`. Managed proxy mode forces that global agent so explicit Node HTTP agents do not accidentally bypass the operator proxy.
+Internally, OpenClaw installs Proxyline as the process-level routing runtime for this feature. Proxyline covers `fetch`, undici-backed clients, Node core `node:http` / `node:https` callers, common WebSocket clients, and helper-created CONNECT tunnels. Managed proxy mode replaces caller-provided Node HTTP agents so explicit agents do not accidentally bypass the operator proxy.
 
 Some plugins own custom transports that need explicit proxy wiring even when process-level routing exists. For example, Telegram's Bot API transport uses its own HTTP/1 undici dispatcher and therefore honors process proxy env plus the managed `OPENCLAW_PROXY_URL` fallback in that owner-specific transport path.
 
 The proxy URL itself must use `http://`. HTTPS destinations are still supported through the proxy with HTTP `CONNECT`; this only means OpenClaw expects a plain HTTP forward-proxy listener such as `http://127.0.0.1:3128`.
 
-While the proxy is active, OpenClaw clears `no_proxy`, `NO_PROXY`, and `GLOBAL_AGENT_NO_PROXY`. Those bypass lists are destination-based, so leaving `localhost` or `127.0.0.1` there would let high-risk SSRF targets skip the filtering proxy.
+While the proxy is active, OpenClaw clears `no_proxy` and `NO_PROXY`. Those bypass lists are destination-based, so leaving `localhost` or `127.0.0.1` there would let high-risk SSRF targets skip the filtering proxy.
 
 On shutdown, OpenClaw restores the previous proxy environment and resets cached process routing state.
 
@@ -84,8 +81,8 @@ proxy:
   loopbackMode: gateway-only # gateway-only, proxy, or block
 ```
 
-- `gateway-only` (default): OpenClaw registers the Gateway loopback authority in the active `global-agent` `NO_PROXY` controller so local Gateway WebSocket traffic can connect directly. Custom loopback Gateway ports work because the active Gateway URL's host and port are registered.
-- `proxy`: OpenClaw does not register a Gateway loopback `NO_PROXY` authority, so local Gateway traffic is sent through the managed proxy. If the proxy is remote, it must provide special routing for the OpenClaw host's loopback service, such as mapping it to a proxy-reachable hostname, IP, or tunnel. Standard remote proxies resolve `127.0.0.1` and `localhost` from the proxy host, not from the OpenClaw host.
+- `gateway-only` (default): OpenClaw registers the Gateway loopback authority in Proxyline's managed bypass policy so local Gateway WebSocket traffic can connect directly. Custom loopback Gateway ports work because the active Gateway URL's host and port are registered.
+- `proxy`: OpenClaw does not register a Gateway loopback bypass, so local Gateway traffic is sent through the managed proxy. If the proxy is remote, it must provide special routing for the OpenClaw host's loopback service, such as mapping it to a proxy-reachable hostname, IP, or tunnel. Standard remote proxies resolve `127.0.0.1` and `localhost` from the proxy host, not from the OpenClaw host.
 - `block`: OpenClaw denies loopback Gateway control-plane connections before opening a socket.
 
 If `enabled=true` but no valid proxy URL is configured, protected commands fail startup instead of falling back to direct network access.
@@ -212,7 +209,7 @@ proxy:
 ## Limits
 
 - The proxy improves coverage for process-local JavaScript HTTP and WebSocket clients, but it is not an OS-level network sandbox.
-- Gateway loopback control-plane traffic defaults to direct local bypass through `proxy.loopbackMode: "gateway-only"`. OpenClaw implements that bypass by registering the active Gateway loopback authority in the managed `global-agent` `NO_PROXY` controller. Operators can set `proxy.loopbackMode: "proxy"` to send Gateway loopback traffic through the managed proxy, or `proxy.loopbackMode: "block"` to deny loopback Gateway connections. See [Gateway Loopback Mode](#gateway-loopback-mode) for the remote-proxy caveat.
+- Gateway loopback control-plane traffic defaults to direct local bypass through `proxy.loopbackMode: "gateway-only"`. OpenClaw implements that bypass by registering the active Gateway loopback authority in Proxyline's managed bypass policy. Operators can set `proxy.loopbackMode: "proxy"` to send Gateway loopback traffic through the managed proxy, or `proxy.loopbackMode: "block"` to deny loopback Gateway connections. See [Gateway Loopback Mode](#gateway-loopback-mode) for the remote-proxy caveat.
 - Raw `net`, `tls`, and `http2` sockets, native addons, and non-OpenClaw child processes may bypass Node-level proxy routing unless they inherit and respect proxy environment variables. Forked OpenClaw child CLIs inherit the managed proxy URL and `proxy.loopbackMode` state.
 - IRC is a raw TCP/TLS channel outside operator-managed forward proxy routing. In deployments that require all egress through that forward proxy, set `channels.irc.enabled=false` unless direct IRC egress is explicitly approved.
 - The local debug proxy is diagnostic tooling and its direct upstream forwarding for proxy requests and CONNECT tunnels is disabled by default while managed proxy mode is active; enable direct forwarding only for approved local diagnostics.

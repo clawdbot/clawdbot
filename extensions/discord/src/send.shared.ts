@@ -39,9 +39,11 @@ type DiscordRequest = RetryRunner;
 export {
   buildDiscordMessagePayload,
   buildDiscordMessageRequest,
+  resolveDiscordMessageFlags,
   resolveDiscordSendComponents,
   resolveDiscordSendEmbeds,
   stripUndefinedFields,
+  SUPPRESS_EMBEDS_FLAG,
   SUPPRESS_NOTIFICATIONS_FLAG,
   type DiscordSendComponentFactory,
   type DiscordSendComponents,
@@ -49,9 +51,9 @@ export {
 } from "./send.message-request.js";
 import {
   buildDiscordMessageRequest,
+  resolveDiscordMessageFlags,
   resolveDiscordSendComponents,
   resolveDiscordSendEmbeds,
-  SUPPRESS_NOTIFICATIONS_FLAG,
   type DiscordSendComponents,
   type DiscordSendEmbeds,
 } from "./send.message-request.js";
@@ -301,12 +303,12 @@ async function sendDiscordText(
   embeds?: DiscordSendEmbeds,
   chunkMode?: ChunkMode,
   silent?: boolean,
+  suppressEmbeds?: boolean,
   maxChars?: number,
 ) {
   if (!text.trim()) {
     throw new Error("Message must be non-empty for Discord sends");
   }
-  const flags = silent ? SUPPRESS_NOTIFICATIONS_FLAG : undefined;
   const chunks = buildDiscordTextChunks(text, { maxLinesPerMessage, chunkMode, maxChars });
   const sendChunk = async (chunk: string, isFirst: boolean) => {
     const chunkComponents = resolveDiscordSendComponents({
@@ -315,6 +317,10 @@ async function sendDiscordText(
       isFirst,
     });
     const chunkEmbeds = resolveDiscordSendEmbeds({ embeds, isFirst });
+    const flags = resolveDiscordMessageFlags({
+      silent,
+      suppressEmbeds: suppressEmbeds && !chunkEmbeds?.length,
+    });
     const body = buildDiscordMessageRequest({
       text: chunk,
       components: chunkComponents,
@@ -362,6 +368,7 @@ async function sendDiscordMedia(
   embeds?: DiscordSendEmbeds,
   chunkMode?: ChunkMode,
   silent?: boolean,
+  suppressEmbeds?: boolean,
   maxChars?: number,
 ) {
   const media = await loadWebMedia(
@@ -378,7 +385,6 @@ async function sendDiscordMedia(
     ? buildDiscordTextChunks(text, { maxLinesPerMessage, chunkMode, maxChars })
     : [];
   const caption = chunks[0] ?? "";
-  const flags = silent ? SUPPRESS_NOTIFICATIONS_FLAG : undefined;
   const fileData = toDiscordFileBlob(media.buffer);
   const captionComponents = resolveDiscordSendComponents({
     components,
@@ -386,6 +392,10 @@ async function sendDiscordMedia(
     isFirst: true,
   });
   const captionEmbeds = resolveDiscordSendEmbeds({ embeds, isFirst: true });
+  const flags = resolveDiscordMessageFlags({
+    silent,
+    suppressEmbeds: suppressEmbeds && !captionEmbeds?.length,
+  });
   const body = buildDiscordMessageRequest({
     text: caption,
     components: captionComponents,
@@ -419,6 +429,7 @@ async function sendDiscordMedia(
       undefined,
       chunkMode,
       silent,
+      suppressEmbeds,
       maxChars,
     );
     for (const id of followup.platformMessageIds) {

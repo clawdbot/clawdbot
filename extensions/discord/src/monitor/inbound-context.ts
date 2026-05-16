@@ -1,7 +1,4 @@
-import {
-  buildUntrustedChannelMetadata,
-  wrapExternalContent,
-} from "openclaw/plugin-sdk/security-runtime";
+import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import {
   resolveDiscordMemberAllowed,
   resolveDiscordOwnerAllowFrom,
@@ -50,24 +47,21 @@ export function buildDiscordGroupSystemPrompt(
 export function buildDiscordUntrustedContext(params: {
   isGuild: boolean;
   channelTopic?: string;
-  messageBody?: string;
-}): string[] | undefined {
+}): MsgContext["UntrustedStructuredContext"] | undefined {
   if (!params.isGuild) {
     return undefined;
   }
-  const entries = [
-    buildUntrustedChannelMetadata({
+  const entries: NonNullable<MsgContext["UntrustedStructuredContext"]> = [];
+  if (typeof params.channelTopic === "string" && params.channelTopic.trim().length > 0) {
+    entries.push({
+      label: "Discord channel metadata",
       source: "discord",
-      label: "Discord channel topic",
-      entries: [params.channelTopic],
-    }),
-    typeof params.messageBody === "string" && params.messageBody.trim().length > 0
-      ? wrapExternalContent(`UNTRUSTED Discord message body\n${params.messageBody.trim()}`, {
-          source: "unknown",
-          includeWarning: false,
-        })
-      : undefined,
-  ].filter((entry): entry is string => Boolean(entry));
+      type: "channel_metadata",
+      payload: {
+        topic: params.channelTopic.trim(),
+      },
+    });
+  }
   return entries.length > 0 ? entries : undefined;
 }
 
@@ -82,7 +76,6 @@ export function buildDiscordInboundAccessContext(params: {
   allowNameMatching?: boolean;
   isGuild: boolean;
   channelTopic?: string;
-  messageBody?: string;
 }) {
   return {
     groupSystemPrompt: params.isGuild
@@ -91,7 +84,6 @@ export function buildDiscordInboundAccessContext(params: {
     untrustedContext: buildDiscordUntrustedContext({
       isGuild: params.isGuild,
       channelTopic: params.channelTopic,
-      messageBody: params.messageBody,
     }),
     ownerAllowFrom: resolveDiscordOwnerAllowFrom({
       channelConfig: params.channelConfig,

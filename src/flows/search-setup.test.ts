@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import { createNonExitingRuntime } from "../runtime.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { runSearchSetupFlow } from "./search-setup.js";
 
 const mockGrokProvider = vi.hoisted(() => ({
@@ -159,6 +160,44 @@ describe("runSearchSetupFlow", () => {
     ensureOnboardingPluginInstalled.mockClear();
   });
 
+  it("localizes setup copy for web search provider selection", async () => {
+    const previousLocale = process.env.OPENCLAW_LOCALE;
+    process.env.OPENCLAW_LOCALE = "zh-CN";
+    const note = vi.fn(async () => {});
+    const select = vi.fn().mockResolvedValueOnce("__skip__");
+    const prompter = createWizardPrompter({
+      note: note as never,
+      select: select as never,
+    });
+
+    try {
+      await runSearchSetupFlow(
+        { plugins: { allow: ["xai"] } },
+        createNonExitingRuntime(),
+        prompter,
+      );
+    } finally {
+      if (previousLocale === undefined) {
+        delete process.env.OPENCLAW_LOCALE;
+      } else {
+        process.env.OPENCLAW_LOCALE = previousLocale;
+      }
+    }
+
+    expect(note).toHaveBeenCalledWith(expect.stringContaining("在线查询资料"), "网页搜索");
+    expect(select).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "搜索提供方",
+        options: expect.arrayContaining([
+          expect.objectContaining({
+            label: "暂时跳过",
+            hint: "稍后可用 openclaw configure --section web 配置",
+          }),
+        ]),
+      }),
+    );
+  });
+
   it("runs provider-owned setup after selecting Grok web search", async () => {
     const select = vi
       .fn()
@@ -212,8 +251,15 @@ describe("runSearchSetupFlow", () => {
       select: select as never,
     });
 
-    await runSearchSetupFlow({ plugins: { allow: ["xai"] } }, createNonExitingRuntime(), prompter, {
-      secretInputMode: "ref",
+    await withEnvAsync({ XAI_API_KEY: undefined }, async () => {
+      await runSearchSetupFlow(
+        { plugins: { allow: ["xai"] } },
+        createNonExitingRuntime(),
+        prompter,
+        {
+          secretInputMode: "ref",
+        },
+      );
     });
 
     expect(note).toHaveBeenNthCalledWith(

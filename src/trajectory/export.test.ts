@@ -317,17 +317,35 @@ describe("exportTrajectoryBundle", () => {
     writeSimpleSessionFile(sessionFile);
     fs.writeFileSync(
       runtimeFile,
-      `${JSON.stringify({})}\n${JSON.stringify({
-        traceSchema: "openclaw-trajectory",
-        schemaVersion: 1,
-        traceId: "session-1",
-        source: "runtime",
-        type: "session.started",
-        ts: "2026-04-22T08:00:00.000Z",
-        seq: 1,
-        sourceSeq: 1,
-        sessionId: "session-1",
-      })}\n`,
+      [
+        "",
+        JSON.stringify({}),
+        "",
+        JSON.stringify({
+          traceSchema: "openclaw-trajectory",
+          schemaVersion: 1,
+          traceId: "session-1",
+          source: "runtime",
+          type: "bad-data",
+          ts: "2026-04-22T08:00:00.000Z",
+          seq: 1,
+          sourceSeq: 1,
+          sessionId: "session-1",
+          data: [],
+        }),
+        '{"traceSchema":',
+        JSON.stringify({
+          traceSchema: "openclaw-trajectory",
+          schemaVersion: 1,
+          traceId: "session-1",
+          source: "runtime",
+          type: "session.started",
+          ts: "2026-04-22T08:00:00.000Z",
+          seq: 1,
+          sourceSeq: 1,
+          sessionId: "session-1",
+        }),
+      ].join("\n") + "\n",
       "utf8",
     );
 
@@ -340,6 +358,95 @@ describe("exportTrajectoryBundle", () => {
 
     expect(bundle.manifest.runtimeEventCount).toBe(1);
     expect(eventTypes(bundle.events)).toContain("session.started");
+    expect(bundle.manifest.warnings).toEqual([
+      {
+        source: "runtime",
+        code: "invalid-runtime-event",
+        count: 2,
+        rows: [2, 4],
+        message: "Skipped a runtime trajectory JSONL row that does not match the session schema.",
+      },
+      {
+        source: "runtime",
+        code: "invalid-runtime-json",
+        count: 1,
+        rows: [5],
+        message: "Skipped a runtime trajectory JSONL row that is not valid JSON.",
+      },
+    ]);
+  });
+
+  it("skips and reports malformed session jsonl rows without poisoning transcript export", async () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const outputDir = path.join(tmpDir, "bundle");
+    const header = {
+      type: "session",
+      version: 3,
+      id: "session-1",
+      timestamp: "2026-04-01T05:46:39.000Z",
+      cwd: tmpDir,
+    };
+    const userEntry = {
+      type: "message",
+      id: "entry-user",
+      parentId: null,
+      timestamp: "2026-04-01T05:46:40.000Z",
+      message: userMessage("hello"),
+    };
+    const assistantEntry = {
+      type: "message",
+      id: "entry-assistant",
+      parentId: "entry-user",
+      timestamp: "2026-04-01T05:46:41.000Z",
+      message: assistantMessage([{ type: "text", text: "done" }]),
+    };
+    fs.writeFileSync(
+      sessionFile,
+      [
+        JSON.stringify(header),
+        "null",
+        '{"type":',
+        JSON.stringify({
+          type: "message",
+          id: "entry-corrupt",
+          parentId: null,
+          timestamp: "2026-04-01T05:46:39.500Z",
+        }),
+        JSON.stringify(userEntry),
+        JSON.stringify(assistantEntry),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+
+    const bundle = await exportTrajectoryBundle({
+      outputDir,
+      sessionFile,
+      sessionId: "session-1",
+      workspaceDir: tmpDir,
+    });
+
+    expect(bundle.manifest.transcriptEventCount).toBe(2);
+    expect(eventTypes(bundle.events)).toEqual(["user.message", "assistant.message"]);
+    expect(bundle.manifest.warnings).toEqual([
+      {
+        source: "session",
+        code: "invalid-session-row",
+        count: 2,
+        rows: [2, 4],
+        message: "Skipped a session JSONL row that is not a session entry object.",
+      },
+      {
+        source: "session",
+        code: "invalid-session-json",
+        count: 1,
+        rows: [3],
+        message: "Skipped a session JSONL row that is not valid JSON.",
+      },
+    ]);
+    expect(
+      JSON.parse(fs.readFileSync(path.join(outputDir, "manifest.json"), "utf8")).warnings,
+    ).toEqual(bundle.manifest.warnings);
   });
 
   it("uses the recorded runtime pointer before current environment overrides", async () => {
@@ -550,6 +657,7 @@ describe("exportTrajectoryBundle", () => {
 
     expect(bundle.manifest.runtimeEventCount).toBe(0);
     expect(eventTypes(bundle.events)).not.toContain("other-runtime");
+    expect(bundle.manifest.warnings).toBeUndefined();
   });
 
   it("redacts non-workspace paths in strings that also contain workspace paths", async () => {

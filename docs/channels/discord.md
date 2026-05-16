@@ -661,6 +661,23 @@ Default slash command settings:
 
   </Accordion>
 
+  <Accordion title="Link previews">
+    Discord generates rich link embeds for URLs by default. OpenClaw suppresses those generated embeds on outbound Discord messages by default, so agent-sent URLs stay as plain links unless you opt in:
+
+```json5
+{
+  channels: {
+    discord: {
+      suppressEmbeds: false,
+    },
+  },
+}
+```
+
+    Set `channels.discord.accounts.<id>.suppressEmbeds` to override one account. Agent message-tool sends can also pass `suppressEmbeds: false` for a single message. Explicit Discord `embeds` payloads are not suppressed by the default link-preview setting.
+
+  </Accordion>
+
   <Accordion title="Live stream preview">
     OpenClaw can stream draft replies by sending a temporary message and editing it as text arrives. `channels.discord.streaming` takes `off` | `partial` | `block` | `progress` (default). `progress` keeps one editable status draft and updates it with tool progress until final delivery; the shared starter label is a rolling line, so it scrolls away like the rest once enough work appears. `streamMode` is a legacy runtime alias. Run `openclaw doctor --fix` to rewrite persisted config to the canonical key.
 
@@ -1118,6 +1135,7 @@ OpenClaw uses Discord components v2 for exec approvals and cross-context markers
 - `channels.discord.ui.components.accentColor` sets the accent color used by Discord component containers (hex).
 - Set per account with `channels.discord.accounts.<id>.ui.components.accentColor`.
 - `embeds` are ignored when components v2 are present.
+- Plain URL previews are suppressed by default. Set `suppressEmbeds: false` on a message action when a single outbound link should expand.
 
 Example:
 

@@ -177,6 +177,25 @@ describe("discoverDeepInfraModels", () => {
     });
   });
 
+  it("falls back without caching malformed successful model list payloads", async () => {
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ data: {} }),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ data: [makeModelEntry({ id: "recovered/model" })] }),
+      });
+
+    await withFetchPathTest(mockFetch, async () => {
+      expect(await discoverDeepInfraModels()).toStrictEqual(expectedStaticCatalog());
+      expect((await discoverDeepInfraModels()).map((m) => m.id)).toEqual(["recovered/model"]);
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+    });
+  });
+
   it("caches successful discovery responses only", async () => {
     const mockFetch = vi
       .fn()

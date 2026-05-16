@@ -190,6 +190,38 @@ describe("stripReasoningTagsFromText", () => {
         input: "A <FINAL data-x='1'>visible</Final> B",
         expected: "A visible B",
       },
+      {
+        input: "A <final/>visible <final data-model='gemini'>answer</final> B",
+        expected: "A visible answer B",
+      },
+      {
+        input: "A <final data-model=openrouter/google/gemini>answer</final> B",
+        expected: "A answer B",
+      },
+      {
+        input: "A <final-result>visible</final-result> B",
+        expected: "A <final-result>visible</final-result> B",
+      },
+      {
+        input: "  <final-result>visible</final-result>  ",
+        expected: "  <final-result>visible</final-result>  ",
+      },
+      {
+        input: 'A <final reason="a>b">visible B',
+        expected: 'A <final reason="a>b">visible B',
+      },
+      {
+        input: "A <final / nottag>visible B",
+        expected: "A <final / nottag>visible B",
+      },
+      {
+        input: `A <final ${" ".repeat(10_000)} B`,
+        expected: `A <final ${" ".repeat(10_000)} B`,
+      },
+      {
+        input: `A <final ${" ".repeat(10_000)}= > B`,
+        expected: `A <final ${" ".repeat(10_000)}= > B`,
+      },
     ] as const)("handles nested/final tag behavior: %j", (testCase) => {
       expectStrippedCase(testCase);
     });

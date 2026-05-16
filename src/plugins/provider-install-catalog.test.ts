@@ -7,6 +7,7 @@ type ResolveManifestProviderAuthChoices =
   typeof import("./provider-auth-choices.js").resolveManifestProviderAuthChoices;
 type ListOfficialExternalProviderCatalogEntries =
   typeof import("./official-external-plugin-catalog.js").listOfficialExternalProviderCatalogEntries;
+type PluginInstallSourceInfo = import("./install-source-info.js").PluginInstallSourceInfo;
 
 const loadOpenClawProviderIndex = vi.hoisted(() =>
   vi.fn<LoadOpenClawProviderIndex>(() => ({ version: 1, providers: {} })),
@@ -398,6 +399,59 @@ describe("provider install catalog", () => {
         methodId: "api-key",
         choiceId: "demo-provider-api-key",
         choiceLabel: "Demo Provider API key",
+      },
+    ]);
+
+    expect(resolveProviderInstallCatalogEntries()).toStrictEqual([]);
+  });
+
+  it("ignores malformed persisted package install metadata", () => {
+    loadPluginRegistrySnapshot.mockReturnValue({
+      version: 1,
+      hostContractVersion: "test",
+      compatRegistryVersion: "test",
+      migrationVersion: 1,
+      policyHash: "test",
+      generatedAtMs: 0,
+      installRecords: {},
+      plugins: [
+        {
+          pluginId: "openai",
+          origin: "bundled",
+          manifestPath: "/repo/extensions/openai/openclaw.plugin.json",
+          manifestHash: "hash",
+          rootDir: "/repo/extensions/openai",
+          enabled: true,
+          startup: {
+            sidecar: false,
+            memory: false,
+            deferConfiguredChannelFullLoadUntilAfterListen: false,
+            agentHarnesses: [],
+          },
+          compat: [],
+          packageName: "@openclaw/openai",
+          packageInstall: {
+            defaultChoice: "npm",
+            npm: {
+              spec: 12,
+              packageName: "@openclaw/openai",
+              selectorKind: "exact-version",
+              exactVersion: true,
+              pinState: "exact-with-integrity",
+            },
+            warnings: [],
+          } as unknown as PluginInstallSourceInfo,
+        },
+      ],
+      diagnostics: [],
+    });
+    resolveManifestProviderAuthChoices.mockReturnValue([
+      {
+        pluginId: "openai",
+        providerId: "openai",
+        methodId: "api-key",
+        choiceId: "openai-api-key",
+        choiceLabel: "OpenAI API key",
       },
     ]);
 

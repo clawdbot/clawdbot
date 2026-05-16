@@ -244,6 +244,10 @@
           - "docs/gateway/security.md"
           - "security/**"
 
+"extensions: admin-http-rpc":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/admin-http-rpc/**"
 "extensions: copilot-proxy":
   - changed-files:
       - any-glob-to-any-file:

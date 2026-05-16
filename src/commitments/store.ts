@@ -20,6 +20,15 @@ import type {
 
 const STORE_VERSION = 1 as const;
 const ROLLING_DAY_MS = 24 * 60 * 60 * 1000;
+const COMMITMENT_KINDS = new Set([
+  "event_check_in",
+  "deadline_check",
+  "care_check_in",
+  "open_loop",
+]);
+const COMMITMENT_SENSITIVITIES = new Set(["routine", "personal", "care"]);
+const COMMITMENT_SOURCES = new Set(["inferred_user_context", "agent_promise"]);
+const COMMITMENT_STATUSES = new Set(["pending", "sent", "dismissed", "snoozed", "expired"]);
 
 type LoadedCommitmentStore = {
   store: CommitmentStoreFile;
@@ -49,6 +58,26 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function normalizeRequiredString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function normalizeOptionalString(value: unknown): string | undefined {
+  return typeof value === "string" ? value.trim() || undefined : undefined;
+}
+
+function normalizeNonNegativeNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function normalizeNonNegativeInteger(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
+}
+
 function coerceCommitment(raw: unknown): CommitmentRecord | undefined {
   if (!isRecord(raw)) {
     return undefined;
@@ -57,35 +86,94 @@ function coerceCommitment(raw: unknown): CommitmentRecord | undefined {
   if (!dueWindow) {
     return undefined;
   }
-  const requiredStrings = [
-    raw.id,
-    raw.agentId,
-    raw.sessionKey,
-    raw.channel,
-    raw.kind,
-    raw.sensitivity,
-    raw.source,
-    raw.status,
-    raw.reason,
-    raw.suggestedText,
-    raw.dedupeKey,
-  ];
-  if (requiredStrings.some((value) => typeof value !== "string" || !value.trim())) {
-    return undefined;
-  }
+
+  const id = normalizeRequiredString(raw.id);
+  const agentId = normalizeRequiredString(raw.agentId);
+  const sessionKey = normalizeRequiredString(raw.sessionKey);
+  const channel = normalizeRequiredString(raw.channel);
+  const reason = normalizeRequiredString(raw.reason);
+  const suggestedText = normalizeRequiredString(raw.suggestedText);
+  const dedupeKey = normalizeRequiredString(raw.dedupeKey);
+  const kind = normalizeRequiredString(raw.kind);
+  const sensitivity = normalizeRequiredString(raw.sensitivity);
+  const source = normalizeRequiredString(raw.source);
+  const status = normalizeRequiredString(raw.status);
+  const confidence = normalizeNonNegativeNumber(raw.confidence);
+  const createdAtMs = normalizeNonNegativeNumber(raw.createdAtMs);
+  const updatedAtMs = normalizeNonNegativeNumber(raw.updatedAtMs);
+  const attempts = normalizeNonNegativeInteger(raw.attempts);
+  const earliestMs = normalizeNonNegativeNumber(dueWindow.earliestMs);
+  const latestMs = normalizeNonNegativeNumber(dueWindow.latestMs);
+  const timezone = normalizeRequiredString(dueWindow.timezone);
+  const accountId = normalizeOptionalString(raw.accountId);
+  const to = normalizeOptionalString(raw.to);
+  const threadId = normalizeOptionalString(raw.threadId);
+  const senderId = normalizeOptionalString(raw.senderId);
+  const sourceMessageId = normalizeOptionalString(raw.sourceMessageId);
+  const sourceRunId = normalizeOptionalString(raw.sourceRunId);
+  const lastAttemptAtMs = normalizeNonNegativeNumber(raw.lastAttemptAtMs);
+  const sentAtMs = normalizeNonNegativeNumber(raw.sentAtMs);
+  const dismissedAtMs = normalizeNonNegativeNumber(raw.dismissedAtMs);
+  const snoozedUntilMs = normalizeNonNegativeNumber(raw.snoozedUntilMs);
+  const expiredAtMs = normalizeNonNegativeNumber(raw.expiredAtMs);
+
   if (
-    typeof raw.confidence !== "number" ||
-    typeof raw.createdAtMs !== "number" ||
-    typeof raw.updatedAtMs !== "number" ||
-    typeof raw.attempts !== "number" ||
-    typeof dueWindow.earliestMs !== "number" ||
-    typeof dueWindow.latestMs !== "number" ||
-    typeof dueWindow.timezone !== "string"
+    !id ||
+    !agentId ||
+    !sessionKey ||
+    !channel ||
+    !reason ||
+    !suggestedText ||
+    !dedupeKey ||
+    !kind ||
+    !sensitivity ||
+    !source ||
+    !status ||
+    !COMMITMENT_KINDS.has(kind) ||
+    !COMMITMENT_SENSITIVITIES.has(sensitivity) ||
+    !COMMITMENT_SOURCES.has(source) ||
+    !COMMITMENT_STATUSES.has(status) ||
+    confidence === undefined ||
+    createdAtMs === undefined ||
+    updatedAtMs === undefined ||
+    attempts === undefined ||
+    earliestMs === undefined ||
+    latestMs === undefined ||
+    !timezone ||
+    latestMs < earliestMs
   ) {
     return undefined;
   }
-  const commitment = { ...raw } as CommitmentRecord;
-  return stripLegacySourceText(commitment);
+
+  return {
+    id,
+    agentId,
+    sessionKey,
+    channel,
+    ...(accountId ? { accountId } : {}),
+    ...(to ? { to } : {}),
+    ...(threadId ? { threadId } : {}),
+    ...(senderId ? { senderId } : {}),
+    kind: kind as CommitmentRecord["kind"],
+    sensitivity: sensitivity as CommitmentRecord["sensitivity"],
+    source: source as CommitmentRecord["source"],
+    status: status as CommitmentRecord["status"],
+    reason,
+    suggestedText,
+    dedupeKey,
+    confidence,
+    dueWindow: { earliestMs, latestMs, timezone },
+    ...(sourceMessageId ? { sourceMessageId } : {}),
+    ...(sourceRunId ? { sourceRunId } : {}),
+    createdAtMs,
+    updatedAtMs,
+    attempts,
+    ...(lastAttemptAtMs !== undefined ? { lastAttemptAtMs } : {}),
+    ...(sentAtMs !== undefined ? { sentAtMs } : {}),
+    ...(dismissedAtMs !== undefined ? { dismissedAtMs } : {}),
+    ...(snoozedUntilMs !== undefined ? { snoozedUntilMs } : {}),
+    ...(expiredAtMs !== undefined ? { expiredAtMs } : {}),
+  };
 }
 
 function hasLegacySourceText(raw: unknown): boolean {

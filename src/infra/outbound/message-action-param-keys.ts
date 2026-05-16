@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "../../shared/string-coerce.js";
 const STANDARD_MESSAGE_ACTION_PARAM_KEYS = new Set([
   "accountId",
   "asDocument",
+  "attachments",
   "base64",
   "bestEffort",
   "caption",

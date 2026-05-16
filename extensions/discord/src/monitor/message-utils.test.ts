@@ -51,6 +51,7 @@ let resolveDiscordMessageChannelId: typeof import("./message-utils.js").resolveD
 let resolveDiscordMessageText: typeof import("./message-utils.js").resolveDiscordMessageText;
 let resolveForwardedMediaList: typeof import("./message-utils.js").resolveForwardedMediaList;
 let resolveMediaList: typeof import("./message-utils.js").resolveMediaList;
+let resolveReferencedReplyMediaList: typeof import("./message-utils.js").resolveReferencedReplyMediaList;
 
 beforeAll(async () => {
   ({
@@ -60,6 +61,7 @@ beforeAll(async () => {
     resolveDiscordMessageText,
     resolveForwardedMediaList,
     resolveMediaList,
+    resolveReferencedReplyMediaList,
   } = await import("./message-utils.js"));
 });
 
@@ -467,6 +469,65 @@ describe("resolveForwardedMediaList", () => {
     );
 
     expect(fetchParams().readIdleTimeoutMs).toBe(60_000);
+  });
+});
+
+describe("resolveReferencedReplyMediaList", () => {
+  beforeEach(() => {
+    readRemoteMediaBuffer.mockClear();
+    saveMediaBuffer.mockClear();
+  });
+
+  it("downloads referenced reply attachments", async () => {
+    const attachment = {
+      id: "att-reply-1",
+      url: "https://cdn.discordapp.com/attachments/1/reply-image.png",
+      filename: "reply-image.png",
+      content_type: "image/png",
+    };
+    readRemoteMediaBuffer.mockResolvedValueOnce({
+      buffer: Buffer.from("image"),
+      contentType: "image/png",
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/reply-image.png",
+      contentType: "image/png",
+    });
+
+    const result = await resolveReferencedReplyMediaList(
+      asReferencedForwardMessage({
+        messageReferenceType: MessageReferenceType.Default,
+        attachments: [attachment],
+      }),
+      512,
+    );
+
+    expectSinglePngDownload({
+      result,
+      expectedUrl: attachment.url,
+      filePathHint: attachment.filename,
+      expectedPath: "/tmp/reply-image.png",
+      placeholder: "<media:image>",
+    });
+  });
+
+  it("ignores forwarded references", async () => {
+    const result = await resolveReferencedReplyMediaList(
+      asReferencedForwardMessage({
+        attachments: [
+          {
+            id: "att-forward-1",
+            url: "https://cdn.discordapp.com/attachments/1/forward.png",
+            filename: "forward.png",
+            content_type: "image/png",
+          },
+        ],
+      }),
+      512,
+    );
+
+    expect(result).toEqual([]);
+    expect(readRemoteMediaBuffer).not.toHaveBeenCalled();
   });
 });
 

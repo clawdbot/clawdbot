@@ -10,6 +10,7 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 const gatewayLog = createSubsystemLogger("gateway");
 const LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS = 1500;
 const DEFAULT_RESTART_DRAIN_TIMEOUT_MS = 300_000;
+const RESTART_ACTIVE_EMBEDDED_RUN_ABORT_GRACE_MS = 30_000;
 const RESTART_DRAIN_STILL_PENDING_WARN_MS = 30_000;
 const UPDATE_RESPAWN_HEALTH_TIMEOUT_MS = 10_000;
 const UPDATE_RESPAWN_HEALTH_POLL_MS = 200;
@@ -345,6 +346,15 @@ export async function runGatewayLoop(params: {
         restartDrainTimeoutMs === undefined
           ? "without a timeout"
           : `with timeout ${restartDrainTimeoutMs}ms`;
+      const resolveActiveRunDrainWaitMs = (activeRuns: number): RestartDrainTimeoutMs => {
+        if (activeRuns <= 0) {
+          return restartDrainTimeoutMs;
+        }
+        if (restartDrainTimeoutMs === undefined) {
+          return RESTART_ACTIVE_EMBEDDED_RUN_ABORT_GRACE_MS;
+        }
+        return Math.min(restartDrainTimeoutMs, RESTART_ACTIVE_EMBEDDED_RUN_ABORT_GRACE_MS);
+      };
       const armCloseForceExitTimerForIndefiniteRestart = () => {
         if (isRestart && restartDrainTimeoutMs === undefined) {
           armForceExitTimer(SHUTDOWN_TIMEOUT_MS);
@@ -417,22 +427,40 @@ export async function runGatewayLoop(params: {
               gatewayLog.warn("forced restart requested; skipping active work drain");
               abortEmbeddedPiRun(undefined, { mode: "all" });
             } else {
+              const activeRunDrainWaitMs = resolveActiveRunDrainWaitMs(activeRuns);
               const stillPendingDrainLogger = createStillPendingDrainLogger();
-              const [tasksDrain, runsDrain] = await Promise.all([
-                activeTasks > 0
-                  ? waitForActiveTasks(restartDrainTimeoutMs)
-                  : Promise.resolve({ drained: true }),
-                activeRuns > 0
-                  ? waitForActiveEmbeddedRuns(restartDrainTimeoutMs)
-                  : Promise.resolve({ drained: true }),
-              ]).finally(() => clearInterval(stillPendingDrainLogger));
+              let abortedAfterRunGrace = false;
+              let tasksDrain: { drained: boolean } = { drained: true };
+              let runsDrain: { drained: boolean } = { drained: true };
+              try {
+                const tasksDrainPromise =
+                  activeTasks > 0
+                    ? waitForActiveTasks(restartDrainTimeoutMs)
+                    : Promise.resolve({ drained: true });
+                runsDrain =
+                  activeRuns > 0
+                    ? await waitForActiveEmbeddedRuns(activeRunDrainWaitMs)
+                    : { drained: true };
+                if (!runsDrain.drained && activeRuns > 0) {
+                  gatewayLog.warn(
+                    "active embedded run drain grace reached; aborting active run(s) before restart",
+                  );
+                  abortEmbeddedPiRun(undefined, { mode: "all" });
+                  abortedAfterRunGrace = true;
+                }
+                tasksDrain = await tasksDrainPromise;
+              } finally {
+                clearInterval(stillPendingDrainLogger);
+              }
               if (tasksDrain.drained && runsDrain.drained) {
                 gatewayLog.info("all active work drained");
               } else {
                 gatewayLog.warn("drain timeout reached; proceeding with restart");
                 // Final best-effort abort to avoid carrying active runs into the
                 // next lifecycle when drain time budget is exhausted.
-                abortEmbeddedPiRun(undefined, { mode: "all" });
+                if (!abortedAfterRunGrace) {
+                  abortEmbeddedPiRun(undefined, { mode: "all" });
+                }
               }
             }
           }

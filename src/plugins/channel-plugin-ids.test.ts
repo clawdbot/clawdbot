@@ -184,6 +184,17 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         },
       },
       {
+        id: "brave",
+        channels: [],
+        origin: "global",
+        enabledByDefault: undefined,
+        providers: [],
+        cliBackends: [],
+        contracts: {
+          webSearchProviders: ["brave"],
+        },
+      },
+      {
         id: "codex",
         channels: [],
         activation: {
@@ -820,6 +831,75 @@ describe("resolveGatewayStartupPluginIds", () => {
       ["browser", "memory-core"],
     ],
     [
+      "includes explicitly selected external web search providers at startup",
+      {
+        channels: {},
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              provider: "brave",
+            },
+          },
+        },
+        plugins: {
+          allow: ["brave"],
+          entries: {
+            brave: {
+              enabled: true,
+            },
+          },
+        },
+      } as OpenClawConfig,
+      ["brave"],
+    ],
+    [
+      "honors disabled web search when selecting startup providers",
+      {
+        channels: {},
+        tools: {
+          web: {
+            search: {
+              enabled: false,
+              provider: "brave",
+            },
+          },
+        },
+        plugins: {
+          allow: ["brave"],
+          entries: {
+            brave: {
+              enabled: true,
+            },
+          },
+        },
+      } as OpenClawConfig,
+      [],
+    ],
+    [
+      "honors explicit plugin disablement for configured web search providers",
+      {
+        channels: {},
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              provider: "brave",
+            },
+          },
+        },
+        plugins: {
+          allow: ["brave"],
+          entries: {
+            brave: {
+              enabled: false,
+            },
+          },
+        },
+      } as OpenClawConfig,
+      [],
+    ],
+    [
       "keeps configured generation providers behind restrictive allowlists",
       {
         channels: {},
@@ -881,6 +961,40 @@ describe("resolveGatewayStartupPluginIds", () => {
       config: effectiveConfig,
       activationSourceConfig: rawConfig,
       expected: ["browser"],
+    });
+  });
+
+  it("includes auto-enabled external web search providers at startup", () => {
+    const rawConfig = {
+      channels: {},
+      tools: {
+        web: {
+          search: {
+            enabled: true,
+            provider: "brave",
+          },
+        },
+      },
+      plugins: {
+        allow: ["browser"],
+      },
+    } as OpenClawConfig;
+    const effectiveConfig = {
+      ...rawConfig,
+      plugins: {
+        allow: ["browser", "brave"],
+        entries: {
+          brave: {
+            enabled: true,
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expectStartupPluginIdsCase({
+      config: effectiveConfig,
+      activationSourceConfig: rawConfig,
+      expected: ["browser", "brave"],
     });
   });
 

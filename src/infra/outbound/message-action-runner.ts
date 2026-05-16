@@ -16,6 +16,7 @@ import type {
   ChannelMessageActionName,
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.public.js";
+import type { InboundTurnKind } from "../../channels/turn/kind.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   hasInteractiveReplyBlocks,
@@ -121,6 +122,7 @@ export type RunMessageActionParams = {
   sandboxRoot?: string;
   dryRun?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  inboundTurnKind?: InboundTurnKind;
   abortSignal?: AbortSignal;
 };
 
@@ -468,6 +470,35 @@ type SendPayloadParts = {
   silent?: boolean;
 };
 
+function collectMessageAttachmentMediaHints(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const mediaUrls: string[] = [];
+  const seen = new Set<string>();
+  const pushMedia = (entry: unknown) => {
+    const normalized = normalizeOptionalString(entry);
+    if (!normalized || seen.has(normalized)) {
+      return;
+    }
+    seen.add(normalized);
+    mediaUrls.push(normalized);
+  };
+  for (const attachment of value) {
+    if (!attachment || typeof attachment !== "object" || Array.isArray(attachment)) {
+      continue;
+    }
+    const record = attachment as Record<string, unknown>;
+    pushMedia(record.media);
+    pushMedia(record.mediaUrl);
+    pushMedia(record.path);
+    pushMedia(record.filePath);
+    pushMedia(record.fileUrl);
+    pushMedia(record.url);
+  }
+  return mediaUrls;
+}
+
 function hasExplicitRouteParam(params: Record<string, unknown>): boolean {
   for (const key of ["channel", "target", "to", "channelId"]) {
     if (normalizeOptionalString(params[key])) {
@@ -527,6 +558,7 @@ async function runGatewayPluginMessageActionOrNull(params: {
       senderIsOwner: params.input.senderIsOwner,
       sessionKey: params.input.sessionKey,
       sessionId: params.input.sessionId,
+      inboundTurnKind: params.input.inboundTurnKind,
       agentId: params.agentId,
       toolContext: params.input.toolContext,
       idempotencyKey: await resolveGatewayActionIdempotencyKey(
@@ -692,12 +724,14 @@ async function buildSendPayloadParts(params: {
     readStringParam(actionParams, "path", { trim: false }) ??
     readStringParam(actionParams, "filePath", { trim: false }) ??
     readStringParam(actionParams, "fileUrl", { trim: false });
+  const attachmentMediaHints = collectMessageAttachmentMediaHints(actionParams.attachments);
+  const hasMediaHint = Boolean(mediaHint) || attachmentMediaHints.length > 0;
   const hasPresentation = hasMessagePresentationBlocks(actionParams.presentation);
   const hasInteractive = hasInteractiveReplyBlocks(actionParams.interactive);
   const caption = readStringParam(actionParams, "caption", { allowEmpty: true }) ?? "";
   let message =
     readStringParam(actionParams, "message", {
-      required: !mediaHint && !hasPresentation && !hasInteractive,
+      required: !hasMediaHint && !hasPresentation && !hasInteractive,
       allowEmpty: true,
     }) ?? "";
   if (message.includes("\\n")) {
@@ -719,6 +753,9 @@ async function buildSendPayloadParts(params: {
     mergedMediaUrls.push(trimmed);
   };
   pushMedia(mediaHint);
+  for (const attachmentMediaHint of attachmentMediaHints) {
+    pushMedia(attachmentMediaHint);
+  }
   for (const url of parsed.mediaUrls ?? []) {
     pushMedia(url);
   }
@@ -903,6 +940,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       accountId: accountId ?? undefined,
       senderIsOwner: input.senderIsOwner,
       sessionId: input.sessionId,
+      inboundTurnKind: input.inboundTurnKind,
       gateway,
       toolContext: input.toolContext,
       deps: input.deps,
@@ -1009,6 +1047,7 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
       senderIsOwner: input.senderIsOwner,
       sessionKey: input.sessionKey,
       sessionId: input.sessionId,
+      inboundTurnKind: input.inboundTurnKind,
       gateway,
       toolContext: input.toolContext,
       dryRun,
@@ -1119,6 +1158,7 @@ async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageAc
     senderIsOwner: input.senderIsOwner,
     sessionKey: input.sessionKey,
     sessionId: input.sessionId,
+    inboundTurnKind: input.inboundTurnKind,
     agentId,
     gateway,
     toolContext: input.toolContext,

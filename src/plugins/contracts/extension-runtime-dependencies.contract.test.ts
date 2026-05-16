@@ -1,9 +1,11 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { builtinModules } from "node:module";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 const EXTENSION_ROOT = "extensions";
+const REPO_ROOT = path.resolve(import.meta.dirname, "../../..");
 const EXTENSION_RUNTIME_FILE_EXTENSIONS = new Set([".cjs", ".js", ".jsx", ".mjs", ".ts", ".tsx"]);
 const BUILTIN_MODULES = new Set(builtinModules.map((moduleId) => moduleId.replace(/^node:/, "")));
 const OPTIONAL_UNDECLARED_RUNTIME_IMPORTS = new Map<string, Set<string>>([
@@ -53,16 +55,51 @@ type PackageManifest = {
   optionalDependencies?: Record<string, string>;
   peerDependencies?: Record<string, string>;
 };
+const trackedFilesByRoot = new Map<string, readonly string[] | null>();
 
 function toPosixPath(filePath: string): string {
   return filePath.split(path.sep).join("/");
 }
 
 function readPackageManifest(filePath: string): PackageManifest {
-  return JSON.parse(fs.readFileSync(filePath, "utf8")) as PackageManifest;
+  return JSON.parse(fs.readFileSync(path.resolve(REPO_ROOT, filePath), "utf8")) as PackageManifest;
+}
+
+function listTrackedFiles(root: string): string[] | null {
+  const relativeRoot = toPosixPath(path.relative(REPO_ROOT, path.resolve(REPO_ROOT, root)));
+  if (!relativeRoot || relativeRoot.startsWith("..")) {
+    return null;
+  }
+  if (trackedFilesByRoot.has(relativeRoot)) {
+    const files = trackedFilesByRoot.get(relativeRoot);
+    return files ? [...files] : null;
+  }
+  const result = spawnSync("git", ["ls-files", "--", relativeRoot], {
+    cwd: REPO_ROOT,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (result.status !== 0) {
+    trackedFilesByRoot.set(relativeRoot, null);
+    return null;
+  }
+  const files = result.stdout
+    .split("\n")
+    .map((line) => line.trim().replaceAll("\\", "/"))
+    .filter((line) => line.length > 0)
+    .toSorted();
+  trackedFilesByRoot.set(relativeRoot, files);
+  return [...files];
 }
 
 function listPackageManifests(root: string): string[] {
+  const trackedFiles = listTrackedFiles(root);
+  if (trackedFiles) {
+    return trackedFiles
+      .filter((filePath) => /^extensions\/[^/]+\/package\.json$/u.test(filePath))
+      .toSorted();
+  }
+
   const entries = fs.readdirSync(root, { withFileTypes: true });
   const manifests: string[] = [];
   for (const entry of entries) {
@@ -94,6 +131,17 @@ function shouldSkipRuntimeFile(filePath: string): boolean {
 }
 
 function listRuntimeFiles(root: string): string[] {
+  const trackedFiles = listTrackedFiles(root);
+  if (trackedFiles) {
+    return trackedFiles
+      .filter(
+        (filePath) =>
+          EXTENSION_RUNTIME_FILE_EXTENSIONS.has(path.extname(filePath)) &&
+          !shouldSkipRuntimeFile(filePath),
+      )
+      .toSorted();
+  }
+
   const files: string[] = [];
   const visit = (dir: string) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -118,7 +166,8 @@ function listRuntimeFiles(root: string): string[] {
 
 function readManifestText(root: string): string {
   const manifestPath = path.join(root, "openclaw.plugin.json");
-  return fs.existsSync(manifestPath) ? fs.readFileSync(manifestPath, "utf8") : "";
+  const resolvedManifestPath = path.resolve(REPO_ROOT, manifestPath);
+  return fs.existsSync(resolvedManifestPath) ? fs.readFileSync(resolvedManifestPath, "utf8") : "";
 }
 
 function packageNameForSpecifier(specifier: string): string | null {
@@ -156,7 +205,7 @@ function isTypeOnlyClause(clause: string | undefined): boolean {
 }
 
 function collectRuntimeImports(filePath: string): string[] {
-  const source = fs.readFileSync(filePath, "utf8");
+  const source = fs.readFileSync(path.resolve(REPO_ROOT, filePath), "utf8");
   const imports = new Set<string>();
   const importRegex =
     /(import|export)\s+([^'";]*?\s+from\s+)?["']([^"']+)["']|import\s*\(\s*["']([^"']+)["']\s*\)|require\s*\(\s*["']([^"']+)["']\s*\)/g;
@@ -226,6 +275,20 @@ describe("Discord dependency ownership", () => {
 });
 
 describe("extension runtime dependency manifests", () => {
+  it("lists extension dependency inputs from git without walking extension dirs", () => {
+    const readDir = vi.spyOn(fs, "readdirSync");
+    try {
+      const manifests = listPackageManifests(EXTENSION_ROOT);
+      const runtimeFiles = listRuntimeFiles("extensions/discord");
+
+      expect(manifests.length).toBeGreaterThan(0);
+      expect(runtimeFiles.length).toBeGreaterThan(0);
+      expect(readDir).not.toHaveBeenCalled();
+    } finally {
+      readDir.mockRestore();
+    }
+  });
+
   it("keeps json5 in memory-core for packaged runtime config parsing", () => {
     const manifest = readPackageManifest("extensions/memory-core/package.json");
 
@@ -271,7 +334,7 @@ describe("extension runtime dependency manifests", () => {
       ].toSorted();
       const allowedIndirect = INDIRECT_RUNTIME_DEPENDENCIES.get(extensionDir) ?? new Set<string>();
       const runtimeText = listRuntimeFiles(extensionDir)
-        .map((filePath) => fs.readFileSync(filePath, "utf8"))
+        .map((filePath) => fs.readFileSync(path.resolve(REPO_ROOT, filePath), "utf8"))
         .concat(readManifestText(extensionDir))
         .join("\n");
 

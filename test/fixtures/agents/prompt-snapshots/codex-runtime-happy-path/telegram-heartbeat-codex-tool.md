@@ -218,8 +218,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 140
   },
   "dynamicToolsJson": {
-    "chars": 44057,
-    "roughTokens": 11015
+    "chars": 45242,
+    "roughTokens": 11311
   },
   "openClawDeveloperInstructions": {
     "chars": 4412,
@@ -230,8 +230,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 7155
   },
   "totalWithDynamicToolsJson": {
-    "chars": 72678,
-    "roughTokens": 18170
+    "chars": 73863,
+    "roughTokens": 18466
   },
   "userInputText": {
     "chars": 608,
@@ -601,6 +601,43 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
         },
         "asVoice": {
           "type": "boolean"
+        },
+        "attachments": {
+          "description": "Structured media attachments to send with the message. Each item needs media/mediaUrl/path/filePath/fileUrl/url.",
+          "items": {
+            "properties": {
+              "filePath": {
+                "type": "string"
+              },
+              "fileUrl": {
+                "type": "string"
+              },
+              "media": {
+                "type": "string"
+              },
+              "mediaUrl": {
+                "type": "string"
+              },
+              "mimeType": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "type": {
+                "enum": ["image", "audio", "video", "file"],
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "type": "array"
         },
         "bestEffort": {
           "type": "boolean"

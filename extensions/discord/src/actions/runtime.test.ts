@@ -389,6 +389,14 @@ describe("handleDiscordMessagingAction", () => {
     expect(payload.messages[0].timestampUtc).toBe(new Date(expectedMs).toISOString());
   });
 
+  it("rejects unexpected readMessages payloads with a boundary error", async () => {
+    readMessagesDiscord.mockResolvedValueOnce({ ok: true } as never);
+
+    await expect(
+      handleMessagingAction("readMessages", { channelId: "C1" }, enableAllActions),
+    ).rejects.toThrow("Discord message read returned object with keys ok instead of an array.");
+  });
+
   it("threads provided cfg into readMessages calls", async () => {
     const cfg = {
       channels: {
@@ -655,6 +663,23 @@ describe("handleDiscordMessagingAction", () => {
     });
   });
 
+  it("forwards sendMessage suppressEmbeds overrides", async () => {
+    sendMessageDiscord.mockClear();
+
+    await handleMessagingAction(
+      "sendMessage",
+      {
+        to: "channel:123",
+        content: "https://example.com",
+        suppressEmbeds: false,
+      },
+      enableAllActions,
+    );
+
+    const sendOptions = mockObjectArg(sendMessageDiscord, "sendMessageDiscord", 0, 2);
+    expect(sendOptions.suppressEmbeds).toBe(false);
+  });
+
   it("warns instead of renaming when threadName is provided but channel management is disabled", async () => {
     sendMessageDiscord.mockResolvedValueOnce({
       messageId: "M1",
@@ -908,6 +933,27 @@ describe("handleDiscordGuildAction - channel management", () => {
         type: 0,
       },
     });
+  });
+
+  it("prefers channelType when creating a channel", async () => {
+    await handleGuildAction(
+      "channelCreate",
+      {
+        guildId: "G1",
+        name: "forum-thread",
+        channelType: 11,
+        type: 0,
+      },
+      channelsEnabled,
+    );
+    expect(createChannelDiscord).toHaveBeenCalledWith(
+      expect.objectContaining({
+        guildId: "G1",
+        name: "forum-thread",
+        type: 11,
+      }),
+      { cfg: DISCORD_TEST_CFG },
+    );
   });
 
   it("respects channel gating for channelCreate", async () => {

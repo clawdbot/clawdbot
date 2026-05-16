@@ -1,9 +1,9 @@
 import { findCodeRegions, isInsideCode } from "./code-regions.js";
+import { findFinalTagMatches } from "./final-tags.js";
 export type ReasoningTagMode = "strict" | "preserve";
 export type ReasoningTagTrim = "none" | "start" | "both";
 
 const QUICK_TAG_RE = /<\s*\/?\s*(?:(?:antml:)?(?:think(?:ing)?|thought)|antthinking|final)\b/i;
-const FINAL_TAG_RE = /<\s*\/?\s*final\b[^<>]*>/gi;
 const THINKING_TAG_RE =
   /<\s*(\/?)\s*(?:(?:antml:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/gi;
 
@@ -42,15 +42,21 @@ export function stripReasoningTagsFromText(
   const trimMode = options?.trim ?? "both";
 
   let cleaned = text;
-  if (FINAL_TAG_RE.test(cleaned)) {
-    FINAL_TAG_RE.lastIndex = 0;
+  const matches = findFinalTagMatches(cleaned);
+  THINKING_TAG_RE.lastIndex = 0;
+  const hasThinkingTag = THINKING_TAG_RE.test(cleaned);
+  THINKING_TAG_RE.lastIndex = 0;
+  if (matches.length === 0 && !hasThinkingTag) {
+    return text;
+  }
+  if (matches.length > 0) {
     const finalMatches: Array<{ start: number; length: number; inCode: boolean }> = [];
     const preCodeRegions = findCodeRegions(cleaned);
-    for (const match of cleaned.matchAll(FINAL_TAG_RE)) {
-      const start = match.index ?? 0;
+    for (const match of matches) {
+      const start = match.index;
       finalMatches.push({
         start,
-        length: match[0].length,
+        length: match.text.length,
         inCode: isInsideCode(start, preCodeRegions),
       });
     }
@@ -61,8 +67,6 @@ export function stripReasoningTagsFromText(
         cleaned = cleaned.slice(0, m.start) + cleaned.slice(m.start + m.length);
       }
     }
-  } else {
-    FINAL_TAG_RE.lastIndex = 0;
   }
 
   const codeRegions = findCodeRegions(cleaned);

@@ -19,11 +19,12 @@ export function resolveThinkingDefault(params: {
 }): ThinkLevel {
   const normalizedProvider = normalizeProviderId(params.provider);
   const normalizedModel = normalizeLowercaseStringOrEmpty(params.model).replace(/\./g, "-");
-  const catalogCandidate = Array.isArray(params.catalog)
-    ? params.catalog.find(
-        (entry) => entry.provider === params.provider && entry.id === params.model,
-      )
-    : undefined;
+  const catalog = Array.isArray(params.catalog)
+    ? params.catalog
+    : buildConfiguredModelCatalog({ cfg: params.cfg });
+  const catalogCandidate = catalog.find(
+    (entry) => entry.provider === params.provider && entry.id === params.model,
+  );
   const configuredModels = params.cfg.agents?.defaults?.models;
   const canonicalKey = modelKey(params.provider, params.model);
   const legacyKey = legacyModelKey(params.provider, params.model);
@@ -75,7 +76,7 @@ export function resolveThinkingDefault(params: {
   return resolveThinkingDefaultForModel({
     provider: params.provider,
     model: params.model,
-    catalog: params.catalog,
+    catalog,
   });
 }
 

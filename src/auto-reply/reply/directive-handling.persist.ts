@@ -11,6 +11,7 @@ import { resolveContextConfigProviderForRuntime } from "../../agents/openai-code
 import { updateSessionStore } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { triggerSessionPatchHook } from "../../gateway/session-patch-hooks.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { applyTraceOverride, applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
@@ -235,6 +236,7 @@ export async function persistInlineDirectives(params: {
       directives.hasModelDirective && params.effectiveModelDirective
         ? params.effectiveModelDirective
         : undefined;
+    let modelUpdated = false;
     if (modelDirective) {
       const modelResolution = resolveModelSelectionFromDirective({
         directives: {
@@ -252,7 +254,7 @@ export async function persistInlineDirectives(params: {
         provider,
       });
       if (modelResolution.modelSelection) {
-        const { updated: modelUpdated } = applyModelOverrideToSessionEntry({
+        const appliedModelOverride = applyModelOverrideToSessionEntry({
           entry: sessionEntry,
           selection: modelResolution.modelSelection,
           profileOverride: modelResolution.profileOverride,
@@ -292,6 +294,7 @@ export async function persistInlineDirectives(params: {
             },
           );
         }
+        modelUpdated = appliedModelOverride.updated;
         provider = modelResolution.modelSelection.provider;
         model = modelResolution.modelSelection.model;
         const currentThinkingLevel = sessionEntry.thinkingLevel as ThinkLevel | undefined;
@@ -349,6 +352,14 @@ export async function persistInlineDirectives(params: {
       if (storePath) {
         await updateSessionStore(storePath, (store) => {
           store[sessionKey] = sessionEntry;
+        });
+      }
+      if (modelDirective && modelUpdated) {
+        triggerSessionPatchHook({
+          cfg,
+          sessionEntry,
+          sessionKey,
+          patch: { key: sessionKey, model: modelDirective },
         });
       }
       enqueueModeSwitchEvents({

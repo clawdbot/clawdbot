@@ -5,6 +5,7 @@ import {
   type BundleMcpServerConfig,
 } from "../plugins/bundle-mcp.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { isRecord } from "../utils.js";
 import {
   applyCommonServerConfig,
   decodeHeaderEnvPlaceholder,
@@ -31,13 +32,45 @@ function isOpenClawLoopbackMcpServer(name: string, server: BundleMcpServerConfig
   );
 }
 
+type CodexMcpToolApprovalMode = "auto" | "prompt" | "approve";
+
+const CODEX_MCP_TOOL_APPROVAL_MODES = new Set<CodexMcpToolApprovalMode>([
+  "auto",
+  "prompt",
+  "approve",
+]);
+
+function readCodexProjectionConfig(server: BundleMcpServerConfig): Record<string, unknown> {
+  return isRecord(server.codex) ? server.codex : {};
+}
+
+function normalizeCodexToolApprovalMode(value: unknown): CodexMcpToolApprovalMode | undefined {
+  return typeof value === "string" &&
+    CODEX_MCP_TOOL_APPROVAL_MODES.has(value as CodexMcpToolApprovalMode)
+    ? (value as CodexMcpToolApprovalMode)
+    : undefined;
+}
+
+function resolveCodexDefaultToolsApprovalMode(
+  server: BundleMcpServerConfig,
+): CodexMcpToolApprovalMode | undefined {
+  const codex = readCodexProjectionConfig(server);
+  return (
+    normalizeCodexToolApprovalMode(codex.defaultToolsApprovalMode) ??
+    normalizeCodexToolApprovalMode(codex.default_tools_approval_mode)
+  );
+}
+
 export function normalizeCodexMcpServerConfig(
   name: string,
   server: BundleMcpServerConfig,
 ): Record<string, unknown> {
   const next: Record<string, unknown> = {};
   applyCommonServerConfig(next, server);
-  if (isOpenClawLoopbackMcpServer(name, server)) {
+  const defaultToolsApprovalMode = resolveCodexDefaultToolsApprovalMode(server);
+  if (defaultToolsApprovalMode) {
+    next.default_tools_approval_mode = defaultToolsApprovalMode;
+  } else if (isOpenClawLoopbackMcpServer(name, server)) {
     next.default_tools_approval_mode = "approve";
   }
   const httpHeaders = normalizeStringRecord(server.headers);

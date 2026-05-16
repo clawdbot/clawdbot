@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -29,15 +29,58 @@ function checkedOutput(command, commandArgs) {
   };
 }
 
+function configuredProvider() {
+  try {
+    const config = readFileSync(resolve(repoRoot, ".crabbox.yaml"), "utf8");
+    const match = config.match(/^provider:\s*([^\s#]+)/m);
+    return match?.[1] ?? "aws";
+  } catch {
+    return "aws";
+  }
+}
+
+function selectedProvider(commandArgs) {
+  for (let index = 0; index < commandArgs.length; index += 1) {
+    const arg = commandArgs[index];
+    if (arg === "--provider") {
+      return commandArgs[index + 1] ?? "";
+    }
+    if (arg.startsWith("--provider=")) {
+      return arg.slice("--provider=".length);
+    }
+  }
+  return configuredProvider();
+}
+
 const version = checkedOutput(binary, ["--version"]);
 const help = checkedOutput(binary, ["run", "--help"]);
-const providers = ["hetzner", "aws", "blacksmith-testbox"].filter((provider) =>
-  help.text.includes(provider),
+const knownProviders = [
+  "hetzner",
+  "aws",
+  "azure",
+  "gcp",
+  "proxmox",
+  "ssh",
+  "blacksmith-testbox",
+  "namespace-devbox",
+  "semaphore",
+  "daytona",
+  "islo",
+  "e2b",
+  "modal",
+  "sprites",
+  "cloudflare",
+];
+const providers = knownProviders.filter((provider) =>
+  new RegExp(`\\b${provider.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`).test(
+    help.text,
+  ),
 );
 const displayBinary = binary === "crabbox" ? "crabbox" : relative(repoRoot, binary);
+const provider = selectedProvider(args);
 
 console.error(
-  `[crabbox] bin=${displayBinary} version=${version.text || "unknown"} providers=${providers.join(",") || "unknown"}`,
+  `[crabbox] bin=${displayBinary} version=${version.text || "unknown"} provider=${provider || "unknown"} providers=${providers.join(",") || "unknown"}`,
 );
 
 if (version.status !== 0 || help.status !== 0) {
@@ -45,11 +88,17 @@ if (version.status !== 0 || help.status !== 0) {
   process.exit(2);
 }
 
-if (!providers.includes("blacksmith-testbox")) {
+if (provider && knownProviders.includes(provider) && !providers.includes(provider)) {
   console.error(
-    "[crabbox] selected binary does not advertise provider blacksmith-testbox; refusing stale Crabbox binary",
+    `[crabbox] selected binary does not advertise provider ${provider}; update Crabbox or choose a supported provider`,
   );
   process.exit(2);
+}
+
+if (provider === "blacksmith-testbox") {
+  console.error(
+    "[crabbox] provider=blacksmith-testbox explicit; if Testbox is queued or down, rerun without --provider to use .crabbox.yaml",
+  );
 }
 
 const child = spawn(binary, args, {

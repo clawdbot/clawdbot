@@ -3,7 +3,7 @@ import {
   type AnyAgentTool,
   type OpenClawPluginNodeHostCommand,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { createFileTransferNodeInvokePolicy } from "./src/shared/node-invoke-policy.js";
+import { createLazyFileTransferNodeInvokePolicy } from "./src/shared/lazy-node-invoke-policy.js";
 import {
   DIR_FETCH_TOOL_DESCRIPTOR,
   DIR_LIST_TOOL_DESCRIPTOR,
@@ -91,7 +91,7 @@ export default definePluginEntry({
   description: "Fetch, list, and write files on paired nodes via dedicated node commands.",
   nodeHostCommands: fileTransferNodeHostCommands,
   register(api) {
-    api.registerNodeInvokePolicy(createFileTransferNodeInvokePolicy());
+    api.registerNodeInvokePolicy(createLazyFileTransferNodeInvokePolicy());
     api.registerTool(
       createLazyTool(FILE_FETCH_TOOL_DESCRIPTOR, async () => {
         const { createFileFetchTool } = await import("./src/tools/file-fetch-tool.js");

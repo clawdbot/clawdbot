@@ -52,6 +52,10 @@ type CreateLaneTextDelivererParams = {
     text: string;
     buttons?: TelegramInlineButtons;
   }) => Promise<void>;
+  resolveFinalTextCandidate?: (params: {
+    finalText: string;
+    laneName: LaneName;
+  }) => Promise<string | undefined> | string | undefined;
   log: (message: string) => void;
   markDelivered: () => void;
 };
@@ -101,6 +105,53 @@ function compactChunks(chunks: readonly string[]): string[] {
   return out;
 }
 
+function stripTrailingEllipsis(text: string): string {
+  return text.replace(/(?:\s*(?:\.{3}|\u2026))+$/u, "").trimEnd();
+}
+
+const MIN_TRUNCATED_FINAL_PREFIX_CHARS = 48;
+const MIN_TRUNCATED_FINAL_CONTINUATION_CHARS = 24;
+
+function isPotentialTruncatedFinal(finalText: string): boolean {
+  const trimmedFinal = finalText.trimEnd();
+  const untruncatedFinal = stripTrailingEllipsis(trimmedFinal);
+  return (
+    untruncatedFinal.length >= MIN_TRUNCATED_FINAL_PREFIX_CHARS && untruncatedFinal !== trimmedFinal
+  );
+}
+
+function selectLongerPreviewForFinal(params: {
+  finalText: string;
+  candidateTexts: readonly (string | undefined)[];
+}): string | undefined {
+  const finalText = params.finalText.trimEnd();
+  const untruncatedFinal = stripTrailingEllipsis(finalText);
+  if (
+    untruncatedFinal.length < MIN_TRUNCATED_FINAL_PREFIX_CHARS ||
+    untruncatedFinal === finalText
+  ) {
+    return undefined;
+  }
+  for (const candidate of params.candidateTexts) {
+    const candidateText = candidate?.trimEnd();
+    if (
+      !candidateText ||
+      candidateText.length <= finalText.length ||
+      !candidateText.startsWith(untruncatedFinal)
+    ) {
+      continue;
+    }
+    const continuation = candidateText.slice(untruncatedFinal.length).trimStart();
+    if (
+      continuation.length >= MIN_TRUNCATED_FINAL_CONTINUATION_CHARS &&
+      /^[\p{L}\p{N}]/u.test(continuation)
+    ) {
+      return candidateText;
+    }
+  }
+  return undefined;
+}
+
 export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
   const followUpPayload = (payload: ReplyPayload, text: string) =>
     params.applyTextToFollowUpPayload
@@ -136,6 +187,53 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     const [firstChunk, ...remainingChunks] = chunks;
     if (!firstChunk || firstChunk.length > params.draftMaxChars) {
       return undefined;
+    }
+
+    const retainedPreview =
+      isFinal && remainingChunks.length === 0 && isPotentialTruncatedFinal(text)
+        ? selectLongerPreviewForFinal({
+            finalText: text,
+            candidateTexts: [
+              await params.resolveFinalTextCandidate?.({ finalText: text, laneName }),
+              stream.lastDeliveredText?.(),
+              lane.lastPartialText,
+            ],
+          })
+        : undefined;
+    if (retainedPreview && (!buttons || retainedPreview.length <= params.draftMaxChars)) {
+      const previewText = retainedPreview;
+      lane.lastPartialText = previewText;
+      lane.hasStreamedMessage = true;
+      await params.stopDraftLane(lane);
+      const messageId = stream.messageId();
+      if (typeof messageId !== "number") {
+        if (stream.sendMayHaveLanded?.()) {
+          lane.finalized = true;
+          params.markDelivered();
+          return result("preview-retained");
+        }
+        return undefined;
+      }
+      const deliveredStreamText = stream.lastDeliveredText?.();
+      if (deliveredStreamText !== undefined && deliveredStreamText !== previewText) {
+        return undefined;
+      }
+      if (buttons) {
+        try {
+          await params.editStreamMessage({ laneName, messageId, text: previewText, buttons });
+        } catch (err) {
+          params.log(`telegram: ${laneName} stream button edit failed: ${String(err)}`);
+        }
+      }
+      for (const chunk of remainingChunks) {
+        if (chunk.trim().length === 0) {
+          continue;
+        }
+        await params.sendPayload(followUpPayload(payload, chunk));
+      }
+      lane.finalized = true;
+      params.markDelivered();
+      return result("preview-finalized", { content: previewText, messageId });
     }
 
     lane.lastPartialText = firstChunk;

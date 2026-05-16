@@ -63,6 +63,7 @@ export default defineSingleProviderPluginEntry({
     ...buildProviderReplayFamilyHooks({
       family: "openai-compatible",
       sanitizeToolCallIds: false,
+      dropReasoningFromHistory: false,
     }),
     ...MOONSHOT_THINKING_STREAM_HOOKS,
     resolveThinkingProfile: () => ({

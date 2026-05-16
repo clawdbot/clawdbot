@@ -190,6 +190,10 @@ function isGenericMime(mime?: string): boolean {
   return m === "application/octet-stream" || m === "application/zip";
 }
 
+function isImageMime(mime?: string): boolean {
+  return mediaKindFromMime(normalizeMimeType(mime)) === "image";
+}
+
 async function detectMimeImpl(opts: {
   buffer?: Buffer;
   headerMime?: string | null;
@@ -200,23 +204,27 @@ async function detectMimeImpl(opts: {
 
   const headerMime = normalizeMimeType(opts.headerMime);
   const sniffed = await sniffMime(opts.buffer);
+  const sniffedGenericContainer = sniffed && isGenericMime(sniffed);
+  const trustedExtMime = sniffedGenericContainer && isImageMime(extMime) ? undefined : extMime;
+  const trustedHeaderMime =
+    sniffedGenericContainer && isImageMime(headerMime) ? undefined : headerMime;
 
   // Prefer sniffed types, but don't let generic container types override a more
   // specific extension mapping (e.g. XLSX vs ZIP).
-  if (sniffed && (!isGenericMime(sniffed) || !extMime)) {
+  if (sniffed && (!isGenericMime(sniffed) || !trustedExtMime)) {
     return sniffed;
   }
-  if (extMime) {
-    return extMime;
+  if (trustedExtMime) {
+    return trustedExtMime;
   }
-  if (headerMime && !isGenericMime(headerMime)) {
-    return headerMime;
+  if (trustedHeaderMime && !isGenericMime(trustedHeaderMime)) {
+    return trustedHeaderMime;
   }
   if (sniffed) {
     return sniffed;
   }
-  if (headerMime) {
-    return headerMime;
+  if (trustedHeaderMime) {
+    return trustedHeaderMime;
   }
 
   return undefined;

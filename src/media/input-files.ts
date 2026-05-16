@@ -272,6 +272,20 @@ async function normalizeInputImage(params: {
   };
 }
 
+async function resolveInputFileMime(params: {
+  buffer: Buffer;
+  declaredMime?: string;
+}): Promise<string | undefined> {
+  const sniffedMime = normalizeMimeType(await detectMime({ buffer: params.buffer }));
+  if (!sniffedMime) {
+    return params.declaredMime;
+  }
+  if (sniffedMime === "application/octet-stream") {
+    return params.declaredMime ?? sniffedMime;
+  }
+  return sniffedMime;
+}
+
 export async function extractImageContentFromSource(
   source: InputImageSource,
   limits: InputImageLimits,
@@ -366,6 +380,8 @@ export async function extractFileContentFromSource(params: {
   if (buffer.byteLength > limits.maxBytes) {
     throw new Error(`File too large: ${buffer.byteLength} bytes (limit: ${limits.maxBytes} bytes)`);
   }
+
+  mimeType = await resolveInputFileMime({ buffer, declaredMime: mimeType });
 
   if (!mimeType) {
     throw new Error("input_file missing media type");

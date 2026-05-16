@@ -1,3 +1,4 @@
+import { readProviderJsonArrayFieldResponse } from "openclaw/plugin-sdk/provider-http";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -31,10 +32,6 @@ type VercelGatewayModelShape = {
   max_tokens?: number;
   tags?: string[];
   pricing?: VercelPricingShape;
-};
-
-type VercelGatewayModelsResponse = {
-  data?: VercelGatewayModelShape[];
 };
 
 type StaticVercelGatewayModel = Omit<ModelDefinitionConfig, "cost"> & {
@@ -186,6 +183,13 @@ function buildDiscoveredModelDefinition(
   };
 }
 
+function asVercelGatewayModelShape(value: unknown): VercelGatewayModelShape {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("Vercel AI Gateway model list: malformed JSON response");
+  }
+  return value as VercelGatewayModelShape;
+}
+
 export async function discoverVercelAiGatewayModels(): Promise<ModelDefinitionConfig[]> {
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
     return getStaticVercelAiGatewayModelCatalog();
@@ -202,8 +206,13 @@ export async function discoverVercelAiGatewayModels(): Promise<ModelDefinitionCo
         log.warn(`Failed to discover Vercel AI Gateway models: HTTP ${response.status}`);
         return getStaticVercelAiGatewayModelCatalog();
       }
-      const data = (await response.json()) as VercelGatewayModelsResponse;
-      const discovered = (data.data ?? [])
+      const data = await readProviderJsonArrayFieldResponse(
+        response,
+        "Vercel AI Gateway model list",
+        "data",
+      );
+      const discovered = data
+        .map(asVercelGatewayModelShape)
         .map(buildDiscoveredModelDefinition)
         .filter((entry): entry is ModelDefinitionConfig => entry !== null);
       return discovered.length > 0 ? discovered : getStaticVercelAiGatewayModelCatalog();

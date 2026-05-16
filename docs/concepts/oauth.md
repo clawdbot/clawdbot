@@ -46,8 +46,10 @@ To reduce that, OpenClaw treats `auth-profiles.json` as a **token sink**:
 - we can keep multiple profiles and route them deterministically
 - external CLI reuse is provider-specific: Codex CLI can bootstrap an empty
   `openai-codex:default` profile, but once OpenClaw has a local OAuth profile,
-  the local refresh token is canonical; other integrations can remain
-  externally managed and re-read their CLI auth store
+  the local refresh token is canonical. If that local refresh token is rejected,
+  OpenClaw can use a usable same-account Codex CLI token as a runtime-only
+  fallback; other integrations can remain externally managed and re-read their
+  CLI auth store
 - status and startup paths that already know the configured provider set scope
   external CLI discovery to that set, so an unrelated CLI login store is not
   probed for a single-provider setup
@@ -146,7 +148,9 @@ At runtime:
   re-reads those CLI auth stores instead of spending copied refresh tokens.
   Codex CLI bootstrap is intentionally narrower: it seeds an empty
   `openai-codex:default` profile, then OpenClaw-owned refreshes keep the local
-  profile canonical.
+  profile canonical. If the local Codex refresh fails and Codex CLI has a
+  usable token for the same account, OpenClaw may use that token for the current
+  runtime request without writing it back to `auth-profiles.json`.
 
 The refresh flow is automatic; you generally don't need to manage tokens manually.
 

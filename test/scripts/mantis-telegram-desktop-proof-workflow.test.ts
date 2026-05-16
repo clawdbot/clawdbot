@@ -149,6 +149,14 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(prompt).toContain("do not run\n   `pnpm qa:telegram-user:crabbox` directly");
   });
 
+  it("runs the Mantis Codex agent in fast medium-effort mode", () => {
+    const agent = workflowStep("Run Codex Mantis Telegram agent");
+
+    expect(agent.uses).toContain("openai/codex-action@");
+    expect(agent.with?.effort).toBe("medium");
+    expect(agent.with?.["codex-args"]).toBe('["-c","service_tier=\\"fast\\""]');
+  });
+
   it("derives refs from the PR instead of parsing comment prose", () => {
     const workflowText = readFileSync(WORKFLOW, "utf8");
     expect(workflowText).toContain('setOutput("baseline_ref", pr.base.sha)');

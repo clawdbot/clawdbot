@@ -101,6 +101,7 @@ describe("normalizeRegisteredProvider", () => {
             kind: "custom",
             wizard: {
               choiceId: " demo-primary ",
+              onboardingFeatured: true,
               modelAllowlist: {
                 allowedKeys: [" demo/model ", "demo/model"],
                 initialSelections: [" demo/model "],
@@ -121,6 +122,7 @@ describe("normalizeRegisteredProvider", () => {
         wizard: {
           setup: {
             choiceId: " demo-choice ",
+            onboardingFeatured: true,
             methodId: " missing ",
           },
           modelPicker: {
@@ -142,6 +144,7 @@ describe("normalizeRegisteredProvider", () => {
             kind: "custom",
             wizard: {
               choiceId: "demo-primary",
+              onboardingFeatured: true,
               modelAllowlist: {
                 allowedKeys: ["demo/model"],
                 initialSelections: ["demo/model"],
@@ -155,6 +158,7 @@ describe("normalizeRegisteredProvider", () => {
         wizard: {
           setup: {
             choiceId: "demo-choice",
+            onboardingFeatured: true,
           },
           modelPicker: {
             label: "Demo models",

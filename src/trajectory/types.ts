@@ -49,4 +49,17 @@ export type TrajectoryBundleManifest = {
     bytes: number;
   }>;
   supplementalFiles?: string[];
+  warnings?: TrajectoryBundleWarning[];
+};
+
+export type TrajectoryBundleWarning = {
+  source: "session" | "runtime";
+  code:
+    | "invalid-session-json"
+    | "invalid-session-row"
+    | "invalid-runtime-json"
+    | "invalid-runtime-event";
+  count: number;
+  rows: number[];
+  message: string;
 };

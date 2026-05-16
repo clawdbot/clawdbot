@@ -173,7 +173,7 @@ export type SlackAccountConfig = {
   /** Per-DM config overrides keyed by user ID. */
   dms?: Record<string, DmConfig>;
   textChunkLimit?: number;
-  /** Pass through Slack chat.postMessage link unfurl control. Omitted by default. */
+  /** Pass through Slack chat.postMessage link unfurl control. Default: false. */
   unfurlLinks?: boolean;
   /** Pass through Slack chat.postMessage media unfurl control. Omitted by default. */
   unfurlMedia?: boolean;

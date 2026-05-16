@@ -883,6 +883,54 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           }
 
+          summarize_failed_child() {
+            local label="$1"
+            local run_id="$2"
+            if [[ -z "${run_id// }" ]]; then
+              return 0
+            fi
+
+            local run_json status conclusion artifacts_json
+            run_json="$(gh run view "$run_id" --json status,conclusion,url,jobs)"
+            status="$(jq -r '.status' <<< "$run_json")"
+            conclusion="$(jq -r '.conclusion' <<< "$run_json")"
+            if [[ "$status" == "completed" && "$conclusion" == "success" ]]; then
+              return 0
+            fi
+
+            {
+              echo
+              echo "### Failed child detail: ${label}"
+              echo
+              jq -r '
+                "- Run: " + (.url // ""),
+                "- Result: `" + (.status // "") + "/" + (.conclusion // "") + "`",
+                "",
+                "Failed jobs:",
+                (.jobs[]
+                  | select(.conclusion != "success" and .conclusion != "skipped")
+                  | "- `" + (.name | gsub("`"; "\\`")) + "`: `" + ((.conclusion // .status // "") | tostring) + "` " + (.url // ""))
+              ' <<< "$run_json" || true
+              echo
+              echo "Artifacts:"
+              artifacts_json="$(
+                gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts?per_page=100" 2>/dev/null || true
+              )"
+              if [[ -n "${artifacts_json// }" ]]; then
+                jq -r '
+                  if ((.artifacts // []) | length) == 0 then
+                    "- none"
+                  else
+                    (.artifacts[]
+                      | "- `" + (.name | gsub("`"; "\\`")) + "` (" + ((.size_in_bytes // 0) | tostring) + " bytes)")
+                  end
+                ' <<< "$artifacts_json" || echo "- unable to list artifacts"
+              else
+                echo "- unable to list artifacts"
+              fi
+            } >> "$GITHUB_STEP_SUMMARY"
+          }
+
           failed=0
 
           append_child_overview
@@ -915,6 +963,13 @@ jobs:
           summarize_child_timing "plugin_prerelease" "$PLUGIN_PRERELEASE_RUN_ID"
           summarize_child_timing "release_checks" "$RELEASE_CHECKS_RUN_ID"
           summarize_child_timing "npm_telegram" "$NPM_TELEGRAM_RUN_ID"
+
+          if [[ "$failed" != "0" ]]; then
+            summarize_failed_child "normal_ci" "$NORMAL_CI_RUN_ID"
+            summarize_failed_child "plugin_prerelease" "$PLUGIN_PRERELEASE_RUN_ID"
+            summarize_failed_child "release_checks" "$RELEASE_CHECKS_RUN_ID"
+            summarize_failed_child "npm_telegram" "$NPM_TELEGRAM_RUN_ID"
+          fi
 
           exit "$failed"
 
@@ -975,3 +1030,60 @@ jobs:
             -d "$payload"; then
             echo "::warning::Automatic private release evidence dispatch failed; child workflow validation remains authoritative."
           fi
+
+      - name: Write release validation manifest
+        if: ${{ success() }}
+        env:
+          TARGET_REF: ${{ inputs.ref }}
+          TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
+          RELEASE_PROFILE: ${{ inputs.release_profile }}
+          RERUN_GROUP: ${{ inputs.rerun_group }}
+          RUN_RELEASE_SOAK: ${{ inputs.run_release_soak || inputs.release_profile == 'full' }}
+          NORMAL_CI_RUN_ID: ${{ needs.normal_ci.outputs.run_id }}
+          PLUGIN_PRERELEASE_RUN_ID: ${{ needs.plugin_prerelease.outputs.run_id }}
+          RELEASE_CHECKS_RUN_ID: ${{ needs.release_checks.outputs.run_id }}
+          NPM_TELEGRAM_RUN_ID: ${{ needs.npm_telegram.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          manifest_dir="${RUNNER_TEMP}/full-release-validation"
+          mkdir -p "$manifest_dir"
+          jq -n \
+            --arg workflowName "Full Release Validation" \
+            --arg runId "$GITHUB_RUN_ID" \
+            --arg runAttempt "$GITHUB_RUN_ATTEMPT" \
+            --arg workflowRef "$GITHUB_REF_NAME" \
+            --arg targetRef "$TARGET_REF" \
+            --arg targetSha "$TARGET_SHA" \
+            --arg releaseProfile "$RELEASE_PROFILE" \
+            --arg rerunGroup "$RERUN_GROUP" \
+            --arg runReleaseSoak "$RUN_RELEASE_SOAK" \
+            --arg normalCiRunId "$NORMAL_CI_RUN_ID" \
+            --arg pluginPrereleaseRunId "$PLUGIN_PRERELEASE_RUN_ID" \
+            --arg releaseChecksRunId "$RELEASE_CHECKS_RUN_ID" \
+            --arg npmTelegramRunId "$NPM_TELEGRAM_RUN_ID" \
+            '{
+              version: 1,
+              workflowName: $workflowName,
+              runId: $runId,
+              runAttempt: $runAttempt,
+              workflowRef: $workflowRef,
+              targetRef: $targetRef,
+              targetSha: $targetSha,
+              releaseProfile: $releaseProfile,
+              rerunGroup: $rerunGroup,
+              runReleaseSoak: $runReleaseSoak,
+              childRuns: {
+                normalCi: $normalCiRunId,
+                pluginPrerelease: $pluginPrereleaseRunId,
+                releaseChecks: $releaseChecksRunId,
+                npmTelegram: $npmTelegramRunId
+              }
+            }' > "${manifest_dir}/full-release-validation-manifest.json"
+
+      - name: Upload release validation manifest
+        if: ${{ success() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: full-release-validation-${{ github.run_id }}
+          path: ${{ runner.temp }}/full-release-validation
+          if-no-files-found: error

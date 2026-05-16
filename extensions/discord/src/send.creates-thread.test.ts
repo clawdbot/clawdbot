@@ -1,4 +1,4 @@
-import { ChannelType, Routes } from "discord-api-types/v10";
+import { ChannelType, MessageFlags, Routes } from "discord-api-types/v10";
 import { loadWebMediaRaw } from "openclaw/plugin-sdk/web-media";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { RateLimitError } from "./internal/discord.js";
@@ -436,6 +436,24 @@ describe("sendStickerDiscord", () => {
     expect(requestPath(postMock as unknown as MockCallSource)).toBe(Routes.channelMessages("789"));
     expect(requestBody(postMock as unknown as MockCallSource)).toEqual({
       content: "hiya",
+      flags: MessageFlags.SuppressEmbeds,
+      sticker_ids: ["123"],
+    });
+  });
+
+  it("allows sticker content link embeds when disabled", async () => {
+    const { rest, postMock } = makeDiscordRest();
+    postMock.mockResolvedValue({ id: "msg1", channel_id: "789" });
+    await sendStickerDiscord("channel:789", ["123"], {
+      cfg: DISCORD_TEST_CFG,
+      rest,
+      token: "t",
+      content: "https://example.com",
+      suppressEmbeds: false,
+    });
+
+    expect(requestBody(postMock as unknown as MockCallSource)).toEqual({
+      content: "https://example.com",
       sticker_ids: ["123"],
     });
   });
@@ -466,6 +484,9 @@ describe("sendPollDiscord", () => {
     expect(res.receipt.parts[0]?.platformMessageId).toBe("msg1");
     expect(res.receipt.parts[0]?.kind).toBe("card");
     expect(requestPath(postMock as unknown as MockCallSource)).toBe(Routes.channelMessages("789"));
+    expect(requestBody(postMock as unknown as MockCallSource).flags).toBe(
+      MessageFlags.SuppressEmbeds,
+    );
     expect(requestBody(postMock as unknown as MockCallSource).poll).toEqual({
       question: { text: "Lunch?" },
       answers: [{ poll_media: { text: "Pizza" } }, { poll_media: { text: "Sushi" } }],
@@ -473,6 +494,29 @@ describe("sendPollDiscord", () => {
       allow_multiselect: false,
       layout_type: 1,
     });
+  });
+
+  it("combines silent and suppress-embeds flags for polls", async () => {
+    const { rest, postMock } = makeDiscordRest();
+    postMock.mockResolvedValue({ id: "msg1", channel_id: "789" });
+    await sendPollDiscord(
+      "channel:789",
+      {
+        question: "Lunch?",
+        options: ["Pizza", "Sushi"],
+      },
+      {
+        cfg: DISCORD_TEST_CFG,
+        rest,
+        token: "t",
+        content: "https://example.com",
+        silent: true,
+      },
+    );
+
+    expect(requestBody(postMock as unknown as MockCallSource).flags).toBe(
+      MessageFlags.SuppressEmbeds | MessageFlags.SuppressNotifications,
+    );
   });
 });
 

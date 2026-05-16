@@ -333,7 +333,7 @@
     },
     "appServer.turnCompletionIdleTimeoutMs": {
       "label": "Turn Completion Idle Timeout",
-      "help": "Maximum quiet time after a turn-scoped Codex app-server request before OpenClaw interrupts the turn while waiting for turn/completed.",
+      "help": "Maximum quiet time after Codex accepts a turn or after a turn-scoped app-server request before OpenClaw interrupts the turn while waiting for turn/completed.",
       "advanced": true
     },
     "appServer.approvalPolicy": {

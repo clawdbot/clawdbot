@@ -85,6 +85,7 @@ export function applyQueueDropPolicy<T>(params: {
   queue: QueueState<T>;
   summarize: (item: T) => string;
   summaryLimit?: number;
+  onDrop?: (items: T[]) => void;
 }): boolean {
   const cap = params.queue.cap;
   if (cap <= 0 || params.queue.items.length < cap) {
@@ -95,6 +96,7 @@ export function applyQueueDropPolicy<T>(params: {
   }
   const dropCount = params.queue.items.length - cap + 1;
   const dropped = params.queue.items.splice(0, dropCount);
+  params.onDrop?.(dropped);
   if (params.queue.dropPolicy === "summarize") {
     for (const item of dropped) {
       params.queue.droppedCount += 1;

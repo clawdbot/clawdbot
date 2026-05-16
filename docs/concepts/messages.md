@@ -186,9 +186,12 @@ When a turn also has pending tool media, such as generated TTS audio, OpenClaw
 strips the silent text but still delivers the media attachment.
 OpenClaw resolves that behavior by conversation type:
 
-- Direct conversations disallow silence by default and rewrite a bare silent
-  reply to a short visible fallback.
-- Groups/channels allow silence by default.
+- Direct conversations never receive `NO_REPLY` prompt guidance. If a direct
+  run accidentally returns a bare silent token, OpenClaw suppresses it instead
+  of rewriting or delivering it.
+- Groups/channels allow silence by default only for automatic group replies.
+  In `message_tool` visible-reply mode, silence means the model does not call
+  `message(action=send)`.
 - Internal orchestration allows silence by default.
 
 OpenClaw also uses silent replies for internal runner failures that happen
@@ -196,13 +199,11 @@ before any assistant reply in non-direct chats, so groups/channels do not see
 gateway error boilerplate. Direct chats show compact failure copy by default;
 raw runner details are shown only when `/verbose` is `on` or `full`.
 
-Defaults live under `agents.defaults.silentReply` and
-`agents.defaults.silentReplyRewrite`; `surfaces.<id>.silentReply` and
-`surfaces.<id>.silentReplyRewrite` can override them per surface.
+Defaults live under `agents.defaults.silentReply`; `surfaces.<id>.silentReply`
+can override group/internal policy per surface.
 
-When the parent session has one or more pending spawned subagent runs, bare
-silent replies are dropped on all surfaces instead of being rewritten, so the
-parent stays quiet until the child completion event delivers the real reply.
+Bare silent replies are dropped on all surfaces, so parent sessions stay quiet
+instead of rewriting sentinel text into fallback chatter.
 
 ## Related
 

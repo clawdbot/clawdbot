@@ -1,5 +1,6 @@
-import { readFileSync, readdirSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { spawnSync } from "node:child_process";
+import fs, { readFileSync } from "node:fs";
+import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
   BaseProbeResult as ContractBaseProbeResult,
@@ -22,7 +23,7 @@ import type {
 } from "openclaw/plugin-sdk/core";
 import * as providerEntrySdk from "openclaw/plugin-sdk/provider-entry";
 import ts from "typescript";
-import { describe, expect, expectTypeOf, it } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import type { ChannelMessageActionContext } from "../../channels/plugins/types.js";
 import type {
   BaseProbeResult,
@@ -325,12 +326,44 @@ function expectNamedExportParity(params: BrowserHelperExportParityContract) {
   ]);
 }
 
+function listTrackedRepoTsFiles(dir: string): string[] | null {
+  const relativeDir = relative(REPO_ROOT, dir).split(/[\\/]+/u).join("/");
+  if (!relativeDir || relativeDir.startsWith("..")) {
+    return null;
+  }
+  const result = spawnSync("git", ["ls-files", "--", relativeDir], {
+    cwd: REPO_ROOT,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout
+    .split("\n")
+    .map((line) => line.trim().replaceAll("\\", "/"))
+    .filter(
+      (line) =>
+        line.endsWith(".ts") &&
+        !line.includes("/dist/") &&
+        !line.includes("/node_modules/"),
+    )
+    .map((line) => resolve(REPO_ROOT, ...line.split("/")))
+    .toSorted();
+}
+
 function listRepoTsFiles(dir: string): string[] {
   const cached = repoTsFilesCache.get(dir);
-  if (cached) {
+  if (cached !== undefined) {
     return cached;
   }
-  const entries = readdirSync(dir, { withFileTypes: true });
+  const trackedFiles = listTrackedRepoTsFiles(dir);
+  if (trackedFiles) {
+    repoTsFilesCache.set(dir, trackedFiles);
+    return trackedFiles;
+  }
+
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
   const files = entries.flatMap((entry) => {
     const absolute = resolve(dir, entry.name);
     if (entry.isDirectory()) {
@@ -547,13 +580,17 @@ describe("plugin-sdk subpath exports", () => {
     ]);
     expectSourceMentions("reply-chunking", ["chunkText", "chunkTextWithMode"]);
     expectSourceMentions("reply-history", [
+      "buildInboundHistoryFromEntries",
+      "buildInboundHistoryFromMap",
       "buildPendingHistoryContextFromMap",
       "clearHistoryEntriesIfEnabled",
+      "createChannelHistoryWindow",
       "recordPendingHistoryEntryIfEnabled",
     ]);
     expectSourceMentions("mattermost", [
       "buildPendingHistoryContextFromMap",
       "clearHistoryEntriesIfEnabled",
+      "createChannelHistoryWindow",
       "formatPairingApproveHint",
       "recordPendingHistoryEntryIfEnabled",
       "resolveControlCommandGate",
@@ -785,6 +822,21 @@ describe("plugin-sdk subpath exports", () => {
       .toSorted();
 
     expect(violations).toStrictEqual([]);
+  });
+
+  it("lists repo source candidates from git without walking SDK boundary roots", () => {
+    const readDir = vi.spyOn(fs, "readdirSync");
+    try {
+      repoTsFilesCache.clear();
+      const files = listRepoTsFiles(resolve(REPO_ROOT, "src"));
+
+      expect(files.length).toBeGreaterThan(0);
+      expect(files.every((file) => file.endsWith(".ts"))).toBe(true);
+      expect(readDir).not.toHaveBeenCalled();
+    } finally {
+      readDir.mockRestore();
+      repoTsFilesCache.clear();
+    }
   });
 
   it("keeps the deprecated channel-runtime shim unused in repo imports", () => {

@@ -25,6 +25,7 @@ import {
   type PluginManifest,
   resolvePackageExtensionEntries,
   type OpenClawPackageManifest,
+  type PackageExtensionResolution,
   type PackageManifest,
 } from "./manifest.js";
 import {
@@ -562,6 +563,30 @@ function derivePackagePluginIdHint(params: {
     : unscoped;
 }
 
+function pushInvalidPackageExtensionDiagnostic(params: {
+  resolution: PackageExtensionResolution;
+  source: string;
+  diagnostics: PluginDiagnostic[];
+}): boolean {
+  if (params.resolution.status === "invalid") {
+    params.diagnostics.push({
+      level: "error",
+      source: params.source,
+      message: params.resolution.error,
+    });
+    return true;
+  }
+  if (params.resolution.status === "empty") {
+    params.diagnostics.push({
+      level: "error",
+      source: params.source,
+      message: "package.json openclaw.extensions is empty",
+    });
+    return true;
+  }
+  return false;
+}
+
 function resolveIdHintManifestId(
   rootDir: string,
   rejectHardlinks: boolean,
@@ -807,6 +832,15 @@ function discoverInDirectory(params: {
       ...(fullPathRealPath !== undefined ? { rootRealPath: fullPathRealPath } : {}),
     });
     const extensionResolution = resolvePackageExtensionEntries(manifest ?? undefined);
+    if (
+      pushInvalidPackageExtensionDiagnostic({
+        resolution: extensionResolution,
+        source: fullPath,
+        diagnostics: params.diagnostics,
+      })
+    ) {
+      continue;
+    }
     const extensions = extensionResolution.status === "ok" ? extensionResolution.entries : [];
     const manifestId = resolveIdHintManifestId(fullPath, rejectHardlinks, fullPathRealPath);
     const setupSource = resolvePackageSetupSource({
@@ -1041,6 +1075,15 @@ function discoverFromPath(params: {
       ...(resolvedRealPath !== undefined ? { rootRealPath: resolvedRealPath } : {}),
     });
     const extensionResolution = resolvePackageExtensionEntries(manifest ?? undefined);
+    if (
+      pushInvalidPackageExtensionDiagnostic({
+        resolution: extensionResolution,
+        source: resolved,
+        diagnostics: params.diagnostics,
+      })
+    ) {
+      return;
+    }
     const extensions = extensionResolution.status === "ok" ? extensionResolution.entries : [];
     const manifestId = resolveIdHintManifestId(resolved, rejectHardlinks, resolvedRealPath);
     const setupSource = resolvePackageSetupSource({

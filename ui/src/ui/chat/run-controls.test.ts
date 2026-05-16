@@ -101,11 +101,13 @@ describe("chat run controls", () => {
 
     const newSessionButton = getButton(container, 'button[title="New session"]');
     expect(newSessionButton.title).toBe("New session");
+    expect(newSessionButton.textContent).toContain("New session");
     newSessionButton.click();
     expect(onNewSession).toHaveBeenCalledTimes(1);
 
     const sendButton = getButton(container, 'button[title="Send"]');
     expect(sendButton.title).toBe("Send");
+    expect(sendButton.textContent).toContain("Send");
     sendButton.click();
     expect(onStoreDraft).toHaveBeenCalledWith(" run this ");
     expect(onSend).toHaveBeenCalledTimes(1);
@@ -160,9 +162,15 @@ describe("chat run controls", () => {
     const container = document.createElement("div");
     render(renderChatRunControls(createProps({ hasMessages: true })), container);
 
-    getButton(container, `button[title="${t("chat.runControls.newSession")}"]`);
-    getButton(container, `button[title="${t("chat.runControls.export")}"]`);
-    getButton(container, `button[title="${t("chat.runControls.send")}"]`);
+    expect(
+      getButton(container, `button[title="${t("chat.runControls.newSession")}"]`).textContent,
+    ).toContain(t("chat.runControls.newSession"));
+    expect(
+      getButton(container, `button[title="${t("chat.runControls.export")}"]`).textContent,
+    ).toContain(t("chat.runControls.export"));
+    expect(
+      getButton(container, `button[title="${t("chat.runControls.send")}"]`).textContent,
+    ).toContain(t("chat.runControls.send"));
     expect(container.querySelector('button[title="New session"]')).toBeNull();
   });
 });

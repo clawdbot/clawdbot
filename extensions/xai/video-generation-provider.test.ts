@@ -104,6 +104,97 @@ describe("xai video generation provider", () => {
     expect(result.metadata?.mode).toBe("generate");
   });
 
+  it("wraps malformed successful xAI create responses", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => [],
+      },
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildXaiVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "xai",
+        model: "grok-imagine-video",
+        prompt: "bad shape",
+        cfg: {},
+      }),
+    ).rejects.toThrow("xAI video generation response malformed");
+  });
+
+  it("wraps non-JSON successful xAI create responses", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => {
+          throw new SyntaxError("Unexpected token < in JSON");
+        },
+      },
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildXaiVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "xai",
+        model: "grok-imagine-video",
+        prompt: "html body",
+        cfg: {},
+      }),
+    ).rejects.toThrow("xAI video generation response malformed");
+  });
+
+  it("rejects unknown xAI poll statuses without waiting for timeout", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({ request_id: "req_bad_status" }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock.mockResolvedValueOnce({
+      json: async () => ({
+        request_id: "req_bad_status",
+        status: "almost_done",
+      }),
+    });
+
+    const provider = buildXaiVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "xai",
+        model: "grok-imagine-video",
+        prompt: "bad status",
+        cfg: {},
+      }),
+    ).rejects.toThrow("xAI video generation response malformed");
+  });
+
+  it("rejects completed xAI poll responses without output URLs as malformed", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({ request_id: "req_no_video" }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock.mockResolvedValueOnce({
+      json: async () => ({
+        request_id: "req_no_video",
+        status: "done",
+        video: {},
+      }),
+    });
+
+    const provider = buildXaiVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "xai",
+        model: "grok-imagine-video",
+        prompt: "missing video",
+        cfg: {},
+      }),
+    ).rejects.toThrow("xAI video generation response malformed");
+  });
+
   it("sends a single unroled image as xAI first-frame image-to-video", async () => {
     postJsonRequestMock.mockResolvedValue({
       response: {

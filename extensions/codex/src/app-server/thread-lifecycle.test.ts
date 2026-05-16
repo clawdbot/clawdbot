@@ -61,13 +61,13 @@ describe("Codex app-server native code mode config", () => {
       appServer: createAppServerOptions() as never,
       developerInstructions: "test instructions",
       config: {
-        "features.codex_hooks": true,
+        "features.hooks": true,
         apps: { _default: { enabled: false } },
       },
     });
 
     expect(request.config).toEqual({
-      "features.codex_hooks": true,
+      "features.hooks": true,
       apps: { _default: { enabled: false } },
       "features.code_mode": true,
       "features.code_mode_only": true,
@@ -101,14 +101,14 @@ describe("Codex app-server native code mode config", () => {
         developerInstructions: "test instructions",
         config: {
           project_doc_max_bytes: 64_000,
-          "features.codex_hooks": true,
+          "features.hooks": true,
         },
       },
     );
 
     expect(request.config).toEqual({
       project_doc_max_bytes: 0,
-      "features.codex_hooks": true,
+      "features.hooks": true,
       "features.code_mode": true,
       "features.code_mode_only": true,
     });

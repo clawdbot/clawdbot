@@ -1,4 +1,5 @@
 import {
+  createSetupTranslator,
   createDetectedBinaryStatus,
   setSetupChannelEnabled,
   type ChannelSetupWizard,
@@ -13,17 +14,18 @@ import {
   signalNumberTextInput,
 } from "./setup-core.js";
 
-const channel = "signal" as const;
+const t = createSetupTranslator();
 
+const channel = "signal" as const;
 export const signalSetupWizard: ChannelSetupWizard = {
   channel,
   status: createDetectedBinaryStatus({
     channelLabel: "Signal",
     binaryLabel: "signal-cli",
-    configuredLabel: "configured",
-    unconfiguredLabel: "needs setup",
-    configuredHint: "signal-cli found",
-    unconfiguredHint: "signal-cli missing",
+    configuredLabel: t("wizard.channels.statusConfigured"),
+    unconfiguredLabel: t("wizard.channels.statusNeedsSetup"),
+    configuredHint: t("wizard.channels.statusSignalCliFound"),
+    unconfiguredHint: t("wizard.channels.statusSignalCliMissing"),
     configuredScore: 1,
     unconfiguredScore: 0,
     resolveConfigured: ({ cfg, accountId }) =>
@@ -47,9 +49,7 @@ export const signalSetupWizard: ChannelSetupWizard = {
       "signal-cli";
     const cliDetected = await detectBinary(currentCliPath);
     const wantsInstall = await prompter.confirm({
-      message: cliDetected
-        ? "signal-cli detected. Reinstall/update now?"
-        : "signal-cli not found. Install now?",
+      message: cliDetected ? t("wizard.signal.reinstallPrompt") : t("wizard.signal.installPrompt"),
       initialValue: !cliDetected,
     });
     if (!wantsInstall) {

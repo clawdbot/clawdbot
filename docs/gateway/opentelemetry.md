@@ -230,7 +230,7 @@ OpenClaw classifies sessions by the work it can still observe:
   recent progress. Stalled embedded runs stay observe-only at first, then
   abort-drain after `diagnostics.stuckSessionAbortMs` with no progress so queued
   turns behind the lane can resume. When unset, the abort threshold defaults to
-  the safer extended window of at least 10 minutes and 5x
+  the safer extended window of at least 5 minutes and 3x
   `diagnostics.stuckSessionWarnMs`.
 - `session.stuck`: stale session bookkeeping with no active work. This releases
   the affected session lane immediately.

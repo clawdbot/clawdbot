@@ -93,6 +93,52 @@ test("sessions.reset drops cached skills snapshot so /new rebuilds visible skill
   expect(store["agent:main:main"]?.skillsSnapshot).toBeUndefined();
 });
 
+test("sessions.reset rotates generated topic transcript files with the new session id", async () => {
+  const { dir, storePath } = await createSessionStoreDir();
+  const previousSessionId = "11111111-1111-4111-8111-111111111111";
+  const previousSessionFile = path.join(dir, `${previousSessionId}-topic-456.jsonl`);
+  await fs.writeFile(previousSessionFile, `${JSON.stringify({ role: "user", content: "old" })}\n`);
+
+  await writeSessionStore({
+    entries: {
+      "agent:main:telegram:group:123:topic:456": sessionStoreEntry(previousSessionId, {
+        sessionFile: previousSessionFile,
+      }),
+    },
+  });
+
+  const reset = await directSessionReq<{
+    ok: true;
+    key: string;
+    entry: {
+      sessionId: string;
+      sessionFile?: string;
+    };
+  }>("sessions.reset", {
+    key: "agent:main:telegram:group:123:topic:456",
+  });
+
+  expect(reset.ok).toBe(true);
+  const nextSessionId = reset.payload?.entry.sessionId;
+  const nextSessionFile = reset.payload?.entry.sessionFile;
+  if (!nextSessionId || !nextSessionFile) {
+    throw new Error("expected reset session id and file");
+  }
+  expect(nextSessionId).not.toBe(previousSessionId);
+  expect(path.basename(nextSessionFile)).toBe(`${nextSessionId}-topic-456.jsonl`);
+
+  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    {
+      sessionId?: string;
+      sessionFile?: string;
+    }
+  >;
+  const persistedEntry = store["agent:main:telegram:group:123:topic:456"];
+  expect(persistedEntry?.sessionId).toBe(nextSessionId);
+  expect(path.basename(persistedEntry?.sessionFile ?? "")).toBe(`${nextSessionId}-topic-456.jsonl`);
+});
+
 test("sessions.reset preserves legacy explicit model overrides without modelOverrideSource", async () => {
   const { storePath } = await createSessionStoreDir();
   testState.agentConfig = {

@@ -269,7 +269,7 @@ describe("openrouter provider hooks", () => {
     expect(baseStreamFn).toHaveBeenCalledOnce();
   });
 
-  it("fills DeepSeek V4 reasoning_content for OpenRouter replay turns", async () => {
+  it("skips DeepSeek V4 reasoning_content on OpenRouter tool-call replay turns", async () => {
     const provider = await registerSingleProviderPlugin(openrouterPlugin);
     let capturedPayload: Record<string, unknown> | undefined;
     const baseStreamFn = vi.fn(
@@ -316,7 +316,6 @@ describe("openrouter provider hooks", () => {
       {
         role: "assistant",
         tool_calls: [{ id: "call_1", type: "function" }],
-        reasoning_content: "",
       },
       { role: "tool", content: "ok" },
       { role: "assistant", content: "done", reasoning_content: "" },
@@ -424,7 +423,6 @@ describe("openrouter provider hooks", () => {
       {
         role: "assistant",
         tool_calls: [{ id: "call_1", type: "function" }],
-        reasoning_content: "",
       },
     ]);
     expect(payloads[1]?.messages).toEqual([

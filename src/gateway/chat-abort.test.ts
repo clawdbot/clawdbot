@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   abortChatRunById,
+  abortChatRunsForProvider,
   isChatStopCommandText,
   type ChatAbortOps,
   type ChatAbortControllerEntry,
+  updateChatRunProvider,
 } from "./chat-abort.js";
 
 type ChatAbortPayload = {
@@ -191,5 +193,38 @@ describe("abortChatRunById", () => {
         timestamp: now.getTime(),
       },
     });
+  });
+});
+
+describe("abortChatRunsForProvider", () => {
+  it("uses updated provider metadata after model fallback", () => {
+    const runId = "run-1";
+    const sessionKey = "main";
+    const entry = createActiveEntry(sessionKey);
+    entry.providerId = "openai";
+    entry.authProviderId = "openai";
+    const ops = createOps({ runId, entry });
+
+    const updated = updateChatRunProvider(ops.chatAbortControllers, {
+      runId,
+      providerId: "openrouter",
+      authProviderId: "openrouter",
+    });
+    const result = abortChatRunsForProvider(ops, {
+      providerId: "openrouter",
+      stopReason: "auth-revoked",
+    });
+
+    expect(updated).toBe(true);
+    expect(result.runIds).toEqual([runId]);
+    expect(entry.controller.signal.aborted).toBe(true);
+    expect(ops.broadcast).toHaveBeenCalledWith(
+      "chat",
+      expect.objectContaining({
+        runId,
+        state: "aborted",
+        stopReason: "auth-revoked",
+      }),
+    );
   });
 });

@@ -20,7 +20,8 @@ diagnostic surfaces around that boundary.
 OpenClaw still owns channel routing, session files, visible message delivery,
 OpenClaw dynamic tools, approvals, media delivery, and a transcript mirror.
 Codex owns the canonical native thread, native model loop, native tool
-continuation, and native compaction.
+continuation, and native compaction unless the active OpenClaw context engine
+declares that it owns compaction.
 
 ## Thread bindings and model changes
 
@@ -184,8 +185,17 @@ diagnostics bundle.
 ## Compaction and transcript mirror
 
 When the selected model uses the Codex harness, native thread compaction is
-delegated to Codex app-server. OpenClaw keeps a transcript mirror for channel
-history, search, `/new`, `/reset`, and future model or harness switching.
+delegated to Codex app-server unless an active context engine declares
+`ownsCompaction: true`. Owning context engines compact first and cause OpenClaw
+to abandon the old Codex backend thread so the next turn can rehydrate a fresh
+thread from engine-managed context. OpenClaw keeps a transcript mirror for
+channel history, search, `/new`, `/reset`, and future model or harness
+switching.
+
+When a context engine requests Codex thread-bootstrap projection, OpenClaw
+projects tool-call names and ids, input shapes, and redacted tool-result content
+into the fresh Codex thread. It does not copy raw tool-call argument values into
+that projection.
 
 The mirror includes the user prompt, final assistant text, and lightweight Codex
 reasoning or plan records when the app-server emits them. Today, OpenClaw only

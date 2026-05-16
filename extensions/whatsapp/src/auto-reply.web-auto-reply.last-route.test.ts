@@ -175,6 +175,13 @@ describe("web auto-reply last-route", () => {
       ChatType: "direct",
       CommandAuthorized: undefined,
       ConversationLabel: "+1000",
+      CommandSource: undefined,
+      CommandTurn: {
+        authorized: false,
+        body: "hello",
+        kind: "normal",
+        source: "message",
+      },
       GroupMembers: "+1000",
       GroupSubject: undefined,
       GroupSystemPrompt: undefined,

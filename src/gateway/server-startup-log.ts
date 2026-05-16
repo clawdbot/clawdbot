@@ -3,6 +3,7 @@ import { resolveDefaultAgentId, resolveAgentConfig } from "../agents/agent-scope
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import {
+  buildConfiguredModelCatalog,
   resolveConfiguredModelRef,
   resolveThinkingDefault,
   legacyModelKey,
@@ -98,6 +99,17 @@ function resolveExplicitStartupThinking(params: {
   );
 }
 
+function isConfiguredReasoningDisabled(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  model: string;
+}): boolean {
+  return buildConfiguredModelCatalog({ cfg: params.cfg }).some(
+    (entry) =>
+      entry.provider === params.provider && entry.id === params.model && entry.reasoning === false,
+  );
+}
+
 export function formatAgentModelStartupDetails(params: {
   cfg: OpenClawConfig;
   provider: string;
@@ -118,7 +130,13 @@ export function formatAgentModelStartupDetails(params: {
       provider: params.provider,
       model: params.model,
     });
-  const thinking = explicitThinking ?? (resolvedThinking === "off" ? "medium" : resolvedThinking);
+  const thinking =
+    explicitThinking ??
+    (isConfiguredReasoningDisabled(params)
+      ? "off"
+      : resolvedThinking === "off"
+        ? "medium"
+        : resolvedThinking);
   const fast = resolveFastModeState({
     cfg: params.cfg,
     provider: params.provider,

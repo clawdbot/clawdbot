@@ -12,8 +12,7 @@ import {
 import { createClaimableDedupe, type ClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 import {
   DEFAULT_GROUP_HISTORY_LIMIT,
-  clearHistoryEntriesIfEnabled,
-  recordPendingHistoryEntryIfEnabled,
+  createChannelHistoryWindow,
   type HistoryEntry,
 } from "openclaw/plugin-sdk/reply-history";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -450,8 +449,7 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
     const historyKey = groupId ?? roomId;
     const senderId = sourceInfo.userId ?? "unknown";
     if (historyKey && context.groupHistories) {
-      recordPendingHistoryEntryIfEnabled({
-        historyMap: context.groupHistories,
+      createChannelHistoryWindow({ historyMap: context.groupHistories }).record({
         historyKey,
         limit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
         entry: {
@@ -503,8 +501,7 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
   if (isGroup && context.groupHistories) {
     const historyKey = groupId ?? roomId;
     if (historyKey && context.groupHistories.has(historyKey)) {
-      clearHistoryEntriesIfEnabled({
-        historyMap: context.groupHistories,
+      createChannelHistoryWindow({ historyMap: context.groupHistories }).clear({
         historyKey,
         limit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
       });

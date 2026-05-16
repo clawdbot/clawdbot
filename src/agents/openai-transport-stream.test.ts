@@ -140,6 +140,39 @@ describe("openai transport stream", () => {
     ).rejects.toThrow(/did not deliver a first event within 1ms after HTTP streaming headers/);
   });
 
+  it("clamps Responses cached prompt usage at zero", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+
+    await __testing.processResponsesStream(
+      streamChunks([
+        {
+          type: "response.completed",
+          response: {
+            id: "resp-cache-overflow",
+            status: "completed",
+            usage: {
+              input_tokens: 2,
+              output_tokens: 5,
+              total_tokens: 7,
+              input_tokens_details: { cached_tokens: 4 },
+            },
+          },
+        },
+      ]),
+      output,
+      { push: vi.fn() },
+      model,
+    );
+
+    expectRecordFields(output.usage, {
+      input: 0,
+      output: 5,
+      cacheRead: 4,
+      totalTokens: 9,
+    });
+  });
+
   it("summarizes model payload tools with full names when requested", () => {
     const previous = process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;
     process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD = "tools";
@@ -3151,7 +3184,34 @@ describe("openai transport stream", () => {
     expect(params.stream_options?.include_usage).toBe(true);
   });
 
-  it("always includes stream_options.include_usage for known local backends like llama-cpp", () => {
+  it("includes stream_options.include_usage for Volcengine CodingPlan", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "ark-code-latest",
+        name: "Ark Coding Plan",
+        api: "openai-completions",
+        provider: "volcengine-plan",
+        baseUrl: "https://ark.cn-beijing.volces.com/api/coding/v3",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 256000,
+        maxTokens: 4096,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    ) as {
+      stream_options?: { include_usage?: boolean };
+    };
+
+    expect(params.stream_options).toEqual({ include_usage: true });
+  });
+
+  it("includes stream_options.include_usage for known local backends like llama-cpp", () => {
     const params = buildOpenAICompletionsParams(
       {
         id: "llama-3",
@@ -3277,7 +3337,7 @@ describe("openai transport stream", () => {
 
     expect(params.messages?.[0]?.role).toBe("system");
     expect(params).not.toHaveProperty("reasoning_effort");
-    expect(params.stream_options).toEqual({ include_usage: true });
+    expect(params).not.toHaveProperty("stream_options");
     expect(params).not.toHaveProperty("store");
     expect(params.tools?.[0]?.function).not.toHaveProperty("strict");
   });
@@ -3414,6 +3474,93 @@ describe("openai transport stream", () => {
     );
 
     expect(params.max_completion_tokens).toBe(65_536);
+    expect(params).not.toHaveProperty("max_tokens");
+  });
+
+  it("uses model params max_completion_tokens for OpenAI completions before model maxTokens", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "kimi-k2.6",
+        name: "Kimi K2.6",
+        api: "openai-completions",
+        provider: "dashscope",
+        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 262_144,
+        maxTokens: 32_000,
+        params: {
+          max_completion_tokens: 64_000,
+        },
+      } as never,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    );
+
+    expect(params.max_completion_tokens).toBe(64_000);
+    expect(params).not.toHaveProperty("max_tokens");
+  });
+
+  it("keeps runtime maxTokens ahead of model params max_completion_tokens for OpenAI completions", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "kimi-k2.6",
+        name: "Kimi K2.6",
+        api: "openai-completions",
+        provider: "dashscope",
+        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 262_144,
+        maxTokens: 32_000,
+        params: {
+          max_completion_tokens: 64_000,
+        },
+      } as never,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      { maxTokens: 16_000 } as never,
+    );
+
+    expect(params.max_completion_tokens).toBe(16_000);
+    expect(params).not.toHaveProperty("max_tokens");
+  });
+
+  it("keeps zero runtime maxTokens falling back to model params for OpenAI completions", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "kimi-k2.6",
+        name: "Kimi K2.6",
+        api: "openai-completions",
+        provider: "dashscope",
+        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 262_144,
+        maxTokens: 32_000,
+        params: {
+          max_completion_tokens: 64_000,
+        },
+      } as never,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      { maxTokens: 0 } as never,
+    );
+
+    expect(params.max_completion_tokens).toBe(64_000);
     expect(params).not.toHaveProperty("max_tokens");
   });
 
@@ -5411,5 +5558,340 @@ describe("openai transport stream", () => {
     await expect(
       __testing.processOpenAICompletionsStream(mockStream(), output, model, stream),
     ).rejects.toThrow("Exceeded tool-call argument buffer limit");
+  });
+});
+
+describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () => {
+  const openRouterModel = {
+    id: "deepseek/deepseek-v4-flash",
+    name: "DeepSeek v4 Flash",
+    api: "openai-completions",
+    provider: "openrouter",
+    baseUrl: "https://openrouter.ai/api/v1",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 8192,
+  } satisfies Model<"openai-completions">;
+
+  const openAIModel = {
+    id: "gpt-5.4-mini",
+    name: "GPT-5.4 Mini",
+    api: "openai-completions",
+    provider: "openai",
+    baseUrl: "https://api.openai.com/v1",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 200_000,
+    maxTokens: 8192,
+  } satisfies Model<"openai-completions">;
+
+  const nativeDeepSeekModel = {
+    id: "deepseek-v4-flash",
+    name: "DeepSeek V4 Flash",
+    api: "openai-completions",
+    provider: "deepseek",
+    baseUrl: "https://api.deepseek.com",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 1_000_000,
+    maxTokens: 384_000,
+  } satisfies Model<"openai-completions">;
+
+  const nativeZaiModel = {
+    id: "glm-5.1",
+    name: "GLM 5.1",
+    api: "openai-completions",
+    provider: "zai",
+    baseUrl: "https://api.z.ai/api/paas/v4",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 200_000,
+    maxTokens: 131_072,
+  } satisfies Model<"openai-completions">;
+
+  const xiaomiModel = {
+    id: "mimo-v2.5-pro",
+    name: "MiMo V2.5 Pro",
+    api: "openai-completions",
+    provider: "xiaomi",
+    baseUrl: "https://api.xiaomimimo.com/v1",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 1_048_576,
+    maxTokens: 32_000,
+  } satisfies Model<"openai-completions">;
+
+  const customMiMoProxyModel = {
+    ...xiaomiModel,
+    provider: "xiaomi-orbit",
+    baseUrl: "https://proxy.example.com/v1",
+  } satisfies Model<"openai-completions">;
+
+  const customKimiProxyModel = {
+    id: "moonshotai/kimi-k2.6",
+    name: "Kimi K2.6",
+    api: "openai-completions",
+    provider: "custom-openai-proxy",
+    baseUrl: "https://proxy.example.com/v1",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 262_144,
+    maxTokens: 32_000,
+  } satisfies Model<"openai-completions">;
+
+  function getAssistantMessage(params: { messages: unknown }) {
+    expect(Array.isArray(params.messages)).toBe(true);
+    const list = params.messages as Array<Record<string, unknown>>;
+    const assistant = list.find((m) => m.role === "assistant");
+    expect(assistant).toBeDefined();
+    return assistant as Record<string, unknown>;
+  }
+
+  function buildReplayParams(model: Model<"openai-completions">, thinkingSignature: string) {
+    return buildOpenAICompletionsParams(
+      model,
+      {
+        systemPrompt: "system",
+        messages: [
+          { role: "user", content: "hello" },
+          {
+            role: "assistant",
+            provider: model.provider,
+            api: model.api,
+            model: model.id,
+            stopReason: "stop",
+            timestamp: 0,
+            content: [
+              {
+                type: "thinking",
+                thinking: "Need to answer politely.",
+                thinkingSignature,
+              },
+              { type: "text", text: "Hello!" },
+            ],
+          },
+          { role: "user", content: "again" },
+        ],
+        tools: [],
+      } as never,
+      undefined,
+    ) as { messages: unknown };
+  }
+
+  it.each(["reasoning_details", "reasoning_content", "reasoning", "reasoning_text"])(
+    "strips %s from stock OpenAI Chat Completions assistant replay",
+    (thinkingSignature) => {
+      const assistant = getAssistantMessage(buildReplayParams(openAIModel, thinkingSignature));
+
+      expect(assistant).not.toHaveProperty("reasoning_details");
+      expect(assistant).not.toHaveProperty("reasoning_content");
+      expect(assistant).not.toHaveProperty("reasoning");
+      expect(assistant).not.toHaveProperty("reasoning_text");
+    },
+  );
+
+  it("normalizes OpenRouter string reasoning_details to reasoning", () => {
+    const assistant = getAssistantMessage(buildReplayParams(openRouterModel, "reasoning_details"));
+
+    expect(assistant).not.toHaveProperty("reasoning_details");
+    expect(assistant.reasoning).toBe("Need to answer politely.");
+  });
+
+  it.each(["reasoning", "reasoning_content"])(
+    "preserves OpenRouter %s string reasoning replay",
+    (thinkingSignature) => {
+      const assistant = getAssistantMessage(buildReplayParams(openRouterModel, thinkingSignature));
+
+      expect(assistant[thinkingSignature]).toBe("Need to answer politely.");
+    },
+  );
+
+  it("strips empty-string reasoning_content from OpenRouter assistant replay", () => {
+    const params = buildOpenAICompletionsParams(
+      openRouterModel,
+      {
+        systemPrompt: "system",
+        messages: [
+          { role: "user", content: "read config" },
+          {
+            role: "assistant",
+            provider: "openrouter",
+            api: "openai-completions",
+            model: "deepseek/deepseek-v4-pro",
+            stopReason: "toolUse",
+            timestamp: 0,
+            content: [
+              {
+                type: "thinking",
+                thinking: "",
+                thinkingSignature: "reasoning_content",
+              },
+              {
+                type: "toolCall",
+                id: "call_1",
+                name: "read_file",
+                arguments: { path: "config.json" },
+              },
+            ],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "read_file",
+            content: [{ type: "text", text: "{ }" }],
+            isError: false,
+            timestamp: 1,
+          },
+          { role: "user", content: "continue" },
+        ],
+        tools: [],
+      } as never,
+      undefined,
+    ) as { messages: Array<Record<string, unknown>> };
+
+    const assistantMessages = params.messages.filter((msg) => msg.role === "assistant");
+    for (const msg of assistantMessages) {
+      expect(msg).not.toHaveProperty("reasoning_content");
+    }
+  });
+
+  it.each([
+    ["DeepSeek", nativeDeepSeekModel],
+    ["Z.AI", nativeZaiModel],
+  ] as const)("preserves native %s reasoning_content replay", (_label, model) => {
+    const assistant = getAssistantMessage(buildReplayParams(model, "reasoning_content"));
+
+    expect(assistant.reasoning_content).toBe("Need to answer politely.");
+  });
+
+  it.each([
+    ["DeepSeek", nativeDeepSeekModel],
+    ["Z.AI", nativeZaiModel],
+  ] as const)("strips non-native %s reasoning replay fields", (_label, model) => {
+    const assistant = getAssistantMessage(buildReplayParams(model, "reasoning_details"));
+
+    expect(assistant).not.toHaveProperty("reasoning_details");
+    expect(assistant).not.toHaveProperty("reasoning");
+    expect(assistant).not.toHaveProperty("reasoning_text");
+  });
+
+  it("normalizes OpenRouter reasoning_text to reasoning", () => {
+    const assistant = getAssistantMessage(buildReplayParams(openRouterModel, "reasoning_text"));
+
+    expect(assistant).not.toHaveProperty("reasoning_text");
+    expect(assistant.reasoning).toBe("Need to answer politely.");
+  });
+
+  it("preserves DeepSeek-style reasoning_content replay for Xiaomi MiMo", () => {
+    const assistant = getAssistantMessage(buildReplayParams(xiaomiModel, "reasoning_content"));
+
+    expect(assistant.reasoning_content).toBe("Need to answer politely.");
+    expect(assistant).not.toHaveProperty("reasoning_details");
+    expect(assistant).not.toHaveProperty("reasoning");
+    expect(assistant).not.toHaveProperty("reasoning_text");
+  });
+
+  it("preserves reasoning_content replay for custom MiMo proxy routes", () => {
+    const assistant = getAssistantMessage(
+      buildReplayParams(customMiMoProxyModel, "reasoning_content"),
+    );
+
+    expect(assistant.reasoning_content).toBe("Need to answer politely.");
+    expect(assistant).not.toHaveProperty("reasoning_details");
+    expect(assistant).not.toHaveProperty("reasoning");
+    expect(assistant).not.toHaveProperty("reasoning_text");
+  });
+
+  it("preserves reasoning_content replay for custom MiMo V2.6 proxy routes", () => {
+    const assistant = getAssistantMessage(
+      buildReplayParams(
+        {
+          ...customMiMoProxyModel,
+          id: "xiaomi/mimo-v2.6-pro",
+        },
+        "reasoning_content",
+      ),
+    );
+
+    expect(assistant.reasoning_content).toBe("Need to answer politely.");
+    expect(assistant).not.toHaveProperty("reasoning_details");
+    expect(assistant).not.toHaveProperty("reasoning");
+    expect(assistant).not.toHaveProperty("reasoning_text");
+  });
+
+  it("preserves reasoning_content replay for custom Kimi K2 proxy routes", () => {
+    const assistant = getAssistantMessage(
+      buildReplayParams(customKimiProxyModel, "reasoning_content"),
+    );
+
+    expect(assistant.reasoning_content).toBe("Need to answer politely.");
+    expect(assistant).not.toHaveProperty("reasoning_details");
+    expect(assistant).not.toHaveProperty("reasoning");
+    expect(assistant).not.toHaveProperty("reasoning_text");
+  });
+
+  it("preserves reasoning_content replay for suffixed reasoning model ids", () => {
+    const assistant = getAssistantMessage(
+      buildReplayParams(
+        {
+          ...customMiMoProxyModel,
+          id: "xiaomi/mimo-v2.5-pro:cloud",
+        },
+        "reasoning_content",
+      ),
+    );
+
+    expect(assistant.reasoning_content).toBe("Need to answer politely.");
+  });
+
+  it("preserves OpenRouter array reasoning_details from tool-call signatures", () => {
+    const reasoningDetail = { type: "reasoning.encrypted", id: "rs_1", data: "ciphertext" };
+    const params = buildOpenAICompletionsParams(
+      openRouterModel,
+      {
+        systemPrompt: "system",
+        messages: [
+          { role: "user", content: "lookup" },
+          {
+            role: "assistant",
+            provider: "openrouter",
+            api: "openai-completions",
+            model: "deepseek/deepseek-v4-flash",
+            stopReason: "stop",
+            timestamp: 0,
+            content: [
+              {
+                type: "toolCall",
+                id: "call_1",
+                name: "lookup",
+                arguments: { query: "weather" },
+                thoughtSignature: JSON.stringify(reasoningDetail),
+              },
+            ],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "lookup",
+            content: [{ type: "text", text: "sunny" }],
+            isError: false,
+            timestamp: 1,
+          },
+          { role: "user", content: "answer" },
+        ],
+        tools: [],
+      } as never,
+      undefined,
+    ) as { messages: unknown };
+
+    const assistant = getAssistantMessage(params);
+    expect(assistant.reasoning_details).toEqual([reasoningDetail]);
   });
 });

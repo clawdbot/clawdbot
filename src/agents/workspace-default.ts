@@ -7,6 +7,10 @@ export function resolveDefaultAgentWorkspaceDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
 ): string {
+  const workspaceDir = env.OPENCLAW_WORKSPACE_DIR?.trim();
+  if (workspaceDir) {
+    return path.resolve(workspaceDir);
+  }
   const home = resolveRequiredHomeDir(env, homedir);
   const profile = env.OPENCLAW_PROFILE?.trim();
   if (profile && normalizeOptionalLowercaseString(profile) !== "default") {

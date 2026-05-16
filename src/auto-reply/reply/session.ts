@@ -52,6 +52,7 @@ import {
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.shared.js";
+import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import { normalizeCommandBody } from "../commands-registry.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import { resolveEffectiveResetTargetSessionKey } from "./acp-reset-target.js";
@@ -248,10 +249,7 @@ export async function initSessionState(params: {
     : resolveSessionConversationBindingContext(cfg, ctx);
   // Native slash commands (Telegram/Discord/Slack) are delivered on a separate
   // "slash session" key, but should mutate the target chat session.
-  const commandTargetSessionKey =
-    ctx.CommandSource === "native"
-      ? normalizeOptionalString(ctx.CommandTargetSessionKey)
-      : undefined;
+  const commandTargetSessionKey = resolveCommandTurnTargetSessionKey(ctx);
   // Native slash/menu commands can arrive on a transport-specific "slash session"
   // while explicitly targeting an existing chat session. Honor that explicit target
   // before any binding lookup so command-side mutations land on the intended session.

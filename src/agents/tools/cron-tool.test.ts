@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { callGatewayMock } = vi.hoisted(() => ({
+const { callGatewayMock, extractDeliveryInfoMock } = vi.hoisted(() => ({
   callGatewayMock: vi.fn(),
+  extractDeliveryInfoMock: vi.fn(),
 }));
 
 vi.mock("../agent-scope.js", async () => {
@@ -12,6 +13,11 @@ vi.mock("../agent-scope.js", async () => {
   };
 });
 
+vi.mock("../../config/sessions/delivery-info.js", () => ({
+  extractDeliveryInfo: extractDeliveryInfoMock,
+}));
+
+import { buildAgentPeerSessionKey } from "../../routing/session-key.js";
 import { createCronTool } from "./cron-tool.js";
 
 describe("cron tool", () => {
@@ -163,6 +169,8 @@ describe("cron tool", () => {
   beforeEach(() => {
     callGatewayMock.mockClear();
     callGatewayMock.mockResolvedValue({ ok: true });
+    extractDeliveryInfoMock.mockReset();
+    extractDeliveryInfoMock.mockReturnValue({ deliveryContext: undefined, threadId: undefined });
   });
 
   it("marks cron as owner-only", () => {
@@ -720,89 +728,56 @@ describe("cron tool", () => {
     expect(call.params?.agentId).toBeNull();
   });
 
-  it("infers delivery from threaded session keys", async () => {
-    expect(
-      await executeAddAndReadDelivery({
-        callId: "call-thread",
-        agentSessionKey: "agent:main:slack:channel:general:thread:1699999999.0001",
-      }),
-    ).toEqual({
-      mode: "announce",
-      channel: "slack",
-      to: "general",
+  it("does not infer delivery from raw session-key fragments without delivery context", async () => {
+    const slackDelivery = await executeAddAndReadDelivery({
+      callId: "call-thread",
+      agentSessionKey: "agent:main:slack:channel:general:thread:1699999999.0001",
     });
+    const telegramDelivery = await executeAddAndReadDelivery({
+      callId: "call-telegram-topic",
+      agentSessionKey: "agent:main:telegram:group:-1001234567890:topic:99",
+    });
+
+    expect(slackDelivery?.channel).toBeUndefined();
+    expect(slackDelivery?.to).toBeUndefined();
+    expect(telegramDelivery?.channel).toBeUndefined();
+    expect(telegramDelivery?.to).toBeUndefined();
   });
 
-  it("preserves telegram forum topics when inferring delivery", async () => {
-    expect(
-      await executeAddAndReadDelivery({
-        callId: "call-telegram-topic",
-        agentSessionKey: "agent:main:telegram:group:-1001234567890:topic:99",
-      }),
-    ).toEqual({
-      mode: "announce",
-      channel: "telegram",
-      to: "-1001234567890:topic:99",
+  it("uses stored delivery context when current context is unavailable", async () => {
+    extractDeliveryInfoMock.mockReturnValueOnce({
+      deliveryContext: {
+        channel: "matrix",
+        to: "room:!AbCdEf1234567890:example.org",
+        accountId: "bot-a",
+        threadId: "$RootEvent:Example.Org",
+      },
+      threadId: undefined,
     });
-  });
 
-  it("preserves telegram direct-chat thread ids when inferring delivery", async () => {
     expect(
       await executeAddAndReadDelivery({
-        callId: "call-telegram-direct-thread",
-        agentSessionKey: "agent:main:telegram:direct:123456789:thread:123456789:99",
+        callId: "call-stored-context",
+        agentSessionKey: "agent:main:matrix:channel:!abcdef1234567890:example.org",
       }),
     ).toEqual({
       mode: "announce",
-      channel: "telegram",
-      to: "123456789",
-      threadId: "99",
-    });
-  });
-
-  it("preserves telegram account ids with direct-chat thread inference", async () => {
-    expect(
-      await executeAddAndReadDelivery({
-        callId: "call-telegram-account-direct-thread",
-        agentSessionKey: "agent:main:telegram:bot-a:direct:123456789:thread:123456789:99",
-      }),
-    ).toEqual({
-      mode: "announce",
-      channel: "telegram",
-      to: "123456789",
+      channel: "matrix",
+      to: "room:!AbCdEf1234567890:example.org",
       accountId: "bot-a",
-      threadId: "99",
+      threadId: "$RootEvent:Example.Org",
     });
   });
 
-  it("preserves legacy telegram dm thread ids when inferring delivery", async () => {
-    expect(
-      await executeAddAndReadDelivery({
-        callId: "call-telegram-dm-thread",
-        agentSessionKey: "agent:main:telegram:dm:123456789:thread:123456789:99",
-      }),
-    ).toEqual({
-      mode: "announce",
-      channel: "telegram",
-      to: "123456789",
-      threadId: "99",
+  it("prefers current delivery context over stored session context", async () => {
+    extractDeliveryInfoMock.mockReturnValueOnce({
+      deliveryContext: {
+        channel: "matrix",
+        to: "!stored:example.org",
+      },
+      threadId: undefined,
     });
-  });
 
-  it("drops mismatched telegram direct-chat thread ids when inferring delivery", async () => {
-    expect(
-      await executeAddAndReadDelivery({
-        callId: "call-telegram-mismatched-direct-thread",
-        agentSessionKey: "agent:main:telegram:direct:123456789:thread:987654321:99",
-      }),
-    ).toEqual({
-      mode: "announce",
-      channel: "telegram",
-      to: "123456789",
-    });
-  });
-
-  it("prefers current delivery context over lowercased session-key targets", async () => {
     expect(
       await executeAddAndReadDelivery({
         callId: "call-current-context",
@@ -821,6 +796,63 @@ describe("cron tool", () => {
       accountId: "bot-a",
       threadId: "$RootEvent:Example.Org",
     });
+  });
+
+  it("does not surface lowercased LINE recipients when current delivery context is unavailable (#81628)", async () => {
+    // LINE chat IDs are case-sensitive; without current/persisted deliveryContext,
+    // cron must not rebuild delivery.to from the lowercased session-key fragment.
+    const sessionKey = buildAgentPeerSessionKey({
+      agentId: "main",
+      channel: "line",
+      peerKind: "group",
+      peerId: "Cabcdef0123456789abcdef0123456789",
+    });
+    expect(sessionKey).toBe("agent:main:line:group:cabcdef0123456789abcdef0123456789");
+
+    const delivery = await executeAddAndReadDelivery({
+      callId: "call-line-group-no-context-81628",
+      agentSessionKey: sessionKey,
+      // Intentionally no currentDeliveryContext.
+    });
+
+    expect(delivery?.to).toBeUndefined();
+  });
+
+  it("does not surface lowercased LINE DM recipients with per-account-channel-peer scope (#81628)", async () => {
+    const sessionKey = buildAgentPeerSessionKey({
+      agentId: "main",
+      channel: "line",
+      peerKind: "direct",
+      accountId: "primary",
+      dmScope: "per-account-channel-peer",
+      peerId: "Uabcdef0123456789abcdef0123456789",
+    });
+    expect(sessionKey).toBe("agent:main:line:primary:direct:uabcdef0123456789abcdef0123456789");
+
+    const delivery = await executeAddAndReadDelivery({
+      callId: "call-line-direct-no-context-81628",
+      agentSessionKey: sessionKey,
+    });
+
+    expect(delivery?.to).toBeUndefined();
+  });
+
+  it("does not surface lowercased LINE DM recipients with per-peer scope (#81628)", async () => {
+    const sessionKey = buildAgentPeerSessionKey({
+      agentId: "main",
+      channel: "line",
+      peerKind: "direct",
+      dmScope: "per-peer",
+      peerId: "Uabcdef0123456789abcdef0123456789",
+    });
+    expect(sessionKey).toBe("agent:main:direct:uabcdef0123456789abcdef0123456789");
+
+    const delivery = await executeAddAndReadDelivery({
+      callId: "call-line-per-peer-no-context-81628",
+      agentSessionKey: sessionKey,
+    });
+
+    expect(delivery?.to).toBeUndefined();
   });
 
   it("does not let current delivery context override explicit delivery targets", async () => {
@@ -926,7 +958,15 @@ describe("cron tool", () => {
     });
   });
 
-  it("falls back to session-key inference when current context has no target", async () => {
+  it("falls back to stored delivery context when current context has no target", async () => {
+    extractDeliveryInfoMock.mockReturnValueOnce({
+      deliveryContext: {
+        channel: "telegram",
+        to: "-1001234567890",
+      },
+      threadId: "99",
+    });
+
     expect(
       await executeAddAndReadDelivery({
         callId: "call-empty-current-context",
@@ -939,7 +979,8 @@ describe("cron tool", () => {
     ).toEqual({
       mode: "announce",
       channel: "telegram",
-      to: "-1001234567890:topic:99",
+      to: "-1001234567890",
+      threadId: "99",
     });
   });
 
@@ -958,6 +999,13 @@ describe("cron tool", () => {
   });
 
   it("infers delivery when delivery is null", async () => {
+    extractDeliveryInfoMock.mockReturnValueOnce({
+      deliveryContext: {
+        to: "alice",
+      },
+      threadId: undefined,
+    });
+
     expect(
       await executeAddAndReadDelivery({
         callId: "call-null-delivery",

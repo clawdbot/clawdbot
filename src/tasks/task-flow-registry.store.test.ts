@@ -1,5 +1,6 @@
 import { statSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   createManagedTaskFlow,
@@ -189,6 +190,39 @@ describe("task-flow-registry store runtime", () => {
       expect(restored?.flowId).toBe(created.flowId);
       expect(restored?.stateJson).toBeNull();
       expect(restored?.waitJson).toBeNull();
+    });
+  });
+
+  it("drops malformed requester origin json from sqlite flow state", async () => {
+    await withFlowRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskFlowRegistryForTests();
+
+      const created = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        requesterOrigin: {
+          channel: "notifychat",
+          to: "notifychat:123",
+        },
+        controllerId: "tests/malformed-origin",
+        goal: "Restore malformed origin",
+        status: "running",
+      });
+
+      const sqlitePath = resolveTaskFlowRegistrySqlitePath(process.env);
+      const { DatabaseSync } = requireNodeSqlite();
+      const db = new DatabaseSync(sqlitePath);
+      db.prepare(`UPDATE flow_runs SET requester_origin_json = ? WHERE flow_id = ?`).run(
+        JSON.stringify(["notifychat", "123"]),
+        created.flowId,
+      );
+      db.close();
+
+      resetTaskFlowRegistryForTests({ persist: false });
+
+      const restored = getTaskFlowById(created.flowId);
+      expect(restored?.flowId).toBe(created.flowId);
+      expect(restored?.requesterOrigin).toBeUndefined();
     });
   });
 

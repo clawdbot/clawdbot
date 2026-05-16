@@ -2128,6 +2128,38 @@ describe("model-selection", () => {
         }),
       ).toBe("medium");
     });
+
+    it("honors configured provider models that disable reasoning", () => {
+      const cfg = {
+        models: {
+          providers: {
+            google: {
+              api: "google-generative-ai",
+              baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+              models: [
+                {
+                  id: "gemma-4-26b-a4b-it",
+                  name: "Gemma 4 26B",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 32_000,
+                  maxTokens: 8_192,
+                },
+              ],
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(
+        resolveThinkingDefault({
+          cfg,
+          provider: "google",
+          model: "gemma-4-26b-a4b-it",
+        }),
+      ).toBe("off");
+    });
   });
 });
 

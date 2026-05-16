@@ -473,6 +473,21 @@ export function activateSecretsRuntimeSnapshot(snapshot: PreparedSecretsRuntimeS
   });
 }
 
+export async function refreshActiveSecretsRuntimeSnapshot(): Promise<boolean> {
+  if (!activeSnapshot || !activeRefreshContext) {
+    return false;
+  }
+  const refreshed = await prepareSecretsRuntimeSnapshot({
+    config: activeSnapshot.sourceConfig,
+    env: activeRefreshContext.env,
+    agentDirs: resolveRefreshAgentDirs(activeSnapshot.sourceConfig, activeRefreshContext),
+    loadAuthStore: activeRefreshContext.loadAuthStore,
+    loadablePluginOrigins: activeRefreshContext.loadablePluginOrigins,
+  });
+  activateSecretsRuntimeSnapshot(refreshed);
+  return true;
+}
+
 export function getActiveSecretsRuntimeSnapshot(): PreparedSecretsRuntimeSnapshot | null {
   if (!activeSnapshot) {
     return null;

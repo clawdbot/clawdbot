@@ -5,6 +5,7 @@ import type {
 import {
   assertOkOrThrowHttpError,
   postTranscriptionRequest,
+  readProviderJsonObjectResponse,
   resolveProviderHttpRequestConfig,
   requireTranscriptionText,
 } from "openclaw/plugin-sdk/provider-http";
@@ -17,15 +18,36 @@ function resolveModel(model?: string): string {
   return trimmed || DEFAULT_DEEPGRAM_AUDIO_MODEL;
 }
 
-type DeepgramTranscriptResponse = {
-  results?: {
-    channels?: Array<{
-      alternatives?: Array<{
-        transcript?: string;
-      }>;
-    }>;
-  };
-};
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function readDeepgramTranscript(payload: Record<string, unknown>): string | undefined {
+  const results = asRecord(payload.results);
+  if (!results) {
+    return undefined;
+  }
+  if (!Array.isArray(results.channels)) {
+    throw new Error("Audio transcription failed: malformed JSON response");
+  }
+  const channel = asRecord(results.channels[0]);
+  if (!channel) {
+    return undefined;
+  }
+  if (!Array.isArray(channel.alternatives)) {
+    throw new Error("Audio transcription failed: malformed JSON response");
+  }
+  const alternative = asRecord(channel.alternatives[0]);
+  if (!alternative) {
+    return undefined;
+  }
+  if (alternative.transcript !== undefined && typeof alternative.transcript !== "string") {
+    throw new Error("Audio transcription failed: malformed JSON response");
+  }
+  return alternative.transcript;
+}
 
 export async function transcribeDeepgramAudio(
   params: AudioTranscriptionRequest,
@@ -75,9 +97,9 @@ export async function transcribeDeepgramAudio(
   try {
     await assertOkOrThrowHttpError(res, "Audio transcription failed");
 
-    const payload = (await res.json()) as DeepgramTranscriptResponse;
+    const payload = await readProviderJsonObjectResponse(res, "Audio transcription failed");
     const transcript = requireTranscriptionText(
-      payload.results?.channels?.[0]?.alternatives?.[0]?.transcript,
+      readDeepgramTranscript(payload),
       "Audio transcription response missing transcript",
     );
     return { text: transcript, model };

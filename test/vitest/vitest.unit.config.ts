@@ -84,6 +84,20 @@ export function resolveDefaultUnitCoverageIncludePatterns(
   return [...sourceFiles].toSorted((left, right) => left.localeCompare(right));
 }
 
+function isEnabledFlagValue(value: string): boolean {
+  return !["0", "false", "no", "off"].includes(value.trim().toLowerCase());
+}
+
+function isCoverageEnabledFromArgv(argv: string[] = process.argv): boolean {
+  return argv.some((arg) => {
+    if (arg === "--coverage" || arg === "--coverage.enabled") {
+      return true;
+    }
+    const match = arg.match(/^--coverage(?:\.enabled)?=(.*)$/u);
+    return match ? isEnabledFlagValue(match[1] ?? "") : false;
+  });
+}
+
 export function createUnitVitestConfigWithOptions(
   env: Record<string, string | undefined> = process.env,
   options: {
@@ -95,11 +109,13 @@ export function createUnitVitestConfigWithOptions(
   } = {},
 ) {
   const isolate = resolveVitestIsolation(env);
+  const argv = options.argv ?? process.argv;
   const unitFastTestFiles = getUnitFastTestFiles();
   const envIncludePatterns = loadIncludePatternsFromEnv(env);
   const defaultIncludePatterns = options.includePatterns ?? unitTestIncludePatterns;
-  const cliIncludePatterns = narrowIncludePatternsForCli(defaultIncludePatterns, options.argv);
+  const cliIncludePatterns = narrowIncludePatternsForCli(defaultIncludePatterns, argv);
   const coverageIncludePatterns =
+    isCoverageEnabledFromArgv(argv) &&
     options.includePatterns === undefined &&
     envIncludePatterns === null &&
     cliIncludePatterns === null

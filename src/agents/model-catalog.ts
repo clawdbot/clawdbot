@@ -5,7 +5,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { planManifestModelCatalogRows } from "../model-catalog/manifest-planner.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
-import { isManifestPluginAvailableForControlPlane } from "../plugins/manifest-contract-eligibility.js";
+import {
+  isManifestPluginAvailableForControlPlane,
+  loadManifestMetadataSnapshot,
+} from "../plugins/manifest-contract-eligibility.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { augmentModelCatalogWithProviderPlugins } from "../plugins/provider-runtime.runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
@@ -16,7 +19,10 @@ import {
 import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { modelSupportsInput as modelCatalogEntrySupportsInput } from "./model-catalog-lookup.js";
 import type { ModelCatalogEntry, ModelInputType } from "./model-catalog.types.js";
-import { normalizeConfiguredProviderCatalogModelId } from "./model-ref-shared.js";
+import {
+  normalizeConfiguredProviderCatalogModelId,
+  type ProviderModelIdNormalizationOptions,
+} from "./model-ref-shared.js";
 import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import { normalizeProviderId } from "./provider-id.js";
@@ -196,6 +202,9 @@ function normalizePersistedModelCatalogEntry(
     contextWindow?: number;
     contextTokens?: number;
   },
+  options: {
+    manifestPlugins?: ProviderModelIdNormalizationOptions["manifestPlugins"];
+  } = {},
 ): ModelCatalogEntry | undefined {
   const rawId = normalizeOptionalString(entry.id) ?? "";
   if (!rawId) {
@@ -205,7 +214,7 @@ function normalizePersistedModelCatalogEntry(
   if (!provider) {
     return undefined;
   }
-  const id = normalizeConfiguredProviderCatalogModelId(provider, rawId);
+  const id = normalizeConfiguredProviderCatalogModelId(provider, rawId, options);
   const name = normalizeOptionalString(entry.name ?? id) || id;
   const contextWindow =
     typeof entry?.contextWindow === "number" && entry.contextWindow > 0
@@ -252,6 +261,14 @@ async function loadReadOnlyPersistedModelCatalog(params?: {
   const models: ModelCatalogEntry[] = [];
   const { buildShouldSuppressBuiltInModel } = await loadModelSuppression();
   const shouldSuppressBuiltInModel = buildShouldSuppressBuiltInModel({ config: cfg });
+  let manifestPlugins: ProviderModelIdNormalizationOptions["manifestPlugins"];
+  const getManifestPlugins = () => {
+    manifestPlugins ??= loadManifestMetadataSnapshot({
+      config: cfg,
+      env: process.env,
+    }).plugins;
+    return manifestPlugins;
+  };
   const providers =
     parsed?.providers && typeof parsed.providers === "object"
       ? (parsed.providers as Record<string, Record<string, unknown>>)
@@ -269,10 +286,15 @@ async function loadReadOnlyPersistedModelCatalog(params?: {
         ? providerConfig.contextTokens
         : undefined;
     for (const entry of providerConfig.models as Record<string, unknown>[]) {
-      const normalized = normalizePersistedModelCatalogEntry(providerRaw, entry, {
-        contextWindow: providerContextWindow,
-        contextTokens: providerContextTokens,
-      });
+      const normalized = normalizePersistedModelCatalogEntry(
+        providerRaw,
+        entry,
+        {
+          contextWindow: providerContextWindow,
+          contextTokens: providerContextTokens,
+        },
+        { manifestPlugins: getManifestPlugins() },
+      );
       if (normalized && !shouldSuppressBuiltInModel(normalized)) {
         models.push(normalized);
       }

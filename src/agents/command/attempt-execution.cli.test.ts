@@ -519,6 +519,72 @@ describe("CLI attempt execution", () => {
     expect(messages).toHaveLength(1);
   });
 
+  it("embedded assistant gap-fill skips malformed transcript tail rows before deduping", async () => {
+    const sessionKey = "agent:main:subagent:embedded-gap-fill-malformed-tail";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-embedded-gap-fill-malformed-tail",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+
+    const result = makeCliResult("already mirrored");
+    result.meta.executionTrace = {
+      winnerProvider: "anthropic",
+      winnerModel: "claude-opus-4-6",
+      fallbackUsed: false,
+      runner: "embedded",
+    };
+
+    const updatedFirst = await persistCliTurnTranscript({
+      body: "ignored for gap fill",
+      result,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      storePath,
+      sessionAgentId: "main",
+      sessionCwd: tmpDir,
+      config: {},
+      embeddedAssistantGapFill: true,
+    });
+    const sessionFile = updatedFirst?.sessionFile;
+    if (typeof sessionFile !== "string") {
+      throw new Error("Expected CLI transcript session file.");
+    }
+
+    await fs.appendFile(sessionFile, "{truncated-json\n", "utf-8");
+
+    await persistCliTurnTranscript({
+      body: "still ignored",
+      result,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionEntry: updatedFirst,
+      sessionStore,
+      storePath,
+      sessionAgentId: "main",
+      sessionCwd: tmpDir,
+      config: {},
+      embeddedAssistantGapFill: true,
+    });
+
+    const validEntries = (await fs.readFile(sessionFile, "utf-8"))
+      .split(/\r?\n/)
+      .flatMap((line) => {
+        if (!line) {
+          return [];
+        }
+        try {
+          return [JSON.parse(line) as { type?: string; message?: { role?: string } }];
+        } catch {
+          return [];
+        }
+      });
+    expect(validEntries.filter((entry) => entry.type === "message")).toHaveLength(1);
+  });
+
   it("embedded assistant gap-fill appends repeated replies after a user tail", async () => {
     const sessionKey = "agent:main:subagent:embedded-repeated-reply";
     const sessionEntry: SessionEntry = {
@@ -785,7 +851,7 @@ describe("CLI attempt execution", () => {
     });
   });
 
-  it("routes canonical OpenAI models through the configured Codex CLI runtime", async () => {
+  it("routes canonical OpenAI models through the configured embedded Codex runtime", async () => {
     const sessionKey = "agent:main:direct:canonical-codex-cli";
     const sessionEntry: SessionEntry = {
       sessionId: "openclaw-session-canonical-codex-cli",
@@ -793,7 +859,14 @@ describe("CLI attempt execution", () => {
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
     await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
-    runCliAgentMock.mockResolvedValueOnce(makeCliResult("canonical codex cli"));
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "canonical codex embedded" }],
+      meta: {
+        durationMs: 5,
+        finalAssistantVisibleText: "canonical codex embedded",
+        executionTrace: { runner: "pi" },
+      },
+    });
 
     await runAgentAttempt({
       providerOverride: "openai",
@@ -833,9 +906,9 @@ describe("CLI attempt execution", () => {
       sessionHasHistory: false,
     });
 
-    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
-    expectMockArgFields(runCliAgentMock, {
-      provider: "codex-cli",
+    expect(runCliAgentMock).not.toHaveBeenCalled();
+    expectMockArgFields(runEmbeddedPiAgentMock, {
+      provider: "openai",
       model: "gpt-5.4",
     });
   });

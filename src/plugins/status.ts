@@ -206,7 +206,6 @@ function buildPluginRecordFromInstalledIndex(
     migrationProviderIds: [...(manifest?.contracts?.migrationProviders ?? [])],
     memoryEmbeddingProviderIds: [...(manifest?.contracts?.memoryEmbeddingProviders ?? [])],
     agentHarnessIds: [],
-    gatewayMethods: [],
     cliCommands: [],
     services: [],
     gatewayDiscoveryServiceIds: [],
@@ -447,6 +446,11 @@ export function buildPluginInspectReport(params: {
   const policyEntry = normalizePluginsConfig(config.plugins).entries[plugin.id];
   const shapeSummary = buildPluginShapeSummary({ plugin, report });
   const shape = shapeSummary.shape;
+  const gatewayMethods = (report.gatewayMethodDescriptors ?? [])
+    .filter(
+      (descriptor) => descriptor.owner.kind === "plugin" && descriptor.owner.pluginId === plugin.id,
+    )
+    .map((descriptor) => descriptor.name);
 
   // Populate MCP server info for bundle-format plugins with a known rootDir.
   let mcpServers: PluginInspectReport["mcpServers"] = [];
@@ -508,7 +512,7 @@ export function buildPluginInspectReport(params: {
     cliCommands: [...plugin.cliCommands],
     services: [...plugin.services],
     gatewayDiscoveryServices: [...plugin.gatewayDiscoveryServiceIds],
-    gatewayMethods: [...plugin.gatewayMethods],
+    gatewayMethods,
     mcpServers,
     lspServers,
     httpRouteCount: plugin.httpRoutes,

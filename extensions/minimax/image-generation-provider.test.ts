@@ -109,6 +109,37 @@ describe("minimax image-generation provider", () => {
     });
   });
 
+  it("rejects malformed base64 image payloads", async () => {
+    mockMinimaxApiKey();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            data: {
+              image_base64: ["not-base64!"],
+            },
+            base_resp: { status_code: 0 },
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+      ),
+    );
+
+    const provider = buildMinimaxImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "minimax",
+        model: "image-01",
+        prompt: "draw a cat",
+        cfg: {},
+      }),
+    ).rejects.toThrow("MiniMax image generation returned malformed image base64");
+  });
+
   it("passes request SSRF policy to the provider HTTP helper", async () => {
     mockMinimaxApiKey();
     const postJsonRequest = vi.spyOn(providerHttp, "postJsonRequest").mockResolvedValue({

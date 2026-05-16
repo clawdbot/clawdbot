@@ -173,7 +173,7 @@ export async function readTailAssistantTextFromSessionTranscript(
     try {
       return parseAssistantTranscriptText(line);
     } catch {
-      return undefined;
+      continue;
     }
   }
   return undefined;

@@ -27,6 +27,10 @@ import { resolveUserPath } from "../../utils.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
 import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
+import {
+  formatGeneratedAttachmentLines,
+  type AgentGeneratedAttachment,
+} from "../generated-attachments.js";
 import { ToolInputError, readNumberParam, readStringParam } from "./common.js";
 import { decodeDataUrl } from "./image-tool.helpers.js";
 import { withMediaGenerationTaskKeepalive } from "./media-generate-background-shared.js";
@@ -401,6 +405,7 @@ type ExecutedMusicGeneration = {
   provider: string;
   model: string;
   savedPaths: string[];
+  attachments: AgentGeneratedAttachment[];
   contentText: string;
   details: Record<string, unknown>;
   wakeResult: string;
@@ -482,6 +487,12 @@ async function executeMusicGenerationJob(params: {
     ignoredOverrides.length > 0
       ? `Ignored unsupported overrides for ${result.provider}/${result.model}: ${ignoredOverrides.map((entry) => `${entry.key}=${String(entry.value)}`).join(", ")}.`
       : undefined;
+  const attachments: AgentGeneratedAttachment[] = savedTracks.map((track, index) => ({
+    type: "audio",
+    path: track.path,
+    mimeType: track.contentType,
+    name: result.tracks[index]?.fileName,
+  }));
   const lines = [
     `Generated ${savedTracks.length} track${savedTracks.length === 1 ? "" : "s"} with ${result.provider}/${result.model}.`,
     ...(warning ? [`Warning: ${warning}`] : []),
@@ -496,12 +507,13 @@ async function executeMusicGenerationJob(params: {
       ? `Duration normalized: requested ${requestedDurationSeconds}s; used ${appliedDurationSeconds}s.`
       : null,
     ...(result.lyrics?.length ? ["Lyrics returned.", ...result.lyrics] : []),
-    ...savedTracks.map((track) => `MEDIA:${track.path}`),
+    ...formatGeneratedAttachmentLines(attachments),
   ].filter((entry): entry is string => Boolean(entry));
   return {
     provider: result.provider,
     model: result.model,
     savedPaths: savedTracks.map((track) => track.path),
+    attachments,
     contentText: lines.join("\n"),
     wakeResult: lines.join("\n"),
     details: {
@@ -510,7 +522,9 @@ async function executeMusicGenerationJob(params: {
       count: savedTracks.length,
       media: {
         mediaUrls: savedTracks.map((track) => track.path),
+        attachments,
       },
+      attachments,
       paths: savedTracks.map((track) => track.path),
       ...buildTaskRunDetails(params.taskHandle),
       ...(!ignoredOverrideKeys.has("lyrics") && params.lyrics
@@ -719,7 +733,7 @@ export function createMusicGenerateTool(options?: {
                 status: "ok",
                 statusLabel: "completed successfully",
                 result: executed.wakeResult,
-                mediaUrls: executed.savedPaths,
+                attachments: executed.attachments,
               });
             } catch (error) {
               log.warn("Music generation completion wake failed after successful generation", {

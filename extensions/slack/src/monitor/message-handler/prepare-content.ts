@@ -293,6 +293,9 @@ export async function resolveSlackMessageContent(params: {
   client?: SlackWebClient;
   mediaMaxBytes: number;
   resolveUserName?: (userId: string) => Promise<{ name?: string }>;
+  mediaReadIdleTimeoutMs?: number;
+  mediaTotalTimeoutMs?: number;
+  abortSignal?: AbortSignal;
 }): Promise<SlackResolvedMessageContent | null> {
   const ownFiles = filterInheritedParentFiles({
     files: params.message.files,
@@ -308,6 +311,9 @@ export async function resolveSlackMessageContent(params: {
             client: params.client,
             token: params.botToken,
             maxBytes: params.mediaMaxBytes,
+            readIdleTimeoutMs: params.mediaReadIdleTimeoutMs,
+            totalTimeoutMs: params.mediaTotalTimeoutMs,
+            abortSignal: params.abortSignal,
           }),
         )
       : Promise.resolve(null);
@@ -320,6 +326,9 @@ export async function resolveSlackMessageContent(params: {
             client: params.client,
             token: params.botToken,
             maxBytes: params.mediaMaxBytes,
+            readIdleTimeoutMs: params.mediaReadIdleTimeoutMs,
+            totalTimeoutMs: params.mediaTotalTimeoutMs,
+            abortSignal: params.abortSignal,
           }),
         )
       : Promise.resolve(null);

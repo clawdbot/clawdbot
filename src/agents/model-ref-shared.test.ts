@@ -19,6 +19,36 @@ describe("normalizeStaticProviderModelId", () => {
 });
 
 describe("normalizeConfiguredProviderCatalogModelId", () => {
+  const manifestPlugins = [
+    {
+      modelIdNormalization: {
+        providers: {
+          custom: {
+            aliases: {
+              latest: "modern-model",
+            },
+            prefixWhenBare: "vendor",
+          },
+        },
+      },
+    },
+  ];
+
+  it("applies supplied manifest normalization policies to configured catalog ids", () => {
+    expect(normalizeConfiguredProviderCatalogModelId("custom", "latest", { manifestPlugins })).toBe(
+      "vendor/modern-model",
+    );
+  });
+
+  it("can skip manifest normalization while retaining built-in normalization", () => {
+    expect(
+      normalizeConfiguredProviderCatalogModelId("custom", "latest", {
+        allowManifestNormalization: false,
+        manifestPlugins,
+      }),
+    ).toBe("latest");
+  });
+
   it("normalizes nested retired Google Gemini ids in proxy-prefixed rows", () => {
     expect(
       normalizeConfiguredProviderCatalogModelId("kilocode", "kilocode/google/gemini-3-pro-preview"),

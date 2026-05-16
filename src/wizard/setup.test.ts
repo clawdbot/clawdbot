@@ -1101,6 +1101,55 @@ describe("runSetupWizard", () => {
     expect(matchingQuickStartNotes.length).toBeGreaterThan(0);
   });
 
+  it("localizes the quickstart summary", async () => {
+    const previousPort = process.env.OPENCLAW_GATEWAY_PORT;
+    const previousLocale = process.env.OPENCLAW_LOCALE;
+    process.env.OPENCLAW_GATEWAY_PORT = "18791";
+    process.env.OPENCLAW_LOCALE = "zh-CN";
+    const note: WizardPrompter["note"] = vi.fn(async () => {});
+    const prompter = buildWizardPrompter({ note });
+    const runtime = createRuntime();
+
+    try {
+      await runSetupWizard(
+        {
+          acceptRisk: true,
+          flow: "quickstart",
+          authChoice: "skip",
+          installDaemon: false,
+          skipProviders: true,
+          skipSkills: true,
+          skipSearch: true,
+          skipHealth: true,
+          skipUi: true,
+        },
+        runtime,
+        prompter,
+      );
+    } finally {
+      if (previousPort === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_PORT;
+      } else {
+        process.env.OPENCLAW_GATEWAY_PORT = previousPort;
+      }
+      if (previousLocale === undefined) {
+        delete process.env.OPENCLAW_LOCALE;
+      } else {
+        process.env.OPENCLAW_LOCALE = previousLocale;
+      }
+    }
+
+    const calls = (note as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    const matchingQuickStartNotes = calls.filter(
+      (call) =>
+        call?.[1] === "QuickStart" &&
+        typeof call?.[0] === "string" &&
+        call[0].includes("Gateway 端口：18791") &&
+        call[0].includes("Tailscale 暴露方式：关闭"),
+    );
+    expect(matchingQuickStartNotes.length).toBeGreaterThan(0);
+  });
+
   it("uses manifest setup metadata for post-auth model policy without loading provider runtime", async () => {
     promptDefaultModel.mockClear();
     resolvePluginProvidersRuntime.mockClear();
@@ -1109,7 +1158,7 @@ describe("runSetupWizard", () => {
       providerId: "openai-codex",
       methodId: "oauth",
       choiceId: "openai-codex",
-      choiceLabel: "OpenAI Codex Browser Login",
+      choiceLabel: "ChatGPT/Codex Browser Login",
     });
     resolvePluginSetupProvider.mockReturnValue({
       id: "openai-codex",
@@ -1117,7 +1166,7 @@ describe("runSetupWizard", () => {
       auth: [
         {
           id: "oauth",
-          label: "OpenAI Codex Browser Login",
+          label: "ChatGPT/Codex Browser Login",
           kind: "oauth",
           wizard: {
             modelSelection: {

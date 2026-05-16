@@ -14,7 +14,10 @@ const WEB_LOGIN_METHODS = new Set(["web.login.start", "web.login.wait"]);
 
 const resolveWebLoginProvider = () =>
   listChannelPlugins().find((plugin) =>
-    (plugin.gatewayMethods ?? []).some((method) => WEB_LOGIN_METHODS.has(method)),
+    [
+      ...(plugin.gatewayMethods ?? []),
+      ...(plugin.gatewayMethodDescriptors ?? []).map((descriptor) => descriptor.name),
+    ].some((method) => WEB_LOGIN_METHODS.has(method)),
   ) ?? null;
 
 function resolveAccountId(params: unknown): string | undefined {

@@ -8,6 +8,7 @@ export type {
   ChannelConfigSchema,
   ChannelConfigUiHint,
 } from "./types.config.js";
+import type { OperatorScope } from "../../gateway/operator-scopes.js";
 import type {
   ChannelApprovalCapability,
   ChannelAuthAdapter,
@@ -48,6 +49,12 @@ import type {
 /** Full capability contract for a native channel plugin. */
 type ChannelPluginSetupWizard = ChannelSetupWizard | ChannelSetupWizardAdapter;
 
+export type ChannelGatewayMethodDescriptor = {
+  name: string;
+  scope?: OperatorScope;
+  description?: string;
+};
+
 // Omitted generic means "plugin with some account shape", not "plugin whose
 // account is literally Record<string, unknown>".
 // oxlint-disable-next-line typescript/no-explicit-any
@@ -72,6 +79,7 @@ export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknow
   outbound?: ChannelOutboundAdapter;
   status?: ChannelStatusAdapter<ResolvedAccount, Probe, Audit>;
   gatewayMethods?: string[];
+  gatewayMethodDescriptors?: ChannelGatewayMethodDescriptor[];
   gateway?: ChannelGatewayAdapter<ResolvedAccount>;
   // Login/logout and channel-auth only. Approval auth lives on approvalCapability.
   auth?: ChannelAuthAdapter;

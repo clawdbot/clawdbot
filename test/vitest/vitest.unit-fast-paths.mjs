@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -309,15 +310,32 @@ function walkFiles(directory, files = []) {
 
 const walkedTestFilesByCwd = new Map();
 
+function collectRepoTestFilesFromGit(cwd) {
+  const result = spawnSync("git", ["ls-files", "--", "src", "packages", "test"], {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout
+    .split("\n")
+    .map((file) => normalizeRepoPath(file.trim()))
+    .filter((file) => file.endsWith(".test.ts"));
+}
+
 function collectRepoTestFiles(cwd) {
   const normalizedCwd = normalizeRepoPath(cwd);
   const cached = walkedTestFilesByCwd.get(normalizedCwd);
   if (cached) {
     return cached;
   }
-  const files = ["src", "packages", "test"]
-    .flatMap((directory) => walkFiles(path.join(cwd, directory)))
-    .map((file) => normalizeRepoPath(path.relative(cwd, file)));
+  const files =
+    collectRepoTestFilesFromGit(cwd) ??
+    ["src", "packages", "test"]
+      .flatMap((directory) => walkFiles(path.join(cwd, directory)))
+      .map((file) => normalizeRepoPath(path.relative(cwd, file)));
   walkedTestFilesByCwd.set(normalizedCwd, files);
   return files;
 }

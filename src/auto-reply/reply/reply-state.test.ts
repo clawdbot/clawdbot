@@ -8,6 +8,8 @@ import {
   buildHistoryContext,
   buildHistoryContextFromEntries,
   buildHistoryContextFromMap,
+  buildInboundHistoryFromEntries,
+  buildInboundHistoryFromMap,
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
   HISTORY_CONTEXT_MARKER,
@@ -177,6 +179,58 @@ describe("history helpers", () => {
     expect(result).toContain("B: two");
     expect(result).toContain(CURRENT_MESSAGE_MARKER);
     expect(result).toContain("current");
+  });
+
+  it("builds structured inbound history with media metadata", () => {
+    const historyMap = new Map([
+      [
+        "group",
+        [
+          {
+            sender: "Older",
+            body: "zero",
+            timestamp: 0,
+          },
+          {
+            sender: "A",
+            body: "one",
+            timestamp: 1,
+            messageId: "m1",
+            media: [
+              {
+                path: "/tmp/image.png",
+                contentType: "image/png",
+                kind: "image" as const,
+              },
+            ],
+          },
+        ],
+      ],
+    ]);
+
+    expect(buildInboundHistoryFromMap({ historyMap, historyKey: "group", limit: 1 })).toEqual([
+      {
+        sender: "A",
+        body: "one",
+        timestamp: 1,
+        messageId: "m1",
+        media: [{ path: "/tmp/image.png", contentType: "image/png", kind: "image" }],
+      },
+    ]);
+    expect(
+      buildInboundHistoryFromMap({ historyMap, historyKey: "group", limit: 0 }),
+    ).toBeUndefined();
+    expect(
+      buildInboundHistoryFromEntries({ entries: historyMap.get("group") ?? [], limit: 1 }),
+    ).toEqual([
+      {
+        sender: "A",
+        body: "one",
+        timestamp: 1,
+        messageId: "m1",
+        media: [{ path: "/tmp/image.png", contentType: "image/png", kind: "image" }],
+      },
+    ]);
   });
 
   it("records pending entries only when enabled", () => {

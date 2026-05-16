@@ -171,3 +171,64 @@ export async function readProviderJsonResponse<T>(response: Response, label: str
     throw new Error(`${label}: malformed JSON response`, { cause });
   }
 }
+
+export async function readProviderJsonObjectResponse(
+  response: Response,
+  label: string,
+): Promise<Record<string, unknown>> {
+  const payload = await readProviderJsonResponse<unknown>(response, label);
+  const object = asObject(payload);
+  if (!object) {
+    throw new Error(`${label}: malformed JSON response`);
+  }
+  return object;
+}
+
+export async function readProviderJsonArrayFieldResponse(
+  response: Response,
+  label: string,
+  field: string,
+): Promise<unknown[]> {
+  const payload = await readProviderJsonObjectResponse(response, label);
+  const value = payload[field];
+  if (!Array.isArray(value)) {
+    throw new Error(`${label}: malformed JSON response`);
+  }
+  return value;
+}
+
+function normalizeContentType(response: Response): string | undefined {
+  const contentType = response.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase();
+  return contentType || undefined;
+}
+
+export function assertProviderBinaryResponseContent(
+  response: Response,
+  label: string,
+  kind = "binary",
+): void {
+  const contentType = normalizeContentType(response);
+  if (!contentType) {
+    return;
+  }
+  if (
+    contentType === "application/json" ||
+    contentType.endsWith("+json") ||
+    contentType.startsWith("text/")
+  ) {
+    throw new Error(`${label}: malformed ${kind} response`);
+  }
+}
+
+export async function readProviderBinaryResponse(
+  response: Response,
+  label: string,
+  kind = "binary",
+): Promise<Uint8Array> {
+  assertProviderBinaryResponseContent(response, label, kind);
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  if (bytes.byteLength === 0) {
+    throw new Error(`${label}: malformed ${kind} response`);
+  }
+  return bytes;
+}

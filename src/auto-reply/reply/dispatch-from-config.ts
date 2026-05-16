@@ -79,6 +79,11 @@ import {
   shouldAttemptTtsPayload,
 } from "../../tts/tts-config.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
+import {
+  isNativeCommandTurn,
+  resolveCommandTurnContext,
+  resolveCommandTurnTargetSessionKey,
+} from "../command-turn-context.js";
 import type { BlockReplyContext } from "../get-reply-options.types.js";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../reply-payload.js";
 import type { FinalizedMsgContext } from "../templating.js";
@@ -198,11 +203,8 @@ const isInboundAudioContext = (ctx: FinalizedMsgContext): boolean => {
 const resolveRoutedPolicyConversationType = (
   ctx: FinalizedMsgContext,
 ): "direct" | "group" | undefined => {
-  if (
-    ctx.CommandSource === "native" &&
-    ctx.CommandTargetSessionKey &&
-    ctx.CommandTargetSessionKey !== ctx.SessionKey
-  ) {
+  const commandTargetSessionKey = resolveCommandTurnTargetSessionKey(ctx);
+  if (commandTargetSessionKey && commandTargetSessionKey !== ctx.SessionKey) {
     return undefined;
   }
   const chatType = normalizeChatType(ctx.ChatType);
@@ -223,10 +225,7 @@ const resolveSessionStoreLookup = (
   storePath?: string;
   entry?: SessionEntry;
 } => {
-  const targetSessionKey =
-    ctx.CommandSource === "native"
-      ? normalizeOptionalString(ctx.CommandTargetSessionKey)
-      : undefined;
+  const targetSessionKey = resolveCommandTurnTargetSessionKey(ctx);
   const sessionKey = normalizeOptionalString(targetSessionKey ?? ctx.SessionKey);
   if (!sessionKey) {
     return {};
@@ -308,7 +307,7 @@ const resolveHarnessSourceVisibleRepliesDefault = (params: {
   sessionAgentId: string;
   sessionKey?: string;
 }): "automatic" | "message_tool" | undefined => {
-  if (params.ctx.CommandSource === "native") {
+  if (isNativeCommandTurn(resolveCommandTurnContext(params.ctx))) {
     return undefined;
   }
   try {
@@ -610,10 +609,7 @@ export async function dispatchReplyFromConfig(
       channel: routeReplyChannel,
       to: routeReplyTo,
       sessionKey: ctx.SessionKey,
-      policySessionKey:
-        ctx.CommandSource === "native"
-          ? (ctx.CommandTargetSessionKey ?? ctx.SessionKey)
-          : ctx.SessionKey,
+      policySessionKey: resolveCommandTurnTargetSessionKey(ctx) ?? ctx.SessionKey,
       policyConversationType: resolveRoutedPolicyConversationType(ctx),
       accountId: replyRoute.accountId,
       requesterSenderId: ctx.SenderId,
@@ -805,6 +801,7 @@ export async function dispatchReplyFromConfig(
     cfg,
     ctx,
     requested: params.replyOptions?.sourceReplyDeliveryMode,
+    strictMessageToolOnly: ctx.InboundTurnKind === "room_event",
     sendPolicy,
     suppressAcpChildUserDelivery,
     explicitSuppressTyping: params.replyOptions?.suppressTyping === true,
@@ -1602,6 +1599,7 @@ export async function dispatchReplyFromConfig(
     let finalDeliveryFailed = false;
     const shouldDeliverDespiteSourceReplySuppression = (reply: ReplyPayload) =>
       suppressAutomaticSourceDelivery &&
+      ctx.InboundTurnKind !== "room_event" &&
       !sendPolicyDenied &&
       getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression === true;
     for (const reply of replies) {

@@ -226,6 +226,7 @@ export async function prepareCliRunContext(
           OPENCLAW_MCP_ACCOUNT_ID: params.agentAccountId ?? "",
           OPENCLAW_MCP_SESSION_KEY: params.sessionKey ?? "",
           OPENCLAW_MCP_MESSAGE_CHANNEL: params.messageChannel ?? params.messageProvider ?? "",
+          OPENCLAW_MCP_INBOUND_TURN_KIND: params.currentTurnKind ?? "",
         }
       : undefined,
     warn: (message) => cliBackendLog.warn(message),
@@ -468,6 +469,11 @@ export async function prepareCliRunContext(
     injectedFiles: contextFiles,
     skillsPrompt,
     tools: [],
+    currentTurn: {
+      ...(params.currentTurnKind ? { kind: params.currentTurnKind } : {}),
+      promptChars: preparedPrompt.length,
+      runtimeContextChars: 0,
+    },
   });
 
   return {

@@ -943,6 +943,7 @@ describe("zalouser monitor group mention gating", () => {
       {
         sender: "Alice",
         body: "first unmentioned line",
+        messageId: "history-1",
         timestamp: 1700000000000,
       },
     ]);

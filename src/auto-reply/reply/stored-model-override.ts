@@ -1,3 +1,4 @@
+import { hasSessionAutoModelFallbackProvenance } from "../../agents/agent-scope.js";
 import {
   modelKey,
   normalizeModelRef,
@@ -91,7 +92,15 @@ export function isStaleHeartbeatAutoFallbackOverride(params: {
   if (params.storedOverride?.source !== "session") {
     return false;
   }
-  if (params.sessionEntry?.modelOverrideSource !== "auto") {
+  const entry = params.sessionEntry;
+  const recoveredAutoFallbackOverride =
+    entry !== undefined &&
+    entry.modelOverrideSource === undefined &&
+    hasSessionAutoModelFallbackProvenance(entry);
+  if (entry?.modelOverrideSource !== "auto" && !recoveredAutoFallbackOverride) {
+    return false;
+  }
+  if (!entry) {
     return false;
   }
 
@@ -106,8 +115,8 @@ export function isStaleHeartbeatAutoFallbackOverride(params: {
 
   const originKey = resolveModelRefKey({
     defaultProvider: params.defaultProvider,
-    overrideProvider: params.sessionEntry.modelOverrideFallbackOriginProvider,
-    overrideModel: params.sessionEntry.modelOverrideFallbackOriginModel,
+    overrideProvider: entry.modelOverrideFallbackOriginProvider,
+    overrideModel: entry.modelOverrideFallbackOriginModel,
   });
   if (originKey) {
     return originKey !== primaryKey;
@@ -115,7 +124,7 @@ export function isStaleHeartbeatAutoFallbackOverride(params: {
 
   const noticeSelectedKey = resolveModelRefKey({
     defaultProvider: params.defaultProvider,
-    overrideModel: normalizeOptionalString(params.sessionEntry.fallbackNoticeSelectedModel),
+    overrideModel: normalizeOptionalString(entry.fallbackNoticeSelectedModel),
   });
   if (noticeSelectedKey) {
     return noticeSelectedKey !== primaryKey;

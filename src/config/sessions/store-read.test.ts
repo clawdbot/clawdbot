@@ -18,4 +18,50 @@ describe("readSessionStoreReadOnly", () => {
       expect(store["session-1"]?.updatedAt).toBe(1);
     });
   });
+
+  it("filters non-object entries from read-only session store snapshots", async () => {
+    await withTempDir({ prefix: "openclaw-session-store-readonly-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          good: { sessionId: "s-good", updatedAt: 1 },
+          scalar: "bad",
+          array: [{ sessionId: "s-array", updatedAt: 1 }],
+        }),
+        "utf8",
+      );
+
+      const store = readSessionStoreReadOnly(storePath);
+
+      expect(store.good?.sessionId).toBe("s-good");
+      expect(store.scalar).toBeUndefined();
+      expect(store.array).toBeUndefined();
+    });
+  });
+
+  it("filters invalid session ids and drops malformed sessionFile fields", async () => {
+    await withTempDir({ prefix: "openclaw-session-store-readonly-shape-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          good: { sessionId: " good-session ", updatedAt: "bad", sessionFile: ["bad"] },
+          badId: { sessionId: { id: "bad" }, updatedAt: 1 },
+          traversal: { sessionId: "../etc/passwd", updatedAt: 1 },
+        }),
+        "utf8",
+      );
+
+      const store = readSessionStoreReadOnly(storePath);
+
+      expect(store.good?.sessionId).toBe("good-session");
+      expect(store.good?.updatedAt).toBe(0);
+      expect(store.good?.sessionFile).toBeUndefined();
+      expect(store.badId).toBeUndefined();
+      expect(store.traversal).toBeUndefined();
+    });
+  });
 });

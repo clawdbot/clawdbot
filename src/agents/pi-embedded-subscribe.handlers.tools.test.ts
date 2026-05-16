@@ -1187,6 +1187,43 @@ describe("messaging tool media URL tracking", () => {
     expect(ctx.state.pendingMessagingMediaUrls.has("tool-upload-file")).toBe(false);
   });
 
+  it("commits message attachment aliases as delivery evidence", async () => {
+    const { ctx } = createTestContext();
+
+    const startEvt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-attachment-aliases",
+      args: {
+        action: "send",
+        to: "channel:123",
+        content: "track ready",
+        media: "/tmp/generated-song.mp3",
+        attachments: [{ filePath: "/tmp/generated-cover.png" }],
+      },
+    };
+    await handleToolExecutionStart(ctx, startEvt);
+
+    const endEvt: ToolExecutionEndEvent = {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-attachment-aliases",
+      isError: false,
+      result: { ok: true },
+    };
+    await handleToolExecutionEnd(ctx, endEvt);
+
+    expect(ctx.state.messagingToolSentMediaUrls).toEqual([
+      "/tmp/generated-song.mp3",
+      "/tmp/generated-cover.png",
+    ]);
+    expectRecordFields(requireSingleMessagingTarget(ctx), "messaging target", {
+      to: "channel:123",
+      text: "track ready",
+      mediaUrls: ["/tmp/generated-song.mp3", "/tmp/generated-cover.png"],
+    });
+  });
+
   it("commits sendAttachment args as message delivery evidence", async () => {
     const { ctx } = createTestContext();
 

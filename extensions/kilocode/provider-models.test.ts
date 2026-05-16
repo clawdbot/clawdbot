@@ -226,6 +226,19 @@ describe("discoverKilocodeModels (fetch path)", () => {
     });
   });
 
+  it("falls back to static catalog for malformed successful model list payloads", async () => {
+    for (const payload of [[], { data: {} }, { data: [null] }]) {
+      const mockFetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(payload),
+      });
+      await withFetchPathTest(mockFetch, async () => {
+        const models = await discoverKilocodeModels();
+        expect(models).toStrictEqual(EXPECTED_STATIC_KILOCODE_MODELS);
+      });
+    }
+  });
+
   it("ensures kilo/auto is present even when API doesn't return it", async () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,

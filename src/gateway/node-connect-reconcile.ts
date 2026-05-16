@@ -8,6 +8,7 @@ import { normalizeArrayBackedTrimmedStringList } from "../shared/string-normaliz
 import {
   normalizeDeclaredNodeCommands,
   resolveNodeCommandAllowlist,
+  resolveNodePairingCommandAllowlist,
 } from "./node-command-policy.js";
 import type { ConnectParams } from "./protocol/index.js";
 
@@ -144,17 +145,18 @@ export async function reconcileNodePairingOnConnect(params: {
   requestPairing: (input: NodePairingRequestInput) => Promise<RequestNodePairingResult>;
 }): Promise<NodeConnectPairingReconcileResult> {
   const nodeId = params.connectParams.device?.id ?? params.connectParams.client.id;
-  const allowlist = resolveNodeCommandAllowlist(params.cfg, {
+  const policyNode = {
     platform: params.connectParams.client.platform,
     deviceFamily: params.connectParams.client.deviceFamily,
     caps: params.connectParams.caps,
     commands: params.connectParams.commands,
-  });
+  };
+  const pairingAllowlist = resolveNodePairingCommandAllowlist(params.cfg, policyNode);
   const declared = normalizeDeclaredNodeCommands({
     declaredCommands: Array.isArray(params.connectParams.commands)
       ? params.connectParams.commands
       : [],
-    allowlist,
+    allowlist: pairingAllowlist,
   });
   const declaredCaps = normalizeApprovalSurfaceList(params.connectParams.caps);
   const declaredPermissions = normalizePermissionMap(params.connectParams.permissions);
@@ -182,9 +184,13 @@ export async function reconcileNodePairingOnConnect(params: {
     };
   }
 
+  const runtimeAllowlist = resolveNodeCommandAllowlist(params.cfg, {
+    ...policyNode,
+    approvedCommands: params.pairedNode.commands,
+  });
   const approvedCommands = resolveApprovedReconnectCommands({
     pairedCommands: params.pairedNode.commands,
-    allowlist,
+    allowlist: runtimeAllowlist,
   });
   const approvedCaps = normalizeApprovalSurfaceList(params.pairedNode.caps);
   const approvedPermissions = normalizePermissionMap(params.pairedNode.permissions);

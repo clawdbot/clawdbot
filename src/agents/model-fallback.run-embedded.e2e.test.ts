@@ -781,7 +781,7 @@ describe("runWithModelFallback + runEmbeddedPiAgent failover behavior", () => {
     });
   });
 
-  it("falls back on classified rate limits even when stopReason is not error", async () => {
+  it("ignores stale classified rate-limit text when stopReason is not error", async () => {
     await withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
       await writeMultiProfileAuthStore(agentDir);
 
@@ -798,12 +798,11 @@ describe("runWithModelFallback + runEmbeddedPiAgent failover behavior", () => {
         },
       });
 
-      expect(result.provider).toBe("groq");
-      expect(result.model).toBe("mock-2");
-      expect(result.attempts[0]?.reason).toBe("rate_limit");
-      expect(result.result.payloads?.[0]?.text ?? "").toContain("fallback ok");
+      expect(result.provider).toBe("openai");
+      expect(result.model).toBe("mock-1");
+      expect(result.attempts).toEqual([]);
 
-      expectProviderAttemptCounts({ openai: 3, groq: 1 });
+      expectProviderAttemptCounts({ openai: 1, groq: 0 });
     });
   });
 

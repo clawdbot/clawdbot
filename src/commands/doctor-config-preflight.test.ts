@@ -2,9 +2,30 @@ import fs from "node:fs/promises";
 import { describe, expect, it } from "vitest";
 import { promoteConfigSnapshotToLastKnownGood, readConfigFileSnapshot } from "../config/config.js";
 import { withTempHome, writeOpenClawConfig } from "../config/test-helpers.js";
-import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
+import {
+  runDoctorConfigPreflight,
+  shouldSkipPluginValidationForDoctorConfigPreflight,
+} from "./doctor-config-preflight.js";
 
 describe("runDoctorConfigPreflight", () => {
+  it("skips plugin schema validation while doctor is running inside update", () => {
+    expect(
+      shouldSkipPluginValidationForDoctorConfigPreflight({
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+      } as NodeJS.ProcessEnv),
+    ).toBe(true);
+    expect(
+      shouldSkipPluginValidationForDoctorConfigPreflight({
+        OPENCLAW_UPDATE_IN_PROGRESS: "true",
+      } as NodeJS.ProcessEnv),
+    ).toBe(true);
+    expect(
+      shouldSkipPluginValidationForDoctorConfigPreflight({
+        OPENCLAW_UPDATE_IN_PROGRESS: "0",
+      } as NodeJS.ProcessEnv),
+    ).toBe(false);
+  });
+
   it("collects legacy config issues outside the normal config read path", async () => {
     await withTempHome(async (home) => {
       await writeOpenClawConfig(home, {

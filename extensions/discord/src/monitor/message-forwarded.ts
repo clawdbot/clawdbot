@@ -83,6 +83,13 @@ export function resolveDiscordReferencedForwardMessage(message: Message): Messag
     : null;
 }
 
+export function resolveDiscordReferencedReplyMessage(message: Message): Message | null {
+  const referenceType = message.messageReference?.type;
+  return Number(referenceType) === FORWARD_MESSAGE_REFERENCE_TYPE
+    ? null
+    : (message.referencedMessage ?? null);
+}
+
 export function formatDiscordSnapshotAuthor(
   author: DiscordSnapshotAuthor | null | undefined,
 ): string | undefined {

@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 import { commandsLightTestFiles } from "../../test/vitest/vitest.commands-light-paths.mjs";
@@ -12,6 +13,18 @@ const EXCLUDED_FULL_SUITE_SHARDS = new Set([
 const EXCLUDED_PROJECT_CONFIGS = new Set(["test/vitest/vitest.channels.config.ts"]);
 const RELEASE_ONLY_PLUGIN_SHARDS = new Set(["agentic-plugins"]);
 function listTestFiles(rootDir) {
+  const result = spawnSync("git", ["ls-files", "--", rootDir], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (result.status === 0) {
+    return result.stdout
+      .split("\n")
+      .map((line) => line.trim().replaceAll("\\", "/"))
+      .filter((line) => line.endsWith(".test.ts"))
+      .toSorted((a, b) => a.localeCompare(b));
+  }
+
   if (!existsSync(rootDir)) {
     return [];
   }

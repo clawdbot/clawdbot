@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   listCommitments,
   listDueCommitmentsForSession,
+  listPendingCommitmentsForScope,
   loadCommitmentStore,
   saveCommitmentStore,
 } from "./store.js";
@@ -160,6 +161,48 @@ describe("commitment store delivery selection", () => {
     expect(raw).not.toContain("I have an interview tomorrow.");
     expect(raw).not.toContain("sourceUserText");
     expect(raw).not.toContain("sourceAssistantText");
+  });
+
+  it("strips malformed optional scope metadata from persisted commitments", async () => {
+    const tmpDir = await useTempStateDir();
+    const storePath = path.join(tmpDir, "commitments", "commitments.json");
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          version: 1,
+          commitments: [
+            commitment({
+              accountId: { nested: "bad" } as never,
+              threadId: ["bad"] as never,
+              sourceMessageId: { id: "bad" } as never,
+            }),
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const store = await loadCommitmentStore();
+    expect(store.commitments).toHaveLength(1);
+    expect(store.commitments[0]?.accountId).toBeUndefined();
+    expect(store.commitments[0]?.threadId).toBeUndefined();
+    expect(store.commitments[0]?.sourceMessageId).toBeUndefined();
+
+    await expect(
+      listPendingCommitmentsForScope({
+        scope: {
+          agentId: "main",
+          sessionKey,
+          channel: "telegram",
+          to: "155462274",
+        },
+        nowMs,
+      }),
+    ).resolves.toHaveLength(1);
   });
 
   it("lists expired commitments after expiry transition", async () => {

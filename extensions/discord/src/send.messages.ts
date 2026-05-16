@@ -88,7 +88,10 @@ export async function editMessageDiscord(
 ): Promise<APIMessage> {
   const rest = resolveDiscordRest(opts);
   return await editChannelMessage(rest, channelId, messageId, {
-    body: { content: payload.content },
+    body: {
+      content: payload.content,
+      ...(payload.flags !== undefined ? { flags: payload.flags } : {}),
+    },
   });
 }
 

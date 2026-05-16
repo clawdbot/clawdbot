@@ -40,7 +40,7 @@ import {
   sanitizeCodexAgentEventRecord,
   sanitizeCodexToolArguments,
 } from "./tool-progress-normalization.js";
-import { attachCodexMirrorIdentity } from "./transcript-mirror.js";
+import { attachCodexMirrorIdentity, buildCodexUserPromptMessage } from "./transcript-mirror.js";
 
 export type CodexAppServerToolTelemetry = {
   didSendViaMessagingTool: boolean;
@@ -260,14 +260,7 @@ export class CodexAppServerEventProjector {
     //     distinct turnIds → distinct identities → both kept.
     const turnId = this.turnId;
     const messagesSnapshot: AgentMessage[] = [
-      attachCodexMirrorIdentity(
-        {
-          role: "user",
-          content: this.params.prompt,
-          timestamp: Date.now(),
-        },
-        `${turnId}:prompt`,
-      ),
+      attachCodexMirrorIdentity(buildCodexUserPromptMessage(this.params), `${turnId}:prompt`),
     ];
     // Codex owns the canonical thread. These mirror records keep enough local
     // context for OpenClaw history, search, and future harness switching.

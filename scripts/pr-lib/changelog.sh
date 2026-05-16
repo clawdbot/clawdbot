@@ -200,7 +200,7 @@ validate_changelog_entry_for_pr() {
   pr_pattern="(#$pr|openclaw#$pr)"
 
   local with_pr
-  with_pr=$(printf '%s\n' "$added_lines" | rg -in "$pr_pattern" || true)
+  with_pr=$(printf '%s\n' "$added_lines" | grep -Ein "$pr_pattern" || true)
   if [ -z "$with_pr" ]; then
     echo "CHANGELOG.md update must reference PR #$pr (for example, (#$pr))."
     exit 1
@@ -338,7 +338,7 @@ END {
 
   if changelog_thanks_required_for_contributor "$contrib"; then
     local with_pr_and_thanks
-    with_pr_and_thanks=$(printf '%s\n' "$added_lines" | rg -in "$pr_pattern" | rg -i "thanks @$contrib" || true)
+    with_pr_and_thanks=$(printf '%s\n' "$added_lines" | grep -Ein "$pr_pattern" | grep -Fi "thanks @$contrib" || true)
     if [ -z "$with_pr_and_thanks" ]; then
       echo "CHANGELOG.md update must include both PR #$pr and thanks @$contrib on the changelog entry line."
       exit 1
@@ -353,7 +353,7 @@ END {
   fi
 
   local with_pr_and_any_thanks
-  with_pr_and_any_thanks=$(printf '%s\n' "$added_lines" | rg -in "$pr_pattern" | rg -i '\bthanks[[:space:]]+@' || true)
+  with_pr_and_any_thanks=$(printf '%s\n' "$added_lines" | grep -Ein "$pr_pattern" | grep -Ei '(^|[[:space:]])thanks[[:space:]]+@' || true)
   if [ -z "$with_pr_and_any_thanks" ]; then
     echo "CHANGELOG.md update for bot/app/non-creditable author $contrib must include an explicit human Thanks @handle on the PR #$pr entry line."
     echo "Choose the credited original contributor, or stop for maintainer input if authorship is unclear."
@@ -377,7 +377,7 @@ validate_changelog_merge_hygiene() {
   fi
 
   local removed_refs
-  removed_refs=$(printf '%s\n' "$removed_lines" | rg -o '#[0-9]+' | sort -u || true)
+  removed_refs=$(printf '%s\n' "$removed_lines" | grep -Eo '#[0-9]+' | sort -u || true)
   if [ -z "$removed_refs" ]; then
     return 0
   fi
@@ -391,7 +391,7 @@ validate_changelog_merge_hygiene() {
   local ref
   while IFS= read -r ref; do
     [ -z "$ref" ] && continue
-    if ! printf '%s\n' "$added_lines" | rg -q -F "$ref"; then
+    if ! printf '%s\n' "$added_lines" | grep -Fq "$ref"; then
       echo "CHANGELOG.md drops existing entry reference $ref without re-adding it."
       echo "Likely merge conflict loss; restore the dropped entry (or keep the same PR ref in rewritten text)."
       exit 1

@@ -118,6 +118,14 @@ function isEmptyUserTextOnlyMessage(message: unknown): boolean {
   if (normalizeLowercaseStringOrEmpty(entry.role) !== "user") {
     return false;
   }
+  const mediaPaths = Array.isArray(entry.MediaPaths)
+    ? entry.MediaPaths
+    : typeof entry.MediaPath === "string"
+      ? [entry.MediaPath]
+      : [];
+  if (mediaPaths.some((value) => typeof value === "string" && value.trim())) {
+    return false;
+  }
   if (!isTextOnlyContent(entry.content ?? entry.text)) {
     return false;
   }
@@ -375,6 +383,15 @@ function dataUrlToBase64(dataUrl: string): { content: string; mimeType: string }
   return { mimeType: match[1], content: match[2] };
 }
 
+function isInlineDataUrl(value: string): boolean {
+  return /^\s*data:/iu.test(value);
+}
+
+function formatInlineImageAttachmentPlaceholder(attachment: ChatAttachment): string {
+  const label = attachment.fileName?.trim();
+  return label ? `Attached image: ${label}` : "Attached image";
+}
+
 function buildApiAttachments(attachments?: ChatAttachment[]) {
   const hasAttachments = attachments && attachments.length > 0;
   return hasAttachments
@@ -506,6 +523,10 @@ export async function sendChatMessage(
         continue;
       }
       if (att.mimeType.startsWith("image/")) {
+        if (isInlineDataUrl(previewUrl)) {
+          contentBlocks.push({ type: "text", text: formatInlineImageAttachmentPlaceholder(att) });
+          continue;
+        }
         contentBlocks.push({
           type: "image",
           url: previewUrl,

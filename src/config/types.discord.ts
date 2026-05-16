@@ -355,6 +355,11 @@ export type DiscordAccountConfig = {
   contextVisibility?: ContextVisibilityMode;
   /** Outbound text chunk size (chars). Default: 2000. */
   textChunkLimit?: number;
+  /**
+   * Suppress Discord-generated link embeds for outbound messages. Default: true.
+   * Explicit `embeds` payloads are still sent normally.
+   */
+  suppressEmbeds?: boolean;
   /** Streaming + chunking settings. Prefer this nested shape over legacy flat keys. */
   streaming?: ChannelPreviewStreamingConfig;
   /**

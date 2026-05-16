@@ -19,6 +19,12 @@ Capabilities live in [Control UI](/web/control-ui). The rest of this page focuse
 When `hooks.enabled=true`, the Gateway also exposes a small webhook endpoint on the same HTTP server.
 See [Gateway configuration](/gateway/configuration) → `hooks` for auth + payloads.
 
+## Admin HTTP RPC
+
+Admin HTTP RPC exposes selected Gateway control-plane methods at `POST /api/v1/admin/rpc`.
+It is off by default and is registered only when the `admin-http-rpc` plugin is enabled.
+See [Admin HTTP RPC](/plugins/admin-http-rpc) for the auth model, allowed methods, and WebSocket comparison.
+
 ## Config (default-on)
 
 The Control UI is **enabled by default** when assets are present (`dist/control-ui`).

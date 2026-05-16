@@ -6,6 +6,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import type { MigrationProviderPlugin } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
+import { t } from "./i18n/index.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
 
 export type SetupMigrationDetection = {
@@ -169,7 +170,7 @@ async function selectSetupMigrationProvider(params: {
   const providerId =
     params.opts.importFrom?.trim() ||
     (await params.prompter.select({
-      message: "Migration source",
+      message: t("wizard.migration.source"),
       options: [
         ...params.detections.map((detection) => ({
           value: detection.providerId,
@@ -186,7 +187,7 @@ async function selectSetupMigrationProvider(params: {
           .map((provider) => ({
             value: provider.id,
             label: provider.label,
-            hint: provider.description ?? "Enter a source path next",
+            hint: provider.description ?? t("wizard.migration.sourcePathHint"),
           })),
       ],
       initialValue: params.detections[0]?.providerId ?? providers[0]?.id,
@@ -238,7 +239,7 @@ export async function runSetupMigrationImport(params: {
           throw new Error("--import-source is required for non-interactive migration import.");
         })()
       : await params.prompter.text({
-          message: "Source agent home",
+          message: t("wizard.migration.sourceAgentHome"),
           initialValue: providerId === "hermes" ? "~/.hermes" : undefined,
         }));
   const workspaceInput =
@@ -246,7 +247,7 @@ export async function runSetupMigrationImport(params: {
     (params.opts.nonInteractive
       ? (params.baseConfig.agents?.defaults?.workspace ?? onboardHelpers.DEFAULT_WORKSPACE)
       : await params.prompter.text({
-          message: "Target workspace directory",
+          message: t("wizard.migration.targetWorkspace"),
           initialValue:
             params.baseConfig.agents?.defaults?.workspace ?? onboardHelpers.DEFAULT_WORKSPACE,
         }));
@@ -273,18 +274,21 @@ export async function runSetupMigrationImport(params: {
     logger: createMigrationLogger(params.runtime),
   };
   const plan = await provider.plan(ctx);
-  await params.prompter.note(formatMigrationPreview(plan).join("\n"), "Migration preview");
+  await params.prompter.note(
+    formatMigrationPreview(plan).join("\n"),
+    t("wizard.migration.previewTitle"),
+  );
   assertConflictFreePlan(plan, providerId);
 
   const confirmed =
     params.opts.nonInteractive === true
       ? true
       : await params.prompter.confirm({
-          message: "Apply this migration now?",
+          message: t("wizard.migration.apply"),
           initialValue: false,
         });
   if (!confirmed) {
-    throw new WizardCancelledError("migration cancelled");
+    throw new WizardCancelledError(t("wizard.migration.cancelled"));
   }
 
   const reportDir = buildMigrationReportDir(providerId, stateDir);
@@ -307,6 +311,9 @@ export async function runSetupMigrationImport(params: {
     reportDir: result.reportDir ?? reportDir,
   };
   assertApplySucceeded(withReport);
-  await params.prompter.note(formatMigrationResult(withReport).join("\n"), "Migration applied");
-  await params.prompter.outro("Migration complete. Run `openclaw doctor` next.");
+  await params.prompter.note(
+    formatMigrationResult(withReport).join("\n"),
+    t("wizard.migration.appliedTitle"),
+  );
+  await params.prompter.outro(t("wizard.migration.complete"));
 }

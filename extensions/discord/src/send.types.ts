@@ -81,6 +81,7 @@ export type DiscordMessageQuery = {
 
 export type DiscordMessageEdit = {
   content?: string;
+  flags?: number;
 };
 
 export type DiscordThreadCreate = {

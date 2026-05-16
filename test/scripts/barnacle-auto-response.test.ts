@@ -810,6 +810,26 @@ describe("barnacle-auto-response", () => {
     expect(calls.removeLabel).toEqual([]);
   });
 
+  it("does not let Barnacle veto ClawSweeper's sufficient proof label add", async () => {
+    const { calls, github } = barnacleGithub([file("src/gateway/server.ts")]);
+
+    await runBarnacleAutoResponse({
+      github,
+      context: barnacleContext({}, [PROOF_SUFFICIENT_LABEL], {
+        action: "labeled",
+        label: { name: PROOF_SUFFICIENT_LABEL },
+        sender: { login: "openclaw-clawsweeper[bot]", type: "Bot" },
+      }),
+      core: {
+        info: () => undefined,
+      },
+    });
+
+    expect(calls.removeLabel).toEqual([]);
+    expect(calls.addLabels).toEqual([]);
+    expect(calls.update).toEqual([]);
+  });
+
   it("actions manually applied candidate labels", async () => {
     const { calls, github } = barnacleGithub([file("extensions/example/openclaw.plugin.json")]);
 

@@ -171,6 +171,13 @@ function ensureOpenClawExtensions(params: { manifest: PackageManifest }):
       code: PLUGIN_INSTALL_ERROR_CODE.EMPTY_OPENCLAW_EXTENSIONS,
     };
   }
+  if (resolved.status === "invalid") {
+    return {
+      ok: false,
+      error: resolved.error,
+      code: PLUGIN_INSTALL_ERROR_CODE.INVALID_OPENCLAW_EXTENSIONS,
+    };
+  }
   return {
     ok: true,
     entries: resolved.entries,

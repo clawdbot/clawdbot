@@ -23,7 +23,9 @@ Prove the touched surface first. Do not reflexively run the whole suite.
    - normal source checkout, tests only: `pnpm test:changed`
    - normal source checkout, one failing file: `pnpm test <path-or-filter> -- --reporter=verbose`
    - Codex worktree or linked/sparse checkout, one/few explicit files: `node scripts/run-vitest.mjs <path-or-filter>`
-   - Codex worktree or linked/sparse checkout, changed gates or anything broad: `node scripts/crabbox-wrapper.mjs run --provider blacksmith-testbox ... --shell -- "pnpm check:changed"`
+   - Codex worktree or linked/sparse checkout, changed gates or anything broad:
+     `node scripts/crabbox-wrapper.mjs run ... --shell -- "pnpm check:changed"`
+     and let `.crabbox.yaml` choose the provider
    - workflow-only: `git diff --check`, workflow syntax/lint (`actionlint` when available)
    - docs-only: `pnpm docs:list`, docs formatter/lint only if docs tooling changed or requested
 2. Reproduce narrowly before fixing.
@@ -44,11 +46,13 @@ Prove the touched surface first. Do not reflexively run the whole suite.
   `node scripts/run-vitest.mjs` for tiny local proof, `node
 scripts/crabbox-wrapper.mjs` for Testbox, and `git commit --no-verify` only
   after the relevant remote or node-wrapper proof is already clean.
-- For Blacksmith Testbox proof, use Crabbox first. `pnpm crabbox:run -- --provider
-blacksmith-testbox --timing-json -- <command...>` warms, claims, syncs, runs,
-  reports, and cleans up one-shot boxes. Reuse only an id/slug created in this
-  operator session; `blacksmith testbox list` is diagnostics only, not a shared
-  work queue.
+- For remote proof, use Crabbox first and omit `--provider` unless a specific
+  provider is being tested. The repo Crabbox config routes normal broad proof to
+  brokered AWS. Blacksmith Testbox is explicit opt-in; if it queues, fails
+  capacity, or cannot allocate, retry once through the default Crabbox route or
+  report the Testbox blocker. Reuse only an id/slug created in this operator
+  session; `blacksmith testbox list` is diagnostics only, not a shared work
+  queue.
 
 ## Local Test Shortcuts
 

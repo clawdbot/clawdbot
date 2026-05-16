@@ -412,7 +412,8 @@
         "install": {
           "npmSpec": "@openclaw/slack",
           "defaultChoice": "npm",
-          "minHostVersion": ">=2026.5.12-beta.1"
+          "minHostVersion": ">=2026.5.12-beta.1",
+          "allowInvalidConfigRecovery": true
         }
       }
     },

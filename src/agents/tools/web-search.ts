@@ -8,6 +8,7 @@ import { resolveWebSearchToolRuntimeContext } from "./web-tool-runtime-context.j
 
 const WebSearchSchema = {
   type: "object",
+  required: ["query"],
   properties: {
     query: { type: "string", description: "Search query string." },
     count: {

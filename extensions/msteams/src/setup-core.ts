@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   createStandardChannelSetupStatus,
   DEFAULT_ACCOUNT_ID,
+  createSetupTranslator,
   type ChannelSetupAdapter,
   type ChannelSetupWizard,
   type WizardPrompter,
@@ -9,6 +10,8 @@ import {
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { normalizeSecretInputString } from "./secret-input.js";
 import { hasConfiguredMSTeamsCredentials, resolveMSTeamsCredentials } from "./token.js";
+
+const t = createSetupTranslator();
 
 export const msteamsSetupAdapter: ChannelSetupAdapter = {
   resolveAccountId: () => DEFAULT_ACCOUNT_ID,
@@ -33,20 +36,20 @@ async function promptMSTeamsCredentials(prompter: WizardPrompter): Promise<{
 }> {
   const appId = (
     await prompter.text({
-      message: "Enter MS Teams App ID",
-      validate: (value) => (value?.trim() ? undefined : "Required"),
+      message: t("wizard.msteams.appIdPrompt"),
+      validate: (value) => (value?.trim() ? undefined : t("common.required")),
     })
   ).trim();
   const appPassword = (
     await prompter.text({
-      message: "Enter MS Teams App Password",
-      validate: (value) => (value?.trim() ? undefined : "Required"),
+      message: t("wizard.msteams.appPasswordPrompt"),
+      validate: (value) => (value?.trim() ? undefined : t("common.required")),
     })
   ).trim();
   const tenantId = (
     await prompter.text({
-      message: "Enter MS Teams Tenant ID",
-      validate: (value) => (value?.trim() ? undefined : "Required"),
+      message: t("wizard.msteams.tenantIdPrompt"),
+      validate: (value) => (value?.trim() ? undefined : t("common.required")),
     })
   ).trim();
   return { appId, appPassword, tenantId };
@@ -55,13 +58,13 @@ async function promptMSTeamsCredentials(prompter: WizardPrompter): Promise<{
 async function noteMSTeamsCredentialHelp(prompter: WizardPrompter): Promise<void> {
   await prompter.note(
     [
-      "1) Azure Bot registration -> get App ID + Tenant ID",
-      "2) Add a client secret (App Password)",
-      "3) Set webhook URL + messaging endpoint",
-      "Tip: you can also set MSTEAMS_APP_ID / MSTEAMS_APP_PASSWORD / MSTEAMS_TENANT_ID.",
-      `Docs: ${formatDocsLink("/channels/msteams", "msteams")}`,
+      t("wizard.msteams.helpAzureBot"),
+      t("wizard.msteams.helpClientSecret"),
+      t("wizard.msteams.helpWebhook"),
+      t("wizard.msteams.helpEnvTip"),
+      t("wizard.channels.docs", { link: formatDocsLink("/channels/msteams", "msteams") }),
     ].join("\n"),
-    "MS Teams credentials",
+    t("wizard.msteams.credentialsTitle"),
   );
 }
 
@@ -80,10 +83,10 @@ export function createMSTeamsSetupWizardBase(): Pick<
     resolveShouldPromptAccountIds: () => false,
     status: createStandardChannelSetupStatus({
       channelLabel: "MS Teams",
-      configuredLabel: "configured",
-      unconfiguredLabel: "needs app credentials",
-      configuredHint: "configured",
-      unconfiguredHint: "needs app creds",
+      configuredLabel: t("wizard.channels.statusConfigured"),
+      unconfiguredLabel: t("wizard.channels.statusNeedsAppCredentials"),
+      configuredHint: t("wizard.channels.statusConfigured"),
+      unconfiguredHint: t("wizard.channels.statusNeedsAppCreds"),
       configuredScore: 2,
       unconfiguredScore: 0,
       includeStatusLine: true,
@@ -113,8 +116,7 @@ export function createMSTeamsSetupWizardBase(): Pick<
 
       if (canUseEnv) {
         const keepEnv = await prompter.confirm({
-          message:
-            "MSTEAMS_APP_ID + MSTEAMS_APP_PASSWORD + MSTEAMS_TENANT_ID detected. Use env vars?",
+          message: t("wizard.msteams.envPrompt"),
           initialValue: true,
         });
         if (keepEnv) {
@@ -128,7 +130,7 @@ export function createMSTeamsSetupWizardBase(): Pick<
         }
       } else if (hasConfigCreds) {
         const keep = await prompter.confirm({
-          message: "MS Teams credentials already configured. Keep them?",
+          message: t("wizard.msteams.credentialsKeep"),
           initialValue: true,
         });
         if (!keep) {

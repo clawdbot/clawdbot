@@ -1,6 +1,11 @@
 import fs from "node:fs";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.shared.js";
+import { isPluginJsonValue, type PluginJsonValue } from "../../plugins/host-hook-json.js";
+import { normalizeSessionEntrySlotKey } from "../../plugins/session-entry-slot-keys.js";
+import {
+  normalizeDeliveryContext,
+  normalizeSessionDeliveryFields,
+} from "../../utils/delivery-context.shared.js";
 import { getFileStatSnapshot } from "../cache-utils.js";
 import {
   cloneSessionStoreRecord,
@@ -9,6 +14,7 @@ import {
   setSerializedSessionStore,
   writeSessionStoreCache,
 } from "./store-cache.js";
+import { normalizePersistedSessionEntryShape } from "./store-entry-shape.js";
 import { collectSessionMaintenancePreserveKeys } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
@@ -31,6 +37,214 @@ const log = createSubsystemLogger("sessions/store");
 
 function isSessionStoreRecord(value: unknown): value is Record<string, SessionEntry> {
   return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeOptionalFiniteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function normalizeOptionalAttemptCount(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : undefined;
+}
+
+function normalizeOptionalStringOrNull(value: unknown): string | null | undefined {
+  if (value === null || typeof value === "string") {
+    return value;
+  }
+  return undefined;
+}
+
+function normalizeRecordKey(value: string): string | undefined {
+  const key = value.trim();
+  return key.length > 0 ? key : undefined;
+}
+
+function normalizeOptionalDeliveryContext(
+  value: unknown,
+): SessionEntry["pendingFinalDeliveryContext"] {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const normalized = normalizeDeliveryContext({
+    channel: typeof value.channel === "string" ? value.channel : undefined,
+    to: typeof value.to === "string" ? value.to : undefined,
+    accountId: typeof value.accountId === "string" ? value.accountId : undefined,
+    threadId:
+      typeof value.threadId === "string" || typeof value.threadId === "number"
+        ? value.threadId
+        : undefined,
+  });
+  return normalized?.channel && normalized.to ? normalized : undefined;
+}
+
+function sameDeliveryContext(
+  left: SessionEntry["pendingFinalDeliveryContext"],
+  right: SessionEntry["pendingFinalDeliveryContext"],
+): boolean {
+  return (
+    (left?.channel ?? undefined) === (right?.channel ?? undefined) &&
+    (left?.to ?? undefined) === (right?.to ?? undefined) &&
+    (left?.accountId ?? undefined) === (right?.accountId ?? undefined) &&
+    (left?.threadId ?? undefined) === (right?.threadId ?? undefined)
+  );
+}
+
+function normalizePendingFinalDeliveryFields(entry: SessionEntry): SessionEntry {
+  let next = entry;
+
+  const assign = <K extends keyof SessionEntry>(key: K, value: SessionEntry[K] | undefined) => {
+    if (entry[key] === value) {
+      return;
+    }
+    if (next === entry) {
+      next = { ...entry };
+    }
+    if (value === undefined) {
+      delete next[key];
+    } else {
+      next[key] = value;
+    }
+  };
+
+  assign("pendingFinalDelivery", entry.pendingFinalDelivery === true ? true : undefined);
+  assign("pendingFinalDeliveryText", normalizeOptionalStringOrNull(entry.pendingFinalDeliveryText));
+  assign(
+    "pendingFinalDeliveryCreatedAt",
+    normalizeOptionalFiniteNumber(entry.pendingFinalDeliveryCreatedAt),
+  );
+  assign(
+    "pendingFinalDeliveryLastAttemptAt",
+    normalizeOptionalFiniteNumber(entry.pendingFinalDeliveryLastAttemptAt),
+  );
+  assign(
+    "pendingFinalDeliveryAttemptCount",
+    normalizeOptionalAttemptCount(entry.pendingFinalDeliveryAttemptCount),
+  );
+  assign(
+    "pendingFinalDeliveryLastError",
+    normalizeOptionalStringOrNull(entry.pendingFinalDeliveryLastError),
+  );
+  const pendingFinalDeliveryContext = normalizeOptionalDeliveryContext(
+    entry.pendingFinalDeliveryContext,
+  );
+  if (!sameDeliveryContext(entry.pendingFinalDeliveryContext, pendingFinalDeliveryContext)) {
+    assign("pendingFinalDeliveryContext", pendingFinalDeliveryContext);
+  }
+  assign(
+    "pendingFinalDeliveryIntentId",
+    normalizeOptionalStringOrNull(entry.pendingFinalDeliveryIntentId),
+  );
+
+  return next;
+}
+
+function normalizePluginExtensions(entry: SessionEntry): SessionEntry {
+  if (entry.pluginExtensions === undefined) {
+    return entry;
+  }
+  if (!isRecord(entry.pluginExtensions)) {
+    const next = { ...entry };
+    delete next.pluginExtensions;
+    return next;
+  }
+
+  let changed = false;
+  const normalizedExtensions: Record<string, Record<string, PluginJsonValue>> = {};
+  for (const [rawPluginId, rawPluginState] of Object.entries(entry.pluginExtensions)) {
+    const pluginId = normalizeRecordKey(rawPluginId);
+    if (!pluginId || !isRecord(rawPluginState)) {
+      changed = true;
+      continue;
+    }
+    if (pluginId !== rawPluginId) {
+      changed = true;
+    }
+    const normalizedPluginState: Record<string, PluginJsonValue> = {};
+    for (const [rawNamespace, rawValue] of Object.entries(rawPluginState)) {
+      const namespace = normalizeRecordKey(rawNamespace);
+      if (!namespace || !isPluginJsonValue(rawValue)) {
+        changed = true;
+        continue;
+      }
+      if (namespace !== rawNamespace) {
+        changed = true;
+      }
+      normalizedPluginState[namespace] = rawValue;
+    }
+    if (Object.keys(normalizedPluginState).length === 0) {
+      changed = true;
+      continue;
+    }
+    normalizedExtensions[pluginId] = normalizedPluginState;
+  }
+
+  if (!changed) {
+    return entry;
+  }
+  const next = { ...entry };
+  if (Object.keys(normalizedExtensions).length > 0) {
+    next.pluginExtensions = normalizedExtensions;
+  } else {
+    delete next.pluginExtensions;
+  }
+  return next;
+}
+
+function normalizePluginExtensionSlotKeys(entry: SessionEntry): SessionEntry {
+  if (entry.pluginExtensionSlotKeys === undefined) {
+    return entry;
+  }
+  if (!isRecord(entry.pluginExtensionSlotKeys)) {
+    const next = { ...entry };
+    delete next.pluginExtensionSlotKeys;
+    return next;
+  }
+
+  let changed = false;
+  const normalizedSlotKeys: Record<string, Record<string, string>> = {};
+  for (const [rawPluginId, rawPluginSlots] of Object.entries(entry.pluginExtensionSlotKeys)) {
+    const pluginId = normalizeRecordKey(rawPluginId);
+    if (!pluginId || !isRecord(rawPluginSlots)) {
+      changed = true;
+      continue;
+    }
+    if (pluginId !== rawPluginId) {
+      changed = true;
+    }
+    const normalizedPluginSlots: Record<string, string> = {};
+    for (const [rawNamespace, rawSlotKey] of Object.entries(rawPluginSlots)) {
+      const namespace = normalizeRecordKey(rawNamespace);
+      const slotKey = normalizeSessionEntrySlotKey(rawSlotKey);
+      if (!namespace || !slotKey.ok) {
+        changed = true;
+        continue;
+      }
+      if (namespace !== rawNamespace || slotKey.key !== rawSlotKey) {
+        changed = true;
+      }
+      normalizedPluginSlots[namespace] = slotKey.key;
+    }
+    if (Object.keys(normalizedPluginSlots).length === 0) {
+      changed = true;
+      continue;
+    }
+    normalizedSlotKeys[pluginId] = normalizedPluginSlots;
+  }
+
+  if (!changed) {
+    return entry;
+  }
+  const next = { ...entry };
+  if (Object.keys(normalizedSlotKeys).length > 0) {
+    next.pluginExtensionSlotKeys = normalizedSlotKeys;
+  } else {
+    delete next.pluginExtensionSlotKeys;
+  }
+  return next;
 }
 
 function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
@@ -84,11 +298,20 @@ function stripPersistedSkillsCache(entry: SessionEntry): SessionEntry {
 export function normalizeSessionStore(store: Record<string, SessionEntry>): boolean {
   let changed = false;
   for (const [key, entry] of Object.entries(store)) {
-    if (!entry) {
+    const shaped = normalizePersistedSessionEntryShape(entry);
+    if (!shaped) {
+      delete store[key];
+      changed = true;
       continue;
     }
     const normalized = stripPersistedSkillsCache(
-      normalizeSessionEntryDelivery(normalizeSessionRuntimeModelFields(entry)),
+      normalizePluginExtensionSlotKeys(
+        normalizePluginExtensions(
+          normalizePendingFinalDeliveryFields(
+            normalizeSessionEntryDelivery(normalizeSessionRuntimeModelFields(shaped)),
+          ),
+        ),
+      ),
     );
     if (normalized !== entry) {
       store[key] = normalized;

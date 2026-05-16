@@ -350,6 +350,54 @@ describe("resolveOutboundSessionRoute", () => {
         chatType: "channel",
       },
     },
+    {
+      name: "FallbackChat explicit group prefix",
+      cfg: baseConfig,
+      channel: "fallbackchat",
+      target: "group:ops",
+      expected: {
+        sessionKey: "agent:main:fallbackchat:group:ops",
+        from: "fallbackchat:group:ops",
+        to: "channel:ops",
+        chatType: "group",
+      },
+    },
+    {
+      name: "FallbackChat plugin parser classifies space-style target",
+      cfg: baseConfig,
+      channel: "fallbackchat",
+      target: "spaces/AAA",
+      expected: {
+        sessionKey: "agent:main:fallbackchat:group:spaces/aaa",
+        from: "fallbackchat:group:spaces/AAA",
+        to: "channel:spaces/AAA",
+        chatType: "group",
+      },
+    },
+    {
+      name: "FallbackChat explicit user prefix",
+      cfg: perChannelPeerCfg,
+      channel: "fallbackchat",
+      target: "user:U123",
+      expected: {
+        sessionKey: "agent:main:fallbackchat:direct:u123",
+        from: "fallbackchat:U123",
+        to: "user:U123",
+        chatType: "direct",
+      },
+    },
+    {
+      name: "FallbackChat explicit thread prefix",
+      cfg: baseConfig,
+      channel: "fallbackchat",
+      target: "thread:abc",
+      expected: {
+        sessionKey: "agent:main:fallbackchat:channel:abc",
+        from: "fallbackchat:channel:abc",
+        to: "channel:abc",
+        chatType: "channel",
+      },
+    },
   ] satisfies NamedRouteCase[])("$name", async ({ name: _name, ...params }) => {
     await expectResolvedRoute(params);
   });

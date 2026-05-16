@@ -1507,6 +1507,12 @@ describe("loadOpenClawPlugins", () => {
         const loaded = registry.plugins.find((entry) => entry.id === "allowed-config-path");
         expect(loaded?.status).toBe("loaded");
         expect(Object.keys(registry.gatewayHandlers)).toContain("allowed-config-path.ping");
+        expect(registry.gatewayMethodDescriptors).toMatchObject([
+          {
+            name: "allowed-config-path.ping",
+            owner: { kind: "plugin", pluginId: "allowed-config-path" },
+          },
+        ]);
       },
     },
     {
@@ -1540,10 +1546,46 @@ describe("loadOpenClawPlugins", () => {
         });
 
         expect(Object.keys(registry.gatewayHandlers)).toContain(RESERVED_ADMIN_PLUGIN_METHOD);
-        expect(registry.gatewayMethodScopes?.[RESERVED_ADMIN_PLUGIN_METHOD]).toBe("operator.admin");
+        expect(registry.gatewayMethodDescriptors[0]?.scope).toBe("operator.admin");
         expectDiagnosticContaining({
           registry,
           message: `${RESERVED_ADMIN_SCOPE_WARNING}: ${RESERVED_ADMIN_PLUGIN_METHOD}`,
+        });
+      },
+    },
+    {
+      label: "rejects gateway methods that collide with hidden core methods",
+      run: () => {
+        useNoBundledPlugins();
+        const plugin = writePlugin({
+          id: "hidden-core-collision",
+          filename: "hidden-core-collision.cjs",
+          body: `module.exports = {
+  id: "hidden-core-collision",
+  register(api) {
+    api.registerGatewayMethod("config.openFile", ({ respond }) => respond(true, { ok: true }));
+  },
+};`,
+        });
+
+        const registry = loadOpenClawPlugins({
+          cache: false,
+          workspaceDir: plugin.dir,
+          coreGatewayMethodNames: ["config.openFile"],
+          config: {
+            plugins: {
+              load: { paths: [plugin.file] },
+              allow: ["hidden-core-collision"],
+            },
+          },
+        });
+
+        expect(Object.keys(registry.gatewayHandlers)).not.toContain("config.openFile");
+        expectDiagnosticContaining({
+          registry,
+          level: "error",
+          pluginId: "hidden-core-collision",
+          message: "gateway method already registered: config.openFile",
         });
       },
     },

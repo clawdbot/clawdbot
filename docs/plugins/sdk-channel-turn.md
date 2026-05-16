@@ -315,6 +315,150 @@ Supplemental context covers quote, forwarded, and thread-bootstrap context. The 
 
 Media is fact-shaped. Platform download, auth, SSRF policy, CDN rules, and decryption stay channel-local. The kernel maps facts into `MediaPath`, `MediaUrl`, `MediaType`, `MediaPaths`, `MediaUrls`, `MediaTypes`, and `MediaTranscribedIndexes`.
 
+Use `toInboundMediaFacts(...)` from `openclaw/plugin-sdk/channel-inbound` when
+your channel has a resolved media list and only needs to attach generic facts:
+
+```typescript
+media: toInboundMediaFacts(resolvedMedia, {
+  kind: "image",
+  messageId: input.id,
+});
+```
+
+If media mixes local files and URL-only entries, keep the list as media facts.
+Core preserves array indexes when it writes legacy context fields so downstream
+media understanding, transcription markers, and prompt notes continue to refer
+to the same attachment.
+
+For skipped group messages that should be available to a later mention, pass
+media facts through the turn `preflight.media` field. The kernel converts those
+facts into bounded history media entries before recording:
+
+```typescript
+preflight(input) {
+  return {
+    admission: { kind: "drop", reason: "missing_mention", recordHistory: true },
+    media: () => toInboundMediaFacts(resolveLocalImages(input), {
+      kind: "image",
+      messageId: input.id,
+    }),
+    history: {
+      key: historyKey,
+      limit: historyLimit,
+      mediaLimit: 4,
+      shouldRecord: () => stillCurrent(input),
+    },
+  };
+}
+```
+
+History media is intentionally conservative: image-only today, local readable
+paths only, bounded by the configured media limit, and still tied to the
+channel history key. Authenticated provider URLs should be downloaded by the
+plugin before they become model-visible media.
+
+## History windows
+
+Message-turn code should use `createChannelHistoryWindow(...)` instead of
+calling low-level `reply-history` map helpers directly. The old map helpers
+remain importable as deprecated compatibility exports, but new plugin runtime
+code should not call them. The window facade keeps text context, structured
+`InboundHistory`, history-media normalization, and clearing behind one
+core-owned API while still letting the channel choose how a history line is
+rendered.
+
+```typescript
+const history = createChannelHistoryWindow({ historyMap: groupHistories });
+
+await history.recordWithMedia({
+  historyKey,
+  limit: historyLimit,
+  entry,
+  media: () =>
+    toInboundMediaFacts(resolvedImages, {
+      kind: "image",
+      messageId: entry.messageId,
+    }),
+});
+
+const combinedBody = history.buildPendingContext({
+  historyKey,
+  limit: historyLimit,
+  currentMessage,
+  formatEntry: (entry) => `${entry.sender}: ${entry.body}`,
+});
+```
+
+The older `buildPendingHistoryContextFromMap`,
+`buildInboundHistoryFromMap`, `recordPendingHistoryEntry*`, and
+`clearHistoryEntries*` exports remain as deprecated compatibility for plugins
+that have not migrated yet. New channel work should use the window or the turn
+kernel record/finalize options.
+
+## Common message patterns
+
+Text-only group with mention required:
+
+```typescript
+preflight(input) {
+  const decision = resolveInboundMentionDecision({ facts, policy });
+  if (decision.shouldSkip) {
+    return {
+      admission: { kind: "drop", reason: "missing_mention", recordHistory: true },
+      history: { key: historyKey, limit: historyLimit },
+    };
+  }
+  return { access: { mentions: decision } };
+}
+```
+
+Image-only message followed by a later mention:
+
+```typescript
+preflight(input) {
+  if (!wasMentioned && resolvedImages.length > 0) {
+    return {
+      admission: { kind: "drop", reason: "missing_mention", recordHistory: true },
+      media: () => toInboundMediaFacts(resolvedImages, {
+        kind: "image",
+        messageId: input.id,
+      }),
+      history: { key: historyKey, limit: historyLimit, mediaLimit: 4 },
+    };
+  }
+  return {};
+}
+```
+
+Explicit reply-to-image:
+
+```typescript
+resolveTurn(input, _eventClass, preflight) {
+  return {
+    ...assembled,
+    media: toInboundMediaFacts([...currentMedia, ...referencedReplyMedia]),
+    supplemental: {
+      quote: preflight.supplemental?.quote,
+    },
+  };
+}
+```
+
+Direct message with history:
+
+```typescript
+resolveTurn(input) {
+  return {
+    ...assembled,
+    history: undefined,
+    message: {
+      rawBody: input.rawText,
+      bodyForAgent: input.textForAgent,
+    },
+  };
+}
+```
+
 ## Adapter contract
 
 For full `run`, the adapter shape is:

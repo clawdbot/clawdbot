@@ -81,6 +81,21 @@ function registerDuplicateBootstrapFileHook() {
   });
 }
 
+function registerBootstrapFileHook(relativePath = "BOOTSTRAP.md") {
+  registerInternalHook("agent:bootstrap", (event) => {
+    const context = event.context as AgentBootstrapHookContext;
+    context.bootstrapFiles = [
+      ...context.bootstrapFiles,
+      {
+        name: "BOOTSTRAP.md",
+        path: path.join(context.workspaceDir, relativePath),
+        content: "stale ritual",
+        missing: false,
+      },
+    ];
+  });
+}
+
 async function createHeartbeatAgentsWorkspace() {
   const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
   await fs.writeFile(path.join(workspaceDir, "HEARTBEAT.md"), "check inbox", "utf8");
@@ -148,6 +163,124 @@ describe("resolveBootstrapFilesForRun", () => {
     const agentsContextFiles = context.contextFiles.filter((file) => file.path === agentsPath);
     expect(agentsContextFiles).toHaveLength(1);
     expect(agentsContextFiles[0]?.content).toBe("workspace rules");
+  });
+
+  it("ignores stale workspace BOOTSTRAP.md once setup is completed", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.mkdir(path.join(workspaceDir, ".openclaw"), { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceDir, ".openclaw", "workspace-state.json"),
+      `${JSON.stringify({
+        version: 1,
+        bootstrapSeededAt: "2026-05-16T00:00:00.000Z",
+        setupCompletedAt: "2026-05-16T00:00:01.000Z",
+      })}\n`,
+      "utf8",
+    );
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "rules", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "BOOTSTRAP.md"), "stale ritual", "utf8");
+
+    const files = await resolveBootstrapFilesForRun({ workspaceDir });
+
+    expect(files.map((file) => file.name)).toContain("AGENTS.md");
+    expect(files.map((file) => file.name)).not.toContain("BOOTSTRAP.md");
+  });
+
+  it("keeps BOOTSTRAP.md when setup state cannot be read", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.mkdir(path.join(workspaceDir, ".openclaw", "workspace-state.json"), {
+      recursive: true,
+    });
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "rules", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "BOOTSTRAP.md"), "ritual", "utf8");
+
+    const files = await resolveBootstrapFilesForRun({ workspaceDir });
+
+    expect(files.map((file) => file.name)).toContain("BOOTSTRAP.md");
+  });
+
+  it("does not let hooks re-add stale root BOOTSTRAP.md after setup is completed", async () => {
+    registerBootstrapFileHook();
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.mkdir(path.join(workspaceDir, ".openclaw"), { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceDir, ".openclaw", "workspace-state.json"),
+      `${JSON.stringify({
+        version: 1,
+        bootstrapSeededAt: "2026-05-16T00:00:00.000Z",
+        setupCompletedAt: "2026-05-16T00:00:01.000Z",
+      })}\n`,
+      "utf8",
+    );
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "rules", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "BOOTSTRAP.md"), "stale ritual", "utf8");
+
+    const files = await resolveBootstrapFilesForRun({ workspaceDir });
+
+    expect(files.map((file) => file.name)).not.toContain("BOOTSTRAP.md");
+  });
+
+  it("ignores stale root BOOTSTRAP.md for home-relative workspace paths", async () => {
+    registerBootstrapFileHook();
+    const parentDir = await makeTempWorkspace("openclaw-bootstrap-home-");
+    const workspaceDir = path.join(parentDir, "workspace");
+    await fs.mkdir(path.join(workspaceDir, ".openclaw"), { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceDir, ".openclaw", "workspace-state.json"),
+      `${JSON.stringify({
+        version: 1,
+        bootstrapSeededAt: "2026-05-16T00:00:00.000Z",
+        setupCompletedAt: "2026-05-16T00:00:01.000Z",
+      })}\n`,
+      "utf8",
+    );
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "rules", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "BOOTSTRAP.md"), "stale ritual", "utf8");
+
+    const previousOpenClawHome = process.env.OPENCLAW_HOME;
+    process.env.OPENCLAW_HOME = parentDir;
+    try {
+      const files = await resolveBootstrapFilesForRun({ workspaceDir: "~/workspace" });
+
+      expect(files.map((file) => file.name)).toContain("AGENTS.md");
+      expect(files.map((file) => file.name)).not.toContain("BOOTSTRAP.md");
+    } finally {
+      if (previousOpenClawHome === undefined) {
+        delete process.env.OPENCLAW_HOME;
+      } else {
+        process.env.OPENCLAW_HOME = previousOpenClawHome;
+      }
+    }
+  });
+
+  it("keeps hook-added nested BOOTSTRAP.md after setup is completed", async () => {
+    registerBootstrapFileHook(path.join("packages", "core", "BOOTSTRAP.md"));
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    await fs.mkdir(path.join(workspaceDir, ".openclaw"), { recursive: true });
+    await fs.mkdir(path.join(workspaceDir, "packages", "core"), { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceDir, ".openclaw", "workspace-state.json"),
+      `${JSON.stringify({
+        version: 1,
+        bootstrapSeededAt: "2026-05-16T00:00:00.000Z",
+        setupCompletedAt: "2026-05-16T00:00:01.000Z",
+      })}\n`,
+      "utf8",
+    );
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "rules", "utf8");
+    await fs.writeFile(path.join(workspaceDir, "BOOTSTRAP.md"), "stale ritual", "utf8");
+    await fs.writeFile(
+      path.join(workspaceDir, "packages", "core", "BOOTSTRAP.md"),
+      "package ritual",
+      "utf8",
+    );
+
+    const files = await resolveBootstrapFilesForRun({ workspaceDir });
+
+    expect(files.map((file) => path.relative(workspaceDir, file.path))).toContain(
+      path.join("packages", "core", "BOOTSTRAP.md"),
+    );
+    expect(files.map((file) => file.path)).not.toContain(path.join(workspaceDir, "BOOTSTRAP.md"));
   });
 });
 

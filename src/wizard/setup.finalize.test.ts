@@ -424,6 +424,61 @@ describe("finalizeSetupWizard", () => {
     });
   });
 
+  it("localizes the bootstrap hatch TUI seed message", async () => {
+    const previousLocale = process.env.OPENCLAW_LOCALE;
+    process.env.OPENCLAW_LOCALE = "zh-CN";
+    vi.spyOn(fs, "access").mockResolvedValueOnce(undefined);
+    const select = vi.fn(async (params: { message: string }) => {
+      if (params.message === "你想如何启动 agent？") {
+        return "tui";
+      }
+      return "later";
+    });
+    const prompter = buildWizardPrompter({
+      select: select as never,
+      confirm: vi.fn(async () => false),
+    });
+
+    try {
+      await finalizeSetupWizard({
+        flow: "quickstart",
+        opts: {
+          acceptRisk: true,
+          authChoice: "skip",
+          installDaemon: false,
+          skipHealth: true,
+          skipUi: false,
+        },
+        baseConfig: {},
+        nextConfig: {},
+        workspaceDir: "/tmp",
+        settings: {
+          port: 18789,
+          bind: "loopback",
+          authMode: "token",
+          gatewayToken: undefined,
+          tailscaleMode: "off",
+          tailscaleResetOnExit: false,
+        },
+        prompter,
+        runtime: createRuntime(),
+      });
+
+      expect(launchTuiCli).toHaveBeenCalledWith({
+        local: true,
+        deliver: false,
+        message: "醒醒，我的朋友！",
+        timeoutMs: 300_000,
+      });
+    } finally {
+      if (previousLocale === undefined) {
+        delete process.env.OPENCLAW_LOCALE;
+      } else {
+        process.env.OPENCLAW_LOCALE = previousLocale;
+      }
+    }
+  });
+
   it("restores terminal state after failed TUI hatch", async () => {
     launchTuiCli.mockRejectedValueOnce(new Error("TUI exited with code 1"));
     const select = vi.fn(async (params: { message: string }) => {
@@ -559,8 +614,33 @@ describe("finalizeSetupWizard", () => {
     expect(gatewayServiceRestart).toHaveBeenCalledTimes(1);
     expect(gatewayServiceInstall).not.toHaveBeenCalled();
     expect(gatewayServiceUninstall).not.toHaveBeenCalled();
-    expect(progressUpdate).toHaveBeenCalledWith("Restarting Gateway service…");
+    expect(progressUpdate).toHaveBeenCalledWith("Restarting Gateway service...");
     expect(progressStop).toHaveBeenCalledWith("Gateway service restart scheduled.");
+  });
+
+  it("localizes finalize non-prompt notes", async () => {
+    const previousLocale = process.env.OPENCLAW_LOCALE;
+    process.env.OPENCLAW_LOCALE = "zh-CN";
+    const prompter = createLaterPrompter();
+
+    try {
+      await finalizeSetupWizard(createAdvancedFinalizeArgs({ prompter }));
+    } finally {
+      if (previousLocale === undefined) {
+        delete process.env.OPENCLAW_LOCALE;
+      } else {
+        process.env.OPENCLAW_LOCALE = previousLocale;
+      }
+    }
+
+    const noteMessages = (prompter.note as ReturnType<typeof vi.fn>).mock.calls.map((call) =>
+      String(call[0]),
+    );
+    expect(noteMessages.some((message) => message.includes("备份你的 agent 工作区"))).toBe(true);
+    expect(
+      noteMessages.some((message) => message.includes("在你的电脑上运行 agent 存在风险")),
+    ).toBe(true);
+    expect(noteMessages.some((message) => message.includes("已跳过 web search"))).toBe(true);
   });
 
   it("reports selected providers blocked by plugin policy as unavailable", async () => {

@@ -1,5 +1,8 @@
 import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
-import { fetchWithTimeout } from "openclaw/plugin-sdk/provider-http";
+import {
+  fetchWithTimeout,
+  readProviderJsonArrayFieldResponse,
+} from "openclaw/plugin-sdk/provider-http";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
@@ -51,10 +54,6 @@ interface DeepInfraModelEntry {
   metadata: DeepInfraModelMetadata | null;
 }
 
-interface DeepInfraModelsResponse {
-  data?: DeepInfraModelEntry[];
-}
-
 function parseModality(metadata: DeepInfraModelMetadata): Array<"text" | "image"> {
   return metadata.tags?.includes("vision") ? ["text", "image"] : ["text"];
 }
@@ -100,6 +99,17 @@ function staticCatalog(): ModelDefinitionConfig[] {
   return DEEPINFRA_MODEL_CATALOG.map(buildDeepInfraModelDefinition);
 }
 
+function asDeepInfraModelEntry(value: unknown): DeepInfraModelEntry {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("DeepInfra model list: malformed JSON response");
+  }
+  const entry = value as Partial<DeepInfraModelEntry>;
+  if (typeof entry.id !== "string") {
+    throw new Error("DeepInfra model list: malformed JSON response");
+  }
+  return value as DeepInfraModelEntry;
+}
+
 export async function discoverDeepInfraModels(): Promise<ModelDefinitionConfig[]> {
   if (process.env.NODE_ENV === "test" || process.env.VITEST) {
     return staticCatalog();
@@ -122,15 +132,16 @@ export async function discoverDeepInfraModels(): Promise<ModelDefinitionConfig[]
       return staticCatalog();
     }
 
-    const body = (await response.json()) as DeepInfraModelsResponse;
-    if (!Array.isArray(body.data) || body.data.length === 0) {
+    const data = await readProviderJsonArrayFieldResponse(response, "DeepInfra model list", "data");
+    if (data.length === 0) {
       log.warn("No models found from DeepInfra API, using static catalog");
       return staticCatalog();
     }
 
     const seen = new Set<string>();
     const models: ModelDefinitionConfig[] = [];
-    for (const entry of body.data) {
+    for (const rawEntry of data) {
+      const entry = asDeepInfraModelEntry(rawEntry);
       const id = typeof entry?.id === "string" ? entry.id.trim() : "";
       if (!id || seen.has(id) || !entry.metadata) {
         continue;

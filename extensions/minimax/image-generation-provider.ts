@@ -1,4 +1,5 @@
 import type { ImageGenerationProvider } from "openclaw/plugin-sdk/image-generation";
+import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
@@ -183,8 +184,12 @@ function buildMinimaxImageProvider(providerId: string): ImageGenerationProvider 
             if (!b64) {
               return null;
             }
+            const canonicalBase64 = canonicalizeBase64(b64);
+            if (!canonicalBase64) {
+              throw new Error("MiniMax image generation returned malformed image base64");
+            }
             return {
-              buffer: Buffer.from(b64, "base64"),
+              buffer: Buffer.from(canonicalBase64, "base64"),
               mimeType: DEFAULT_OUTPUT_MIME,
               fileName: `image-${index + 1}.png`,
             };

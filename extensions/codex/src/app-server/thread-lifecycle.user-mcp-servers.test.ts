@@ -135,6 +135,56 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     });
   });
 
+  it("projects only Codex user MCP servers scoped to the current agent", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const request = vi.fn(async (method: string, _params: unknown) => {
+      if (method === "thread/start") {
+        return threadStartResult();
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params: createParams(sessionFile, workspaceDir, {
+        mcp: {
+          servers: {
+            atlas: {
+              transport: "streamable-http",
+              url: "https://atlas.example.com/mcp",
+              codex: {
+                agents: ["atlas"],
+                defaultToolsApprovalMode: "approve",
+              },
+            },
+            apolo: {
+              transport: "streamable-http",
+              url: "https://apolo.example.com/mcp",
+              codex: {
+                agents: ["apolo"],
+                defaultToolsApprovalMode: "approve",
+              },
+            },
+          },
+        },
+      } as unknown as EmbeddedRunAttemptParams["config"]),
+      agentId: "atlas",
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createAppServerOptions(),
+    });
+
+    const startCall = request.mock.calls.find(([method]) => method === "thread/start");
+    const startParams = startCall?.[1] as { config?: { mcp_servers?: Record<string, unknown> } };
+    expect(startParams?.config?.mcp_servers).toStrictEqual({
+      atlas: {
+        url: "https://atlas.example.com/mcp",
+        default_tools_approval_mode: "approve",
+      },
+    });
+  });
+
   it("omits mcp_servers from the start config when cfg has no user MCP servers", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");

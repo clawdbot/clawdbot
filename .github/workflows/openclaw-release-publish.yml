@@ -11,6 +11,10 @@ on:
         description: Successful OpenClaw NPM Release preflight run id, required when publish_openclaw_npm=true
         required: false
         type: string
+      full_release_validation_run_id:
+        description: Successful Full Release Validation run id for this tag/SHA, required when publish_openclaw_npm=true
+        required: false
+        type: string
       npm_dist_tag:
         description: npm dist-tag for the OpenClaw package
         required: true
@@ -77,6 +81,7 @@ jobs:
         env:
           RELEASE_TAG: ${{ inputs.tag }}
           PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
+          FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
           PUBLISH_OPENCLAW_NPM: ${{ inputs.publish_openclaw_npm && 'true' || 'false' }}
           PLUGIN_PUBLISH_SCOPE: ${{ inputs.plugin_publish_scope }}
           PLUGINS: ${{ inputs.plugins }}
@@ -99,6 +104,10 @@ jobs:
           fi
           if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" && -z "${PREFLIGHT_RUN_ID}" ]]; then
             echo "publish_openclaw_npm=true requires preflight_run_id." >&2
+            exit 1
+          fi
+          if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" && -z "${FULL_RELEASE_VALIDATION_RUN_ID}" ]]; then
+            echo "publish_openclaw_npm=true requires full_release_validation_run_id." >&2
             exit 1
           fi
           if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" && "${WORKFLOW_REF}" != "refs/heads/main" && ! "${WORKFLOW_REF}" =~ ^refs/heads/release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ ]]; then
@@ -129,6 +138,16 @@ jobs:
           path: ${{ runner.temp }}/openclaw-npm-preflight-manifest
           repository: ${{ github.repository }}
           run-id: ${{ inputs.preflight_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Download full release validation manifest
+        if: ${{ inputs.publish_openclaw_npm }}
+        uses: actions/download-artifact@v8
+        with:
+          name: full-release-validation-${{ inputs.full_release_validation_run_id }}
+          path: ${{ runner.temp }}/full-release-validation-manifest
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.full_release_validation_run_id }}
           github-token: ${{ github.token }}
 
       - name: Checkout release tag
@@ -186,6 +205,46 @@ jobs:
           fi
           echo "sha=$release_sha" >> "$GITHUB_OUTPUT"
 
+      - name: Validate full release validation manifest
+        if: ${{ inputs.publish_openclaw_npm }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
+          EXPECTED_SHA: ${{ steps.ref.outputs.sha }}
+          EXPECTED_RELEASE_PROFILE: ${{ inputs.release_profile }}
+          EXPECTED_WORKFLOW_BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          RUN_JSON="$(gh run view "$FULL_RELEASE_VALIDATION_RUN_ID" --repo "$GITHUB_REPOSITORY" --json workflowName,headBranch,event,status,conclusion,url)"
+          printf '%s' "$RUN_JSON" | node -e 'const fs = require("node:fs"); const run = JSON.parse(fs.readFileSync(0, "utf8")); const checks = [["workflowName", "Full Release Validation"], ["headBranch", process.env.EXPECTED_WORKFLOW_BRANCH], ["event", "workflow_dispatch"], ["status", "completed"], ["conclusion", "success"]]; for (const [key, expected] of checks) { if (run[key] !== expected) { console.error(`Referenced full release validation run ${process.env.FULL_RELEASE_VALIDATION_RUN_ID} must have ${key}=${expected}, got ${run[key] ?? "<missing>"}.`); process.exit(1); } } console.log(`Using full release validation run ${process.env.FULL_RELEASE_VALIDATION_RUN_ID}: ${run.url}`);'
+
+          manifest="${RUNNER_TEMP}/full-release-validation-manifest/full-release-validation-manifest.json"
+          if [[ ! -f "$manifest" ]]; then
+            echo "Full release validation manifest is missing." >&2
+            ls -la "${RUNNER_TEMP}/full-release-validation-manifest" >&2 || true
+            exit 1
+          fi
+          workflow_name="$(jq -r '.workflowName // ""' "$manifest")"
+          target_sha="$(jq -r '.targetSha // ""' "$manifest")"
+          release_profile="$(jq -r '.releaseProfile // ""' "$manifest")"
+          rerun_group="$(jq -r '.rerunGroup // ""' "$manifest")"
+          if [[ "$workflow_name" != "Full Release Validation" ]]; then
+            echo "Full release validation manifest workflow mismatch: $workflow_name" >&2
+            exit 1
+          fi
+          if [[ "$target_sha" != "$EXPECTED_SHA" ]]; then
+            echo "Full release validation target SHA mismatch: expected $EXPECTED_SHA, got $target_sha" >&2
+            exit 1
+          fi
+          if [[ "$release_profile" != "$EXPECTED_RELEASE_PROFILE" ]]; then
+            echo "Full release validation profile mismatch: expected $EXPECTED_RELEASE_PROFILE, got $release_profile" >&2
+            exit 1
+          fi
+          if [[ "$rerun_group" != "all" ]]; then
+            echo "Full release validation must run rerun_group=all before npm publish; got $rerun_group" >&2
+            exit 1
+          fi
+
       - name: Validate release tag is reachable from main or release branch
         run: |
           set -euo pipefail
@@ -208,6 +267,7 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
           TARGET_SHA: ${{ steps.manifest.outputs.sha || steps.ref.outputs.sha }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
+          FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
         run: |
           {
             echo "### Release target"
@@ -215,6 +275,9 @@ jobs:
             echo "- Tag: \`${RELEASE_TAG}\`"
             echo "- SHA: \`${TARGET_SHA}\`"
             echo "- Release profile: \`${RELEASE_PROFILE}\`"
+            if [[ -n "${FULL_RELEASE_VALIDATION_RUN_ID// }" ]]; then
+              echo "- Full release validation: \`${FULL_RELEASE_VALIDATION_RUN_ID}\`"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
   publish:
@@ -237,6 +300,7 @@ jobs:
           CHILD_WORKFLOW_REF: ${{ github.ref_name }}
           RELEASE_TAG: ${{ inputs.tag }}
           PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
+          FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           PLUGIN_PUBLISH_SCOPE: ${{ inputs.plugin_publish_scope }}
           PLUGINS: ${{ inputs.plugins }}
@@ -473,6 +537,7 @@ jobs:
               -f tag="${RELEASE_TAG}" \
               -f preflight_only=false \
               -f preflight_run_id="${PREFLIGHT_RUN_ID}" \
+              -f full_release_validation_run_id="${FULL_RELEASE_VALIDATION_RUN_ID}" \
               -f npm_dist_tag="${RELEASE_NPM_DIST_TAG}")"
             echo "- OpenClaw npm run ID: \`${openclaw_npm_run_id}\`" >> "$GITHUB_STEP_SUMMARY"
           else

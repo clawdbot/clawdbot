@@ -217,8 +217,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 140
   },
   "dynamicToolsJson": {
-    "chars": 42879,
-    "roughTokens": 10720
+    "chars": 44064,
+    "roughTokens": 11016
   },
   "openClawDeveloperInstructions": {
     "chars": 4412,
@@ -229,8 +229,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 6748
   },
   "totalWithDynamicToolsJson": {
-    "chars": 69873,
-    "roughTokens": 17469
+    "chars": 71058,
+    "roughTokens": 17765
   },
   "userInputText": {
     "chars": 370,
@@ -584,6 +584,43 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
         },
         "asVoice": {
           "type": "boolean"
+        },
+        "attachments": {
+          "description": "Structured media attachments to send with the message. Each item needs media/mediaUrl/path/filePath/fileUrl/url.",
+          "items": {
+            "properties": {
+              "filePath": {
+                "type": "string"
+              },
+              "fileUrl": {
+                "type": "string"
+              },
+              "media": {
+                "type": "string"
+              },
+              "mediaUrl": {
+                "type": "string"
+              },
+              "mimeType": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "type": {
+                "enum": ["image", "audio", "video", "file"],
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "type": "array"
         },
         "bestEffort": {
           "type": "boolean"

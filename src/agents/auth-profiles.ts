@@ -32,6 +32,7 @@ export {
   dedupeProfileIds,
   listProfilesForProvider,
   markAuthProfileSuccess,
+  removeProviderAuthProfilesWithLock,
   setAuthProfileOrder,
   upsertAuthProfile,
   upsertAuthProfileWithLock,

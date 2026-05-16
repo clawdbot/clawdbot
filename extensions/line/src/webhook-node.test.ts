@@ -303,7 +303,7 @@ describe("LINE webhook shared POST contract", () => {
   );
 
   it.each(sharedWebhookPostContractCases)(
-    "$name returns 500 when event processing fails and does not acknowledge with 200",
+    "$name acknowledges signed events before failed background processing is logged",
     async ({ invoke }) => {
       const result = await invoke({
         failWith: new Error("transient failure"),
@@ -311,10 +311,12 @@ describe("LINE webhook shared POST contract", () => {
         signed: true,
       });
 
-      expect(result.status).toBe(500);
-      expect(result.body).toEqual({ error: "Internal server error" });
+      expect(result.status).toBe(200);
+      expect(result.body).toEqual({ status: "ok" });
       expect(result.dispatched).toHaveBeenCalledTimes(1);
-      expect(result.runtimeError).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => {
+        expect(result.runtimeError).toHaveBeenCalledTimes(1);
+      });
     },
   );
 });
@@ -436,7 +438,7 @@ describe("createLineNodeWebhookHandler", () => {
     expect(payload.events).toEqual([{ type: "message" }]);
   });
 
-  it("releases authenticated requests before event processing completes", async () => {
+  it("acknowledges signed event requests before event processing completes", async () => {
     const rawBody = JSON.stringify({ events: [{ type: "message" }] });
     let releaseAuthenticated: (() => void) | undefined;
     const bot = {
@@ -465,14 +467,14 @@ describe("createLineNodeWebhookHandler", () => {
       expect(bot.handleWebhook).toHaveBeenCalledTimes(1);
     });
 
-    expect(res.headersSent).toBe(false);
+    await request;
+
+    expect(res.statusCode).toBe(200);
+    expect(res.headersSent).toBe(true);
     if (!releaseAuthenticated) {
       throw new Error("Expected LINE authenticated request release callback to be initialized");
     }
     releaseAuthenticated();
-    await request;
-
-    expect(res.statusCode).toBe(200);
   });
 
   it("returns 400 for invalid JSON payload even when signature is valid", async () => {

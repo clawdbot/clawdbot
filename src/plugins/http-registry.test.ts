@@ -1,12 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { registerPluginHttpRoute } from "./http-registry.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { createPluginRegistry } from "./registry.js";
 import {
   pinActivePluginHttpRouteRegistry,
   releasePinnedPluginHttpRouteRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "./runtime.js";
+import type { PluginRuntime } from "./runtime/types.js";
+import { createPluginRecord } from "./status.test-helpers.js";
 
 function expectRouteRegistrationDenied(params: {
   replaceExisting: boolean;
@@ -107,6 +111,51 @@ describe("registerPluginHttpRoute", () => {
 
     unregister();
     expect(registry.httpRoutes).toHaveLength(0);
+  });
+
+  it("marks gateway method dispatch entitlement only for plugins declaring the contract", () => {
+    const pluginRegistry = createPluginRegistry({
+      logger: {
+        info() {},
+        warn() {},
+        error() {},
+        debug() {},
+      },
+      runtime: {} as PluginRuntime,
+      activateGlobalSideEffects: false,
+    });
+    const config = {} as OpenClawConfig;
+    const plainRecord = createPluginRecord({
+      id: "plain-http",
+      source: "/plugins/plain-http/index.ts",
+    });
+    const adminRecord = createPluginRecord({
+      id: "admin-http",
+      source: "/plugins/admin-http/index.ts",
+      contracts: { gatewayMethodDispatch: ["authenticated-request"] },
+    });
+
+    pluginRegistry.registry.plugins.push(plainRecord, adminRecord);
+    pluginRegistry.createApi(plainRecord, { config }).registerHttpRoute({
+      path: "/plain",
+      auth: "gateway",
+      handler: vi.fn(),
+    });
+    pluginRegistry.createApi(adminRecord, { config }).registerHttpRoute({
+      path: "/admin",
+      auth: "gateway",
+      handler: vi.fn(),
+    });
+
+    const plainRoute = pluginRegistry.registry.httpRoutes.find(
+      (route) => route.pluginId === "plain-http",
+    );
+    const adminRoute = pluginRegistry.registry.httpRoutes.find(
+      (route) => route.pluginId === "admin-http",
+    );
+
+    expect(plainRoute?.gatewayMethodDispatchAllowed).toBeUndefined();
+    expect(adminRoute?.gatewayMethodDispatchAllowed).toBe(true);
   });
 
   it("returns noop unregister when path is missing", () => {

@@ -283,6 +283,57 @@ describe("gateway session utils", () => {
     expect(row.thinkingDefault).toBe("medium");
   });
 
+  test("session rows ignore malformed compaction checkpoints", () => {
+    const row = buildGatewaySessionRow({
+      cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
+      storePath: "",
+      store: {},
+      key: "agent:main:main",
+      entry: {
+        sessionId: "session-1",
+        updatedAt: 1,
+        compactionCheckpoints: [
+          {
+            checkpointId: "checkpoint-older",
+            sessionKey: "agent:main:main",
+            sessionId: "session-1",
+            createdAt: 10,
+            reason: "manual",
+            preCompaction: { sessionId: "session-1" },
+            postCompaction: { sessionId: "session-1" },
+          },
+          null,
+          {
+            checkpointId: "",
+            createdAt: 30,
+            reason: "manual",
+          },
+          {
+            checkpointId: "checkpoint-bad-reason",
+            createdAt: 40,
+            reason: "bogus",
+          },
+          {
+            checkpointId: "checkpoint-newer",
+            sessionKey: "agent:main:main",
+            sessionId: "session-1",
+            createdAt: 50,
+            reason: "overflow-retry",
+            preCompaction: { sessionId: "session-1" },
+            postCompaction: { sessionId: "session-1" },
+          },
+        ],
+      } as unknown as SessionEntry,
+    });
+
+    expect(row.compactionCheckpointCount).toBe(2);
+    expect(row.latestCompactionCheckpoint).toEqual({
+      checkpointId: "checkpoint-newer",
+      createdAt: 50,
+      reason: "overflow-retry",
+    });
+  });
+
   test("async session list reuses thinking metadata for lightweight rows", async () => {
     const resolveThinkingProfile = vi.fn(() => ({
       levels: [{ id: "off" as const }, { id: "medium" as const }],

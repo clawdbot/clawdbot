@@ -88,9 +88,10 @@ Important lanes:
   local folder update skip behavior, local folders with preinstalled
   dependencies, `file:` package installs, git installs with CLI execution, git
   moving-ref updates, npm registry installs with hoisted transitive
-  dependencies, npm update no-ops, local ClawHub fixture installs and update
-  no-ops, marketplace update behavior, and Claude-bundle enable/inspect. Set
-  `OPENCLAW_PLUGINS_E2E_CLAWHUB=0` to keep the ClawHub block hermetic/offline.
+  dependencies, npm update no-ops, malformed npm package metadata rejection,
+  local ClawHub fixture installs and update no-ops, marketplace update behavior,
+  and Claude-bundle enable/inspect. Set `OPENCLAW_PLUGINS_E2E_CLAWHUB=0` to
+  keep the ClawHub block hermetic/offline.
 - `test:docker:plugin-lifecycle-matrix` installs the candidate package in a bare
   container, runs an npm plugin through install, inspect, disable, enable,
   explicit upgrade, explicit downgrade, and uninstall after deleting the plugin

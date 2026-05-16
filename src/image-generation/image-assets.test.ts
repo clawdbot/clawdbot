@@ -28,6 +28,16 @@ describe("image asset helpers", () => {
     expect(asset.fileName).toBe("image-2.png");
   });
 
+  it("rejects malformed base64 image data URLs", () => {
+    expect(parseImageDataUrl("data:image/png;base64,not-base64!")).toBeUndefined();
+    expect(
+      generatedImageAssetFromDataUrl({
+        dataUrl: "data:image/png;base64,not-base64!",
+        index: 0,
+      }),
+    ).toBeUndefined();
+  });
+
   it("normalizes image file extensions", () => {
     expect(imageFileExtensionForMimeType("image/jpeg")).toBe("jpg");
     expect(imageFileExtensionForMimeType("image/webp")).toBe("webp");
@@ -69,6 +79,37 @@ describe("image asset helpers", () => {
         revisedPrompt: "revised",
       },
     ]);
+  });
+
+  it("skips malformed OpenAI-compatible base64 image responses", () => {
+    expect(
+      parseOpenAiCompatibleImageResponse(
+        {
+          data: [{ b64_json: "not-base64!" }],
+        },
+        { defaultMimeType: "image/png" },
+      ),
+    ).toEqual([]);
+  });
+
+  it("rejects malformed OpenAI-compatible image responses in strict mode", () => {
+    expect(() =>
+      parseOpenAiCompatibleImageResponse(
+        {
+          data: [{ b64_json: "not-base64!" }],
+        },
+        {
+          defaultMimeType: "image/png",
+          malformedResponseError: "Sample image response malformed",
+        },
+      ),
+    ).toThrow("Sample image response malformed");
+    expect(() =>
+      parseOpenAiCompatibleImageResponse(
+        { data: { b64_json: Buffer.from("png").toString("base64") } },
+        { malformedResponseError: "Sample image response malformed" },
+      ),
+    ).toThrow("Sample image response malformed");
   });
 
   it("resolves source upload filenames from explicit names or MIME types", () => {

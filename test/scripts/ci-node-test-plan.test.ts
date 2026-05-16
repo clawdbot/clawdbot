@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import fg from "fast-glob";
@@ -34,6 +35,20 @@ const GATEWAY_SERVER_EXCLUDED_TESTS = new Set([
 ]);
 
 function listTestFiles(rootDir: string): string[] {
+  const result = spawnSync("git", ["ls-files", "--", rootDir], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  expect(result.status).toBe(0);
+  if (result.status === 0) {
+    return result.stdout
+      .split("\n")
+      .map((line) => line.trim().replaceAll("\\", "/"))
+      .filter((line) => line.endsWith(".test.ts"))
+      .toSorted((a, b) => a.localeCompare(b));
+  }
+
   if (!existsSync(rootDir)) {
     return [];
   }
@@ -78,6 +93,54 @@ function isGatewayServerTestFile(file: string): boolean {
 }
 
 describe("scripts/lib/ci-node-test-plan.mjs", () => {
+  it("creates split shards without walking test roots", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        `
+          import fs from "node:fs";
+          import { syncBuiltinESMExports } from "node:module";
+          const counts = { existsSync: 0, readdirSync: 0 };
+          const originalExistsSync = fs.existsSync;
+          const originalReaddirSync = fs.readdirSync;
+          fs.existsSync = (...args) => {
+            counts.existsSync += 1;
+            return originalExistsSync(...args);
+          };
+          fs.readdirSync = (...args) => {
+            counts.readdirSync += 1;
+            return originalReaddirSync(...args);
+          };
+          syncBuiltinESMExports();
+          const { createNodeTestShards } = await import("./scripts/lib/ci-node-test-plan.mjs");
+          const shards = createNodeTestShards();
+          console.log(JSON.stringify({
+            counts,
+            includePatterns: shards.reduce((total, shard) => total + (shard.includePatterns?.length ?? 0), 0),
+            shards: shards.length,
+          }));
+        `,
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    const payload = JSON.parse(result.stdout) as {
+      counts: { existsSync: number; readdirSync: number };
+      includePatterns: number;
+      shards: number;
+    };
+    expect(payload.shards).toBeGreaterThan(0);
+    expect(payload.includePatterns).toBeGreaterThan(0);
+    expect(payload.counts).toEqual({ existsSync: 0, readdirSync: 0 });
+  });
+
   it("splits the slow core unit shards while keeping paired source/security coverage", () => {
     const coreUnitShards = createNodeTestShards()
       .filter((shard) => shard.shardName.startsWith("core-unit-"))

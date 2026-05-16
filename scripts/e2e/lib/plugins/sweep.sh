@@ -88,10 +88,12 @@ node scripts/e2e/lib/plugins/assertions.mjs plugin-file-removed
 echo "Testing install and update from npm registry..."
 npm_pack_dir="$(mktemp -d "/tmp/openclaw-plugin-npm-pack.XXXXXX")"
 npm_dep_pack_dir="$(mktemp -d "/tmp/openclaw-plugin-npm-dep-pack.XXXXXX")"
+invalid_npm_pack_dir="$(mktemp -d "/tmp/openclaw-plugin-invalid-metadata-pack.XXXXXX")"
 npm_registry_dir="$(mktemp -d "/tmp/openclaw-plugin-npm-registry.XXXXXX")"
 pack_fixture_plugin_with_cli_registry_dependency "$npm_pack_dir" /tmp/demo-plugin-npm.tgz demo-plugin-npm 0.0.1 demo.npm "Demo Plugin NPM" demo-npm "demo-plugin-npm:pong"
 pack_fake_is_number_package "$npm_dep_pack_dir" /tmp/is-number-7.0.0.tgz
-start_npm_fixture_registry "@openclaw/demo-plugin-npm" "0.0.1" /tmp/demo-plugin-npm.tgz "$npm_registry_dir" "is-number" "7.0.0" /tmp/is-number-7.0.0.tgz
+pack_fixture_plugin_with_invalid_extension_entry "$invalid_npm_pack_dir" /tmp/demo-plugin-invalid-metadata.tgz demo-plugin-invalid-metadata 0.0.1 demo.invalid.metadata "Demo Plugin Invalid Metadata"
+start_npm_fixture_registry "@openclaw/demo-plugin-npm" "0.0.1" /tmp/demo-plugin-npm.tgz "$npm_registry_dir" "is-number" "7.0.0" /tmp/is-number-7.0.0.tgz "@openclaw/demo-plugin-invalid-metadata" "0.0.1" /tmp/demo-plugin-invalid-metadata.tgz
 
 run_logged install-npm node "$OPENCLAW_ENTRY" plugins install "npm:@openclaw/demo-plugin-npm@0.0.1"
 node "$OPENCLAW_ENTRY" plugins list --json >/tmp/plugins-npm.json
@@ -106,6 +108,15 @@ node scripts/e2e/lib/plugins/assertions.mjs plugin-npm-update
 run_logged uninstall-npm node "$OPENCLAW_ENTRY" plugins uninstall demo-plugin-npm --force
 node "$OPENCLAW_ENTRY" plugins list --json >/tmp/plugins-npm-uninstalled.json
 node scripts/e2e/lib/plugins/assertions.mjs plugin-npm-removed
+
+echo "Testing npm install rejects malformed package metadata..."
+if node "$OPENCLAW_ENTRY" plugins install "npm:@openclaw/demo-plugin-invalid-metadata@0.0.1" > /tmp/plugins-invalid-openclaw-extensions.log 2>&1; then
+  cat /tmp/plugins-invalid-openclaw-extensions.log
+  echo "Expected malformed package metadata install to fail." >&2
+  exit 1
+fi
+node "$OPENCLAW_ENTRY" plugins list --json >/tmp/plugins-invalid-openclaw-extensions-list.json
+node scripts/e2e/lib/plugins/assertions.mjs invalid-openclaw-extensions
 
 echo "Testing install from git repo and plugin CLI execution..."
 git_fixture_root="$(mktemp -d "/tmp/openclaw-plugin-git.XXXXXX")"

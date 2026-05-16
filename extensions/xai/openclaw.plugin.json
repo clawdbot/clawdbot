@@ -45,12 +45,23 @@
       "choiceLabel": "xAI API key",
       "groupId": "xai",
       "groupLabel": "xAI (Grok)",
-      "groupHint": "API key",
+      "groupHint": "API key or SuperGrok OAuth",
       "onboardingFeatured": true,
       "optionKey": "xaiApiKey",
       "cliFlag": "--xai-api-key",
       "cliOption": "--xai-api-key <key>",
       "cliDescription": "xAI API key"
+    },
+    {
+      "provider": "xai",
+      "method": "oauth",
+      "choiceId": "xai-oauth",
+      "choiceLabel": "xAI Grok OAuth",
+      "choiceHint": "SuperGrok subscription",
+      "groupId": "xai",
+      "groupLabel": "xAI (Grok)",
+      "groupHint": "API key or SuperGrok OAuth",
+      "onboardingFeatured": true
     }
   ],
   "uiHints": {

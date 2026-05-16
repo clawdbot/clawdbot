@@ -36,6 +36,7 @@ const BLOCKED_IPV6_SPECIAL_USE_RANGES = new Set<BlockedIpv6Range>([
   "orchid2",
 ]);
 const RFC2544_BENCHMARK_PREFIX: [ipaddr.IPv4, number] = [ipaddr.IPv4.parse("198.18.0.0"), 15];
+const CLOUD_METADATA_IP_ADDRESSES = new Set(["100.100.100.200", "fd00:ec2::254"]);
 export type Ipv4SpecialUseBlockOptions = {
   allowRfc2544BenchmarkRange?: boolean;
 };
@@ -241,6 +242,37 @@ export function isLoopbackIpAddress(raw: string | undefined): boolean {
   }
   const normalized = normalizeIpv4MappedAddress(parsed);
   return normalized.range() === "loopback";
+}
+
+export function isLinkLocalIpAddress(raw: string | undefined): boolean {
+  const parsed = parseLooseIpAddress(raw);
+  if (!parsed) {
+    return false;
+  }
+  const normalized = normalizeIpv4MappedAddress(parsed);
+  if (isIpv4Address(normalized)) {
+    return normalized.range() === "linkLocal";
+  }
+  const embeddedIpv4 = extractEmbeddedIpv4FromIpv6(normalized);
+  if (embeddedIpv4?.range() === "linkLocal") {
+    return true;
+  }
+  return normalized.range() === "linkLocal";
+}
+
+export function isCloudMetadataIpAddress(raw: string | undefined): boolean {
+  const parsed = parseLooseIpAddress(raw);
+  if (!parsed) {
+    return false;
+  }
+  const normalized = normalizeIpv4MappedAddress(parsed);
+  if (isIpv6Address(normalized)) {
+    const embeddedIpv4 = extractEmbeddedIpv4FromIpv6(normalized);
+    if (embeddedIpv4 && CLOUD_METADATA_IP_ADDRESSES.has(embeddedIpv4.toString())) {
+      return true;
+    }
+  }
+  return CLOUD_METADATA_IP_ADDRESSES.has(normalized.toString());
 }
 
 export function isPrivateOrLoopbackIpAddress(raw: string | undefined): boolean {

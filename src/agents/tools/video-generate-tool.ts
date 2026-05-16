@@ -30,6 +30,10 @@ import type {
   VideoGenerationSourceAsset,
 } from "../../video-generation/types.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
+import {
+  formatGeneratedAttachmentLines,
+  type AgentGeneratedAttachment,
+} from "../generated-attachments.js";
 import { ToolInputError, readNumberParam, readStringParam } from "./common.js";
 import { decodeDataUrl } from "./image-tool.helpers.js";
 import { withMediaGenerationTaskKeepalive } from "./media-generate-background-shared.js";
@@ -540,6 +544,7 @@ type ExecutedVideoGeneration = {
   urlOnlyUrls: string[];
   /** Total generated video count, including url-only assets. */
   count: number;
+  attachments: AgentGeneratedAttachment[];
   contentText: string;
   details: Record<string, unknown>;
   wakeResult: string;
@@ -697,6 +702,20 @@ async function executeVideoGenerationJob(params: {
     ...savedVideos.map((video) => video.path),
     ...urlOnlyVideos.map((video) => video.url),
   ];
+  const attachments: AgentGeneratedAttachment[] = [
+    ...savedVideos.map((video) => ({
+      type: "video" as const,
+      path: video.path,
+      mimeType: video.contentType,
+      name: video.id,
+    })),
+    ...urlOnlyVideos.map((video) => ({
+      type: "video" as const,
+      url: video.url,
+      mimeType: video.mimeType,
+      name: video.fileName,
+    })),
+  ];
   const lines = [
     `Generated ${totalCount} video${totalCount === 1 ? "" : "s"} with ${result.provider}/${result.model}.`,
     ...(warning ? [`Warning: ${warning}`] : []),
@@ -705,8 +724,7 @@ async function executeVideoGenerationJob(params: {
     requestedDurationSeconds !== normalizedDurationSeconds
       ? `Duration normalized: requested ${requestedDurationSeconds}s; used ${normalizedDurationSeconds}s.`
       : null,
-    ...savedVideos.map((video) => `MEDIA:${video.path}`),
-    ...urlOnlyVideos.map((video) => `MEDIA:${video.url}`),
+    ...formatGeneratedAttachmentLines(attachments),
   ].filter((entry): entry is string => Boolean(entry));
 
   return {
@@ -715,6 +733,7 @@ async function executeVideoGenerationJob(params: {
     savedPaths: savedVideos.map((video) => video.path),
     urlOnlyUrls: urlOnlyVideos.map((video) => video.url),
     count: totalCount,
+    attachments,
     contentText: lines.join("\n"),
     wakeResult: lines.join("\n"),
     details: {
@@ -723,7 +742,9 @@ async function executeVideoGenerationJob(params: {
       count: totalCount,
       media: {
         mediaUrls: allMediaUrls,
+        attachments,
       },
+      attachments,
       paths: allMediaUrls,
       ...buildTaskRunDetails(params.taskHandle),
       ...buildMediaReferenceDetails({
@@ -1027,7 +1048,7 @@ export function createVideoGenerateTool(options?: {
                 status: "ok",
                 statusLabel: "completed successfully",
                 result: executed.wakeResult,
-                mediaUrls: [...executed.savedPaths, ...executed.urlOnlyUrls],
+                attachments: executed.attachments,
               });
             } catch (error) {
               log.warn("Video generation completion wake failed after successful generation", {

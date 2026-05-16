@@ -5,6 +5,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { sanitizePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
   type SessionEntry,
@@ -121,8 +122,12 @@ function buildResumeMessage(pendingFinalDeliveryText?: string | null): string {
     "[System] Your previous turn was interrupted by a gateway restart while " +
     "OpenClaw was waiting on tool/model work. Continue from the existing " +
     "transcript and finish the interrupted response.";
-  if (pendingFinalDeliveryText) {
-    return `${base}\n\nNote: The interrupted final reply was captured: "${pendingFinalDeliveryText}"`;
+  const sanitizedPendingText =
+    typeof pendingFinalDeliveryText === "string"
+      ? sanitizePendingFinalDeliveryText(pendingFinalDeliveryText)
+      : "";
+  if (sanitizedPendingText) {
+    return `${base}\n\nNote: The interrupted final reply was captured: "${sanitizedPendingText}"`;
   }
   return base;
 }
@@ -162,11 +167,15 @@ async function resumeMainSession(params: {
   sessionKey: string;
   pendingFinalDeliveryText?: string | null;
 }): Promise<boolean> {
+  const sanitizedPendingText =
+    typeof params.pendingFinalDeliveryText === "string"
+      ? sanitizePendingFinalDeliveryText(params.pendingFinalDeliveryText)
+      : "";
   try {
     await callGateway<{ runId: string }>({
       method: "agent",
       params: {
-        message: buildResumeMessage(params.pendingFinalDeliveryText),
+        message: buildResumeMessage(sanitizedPendingText),
         sessionKey: params.sessionKey,
         idempotencyKey: crypto.randomUUID(),
         deliver: false,
@@ -185,10 +194,21 @@ async function resumeMainSession(params: {
         entry.abortedLastRun = false;
         entry.updatedAt = now;
         if (entry.pendingFinalDelivery || entry.pendingFinalDeliveryText) {
-          entry.pendingFinalDeliveryLastAttemptAt = now;
-          entry.pendingFinalDeliveryAttemptCount =
-            (entry.pendingFinalDeliveryAttemptCount ?? 0) + 1;
-          entry.pendingFinalDeliveryLastError = null;
+          if (sanitizedPendingText) {
+            entry.pendingFinalDeliveryLastAttemptAt = now;
+            entry.pendingFinalDeliveryAttemptCount =
+              (entry.pendingFinalDeliveryAttemptCount ?? 0) + 1;
+            entry.pendingFinalDeliveryLastError = null;
+            entry.pendingFinalDeliveryText = sanitizedPendingText;
+          } else {
+            entry.pendingFinalDelivery = undefined;
+            entry.pendingFinalDeliveryText = undefined;
+            entry.pendingFinalDeliveryCreatedAt = undefined;
+            entry.pendingFinalDeliveryLastAttemptAt = undefined;
+            entry.pendingFinalDeliveryAttemptCount = undefined;
+            entry.pendingFinalDeliveryLastError = undefined;
+            entry.pendingFinalDeliveryContext = undefined;
+          }
         }
         store[params.sessionKey] = entry;
       },
@@ -196,7 +216,7 @@ async function resumeMainSession(params: {
     );
     log.info(
       `resumed interrupted main session: ${params.sessionKey}${
-        params.pendingFinalDeliveryText ? " (with pending payload)" : ""
+        sanitizedPendingText ? " (with pending payload)" : ""
       }`,
     );
     return true;

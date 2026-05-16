@@ -90,6 +90,8 @@ export type AgentConfig = {
   model?: AgentModelConfig;
   /** Per-model metadata overrides for this agent. */
   models?: Record<string, AgentModelEntryConfig>;
+  /** @deprecated Legacy per-agent compaction config is kept for raw doctor migration/repair. */
+  compaction?: AgentDefaultsConfig["compaction"];
   /** Optional per-agent default thinking level (overrides agents.defaults.thinkingDefault). */
   thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | "max";
   /** Optional per-agent default verbosity level. */

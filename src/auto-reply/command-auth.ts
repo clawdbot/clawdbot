@@ -17,6 +17,7 @@ import {
   isInternalMessageChannel,
   normalizeMessageChannel,
 } from "../utils/message-channel.js";
+import { isNativeCommandTurn, resolveCommandTurnContext } from "./command-turn-context.js";
 import type { MsgContext } from "./templating.js";
 
 export type CommandAuthorization = {
@@ -711,7 +712,7 @@ export function resolveCommandAuthorization(params: {
         ? senderIsOwner
         : senderIsOwnerByScope || Boolean(matchedCommandOwner);
   const nativeCommandAuthorized =
-    commandAuthorized && ctx.CommandSource === "native" && !requireOwner;
+    commandAuthorized && isNativeCommandTurn(resolveCommandTurnContext(ctx)) && !requireOwner;
   const isAuthorizedSender = resolveCommandSenderAuthorization({
     commandAuthorized,
     enforceOwnerForCommands: enforceOwner,

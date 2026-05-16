@@ -55,6 +55,12 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { asRecord } from "../dreaming-shared.js";
 import { resolveQmdCollectionPatternFlags, type QmdCollectionPatternFlag } from "./qmd-compat.js";
+import {
+  recordMemoryWatchEventPath,
+  settleMemoryWatchEventPaths,
+  type MemoryWatchEventStats,
+  type MemoryWatchSettleQueue,
+} from "./watch-settle.js";
 
 type SqliteDatabase = import("node:sqlite").DatabaseSync;
 
@@ -62,7 +68,6 @@ const log = createSubsystemLogger("memory");
 
 const SNIPPET_HEADER_RE = /@@\s*-([0-9]+),([0-9]+)/;
 const SEARCH_PENDING_UPDATE_WAIT_MS = 500;
-const QMD_WATCH_STABILITY_MS = 200;
 const MAX_QMD_OUTPUT_CHARS = 200_000;
 const NUL_MARKER_RE = /(?:\^@|\\0|\\x00|\\u0000|null\s*byte|nul\s*byte)/i;
 const QMD_EMBED_BACKOFF_BASE_MS = 60_000;
@@ -324,6 +329,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private embedTimer: NodeJS.Timeout | null = null;
   private watcher: FSWatcher | null = null;
   private watchTimer: NodeJS.Timeout | null = null;
+  private readonly pendingWatchPaths: MemoryWatchSettleQueue = new Map();
   private pendingUpdate: Promise<void> | null = null;
   private queuedForcedUpdate: Promise<void> | null = null;
   private queuedForcedRuns = 0;
@@ -1560,12 +1566,9 @@ export class QmdMemoryManager implements MemorySearchManager {
     this.watcher = chokidar.watch(watchPathList, {
       ignoreInitial: true,
       ignored: (watchPath) => shouldIgnoreMemoryWatchPath(watchPath),
-      awaitWriteFinish: {
-        stabilityThreshold: QMD_WATCH_STABILITY_MS,
-        pollInterval: 100,
-      },
     });
-    const markDirty = () => {
+    const markDirty = (watchPath?: string, stats?: MemoryWatchEventStats) => {
+      recordMemoryWatchEventPath(this.pendingWatchPaths, watchPath, stats);
       this.dirty = true;
       this.scheduleWatchSync();
     };
@@ -1592,7 +1595,21 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
     this.watchTimer = setTimeout(() => {
       this.watchTimer = null;
-      void this.sync({ reason: "watch" }).catch((err) => {
+      void (async () => {
+        if (this.closed) {
+          return;
+        }
+        if (!(await settleMemoryWatchEventPaths(this.pendingWatchPaths))) {
+          if (!this.closed) {
+            this.scheduleWatchSync();
+          }
+          return;
+        }
+        if (this.closed) {
+          return;
+        }
+        await this.sync({ reason: "watch" });
+      })().catch((err) => {
         log.warn(`qmd watch sync failed: ${String(err)}`);
       });
     }, this.syncSettings.watchDebounceMs);

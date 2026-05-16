@@ -208,7 +208,14 @@ async function executePluginAction(params: {
   action: "send" | "poll";
   ctx: Pick<
     ChannelMessageActionContext,
-    "channel" | "cfg" | "params" | "mediaAccess" | "accountId" | "gateway" | "toolContext"
+    | "channel"
+    | "cfg"
+    | "params"
+    | "mediaAccess"
+    | "accountId"
+    | "gateway"
+    | "toolContext"
+    | "inboundTurnKind"
   > & {
     dryRun: boolean;
     agentId?: string;
@@ -228,6 +235,7 @@ async function executePluginAction(params: {
     accountId: params.ctx.accountId ?? undefined,
     gateway: params.ctx.gateway,
     toolContext: params.ctx.toolContext,
+    inboundTurnKind: params.ctx.inboundTurnKind,
     dryRun: params.ctx.dryRun,
     agentId: params.ctx.agentId,
   });
@@ -385,6 +393,7 @@ describe("runMessageAction plugin dispatch", () => {
         sessionKey: "agent:alpha:main",
         sessionId: "session-123",
         agentId: "alpha",
+        inboundTurnKind: "room_event",
         toolContext: {
           currentChannelId: "oc_123",
           currentChannelProvider: "actionhub",
@@ -403,6 +412,7 @@ describe("runMessageAction plugin dispatch", () => {
           requesterSenderId: "trusted-user",
           sessionKey: "agent:alpha:main",
           sessionId: "session-123",
+          inboundTurnKind: "room_event",
           agentId: "alpha",
         },
         "plugin action call",

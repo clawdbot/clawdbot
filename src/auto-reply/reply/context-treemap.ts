@@ -342,7 +342,18 @@ function buildGroups(report: SessionSystemPromptReport): TreemapGroup[] {
   const tools = report.tools.entries
     .map((tool) => ({ name: tool.name, value: tool.schemaChars ?? 0 }))
     .filter((tool) => tool.value > 0);
+  const currentTurnLeaves = report.currentTurn
+    ? [
+        { name: "Model prompt", value: report.currentTurn.promptChars },
+        { name: "Runtime context", value: report.currentTurn.runtimeContextChars },
+      ].filter((leaf) => leaf.value > 0)
+    : [];
   const groups = [
+    treemapGroup({
+      name: report.currentTurn?.kind === "room_event" ? "Room event" : "Current turn",
+      color: rgba(72, 135, 197),
+      leaves: currentTurnLeaves,
+    }),
     treemapGroup({
       name: "Workspace files",
       color: rgba(58, 145, 91),

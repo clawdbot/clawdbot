@@ -49,7 +49,6 @@ export function createMockPluginRegistry(
     agentHarnesses: [],
     httpRoutes: [],
     gatewayHandlers: {},
-    gatewayMethodScopes: {},
     cliRegistrars: [],
     textTransforms: [],
     reloads: [],

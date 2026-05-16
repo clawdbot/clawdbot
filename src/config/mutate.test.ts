@@ -11,17 +11,24 @@ import {
 import { registerRuntimeConfigWriteListener, resetConfigRuntimeState } from "./runtime-snapshot.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 
+type MockValidationIssue = { path: string; message: string };
+type MockValidationResult =
+  | { ok: true; config: OpenClawConfig; warnings: MockValidationIssue[] }
+  | { ok: false; issues: MockValidationIssue[]; warnings: MockValidationIssue[] };
+
 const ioMocks = vi.hoisted(() => ({
   readConfigFileSnapshotForWrite: vi.fn(),
   resolveConfigSnapshotHash: vi.fn(),
   writeConfigFile: vi.fn(),
 }));
 const validationMocks = vi.hoisted(() => ({
-  validateConfigObjectWithPlugins: vi.fn((config: OpenClawConfig) => ({
-    ok: true,
-    config,
-    warnings: [],
-  })),
+  validateConfigObjectWithPlugins: vi.fn(
+    (config: OpenClawConfig): MockValidationResult => ({
+      ok: true,
+      config,
+      warnings: [],
+    }),
+  ),
 }));
 
 vi.mock("./io.js", () => ioMocks);
@@ -331,6 +338,35 @@ describe("config mutate helpers", () => {
     );
   });
 
+  it("uses skipPluginValidation for replace pre-write snapshots", async () => {
+    const snapshot = createSnapshot({
+      hash: "hash-1",
+      sourceConfig: { plugins: { entries: { "strict-plugin": { enabled: true } } } },
+    });
+    ioMocks.readConfigFileSnapshotForWrite.mockResolvedValue({
+      snapshot,
+      writeOptions: { expectedConfigPath: snapshot.path },
+    });
+
+    await replaceConfigFile({
+      nextConfig: { plugins: { entries: { "strict-plugin": { enabled: false } } } },
+      writeOptions: { skipPluginValidation: true },
+    });
+
+    expect(ioMocks.readConfigFileSnapshotForWrite).toHaveBeenCalledWith({
+      skipPluginValidation: true,
+    });
+    expect(ioMocks.writeConfigFile).toHaveBeenCalledWith(
+      { plugins: { entries: { "strict-plugin": { enabled: false } } } },
+      {
+        baseSnapshot: snapshot,
+        expectedConfigPath: snapshot.path,
+        skipPluginValidation: true,
+        afterWrite: { mode: "auto" },
+      },
+    );
+  });
+
   it("returns explicit restart follow-up intent for replace writes", async () => {
     const snapshot = createSnapshot({
       hash: "hash-restart",
@@ -502,6 +538,132 @@ describe("config mutate helpers", () => {
     };
     expect(persistedPlugins.entries?.demo).toEqual({ enabled: true });
     expect(persistedPlugins.installs).toBeUndefined();
+  });
+
+  it("keeps single-file top-level plugins include writes when plugin validation is skipped", async () => {
+    const home = await suiteRootTracker.make("include-skip-plugin-validation");
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
+    const pluginsPath = path.join(home, ".openclaw", "config", "plugins.json5");
+    await fs.mkdir(path.dirname(pluginsPath), { recursive: true });
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify({ plugins: { $include: "./config/plugins.json5" } }, null, 2)}\n`,
+      "utf-8",
+    );
+    await fs.writeFile(pluginsPath, `${JSON.stringify({ entries: {} }, null, 2)}\n`, "utf-8");
+    const snapshot = createSnapshot({
+      hash: "hash-include-skip",
+      path: configPath,
+      parsed: { plugins: { $include: "./config/plugins.json5" } },
+      sourceConfig: { plugins: { entries: {} } },
+    });
+    const refreshedSnapshot = createSnapshot({
+      hash: "hash-include-skip-refreshed",
+      path: configPath,
+      parsed: { plugins: { $include: "./config/plugins.json5" } },
+      sourceConfig: {
+        plugins: {
+          entries: {
+            "strict-plugin": { enabled: true },
+          },
+        },
+      },
+    });
+    ioMocks.readConfigFileSnapshotForWrite.mockResolvedValue({
+      snapshot: refreshedSnapshot,
+      writeOptions: { expectedConfigPath: configPath },
+    });
+    const nextConfig: OpenClawConfig = {
+      plugins: {
+        entries: {
+          "strict-plugin": { enabled: true },
+        },
+      },
+    };
+
+    await replaceConfigFile({
+      baseHash: snapshot.hash,
+      snapshot,
+      writeOptions: {
+        expectedConfigPath: snapshot.path,
+        skipPluginValidation: true,
+      },
+      nextConfig,
+    });
+
+    expect(ioMocks.writeConfigFile).not.toHaveBeenCalled();
+    expect(validationMocks.validateConfigObjectWithPlugins).toHaveBeenCalledWith(nextConfig, {
+      pluginValidation: "skip",
+    });
+    expect(ioMocks.readConfigFileSnapshotForWrite).toHaveBeenCalledWith({
+      skipPluginValidation: true,
+    });
+    await expect(fs.readFile(configPath, "utf-8")).resolves.toContain(
+      '"$include": "./config/plugins.json5"',
+    );
+    const persistedPlugins = JSON.parse(await fs.readFile(pluginsPath, "utf-8")) as {
+      entries?: Record<string, unknown>;
+    };
+    expect(persistedPlugins.entries?.["strict-plugin"]).toEqual({ enabled: true });
+  });
+
+  it("rejects invalid base config before skipped-plugin include writes", async () => {
+    const home = await suiteRootTracker.make("include-skip-invalid-base");
+    const configPath = path.join(home, ".openclaw", "openclaw.json");
+    const pluginsPath = path.join(home, ".openclaw", "config", "plugins.json5");
+    await fs.mkdir(path.dirname(pluginsPath), { recursive: true });
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify({ plugins: { $include: "./config/plugins.json5" } }, null, 2)}\n`,
+      "utf-8",
+    );
+    await fs.writeFile(
+      pluginsPath,
+      `${JSON.stringify({ entries: { old: { enabled: true } } }, null, 2)}\n`,
+      "utf-8",
+    );
+    const snapshot = createSnapshot({
+      hash: "hash-include-invalid-base",
+      path: configPath,
+      parsed: { plugins: { $include: "./config/plugins.json5" } },
+      sourceConfig: { plugins: { entries: { old: { enabled: true } } } },
+    });
+    const nextConfig = {
+      plugins: {
+        entries: {
+          "strict-plugin": { enabled: "yes" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    validationMocks.validateConfigObjectWithPlugins.mockReturnValue({
+      ok: false,
+      issues: [
+        {
+          path: "plugins.entries.strict-plugin.enabled",
+          message: "Expected boolean",
+        },
+      ],
+      warnings: [],
+    });
+
+    await expect(
+      replaceConfigFile({
+        baseHash: snapshot.hash,
+        snapshot,
+        writeOptions: {
+          expectedConfigPath: snapshot.path,
+          skipPluginValidation: true,
+        },
+        nextConfig,
+      }),
+    ).rejects.toThrow("plugins.entries.strict-plugin.enabled: Expected boolean");
+
+    expect(ioMocks.writeConfigFile).not.toHaveBeenCalled();
+    expect(ioMocks.readConfigFileSnapshotForWrite).not.toHaveBeenCalled();
+    const persistedPlugins = JSON.parse(await fs.readFile(pluginsPath, "utf-8")) as {
+      entries?: Record<string, unknown>;
+    };
+    expect(persistedPlugins.entries).toEqual({ old: { enabled: true } });
   });
 
   it("falls back to the root writer when a plugins include write is not isolated", async () => {

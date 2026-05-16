@@ -13,8 +13,12 @@ const { logger, makeStorePath } = setupCronServiceSuite({
 const STORE_TEST_NOW = Date.parse("2026-03-23T12:00:00.000Z");
 
 async function writeSingleJobStore(storePath: string, job: Record<string, unknown>) {
+  await writeJobStore(storePath, [job]);
+}
+
+async function writeJobStore(storePath: string, jobs: Array<Record<string, unknown>>) {
   await fs.mkdir(path.dirname(storePath), { recursive: true });
-  await fs.writeFile(storePath, JSON.stringify({ version: 1, jobs: [job] }, null, 2), "utf8");
+  await fs.writeFile(storePath, JSON.stringify({ version: 1, jobs }, null, 2), "utf8");
 }
 
 function createStoreTestState(storePath: string) {
@@ -116,6 +120,109 @@ describe("cron service store load: missing sessionTarget", () => {
       payload: { kind: "agentTurn" as const, message: "ping" },
     } as unknown as Parameters<typeof assertSupportedJobSpec>[0];
     expect(() => assertSupportedJobSpec(bogus)).toThrow(/missing sessionTarget/);
+  });
+
+  it("skips malformed persisted schedule and payload shapes without rewriting the store", async () => {
+    const { storePath } = await makeStorePath();
+
+    await writeJobStore(storePath, [
+      {
+        id: "valid-job",
+        name: "valid job",
+        enabled: true,
+        createdAtMs: STORE_TEST_NOW - 60_000,
+        updatedAtMs: STORE_TEST_NOW - 60_000,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "systemEvent", text: "tick" },
+        state: {},
+      },
+      {
+        id: "bad-schedule",
+        name: "bad schedule",
+        enabled: true,
+        createdAtMs: STORE_TEST_NOW - 60_000,
+        updatedAtMs: STORE_TEST_NOW - 60_000,
+        schedule: ["every", 60_000],
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "systemEvent", text: "tick" },
+        state: {},
+      },
+      {
+        id: "bad-payload",
+        name: "bad payload",
+        enabled: true,
+        createdAtMs: STORE_TEST_NOW - 60_000,
+        updatedAtMs: STORE_TEST_NOW - 60_000,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: ["systemEvent", "tick"],
+        state: {},
+      },
+      {
+        id: "bad-cron-expr",
+        name: "bad cron expr",
+        enabled: true,
+        createdAtMs: STORE_TEST_NOW - 60_000,
+        updatedAtMs: STORE_TEST_NOW - 60_000,
+        schedule: { kind: "cron", expr: [] },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "systemEvent", text: "tick" },
+        state: {},
+      },
+      {
+        id: "bad-system-event-text",
+        name: "bad system event text",
+        enabled: true,
+        createdAtMs: STORE_TEST_NOW - 60_000,
+        updatedAtMs: STORE_TEST_NOW - 60_000,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "systemEvent", text: ["tick"] },
+        state: {},
+      },
+      {
+        id: "bad-agent-turn-message",
+        name: "bad agent turn message",
+        enabled: true,
+        createdAtMs: STORE_TEST_NOW - 60_000,
+        updatedAtMs: STORE_TEST_NOW - 60_000,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: { kind: "agentTurn", message: { text: "tick" } },
+        state: {},
+      },
+    ]);
+    const beforeRaw = await fs.readFile(storePath, "utf-8");
+    const warnSpy = vi.spyOn(logger, "warn");
+
+    const state = createStoreTestState(storePath);
+    await ensureLoaded(state);
+    await ensureLoaded(state, { forceReload: true });
+
+    expect(state.store?.jobs.map((job) => job.id)).toEqual(["valid-job"]);
+    expect(findJobOrThrow(state, "valid-job").state.nextRunAtMs).toBe(STORE_TEST_NOW);
+    await expect(fs.readFile(storePath, "utf-8")).resolves.toBe(beforeRaw);
+
+    const invalidShapeWarns = warnSpy.mock.calls.filter((call) => {
+      const msg = typeof call[1] === "string" ? call[1] : "";
+      return msg.includes("skipped invalid persisted job");
+    });
+    expect(invalidShapeWarns).toHaveLength(5);
+    expect(invalidShapeWarns.map((call) => (call[0] as { reason?: string }).reason)).toEqual([
+      "missing-schedule",
+      "missing-payload",
+      "invalid-schedule",
+      "invalid-payload",
+      "invalid-payload",
+    ]);
+    warnSpy.mockRestore();
   });
 
   it("warns once per jobId across repeated forceReload cycles", async () => {

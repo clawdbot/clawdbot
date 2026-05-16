@@ -96,4 +96,19 @@ describe("Canvas tool", () => {
     expect(imageResultParams?.details).toEqual({ format: "png" });
     expect(imageResultParams?.imageSanitization).toEqual({ maxDimensionPx: 1600 });
   });
+
+  it("rejects node-controlled snapshot formats before creating image results", async () => {
+    mocks.callGatewayTool.mockResolvedValue({
+      payload: {
+        format: "/../../target.sh",
+        base64: Buffer.from("not-a-real-png").toString("base64"),
+      },
+    });
+    const tool = createCanvasTool();
+
+    await expect(tool.execute("tool-call-1", { action: "snapshot" })).rejects.toThrow(
+      /invalid canvas\.snapshot payload/i,
+    );
+    expect(mocks.imageResultFromFile).not.toHaveBeenCalled();
+  });
 });

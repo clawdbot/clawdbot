@@ -64,7 +64,7 @@ function parseCommandName(body: string | undefined): string | undefined {
   return normalizeOptionalString(name);
 }
 
-function commandTurnKindToSource(kind: CommandTurnKind): CommandTurnSource {
+export function commandTurnKindToSource(kind: CommandTurnKind): CommandTurnSource {
   if (kind === "native") {
     return "native";
   }
@@ -82,7 +82,7 @@ function normalizeCommandTurnSource(value: unknown): CommandTurnSource | undefin
   return value === "native" || value === "text" || value === "message" ? value : undefined;
 }
 
-function sourceToCommandTurnKind(source: CommandTurnSource): CommandTurnKind {
+export function commandTurnSourceToKind(source: CommandTurnSource): CommandTurnKind {
   if (source === "native") {
     return "native";
   }
@@ -92,7 +92,7 @@ function sourceToCommandTurnKind(source: CommandTurnSource): CommandTurnKind {
   return "normal";
 }
 
-function buildCommandTurnContext(
+export function createCommandTurnContext(
   source: CommandTurnSource,
   input: {
     authorized: boolean;
@@ -138,7 +138,7 @@ function normalizeExplicitCommandTurn(
   const kind = normalizeCommandTurnKind(record.kind);
   const source =
     normalizeCommandTurnSource(record.source) ?? (kind ? commandTurnKindToSource(kind) : undefined);
-  const resolvedKind = kind ?? (source ? sourceToCommandTurnKind(source) : undefined);
+  const resolvedKind = kind ?? (source ? commandTurnSourceToKind(source) : undefined);
   if (kind && source && commandTurnKindToSource(kind) !== source) {
     return undefined;
   }
@@ -146,7 +146,7 @@ function normalizeExplicitCommandTurn(
     return undefined;
   }
   const body = normalizeOptionalString(record.body) ?? resolveCommandBody(input);
-  return buildCommandTurnContext(source, {
+  return createCommandTurnContext(source, {
     authorized:
       resolvedKind === "normal"
         ? false
@@ -170,16 +170,50 @@ export function resolveCommandTurnContext(input: CommandTurnContextInput): Comma
         ? "text"
         : "message";
   const body = resolveCommandBody(input);
-  const kind = sourceToCommandTurnKind(source);
-  return buildCommandTurnContext(source, {
+  const kind = commandTurnSourceToKind(source);
+  return createCommandTurnContext(source, {
     authorized: kind === "normal" ? false : input.CommandAuthorized === true,
     commandName: parseCommandName(body),
     body,
   });
 }
 
-export function isExplicitCommandTurn(commandTurn: CommandTurnContext): boolean {
+export function isNativeCommandTurn(commandTurn: CommandTurnContext | undefined): boolean {
+  return commandTurn?.kind === "native";
+}
+
+export function isTextSlashCommandTurn(commandTurn: CommandTurnContext | undefined): boolean {
+  return commandTurn?.kind === "text-slash";
+}
+
+export function isAuthorizedTextSlashCommandTurn(
+  commandTurn: CommandTurnContext | undefined,
+): boolean {
+  return commandTurn?.kind === "text-slash" && commandTurn.authorized;
+}
+
+export function isExplicitCommandTurn(commandTurn: CommandTurnContext | undefined): boolean {
   return (
-    commandTurn.kind === "native" || (commandTurn.kind === "text-slash" && commandTurn.authorized)
+    commandTurn?.kind === "native" || (commandTurn?.kind === "text-slash" && commandTurn.authorized)
   );
+}
+
+export function resolveCommandTurnTargetSessionKey(input: {
+  CommandTurn?: CommandTurnContext;
+  CommandSource?: unknown;
+  CommandAuthorized?: unknown;
+  CommandBody?: unknown;
+  BodyForCommands?: unknown;
+  RawBody?: unknown;
+  Body?: unknown;
+  CommandTargetSessionKey?: unknown;
+}): string | undefined {
+  if (
+    !isNativeCommandTurn(resolveCommandTurnContext(input)) ||
+    typeof input.CommandTargetSessionKey !== "string"
+  ) {
+    return undefined;
+  }
+  const trimmed = input.CommandTargetSessionKey.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
 }

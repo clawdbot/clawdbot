@@ -7,12 +7,57 @@ import {
   resolveSessionWriteLockAcquireTimeoutMs,
   runAgentHarnessBeforeMessageWriteHook,
   type AgentMessage,
+  type EmbeddedRunAttemptParams,
   type SessionWriteLockAcquireTimeoutConfig,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 
 type MirroredAgentMessage = Extract<AgentMessage, { role: "user" | "assistant" | "toolResult" }>;
 
 const MIRROR_IDENTITY_META_KEY = "mirrorIdentity" as const;
+
+function normalizeOptionalString(value: string | null | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized ? normalized : undefined;
+}
+
+function buildSenderLabel(params: {
+  senderId?: string;
+  senderName?: string;
+  senderUsername?: string;
+  senderE164?: string;
+}): string | undefined {
+  const label = params.senderName ?? params.senderUsername ?? params.senderE164 ?? params.senderId;
+  if (!label) {
+    return undefined;
+  }
+  if (!params.senderId || label.includes(params.senderId)) {
+    return label;
+  }
+  return `${label} (${params.senderId})`;
+}
+
+export function buildCodexUserPromptMessage(params: EmbeddedRunAttemptParams): AgentMessage {
+  const senderId = normalizeOptionalString(params.senderId);
+  const senderName = normalizeOptionalString(params.senderName);
+  const senderUsername = normalizeOptionalString(params.senderUsername);
+  const senderE164 = normalizeOptionalString(params.senderE164);
+  const senderLabel = buildSenderLabel({ senderId, senderName, senderUsername, senderE164 });
+  const sourceChannel = normalizeOptionalString(
+    params.inputProvenance?.sourceChannel ?? params.messageChannel ?? params.messageProvider,
+  );
+  return {
+    role: "user",
+    content: params.prompt,
+    timestamp: Date.now(),
+    ...(params.inputProvenance ? { provenance: params.inputProvenance } : {}),
+    ...(sourceChannel ? { sourceChannel } : {}),
+    ...(senderId ? { senderId } : {}),
+    ...(senderName ? { senderName } : {}),
+    ...(senderUsername ? { senderUsername } : {}),
+    ...(senderE164 ? { senderE164 } : {}),
+    ...(senderLabel ? { senderLabel } : {}),
+  } as AgentMessage;
+}
 
 /**
  * Tag a message with a stable logical identity for mirror dedupe. Callers

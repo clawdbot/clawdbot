@@ -9,8 +9,13 @@ import {
 } from "../../agents/auth-health.js";
 import {
   ensureAuthProfileStore,
+  ensureAuthProfileStoreWithoutExternalProfiles,
   externalCliDiscoveryForConfigStatus,
+  listProfilesForProvider,
+  removeProviderAuthProfilesWithLock,
+  resolvePersistedAuthProfileOwnerAgentDir,
 } from "../../agents/auth-profiles.js";
+import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { normalizeProviderId } from "../../agents/provider-id.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { isSecretRef } from "../../config/types.secrets.js";
@@ -18,9 +23,11 @@ import { loadProviderUsageSummary } from "../../infra/provider-usage.load.js";
 import { PROVIDER_LABELS, resolveUsageProviderId } from "../../infra/provider-usage.shared.js";
 import type { UsageProviderId, UsageWindow } from "../../infra/provider-usage.types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { refreshActiveSecretsRuntimeSnapshot } from "../../secrets/runtime.js";
+import { abortChatRunsForProvider, type ChatAbortOps } from "../chat-abort.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
 import { formatForLog } from "../ws-log.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 
 const log = createSubsystemLogger("models-auth-status");
 
@@ -65,6 +72,12 @@ export type ModelAuthStatusResult = {
   providers: ModelAuthStatusProvider[];
 };
 
+export type ModelAuthLogoutResult = {
+  provider: string;
+  removedProfiles: string[];
+  abortedRunIds: string[];
+};
+
 const CACHE_TTL_MS = 60_000;
 let cached: { ts: number; result: ModelAuthStatusResult } | null = null;
 
@@ -76,6 +89,58 @@ let cached: { ts: number; result: ModelAuthStatusResult } | null = null;
  */
 export function invalidateModelAuthStatusCache(): void {
   cached = null;
+}
+
+function readProviderParam(params: Record<string, unknown>): string | null {
+  const raw = params.provider;
+  if (typeof raw !== "string") {
+    return null;
+  }
+  const provider = normalizeProviderId(raw);
+  return provider || null;
+}
+
+function createAuthLogoutAbortOps(context: GatewayRequestContext): ChatAbortOps {
+  return {
+    chatAbortControllers: context.chatAbortControllers,
+    chatRunBuffers: context.chatRunBuffers,
+    chatDeltaSentAt: context.chatDeltaSentAt,
+    chatDeltaLastBroadcastLen: context.chatDeltaLastBroadcastLen,
+    chatDeltaLastBroadcastText: context.chatDeltaLastBroadcastText,
+    agentDeltaSentAt: context.agentDeltaSentAt,
+    bufferedAgentEvents: context.bufferedAgentEvents,
+    chatAbortedRuns: context.chatAbortedRuns,
+    removeChatRun: context.removeChatRun,
+    agentRunSeq: context.agentRunSeq,
+    broadcast: context.broadcast,
+    nodeSendToSession: context.nodeSendToSession,
+  };
+}
+
+async function removeProviderAuthProfilesAcrossOwnerStores(params: {
+  provider: string;
+  agentDir: string;
+  profileIds: string[];
+}): Promise<boolean> {
+  const ownerAgentDirs = new Set<string | undefined>([params.agentDir]);
+  for (const profileId of params.profileIds) {
+    ownerAgentDirs.add(
+      resolvePersistedAuthProfileOwnerAgentDir({
+        agentDir: params.agentDir,
+        profileId,
+      }),
+    );
+  }
+  for (const ownerAgentDir of ownerAgentDirs) {
+    const updatedStore = await removeProviderAuthProfilesWithLock({
+      provider: params.provider,
+      agentDir: ownerAgentDir,
+    });
+    if (!updatedStore) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function buildExpiry(
@@ -285,6 +350,53 @@ function resolveConfiguredProviders(cfg: OpenClawConfig): {
 }
 
 export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
+  "models.authLogout": async ({ params, respond, context }) => {
+    const provider = readProviderParam(params);
+    if (!provider) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "provider is required"));
+      return;
+    }
+    try {
+      const cfg = context.getRuntimeConfig();
+      const agentDir = resolveDefaultAgentDir(cfg);
+      const authProvider = resolveProviderIdForAuth(provider, { config: cfg });
+      const store = ensureAuthProfileStoreWithoutExternalProfiles(agentDir);
+      const removedProfiles = listProfilesForProvider(store, provider);
+      const removed = await removeProviderAuthProfilesAcrossOwnerStores({
+        provider,
+        agentDir,
+        profileIds: removedProfiles,
+      });
+      if (!removed) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.UNAVAILABLE,
+            `failed to remove saved auth profiles for provider ${provider}`,
+          ),
+        );
+        return;
+      }
+      await refreshActiveSecretsRuntimeSnapshot();
+      invalidateModelAuthStatusCache();
+      const { runIds: abortedRunIds } = abortChatRunsForProvider(
+        createAuthLogoutAbortOps(context),
+        {
+          providerId: authProvider,
+          stopReason: "auth-revoked",
+        },
+      );
+      const result: ModelAuthLogoutResult = {
+        provider,
+        removedProfiles,
+        abortedRunIds,
+      };
+      respond(true, result, undefined);
+    } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
+    }
+  },
   "models.authStatus": async ({ params, respond, context }) => {
     const now = Date.now();
     const bypassCache = Boolean((params as { refresh?: boolean } | undefined)?.refresh);

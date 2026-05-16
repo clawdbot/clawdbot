@@ -631,8 +631,12 @@ function resolveRecallRunChannelContext(params: {
   // causes bundled-plugin dirName validation to throw (#76704, #78918).
   const runnableExplicitChannel =
     explicitChannel && isRunnableChannelName(explicitChannel) ? explicitChannel : undefined;
+  // Non-webchat providers often pass a raw conversation id as channelId.
+  // Keep those ids for filtering, but run the recall sub-agent through the provider.
   const trustedExplicitChannel =
-    runnableExplicitChannel && runnableExplicitChannel !== explicitProvider
+    runnableExplicitChannel &&
+    runnableExplicitChannel !== explicitProvider &&
+    (!explicitProvider || explicitProvider === "webchat")
       ? runnableExplicitChannel
       : undefined;
   const resolveReturnValue = (params: {
@@ -645,8 +649,8 @@ function resolveRecallRunChannelContext(params: {
       messageChannel:
         trustedExplicitChannel ??
         trustedResolvedChannel ??
-        runnableExplicitChannel ??
         explicitProvider ??
+        runnableExplicitChannel ??
         params.resolvedChannel,
       messageProvider:
         trustedExplicitChannel ??

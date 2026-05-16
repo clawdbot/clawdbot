@@ -5,6 +5,10 @@ import type {
   OpenClawPluginNodeInvokePolicyResult,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { appendFileTransferAudit, type FileTransferAuditOp } from "./audit.js";
+import {
+  FILE_TRANSFER_NODE_INVOKE_COMMANDS,
+  type FileTransferNodeInvokeCommand,
+} from "./node-invoke-policy-commands.js";
 import { evaluateFilePolicy, persistAllowAlways, type FilePolicyKind } from "./policy.js";
 
 const FILE_FETCH_DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
@@ -14,9 +18,7 @@ const DIR_FETCH_HARD_MAX_BYTES = 16 * 1024 * 1024;
 const DIR_FETCH_ARCHIVE_LIST_TIMEOUT_MS = 30_000;
 const DIR_FETCH_ARCHIVE_LIST_MAX_OUTPUT_BYTES = 32 * 1024 * 1024;
 
-type FileTransferCommand = "file.fetch" | "dir.list" | "dir.fetch" | "file.write";
-
-const COMMANDS: FileTransferCommand[] = ["file.fetch", "dir.list", "dir.fetch", "file.write"];
+type FileTransferCommand = FileTransferNodeInvokeCommand;
 
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
@@ -651,7 +653,7 @@ async function runDirFetchPreflight(input: {
 async function handleFileTransferInvoke(
   ctx: OpenClawPluginNodeInvokePolicyContext,
 ): Promise<OpenClawPluginNodeInvokePolicyResult> {
-  if (!COMMANDS.includes(ctx.command as FileTransferCommand)) {
+  if (!FILE_TRANSFER_NODE_INVOKE_COMMANDS.includes(ctx.command as FileTransferCommand)) {
     return { ok: false, code: "UNSUPPORTED_COMMAND", message: "unsupported file-transfer command" };
   }
   const command = ctx.command as FileTransferCommand;
@@ -837,7 +839,7 @@ async function handleFileTransferInvoke(
 
 export function createFileTransferNodeInvokePolicy(): OpenClawPluginNodeInvokePolicy {
   return {
-    commands: COMMANDS,
+    commands: [...FILE_TRANSFER_NODE_INVOKE_COMMANDS],
     handle: handleFileTransferInvoke,
   };
 }

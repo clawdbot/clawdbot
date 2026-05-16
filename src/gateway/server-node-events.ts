@@ -648,6 +648,7 @@ export const handleNodeEvent = async (
       const queued = enqueueSystemEvent(summary, {
         sessionKey,
         contextKey: `notification:${keyRaw}`,
+        forceSenderIsOwnerFalse: true,
         trusted: false,
       });
       if (queued) {
@@ -769,6 +770,7 @@ export const handleNodeEvent = async (
       const queued = enqueueSystemEvent(text, {
         sessionKey: resolveEventSessionKey(sessionKey, cfg.session?.mainKey, cfg.session?.scope),
         contextKey: runId ? `exec:${runId}` : "exec",
+        forceSenderIsOwnerFalse: true,
         trusted: false,
       });
       if (queued) {

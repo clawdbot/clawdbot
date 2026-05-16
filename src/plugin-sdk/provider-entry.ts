@@ -4,6 +4,7 @@ import type {
   ProviderPlugin,
   ProviderCatalogContext,
   ProviderCatalogResult,
+  ProviderAuthMethod,
   ProviderPluginCatalog,
   UnifiedModelCatalogProviderContext,
   ProviderPluginWizardSetup,
@@ -62,6 +63,7 @@ export type SingleProviderPluginOptions = {
     aliases?: string[];
     envVars?: string[];
     auth?: SingleProviderPluginApiKeyAuthOptions[];
+    extraAuth?: ProviderAuthMethod[];
     catalog: SingleProviderPluginCatalogOptions;
   } & Omit<
     ProviderPlugin,
@@ -178,6 +180,7 @@ export function defineSingleProviderPluginEntry(options: SingleProviderPluginOpt
             ...(wizard ? { wizard } : {}),
           });
         });
+        auth.push(...(provider.extraAuth ?? []));
         let catalog: ProviderPluginCatalog;
         if ("run" in provider.catalog) {
           const catalogRun = provider.catalog.run;
@@ -233,6 +236,7 @@ export function defineSingleProviderPluginEntry(options: SingleProviderPluginOpt
                   "aliases",
                   "envVars",
                   "auth",
+                  "extraAuth",
                   "catalog",
                   "staticCatalog",
                 ].includes(key),

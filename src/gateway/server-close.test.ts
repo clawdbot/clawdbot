@@ -16,7 +16,8 @@ const WEBSOCKET_CLOSE_GRACE_MS = 1_000;
 const WEBSOCKET_CLOSE_FORCE_CONTINUE_MS = 250;
 const HTTP_CLOSE_GRACE_MS = 1_000;
 const HTTP_CLOSE_FORCE_WAIT_MS = 5_000;
-const GATEWAY_LIFECYCLE_HOOK_TIMEOUT_MS = 1_000;
+const GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS = 5_000;
+const GATEWAY_PRE_RESTART_HOOK_TIMEOUT_MS = 10_000;
 
 vi.mock("../channels/plugins/index.js", async () => ({
   ...(await vi.importActual<typeof import("../channels/plugins/index.js")>(
@@ -181,14 +182,14 @@ describe("createGatewayCloseHandler", () => {
     );
 
     const closePromise = close({ reason: "test shutdown" });
-    await vi.advanceTimersByTimeAsync(GATEWAY_LIFECYCLE_HOOK_TIMEOUT_MS);
+    await vi.advanceTimersByTimeAsync(GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS);
     const result = await closePromise;
 
     expect(result.warnings).toContain("gateway:shutdown");
     expect(stopTaskRegistryMaintenance).toHaveBeenCalledTimes(1);
     expect(
       mocks.logWarn.mock.calls.some(([message]) =>
-        String(message).includes("gateway:shutdown hook timed out after 1000ms"),
+        String(message).includes("gateway:shutdown hook timed out after 5000ms"),
       ),
     ).toBe(true);
   });
@@ -265,11 +266,16 @@ describe("createGatewayCloseHandler", () => {
       reason: "test restart",
       restartExpectedMs: 123,
     });
-    await vi.advanceTimersByTimeAsync(GATEWAY_LIFECYCLE_HOOK_TIMEOUT_MS);
+    await vi.advanceTimersByTimeAsync(GATEWAY_PRE_RESTART_HOOK_TIMEOUT_MS);
     const result = await closePromise;
 
     expect(result.warnings).toContain("gateway:pre-restart");
     expect(mocks.triggerInternalHook).toHaveBeenCalledTimes(2);
+    expect(
+      mocks.logWarn.mock.calls.some(([message]) =>
+        String(message).includes("gateway:pre-restart hook timed out after 10000ms"),
+      ),
+    ).toBe(true);
   });
 
   it("records subsystem shutdown warnings without aborting later cleanup", async () => {

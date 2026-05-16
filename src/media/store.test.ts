@@ -670,6 +670,21 @@ describe("media store", () => {
       expectedContentType: "application/octet-stream",
       expectedExtension: ".custom",
     },
+    {
+      name: "does not preserve image header extensions for generic container buffers",
+      bufferFactory: async () => {
+        const zip = new JSZip();
+        zip.file("hello.txt", "hi");
+        return await zip.generateAsync({ type: "nodebuffer" });
+      },
+      contentType: "image/png",
+      originalFilename: "fake.png",
+      expectedContentType: "application/zip",
+      expectedExtension: ".zip",
+      assertSaved: async (saved: Awaited<ReturnType<typeof store.saveMediaBuffer>>) => {
+        expect(path.basename(saved.path)).toMatch(/^fake---[a-f0-9-]{36}\.zip$/);
+      },
+    },
   ] as const)("$name", async (testCase) => {
     const buffer =
       "bufferFactory" in testCase && testCase.bufferFactory

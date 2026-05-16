@@ -2,6 +2,7 @@ import {
   loadOpenClawProviderIndex,
   type OpenClawProviderIndexProvider,
 } from "../model-catalog/index.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import {
   describePluginInstallSource,
@@ -61,6 +62,10 @@ function normalizeDefaultChoice(value: unknown): PluginPackageInstall["defaultCh
   return value === "clawhub" || value === "npm" || value === "local" ? value : undefined;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function resolveInstallInfoFromInstallRecord(
   record: InstalledPluginInstallRecordInfo | undefined,
 ): PluginPackageInstall | null {
@@ -93,21 +98,26 @@ function resolveInstallInfoFromInstallRecord(
 
 function resolveInstallInfoFromPackageSource(params: {
   origin: PluginOrigin;
-  source?: PluginInstallSourceInfo;
+  source?: unknown;
 }): PluginPackageInstall | null {
+  const source = isRecord(params.source) ? params.source : undefined;
+  const npm = isRecord(source?.npm) ? source.npm : undefined;
+  const clawhub = isRecord(source?.clawhub) ? source.clawhub : undefined;
+  const local = isRecord(source?.local) ? source.local : undefined;
   const npmSpec =
     params.origin === "bundled" || params.origin === "config"
-      ? params.source?.npm?.spec
+      ? normalizeOptionalString(npm?.spec)
       : undefined;
   const clawhubSpec =
     params.origin === "bundled" || params.origin === "config"
-      ? params.source?.clawhub?.spec
+      ? normalizeOptionalString(clawhub?.spec)
       : undefined;
-  const localPath = params.source?.local?.path;
+  const localPath = normalizeOptionalString(local?.path);
   if (!clawhubSpec && !npmSpec && !localPath) {
     return null;
   }
-  const defaultChoice = normalizeDefaultChoice(params.source?.defaultChoice);
+  const defaultChoice = normalizeDefaultChoice(source?.defaultChoice);
+  const expectedIntegrity = normalizeOptionalString(npm?.expectedIntegrity);
   return {
     ...(clawhubSpec ? { clawhubSpec } : {}),
     ...(npmSpec ? { npmSpec } : {}),
@@ -119,9 +129,7 @@ function resolveInstallInfoFromPackageSource(params: {
         : npmSpec
           ? { defaultChoice: "npm" as const }
           : {}),
-    ...(npmSpec && params.source?.npm?.expectedIntegrity
-      ? { expectedIntegrity: params.source.npm.expectedIntegrity }
-      : {}),
+    ...(npmSpec && expectedIntegrity ? { expectedIntegrity } : {}),
   };
 }
 

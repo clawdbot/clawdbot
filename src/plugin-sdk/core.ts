@@ -148,7 +148,7 @@ export type {
 } from "../plugins/types.js";
 export type { OpenClawConfig } from "../config/config.js";
 export type { OutboundIdentity } from "../infra/outbound/identity.js";
-export type { HistoryEntry } from "../auto-reply/reply/history.js";
+export type { HistoryEntry } from "../auto-reply/reply/history.types.js";
 export type { ReplyPayload } from "./reply-payload.js";
 export type { AllowlistMatch } from "../channels/allowlist-match.js";
 export type {
@@ -488,6 +488,7 @@ type CreateChannelPluginBaseOptions<TResolvedAccount> = {
   streaming?: ChannelPlugin<TResolvedAccount>["streaming"];
   reload?: ChannelPlugin<TResolvedAccount>["reload"];
   gatewayMethods?: ChannelPlugin<TResolvedAccount>["gatewayMethods"];
+  gatewayMethodDescriptors?: ChannelPlugin<TResolvedAccount>["gatewayMethodDescriptors"];
   configSchema?: ChannelPlugin<TResolvedAccount>["configSchema"];
   config?: ChannelPlugin<TResolvedAccount>["config"];
   security?: ChannelPlugin<TResolvedAccount>["security"];
@@ -510,6 +511,7 @@ type CreatedChannelPluginBase<TResolvedAccount> = Pick<
       | "streaming"
       | "reload"
       | "gatewayMethods"
+      | "gatewayMethodDescriptors"
       | "configSchema"
       | "config"
       | "security"
@@ -822,6 +824,9 @@ export function createChannelPluginBase<TResolvedAccount>(
     ...(params.streaming ? { streaming: params.streaming } : {}),
     ...(params.reload ? { reload: params.reload } : {}),
     ...(params.gatewayMethods ? { gatewayMethods: params.gatewayMethods } : {}),
+    ...(params.gatewayMethodDescriptors
+      ? { gatewayMethodDescriptors: params.gatewayMethodDescriptors }
+      : {}),
     ...(params.configSchema ? { configSchema: params.configSchema } : {}),
     ...(params.config ? { config: params.config } : {}),
     ...(params.security ? { security: params.security } : {}),

@@ -18,6 +18,20 @@
   "providerAuthAliases": {
     "volcengine-plan": "volcengine"
   },
+  "providerRequest": {
+    "providers": {
+      "volcengine": {
+        "openAICompletions": {
+          "supportsStreamingUsage": true
+        }
+      },
+      "volcengine-plan": {
+        "openAICompletions": {
+          "supportsStreamingUsage": true
+        }
+      }
+    }
+  },
   "modelCatalog": {
     "providers": {
       "volcengine": {

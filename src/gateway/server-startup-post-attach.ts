@@ -18,9 +18,9 @@ import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
   type GatewayUpdateAvailableEventPayload,
 } from "./events.js";
+import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-descriptors.js";
 import type { refreshLatestUpdateRestartSentinel } from "./server-restart-sentinel.js";
 import type { logGatewayStartup } from "./server-startup-log.js";
-import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./server-startup-unavailable-methods.js";
 import type { startGatewayTailscaleExposure } from "./server-tailscale.js";
 
 const SESSION_LOCK_STALE_MS = 30 * 60 * 1000;
@@ -44,6 +44,22 @@ type GatewayMemoryStartupPolicy =
   | { mode: "off" }
   | { mode: "immediate" }
   | { mode: "idle"; delayMs: number };
+
+export type GatewayPostReadySidecarHandle = {
+  stop: () => void;
+};
+
+export function stopPostReadySidecarsAfterCloseStarted(params: {
+  postReadySidecars: readonly GatewayPostReadySidecarHandle[];
+  closeStarted: boolean;
+}): void {
+  if (!params.closeStarted) {
+    return;
+  }
+  for (const postReadySidecar of params.postReadySidecars) {
+    postReadySidecar.stop();
+  }
+}
 
 async function measureStartup<T>(
   startupTrace: GatewayStartupTrace | undefined,
@@ -134,14 +150,29 @@ function schedulePostReadySidecarTask(params: {
   startupTrace?: GatewayStartupTrace;
   name: string;
   log: { warn: (msg: string) => void };
-  run: () => Awaitable<void>;
-}): void {
+  run: (isStopped: () => boolean, signal: AbortSignal) => Awaitable<void>;
+}): GatewayPostReadySidecarHandle {
+  let stopped = false;
+  const abortController = new AbortController();
+  const isStopped = () => stopped;
   const handle = setImmediate(() => {
-    void measureStartup(params.startupTrace, params.name, params.run).catch((err) => {
+    if (isStopped()) {
+      return;
+    }
+    void measureStartup(params.startupTrace, params.name, () =>
+      params.run(isStopped, abortController.signal),
+    ).catch((err) => {
       params.log.warn(`${params.name} failed after gateway ready: ${String(err)}`);
     });
   });
   handle.unref?.();
+  return {
+    stop: () => {
+      stopped = true;
+      abortController.abort();
+      clearImmediate(handle);
+    },
+  };
 }
 
 async function pathExists(filePath: string): Promise<boolean> {
@@ -392,59 +423,7 @@ export async function startGatewaySidecars(params: {
   logChannels: { info: (msg: string) => void; error: (msg: string) => void };
   startupTrace?: GatewayStartupTrace;
 }) {
-  await measureStartup(params.startupTrace, "sidecars.gmail-watch", async () => {
-    if (params.cfg.hooks?.enabled && params.cfg.hooks.gmail?.account) {
-      const { startGmailWatcherWithLogs } = await import("../hooks/gmail-watcher-lifecycle.js");
-      await startGmailWatcherWithLogs({
-        cfg: params.cfg,
-        log: params.logHooks,
-      });
-    }
-  });
-
-  await measureStartup(params.startupTrace, "sidecars.gmail-model", async () => {
-    if (params.cfg.hooks?.gmail?.model) {
-      const [
-        { DEFAULT_MODEL, DEFAULT_PROVIDER },
-        { loadModelCatalog },
-        { getModelRefStatus, resolveConfiguredModelRef, resolveHooksGmailModel },
-      ] = await Promise.all([
-        import("../agents/defaults.js"),
-        import("../agents/model-catalog.js"),
-        import("../agents/model-selection.js"),
-      ]);
-      const hooksModelRef = resolveHooksGmailModel({
-        cfg: params.cfg,
-        defaultProvider: DEFAULT_PROVIDER,
-      });
-      if (hooksModelRef) {
-        const { provider: resolvedDefaultProvider, model: defaultModel } =
-          resolveConfiguredModelRef({
-            cfg: params.cfg,
-            defaultProvider: DEFAULT_PROVIDER,
-            defaultModel: DEFAULT_MODEL,
-          });
-        const catalog = await loadModelCatalog({ config: params.cfg });
-        const status = getModelRefStatus({
-          cfg: params.cfg,
-          catalog,
-          ref: hooksModelRef,
-          defaultProvider: resolvedDefaultProvider,
-          defaultModel,
-        });
-        if (!status.allowed) {
-          params.logHooks.warn(
-            `hooks.gmail.model "${status.key}" not in agents.defaults.models allowlist (will use primary instead)`,
-          );
-        }
-        if (!status.inCatalog) {
-          params.logHooks.warn(
-            `hooks.gmail.model "${status.key}" not in the model catalog (may fail at runtime)`,
-          );
-        }
-      }
-    }
-  });
+  const postReadySidecars: GatewayPostReadySidecarHandle[] = [];
 
   const internalHooksConfigured = hasConfiguredInternalHooks(params.cfg);
   await measureStartup(params.startupTrace, "sidecars.internal-hooks", async () => {
@@ -637,7 +616,83 @@ export async function startGatewaySidecars(params: {
     },
   });
 
-  return { pluginServices };
+  if (params.cfg.hooks?.enabled && params.cfg.hooks.gmail?.account) {
+    postReadySidecars.push(
+      schedulePostReadySidecarTask({
+        startupTrace: params.startupTrace,
+        name: "sidecars.gmail-watch",
+        log: params.log,
+        run: async (isStopped, signal) => {
+          const { startGmailWatcherWithLogs } = await import("../hooks/gmail-watcher-lifecycle.js");
+          if (isStopped()) {
+            return;
+          }
+          await startGmailWatcherWithLogs({
+            cfg: params.cfg,
+            log: params.logHooks,
+            isCancelled: isStopped,
+            signal,
+          });
+        },
+      }),
+    );
+  }
+
+  if (params.cfg.hooks?.gmail?.model) {
+    postReadySidecars.push(
+      schedulePostReadySidecarTask({
+        startupTrace: params.startupTrace,
+        name: "sidecars.gmail-model",
+        log: params.log,
+        run: async (isStopped) => {
+          const [
+            { DEFAULT_MODEL, DEFAULT_PROVIDER },
+            { loadModelCatalog },
+            { getModelRefStatus, resolveConfiguredModelRef, resolveHooksGmailModel },
+          ] = await Promise.all([
+            import("../agents/defaults.js"),
+            import("../agents/model-catalog.js"),
+            import("../agents/model-selection.js"),
+          ]);
+          if (isStopped()) {
+            return;
+          }
+          const hooksModelRef = resolveHooksGmailModel({
+            cfg: params.cfg,
+            defaultProvider: DEFAULT_PROVIDER,
+          });
+          if (hooksModelRef) {
+            const { provider: resolvedDefaultProvider, model: defaultModel } =
+              resolveConfiguredModelRef({
+                cfg: params.cfg,
+                defaultProvider: DEFAULT_PROVIDER,
+                defaultModel: DEFAULT_MODEL,
+              });
+            const catalog = await loadModelCatalog({ config: params.cfg });
+            const status = getModelRefStatus({
+              cfg: params.cfg,
+              catalog,
+              ref: hooksModelRef,
+              defaultProvider: resolvedDefaultProvider,
+              defaultModel,
+            });
+            if (!status.allowed) {
+              params.logHooks.warn(
+                `hooks.gmail.model "${status.key}" not in agents.defaults.models allowlist (will use primary instead)`,
+              );
+            }
+            if (!status.inCatalog) {
+              params.logHooks.warn(
+                `hooks.gmail.model "${status.key}" not in the model catalog (may fail at runtime)`,
+              );
+            }
+          }
+        },
+      }),
+    );
+  }
+
+  return { pluginServices, postReadySidecars };
 }
 
 type GatewayPostAttachRuntimeDeps = {
@@ -716,6 +771,7 @@ export async function startGatewayPostAttachRuntime(
     }) => Awaitable<void>;
     getCronService?: () => PluginHookGatewayCronService | null | undefined;
     onPluginServices?: (pluginServices: PluginServicesHandle | null) => void;
+    onPostReadySidecars?: (postReadySidecars: GatewayPostReadySidecarHandle[]) => void;
     onSidecarsReady?: () => void;
     startupTrace?: GatewayStartupTrace;
     deferSidecars?: boolean;
@@ -778,7 +834,7 @@ export async function startGatewayPostAttachRuntime(
         );
 
   const sidecarsPromise = params.minimalTestGateway
-    ? Promise.resolve({ pluginServices: null, pluginRegistry })
+    ? Promise.resolve({ pluginServices: null, pluginRegistry, postReadySidecars: [] })
     : new Promise<void>((resolve) => setImmediate(resolve)).then(async () => {
         params.log.info("starting channels and sidecars...");
         const loaderStatsBefore = getPluginModuleLoaderStats();
@@ -813,6 +869,7 @@ export async function startGatewayPostAttachRuntime(
           params.unavailableGatewayMethods.delete(method);
         }
         params.onPluginServices?.(result.pluginServices);
+        params.onPostReadySidecars?.(result.postReadySidecars);
         params.onSidecarsReady?.();
         params.startupTrace?.mark("sidecars.ready");
         params.log.info("gateway ready");
@@ -885,4 +942,5 @@ export const __testing = {
   resolveGatewayMemoryStartupPolicy,
   schedulePrimaryModelPrewarm,
   shouldSkipStartupModelPrewarm,
+  stopPostReadySidecarsAfterCloseStarted,
 };

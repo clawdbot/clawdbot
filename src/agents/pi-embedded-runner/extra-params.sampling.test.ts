@@ -4,6 +4,7 @@ import { createPiAiStreamSimpleMock } from "../../../test/helpers/agents/pi-ai-s
 import {
   __testing as extraParamsTesting,
   applyExtraParamsToAgent,
+  resolveExtraParams,
   resolvePreparedExtraParams,
 } from "./extra-params.js";
 
@@ -61,6 +62,100 @@ describe("createStreamFnWithExtraParams sampling overrides", () => {
     expect(callOptions?.temperature).toBe(0.4);
     expect(callOptions?.topP).toBe(0.7);
     expect(callOptions?.maxTokens).toBe(512);
+  });
+
+  it("forwards OpenAI completions token aliases into the underlying streamFn options", () => {
+    const underlying = vi.fn(() => ({
+      push: vi.fn(),
+      result: vi.fn(async () => undefined),
+      [Symbol.asyncIterator]: vi.fn(async function* () {
+        // empty stream
+      }),
+    })) as unknown as StreamFn;
+    const agent: { streamFn?: StreamFn } = { streamFn: underlying };
+
+    applyExtraParamsToAgent(agent, undefined, "dashscope", "kimi-k2.6", {
+      max_completion_tokens: 64_000,
+    });
+
+    if (!agent.streamFn) {
+      throw new Error("expected extra params to wrap streamFn");
+    }
+
+    void agent.streamFn(
+      { id: "kimi-k2.6", api: "openai-completions", provider: "dashscope" } as never,
+      { messages: [], tools: [] } as never,
+      undefined,
+    );
+
+    const callOptions = (underlying as unknown as { mock: { calls: unknown[][] } }).mock
+      .calls[0]?.[2] as { maxTokens?: number } | undefined;
+    expect(callOptions?.maxTokens).toBe(64_000);
+  });
+
+  it("keeps runtime maxTokens ahead of OpenAI completions token alias defaults", () => {
+    const underlying = vi.fn(() => ({
+      push: vi.fn(),
+      result: vi.fn(async () => undefined),
+      [Symbol.asyncIterator]: vi.fn(async function* () {
+        // empty stream
+      }),
+    })) as unknown as StreamFn;
+    const agent: { streamFn?: StreamFn } = { streamFn: underlying };
+
+    applyExtraParamsToAgent(agent, undefined, "dashscope", "kimi-k2.6", {
+      max_completion_tokens: 64_000,
+    });
+
+    if (!agent.streamFn) {
+      throw new Error("expected extra params to wrap streamFn");
+    }
+
+    void agent.streamFn(
+      { id: "kimi-k2.6", api: "openai-completions", provider: "dashscope" } as never,
+      { messages: [], tools: [] } as never,
+      { maxTokens: 32_000 } as never,
+    );
+
+    const callOptions = (underlying as unknown as { mock: { calls: unknown[][] } }).mock
+      .calls[0]?.[2] as { maxTokens?: number } | undefined;
+    expect(callOptions?.maxTokens).toBe(32_000);
+  });
+
+  it("canonicalizes token aliases with config precedence before preparing stream params", () => {
+    const resolved = resolveExtraParams({
+      cfg: {
+        agents: {
+          defaults: {
+            params: {
+              maxTokens: 32_000,
+            },
+            models: {
+              "dashscope/kimi-k2.6": {
+                params: {
+                  max_completion_tokens: 64_000,
+                },
+              },
+            },
+          },
+          list: [
+            {
+              id: "bot",
+              params: {
+                max_tokens: 48_000,
+              },
+            },
+          ],
+        },
+      } as never,
+      provider: "dashscope",
+      modelId: "kimi-k2.6",
+      agentId: "bot",
+    });
+
+    expect(resolved?.maxTokens).toBe(48_000);
+    expect(resolved).not.toHaveProperty("max_completion_tokens");
+    expect(resolved).not.toHaveProperty("max_tokens");
   });
 
   it("lets runtime options override the wrapper sampling defaults", () => {

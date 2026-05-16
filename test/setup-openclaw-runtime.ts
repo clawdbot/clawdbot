@@ -147,7 +147,6 @@ function createTestRegistryForSetup(
     migrationProviders: [],
     memoryEmbeddingProviders: [],
     gatewayHandlers: {},
-    gatewayMethodScopes: {},
     httpRoutes: [],
     cliRegistrars: [],
     reloads: [],

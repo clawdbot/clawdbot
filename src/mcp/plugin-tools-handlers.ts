@@ -42,7 +42,7 @@ export function createPluginToolsMcpHandlers(tools: AnyAgentTool[]) {
         inputSchema: resolveJsonSchemaForTool(tool),
       })),
     }),
-    callTool: async (params: CallPluginToolParams) => {
+    callTool: async (params: CallPluginToolParams, signal?: AbortSignal) => {
       const tool = toolMap.get(params.name);
       if (!tool) {
         return {
@@ -51,7 +51,7 @@ export function createPluginToolsMcpHandlers(tools: AnyAgentTool[]) {
         };
       }
       try {
-        const result = await tool.execute(`mcp-${Date.now()}`, params.arguments ?? {});
+        const result = await tool.execute(`mcp-${Date.now()}`, params.arguments ?? {}, signal);
         const rawContent =
           result && typeof result === "object" && "content" in result
             ? (result as { content?: unknown }).content

@@ -2905,6 +2905,62 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
   });
 
+  it("routes image-named generic container bytes as non-image media paths for chat.send", async () => {
+    createTranscriptFixture("openclaw-chat-send-spoofed-image-container-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      modelProvider: "test-provider",
+      model: "vision-model",
+    };
+    mockState.modelCatalog = [
+      {
+        provider: "test-provider",
+        id: "vision-model",
+        name: "Vision model",
+        input: ["text", "image"],
+      },
+    ];
+    mockState.savedMediaResults = [
+      { path: "/home/user/.openclaw/media/inbound/fake.zip", contentType: "application/zip" },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+    const zip = Buffer.from("PK\u0003\u0004zip-archive-bytes").toString("base64");
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-spoofed-image-container",
+      message: "inspect this",
+      requestParams: {
+        attachments: [
+          {
+            type: "image",
+            mimeType: "image/png",
+            fileName: "fake.png",
+            content: zip,
+          },
+        ],
+      },
+      expectBroadcast: false,
+    });
+
+    expect(mockState.savedMediaCalls).toEqual([
+      {
+        contentType: "application/zip",
+        subdir: "inbound",
+        size: mockState.savedMediaCalls[0]?.size ?? 0,
+      },
+    ]);
+    expect(mockState.lastDispatchCtx?.MediaPaths).toEqual([
+      "/home/user/.openclaw/media/inbound/fake.zip",
+    ]);
+    expect(mockState.lastDispatchCtx?.MediaTypes).toEqual(["application/zip"]);
+    expect(mockState.lastDispatchImages).toBeUndefined();
+    expect(mockState.lastDispatchCtx?.Body).not.toContain("media://");
+    expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
+  });
+
   it("preserves sandbox-relative MediaPaths and stores workspace context for media-understanding", async () => {
     createTranscriptFixture("openclaw-chat-send-non-image-absolutize-");
     mockState.finalText = "ok";

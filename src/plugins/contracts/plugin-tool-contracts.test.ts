@@ -1,6 +1,7 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 type PluginManifestFile = {
   id?: unknown;
@@ -10,6 +11,11 @@ type PluginManifestFile = {
 };
 
 function walkFiles(dir: string): string[] {
+  const gitFiles = listGitFiles(dir);
+  if (gitFiles) {
+    return gitFiles;
+  }
+
   const files: string[] = [];
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     if (entry.name === "node_modules" || entry.name === "dist" || entry.name.startsWith(".")) {
@@ -23,6 +29,71 @@ function walkFiles(dir: string): string[] {
     files.push(entryPath);
   }
   return files;
+}
+
+function repoRelativePath(filePath: string): string {
+  return path.relative(process.cwd(), filePath).split(path.sep).join("/");
+}
+
+function isSkippedRepoPath(relativePath: string): boolean {
+  return relativePath
+    .split("/")
+    .some((part) => part === "node_modules" || part === "dist" || part.startsWith("."));
+}
+
+function listGitFiles(dir: string): string[] | null {
+  const relativeDir = repoRelativePath(dir);
+  if (!relativeDir || relativeDir.startsWith("..") || path.isAbsolute(relativeDir)) {
+    return null;
+  }
+  const result = spawnSync("git", ["ls-files", "--", relativeDir], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout
+    .split("\n")
+    .map((line) => line.trim().replaceAll("\\", "/"))
+    .filter((line) => line.length > 0 && !isSkippedRepoPath(line))
+    .map((line) => path.join(process.cwd(), ...line.split("/")))
+    .toSorted();
+}
+
+function listGitPluginManifestPaths(extensionsDir: string): string[] | null {
+  const relativeDir = repoRelativePath(extensionsDir);
+  if (!relativeDir || relativeDir.startsWith("..") || path.isAbsolute(relativeDir)) {
+    return null;
+  }
+  const result = spawnSync("git", ["ls-files", "--", relativeDir], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout
+    .split("\n")
+    .map((line) => line.trim().replaceAll("\\", "/"))
+    .filter((line) => /^extensions\/[^/]+\/openclaw\.plugin\.json$/u.test(line))
+    .map((line) => path.join(process.cwd(), ...line.split("/")))
+    .toSorted();
+}
+
+function listPluginManifestPaths(extensionsDir: string): string[] {
+  const gitPaths = listGitPluginManifestPaths(extensionsDir);
+  if (gitPaths) {
+    return gitPaths;
+  }
+
+  return fs
+    .readdirSync(extensionsDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+    .map((entry) => path.join(extensionsDir, entry.name, "openclaw.plugin.json"))
+    .filter((manifestPath) => fs.existsSync(manifestPath));
 }
 
 function isProductionSource(filePath: string): boolean {
@@ -202,22 +273,31 @@ function normalizeManifestTools(value: unknown): string[] {
 }
 
 describe("bundled plugin tool manifest contracts", () => {
+  it("lists plugin tool contract inputs from git without walking extension roots", () => {
+    const extensionsDir = path.join(process.cwd(), "extensions");
+    const readDir = vi.spyOn(fs, "readdirSync");
+    try {
+      const manifestPaths = listPluginManifestPaths(extensionsDir);
+      const sourceFiles = manifestPaths.flatMap((manifestPath) =>
+        walkFiles(path.dirname(manifestPath)).filter(isProductionSource),
+      );
+
+      expect(manifestPaths.length).toBeGreaterThan(0);
+      expect(sourceFiles.length).toBeGreaterThan(0);
+      expect(readDir).not.toHaveBeenCalled();
+    } finally {
+      readDir.mockRestore();
+    }
+  });
+
   it("declares every production registerTool owner in contracts.tools", () => {
     const extensionsDir = path.join(process.cwd(), "extensions");
     const failures: string[] = [];
 
-    for (const entry of fs.readdirSync(extensionsDir, { withFileTypes: true })) {
-      if (!entry.isDirectory() || entry.name.startsWith(".")) {
-        continue;
-      }
-      const pluginDir = path.join(extensionsDir, entry.name);
-      const manifestPath = path.join(pluginDir, "openclaw.plugin.json");
-      if (!fs.existsSync(manifestPath)) {
-        continue;
-      }
-
+    for (const manifestPath of listPluginManifestPaths(extensionsDir)) {
+      const pluginDir = path.dirname(manifestPath);
       const manifest = readManifest(manifestPath);
-      const pluginId = typeof manifest.id === "string" ? manifest.id : entry.name;
+      const pluginId = typeof manifest.id === "string" ? manifest.id : path.basename(pluginDir);
       const declaredTools = new Set(normalizeManifestTools(manifest.contracts?.tools));
       const registeredNames = new Set<string>();
       let registerCallCount = 0;

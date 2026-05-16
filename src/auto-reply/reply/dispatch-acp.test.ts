@@ -9,10 +9,15 @@ import type { SessionBindingRecord } from "../../infra/outbound/session-binding-
 import type { MediaUnderstandingSkipError } from "../../media-understanding/errors.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import {
-  resolveAcpAttachments,
-  resolveAcpInlineImageAttachments,
-} from "./dispatch-acp-attachments.js";
+  resolveAgentAttachments,
+  resolveAgentTurnAttachments,
+  resolveInlineAgentImageAttachments,
+} from "./agent-turn-attachments.js";
 import { tryDispatchAcpReply } from "./dispatch-acp.js";
+import {
+  appendRecentHistoryImageContext,
+  resolveRecentInboundHistoryImages,
+} from "./history-media.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 import { createAcpSessionMeta, createAcpTestConfig } from "./test-fixtures/acp-runtime.js";
@@ -73,6 +78,8 @@ const ttsMocks = vi.hoisted(() => ({
 const mediaUnderstandingMocks = vi.hoisted(() => ({
   applyMediaUnderstanding: vi.fn(async (_params: unknown) => undefined),
 }));
+
+const acpAttachmentBuffers = vi.hoisted(() => new Map<string, Buffer>());
 
 const diagnosticMocks = vi.hoisted(() => ({
   markDiagnosticSessionProgress: vi.fn(),
@@ -159,7 +166,19 @@ vi.mock("./dispatch-acp-media.runtime.js", () => ({
     return params.cfg.channels?.[channel]?.attachmentRoots ?? [];
   },
   MediaAttachmentCache: class {
-    async getBuffer(): Promise<never> {
+    constructor(private readonly attachments: Array<{ path?: string; index: number }>) {}
+    async getBuffer({ attachmentIndex }: { attachmentIndex: number }) {
+      const attachment = this.attachments.find((item) => item.index === attachmentIndex);
+      const path = attachment?.path;
+      const buffer = path ? acpAttachmentBuffers.get(path) : undefined;
+      if (buffer) {
+        return {
+          buffer,
+          mime: "image/png",
+          fileName: path,
+          size: buffer.length,
+        };
+      }
       const error = new Error("outside allowed roots");
       error.name = "MediaUnderstandingSkipError";
       throw error;
@@ -431,6 +450,7 @@ describe("tryDispatchAcpReply", () => {
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
     mediaUnderstandingMocks.applyMediaUnderstanding.mockReset();
     mediaUnderstandingMocks.applyMediaUnderstanding.mockResolvedValue(undefined);
+    acpAttachmentBuffers.clear();
     diagnosticMocks.markDiagnosticSessionProgress.mockReset();
     sessionMetaMocks.readAcpSessionEntry.mockReset();
     sessionMetaMocks.readAcpSessionEntry.mockReturnValue(null);
@@ -702,12 +722,12 @@ describe("tryDispatchAcpReply", () => {
     }
   });
 
-  it("forwards normalized image attachments into ACP turns", async () => {
+  it("forwards normalized image attachments into agent runtime turns", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-"));
     const imagePath = path.join(tempDir, "inbound.png");
     try {
       await fs.writeFile(imagePath, "image-bytes");
-      const attachments = await resolveAcpAttachments({
+      const attachments = await resolveAgentAttachments({
         cfg: createAcpTestConfig({
           channels: {
             imessage: {
@@ -756,14 +776,417 @@ describe("tryDispatchAcpReply", () => {
     }
   });
 
-  it("forwards chat.send inline image attachments into ACP turns", async () => {
+  it("selects bounded recent local history images", () => {
+    const now = 1_700_000_000_000;
+    const ctx = buildTestCtx({
+      Timestamp: now,
+      InboundHistory: [
+        {
+          sender: "Old",
+          body: "<media:image>",
+          timestamp: now - 31 * 60_000,
+          messageId: "old",
+          media: [{ path: "/tmp/old.png", contentType: "image/png", kind: "image" }],
+        },
+        {
+          sender: "Doc",
+          body: "<media:document>",
+          timestamp: now - 1_000,
+          messageId: "doc",
+          media: [{ path: "/tmp/doc.pdf", contentType: "application/pdf", kind: "document" }],
+        },
+        {
+          sender: "Remote",
+          body: "<media:image>",
+          timestamp: now - 1_000,
+          messageId: "remote",
+          media: [
+            { path: "https://example.com/image.png", contentType: "image/png", kind: "image" },
+          ],
+        },
+        ...Array.from({ length: 5 }, (_, index) => ({
+          sender: `Recent ${index}`,
+          body: "<media:image>",
+          timestamp: now - (5 - index) * 1_000,
+          messageId: `recent-${index}`,
+          media: [
+            { path: `/tmp/recent-${index}.png`, contentType: "image/png", kind: "image" as const },
+          ],
+        })),
+        {
+          sender: "Windows",
+          body: "<media:image>",
+          timestamp: now - 500,
+          messageId: "windows",
+          media: [
+            {
+              path: "C:\\Users\\Alice\\Pictures\\recent.png",
+              contentType: "image/png",
+              kind: "image",
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(resolveRecentInboundHistoryImages({ ctx })).toEqual([
+      {
+        path: "/tmp/recent-2.png",
+        contentType: "image/png",
+        sender: "Recent 2",
+        messageId: "recent-2",
+      },
+      {
+        path: "/tmp/recent-3.png",
+        contentType: "image/png",
+        sender: "Recent 3",
+        messageId: "recent-3",
+      },
+      {
+        path: "/tmp/recent-4.png",
+        contentType: "image/png",
+        sender: "Recent 4",
+        messageId: "recent-4",
+      },
+      {
+        path: "C:\\Users\\Alice\\Pictures\\recent.png",
+        contentType: "image/png",
+        sender: "Windows",
+        messageId: "windows",
+      },
+    ]);
+  });
+
+  it("adds recent history image context without exposing paths", () => {
+    const text = appendRecentHistoryImageContext({
+      promptText: "what is this?",
+      images: [
+        {
+          path: "/tmp/secret.png",
+          contentType: "image/png",
+          sender: "@alice",
+          messageId: "msg-1",
+        },
+      ],
+    });
+
+    expect(text).toContain("what is this?");
+    expect(text).toContain("Recent image 1 from @alice, message msg-1");
+    expect(text).not.toContain("/tmp/secret.png");
+  });
+
+  it("forwards recent history image attachments into agent runtime turns", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-history-"));
+    const imagePath = path.join(tempDir, "recent.png");
+    try {
+      await fs.writeFile(imagePath, "recent-image");
+      const result = await resolveAgentTurnAttachments({
+        cfg: createAcpTestConfig(),
+        ctx: buildTestCtx({
+          Provider: "discord",
+          Surface: "discord",
+          Timestamp: 1_700_000_000_000,
+          InboundHistory: [
+            {
+              sender: "@alice",
+              body: "<media:image>",
+              timestamp: 1_700_000_000_000,
+              messageId: "msg-1",
+              media: [{ path: imagePath, contentType: "image/png", kind: "image" }],
+            },
+          ],
+        }),
+        runtime: {
+          MediaAttachmentCache: class {
+            constructor(private readonly attachments: Array<{ path?: string; index: number }>) {}
+            async getBuffer({ attachmentIndex }: { attachmentIndex: number }) {
+              const attachment = this.attachments.find((item) => item.index === attachmentIndex);
+              return {
+                buffer: Buffer.from(attachment?.path ?? ""),
+                mime: "image/png",
+                fileName: "recent.png",
+                size: attachment?.path?.length ?? 0,
+              };
+            }
+          } as unknown as typeof import("./dispatch-acp-media.runtime.js").MediaAttachmentCache,
+          isMediaUnderstandingSkipError: (_error: unknown): _error is MediaUnderstandingSkipError =>
+            false,
+          normalizeAttachments: () => [],
+          resolveMediaAttachmentLocalRoots: () => [tempDir],
+        },
+      });
+
+      expect(result.attachments).toEqual([
+        {
+          mediaType: "image/png",
+          data: Buffer.from(imagePath).toString("base64"),
+        },
+      ]);
+      expect(result.recentHistoryImages).toEqual([
+        {
+          path: imagePath,
+          contentType: "image/png",
+          sender: "@alice",
+          messageId: "msg-1",
+        },
+      ]);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps text-only turns off the agent media runtime", async () => {
+    const normalizeAttachments = vi.fn(() => {
+      throw new Error("media runtime should not be touched");
+    });
+
+    const result = await resolveAgentTurnAttachments({
+      cfg: createAcpTestConfig(),
+      ctx: buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        BodyForAgent: "hello",
+      }),
+      runtime: {
+        MediaAttachmentCache: class {
+          readonly __mock = true;
+        } as unknown as typeof import("./dispatch-acp-media.runtime.js").MediaAttachmentCache,
+        isMediaUnderstandingSkipError: (_error: unknown): _error is MediaUnderstandingSkipError =>
+          false,
+        normalizeAttachments,
+        resolveMediaAttachmentLocalRoots: () => [],
+      },
+    });
+
+    expect(result).toEqual({ attachments: [], recentHistoryImages: [] });
+    expect(normalizeAttachments).not.toHaveBeenCalled();
+  });
+
+  it("does not inject recent history images when the current turn already has an image", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-current-"));
+    const currentPath = path.join(tempDir, "current.png");
+    const historyPath = path.join(tempDir, "history.png");
+    try {
+      await fs.writeFile(currentPath, "current-image");
+      await fs.writeFile(historyPath, "history-image");
+      const result = await resolveAgentTurnAttachments({
+        cfg: createAcpTestConfig(),
+        ctx: buildTestCtx({
+          Provider: "discord",
+          Surface: "discord",
+          MediaPath: currentPath,
+          MediaType: "image/png",
+          Timestamp: 1_700_000_000_000,
+          InboundHistory: [
+            {
+              sender: "@alice",
+              body: "<media:image>",
+              timestamp: 1_700_000_000_000,
+              media: [{ path: historyPath, contentType: "image/png", kind: "image" }],
+            },
+          ],
+        }),
+        runtime: {
+          MediaAttachmentCache: class {
+            async getBuffer() {
+              return {
+                buffer: Buffer.from("current-image"),
+                mime: "image/png",
+                fileName: "current.png",
+                size: "current-image".length,
+              };
+            }
+          } as unknown as typeof import("./dispatch-acp-media.runtime.js").MediaAttachmentCache,
+          isMediaUnderstandingSkipError: (_error: unknown): _error is MediaUnderstandingSkipError =>
+            false,
+          normalizeAttachments: (ctx) => [{ path: ctx.MediaPath, mime: ctx.MediaType, index: 0 }],
+          resolveMediaAttachmentLocalRoots: () => [tempDir],
+        },
+      });
+
+      expect(result.attachments).toHaveLength(1);
+      expect(result.recentHistoryImages).toEqual([]);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps history attachment indexes distinct from sparse current media indexes", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-sparse-history-"));
+    const currentPath = path.join(tempDir, "current.png");
+    const historyPath = path.join(tempDir, "history.png");
+    const seenAttachmentIndexes: number[] = [];
+    try {
+      await fs.writeFile(currentPath, "current-image");
+      await fs.writeFile(historyPath, "history-image");
+      const result = await resolveAgentTurnAttachments({
+        cfg: createAcpTestConfig(),
+        ctx: buildTestCtx({
+          Provider: "discord",
+          Surface: "discord",
+          MediaPath: currentPath,
+          MediaType: "image/png",
+          Timestamp: 1_700_000_000_000,
+          InboundHistory: [
+            {
+              sender: "@alice",
+              body: "<media:image>",
+              timestamp: 1_700_000_000_000,
+              messageId: "msg-history",
+              media: [{ path: historyPath, contentType: "image/png", kind: "image" }],
+            },
+          ],
+        }),
+        runtime: {
+          MediaAttachmentCache: class {
+            constructor(private readonly attachments: Array<{ path?: string; index: number }>) {}
+            async getBuffer({ attachmentIndex }: { attachmentIndex: number }) {
+              seenAttachmentIndexes.push(attachmentIndex);
+              const attachment = this.attachments.find((item) => item.index === attachmentIndex);
+              return {
+                buffer: Buffer.from(attachment?.path ?? ""),
+                mime: "image/png",
+                fileName: "current.png",
+                size: attachment?.path?.length ?? 0,
+              };
+            }
+          } as unknown as typeof import("./dispatch-acp-media.runtime.js").MediaAttachmentCache,
+          isMediaUnderstandingSkipError: (_error: unknown): _error is MediaUnderstandingSkipError =>
+            false,
+          normalizeAttachments: (ctx) => [{ path: ctx.MediaPath, mime: ctx.MediaType, index: 1 }],
+          resolveMediaAttachmentLocalRoots: () => [tempDir],
+        },
+      });
+
+      expect(result.attachments).toEqual([
+        {
+          mediaType: "image/png",
+          data: Buffer.from(currentPath).toString("base64"),
+        },
+      ]);
+      expect(result.recentHistoryImages).toEqual([]);
+      expect(seenAttachmentIndexes).toEqual([1]);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not fall back to recent history images when the current turn has non-image media", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-current-pdf-"));
+    const documentPath = path.join(tempDir, "current.pdf");
+    const historyPath = path.join(tempDir, "history.png");
+    const getBuffer = vi.fn();
+    try {
+      await fs.writeFile(documentPath, "current-pdf");
+      await fs.writeFile(historyPath, "history-image");
+      const result = await resolveAgentTurnAttachments({
+        cfg: createAcpTestConfig(),
+        ctx: buildTestCtx({
+          Provider: "discord",
+          Surface: "discord",
+          MediaPath: documentPath,
+          MediaType: "application/pdf",
+          Timestamp: 1_700_000_000_000,
+          InboundHistory: [
+            {
+              sender: "@alice",
+              body: "<media:image>",
+              timestamp: 1_700_000_000_000,
+              messageId: "msg-history",
+              media: [{ path: historyPath, contentType: "image/png", kind: "image" }],
+            },
+          ],
+        }),
+        runtime: {
+          MediaAttachmentCache: class {
+            async getBuffer(params: { attachmentIndex: number }) {
+              return getBuffer(params);
+            }
+          } as unknown as typeof import("./dispatch-acp-media.runtime.js").MediaAttachmentCache,
+          isMediaUnderstandingSkipError: (_error: unknown): _error is MediaUnderstandingSkipError =>
+            false,
+          normalizeAttachments: (ctx) => [{ path: ctx.MediaPath, mime: ctx.MediaType, index: 0 }],
+          resolveMediaAttachmentLocalRoots: () => [tempDir],
+        },
+      });
+
+      expect(result).toEqual({ attachments: [], recentHistoryImages: [] });
+      expect(getBuffer).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to recent history images when current image attachments are unusable", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-history-fallback-"));
+    const historyPath = path.join(tempDir, "history.png");
+    try {
+      await fs.writeFile(historyPath, "history-image");
+      const result = await resolveAgentTurnAttachments({
+        cfg: createAcpTestConfig(),
+        ctx: buildTestCtx({
+          Provider: "discord",
+          Surface: "discord",
+          MediaUrl: "https://example.com/current.png",
+          MediaType: "image/png",
+          Timestamp: 1_700_000_000_000,
+          InboundHistory: [
+            {
+              sender: "@alice",
+              body: "<media:image>",
+              timestamp: 1_700_000_000_000,
+              messageId: "msg-history",
+              media: [{ path: historyPath, contentType: "image/png", kind: "image" }],
+            },
+          ],
+        }),
+        runtime: {
+          MediaAttachmentCache: class {
+            constructor(private readonly attachments: Array<{ path?: string; index: number }>) {}
+            async getBuffer({ attachmentIndex }: { attachmentIndex: number }) {
+              const attachment = this.attachments.find((item) => item.index === attachmentIndex);
+              return {
+                buffer: Buffer.from(attachment?.path ?? ""),
+                mime: "image/png",
+                fileName: "history.png",
+                size: attachment?.path?.length ?? 0,
+              };
+            }
+          } as unknown as typeof import("./dispatch-acp-media.runtime.js").MediaAttachmentCache,
+          isMediaUnderstandingSkipError: (_error: unknown): _error is MediaUnderstandingSkipError =>
+            false,
+          normalizeAttachments: (ctx) => [{ url: ctx.MediaUrl, mime: ctx.MediaType, index: 0 }],
+          resolveMediaAttachmentLocalRoots: () => [tempDir],
+        },
+      });
+
+      expect(result.attachments).toEqual([
+        {
+          mediaType: "image/png",
+          data: Buffer.from(historyPath).toString("base64"),
+        },
+      ]);
+      expect(result.recentHistoryImages).toEqual([
+        {
+          path: historyPath,
+          contentType: "image/png",
+          sender: "@alice",
+          messageId: "msg-history",
+        },
+      ]);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("forwards chat.send inline image attachments into agent runtime turns", async () => {
     setReadyAcpResolution();
     const image = {
       mimeType: "image/png",
       data: Buffer.from("image-bytes").toString("base64"),
     };
 
-    expect(resolveAcpInlineImageAttachments([image])).toEqual([
+    expect(resolveInlineAgentImageAttachments([image])).toEqual([
       {
         mediaType: "image/png",
         data: image.data,
@@ -784,7 +1207,42 @@ describe("tryDispatchAcpReply", () => {
     ]);
   });
 
-  it("skips ACP attachments outside allowed inbound roots", async () => {
+  it("preserves chat.send inline image attachments over recent history images", async () => {
+    setReadyAcpResolution();
+    const image = {
+      mimeType: "image/png",
+      data: Buffer.from("inline-image").toString("base64"),
+    };
+    const historyPath = "/tmp/openclaw-history-inline.png";
+    acpAttachmentBuffers.set(historyPath, Buffer.from("history-image"));
+
+    await runDispatch({
+      bodyForAgent: "describe image",
+      images: [image],
+      ctxOverrides: {
+        Timestamp: 1_700_000_000_000,
+        InboundHistory: [
+          {
+            sender: "@alice",
+            body: "<media:image>",
+            timestamp: 1_700_000_000_000,
+            messageId: "msg-history",
+            media: [{ path: historyPath, contentType: "image/png", kind: "image" }],
+          },
+        ],
+      },
+    });
+
+    expect(runTurnCall().text).toBe("describe image");
+    expect(runTurnCall().attachments).toEqual([
+      {
+        mediaType: "image/png",
+        data: image.data,
+      },
+    ]);
+  });
+
+  it("skips agent runtime attachments outside allowed inbound roots", async () => {
     setReadyAcpResolution();
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-"));
     const imagePath = path.join(tempDir, "outside-root.png");
@@ -806,7 +1264,7 @@ describe("tryDispatchAcpReply", () => {
     }
   });
 
-  it("skips file URL ACP attachments outside allowed inbound roots", async () => {
+  it("skips file URL agent runtime attachments outside allowed inbound roots", async () => {
     setReadyAcpResolution();
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-"));
     const imagePath = path.join(tempDir, "outside-root.png");

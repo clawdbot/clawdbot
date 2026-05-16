@@ -1,7 +1,8 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import fs from "node:fs";
 import { basename, dirname, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { loadPluginManifestRegistry } from "../manifest-registry.js";
 
 type SharedFamilyHookKind = "replay" | "stream" | "tool-compat";
@@ -49,10 +50,40 @@ function toRepoRelative(path: string): string {
   return relative(REPO_ROOT, path).split(sep).join("/");
 }
 
+function shouldSkipScannedPath(relativePath: string): boolean {
+  return relativePath.split("/").some((part) => part === "dist" || part === "node_modules");
+}
+
+function listGitFiles(dir: string): string[] | null {
+  const relativeDir = toRepoRelative(dir);
+  if (!relativeDir || relativeDir.startsWith("..")) {
+    return null;
+  }
+  const result = spawnSync("git", ["ls-files", "--", relativeDir], {
+    cwd: REPO_ROOT,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout
+    .split("\n")
+    .map((line) => line.trim().replaceAll("\\", "/"))
+    .filter((line) => line.length > 0 && !shouldSkipScannedPath(line))
+    .map((line) => resolve(REPO_ROOT, line))
+    .toSorted();
+}
+
 function listFiles(dir: string): string[] {
+  const gitFiles = listGitFiles(dir);
+  if (gitFiles) {
+    return gitFiles;
+  }
+
   const files: string[] = [];
 
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     if (entry.name === "dist" || entry.name === "node_modules") {
       continue;
     }
@@ -82,7 +113,7 @@ function resolveBundledPluginSourceRoot(rootDir: string, workspaceDir?: string):
     return workspaceDir;
   }
   const sourceRoot = resolve(REPO_ROOT, "extensions", basename(rootDir));
-  return existsSync(sourceRoot) ? sourceRoot : rootDir;
+  return fs.existsSync(sourceRoot) ? sourceRoot : rootDir;
 }
 
 function collectSharedFamilyProviders(): Map<string, SharedFamilyProviderInventory> {
@@ -93,7 +124,7 @@ function collectSharedFamilyProviders(): Map<string, SharedFamilyProviderInvento
       if (!filePath.endsWith(".ts") || filePath.endsWith(".test.ts")) {
         continue;
       }
-      const source = readFileSync(filePath, "utf8");
+      const source = fs.readFileSync(filePath, "utf8");
       const matchedKinds = SHARED_FAMILY_HOOK_PATTERNS.filter(({ regex }) => regex.test(source));
       if (matchedKinds.length === 0) {
         continue;
@@ -121,7 +152,7 @@ function collectProviderBoundaryTests(): Map<string, Set<string>> {
       if (!filePath.endsWith(".test.ts")) {
         continue;
       }
-      const source = readFileSync(filePath, "utf8");
+      const source = fs.readFileSync(filePath, "utf8");
       if (!PROVIDER_BOUNDARY_TEST_SIGNALS.some((signal) => signal.test(source))) {
         continue;
       }
@@ -149,7 +180,7 @@ function collectSharedFamilyAssignments(): Map<string, ExpectedSharedFamilyContr
       if (!filePath.endsWith(".ts") || filePath.endsWith(".test.ts")) {
         continue;
       }
-      const source = readFileSync(filePath, "utf8");
+      const source = fs.readFileSync(filePath, "utf8");
       const replayFamilies = listMatchingFamilies(source, replayPattern);
       const streamFamilies = listMatchingFamilies(source, streamPattern);
       const toolCompatFamilies = listMatchingFamilies(source, toolCompatPattern);
@@ -184,6 +215,20 @@ function collectSharedFamilyAssignments(): Map<string, ExpectedSharedFamilyContr
 }
 
 describe("provider family plugin-boundary inventory", () => {
+  it("lists bundled plugin files from git without walking plugin roots", () => {
+    const bundledRoots = listBundledPluginRoots();
+    const readDir = vi.spyOn(fs, "readdirSync");
+    try {
+      const files = bundledRoots.flatMap((plugin) => listFiles(plugin.rootDir));
+
+      expect(files.length).toBeGreaterThan(0);
+      expect(files.some((file) => toRepoRelative(file).startsWith("extensions/"))).toBe(true);
+      expect(readDir).not.toHaveBeenCalled();
+    } finally {
+      readDir.mockRestore();
+    }
+  });
+
   it("keeps shared-family provider hooks covered by at least one plugin-boundary test", () => {
     const sharedFamilyProviders = collectSharedFamilyProviders();
     const providerBoundaryTests = collectProviderBoundaryTests();

@@ -594,6 +594,9 @@ export type CronJobState = {
   lastDelivered?: boolean;
   lastDeliveryStatus?: CronDeliveryStatus;
   lastDeliveryError?: string;
+  lastFailureNotificationDelivered?: boolean;
+  lastFailureNotificationDeliveryStatus?: CronDeliveryStatus;
+  lastFailureNotificationDeliveryError?: string;
   lastFailureAlertAtMs?: number;
 };
 

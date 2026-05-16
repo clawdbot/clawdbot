@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/slack",
-  "version": "2026.5.14",
+  "version": "2026.5.16",
   "description": "OpenClaw Slack channel plugin",
   "repository": {
     "type": "git",
@@ -20,7 +20,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.5.14"
+    "openclaw": ">=2026.5.16"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -61,13 +61,14 @@
     "install": {
       "npmSpec": "@openclaw/slack",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.5.12-beta.1"
+      "minHostVersion": ">=2026.5.12-beta.1",
+      "allowInvalidConfigRecovery": true
     },
     "compat": {
-      "pluginApi": ">=2026.5.14"
+      "pluginApi": ">=2026.5.16"
     },
     "build": {
-      "openclawVersion": "2026.5.14",
+      "openclawVersion": "2026.5.16",
       "bundledDist": false
     },
     "release": {

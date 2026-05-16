@@ -54,6 +54,7 @@ export type ProviderEndpointClass =
   | "azure-openai"
   | "openrouter"
   | "xai-native"
+  | "xiaomi-native"
   | "zai-native"
   | "google-generative-ai"
   | "google-vertex"
@@ -149,6 +150,7 @@ const MANIFEST_PROVIDER_ENDPOINT_CLASSES = new Set<ProviderEndpointClass>([
   "azure-openai",
   "openrouter",
   "xai-native",
+  "xiaomi-native",
   "zai-native",
   "google-generative-ai",
   "google-vertex",
@@ -680,6 +682,7 @@ export function resolveProviderRequestCapabilities(
     endpointClass === "azure-openai" ||
     endpointClass === "openrouter" ||
     endpointClass === "xai-native" ||
+    endpointClass === "xiaomi-native" ||
     endpointClass === "zai-native" ||
     endpointClass === "google-generative-ai" ||
     endpointClass === "google-vertex";

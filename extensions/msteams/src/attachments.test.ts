@@ -47,6 +47,7 @@ const TEST_URL_FILE_DOWNLOAD = createTestUrl("dl");
 const TEST_URL_OUTSIDE_ALLOWLIST = "https://evil.test/img";
 const CONTENT_TYPE_IMAGE_PNG = "image/png";
 const CONTENT_TYPE_APPLICATION_PDF = "application/pdf";
+const CONTENT_TYPE_APPLICATION_ZIP = "application/zip";
 const CONTENT_TYPE_TEXT_HTML = "text/html";
 const CONTENT_TYPE_TEAMS_FILE_DOWNLOAD_INFO = "application/vnd.microsoft.teams.file.download.info";
 const REDIRECT_STATUS_CODES = new Set([301, 302, 303, 307, 308]);
@@ -59,21 +60,21 @@ type RemoteMediaFetchParams = {
   fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 };
 
-const detectMimeMock = vi.fn(async () => CONTENT_TYPE_IMAGE_PNG);
-const saveMediaBufferMock = vi.fn(
-  async (
-    _buffer: Buffer,
-    contentType?: string,
-    _subdir?: string,
-    _maxBytes?: number,
-    _originalFilename?: string,
-  ) => ({
-    id: "saved.png",
-    path: contentType === CONTENT_TYPE_APPLICATION_PDF ? SAVED_PDF_PATH : SAVED_PNG_PATH,
-    size: Buffer.byteLength(PNG_BUFFER),
-    contentType: contentType ?? CONTENT_TYPE_IMAGE_PNG,
-  }),
-);
+const detectMimeDefault = async () => CONTENT_TYPE_IMAGE_PNG;
+const saveMediaBufferDefault = async (
+  _buffer: Buffer,
+  contentType?: string,
+  _subdir?: string,
+  _maxBytes?: number,
+  _originalFilename?: string,
+) => ({
+  id: "saved.png",
+  path: contentType === CONTENT_TYPE_APPLICATION_PDF ? SAVED_PDF_PATH : SAVED_PNG_PATH,
+  size: Buffer.byteLength(PNG_BUFFER),
+  contentType: contentType ?? CONTENT_TYPE_IMAGE_PNG,
+});
+const detectMimeMock = vi.fn(detectMimeDefault);
+const saveMediaBufferMock = vi.fn(saveMediaBufferDefault);
 function isHostnameAllowedByPattern(hostname: string, pattern: string): boolean {
   if (pattern.startsWith("*.")) {
     const suffix = pattern.slice(2);
@@ -422,8 +423,10 @@ const runAttachmentAuthRetryCase = async ({
 
 describe("msteams attachments", () => {
   beforeEach(() => {
-    detectMimeMock.mockClear();
-    saveMediaBufferMock.mockClear();
+    detectMimeMock.mockReset();
+    detectMimeMock.mockImplementation(detectMimeDefault);
+    saveMediaBufferMock.mockReset();
+    saveMediaBufferMock.mockImplementation(saveMediaBufferDefault);
     readRemoteMediaBufferMock.mockClear();
     saveRemoteMediaMock.mockClear();
     saveResponseMediaMock.mockClear();
@@ -445,6 +448,33 @@ describe("msteams attachments", () => {
 
       expectSingleMedia(media);
       expectMediaBufferSaved();
+    });
+
+    it("stores every inline data:image base64 payload", async () => {
+      const media = await downloadMSTeamsAttachments(
+        buildDownloadParams([
+          ...createHtmlImageAttachments([
+            `data:image/png;base64,${PNG_BASE64}`,
+            `data:image/png;base64,${PNG_BASE64}`,
+          ]),
+        ]),
+      );
+
+      expectAttachmentMediaLength(media, 2);
+      expect(saveMediaBufferMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("skips inline data:image payloads whose bytes sniff as non-image", async () => {
+      detectMimeMock.mockResolvedValueOnce(CONTENT_TYPE_APPLICATION_ZIP);
+
+      const media = await downloadMSTeamsAttachments(
+        buildDownloadParams([
+          ...createHtmlImageAttachments([`data:image/png;base64,${PNG_BASE64}`]),
+        ]),
+      );
+
+      expectAttachmentMediaLength(media, 0);
+      expect(saveMediaBufferMock).not.toHaveBeenCalled();
     });
 
     it.each<AttachmentAuthRetryCase>(ATTACHMENT_AUTH_RETRY_CASES)(

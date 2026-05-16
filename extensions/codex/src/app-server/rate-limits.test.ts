@@ -148,4 +148,55 @@ describe("summarizeCodexRateLimits", () => {
       blockingReason: "Codex usage limit is reached",
     });
   });
+
+  it("ignores metadata-only Codex buckets", () => {
+    expect(
+      summarizeCodexRateLimits({
+        rateLimitsByLimitId: {
+          codex: {
+            limitId: "codex",
+            limitName: "Codex",
+            primary: null,
+            secondary: null,
+            credits: null,
+            planType: "plus",
+            rateLimitReachedType: null,
+          },
+        },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("keeps displayable buckets when sibling buckets are empty", () => {
+    const nowMs = 1_700_000_000_000;
+    const nowSeconds = nowMs / 1000;
+
+    expect(
+      summarizeCodexRateLimits(
+        {
+          rateLimitsByLimitId: {
+            codex: {
+              limitId: "codex",
+              limitName: "Codex",
+              primary: { usedPercent: 26, windowDurationMins: 300, resetsAt: nowSeconds + 3600 },
+              secondary: null,
+              credits: null,
+              planType: "plus",
+              rateLimitReachedType: null,
+            },
+            "gpt-5.3-codex-spark": {
+              limitId: "gpt-5.3-codex-spark",
+              limitName: "GPT 5.3 Codex Spark",
+              primary: null,
+              secondary: null,
+              credits: null,
+              planType: "plus",
+              rateLimitReachedType: null,
+            },
+          },
+        },
+        nowMs,
+      ),
+    ).toBe("Codex: primary 74% left ⏱1h");
+  });
 });

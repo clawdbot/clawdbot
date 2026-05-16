@@ -169,4 +169,80 @@ describe("runway video generation provider", () => {
     ).rejects.toThrow("Runway video-to-video currently requires model gen4_aleph.");
     expect(postJsonRequestMock).not.toHaveBeenCalled();
   });
+
+  it("reports malformed create JSON with a provider-owned error", async () => {
+    const release = vi.fn(async () => {});
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => {
+          throw new SyntaxError("bad json");
+        },
+      },
+      release,
+    });
+
+    const provider = buildRunwayVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "runway",
+        model: "gen4.5",
+        prompt: "bad create response",
+        cfg: {},
+      }),
+    ).rejects.toThrow("Runway video generation failed: malformed JSON response");
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("rejects status responses missing a task status", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({ id: "task-missing-status" }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock.mockResolvedValueOnce({
+      json: async () => ({
+        id: "task-missing-status",
+        output: ["https://example.com/out.mp4"],
+      }),
+      headers: new Headers(),
+    });
+
+    const provider = buildRunwayVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "runway",
+        model: "gen4.5",
+        prompt: "missing status",
+        cfg: {},
+      }),
+    ).rejects.toThrow("Runway video status response missing task status");
+  });
+
+  it("rejects malformed completed output URLs", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({ id: "task-malformed-output" }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock.mockResolvedValueOnce({
+      json: async () => ({
+        id: "task-malformed-output",
+        status: "SUCCEEDED",
+        output: "https://example.com/out.mp4",
+      }),
+      headers: new Headers(),
+    });
+
+    const provider = buildRunwayVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "runway",
+        model: "gen4.5",
+        prompt: "malformed output",
+        cfg: {},
+      }),
+    ).rejects.toThrow("Runway video generation completed with malformed output URLs");
+  });
 });

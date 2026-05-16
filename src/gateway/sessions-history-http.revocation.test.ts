@@ -47,6 +47,7 @@ vi.mock("./http-utils.js", () => ({
   authorizeScopedGatewayHttpRequestOrReply: async () => ({
     cfg: { gateway: { webchat: { chatHistoryMaxChars: 2000 } } },
     requestAuth: { trustDeclaredOperatorScopes: true },
+    operatorScopes: ["operator.read"],
   }),
   checkGatewayHttpRequestAuth: async (params: {
     trustedProxies?: string[];

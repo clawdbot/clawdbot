@@ -401,6 +401,38 @@ describe("runGatewayLoop", () => {
     });
   });
 
+  it("aborts active embedded runs after a short restart drain grace", async () => {
+    vi.clearAllMocks();
+    consumeGatewayRestartIntentPayloadSync.mockReturnValueOnce({});
+    getActiveTaskCount.mockReturnValueOnce(1).mockReturnValue(0);
+    getActiveEmbeddedRunCount.mockReturnValueOnce(1).mockReturnValue(0);
+    waitForActiveTasks.mockResolvedValueOnce({ drained: false });
+    waitForActiveEmbeddedRuns.mockResolvedValueOnce({ drained: false });
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { start, exited } = await createSignaledLoopHarness();
+      const sigterm = captureSignal("SIGTERM");
+      const sigint = captureSignal("SIGINT");
+
+      sigterm();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(waitForActiveTasks).toHaveBeenCalledWith(90_000);
+      expect(waitForActiveEmbeddedRuns).toHaveBeenCalledWith(30_000);
+      expect(abortEmbeddedPiRun).toHaveBeenCalledWith(undefined, { mode: "compacting" });
+      expect(abortEmbeddedPiRun).toHaveBeenCalledWith(undefined, { mode: "all" });
+      expect(gatewayLog.warn).toHaveBeenCalledWith(
+        "active embedded run drain grace reached; aborting active run(s) before restart",
+      );
+      expect(gatewayLog.warn).toHaveBeenCalledWith(DRAIN_TIMEOUT_LOG);
+      expect(start).toHaveBeenCalledTimes(2);
+
+      sigint();
+      await expect(exited).resolves.toBe(0);
+    });
+  });
+
   it("forces SIGTERM restarts without waiting for active task drain", async () => {
     vi.clearAllMocks();
     consumeGatewayRestartIntentPayloadSync.mockReturnValueOnce({ force: true });

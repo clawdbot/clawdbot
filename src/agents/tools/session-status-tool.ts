@@ -14,6 +14,7 @@ import {
   updateSessionStore,
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { triggerSessionPatchHook } from "../../gateway/session-patch-hooks.js";
 import { resolveSessionModelIdentityRef } from "../../gateway/session-utils.js";
 import {
   buildAgentMainSessionKey,
@@ -630,6 +631,15 @@ export function createSessionStatusTool(opts?: {
             nextStore[resolved.key] = persistedEntry;
           });
           resolved.entry = persistedEntry;
+          triggerSessionPatchHook({
+            cfg,
+            sessionEntry: persistedEntry,
+            sessionKey: resolved.key,
+            patch: {
+              key: resolved.key,
+              model: selection.kind === "reset" ? null : `${selection.provider}/${selection.model}`,
+            },
+          });
           changedModel = true;
         }
       }

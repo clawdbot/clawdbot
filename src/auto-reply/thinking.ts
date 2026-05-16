@@ -127,6 +127,13 @@ function buildBaseThinkingProfile(defaultLevel?: ThinkLevel | null): ResolvedThi
   };
 }
 
+function buildOffOnlyThinkingProfile(): ResolvedThinkingProfile {
+  return {
+    levels: [{ id: "off", label: "off", rank: THINKING_LEVEL_RANKS.off }],
+    defaultLevel: "off",
+  };
+}
+
 function buildBinaryThinkingProfile(defaultLevel?: ThinkLevel | null): ResolvedThinkingProfile {
   return {
     levels: [
@@ -159,6 +166,9 @@ export function resolveThinkingProfile(params: {
     modelId: context.modelId,
     reasoning: context.reasoning,
   };
+  if (context.reasoning === false) {
+    return buildOffOnlyThinkingProfile();
+  }
   const pluginProfile = resolveProviderThinkingProfile({
     provider: context.normalizedProvider,
     context: providerContext,

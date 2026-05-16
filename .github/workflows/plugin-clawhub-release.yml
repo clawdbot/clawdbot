@@ -444,10 +444,14 @@ jobs:
           async function fetchWithRetry(url, options = {}) {
             let lastStatus = "unknown";
             for (let attempt = 1; attempt <= 12; attempt += 1) {
-              const response = await fetch(url, { redirect: "manual", ...options });
-              lastStatus = response.status;
-              if (response.status !== 429 && response.status < 500) {
-                return response;
+              try {
+                const response = await fetch(url, { redirect: "manual", ...options });
+                lastStatus = response.status;
+                if (response.status !== 429 && response.status < 500) {
+                  return response;
+                }
+              } catch (error) {
+                lastStatus = error instanceof Error ? error.message : String(error);
               }
               await new Promise((resolve) => setTimeout(resolve, attempt * 5000));
             }

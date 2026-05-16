@@ -7,10 +7,8 @@ import {
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { resolveAgentOutboundIdentity } from "openclaw/plugin-sdk/outbound-runtime";
 import {
-  buildPendingHistoryContextFromMap,
-  clearHistoryEntriesIfEnabled,
   DEFAULT_GROUP_HISTORY_LIMIT,
-  recordPendingHistoryEntryIfEnabled,
+  createChannelHistoryWindow,
   type HistoryEntry,
 } from "openclaw/plugin-sdk/reply-history";
 import {
@@ -678,10 +676,9 @@ export async function handleFeishuMessage(params: {
       // Record to pending history for non-broadcast groups only. For broadcast groups,
       // the mentioned handler's broadcast dispatch writes the turn directly into all
       // agent sessions — buffering here would cause duplicate replay when this account
-      // later becomes active via buildPendingHistoryContextFromMap.
+      // later becomes active via the channel history window.
       if (!broadcastAgents && chatHistories && groupHistoryKey) {
-        recordPendingHistoryEntryIfEnabled({
-          historyMap: chatHistories,
+        createChannelHistoryWindow({ historyMap: chatHistories }).record({
           historyKey: groupHistoryKey,
           limit: historyLimit,
           entry: {
@@ -1057,8 +1054,8 @@ export async function handleFeishuMessage(params: {
     const historyKey = groupHistoryKey;
 
     if (isGroup && historyKey && chatHistories) {
-      combinedBody = buildPendingHistoryContextFromMap({
-        historyMap: chatHistories,
+      const channelHistory = createChannelHistoryWindow({ historyMap: chatHistories });
+      combinedBody = channelHistory.buildPendingContext({
         historyKey,
         limit: historyLimit,
         currentMessage: combinedBody,
@@ -1076,11 +1073,10 @@ export async function handleFeishuMessage(params: {
 
     const inboundHistory =
       isGroup && historyKey && historyLimit > 0 && chatHistories
-        ? (chatHistories.get(historyKey) ?? []).map((entry) => ({
-            sender: entry.sender,
-            body: entry.body,
-            timestamp: entry.timestamp,
-          }))
+        ? createChannelHistoryWindow({ historyMap: chatHistories }).buildInboundHistory({
+            historyKey,
+            limit: historyLimit,
+          })
         : undefined;
 
     const threadContextBySessionKey = new Map<
@@ -1533,8 +1529,7 @@ export async function handleFeishuMessage(params: {
       }
 
       if (isGroup && historyKey && chatHistories) {
-        clearHistoryEntriesIfEnabled({
-          historyMap: chatHistories,
+        createChannelHistoryWindow({ historyMap: chatHistories }).clear({
           historyKey,
           limit: historyLimit,
         });

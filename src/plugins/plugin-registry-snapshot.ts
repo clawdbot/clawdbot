@@ -138,7 +138,14 @@ function resolveRecordPackageJsonPath(plugin: InstalledPluginIndexRecord): strin
   const rootDir = plugin.rootDir || path.dirname(plugin.manifestPath);
   const resolved = path.resolve(rootDir, packageJsonPath);
   const relative = path.relative(rootDir, resolved);
-  return isRelativePathInsideOrEqual(relative) ? resolved : null;
+  if (!isRelativePathInsideOrEqual(relative)) {
+    return null;
+  }
+  const realRelative = path.relative(
+    resolveComparablePath(rootDir),
+    resolveComparablePath(resolved),
+  );
+  return isRelativePathInsideOrEqual(realRelative) ? resolved : null;
 }
 
 function hasStalePersistedPluginDiagnostics(index: InstalledPluginIndex): boolean {

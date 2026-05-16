@@ -16,6 +16,8 @@ import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
 
 type NodeDeclaredSurface = {
   nodeId: string;
+  clientId?: string;
+  clientMode?: string;
   displayName?: string;
   platform?: string;
   version?: string;
@@ -86,6 +88,8 @@ function buildPendingNodePairingRequest(params: {
   return {
     requestId: params.requestId ?? randomUUID(),
     nodeId: params.req.nodeId,
+    clientId: params.req.clientId,
+    clientMode: params.req.clientMode,
     displayName: params.req.displayName,
     platform: params.req.platform,
     version: params.req.version,
@@ -108,6 +112,8 @@ function refreshPendingNodePairingRequest(
 ): NodePairingPendingRequest {
   return {
     ...existing,
+    clientId: incoming.clientId ?? existing.clientId,
+    clientMode: incoming.clientMode ?? existing.clientMode,
     displayName: incoming.displayName ?? existing.displayName,
     platform: incoming.platform ?? existing.platform,
     version: incoming.version ?? existing.version,
@@ -184,6 +190,8 @@ function mergeNodePairingReplacementInput(params: {
   const latest = params.existing[0];
   return {
     nodeId: params.incoming.nodeId,
+    clientId: params.incoming.clientId ?? latest?.clientId,
+    clientMode: params.incoming.clientMode ?? latest?.clientMode,
     displayName: params.incoming.displayName ?? latest?.displayName,
     platform: params.incoming.platform ?? latest?.platform,
     version: params.incoming.version ?? latest?.version,
@@ -331,6 +339,8 @@ export async function approveNodePairing(
     const node: NodePairingPairedNode = {
       nodeId: pending.nodeId,
       token: newToken(),
+      clientId: pending.clientId,
+      clientMode: pending.clientMode,
       displayName: pending.displayName,
       platform: pending.platform,
       version: pending.version,
@@ -417,6 +427,8 @@ export async function updatePairedNodeMetadata(
 
     const next: NodePairingPairedNode = {
       ...existing,
+      clientId: patch.clientId ?? existing.clientId,
+      clientMode: patch.clientMode ?? existing.clientMode,
       displayName: patch.displayName ?? existing.displayName,
       platform: patch.platform ?? existing.platform,
       version: patch.version ?? existing.version,

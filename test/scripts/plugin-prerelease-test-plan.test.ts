@@ -236,7 +236,8 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       permissions: {
         contents: "read",
       },
-      "runs-on": "blacksmith-8vcpu-ubuntu-2404",
+      "runs-on":
+        "${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}",
       steps: [
         {
           name: "Checkout",

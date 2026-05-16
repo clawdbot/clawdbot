@@ -307,6 +307,37 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.replayMetadata.replaySafe).toBe(true);
   });
 
+  it("preserves inbound sender metadata on the mirrored user prompt", async () => {
+    const params = await createParams();
+    const projector = await createProjector({
+      ...params,
+      messageChannel: "discord",
+      messageProvider: "discord-voice",
+      senderId: "user-123",
+      senderName: "Test User",
+      senderUsername: "testuser",
+      inputProvenance: {
+        kind: "external_user",
+        sourceChannel: "discord",
+      },
+    });
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    const userMessage = requireRecord(result.messagesSnapshot[0], "user message");
+    expect(userMessage.role).toBe("user");
+    expect(userMessage.content).toBe("hello");
+    expect(userMessage.sourceChannel).toBe("discord");
+    expect(userMessage.senderId).toBe("user-123");
+    expect(userMessage.senderName).toBe("Test User");
+    expect(userMessage.senderUsername).toBe("testuser");
+    expect(userMessage.senderLabel).toBe("Test User (user-123)");
+    expect(userMessage.provenance).toEqual({
+      kind: "external_user",
+      sourceChannel: "discord",
+    });
+  });
+
   it("does not treat cumulative-only token usage as fresh context usage", async () => {
     const projector = await createProjector();
 

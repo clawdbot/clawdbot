@@ -9,6 +9,7 @@ import type { MessagePresentation } from "../../interactive/payload.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { PollInput } from "../../polls.js";
 import type { ChatType } from "../chat-type.js";
+import type { InboundTurnKind } from "../turn/kind.js";
 import type { ChannelId } from "./channel-id.types.js";
 import type { ChannelMessageActionName as ChannelMessageActionNameFromList } from "./message-action-names.js";
 import type { ChannelMessageCapability } from "./message-capabilities.js";
@@ -681,6 +682,7 @@ export type ChannelMessageActionContext = {
   senderIsOwner?: boolean;
   sessionKey?: string | null;
   sessionId?: string | null;
+  inboundTurnKind?: InboundTurnKind;
   agentId?: string | null;
   gateway?: {
     url?: string;

@@ -17,6 +17,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "../../../shared/string-coerce.js";
+import { isNativeCommandTurn, resolveCommandTurnContext } from "../../command-turn-context.js";
 import { resolveCommandSurfaceChannel, resolveChannelAccountId } from "../channel-context.js";
 import { extractMessageText, type ChatMessage } from "../commands-subagents-text.js";
 import type { CommandHandler, CommandHandlerResult } from "../commands-types.js";
@@ -131,7 +132,7 @@ export function resolveRequesterSessionKey(
   const commandTarget = normalizeOptionalString(params.ctx.CommandTargetSessionKey);
   const commandSession = normalizeOptionalString(params.sessionKey);
   const shouldPreferCommandTarget =
-    opts?.preferCommandTarget ?? params.ctx.CommandSource === "native";
+    opts?.preferCommandTarget ?? isNativeCommandTurn(resolveCommandTurnContext(params.ctx));
   const raw = shouldPreferCommandTarget
     ? commandTarget || commandSession
     : commandSession || commandTarget;

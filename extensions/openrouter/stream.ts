@@ -56,6 +56,10 @@ function shouldPatchDeepSeekV4OpenRouterPayload(model: Parameters<StreamFn>[0]):
   );
 }
 
+function assistantMessageHasOpenAIToolCalls(message: Record<string, unknown>): boolean {
+  return Array.isArray(message.tool_calls) && message.tool_calls.length > 0;
+}
+
 function resolveOpenRouterDeepSeekV4ReasoningEffort(
   thinkingLevel: DeepSeekV4ThinkingLevel,
 ): DeepSeekV4ReasoningEffort {
@@ -188,6 +192,8 @@ function createOpenRouterDeepSeekV4ThinkingWrapper(
     thinkingLevel,
     shouldPatchModel: shouldPatchDeepSeekV4OpenRouterPayload,
     resolveReasoningEffort: resolveOpenRouterDeepSeekV4ReasoningEffort,
+    shouldBackfillAssistantReasoningContent: (message) =>
+      !assistantMessageHasOpenAIToolCalls(message),
   });
 }
 

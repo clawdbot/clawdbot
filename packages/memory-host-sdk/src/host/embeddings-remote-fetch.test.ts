@@ -32,7 +32,7 @@ describe("fetchRemoteEmbeddingVectors", () => {
   it("maps remote embedding response data to vectors", async () => {
     postJsonMock.mockImplementationOnce(async (params) => {
       return await params.parse({
-        data: [{ embedding: [0.1, 0.2] }, {}, { embedding: [0.3] }],
+        data: [{ embedding: [0.1, 0.2] }, { embedding: [0.4] }, { embedding: [0.3] }],
       });
     });
 
@@ -43,7 +43,7 @@ describe("fetchRemoteEmbeddingVectors", () => {
       errorPrefix: "embedding fetch failed",
     });
 
-    expect(vectors).toEqual([[0.1, 0.2], [], [0.3]]);
+    expect(vectors).toEqual([[0.1, 0.2], [0.4], [0.3]]);
     const postJsonParams = requirePostJsonParams();
     expect(postJsonParams.url).toBe("https://memory.example/v1/embeddings");
     expect(postJsonParams.headers).toEqual({ Authorization: "Bearer test" });
@@ -62,5 +62,61 @@ describe("fetchRemoteEmbeddingVectors", () => {
         errorPrefix: "embedding fetch failed",
       }),
     ).rejects.toThrow("embedding fetch failed: 403 forbidden");
+  });
+
+  it("rejects non-object embedding responses", async () => {
+    postJsonMock.mockImplementationOnce(async (params) => await params.parse([]));
+
+    await expect(
+      fetchRemoteEmbeddingVectors({
+        url: "https://memory.example/v1/embeddings",
+        headers: {},
+        body: { input: ["one"] },
+        errorPrefix: "embedding fetch failed",
+      }),
+    ).rejects.toThrow("embedding fetch failed: malformed JSON response");
+  });
+
+  it("rejects missing embedding data arrays", async () => {
+    postJsonMock.mockImplementationOnce(async (params) => await params.parse({}));
+
+    await expect(
+      fetchRemoteEmbeddingVectors({
+        url: "https://memory.example/v1/embeddings",
+        headers: {},
+        body: { input: ["one"] },
+        errorPrefix: "embedding fetch failed",
+      }),
+    ).rejects.toThrow("embedding fetch failed: malformed JSON response");
+  });
+
+  it("rejects embedding counts that do not match the submitted input batch", async () => {
+    postJsonMock.mockImplementationOnce(async (params) => {
+      return await params.parse({ data: [{ embedding: [0.1] }] });
+    });
+
+    await expect(
+      fetchRemoteEmbeddingVectors({
+        url: "https://memory.example/v1/embeddings",
+        headers: {},
+        body: { input: ["one", "two"] },
+        errorPrefix: "embedding fetch failed",
+      }),
+    ).rejects.toThrow("embedding fetch failed: malformed JSON response");
+  });
+
+  it("rejects wrong nested embedding vector types", async () => {
+    postJsonMock.mockImplementationOnce(async (params) => {
+      return await params.parse({ data: [{ embedding: [0.1, "bad"] }] });
+    });
+
+    await expect(
+      fetchRemoteEmbeddingVectors({
+        url: "https://memory.example/v1/embeddings",
+        headers: {},
+        body: { input: ["one"] },
+        errorPrefix: "embedding fetch failed",
+      }),
+    ).rejects.toThrow("embedding fetch failed: malformed JSON response");
   });
 });

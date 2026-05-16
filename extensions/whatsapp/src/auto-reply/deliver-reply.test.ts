@@ -778,6 +778,7 @@ describe("deliverWebReply", () => {
     expect(ffmpegArgList).toContain("48000");
     expect(ffmpegArgList).toContain("-b:a");
     expect(ffmpegArgList).toContain("64k");
+    expect(ffmpegArgList.slice(-3, -1)).toEqual(["-f", "ogg"]);
     const mediaPayload = requireRecord(
       mockCallArg(msg.sendMedia, 0, 0, "sendMedia"),
       "sendMedia payload",

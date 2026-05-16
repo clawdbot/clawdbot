@@ -1,6 +1,9 @@
 import { getAcpSessionManager } from "../../acp/control-plane/manager.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { abortEmbeddedPiRun } from "../../agents/pi-embedded-runner/runs.js";
+import {
+  abortEmbeddedPiRun,
+  resolveActiveEmbeddedRunSessionId,
+} from "../../agents/pi-embedded-runner/runs.js";
 import {
   getLatestSubagentRunByChildSessionKey,
   listSubagentRunsForController,
@@ -58,6 +61,7 @@ export {
 const defaultAbortDeps = {
   getAcpSessionManager,
   abortEmbeddedPiRun,
+  resolveActiveEmbeddedRunSessionId,
   getLatestSubagentRunByChildSessionKey,
   listSubagentRunsForController,
   markSubagentRunTerminated,
@@ -72,6 +76,8 @@ export const __testing = {
     abortDeps.getAcpSessionManager =
       deps?.getAcpSessionManager ?? defaultAbortDeps.getAcpSessionManager;
     abortDeps.abortEmbeddedPiRun = deps?.abortEmbeddedPiRun ?? defaultAbortDeps.abortEmbeddedPiRun;
+    abortDeps.resolveActiveEmbeddedRunSessionId =
+      deps?.resolveActiveEmbeddedRunSessionId ?? defaultAbortDeps.resolveActiveEmbeddedRunSessionId;
     abortDeps.getLatestSubagentRunByChildSessionKey =
       deps?.getLatestSubagentRunByChildSessionKey ??
       defaultAbortDeps.getLatestSubagentRunByChildSessionKey;
@@ -83,12 +89,35 @@ export const __testing = {
   resetDepsForTests(): void {
     abortDeps.getAcpSessionManager = defaultAbortDeps.getAcpSessionManager;
     abortDeps.abortEmbeddedPiRun = defaultAbortDeps.abortEmbeddedPiRun;
+    abortDeps.resolveActiveEmbeddedRunSessionId =
+      defaultAbortDeps.resolveActiveEmbeddedRunSessionId;
     abortDeps.getLatestSubagentRunByChildSessionKey =
       defaultAbortDeps.getLatestSubagentRunByChildSessionKey;
     abortDeps.listSubagentRunsForController = defaultAbortDeps.listSubagentRunsForController;
     abortDeps.markSubagentRunTerminated = defaultAbortDeps.markSubagentRunTerminated;
   },
 };
+
+export function abortSessionRunTarget(params: { key?: string; sessionId?: string }): boolean {
+  const sessionIds = new Set<string>();
+  const key = normalizeOptionalString(params.key);
+  if (key) {
+    const activeSessionId = abortDeps.resolveActiveEmbeddedRunSessionId(key);
+    if (activeSessionId) {
+      sessionIds.add(activeSessionId);
+    }
+  }
+  const explicitSessionId = normalizeOptionalString(params.sessionId);
+  if (explicitSessionId) {
+    sessionIds.add(explicitSessionId);
+  }
+
+  let aborted = key ? replyRunRegistry.abort(key) : false;
+  for (const sessionId of sessionIds) {
+    aborted = abortDeps.abortEmbeddedPiRun(sessionId) || aborted;
+  }
+  return aborted;
+}
 
 export function formatAbortReplyText(stoppedSubagents?: number): string {
   if (typeof stoppedSubagents !== "number" || stoppedSubagents <= 0) {
@@ -193,9 +222,7 @@ export function stopSubagentsForRequester(params: {
       }
       const entry = store[childKey];
       const sessionId = replyRunRegistry.resolveSessionId(childKey) ?? entry?.sessionId;
-      const aborted =
-        (childKey ? replyRunRegistry.abort(childKey) : false) ||
-        (sessionId ? abortDeps.abortEmbeddedPiRun(sessionId) : false);
+      const aborted = abortSessionRunTarget({ key: childKey, sessionId });
       const markedTerminated =
         abortDeps.markSubagentRunTerminated({
           runId: run.runId,
@@ -289,9 +316,7 @@ export async function tryFastAbortFromMessage(params: {
       }
     }
     const sessionId = replyRunRegistry.resolveSessionId(resolvedTargetKey) ?? entry?.sessionId;
-    const aborted =
-      replyRunRegistry.abort(resolvedTargetKey) ||
-      (sessionId ? abortDeps.abortEmbeddedPiRun(sessionId) : false);
+    const aborted = abortSessionRunTarget({ key: resolvedTargetKey, sessionId });
     const cleared = clearSessionQueues([resolvedTargetKey, sessionId]);
     if (cleared.followupCleared > 0 || cleared.laneCleared > 0) {
       logVerbose(

@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import path from "node:path";
 import { collectConfiguredAgentHarnessRuntimes } from "../../../agents/harness-runtimes.js";
 import {
@@ -23,6 +24,7 @@ import {
   resolveNpmInstallSpecsForUpdateChannel,
 } from "../../../plugins/install-channel-specs.js";
 import {
+  resolveDefaultPluginNpmDir,
   resolveDefaultPluginExtensionsDir,
   resolvePluginInstallDir,
 } from "../../../plugins/install-paths.js";
@@ -85,6 +87,7 @@ const MISSING_CHANNEL_CONFIG_DESCRIPTOR_DIAGNOSTIC = "without channelConfigs met
 const REPAIRABLE_PACKAGE_ENTRY_DIAGNOSTIC_MARKERS = [
   "extension entry escapes package directory",
   "extension entry unreadable",
+  "requires compiled runtime output",
 ] as const;
 
 function shouldFallbackClawHubToNpm(result: { ok: false; code?: string }): boolean {
@@ -529,6 +532,68 @@ function collectInstalledPluginIdsWithRepairablePackageDiagnostics(params: {
   return pluginIds;
 }
 
+function isConfiguredPluginRepairTarget(params: {
+  pluginId: string;
+  configuredPluginIds: ReadonlySet<string>;
+  configuredChannelIds: ReadonlySet<string>;
+  configuredChannelOwnerPluginIds: ReadonlyMap<string, ReadonlySet<string>>;
+}): boolean {
+  if (params.configuredPluginIds.has(params.pluginId)) {
+    return true;
+  }
+  if (params.configuredChannelIds.has(params.pluginId)) {
+    return true;
+  }
+  for (const ownerIds of params.configuredChannelOwnerPluginIds.values()) {
+    if (ownerIds.has(params.pluginId)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function collectOfficialReplacementInstallCandidates(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  repairablePluginIds: ReadonlySet<string>;
+  configuredPluginIds: ReadonlySet<string>;
+  configuredChannelIds: ReadonlySet<string>;
+  configuredChannelOwnerPluginIds: ReadonlyMap<string, ReadonlySet<string>>;
+  blockedPluginIds?: ReadonlySet<string>;
+}): Map<string, DownloadableInstallCandidate> {
+  const repairableConfiguredPluginIds = new Set(
+    [...params.repairablePluginIds].filter((pluginId) =>
+      isConfiguredPluginRepairTarget({
+        pluginId,
+        configuredPluginIds: params.configuredPluginIds,
+        configuredChannelIds: params.configuredChannelIds,
+        configuredChannelOwnerPluginIds: params.configuredChannelOwnerPluginIds,
+      }),
+    ),
+  );
+  if (repairableConfiguredPluginIds.size === 0) {
+    return new Map();
+  }
+  const candidates = collectDownloadableInstallCandidates({
+    cfg: params.cfg,
+    env: params.env,
+    missingPluginIds: repairableConfiguredPluginIds,
+    configuredPluginIds: params.configuredPluginIds,
+    configuredChannelIds: params.configuredChannelIds,
+    configuredChannelOwnerPluginIds: params.configuredChannelOwnerPluginIds,
+    blockedPluginIds: params.blockedPluginIds,
+  });
+  return new Map(
+    candidates
+      .filter(
+        (candidate) =>
+          repairableConfiguredPluginIds.has(candidate.pluginId) &&
+          candidate.trustedSourceLinkedOfficialInstall,
+      )
+      .map((candidate) => [candidate.pluginId, candidate] as const),
+  );
+}
+
 function forceNpmInstallRecordRepair(record: PluginInstallRecord): PluginInstallRecord {
   if (record.source !== "npm") {
     return record;
@@ -549,6 +614,114 @@ function isInstalledRecordMissingOnDisk(
   }
   const resolved = resolveUserPath(installPath, env);
   return !existsSync(path.join(resolved, "package.json"));
+}
+
+function pathsEqual(left: string, right: string): boolean {
+  return path.resolve(left) === path.resolve(right);
+}
+
+function resolveNpmPackageInstallPath(params: { packageName: string; npmRoot: string }): string {
+  return path.join(params.npmRoot, "node_modules", ...params.packageName.split("/"));
+}
+
+function collectCandidateOfficialPackageNames(
+  candidate: DownloadableInstallCandidate,
+): Set<string> {
+  const names = new Set<string>();
+  const npmName = candidate.npmSpec ? parseRegistryNpmSpec(candidate.npmSpec)?.name : undefined;
+  const clawhubName = candidate.clawhubSpec
+    ? parseClawHubPluginSpec(candidate.clawhubSpec)?.name
+    : undefined;
+  if (npmName) {
+    names.add(npmName);
+  }
+  if (clawhubName) {
+    names.add(clawhubName);
+  }
+  return names;
+}
+
+function collectInstalledRecordPackageNames(record: PluginInstallRecord): Set<string> {
+  const names = new Set<string>();
+  if (record.source === "npm") {
+    const specName = record.spec ? parseRegistryNpmSpec(record.spec)?.name : undefined;
+    const resolvedSpecName = record.resolvedSpec
+      ? parseRegistryNpmSpec(record.resolvedSpec)?.name
+      : undefined;
+    for (const value of [record.resolvedName, specName, resolvedSpecName]) {
+      if (value) {
+        names.add(value);
+      }
+    }
+  }
+  if (record.source === "clawhub") {
+    const specName = record.spec ? parseClawHubPluginSpec(record.spec)?.name : undefined;
+    for (const value of [record.clawhubPackage, specName]) {
+      if (value) {
+        names.add(value);
+      }
+    }
+  }
+  return names;
+}
+
+function isTrustedOfficialInstallRecordForCandidate(params: {
+  record: PluginInstallRecord | undefined;
+  candidate: DownloadableInstallCandidate;
+}): boolean {
+  const record = params.record;
+  if (!record) {
+    return false;
+  }
+  if (record.source !== "npm" && record.source !== "clawhub") {
+    return false;
+  }
+  if (record.source === "clawhub" && record.clawhubChannel !== "official") {
+    return false;
+  }
+  const candidatePackageNames = collectCandidateOfficialPackageNames(params.candidate);
+  if (candidatePackageNames.size === 0) {
+    return false;
+  }
+  for (const installedPackageName of collectInstalledRecordPackageNames(record)) {
+    if (candidatePackageNames.has(installedPackageName)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function resolveSafeBrokenOfficialInstallRemovalPath(params: {
+  pluginId: string;
+  candidate: DownloadableInstallCandidate;
+  record: PluginInstallRecord | undefined;
+  env: NodeJS.ProcessEnv;
+}): string | null {
+  const installPath = params.record?.installPath?.trim();
+  if (!installPath) {
+    return null;
+  }
+  const resolvedInstallPath = resolveUserPath(installPath, params.env);
+  try {
+    const extensionsDir = resolveDefaultPluginExtensionsDir(params.env);
+    const expectedExtensionPath = resolvePluginInstallDir(params.pluginId, extensionsDir);
+    if (pathsEqual(resolvedInstallPath, expectedExtensionPath)) {
+      return resolvedInstallPath;
+    }
+  } catch {
+    // Ignore malformed plugin ids here; the installer will surface the real failure.
+  }
+  const parsedNpmSpec = params.candidate.npmSpec
+    ? parseRegistryNpmSpec(params.candidate.npmSpec)
+    : null;
+  if (!parsedNpmSpec?.name) {
+    return null;
+  }
+  const expectedNpmPath = resolveNpmPackageInstallPath({
+    packageName: parsedNpmSpec.name,
+    npmRoot: resolveDefaultPluginNpmDir(params.env),
+  });
+  return pathsEqual(resolvedInstallPath, expectedNpmPath) ? resolvedInstallPath : null;
 }
 
 function recordMatchesBundledPackage(
@@ -589,6 +762,7 @@ async function installCandidate(params: {
   candidate: DownloadableInstallCandidate;
   records: Record<string, PluginInstallRecord>;
   updateChannel?: UpdateChannel;
+  mode?: "install" | "update";
 }): Promise<{
   records: Record<string, PluginInstallRecord>;
   changes: string[];
@@ -616,7 +790,7 @@ async function installCandidate(params: {
       spec: clawhubInstallSpec,
       extensionsDir,
       expectedPluginId: candidate.pluginId,
-      mode: "install",
+      mode: params.mode ?? "install",
     });
     if (clawhubResult.ok) {
       const pluginId = clawhubResult.pluginId;
@@ -664,7 +838,7 @@ async function installCandidate(params: {
     ...(candidate.trustedSourceLinkedOfficialInstall
       ? { trustedSourceLinkedOfficialInstall: true }
       : {}),
-    mode: "install",
+    mode: params.mode ?? "install",
   });
   if (!result.ok) {
     return {
@@ -815,6 +989,16 @@ async function repairMissingPluginInstalls(params: {
       snapshot,
       installRecords: records,
     });
+  const officialReplacementInstallCandidates = collectOfficialReplacementInstallCandidates({
+    cfg: params.cfg,
+    env,
+    repairablePluginIds: installedPluginIdsWithRepairablePackageDiagnostics,
+    configuredPluginIds: params.pluginIds,
+    configuredChannelIds: params.channelIds,
+    configuredChannelOwnerPluginIds,
+    blockedPluginIds: params.blockedPluginIds,
+  });
+  const officialReplacementPluginIds = new Set(officialReplacementInstallCandidates.keys());
   const changes: string[] = [];
   const warnings: string[] = [];
   const deferredPluginIds = new Set<string>();
@@ -860,6 +1044,7 @@ async function repairMissingPluginInstalls(params: {
   const missingRecordedPluginIds = Object.keys(records).filter(
     (pluginId) =>
       !deferredPluginIds.has(pluginId) &&
+      !officialReplacementPluginIds.has(pluginId) &&
       Object.hasOwn(nextRecords, pluginId) &&
       !bundledPluginsById.has(pluginId) &&
       ((params.pluginIds.has(pluginId) &&
@@ -925,10 +1110,11 @@ async function repairMissingPluginInstalls(params: {
       );
     }),
   );
+  const installCandidatePluginIds = new Set([...missingPluginIds, ...officialReplacementPluginIds]);
   for (const candidate of collectDownloadableInstallCandidates({
     cfg: params.cfg,
     env,
-    missingPluginIds,
+    missingPluginIds: installCandidatePluginIds,
     configuredPluginIds: params.pluginIds,
     configuredChannelIds: params.channelIds,
     configuredChannelOwnerPluginIds,
@@ -940,16 +1126,63 @@ async function repairMissingPluginInstalls(params: {
     if (bundledPluginsById.has(candidate.pluginId)) {
       continue;
     }
+    const shouldReplaceBrokenOfficialInstall = officialReplacementPluginIds.has(candidate.pluginId);
+    if (shouldReplaceBrokenOfficialInstall && !candidate.trustedSourceLinkedOfficialInstall) {
+      continue;
+    }
+    const record = nextRecords[candidate.pluginId];
+    if (
+      shouldReplaceBrokenOfficialInstall &&
+      !isTrustedOfficialInstallRecordForCandidate({ record, candidate })
+    ) {
+      continue;
+    }
     const hasUsableRecord =
       Object.hasOwn(nextRecords, candidate.pluginId) &&
       !isInstalledRecordMissingOnDisk(nextRecords[candidate.pluginId], env);
-    if (knownIds.has(candidate.pluginId) && hasUsableRecord) {
+    if (
+      !shouldReplaceBrokenOfficialInstall &&
+      knownIds.has(candidate.pluginId) &&
+      hasUsableRecord
+    ) {
       continue;
     }
-    if (hasUsableRecord) {
+    if (!shouldReplaceBrokenOfficialInstall && hasUsableRecord) {
       continue;
     }
-    const installed = await installCandidate({ candidate, records: nextRecords, updateChannel });
+    const removalPath = shouldReplaceBrokenOfficialInstall
+      ? resolveSafeBrokenOfficialInstallRemovalPath({
+          pluginId: candidate.pluginId,
+          candidate,
+          record,
+          env,
+        })
+      : null;
+    const previousRecords = nextRecords;
+    const installed = await installCandidate({
+      candidate,
+      records: nextRecords,
+      updateChannel,
+      mode: shouldReplaceBrokenOfficialInstall ? "update" : "install",
+    });
+    if (shouldReplaceBrokenOfficialInstall) {
+      const installedRecord = installed.records[candidate.pluginId];
+      const replacementSucceeded = installed.records !== previousRecords;
+      if (
+        replacementSucceeded &&
+        removalPath &&
+        (!installedRecord?.installPath ||
+          !pathsEqual(resolveUserPath(installedRecord.installPath, env), removalPath))
+      ) {
+        try {
+          await rm(removalPath, { recursive: true, force: true });
+        } catch (error) {
+          warnings.push(
+            `Failed to remove broken installed plugin "${candidate.pluginId}" at ${removalPath}: ${String(error)}`,
+          );
+        }
+      }
+    }
     nextRecords = installed.records;
     changes.push(...installed.changes);
     warnings.push(...installed.warnings);

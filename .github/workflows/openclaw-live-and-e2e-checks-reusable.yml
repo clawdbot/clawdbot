@@ -455,7 +455,7 @@ jobs:
   validate_release_live_cache:
     needs: validate_selected_ref
     if: inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'live-cache')
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ${{ github.event_name == 'workflow_call' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
     timeout-minutes: 20
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -505,7 +505,7 @@ jobs:
   validate_repo_e2e:
     needs: validate_selected_ref
     if: inputs.include_repo_e2e && inputs.live_suite_filter == ''
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ${{ github.event_name == 'workflow_call' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
     timeout-minutes: ${{ inputs.release_test_profile == 'full' && 90 || 60 }}
     env:
       OPENCLAW_VITEST_MAX_WORKERS: "2"
@@ -534,7 +534,7 @@ jobs:
   validate_special_e2e:
     needs: validate_selected_ref
     if: inputs.include_repo_e2e && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'openshell-e2e')
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ${{ github.event_name == 'workflow_call' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
       fail-fast: false
@@ -608,7 +608,7 @@ jobs:
     needs: [validate_selected_ref, prepare_docker_e2e_image]
     if: inputs.include_release_path_suites && inputs.docker_lanes == ''
     name: Docker E2E (${{ matrix.label }})
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: ${{ github.event_name == 'workflow_call' && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
       fail-fast: false
@@ -876,7 +876,7 @@ jobs:
   plan_docker_lane_groups:
     needs: validate_selected_ref
     if: inputs.docker_lanes != ''
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ${{ github.event_name == 'workflow_call' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404' }}
     timeout-minutes: 5
     outputs:
       groups_json: ${{ steps.groups.outputs.groups_json }}
@@ -903,7 +903,7 @@ jobs:
     needs: [validate_selected_ref, prepare_docker_e2e_image, plan_docker_lane_groups]
     if: inputs.docker_lanes != ''
     name: Docker E2E targeted lanes (${{ matrix.group.label }})
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: ${{ github.event_name == 'workflow_call' && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -1112,7 +1112,7 @@ jobs:
     needs: [validate_selected_ref, prepare_docker_e2e_image]
     if: inputs.include_openwebui && !inputs.include_release_path_suites && inputs.docker_lanes == ''
     name: Docker E2E (openwebui)
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: ${{ github.event_name == 'workflow_call' && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: 60
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -1239,7 +1239,7 @@ jobs:
   prepare_docker_e2e_image:
     needs: validate_selected_ref
     if: inputs.include_release_path_suites || inputs.include_openwebui || inputs.docker_lanes != ''
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: ${{ github.event_name == 'workflow_call' && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: ${{ inputs.release_test_profile == 'full' && 90 || 60 }}
     permissions:
       actions: read
@@ -1483,7 +1483,7 @@ jobs:
   prepare_live_test_image:
     needs: validate_selected_ref
     if: inputs.include_live_suites && (inputs.live_suite_filter == '' || startsWith(inputs.live_suite_filter, 'live-') || startsWith(inputs.live_suite_filter, 'docker-live-models'))
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: ${{ github.event_name == 'workflow_call' && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: 60
     permissions:
       contents: read
@@ -1556,7 +1556,7 @@ jobs:
     name: Docker live models (${{ matrix.provider_label }})
     needs: [validate_selected_ref, prepare_live_test_image]
     if: inputs.include_live_suites && inputs.live_model_providers == '' && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'docker-live-models')
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: ${{ github.event_name == 'workflow_call' && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
@@ -1708,7 +1708,7 @@ jobs:
     name: Docker live models (selected providers)
     needs: [validate_selected_ref, prepare_live_test_image]
     if: inputs.include_live_suites && inputs.live_model_providers != '' && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'docker-live-models')
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: ${{ github.event_name == 'workflow_call' && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: 45
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -1883,7 +1883,7 @@ jobs:
   validate_live_provider_suites:
     needs: validate_selected_ref
     if: inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || (startsWith(inputs.live_suite_filter, 'native-live-') && !startsWith(inputs.live_suite_filter, 'native-live-extensions-media') && inputs.live_suite_filter != 'native-live-extensions-a-k'))
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ${{ github.event_name == 'workflow_call' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
       fail-fast: false
@@ -2204,7 +2204,7 @@ jobs:
     name: Docker live suites (${{ matrix.label }})
     needs: [validate_selected_ref, prepare_live_test_image]
     if: inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || startsWith(inputs.live_suite_filter, 'live-'))
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    runs-on: ${{ github.event_name == 'workflow_call' && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
       fail-fast: false
@@ -2423,7 +2423,7 @@ jobs:
     name: Live media suites (${{ matrix.label }})
     needs: validate_selected_ref
     if: inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || startsWith(inputs.live_suite_filter, 'native-live-extensions-media') || inputs.live_suite_filter == 'native-live-extensions-a-k')
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    runs-on: ${{ github.event_name == 'workflow_call' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
     container:
       image: ghcr.io/openclaw/openclaw-live-media-runner:ubuntu-24.04
       credentials:

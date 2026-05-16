@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -19,7 +20,46 @@ function normalizePackageRelativePath(value) {
   return normalized;
 }
 
+function listTrackedExtensionPackageDirs(rootDir, fsImpl) {
+  if (fsImpl !== fs) {
+    return null;
+  }
+  const result = spawnSync("git", ["ls-files", "--", ":(glob)extensions/*/package.json"], {
+    cwd: rootDir,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout
+    .split("\n")
+    .map((line) => toPosixPath(line.trim()))
+    .filter((line) => line.length > 0)
+    .flatMap((line) => {
+      const match = /^extensions\/([^/]+)\/package\.json$/u.exec(line);
+      if (!match?.[1]) {
+        return [];
+      }
+      const packageDir = path.join(rootDir, "extensions", match[1]);
+      return [
+        {
+          dirName: match[1],
+          hasPackageJson: true,
+          packageDir,
+          packageJsonPath: path.join(packageDir, "package.json"),
+        },
+      ];
+    })
+    .toSorted((left, right) => left.dirName.localeCompare(right.dirName));
+}
+
 function listExtensionPackageDirs(rootDir, fsImpl) {
+  const trackedDirs = listTrackedExtensionPackageDirs(rootDir, fsImpl);
+  if (trackedDirs) {
+    return trackedDirs;
+  }
+
   const extensionsRoot = path.join(rootDir, "extensions");
   if (!fsImpl.existsSync(extensionsRoot)) {
     return [];
@@ -29,7 +69,9 @@ function listExtensionPackageDirs(rootDir, fsImpl) {
     .filter((entry) => entry.isDirectory())
     .map((entry) => ({
       dirName: entry.name,
+      hasPackageJson: undefined,
       packageDir: path.join(extensionsRoot, entry.name),
+      packageJsonPath: path.join(extensionsRoot, entry.name, "package.json"),
     }))
     .toSorted((left, right) => left.dirName.localeCompare(right.dirName));
 }
@@ -58,9 +100,11 @@ export function discoverStaticExtensionAssets(params = {}) {
   const rootDir = params.rootDir ?? process.cwd();
   const fsImpl = params.fs ?? fs;
   const assets = [];
-  for (const { dirName, packageDir } of listExtensionPackageDirs(rootDir, fsImpl)) {
-    const packageJsonPath = path.join(packageDir, "package.json");
-    if (!fsImpl.existsSync(packageJsonPath)) {
+  for (const { dirName, hasPackageJson, packageJsonPath } of listExtensionPackageDirs(
+    rootDir,
+    fsImpl,
+  )) {
+    if (!(hasPackageJson ?? fsImpl.existsSync(packageJsonPath))) {
       continue;
     }
     const packageJson = readJsonFile(packageJsonPath, fsImpl);

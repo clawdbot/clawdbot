@@ -31,7 +31,6 @@ function createPluginRecord(id: string, origin: PluginRecord["origin"] = "bundle
     migrationProviderIds: [],
     memoryEmbeddingProviderIds: [],
     agentHarnessIds: [],
-    gatewayMethods: [],
     cliCommands: [],
     services: [],
     gatewayDiscoveryServiceIds: [],

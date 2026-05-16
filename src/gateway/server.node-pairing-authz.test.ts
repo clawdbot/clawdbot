@@ -35,7 +35,8 @@ async function connectNodeClient(params: {
     clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
     clientDisplayName: "node-command-pin",
     clientVersion: "1.0.0",
-    platform: "darwin",
+    platform: "macos",
+    deviceFamily: "Mac",
     mode: GATEWAY_CLIENT_MODES.NODE,
     scopes: [],
     commands: params.commands,
@@ -66,7 +67,8 @@ async function expectPairingApprovalRejected(params: {
   try {
     const request = await requestNodePairing({
       nodeId: params.nodeId,
-      platform: "darwin",
+      platform: "macos",
+      deviceFamily: "Mac",
       ...(params.requestCommands ? { commands: params.requestCommands } : {}),
     });
 
@@ -124,7 +126,8 @@ async function expectRePairingRequest(params: {
 
     const request = await requestNodePairing({
       nodeId: pairedNode.identity.deviceId,
-      platform: "darwin",
+      platform: "macos",
+      deviceFamily: "Mac",
       ...(params.initialCommands ? { commands: params.initialCommands } : {}),
     });
     await approveNodePairing(request.request.requestId, {
@@ -212,7 +215,8 @@ describe("gateway node pairing authorization", () => {
 
       const request = await requestNodePairing({
         nodeId: "node-approve-target",
-        platform: "darwin",
+        platform: "macos",
+        deviceFamily: "Mac",
       });
 
       pairingWs = await openTrackedWs(started.port);

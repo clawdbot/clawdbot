@@ -329,6 +329,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       },
       skillsSnapshot: emptySkillsSnapshot,
       agentPayload: null,
+      useSubagentFallbacks: false,
       liveSelection: {
         provider: "openai",
         model: "gpt-5.4",

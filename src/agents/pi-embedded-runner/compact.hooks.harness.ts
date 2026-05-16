@@ -333,6 +333,7 @@ export async function loadCompactHooksHarness(): Promise<{
 
   vi.doMock("../harness/selection.js", () => ({
     maybeCompactAgentHarnessSession: maybeCompactAgentHarnessSessionMock,
+    resolveAgentHarnessPolicy: vi.fn(() => ({ runtime: "pi" })),
   }));
 
   vi.doMock("../../plugins/provider-runtime.js", () => ({

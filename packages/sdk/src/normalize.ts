@@ -28,6 +28,7 @@ function normalizeLifecycleEndEventType(data: JsonObject): OpenClawEventType {
     stopReason === "cancelled" ||
     stopReason === "canceled" ||
     stopReason === "killed" ||
+    stopReason === "auth-revoked" ||
     stopReason === "rpc" ||
     stopReason === "user" ||
     (data.aborted === true && stopReason === "stop")

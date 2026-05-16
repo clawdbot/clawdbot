@@ -1,4 +1,8 @@
-import { assertOkOrThrowProviderError } from "openclaw/plugin-sdk/provider-http";
+import {
+  assertOkOrThrowProviderError,
+  assertProviderBinaryResponseContent,
+  readProviderBinaryResponse,
+} from "openclaw/plugin-sdk/provider-http";
 import {
   normalizeApplyTextNormalization,
   normalizeLanguageCode,
@@ -143,7 +147,7 @@ export async function elevenLabsTTS(params: ElevenLabsTtsRequestParams): Promise
   try {
     await assertOkOrThrowProviderError(response, "ElevenLabs API error");
 
-    return Buffer.from(await response.arrayBuffer());
+    return Buffer.from(await readProviderBinaryResponse(response, "ElevenLabs API error", "audio"));
   } finally {
     await release();
   }
@@ -177,6 +181,7 @@ export async function elevenLabsTTSStream(params: ElevenLabsTtsRequestParams): P
   let handedOff = false;
   try {
     await assertOkOrThrowProviderError(response, "ElevenLabs API error");
+    assertProviderBinaryResponseContent(response, "ElevenLabs API error", "audio");
     if (!response.body) {
       throw new Error("ElevenLabs API response missing audio stream");
     }

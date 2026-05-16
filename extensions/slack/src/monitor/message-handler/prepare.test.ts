@@ -163,6 +163,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(enqueueSystemEventMock).toHaveBeenCalledWith("Slack DM from Alice: hi", {
       sessionKey: prepared.ctxPayload.SessionKey,
       contextKey: "slack:message:D123:1.000",
+      forceSenderIsOwnerFalse: true,
       trusted: false,
     });
   });
@@ -664,6 +665,178 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
 
     expect(prepared).toBeNull();
     expect(members).not.toHaveBeenCalled();
+  });
+
+  it("records skipped no-mention room images as pending history media", async () => {
+    const originalFetch = globalThis.fetch;
+    const mockFetch = vi.fn(async () => {
+      return new Response(Buffer.from("image data"), {
+        status: 200,
+        headers: { "content-type": "image/png" },
+      });
+    });
+    globalThis.fetch = mockFetch as typeof fetch;
+
+    try {
+      const slackCtx = createInboundSlackCtx({
+        cfg: { channels: { slack: { enabled: true } } } as OpenClawConfig,
+        defaultRequireMention: true,
+      });
+      slackCtx.historyLimit = 5;
+      slackCtx.resolveUserName = async () => ({ name: "Alice" });
+
+      const prepared = await prepareMessageWith(
+        slackCtx,
+        createSlackAccount(),
+        createSlackMessage({
+          channel: "C123",
+          channel_type: "channel",
+          text: "",
+          ts: "500.000",
+          files: [
+            {
+              id: "F1",
+              name: "diagram.png",
+              mimetype: "image/png",
+              url_private: "https://files.slack.com/diagram.png",
+            },
+          ],
+        }),
+      );
+
+      expect(prepared).toBeNull();
+      const entries = Array.from(slackCtx.channelHistories.values()).flat();
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.body).toBe("[Slack file: diagram.png (fileId: F1)]");
+      expect(entries[0]?.media).toHaveLength(1);
+      expect(entries[0]?.media?.[0]).toMatchObject({
+        contentType: "image/png",
+        kind: "image",
+        messageId: "500.000",
+      });
+      expect(entries[0]?.media?.[0]?.path).toEqual(expect.any(String));
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("records skipped no-mention shared images as pending history media", async () => {
+    const originalFetch = globalThis.fetch;
+    const mockFetch = vi.fn(async () => {
+      return new Response(Buffer.from("shared image data"), {
+        status: 200,
+        headers: { "content-type": "image/png" },
+      });
+    });
+    globalThis.fetch = mockFetch as typeof fetch;
+
+    try {
+      const slackCtx = createInboundSlackCtx({
+        cfg: { channels: { slack: { enabled: true } } } as OpenClawConfig,
+        defaultRequireMention: true,
+      });
+      slackCtx.historyLimit = 5;
+      slackCtx.resolveUserName = async () => ({ name: "Alice" });
+
+      const prepared = await prepareMessageWith(
+        slackCtx,
+        createSlackAccount(),
+        createSlackMessage({
+          channel: "C123",
+          channel_type: "channel",
+          text: "",
+          ts: "501.000",
+          attachments: [
+            {
+              is_share: true,
+              image_url: "https://files.slack.com/shared.png",
+            },
+          ],
+        }),
+      );
+
+      expect(prepared).toBeNull();
+      const entries = Array.from(slackCtx.channelHistories.values()).flat();
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.body).toBe("[Slack media attachment]");
+      expect(entries[0]?.media).toHaveLength(1);
+      expect(entries[0]?.media?.[0]).toMatchObject({
+        contentType: "image/png",
+        kind: "image",
+        messageId: "501.000",
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("does not record inherited thread-starter files as skipped reply history media", async () => {
+    const originalFetch = globalThis.fetch;
+    const mockFetch = vi.fn(async () => {
+      throw new Error("inherited parent file should not be downloaded");
+    });
+    globalThis.fetch = mockFetch as typeof fetch;
+
+    try {
+      const replies = vi.fn().mockResolvedValue({
+        messages: [
+          {
+            text: "starter",
+            user: "U2",
+            ts: "600.000",
+            files: [
+              {
+                id: "F-parent",
+                name: "parent.png",
+                mimetype: "image/png",
+              },
+            ],
+          },
+        ],
+      });
+      const slackCtx = createInboundSlackCtx({
+        cfg: { channels: { slack: { enabled: true } } } as OpenClawConfig,
+        appClient: { conversations: { replies } } as unknown as App["client"],
+        defaultRequireMention: true,
+      });
+      slackCtx.historyLimit = 5;
+      slackCtx.resolveUserName = async () => ({ name: "Alice" });
+
+      const prepared = await prepareMessageWith(
+        slackCtx,
+        createSlackAccount(),
+        createSlackMessage({
+          channel: "C123",
+          channel_type: "channel",
+          text: "",
+          ts: "601.000",
+          thread_ts: "600.000",
+          files: [
+            {
+              id: "F-parent",
+              name: "parent.png",
+              mimetype: "image/png",
+              url_private: "https://files.slack.com/parent.png",
+            },
+          ],
+        }),
+      );
+
+      expect(prepared).toBeNull();
+      expect(replies).toHaveBeenCalledWith({
+        channel: "C123",
+        ts: "600.000",
+        limit: 1,
+        inclusive: true,
+      });
+      const entries = Array.from(slackCtx.channelHistories.values()).flat();
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.body).toBe("[Slack file: parent.png (fileId: F-parent)]");
+      expect(entries[0]?.media).toBeUndefined();
+      expect(mockFetch).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it("allows bot-authored room messages with explicit mention when allowBots is mentions", async () => {

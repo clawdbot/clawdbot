@@ -89,6 +89,7 @@ const mocks = vi.hoisted(() => ({
     (runs: Map<string, import("./subagent-registry.types.js").SubagentRunRecord>) => new Map(runs),
   ),
   captureSubagentCompletionReply: vi.fn(async () => "final completion reply"),
+  cleanupBrowserSessionsForLifecycleEnd: vi.fn(async () => {}),
   runSubagentAnnounceFlow: vi.fn(async () => true),
   getGlobalHookRunner: vi.fn(() => null),
   ensureRuntimePluginsLoaded: vi.fn(),
@@ -189,6 +190,7 @@ describe("subagent registry seam flow", () => {
       },
     });
     mocks.getGlobalHookRunner.mockReturnValue(null);
+    mocks.cleanupBrowserSessionsForLifecycleEnd.mockResolvedValue(undefined);
     mocks.resolveContextEngine.mockResolvedValue({
       onSubagentEnded: mocks.onSubagentEnded,
     });
@@ -206,7 +208,7 @@ describe("subagent registry seam flow", () => {
     mod.__testing.setDepsForTest({
       callGateway: mocks.callGateway,
       captureSubagentCompletionReply: mocks.captureSubagentCompletionReply,
-      cleanupBrowserSessionsForLifecycleEnd: async () => {},
+      cleanupBrowserSessionsForLifecycleEnd: mocks.cleanupBrowserSessionsForLifecycleEnd,
       onAgentEvent: mocks.onAgentEvent,
       persistSubagentRunsToDisk: mocks.persistSubagentRunsToDisk,
       resolveAgentTimeoutMs: mocks.resolveAgentTimeoutMs,
@@ -556,6 +558,64 @@ describe("subagent registry seam flow", () => {
     );
 
     expect(mocks.persistSubagentRunsToDisk).toHaveBeenCalledTimes(6);
+  });
+
+  it("continues completion announce cleanup when lifecycle cleanup fails", async () => {
+    mocks.cleanupBrowserSessionsForLifecycleEnd.mockRejectedValueOnce(
+      new Error("browser cleanup unavailable"),
+    );
+
+    mod.registerSubagentRun({
+      runId: "run-cleanup-warning",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "finish despite cleanup warning",
+      cleanup: "keep",
+    });
+
+    await waitForFast(() => {
+      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+    });
+
+    expect(mocks.cleanupBrowserSessionsForLifecycleEnd).toHaveBeenCalledTimes(1);
+    expectRecordFields(
+      getMockCallArg(mocks.runSubagentAnnounceFlow, 0, 0, "completion announce"),
+      {
+        childSessionKey: "agent:main:subagent:child",
+        childRunId: "run-cleanup-warning",
+        task: "finish despite cleanup warning",
+      },
+      "completion announce params",
+    );
+
+    const run = mod
+      .listSubagentRunsForRequester("agent:main:main")
+      .find((entry) => entry.runId === "run-cleanup-warning");
+    expect(run?.cleanupCompletedAt).toBeTypeOf("number");
+  });
+
+  it("retries completion hooks before resuming ended cleanup", async () => {
+    mocks.ensureRuntimePluginsLoaded.mockRejectedValueOnce(new Error("runtime unavailable"));
+
+    mod.registerSubagentRun({
+      runId: "run-hook-retry",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "finish after hook retry",
+      cleanup: "keep",
+      expectsCompletionMessage: false,
+    });
+
+    await waitForFast(() => {
+      expect(mocks.ensureRuntimePluginsLoaded).toHaveBeenCalledTimes(2);
+      const run = mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((entry) => entry.runId === "run-hook-retry");
+      expect(run?.cleanupCompletedAt).toBeTypeOf("number");
+    });
+    expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
   });
 
   it("suppresses stale timeout announces when the same child run later finishes successfully", async () => {

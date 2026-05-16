@@ -18,7 +18,7 @@ import type {
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import type { PluginPackageChannel } from "./manifest.js";
-import { safeRealpathSync } from "./path-safety.js";
+import { isPathInsideWithRealpath, safeRealpathSync } from "./path-safety.js";
 import { hasKind } from "./slots.js";
 
 function sortUnique(values: readonly string[] | undefined): readonly string[] {
@@ -83,7 +83,10 @@ function resolvePackageJsonPath(candidate: PluginCandidate | undefined): string 
   }
   const packageDir = safeRealpathSync(candidate.packageDir) ?? path.resolve(candidate.packageDir);
   const packageJsonPath = path.join(packageDir, "package.json");
-  return fs.existsSync(packageJsonPath) ? packageJsonPath : undefined;
+  const rootDir = safeRealpathSync(candidate.rootDir) ?? path.resolve(candidate.rootDir);
+  return fs.existsSync(packageJsonPath) && isPathInsideWithRealpath(rootDir, packageJsonPath)
+    ? packageJsonPath
+    : undefined;
 }
 
 function resolvePackageJsonRelativePath(rootDir: string, packageJsonPath: string): string {

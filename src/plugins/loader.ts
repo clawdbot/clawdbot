@@ -373,7 +373,7 @@ type PluginRegistrySnapshot = {
     diagnostics: PluginRegistry["diagnostics"];
   };
   gatewayHandlers: PluginRegistry["gatewayHandlers"];
-  gatewayMethodScopes: NonNullable<PluginRegistry["gatewayMethodScopes"]>;
+  gatewayMethodDescriptors: PluginRegistry["gatewayMethodDescriptors"];
   coreGatewayMethodNames: NonNullable<PluginRegistry["coreGatewayMethodNames"]>;
 };
 
@@ -416,7 +416,7 @@ function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistrySnapsho
       diagnostics: [...registry.diagnostics],
     },
     gatewayHandlers: { ...registry.gatewayHandlers },
-    gatewayMethodScopes: { ...registry.gatewayMethodScopes },
+    gatewayMethodDescriptors: [...registry.gatewayMethodDescriptors],
     coreGatewayMethodNames: [...(registry.coreGatewayMethodNames ?? [])],
   };
 }
@@ -458,7 +458,7 @@ function restorePluginRegistry(registry: PluginRegistry, snapshot: PluginRegistr
     snapshot.arrays.conversationBindingResolvedHandlers;
   registry.diagnostics = snapshot.arrays.diagnostics;
   registry.gatewayHandlers = snapshot.gatewayHandlers;
-  registry.gatewayMethodScopes = snapshot.gatewayMethodScopes;
+  registry.gatewayMethodDescriptors = snapshot.gatewayMethodDescriptors;
   registry.coreGatewayMethodNames = snapshot.coreGatewayMethodNames;
 }
 

@@ -59,7 +59,6 @@ function createBundledPluginRecord(id: string): PluginRecord {
     migrationProviderIds: [],
     memoryEmbeddingProviderIds: [],
     agentHarnessIds: [],
-    gatewayMethods: [],
     cliCommands: [],
     services: [],
     gatewayDiscoveryServiceIds: [],

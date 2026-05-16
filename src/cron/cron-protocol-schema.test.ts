@@ -15,4 +15,11 @@ describe("cron protocol schema", () => {
     }
     expect(lastStatus.deprecated).toBe(true);
   });
+
+  it("exposes failure-notification delivery state", () => {
+    const properties = (CronJobStateSchema as SchemaLike).properties ?? {};
+    expect(properties.lastFailureNotificationDelivered).toBeDefined();
+    expect(properties.lastFailureNotificationDeliveryStatus).toBeDefined();
+    expect(properties.lastFailureNotificationDeliveryError).toBeDefined();
+  });
 });

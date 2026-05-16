@@ -1,6 +1,7 @@
+import fs from "node:fs";
 import path from "node:path";
 import fg from "fast-glob";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS,
   applyDefaultMultiSpecVitestCachePaths,
@@ -836,9 +837,16 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 
   it("uses import-graph targets in default changed mode", () => {
-    expect(resolveChangedTestTargetPlan(["test/helpers/normalize-text.ts"]).targets).toContain(
-      "src/auto-reply/status.test.ts",
-    );
+    const readFileSync = vi.spyOn(fs, "readFileSync");
+    const before = readFileSync.mock.calls.length;
+    const targets = resolveChangedTestTargetPlan(["test/helpers/normalize-text.ts"]).targets;
+    const repoSourceReads = readFileSync.mock.calls
+      .slice(before)
+      .filter(([file]) => typeof file === "string" && normalizeRepoPath(file).includes("/src/"));
+    readFileSync.mockRestore();
+
+    expect(targets).toContain("src/auto-reply/status.test.ts");
+    expect(repoSourceReads.length).toBeLessThan(100);
   });
 
   it.each([
@@ -1164,9 +1172,20 @@ describe("scripts/test-projects full-suite sharding", () => {
     const gatewayServerConfig = "test/vitest/vitest.gateway-server.config.ts";
     process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS = "1";
     let plans: ReturnType<typeof buildFullSuiteVitestRunPlans>;
+    const readdirSync = vi.spyOn(fs, "readdirSync");
+    const before = readdirSync.mock.calls.length;
+    let gatewayTreeReads: unknown[][] = [];
     try {
       plans = buildFullSuiteVitestRunPlans([], process.cwd());
+      gatewayTreeReads = readdirSync.mock.calls
+        .slice(before)
+        .filter(([target]) =>
+          typeof target === "string"
+            ? normalizeRepoPath(target).includes("src/gateway")
+            : false,
+        );
     } finally {
+      readdirSync.mockRestore();
       if (previous === undefined) {
         delete process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
       } else {
@@ -1174,6 +1193,7 @@ describe("scripts/test-projects full-suite sharding", () => {
       }
     }
 
+    expect(gatewayTreeReads).toEqual([]);
     expect(plans.map((plan) => plan.config)).toEqual([
       "test/vitest/vitest.unit-fast.config.ts",
       "test/vitest/vitest.unit-src.config.ts",

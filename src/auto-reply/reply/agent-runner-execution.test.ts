@@ -541,6 +541,56 @@ describe("runAgentTurnWithFallback", () => {
     });
   });
 
+  it("does not reuse or persist CLI sessions for room-event turns", async () => {
+    state.isCliProviderMock.mockReturnValue(true);
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
+      result: await params.run("codex-cli", "gpt-5.4"),
+      provider: "codex-cli",
+      model: "gpt-5.4",
+      attempts: [],
+    }));
+    state.runCliAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ambient" }],
+      meta: {
+        agentMeta: {
+          sessionId: "transient-cli-session",
+          cliSessionBinding: {
+            sessionId: "transient-cli-session",
+            authProfileId: "profile",
+          },
+        },
+      },
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    followupRun.currentTurnKind = "room_event";
+    followupRun.run.provider = "codex-cli";
+    followupRun.run.model = "gpt-5.4";
+
+    const result = await runAgentTurnWithFallback({
+      ...createMinimalRunAgentTurnParams({ followupRun }),
+      getActiveSessionEntry: () =>
+        ({
+          cliSessionBindings: {
+            "codex-cli": { sessionId: "existing-cli-session" },
+          },
+        }) as unknown as SessionEntry,
+    });
+
+    expect(result.kind).toBe("success");
+    expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
+      currentTurnKind: "room_event",
+      cliSessionId: undefined,
+      cliSessionBinding: undefined,
+    });
+    if (result.kind !== "success") {
+      throw new Error("expected success");
+    }
+    expect(result.runResult.meta?.agentMeta?.sessionId).toBe("");
+    expect(result.runResult.meta?.agentMeta?.cliSessionBinding).toBeUndefined();
+  });
+
   it("bridges CLI assistant agent events into onPartialReply for live preview (#76869)", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
@@ -3112,6 +3162,120 @@ describe("runAgentTurnWithFallback", () => {
     },
   );
 
+  it.each(["group", "channel"] as const)(
+    "surfaces raw runner failure copy in Discord %s chats when silentReply.group is set to disallow",
+    async (chatType) => {
+      state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
+        new Error("openai-codex/gpt-5.5 ended with an incomplete terminal response"),
+      );
+
+      const followupRun = createFollowupRun();
+      followupRun.run.config = {
+        agents: {
+          defaults: {
+            silentReply: { group: "disallow" },
+          },
+        },
+      };
+
+      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+      const result = await runAgentTurnWithFallback(
+        createMinimalRunAgentTurnParams({
+          followupRun,
+          sessionCtx: {
+            Provider: "discord",
+            Surface: "discord",
+            ChatType: chatType,
+            GroupSubject: "agent group",
+            GroupChannel: "#general",
+            MessageSid: "msg",
+          } as unknown as TemplateContext,
+        }),
+      );
+
+      expect(result.kind).toBe("final");
+      if (result.kind === "final") {
+        expect(result.payload.text).not.toBe(SILENT_REPLY_TOKEN);
+        expect(result.payload.text).toBe(GENERIC_RUN_FAILURE_TEXT);
+      }
+    },
+  );
+
+  it("surfaces raw runner failure copy when per-surface silentReply.group is set to disallow", async () => {
+    state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
+      new Error("openai-codex/gpt-5.5 ended with an incomplete terminal response"),
+    );
+
+    const followupRun = createFollowupRun();
+    followupRun.run.config = {
+      agents: {
+        defaults: {
+          silentReply: { group: "allow" },
+        },
+      },
+      surfaces: {
+        discord: {
+          silentReply: { group: "disallow" },
+        },
+      },
+    };
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(
+      createMinimalRunAgentTurnParams({
+        followupRun,
+        sessionCtx: {
+          Provider: "discord",
+          Surface: "discord",
+          ChatType: "group",
+          GroupSubject: "agent group",
+          GroupChannel: "#general",
+          MessageSid: "msg",
+        } as unknown as TemplateContext,
+      }),
+    );
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toBe(GENERIC_RUN_FAILURE_TEXT);
+    }
+  });
+
+  it.each(["group", "channel"] as const)(
+    "keeps default silent behavior in Discord %s chats when silentReply policy is unset",
+    async (chatType) => {
+      // Sanity check: explicit `{}` config (no silentReply) must still resolve
+      // to the documented default `group: "allow"` and produce a silent payload
+      // — the new policy hookup must not regress the default behavior.
+      state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
+        new Error("openai-codex/gpt-5.5 ended with an incomplete terminal response"),
+      );
+
+      const followupRun = createFollowupRun();
+      followupRun.run.config = {};
+
+      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+      const result = await runAgentTurnWithFallback(
+        createMinimalRunAgentTurnParams({
+          followupRun,
+          sessionCtx: {
+            Provider: "discord",
+            Surface: "discord",
+            ChatType: chatType,
+            GroupSubject: "agent group",
+            GroupChannel: "#general",
+            MessageSid: "msg",
+          } as unknown as TemplateContext,
+        }),
+      );
+
+      expect(result.kind).toBe("final");
+      if (result.kind === "final") {
+        expect(result.payload.text).toBe(SILENT_REPLY_TOKEN);
+      }
+    },
+  );
+
   it("uses compact generic copy for raw runner failures in normal Discord direct chats", async () => {
     state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
       new Error("openai-codex/gpt-5.5 ended with an incomplete terminal response"),
@@ -3795,8 +3959,8 @@ describe("runAgentTurnWithFallback", () => {
     });
 
     const followupRun = createFollowupRun();
-    followupRun.run.provider = "anthropic";
-    followupRun.run.model = "claude-opus-4-6";
+    followupRun.run.provider = "bailian";
+    followupRun.run.model = "qwen3.6-plus";
 
     const sessionEntry: SessionEntry = {
       sessionId: "session",
@@ -3841,6 +4005,71 @@ describe("runAgentTurnWithFallback", () => {
     expect(sessionEntry.providerOverride).toBe("anthropic");
     expect(sessionEntry.modelOverride).toBe("claude-opus-4-6");
     expect(sessionEntry.modelOverrideSource).toBeUndefined();
+  });
+
+  it("persists fallback selection for recovered auto overrides without modelOverrideSource", async () => {
+    state.runWithModelFallbackMock.mockImplementation(
+      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+        result: await params.run("openai-codex", "gpt-5.4"),
+        provider: "openai-codex",
+        model: "gpt-5.4",
+        attempts: [],
+      }),
+    );
+    state.runEmbeddedPiAgentMock.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "anthropic";
+    followupRun.run.model = "claude-opus-4-6";
+
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 1,
+      compactionCount: 0,
+      providerOverride: "bailian",
+      modelOverride: "qwen3.6-plus",
+      modelOverrideFallbackOriginProvider: "minimax",
+      modelOverrideFallbackOriginModel: "MiniMax-M2.7",
+      // modelOverrideSource intentionally absent
+    };
+    const sessionStore = { main: sessionEntry };
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun,
+      sessionCtx: {
+        Provider: "telegram",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {},
+      typingSignals: createMockTypingSignaler(),
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => sessionEntry,
+      activeSessionStore: sessionStore,
+      resolvedVerboseLevel: "off",
+    });
+
+    expect(result.kind).toBe("success");
+    expect(sessionEntry.providerOverride).toBe("openai-codex");
+    expect(sessionEntry.modelOverride).toBe("gpt-5.4");
+    expect(sessionEntry.modelOverrideSource).toBe("auto");
+    expect(sessionEntry.modelOverrideFallbackOriginProvider).toBe("minimax");
+    expect(sessionEntry.modelOverrideFallbackOriginModel).toBe("MiniMax-M2.7");
   });
 
   it("does not persist fallback selection when modelOverrideSource is user", async () => {

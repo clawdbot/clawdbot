@@ -295,6 +295,23 @@ describe("parseMessageWithAttachments", () => {
     expect(parsed.offloadedRefs[0]?.label).toBe("bundle.zip");
     expect(parsed.offloadedRefs[0]?.mimeType).toBe("application/zip");
   });
+
+  it("does not let image filenames override generic non-image byte sniffing", async () => {
+    const zip = Buffer.from("PK\u0003\u0004zip-archive-bytes").toString("base64");
+    const { parsed, logs } = await parseWithWarnings("x", [
+      {
+        type: "image",
+        mimeType: "image/png",
+        fileName: "fake.png",
+        content: zip,
+      },
+    ]);
+    expect(parsed.images).toHaveLength(0);
+    expect(parsed.offloadedRefs).toHaveLength(1);
+    expect(parsed.offloadedRefs[0]?.mimeType).toBe("application/zip");
+    expect(savedMime()).toBe("application/zip");
+    expect(logs[0]).toMatch(/mime mismatch/i);
+  });
 });
 
 describe("parseMessageWithAttachments validation errors", () => {
@@ -339,6 +356,23 @@ describe("parseMessageWithAttachments validation errors", () => {
       await parseMessageWithAttachments(
         "x",
         [{ type: "file", mimeType: "image/png", fileName: "report.docx", content: docx }],
+        { log: { warn: () => {} }, acceptNonImage: false },
+      );
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(UnsupportedAttachmentError);
+    expect((caught as UnsupportedAttachmentError).reason).toBe("unsupported-non-image");
+    expect(saveMediaBufferMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects generic-container payloads with image mime and image filename when acceptNonImage is false", async () => {
+    const zip = Buffer.from("PK\u0003\u0004zip-archive-bytes").toString("base64");
+    let caught: unknown;
+    try {
+      await parseMessageWithAttachments(
+        "x",
+        [{ type: "image", mimeType: "image/png", fileName: "fake.png", content: zip }],
         { log: { warn: () => {} }, acceptNonImage: false },
       );
     } catch (err) {

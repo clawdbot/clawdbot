@@ -16,6 +16,7 @@ import {
 import { AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION } from "../../agents/internal-event-contract.js";
 import type { AgentInternalEvent } from "../../agents/internal-events.js";
 import { resolveTrustedGroupId } from "../../agents/pi-tools.policy.js";
+import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
 import {
   normalizeSpawnedRunMetadata,
@@ -95,7 +96,11 @@ import {
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
 import { resolveAssistantIdentity } from "../assistant-identity.js";
-import { registerChatAbortController, resolveAgentRunExpiresAtMs } from "../chat-abort.js";
+import {
+  registerChatAbortController,
+  resolveAgentRunExpiresAtMs,
+  updateChatRunProvider,
+} from "../chat-abort.js";
 import {
   MediaOffloadError,
   parseMessageWithAttachments,
@@ -599,6 +604,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       internalRuntimeHandoffId?: string;
       internalEvents?: AgentInternalEvent[];
       idempotencyKey: string;
+      sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
       timeout?: number;
       bestEffortDeliver?: boolean;
       cleanupBundleMcpOnRunEnd?: boolean;
@@ -1319,6 +1325,18 @@ export const agentHandlers: GatewayRequestHandlers = {
       cfg: cfgForAgent ?? cfg,
       overrideSeconds: typeof request.timeout === "number" ? request.timeout : undefined,
     });
+    const activeModelProvider =
+      providerOverride ??
+      resolveSessionModelRef(
+        cfgForAgent ?? cfg,
+        sessionEntry,
+        resolvedSessionKey
+          ? resolveAgentIdFromSessionKey(resolvedSessionKey)
+          : (agentId ?? resolveDefaultAgentId(cfgForAgent ?? cfg)),
+      ).provider;
+    const activeAuthProvider = resolveProviderIdForAuth(activeModelProvider, {
+      config: cfgForAgent ?? cfg,
+    });
     const activeRunAbort = registerChatAbortController({
       chatAbortControllers: context.chatAbortControllers,
       runId,
@@ -1330,6 +1348,8 @@ export const agentHandlers: GatewayRequestHandlers = {
       ownerConnId: typeof client?.connId === "string" ? client.connId : undefined,
       ownerDeviceId:
         typeof client?.connect?.device?.id === "string" ? client.connect.device.id : undefined,
+      providerId: activeModelProvider,
+      authProviderId: activeAuthProvider,
       kind: "agent",
     });
     if (!activeRunAbort.registered && context.chatAbortControllers.has(runId)) {
@@ -1490,12 +1510,22 @@ export const agentHandlers: GatewayRequestHandlers = {
             acpTurnSource: request.acpTurnSource,
             internalEvents: request.internalEvents,
             inputProvenance,
+            sourceReplyDeliveryMode: request.sourceReplyDeliveryMode,
             suppressPromptPersistence: shouldSuppressAgentPromptPersistence({
               inputProvenance,
               internalEvents: request.internalEvents,
             }),
             cleanupBundleMcpOnRunEnd: request.cleanupBundleMcpOnRunEnd,
             abortSignal: activeRunAbort.controller.signal,
+            onActiveModelSelected: ({ provider }) => {
+              updateChatRunProvider(context.chatAbortControllers, {
+                runId,
+                providerId: provider,
+                authProviderId: resolveProviderIdForAuth(provider, {
+                  config: cfgForAgent ?? cfg,
+                }),
+              });
+            },
             // Internal-only: allow workspace override for spawned subagent runs.
             workspaceDir: resolveIngressWorkspaceOverrideForSpawnedRun({
               spawnedBy: spawnedByValue,

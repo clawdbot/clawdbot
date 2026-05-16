@@ -11,6 +11,10 @@ import {
 } from "openclaw/plugin-sdk/hook-runtime";
 import type { ReplyPayloadDelivery } from "openclaw/plugin-sdk/interactive-runtime";
 import {
+  normalizeMessagePresentation,
+  presentationToInteractiveReply,
+} from "openclaw/plugin-sdk/interactive-runtime";
+import {
   buildOutboundMediaLoadOptions,
   isGifMedia,
   kindFromMime,
@@ -755,10 +759,15 @@ export async function deliverReplies(params: {
         ? [reply.mediaUrl]
         : [];
     const hasMedia = mediaList.length > 0;
+    const presentation = normalizeMessagePresentation(reply?.presentation);
+    const interactive =
+      reply?.interactive ??
+      (presentation ? presentationToInteractiveReply(presentation) : undefined);
     const resolvedReplyText =
       resolveTelegramInteractiveTextFallback({
         text: reply?.text,
-        interactive: reply?.interactive,
+        interactive,
+        presentation,
       }) ??
       reply?.text ??
       "";
@@ -820,7 +829,7 @@ export async function deliverReplies(params: {
       const replyMarkup = buildInlineKeyboard(
         resolveTelegramInlineButtons({
           buttons: telegramData?.buttons,
-          interactive: reply.interactive,
+          interactive,
         }),
       );
       let firstDeliveredMessageId: number | undefined;

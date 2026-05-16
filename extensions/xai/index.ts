@@ -31,6 +31,7 @@ import {
   buildMissingXSearchApiKeyPayload,
   createXSearchToolDefinition,
 } from "./x-search-tool-shared.js";
+import { createXaiOAuthAuthMethod, refreshXaiOAuthCredential } from "./xai-oauth.js";
 
 const PROVIDER_ID = "xai";
 type CodeExecutionModule = typeof import("./code-execution.js");
@@ -182,6 +183,7 @@ export default defineSingleProviderPluginEntry({
         },
       },
     ],
+    extraAuth: [createXaiOAuthAuthMethod()],
     catalog: {
       buildProvider: buildXaiProvider,
     },
@@ -210,6 +212,7 @@ export default defineSingleProviderPluginEntry({
       shouldContributeXaiCompat({ modelId, model }) ? resolveXaiModelCompatPatch() : undefined,
     normalizeModelId: ({ modelId }) => normalizeXaiModelId(modelId),
     resolveDynamicModel: (ctx) => resolveXaiForwardCompatModel({ providerId: PROVIDER_ID, ctx }),
+    refreshOAuth: refreshXaiOAuthCredential,
     resolveThinkingProfile,
     isModernModelRef: ({ modelId }) => isModernXaiModel(modelId),
   },

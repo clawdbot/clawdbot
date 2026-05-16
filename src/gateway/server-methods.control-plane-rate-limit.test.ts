@@ -3,10 +3,10 @@ import {
   __testing as controlPlaneRateLimitTesting,
   resolveControlPlaneRateLimitKey,
 } from "./control-plane-rate-limit.js";
+import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-descriptors.js";
 import { isRetryableGatewayStartupUnavailableError } from "./protocol/startup-unavailable.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
-import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./server-startup-unavailable-methods.js";
 
 const noWebchat = () => false;
 
@@ -39,7 +39,7 @@ describe("gateway control-plane write rate limit", () => {
       client: {
         id: "openclaw-control-ui",
         version: "1.0.0",
-        platform: "darwin",
+        platform: "macos",
         mode: "ui",
       },
       minProtocol: 1,

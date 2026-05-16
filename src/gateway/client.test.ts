@@ -5,11 +5,38 @@ import { captureEnv } from "../test-utils/env.js";
 import { MIN_CLIENT_PROTOCOL_VERSION, PROTOCOL_VERSION } from "./protocol/index.js";
 
 const wsInstances = vi.hoisted((): MockWebSocket[] => []);
+const wsConstructorObservers = vi.hoisted((): Array<(url: string, options: unknown) => void> => []);
 const clearDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
 const loadDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
 const storeDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
 const logDebugMock = vi.hoisted(() => vi.fn());
 const logErrorMock = vi.hoisted(() => vi.fn());
+const {
+  installGlobalProxyMock,
+  proxylineRegisterBypassMock,
+  proxylineStopMock,
+  proxylineUnregisterBypassMock,
+} = vi.hoisted(() => {
+  const proxylineStopMock = vi.fn();
+  const proxylineUnregisterBypassMock = vi.fn();
+  const proxylineRegisterBypassMock = vi.fn(() => proxylineUnregisterBypassMock);
+  return {
+    proxylineRegisterBypassMock,
+    proxylineStopMock,
+    proxylineUnregisterBypassMock,
+    installGlobalProxyMock: vi.fn(() => ({
+      active: true,
+      createNodeAgent: vi.fn(),
+      createUndiciDispatcher: vi.fn(),
+      createWebSocketAgent: vi.fn(),
+      explain: vi.fn(),
+      mode: "managed",
+      registerBypass: proxylineRegisterBypassMock,
+      stop: proxylineStopMock,
+      withBypass: vi.fn(),
+    })),
+  };
+});
 
 type WsEvent = "open" | "message" | "close" | "error";
 type WsEventHandlers = {
@@ -39,6 +66,9 @@ class MockWebSocket {
   constructor(_url: string, options?: unknown) {
     this.options = options;
     wsInstances.push(this);
+    for (const observer of wsConstructorObservers) {
+      observer(_url, options);
+    }
   }
 
   on(event: "open", handler: WsEventHandlers["open"]): void;
@@ -100,10 +130,20 @@ class MockWebSocket {
       handler(code, Buffer.from(reason));
     }
   }
+
+  emitError(error: unknown): void {
+    for (const handler of this.errorHandlers) {
+      handler(error);
+    }
+  }
 }
 
 vi.mock("ws", () => ({
   WebSocket: MockWebSocket,
+}));
+
+vi.mock("@openclaw/proxyline", () => ({
+  installGlobalProxy: installGlobalProxyMock,
 }));
 
 vi.mock("../infra/device-auth-store.js", async () => {
@@ -224,31 +264,33 @@ describe("GatewayClient security checks", () => {
     "OPENCLAW_PROXY_ACTIVE",
     "OPENCLAW_PROXY_LOOPBACK_MODE",
     "HTTP_PROXY",
-    "GLOBAL_AGENT_HTTP_PROXY",
-    "GLOBAL_AGENT_FORCE_GLOBAL_AGENT",
   ]);
 
-  beforeEach(() => {
+  beforeEach(async () => {
     envSnapshot.restore();
     delete process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS;
     delete process.env.OPENCLAW_PROXY_ACTIVE;
     delete process.env.OPENCLAW_PROXY_LOOPBACK_MODE;
     delete process.env.HTTP_PROXY;
-    delete process.env.GLOBAL_AGENT_HTTP_PROXY;
-    delete process.env.GLOBAL_AGENT_FORCE_GLOBAL_AGENT;
-    delete (global as Record<string, unknown>)["GLOBAL_AGENT"];
+    const { resetProxyLifecycleForTests } = await import("../infra/net/proxy/proxy-lifecycle.js");
+    resetProxyLifecycleForTests();
+    installGlobalProxyMock.mockClear();
+    proxylineRegisterBypassMock.mockClear();
+    proxylineStopMock.mockClear();
+    proxylineUnregisterBypassMock.mockClear();
     wsInstances.length = 0;
+    wsConstructorObservers.length = 0;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     envSnapshot.restore();
     delete process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS;
     delete process.env.OPENCLAW_PROXY_ACTIVE;
     delete process.env.OPENCLAW_PROXY_LOOPBACK_MODE;
     delete process.env.HTTP_PROXY;
-    delete process.env.GLOBAL_AGENT_HTTP_PROXY;
-    delete process.env.GLOBAL_AGENT_FORCE_GLOBAL_AGENT;
-    delete (global as Record<string, unknown>)["GLOBAL_AGENT"];
+    const { resetProxyLifecycleForTests } = await import("../infra/net/proxy/proxy-lifecycle.js");
+    resetProxyLifecycleForTests();
+    wsConstructorObservers.length = 0;
   });
 
   it("blocks ws:// to non-loopback addresses (CWE-319)", () => {
@@ -298,7 +340,6 @@ describe("GatewayClient security checks", () => {
     process.env.OPENCLAW_PROXY_ACTIVE = "1";
     process.env.OPENCLAW_PROXY_LOOPBACK_MODE = "proxy";
     process.env.HTTP_PROXY = "http://127.0.0.1:3128";
-    process.env.GLOBAL_AGENT_HTTP_PROXY = "http://127.0.0.1:3128";
     const onConnectError = vi.fn();
     const client = new GatewayClient({
       url: "ws://127.0.0.1:18789",
@@ -309,14 +350,70 @@ describe("GatewayClient security checks", () => {
 
     expect(onConnectError).not.toHaveBeenCalled();
     expect(wsInstances.length).toBe(1);
-    expect(requireRecord(getLatestWs().options, "websocket options").agent).toBeUndefined();
-    expectRecordFields(
-      (global as Record<string, unknown>)["GLOBAL_AGENT"],
-      {
-        HTTP_PROXY: "http://127.0.0.1:3128",
-        HTTPS_PROXY: "http://127.0.0.1:3128",
-      },
-      "global agent",
+    expect(getLatestWs().options).not.toMatchObject({ agent: expect.any(Object) });
+    expect(installGlobalProxyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ifActive: "reuse-compatible",
+        mode: "managed",
+        proxyUrl: "http://127.0.0.1:3128",
+        undici: expect.objectContaining({ allowH2: false }),
+      }),
+    );
+    client.stop();
+  });
+
+  it("keeps gateway-only loopback bypass active only during WebSocket construction", () => {
+    process.env.OPENCLAW_PROXY_ACTIVE = "1";
+    process.env.OPENCLAW_PROXY_LOOPBACK_MODE = "gateway-only";
+    process.env.HTTP_PROXY = "http://127.0.0.1:3128";
+    const onConnectError = vi.fn();
+    const bypassActiveDuringConstruction: boolean[] = [];
+    wsConstructorObservers.push(() => {
+      bypassActiveDuringConstruction.push(
+        proxylineRegisterBypassMock.mock.calls.length === 1 &&
+          proxylineUnregisterBypassMock.mock.calls.length === 0,
+      );
+    });
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      onConnectError,
+    });
+
+    client.start();
+
+    expect(proxylineRegisterBypassMock).toHaveBeenCalledWith({ url: "ws://127.0.0.1:18789" });
+    expect(bypassActiveDuringConstruction).toEqual([true]);
+    expect(proxylineUnregisterBypassMock).toHaveBeenCalledOnce();
+    const ws = getLatestWs();
+
+    ws.emitOpen();
+
+    expect(proxylineUnregisterBypassMock).toHaveBeenCalledOnce();
+    expect(onConnectError).not.toHaveBeenCalled();
+    client.stop();
+  });
+
+  it("clears gateway-only loopback bypass when WebSocket connection errors before opening", () => {
+    process.env.OPENCLAW_PROXY_ACTIVE = "1";
+    process.env.OPENCLAW_PROXY_LOOPBACK_MODE = "gateway-only";
+    process.env.HTTP_PROXY = "http://127.0.0.1:3128";
+    const onConnectError = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      onConnectError,
+    });
+
+    client.start();
+
+    expect(proxylineRegisterBypassMock).toHaveBeenCalledWith({ url: "ws://127.0.0.1:18789" });
+    expect(proxylineUnregisterBypassMock).toHaveBeenCalledOnce();
+    const ws = getLatestWs();
+
+    ws.emitError(new Error("proxy connection failed"));
+
+    expect(proxylineUnregisterBypassMock).toHaveBeenCalledOnce();
+    expect(onConnectError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "proxy connection failed" }),
     );
     client.stop();
   });
@@ -339,7 +436,7 @@ describe("GatewayClient security checks", () => {
 
       expect(onConnectError).not.toHaveBeenCalled();
       expect(wsInstances.length).toBe(1);
-      expect(requireRecord(getLatestWs().options, "websocket options").agent).toBeUndefined();
+      expect(getLatestWs().options).not.toMatchObject({ agent: expect.any(Object) });
     } finally {
       client.stop();
       await stopProxy(handle);
@@ -460,11 +557,12 @@ describe("GatewayClient request errors", () => {
       }),
     );
 
-    await expectGatewayRequestError(requestPromise, {
+    await expect(requestPromise).rejects.toMatchObject({
       name: "GatewayClientRequestError",
       gatewayCode: "UNAVAILABLE",
       retryable: true,
       retryAfterMs: 250,
+      details: { method: "chat.history" },
     });
 
     client.stop();
@@ -521,10 +619,10 @@ describe("GatewayClient request errors", () => {
       expect(onConnectError).not.toHaveBeenCalled();
       expect(onClose).not.toHaveBeenCalled();
       expect(ws.lastClose).toEqual({ code: 1013, reason: "gateway starting" });
-      expect(logDebugMock.mock.calls).toEqual([
-        ["gateway connect failed: GatewayClientRequestError: gateway starting; retry shortly"],
-      ]);
-      expect(logErrorMock.mock.calls).toEqual([]);
+      expect(logDebugMock).toHaveBeenCalledWith(expect.stringContaining("gateway connect failed:"));
+      expect(logErrorMock).not.toHaveBeenCalledWith(
+        expect.stringContaining("gateway connect failed:"),
+      );
       expect(wsInstances).toHaveLength(1);
 
       await vi.advanceTimersByTimeAsync(249);
@@ -576,7 +674,7 @@ describe("GatewayClient close handling", () => {
     expect(getLatestWs().emitClose(1008, "unauthorized: device token mismatch")).toBeUndefined();
 
     expect(logDebugMock).toHaveBeenCalledWith(
-      "failed clearing stale device-auth token for device dev-2: Error: disk unavailable",
+      expect.stringContaining("failed clearing stale device-auth token"),
     );
     expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: device token mismatch");
     client.stop();
@@ -754,10 +852,6 @@ describe("GatewayClient connect auth payload", () => {
     return parseConnectRequest(ws).params?.auth ?? {};
   }
 
-  function expectConnectAuthFields(ws: MockWebSocket, expected: Record<string, unknown>): void {
-    expectRecordFields(connectFrameFrom(ws), expected, "connect auth");
-  }
-
   function connectScopesFrom(ws: MockWebSocket) {
     return parseConnectRequest(ws).params?.scopes ?? [];
   }
@@ -890,7 +984,9 @@ describe("GatewayClient connect auth payload", () => {
     ws.emitOpen();
     emitConnectChallenge(ws);
 
-    expectConnectAuthFields(ws, { token: "shared-token" });
+    expect(connectFrameFrom(ws)).toMatchObject({
+      token: "shared-token",
+    });
     expect(connectFrameFrom(ws).deviceToken).toBeUndefined();
     client.stop();
   });
@@ -939,7 +1035,9 @@ describe("GatewayClient connect auth payload", () => {
 
     const { ws, connect } = startClientWithEarlyChallenge({ client });
 
-    expectConnectAuthFields(ws, { token: "shared-token" });
+    expect(connectFrameFrom(ws)).toMatchObject({
+      token: "shared-token",
+    });
     emitHelloOk(ws, connect.id);
     client.stop();
   });
@@ -981,7 +1079,9 @@ describe("GatewayClient connect auth payload", () => {
     ws.emitOpen();
     emitConnectChallenge(ws);
 
-    expectConnectAuthFields(ws, { password: "shared-password" }); // pragma: allowlist secret
+    expect(connectFrameFrom(ws)).toMatchObject({
+      password: "shared-password", // pragma: allowlist secret
+    });
     expect(connectFrameFrom(ws).token).toBeUndefined();
     expect(connectFrameFrom(ws).deviceToken).toBeUndefined();
     client.stop();
@@ -999,7 +1099,9 @@ describe("GatewayClient connect auth payload", () => {
     ws.emitOpen();
     emitConnectChallenge(ws);
 
-    expectConnectAuthFields(ws, { password: "shared-password" }); // pragma: allowlist secret
+    expect(connectFrameFrom(ws)).toMatchObject({
+      password: "shared-password", // pragma: allowlist secret
+    });
     expect(connectFrameFrom(ws).bootstrapToken).toBeUndefined();
     expect(connectFrameFrom(ws).token).toBeUndefined();
     client.stop();
@@ -1019,7 +1121,7 @@ describe("GatewayClient connect auth payload", () => {
     ws.emitOpen();
     emitConnectChallenge(ws);
 
-    expectConnectAuthFields(ws, {
+    expect(connectFrameFrom(ws)).toMatchObject({
       token: "stored-device-token",
       deviceToken: "stored-device-token",
     });
@@ -1042,7 +1144,7 @@ describe("GatewayClient connect auth payload", () => {
     ws.emitOpen();
     emitConnectChallenge(ws);
 
-    expectConnectAuthFields(ws, {
+    expect(connectFrameFrom(ws)).toMatchObject({
       token: "stored-device-token",
       deviceToken: "stored-device-token",
     });
@@ -1078,7 +1180,7 @@ describe("GatewayClient connect auth payload", () => {
       "load device token params",
     );
     expect(loadTokenParams.deviceId).toBeTypeOf("string");
-    expectConnectAuthFields(ws, {
+    expect(connectFrameFrom(ws)).toMatchObject({
       token: "stored-device-token",
       deviceToken: "stored-device-token",
     });
@@ -1097,7 +1199,9 @@ describe("GatewayClient connect auth payload", () => {
     ws.emitOpen();
     emitConnectChallenge(ws);
 
-    expectConnectAuthFields(ws, { bootstrapToken: "bootstrap-token" });
+    expect(connectFrameFrom(ws)).toMatchObject({
+      bootstrapToken: "bootstrap-token",
+    });
     expect(connectFrameFrom(ws).token).toBeUndefined();
     expect(connectFrameFrom(ws).deviceToken).toBeUndefined();
     client.stop();
@@ -1119,7 +1223,7 @@ describe("GatewayClient connect auth payload", () => {
     ws.emitOpen();
     emitConnectChallenge(ws);
 
-    expectConnectAuthFields(ws, {
+    expect(connectFrameFrom(ws)).toMatchObject({
       token: "explicit-device-token",
       deviceToken: "explicit-device-token",
     });
@@ -1142,7 +1246,7 @@ describe("GatewayClient connect auth payload", () => {
     ws.emitOpen();
     emitConnectChallenge(ws);
 
-    expectConnectAuthFields(ws, {
+    expect(connectFrameFrom(ws)).toMatchObject({
       token: "stored-device-token",
       deviceToken: "stored-device-token",
     });
@@ -1169,14 +1273,10 @@ describe("GatewayClient connect auth payload", () => {
       connectId: firstConnect.id,
       failureDetails: { code: "AUTH_TOKEN_MISMATCH", canRetryWithDeviceToken: true },
     });
-    expectRecordFields(
-      retriedAuth,
-      {
-        token: "shared-token",
-        deviceToken: "stored-device-token",
-      },
-      "retried connect auth",
-    );
+    expect(retriedAuth).toMatchObject({
+      token: "shared-token",
+      deviceToken: "stored-device-token",
+    });
     const ws = getLatestWs();
     expect(connectScopesFrom(ws)).toEqual(["operator.read"]);
     client.stop();
@@ -1195,14 +1295,10 @@ describe("GatewayClient connect auth payload", () => {
       connectId: firstConnect.id,
       failureDetails: { code: "AUTH_UNAUTHORIZED", recommendedNextStep: "retry_with_device_token" },
     });
-    expectRecordFields(
-      retriedAuth,
-      {
-        token: "shared-token",
-        deviceToken: "stored-device-token",
-      },
-      "retried connect auth",
-    );
+    expect(retriedAuth).toMatchObject({
+      token: "shared-token",
+      deviceToken: "stored-device-token",
+    });
     client.stop();
   });
 

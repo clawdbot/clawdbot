@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { SessionManager } from "@earendil-works/pi-coding-agent";
-import { stripInboundMetadata } from "../../auto-reply/reply/strip-inbound-meta.js";
+import { stripInternalMetadataForDisplay } from "../../auto-reply/reply/display-text-sanitize.js";
+import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import {
@@ -282,8 +283,9 @@ function isTranscriptOnlyOpenclawAssistant(message: AgentMessage): boolean {
 }
 
 function normalizeAssistantReplayTextContent(message: AgentMessage, replayContent: string) {
-  const strippedText = stripInboundMetadata(replayContent);
-  if (!strippedText.trim()) {
+  const strippedText = stripInternalMetadataForDisplay(replayContent);
+  const trimmed = strippedText.trim();
+  if (!trimmed || isSilentReplyPayloadText(trimmed, SILENT_REPLY_TOKEN)) {
     return null;
   }
   return {
@@ -305,13 +307,18 @@ function normalizeAssistantReplayBlockContent(message: AgentMessage, replayConte
       sanitizedContent.push(block);
       continue;
     }
-    const strippedText = stripInboundMetadata(text);
+    const strippedText = stripInternalMetadataForDisplay(text);
     if (strippedText === text) {
-      sanitizedContent.push(block);
+      if (!isSilentReplyPayloadText(text.trim(), SILENT_REPLY_TOKEN)) {
+        sanitizedContent.push(block);
+      } else {
+        touched = true;
+      }
       continue;
     }
     touched = true;
-    if (strippedText.trim()) {
+    const trimmed = strippedText.trim();
+    if (trimmed && !isSilentReplyPayloadText(trimmed, SILENT_REPLY_TOKEN)) {
       sanitizedContent.push({ ...block, text: strippedText });
     }
   }

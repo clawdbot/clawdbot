@@ -142,6 +142,34 @@ describe("normalizeStoredCronJobs", () => {
     expect(result.issues.legacyPayloadKind).toBeUndefined();
   });
 
+  it("removes unrepairable persisted schedule and payload shapes", () => {
+    const jobs = [
+      makeLegacyJob({
+        id: "valid",
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: 1 },
+        payload: { kind: "systemEvent", text: "tick" },
+      }),
+      makeLegacyJob({
+        id: "bad-schedule",
+        schedule: { kind: "cron", expr: [] },
+        payload: { kind: "systemEvent", text: "tick" },
+      }),
+      makeLegacyJob({
+        id: "bad-payload",
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: 1 },
+        payload: { kind: "agentTurn", message: ["tick"] },
+      }),
+    ];
+
+    const result = normalizeStoredCronJobs(jobs);
+
+    expect(result.mutated).toBe(true);
+    expect(result.issues.invalidSchedule).toBe(1);
+    expect(result.issues.invalidPayload).toBe(1);
+    expect(jobs.map((job) => job.id)).toEqual(["valid"]);
+    expect(result.jobs.map((job) => job.id)).toEqual(["valid"]);
+  });
+
   it("normalizes whitespace-padded and non-canonical payload kinds", () => {
     const jobs = [
       {

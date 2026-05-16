@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -47,6 +48,28 @@ function writeFileText(filePath: string, text: string): void {
   mkdirSync(dirname(filePath), { recursive: true });
   // writeJsonFile intentionally owns JSON formatting only.
   writeFileSync(filePath, text, "utf8");
+}
+
+function listNpmPackDryRunFiles(packageDir: string): string[] {
+  const result = spawnSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {
+    cwd: packageDir,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (result.error) {
+    throw result.error;
+  }
+  if (result.status !== 0) {
+    throw new Error(result.stderr.trim() || `npm pack failed with exit ${result.status}`);
+  }
+  const [packResult] = JSON.parse(result.stdout) as [
+    {
+      files?: { path?: string }[];
+    },
+  ];
+  return (packResult?.files ?? []).flatMap((entry) =>
+    typeof entry.path === "string" ? [entry.path] : [],
+  );
 }
 
 function writePublishablePluginPackage(repoDir: string): string {
@@ -192,6 +215,42 @@ describe("plugin npm package manifest staging", () => {
       }),
     ).toThrow(
       "package-local plugin runtime is missing for diffs: ./dist/index.js, ./dist/setup-entry.js",
+    );
+  });
+
+  it("refuses package file rules that omit advertised package-local runtime files", () => {
+    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-package-runtime-excluded-");
+    const packageDir = writePublishablePluginPackage(repoDir);
+    writeFileText(join(packageDir, "dist", "index.js"), "export {};\n");
+    writeFileText(join(packageDir, "dist", "setup-entry.js"), "export {};\n");
+    writeJsonFile(join(packageDir, "package.json"), {
+      name: "@openclaw/diffs",
+      version: "2026.5.3",
+      type: "module",
+      files: ["dist/**", "!dist/setup-entry.js"],
+      openclaw: {
+        extensions: ["./index.ts"],
+        setupEntry: "./setup-entry.ts",
+        compat: {
+          pluginApi: ">=2026.4.30",
+        },
+        release: {
+          publishToNpm: true,
+        },
+      },
+    });
+
+    const packedFiles = listNpmPackDryRunFiles(packageDir);
+    expect(packedFiles).toContain("dist/index.js");
+    expect(packedFiles).not.toContain("dist/setup-entry.js");
+
+    expect(() =>
+      resolveAugmentedPluginNpmPackageJson({
+        repoRoot: repoDir,
+        packageDir,
+      }),
+    ).toThrow(
+      "package file rule '!dist/setup-entry.js' excludes required package-local runtime file './dist/setup-entry.js' for diffs",
     );
   });
 });

@@ -34,6 +34,7 @@ export function createOpenAICodexProvider(): ProviderPlugin {
           choiceLabel: OPENAI_CODEX_LOGIN_LABEL,
           choiceHint: OPENAI_CODEX_LOGIN_HINT,
           assistantPriority: -30,
+          onboardingFeatured: true,
           ...OPENAI_CODEX_WIZARD_GROUP,
         },
       },

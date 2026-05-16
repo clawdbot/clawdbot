@@ -362,6 +362,19 @@ describe("resolveTranscriptPolicy", () => {
     expect(responsesPolicy.dropReasoningFromHistory).toBe(false);
   });
 
+  it.each(["moonshotai/kimi-k2.6", "kimi-k2-thinking", "xiaomi/mimo-v2.6-pro"])(
+    "preserves historical reasoning for %s replay-required OpenAI-compatible models",
+    (modelId) => {
+      const policy = resolveTranscriptPolicy({
+        provider: "custom-openai-proxy",
+        modelId,
+        modelApi: "openai-completions",
+      });
+
+      expect(policy.dropReasoningFromHistory).toBe(false);
+    },
+  );
+
   it("falls back to unowned transport defaults when no owning plugin exists", () => {
     expectStrictOpenAiCompatibleReplayDefaults("custom-openai-proxy");
   });

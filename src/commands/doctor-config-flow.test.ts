@@ -654,7 +654,7 @@ vi.mock("./doctor/channel-capabilities.js", () => {
     msteams: {
       dmAllowFromMode: "topOnly",
       groupModel: "hybrid",
-      groupAllowFromFallbackToAllowFrom: false,
+      groupAllowFromFallbackToAllowFrom: true,
       warnOnEmptyGroupSenderAllowlist: true,
     },
     zalouser: {
@@ -1714,8 +1714,9 @@ describe("doctor config flow", () => {
     expect(
       ((browser.profiles as Record<string, { driver?: string }>)?.chromeLive ?? {}).driver,
     ).toBe("existing-session");
-    expect(result.cfg.plugins?.allow).toEqual(["telegram", "browser"]);
+    expect(result.cfg.plugins?.allow).toEqual(["telegram", "browser", "codex"]);
     expect(result.cfg.plugins?.entries?.browser?.enabled).toBe(true);
+    expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(true);
   });
 
   it("preserves commitments config on repair", async () => {

@@ -1,3 +1,4 @@
+import type { InboundTurnKind } from "../channels/turn/kind.js";
 import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
@@ -5,6 +6,7 @@ import type {
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { CommandTurnContext } from "./command-turn-context.js";
 import type { CommandArgs } from "./commands-args.types.js";
+import type { HistoryEntry } from "./reply/history.types.js";
 import type { ReplyThreadingPolicy } from "./types.js";
 
 /** Valid message channels for routing. */
@@ -39,6 +41,7 @@ type UntrustedStructuredContextEntry = {
 
 export type MsgContext = {
   Body?: string;
+  InboundTurnKind?: InboundTurnKind;
   /**
    * Agent prompt body (may include envelope/history/context). Prefer this for prompt shaping.
    * Should use real newlines (`\n`), not escaped `\\n`.
@@ -48,11 +51,7 @@ export type MsgContext = {
    * Recent chat history for context (untrusted user content). Prefer passing this
    * as structured context blocks in the user prompt rather than rendering plaintext envelopes.
    */
-  InboundHistory?: Array<{
-    sender: string;
-    body: string;
-    timestamp?: number;
-  }>;
+  InboundHistory?: HistoryEntry[];
   /**
    * @deprecated Use CommandBody.
    *
@@ -237,7 +236,7 @@ export type MsgContext = {
   AcpDispatchTailAfterReset?: boolean;
   /** Gateway client scopes when the message originates from the gateway. */
   GatewayClientScopes?: string[];
-  /** Trusted system override for contexts that must never inherit owner semantics. */
+  /** System-event authority override for contexts that must never inherit owner semantics. */
   ForceSenderIsOwnerFalse?: boolean;
   /** Thread identifier (Telegram topic id or Matrix thread event id). */
   MessageThreadId?: string | number;

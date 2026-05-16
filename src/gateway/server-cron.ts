@@ -100,6 +100,12 @@ function toPluginCronJob(job: CronJob): PluginHookGatewayCronJob {
       lastRunStatus: job.state.lastRunStatus,
       lastError: job.state.lastError,
       lastDurationMs: job.state.lastDurationMs,
+      lastDelivered: job.state.lastDelivered,
+      lastDeliveryStatus: job.state.lastDeliveryStatus,
+      lastDeliveryError: job.state.lastDeliveryError,
+      lastFailureNotificationDelivered: job.state.lastFailureNotificationDelivered,
+      lastFailureNotificationDeliveryStatus: job.state.lastFailureNotificationDeliveryStatus,
+      lastFailureNotificationDeliveryError: job.state.lastFailureNotificationDeliveryError,
     },
     createdAtMs: job.createdAtMs,
     updatedAtMs: job.updatedAtMs,
@@ -295,7 +301,8 @@ export function buildGatewayCronService(params: {
       enqueueSystemEvent(text, {
         sessionKey,
         contextKey: opts?.contextKey,
-        trusted: opts?.trusted,
+        forceSenderIsOwnerFalse: opts?.forceSenderIsOwnerFalse,
+        trusted: opts?.forceSenderIsOwnerFalse !== true,
       });
     },
     requestHeartbeat: (opts) => {
@@ -463,6 +470,7 @@ export function buildGatewayCronService(params: {
             delivered: evt.delivered,
             deliveryStatus: evt.deliveryStatus,
             deliveryError: evt.deliveryError,
+            failureNotificationDelivery: evt.failureNotificationDelivery,
             delivery: evt.delivery,
             sessionId: evt.sessionId,
             sessionKey: evt.sessionKey,

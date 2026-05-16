@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/sglang-provider",
-  "version": "2026.5.14",
+  "version": "2026.5.16",
   "private": true,
   "description": "OpenClaw SGLang provider plugin",
   "type": "module",

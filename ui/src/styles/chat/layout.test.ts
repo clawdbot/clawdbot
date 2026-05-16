@@ -57,4 +57,14 @@ describe("chat layout styles", () => {
     expect(css).toContain(".chat-controls__separator {");
     expect(css).toContain("height: 22px;");
   });
+
+  it("keeps composer controls labeled and large enough without shrinking mobile taps", () => {
+    const css = readLayoutCss();
+
+    expect(css).toContain(".agent-chat__control-label");
+    expect(css).toContain("min-width: 36px;");
+    expect(css).toContain("height: 36px;");
+    expect(css).toContain("@media (max-width: 860px)");
+    expect(css).toContain("width: 44px;");
+  });
 });

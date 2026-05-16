@@ -1,9 +1,9 @@
-import { stripInternalRuntimeContext } from "../agents/internal-runtime-context.js";
 import {
-  extractInboundSenderLabel,
-  stripInboundMetadata,
-} from "../auto-reply/reply/strip-inbound-meta.js";
-import { stripEnvelope, stripMessageIdHints } from "../shared/chat-envelope.js";
+  stripInternalMetadataForDisplay,
+  stripUserEnvelopeForDisplay,
+} from "../auto-reply/reply/display-text-sanitize.js";
+import { extractInboundSenderLabel } from "../auto-reply/reply/strip-inbound-meta.js";
+import { stripEnvelope } from "../shared/chat-envelope.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 export { stripEnvelope };
@@ -49,11 +49,9 @@ function stripEnvelopeFromContentWithRole(
     if (entry.type !== "text" || typeof entry.text !== "string") {
       return item;
     }
-    const runtimeStripped = stripInternalRuntimeContext(entry.text);
-    const inboundStripped = stripInboundMetadata(runtimeStripped);
     const stripped = stripUserEnvelope
-      ? stripMessageIdHints(stripEnvelope(inboundStripped))
-      : inboundStripped;
+      ? stripUserEnvelopeForDisplay(entry.text)
+      : stripInternalMetadataForDisplay(entry.text);
     if (stripped === entry.text) {
       return item;
     }
@@ -83,11 +81,9 @@ export function stripEnvelopeFromMessage(message: unknown): unknown {
   }
 
   if (typeof entry.content === "string") {
-    const runtimeStripped = stripInternalRuntimeContext(entry.content);
-    const inboundStripped = stripInboundMetadata(runtimeStripped);
     const stripped = stripUserEnvelope
-      ? stripMessageIdHints(stripEnvelope(inboundStripped))
-      : inboundStripped;
+      ? stripUserEnvelopeForDisplay(entry.content)
+      : stripInternalMetadataForDisplay(entry.content);
     if (stripped !== entry.content) {
       next.content = stripped;
       changed = true;
@@ -99,11 +95,9 @@ export function stripEnvelopeFromMessage(message: unknown): unknown {
       changed = true;
     }
   } else if (typeof entry.text === "string") {
-    const runtimeStripped = stripInternalRuntimeContext(entry.text);
-    const inboundStripped = stripInboundMetadata(runtimeStripped);
     const stripped = stripUserEnvelope
-      ? stripMessageIdHints(stripEnvelope(inboundStripped))
-      : inboundStripped;
+      ? stripUserEnvelopeForDisplay(entry.text)
+      : stripInternalMetadataForDisplay(entry.text);
     if (stripped !== entry.text) {
       next.text = stripped;
       changed = true;

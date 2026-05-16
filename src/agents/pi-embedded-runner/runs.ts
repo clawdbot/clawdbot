@@ -44,6 +44,7 @@ export type EmbeddedPiQueueFailureReason =
   | "no_active_run"
   | "not_streaming"
   | "compacting"
+  | "source_reply_delivery_mode_mismatch"
   | "runtime_rejected";
 
 export type EmbeddedPiQueueMessageOutcome =
@@ -140,7 +141,7 @@ export function queueEmbeddedPiMessageWithOutcome(
   text: string,
   options?: EmbeddedPiQueueMessageOptions,
 ): EmbeddedPiQueueMessageOutcome {
-  const prepared = prepareEmbeddedPiQueueMessage(sessionId, text);
+  const prepared = prepareEmbeddedPiQueueMessage(sessionId, text, options);
   if (prepared.kind === "complete") {
     return prepared.outcome;
   }
@@ -169,7 +170,7 @@ export async function queueEmbeddedPiMessageWithOutcomeAsync(
   text: string,
   options?: EmbeddedPiQueueMessageOptions,
 ): Promise<EmbeddedPiQueueMessageOutcome> {
-  const prepared = prepareEmbeddedPiQueueMessage(sessionId, text);
+  const prepared = prepareEmbeddedPiQueueMessage(sessionId, text, options);
   if (prepared.kind === "complete") {
     return prepared.outcome;
   }
@@ -192,6 +193,7 @@ export async function queueEmbeddedPiMessageWithOutcomeAsync(
 function prepareEmbeddedPiQueueMessage(
   sessionId: string,
   text: string,
+  options?: EmbeddedPiQueueMessageOptions,
 ): PreparedEmbeddedPiQueueMessage {
   const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
   if (!handle) {
@@ -218,6 +220,18 @@ function prepareEmbeddedPiQueueMessage(
   if (handle.isCompacting()) {
     diag.debug(`queue message failed: sessionId=${sessionId} reason=compacting`);
     return { kind: "complete", outcome: createQueueFailureOutcome(sessionId, "compacting") };
+  }
+  if (
+    options?.sourceReplyDeliveryMode === "message_tool_only" &&
+    handle.sourceReplyDeliveryMode !== "message_tool_only"
+  ) {
+    diag.debug(
+      `queue message failed: sessionId=${sessionId} reason=source_reply_delivery_mode_mismatch`,
+    );
+    return {
+      kind: "complete",
+      outcome: createQueueFailureOutcome(sessionId, "source_reply_delivery_mode_mismatch"),
+    };
   }
   return { kind: "embedded_run", handle };
 }

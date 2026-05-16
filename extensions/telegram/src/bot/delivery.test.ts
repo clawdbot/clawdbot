@@ -328,6 +328,33 @@ describe("deliverReplies", () => {
     });
   });
 
+  it("uses presentation button labels as fallback text for presentation-only replies", async () => {
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 4, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [
+        {
+          presentation: {
+            blocks: [{ type: "buttons", buttons: [{ label: "Retry", value: "cmd:retry" }] }],
+          },
+        },
+      ],
+      runtime,
+      bot,
+    });
+
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(firstMockCallArg(sendMessage, 0)).toBe("123");
+    expect(firstMockCallArg(sendMessage, 1)).toContain("Retry");
+    expectRecordFields(mockCallArg(sendMessage, 0, 2), {
+      reply_markup: {
+        inline_keyboard: [[{ text: "Retry", callback_data: "cmd:retry" }]],
+      },
+    });
+  });
+
   it("reports message_sent success=false when hooks blank out a text-only reply", async () => {
     messageHookRunner.hasHooks.mockImplementation(
       (name: string) => name === "message_sending" || name === "message_sent",
@@ -452,7 +479,7 @@ describe("deliverReplies", () => {
     expect(triggerInternalHook).not.toHaveBeenCalled();
   });
 
-  it("rewrites exact NO_REPLY for direct Telegram sessions", async () => {
+  it("suppresses exact NO_REPLY for direct Telegram sessions", async () => {
     const runtime = createRuntime(false);
     const sendMessage = vi.fn().mockResolvedValue({ message_id: 12, chat: { id: "123" } });
     const bot = createBot({ sendMessage });
@@ -464,13 +491,10 @@ describe("deliverReplies", () => {
       bot,
     });
 
-    expect(sendMessage).toHaveBeenCalledTimes(1);
-    const text = firstSendText(sendMessage);
-    expect(text).not.toBe("");
-    expect(text.trim()).not.toBe("NO_REPLY");
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("uses the policy session key for exact NO_REPLY policy", async () => {
+  it("uses the policy session key when suppressing exact NO_REPLY", async () => {
     const runtime = createRuntime(false);
     const sendMessage = vi.fn().mockResolvedValue({ message_id: 121, chat: { id: "123" } });
     const bot = createBot({ sendMessage });
@@ -483,10 +507,7 @@ describe("deliverReplies", () => {
       bot,
     });
 
-    expect(sendMessage).toHaveBeenCalledTimes(1);
-    const text = firstSendText(sendMessage);
-    expect(text).not.toBe("");
-    expect(text.trim()).not.toBe("NO_REPLY");
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it("suppresses exact NO_REPLY for group Telegram sessions", async () => {

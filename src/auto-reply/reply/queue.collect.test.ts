@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
 import {
@@ -7,6 +7,7 @@ import {
   installQueueRuntimeErrorSilencer,
 } from "./queue.test-helpers.js";
 import { resolveFollowupAuthorizationKey } from "./queue/drain.js";
+import { getExistingFollowupQueue } from "./queue/state.js";
 
 installQueueRuntimeErrorSilencer();
 
@@ -93,6 +94,113 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
     expect(calls[0]?.originatingChannel).toBe("slack");
     expect(calls[0]?.originatingTo).toBe("channel:A");
+  });
+
+  it("collects ordinary user-request followups with current turn kind", async () => {
+    const key = `test-collect-user-request-kind-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      done.resolve();
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "one",
+        currentTurnKind: "user_request",
+        originatingChannel: "slack",
+        originatingTo: "channel:A",
+      }),
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "two",
+        currentTurnKind: "user_request",
+        originatingChannel: "slack",
+        originatingTo: "channel:A",
+      }),
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
+    expect(calls[0]?.prompt).toContain("Queued #1");
+    expect(calls[0]?.prompt).toContain("Queued #2");
+  });
+
+  it("drains runtime-context followups individually instead of collecting them", async () => {
+    const key = `test-collect-runtime-context-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const expectedCalls = 2;
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      if (calls.length >= expectedCalls) {
+        done.resolve();
+      }
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+    const controller = new AbortController();
+    const begin = () => () => undefined;
+    const lifecycle = { onComplete: () => undefined };
+
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "[OpenClaw room event]",
+        originatingChannel: "telegram",
+        originatingTo: "-100123",
+      }),
+      settings,
+    );
+    const first = getExistingFollowupQueue(key)?.items[0];
+    if (!first) {
+      throw new Error("expected queued followup");
+    }
+    first.currentTurnKind = "room_event";
+    first.currentTurnContext = { text: "room event body" };
+    first.abortSignal = controller.signal;
+    first.deliveryCorrelations = [{ begin }];
+    first.queuedLifecycle = lifecycle;
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "second",
+        originatingChannel: "telegram",
+        originatingTo: "-100123",
+      }),
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.prompt).toBe("[OpenClaw room event]");
+    expect(calls[0]?.currentTurnKind).toBe("room_event");
+    expect(calls[0]?.currentTurnContext?.text).toBe("room event body");
+    expect(calls[0]?.abortSignal).toBe(controller.signal);
+    expect(calls[0]?.deliveryCorrelations?.[0]?.begin).toBe(begin);
+    expect(calls[0]?.queuedLifecycle).toBe(lifecycle);
+    expect(calls[1]?.prompt).toBe("second");
   });
 
   it("carries image payloads across collected batches", async () => {
@@ -848,6 +956,46 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.prompt).toContain("- first");
   });
 
+  it("clears overflow summaries when aborts empty the queue", async () => {
+    const key = `test-overflow-summary-aborted-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const cleaned: FollowupRun[] = [];
+    const settings: QueueSettings = {
+      mode: "followup",
+      debounceMs: 0,
+      cap: 1,
+      dropPolicy: "summarize",
+    };
+    const controller = new AbortController();
+    const onComplete = vi.fn();
+
+    enqueueFollowupRun(key, createRun({ prompt: "dropped" }), settings);
+    enqueueFollowupRun(
+      key,
+      {
+        ...createRun({ prompt: "aborted" }),
+        abortSignal: controller.signal,
+        queuedLifecycle: { onComplete },
+      },
+      settings,
+    );
+    controller.abort();
+
+    scheduleFollowupDrain(key, async (run) => {
+      if (run.abortSignal?.aborted) {
+        cleaned.push(run);
+        return;
+      }
+      calls.push(run);
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(calls).toHaveLength(0);
+    expect(cleaned.map((run) => run.prompt)).toEqual(["aborted"]);
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    expect(getExistingFollowupQueue(key)).toBeUndefined();
+  });
+
   it("includes the overflow summary only in the first split auth group", async () => {
     const key = `test-collect-overflow-summary-once-${Date.now()}`;
     const calls: FollowupRun[] = [];
@@ -1071,6 +1219,156 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.originatingAccountId).toBe("work");
     expect(calls[0]?.originatingThreadId).toBe("1739142736.000100");
     expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
+  });
+
+  it("preserves live item abort metadata on overflow summary followups", async () => {
+    const key = `test-overflow-summary-runtime-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const controller = new AbortController();
+    const onComplete = vi.fn();
+    const begin = vi.fn(() => () => undefined);
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      done.resolve();
+    };
+    const settings: QueueSettings = {
+      mode: "followup",
+      debounceMs: 0,
+      cap: 1,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(
+      key,
+      {
+        ...createRun({ prompt: "dropped ambient" }),
+        currentTurnKind: "room_event",
+        currentTurnContext: { text: "dropped context" },
+      },
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      {
+        ...createRun({ prompt: "live ambient" }),
+        currentTurnKind: "room_event",
+        currentTurnContext: { text: "live context" },
+        abortSignal: controller.signal,
+        deliveryCorrelations: [{ begin }],
+        queuedLifecycle: { onComplete },
+      },
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
+    expect(calls[0]?.currentTurnKind).toBe("room_event");
+    expect(calls[0]?.currentTurnContext?.text).toBe("live context");
+    expect(calls[0]?.abortSignal).toBe(controller.signal);
+    expect(calls[0]?.queuedLifecycle?.onComplete).toBe(onComplete);
+    expect(calls[0]?.deliveryCorrelations?.[0]?.begin).toBe(begin);
+  });
+
+  it("keeps summarized room-event lifecycle until the overflow summary drains", async () => {
+    const key = `test-overflow-summary-lifecycle-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const controller = new AbortController();
+    const onComplete = vi.fn();
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      done.resolve();
+    };
+    const settings: QueueSettings = {
+      mode: "followup",
+      debounceMs: 0,
+      cap: 1,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(
+      key,
+      {
+        ...createRun({ prompt: "dropped ambient" }),
+        currentTurnKind: "room_event",
+        currentTurnContext: { text: "dropped context" },
+        abortSignal: controller.signal,
+        queuedLifecycle: { onComplete },
+      },
+      settings,
+    );
+    enqueueFollowupRun(key, createRun({ prompt: "live followup" }), settings);
+    controller.abort();
+
+    expect(onComplete).not.toHaveBeenCalled();
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
+    expect(calls[0]?.currentTurnKind).toBeUndefined();
+    expect(calls[0]?.currentTurnContext).toBeUndefined();
+    expect(calls[0]?.abortSignal).toBeUndefined();
+    expect(onComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it("completes summarized room-event lifecycle when overflow summary delivery fails", async () => {
+    const key = `test-overflow-summary-lifecycle-failure-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const firstAttempt = createDeferred<void>();
+    const releaseRetry = createDeferred<void>();
+    const done = createDeferred<void>();
+    const onComplete = vi.fn();
+    let attempts = 0;
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      attempts += 1;
+      if (attempts === 1) {
+        firstAttempt.resolve();
+        throw new Error("transient failure");
+      }
+      await releaseRetry.promise;
+      done.resolve();
+    };
+    const settings: QueueSettings = {
+      mode: "followup",
+      debounceMs: 0,
+      cap: 1,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(
+      key,
+      {
+        ...createRun({ prompt: "dropped ambient" }),
+        currentTurnKind: "room_event",
+        currentTurnContext: { text: "dropped context" },
+        queuedLifecycle: { onComplete },
+      },
+      settings,
+    );
+    enqueueFollowupRun(key, createRun({ prompt: "live followup" }), settings);
+
+    scheduleFollowupDrain(key, runFollowup);
+    await firstAttempt.promise;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    expect(onComplete).toHaveBeenCalledTimes(1);
+    expect(getExistingFollowupQueue(key)?.summarySources).toHaveLength(0);
+
+    releaseRetry.resolve();
+    await done.promise;
+
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
+    expect(calls[1]?.prompt).toContain("- dropped ambient");
+    expect(onComplete).toHaveBeenCalledTimes(1);
   });
 });
 

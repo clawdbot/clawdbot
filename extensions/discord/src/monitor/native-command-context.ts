@@ -74,7 +74,7 @@ export function buildDiscordNativeCommandContext(params: BuildDiscordNativeComma
       : undefined,
     MemberRoleIds: params.memberRoleIds,
     GroupSystemPrompt: groupSystemPrompt,
-    UntrustedContext: untrustedContext,
+    UntrustedStructuredContext: untrustedContext,
     OwnerAllowFrom: ownerAllowFrom,
     SenderName: params.user.globalName ?? params.user.username,
     SenderId: params.user.id,

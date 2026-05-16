@@ -260,12 +260,8 @@ describe("routeReply", () => {
       agents: {
         defaults: {
           silentReply: {
-            direct: "disallow",
             group: "allow",
             internal: "allow",
-          },
-          silentReplyRewrite: {
-            direct: true,
           },
         },
       },
@@ -289,37 +285,26 @@ describe("routeReply", () => {
     expect(session.conversationType).toBeUndefined();
   });
 
-  it("uses explicit policy conversation type to preserve routed direct silent replies", async () => {
+  it("uses explicit policy conversation type to suppress routed direct silent replies", async () => {
     const cfg = {
       agents: {
         defaults: {
           silentReply: {
-            direct: "disallow",
             internal: "allow",
-          },
-          silentReplyRewrite: {
-            direct: true,
           },
         },
       },
     } as unknown as OpenClawConfig;
 
-    const res = await routeReply({
-      payload: { text: SILENT_REPLY_TOKEN },
-      channel: "slack",
-      to: "channel:C123",
-      cfg,
-      sessionKey: "agent:main:main",
-      policySessionKey: "agent:main:main",
-      policyConversationType: "direct",
-    });
-
-    expect(res.ok).toBe(true);
-    expect(lastDeliveryPayload().text).toBe(SILENT_REPLY_TOKEN);
-    const session = lastDelivery().session as Record<string, unknown>;
-    expect(session.key).toBe("agent:main:main");
-    expect(session.policyKey).toBe("agent:main:main");
-    expect(session.conversationType).toBe("direct");
+    await expectSlackNoDelivery(
+      { text: SILENT_REPLY_TOKEN },
+      {
+        cfg,
+        sessionKey: "agent:main:main",
+        policySessionKey: "agent:main:main",
+        policyConversationType: "direct",
+      },
+    );
   });
 
   it("applies responsePrefix when routing", async () => {

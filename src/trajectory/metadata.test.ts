@@ -109,7 +109,6 @@ describe("trajectory metadata", () => {
       migrationProviderIds: [],
       memoryEmbeddingProviderIds: [],
       agentHarnessIds: ["pi"],
-      gatewayMethods: [],
       cliCommands: [],
       services: [],
       gatewayDiscoveryServiceIds: [],

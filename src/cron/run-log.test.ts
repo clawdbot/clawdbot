@@ -225,6 +225,36 @@ describe("cron run log", () => {
     });
   });
 
+  it("filters run-log pages by runId", async () => {
+    await withRunLogDir("openclaw-cron-log-runid-", async (dir) => {
+      const logPath = path.join(dir, "runs", "job-1.jsonl");
+
+      await appendCronRunLog(logPath, {
+        ts: 1,
+        jobId: "job-1",
+        action: "finished",
+        status: "error",
+        runId: "manual:job-1:1:0",
+      });
+      await appendCronRunLog(logPath, {
+        ts: 2,
+        jobId: "job-1",
+        action: "finished",
+        status: "ok",
+        runId: "manual:job-1:2:0",
+      });
+
+      const page = await readCronRunLogEntriesPage(logPath, {
+        runId: "manual:job-1:2:0",
+        limit: 10,
+      });
+
+      expect(page.entries).toHaveLength(1);
+      expect(page.entries[0]?.runId).toBe("manual:job-1:2:0");
+      expect(page.entries[0]?.status).toBe("ok");
+    });
+  });
+
   it("ignores invalid and non-finished lines while preserving delivery fields", async () => {
     await withRunLogDir("openclaw-cron-log-filter-", async (dir) => {
       const logPath = path.join(dir, "runs", "job-1.jsonl");
@@ -242,6 +272,10 @@ describe("cron run log", () => {
             delivered: true,
             deliveryStatus: "not-delivered",
             deliveryError: "announce failed",
+            failureNotificationDelivery: {
+              delivered: true,
+              status: "delivered",
+            },
             delivery: {
               intended: { channel: "last", to: null, source: "last" },
               resolved: { ok: true, channel: "telegram", to: "-100", source: "last" },
@@ -260,6 +294,10 @@ describe("cron run log", () => {
       expect(entries[0]?.delivered).toBe(true);
       expect(entries[0]?.deliveryStatus).toBe("not-delivered");
       expect(entries[0]?.deliveryError).toBe("announce failed");
+      expect(entries[0]?.failureNotificationDelivery).toEqual({
+        delivered: true,
+        status: "delivered",
+      });
       expect(entries[0]?.delivery).toEqual({
         intended: { channel: "last", to: null, source: "last" },
         resolved: { ok: true, channel: "telegram", to: "-100", source: "last" },

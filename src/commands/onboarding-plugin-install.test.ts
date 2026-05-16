@@ -163,6 +163,100 @@ describe("ensureOnboardingPluginInstalled", () => {
     refreshPluginRegistryAfterConfigMutation.mockResolvedValue(undefined);
   });
 
+  it("localizes plugin install choices", async () => {
+    const previousLocale = process.env.OPENCLAW_LOCALE;
+    process.env.OPENCLAW_LOCALE = "zh-CN";
+    let captured:
+      | {
+          message: string;
+          options: Array<{
+            value: "clawhub" | "npm" | "local" | "skip";
+            label: string;
+            hint?: string;
+          }>;
+        }
+      | undefined;
+
+    try {
+      await ensureOnboardingPluginInstalled({
+        cfg: {},
+        entry: {
+          pluginId: "qqbot",
+          label: "QQ Bot",
+          install: {
+            npmSpec: "@openclaw/qqbot@beta",
+          },
+        },
+        prompter: {
+          select: vi.fn(async (input) => {
+            captured = input;
+            return "skip";
+          }),
+        } as never,
+        runtime: {} as never,
+      });
+
+      expect(captured?.message).toBe("安装 QQ Bot 插件？");
+      expect(captured?.options).toEqual([
+        { value: "npm", label: "从 npm 下载（@openclaw/qqbot@beta）" },
+        { value: "skip", label: "暂时跳过" },
+      ]);
+    } finally {
+      if (previousLocale === undefined) {
+        delete process.env.OPENCLAW_LOCALE;
+      } else {
+        process.env.OPENCLAW_LOCALE = previousLocale;
+      }
+    }
+  });
+
+  it("localizes plugin install progress and enablement failures", async () => {
+    const previousLocale = process.env.OPENCLAW_LOCALE;
+    process.env.OPENCLAW_LOCALE = "zh-CN";
+    enablePluginInConfig.mockReturnValueOnce({
+      config: {},
+      enabled: false,
+      pluginId: "demo-plugin",
+      reason: "blocked by allowlist",
+    });
+    installPluginFromNpmSpec.mockResolvedValueOnce({
+      ok: true,
+      pluginId: "demo-plugin",
+      targetDir: "/tmp/demo-plugin",
+      version: "1.2.3",
+    });
+    const note = vi.fn(async () => {});
+    const progress = vi.fn(() => ({ update: vi.fn(), stop: vi.fn() }));
+
+    try {
+      await ensureOnboardingPluginInstalled({
+        cfg: {},
+        entry: {
+          pluginId: "demo-plugin",
+          label: "Demo Plugin",
+          install: {
+            npmSpec: "@demo/plugin@1.2.3",
+          },
+        },
+        prompter: {
+          select: vi.fn(async () => "npm"),
+          note,
+          progress,
+        } as never,
+        runtime: { error: vi.fn() } as never,
+      });
+
+      expect(progress).toHaveBeenCalledWith("正在安装 Demo Plugin 插件...");
+      expect(note).toHaveBeenCalledWith("无法启用 Demo Plugin：blocked by allowlist。", "插件安装");
+    } finally {
+      if (previousLocale === undefined) {
+        delete process.env.OPENCLAW_LOCALE;
+      } else {
+        process.env.OPENCLAW_LOCALE = previousLocale;
+      }
+    }
+  });
+
   it("refuses non-skipped installs in Nix mode before package work", async () => {
     const previous = process.env.OPENCLAW_NIX_MODE;
     process.env.OPENCLAW_NIX_MODE = "1";

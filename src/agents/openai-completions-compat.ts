@@ -20,6 +20,7 @@ type OpenAICompletionsCompatDefaults = {
   thinkingFormat: "openai" | "openrouter" | "deepseek" | "zai";
   visibleReasoningDetailTypes: string[];
   supportsStrictMode: boolean;
+  requiresReasoningContentOnAssistantMessages: boolean;
 };
 
 type DetectedOpenAICompletionsCompat = {
@@ -56,6 +57,9 @@ export function resolveOpenAICompletionsCompatDefaults(
   const isDeepSeek =
     endpointClass === "deepseek-native" ||
     (isDefaultRoute && isDefaultRouteProvider(input.provider, "deepseek"));
+  const isXiaomi =
+    endpointClass === "xiaomi-native" ||
+    (isDefaultRoute && isDefaultRouteProvider(input.provider, "xiaomi"));
   const isNonStandard =
     endpointClass === "cerebras-native" ||
     endpointClass === "chutes-native" ||
@@ -63,10 +67,12 @@ export function resolveOpenAICompletionsCompatDefaults(
     endpointClass === "mistral-public" ||
     endpointClass === "opencode-native" ||
     endpointClass === "xai-native" ||
+    isXiaomi ||
     isZai ||
     (isDefaultRoute &&
       isDefaultRouteProvider(input.provider, "cerebras", "chutes", "deepseek", "opencode", "xai"));
   const isOpenRouterLike = input.provider === "openrouter" || endpointClass === "openrouter";
+  const isLocalEndpoint = endpointClass === "local";
   const usesMaxTokens =
     endpointClass === "chutes-native" ||
     endpointClass === "mistral-public" ||
@@ -83,17 +89,20 @@ export function resolveOpenAICompletionsCompatDefaults(
       !usesExplicitProxyLikeEndpoint,
     supportsUsageInStreaming:
       supportsOpenAICompletionsStreamingUsageCompat ||
-      (!isNonStandard && (!usesConfiguredNonOpenAIEndpoint || supportsNativeStreamingUsageCompat)),
+      (!isNonStandard &&
+        (isLocalEndpoint || !usesConfiguredNonOpenAIEndpoint || supportsNativeStreamingUsageCompat)),
     maxTokensField: usesMaxTokens ? "max_tokens" : "max_completion_tokens",
-    thinkingFormat: isDeepSeek
-      ? "deepseek"
-      : isZai
-        ? "zai"
-        : isOpenRouterLike
-          ? "openrouter"
-          : "openai",
+    thinkingFormat:
+      isDeepSeek || isXiaomi
+        ? "deepseek"
+        : isZai
+          ? "zai"
+          : isOpenRouterLike
+            ? "openrouter"
+            : "openai",
     visibleReasoningDetailTypes: isOpenRouterLike ? ["response.output_text", "response.text"] : [],
     supportsStrictMode: !isZai && !usesConfiguredNonOpenAIEndpoint,
+    requiresReasoningContentOnAssistantMessages: isDeepSeek || isXiaomi,
   };
 }
 

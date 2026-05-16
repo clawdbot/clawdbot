@@ -23,6 +23,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { GATEWAY_SERVICE_KIND, GATEWAY_SERVICE_MARKER } from "../../daemon/constants.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
+import { disableCurrentOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import { resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
 import {
   readGatewayServiceState,
@@ -1824,7 +1825,7 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
   assertConfigWriteAllowedInCurrentMode();
 
   const root = await resolveUpdateRoot();
-  let configSnapshot = await readConfigFileSnapshot();
+  let configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
   const requestedChannel = normalizeUpdateChannel(opts.channel);
   if (opts.channel && !requestedChannel) {
     defaultRuntime.error(`--channel must be "stable", "beta", or "dev" (got "${opts.channel}")`);
@@ -1849,7 +1850,7 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
       repair: true,
       yes: opts.yes === true,
     });
-    configSnapshot = await readConfigFileSnapshot();
+    configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
     if (requestedChannel) {
       configSnapshot = await persistRequestedUpdateChannel({
         configSnapshot,
@@ -1926,6 +1927,7 @@ async function persistRequestedUpdateChannel(params: {
   const requestedChannel = params.requestedChannel;
 
   const mutation = await mutateConfigFileWithRetry({
+    writeOptions: { skipPluginValidation: true },
     mutate: (draft) => {
       draft.update = {
         ...draft.update,
@@ -2259,6 +2261,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     return;
   }
   if (opts.dryRun !== true) {
+    await disableCurrentOpenClawUpdateLaunchdJob().catch(() => undefined);
     assertConfigWriteAllowedInCurrentMode();
   }
   const updateStepTimeoutMs = timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS;
@@ -2285,7 +2288,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     }
 
     const postCoreConfigSnapshot = await persistRequestedUpdateChannel({
-      configSnapshot: await readConfigFileSnapshot(),
+      configSnapshot: await readConfigFileSnapshot({ skipPluginValidation: true }),
       requestedChannel: postCoreRequestedChannel,
     });
 
@@ -2335,7 +2338,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     return;
   }
 
-  let configSnapshot = await readConfigFileSnapshot();
+  let configSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
   if (opts.channel && !opts.dryRun && !configSnapshot.valid) {
     configSnapshot = await maybeRepairLegacyConfigForUpdateChannel({
       configSnapshot,
@@ -2668,7 +2671,9 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   });
 
   let postUpdateConfigSnapshot =
-    result.status === "ok" && !opts.dryRun ? await readConfigFileSnapshot() : configSnapshot;
+    result.status === "ok" && !opts.dryRun
+      ? await readConfigFileSnapshot({ skipPluginValidation: true })
+      : configSnapshot;
   if (!shouldResumePostCoreInFreshProcess) {
     postUpdateConfigSnapshot = await persistRequestedUpdateChannel({
       configSnapshot: postUpdateConfigSnapshot,

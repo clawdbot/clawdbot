@@ -646,6 +646,24 @@ describe("fetchCopilotModelCatalog", () => {
     ).rejects.toThrow(/HTTP 401/);
   });
 
+  it("throws provider-owned errors for malformed successful /models payloads", async () => {
+    for (const payload of [[], { data: {} }, { data: [null] }]) {
+      const fetchImpl = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => payload,
+      });
+
+      await expect(
+        fetchCopilotModelCatalog({
+          copilotApiToken: "tid=test",
+          baseUrl: "https://api.githubcopilot.com",
+          fetchImpl: fetchImpl as unknown as typeof fetch,
+        }),
+      ).rejects.toThrow("Copilot /models: malformed JSON response");
+    }
+  });
+
   it("rejects empty token / baseUrl synchronously before fetching", async () => {
     const fetchImpl = vi.fn();
 

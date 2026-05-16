@@ -630,6 +630,7 @@ export function runAgentAttempt(params: {
     toolsAllow: params.opts.toolsAllow,
     internalEvents: params.opts.internalEvents,
     inputProvenance: params.opts.inputProvenance,
+    sourceReplyDeliveryMode: params.opts.sourceReplyDeliveryMode,
     streamParams: params.opts.streamParams,
     agentDir: params.agentDir,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,

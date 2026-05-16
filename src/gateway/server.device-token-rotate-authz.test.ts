@@ -429,7 +429,7 @@ describe("gateway device.token.rotate/revoke ownership guard (IDOR)", () => {
           clientName: GATEWAY_CLIENT_NAMES.MACOS_APP,
           clientDisplayName: "node-token-metadata-mismatch",
           clientVersion: "1.0.0",
-          platform: "darwin",
+          platform: "macos",
           mode: GATEWAY_CLIENT_MODES.UI,
           scopes: [],
           commands: ["system.run"],

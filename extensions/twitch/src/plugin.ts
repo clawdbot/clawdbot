@@ -13,7 +13,10 @@ import {
   createPairingPrefixStripper,
 } from "openclaw/plugin-sdk/channel-pairing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
+import {
+  buildPassiveProbedChannelStatusSummary,
+  runStoppablePassiveMonitor,
+} from "openclaw/plugin-sdk/extension-shared";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
@@ -180,14 +183,22 @@ export const twitchPlugin: ChannelPlugin<ResolvedTwitchAccount> =
 
           ctx.log?.info(`Starting Twitch connection for ${account.username}`);
 
-          // Lazy import: the monitor pulls the reply pipeline; avoid ESM init cycles.
-          const { monitorTwitchProvider } = await import("./monitor.js");
-          await monitorTwitchProvider({
-            account,
-            accountId,
-            config: ctx.cfg,
-            runtime: ctx.runtime,
+          // Keep startAccount pending until abort fires; otherwise the channel
+          // supervisor reads the settled task as `channel exited without an
+          // error` and triggers a restart loop. See #60071.
+          await runStoppablePassiveMonitor({
             abortSignal: ctx.abortSignal,
+            start: async () => {
+              // Lazy import: the monitor pulls the reply pipeline; avoid ESM init cycles.
+              const { monitorTwitchProvider } = await import("./monitor.js");
+              return monitorTwitchProvider({
+                account,
+                accountId,
+                config: ctx.cfg,
+                runtime: ctx.runtime,
+                abortSignal: ctx.abortSignal,
+              });
+            },
           });
         },
         stopAccount: async (ctx): Promise<void> => {

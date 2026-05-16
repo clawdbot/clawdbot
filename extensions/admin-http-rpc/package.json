@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/admin-http-rpc",
+  "version": "2026.5.16",
+  "private": true,
+  "description": "OpenClaw admin HTTP RPC endpoint",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

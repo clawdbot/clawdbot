@@ -66,6 +66,7 @@ vi.mock("./runtime-api.js", () => ({
   buildHistoryContextFromEntries: (_p: { currentMessage: string }) => _p.currentMessage,
   createChannelMessageReplyPipeline: () => ({ onModelSelected: undefined }),
   formatInboundEnvelope: (p: { body: string }) => p.body,
+  isControlCommandMessage: () => false,
   logVerbose: () => {},
   normalizeE164: (v: string) => v,
   readStoreAllowFromForDmPolicy: async () => [],

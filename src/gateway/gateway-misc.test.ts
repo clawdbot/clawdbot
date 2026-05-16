@@ -58,22 +58,12 @@ vi.mock("ws", () => ({
     send = vi.fn();
 
     constructor(url: unknown, opts: unknown) {
-      const agent = (global as Record<string, unknown>)["GLOBAL_AGENT"];
       wsMockState.last = {
         url,
         opts,
-        noProxyDuringConstruction:
-          typeof agent === "object" && agent !== null
-            ? (agent as Record<string, unknown>)["NO_PROXY"]
-            : undefined,
-        httpProxyDuringConstruction:
-          typeof agent === "object" && agent !== null
-            ? (agent as Record<string, unknown>)["HTTP_PROXY"]
-            : undefined,
-        httpsProxyDuringConstruction:
-          typeof agent === "object" && agent !== null
-            ? (agent as Record<string, unknown>)["HTTPS_PROXY"]
-            : undefined,
+        noProxyDuringConstruction: process.env["NO_PROXY"],
+        httpProxyDuringConstruction: process.env["HTTP_PROXY"],
+        httpsProxyDuringConstruction: process.env["HTTPS_PROXY"],
       };
     }
   },
@@ -89,7 +79,10 @@ describe("GatewayClient", () => {
   beforeEach(() => {
     wsMockState.last = null;
     _resetActiveManagedProxyStateForTests();
-    delete (global as Record<string, unknown>)["GLOBAL_AGENT"];
+    delete process.env["NO_PROXY"];
+    delete process.env["no_proxy"];
+    delete process.env["HTTP_PROXY"];
+    delete process.env["HTTPS_PROXY"];
   });
 
   async function withControlUiRoot(
@@ -153,9 +146,9 @@ describe("GatewayClient", () => {
     expect(last?.opts.agent).toBeUndefined();
   });
 
-  test("scopes Gateway loopback NO_PROXY to WebSocket construction", () => {
-    const agent = { NO_PROXY: "corp.example.com" };
-    (global as Record<string, unknown>)["GLOBAL_AGENT"] = agent;
+  test("scopes Gateway loopback bypass to WebSocket connection setup without mutating NO_PROXY", () => {
+    process.env["NO_PROXY"] = "corp.example.com";
+    process.env["no_proxy"] = "corp.example.com";
     const registration = registerActiveManagedProxyUrl(
       new URL("http://127.0.0.1:3128"),
       "gateway-only",
@@ -166,21 +159,19 @@ describe("GatewayClient", () => {
       client.start();
       const last = wsMockState.last as { noProxyDuringConstruction: unknown } | null;
 
-      expect(last?.noProxyDuringConstruction).toBe("corp.example.com,127.0.0.1:18789");
-      expect(agent.NO_PROXY).toBe("corp.example.com");
+      expect(last?.noProxyDuringConstruction).toBe("corp.example.com");
+      expect(process.env["NO_PROXY"]).toBe("corp.example.com");
+      expect(process.env["no_proxy"]).toBe("corp.example.com");
     } finally {
       stopActiveManagedProxyRegistration(registration);
-      delete (global as Record<string, unknown>)["GLOBAL_AGENT"];
     }
   });
 
-  test("uses a scoped direct construction path for IPv6 loopback in Gateway-only proxy mode", () => {
-    const agent = {
-      NO_PROXY: "corp.example.com",
-      HTTP_PROXY: "http://127.0.0.1:3128",
-      HTTPS_PROXY: "http://127.0.0.1:3128",
-    };
-    (global as Record<string, unknown>)["GLOBAL_AGENT"] = agent;
+  test("scopes IPv6 loopback bypass during Gateway-only proxy mode connection setup", () => {
+    process.env["NO_PROXY"] = "corp.example.com";
+    process.env["no_proxy"] = "corp.example.com";
+    process.env["HTTP_PROXY"] = "http://127.0.0.1:3128";
+    process.env["HTTPS_PROXY"] = "http://127.0.0.1:3128";
     const registration = registerActiveManagedProxyUrl(
       new URL("http://127.0.0.1:3128"),
       "gateway-only",
@@ -195,15 +186,15 @@ describe("GatewayClient", () => {
         httpsProxyDuringConstruction: unknown;
       } | null;
 
-      expect(last?.noProxyDuringConstruction).toBe("corp.example.com,[::1]:18789");
-      expect(last?.httpProxyDuringConstruction).toBeNull();
-      expect(last?.httpsProxyDuringConstruction).toBeNull();
-      expect(agent.NO_PROXY).toBe("corp.example.com");
-      expect(agent.HTTP_PROXY).toBe("http://127.0.0.1:3128");
-      expect(agent.HTTPS_PROXY).toBe("http://127.0.0.1:3128");
+      expect(last?.noProxyDuringConstruction).toBe("corp.example.com");
+      expect(last?.httpProxyDuringConstruction).toBe("http://127.0.0.1:3128");
+      expect(last?.httpsProxyDuringConstruction).toBe("http://127.0.0.1:3128");
+      expect(process.env["NO_PROXY"]).toBe("corp.example.com");
+      expect(process.env["no_proxy"]).toBe("corp.example.com");
+      expect(process.env["HTTP_PROXY"]).toBe("http://127.0.0.1:3128");
+      expect(process.env["HTTPS_PROXY"]).toBe("http://127.0.0.1:3128");
     } finally {
       stopActiveManagedProxyRegistration(registration);
-      delete (global as Record<string, unknown>)["GLOBAL_AGENT"];
     }
   });
 
@@ -785,7 +776,7 @@ describe("node subscription manager", () => {
           client: {
             id: "node-client",
             version: "1.0.0",
-            platform: "darwin",
+            platform: "macos",
             mode: "node",
           },
           device: { id: "node-a" },
@@ -828,7 +819,7 @@ describe("resolveNodeCommandAllowlist", () => {
     const allow = resolveNodeCommandAllowlist(
       {},
       {
-        platform: "ios 26.0",
+        platform: "iOS 26.0",
         deviceFamily: "iPhone",
       },
     );
@@ -851,7 +842,7 @@ describe("resolveNodeCommandAllowlist", () => {
     const allow = resolveNodeCommandAllowlist(
       {},
       {
-        platform: "android 16",
+        platform: "Android 16",
         deviceFamily: "Android",
       },
     );
@@ -875,6 +866,7 @@ describe("resolveNodeCommandAllowlist", () => {
       {
         platform: "macOS 26.3.1",
         deviceFamily: "Mac",
+        approvedCommands: ["screen.snapshot"],
       },
     );
 
@@ -888,8 +880,9 @@ describe("resolveNodeCommandAllowlist", () => {
     const allow = resolveNodeCommandAllowlist(
       {},
       {
-        platform: "Windows_NT",
+        platform: "windows",
         deviceFamily: "Windows",
+        approvedCommands: ["screen.snapshot", "system.run", "system.which"],
       },
     );
 

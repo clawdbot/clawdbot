@@ -73,6 +73,7 @@ function runStatusFromWaitPayload(payload: unknown): RunResult["status"] {
     stopReason === "cancelled" ||
     stopReason === "canceled" ||
     stopReason === "killed" ||
+    stopReason === "auth-revoked" ||
     stopReason === "rpc" ||
     stopReason === "user" ||
     (record.aborted === true && stopReason === "stop")

@@ -491,7 +491,13 @@ function isAllowedPluginRecoveryIssue(
       issue.message.includes("plugin path not found")) ||
     (issue.path === "plugins" &&
       typeof issue.message === "string" &&
-      issue.message.includes("requires compiled runtime output"))
+      issue.message.includes("requires compiled runtime output")) ||
+    (issue.path === `plugins.entries.${pluginId}` &&
+      typeof issue.message === "string" &&
+      issue.message.includes("requires compiled runtime output")) ||
+    (issue.path === "tools.web.search.provider" &&
+      typeof issue.message === "string" &&
+      issue.message.includes(`plugin "${pluginId}"`))
   );
 }
 

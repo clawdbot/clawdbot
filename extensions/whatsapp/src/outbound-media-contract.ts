@@ -214,6 +214,8 @@ async function transcodeToWhatsAppVoiceOpus(params: {
             "libopus",
             "-b:a",
             WHATSAPP_VOICE_BITRATE,
+            "-f",
+            "ogg",
             outputPath,
           ]);
         },

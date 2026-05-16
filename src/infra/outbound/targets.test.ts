@@ -79,6 +79,27 @@ describe("resolveOutboundTarget defaultTo config fallback", () => {
     expect(res).toEqual({ ok: true, to: "default-room" });
   });
 
+  it("passes bootstrap opt-in to channel plugin resolution", () => {
+    const cfg: OpenClawConfig = {
+      channels: { alpha: { defaultTo: "Alpha:Room One" } },
+    };
+
+    const res = resolveOutboundTarget({
+      channel: "alpha",
+      to: "Alpha:Override Room",
+      cfg,
+      mode: "explicit",
+      allowBootstrap: true,
+    });
+
+    expect(res).toEqual({ ok: true, to: "override-room" });
+    expect(mocks.resolveOutboundChannelPlugin).toHaveBeenCalledWith({
+      channel: "alpha",
+      cfg,
+      allowBootstrap: true,
+    });
+  });
+
   it("explicit --reply-to overrides defaultTo", () => {
     const res = resolveOutboundTarget({
       channel: "alpha",

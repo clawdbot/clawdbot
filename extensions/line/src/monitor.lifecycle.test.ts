@@ -357,6 +357,47 @@ describe("monitorLineProvider lifecycle", () => {
     secondMonitor.stop();
   });
 
+  it("acknowledges shared-path POST requests before matched event processing completes", async () => {
+    const monitor = await monitorLineProvider({
+      channelAccessToken: "token",
+      channelSecret: "secret", // pragma: allowlist secret
+      accountId: "default",
+      config: {} as OpenClawConfig,
+      runtime: {} as RuntimeEnv,
+    });
+
+    let releaseWebhook: (() => void) | undefined;
+    const bot = createLineBotMock.mock.results[0]?.value as {
+      handleWebhook: ReturnType<typeof vi.fn>;
+    };
+    bot.handleWebhook.mockImplementation(
+      async () =>
+        await new Promise<void>((resolve) => {
+          releaseWebhook = resolve;
+        }),
+    );
+
+    const route = requireRegisteredRoute();
+    const payload = JSON.stringify({ events: [{ type: "message" }] });
+    const signature = crypto.createHmac("SHA256", "secret").update(payload).digest("base64");
+    const req = Object.assign(createMockIncomingRequest([payload]), {
+      method: "POST",
+      headers: { "x-line-signature": signature },
+    }) as unknown as IncomingMessage;
+    const res = createRouteResponse();
+
+    await route.handler(req, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(res.headersSent).toBe(true);
+    expect(bot.handleWebhook).toHaveBeenCalledTimes(1);
+    if (!releaseWebhook) {
+      throw new Error("expected pending LINE webhook handler");
+    }
+    releaseWebhook();
+    monitor.stop();
+  });
+
   it("rejects ambiguous shared-path webhook signatures", async () => {
     const firstMonitor = await monitorLineProvider({
       channelAccessToken: "first-token",

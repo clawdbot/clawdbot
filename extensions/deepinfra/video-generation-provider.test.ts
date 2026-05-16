@@ -166,4 +166,29 @@ describe("deepinfra video generation provider", () => {
       fileName: "video-1.webm",
     });
   });
+
+  it("rejects malformed base64 data URL video outputs", async () => {
+    const release = vi.fn(async () => undefined);
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          video_url: "data:video/webm;base64,not-base64!",
+          request_id: "req_bad_base64",
+          inference_status: { status: "succeeded" },
+        }),
+      },
+      release,
+    });
+
+    const provider = buildDeepInfraVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "deepinfra",
+        model: "deepinfra/Pixverse/Pixverse-T2V",
+        prompt: "A malformed WebM data URL",
+        cfg: {},
+      }),
+    ).rejects.toThrow("DeepInfra video response returned malformed data URL base64");
+    expect(release).toHaveBeenCalledOnce();
+  });
 });

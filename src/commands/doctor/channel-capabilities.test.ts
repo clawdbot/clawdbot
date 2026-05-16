@@ -33,7 +33,7 @@ describe("doctor channel capabilities", () => {
     expect(getDoctorChannelCapabilities("msteams")).toEqual({
       dmAllowFromMode: "topOnly",
       groupModel: "hybrid",
-      groupAllowFromFallbackToAllowFrom: false,
+      groupAllowFromFallbackToAllowFrom: true,
       warnOnEmptyGroupSenderAllowlist: true,
     });
   });

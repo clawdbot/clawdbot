@@ -220,6 +220,7 @@ export function startAcpSpawnParentStreamRelay(params: {
       sessionKey: resolveEventSessionKey(parentSessionKey, params.mainKey, params.sessionScope),
       contextKey,
       deliveryContext: params.deliveryContext,
+      forceSenderIsOwnerFalse: true,
       trusted: false,
     });
     wake();

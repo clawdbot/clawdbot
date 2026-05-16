@@ -16,6 +16,10 @@ on:
         description: Existing successful preflight workflow run id to promote without rebuilding
         required: false
         type: string
+      full_release_validation_run_id:
+        description: Successful Full Release Validation run id for this tag/SHA, required for real publish
+        required: false
+        type: string
       npm_dist_tag:
         description: npm dist-tag to publish to
         required: true
@@ -287,6 +291,20 @@ jobs:
           NODE
           echo "dir=$ARTIFACT_DIR" >> "$GITHUB_OUTPUT"
 
+      - name: Verify prepared npm tarball install
+        env:
+          PREFLIGHT_ARTIFACT_DIR: ${{ steps.packed_tarball.outputs.dir }}
+        run: |
+          set -euo pipefail
+          TARBALL_PATH="$(find "$PREFLIGHT_ARTIFACT_DIR" -maxdepth 1 -type f -name '*.tgz' -print | sort | tail -n 1)"
+          if [[ -z "$TARBALL_PATH" ]]; then
+            echo "Prepared preflight tarball not found." >&2
+            ls -la "$PREFLIGHT_ARTIFACT_DIR" >&2 || true
+            exit 1
+          fi
+          PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+          node --import tsx scripts/openclaw-npm-prepublish-verify.ts "$TARBALL_PATH" "$PACKAGE_VERSION"
+
       - name: Upload dependency release evidence
         uses: actions/upload-artifact@v7
         with:
@@ -320,10 +338,15 @@ jobs:
       - name: Require preflight artifact promotion on real publish
         env:
           PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
+          FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
         run: |
           set -euo pipefail
           if [[ -z "${PREFLIGHT_RUN_ID}" ]]; then
             echo "Real publish requires preflight_run_id from a successful npm preflight run." >&2
+            exit 1
+          fi
+          if [[ -z "${FULL_RELEASE_VALIDATION_RUN_ID}" ]]; then
+            echo "Real publish requires full_release_validation_run_id from a successful Full Release Validation run." >&2
             exit 1
           fi
 
@@ -393,6 +416,16 @@ jobs:
           RUN_JSON="$(gh run view "$PREFLIGHT_RUN_ID" --repo "$GITHUB_REPOSITORY" --json workflowName,headBranch,event,conclusion,url)"
           printf '%s' "$RUN_JSON" | node -e 'const fs = require("node:fs"); const run = JSON.parse(fs.readFileSync(0, "utf8")); const checks = [["workflowName", "OpenClaw NPM Release"], ["headBranch", process.env.EXPECTED_PREFLIGHT_BRANCH], ["event", "workflow_dispatch"], ["conclusion", "success"]]; for (const [key, expected] of checks) { if (run[key] !== expected) { console.error(`Referenced npm preflight run ${process.env.PREFLIGHT_RUN_ID} must have ${key}=${expected}, got ${run[key] ?? "<missing>"}.`); process.exit(1); } } console.log(`Using npm preflight run ${process.env.PREFLIGHT_RUN_ID}: ${run.url}`);'
 
+      - name: Verify full release validation run metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
+          EXPECTED_WORKFLOW_BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          RUN_JSON="$(gh run view "$FULL_RELEASE_VALIDATION_RUN_ID" --repo "$GITHUB_REPOSITORY" --json workflowName,headBranch,event,status,conclusion,url)"
+          printf '%s' "$RUN_JSON" | node -e 'const fs = require("node:fs"); const run = JSON.parse(fs.readFileSync(0, "utf8")); const checks = [["workflowName", "Full Release Validation"], ["headBranch", process.env.EXPECTED_WORKFLOW_BRANCH], ["event", "workflow_dispatch"], ["status", "completed"], ["conclusion", "success"]]; for (const [key, expected] of checks) { if (run[key] !== expected) { console.error(`Referenced full release validation run ${process.env.FULL_RELEASE_VALIDATION_RUN_ID} must have ${key}=${expected}, got ${run[key] ?? "<missing>"}.`); process.exit(1); } } console.log(`Using full release validation run ${process.env.FULL_RELEASE_VALIDATION_RUN_ID}: ${run.url}`);'
+
       - name: Download prepared npm tarball
         uses: actions/download-artifact@v8
         with:
@@ -400,6 +433,15 @@ jobs:
           path: preflight-tarball
           repository: ${{ github.repository }}
           run-id: ${{ inputs.preflight_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Download full release validation manifest
+        uses: actions/download-artifact@v8
+        with:
+          name: full-release-validation-${{ inputs.full_release_validation_run_id }}
+          path: full-release-validation
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.full_release_validation_run_id }}
           github-token: ${{ github.token }}
 
       - name: Validate release tag and package metadata
@@ -455,6 +497,32 @@ jobs:
           actual_tarball_sha256="$(sha256sum "preflight-tarball/$ARTIFACT_TARBALL_NAME" | awk '{print $1}')"
           if [[ "$actual_tarball_sha256" != "$ARTIFACT_TARBALL_SHA256" ]]; then
             echo "Prepared preflight tarball digest mismatch." >&2
+            exit 1
+          fi
+
+      - name: Verify full release validation target
+        run: |
+          set -euo pipefail
+          EXPECTED_RELEASE_SHA="$(git rev-parse HEAD)"
+          MANIFEST_FILE="full-release-validation/full-release-validation-manifest.json"
+          if [[ ! -f "$MANIFEST_FILE" ]]; then
+            echo "Full release validation manifest is missing." >&2
+            ls -la full-release-validation >&2 || true
+            exit 1
+          fi
+          WORKFLOW_NAME="$(jq -r '.workflowName // ""' "$MANIFEST_FILE")"
+          TARGET_SHA="$(jq -r '.targetSha // ""' "$MANIFEST_FILE")"
+          RERUN_GROUP="$(jq -r '.rerunGroup // ""' "$MANIFEST_FILE")"
+          if [[ "$WORKFLOW_NAME" != "Full Release Validation" ]]; then
+            echo "Full release validation manifest workflow mismatch: $WORKFLOW_NAME" >&2
+            exit 1
+          fi
+          if [[ "$TARGET_SHA" != "$EXPECTED_RELEASE_SHA" ]]; then
+            echo "Full release validation target SHA mismatch: expected $EXPECTED_RELEASE_SHA, got $TARGET_SHA" >&2
+            exit 1
+          fi
+          if [[ "$RERUN_GROUP" != "all" ]]; then
+            echo "Full release validation must run rerun_group=all before npm publish; got $RERUN_GROUP" >&2
             exit 1
           fi
 

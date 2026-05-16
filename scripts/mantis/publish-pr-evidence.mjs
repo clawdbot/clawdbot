@@ -1,13 +1,7 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
-import {
-  existsSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
+import { createHash, createHmac } from "node:crypto";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -119,12 +113,183 @@ export function loadEvidenceManifest(manifestPath) {
   };
 }
 
-function renderArtifactFileList(artifacts) {
-  const links = artifacts.map((artifact) => `- ${artifact.label}: \`${artifact.targetPath}\``);
+function encodePathForUrl(input) {
+  return input
+    .split("/")
+    .filter(Boolean)
+    .map((part) => encodeURIComponent(part))
+    .join("/");
+}
+
+function artifactUrl(rawBase, artifact) {
+  return `${rawBase}/${encodePathForUrl(artifact.targetPath)}`;
+}
+
+function requireEnv(env, name) {
+  const value = env[name]?.trim();
+  if (!value) {
+    throw new Error(`Missing ${name}.`);
+  }
+  return value;
+}
+
+function objectStorageConfig(env = process.env) {
+  return {
+    accessKeyId: requireEnv(env, "MANTIS_ARTIFACT_R2_ACCESS_KEY_ID"),
+    bucket: requireEnv(env, "MANTIS_ARTIFACT_R2_BUCKET"),
+    endpoint: requireEnv(env, "MANTIS_ARTIFACT_R2_ENDPOINT").replace(/\/+$/u, ""),
+    publicBaseUrl: requireEnv(env, "MANTIS_ARTIFACT_R2_PUBLIC_BASE_URL").replace(/\/+$/u, ""),
+    region: requireEnv(env, "MANTIS_ARTIFACT_R2_REGION"),
+    secretAccessKey: requireEnv(env, "MANTIS_ARTIFACT_R2_SECRET_ACCESS_KEY"),
+  };
+}
+
+function digestHex(value) {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function hmac(key, value, encoding) {
+  return createHmac("sha256", key).update(value).digest(encoding);
+}
+
+function signingKey({ date, region, secretAccessKey }) {
+  const dateKey = hmac(`AWS4${secretAccessKey}`, date);
+  const regionKey = hmac(dateKey, region);
+  const serviceKey = hmac(regionKey, "s3");
+  return hmac(serviceKey, "aws4_request");
+}
+
+function s3Path({ bucket, key }) {
+  return `/${encodePathForUrl(bucket)}/${encodePathForUrl(key)}`;
+}
+
+function contentType(filePath) {
+  const extension = path.extname(filePath).toLowerCase();
+  return (
+    {
+      ".gif": "image/gif",
+      ".html": "text/html; charset=utf-8",
+      ".json": "application/json",
+      ".md": "text/markdown; charset=utf-8",
+      ".mp4": "video/mp4",
+      ".png": "image/png",
+      ".webm": "video/webm",
+    }[extension] ?? "application/octet-stream"
+  );
+}
+
+function signedPutRequest({ artifact, body, config, key, now = new Date() }) {
+  const url = new URL(`${config.endpoint}${s3Path({ bucket: config.bucket, key })}`);
+  const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/gu, "");
+  const date = amzDate.slice(0, 8);
+  const payloadHash = digestHex(body);
+  const headers = {
+    "content-type": contentType(artifact.targetPath),
+    host: url.host,
+    "x-amz-content-sha256": payloadHash,
+    "x-amz-date": amzDate,
+  };
+  const canonicalHeaders = Object.entries(headers)
+    .toSorted(([left], [right]) => left.localeCompare(right))
+    .map(([name, value]) => `${name}:${value}\n`)
+    .join("");
+  const signedHeaders = Object.keys(headers).toSorted().join(";");
+  const canonicalRequest = [
+    "PUT",
+    url.pathname,
+    "",
+    canonicalHeaders,
+    signedHeaders,
+    payloadHash,
+  ].join("\n");
+  const scope = `${date}/${config.region}/s3/aws4_request`;
+  const stringToSign = ["AWS4-HMAC-SHA256", amzDate, scope, digestHex(canonicalRequest)].join("\n");
+  const signature = hmac(
+    signingKey({ date, region: config.region, secretAccessKey: config.secretAccessKey }),
+    stringToSign,
+    "hex",
+  );
+  return {
+    body,
+    headers: {
+      "content-type": headers["content-type"],
+      "x-amz-content-sha256": headers["x-amz-content-sha256"],
+      "x-amz-date": headers["x-amz-date"],
+      authorization: `AWS4-HMAC-SHA256 Credential=${config.accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`,
+    },
+    method: "PUT",
+    url,
+  };
+}
+
+function byLane(artifacts, kind) {
+  const lanes = new Map();
+  for (const artifact of artifacts) {
+    if (artifact.kind !== kind) {
+      continue;
+    }
+    lanes.set(artifact.lane, artifact);
+  }
+  return lanes;
+}
+
+function findPair(artifacts, kind, leftLane, rightLane) {
+  const lanes = byLane(artifacts, kind);
+  const left = lanes.get(leftLane);
+  const right = lanes.get(rightLane);
+  return left && right ? { left, right } : null;
+}
+
+function renderPairTable({ pair, rawBase }) {
+  const { left, right } = pair;
+  if (!left || !right) {
+    return "";
+  }
+  return [
+    '<table width="100%">',
+    "  <thead>",
+    "    <tr>",
+    `      <th width="50%">${left.label}</th>`,
+    `      <th width="50%">${right.label}</th>`,
+    "    </tr>",
+    "  </thead>",
+    "  <tbody>",
+    "    <tr>",
+    `      <td width="50%" align="center"><img src="${artifactUrl(rawBase, left)}" width="100%" alt="${left.alt ?? left.label}"></td>`,
+    `      <td width="50%" align="center"><img src="${artifactUrl(rawBase, right)}" width="100%" alt="${right.alt ?? right.label}"></td>`,
+    "    </tr>",
+    "  </tbody>",
+    "</table>",
+    "",
+  ].join("\n");
+}
+
+function renderSingleImageTables({ artifacts, rawBase, pairedKeys }) {
+  const renderedPairs = new Set(pairedKeys);
+  return artifacts
+    .filter(
+      (artifact) => artifact.inline && !renderedPairs.has(`${artifact.kind}:${artifact.lane}`),
+    )
+    .map((artifact) => {
+      const width = Math.min(Number(artifact.width ?? 720) || 720, 900);
+      return [
+        `**${artifact.label}**`,
+        "",
+        `<img src="${artifactUrl(rawBase, artifact)}" width="${width}" alt="${artifact.alt ?? artifact.label}">`,
+        "",
+      ].join("\n");
+    })
+    .join("\n");
+}
+
+function renderLinkList({ artifacts, kind, rawBase, title }) {
+  const links = artifacts
+    .filter((artifact) => artifact.kind === kind)
+    .map((artifact) => `- [${artifact.label}](${artifactUrl(rawBase, artifact)})`);
   if (links.length === 0) {
     return "";
   }
-  return ["Artifact files:", ...links, ""].join("\n");
+  return [`${title}:`, ...links, ""].join("\n");
 }
 
 function laneLine(label, lane) {
@@ -147,12 +312,23 @@ export function renderEvidenceComment({
   artifactUrl: actionsArtifactUrl,
   manifest,
   marker,
+  rawBase,
   requestSource,
   runUrl,
+  treeUrl,
 }) {
   const comparison = manifest.comparison ?? {};
   const baseline = comparison.baseline;
   const candidate = comparison.candidate;
+  const pairs = [
+    findPair(manifest.artifacts, "timeline", "baseline", "candidate"),
+    findPair(manifest.artifacts, "desktopScreenshot", "baseline", "candidate"),
+    findPair(manifest.artifacts, "motionPreview", "baseline", "candidate"),
+  ].filter(Boolean);
+  const pairedKeys = pairs.flatMap((pair) => [
+    `${pair.left.kind}:${pair.left.lane}`,
+    `${pair.right.kind}:${pair.right.lane}`,
+  ]);
   const lines = [
     marker,
     `## ${manifest.title}`,
@@ -182,8 +358,37 @@ export function renderEvidenceComment({
     lines.push(`- Overall: \`${comparison.pass}\``);
   }
   lines.push("");
-  lines.push(renderArtifactFileList(manifest.artifacts));
-  lines.push(`Raw QA files: ${actionsArtifactUrl}`);
+
+  const pairedSections = pairs.map((pair) => renderPairTable({ pair, rawBase }));
+
+  lines.push(...pairedSections);
+  const singleTables = renderSingleImageTables({
+    artifacts: manifest.artifacts,
+    pairedKeys,
+    rawBase,
+  });
+  if (singleTables) {
+    lines.push(singleTables);
+  }
+  const motionClips = renderLinkList({
+    artifacts: manifest.artifacts,
+    kind: "motionClip",
+    rawBase,
+    title: "Motion-trimmed clips",
+  });
+  if (motionClips) {
+    lines.push(motionClips);
+  }
+  const fullVideos = renderLinkList({
+    artifacts: manifest.artifacts,
+    kind: "fullVideo",
+    rawBase,
+    title: "Full videos",
+  });
+  if (fullVideos) {
+    lines.push(fullVideos);
+  }
+  lines.push(`Raw QA files: ${treeUrl ?? rawBase}`);
   return `${lines.join("\n").replace(/\n{3,}/gu, "\n\n")}\n`;
 }
 
@@ -193,6 +398,81 @@ function run(command, args, options = {}) {
     stdio: options.stdio ?? ["ignore", "pipe", "inherit"],
     ...options,
   });
+}
+
+export async function publishArtifactFiles({
+  artifactRoot,
+  fetchImpl = fetch,
+  manifest,
+  storageConfig = objectStorageConfig(),
+}) {
+  const safeArtifactRoot = normalizeTargetPath(artifactRoot);
+  const publicRoot = `${storageConfig.publicBaseUrl}/${encodePathForUrl(safeArtifactRoot)}`;
+  for (const artifact of manifest.artifacts) {
+    const key = normalizeTargetPath(`${safeArtifactRoot}/${artifact.targetPath}`);
+    const request = signedPutRequest({
+      artifact,
+      body: readFileSync(artifact.source),
+      config: storageConfig,
+      key,
+    });
+    const response = await fetchImpl(request.url, {
+      body: request.body,
+      headers: request.headers,
+      method: request.method,
+    });
+    if (!response.ok) {
+      const responseText = await response.text();
+      throw new Error(
+        `Failed to upload Mantis artifact ${artifact.targetPath}: ${response.status} ${response.statusText}\n${responseText}`,
+      );
+    }
+  }
+  const indexArtifact = {
+    targetPath: "index.json",
+  };
+  const indexRequest = signedPutRequest({
+    artifact: indexArtifact,
+    body: Buffer.from(
+      `${JSON.stringify(
+        {
+          artifacts: manifest.artifacts.map((artifact) => ({
+            kind: artifact.kind,
+            label: artifact.label,
+            lane: artifact.lane,
+            targetPath: artifact.targetPath,
+            url: artifactUrl(publicRoot, artifact),
+          })),
+          comparison: manifest.comparison,
+          id: manifest.id,
+          rawBase: publicRoot,
+          scenario: manifest.scenario,
+          summary: manifest.summary,
+          title: manifest.title,
+        },
+        null,
+        2,
+      )}\n`,
+    ),
+    config: storageConfig,
+    key: normalizeTargetPath(`${safeArtifactRoot}/${indexArtifact.targetPath}`),
+  });
+  const indexResponse = await fetchImpl(indexRequest.url, {
+    body: indexRequest.body,
+    headers: indexRequest.headers,
+    method: indexRequest.method,
+  });
+  if (!indexResponse.ok) {
+    const responseText = await indexResponse.text();
+    throw new Error(
+      `Failed to upload Mantis artifact ${indexArtifact.targetPath}: ${indexResponse.status} ${indexResponse.statusText}\n${responseText}`,
+    );
+  }
+  return {
+    artifactRoot: safeArtifactRoot,
+    rawBase: publicRoot,
+    treeUrl: artifactUrl(publicRoot, indexArtifact),
+  };
 }
 
 function upsertPrComment({ body, marker, prNumber, repo }) {
@@ -237,7 +517,7 @@ function upsertPrComment({ body, marker, prNumber, repo }) {
   }
 }
 
-export function publishEvidence(rawArgs = process.argv.slice(2)) {
+export async function publishEvidence(rawArgs = process.argv.slice(2)) {
   const args = parseArgs(rawArgs);
   const required = ["manifest", "target_pr", "artifact_root", "marker"];
   for (const key of required) {
@@ -256,18 +536,20 @@ export function publishEvidence(rawArgs = process.argv.slice(2)) {
   if (!ghToken) {
     throw new Error("Missing GH_TOKEN or GITHUB_TOKEN.");
   }
-  if (!args.artifact_url) {
-    throw new Error("Missing --artifact-url. Mantis evidence must use Actions artifacts, not Git.");
-  }
 
   const manifest = loadEvidenceManifest(args.manifest);
-  normalizeTargetPath(args.artifact_root);
+  const published = await publishArtifactFiles({
+    artifactRoot: args.artifact_root,
+    manifest,
+  });
   const body = renderEvidenceComment({
     artifactUrl: args.artifact_url,
     manifest,
     marker: args.marker,
+    rawBase: published.rawBase,
     requestSource: args.request_source,
     runUrl: args.run_url,
+    treeUrl: published.treeUrl,
   });
   upsertPrComment({
     body,
@@ -280,7 +562,7 @@ export function publishEvidence(rawArgs = process.argv.slice(2)) {
 const executedPath = process.argv[1] ? path.resolve(process.argv[1]) : "";
 if (executedPath === fileURLToPath(import.meta.url)) {
   try {
-    publishEvidence();
+    await publishEvidence();
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);

@@ -128,7 +128,10 @@ function hasCustomIdentity(identity?: SlackSendIdentity): boolean {
 
 function buildSlackUnfurlPayload(options?: SlackUnfurlOptions) {
   return {
-    ...(typeof options?.unfurlLinks === "boolean" ? { unfurl_links: options.unfurlLinks } : {}),
+    // Default unfurl_links to false so bot messages don't expand inline
+    // link previews (Slack message links, URLs, etc.) unless the operator
+    // explicitly opts in via `channels.slack.unfurlLinks: true`.
+    unfurl_links: options?.unfurlLinks ?? false,
     ...(typeof options?.unfurlMedia === "boolean" ? { unfurl_media: options.unfurlMedia } : {}),
   };
 }

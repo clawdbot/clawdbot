@@ -7,6 +7,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { MsgContext } from "../templating.js";
 
 const DEFAULT_INBOUND_DEDUPE_TTL_MS = 20 * 60_000;
@@ -39,11 +40,7 @@ const resolveInboundPeerId = (ctx: MsgContext) =>
 
 function resolveInboundDedupeSessionScope(ctx: MsgContext): string {
   const sessionKey =
-    (ctx.CommandSource === "native"
-      ? normalizeOptionalString(ctx.CommandTargetSessionKey)
-      : undefined) ||
-    normalizeOptionalString(ctx.SessionKey) ||
-    "";
+    resolveCommandTurnTargetSessionKey(ctx) || normalizeOptionalString(ctx.SessionKey) || "";
   if (!sessionKey) {
     return "";
   }

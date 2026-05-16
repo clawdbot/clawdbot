@@ -1,7 +1,8 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "../src/plugin-sdk/test-helpers/public-artifacts.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
@@ -18,7 +19,35 @@ const BROAD_PUBLIC_SOURCE_ARTIFACT_BASENAMES = new Set(["api.js", "runtime-api.j
 const ROOTDIR_BOUNDARY_CANARY_RE =
   /(^|\/)__rootdir_boundary_canary__\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/u;
 
+function listGitFiles(dir: string): string[] | null {
+  const relativeRoot = path.relative(repoRoot, dir).replaceAll(path.sep, "/");
+  if (!relativeRoot || relativeRoot.startsWith("..") || path.isAbsolute(relativeRoot)) {
+    return null;
+  }
+  const result = spawnSync("git", ["ls-files", "--", relativeRoot], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout
+    .split("\n")
+    .map((line) => line.trim().replaceAll("\\", "/"))
+    .filter((line) => line.length > 0)
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
 function walk(dir: string, entries: string[] = []): string[] {
+  const gitFiles = listGitFiles(dir);
+  if (gitFiles) {
+    entries.push(
+      ...gitFiles.filter((file) => file.endsWith(".test.ts") || file.endsWith(".test.tsx")),
+    );
+    return entries;
+  }
+
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const fullPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
@@ -37,6 +66,19 @@ function walk(dir: string, entries: string[] = []): string[] {
 }
 
 function walkCode(dir: string, entries: string[] = []): string[] {
+  const gitFiles = listGitFiles(dir);
+  if (gitFiles) {
+    entries.push(
+      ...gitFiles.filter((file) => {
+        if (!file.endsWith(".ts") && !file.endsWith(".tsx")) {
+          return false;
+        }
+        return !ROOTDIR_BOUNDARY_CANARY_RE.test(file);
+      }),
+    );
+    return entries;
+  }
+
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const fullPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
@@ -100,6 +142,15 @@ function getImportBasename(importPath: string): string {
 }
 
 function collectBundledPluginIds(): Set<string> {
+  const extensionFiles = listGitFiles(path.join(repoRoot, "extensions"));
+  if (extensionFiles) {
+    return new Set(
+      extensionFiles
+        .map((file) => /^extensions\/([^/]+)\//u.exec(file)?.[1])
+        .filter((pluginId): pluginId is string => Boolean(pluginId)),
+    );
+  }
+
   return new Set(
     fs
       .readdirSync(path.join(repoRoot, "extensions"), { withFileTypes: true })
@@ -145,6 +196,22 @@ function isAllowedCoreContractSuite(file: string, imports: readonly string[]): b
 }
 
 describe("non-extension test boundaries", () => {
+  it("lists boundary scan files from git without walking repo roots", () => {
+    const readdirSync = vi.spyOn(fs, "readdirSync");
+    try {
+      const srcTests = walk(path.join(repoRoot, "src"));
+      const srcCode = walkCode(path.join(repoRoot, "src"));
+      const pluginIds = collectBundledPluginIds();
+
+      expect(srcTests.length).toBeGreaterThan(0);
+      expect(srcCode.length).toBeGreaterThan(0);
+      expect(pluginIds.size).toBeGreaterThan(0);
+      expect(readdirSync).not.toHaveBeenCalled();
+    } finally {
+      readdirSync.mockRestore();
+    }
+  });
+
   it("keeps plugin-owned behavior suites under the bundled plugin tree", () => {
     const testFiles = [
       ...walk(path.join(repoRoot, "src")),

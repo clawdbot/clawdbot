@@ -8,6 +8,7 @@ import {
   type AbortCutoff,
 } from "./abort-cutoff.js";
 import {
+  abortSessionRunTarget,
   formatAbortReplyText,
   isAbortTrigger,
   resolveSessionEntryForKey,
@@ -25,11 +26,6 @@ type AbortTarget = {
   key?: string;
   sessionId?: string;
 };
-
-async function abortEmbeddedPiRunForSession(sessionId: string): Promise<void> {
-  const { abortEmbeddedPiRun } = await import("../../agents/pi-embedded-runner/runs.js");
-  abortEmbeddedPiRun(sessionId);
-}
 
 function resolveAbortTarget(params: {
   ctx: { CommandTargetSessionKey?: string | null };
@@ -90,12 +86,7 @@ async function applyAbortTarget(params: {
   abortCutoff?: AbortCutoff;
 }) {
   const { abortTarget } = params;
-  if (abortTarget.key) {
-    replyRunRegistry.abort(abortTarget.key);
-  }
-  if (abortTarget.sessionId) {
-    await abortEmbeddedPiRunForSession(abortTarget.sessionId);
-  }
+  abortSessionRunTarget({ key: abortTarget.key, sessionId: abortTarget.sessionId });
 
   const persisted = await persistAbortTargetEntry({
     entry: abortTarget.entry,

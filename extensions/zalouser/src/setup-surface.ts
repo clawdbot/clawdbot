@@ -7,6 +7,7 @@ import {
   mergeAllowFromEntries,
   normalizeAccountId,
   patchScopedAccountConfig,
+  createSetupTranslator,
   type ChannelSetupDmPolicy,
   type ChannelSetupWizard,
   type DmPolicy,
@@ -27,12 +28,14 @@ import {
   waitForZaloQrLogin,
 } from "./zalo-js.js";
 
+const t = createSetupTranslator();
+
 const channel = "zalouser" as const;
-const ZALOUSER_ALLOW_FROM_PLACEHOLDER = "Alice, 123456789, or leave empty to configure later";
-const ZALOUSER_GROUPS_PLACEHOLDER = "Family, Work, 123456789, or leave empty for now";
-const ZALOUSER_DM_ACCESS_TITLE = "Zalo Personal DM access";
-const ZALOUSER_ALLOWLIST_TITLE = "Zalo Personal allowlist";
-const ZALOUSER_GROUPS_TITLE = "Zalo groups";
+const ZALOUSER_ALLOW_FROM_PLACEHOLDER = t("wizard.zalouser.allowFromPlaceholder");
+const ZALOUSER_GROUPS_PLACEHOLDER = t("wizard.zalouser.groupsPlaceholder");
+const ZALOUSER_DM_ACCESS_TITLE = t("wizard.zalouser.dmAccessTitle");
+const ZALOUSER_ALLOWLIST_TITLE = t("wizard.zalouser.allowlistTitle");
+const ZALOUSER_GROUPS_TITLE = t("wizard.zalouser.groupsTitle");
 
 function parseZalouserEntries(raw: string): string[] {
   return raw
@@ -132,13 +135,13 @@ async function noteZalouserHelp(
 ): Promise<void> {
   await prompter.note(
     [
-      "Zalo Personal Account login via QR code.",
+      t("wizard.zalouser.helpQrLogin"),
       "",
-      "This plugin uses zca-js directly (no external CLI dependency).",
+      t("wizard.zalouser.helpZcaJs"),
       "",
       `Docs: ${formatDocsLink("/channels/zalouser", "zalouser")}`,
     ].join("\n"),
-    "Zalo Personal Setup",
+    t("wizard.zalouser.setupTitle"),
   );
 }
 
@@ -153,7 +156,7 @@ async function promptZalouserAllowFrom(params: {
 
   while (true) {
     const entry = await prompter.text({
-      message: "Zalouser allowFrom (name or user id)",
+      message: t("wizard.zalouser.allowFromPrompt"),
       placeholder: ZALOUSER_ALLOW_FROM_PLACEHOLDER,
       initialValue: existingAllowFrom.length > 0 ? existingAllowFrom.join(", ") : undefined,
     });
@@ -161,9 +164,11 @@ async function promptZalouserAllowFrom(params: {
     if (parts.length === 0) {
       await prompter.note(
         [
-          "No DM allowlist entries added yet.",
-          "Direct chats will stay blocked until you add people later.",
-          `Tip: use \`${formatCliCommand("openclaw directory peers list --channel zalouser")}\` to look up people after onboarding.`,
+          t("wizard.zalouser.noDmAllowlist"),
+          t("wizard.zalouser.directChatsBlocked"),
+          t("wizard.zalouser.peersLookupTip", {
+            command: formatCliCommand("openclaw directory peers list --channel zalouser"),
+          }),
         ].join("\n"),
         ZALOUSER_ALLOWLIST_TITLE,
       );
@@ -180,7 +185,7 @@ async function promptZalouserAllowFrom(params: {
     const unresolved = resolvedEntries.filter((item) => !item.resolved).map((item) => item.input);
     if (unresolved.length > 0) {
       await prompter.note(
-        `Could not resolve: ${unresolved.join(", ")}. Use numeric user ids or exact friend names.`,
+        t("wizard.zalouser.couldNotResolve", { entries: unresolved.join(", ") }),
         ZALOUSER_ALLOWLIST_TITLE,
       );
       continue;
@@ -253,25 +258,25 @@ async function promptZalouserQuickstartDmPolicy(params: {
 
   await prompter.note(
     [
-      "Direct chats are configured separately from group chats.",
-      "- pairing (default): unknown people get a pairing code",
-      "- allowlist: only listed people can DM",
-      "- open: anyone can DM",
-      "- disabled: ignore DMs",
+      t("wizard.zalouser.dmHelpSeparate"),
+      t("wizard.zalouser.dmHelpPairing"),
+      t("wizard.zalouser.dmHelpAllowlist"),
+      t("wizard.zalouser.dmHelpOpen"),
+      t("wizard.zalouser.dmHelpDisabled"),
       "",
       `Current: dmPolicy=${existingPolicy}, allowFrom=${existingLabel}`,
-      "If you choose allowlist now, you can leave it empty and add people later.",
+      t("wizard.zalouser.dmHelpAllowlistEmpty"),
     ].join("\n"),
     ZALOUSER_DM_ACCESS_TITLE,
   );
 
   const policy = (await prompter.select({
-    message: "Zalo Personal DM policy",
+    message: t("wizard.zalouser.dmPolicyPrompt"),
     options: [
-      { value: "pairing", label: "Pairing (recommended)" },
-      { value: "allowlist", label: "Allowlist (specific users only)" },
-      { value: "open", label: "Open (public inbound DMs)" },
-      { value: "disabled", label: "Disabled (ignore DMs)" },
+      { value: "pairing", label: t("wizard.channels.dmPolicyPairing") },
+      { value: "allowlist", label: t("wizard.channels.dmPolicyAllowlistOption") },
+      { value: "open", label: t("wizard.channels.dmPolicyOpenOption") },
+      { value: "disabled", label: t("wizard.channels.dmPolicyDisabledOption") },
     ],
     initialValue: existingPolicy,
   })) as DmPolicy;
@@ -291,10 +296,10 @@ export { zalouserSetupAdapter } from "./setup-core.js";
 export const zalouserSetupWizard: ChannelSetupWizard = {
   channel,
   status: {
-    configuredLabel: "logged in",
-    unconfiguredLabel: "needs QR login",
-    configuredHint: "recommended · logged in",
-    unconfiguredHint: "recommended · QR login",
+    configuredLabel: t("wizard.channels.statusLoggedIn"),
+    unconfiguredLabel: t("wizard.channels.statusNeedsQrLogin"),
+    configuredHint: t("wizard.channels.statusRecommendedLoggedIn"),
+    unconfiguredHint: t("wizard.channels.statusRecommendedQrLogin"),
     configuredScore: 1,
     unconfiguredScore: 15,
     resolveConfigured: async ({ cfg, accountId }) => {
@@ -324,7 +329,7 @@ export const zalouserSetupWizard: ChannelSetupWizard = {
     if (!alreadyAuthenticated) {
       await noteZalouserHelp(prompter);
       const wantsLogin = await prompter.confirm({
-        message: "Login via QR code now?",
+        message: t("wizard.zalouser.loginQrPrompt"),
         initialValue: true,
       });
 
@@ -336,14 +341,14 @@ export const zalouserSetupWizard: ChannelSetupWizard = {
             [
               start.message,
               qrPath
-                ? `QR image saved to: ${qrPath}`
-                : "Could not write QR image file; use gateway web login UI instead.",
-              "Scan + approve on phone, then continue.",
+                ? t("wizard.zalouser.qrImageSaved", { path: qrPath })
+                : t("wizard.zalouser.qrImageWriteFailed"),
+              t("wizard.zalouser.scanApproveContinue"),
             ].join("\n"),
-            "QR Login",
+            t("wizard.zalouser.qrLoginTitle"),
           );
           const scanned = await prompter.confirm({
-            message: "Did you scan and approve the QR on your phone?",
+            message: t("wizard.zalouser.qrScannedPrompt"),
             initialValue: true,
           });
           if (scanned) {
@@ -351,15 +356,18 @@ export const zalouserSetupWizard: ChannelSetupWizard = {
               profile: account.profile,
               timeoutMs: 120_000,
             });
-            await prompter.note(waited.message, waited.connected ? "Success" : "Login pending");
+            await prompter.note(
+              waited.message,
+              waited.connected ? t("common.done") : t("wizard.zalouser.loginPendingTitle"),
+            );
           }
         } else {
-          await prompter.note(start.message, "Login pending");
+          await prompter.note(start.message, t("wizard.zalouser.loginPendingTitle"));
         }
       }
     } else {
       const keepSession = await prompter.confirm({
-        message: "Zalo Personal already logged in. Keep session?",
+        message: t("wizard.zalouser.keepSessionPrompt"),
         initialValue: true,
       });
       if (!keepSession) {
@@ -372,13 +380,19 @@ export const zalouserSetupWizard: ChannelSetupWizard = {
         if (start.qrDataUrl) {
           const qrPath = await writeQrDataUrlToTempFile(start.qrDataUrl, account.profile);
           await prompter.note(
-            [start.message, qrPath ? `QR image saved to: ${qrPath}` : undefined]
+            [
+              start.message,
+              qrPath ? t("wizard.zalouser.qrImageSaved", { path: qrPath }) : undefined,
+            ]
               .filter(Boolean)
               .join("\n"),
-            "QR Login",
+            t("wizard.zalouser.qrLoginTitle"),
           );
           const waited = await waitForZaloQrLogin({ profile: account.profile, timeoutMs: 120_000 });
-          await prompter.note(waited.message, waited.connected ? "Success" : "Login pending");
+          await prompter.note(
+            waited.message,
+            waited.connected ? t("common.done") : t("wizard.zalouser.loginPendingTitle"),
+          );
         }
       }
     }
@@ -415,10 +429,12 @@ export const zalouserSetupWizard: ChannelSetupWizard = {
       if (entries.length === 0) {
         await prompter.note(
           [
-            "No group allowlist entries added yet.",
-            "Group chats will stay blocked until you add groups later.",
-            `Tip: use \`${formatCliCommand("openclaw directory groups list --channel zalouser")}\` after onboarding to find group IDs.`,
-            "Mention requirement stays on by default for groups you allow later.",
+            t("wizard.zalouser.noGroupAllowlist"),
+            t("wizard.zalouser.groupChatsBlocked"),
+            t("wizard.zalouser.groupsLookupTip", {
+              command: formatCliCommand("openclaw directory groups list --channel zalouser"),
+            }),
+            t("wizard.zalouser.groupMentionRequirement"),
           ].join("\n"),
           ZALOUSER_GROUPS_TITLE,
         );
@@ -445,7 +461,7 @@ export const zalouserSetupWizard: ChannelSetupWizard = {
         return keys;
       } catch (err) {
         await prompter.note(
-          `Group lookup failed; keeping entries as typed. ${String(err)}`,
+          t("wizard.zalouser.groupLookupFailed", { error: String(err) }),
           ZALOUSER_GROUPS_TITLE,
         );
         return entries.map((entry) => entry.trim()).filter(Boolean);

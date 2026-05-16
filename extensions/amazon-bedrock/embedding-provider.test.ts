@@ -76,4 +76,34 @@ describe("bedrock embedding response parsers", () => {
       "Amazon Bedrock embedding response returned malformed JSON",
     );
   });
+
+  it("rejects non-object embedding JSON", () => {
+    expect(() => __testing.parseSingle("titan-v2", "[]")).toThrow(
+      "Amazon Bedrock embedding response returned malformed JSON",
+    );
+  });
+
+  it("rejects missing single embedding vectors", () => {
+    expect(() => __testing.parseSingle("titan-v2", "{}")).toThrow(
+      "Amazon Bedrock embedding response returned malformed JSON",
+    );
+  });
+
+  it("rejects wrong single embedding vector element types", () => {
+    expect(() => __testing.parseSingle("titan-v2", '{"embedding":[1,"bad"]}')).toThrow(
+      "Amazon Bedrock embedding response returned malformed JSON",
+    );
+  });
+
+  it("rejects missing batch embedding vectors", () => {
+    expect(() => __testing.parseCohereBatch("cohere-v3", "{}")).toThrow(
+      "Amazon Bedrock embedding response returned malformed JSON",
+    );
+  });
+
+  it("rejects wrong batch embedding vector shapes", () => {
+    expect(() =>
+      __testing.parseCohereBatch("cohere-v3", '{"embeddings":[[1],{"bad":true}]}'),
+    ).toThrow("Amazon Bedrock embedding response returned malformed JSON");
+  });
 });

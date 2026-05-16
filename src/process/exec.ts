@@ -250,6 +250,7 @@ export type CommandOptions = {
   env?: NodeJS.ProcessEnv;
   windowsVerbatimArguments?: boolean;
   noOutputTimeoutMs?: number;
+  signal?: AbortSignal;
 };
 
 const WINDOWS_CLOSE_STATE_SETTLE_TIMEOUT_MS = 250;
@@ -263,6 +264,7 @@ export function resolveProcessExitCode(params: {
   timedOut: boolean;
   noOutputTimedOut: boolean;
   killIssuedByTimeout: boolean;
+  killIssuedByAbort?: boolean;
 }): number | null {
   return (
     params.explicitCode ??
@@ -271,7 +273,8 @@ export function resolveProcessExitCode(params: {
     params.resolvedSignal == null &&
     !params.timedOut &&
     !params.noOutputTimedOut &&
-    !params.killIssuedByTimeout
+    !params.killIssuedByTimeout &&
+    !params.killIssuedByAbort
       ? 0
       : null)
   );
@@ -316,7 +319,7 @@ export async function runCommandWithTimeout(
 ): Promise<SpawnResult> {
   const options: CommandOptions =
     typeof optionsOrTimeout === "number" ? { timeoutMs: optionsOrTimeout } : optionsOrTimeout;
-  const { timeoutMs, cwd, input, env, noOutputTimeoutMs } = options;
+  const { timeoutMs, cwd, input, env, noOutputTimeoutMs, signal } = options;
   const hasInput = input !== undefined;
   const resolvedEnv = resolveCommandEnv({ argv, env });
   const stdio = resolveCommandStdio({ hasInput, preferInherit: true });
@@ -324,6 +327,18 @@ export async function runCommandWithTimeout(
     argv,
     windowsVerbatimArguments: options.windowsVerbatimArguments,
   });
+
+  if (signal?.aborted) {
+    return {
+      stdout: "",
+      stderr: "",
+      code: null,
+      signal: null,
+      killed: false,
+      termination: "signal",
+      noOutputTimedOut: false,
+    };
+  }
 
   const child = spawn(invocation.command, invocation.args, {
     stdio,
@@ -344,6 +359,7 @@ export async function runCommandWithTimeout(
     let timedOut = false;
     let noOutputTimedOut = false;
     let killIssuedByTimeout = false;
+    let killIssuedByAbort = false;
     let childExitState: { code: number | null; signal: NodeJS.Signals | null } | null = null;
     let closeFallbackTimer: NodeJS.Timeout | null = null;
     let noOutputTimer: NodeJS.Timeout | null = null;
@@ -351,6 +367,7 @@ export async function runCommandWithTimeout(
       typeof noOutputTimeoutMs === "number" &&
       Number.isFinite(noOutputTimeoutMs) &&
       noOutputTimeoutMs > 0;
+    let removeAbortListener: (() => void) | null = null;
 
     const clearNoOutputTimer = () => {
       if (!noOutputTimer) {
@@ -368,11 +385,15 @@ export async function runCommandWithTimeout(
       closeFallbackTimer = null;
     };
 
-    const killChild = () => {
+    const killChild = (byTimeout = true) => {
       if (settled || typeof child?.kill !== "function") {
         return;
       }
-      killIssuedByTimeout = true;
+      if (byTimeout) {
+        killIssuedByTimeout = true;
+      } else {
+        killIssuedByAbort = true;
+      }
       if (process.platform === "win32" && typeof child.pid === "number" && child.pid > 0) {
         try {
           spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
@@ -406,6 +427,11 @@ export async function runCommandWithTimeout(
       killChild();
     }, timeoutMs);
     armNoOutputTimer();
+    if (signal) {
+      const onAbort = () => killChild(false);
+      signal.addEventListener("abort", onAbort, { once: true });
+      removeAbortListener = () => signal.removeEventListener("abort", onAbort);
+    }
 
     if (hasInput && child.stdin) {
       // Swallow EPIPE from a prematurely-exited child; the exit handler
@@ -431,6 +457,8 @@ export async function runCommandWithTimeout(
       clearTimeout(timer);
       clearNoOutputTimer();
       clearCloseFallbackTimer();
+      removeAbortListener?.();
+      removeAbortListener = null;
       reject(err);
     });
     child.on("exit", (code, signal) => {
@@ -454,6 +482,8 @@ export async function runCommandWithTimeout(
       clearTimeout(timer);
       clearNoOutputTimer();
       clearCloseFallbackTimer();
+      removeAbortListener?.();
+      removeAbortListener = null;
       const resolvedSignal = childExitState?.signal ?? signal ?? child.signalCode ?? null;
       const resolvedCode = resolveProcessExitCode({
         explicitCode: childExitState?.code ?? code,
@@ -463,12 +493,13 @@ export async function runCommandWithTimeout(
         timedOut,
         noOutputTimedOut,
         killIssuedByTimeout,
+        killIssuedByAbort,
       });
       const termination = noOutputTimedOut
         ? "no-output-timeout"
         : timedOut
           ? "timeout"
-          : resolvedSignal != null
+          : resolvedSignal != null || killIssuedByAbort
             ? "signal"
             : "exit";
       const normalizedCode =

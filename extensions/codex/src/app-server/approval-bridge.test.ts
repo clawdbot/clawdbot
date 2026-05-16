@@ -1,5 +1,6 @@
 import {
   callGatewayTool,
+  runBeforeToolCallHook,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -8,9 +9,14 @@ import { buildApprovalResponse, handleCodexAppServerApprovalRequest } from "./ap
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>()),
   callGatewayTool: vi.fn(),
+  runBeforeToolCallHook: vi.fn(async ({ params }: { params: unknown }) => ({
+    blocked: false,
+    params,
+  })),
 }));
 
 const mockCallGatewayTool = vi.mocked(callGatewayTool);
+const mockRunBeforeToolCallHook = vi.mocked(runBeforeToolCallHook);
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -41,7 +47,13 @@ function gatewayCallMethod(callIndex = 0) {
 
 function findApprovalEvent(
   params: EmbeddedRunAttemptParams,
-  fields: { status?: string; approvalId?: string; command?: string; reason?: string },
+  fields: {
+    status?: string;
+    approvalId?: string;
+    command?: string;
+    reason?: string;
+    message?: string;
+  },
 ) {
   const onAgentEvent = params.onAgentEvent as unknown as { mock?: { calls?: unknown[][] } };
   const calls = onAgentEvent.mock?.calls;
@@ -58,7 +70,8 @@ function findApprovalEvent(
       (!fields.status || data.status === fields.status) &&
       (!fields.approvalId || data.approvalId === fields.approvalId) &&
       (!fields.command || data.command === fields.command) &&
-      (!fields.reason || data.reason === fields.reason)
+      (!fields.reason || data.reason === fields.reason) &&
+      (!fields.message || data.message === fields.message)
     ) {
       return data;
     }
@@ -81,6 +94,11 @@ function createParams(): EmbeddedRunAttemptParams {
 describe("Codex app-server approval bridge", () => {
   beforeEach(() => {
     mockCallGatewayTool.mockReset();
+    mockRunBeforeToolCallHook.mockReset();
+    mockRunBeforeToolCallHook.mockImplementation(async ({ params }) => ({
+      blocked: false,
+      params,
+    }));
   });
 
   it("routes command approvals through plugin approvals and accepts allowed commands", async () => {
@@ -116,8 +134,121 @@ describe("Codex app-server approval bridge", () => {
     expect(requestPayload.turnSourceChannel).toBe("telegram");
     expect(requestPayload.turnSourceTo).toBe("chat-1");
     expect(gatewayCallOptions()).toEqual({ expectFinal: false });
+    expect(mockRunBeforeToolCallHook).toHaveBeenCalledWith({
+      toolName: "bash",
+      params: {
+        command: "pnpm test extensions/codex/src/app-server",
+        approval: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "cmd-1",
+          command: "pnpm test extensions/codex/src/app-server",
+        },
+      },
+      toolCallId: "cmd-1",
+      approvalMode: "report",
+      signal: undefined,
+      ctx: {
+        agentId: "main",
+        sessionKey: "agent:main:session-1",
+        channelId: "telegram",
+      },
+    });
     findApprovalEvent(params, { status: "pending", approvalId: "plugin:approval-1" });
     findApprovalEvent(params, { status: "approved", approvalId: "plugin:approval-1" });
+  });
+
+  it("denies command approvals before prompting when OpenClaw tool policy blocks", async () => {
+    const params = createParams();
+    mockRunBeforeToolCallHook.mockResolvedValueOnce({
+      blocked: true,
+      kind: "veto",
+      deniedReason: "plugin-before-tool-call",
+      reason: "blocked by policy",
+    });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-blocked",
+        command: "cat /tmp/private_key",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    expect(result).toEqual({ decision: "decline" });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    findApprovalEvent(params, { status: "denied" });
+  });
+
+  it("denies command approvals when OpenClaw tool policy rewrites params", async () => {
+    const params = createParams();
+    mockRunBeforeToolCallHook.mockResolvedValueOnce({
+      blocked: false,
+      params: {
+        command: "echo rewritten",
+        approval: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "cmd-rewritten",
+          command: "echo rewritten",
+        },
+      },
+    });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-rewritten",
+        command: "cat /tmp/private_key",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    expect(result).toEqual({ decision: "decline" });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    findApprovalEvent(params, {
+      status: "denied",
+      message:
+        "OpenClaw tool policy rewrote Codex app-server approval params; refusing original request.",
+    });
+  });
+
+  it("denies command approvals when OpenClaw tool policy requires approval", async () => {
+    const params = createParams();
+    mockRunBeforeToolCallHook.mockResolvedValueOnce({
+      blocked: true,
+      kind: "failure",
+      deniedReason: "plugin-approval",
+      reason: "Plugin approval required",
+    });
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-needs-approval",
+        command: "pnpm test",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    expect(result).toEqual({ decision: "decline" });
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    findApprovalEvent(params, {
+      status: "denied",
+      message: "Plugin approval required",
+    });
   });
 
   it("describes command approvals from parsed command actions when available", async () => {
@@ -143,6 +274,12 @@ describe("Codex app-server approval bridge", () => {
     const requestPayload = gatewayRequestPayload();
     expect(String(requestPayload.description)).toContain("Command: pnpm test extensions/codex");
     expect(String(requestPayload.description)).not.toContain("bash -lc");
+    expect(mockRunBeforeToolCallHook.mock.calls.at(0)?.[0]).toMatchObject({
+      toolName: "bash",
+      params: {
+        command: "bash -lc 'pnpm test extensions/codex'",
+      },
+    });
     findApprovalEvent(params, { command: "pnpm test extensions/codex" });
   });
 

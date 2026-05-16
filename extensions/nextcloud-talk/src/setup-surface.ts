@@ -4,6 +4,7 @@ import {
   createStandardChannelSetupStatus,
   formatDocsLink,
   setSetupChannelEnabled,
+  createSetupTranslator,
   type ChannelSetupWizard,
 } from "openclaw/plugin-sdk/setup";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -17,6 +18,8 @@ import {
 } from "./setup-core.js";
 import type { CoreConfig } from "./types.js";
 
+const t = createSetupTranslator();
+
 const channel = "nextcloud-talk" as const;
 const CONFIGURE_API_FLAG = "__nextcloudTalkConfigureApiCredentials";
 
@@ -25,10 +28,10 @@ export const nextcloudTalkSetupWizard: ChannelSetupWizard = {
   stepOrder: "text-first",
   status: createStandardChannelSetupStatus({
     channelLabel: "Nextcloud Talk",
-    configuredLabel: "configured",
-    unconfiguredLabel: "needs setup",
-    configuredHint: "configured",
-    unconfiguredHint: "self-hosted chat",
+    configuredLabel: t("wizard.channels.statusConfigured"),
+    unconfiguredLabel: t("wizard.channels.statusNeedsSetup"),
+    configuredHint: t("wizard.channels.statusConfigured"),
+    unconfiguredHint: t("wizard.channels.statusSelfHostedChat"),
     configuredScore: 1,
     unconfiguredScore: 5,
     resolveConfigured: ({ cfg, accountId }) => {
@@ -37,14 +40,16 @@ export const nextcloudTalkSetupWizard: ChannelSetupWizard = {
     },
   }),
   introNote: {
-    title: "Nextcloud Talk bot setup",
+    title: t("wizard.nextcloudTalk.setupTitle"),
     lines: [
-      "1) SSH into your Nextcloud server",
-      '2) Run: ./occ talk:bot:install "OpenClaw" "<shared-secret>" "<webhook-url>" --feature webhook --feature response --feature reaction',
-      "3) Copy the shared secret you used in the command",
-      "4) Enable the bot in your Nextcloud Talk room settings",
-      "Tip: you can also set NEXTCLOUD_TALK_BOT_SECRET in your env.",
-      `Docs: ${formatDocsLink("/channels/nextcloud-talk", "channels/nextcloud-talk")}`,
+      t("wizard.nextcloudTalk.helpSsh"),
+      t("wizard.nextcloudTalk.helpInstallCommand"),
+      t("wizard.nextcloudTalk.helpCopySecret"),
+      t("wizard.nextcloudTalk.helpEnableRoom"),
+      t("wizard.nextcloudTalk.helpEnvTip"),
+      t("wizard.channels.docs", {
+        link: formatDocsLink("/channels/nextcloud-talk", "channels/nextcloud-talk"),
+      }),
     ],
     shouldShow: ({ cfg, accountId }) => {
       const account = resolveNextcloudTalkAccount({ cfg: cfg as CoreConfig, accountId });
@@ -59,7 +64,7 @@ export const nextcloudTalkSetupWizard: ChannelSetupWizard = {
         resolvedAccount.config.apiPasswordFile),
     );
     const configureApiCredentials = await prompter.confirm({
-      message: "Configure optional Nextcloud Talk API credentials for room lookups?",
+      message: t("wizard.nextcloudTalk.configureApiCredentials"),
       initialValue: hasApiCredentials,
     });
     if (!configureApiCredentials) {
@@ -76,11 +81,11 @@ export const nextcloudTalkSetupWizard: ChannelSetupWizard = {
     {
       inputKey: "token",
       providerHint: channel,
-      credentialLabel: "bot secret",
+      credentialLabel: t("wizard.nextcloudTalk.botSecret"),
       preferredEnvVar: "NEXTCLOUD_TALK_BOT_SECRET",
-      envPrompt: "NEXTCLOUD_TALK_BOT_SECRET detected. Use env var?",
-      keepPrompt: "Nextcloud Talk bot secret already configured. Keep it?",
-      inputPrompt: "Enter Nextcloud Talk bot secret",
+      envPrompt: t("wizard.nextcloudTalk.botSecretEnvPrompt"),
+      keepPrompt: t("wizard.nextcloudTalk.botSecretKeep"),
+      inputPrompt: t("wizard.nextcloudTalk.botSecretInput"),
       allowEnv: ({ accountId }) => accountId === DEFAULT_ACCOUNT_ID,
       inspect: ({ cfg, accountId }) => {
         const resolvedAccount = resolveNextcloudTalkAccount({ cfg: cfg as CoreConfig, accountId });
@@ -126,11 +131,11 @@ export const nextcloudTalkSetupWizard: ChannelSetupWizard = {
     {
       inputKey: "password",
       providerHint: "nextcloud-talk-api",
-      credentialLabel: "API password",
+      credentialLabel: t("wizard.nextcloudTalk.apiPassword"),
       preferredEnvVar: "NEXTCLOUD_TALK_API_PASSWORD",
       envPrompt: "",
-      keepPrompt: "Nextcloud Talk API password already configured. Keep it?",
-      inputPrompt: "Enter Nextcloud Talk API password",
+      keepPrompt: t("wizard.nextcloudTalk.apiPasswordKeep"),
+      inputPrompt: t("wizard.nextcloudTalk.apiPasswordInput"),
       inspect: ({ cfg, accountId }) => {
         const resolvedAccount = resolveNextcloudTalkAccount({ cfg: cfg as CoreConfig, accountId });
         const apiUser = resolvedAccount.config.apiUser?.trim();
@@ -160,7 +165,7 @@ export const nextcloudTalkSetupWizard: ChannelSetupWizard = {
   textInputs: [
     {
       inputKey: "httpUrl",
-      message: "Enter Nextcloud instance URL (e.g., https://cloud.example.com)",
+      message: t("wizard.nextcloudTalk.instanceUrlPrompt"),
       currentValue: ({ cfg, accountId }) =>
         resolveNextcloudTalkAccount({ cfg: cfg as CoreConfig, accountId }).baseUrl || undefined,
       shouldPrompt: ({ currentValue }) => !currentValue,
@@ -173,12 +178,12 @@ export const nextcloudTalkSetupWizard: ChannelSetupWizard = {
     },
     {
       inputKey: "userId",
-      message: "Nextcloud Talk API user",
+      message: t("wizard.nextcloudTalk.apiUserPrompt"),
       currentValue: ({ cfg, accountId }) =>
         resolveNextcloudTalkAccount({ cfg: cfg as CoreConfig, accountId }).config.apiUser?.trim() ||
         undefined,
       shouldPrompt: ({ credentialValues }) => credentialValues[CONFIGURE_API_FLAG] === "1",
-      validate: ({ value }) => (value ? undefined : "Required"),
+      validate: ({ value }) => (value ? undefined : t("common.required")),
       applySet: async (params) =>
         setNextcloudTalkAccountConfig(params.cfg as CoreConfig, params.accountId, {
           apiUser: params.value,

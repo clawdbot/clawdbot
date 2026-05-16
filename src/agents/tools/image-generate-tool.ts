@@ -33,6 +33,7 @@ import { saveMediaBuffer } from "../../media/store.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import { resolveUserPath } from "../../utils.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
+import { formatGeneratedAttachmentLines } from "../generated-attachments.js";
 import { optionalStringEnum } from "../schema/string-enum.js";
 import { ToolInputError, readNumberParam, readStringParam } from "./common.js";
 import { decodeDataUrl } from "./image-tool.helpers.js";
@@ -652,7 +653,7 @@ export function createImageGenerateTool(options?: {
     label: "Image Generation",
     name: "image_generate",
     description:
-      'Generate new images or edit reference images with the configured or inferred image-generation model. For transparent backgrounds, use outputFormat="png" or "webp" and background="transparent"; OpenAI also accepts openai.background and OpenClaw routes the default OpenAI image model to gpt-image-1.5 for that mode. Set agents.defaults.imageGenerationModel.primary to pick a provider/model. Providers declare their own auth/readiness; use action="list" to inspect registered providers, models, readiness, and auth hints. Generated images are delivered automatically from the tool result as MEDIA paths.',
+      'Generate new images or edit reference images with the configured or inferred image-generation model. For transparent backgrounds, use outputFormat="png" or "webp" and background="transparent"; OpenAI also accepts openai.background and OpenClaw routes the default OpenAI image model to gpt-image-1.5 for that mode. Set agents.defaults.imageGenerationModel.primary to pick a provider/model. Providers declare their own auth/readiness; use action="list" to inspect registered providers, models, readiness, and auth hints. Generated images are delivered automatically from structured tool-result attachments.',
     parameters: ImageGenerateToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -791,12 +792,16 @@ export function createImageGenerateTool(options?: {
       const revisedPrompts = result.images
         .map((image) => image.revisedPrompt?.trim())
         .filter((entry): entry is string => Boolean(entry));
+      const attachments = savedImages.map((image) => ({
+        type: "image" as const,
+        path: image.path,
+        mimeType: image.contentType,
+        name: image.id,
+      }));
       const lines = [
         `Generated ${savedImages.length} image${savedImages.length === 1 ? "" : "s"} with ${displayProvider}/${displayModel}.`,
         ...(warning ? [`Warning: ${warning}`] : []),
-        // Show the actual saved paths so the model does not invent a bogus
-        // local path when it references the generated image in a follow-up reply.
-        ...savedImages.map((image) => `MEDIA:${image.path}`),
+        ...formatGeneratedAttachmentLines(attachments),
       ];
 
       return {
@@ -807,7 +812,9 @@ export function createImageGenerateTool(options?: {
           count: savedImages.length,
           media: {
             mediaUrls: savedImages.map((image) => image.path),
+            attachments,
           },
+          attachments,
           paths: savedImages.map((image) => image.path),
           ...buildMediaReferenceDetails({
             entries: loadedReferenceImages,

@@ -282,7 +282,11 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
 
     // `systemPrompt.chars` already includes injected files, skills, and tool-list text.
     // Add only tool schemas here so the tracked estimate stays disjoint.
-    const trackedPromptChars = report.systemPrompt.chars + report.tools.schemaChars;
+    const currentTurnChars = report.currentTurn
+      ? report.currentTurn.promptChars + report.currentTurn.runtimeContextChars
+      : 0;
+    const trackedPromptChars =
+      report.systemPrompt.chars + report.tools.schemaChars + currentTurnChars;
     const trackedPromptLine = `Tracked prompt estimate: ${formatCharsAndTokens(trackedPromptChars)}`;
     const actualContextLine =
       cachedContextUsageTokens != null

@@ -60,16 +60,18 @@ describe("resolveRunWorkspaceDir", () => {
   });
 
   it("falls back to built-in main workspace when config is unavailable", () => {
+    const workspaceDir = path.join(path.sep, "srv", "openclaw-workspace");
     const result = resolveRunWorkspaceDir({
       workspaceDir: null,
       sessionKey: "agent:main:subagent:test",
       config: undefined,
+      env: { ...process.env, OPENCLAW_WORKSPACE_DIR: workspaceDir },
     });
 
     expect(result.usedFallback).toBe(true);
     expect(result.fallbackReason).toBe("missing");
     expect(result.agentId).toBe("main");
-    expect(result.workspaceDir).toBe(path.resolve(resolveDefaultAgentWorkspaceDir(process.env)));
+    expect(result.workspaceDir).toBe(path.resolve(workspaceDir));
   });
 
   it("throws for malformed agent session keys", () => {

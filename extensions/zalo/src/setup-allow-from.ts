@@ -1,5 +1,6 @@
 import {
   DEFAULT_ACCOUNT_ID,
+  createSetupTranslator,
   formatDocsLink,
   mergeAllowFromEntries,
   type ChannelSetupDmPolicy,
@@ -7,6 +8,8 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/setup";
 import { resolveDefaultZaloAccountId, resolveZaloAccount } from "./accounts.js";
+
+const t = createSetupTranslator();
 
 type ZaloAccountSetupConfig = {
   enabled?: boolean;
@@ -17,13 +20,13 @@ export async function noteZaloTokenHelp(
 ): Promise<void> {
   await prompter.note(
     [
-      "1) Open Zalo Bot Platform: https://bot.zaloplatforms.com",
-      "2) Create a bot and get the token",
-      "3) Token looks like 12345689:abc-xyz",
-      "Tip: you can also set ZALO_BOT_TOKEN in your env.",
+      t("wizard.zalo.helpOpenPlatform"),
+      t("wizard.zalo.helpCreateBot"),
+      t("wizard.zalo.helpTokenFormat"),
+      t("wizard.zalo.helpEnvTip"),
       `Docs: ${formatDocsLink("/channels/zalo", "zalo")}`,
     ].join("\n"),
-    "Zalo bot token",
+    t("wizard.zalo.botTokenTitle"),
   );
 }
 
@@ -37,16 +40,16 @@ export async function promptZaloAllowFrom(params: {
   const resolved = resolveZaloAccount({ cfg, accountId });
   const existingAllowFrom = resolved.config.allowFrom ?? [];
   const entry = await prompter.text({
-    message: "Zalo allowFrom (user id)",
+    message: t("wizard.zalo.allowFromPrompt"),
     placeholder: "123456789",
     initialValue: existingAllowFrom[0] ? String(existingAllowFrom[0]) : undefined,
     validate: (value) => {
       const raw = (value ?? "").trim();
       if (!raw) {
-        return "Required";
+        return t("common.required");
       }
       if (!/^\d+$/.test(raw)) {
-        return "Use a numeric Zalo user id";
+        return t("wizard.zalo.allowFromNumeric");
       }
       return undefined;
     },

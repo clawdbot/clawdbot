@@ -631,6 +631,43 @@
         "asVoice": {
           "type": "boolean"
         },
+        "attachments": {
+          "description": "Structured media attachments to send with the message. Each item needs media/mediaUrl/path/filePath/fileUrl/url.",
+          "items": {
+            "properties": {
+              "filePath": {
+                "type": "string"
+              },
+              "fileUrl": {
+                "type": "string"
+              },
+              "media": {
+                "type": "string"
+              },
+              "mediaUrl": {
+                "type": "string"
+              },
+              "mimeType": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "type": {
+                "enum": ["image", "audio", "video", "file"],
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "type": "array"
+        },
         "bestEffort": {
           "type": "boolean"
         },
@@ -1133,6 +1170,7 @@
           "type": "string"
         }
       },
+      "required": ["query"],
       "type": "object"
     },
     "name": "web_search",

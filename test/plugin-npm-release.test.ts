@@ -85,6 +85,17 @@ describe("parsePluginReleaseArgs", () => {
   });
 });
 
+function externalPluginContract(version: string) {
+  return {
+    compat: {
+      pluginApi: `>=${version}`,
+    },
+    build: {
+      openclawVersion: version,
+    },
+  };
+}
+
 describe("collectPublishablePluginPackageErrors", () => {
   it("accepts a valid publishable plugin package candidate", () => {
     expect(
@@ -100,6 +111,7 @@ describe("collectPublishablePluginPackageErrors", () => {
           },
           openclaw: {
             extensions: ["./index.ts"],
+            ...externalPluginContract("2026.3.15"),
             install: {
               npmSpec: "@openclaw/zalo",
             },
@@ -123,6 +135,7 @@ describe("collectPublishablePluginPackageErrors", () => {
           private: true,
           openclaw: {
             extensions: [""],
+            ...externalPluginContract("2026.3.15"),
             install: {
               npmSpec: "   ",
             },
@@ -152,6 +165,7 @@ describe("collectPublishablePluginPackageErrors", () => {
           version: "2026.5.1-beta.1",
           openclaw: {
             extensions: ["./index.ts"],
+            ...externalPluginContract("2026.5.1-beta.1"),
             install: {
               npmSpec: "@openclaw/twitch",
             },
@@ -180,6 +194,7 @@ describe("collectPublishablePluginPackageErrors", () => {
           },
           openclaw: {
             extensions: ["./index.ts"],
+            ...externalPluginContract("2026.5.1-beta.1"),
             release: {
               publishToNpm: true,
             },
@@ -187,6 +202,35 @@ describe("collectPublishablePluginPackageErrors", () => {
         },
       }),
     ).toEqual(["openclaw.install.npmSpec must be a non-empty string for publishable plugins."]);
+  });
+
+  it("requires the external plugin package compatibility contract for npm publish", () => {
+    expect(
+      collectPublishablePluginPackageErrors({
+        extensionId: "voice-call",
+        packageDir: bundledPluginRoot("voice-call"),
+        packageJson: {
+          name: "@openclaw/voice-call",
+          version: "2026.5.1-beta.1",
+          repository: {
+            type: "git",
+            url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
+          },
+          openclaw: {
+            extensions: ["./index.ts"],
+            install: {
+              npmSpec: "@openclaw/voice-call",
+            },
+            release: {
+              publishToNpm: true,
+            },
+          },
+        },
+      }),
+    ).toEqual([
+      "openclaw.compat.pluginApi is required for external code plugin packages.",
+      "openclaw.build.openclawVersion is required for external code plugin packages.",
+    ]);
   });
 });
 
@@ -224,6 +268,7 @@ describe("collectPublishablePluginPackages", () => {
       },
       openclaw: {
         extensions: ["./index.ts"],
+        ...externalPluginContract("2026.4.10"),
         install: {
           npmSpec: "@openclaw/demo-plugin",
         },
@@ -258,6 +303,7 @@ describe("collectPublishablePluginPackages", () => {
       },
       openclaw: {
         extensions: ["./index.ts"],
+        ...externalPluginContract("2026.4.10-beta.1"),
         install: {
           npmSpec: "@openclaw/demo-plugin",
         },
@@ -273,6 +319,7 @@ describe("collectPublishablePluginPackages", () => {
       private: true,
       openclaw: {
         extensions: ["./index.ts"],
+        ...externalPluginContract("2026.4.10-beta.1"),
         install: {
           npmSpec: "@openclaw/private-plugin",
         },
@@ -308,6 +355,7 @@ describe("collectPublishablePluginPackages", () => {
       private: true,
       openclaw: {
         extensions: ["./index.ts"],
+        ...externalPluginContract("2026.4.10-beta.1"),
         release: {
           publishToNpm: true,
         },
@@ -333,6 +381,7 @@ describe("collectPublishablePluginPackages", () => {
       },
       openclaw: {
         extensions: ["./index.ts"],
+        ...externalPluginContract("2026.4.10-alpha.1"),
         install: {
           npmSpec: "@openclaw/demo-plugin",
         },

@@ -115,6 +115,155 @@ function expectNoNoteContaining(message: string, title: string): void {
 }
 
 describe("maybeRepairLegacyCronStore", () => {
+  it("surfaces cron payload model overrides without rewriting current jobs", async () => {
+    const storePath = await makeTempStorePath();
+    await writeCronStore(storePath, [
+      {
+        id: "api-pinned",
+        name: "API pinned",
+        enabled: true,
+        createdAtMs: Date.parse("2026-05-01T00:00:00.000Z"),
+        updatedAtMs: Date.parse("2026-05-01T00:00:00.000Z"),
+        schedule: { kind: "cron", expr: "0 7 * * *", tz: "UTC" },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: {
+          kind: "agentTurn",
+          message: "Morning brief",
+          model: "openai/gpt-5.4",
+          thinking: "high",
+        },
+        state: {},
+      },
+      {
+        id: "other-pinned",
+        name: "Other pinned",
+        enabled: true,
+        createdAtMs: Date.parse("2026-05-01T00:00:00.000Z"),
+        updatedAtMs: Date.parse("2026-05-01T00:00:00.000Z"),
+        schedule: { kind: "cron", expr: "0 8 * * *", tz: "UTC" },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: {
+          kind: "agentTurn",
+          message: "Morning brief",
+          model: "anthropic/claude-sonnet-4-6",
+        },
+        state: {},
+      },
+      {
+        id: "inherits-default",
+        name: "Inherits default",
+        enabled: true,
+        createdAtMs: Date.parse("2026-05-01T00:00:00.000Z"),
+        updatedAtMs: Date.parse("2026-05-01T00:00:00.000Z"),
+        schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: {
+          kind: "agentTurn",
+          message: "Morning brief",
+        },
+        state: {},
+      },
+    ]);
+    const prompter = makePrompter(true);
+
+    await maybeRepairLegacyCronStore({
+      cfg: {
+        cron: { store: storePath },
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.5", fallbacks: [] },
+          },
+        },
+      },
+      options: {},
+      prompter,
+    });
+
+    expect(prompter.confirm).not.toHaveBeenCalled();
+    expectNoteContaining("Cron model overrides detected", "Cron");
+    expectNoteContaining("2 jobs set `payload.model`", "Cron");
+    expectNoteContaining("Provider namespaces: anthropic=1, openai=1", "Cron");
+    expectNoteContaining("2 jobs use a different model than `agents.defaults.model`", "Cron");
+
+    const jobs = await readPersistedJobs(storePath);
+    const job = requirePersistedJob(jobs, 0);
+    const payload = requireRecord(job.payload, "cron payload");
+    expect(payload.model).toBe("openai/gpt-5.4");
+    expect(payload.thinking).toBe("high");
+  });
+
+  it("does not surface cron model override diagnostics when jobs inherit the default", async () => {
+    const storePath = await makeTempStorePath();
+    await writeCronStore(storePath, [
+      {
+        id: "inherits-default",
+        name: "Inherits default",
+        enabled: true,
+        createdAtMs: Date.parse("2026-05-01T00:00:00.000Z"),
+        updatedAtMs: Date.parse("2026-05-01T00:00:00.000Z"),
+        schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC" },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: {
+          kind: "agentTurn",
+          message: "Morning brief",
+        },
+        state: {},
+      },
+    ]);
+
+    await maybeRepairLegacyCronStore({
+      cfg: createCronConfig(storePath),
+      options: {},
+      prompter: makePrompter(true),
+    });
+
+    expectNoNoteContaining("Cron model overrides detected", "Cron");
+  });
+
+  it("counts alias model pins as default mismatches", async () => {
+    const storePath = await makeTempStorePath();
+    await writeCronStore(storePath, [
+      {
+        id: "alias-pinned",
+        name: "Alias pinned",
+        enabled: true,
+        createdAtMs: Date.parse("2026-05-01T00:00:00.000Z"),
+        updatedAtMs: Date.parse("2026-05-01T00:00:00.000Z"),
+        schedule: { kind: "cron", expr: "0 10 * * *", tz: "UTC" },
+        sessionTarget: "isolated",
+        wakeMode: "now",
+        payload: {
+          kind: "agentTurn",
+          message: "Morning brief",
+          model: "gpt",
+        },
+        state: {},
+      },
+    ]);
+
+    await maybeRepairLegacyCronStore({
+      cfg: {
+        cron: { store: storePath },
+        agents: {
+          defaults: {
+            model: { primary: "pi:opus", fallbacks: [] },
+          },
+        },
+      },
+      options: {},
+      prompter: makePrompter(true),
+    });
+
+    expectNoteContaining("1 job set `payload.model`", "Cron");
+    expectNoteContaining("Provider namespaces: bare/alias=1", "Cron");
+    expectNoteContaining("1 job uses a different model than `agents.defaults.model`", "Cron");
+    expectNoteContaining("Examples: alias-pinned -> gpt", "Cron");
+  });
+
   it("repairs legacy cron store fields and migrates notify fallback to webhook delivery", async () => {
     const storePath = await makeTempStorePath();
     await writeCronStore(storePath, [createLegacyCronJob()]);

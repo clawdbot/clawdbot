@@ -2,10 +2,13 @@ import type { ChannelSetupWizard } from "openclaw/plugin-sdk/setup";
 import {
   DEFAULT_ACCOUNT_ID,
   setSetupChannelEnabled,
+  createSetupTranslator,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/setup";
 import { listWhatsAppAccountIds, resolveWhatsAppAuthDir } from "./accounts.js";
 import { formatWhatsAppWebAuthStatusState, readWebAuthState } from "./auth-store.js";
+
+const t = createSetupTranslator();
 
 const channel = "whatsapp" as const;
 
@@ -22,10 +25,10 @@ async function readWhatsAppSetupLinkState(
 export const whatsappSetupWizard: ChannelSetupWizard = {
   channel,
   status: {
-    configuredLabel: "linked",
-    unconfiguredLabel: "not linked",
-    configuredHint: "linked",
-    unconfiguredHint: "not linked",
+    configuredLabel: t("wizard.channels.statusLinked"),
+    unconfiguredLabel: t("wizard.channels.statusNotLinked"),
+    configuredHint: t("wizard.channels.statusLinked"),
+    unconfiguredHint: t("wizard.channels.statusNotLinked"),
     configuredScore: 5,
     unconfiguredScore: 4,
     resolveConfigured: async ({ cfg, accountId }) => {

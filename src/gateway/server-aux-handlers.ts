@@ -26,6 +26,7 @@ import {
   type SharedGatewaySessionGenerationState,
 } from "./server-shared-auth-generation.js";
 import type { ActivateRuntimeSecrets } from "./server-startup-config.js";
+export { GATEWAY_AUX_METHODS } from "./server-aux-methods.js";
 
 type GatewayAuxHandlerLogger = {
   warn?: (message: string) => void;

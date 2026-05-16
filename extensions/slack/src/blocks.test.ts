@@ -105,6 +105,7 @@ describe("parseSlackModalPrivateMetadata", () => {
           channelId: "D123",
           channelType: "im",
           userId: "U123",
+          pluginInteractiveData: "dean.contract:confirm",
           ignored: "x",
         }),
       ),
@@ -113,6 +114,7 @@ describe("parseSlackModalPrivateMetadata", () => {
       channelId: "D123",
       channelType: "im",
       userId: "U123",
+      pluginInteractiveData: "dean.contract:confirm",
     });
   });
 });
@@ -126,12 +128,14 @@ describe("encodeSlackModalPrivateMetadata", () => {
           channelId: "",
           channelType: "im",
           userId: "U123",
+          pluginInteractiveData: "dean.contract:confirm",
         }),
       ),
     ).toEqual({
       sessionKey: "agent:main:slack:channel:C1",
       channelType: "im",
       userId: "U123",
+      pluginInteractiveData: "dean.contract:confirm",
     });
   });
 

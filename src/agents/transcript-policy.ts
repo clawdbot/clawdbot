@@ -143,7 +143,9 @@ function buildUnownedProviderTransportReplayFallback(params: {
     ...(isAnthropic && modelDisablesReasoningEffort(params.model)
       ? { dropThinkingBlocks: true }
       : {}),
-    ...(isStrictOpenAiCompatible ? { dropReasoningFromHistory: true } : {}),
+    ...(isStrictOpenAiCompatible
+      ? { dropReasoningFromHistory: !requiresReasoningContentReplay(params.modelId) }
+      : {}),
     ...(isGoogle || isStrictOpenAiCompatible ? { applyAssistantFirstOrderingFix: true } : {}),
     ...(isGoogle || isStrictOpenAiCompatible ? { validateGeminiTurns: true } : {}),
     ...(isAnthropic || isStrictOpenAiCompatible || isClaudeOpenAiResponses
@@ -153,6 +155,28 @@ function buildUnownedProviderTransportReplayFallback(params: {
       ? { allowSyntheticToolResults: true }
       : {}),
   };
+}
+
+const REASONING_CONTENT_REPLAY_MODEL_IDS = new Set([
+  "kimi-k2.5",
+  "kimi-k2.6",
+  "kimi-k2-thinking",
+  "kimi-k2-thinking-turbo",
+  "mimo-v2-pro",
+  "mimo-v2-omni",
+  "mimo-v2.5",
+  "mimo-v2.5-pro",
+  "mimo-v2.6-pro",
+]);
+
+function requiresReasoningContentReplay(modelId: string | null | undefined): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(modelId).split(":", 1)[0];
+  if (!normalized) {
+    return false;
+  }
+  const parts = normalized.split("/").filter(Boolean);
+  const finalPart = parts[parts.length - 1] ?? normalized;
+  return REASONING_CONTENT_REPLAY_MODEL_IDS.has(finalPart);
 }
 
 function mergeTranscriptPolicy(

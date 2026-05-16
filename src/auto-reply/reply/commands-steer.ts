@@ -5,6 +5,7 @@ import {
 import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { isNativeCommandTurn, resolveCommandTurnContext } from "../command-turn-context.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import {
   formatEmbeddedPiQueueFailureSummary,
@@ -31,10 +32,9 @@ function parseSteerMessage(raw: string): string | null {
 function resolveSteerTargetSessionKey(params: HandleCommandsParams): string | undefined {
   const commandTarget = normalizeOptionalString(params.ctx.CommandTargetSessionKey);
   const commandSession = normalizeOptionalString(params.sessionKey);
-  const raw =
-    params.ctx.CommandSource === "native"
-      ? commandTarget || commandSession
-      : commandSession || commandTarget;
+  const raw = isNativeCommandTurn(resolveCommandTurnContext(params.ctx))
+    ? commandTarget || commandSession
+    : commandSession || commandTarget;
   if (!raw) {
     return undefined;
   }

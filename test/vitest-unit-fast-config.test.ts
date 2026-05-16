@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import { createCommandsLightVitestConfig } from "./vitest/vitest.commands-light.config.ts";
 import { createPluginSdkLightVitestConfig } from "./vitest/vitest.plugin-sdk-light.config.ts";
@@ -49,6 +50,31 @@ function collectUnroutedForcedFiles(
 }
 
 describe("unit-fast vitest lane", () => {
+  it("loads the config without recursively walking repo roots", () => {
+    const script = `
+      import fs from "node:fs";
+      let readdirSyncCalls = 0;
+      const originalReaddirSync = fs.readdirSync;
+      fs.readdirSync = function patchedReaddirSync(...args) {
+        readdirSyncCalls += 1;
+        return originalReaddirSync.apply(this, args);
+      };
+      await import("./test/vitest/vitest.unit-fast.config.ts?io-probe=" + Date.now());
+      console.log(readdirSyncCalls);
+    `;
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "--input-type=module", "-e", script],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(Number(result.stdout.trim())).toBeLessThan(20);
+  });
+
   it("runs cache-friendly tests without the reset-heavy runner or runtime setup", () => {
     const config = createUnitFastVitestConfig({});
     const testConfig = requireTestConfig(config);

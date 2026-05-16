@@ -132,8 +132,20 @@ describe("unit vitest config", () => {
     expect(testConfig.exclude).toContain("src/security/**");
   });
 
-  it("scopes default coverage to source files owned by the unit lane", () => {
+  it("skips default coverage source discovery when coverage is disabled", () => {
     const unitConfig = createUnitVitestConfig({});
+    const testConfig = requireTestConfig(unitConfig);
+
+    expect(testConfig.coverage?.include).toBeUndefined();
+  });
+
+  it("scopes default coverage to source files owned by the unit lane", () => {
+    const unitConfig = createUnitVitestConfigWithOptions(
+      {},
+      {
+        argv: ["node", "vitest", "run", "--coverage"],
+      },
+    );
     const testConfig = requireTestConfig(unitConfig);
     const coverageInclude = testConfig.coverage?.include;
     expect(coverageInclude).toContain("src/commitments/runtime.ts");

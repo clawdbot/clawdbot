@@ -192,6 +192,29 @@ describe("runCommandWithTimeout", () => {
     ).toBeNull();
   });
 
+  it("does not spawn when the abort signal is already aborted", async () => {
+    await loadExecModules({ mockSpawn: true });
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await runCommandWithTimeout(createSilentIdleArgv(), {
+      timeoutMs: 2_000,
+      signal: controller.signal,
+    });
+
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      stdout: "",
+      stderr: "",
+      code: null,
+      signal: null,
+      killed: false,
+      termination: "signal",
+      noOutputTimedOut: false,
+    });
+    expect(result.code).not.toBe(0);
+  });
+
   it.runIf(process.platform !== "win32")(
     "kills command when no output timeout elapses",
     { timeout: 5_000 },

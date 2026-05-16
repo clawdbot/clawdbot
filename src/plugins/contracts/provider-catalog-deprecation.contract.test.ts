@@ -1,11 +1,49 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 const repoRoot = path.resolve(import.meta.dirname, "../../..");
 const extensionsRoot = path.join(repoRoot, "extensions");
 
+function isProductionSourcePath(filePath: string): boolean {
+  const normalized = filePath.split(path.sep).join("/");
+  if (!/\.(?:ts|tsx|js|mjs|cjs)$/.test(normalized)) {
+    return false;
+  }
+  if (/(^|\/)(?:node_modules|dist|\.[^/]+)(?:\/|$)/.test(normalized)) {
+    return false;
+  }
+  return !/(\.test\.|\.spec\.|\/__tests__\/|\/test-support\/)/.test(normalized);
+}
+
+function listGitProductionSourceFiles(root: string): string[] | null {
+  const relativeRoot = path.relative(repoRoot, root).split(path.sep).join("/");
+  if (!relativeRoot || relativeRoot.startsWith("..") || path.isAbsolute(relativeRoot)) {
+    return null;
+  }
+  const result = spawnSync("git", ["ls-files", "--", relativeRoot], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout
+    .split("\n")
+    .map((line) => line.trim().replaceAll("\\", "/"))
+    .filter((line) => line.length > 0 && isProductionSourcePath(line))
+    .map((line) => path.join(repoRoot, ...line.split("/")))
+    .toSorted();
+}
+
 function walkProductionSourceFiles(dir: string): string[] {
+  const gitFiles = listGitProductionSourceFiles(dir);
+  if (gitFiles) {
+    return gitFiles;
+  }
+
   const files: string[] = [];
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     if (entry.name === "node_modules" || entry.name === "dist" || entry.name.startsWith(".")) {
@@ -16,11 +54,7 @@ function walkProductionSourceFiles(dir: string): string[] {
       files.push(...walkProductionSourceFiles(entryPath));
       continue;
     }
-    const normalized = entryPath.split(path.sep).join("/");
-    if (!/\.(?:ts|tsx|js|mjs|cjs)$/.test(normalized)) {
-      continue;
-    }
-    if (/(\.test\.|\.spec\.|\/__tests__\/|\/test-support\/)/.test(normalized)) {
+    if (!isProductionSourcePath(entryPath)) {
       continue;
     }
     files.push(entryPath);
@@ -108,6 +142,22 @@ function lineNumberFor(source: string, offset: number): number {
 }
 
 describe("bundled provider catalog deprecation guard", () => {
+  it("lists production extension sources from git without walking extension roots", () => {
+    const readDir = vi.spyOn(fs, "readdirSync");
+    try {
+      const files = walkProductionSourceFiles(extensionsRoot);
+
+      expect(files.length).toBeGreaterThan(0);
+      expect(files.every((file) => path.relative(repoRoot, file).startsWith("extensions"))).toBe(
+        true,
+      );
+      expect(files.some((file) => file.endsWith(".test.ts"))).toBe(false);
+      expect(readDir).not.toHaveBeenCalled();
+    } finally {
+      readDir.mockRestore();
+    }
+  });
+
   it("keeps bundled provider plugins off the deprecated discovery hook", () => {
     const offenders: string[] = [];
     for (const filePath of walkProductionSourceFiles(extensionsRoot)) {

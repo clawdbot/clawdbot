@@ -109,6 +109,34 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     }
   });
 
+  it("falls back to the canonical transcript path for malformed persisted sessionFile metadata", async () => {
+    fs.writeFileSync(
+      fixture.storePath(),
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId,
+          sessionFile: { path: "../../escaped.jsonl" },
+          updatedAt: Date.now(),
+        },
+      }),
+      "utf-8",
+    );
+
+    const result = await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "Hello from a repaired metadata boundary",
+      storePath: fixture.storePath(),
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.sessionFile).toBe(
+        resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir()),
+      );
+      expect(fs.existsSync(result.sessionFile)).toBe(true);
+    }
+  });
+
   it("emits transcript update events for delivery mirrors", async () => {
     const store = {
       [sessionKey]: {

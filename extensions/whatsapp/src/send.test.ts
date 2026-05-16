@@ -315,6 +315,8 @@ describe("web outbound", () => {
       "libopus",
       "-b:a",
       "64k",
+      "-f",
+      "ogg",
     ]);
     const outputPath = ffmpegArgs?.at(-1);
     expect(outputPath).toContain("/fs-safe-output-");

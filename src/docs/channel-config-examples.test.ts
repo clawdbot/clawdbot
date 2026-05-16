@@ -1,7 +1,8 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { OpenClawSchema } from "../config/zod-schema.js";
 
 const CHANNEL_DOCS_DIR = path.join(process.cwd(), "docs", "channels");
@@ -10,13 +11,79 @@ function lineNumberAt(source: string, index: number): number {
   return source.slice(0, index).split("\n").length;
 }
 
+function listChannelDocFiles(): string[] {
+  const externalFiles = listExternalChannelDocFiles();
+  if (externalFiles) {
+    return externalFiles;
+  }
+  return fs
+    .readdirSync(CHANNEL_DOCS_DIR)
+    .filter((entry) => entry.endsWith(".md"))
+    .map((fileName) => path.join(CHANNEL_DOCS_DIR, fileName))
+    .toSorted();
+}
+
+function listExternalChannelDocFiles(): string[] | null {
+  return listGitChannelDocFiles() ?? listFindChannelDocFiles();
+}
+
+function listGitChannelDocFiles(): string[] | null {
+  const result = spawnSync("git", ["ls-files", "--", "docs/channels/*.md"], {
+    cwd: process.cwd(),
+    encoding: "utf8",
+    maxBuffer: 1024 * 1024,
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((filePath) => path.join(process.cwd(), filePath))
+    .toSorted();
+}
+
+function listFindChannelDocFiles(): string[] | null {
+  const result = spawnSync(
+    "find",
+    [CHANNEL_DOCS_DIR, "-maxdepth", "1", "-type", "f", "-name", "*.md"],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+    },
+  );
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .toSorted();
+}
+
 describe("channel docs config examples", () => {
+  it("lists channel docs without scanning the docs directory in-process", () => {
+    const readDir = vi.spyOn(fs, "readdirSync");
+    try {
+      const files = listChannelDocFiles();
+
+      expect(files.length).toBeGreaterThan(0);
+      expect(files.every((filePath) => filePath.endsWith(".md"))).toBe(true);
+      expect(readDir).not.toHaveBeenCalled();
+    } finally {
+      readDir.mockRestore();
+    }
+  });
+
   it("keeps channel docs JSON fences parseable", () => {
     const failures: string[] = [];
-    for (const fileName of fs
-      .readdirSync(CHANNEL_DOCS_DIR)
-      .filter((entry) => entry.endsWith(".md"))) {
-      const docPath = path.join(CHANNEL_DOCS_DIR, fileName);
+    for (const docPath of listChannelDocFiles()) {
+      const fileName = path.basename(docPath);
       const markdown = fs.readFileSync(docPath, "utf8");
       const blocks = markdown.matchAll(/```(?:json5|json)\n([\s\S]*?)```/g);
       for (const match of blocks) {
@@ -41,10 +108,8 @@ describe("channel docs config examples", () => {
 
   it("keeps OpenClaw channel config snippets parseable and schema-valid", () => {
     const failures: string[] = [];
-    for (const fileName of fs
-      .readdirSync(CHANNEL_DOCS_DIR)
-      .filter((entry) => entry.endsWith(".md"))) {
-      const docPath = path.join(CHANNEL_DOCS_DIR, fileName);
+    for (const docPath of listChannelDocFiles()) {
+      const fileName = path.basename(docPath);
       const markdown = fs.readFileSync(docPath, "utf8");
       const blocks = markdown.matchAll(/```(?:json5|json)\n([\s\S]*?)```/g);
       for (const match of blocks) {

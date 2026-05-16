@@ -1,11 +1,9 @@
 import {
   classifySilentReplyConversationType,
   resolveSilentReplyPolicyFromPolicies,
-  resolveSilentReplyRewriteFromPolicies,
   type SilentReplyConversationType,
   type SilentReplyPolicy,
   type SilentReplyPolicyShape,
-  type SilentReplyRewriteShape,
 } from "../shared/silent-reply-policy.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
@@ -20,9 +18,7 @@ type ResolveSilentReplyParams = {
 function resolveSilentReplyConversationContext(params: ResolveSilentReplyParams): {
   conversationType: SilentReplyConversationType;
   defaultPolicy?: SilentReplyPolicyShape;
-  defaultRewrite?: SilentReplyRewriteShape;
   surfacePolicy?: SilentReplyPolicyShape;
-  surfaceRewrite?: SilentReplyRewriteShape;
 } {
   const conversationType = classifySilentReplyConversationType({
     sessionKey: params.sessionKey,
@@ -34,27 +30,19 @@ function resolveSilentReplyConversationContext(params: ResolveSilentReplyParams)
   return {
     conversationType,
     defaultPolicy: params.cfg?.agents?.defaults?.silentReply,
-    defaultRewrite: params.cfg?.agents?.defaults?.silentReplyRewrite,
     surfacePolicy: surface?.silentReply,
-    surfaceRewrite: surface?.silentReplyRewrite,
   };
 }
 
 export function resolveSilentReplySettings(params: ResolveSilentReplyParams): {
   policy: SilentReplyPolicy;
-  rewrite: boolean;
 } {
   const context = resolveSilentReplyConversationContext(params);
   return {
     policy: resolveSilentReplyPolicyFromPolicies(context),
-    rewrite: resolveSilentReplyRewriteFromPolicies(context),
   };
 }
 
 export function resolveSilentReplyPolicy(params: ResolveSilentReplyParams): SilentReplyPolicy {
   return resolveSilentReplySettings(params).policy;
-}
-
-export function resolveSilentReplyRewriteEnabled(params: ResolveSilentReplyParams): boolean {
-  return resolveSilentReplySettings(params).rewrite;
 }

@@ -959,6 +959,8 @@ async function transcodeToFeishuVoiceOpus(params: {
             "libopus",
             "-b:a",
             FEISHU_VOICE_BITRATE,
+            "-f",
+            "ogg",
             outputPath,
           ]);
         },

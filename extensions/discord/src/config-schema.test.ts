@@ -76,6 +76,20 @@ describe("discord config schema", () => {
     expect(cfg.historyLimit).toBe(3);
   });
 
+  it("accepts suppressEmbeds at top-level and account scope", () => {
+    const cfg = expectValidDiscordConfig({
+      suppressEmbeds: true,
+      accounts: {
+        noisy: {
+          suppressEmbeds: false,
+        },
+      },
+    });
+
+    expect(cfg.suppressEmbeds).toBe(true);
+    expect(cfg.accounts?.noisy?.suppressEmbeds).toBe(false);
+  });
+
   it("accepts Discord application IDs at top-level and account scope", () => {
     const cfg = expectValidDiscordConfig({
       applicationId: "123456789012345678",

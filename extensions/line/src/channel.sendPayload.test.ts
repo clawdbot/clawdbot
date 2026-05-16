@@ -593,18 +593,16 @@ describe("line outbound sendPayload", () => {
     );
   });
 
-  it("declares receive ack policies for deferred LINE webhook acknowledgement", async () => {
+  it("declares receive ack policies for immediate LINE webhook acknowledgement", async () => {
     const proofResults = await verifyChannelMessageReceiveAckPolicyAdapterProofs({
       adapterName: "line",
       adapter: linePlugin.message!,
       proofs: {
         after_receive_record: () => {
+          expect(linePlugin.message?.receive?.defaultAckPolicy).toBe("after_receive_record");
           expect(linePlugin.message?.receive?.supportedAckPolicies).toContain(
             "after_receive_record",
           );
-        },
-        after_agent_dispatch: () => {
-          expect(linePlugin.message?.receive?.defaultAckPolicy).toBe("after_agent_dispatch");
         },
       },
     });
@@ -613,7 +611,7 @@ describe("line outbound sendPayload", () => {
       "verified",
     );
     expect(proofResults.find((result) => result.policy === "after_agent_dispatch")?.status).toBe(
-      "verified",
+      "not_declared",
     );
   });
 });

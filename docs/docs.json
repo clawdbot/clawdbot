@@ -101,6 +101,10 @@
       "destination": "/plugins/building-plugins#registering-agent-tools"
     },
     {
+      "source": "/gateway/admin-http-rpc",
+      "destination": "/plugins/admin-http-rpc"
+    },
+    {
       "source": "/cli/capability",
       "destination": "/cli/infer"
     },
@@ -1201,6 +1205,7 @@
                   "plugins/codex-computer-use",
                   "plugins/google-meet",
                   "plugins/webhooks",
+                  "plugins/admin-http-rpc",
                   "plugins/voice-call",
                   "plugins/memory-wiki",
                   "plugins/memory-lancedb",

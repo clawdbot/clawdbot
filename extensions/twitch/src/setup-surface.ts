@@ -12,6 +12,7 @@ import {
   type OpenClawConfig,
   type WizardPrompter,
   normalizeAccountId,
+  createSetupTranslator,
 } from "openclaw/plugin-sdk/setup";
 import {
   DEFAULT_ACCOUNT_ID,
@@ -24,6 +25,7 @@ import type { TwitchAccountConfig, TwitchRole } from "./types.js";
 import { isAccountConfigured } from "./utils/twitch.js";
 
 const channel = "twitch" as const;
+const t = createSetupTranslator();
 const INVALID_ACCOUNT_ID_MESSAGE = "Invalid Twitch account id";
 
 function normalizeRequestedSetupAccountId(accountId: string): string {
@@ -91,15 +93,15 @@ export function setTwitchAccount(
 async function noteTwitchSetupHelp(prompter: WizardPrompter): Promise<void> {
   await prompter.note(
     [
-      "Twitch requires a bot account with OAuth token.",
-      "1. Create a Twitch application at https://dev.twitch.tv/console",
-      "2. Generate a token with scopes: chat:read and chat:write",
-      "   Use https://twitchtokengenerator.com/ or https://twitchapps.com/tmi/",
-      "3. Copy the token (starts with 'oauth:') and Client ID",
-      "Env vars supported: OPENCLAW_TWITCH_ACCESS_TOKEN",
+      t("wizard.twitch.helpRequiresBot"),
+      t("wizard.twitch.helpCreateApp"),
+      t("wizard.twitch.helpGenerateToken"),
+      t("wizard.twitch.helpTokenTools"),
+      t("wizard.twitch.helpCopyToken"),
+      t("wizard.twitch.helpEnvVars"),
       `Docs: ${formatDocsLink("/channels/twitch", "channels/twitch")}`,
     ].join("\n"),
-    "Twitch setup",
+    t("wizard.twitch.setupTitle"),
   );
 }
 
@@ -112,7 +114,7 @@ export async function promptToken(
 
   if (existingToken && !envToken) {
     const keepToken = await prompter.confirm({
-      message: "Access token already configured. Keep it?",
+      message: t("wizard.twitch.accessTokenKeep"),
       initialValue: true,
     });
     if (keepToken) {
@@ -122,7 +124,7 @@ export async function promptToken(
 
   return (
     await prompter.text({
-      message: "Twitch OAuth token (oauth:...)",
+      message: t("wizard.twitch.oauthTokenPrompt"),
       initialValue: envToken ?? "",
       validate: (value) => {
         const raw = value?.trim() ?? "";
@@ -144,7 +146,7 @@ export async function promptUsername(
 ): Promise<string> {
   return (
     await prompter.text({
-      message: "Twitch bot username",
+      message: t("wizard.twitch.botUsernamePrompt"),
       initialValue: account?.username ?? "",
       validate: (value) => (value?.trim() ? undefined : "Required"),
     })
@@ -157,7 +159,7 @@ export async function promptClientId(
 ): Promise<string> {
   return (
     await prompter.text({
-      message: "Twitch Client ID",
+      message: t("wizard.twitch.clientIdPrompt"),
       initialValue: account?.clientId ?? "",
       validate: (value) => (value?.trim() ? undefined : "Required"),
     })
@@ -170,7 +172,7 @@ export async function promptChannelName(
 ): Promise<string> {
   return (
     await prompter.text({
-      message: "Channel to join",
+      message: t("wizard.twitch.channelJoinPrompt"),
       initialValue: account?.channel ?? "",
       validate: (value) => (value?.trim() ? undefined : "Required"),
     })
@@ -182,7 +184,7 @@ export async function promptRefreshTokenSetup(
   account: TwitchAccountConfig | null,
 ): Promise<{ clientSecret?: string; refreshToken?: string }> {
   const useRefresh = await prompter.confirm({
-    message: "Enable automatic token refresh (requires client secret and refresh token)?",
+    message: t("wizard.twitch.refreshTokenPrompt"),
     initialValue: Boolean(account?.clientSecret && account?.refreshToken),
   });
 
@@ -193,7 +195,7 @@ export async function promptRefreshTokenSetup(
   const clientSecret =
     (
       await prompter.text({
-        message: "Twitch Client Secret (for token refresh)",
+        message: t("wizard.twitch.clientSecretPrompt"),
         initialValue: account?.clientSecret ?? "",
         validate: (value) => (value?.trim() ? undefined : "Required"),
       })
@@ -202,7 +204,7 @@ export async function promptRefreshTokenSetup(
   const refreshToken =
     (
       await prompter.text({
-        message: "Twitch Refresh Token",
+        message: t("wizard.twitch.refreshTokenInputPrompt"),
         initialValue: account?.refreshToken ?? "",
         validate: (value) => (value?.trim() ? undefined : "Required"),
       })
@@ -228,7 +230,7 @@ export async function configureWithEnvToken(
   }
 
   const useEnv = await prompter.confirm({
-    message: "Twitch env var OPENCLAW_TWITCH_ACCESS_TOKEN detected. Use env token?",
+    message: t("wizard.twitch.envPrompt"),
     initialValue: true,
   });
   if (!useEnv) {
@@ -342,7 +344,7 @@ const twitchDmPolicy: ChannelSetupDmPolicy = {
     const existingAllowFrom = account?.allowFrom ?? [];
 
     const entry = await prompter.text({
-      message: "Twitch allowFrom (user IDs, one per line, recommended for security)",
+      message: t("wizard.twitch.allowFromPrompt"),
       placeholder: "123456789",
       initialValue: existingAllowFrom[0] || undefined,
     });
@@ -399,10 +401,10 @@ export const twitchSetupWizard: ChannelSetupWizard = {
     resolveSetupAccountId(cfg, accountOverride),
   resolveShouldPromptAccountIds: () => false,
   status: {
-    configuredLabel: "configured",
-    unconfiguredLabel: "needs username, token, and clientId",
-    configuredHint: "configured",
-    unconfiguredHint: "needs setup",
+    configuredLabel: t("wizard.channels.statusConfigured"),
+    unconfiguredLabel: t("wizard.channels.statusNeedsUsernameTokenClientId"),
+    configuredHint: t("wizard.channels.statusConfigured"),
+    unconfiguredHint: t("wizard.channels.statusNeedsSetup"),
     resolveConfigured: ({ cfg, accountId }) => {
       return resolveTwitchAccountContext(cfg, resolveSetupAccountId(cfg, accountId)).configured;
     },
@@ -410,7 +412,11 @@ export const twitchSetupWizard: ChannelSetupWizard = {
       const resolvedAccountId = resolveSetupAccountId(cfg, accountId);
       const configured = resolveTwitchAccountContext(cfg, resolvedAccountId).configured;
       return [
-        `Twitch${resolvedAccountId !== DEFAULT_ACCOUNT_ID ? ` (${resolvedAccountId})` : ""}: ${configured ? "configured" : "needs username, token, and clientId"}`,
+        `Twitch${resolvedAccountId !== DEFAULT_ACCOUNT_ID ? ` (${resolvedAccountId})` : ""}: ${
+          configured
+            ? t("wizard.channels.statusConfigured")
+            : t("wizard.channels.statusNeedsUsernameTokenClientId")
+        }`,
       ];
     },
   },

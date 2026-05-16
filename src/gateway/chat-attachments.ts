@@ -107,11 +107,40 @@ function isGenericContainerMime(mime?: string): boolean {
   return mime === "application/zip" || mime === "application/octet-stream";
 }
 
-function shouldIgnoreProvidedImageMime(params: {
+function shouldIgnoreImageMimeHint(params: { sniffedMime?: string; hintedMime?: string }): boolean {
+  return isGenericContainerMime(params.sniffedMime) && isImageMime(params.hintedMime);
+}
+
+function isSpecificMime(mime?: string): boolean {
+  return Boolean(mime && !isGenericContainerMime(mime));
+}
+
+function resolveAttachmentMime(params: {
   sniffedMime?: string;
   providedMime?: string;
-}): boolean {
-  return isGenericContainerMime(params.sniffedMime) && isImageMime(params.providedMime);
+  labelMime?: string;
+}): string {
+  const trustedProvidedMime = shouldIgnoreImageMimeHint({
+    sniffedMime: params.sniffedMime,
+    hintedMime: params.providedMime,
+  })
+    ? undefined
+    : params.providedMime;
+  const trustedLabelMime = shouldIgnoreImageMimeHint({
+    sniffedMime: params.sniffedMime,
+    hintedMime: params.labelMime,
+  })
+    ? undefined
+    : params.labelMime;
+  return (
+    (isSpecificMime(params.sniffedMime) && params.sniffedMime) ||
+    (isSpecificMime(trustedProvidedMime) && trustedProvidedMime) ||
+    (isSpecificMime(trustedLabelMime) && trustedLabelMime) ||
+    params.sniffedMime ||
+    trustedProvidedMime ||
+    trustedLabelMime ||
+    "application/octet-stream"
+  );
 }
 
 function isValidBase64(value: string): boolean {
@@ -264,24 +293,12 @@ export async function parseMessageWithAttachments(
       const providedMime = normalizeMime(mime);
       const sniffedMime = normalizeMime(await sniffMimeFromBase64(b64));
       const labelMime = normalizeMime(mimeTypeFromFilePath(label));
-      const trustedProvidedMime = shouldIgnoreProvidedImageMime({ sniffedMime, providedMime })
-        ? undefined
-        : providedMime;
 
       // Prefer specific MIME signals over generic container types. OOXML
       // documents (docx/xlsx/pptx) sniff as application/zip; without this
       // priority the agent would receive a `.zip` instead of the specific
       // Office document the caller declared.
-      const finalMime =
-        (sniffedMime && !isGenericContainerMime(sniffedMime) && sniffedMime) ||
-        (trustedProvidedMime &&
-          !isGenericContainerMime(trustedProvidedMime) &&
-          trustedProvidedMime) ||
-        (labelMime && !isGenericContainerMime(labelMime) && labelMime) ||
-        sniffedMime ||
-        trustedProvidedMime ||
-        labelMime ||
-        "application/octet-stream";
+      const finalMime = resolveAttachmentMime({ sniffedMime, providedMime, labelMime });
 
       if (
         sniffedMime &&

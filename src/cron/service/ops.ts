@@ -8,6 +8,7 @@ import {
   failTaskRunByRunId,
 } from "../../tasks/detached-task-runtime.js";
 import { clearCronJobActive, markCronJobActive } from "../active-jobs.js";
+import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-plan.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { createCronExecutionId } from "../run-id.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
@@ -40,6 +41,7 @@ import {
   armTimer,
   emit,
   executeJobCoreWithTimeout,
+  failureNotificationDeliveryFromJobState,
   normalizeCronRunErrorText,
   runMissedJobs,
   stopTimer,
@@ -54,6 +56,20 @@ type InterruptedStartupRun = {
   durationMs: number;
 };
 
+function resolveInterruptedStartupFailureNotificationStatus(params: {
+  state: CronServiceState;
+  job: CronJob;
+}) {
+  if (params.job.delivery?.bestEffort === true) {
+    return "not-requested";
+  }
+  if (resolveFailureDestination(params.job, params.state.deps.cronConfig?.failureDestination)) {
+    return "unknown";
+  }
+  const primaryPlan = resolveCronDeliveryPlan(params.job);
+  return primaryPlan.mode === "announce" && primaryPlan.requested ? "unknown" : "not-requested";
+}
+
 function markInterruptedStartupRun(params: {
   state: CronServiceState;
   job: CronJob;
@@ -61,6 +77,10 @@ function markInterruptedStartupRun(params: {
   nowMs: number;
 }): InterruptedStartupRun {
   const { job, runningAtMs, nowMs } = params;
+  const failureNotificationStatus = resolveInterruptedStartupFailureNotificationStatus({
+    state: params.state,
+    job,
+  });
   const previousErrors =
     typeof job.state.consecutiveErrors === "number" && Number.isFinite(job.state.consecutiveErrors)
       ? Math.max(0, Math.floor(job.state.consecutiveErrors))
@@ -81,6 +101,9 @@ function markInterruptedStartupRun(params: {
   job.state.lastDelivered = false;
   job.state.lastDeliveryStatus = "unknown";
   job.state.lastDeliveryError = STARTUP_INTERRUPTED_ERROR;
+  job.state.lastFailureNotificationDelivered = undefined;
+  job.state.lastFailureNotificationDeliveryStatus = failureNotificationStatus;
+  job.state.lastFailureNotificationDeliveryError = undefined;
   job.state.nextRunAtMs = undefined;
   job.updatedAtMs = nowMs;
 
@@ -194,6 +217,7 @@ export async function start(state: CronServiceState) {
         delivered: false,
         deliveryStatus: "unknown",
         deliveryError: STARTUP_INTERRUPTED_ERROR,
+        failureNotificationDelivery: job ? failureNotificationDeliveryFromJobState(job) : undefined,
         runAtMs: interrupted.runAtMs,
         durationMs: interrupted.durationMs,
         nextRunAtMs: job?.state.nextRunAtMs,
@@ -524,6 +548,7 @@ async function skipInvalidPersistedManualRun(params: {
     nextRunAtMs: params.job.state.nextRunAtMs,
     deliveryStatus: params.job.state.lastDeliveryStatus,
     deliveryError: params.job.state.lastDeliveryError,
+    failureNotificationDelivery: failureNotificationDeliveryFromJobState(params.job),
   });
 
   if (shouldDelete && params.state.store) {
@@ -762,9 +787,10 @@ async function finishPreparedManualRun(
         error: coreResult.error,
         summary: coreResult.summary,
         diagnostics: coreResult.diagnostics,
-        delivered: coreResult.delivered,
+        delivered: job.state.lastDelivered,
         deliveryStatus: job.state.lastDeliveryStatus,
         deliveryError: job.state.lastDeliveryError,
+        failureNotificationDelivery: failureNotificationDeliveryFromJobState(job),
         delivery: coreResult.delivery,
         sessionId: coreResult.sessionId,
         sessionKey: coreResult.sessionKey,

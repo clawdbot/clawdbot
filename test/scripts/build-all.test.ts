@@ -124,6 +124,13 @@ describe("resolveBuildAllStep", () => {
       },
     });
   });
+
+  it("keeps plugin-sdk dts cache metadata aligned with declaration inputs", () => {
+    const step = getBuildAllStep("build:plugin-sdk:dts");
+
+    expect(step.cache?.inputs).toEqual(expect.arrayContaining(["packages/memory-host-sdk/src"]));
+    expect(step.cache?.outputs).toEqual(expect.arrayContaining(["dist/plugin-sdk/packages"]));
+  });
 });
 
 describe("resolveBuildAllSteps", () => {

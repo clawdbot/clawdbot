@@ -1057,6 +1057,16 @@ export default function (api) {
 The factory `ctx` exposes optional `config`, `agentDir`, and `workspaceDir`
 values for construction-time initialization.
 
+`assemble()` may return `contextProjection` when the active harness has a
+persistent backend thread. Omit it for legacy per-turn projection. Return
+`{ mode: "thread_bootstrap", epoch }` when the assembled context should be
+injected once into a backend thread and reused until the epoch changes. Change
+the epoch after the engine's semantic context changes, such as after an
+engine-owned compaction pass. Hosts may preserve tool-call metadata, input
+shape, and redacted tool results in a thread-bootstrap projection so fresh
+backend threads retain tool continuity without copying raw secret-bearing
+payloads.
+
 If your engine does **not** own the compaction algorithm, keep `compact()`
 implemented and delegate it explicitly:
 

@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { clearBootstrapSnapshotOnSessionRollover } from "../../agents/bootstrap-cache.js";
 import { resolveSessionLifecycleTimestamps } from "../../config/sessions/lifecycle.js";
+import { hasSessionAutoModelFallbackProvenance } from "../../config/sessions/model-override-provenance.js";
 import { resolveStorePath } from "../../config/sessions/paths.js";
 import {
   evaluateSessionFreshness,
@@ -59,7 +60,9 @@ function copySessionFields(
 }
 
 function preserveNonAutoModelOverride(target: SessionEntry, entry: SessionEntry): void {
-  if (entry.modelOverrideSource !== "auto") {
+  const recoveredAutoFallbackOverride =
+    entry.modelOverrideSource === undefined && hasSessionAutoModelFallbackProvenance(entry);
+  if (entry.modelOverrideSource !== "auto" && !recoveredAutoFallbackOverride) {
     if (entry.modelOverride !== undefined) {
       target.modelOverride = entry.modelOverride;
     }

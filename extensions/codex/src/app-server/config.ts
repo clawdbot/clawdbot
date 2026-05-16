@@ -389,6 +389,24 @@ export function resolveCodexAppServerRuntimeOptions(
   };
 }
 
+export function isCodexAppServerApprovalPolicyAllowedByRequirements(
+  policy: CodexAppServerApprovalPolicy,
+  params: {
+    env?: NodeJS.ProcessEnv;
+    requirementsToml?: string | null;
+    requirementsPath?: string;
+    readRequirementsFile?: (path: string) => string | undefined;
+    platform?: NodeJS.Platform;
+  } = {},
+): boolean {
+  const content = readCodexRequirementsToml(params);
+  if (content === undefined) {
+    return true;
+  }
+  const allowedApprovalPolicies = parseAllowedApprovalPoliciesFromCodexRequirements(content);
+  return allowedApprovalPolicies === undefined || allowedApprovalPolicies.has(policy);
+}
+
 export function resolveCodexComputerUseConfig(
   params: {
     pluginConfig?: unknown;

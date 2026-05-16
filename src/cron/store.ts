@@ -50,6 +50,10 @@ type CronStateFile = {
   jobs: Record<string, CronStateFileEntry>;
 };
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
 function stripRuntimeOnlyCronFields(store: CronStoreFile): unknown {
   return {
     version: store.version,
@@ -154,15 +158,13 @@ function hasInlineState(jobs: Array<Record<string, unknown> | null | undefined>)
   return jobs.some(
     (job) =>
       job != null &&
-      job.state !== undefined &&
-      typeof job.state === "object" &&
-      job.state !== null &&
-      Object.keys(job.state as Record<string, unknown>).length > 0,
+      isRecord(job.state) &&
+      Object.keys(job.state).length > 0,
   );
 }
 
 function ensureJobStateObject(job: CronStoreFile["jobs"][number]): void {
-  if (!job.state || typeof job.state !== "object") {
+  if (!isRecord(job.state)) {
     job.state = {} as never;
   }
 }
@@ -186,9 +188,13 @@ function resolveUpdatedAtMs(job: CronStoreFile["jobs"][number], updatedAtMs: unk
     : Date.now();
 }
 
-function mergeStateFileEntry(job: CronStoreFile["jobs"][number], entry: CronStateFileEntry): void {
+function mergeStateFileEntry(job: CronStoreFile["jobs"][number], entry: unknown): void {
+  if (!isRecord(entry)) {
+    backfillMissingRuntimeFields(job);
+    return;
+  }
   job.updatedAtMs = resolveUpdatedAtMs(job, entry.updatedAtMs);
-  job.state = (entry.state ?? {}) as never;
+  job.state = isRecord(entry.state) ? (entry.state as never) : ({} as never);
   if (
     typeof entry.scheduleIdentity === "string" &&
     entry.scheduleIdentity !== tryCronScheduleIdentity(job as unknown as Record<string, unknown>)
@@ -213,7 +219,9 @@ export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
       parsed && typeof parsed === "object" && !Array.isArray(parsed)
         ? (parsed as Record<string, unknown>)
         : {};
-    const jobs = Array.isArray(parsedRecord.jobs) ? (parsedRecord.jobs as never[]) : [];
+    const jobs = Array.isArray(parsedRecord.jobs)
+      ? (parsedRecord.jobs.filter(isRecord) as never[])
+      : [];
     const store = {
       version: 1 as const,
       jobs: jobs.filter(Boolean) as never as CronStoreFile["jobs"],
@@ -281,7 +289,9 @@ export function loadCronStoreSync(storePath: string): CronStoreFile {
       parsed && typeof parsed === "object" && !Array.isArray(parsed)
         ? (parsed as Record<string, unknown>)
         : {};
-    const jobs = Array.isArray(parsedRecord.jobs) ? (parsedRecord.jobs as never[]) : [];
+    const jobs = Array.isArray(parsedRecord.jobs)
+      ? (parsedRecord.jobs.filter(isRecord) as never[])
+      : [];
     const store = {
       version: 1 as const,
       jobs: jobs.filter(Boolean) as never as CronStoreFile["jobs"],

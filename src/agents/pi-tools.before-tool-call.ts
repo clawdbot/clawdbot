@@ -83,6 +83,10 @@ type HookOutcome =
   | { blocked: false; params: unknown };
 type PluginApprovalRequest = NonNullable<PluginHookBeforeToolCallResult["requireApproval"]>;
 
+export function hasBeforeToolCallPolicy(): boolean {
+  return getGlobalHookRunner()?.hasHooks("before_tool_call") === true || hasTrustedToolPolicies();
+}
+
 const log = createSubsystemLogger("agents/tools");
 const BEFORE_TOOL_CALL_WRAPPED = Symbol("beforeToolCallWrapped");
 const BEFORE_TOOL_CALL_HOOK_FAILURE_REASON =

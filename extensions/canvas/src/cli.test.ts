@@ -91,4 +91,26 @@ describe("canvas CLI", () => {
     expect(mediaMessage?.startsWith("MEDIA:")).toBe(true);
     expect(mediaMessage?.endsWith(".png")).toBe(true);
   });
+
+  it("rejects node-controlled snapshot formats before writing", async () => {
+    const program = new Command();
+    program.exitOverride();
+    const nodes = program.command("nodes");
+    const { deps, writtenFiles } = createCanvasCliDeps();
+    vi.mocked(deps.callGatewayCli).mockResolvedValueOnce({
+      payload: {
+        format: "/../../target.sh",
+        base64: "aGk=",
+      },
+    });
+
+    registerNodesCanvasCommands(nodes, deps);
+
+    await expect(
+      program.parseAsync(["nodes", "canvas", "snapshot", "--node", "ios-node"], {
+        from: "user",
+      }),
+    ).rejects.toThrow(/invalid canvas\.snapshot payload/i);
+    expect(writtenFiles).toHaveLength(0);
+  });
 });

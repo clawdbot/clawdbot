@@ -65,7 +65,7 @@ vi.mock("../health-state.js", () => ({
   incrementPresenceVersion: incrementPresenceVersionMock,
 }));
 
-import { attachGatewayWsMessageHandler } from "./message-handler.js";
+import { __testing, attachGatewayWsMessageHandler } from "./message-handler.js";
 
 function createLogger() {
   return {
@@ -394,4 +394,54 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     } | null;
     expect(connectedClient?.internal?.approvalRuntime).toBe(true);
   });
+});
+
+describe("resolvePinnedClientMetadata", () => {
+  it.each([
+    ["darwin", "macos"],
+    ["win32", "windows"],
+  ])(
+    "pins legacy node-host platform alias %s to paired canonical %s",
+    (claimedPlatform, pairedPlatform) => {
+      expect(
+        __testing.resolvePinnedClientMetadata({
+          clientId: "node-host",
+          clientMode: "node",
+          claimedPlatform,
+          claimedDeviceFamily: pairedPlatform === "macos" ? "Mac" : "Windows",
+          pairedPlatform,
+          pairedDeviceFamily: pairedPlatform === "macos" ? "Mac" : "Windows",
+        }),
+      ).toEqual({
+        platformMismatch: false,
+        deviceFamilyMismatch: false,
+        pinnedPlatform: pairedPlatform,
+        pinnedDeviceFamily: pairedPlatform === "macos" ? "Mac" : "Windows",
+      });
+    },
+  );
+
+  it.each([
+    ["macos", "darwin", "Mac"],
+    ["windows", "win32", "Windows"],
+  ])(
+    "pins canonical node-host platform %s over paired legacy alias %s",
+    (claimedPlatform, pairedPlatform, deviceFamily) => {
+      expect(
+        __testing.resolvePinnedClientMetadata({
+          clientId: "node-host",
+          clientMode: "node",
+          claimedPlatform,
+          claimedDeviceFamily: deviceFamily,
+          pairedPlatform,
+          pairedDeviceFamily: deviceFamily,
+        }),
+      ).toEqual({
+        platformMismatch: false,
+        deviceFamilyMismatch: false,
+        pinnedPlatform: claimedPlatform,
+        pinnedDeviceFamily: deviceFamily,
+      });
+    },
+  );
 });

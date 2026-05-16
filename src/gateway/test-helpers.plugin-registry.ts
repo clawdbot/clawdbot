@@ -30,6 +30,7 @@ function createStubPluginRegistry(): PluginRegistry {
     textTransforms: [],
     agentHarnesses: [],
     gatewayHandlers: {},
+    gatewayMethodDescriptors: [],
     httpRoutes: [],
     cliRegistrars: [],
     services: [],

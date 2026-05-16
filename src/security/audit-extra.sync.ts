@@ -124,8 +124,40 @@ function listKnownNodeCommands(cfg: OpenClawConfig): Set<string> {
     },
   };
   const out = new Set<string>();
-  for (const platform of ["ios", "android", "macos", "linux", "windows", "unknown"]) {
-    const allow = resolveNodeCommandAllowlist(baseCfg, { platform });
+  const platformNodes = [
+    { platform: "ios", deviceFamily: "iPhone" },
+    { platform: "android", deviceFamily: "Android" },
+    {
+      platform: "macos",
+      deviceFamily: "Mac",
+      approvedCommands: [
+        "system.run",
+        "system.run.prepare",
+        "system.which",
+        "browser.proxy",
+        "screen.snapshot",
+      ],
+    },
+    {
+      platform: "linux",
+      deviceFamily: "Linux",
+      approvedCommands: ["system.run", "system.run.prepare", "system.which", "browser.proxy"],
+    },
+    {
+      platform: "windows",
+      deviceFamily: "Windows",
+      approvedCommands: [
+        "system.run",
+        "system.run.prepare",
+        "system.which",
+        "browser.proxy",
+        "screen.snapshot",
+      ],
+    },
+    { platform: "unknown" },
+  ];
+  for (const node of platformNodes) {
+    const allow = resolveNodeCommandAllowlist(baseCfg, node);
     for (const cmd of allow) {
       const normalized = normalizeNodeCommand(cmd);
       if (normalized) {
@@ -620,10 +652,12 @@ export function collectGatewayHttpNoAuthFindings(
 
   const chatCompletionsEnabled = cfg.gateway?.http?.endpoints?.chatCompletions?.enabled === true;
   const responsesEnabled = cfg.gateway?.http?.endpoints?.responses?.enabled === true;
+  const adminHttpRpcEnabled = cfg.plugins?.entries?.["admin-http-rpc"]?.enabled === true;
   const enabledEndpoints = [
     "/tools/invoke",
     chatCompletionsEnabled ? "/v1/chat/completions" : null,
     responsesEnabled ? "/v1/responses" : null,
+    adminHttpRpcEnabled ? "/api/v1/admin/rpc" : null,
   ].filter((entry): entry is string => Boolean(entry));
 
   const remoteExposure = isGatewayRemotelyExposed(cfg);
@@ -635,7 +669,7 @@ export function collectGatewayHttpNoAuthFindings(
       `gateway.auth.mode="none" leaves ${enabledEndpoints.join(", ")} callable without a shared secret. ` +
       "Treat this as trusted-local only and avoid exposing the gateway beyond loopback.",
     remediation:
-      "Set gateway.auth.mode to token/password (recommended). If you intentionally keep mode=none, keep gateway.bind=loopback and disable optional HTTP endpoints.",
+      "Set gateway.auth.mode to token/password (recommended). If you intentionally keep mode=none, keep gateway.bind=loopback and disable optional HTTP endpoints/plugins.",
   });
 
   return findings;

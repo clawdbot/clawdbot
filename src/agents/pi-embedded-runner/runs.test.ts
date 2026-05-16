@@ -73,16 +73,46 @@ describe("pi-embedded runner run registry", () => {
     const queueMessage = vi.fn(async () => {});
     setActiveEmbeddedRun("session-steer", {
       ...createRunHandle(),
+      sourceReplyDeliveryMode: "message_tool_only",
       queueMessage,
     });
 
     expect(
       queueEmbeddedPiMessageWithOutcome("session-steer", "continue", {
         steeringMode: "all",
+        sourceReplyDeliveryMode: "message_tool_only",
       }).queued,
     ).toBe(true);
 
-    expect(queueMessage).toHaveBeenCalledWith("continue", { steeringMode: "all" });
+    expect(queueMessage).toHaveBeenCalledWith("continue", {
+      steeringMode: "all",
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+  });
+
+  it("rejects message-tool-only steering for active runs created without that mode", () => {
+    const queueMessage = vi.fn(async () => {});
+    setActiveEmbeddedRun("session-automatic-source-reply", {
+      ...createRunHandle(),
+      queueMessage,
+    });
+
+    const outcome = queueEmbeddedPiMessageWithOutcome(
+      "session-automatic-source-reply",
+      "continue",
+      {
+        steeringMode: "all",
+        sourceReplyDeliveryMode: "message_tool_only",
+      },
+    );
+
+    expect(outcome).toEqual({
+      queued: false,
+      sessionId: "session-automatic-source-reply",
+      reason: "source_reply_delivery_mode_mismatch",
+      gatewayHealth: "live",
+    });
+    expect(queueMessage).not.toHaveBeenCalled();
   });
 
   it("defaults active embedded steering to all pending messages", () => {

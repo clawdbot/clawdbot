@@ -689,6 +689,52 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     expectAllowOnceForwardingResult(result);
   });
 
+  test("accepts trusted backend webchat replay when turnSourceTo is null on both sides (regression #82132)", () => {
+    const sessionKey = "agent:main:main";
+    const record = makeChatRecord({
+      sessionKey,
+      turnSourceChannel: "webchat",
+      turnSourceTo: null,
+      turnSourceAccountId: null,
+      turnSourceThreadId: null,
+      systemRunPlan: {
+        argv: ["echo", "SAFE"],
+        cwd: null,
+        commandText: "echo SAFE",
+        agentId: "main",
+        sessionKey,
+      },
+      systemRunBinding: buildSystemRunApprovalBinding({
+        argv: ["echo", "SAFE"],
+        cwd: null,
+        agentId: "main",
+        sessionKey,
+      }).binding,
+    });
+
+    const result = sanitizeSystemRunParamsForForwarding({
+      rawParams: {
+        command: ["echo", "SAFE"],
+        rawCommand: "echo SAFE",
+        agentId: "main",
+        sessionKey,
+        turnSourceChannel: "webchat",
+        turnSourceTo: null,
+        turnSourceAccountId: null,
+        turnSourceThreadId: null,
+        runId: "approval-1",
+        approved: true,
+        approvalDecision: "allow-once",
+      },
+      nodeId: "node-1",
+      client: trustedBackendClient,
+      execApprovalManager: manager(record),
+      nowMs: now,
+    });
+
+    expectAllowOnceForwardingResult(result);
+  });
+
   test("rejects trusted backend chat replay when session binding changes", () => {
     const result = sanitizeSystemRunParamsForForwarding({
       rawParams: {

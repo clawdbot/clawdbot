@@ -96,7 +96,7 @@
       "class": "core-runtime",
       "risk": ["file-sniffing", "untrusted-files"]
     },
-    "global-agent": {
+    "@openclaw/proxyline": {
       "owner": "core:proxy",
       "class": "core-runtime",
       "risk": ["network", "proxy"]

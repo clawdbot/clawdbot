@@ -20,6 +20,7 @@ function createRoute(params: {
   auth: "gateway" | "plugin";
   match?: "exact" | "prefix";
   gatewayRuntimeScopeSurface?: "write-default" | "trusted-operator";
+  gatewayMethodDispatchAllowed?: boolean;
   handler?: (req: IncomingMessage, res: ServerResponse) => boolean | Promise<boolean>;
 }) {
   return {
@@ -27,6 +28,7 @@ function createRoute(params: {
     path: params.path,
     auth: params.auth,
     gatewayRuntimeScopeSurface: params.gatewayRuntimeScopeSurface,
+    gatewayMethodDispatchAllowed: params.gatewayMethodDispatchAllowed,
     match: params.match ?? "exact",
     handler: params.handler ?? (() => true),
     source: "route",
@@ -140,6 +142,51 @@ describe("plugin HTTP route runtime scopes", () => {
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(200);
     expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("threads plugin route identity and gateway dispatch entitlement into runtime scope", async () => {
+    let observed:
+      | {
+          pluginId: string | undefined;
+          pluginSource: string | undefined;
+          gatewayMethodDispatchAllowed: boolean | undefined;
+        }
+      | undefined;
+    const handler = createGatewayPluginRequestHandler({
+      registry: createTestRegistry({
+        httpRoutes: [
+          createRoute({
+            path: "/secure-hook",
+            auth: "gateway",
+            gatewayMethodDispatchAllowed: true,
+            handler: async () => {
+              const scope = getPluginRuntimeGatewayRequestScope();
+              observed = {
+                pluginId: scope?.pluginId,
+                pluginSource: scope?.pluginSource,
+                gatewayMethodDispatchAllowed: scope?.gatewayMethodDispatchAllowed,
+              };
+              return true;
+            },
+          }),
+        ],
+      }),
+      log: createMockLogger(),
+    });
+
+    const { res } = makeMockHttpResponse();
+    const handled = await handler({ url: "/secure-hook" } as IncomingMessage, res, undefined, {
+      gatewayAuthSatisfied: true,
+      gatewayRequestOperatorScopes: ["operator.write"],
+    });
+
+    expect(handled).toBe(true);
+    expect(res.statusCode).toBe(200);
+    expect(observed).toEqual({
+      pluginId: "route",
+      pluginSource: "route",
+      gatewayMethodDispatchAllowed: true,
+    });
   });
 
   it("does not give approval-scoped gateway-auth routes global approval visibility", async () => {

@@ -222,6 +222,16 @@ function promptModelAllowlistOptions(index = 0) {
     | undefined;
 }
 
+function promptDefaultModelOptions(index = 0) {
+  return mocks.promptDefaultModel.mock.calls[index]?.[0] as
+    | {
+        browseCatalogOnDemand?: boolean;
+        loadCatalog?: boolean;
+        preferredProvider?: string;
+      }
+    | undefined;
+}
+
 const noopPrompter = {} as WizardPrompter;
 
 function createKilocodeProvider() {
@@ -629,6 +639,35 @@ describe("promptAuthConfig", () => {
     const call = promptModelAllowlistOptions();
     expect(call?.preferredProvider).toBe("github-copilot");
     expect(call?.loadCatalog).toBe(true);
+  });
+
+  it("lets skip-auth model browsing scope the allowlist to the selected model provider", async () => {
+    vi.clearAllMocks();
+    mocks.promptAuthChoiceGrouped.mockResolvedValue("skip");
+    mocks.promptDefaultModel.mockResolvedValue({ model: "openai-codex/gpt-5.5" });
+    mocks.promptModelAllowlist.mockResolvedValue({
+      models: ["openai-codex/gpt-5.5"],
+      scopeKeys: ["openai-codex/gpt-5.5", "openai-codex/gpt-5.5-pro"],
+    });
+    mocks.resolveProviderPluginChoice.mockReturnValue(null);
+
+    const result = await promptAuthConfig(
+      {
+        agents: {
+          defaults: {
+            model: { primary: "fleet-router/qwen3.6:latest" },
+          },
+        },
+      },
+      makeRuntime(),
+      noopPrompter,
+    );
+
+    expect(promptDefaultModelOptions()?.loadCatalog).toBe(true);
+    expect(promptDefaultModelOptions()?.browseCatalogOnDemand).toBe(true);
+    expect(promptModelAllowlistOptions()?.preferredProvider).toBe("openai-codex");
+    expect(result.agents?.defaults?.model).toEqual({ primary: "openai-codex/gpt-5.5" });
+    expect(Object.keys(result.agents?.defaults?.models ?? {})).toEqual(["openai-codex/gpt-5.5"]);
   });
 
   it("returns to auth selection when plugin install onboarding asks for a retry", async () => {

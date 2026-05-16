@@ -1120,6 +1120,7 @@ export type ProviderPluginWizardSetup = {
   choiceHint?: string;
   assistantPriority?: number;
   assistantVisibility?: "visible" | "manual-only";
+  onboardingFeatured?: boolean;
   groupId?: string;
   groupLabel?: string;
   groupHint?: string;

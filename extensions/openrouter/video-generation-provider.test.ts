@@ -553,6 +553,89 @@ describe("openrouter video generation provider", () => {
     });
   });
 
+  it("wraps malformed successful OpenRouter submit responses", async () => {
+    postJsonRequestMock.mockResolvedValue(releasedJson([]));
+
+    const provider = buildOpenRouterVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "openrouter",
+        model: "google/veo-3.1",
+        prompt: "bad shape",
+        cfg: {} as never,
+      }),
+    ).rejects.toThrow("OpenRouter video generation response malformed");
+  });
+
+  it("wraps non-JSON successful OpenRouter submit responses", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => {
+          throw new SyntaxError("Unexpected token < in JSON");
+        },
+      },
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildOpenRouterVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "openrouter",
+        model: "google/veo-3.1",
+        prompt: "html body",
+        cfg: {} as never,
+      }),
+    ).rejects.toThrow("OpenRouter video generation response malformed");
+  });
+
+  it("rejects unknown OpenRouter poll statuses without waiting for timeout", async () => {
+    postJsonRequestMock.mockResolvedValue(
+      releasedJson({
+        id: "job-123",
+        polling_url: "/api/v1/videos/job-123",
+        status: "pending",
+      }),
+    );
+    fetchWithTimeoutGuardedMock.mockResolvedValueOnce(
+      releasedJson({
+        id: "job-123",
+        status: "nearly_done",
+      }),
+    );
+
+    const provider = buildOpenRouterVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "openrouter",
+        model: "google/veo-3.1",
+        prompt: "bad status",
+        cfg: {} as never,
+      }),
+    ).rejects.toThrow("OpenRouter video generation response malformed");
+    expect(waitProviderOperationPollIntervalMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed OpenRouter completed output URL arrays", async () => {
+    postJsonRequestMock.mockResolvedValue(
+      releasedJson({
+        id: "job-123",
+        polling_url: "/api/v1/videos/job-123",
+        status: "completed",
+        unsigned_urls: { 0: "/api/v1/videos/job-123/content?index=0" },
+      }),
+    );
+
+    const provider = buildOpenRouterVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "openrouter",
+        model: "google/veo-3.1",
+        prompt: "bad urls",
+        cfg: {} as never,
+      }),
+    ).rejects.toThrow("OpenRouter video generation response malformed");
+  });
+
   it("does not forward auth headers to cross-origin polling URLs", async () => {
     postJsonRequestMock.mockResolvedValue(
       releasedJson({

@@ -15,13 +15,17 @@ top-level keys, see [Configuration reference](/gateway/configuration-reference).
 
 ### `agents.defaults.workspace`
 
-Default: `~/.openclaw/workspace`.
+Default: `OPENCLAW_WORKSPACE_DIR` when set, otherwise `~/.openclaw/workspace`.
 
 ```json5
 {
   agents: { defaults: { workspace: "~/.openclaw/workspace" } },
 }
 ```
+
+An explicit `agents.defaults.workspace` value takes precedence over
+`OPENCLAW_WORKSPACE_DIR`. Use the environment variable to point default agents
+at a mounted workspace when you do not want to write that path into config.
 
 ### `agents.defaults.repoRoot`
 
@@ -425,6 +429,7 @@ Time format in system prompt. Default: `auto` (OS preference).
 - `model.primary`: format `provider/model` (e.g. `openai/gpt-5.5` for OpenAI API-key or Codex OAuth access). If you omit the provider, OpenClaw tries an alias first, then a unique configured-provider match for that exact model id, and only then falls back to the configured default provider (deprecated compatibility behavior, so prefer explicit `provider/model`). If that provider no longer exposes the configured default model, OpenClaw falls back to the first configured provider/model instead of surfacing a stale removed-provider default.
 - `models`: the configured model catalog and allowlist for `/model`. Each entry can include `alias` (shortcut) and `params` (provider-specific, for example `temperature`, `maxTokens`, `cacheRetention`, `context1m`, `responsesServerCompaction`, `responsesCompactThreshold`, `chat_template_kwargs`, `extra_body`/`extraBody`).
   - Use `provider/*` entries such as `"openai-codex/*": {}` or `"vllm/*": {}` to show all discovered models for selected providers without manually listing every model id.
+  - Add `agentRuntime` to a `provider/*` entry when every dynamically discovered model for that provider should use the same runtime. Exact `provider/model` runtime policy still wins over the wildcard.
   - Safe edits: use `openclaw config set agents.defaults.models '<json>' --strict-json --merge` to add entries. `config set` refuses replacements that would remove existing allowlist entries unless you pass `--replace`.
   - Provider-scoped configure/onboarding flows merge selected provider models into this map and preserve unrelated providers already configured.
   - For direct OpenAI Responses models, server-side compaction is enabled automatically. Use `params.responsesServerCompaction: false` to stop injecting `context_management`, or `params.responsesCompactThreshold` to override the threshold. See [OpenAI server-side compaction](/providers/openai#server-side-compaction-responses-api).
@@ -458,6 +463,9 @@ Time format in system prompt. Default: `auto` (OS preference).
         "anthropic/claude-opus-4-7": {
           agentRuntime: { id: "claude-cli" },
         },
+        "vllm/*": {
+          agentRuntime: { id: "pi" },
+        },
       },
     },
   },
@@ -466,6 +474,7 @@ Time format in system prompt. Default: `auto` (OS preference).
 
 - `id`: `"auto"`, `"pi"`, a registered plugin harness id, or a supported CLI backend alias. The bundled Codex plugin registers `codex`; the bundled Anthropic plugin provides the `claude-cli` CLI backend.
 - `id: "auto"` lets registered plugin harnesses claim supported turns and uses PI when no harness matches. An explicit plugin runtime such as `id: "codex"` requires that harness and fails closed if it is unavailable or fails.
+- Runtime precedence is exact model policy first (`agents.list[].models["provider/model"]`, `agents.defaults.models["provider/model"]`, or `models.providers.<provider>.models[]`), then `agents.list[]` / `agents.defaults.models["provider/*"]`, then provider-wide policy at `models.providers.<provider>.agentRuntime`.
 - Whole-agent runtime keys are legacy. `agents.defaults.agentRuntime`, `agents.list[].agentRuntime`, session runtime pins, and `OPENCLAW_AGENT_RUNTIME` are ignored by runtime selection. Run `openclaw doctor --fix` to remove stale values.
 - OpenAI agent models use the Codex harness by default; provider/model `agentRuntime.id: "codex"` remains valid when you want to make that explicit.
 - For Claude CLI deployments, prefer `model: "anthropic/claude-opus-4-7"` plus model-scoped `agentRuntime.id: "claude-cli"`. Legacy `claude-cli/claude-opus-4-7` model refs still work for compatibility, but new config should keep provider/model selection canonical and put the execution backend in provider/model runtime policy.

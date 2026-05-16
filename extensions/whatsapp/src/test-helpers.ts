@@ -499,6 +499,7 @@ vi.mock("./auto-reply/monitor/runtime-api.js", () => ({
   finalizeInboundContext: <T>(ctx: T) => ctx,
   formatInboundEnvelope: formatInboundEnvelopeMock,
   getAgentScopedMediaLocalRoots: () => [] as string[],
+  isControlCommandMessage: () => false,
   jidToE164: normalizePhoneLikeToE164,
   logVerbose: (_msg: string) => undefined,
   normalizeE164: normalizePhoneLikeToE164,

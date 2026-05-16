@@ -1,7 +1,4 @@
-import type {
-  SilentReplyPolicyShape,
-  SilentReplyRewriteShape,
-} from "../shared/silent-reply-policy.js";
+import type { SilentReplyPolicyShape } from "../shared/silent-reply-policy.js";
 import type { AccessGroupsConfig } from "./types.access-groups.js";
 import type { AcpConfig } from "./types.acp.js";
 import type { AgentBinding, AgentsConfig } from "./types.agents.js";
@@ -34,7 +31,6 @@ import type { ProxyConfig } from "./zod-schema.proxy.js";
 
 export type SurfaceConfigEntry = {
   silentReply?: SilentReplyPolicyShape;
-  silentReplyRewrite?: SilentReplyRewriteShape;
 };
 
 export type OpenClawConfig = {

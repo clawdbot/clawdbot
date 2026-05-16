@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { isExplicitCommandTurn, resolveCommandTurnContext } from "./command-turn-context.js";
+import {
+  createCommandTurnContext,
+  isAuthorizedTextSlashCommandTurn,
+  isExplicitCommandTurn,
+  isNativeCommandTurn,
+  resolveCommandTurnContext,
+  resolveCommandTurnTargetSessionKey,
+} from "./command-turn-context.js";
 
 describe("resolveCommandTurnContext", () => {
   it("derives native command turns from legacy context fields", () => {
@@ -85,5 +92,33 @@ describe("resolveCommandTurnContext", () => {
       source: "text",
       authorized: true,
     });
+  });
+
+  it("exposes native/text helper predicates and target session resolution", () => {
+    const nativeTurn = createCommandTurnContext("native", {
+      authorized: true,
+      body: "/stop",
+    });
+    const textTurn = createCommandTurnContext("text", {
+      authorized: true,
+      body: "/status",
+    });
+
+    expect(isNativeCommandTurn(nativeTurn)).toBe(true);
+    expect(isAuthorizedTextSlashCommandTurn(textTurn)).toBe(true);
+    expect(
+      resolveCommandTurnTargetSessionKey({
+        CommandTurn: nativeTurn,
+        CommandTargetSessionKey: " target-session ",
+      }),
+    ).toBe("target-session");
+    expect(
+      resolveCommandTurnTargetSessionKey({
+        CommandSource: "native",
+        CommandAuthorized: true,
+        CommandTargetSessionKey: " legacy-target ",
+      }),
+    ).toBe("legacy-target");
+    expect(isExplicitCommandTurn(undefined)).toBe(false);
   });
 });

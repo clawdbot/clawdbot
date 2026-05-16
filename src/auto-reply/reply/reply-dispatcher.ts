@@ -1,13 +1,9 @@
 import type { TypingCallbacks } from "../../channels/typing.js";
-import { resolveSilentReplySettings } from "../../config/silent-reply.js";
 import type { HumanDelayConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { generateSecureInt } from "../../infra/secure-random.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import {
-  resolveSilentReplyRewriteText,
-  type SilentReplyConversationType,
-} from "../../shared/silent-reply-policy.js";
+import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
 import { sleep } from "../../utils.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -124,58 +120,6 @@ function normalizeReplyPayloadInternal(
   });
 }
 
-function resolveSilentFinalPayload(params: {
-  kind: ReplyDispatchKind;
-  payload: ReplyPayload;
-  silentReplyContext?: ReplyDispatcherOptions["silentReplyContext"];
-}): ReplyPayload | null | undefined {
-  if (params.kind !== "final") {
-    return undefined;
-  }
-  if (!isSilentReplyText(params.payload.text, SILENT_REPLY_TOKEN)) {
-    return undefined;
-  }
-  const context = params.silentReplyContext;
-  if (!context) {
-    return undefined;
-  }
-  const resolvedSettings = resolveSilentReplySettings({
-    cfg: context.cfg,
-    sessionKey: context.sessionKey,
-    surface: context.surface,
-    conversationType: context.conversationType,
-  });
-  if (resolvedSettings.policy === "allow") {
-    return undefined;
-  }
-  if (resolvedSettings.rewrite) {
-    silentReplyLogger.debug("rewriting exact NO_REPLY final payload before delivery", {
-      hasSessionKey: Boolean(context.sessionKey),
-      surface: context.surface,
-      conversationType: context.conversationType,
-      resolvedPolicy: resolvedSettings.policy,
-    });
-    return {
-      ...params.payload,
-      text: resolveSilentReplyRewriteText({
-        seed: `${context.sessionKey ?? context.surface ?? "silent-reply"}:${params.payload.text ?? ""}`,
-      }),
-    };
-  }
-  if (!resolvedSettings.rewrite) {
-    silentReplyLogger.debug("preserving exact NO_REPLY final payload before normalization", {
-      hasSessionKey: Boolean(context.sessionKey),
-      surface: context.surface,
-      conversationType: context.conversationType,
-      resolvedPolicy: resolvedSettings.policy,
-    });
-  }
-  return {
-    ...params.payload,
-    text: params.payload.text?.trim() || SILENT_REPLY_TOKEN,
-  };
-}
-
 export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDispatcher {
   let sendChain: Promise<void> = Promise.resolve();
   // Track in-flight deliveries so we can emit a reliable "idle" signal.
@@ -210,21 +154,14 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
 
   const enqueue = (kind: ReplyDispatchKind, payload: ReplyPayload) => {
     const originalWasExactSilent = isSilentReplyText(payload.text, SILENT_REPLY_TOKEN);
-    const silentFinalPayload = resolveSilentFinalPayload({
-      kind,
-      payload,
-      silentReplyContext: options.silentReplyContext,
+    const normalized = normalizeReplyPayloadInternal(payload, {
+      responsePrefix: options.responsePrefix,
+      responsePrefixContext: options.responsePrefixContext,
+      responsePrefixContextProvider: options.responsePrefixContextProvider,
+      transformReplyPayload: options.transformReplyPayload,
+      onHeartbeatStrip: options.onHeartbeatStrip,
+      onSkip: (reason) => options.onSkip?.(payload, { kind, reason }),
     });
-    const normalized =
-      silentFinalPayload ??
-      normalizeReplyPayloadInternal(payload, {
-        responsePrefix: options.responsePrefix,
-        responsePrefixContext: options.responsePrefixContext,
-        responsePrefixContextProvider: options.responsePrefixContextProvider,
-        transformReplyPayload: options.transformReplyPayload,
-        onHeartbeatStrip: options.onHeartbeatStrip,
-        onSkip: (reason) => options.onSkip?.(payload, { kind, reason }),
-      });
     if (!normalized) {
       if (kind === "final" && originalWasExactSilent) {
         silentReplyLogger.debug("exact NO_REPLY final payload was skipped before delivery", {

@@ -24,6 +24,7 @@ import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-na
 import { hasFinalInboundReplyDispatch } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import type { ChannelBotLoopProtectionFacts } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
+import { buildInboundHistoryFromEntries } from "openclaw/plugin-sdk/reply-history";
 import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import {
@@ -1137,7 +1138,12 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 messageId,
               })
             : undefined;
-        const inboundHistory = preparedTrigger?.history;
+        const inboundHistory = preparedTrigger
+          ? buildInboundHistoryFromEntries({
+              entries: preparedTrigger.history,
+              limit: historyLimit,
+            })
+          : undefined;
         const triggerSnapshot = preparedTrigger;
 
         return {

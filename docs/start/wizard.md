@@ -16,6 +16,20 @@ and workspace defaults in one guided flow.
 openclaw onboard
 ```
 
+## Locale
+
+The CLI wizard localizes fixed onboarding copy. It resolves locale from
+`OPENCLAW_LOCALE`, then `LC_ALL`, then `LC_MESSAGES`, then `LANG`, and falls
+back to English. Supported wizard locales are `en`, `zh-CN`, and `zh-TW`.
+
+```bash
+OPENCLAW_LOCALE=zh-CN openclaw onboard
+```
+
+Names and stable identifiers stay literal: `OpenClaw`, `Gateway`, `Tailscale`,
+commands, config keys, URLs, provider IDs, model IDs, and plugin/channel labels
+are not translated.
+
 <Info>
 Fastest first chat: open the Control UI (no channel setup needed). Run
 `openclaw dashboard` and chat in the browser. Docs: [Dashboard](/web/dashboard).

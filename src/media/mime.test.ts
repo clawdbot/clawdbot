@@ -79,6 +79,30 @@ describe("mime detection", () => {
       expected: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     },
     {
+      name: "does not let image extensions override generic zip bytes",
+      input: async () => {
+        const zip = new JSZip();
+        zip.file("hello.txt", "hi");
+        return {
+          buffer: await zip.generateAsync({ type: "nodebuffer" }),
+          filePath: "/tmp/fake.png",
+        };
+      },
+      expected: "application/zip",
+    },
+    {
+      name: "does not let image headers override generic zip bytes",
+      input: async () => {
+        const zip = new JSZip();
+        zip.file("hello.txt", "hi");
+        return {
+          buffer: await zip.generateAsync({ type: "nodebuffer" }),
+          headerMime: "image/png",
+        };
+      },
+      expected: "application/zip",
+    },
+    {
       name: "uses extension mapping for JavaScript assets",
       input: async () => ({
         filePath: "/tmp/a2ui.bundle.js",

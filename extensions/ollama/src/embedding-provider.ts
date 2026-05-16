@@ -73,8 +73,13 @@ const QUERY_INSTRUCTION_TEMPLATES = [
   },
 ] as const;
 
-function sanitizeAndNormalizeEmbedding(vec: number[]): number[] {
-  const sanitized = vec.map((value) => (Number.isFinite(value) ? value : 0));
+function sanitizeAndNormalizeEmbedding(vec: unknown[]): number[] {
+  const sanitized = vec.map((value) => {
+    if (typeof value !== "number") {
+      throw new Error("Ollama embed response contains a non-number embedding value");
+    }
+    return Number.isFinite(value) ? value : 0;
+  });
   const magnitude = Math.sqrt(sanitized.reduce((sum, value) => sum + value * value, 0));
   if (magnitude < 1e-10) {
     return sanitized;
@@ -99,6 +104,21 @@ async function withRemoteHttpResponse<T>(params: {
   } finally {
     await release();
   }
+}
+
+async function readOllamaEmbeddingJsonResponse(
+  response: Pick<Response, "json">,
+): Promise<{ embeddings?: unknown }> {
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch (cause) {
+    throw new Error("Ollama embed response returned malformed JSON", { cause });
+  }
+  if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
+    throw new Error("Ollama embed response returned a non-object JSON payload");
+  }
+  return payload as { embeddings?: unknown };
 }
 
 function normalizeEmbeddingModel(model: string, providerId?: string): string {
@@ -315,7 +335,7 @@ export async function createOllamaEmbeddingProvider(
         if (!response.ok) {
           throw new Error(`Ollama embed HTTP ${response.status}: ${await response.text()}`);
         }
-        return (await response.json()) as { embeddings?: unknown };
+        return await readOllamaEmbeddingJsonResponse(response);
       },
     });
     if (!Array.isArray(json.embeddings)) {

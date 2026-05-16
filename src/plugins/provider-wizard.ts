@@ -27,6 +27,7 @@ export type ProviderWizardOption = {
   onboardingScopes?: Array<"text-inference" | "image-generation">;
   assistantPriority?: number;
   assistantVisibility?: "visible" | "manual-only";
+  onboardingFeatured?: boolean;
 };
 
 export type ProviderModelPickerEntry = {
@@ -119,6 +120,7 @@ function buildSetupOptionForMethod(params: {
     ...(params.wizard.assistantVisibility
       ? { assistantVisibility: params.wizard.assistantVisibility }
       : {}),
+    ...(params.wizard.onboardingFeatured ? { onboardingFeatured: true } : {}),
   };
 }
 

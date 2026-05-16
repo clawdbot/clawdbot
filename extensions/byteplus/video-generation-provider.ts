@@ -27,26 +27,73 @@ const POLL_INTERVAL_MS = 5_000;
 const MAX_POLL_ATTEMPTS = 120;
 
 type BytePlusTaskCreateResponse = {
-  id?: string;
+  id?: unknown;
 };
 
 type BytePlusTaskResponse = {
-  id?: string;
-  model?: string;
-  status?: "running" | "failed" | "queued" | "succeeded" | "cancelled";
-  error?: {
-    code?: string;
-    message?: string;
-  };
-  content?: {
-    video_url?: string;
-    last_frame_url?: string;
-    file_url?: string;
-  };
-  duration?: number;
-  ratio?: string;
-  resolution?: string;
+  id?: unknown;
+  model?: unknown;
+  status?: unknown;
+  error?: unknown;
+  content?: unknown;
+  duration?: unknown;
+  ratio?: unknown;
+  resolution?: unknown;
 };
+
+type BytePlusTaskStatus = "running" | "failed" | "queued" | "succeeded" | "cancelled";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+async function readBytePlusJsonResponse<T>(
+  response: Pick<Response, "json">,
+  label: string,
+): Promise<T> {
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch (cause) {
+    throw new Error(`${label}: malformed JSON response`, { cause });
+  }
+  if (!isRecord(payload)) {
+    throw new Error(`${label}: malformed JSON response`);
+  }
+  return payload as T;
+}
+
+function readBytePlusTaskStatus(payload: BytePlusTaskResponse): BytePlusTaskStatus {
+  const status = normalizeOptionalString(payload.status);
+  switch (status) {
+    case "running":
+    case "failed":
+    case "queued":
+    case "succeeded":
+    case "cancelled":
+      return status;
+    case undefined:
+      throw new Error("BytePlus video status response missing task status");
+    default:
+      throw new Error(`BytePlus video status response returned unknown task status: ${status}`);
+  }
+}
+
+function readBytePlusErrorMessage(error: unknown): string | undefined {
+  return isRecord(error) ? normalizeOptionalString(error.message) : undefined;
+}
+
+function readBytePlusVideoUrl(payload: BytePlusTaskResponse): string {
+  const content = payload.content;
+  if (content !== undefined && !isRecord(content)) {
+    throw new Error("BytePlus video generation completed with malformed content");
+  }
+  const videoUrl = normalizeOptionalString(content?.video_url);
+  if (!videoUrl) {
+    throw new Error("BytePlus video generation completed without a video URL");
+  }
+  return videoUrl;
+}
 
 function resolveBytePlusVideoBaseUrl(req: VideoGenerationRequest): string {
   return (
@@ -100,14 +147,17 @@ async function pollBytePlusTask(params: {
       provider: "byteplus",
       requestFailedMessage: "BytePlus video status request failed",
     });
-    const payload = (await response.json()) as BytePlusTaskResponse;
-    switch (normalizeOptionalString(payload.status)) {
+    const payload = await readBytePlusJsonResponse<BytePlusTaskResponse>(
+      response,
+      "BytePlus video status request failed",
+    );
+    switch (readBytePlusTaskStatus(payload)) {
       case "succeeded":
         return payload;
       case "failed":
       case "cancelled":
         throw new Error(
-          normalizeOptionalString(payload.error?.message) || "BytePlus video generation failed",
+          readBytePlusErrorMessage(payload.error) || "BytePlus video generation failed",
         );
       case "queued":
       case "running":
@@ -292,7 +342,10 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
       });
       try {
         await assertOkOrThrowHttpError(response, "BytePlus video generation failed");
-        const submitted = (await response.json()) as BytePlusTaskCreateResponse;
+        const submitted = await readBytePlusJsonResponse<BytePlusTaskCreateResponse>(
+          response,
+          "BytePlus video generation failed",
+        );
         const taskId = normalizeOptionalString(submitted.id);
         if (!taskId) {
           throw new Error("BytePlus video generation response missing task id");
@@ -307,10 +360,7 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
           baseUrl,
           fetchFn,
         });
-        const videoUrl = normalizeOptionalString(completed.content?.video_url);
-        if (!videoUrl) {
-          throw new Error("BytePlus video generation completed without a video URL");
-        }
+        const videoUrl = readBytePlusVideoUrl(completed);
         const video = await downloadBytePlusVideo({
           url: videoUrl,
           timeoutMs: createProviderOperationTimeoutResolver({
@@ -321,14 +371,14 @@ export function buildBytePlusVideoGenerationProvider(): VideoGenerationProvider 
         });
         return {
           videos: [video],
-          model: completed.model ?? resolvedModel,
+          model: normalizeOptionalString(completed.model) ?? resolvedModel,
           metadata: {
             taskId,
-            status: completed.status,
+            status: normalizeOptionalString(completed.status),
             videoUrl,
-            ratio: completed.ratio,
-            resolution: completed.resolution,
-            duration: completed.duration,
+            ratio: normalizeOptionalString(completed.ratio),
+            resolution: normalizeOptionalString(completed.resolution),
+            duration: typeof completed.duration === "number" ? completed.duration : undefined,
           },
         };
       } finally {

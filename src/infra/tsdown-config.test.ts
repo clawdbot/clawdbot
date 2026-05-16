@@ -99,6 +99,7 @@ describe("tsdown config", () => {
       "index",
       "commands/status.summary.runtime",
       "provider-dispatcher.runtime",
+      "plugins/hook-runner-global",
       "plugins/provider-discovery.runtime",
       "plugins/provider-runtime.runtime",
       "plugins/runtime/index",
@@ -135,6 +136,14 @@ describe("tsdown config", () => {
 
     expect(entrySources(distGraph)["provider-dispatcher.runtime"]).toBe(
       "src/auto-reply/reply/provider-dispatcher.runtime.ts",
+    );
+  });
+
+  it("keeps gateway shutdown hook runner behind one stable dist entry", () => {
+    const distGraph = requireUnifiedDistGraph();
+
+    expect(entrySources(distGraph)["plugins/hook-runner-global"]).toBe(
+      "src/plugins/hook-runner-global.ts",
     );
   });
 

@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.5.14",
+  "version": "2026.5.16",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -479,6 +479,10 @@
     "./plugin-sdk/security-runtime": {
       "types": "./dist/plugin-sdk/security-runtime.d.ts",
       "default": "./dist/plugin-sdk/security-runtime.js"
+    },
+    "./plugin-sdk/gateway-method-runtime": {
+      "types": "./dist/plugin-sdk/gateway-method-runtime.d.ts",
+      "default": "./dist/plugin-sdk/gateway-method-runtime.js"
     },
     "./plugin-sdk/gateway-runtime": {
       "types": "./dist/plugin-sdk/gateway-runtime.d.ts",
@@ -1356,9 +1360,6 @@
     "build:plugin-sdk:dts": "node scripts/run-tsgo.mjs -p tsconfig.plugin-sdk.dts.json --declaration true",
     "build:plugin-sdk:strict-smoke": "pnpm build:plugin-sdk:dts && node --experimental-strip-types scripts/write-plugin-sdk-entry-dts.ts",
     "build:strict-smoke": "pnpm plugins:assets:build && node scripts/tsdown-build.mjs && node scripts/check-cli-bootstrap-imports.mjs && node scripts/runtime-postbuild.mjs && node scripts/build-stamp.mjs && node scripts/runtime-postbuild-stamp.mjs && pnpm build:plugin-sdk:dts && node --experimental-strip-types scripts/write-plugin-sdk-entry-dts.ts && node scripts/check-plugin-sdk-exports.mjs",
-    "canon:check": "node scripts/canon.mjs check",
-    "canon:check:json": "node scripts/canon.mjs check --json",
-    "canon:enforce": "node scripts/canon.mjs enforce --json",
     "canvas:a2ui:bundle": "node scripts/bundle-a2ui.mjs",
     "changed:lanes": "node scripts/changed-lanes.mjs",
     "check": "node scripts/check.mjs",
@@ -1553,6 +1554,7 @@
     "qa:telegram-user:crabbox": "node --import tsx scripts/e2e/telegram-user-crabbox-proof.ts",
     "release-metadata:check": "node scripts/check-release-metadata-only.mjs",
     "release:beta-smoke": "node --import tsx scripts/release-beta-smoke.ts",
+    "release:candidate": "node scripts/release-candidate-checklist.mjs",
     "release:check": "pnpm release:generated:check && node --import tsx scripts/release-check.ts",
     "release:fast-pretag-check": "bash scripts/release-fast-pretag-check.sh",
     "release:generated:check": "node scripts/release-preflight.mjs --check",
@@ -1567,7 +1569,7 @@
     "rtt": "node --import tsx scripts/rtt.ts",
     "runtime-sidecars:check": "node --import tsx scripts/generate-runtime-sidecar-paths-baseline.ts --check",
     "runtime-sidecars:gen": "node --import tsx scripts/generate-runtime-sidecar-paths-baseline.ts --write",
-    "start": "node scripts/run-node.mjs",
+    "start": "node openclaw.mjs",
     "test": "node scripts/test-projects.mjs",
     "test:all": "pnpm lint && pnpm build && pnpm test && pnpm test:e2e && pnpm test:live && pnpm test:docker:all",
     "test:auth:compat": "node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts src/gateway/server.auth.compat-baseline.test.ts src/gateway/client.test.ts src/gateway/reconnect-gating.test.ts src/gateway/protocol/connect-error-details.test.ts",
@@ -1764,7 +1766,7 @@
     "@modelcontextprotocol/sdk": "1.29.0",
     "@mozilla/readability": "0.6.0",
     "@openclaw/fs-safe": "0.2.4",
-    "@openclaw/proxyline": "0.2.0",
+    "@openclaw/proxyline": "0.3.0",
     "ajv": "8.20.0",
     "chalk": "5.6.2",
     "chokidar": "5.0.0",
@@ -1773,7 +1775,6 @@
     "dotenv": "17.4.2",
     "express": "5.2.1",
     "file-type": "22.0.1",
-    "global-agent": "4.1.3",
     "grammy": "1.42.0",
     "ipaddr.js": "2.4.0",
     "jiti": "2.7.0",
@@ -1792,6 +1793,7 @@
     "tokenjuice": "0.7.0",
     "tree-sitter-bash": "0.25.1",
     "tslog": "4.10.2",
+    "typescript": "6.0.3",
     "typebox": "1.1.38",
     "undici": "8.3.0",
     "web-push": "3.6.7",
@@ -1822,7 +1824,6 @@
     "signal-utils": "0.21.1",
     "tsdown": "0.22.0",
     "tsx": "4.22.0",
-    "typescript": "6.0.3",
     "unrun": "0.3.0",
     "vitest": "4.1.6"
   },

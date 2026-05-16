@@ -220,7 +220,7 @@ export function createWhatsAppPluginBase(params: {
       },
     },
     reload: { configPrefixes: ["web"], noopPrefixes: ["channels.whatsapp"] },
-    gatewayMethods: ["web.login.start", "web.login.wait"],
+    gatewayMethodDescriptors: [{ name: "web.login.start" }, { name: "web.login.wait" }],
     configSchema: WhatsAppChannelConfigSchema,
     config: {
       ...whatsappConfigAdapter,
@@ -254,7 +254,7 @@ export function createWhatsAppPluginBase(params: {
     setupWizard: base.setupWizard!,
     capabilities: base.capabilities!,
     reload: base.reload!,
-    gatewayMethods: base.gatewayMethods!,
+    gatewayMethodDescriptors: base.gatewayMethodDescriptors!,
     configSchema: base.configSchema!,
     config: base.config!,
     messaging: {
@@ -278,7 +278,7 @@ export function createWhatsAppPluginBase(params: {
     | "setupWizard"
     | "capabilities"
     | "reload"
-    | "gatewayMethods"
+    | "gatewayMethodDescriptors"
     | "configSchema"
     | "config"
     | "messaging"

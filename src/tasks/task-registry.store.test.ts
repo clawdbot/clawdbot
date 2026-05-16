@@ -8,6 +8,7 @@ import {
   createTaskRecord,
   deleteTaskRecordById,
   findTaskByRunId,
+  getTaskRegistrySnapshot,
   markTaskLostById,
   maybeDeliverTaskStateChangeUpdate,
   resetTaskRegistryForTests,
@@ -272,6 +273,49 @@ describe("task-registry store runtime", () => {
     expect(restored?.requesterSessionKey).toBe("agent:main:workspace:channel:C1234567890");
     expect(restored?.ownerKey).toBe("agent:main:main");
     expect(restored?.childSessionKey).toBe("agent:main:workspace:channel:C1234567890");
+  });
+
+  it("drops malformed requester origin json from sqlite delivery state", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-task-store-origin-shape-" },
+      async () => {
+        const created = createTaskRecord({
+          runtime: "acp",
+          ownerKey: "agent:main:main",
+          scopeKind: "session",
+          requesterOrigin: {
+            channel: "notifychat",
+            to: "notifychat:123",
+          },
+          childSessionKey: "agent:main:acp:origin-shape",
+          runId: "run-origin-shape",
+          task: "Restore malformed origin",
+          status: "running",
+          deliveryStatus: "pending",
+          notifyPolicy: "state_changes",
+        });
+
+        const sqlitePath = resolveTaskRegistrySqlitePath(process.env);
+        const { DatabaseSync } = requireNodeSqlite();
+        const db = new DatabaseSync(sqlitePath);
+        db.prepare(
+          `INSERT OR REPLACE INTO task_delivery_state (
+            task_id,
+            requester_origin_json,
+            last_notified_event_at
+          ) VALUES (?, ?, ?)`,
+        ).run(created.taskId, JSON.stringify(["notifychat", "123"]), 321);
+        db.close();
+
+        resetTaskRegistryForTests({ persist: false });
+
+        const deliveryState = getTaskRegistrySnapshot().deliveryStates.find(
+          (state) => state.taskId === created.taskId,
+        );
+        expect(deliveryState?.lastNotifiedEventAt).toBe(321);
+        expect(deliveryState?.requesterOrigin).toBeUndefined();
+      },
+    );
   });
 
   it("preserves taskKind across sqlite restore", () => {

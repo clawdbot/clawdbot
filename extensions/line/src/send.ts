@@ -68,6 +68,18 @@ function normalizeTarget(to: string): string {
     throw new Error("Recipient is required for LINE sends");
   }
 
+  // Real LINE chat ids are a capital C/U/R followed by 32 lowercase hex chars
+  // (33 chars total) and are case-sensitive — push returns HTTP 400 otherwise.
+  // Reject values that match the LINE id shape but lost their leading capital
+  // so the failure is surfaced as a permanent error (recovery moves the entry
+  // to failed/ immediately instead of silently retrying 5 times). Short test
+  // fixtures (e.g. "U123") are left alone. openclaw/openclaw#81628
+  if (normalized.length >= 33 && !/^[CUR]/.test(normalized)) {
+    throw new Error(
+      `Recipient is not a valid LINE id (case-sensitive; expected leading capital C/U/R): ${normalized.slice(0, 4)}…`,
+    );
+  }
+
   return normalized;
 }
 

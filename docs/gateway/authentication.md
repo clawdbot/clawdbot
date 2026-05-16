@@ -179,6 +179,18 @@ requests`, `ThrottlingException`, `concurrency limit reached`, or
 - Non-rate-limit errors are not retried with alternate keys.
 - If all keys fail, the final error from the last attempt is returned.
 
+## Removing provider auth while the gateway is running
+
+When provider auth is removed through the Gateway control plane, OpenClaw deletes
+the saved auth profiles for that provider and aborts active chat or agent runs
+whose selected model provider matches the removed provider. The aborted runs emit
+the normal chat cancellation and lifecycle events with
+`stopReason: "auth-revoked"`, so connected clients can show that the run was
+stopped because credentials were removed.
+
+Removing saved auth does not revoke keys at the provider. Rotate or revoke the
+key in the provider dashboard when you need provider-side invalidation.
+
 ## Controlling which credential is used
 
 ### Per-session (chat command)
