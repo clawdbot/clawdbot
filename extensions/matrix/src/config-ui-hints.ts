@@ -41,6 +41,10 @@ export const matrixChannelConfigUiHints = {
     label: "Matrix Progress Max Lines",
     help: "Maximum number of compact progress lines to keep below the draft label (default: 8).",
   },
+  "streaming.progress.maxLineChars": {
+    label: "Matrix Progress Max Line Chars",
+    help: "Maximum characters per compact progress line before truncation (default: 120). Prose cuts at word boundaries; commands and paths keep useful suffixes.",
+  },
   "streaming.progress.toolProgress": {
     label: "Matrix Progress Tool Lines",
     help: "Show compact tool/progress lines in progress draft mode (default: true). Set false to keep only the label until final delivery.",

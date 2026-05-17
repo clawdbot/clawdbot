@@ -52,8 +52,9 @@ describe("buildSlackProgressDraftBlocks", () => {
     ]);
   });
 
-  it("compacts long rich details independently from the text fallback", () => {
+  it("uses the configured max line chars for rich progress details", () => {
     const blocks = buildSlackProgressDraftBlocks({
+      maxLineChars: 64,
       lines: [
         {
           kind: "tool",
@@ -69,7 +70,10 @@ describe("buildSlackProgressDraftBlocks", () => {
       type: "section",
       fields: [
         { type: "mrkdwn", text: "🛠️ *Exec*" },
-        { type: "mrkdwn", text: "run tests in /Users/ex…es/very/deep/path/example" },
+        {
+          type: "mrkdwn",
+          text: "run tests in /Users/example/P…aw/packages/very/deep/path/example",
+        },
       ],
     });
   });

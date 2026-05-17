@@ -11,7 +11,7 @@
     "@aws-sdk/client-bedrock": "3.1047.0",
     "@aws-sdk/client-bedrock-runtime": "3.1045.0",
     "@aws-sdk/credential-provider-node": "3.972.41",
-    "@earendil-works/pi-ai": "0.74.0",
+    "@earendil-works/pi-ai": "0.74.1",
     "@smithy/shared-ini-file-loader": "4.5.2"
   },
   "devDependencies": {

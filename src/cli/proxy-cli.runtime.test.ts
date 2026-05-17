@@ -111,6 +111,7 @@ describe("proxy cli runtime", () => {
 
     await runProxyValidateCommand({
       proxyUrl: "http://override.example:3128",
+      proxyCaFile: "./ca.pem",
       allowedUrls: ["https://allowed.example/"],
       deniedUrls: ["http://127.0.0.1/"],
       apnsReachability: true,
@@ -126,6 +127,7 @@ describe("proxy cli runtime", () => {
       },
       env: process.env,
       proxyUrlOverride: "http://override.example:3128",
+      proxyCaFileOverride: "./ca.pem",
       allowedUrls: ["https://allowed.example/"],
       deniedUrls: ["http://127.0.0.1/"],
       apnsReachability: true,
@@ -278,7 +280,34 @@ describe("proxy cli runtime", () => {
         "Problems\n" +
         "  - proxyUrl must use http://\n\n" +
         "Next steps\n" +
-        "  Fix proxy.proxyUrl, OPENCLAW_PROXY_URL, or --proxy-url so it uses a reachable http:// proxy.\n",
+        "  Fix proxy.proxyUrl, OPENCLAW_PROXY_URL, or --proxy-url so it uses a reachable http:// or https:// proxy.\n",
+    );
+  });
+
+  it("prints CA-file guidance when proxy CA files cannot be read", async () => {
+    runProxyValidationMock.mockResolvedValueOnce({
+      ok: false,
+      config: {
+        enabled: true,
+        proxyUrl: "https://proxy.example:8443",
+        source: "config",
+        errors: ["proxy CA file could not be read (/missing/ca.pem): ENOENT"],
+      },
+      checks: [],
+    });
+    const { runProxyValidateCommand } = await import("./proxy-cli.runtime.js");
+
+    await runProxyValidateCommand({});
+
+    expect(process.stdout.write).toHaveBeenCalledWith(
+      "Proxy validation failed\n\n" +
+        "Proxy\n" +
+        "  Source: config\n" +
+        "  URL:    https://proxy.example:8443/\n\n" +
+        "Problems\n" +
+        "  - proxy CA file could not be read (/missing/ca.pem): ENOENT\n\n" +
+        "Next steps\n" +
+        "  Confirm proxy.tls.caFile or --proxy-ca-file points to a readable PEM CA file for the HTTPS proxy endpoint.\n",
     );
   });
 

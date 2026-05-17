@@ -1200,6 +1200,9 @@ export const ko: TranslationMap = {
       ascending: "오름차순",
       descending: "내림차순",
       reset: "재설정",
+      emptyTitle: "No scheduled jobs yet.",
+      emptyHint: "Create one from a plain-language prompt; advanced fields can wait.",
+      emptyFilteredHint: "Clear or change filters to see scheduled jobs.",
       noMatching: "일치하는 작업이 없습니다.",
       loading: "로딩 중...",
       loadMore: "작업 더 불러오기",
@@ -1235,6 +1238,7 @@ export const ko: TranslationMap = {
     form: {
       editJob: "작업 편집",
       newJob: "새 작업",
+      advancedJob: "Advanced job",
       updateSubtitle: "선택한 예약 작업을 업데이트합니다.",
       createSubtitle: "예약된 웨이크업 또는 에이전트 실행을 생성합니다.",
       required: "필수",

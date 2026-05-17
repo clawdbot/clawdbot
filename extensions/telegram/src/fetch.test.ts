@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -10,6 +13,7 @@ const loggerWarn = vi.hoisted(() => vi.fn());
 
 const undiciFetch = vi.hoisted(() => vi.fn());
 const setGlobalDispatcher = vi.hoisted(() => vi.fn());
+const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
 type MockDispatcherInstance = {
   options?: Record<string, unknown> | string;
   destroy: ReturnType<typeof vi.fn>;
@@ -103,6 +107,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
 let resolveTelegramFetch: typeof import("./fetch.js").resolveTelegramFetch;
 let resolveTelegramApiBase: typeof import("./fetch.js").resolveTelegramApiBase;
 let resolveTelegramTransport: typeof import("./fetch.js").resolveTelegramTransport;
+const tempDirs: string[] = [];
 
 type TelegramDispatcherPolicy = NonNullable<
   ReturnType<typeof resolveTelegramTransport>["dispatcherAttempts"]
@@ -132,6 +137,8 @@ beforeEach(() => {
     "NO_PROXY",
     "no_proxy",
     "OPENCLAW_PROXY_URL",
+    "OPENCLAW_PROXY_ACTIVE",
+    "OPENCLAW_PROXY_CA_FILE",
   ]) {
     vi.stubEnv(key, "");
   }
@@ -140,10 +147,15 @@ beforeEach(() => {
   loggerWarn.mockReset();
   getDefaultResultOrder.mockReset();
   getDefaultResultOrder.mockReturnValue("ipv4first");
+  installUndiciRuntimeDeps();
 });
 
 afterEach(() => {
+  Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
   vi.unstubAllEnvs();
+  for (const dir of tempDirs.splice(0)) {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 function resolveTelegramFetchOrThrow(
@@ -181,6 +193,32 @@ function constructorOptions(ctor: ReturnType<typeof vi.fn>, label: string): unkn
     throw new Error(`missing ${label} constructor call`);
   }
   return call[0];
+}
+
+function writeTempCa(contents: string): string {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-proxy-ca-"));
+  tempDirs.push(dir);
+  const caFile = path.join(dir, "proxy-ca.pem");
+  writeFileSync(caFile, contents, "utf8");
+  return caFile;
+}
+
+function installUndiciRuntimeDeps(): void {
+  (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+    Agent: AgentCtor,
+    EnvHttpProxyAgent: EnvHttpProxyAgentCtor,
+    Pool: vi.fn(function MockPool(
+      this: MockDispatcherInstance,
+      _origin: unknown,
+      options?: Record<string, unknown>,
+    ) {
+      this.options = options;
+      this.destroy = vi.fn(async () => undefined);
+      this.close = vi.fn(async () => undefined);
+    }),
+    ProxyAgent: ProxyAgentCtor,
+    fetch: undiciFetch,
+  };
 }
 
 function buildFetchFallbackError(code: string) {
@@ -420,6 +458,32 @@ describe("resolveTelegramFetch", () => {
     expect(dispatcher?.options?.connect?.autoSelectFamilyAttemptTimeout).toBe(300);
     expect(dispatcher?.options?.proxyTls?.autoSelectFamily).toBe(false);
     expect(dispatcher?.options?.proxyTls?.autoSelectFamilyAttemptTimeout).toBe(300);
+  });
+
+  it("adds managed proxy CA trust to Telegram env proxy dispatchers", async () => {
+    const caFile = writeTempCa("telegram-managed-proxy-ca");
+    vi.stubEnv("https_proxy", "https://proxy.example:8443");
+    vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
+    vi.stubEnv("OPENCLAW_PROXY_CA_FILE", caFile);
+    undiciFetch.mockResolvedValue({ ok: true } as Response);
+
+    const resolved = resolveTelegramFetchOrThrow(undefined, {
+      network: {
+        autoSelectFamily: false,
+        dnsResultOrder: "ipv4first",
+      },
+    });
+
+    await resolved("https://api.telegram.org/botx/getMe");
+
+    expect(EnvHttpProxyAgentCtor).toHaveBeenCalledTimes(1);
+    const envProxyOptions = constructorOptions(EnvHttpProxyAgentCtor, "env proxy") as {
+      httpsProxy?: string;
+      proxyTls?: { ca?: unknown; autoSelectFamily?: boolean };
+    };
+    expect(envProxyOptions.httpsProxy).toBe("https://proxy.example:8443");
+    expect(envProxyOptions.proxyTls?.ca).toBe("telegram-managed-proxy-ca");
+    expect(envProxyOptions.proxyTls?.autoSelectFamily).toBe(false);
   });
 
   it("uses the OpenClaw debug proxy URL when no explicit proxy fetch is provided", async () => {

@@ -20,6 +20,7 @@ import {
   reportsMissingDiscoveryFiles,
 } from "./discovery-eval.js";
 import { extractQaToolPayload } from "./extract-tool-payload.js";
+import { assertNoGatewayLogSentinels, scanGatewayLogSentinels } from "./gateway-log-sentinel.js";
 import { hasModelSwitchContinuityEvidence } from "./model-switch-eval.js";
 import { qaChannelPlugin } from "./runtime-api.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
@@ -37,6 +38,7 @@ import {
   readDoctorMemoryStatus,
   readEffectiveTools,
   readRawQaSessionStore,
+  readSessionTranscriptSummary,
   readSkillStatus,
   resolveGeneratedImagePath,
   runAgentPrompt,
@@ -163,6 +165,13 @@ function createQaSuiteScenarioDeps(params: QaSuiteScenarioDepsParams) {
     readEffectiveTools,
     readSkillStatus,
     readRawQaSessionStore,
+    readGatewayLogs: () => params.env.gateway.logs?.() ?? "",
+    markGatewayLogCursor: () => (params.env.gateway.logs?.() ?? "").length,
+    scanGatewayLogSentinels: (options?: Parameters<typeof scanGatewayLogSentinels>[1]) =>
+      scanGatewayLogSentinels(params.env.gateway.logs?.(), options),
+    assertNoGatewayLogSentinels: (options?: Parameters<typeof assertNoGatewayLogSentinels>[1]) =>
+      assertNoGatewayLogSentinels(params.env.gateway.logs?.(), options),
+    readSessionTranscriptSummary,
     runQaCli,
     extractMediaPathFromText,
     resolveGeneratedImagePath,

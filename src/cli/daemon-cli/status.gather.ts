@@ -26,7 +26,9 @@ import {
 import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import {
   formatPortDiagnostics,
+  inspectPortConnections,
   inspectPortUsage,
+  type PortConnection,
   type PortListener,
   type PortUsageStatus,
 } from "../../infra/ports.js";
@@ -294,6 +296,10 @@ export type DaemonStatus = {
     listeners: PortListener[];
     hints: string[];
   };
+  connections?: {
+    port: number;
+    established: PortConnection[];
+  };
   lastError?: string;
   rpc?: {
     ok: boolean;
@@ -460,6 +466,27 @@ async function inspectDaemonPortStatuses(params: {
   };
 }
 
+async function inspectEstablishedGatewayClients(params: {
+  daemonPort: number;
+  deep?: boolean;
+  gatewayMode?: string;
+}): Promise<DaemonStatus["connections"] | undefined> {
+  if (params.deep !== true || params.gatewayMode === "remote") {
+    return undefined;
+  }
+  const result = await inspectPortConnections(params.daemonPort).catch(() => null);
+  const establishedClients = result?.connections.filter(
+    (connection) => connection.direction !== "server",
+  );
+  if (!result || !establishedClients || establishedClients.length === 0) {
+    return undefined;
+  }
+  return {
+    port: result.port,
+    established: establishedClients,
+  };
+}
+
 export async function gatherDaemonStatus(
   opts: {
     rpc: GatewayRpcOpts;
@@ -507,6 +534,11 @@ export async function gatherDaemonStatus(
   const { portStatus, portCliStatus } = await inspectDaemonPortStatuses({
     daemonPort,
     cliPort,
+  });
+  const establishedClients = await inspectEstablishedGatewayClients({
+    daemonPort,
+    deep: opts.deep,
+    gatewayMode: daemonCfg.gateway?.mode,
   });
 
   const extraServices = opts.deep
@@ -618,6 +650,7 @@ export async function gatherDaemonStatus(
     gateway,
     port: portStatus,
     ...(portCliStatus ? { portCli: portCliStatus } : {}),
+    ...(establishedClients ? { connections: establishedClients } : {}),
     lastError,
     ...(rpc
       ? {

@@ -5,7 +5,12 @@ import {
   onAgentEvent,
   resetAgentEventsForTest,
 } from "../../infra/agent-events.js";
-import { emitAcpLifecycleError, formatAcpLifecycleError } from "./attempt-execution.js";
+import {
+  emitAcpLifecycleError,
+  emitAcpPromptSubmitted,
+  emitAcpRuntimeEvent,
+  formatAcpLifecycleError,
+} from "./attempt-execution.js";
 
 let captured: AgentEventPayload[] = [];
 let unsubscribe: (() => void) | undefined;
@@ -15,6 +20,57 @@ beforeEach(() => {
   captured = [];
   unsubscribe = onAgentEvent((evt) => {
     captured.push(evt);
+  });
+});
+
+describe("ACP diagnostic events", () => {
+  it("emits prompt-submitted state with proxy env names but not values", () => {
+    const previous = process.env.HTTPS_PROXY;
+    process.env.HTTPS_PROXY = "http://proxy.example.invalid:8080";
+    try {
+      emitAcpPromptSubmitted({
+        runId: "run-prompt",
+        sessionKey: "agent:codex:acp:child",
+        at: 123,
+      });
+    } finally {
+      if (previous === undefined) {
+        delete process.env.HTTPS_PROXY;
+      } else {
+        process.env.HTTPS_PROXY = previous;
+      }
+    }
+
+    const event = captured[0];
+    expect(event?.stream).toBe("acp");
+    expect(event?.sessionKey).toBe("agent:codex:acp:child");
+    expect(event?.data).toMatchObject({
+      phase: "prompt_submitted",
+      at: 123,
+      proxyEnvKeys: expect.arrayContaining(["HTTPS_PROXY"]),
+    });
+    expect(JSON.stringify(event?.data)).not.toContain("proxy.example.invalid");
+  });
+
+  it("emits sanitized non-text runtime events for parent relay diagnostics", () => {
+    emitAcpRuntimeEvent({
+      runId: "run-status",
+      event: {
+        type: "status",
+        text: "connecting token=sk-abcdefghijklmnopqrstuvwxyz123456",
+        tag: "session_info_update",
+      },
+    });
+
+    const event = captured[0];
+    expect(event?.stream).toBe("acp");
+    expect(event?.data).toMatchObject({
+      phase: "runtime_event",
+      eventType: "status",
+      tag: "session_info_update",
+    });
+    expect(String(event?.data.text)).toContain("connecting");
+    expect(String(event?.data.text)).not.toContain("sk-abcdefghijklmnopqrstuvwxyz123456");
   });
 });
 

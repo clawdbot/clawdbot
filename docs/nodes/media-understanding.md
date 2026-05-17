@@ -260,8 +260,8 @@ For CLI entries, **set `capabilities` explicitly** to avoid surprising matches. 
 <Note>
 **MiniMax note**
 
-- `minimax` and `minimax-portal` image understanding comes from the plugin-owned `MiniMax-VL-01` media provider.
-- The bundled MiniMax text catalog still starts text-only; explicit `models.providers.minimax` entries materialize image-capable M2.7 chat refs.
+- `minimax`, `minimax-cn`, `minimax-portal`, and `minimax-portal-cn` image understanding comes from the plugin-owned `MiniMax-VL-01` media provider.
+- Automatic image routing keeps using `MiniMax-VL-01` even if legacy MiniMax M2.x chat metadata claims image input.
 
 </Note>
 

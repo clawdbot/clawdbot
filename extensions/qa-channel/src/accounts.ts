@@ -9,7 +9,12 @@ const DEFAULT_POLL_TIMEOUT_MS = 1_000;
 const {
   listAccountIds: listQaChannelAccountIds,
   resolveDefaultAccountId: resolveDefaultQaChannelAccountId,
-} = createAccountListHelpers("qa-channel", { normalizeAccountId });
+} = createAccountListHelpers("qa-channel", {
+  normalizeAccountId,
+  implicitDefaultAccount: {
+    channelKeys: ["baseUrl"],
+  },
+});
 
 export { listQaChannelAccountIds, resolveDefaultQaChannelAccountId };
 

@@ -2,6 +2,7 @@ import {
   DEFAULT_ACCOUNT_ID,
   type OpenClawConfig as ClawdbotConfig,
   createAccountListHelpers,
+  hasConfiguredAccountValue,
   normalizeAccountId,
   normalizeOptionalAccountId,
   resolveMergedAccountConfig,
@@ -20,6 +21,11 @@ const { listAccountIds: listFeishuAccountIds, resolveDefaultAccountId } = create
   "feishu",
   {
     allowUnlistedDefaultAccount: true,
+    hasImplicitDefaultAccount: (cfg) =>
+      Boolean(
+        cfg.channels?.feishu?.appId?.trim() &&
+        hasConfiguredAccountValue(cfg.channels.feishu.appSecret),
+      ),
   },
 );
 

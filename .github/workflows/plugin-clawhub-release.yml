@@ -16,7 +16,7 @@ on:
         required: false
         type: string
       ref:
-        description: Commit SHA on main or a release branch to publish from; defaults to the workflow ref
+        description: Commit SHA on main, a release branch, or the matching Tideclaw alpha branch to publish from; defaults to the workflow ref
         required: false
         default: ""
         type: string
@@ -82,7 +82,9 @@ jobs:
           fi
           echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Validate ref is on main or a release branch
+      - name: Validate ref is on a trusted publish branch
+        env:
+          WORKFLOW_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
           if git merge-base --is-ancestor HEAD origin/main; then
@@ -93,7 +95,14 @@ jobs:
               exit 0
             fi
           done < <(git for-each-ref --format='%(refname)' refs/remotes/origin/release)
-          echo "Plugin ClawHub publishes must target a commit reachable from main or release/*." >&2
+          if [[ "${WORKFLOW_REF}" =~ ^refs/heads/tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
+            alpha_branch="${WORKFLOW_REF#refs/heads/}"
+            git fetch --no-tags origin "+refs/heads/${alpha_branch}:refs/remotes/origin/${alpha_branch}"
+            if git merge-base --is-ancestor HEAD "refs/remotes/origin/${alpha_branch}"; then
+              exit 0
+            fi
+          fi
+          echo "Plugin ClawHub publishes must target a commit reachable from main, release/*, or the matching Tideclaw alpha branch." >&2
           exit 1
 
       - name: Validate publishable plugin metadata
@@ -167,6 +176,19 @@ jobs:
         run: |
           echo "::error::One or more selected plugin versions already exist on ClawHub. Bump the version before running a real publish."
           exit 1
+
+      - name: Validate Tideclaw alpha plugin channels
+        if: startsWith(github.ref, 'refs/heads/tideclaw/alpha/')
+        run: |
+          set -euo pipefail
+          invalid="$(
+            jq -r '.candidates[]? | select(.publishTag != "alpha" or .channel != "alpha") | "- \(.packageName)@\(.version) [\(.publishTag)]"' .local/plugin-clawhub-release-plan.json
+          )"
+          if [[ -n "${invalid}" ]]; then
+            echo "Tideclaw alpha ClawHub publishes may only publish alpha plugin versions." >&2
+            printf '%s\n' "${invalid}" >&2
+            exit 1
+          fi
 
       - name: Verify OpenClaw ClawHub package ownership
         if: steps.plan.outputs.has_candidates == 'true'

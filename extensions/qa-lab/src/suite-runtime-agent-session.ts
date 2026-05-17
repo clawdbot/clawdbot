@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { scanDirectReplyTranscriptSentinels } from "./gateway-log-sentinel.js";
 import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import type {
   QaRawSessionStoreEntry,
@@ -16,6 +17,11 @@ type QaGatewayCallEnv = Pick<
 
 const SESSION_STORE_LOCK_RETRY_DELAYS_MS = [1_000, 3_000, 5_000] as const;
 
+type QaSessionTranscriptSummary = {
+  finalText: string;
+  hasDirectReplySelfMessage: boolean;
+};
+
 function isSessionStoreLockTimeout(error: unknown) {
   const text = formatErrorMessage(error);
   return (
@@ -23,6 +29,73 @@ function isSessionStoreLockTimeout(error: unknown) {
     text.includes("SessionWriteLockTimeoutError") ||
     text.includes("session file locked")
   );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function readNonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function extractSessionTranscriptText(message: Record<string, unknown>) {
+  const rawContent = message.content;
+  if (typeof rawContent === "string") {
+    return rawContent.trim();
+  }
+  if (!Array.isArray(rawContent)) {
+    return "";
+  }
+  const parts: string[] = [];
+  for (const block of rawContent) {
+    if (typeof block === "string") {
+      if (block.trim()) {
+        parts.push(block.trim());
+      }
+      continue;
+    }
+    if (!isRecord(block)) {
+      continue;
+    }
+    const text = readNonEmptyString(block.text);
+    if (text) {
+      parts.push(text);
+      continue;
+    }
+    const content = readNonEmptyString(block.content);
+    if (
+      content &&
+      (block.type === "output_text" || block.type === "text" || block.type === "message")
+    ) {
+      parts.push(content);
+    }
+  }
+  return parts.join("\n").trim();
+}
+
+function extractFinalAssistantTextFromTranscript(transcriptBytes: string) {
+  let finalText = "";
+  for (const line of transcriptBytes.split(/\r?\n/u)) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      const message = isRecord(parsed) && isRecord(parsed.message) ? parsed.message : undefined;
+      if (!message || message.role !== "assistant") {
+        continue;
+      }
+      const text = extractSessionTranscriptText(message);
+      if (text) {
+        finalText = text;
+      }
+    } catch {
+      // Ignore malformed transcript rows and keep QA summary checks deterministic.
+    }
+  }
+  return finalText;
 }
 
 async function callGatewayWithSessionStoreLockRetry<T>(
@@ -106,6 +179,18 @@ async function readSkillStatus(env: QaGatewayCallEnv, agentId = "qa") {
   return payload.skills ?? [];
 }
 
+function resolveQaSessionTranscriptFile(params: {
+  sessionsDir: string;
+  sessionId: string;
+  sessionFile?: string;
+}) {
+  const explicit = readNonEmptyString(params.sessionFile);
+  if (explicit) {
+    return path.isAbsolute(explicit) ? explicit : path.join(params.sessionsDir, explicit);
+  }
+  return path.join(params.sessionsDir, `${params.sessionId}.jsonl`);
+}
+
 async function readRawQaSessionStore(env: Pick<QaSuiteRuntimeEnv, "gateway">) {
   const storePath = path.join(
     env.gateway.tempRoot,
@@ -126,4 +211,40 @@ async function readRawQaSessionStore(env: Pick<QaSuiteRuntimeEnv, "gateway">) {
   }
 }
 
-export { createSession, readEffectiveTools, readRawQaSessionStore, readSkillStatus };
+async function readSessionTranscriptSummary(
+  env: Pick<QaSuiteRuntimeEnv, "gateway">,
+  sessionKey: string,
+): Promise<QaSessionTranscriptSummary> {
+  const normalizedSessionKey = sessionKey.trim();
+  if (!normalizedSessionKey) {
+    throw new Error("readSessionTranscriptSummary requires a session key");
+  }
+  const store = await readRawQaSessionStore(env);
+  const entry = store[normalizedSessionKey];
+  const sessionId = readNonEmptyString(entry?.sessionId);
+  if (!sessionId) {
+    throw new Error(`session transcript entry not found for ${normalizedSessionKey}`);
+  }
+  const sessionsDir = path.join(env.gateway.tempRoot, "state", "agents", "qa", "sessions");
+  const transcriptPath = resolveQaSessionTranscriptFile({
+    sessionsDir,
+    sessionId,
+    sessionFile: entry?.sessionFile,
+  });
+  const transcriptBytes = await fs.readFile(transcriptPath, "utf8");
+  if (!transcriptBytes.trim()) {
+    throw new Error(`session transcript is empty for ${normalizedSessionKey}`);
+  }
+  return {
+    finalText: extractFinalAssistantTextFromTranscript(transcriptBytes),
+    hasDirectReplySelfMessage: scanDirectReplyTranscriptSentinels(transcriptBytes).length > 0,
+  };
+}
+
+export {
+  createSession,
+  readEffectiveTools,
+  readRawQaSessionStore,
+  readSessionTranscriptSummary,
+  readSkillStatus,
+};

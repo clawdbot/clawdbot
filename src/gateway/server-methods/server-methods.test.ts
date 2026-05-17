@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import os from "node:os";
@@ -615,6 +616,245 @@ describe("projectRecentChatDisplayMessages", () => {
     ]);
 
     expect(result).toEqual([mediaOnly, multiMediaOnly]);
+  });
+
+  it("merges delayed TTS supplements into their original assistant message", () => {
+    const visibleText = "**Here** is the answer.";
+    const spokenText = "Here is the answer.";
+    const textSha256 = createHash("sha256").update(visibleText).digest("hex");
+
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "first" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: visibleText }],
+        timestamp: 2,
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "second" }],
+        timestamp: 3,
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Audio reply" },
+          {
+            type: "attachment",
+            attachment: {
+              url: "/tmp/tts.mp3",
+              kind: "audio",
+              label: "tts.mp3",
+              mimeType: "audio/mpeg",
+            },
+          },
+        ],
+        openclawTtsSupplement: { textSha256, spokenText },
+        timestamp: 4,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "first" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: visibleText },
+          {
+            type: "attachment",
+            attachment: {
+              url: "/tmp/tts.mp3",
+              kind: "audio",
+              label: "tts.mp3",
+              mimeType: "audio/mpeg",
+            },
+          },
+        ],
+        timestamp: 2,
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "second" }],
+        timestamp: 3,
+      },
+    ]);
+  });
+
+  it("merges delayed TTS supplements when directive tags are stripped for display", () => {
+    const rawVisibleText = "[[reply_to_current]]Visible answer.";
+    const projectedVisibleText = "Visible answer.";
+    const textSha256 = createHash("sha256").update(projectedVisibleText).digest("hex");
+
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: rawVisibleText }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Audio reply" },
+          {
+            type: "attachment",
+            attachment: {
+              url: "/tmp/tts.mp3",
+              kind: "audio",
+              label: "tts.mp3",
+              mimeType: "audio/mpeg",
+            },
+          },
+        ],
+        openclawTtsSupplement: { textSha256 },
+        timestamp: 2,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: projectedVisibleText },
+          {
+            type: "attachment",
+            attachment: {
+              url: "/tmp/tts.mp3",
+              kind: "audio",
+              label: "tts.mp3",
+              mimeType: "audio/mpeg",
+            },
+          },
+        ],
+        timestamp: 1,
+      },
+    ]);
+  });
+
+  it("merges delayed TTS supplements before display truncation", () => {
+    const projectedVisibleText = "Visible answer ".repeat(8).trim();
+    const rawVisibleText = `[[reply_to_current]]${projectedVisibleText}`;
+    const textSha256 = createHash("sha256").update(projectedVisibleText).digest("hex");
+
+    const result = projectRecentChatDisplayMessages(
+      [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: rawVisibleText }],
+          timestamp: 1,
+        },
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "Audio reply" },
+            {
+              type: "attachment",
+              attachment: {
+                url: "/tmp/tts.mp3",
+                kind: "audio",
+                label: "tts.mp3",
+                mimeType: "audio/mpeg",
+              },
+            },
+          ],
+          openclawTtsSupplement: { textSha256 },
+          timestamp: 2,
+        },
+      ],
+      { maxChars: 24 },
+    );
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: `${projectedVisibleText.slice(0, 24)}\n...(truncated)...` },
+          {
+            type: "attachment",
+            attachment: {
+              url: "/tmp/tts.mp3",
+              kind: "audio",
+              label: "tts.mp3",
+              mimeType: "audio/mpeg",
+            },
+          },
+        ],
+        timestamp: 1,
+      },
+    ]);
+  });
+
+  it("does not merge visible TTS finals into an older identical assistant message", () => {
+    const visibleText = "Done.";
+    const textSha256 = createHash("sha256").update(visibleText).digest("hex");
+    const ttsSupplement = { textSha256 };
+
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: visibleText }],
+        timestamp: 1,
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "again" }],
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: visibleText },
+          {
+            type: "attachment",
+            attachment: {
+              url: "/tmp/tts.mp3",
+              kind: "audio",
+              label: "tts.mp3",
+              mimeType: "audio/mpeg",
+            },
+          },
+        ],
+        openclawTtsSupplement: ttsSupplement,
+        timestamp: 3,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: visibleText }],
+        timestamp: 1,
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "again" }],
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: visibleText },
+          {
+            type: "attachment",
+            attachment: {
+              url: "/tmp/tts.mp3",
+              kind: "audio",
+              label: "tts.mp3",
+              mimeType: "audio/mpeg",
+            },
+          },
+        ],
+        openclawTtsSupplement: ttsSupplement,
+        timestamp: 3,
+      },
+    ]);
   });
 });
 

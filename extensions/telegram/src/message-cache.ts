@@ -568,7 +568,7 @@ export function createTelegramMessageCache(params?: {
         }
         const key = telegramMessageCacheKey({ accountId, chatId, messageId });
         const cachedNode = upsertCachedMessageNode({ messages, key, node, mode });
-        if (node.messageId === currentObservation.node.messageId) {
+        if (messageId === currentObservation.node.messageId) {
           recordedEntry = cachedNode;
         }
         trimMessages(messages, maxMessages);
@@ -697,11 +697,12 @@ function resolveSessionBoundaryNode(params: {
   if (!params.messageId) {
     return undefined;
   }
+  const { messageId } = params;
   const candidates = params.cache
     .recentBefore({
       accountId: params.accountId,
       chatId: params.chatId,
-      messageId: params.messageId,
+      messageId,
       ...(params.threadId !== undefined ? { threadId: params.threadId } : {}),
       limit: Number.MAX_SAFE_INTEGER,
     })
@@ -709,7 +710,7 @@ function resolveSessionBoundaryNode(params: {
   const current = params.cache.get({
     accountId: params.accountId,
     chatId: params.chatId,
-    messageId: params.messageId,
+    messageId,
   });
   if (current && isSessionBoundaryCommandNode(current)) {
     candidates.push(current);

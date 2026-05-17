@@ -401,6 +401,27 @@ describe("config view", () => {
     expect(content.scrollLeft).toBe(0);
   });
 
+  it("can hide the root tab for scoped settings surfaces", () => {
+    const { container } = renderConfigView({
+      activeSection: "channels",
+      navRootLabel: "Communication",
+      showRootTab: false,
+      includeSections: ["channels", "messages"],
+      schema: {
+        type: "object",
+        properties: {
+          channels: { type: "object", properties: {} },
+          messages: { type: "object", properties: {} },
+        },
+      },
+    });
+
+    const tabs = Array.from(container.querySelectorAll(".config-top-tabs__tab")).map((tab) =>
+      tab.textContent?.trim(),
+    );
+    expect(tabs).toEqual(["Channels", "Messages"]);
+  });
+
   it("does not normalize off-scope schema sections for scoped config tabs", () => {
     const offScopeSchema = { type: "object" } as Record<string, unknown>;
     Object.defineProperty(offScopeSchema, "properties", {

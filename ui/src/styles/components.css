@@ -1059,10 +1059,7 @@
 
 .cron-workspace {
   margin-top: 16px;
-  display: grid;
-  grid-template-columns: minmax(0, 1.2fr) minmax(340px, 0.8fr);
-  gap: 16px;
-  align-items: start;
+  display: block;
 }
 
 .cron-workspace--form-collapsed {
@@ -1076,10 +1073,25 @@
 }
 
 .cron-workspace-form {
-  position: sticky;
-  top: 74px;
-  max-height: calc(100vh - 74px - 32px);
+  max-height: calc(100vh - 80px);
   overflow-y: auto;
+}
+
+.cron-form-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 32px;
+  background: color-mix(in srgb, #000 58%, transparent);
+  backdrop-filter: blur(8px);
+}
+
+.cron-form-modal {
+  width: min(760px, calc(100vw - 48px));
+  max-height: min(860px, calc(100vh - 64px));
+  box-shadow: var(--shadow-xl);
 }
 
 .cron-workspace-form--collapsed {
@@ -1323,6 +1335,70 @@
 
 .cron-workspace .filters .field {
   min-width: 160px;
+}
+
+.cron-filter-panel {
+  margin-top: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg-elevated) 72%, transparent);
+}
+
+.cron-filter-panel__summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  list-style: none;
+}
+
+.cron-filter-panel__summary::-webkit-details-marker {
+  display: none;
+}
+
+.cron-filter-panel__summary::after {
+  content: "v";
+  color: var(--muted);
+  font-size: 14px;
+  transition: transform var(--duration-fast) var(--ease-out);
+}
+
+.cron-filter-panel[open] .cron-filter-panel__summary::after {
+  transform: rotate(180deg);
+}
+
+.cron-filter-panel__body,
+.cron-filter-panel .cron-run-filters {
+  padding: 0 12px 12px;
+}
+
+.cron-empty-state {
+  margin-top: 12px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+  padding: 22px;
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+  background: color-mix(in srgb, var(--bg-elevated) 58%, transparent);
+}
+
+.cron-empty-state__title {
+  color: var(--text-strong);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.cron-empty-state__copy {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+  max-width: 520px;
 }
 
 .cron-run-filters {

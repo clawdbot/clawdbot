@@ -449,6 +449,7 @@ export function buildNodeServiceEnvironment(params: {
     OPENCLAW_LAUNCHD_LABEL: resolveNodeLaunchAgentLabel(),
     OPENCLAW_SYSTEMD_UNIT: resolveNodeSystemdServiceName(),
     OPENCLAW_WINDOWS_TASK_NAME: resolveNodeWindowsTaskName(),
+    OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1",
     OPENCLAW_TASK_SCRIPT_NAME: NODE_WINDOWS_TASK_SCRIPT_NAME,
     OPENCLAW_LOG_PREFIX: "node",
     OPENCLAW_SERVICE_MARKER: NODE_SERVICE_MARKER,

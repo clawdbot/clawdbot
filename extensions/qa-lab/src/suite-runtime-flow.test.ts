@@ -22,6 +22,7 @@ const createSession = vi.hoisted(() => vi.fn());
 const readEffectiveTools = vi.hoisted(() => vi.fn());
 const readSkillStatus = vi.hoisted(() => vi.fn());
 const readRawQaSessionStore = vi.hoisted(() => vi.fn());
+const readSessionTranscriptSummary = vi.hoisted(() => vi.fn());
 const runQaCli = vi.hoisted(() => vi.fn());
 const extractMediaPathFromText = vi.hoisted(() => vi.fn());
 const resolveGeneratedImagePath = vi.hoisted(() => vi.fn());
@@ -54,6 +55,8 @@ const reportsDiscoveryScopeLeak = vi.hoisted(() => vi.fn());
 const reportsMissingDiscoveryFiles = vi.hoisted(() => vi.fn());
 const hasModelSwitchContinuityEvidence = vi.hoisted(() => vi.fn());
 const qaChannelPlugin = vi.hoisted(() => ({ id: "qa-channel" }));
+const scanGatewayLogSentinels = vi.hoisted(() => vi.fn());
+const assertNoGatewayLogSentinels = vi.hoisted(() => vi.fn());
 
 vi.mock("./scenario-runtime-api.js", () => ({
   createQaScenarioRuntimeApi,
@@ -87,6 +90,7 @@ vi.mock("./suite-runtime-agent.js", () => ({
   readEffectiveTools,
   readSkillStatus,
   readRawQaSessionStore,
+  readSessionTranscriptSummary,
   runQaCli,
   extractMediaPathFromText,
   resolveGeneratedImagePath,
@@ -140,6 +144,11 @@ vi.mock("./model-switch-eval.js", () => ({
 
 vi.mock("./runtime-api.js", () => ({
   qaChannelPlugin,
+}));
+
+vi.mock("./gateway-log-sentinel.js", () => ({
+  scanGatewayLogSentinels,
+  assertNoGatewayLogSentinels,
 }));
 
 import { createQaSuiteScenarioFlowApi } from "./suite-runtime-flow.js";
@@ -234,6 +243,9 @@ describe("qa suite runtime flow", () => {
         runScenario: typeof runScenario;
         waitForQaChannelReady: typeof waitForQaChannelReady;
         waitForOutboundMessage: typeof waitForOutboundMessage;
+        markGatewayLogCursor: () => number;
+        assertNoGatewayLogSentinels: typeof assertNoGatewayLogSentinels;
+        readSessionTranscriptSummary: typeof readSessionTranscriptSummary;
         findManagedDreamingCronJob: typeof findManagedDreamingCronJob;
         forceMemoryIndex: typeof forceMemoryIndex;
         runAgentPrompt: typeof runAgentPrompt;
@@ -251,6 +263,9 @@ describe("qa suite runtime flow", () => {
     expect(call.deps.runScenario).toBe(runScenario);
     expect(call.deps.waitForQaChannelReady).toBe(waitForQaChannelReady);
     expect(call.deps.waitForOutboundMessage).toBe(waitForOutboundMessage);
+    expect(call.deps.markGatewayLogCursor()).toBe(0);
+    expect(() => call.deps.assertNoGatewayLogSentinels()).not.toThrow();
+    expect(call.deps.readSessionTranscriptSummary).toBe(readSessionTranscriptSummary);
     expect(call.deps.findManagedDreamingCronJob).toBe(findManagedDreamingCronJob);
     expect(call.deps.forceMemoryIndex).toBe(forceMemoryIndex);
     expect(call.deps.runAgentPrompt).toBe(runAgentPrompt);

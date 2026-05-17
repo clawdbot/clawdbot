@@ -176,9 +176,10 @@ describe("cron controller", () => {
       },
     });
 
-    await addCronJob(state);
+    const saved = await addCronJob(state);
 
     const addCall = findRequestCall(request.mock.calls, "cron.add");
+    expect(saved).toBe(true);
     const payload = requestPayload(addCall);
     expectRecordFields(payload, {
       name: "webhook job",
@@ -1138,7 +1139,8 @@ describe("cron controller", () => {
         payloadText: "",
       },
     });
-    await addCronJob(state);
+    const saved = await addCronJob(state);
+    expect(saved).toBe(false);
     expect(request).not.toHaveBeenCalled();
     expectRecordFields(state.cronFieldErrors, {
       name: "cron.errors.nameRequired",

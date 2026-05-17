@@ -14,6 +14,12 @@ vi.mock("../plugins/bundled-dir.js", () => ({
   resolveSourceCheckoutDependencyDiagnostic: vi.fn(() => null),
 }));
 
+vi.mock("../plugins/channel-catalog-registry.js", () => ({
+  listChannelCatalogEntries: vi.fn(() => {
+    throw new Error("bundled channel catalog read must not run full plugin discovery");
+  }),
+}));
+
 // The channel-catalog.json fallback still walks package roots via
 // resolveOpenClawPackageRootSync. Isolate from the real repo by mocking
 // moduleUrl/argv1 resolution to null and deriving only from the tmp cwd.

@@ -62,6 +62,7 @@ function parseConfiguredModelRef(
 
 function resolveConfiguredModelHarnessRuntime(params: {
   config: OpenClawConfig;
+  includeImplicitRuntimePreferences: boolean;
   modelRef: string;
   agentId?: string;
 }): string | undefined {
@@ -75,6 +76,9 @@ function resolveConfiguredModelHarnessRuntime(params: {
     modelId: parsed.modelId,
     agentId: params.agentId,
   });
+  if (!params.includeImplicitRuntimePreferences && policy.runtimeSource === "implicit") {
+    return undefined;
+  }
   const runtime = normalizeRuntimeId(policy.runtime);
   return runtime && runtime !== "auto" && runtime !== "pi" ? runtime : undefined;
 }
@@ -115,10 +119,19 @@ function pushConfiguredModelRuntimeIds(config: OpenClawConfig, runtimes: Set<str
   }
 }
 
-function pushConfiguredAgentModelRuntimeIds(config: OpenClawConfig, runtimes: Set<string>): void {
+function pushConfiguredAgentModelRuntimeIds(
+  config: OpenClawConfig,
+  runtimes: Set<string>,
+  includeImplicitRuntimePreferences: boolean,
+): void {
   const pushModelRefs = (modelRefs: string[], agentId?: string) => {
     for (const modelRef of modelRefs) {
-      const runtime = resolveConfiguredModelHarnessRuntime({ config, modelRef, agentId });
+      const runtime = resolveConfiguredModelHarnessRuntime({
+        config,
+        includeImplicitRuntimePreferences,
+        modelRef,
+        agentId,
+      });
       if (runtime) {
         runtimes.add(runtime);
       }
@@ -169,6 +182,7 @@ function pushLegacyAgentRuntimeIds(config: OpenClawConfig, runtimes: Set<string>
 
 export type ConfiguredAgentHarnessRuntimeOptions = {
   includeEnvRuntime?: boolean;
+  includeImplicitRuntimePreferences?: boolean;
   includeLegacyAgentRuntimes?: boolean;
 };
 
@@ -179,6 +193,7 @@ export function collectConfiguredAgentHarnessRuntimes(
 ): string[] {
   const runtimes = new Set<string>();
   const includeEnvRuntime = options.includeEnvRuntime ?? true;
+  const includeImplicitRuntimePreferences = options.includeImplicitRuntimePreferences ?? true;
   const includeLegacyAgentRuntimes = options.includeLegacyAgentRuntimes ?? true;
 
   if (includeEnvRuntime) {
@@ -191,7 +206,7 @@ export function collectConfiguredAgentHarnessRuntimes(
   if (includeLegacyAgentRuntimes) {
     pushLegacyAgentRuntimeIds(config, runtimes);
   }
-  pushConfiguredAgentModelRuntimeIds(config, runtimes);
+  pushConfiguredAgentModelRuntimeIds(config, runtimes, includeImplicitRuntimePreferences);
 
   return [...runtimes].toSorted((left, right) => left.localeCompare(right));
 }

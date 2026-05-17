@@ -178,6 +178,30 @@ describe("codex conversation binding", () => {
     ).resolves.not.toContain('"modelProvider": "openai"');
   });
 
+  it("stores and uses the owning agent dir for bound app-server sessions", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const agentDir = path.join(tempDir, "agents", "bot-a", "agent");
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request: vi.fn(async () => ({
+        thread: { id: "thread-new", sessionId: "session-1", cwd: tempDir },
+        model: "gpt-5.4-mini",
+      })),
+    });
+
+    const data = await startCodexConversationThread({
+      sessionFile,
+      workspaceDir: tempDir,
+      agentDir,
+      model: "gpt-5.4-mini",
+    });
+
+    const sharedClientParams = mockCallArg(sharedClientMocks.getSharedCodexAppServerClient) as {
+      agentDir?: unknown;
+    };
+    expect(sharedClientParams?.agentDir).toBe(agentDir);
+    expect(data.agentDir).toBe(agentDir);
+  });
+
   it("clears the Codex app-server sidecar when a pending bind is denied", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const sidecar = `${sessionFile}.codex-app-server.json`;
@@ -416,6 +440,7 @@ describe("codex conversation binding", () => {
 
   it("returns a clean failure reply when app-server turn start rejects", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
+    const agentDir = path.join(tempDir, "agents", "bot-b", "agent");
     await fs.writeFile(
       `${sessionFile}.codex-app-server.json`,
       JSON.stringify({
@@ -467,6 +492,7 @@ describe("codex conversation binding", () => {
               version: 1,
               sessionFile,
               workspaceDir: tempDir,
+              agentDir,
             },
           },
         },
@@ -492,6 +518,7 @@ describe("codex conversation binding", () => {
 
   it("falls back to content when the channel body for agent is blank", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
+    const agentDir = path.join(tempDir, "agents", "bot-b", "agent");
     await fs.writeFile(
       `${sessionFile}.codex-app-server.json`,
       JSON.stringify({
@@ -553,6 +580,7 @@ describe("codex conversation binding", () => {
             version: 1,
             sessionFile,
             workspaceDir: tempDir,
+            agentDir,
           },
         },
       },
@@ -560,6 +588,10 @@ describe("codex conversation binding", () => {
     );
 
     expect(result).toEqual({ handled: true, reply: { text: "done" } });
+    const sharedClientParams = mockCallArg(sharedClientMocks.getSharedCodexAppServerClient) as {
+      agentDir?: unknown;
+    };
+    expect(sharedClientParams?.agentDir).toBe(agentDir);
     expect(turnStartParams[0]?.input).toEqual([
       { type: "text", text: "use the fallback prompt", text_elements: [] },
     ]);

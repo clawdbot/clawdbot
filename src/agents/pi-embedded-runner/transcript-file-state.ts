@@ -24,8 +24,380 @@ type SessionInfoEntry = Extract<SessionEntry, { type: "session_info" }>;
 type SessionMessageEntry = Extract<SessionEntry, { type: "message" }>;
 type ThinkingLevelChangeEntry = Extract<SessionEntry, { type: "thinking_level_change" }>;
 
+const sessionEntryTypes = new Set<string>([
+  "branch_summary",
+  "compaction",
+  "custom",
+  "custom_message",
+  "label",
+  "message",
+  "model_change",
+  "session_info",
+  "thinking_level_change",
+] satisfies SessionEntry["type"][]);
+
+const repairableToolCallContentTypes = new Set([
+  "functionCall",
+  "function_call",
+  "toolCall",
+  "toolUse",
+  "tool_call",
+  "tool_use",
+]);
+
+const invalidJsonlSlotType = "__openclaw_invalid_jsonl_slot";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isString(value: unknown): value is string {
+  return typeof value === "string" && value.trim() !== "";
+}
+
+function isOptionalString(value: unknown): boolean {
+  return value === undefined || typeof value === "string";
+}
+
+function isTextContent(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    value.type === "text" &&
+    typeof value.text === "string" &&
+    isOptionalString(value.textSignature)
+  );
+}
+
+function isThinkingContent(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    value.type === "thinking" &&
+    typeof value.thinking === "string" &&
+    isOptionalString(value.thinkingSignature) &&
+    (value.redacted === undefined || typeof value.redacted === "boolean")
+  );
+}
+
+function isImageContent(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    value.type === "image" &&
+    typeof value.data === "string" &&
+    typeof value.mimeType === "string"
+  );
+}
+
+function hasToolCallId(value: Record<string, unknown>): boolean {
+  return (
+    isString(value.id) ||
+    isString(value.call_id) ||
+    isString(value.toolCallId) ||
+    isString(value.toolUseId) ||
+    isString(value.tool_call_id) ||
+    isString(value.tool_use_id)
+  );
+}
+
+function isToolCallPayload(value: unknown): boolean {
+  return value === null || isRecord(value) || typeof value === "string";
+}
+
+function isToolCallContent(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.type === "string" &&
+    repairableToolCallContentTypes.has(value.type) &&
+    hasToolCallId(value) &&
+    isString(value.name) &&
+    (value.arguments === undefined || isToolCallPayload(value.arguments)) &&
+    (value.input === undefined || isToolCallPayload(value.input)) &&
+    isOptionalString(value.thoughtSignature)
+  );
+}
+
+function isPersistedContentBlock(value: unknown): boolean {
+  if (!isRecord(value) || !isString(value.type)) {
+    return false;
+  }
+  switch (value.type) {
+    case "text":
+      return isTextContent(value);
+    case "thinking":
+      return isThinkingContent(value);
+    case "image":
+      return isImageContent(value);
+    default:
+      if (repairableToolCallContentTypes.has(value.type)) {
+        return isToolCallContent(value);
+      }
+      return true;
+  }
+}
+
+function isUserContent(value: unknown): boolean {
+  return (
+    typeof value === "string" ||
+    (Array.isArray(value) && value.every((item) => isPersistedContentBlock(item)))
+  );
+}
+
+function isAssistantContent(value: unknown): boolean {
+  return (
+    typeof value === "string" ||
+    (Array.isArray(value) && value.every((item) => isPersistedContentBlock(item)))
+  );
+}
+
+function isToolResultContent(value: unknown): boolean {
+  return Array.isArray(value) && value.every((item) => isPersistedContentBlock(item));
+}
+
+function isOptionalBoolean(value: unknown): boolean {
+  return value === undefined || typeof value === "boolean";
+}
+
+function isBashExecutionMessage(value: Record<string, unknown>): boolean {
+  return (
+    isString(value.command) &&
+    typeof value.output === "string" &&
+    (value.exitCode === undefined || typeof value.exitCode === "number") &&
+    typeof value.cancelled === "boolean" &&
+    typeof value.truncated === "boolean" &&
+    isOptionalString(value.fullOutputPath) &&
+    isOptionalBoolean(value.excludeFromContext)
+  );
+}
+
+function isAgentMessage(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+  switch (value.role) {
+    case "assistant":
+      return isAssistantContent(value.content);
+    case "bashExecution":
+      return isBashExecutionMessage(value);
+    case "custom":
+      return isString(value.customType) && isUserContent(value.content);
+    case "toolResult":
+      return (
+        isString(value.toolCallId) &&
+        isString(value.toolName) &&
+        typeof value.isError === "boolean" &&
+        isToolResultContent(value.content)
+      );
+    case "user":
+      return isUserContent(value.content);
+    default:
+      return false;
+  }
+}
+
+function hasSessionEntryBase(entry: FileEntry): boolean {
+  const candidate = entry as {
+    id?: unknown;
+    parentId?: unknown;
+    timestamp?: unknown;
+  };
+  return (
+    isString(candidate.id) &&
+    (candidate.parentId === undefined ||
+      candidate.parentId === null ||
+      isString(candidate.parentId)) &&
+    (candidate.timestamp === undefined || isString(candidate.timestamp))
+  );
+}
+
 function isSessionEntry(entry: FileEntry): entry is SessionEntry {
-  return entry.type !== "session";
+  if (
+    entry.type === "session" ||
+    !sessionEntryTypes.has(entry.type) ||
+    !hasSessionEntryBase(entry)
+  ) {
+    return false;
+  }
+  switch (entry.type) {
+    case "branch_summary": {
+      const candidate = entry as { fromId?: unknown; summary?: unknown };
+      return isString(candidate.fromId) && typeof candidate.summary === "string";
+    }
+    case "compaction": {
+      const candidate = entry as {
+        firstKeptEntryId?: unknown;
+        summary?: unknown;
+        tokensBefore?: unknown;
+      };
+      return (
+        isString(candidate.firstKeptEntryId) &&
+        typeof candidate.summary === "string" &&
+        typeof candidate.tokensBefore === "number"
+      );
+    }
+    case "custom":
+      return isString((entry as { customType?: unknown }).customType);
+    case "custom_message": {
+      const candidate = entry as {
+        content?: unknown;
+        customType?: unknown;
+        display?: unknown;
+      };
+      return (
+        isString(candidate.customType) &&
+        isUserContent(candidate.content) &&
+        typeof candidate.display === "boolean"
+      );
+    }
+    case "label": {
+      const candidate = entry as { label?: unknown; targetId?: unknown };
+      return (
+        isString(candidate.targetId) &&
+        (candidate.label === undefined || typeof candidate.label === "string")
+      );
+    }
+    case "message": {
+      return isAgentMessage((entry as { message?: unknown }).message);
+    }
+    case "model_change": {
+      const candidate = entry as { modelId?: unknown; provider?: unknown };
+      return isString(candidate.provider) && isString(candidate.modelId);
+    }
+    case "session_info": {
+      const candidate = entry as { name?: unknown };
+      return candidate.name === undefined || typeof candidate.name === "string";
+    }
+    case "thinking_level_change":
+      return isString((entry as { thinkingLevel?: unknown }).thinkingLevel);
+  }
+  return false;
+}
+
+function readableSessionEntries(fileEntries: FileEntry[]): SessionEntry[] {
+  const entries: SessionEntry[] = [];
+  const acceptedIds = new Set<string>();
+  const acceptedEntryById = new Map<string, SessionEntry>();
+  const rejectedIds = new Set<string>();
+  const rejectedParentById = new Map<string, string | null>();
+  const firstReadableDescendantByRejectedId = new Map<string, string>();
+  const rejectedAncestorsByAcceptedId = new Map<string, string[]>();
+  const acceptedPath = (leafId: string | null | undefined): SessionEntry[] => {
+    const path: SessionEntry[] = [];
+    let id = leafId ?? null;
+    const seen = new Set<string>();
+    while (id !== null) {
+      if (seen.has(id)) {
+        break;
+      }
+      seen.add(id);
+      const entry = acceptedEntryById.get(id);
+      if (!entry) {
+        break;
+      }
+      path.unshift(entry);
+      id = entry.parentId;
+    }
+    return path;
+  };
+  const firstReadableDescendantOnBranch = (
+    rejectedId: string,
+    leafId: string | null | undefined,
+  ): string | undefined => {
+    for (const entry of acceptedPath(leafId)) {
+      if (rejectedAncestorsByAcceptedId.get(entry.id)?.includes(rejectedId)) {
+        return entry.id;
+      }
+    }
+    return undefined;
+  };
+  const rejectedParentChain = (parentId: string | null | undefined): string[] => {
+    const chain: string[] = [];
+    let resolved = parentId ?? null;
+    const seen = new Set<string>();
+    while (resolved !== null && rejectedParentById.has(resolved)) {
+      if (seen.has(resolved)) {
+        break;
+      }
+      seen.add(resolved);
+      chain.push(resolved);
+      resolved = rejectedParentById.get(resolved) ?? null;
+    }
+    return chain;
+  };
+  const resolveRejectedParent = (parentId: string | null | undefined): string | null => {
+    let resolved = parentId ?? null;
+    const seen = new Set<string>();
+    while (resolved !== null && rejectedParentById.has(resolved)) {
+      if (seen.has(resolved)) {
+        return null;
+      }
+      seen.add(resolved);
+      resolved = rejectedParentById.get(resolved) ?? null;
+    }
+    return resolved;
+  };
+  const repairEntryLinks = (entry: SessionEntry): SessionEntry => {
+    const rejectedAncestors = rejectedParentChain(entry.parentId);
+    const resolvedRejectedParent =
+      rejectedAncestors.length > 0 ? resolveRejectedParent(entry.parentId) : undefined;
+    const parentId =
+      resolvedRejectedParent !== undefined
+        ? resolvedRejectedParent !== null && acceptedIds.has(resolvedRejectedParent)
+          ? resolvedRejectedParent
+          : null
+        : (entry.parentId ?? null);
+    let repaired = parentId === entry.parentId ? entry : ({ ...entry, parentId } as SessionEntry);
+    if (repaired.type === "compaction" && rejectedIds.has(repaired.firstKeptEntryId)) {
+      const resolvedFirstKeptParent = resolveRejectedParent(repaired.firstKeptEntryId);
+      const firstKeptEntryId =
+        (resolvedFirstKeptParent !== null && acceptedIds.has(resolvedFirstKeptParent)
+          ? resolvedFirstKeptParent
+          : undefined) ??
+        firstReadableDescendantOnBranch(repaired.firstKeptEntryId, parentId) ??
+        firstReadableDescendantByRejectedId.get(repaired.firstKeptEntryId) ??
+        parentId;
+      if (firstKeptEntryId !== null && firstKeptEntryId !== repaired.firstKeptEntryId) {
+        repaired = { ...repaired, firstKeptEntryId } as SessionEntry;
+      }
+    }
+    if (repaired.type !== "compaction") {
+      for (const rejectedId of rejectedAncestors) {
+        if (!firstReadableDescendantByRejectedId.has(rejectedId)) {
+          firstReadableDescendantByRejectedId.set(rejectedId, repaired.id);
+        }
+      }
+      if (rejectedAncestors.length > 0) {
+        rejectedAncestorsByAcceptedId.set(repaired.id, rejectedAncestors);
+      }
+    }
+    return repaired;
+  };
+  for (const rawEntry of fileEntries) {
+    if (!isRecord(rawEntry)) {
+      continue;
+    }
+    const entry = rawEntry as FileEntry;
+    const id = rawEntry.id;
+    if (!isSessionEntry(entry)) {
+      if (isString(id)) {
+        rejectedIds.add(id);
+        const parentId = rawEntry.parentId;
+        rejectedParentById.set(id, isString(parentId) ? parentId : null);
+      }
+      continue;
+    }
+    if (entry.type === "label" && !acceptedIds.has(entry.targetId)) {
+      rejectedIds.add(entry.id);
+      rejectedParentById.set(entry.id, entry.parentId);
+      continue;
+    }
+    if (acceptedIds.has(entry.id)) {
+      continue;
+    }
+    const repaired = repairEntryLinks(entry);
+    entries.push(repaired);
+    acceptedIds.add(repaired.id);
+    acceptedEntryById.set(repaired.id, repaired);
+  }
+  return entries;
 }
 
 function sessionHeaderVersion(header: SessionHeader | null): number {
@@ -44,6 +416,18 @@ function generateEntryId(byId: { has(id: string): boolean }): string {
 
 function serializeTranscriptFileEntries(entries: FileEntry[]): string {
   return `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`;
+}
+
+function fileEntryOrMigrationSlot(value: unknown, index: number): FileEntry {
+  if (isRecord(value)) {
+    return value as unknown as FileEntry;
+  }
+  return {
+    type: invalidJsonlSlotType,
+    id: `__openclaw_invalid_jsonl_slot_${index}`,
+    parentId: null,
+    timestamp: "1970-01-01T00:00:00.000Z",
+  } as unknown as FileEntry;
 }
 
 export class TranscriptFileState {
@@ -281,14 +665,15 @@ export class TranscriptFileState {
 
 export async function readTranscriptFileState(sessionFile: string): Promise<TranscriptFileState> {
   const raw = await fs.readFile(sessionFile, "utf-8");
-  const fileEntries = parseSessionEntries(raw);
+  const fileEntries = (parseSessionEntries(raw) as unknown[]).map(fileEntryOrMigrationSlot);
   const headerBeforeMigration =
     fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
-  const migrated = sessionHeaderVersion(headerBeforeMigration) < CURRENT_SESSION_VERSION;
+  const headerVersionBeforeMigration = sessionHeaderVersion(headerBeforeMigration);
+  const migrated = headerVersionBeforeMigration < CURRENT_SESSION_VERSION;
   migrateSessionEntries(fileEntries);
   const header =
     fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
-  const entries = fileEntries.filter(isSessionEntry);
+  const entries = readableSessionEntries(fileEntries);
   return new TranscriptFileState({ header, entries, migrated });
 }
 

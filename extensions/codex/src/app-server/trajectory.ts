@@ -12,7 +12,7 @@ import {
 } from "openclaw/plugin-sdk/security-runtime";
 import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";
 
-type CodexTrajectoryRecorder = {
+export type CodexTrajectoryRecorder = {
   filePath: string;
   recordEvent: (type: string, data?: Record<string, unknown>) => void;
   flush: () => Promise<void>;

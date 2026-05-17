@@ -93,6 +93,8 @@ const qaScenarioGatewayRuntimeSchema = z.object({
   forwardHostHome: z.boolean().optional(),
 });
 
+const qaRuntimeParityTierSchema = z.enum(["standard", "optional", "live-only", "soak"]);
+
 const qaFlowCallActionSchema = z.object({
   call: z.string().trim().min(1),
   args: z.array(z.unknown()).optional(),
@@ -176,6 +178,7 @@ const qaSeedScenarioSchema = z.object({
   title: z.string().trim().min(1),
   surface: z.string().trim().min(1),
   category: z.string().trim().min(1).optional(),
+  runtimeParityTier: qaRuntimeParityTierSchema.optional(),
   coverage: qaScenarioCoverageSchema.optional(),
   surfaces: z.array(z.string().trim().min(1)).min(1).optional(),
   risk: z.enum(["low", "medium", "high"]).optional(),
@@ -206,6 +209,7 @@ const qaScenarioPackSchema = z.object({
 
 export type QaScenarioExecution = z.infer<typeof qaScenarioExecutionSchema>;
 export type QaScenarioFlow = z.infer<typeof qaFlowSchema>;
+export type QaRuntimeParityTier = z.infer<typeof qaRuntimeParityTierSchema>;
 export type QaSeedScenario = z.infer<typeof qaSeedScenarioSchema>;
 export type QaSeedScenarioWithSource = QaSeedScenario & {
   sourcePath: string;

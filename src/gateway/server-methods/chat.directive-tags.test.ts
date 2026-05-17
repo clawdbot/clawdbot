@@ -39,6 +39,7 @@ const mockState = vi.hoisted(() => ({
       mediaUrl?: string;
       mediaUrls?: string[];
       spokenText?: string;
+      ttsSupplement?: { spokenText: string };
       audioAsVoice?: boolean;
       trustedLocalMedia?: boolean;
       replyToId?: string;
@@ -798,6 +799,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           mediaUrls: [audioPath],
           trustedLocalMedia: true,
           audioAsVoice: true,
+          ttsSupplement: { spokenText: "This text is already in the model transcript." },
         },
       },
     ];

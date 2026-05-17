@@ -558,7 +558,7 @@ async function runGatewayPluginMessageActionOrNull(params: {
       senderIsOwner: params.input.senderIsOwner,
       sessionKey: params.input.sessionKey,
       sessionId: params.input.sessionId,
-      inboundEventKind: params.input.inboundEventKind,
+      inboundTurnKind: params.input.inboundEventKind,
       agentId: params.agentId,
       toolContext: params.input.toolContext,
       idempotencyKey: await resolveGatewayActionIdempotencyKey(

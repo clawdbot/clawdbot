@@ -423,6 +423,13 @@ export function registerDefaultAuthTokenSuite(): void {
           maxProtocol: PROTOCOL_VERSION + 2,
         });
         expect(res.ok).toBe(false);
+        expect(res.error?.details).toMatchObject({
+          code: "PROTOCOL_MISMATCH",
+          clientMinProtocol: PROTOCOL_VERSION + 1,
+          clientMaxProtocol: PROTOCOL_VERSION + 2,
+          expectedProtocol: PROTOCOL_VERSION,
+          minimumProbeProtocol: MIN_PROBE_PROTOCOL_VERSION,
+        });
       } catch {
         // If the server closed before we saw the frame, that's acceptable.
       }

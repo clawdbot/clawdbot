@@ -1222,6 +1222,9 @@ export const fr: TranslationMap = {
       ascending: "Croissant",
       descending: "Décroissant",
       reset: "Réinitialiser",
+      emptyTitle: "No scheduled jobs yet.",
+      emptyHint: "Create one from a plain-language prompt; advanced fields can wait.",
+      emptyFilteredHint: "Clear or change filters to see scheduled jobs.",
       noMatching: "Aucune tâche correspondante.",
       loading: "Chargement...",
       loadMore: "Charger plus de tâches",
@@ -1257,6 +1260,7 @@ export const fr: TranslationMap = {
     form: {
       editJob: "Modifier la tâche",
       newJob: "Nouvelle tâche",
+      advancedJob: "Advanced job",
       updateSubtitle: "Mettez à jour la tâche planifiée sélectionnée.",
       createSubtitle: "Créez un réveil planifié ou une exécution d’agent.",
       required: "Obligatoire",

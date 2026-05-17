@@ -10,13 +10,14 @@ const DEFAULT_MODE = "both";
 const DEFAULT_RELEASE_PROFILE = "beta";
 const DEFAULT_NPM_DIST_TAG = "beta";
 const DEFAULT_PLUGIN_SCOPE = "all-publishable";
+const DEFAULT_TELEGRAM_PROVIDER_MODE = "mock-openai";
 
 function usage() {
   return `Usage: pnpm release:candidate -- --tag vYYYY.M.D-beta.N [options]
 
 Dispatches or consumes release validation runs, validates the prepared npm tarball,
 builds plugin publish plans, writes a green evidence bundle, then prints the exact
-OpenClaw Release Publish command.
+OpenClaw Release Publish command only after everything is green.
 
 Options:
   --tag <tag>                         Release tag to validate.
@@ -25,7 +26,10 @@ Options:
   --full-release-run <id>             Reuse successful Full Release Validation run.
   --npm-preflight-run <id>            Reuse successful OpenClaw NPM Release preflight run.
   --skip-dispatch                     Require both run ids; do not dispatch workflows.
+  --skip-local-generated-check        Do not run local generated release baseline checks before dispatch.
   --skip-parallels                   Do not run local Parallels fresh/update beta smoke.
+  --skip-telegram                    Do not run NPM Telegram E2E against the prepared tarball.
+  --telegram-provider-mode <mode>     mock-openai|live-frontier. Default: ${DEFAULT_TELEGRAM_PROVIDER_MODE}
   --provider <provider>               Full validation provider. Default: ${DEFAULT_PROVIDER}
   --mode <fresh|upgrade|both>         Full validation cross-OS mode. Default: ${DEFAULT_MODE}
   --release-profile <beta|stable|full> Default: ${DEFAULT_RELEASE_PROFILE}
@@ -54,7 +58,10 @@ export function parseArgs(argv) {
     pluginPublishScope: DEFAULT_PLUGIN_SCOPE,
     plugins: "",
     skipDispatch: false,
+    skipLocalGeneratedCheck: false,
     skipParallels: false,
+    skipTelegram: false,
+    telegramProviderMode: DEFAULT_TELEGRAM_PROVIDER_MODE,
     tag: "",
     workflowRef: "",
     fullReleaseRunId: "",
@@ -84,8 +91,17 @@ export function parseArgs(argv) {
       case "--skip-dispatch":
         options.skipDispatch = true;
         break;
+      case "--skip-local-generated-check":
+        options.skipLocalGeneratedCheck = true;
+        break;
       case "--skip-parallels":
         options.skipParallels = true;
+        break;
+      case "--skip-telegram":
+        options.skipTelegram = true;
+        break;
+      case "--telegram-provider-mode":
+        options.telegramProviderMode = requireValue(argv, ++index, arg);
         break;
       case "--provider":
         options.provider = requireValue(argv, ++index, arg);
@@ -127,6 +143,9 @@ export function parseArgs(argv) {
   }
   if (options.pluginPublishScope === "all-publishable" && options.plugins.trim()) {
     throw new Error("--plugins is only valid with --plugin-publish-scope selected");
+  }
+  if (!["mock-openai", "live-frontier"].includes(options.telegramProviderMode)) {
+    throw new Error("--telegram-provider-mode must be mock-openai or live-frontier");
   }
   return options;
 }
@@ -179,6 +198,44 @@ function workflowRuns(repo, workflowFile) {
   );
 }
 
+function runArtifacts(repo, runId) {
+  return JSON.parse(
+    run(
+      "gh",
+      [
+        "api",
+        `repos/${repo}/actions/runs/${runId}/artifacts?per_page=100`,
+        "--jq",
+        ".artifacts | map({name:.name, expired:.expired})",
+      ],
+      { capture: true },
+    ),
+  );
+}
+
+export function resolveArtifactName(artifacts, preferredName, prefix) {
+  const available = artifacts
+    .filter((artifact) => artifact.expired !== true)
+    .map((artifact) => artifact.name);
+  if (available.includes(preferredName)) {
+    return preferredName;
+  }
+  const candidates = available.filter((name) => name.startsWith(prefix));
+  if (candidates.length === 1) {
+    console.warn(`artifact ${preferredName} not found; using ${candidates[0]} from the same run`);
+    return candidates[0];
+  }
+  const candidateList =
+    available.length > 0 ? available.map((name) => `- ${name}`).join("\n") : "- <none>";
+  throw new Error(
+    `artifact ${preferredName} not found in run. Expected ${preferredName} or exactly one ${prefix}* fallback.\nAvailable artifacts:\n${candidateList}`,
+  );
+}
+
+function resolveRunArtifactName(repo, runId, preferredName, prefix) {
+  return resolveArtifactName(runArtifacts(repo, runId), preferredName, prefix);
+}
+
 function beforeRunIds(repo, workflowFile) {
   return new Set(workflowRuns(repo, workflowFile).map((run) => String(run.databaseId)));
 }
@@ -202,6 +259,14 @@ function runAndEcho(command, args) {
     );
   }
   return `${result.stdout ?? ""}${result.stderr ?? ""}`;
+}
+
+function runLocalGeneratedCheckIfNeeded(options) {
+  if (options.skipLocalGeneratedCheck) {
+    return { status: "skipped", reason: "operator skipped --skip-local-generated-check" };
+  }
+  run("pnpm", ["release:generated:check"]);
+  return { status: "passed", command: "pnpm release:generated:check" };
 }
 
 export function parseRunIdFromDispatchOutput(output) {
@@ -256,6 +321,33 @@ function runInfo(repo, runId) {
   );
 }
 
+function pendingDeployments(repo, runId) {
+  try {
+    return JSON.parse(
+      run("gh", ["api", "-X", "GET", `repos/${repo}/actions/runs/${runId}/pending_deployments`], {
+        capture: true,
+      }),
+    );
+  } catch {
+    return [];
+  }
+}
+
+function summarizePendingDeployments(repo, runId, deployments) {
+  if (!Array.isArray(deployments) || deployments.length === 0) {
+    return "";
+  }
+  return deployments
+    .map((deployment) => {
+      const environment = deployment.environment ?? {};
+      return [
+        `- pending approval: env=${environment.name ?? "<unknown>"} canApprove=${String(deployment.current_user_can_approve ?? "<unknown>")}`,
+        `  approve: gh api -X POST repos/${repo}/actions/runs/${runId}/pending_deployments -F 'environment_ids[]=${environment.id ?? "<id>"}' -f state=approved -f comment='Approve release gate'`,
+      ].join("\n");
+    })
+    .join("\n");
+}
+
 function summarizeFailedRun(info) {
   const failedJobs = (info.jobs ?? []).filter(
     (job) => job.conclusion && job.conclusion !== "success" && job.conclusion !== "skipped",
@@ -267,11 +359,20 @@ function summarizeFailedRun(info) {
 }
 
 async function waitForSuccessfulRun(repo, runId, expected) {
+  let lastState = "";
   for (;;) {
     const info = runInfo(repo, runId);
-    console.log(
-      `${info.workflowName} ${runId}: ${info.status}${info.conclusion ? `/${info.conclusion}` : ""} ${info.url}`,
-    );
+    const state = `${info.status}:${info.conclusion ?? ""}`;
+    if (state !== lastState) {
+      console.log(
+        `${info.workflowName} ${runId}: ${info.status}${info.conclusion ? `/${info.conclusion}` : ""} ${info.url}`,
+      );
+      const pending = summarizePendingDeployments(repo, runId, pendingDeployments(repo, runId));
+      if (pending) {
+        console.log(pending);
+      }
+      lastState = state;
+    }
     if (info.status === "completed") {
       if (info.conclusion !== "success") {
         throw new Error(summarizeFailedRun(info));
@@ -296,6 +397,12 @@ function downloadArtifact(repo, runId, name, dir) {
   rmSync(dir, { force: true, recursive: true });
   mkdirSync(dir, { recursive: true });
   run("gh", ["run", "download", runId, "--repo", repo, "--name", name, "--dir", dir]);
+}
+
+function downloadResolvedArtifact(repo, runId, preferredName, prefix, dir) {
+  const name = resolveRunArtifactName(repo, runId, preferredName, prefix);
+  downloadArtifact(repo, runId, name, dir);
+  return name;
 }
 
 function sha256(path) {
@@ -352,6 +459,9 @@ export function buildPublishCommand(options) {
     ["release_profile", options.releaseProfile],
     ["wait_for_clawhub", "false"],
   ];
+  if (options.npmTelegramRunId) {
+    fields.push(["npm_telegram_run_id", options.npmTelegramRunId]);
+  }
   if (options.plugins.trim()) {
     fields.push(["plugins", options.plugins]);
   }
@@ -412,7 +522,7 @@ function validateFullManifest(manifest, params) {
 
 async function runParallelsIfNeeded(options) {
   if (options.skipParallels) {
-    return { status: "skipped" };
+    return { status: "skipped", reason: "operator skipped --skip-parallels" };
   }
   const version = options.tag.replace(/^v/u, "");
   run("pnpm", [
@@ -430,11 +540,42 @@ async function runParallelsIfNeeded(options) {
   };
 }
 
+async function runTelegramIfNeeded(options, artifactName) {
+  if (options.skipTelegram) {
+    return { status: "skipped" };
+  }
+  const workflowFile = "npm-telegram-beta-e2e.yml";
+  const before = beforeRunIds(options.repo, workflowFile);
+  const dispatchedRunId = dispatchWorkflow(options.repo, workflowFile, options.workflowRef, {
+    package_spec: `openclaw@${options.tag.replace(/^v/u, "")}`,
+    package_label: options.tag,
+    package_artifact_name: artifactName,
+    package_artifact_run_id: options.npmPreflightRunId,
+    harness_ref: options.workflowRef,
+    provider_mode: options.telegramProviderMode,
+  });
+  const runId =
+    dispatchedRunId ||
+    (await findNewRunId(options.repo, workflowFile, "NPM Telegram Beta E2E", before));
+  const run = await waitForSuccessfulRun(options.repo, runId, {
+    workflowName: "NPM Telegram Beta E2E",
+    workflowRef: options.workflowRef,
+  });
+  return {
+    status: "passed",
+    runId,
+    url: run.url,
+    artifactName,
+    providerMode: options.telegramProviderMode,
+  };
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   options.workflowRef ||= currentBranch();
   options.outputDir ||= join(".artifacts", "release-candidate", options.tag);
   const targetSha = gitRevParse(`${options.tag}^{}`);
+  const localGeneratedCheck = runLocalGeneratedCheckIfNeeded(options);
 
   if (!options.fullReleaseRunId && !options.skipDispatch) {
     const workflowFile = "full-release-validation.yml";
@@ -481,16 +622,18 @@ async function main() {
 
   const npmDir = join(options.outputDir, "npm-preflight");
   const fullDir = join(options.outputDir, "full-release-validation");
-  downloadArtifact(
+  const npmArtifactName = downloadResolvedArtifact(
     options.repo,
     options.npmPreflightRunId,
     `openclaw-npm-preflight-${options.tag}`,
+    "openclaw-npm-preflight-",
     npmDir,
   );
-  downloadArtifact(
+  const fullArtifactName = downloadResolvedArtifact(
     options.repo,
     options.fullReleaseRunId,
     `full-release-validation-${options.fullReleaseRunId}`,
+    "full-release-validation-",
     fullDir,
   );
 
@@ -520,6 +663,8 @@ async function main() {
   }
 
   const parallels = await runParallelsIfNeeded(options);
+  const npmTelegram = await runTelegramIfNeeded(options, npmArtifactName);
+  options.npmTelegramRunId = npmTelegram.runId ?? "";
   const pluginNpmPlan = await collectPluginPlanWithRetry(
     "scripts/plugin-npm-release-plan.ts",
     options,
@@ -539,21 +684,60 @@ async function main() {
     npmPreflightRunId: options.npmPreflightRunId,
     fullReleaseValidationUrl: fullRun.url,
     npmPreflightUrl: npmRun.url,
+    artifacts: {
+      npmPreflight: npmArtifactName,
+      fullReleaseValidation: fullArtifactName,
+    },
+    localGeneratedCheck,
     tarball: {
       name: basename(tarballPath),
       sha256: actualTarballSha,
       path: tarballPath,
     },
     parallels,
+    npmTelegram,
     pluginNpmPlan,
     pluginClawHubPlan,
     publishCommand,
   };
   mkdirSync(options.outputDir, { recursive: true });
   const evidencePath = join(options.outputDir, "release-candidate-evidence.json");
+  const evidenceMarkdownPath = join(options.outputDir, "release-candidate-evidence.md");
   writeFileSync(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
+  writeFileSync(
+    evidenceMarkdownPath,
+    [
+      `# ${options.tag} release candidate evidence`,
+      "",
+      `- target SHA: ${targetSha}`,
+      `- full release validation: ${options.fullReleaseRunId} ${fullRun.url}`,
+      `- npm preflight: ${options.npmPreflightRunId} ${npmRun.url}`,
+      `- npm preflight artifact: ${npmArtifactName}`,
+      `- full release artifact: ${fullArtifactName}`,
+      `- local generated release checks: ${localGeneratedCheck.status}${
+        localGeneratedCheck.reason ? ` (${localGeneratedCheck.reason})` : ""
+      }`,
+      `- tarball: ${basename(tarballPath)}`,
+      `- tarball sha256: ${actualTarballSha}`,
+      `- npm dist-tag: ${options.npmDistTag}`,
+      `- plugin npm plan: ${pluginNpmPlan.packages?.length ?? 0} packages`,
+      `- ClawHub plan: ${pluginClawHubPlan.packages?.length ?? 0} packages`,
+      `- Parallels: ${parallels.status}${parallels.reason ? ` (${parallels.reason})` : ""}`,
+      `- NPM Telegram E2E: ${npmTelegram.status}${
+        npmTelegram.runId ? ` ${npmTelegram.runId} ${npmTelegram.url}` : ""
+      }`,
+      "",
+      "Publish command:",
+      "",
+      "```bash",
+      publishCommand,
+      "```",
+      "",
+    ].join("\n"),
+  );
 
   console.log(`release candidate evidence: ${evidencePath}`);
+  console.log(`release candidate summary: ${evidenceMarkdownPath}`);
   console.log("publish command:");
   console.log(publishCommand);
 }

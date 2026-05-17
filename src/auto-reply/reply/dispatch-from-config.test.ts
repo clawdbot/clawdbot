@@ -26,6 +26,7 @@ import {
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
 import type { MsgContext } from "../templating.js";
 import { setReplyPayloadMetadata, type GetReplyOptions, type ReplyPayload } from "../types.js";
+import { PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE } from "./provider-request-error-classifier.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 
@@ -4538,6 +4539,45 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
     expect(replyResolver).toHaveBeenCalledTimes(1);
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("delivers provider conversation-state runner payloads as outbound channel replies", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const exactProviderError = "Custom tool call output is missing for call id: call_live_123.";
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (receivedCtx: MsgContext) => {
+      expect(receivedCtx.Body).toBe(exactProviderError);
+      return {
+        text: PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE,
+      } satisfies ReplyPayload;
+    });
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      OriginatingChannel: "discord",
+      OriginatingTo: "discord:channel:provider-error",
+      To: "discord:channel:provider-error",
+      AccountId: "default",
+      SessionKey: "agent:main:discord:channel:provider-error",
+      Body: exactProviderError,
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
+      text: PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE,
+    });
   });
 
   it("delivers replies normally when sendPolicy is unset (defaults to allow)", async () => {

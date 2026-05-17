@@ -68,7 +68,9 @@ const GATEWAY_LOG_SENTINEL_RULES: GatewayLogSentinelRule[] = [
     qaImpact: "P0",
     test: (line) =>
       /\bcontracts\.tools\b/iu.test(line) &&
-      /\b(?:missing|invalid|registration|register|manifest|contract|schema|error)\b/iu.test(line),
+      /\b(?:missing|invalid|registration|register|manifest|contract|schema|declare|error)\b/iu.test(
+        line,
+      ),
   },
   {
     kind: "codex-app-server-timeout",

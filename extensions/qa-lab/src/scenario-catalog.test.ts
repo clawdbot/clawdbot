@@ -103,6 +103,56 @@ describe("qa scenario catalog", () => {
     expect(scenario.gatewayRuntime?.forwardHostHome).toBe(true);
   });
 
+  it("loads runtime parity tier metadata for first-hour and soak lanes", () => {
+    const firstHour = readQaScenarioById("runtime-first-hour-20-turn");
+    const soak = readQaScenarioById("runtime-soak-100-turn");
+
+    expect(firstHour.runtimeParityTier).toBe("standard");
+    expect(readQaScenarioExecutionConfig(firstHour.id)).toMatchObject({
+      runtimeParityComparison: "outcome-only",
+      turnCount: 20,
+    });
+    expect(soak.runtimeParityTier).toBe("soak");
+    expect(readQaScenarioExecutionConfig(soak.id)).toMatchObject({ turnCount: 100 });
+  });
+
+  it("loads the Codex Pi-shaped Read vocabulary live parity canary", () => {
+    const scenario = readQaScenarioById("codex-pi-shaped-read-vocabulary");
+    const config = readQaScenarioExecutionConfig(scenario.id) as
+      | {
+          runtimeParityComparison?: string;
+          fixtureFile?: string;
+          expectedMarker?: string;
+          unavailableNeedles?: string[];
+        }
+      | undefined;
+
+    expect(scenario.sourcePath).toBe("qa/scenarios/runtime/codex-pi-shaped-read-vocabulary.md");
+    expect(scenario.runtimeParityTier).toBe("live-only");
+    expect(config?.runtimeParityComparison).toBe("codex-native-workspace");
+    expect(config?.fixtureFile).toBe("PI_SHAPED_READ_FIXTURE.txt");
+    expect(config?.expectedMarker).toBe("PI_SHAPED_READ_OK");
+    expect(config?.unavailableNeedles).toContain("not in my available tool surface");
+  });
+
+  it("loads live gateway sentinel scenarios for harness self-health", () => {
+    const scenarioIds = [
+      "plugin-hook-health-sentinel",
+      "plugin-manifest-contract-health",
+      "webchat-direct-reply-routing",
+    ];
+
+    for (const scenarioId of scenarioIds) {
+      const scenario = readQaScenarioById(scenarioId);
+      expect(scenario.runtimeParityTier).toBe("live-only");
+      expect(scenario.execution.flow?.steps.length).toBeGreaterThan(0);
+      expect(scenario.coverage?.primary.length).toBeGreaterThan(0);
+    }
+    expect(readQaScenarioById("webchat-direct-reply-routing").sourcePath).toBe(
+      "qa/scenarios/channels/webchat-direct-reply-routing.md",
+    );
+  });
+
   it("keeps the character eval scenario natural and task-shaped", () => {
     const characterConfig = readQaScenarioExecutionConfig("character-vibes-gollum") as
       | {

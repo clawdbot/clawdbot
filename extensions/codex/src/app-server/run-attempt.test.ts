@@ -3928,8 +3928,8 @@ describe("runCodexAppServerAttempt", () => {
       ?.config;
     expect(startConfig?.["features.hooks"]).toBe(true);
     expect(Array.isArray(startConfig?.["hooks.PreToolUse"])).toBe(true);
-    expect(Array.isArray(startConfig?.["hooks.PostToolUse"])).toBe(true);
-    expect(Array.isArray(startConfig?.["hooks.Stop"])).toBe(true);
+    expect(startConfig?.["hooks.PostToolUse"]).toEqual([]);
+    expect(startConfig?.["hooks.Stop"]).toEqual([]);
     expect(startConfig).not.toHaveProperty("hooks.PermissionRequest");
     const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
     expect(
@@ -4128,6 +4128,66 @@ describe("runCodexAppServerAttempt", () => {
     const startRequest = harness.requests.find((request) => request.method === "thread/start");
     const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
+  });
+
+  it("preserves a healthy binding when invalid image cleanup hits a transient thread", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeExistingBinding(sessionFile, workspaceDir, {
+      dynamicToolsFingerprint: JSON.stringify([{ name: "message" }]),
+    });
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-transient");
+      }
+      if (method === "turn/start") {
+        throw new Error("invalid image_url base64 payload");
+      }
+      return undefined;
+    });
+
+    await expect(runCodexAppServerAttempt(createParams(sessionFile, workspaceDir))).rejects.toThrow(
+      "invalid image_url base64 payload",
+    );
+
+    expect(harness.requests.map((request) => request.method)).toEqual([
+      "thread/start",
+      "turn/start",
+    ]);
+    const binding = await readCodexAppServerBinding(sessionFile);
+    expect(binding?.threadId).toBe("thread-existing");
+  });
+
+  it("preserves a healthy binding when the server rejects unsupported image input", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeExistingBinding(sessionFile, workspaceDir, { dynamicToolsFingerprint: "[]" });
+    const harness = createAppServerHarness(async (method) => {
+      if (method === "thread/resume") {
+        return threadStartResult("thread-existing");
+      }
+      if (method === "turn/start") {
+        throw new Error("unsupported image input");
+      }
+      return {};
+    });
+
+    await expect(runCodexAppServerAttempt(createParams(sessionFile, workspaceDir))).rejects.toThrow(
+      "unsupported image input",
+    );
+
+    expect(harness.requests.map((request) => request.method)).toEqual([
+      "thread/resume",
+      "turn/start",
+    ]);
+    const binding = await readCodexAppServerBinding(sessionFile);
+    expect(binding?.threadId).toBe("thread-existing");
+  });
+
+  it("recognizes invalid image payload errors without matching unsupported image input", () => {
+    expect(__testing.isInvalidCodexImagePayloadError("invalid_image_url")).toBe(true);
+    expect(__testing.isInvalidCodexImagePayloadError("malformed-base64 image payload")).toBe(true);
+    expect(__testing.isInvalidCodexImagePayloadError("unsupported image input")).toBe(false);
   });
 
   it("preserves Codex usage-limit reset details when turn/start fails", async () => {
@@ -4809,12 +4869,14 @@ describe("runCodexAppServerAttempt", () => {
       path.join(tempDir, "session.jsonl"),
       path.join(tempDir, "workspace"),
     );
+    const pngBase64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
     params.model = createCodexTestModel("codex", ["text", "image"]);
     params.images = [
       {
         type: "image",
         mimeType: "image/png",
-        data: "aW1hZ2UtYnl0ZXM=",
+        data: pngBase64,
       },
     ];
 
@@ -4829,7 +4891,7 @@ describe("runCodexAppServerAttempt", () => {
       | undefined;
     expect(turnStartParams?.input).toEqual([
       { type: "text", text: "hello", text_elements: [] },
-      { type: "image", url: "data:image/png;base64,aW1hZ2UtYnl0ZXM=" },
+      { type: "image", url: `data:image/png;base64,${pngBase64}` },
     ]);
   });
 

@@ -28,6 +28,11 @@ type BrowserCommandGroupDefinition = {
   register: BrowserCommandRegistrar;
 };
 
+const ROOT_BOOLEAN_OPTIONS = new Set(["--dev", "--no-color"]);
+const ROOT_VALUE_OPTIONS = new Set(["--profile", "--log-level", "--container"]);
+const BROWSER_BOOLEAN_OPTIONS = new Set(["--json", "--expect-final"]);
+const BROWSER_VALUE_OPTIONS = new Set(["--browser-profile", "--url", "--token", "--timeout"]);
+
 const command = (
   name: string,
   description: string,
@@ -143,13 +148,92 @@ function buildBrowserCommandGroups(params: {
   }));
 }
 
+function isValueToken(arg: string | undefined): boolean {
+  return Boolean(arg && arg !== "--" && (!arg.startsWith("-") || /^-\d+(?:\.\d+)?$/.test(arg)));
+}
+
+function consumeOption(
+  args: readonly string[],
+  index: number,
+  booleanOptions: ReadonlySet<string>,
+  valueOptions: ReadonlySet<string>,
+): number {
+  const arg = args[index];
+  if (!arg || arg === "--" || !arg.startsWith("-")) {
+    return 0;
+  }
+  const equalsIndex = arg.indexOf("=");
+  const flag = equalsIndex === -1 ? arg : arg.slice(0, equalsIndex);
+  if (booleanOptions.has(flag)) {
+    return equalsIndex === -1 ? 1 : 0;
+  }
+  if (!valueOptions.has(flag)) {
+    return 0;
+  }
+  if (equalsIndex !== -1) {
+    return arg.slice(equalsIndex + 1).trim() ? 1 : 0;
+  }
+  return isValueToken(args[index + 1]) ? 2 : 1;
+}
+
+function resolveBrowserLazySubcommand(argv: string[]): string | null {
+  const { primary } = resolveCliArgvInvocation(argv);
+  if (primary !== "browser") {
+    return null;
+  }
+
+  const args = argv.slice(2);
+  let sawBrowser = false;
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (!arg || arg === "--") {
+      break;
+    }
+    if (!sawBrowser) {
+      const consumed = consumeOption(args, i, ROOT_BOOLEAN_OPTIONS, ROOT_VALUE_OPTIONS);
+      if (consumed > 0) {
+        i += consumed - 1;
+        continue;
+      }
+      if (arg.startsWith("-")) {
+        continue;
+      }
+      if (arg === "browser") {
+        sawBrowser = true;
+        continue;
+      }
+      return null;
+    }
+
+    const consumed = consumeOption(args, i, BROWSER_BOOLEAN_OPTIONS, BROWSER_VALUE_OPTIONS);
+    if (consumed > 0) {
+      i += consumed - 1;
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      continue;
+    }
+    return arg;
+  }
+
+  return null;
+}
+
+function resolveBrowserParentOpts(cmd: Command): BrowserParentOpts {
+  for (let current: Command | null | undefined = cmd; current; current = current.parent) {
+    if (current.name() === "browser") {
+      return current.opts() as BrowserParentOpts;
+    }
+  }
+  return cmd.parent?.opts?.() as BrowserParentOpts;
+}
+
 function registerLazyBrowserCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
   argv: string[],
 ) {
-  const { primary, commandPath } = resolveCliArgvInvocation(argv);
-  const subcommand = primary === "browser" ? (commandPath[1] ?? null) : null;
+  const subcommand = resolveBrowserLazySubcommand(argv);
   registerCommandGroups(browser, buildBrowserCommandGroups({ browser, parentOpts }), {
     eager: shouldEagerRegisterSubcommands(),
     primary: subcommand,
@@ -184,7 +268,7 @@ export function registerBrowserCli(program: Command, argv: string[] = process.ar
 
   addGatewayClientOptions(browser);
 
-  const parentOpts = (cmd: Command) => cmd.parent?.opts?.() as BrowserParentOpts;
+  const parentOpts = resolveBrowserParentOpts;
 
   registerLazyBrowserCommands(browser, parentOpts, argv);
 }

@@ -2005,7 +2005,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const res = await run();
 
     const payload = requireRecord(res, "ordering conflict payload");
-    expect(payload.text).toContain("Message ordering conflict");
+    expect(payload.text).toContain("model provider rejected the conversation state");
     expect(payload.text).not.toContain("400");
   });
 

@@ -21,11 +21,13 @@ import {
   coerceImageAssistantText,
   hasImageReasoningOnlyResponse,
 } from "../agents/tools/image-tool.helpers.js";
+import { isSecretRef } from "../config/types.secrets.js";
 import {
   buildCopilotIdeHeaders,
   COPILOT_INTEGRATION_ID,
   resolveCopilotApiToken,
 } from "../plugin-sdk/provider-auth.js";
+import { normalizeMediaProviderId } from "./provider-id.js";
 import type {
   ImageDescriptionRequest,
   ImageDescriptionResult,
@@ -315,6 +317,7 @@ function buildImageRequestHeaders(model: Model<Api>): Record<string, string> | u
 
 async function describeImagesWithMinimax(params: {
   apiKey: string;
+  provider: string;
   modelId: string;
   modelBaseUrl?: string;
   prompt: string;
@@ -329,6 +332,7 @@ async function describeImagesWithMinimax(params: {
         : params.prompt;
     const text = await minimaxUnderstandImage({
       apiKey: params.apiKey,
+      provider: params.provider,
       prompt,
       imageDataUrl: `data:${image.mime ?? "image/jpeg"};base64,${image.buffer.toString("base64")}`,
       modelBaseUrl: params.modelBaseUrl,
@@ -354,7 +358,51 @@ function resolveConfiguredProviderBaseUrl(
   if (typeof direct?.baseUrl === "string" && direct.baseUrl.trim()) {
     return direct.baseUrl.trim();
   }
+  const normalizedProvider = normalizeMediaProviderId(provider);
+  const normalized = cfg.models?.providers?.[normalizedProvider];
+  if (typeof normalized?.baseUrl === "string" && normalized.baseUrl.trim()) {
+    if (isMinimaxCnAlias(provider) && !isMinimaxCnBaseUrl(normalized.baseUrl)) {
+      return undefined;
+    }
+    return normalized.baseUrl.trim();
+  }
   return undefined;
+}
+
+function isMinimaxCnAlias(provider: string): boolean {
+  const normalized = provider.trim().toLowerCase();
+  return normalized === "minimax-cn" || normalized === "minimax-portal-cn";
+}
+
+function isMinimaxCnBaseUrl(baseUrl: string): boolean {
+  const trimmed = baseUrl.trim();
+  if (!trimmed) {
+    return false;
+  }
+  try {
+    const parsed = new URL(/^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`);
+    return parsed.hostname.toLowerCase() === "api.minimaxi.com";
+  } catch {
+    return false;
+  }
+}
+
+function hasConfiguredProviderApiKey(
+  cfg: ImageDescriptionRequest["cfg"],
+  provider: string,
+): boolean {
+  const apiKey = cfg.models?.providers?.[provider]?.apiKey;
+  return (typeof apiKey === "string" && apiKey.trim().length > 0) || isSecretRef(apiKey);
+}
+
+function resolveMinimaxVlmAuthProvider(
+  cfg: ImageDescriptionRequest["cfg"],
+  provider: string,
+): string {
+  if (!isMinimaxCnAlias(provider) || hasConfiguredProviderApiKey(cfg, provider)) {
+    return provider;
+  }
+  return normalizeMediaProviderId(provider);
 }
 
 async function resolveMinimaxVlmFallbackRuntime(params: {
@@ -365,8 +413,9 @@ async function resolveMinimaxVlmFallbackRuntime(params: {
   profile?: string;
   preferredProfile?: string;
 }): Promise<{ apiKey: string; modelBaseUrl?: string }> {
+  const authProvider = resolveMinimaxVlmAuthProvider(params.cfg, params.provider);
   const auth = await resolveApiKeyForProvider({
-    provider: params.provider,
+    provider: authProvider,
     cfg: params.cfg,
     profileId: params.profile,
     preferredProfile: params.preferredProfile,
@@ -374,7 +423,7 @@ async function resolveMinimaxVlmFallbackRuntime(params: {
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });
   return {
-    apiKey: requireApiKey(auth, params.provider),
+    apiKey: requireApiKey(auth, authProvider),
     modelBaseUrl: resolveConfiguredProviderBaseUrl(params.cfg, params.provider),
   };
 }
@@ -437,6 +486,7 @@ async function describeImagesWithModelInternal(
     const fallback = await resolveMinimaxVlmFallbackRuntime(params);
     return await describeImagesWithMinimax({
       apiKey: fallback.apiKey,
+      provider: params.provider,
       modelId: params.model,
       modelBaseUrl: fallback.modelBaseUrl,
       prompt,
@@ -448,6 +498,7 @@ async function describeImagesWithModelInternal(
   if (isMinimaxVlmModel(model.provider, model.id)) {
     return await describeImagesWithMinimax({
       apiKey,
+      provider: model.provider,
       modelId: model.id,
       modelBaseUrl: model.baseUrl,
       prompt,

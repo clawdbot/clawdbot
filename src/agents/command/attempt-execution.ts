@@ -1,5 +1,6 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { formatAcpErrorChain } from "../../acp/runtime/errors.js";
+import type { AcpRuntimeEvent } from "../../acp/runtime/types.js";
 import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
 import type { ThinkLevel, VerboseLevel } from "../../auto-reply/thinking.js";
 import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
@@ -10,6 +11,8 @@ import {
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
+import { readErrorName } from "../../infra/errors.js";
+import { redactSensitiveText } from "../../logging/redact.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
@@ -49,6 +52,20 @@ export {
 } from "./attempt-execution.helpers.js";
 
 const log = createSubsystemLogger("agents/agent-command");
+
+function shouldClearReusedCliSessionAfterError(err: unknown): boolean {
+  if (readErrorName(err) === "AbortError") {
+    return true;
+  }
+  return err instanceof FailoverError && err.reason !== "session_expired";
+}
+
+function resolveClearedCliSessionReason(err: unknown): string {
+  if (err instanceof FailoverError) {
+    return err.reason;
+  }
+  return readErrorName(err) || "error";
+}
 
 function normalizeTranscriptMirrorText(value: string): string {
   return value.trim().replace(/\s+/gu, " ");
@@ -587,6 +604,26 @@ export function runAgentAttempt(params: {
             return result;
           });
         }
+        if (
+          isClaudeCliProvider(cliExecutionProvider) &&
+          shouldClearReusedCliSessionAfterError(err) &&
+          activeCliSessionBinding?.sessionId &&
+          params.sessionKey &&
+          params.sessionStore &&
+          params.storePath
+        ) {
+          log.warn(
+            `CLI session cleared after failed reused turn: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${params.sessionKey} reason=${sanitizeForLog(resolveClearedCliSessionReason(err))}`,
+          );
+
+          params.sessionEntry =
+            (await clearCliSessionInStore({
+              provider: cliExecutionProvider,
+              sessionKey: params.sessionKey,
+              sessionStore: params.sessionStore,
+              storePath: params.storePath,
+            })) ?? params.sessionEntry;
+        }
         throw err;
       }
     });
@@ -683,6 +720,93 @@ export function emitAcpLifecycleStart(params: { runId: string; startedAt: number
     data: {
       phase: "start",
       startedAt: params.startedAt,
+    },
+  });
+}
+
+const ACP_PROXY_ENV_KEYS = [
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "ALL_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "all_proxy",
+] as const;
+
+function resolvePresentProxyEnvKeys(env: NodeJS.ProcessEnv = process.env): string[] {
+  return ACP_PROXY_ENV_KEYS.filter((key) => {
+    const value = env[key];
+    return typeof value === "string" && value.trim().length > 0;
+  });
+}
+
+function sanitizeAcpDiagnosticText(value: string): string {
+  return redactSensitiveText(value).replace(/\s+/g, " ").trim().slice(0, 240);
+}
+
+function acpRuntimeEventDiagnostics(event: AcpRuntimeEvent): Record<string, unknown> {
+  if (event.type === "status") {
+    return {
+      eventType: event.type,
+      text: sanitizeAcpDiagnosticText(event.text),
+      ...(event.tag ? { tag: event.tag } : {}),
+    };
+  }
+  if (event.type === "tool_call") {
+    return {
+      eventType: event.type,
+      text: sanitizeAcpDiagnosticText(event.text),
+      ...(event.tag ? { tag: event.tag } : {}),
+      ...(event.status ? { status: sanitizeAcpDiagnosticText(event.status) } : {}),
+      ...(event.title ? { title: sanitizeAcpDiagnosticText(event.title) } : {}),
+      ...(event.toolCallId ? { toolCallId: sanitizeAcpDiagnosticText(event.toolCallId) } : {}),
+    };
+  }
+  if (event.type === "error") {
+    return {
+      eventType: event.type,
+      message: sanitizeAcpDiagnosticText(event.message),
+      ...(event.code ? { code: sanitizeAcpDiagnosticText(event.code) } : {}),
+      ...(typeof event.retryable === "boolean" ? { retryable: event.retryable } : {}),
+    };
+  }
+  if (event.type === "done") {
+    return {
+      eventType: event.type,
+      ...(event.stopReason ? { stopReason: sanitizeAcpDiagnosticText(event.stopReason) } : {}),
+    };
+  }
+  return {
+    eventType: event.type,
+    stream: event.stream ?? "output",
+  };
+}
+
+export function emitAcpPromptSubmitted(params: { runId: string; sessionKey?: string; at: number }) {
+  emitAgentEvent({
+    runId: params.runId,
+    stream: "acp",
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    data: {
+      phase: "prompt_submitted",
+      at: params.at,
+      proxyEnvKeys: resolvePresentProxyEnvKeys(),
+    },
+  });
+}
+
+export function emitAcpRuntimeEvent(params: {
+  runId: string;
+  event: AcpRuntimeEvent;
+  sessionKey?: string;
+}) {
+  emitAgentEvent({
+    runId: params.runId,
+    stream: "acp",
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    data: {
+      phase: "runtime_event",
+      ...acpRuntimeEventDiagnostics(params.event),
     },
   });
 }

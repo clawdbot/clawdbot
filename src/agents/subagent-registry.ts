@@ -198,6 +198,12 @@ const SESSION_RUN_TTL_MS = 5 * 60_000; // 5 minutes
 const PENDING_LIFECYCLE_TERMINAL_TTL_MS = 5 * 60_000; // 5 minutes
 /** Grace period before treating a "running" subagent without a live run context as stale. */
 const STALE_ACTIVE_SUBAGENT_GRACE_MS = process.env.OPENCLAW_TEST_FAST === "1" ? 1_000 : 60_000;
+const SUSPENDED_DELIVERY_CRON_EXPIRY_MS = 2 * 60 * 60_000;
+const SUSPENDED_DELIVERY_SUBAGENT_EXPIRY_MS = 6 * 60 * 60_000;
+const SUSPENDED_DELIVERY_INTERACTIVE_EXPIRY_MS = 24 * 60 * 60_000;
+const SUSPENDED_DELIVERY_SOFT_CAP = 25;
+const SUSPENDED_DELIVERY_HARD_CAP = 50;
+const SUSPENDED_DELIVERY_PRESSURE_TARGET = 10;
 
 function loadContextEngineInitModule(): Promise<ContextEngineInitModule> {
   return contextEngineInitLoader.load();
@@ -503,6 +509,13 @@ function resumeSubagentRun(runId: string) {
   if (entry.cleanupCompletedAt) {
     return;
   }
+  if (
+    typeof entry.endedAt === "number" &&
+    entry.pendingFinalDelivery === true &&
+    typeof entry.deliverySuspendedAt === "number"
+  ) {
+    return;
+  }
   if (entry.pauseReason === "sessions_yield") {
     return;
   }
@@ -655,6 +668,90 @@ function stopSweeper() {
   sweeper = null;
 }
 
+function isSuspendedPendingFinalDelivery(entry: SubagentRunRecord): boolean {
+  return (
+    typeof entry.endedAt === "number" &&
+    entry.pendingFinalDelivery === true &&
+    typeof entry.deliverySuspendedAt === "number"
+  );
+}
+
+function resolveSuspendedDeliveryExpiryMs(entry: SubagentRunRecord): number {
+  const requester = entry.requesterSessionKey;
+  if (requester.includes(":cron:")) {
+    return SUSPENDED_DELIVERY_CRON_EXPIRY_MS;
+  }
+  if (requester.includes(":subagent:")) {
+    return SUSPENDED_DELIVERY_SUBAGENT_EXPIRY_MS;
+  }
+  return SUSPENDED_DELIVERY_INTERACTIVE_EXPIRY_MS;
+}
+
+async function discardSuspendedPendingFinalDelivery(
+  runId: string,
+  entry: SubagentRunRecord,
+  now: number,
+  reason: "expired" | "pressure-pruned",
+): Promise<void> {
+  const payload = entry.pendingFinalDeliveryPayload;
+  entry.deliveryDiscardedAt = now;
+  entry.deliveryDiscardReason = reason;
+  entry.deliveryDiscardedPayloadSummary = {
+    requesterSessionKey: payload?.requesterSessionKey ?? entry.requesterSessionKey,
+    childSessionKey: payload?.childSessionKey ?? entry.childSessionKey,
+    childRunId: payload?.childRunId ?? entry.runId,
+    endedAt: payload?.endedAt ?? entry.endedAt,
+    status: payload?.outcome?.status ?? entry.outcome?.status,
+    lastError: entry.lastAnnounceDeliveryError ?? entry.pendingFinalDeliveryLastError ?? null,
+  };
+  entry.pendingFinalDelivery = undefined;
+  entry.pendingFinalDeliveryCreatedAt = undefined;
+  entry.pendingFinalDeliveryLastAttemptAt = undefined;
+  entry.pendingFinalDeliveryAttemptCount = undefined;
+  entry.pendingFinalDeliveryLastError = undefined;
+  entry.pendingFinalDeliveryPayload = undefined;
+  entry.deliverySuspendedAt = undefined;
+  entry.deliverySuspendedReason = undefined;
+  entry.wakeOnDescendantSettle = undefined;
+  entry.fallbackFrozenResultText = undefined;
+  entry.fallbackFrozenResultCapturedAt = undefined;
+  entry.cleanupHandled = true;
+  entry.completionAnnouncedAt = undefined;
+  resumedRuns.delete(runId);
+  clearPendingLifecycleError(runId);
+  clearPendingLifecycleTimeout(runId);
+  log.warn("subagent suspended delivery discarded", {
+    reason,
+    runId: entry.runId,
+    childSessionKey: entry.childSessionKey,
+    requesterSessionKey: entry.requesterSessionKey,
+  });
+  const shouldDeleteAttachments = entry.cleanup === "delete" || !entry.retainAttachmentsOnKeep;
+  if (shouldDeleteAttachments) {
+    await safeRemoveAttachmentsDir(entry);
+  }
+  const completionReason = entry.endedReason ?? SUBAGENT_ENDED_REASON_COMPLETE;
+  completeCleanupBookkeeping({
+    runId,
+    entry,
+    cleanup: entry.cleanup,
+    completedAt: now,
+  });
+  if (
+    entry.expectsCompletionMessage === true &&
+    shouldEmitEndedHookForRun({
+      entry,
+      reason: completionReason,
+    })
+  ) {
+    await emitSubagentEndedHookForRun({
+      entry,
+      reason: completionReason,
+      sendFarewell: true,
+    });
+  }
+}
+
 async function sweepSubagentRuns() {
   if (sweepInProgress) {
     return;
@@ -664,7 +761,43 @@ async function sweepSubagentRuns() {
     const now = Date.now();
     const storeCache: SubagentSessionStoreCache = new Map();
     let mutated = false;
+    const suspendedEntries = [...subagentRuns.entries()].filter(([, entry]) =>
+      isSuspendedPendingFinalDelivery(entry),
+    );
+    const pressureDiscardRunIds = new Set<string>();
+    if (suspendedEntries.length > SUSPENDED_DELIVERY_HARD_CAP) {
+      const pressureCount = Math.max(
+        0,
+        suspendedEntries.length - SUSPENDED_DELIVERY_PRESSURE_TARGET,
+      );
+      for (const [runId] of suspendedEntries
+        .toSorted((a, b) => (a[1].deliverySuspendedAt ?? 0) - (b[1].deliverySuspendedAt ?? 0))
+        .slice(0, pressureCount)) {
+        pressureDiscardRunIds.add(runId);
+      }
+      log.warn("subagent suspended delivery backlog exceeded pressure cap", {
+        suspendedCount: suspendedEntries.length,
+        softCap: SUSPENDED_DELIVERY_SOFT_CAP,
+        hardCap: SUSPENDED_DELIVERY_HARD_CAP,
+        pressureTarget: SUSPENDED_DELIVERY_PRESSURE_TARGET,
+        pressureDiscardCount: pressureDiscardRunIds.size,
+      });
+    }
     for (const [runId, entry] of subagentRuns.entries()) {
+      if (isSuspendedPendingFinalDelivery(entry)) {
+        const suspendedAgeMs = now - (entry.deliverySuspendedAt ?? now);
+        const expired = suspendedAgeMs >= resolveSuspendedDeliveryExpiryMs(entry);
+        if (expired || pressureDiscardRunIds.has(runId)) {
+          await discardSuspendedPendingFinalDelivery(
+            runId,
+            entry,
+            now,
+            expired ? "expired" : "pressure-pruned",
+          );
+          mutated = true;
+        }
+        continue;
+      }
       if (typeof entry.endedAt !== "number") {
         const hasLiveRunContext = Boolean(getAgentRunContext(runId));
         const activeAgeMs = now - (entry.startedAt ?? entry.createdAt);

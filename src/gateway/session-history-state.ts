@@ -254,14 +254,27 @@ export class SessionHistorySseState {
     if (!sanitizedMessage) {
       return null;
     }
-    const nextMessages = [...this.sentHistory.messages, sanitizedMessage];
+    const projectedMessages = toSessionHistoryMessages(
+      projectChatDisplayMessages([...this.sentHistory.messages, nextMessage], {
+        maxChars: this.maxChars,
+      }),
+    );
+    if (projectedMessages.length <= this.sentHistory.messages.length) {
+      this.sentHistory = buildPaginatedSessionHistory({
+        messages: projectedMessages,
+        hasMore: false,
+      });
+      return { shouldRefresh: true };
+    }
+    const projectedMessage = projectedMessages.at(-1) ?? sanitizedMessage;
+    const nextMessages = [...this.sentHistory.messages, projectedMessage];
     this.sentHistory = buildPaginatedSessionHistory({
       messages: nextMessages,
       hasMore: false,
     });
     return {
-      message: sanitizedMessage,
-      messageSeq: resolveMessageSeq(sanitizedMessage),
+      message: projectedMessage,
+      messageSeq: resolveMessageSeq(projectedMessage),
     };
   }
 

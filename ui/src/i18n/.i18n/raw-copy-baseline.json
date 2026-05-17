@@ -1427,7 +1427,7 @@
       "kind": "html-attribute",
       "name": "placeholder",
       "path": "ui/src/ui/views/chat.ts",
-      "text": "gpt-realtime-2"
+      "text": "Auto"
     },
     {
       "count": 1,
@@ -1472,6 +1472,13 @@
       "text": "&times;"
     },
     {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Advanced"
+    },
+    {
       "count": 2,
       "kind": "html-text",
       "name": "text",
@@ -1486,7 +1493,14 @@
       "text": "close"
     },
     {
-      "count": 2,
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Custom"
+    },
+    {
+      "count": 3,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/chat.ts",
@@ -1505,6 +1519,13 @@
       "name": "text",
       "path": "ui/src/ui/views/chat.ts",
       "text": "Esc"
+    },
+    {
+      "count": 1,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/chat.ts",
+      "text": "Exact VAD"
     },
     {
       "count": 2,
@@ -1528,7 +1549,7 @@
       "text": "Google"
     },
     {
-      "count": 1,
+      "count": 2,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/chat.ts",
@@ -1546,10 +1567,17 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/chat.ts",
+      "text": "Lead-in"
+    },
+    {
+      "count": 2,
+      "kind": "html-text",
+      "name": "text",
+      "path": "ui/src/ui/views/chat.ts",
       "text": "Low"
     },
     {
-      "count": 1,
+      "count": 2,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/chat.ts",
@@ -1595,7 +1623,7 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/chat.ts",
-      "text": "Prefix ms"
+      "text": "Pause before send"
     },
     {
       "count": 1,
@@ -1637,7 +1665,7 @@
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/ui/views/chat.ts",
-      "text": "Silence ms"
+      "text": "Sensitivity"
     },
     {
       "count": 2,
@@ -1652,13 +1680,6 @@
       "name": "text",
       "path": "ui/src/ui/views/chat.ts",
       "text": "Transport"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/chat.ts",
-      "text": "VAD"
     },
     {
       "count": 1,
@@ -3339,13 +3360,6 @@
       "name": "placeholder",
       "path": "ui/src/ui/views/cron.ts",
       "text": "default"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
-      "path": "ui/src/ui/views/cron.ts",
-      "text": "+ New"
     },
     {
       "count": 1,

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   FeishuSecretRefUnavailableError,
   inspectFeishuCredentials,
+  listFeishuAccountIds,
   resolveDefaultFeishuAccountId,
   resolveDefaultFeishuAccountSelection,
   resolveFeishuAccount,
@@ -61,6 +62,23 @@ function expectUnresolvedEnvSecretRefError(key: string) {
 }
 
 describe("resolveDefaultFeishuAccountId", () => {
+  it("preserves top-level default account when named accounts are configured", () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          appId: "cli_default",
+          appSecret: "secret_default",
+          accounts: {
+            work: { enabled: false },
+          },
+        },
+      },
+    };
+
+    expect(listFeishuAccountIds(cfg as never)).toEqual(["default", "work"]);
+    expect(resolveDefaultFeishuAccountId(cfg as never)).toBe("default");
+  });
+
   it("prefers channels.feishu.defaultAccount when configured", () => {
     const cfg = {
       channels: {

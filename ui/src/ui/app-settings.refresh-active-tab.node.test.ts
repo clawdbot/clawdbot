@@ -5,13 +5,15 @@ type CronRunsLoadStatus = "ok" | "error" | "skipped";
 
 function createDeferred<T = void>() {
   let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
-  const promise = new Promise<T>((res) => {
+  let reject: ((reason?: unknown) => void) | undefined;
+  const promise = new Promise<T>((res, rej) => {
     resolve = res;
+    reject = rej;
   });
-  if (!resolve) {
+  if (!resolve || !reject) {
     throw new Error("Expected deferred resolver to be initialized");
   }
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 async function raceWithNextMacrotask(promise: Promise<unknown>): Promise<"resolved" | "pending"> {
@@ -346,6 +348,39 @@ describe("refreshActiveTab", () => {
     await vi.waitFor(() => {
       expect(host.requestUpdate).toHaveBeenCalledOnce();
     });
+  });
+
+  it("loads scoped settings snapshots before starting the schema refresh", async () => {
+    const host = createHost();
+    host.tab = "communications";
+    const config = createDeferred();
+    mocks.loadConfigMock.mockReturnValueOnce(config.promise);
+
+    const refresh = refreshActiveTab(host as never);
+    await Promise.resolve();
+
+    expect(mocks.loadConfigMock).toHaveBeenCalledOnce();
+    expect(mocks.loadConfigSchemaMock).not.toHaveBeenCalled();
+    await expect(raceWithNextMacrotask(refresh)).resolves.toBe("pending");
+
+    config.resolve();
+    await refresh;
+
+    await vi.waitFor(() => {
+      expect(mocks.loadConfigSchemaMock).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("does not start the deferred schema refresh when scoped settings fail to load", async () => {
+    const host = createHost();
+    host.tab = "communications";
+    const error = new Error("config unavailable");
+    mocks.loadConfigMock.mockRejectedValueOnce(error);
+
+    await expect(refreshActiveTab(host as never)).rejects.toBe(error);
+    await Promise.resolve();
+
+    expect(mocks.loadConfigSchemaMock).not.toHaveBeenCalled();
   });
 
   it("renders channels from the cheap snapshot without waiting for config schema", async () => {

@@ -373,11 +373,54 @@ export function createSubagentRegistryLifecycleController(params: {
     args.entry.pendingFinalDeliveryPayload = payload;
   };
 
+  const suspendPendingFinalDelivery = (args: {
+    runId: string;
+    entry: SubagentRunRecord;
+    reason: "retry-limit" | "expiry";
+    error?: string;
+  }) => {
+    markPendingFinalDelivery({
+      entry: args.entry,
+      error: args.error ?? args.entry.lastAnnounceDeliveryError ?? args.reason,
+    });
+    const now = Date.now();
+    args.entry.deliverySuspendedAt ??= now;
+    args.entry.deliverySuspendedReason = args.reason;
+    args.entry.cleanupHandled = false;
+    args.entry.wakeOnDescendantSettle = undefined;
+    args.entry.fallbackFrozenResultText = undefined;
+    args.entry.fallbackFrozenResultCapturedAt = undefined;
+    params.resumedRuns.delete(args.runId);
+    safeSetSubagentTaskDeliveryStatus({
+      runId: args.runId,
+      childSessionKey: args.entry.childSessionKey,
+      deliveryStatus: "failed",
+      deliveryError: args.entry.lastAnnounceDeliveryError ?? args.reason,
+    });
+    logAnnounceGiveUp(args.entry, args.reason);
+    params.persist();
+  };
+
+  const shouldSuspendPendingFinalDelivery = (entry: SubagentRunRecord) =>
+    entry.expectsCompletionMessage === true &&
+    entry.cleanup === "keep" &&
+    entry.endedReason === SUBAGENT_ENDED_REASON_COMPLETE &&
+    entry.outcome?.status === "ok";
+
   const finalizeResumedAnnounceGiveUp = async (giveUpParams: {
     runId: string;
     entry: SubagentRunRecord;
     reason: "retry-limit" | "expiry";
   }) => {
+    if (shouldSuspendPendingFinalDelivery(giveUpParams.entry)) {
+      suspendPendingFinalDelivery({
+        runId: giveUpParams.runId,
+        entry: giveUpParams.entry,
+        reason: giveUpParams.reason,
+        error: giveUpParams.entry.lastAnnounceDeliveryError,
+      });
+      return;
+    }
     clearPendingFinalDelivery(giveUpParams.entry);
     safeSetSubagentTaskDeliveryStatus({
       runId: giveUpParams.runId,
@@ -429,6 +472,9 @@ export function createSubagentRegistryLifecycleController(params: {
         continue;
       }
       if (entry.cleanupCompletedAt || entry.cleanupHandled) {
+        continue;
+      }
+      if (entry.pendingFinalDelivery === true && typeof entry.deliverySuspendedAt === "number") {
         continue;
       }
       if (params.suppressAnnounceForSteerRestart(entry)) {
@@ -546,6 +592,8 @@ export function createSubagentRegistryLifecycleController(params: {
         params.persist();
       }
       clearPendingFinalDelivery(entry);
+      entry.deliverySuspendedAt = undefined;
+      entry.deliverySuspendedReason = undefined;
       if (!options?.skipDeliveryStatus) {
         safeSetSubagentTaskDeliveryStatus({
           runId,
@@ -604,6 +652,15 @@ export function createSubagentRegistryLifecycleController(params: {
     }
 
     if (deferredDecision.kind === "give-up") {
+      if (shouldSuspendPendingFinalDelivery(entry)) {
+        suspendPendingFinalDelivery({
+          runId,
+          entry,
+          reason: deferredDecision.reason,
+          error: entry.lastAnnounceDeliveryError,
+        });
+        return;
+      }
       clearPendingFinalDelivery(entry);
       safeSetSubagentTaskDeliveryStatus({
         runId,

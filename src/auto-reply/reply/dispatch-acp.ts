@@ -26,6 +26,7 @@ import {
 import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
 import { resolveConfiguredTtsMode } from "../../tts/tts-config.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
+import { markReplyPayloadAsTtsSupplement } from "../reply-payload.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import { createAcpReplyProjector } from "./acp-projector.js";
 import {
@@ -250,12 +251,19 @@ async function finalizeAcpTurnOutput(params: {
         accountId: params.ttsAccountId,
       });
       if (ttsSyntheticReply.mediaUrl) {
-        const delivered = await params.delivery.deliver("final", {
-          mediaUrl: ttsSyntheticReply.mediaUrl,
-          audioAsVoice: ttsSyntheticReply.audioAsVoice,
-          spokenText: accumulatedBlockTtsText,
-          trustedLocalMedia: true,
-        });
+        const delivered = await params.delivery.deliver(
+          "final",
+          markReplyPayloadAsTtsSupplement(
+            {
+              mediaUrl: ttsSyntheticReply.mediaUrl,
+              audioAsVoice: ttsSyntheticReply.audioAsVoice,
+              spokenText: accumulatedBlockTtsText,
+              trustedLocalMedia: true,
+            },
+            accumulatedBlockTtsText,
+            { visibleTextAlreadyDelivered: true },
+          ),
+        );
         queuedFinal = queuedFinal || delivered;
         finalMediaDelivered = delivered;
       }

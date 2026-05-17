@@ -1212,6 +1212,9 @@ export const ja_JP: TranslationMap = {
       ascending: "昇順",
       descending: "降順",
       reset: "リセット",
+      emptyTitle: "No scheduled jobs yet.",
+      emptyHint: "Create one from a plain-language prompt; advanced fields can wait.",
+      emptyFilteredHint: "Clear or change filters to see scheduled jobs.",
       noMatching: "一致するジョブはありません。",
       loading: "読み込み中...",
       loadMore: "さらにジョブを読み込む",
@@ -1247,6 +1250,7 @@ export const ja_JP: TranslationMap = {
     form: {
       editJob: "ジョブを編集",
       newJob: "新しいジョブ",
+      advancedJob: "Advanced job",
       updateSubtitle: "選択したスケジュール済みジョブを更新します。",
       createSubtitle: "スケジュールされたウェイクアップまたはエージェント実行を作成します。",
       required: "必須",

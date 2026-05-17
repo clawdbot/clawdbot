@@ -183,6 +183,68 @@ describe("installScheduledTask", () => {
     });
   });
 
+  it("creates hidden launcher Windows tasks when requested", async () => {
+    await withUserProfileDir(async (_tmpDir, env) => {
+      schtasksResponses.push(okSchtasksResponse, missingTaskResponse);
+
+      const { scriptPath } = await installDefaultGatewayTask({
+        ...env,
+        USERDOMAIN: "WORKSTATION",
+        USERNAME: "alice",
+        OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1",
+      });
+      const launcherPath = scriptPath.replace(/\.cmd$/i, ".vbs");
+      const launcher = await fs.readFile(launcherPath, "utf8");
+
+      expectInitialTaskQueries();
+      expect(schtasksCalls[2]).toEqual([
+        "/Create",
+        "/F",
+        "/SC",
+        "ONLOGON",
+        "/RL",
+        "LIMITED",
+        "/TN",
+        "OpenClaw Gateway",
+        "/TR",
+        expect.stringContaining("gateway.vbs"),
+        "/RU",
+        "WORKSTATION\\alice",
+        "/NP",
+        "/IT",
+      ]);
+      expect(launcher).toContain("WScript.Shell");
+      expect(launcher).toContain(scriptPath);
+      expect(launcher).toContain(`Run """${scriptPath}""", 0, False`);
+      expectTaskRunCall(3);
+    });
+  });
+
+  it("updates existing tasks to use the hidden launcher when requested", async () => {
+    await withUserProfileDir(async (_tmpDir, env) => {
+      schtasksResponses.push(okSchtasksResponse, okSchtasksResponse, okSchtasksResponse);
+
+      const { scriptPath } = await installDefaultGatewayTask({
+        ...env,
+        USERDOMAIN: "WORKSTATION",
+        USERNAME: "alice",
+        OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "true",
+      });
+      const launcherPath = scriptPath.replace(/\.cmd$/i, ".vbs");
+
+      expectInitialTaskQueries();
+      expect(schtasksCalls[2]).toEqual([
+        "/Change",
+        "/TN",
+        "OpenClaw Gateway",
+        "/TR",
+        expect.stringContaining("gateway.vbs"),
+      ]);
+      expect(schtasksCalls[2]?.[4]).toContain(launcherPath);
+      expectTaskRunCall(3);
+    });
+  });
+
   it("falls back to /Create when /Change fails on an existing task", async () => {
     await withUserProfileDir(async (_tmpDir, env) => {
       schtasksResponses.push(okSchtasksResponse, okSchtasksResponse, accessDeniedResponse);

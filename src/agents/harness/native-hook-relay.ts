@@ -13,6 +13,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { privateFileStoreSync } from "../../infra/private-file-store.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { hasGlobalHooks } from "../../plugins/hook-runner-global.js";
 import { PluginApprovalResolutions } from "../../plugins/types.js";
 import { runBeforeToolCallHook } from "../pi-tools.before-tool-call.js";
 import { normalizeToolName } from "../tool-policy.js";
@@ -82,6 +83,7 @@ export type NativeHookRelayRegistration = {
 };
 
 export type NativeHookRelayRegistrationHandle = NativeHookRelayRegistration & {
+  shouldRelayEvent: (event: NativeHookRelayEvent) => boolean;
   commandForEvent: (event: NativeHookRelayEvent) => string;
   renew: (ttlMs?: number) => void;
   unregister: () => void;
@@ -312,6 +314,7 @@ export function registerNativeHookRelay(
   registerNativeHookRelayBridge(registration);
   const handle: NativeHookRelayRegistrationHandle = {
     ...registration,
+    shouldRelayEvent: nativeHookRelayEventHasLocalWork,
     commandForEvent: (event) =>
       buildNativeHookRelayCommand({
         provider: params.provider,
@@ -384,6 +387,19 @@ export function buildNativeHookRelayCommand(params: {
     "--timeout",
     String(timeoutMs),
   ]);
+}
+
+function nativeHookRelayEventHasLocalWork(event: NativeHookRelayEvent): boolean {
+  if (event === "pre_tool_use") {
+    return true;
+  }
+  if (event === "post_tool_use") {
+    return hasGlobalHooks("after_tool_call");
+  }
+  if (event === "before_agent_finalize") {
+    return hasGlobalHooks("before_agent_finalize");
+  }
+  return true;
 }
 
 export async function invokeNativeHookRelay(

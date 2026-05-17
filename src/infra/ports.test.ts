@@ -8,6 +8,7 @@ vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
 }));
 
+let inspectPortConnections: typeof import("./ports-inspect.js").inspectPortConnections;
 let inspectPortUsage: typeof import("./ports-inspect.js").inspectPortUsage;
 let ensurePortAvailable: typeof import("./ports.js").ensurePortAvailable;
 let handlePortError: typeof import("./ports.js").handlePortError;
@@ -53,7 +54,7 @@ async function listenServer(
 }
 
 beforeAll(async () => {
-  ({ inspectPortUsage } = await import("./ports-inspect.js"));
+  ({ inspectPortConnections, inspectPortUsage } = await import("./ports-inspect.js"));
   ({ ensurePortAvailable, handlePortError, PortInUseError } = await import("./ports.js"));
 });
 
@@ -197,9 +198,156 @@ describeUnix("inspectPortUsage", () => {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });
+
+  it("reports established gateway client connections from lsof", async () => {
+    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
+      const command = argv[0];
+      if (typeof command !== "string") {
+        return { stdout: "", stderr: "", code: 1 };
+      }
+      if (command.includes("lsof")) {
+        return {
+          stdout:
+            "p111\ncnode\nnTCP 127.0.0.1:50123->127.0.0.1:18789 (ESTABLISHED)\n" +
+            "p222\ncnode\nnTCP 127.0.0.1:18789->127.0.0.1:50123 (ESTABLISHED)\n" +
+            "p444\ncnode\nnTCP 127.0.0.1:50125->[::ffff:127.0.0.1]:18789 (ESTABLISHED)\n" +
+            "p333\ncBrowser\nnTCP 127.0.0.1:50124->198.51.100.7:18789 (ESTABLISHED)\n",
+          stderr: "",
+          code: 0,
+        };
+      }
+      if (command === "ps") {
+        const pid = argv[2];
+        if (argv.includes("command=")) {
+          return {
+            stdout:
+              pid === "111"
+                ? "node /tmp/newer-openclaw/dist/index.js logs --follow\n"
+                : pid === "222"
+                  ? "node /tmp/older-openclaw/dist/index.js gateway run\n"
+                  : "browser https://example.invalid/\n",
+            stderr: "",
+            code: 0,
+          };
+        }
+        if (argv.includes("user=")) {
+          return { stdout: "tester\n", stderr: "", code: 0 };
+        }
+        if (argv.includes("ppid=")) {
+          return { stdout: "1\n", stderr: "", code: 0 };
+        }
+      }
+      return { stdout: "", stderr: "", code: 1 };
+    });
+
+    const result = await inspectPortConnections(18789);
+
+    expect(result.connections).toHaveLength(3);
+    expect(result.connections[0]).toMatchObject({
+      pid: 111,
+      direction: "client",
+      commandLine: "node /tmp/newer-openclaw/dist/index.js logs --follow",
+    });
+    expect(result.connections[1]).toMatchObject({
+      pid: 222,
+      direction: "server",
+    });
+    expect(result.connections[2]).toMatchObject({
+      pid: 444,
+      direction: "client",
+    });
+  });
+
+  it("falls back to ss for established gateway client connections", async () => {
+    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
+      const command = argv[0];
+      if (typeof command !== "string") {
+        return { stdout: "", stderr: "", code: 1 };
+      }
+      if (command.includes("lsof")) {
+        return { stdout: "", stderr: "lsof: not found\n", code: 1 };
+      }
+      if (command === "ss") {
+        return {
+          stdout:
+            '0 0 127.0.0.1:50123 127.0.0.1:18789 users:(("node",pid=111,fd=12))\n' +
+            '0 0 127.0.0.1:50124 198.51.100.7:18789 users:(("browser",pid=333,fd=9))\n',
+          stderr: "",
+          code: 0,
+        };
+      }
+      if (command === "ps") {
+        const pid = argv[2];
+        if (argv.includes("command=")) {
+          return {
+            stdout:
+              pid === "111"
+                ? "node /tmp/newer-openclaw/dist/index.js logs --follow\n"
+                : "browser https://example.invalid/\n",
+            stderr: "",
+            code: 0,
+          };
+        }
+        if (argv.includes("user=")) {
+          return { stdout: "tester\n", stderr: "", code: 0 };
+        }
+        if (argv.includes("ppid=")) {
+          return { stdout: "1\n", stderr: "", code: 0 };
+        }
+      }
+      return { stdout: "", stderr: "", code: 1 };
+    });
+
+    const result = await inspectPortConnections(18789);
+
+    expect(result.connections).toHaveLength(1);
+    expect(result.connections[0]).toMatchObject({
+      pid: 111,
+      direction: "client",
+      commandLine: "node /tmp/newer-openclaw/dist/index.js logs --follow",
+    });
+  });
 });
 
 describe("inspectPortUsage on Windows", () => {
+  it("reports established gateway client connections from netstat", async () => {
+    setPlatform("win32");
+    runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
+      const [command] = argv;
+      if (command === "netstat") {
+        return {
+          stdout:
+            "  TCP    127.0.0.1:50123    127.0.0.1:18789    ESTABLISHED    4242\r\n" +
+            "  TCP    127.0.0.1:50124    198.51.100.7:18789  ESTABLISHED    5000\r\n",
+          stderr: "",
+          code: 0,
+        };
+      }
+      if (command === "tasklist") {
+        return { stdout: "Image Name: node.exe\r\n", stderr: "", code: 0 };
+      }
+      if (command === "powershell") {
+        return {
+          stdout:
+            '"C:\\Program Files\\nodejs\\node.exe" C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js logs --follow\r\n',
+          stderr: "",
+          code: 0,
+        };
+      }
+      return { stdout: "", stderr: "", code: 1 };
+    });
+
+    const result = await inspectPortConnections(18789);
+
+    expect(result.connections).toHaveLength(1);
+    expect(result.connections[0]).toMatchObject({
+      pid: 4242,
+      command: "node.exe",
+      direction: "client",
+    });
+    expect(result.connections[0]?.commandLine).toContain("openclaw");
+  });
+
   it("uses PowerShell process command lines to classify OpenClaw listeners", async () => {
     setPlatform("win32");
     runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {

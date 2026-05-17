@@ -29,6 +29,27 @@ describe("listIrcAccountIds", () => {
 
     expect(listIrcAccountIds(cfg)).toEqual(["ops-team", "work"]);
   });
+
+  it("keeps the implicit default account when named accounts are added to top-level connection config", () => {
+    const cfg = asConfig({
+      channels: {
+        irc: {
+          host: "irc.example.com",
+          nick: "claw",
+          accounts: {
+            work: {
+              enabled: false,
+              host: "irc-work.example.com",
+              nick: "claw-work",
+            },
+          },
+        },
+      },
+    });
+
+    expect(listIrcAccountIds(cfg)).toEqual(["default", "work"]);
+    expect(resolveDefaultIrcAccountId(cfg)).toBe("default");
+  });
 });
 
 describe("resolveDefaultIrcAccountId", () => {

@@ -150,7 +150,7 @@ function renderChatQuotaPill(state: AppViewState) {
         state.setTab("usage");
       }}
     >
-      <span class="chat-controls__quota-label">Usage</span>
+      <span class="chat-controls__quota-label">${t("tabs.usage")}</span>
       <span class="chat-controls__quota-value">${primary.remaining}%</span>
     </a>
   `;

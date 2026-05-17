@@ -21,6 +21,7 @@ export type CronQuickCreateProps = {
   onStepChange: (step: CronQuickCreateStep) => void;
   onCreate: () => void;
   onCancel: () => void;
+  onAdvancedCreate?: () => void;
 };
 
 export type CronQuickCreateStep = "what" | "when" | "how";
@@ -233,6 +234,17 @@ function renderStepIndicator(current: CronQuickCreateStep) {
 
 // ── Step renderers ──
 
+function renderAdvancedButton(props: CronQuickCreateProps) {
+  if (!props.onAdvancedCreate) {
+    return nothing;
+  }
+  return html`
+    <button class="btn cqc-advanced-button" @click=${props.onAdvancedCreate}>
+      ${t("cron.form.advanced")}
+    </button>
+  `;
+}
+
 function renderWhatStep(props: CronQuickCreateProps) {
   return html`
     <div class="cqc-body">
@@ -259,7 +271,10 @@ function renderWhatStep(props: CronQuickCreateProps) {
       </div>
     </div>
     <div class="cqc-actions">
-      <button class="btn" @click=${props.onCancel}>${t("common.cancel")}</button>
+      <div class="cqc-actions__secondary">
+        <button class="btn" @click=${props.onCancel}>${t("common.cancel")}</button>
+        ${renderAdvancedButton(props)}
+      </div>
       <button
         class="btn primary"
         ?disabled=${!props.draft.prompt.trim()}
@@ -294,7 +309,10 @@ function renderWhenStep(props: CronQuickCreateProps) {
       </div>
     </div>
     <div class="cqc-actions">
-      <button class="btn" @click=${() => props.onStepChange("what")}>${t("common.back")}</button>
+      <div class="cqc-actions__secondary">
+        <button class="btn" @click=${() => props.onStepChange("what")}>${t("common.back")}</button>
+        ${renderAdvancedButton(props)}
+      </div>
       <button class="btn primary" @click=${() => props.onStepChange("how")}>
         ${t("common.next")} ${icons.chevronRight}
       </button>
@@ -329,7 +347,10 @@ function renderHowStep(props: CronQuickCreateProps) {
       </div>
     </div>
     <div class="cqc-actions">
-      <button class="btn" @click=${() => props.onStepChange("when")}>${t("common.back")}</button>
+      <div class="cqc-actions__secondary">
+        <button class="btn" @click=${() => props.onStepChange("when")}>${t("common.back")}</button>
+        ${renderAdvancedButton(props)}
+      </div>
       <button class="btn primary" @click=${props.onCreate}>
         ${t("common.create")} ${icons.check}
       </button>
@@ -345,18 +366,35 @@ export function renderCronQuickCreate(props: CronQuickCreateProps) {
   }
 
   return html`
-    <div class="cqc-container">
-      <div class="cqc-header">
-        <h2 class="cqc-header__title">${icons.zap} ${t("cron.quickCreate.title")}</h2>
-        <button class="cqc-header__close" @click=${props.onCancel}>${icons.x}</button>
-      </div>
+    <div class="cqc-backdrop" @click=${props.onCancel}>
+      <section
+        class="cqc-container"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="cron-quick-create-title"
+        @click=${(event: Event) => event.stopPropagation()}
+      >
+        <div class="cqc-header">
+          <h2 id="cron-quick-create-title" class="cqc-header__title">
+            ${icons.zap} ${t("cron.quickCreate.title")}
+          </h2>
+          <button
+            type="button"
+            class="cqc-header__close"
+            aria-label=${t("common.dismiss")}
+            @click=${props.onCancel}
+          >
+            ${icons.x}
+          </button>
+        </div>
 
-      ${renderStepIndicator(props.step)}
-      ${props.step === "what"
-        ? renderWhatStep(props)
-        : props.step === "when"
-          ? renderWhenStep(props)
-          : renderHowStep(props)}
+        ${renderStepIndicator(props.step)}
+        ${props.step === "what"
+          ? renderWhatStep(props)
+          : props.step === "when"
+            ? renderWhenStep(props)
+            : renderHowStep(props)}
+      </section>
     </div>
   `;
 }

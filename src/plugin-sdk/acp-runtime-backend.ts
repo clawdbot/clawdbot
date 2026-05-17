@@ -23,8 +23,11 @@ export type {
   AcpRuntimeEvent,
   AcpRuntimeHandle,
   AcpRuntimeStatus,
+  AcpRuntimeTurn,
   AcpRuntimeTurnAttachment,
   AcpRuntimeTurnInput,
+  AcpRuntimeTurnResult,
+  AcpRuntimeTurnResultError,
   AcpSessionUpdateTag,
 } from "../acp/runtime/types.js";
 

@@ -15,10 +15,15 @@ import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-hel
 const runtime = createTestRuntime();
 let minimalChannelsCommandRegistry: ReturnType<typeof createTestRegistry>;
 const createClackPrompterMock = vi.hoisted(() => vi.fn());
+const catalogMocks = vi.hoisted(() => ({
+  listTrustedChannelPluginCatalogEntries: vi.fn(() => []),
+}));
 
 vi.mock("../wizard/clack-prompter.js", () => ({
   createClackPrompter: createClackPrompterMock,
 }));
+
+vi.mock("./channel-setup/trusted-catalog.js", () => catalogMocks);
 
 type ChannelSectionConfig = {
   enabled?: boolean;

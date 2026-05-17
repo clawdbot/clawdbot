@@ -67,6 +67,10 @@ describe("media-understanding runtime", () => {
   afterEach(() => {
     mocks.buildProviderRegistry.mockReset();
     mocks.createMediaAttachmentCache.mockReset();
+    mocks.createMediaAttachmentCache.mockReturnValue({
+      cleanup: mocks.cleanup,
+      getBuffer: mocks.getBuffer,
+    });
     mocks.normalizeMediaAttachments.mockReset();
     mocks.normalizeMediaProviderId.mockReset();
     mocks.buildMediaUnderstandingRegistry.mockReset();
@@ -184,6 +188,76 @@ describe("media-understanding runtime", () => {
 
     expect(mocks.runCapability).toHaveBeenCalledTimes(1);
     expect(mocks.cleanup).toHaveBeenCalledTimes(1);
+  });
+
+  it("classifies extensionless remote image URLs before capability filtering", async () => {
+    const output: MediaUnderstandingOutput = {
+      kind: "image.description",
+      attachmentIndex: 0,
+      provider: "vision-plugin",
+      model: "vision-v1",
+      text: "image ok",
+    };
+    mocks.normalizeMediaAttachments.mockReturnValue([
+      { index: 0, url: "https://httpbin.org/image/png", mime: "image/*" },
+    ]);
+    mocks.runCapability.mockResolvedValue({
+      outputs: [output],
+    });
+
+    await expect(
+      describeImageFile({
+        filePath: "https://httpbin.org/image/png",
+        cfg: {} as OpenClawConfig,
+        agentDir: "/tmp/agent",
+      }),
+    ).resolves.toEqual({
+      text: "image ok",
+      provider: "vision-plugin",
+      model: "vision-v1",
+      output,
+    });
+
+    expect(mocks.normalizeMediaAttachments).toHaveBeenCalledWith({
+      MediaUrl: "https://httpbin.org/image/png",
+      MediaType: "image/*",
+    });
+    expect(requireRunCapabilityRequest()).toMatchObject({
+      ctx: {
+        MediaUrl: "https://httpbin.org/image/png",
+        MediaType: "image/*",
+      },
+    });
+  });
+
+  it("does not force typed remote URLs into the requested capability", async () => {
+    const media = [{ index: 0, url: "https://example.com/clip.mp4", mime: "video/mp4" }];
+    mocks.normalizeMediaAttachments.mockReturnValue(media);
+    mocks.runCapability.mockResolvedValue({
+      outputs: [],
+      decision: { capability: "image", outcome: "skipped", attachments: [] },
+    });
+
+    await expect(
+      describeImageFile({
+        filePath: "https://example.com/clip.mp4",
+        cfg: {} as OpenClawConfig,
+        agentDir: "/tmp/agent",
+      }),
+    ).resolves.toMatchObject({
+      text: undefined,
+      output: undefined,
+    });
+
+    expect(mocks.normalizeMediaAttachments).toHaveBeenCalledWith({
+      MediaUrl: "https://example.com/clip.mp4",
+      MediaType: "video/mp4",
+    });
+    expect(requireRunCapabilityRequest()).toMatchObject({
+      capability: "image",
+      ctx: { MediaUrl: "https://example.com/clip.mp4", MediaType: "video/mp4" },
+      media,
+    });
   });
 
   it("passes workspaceDir through file media understanding requests", async () => {
@@ -395,6 +469,7 @@ describe("media-understanding runtime", () => {
     await describeImageFileWithModel({
       filePath: "https://example.com/photo.png",
       mediaUrl: "https://example.com/photo.png",
+      mime: "image/*",
       provider: "zai",
       model: "glm-4.6v",
       prompt: "Describe it",
@@ -410,6 +485,58 @@ describe("media-understanding runtime", () => {
       }),
     );
     expect(mocks.cleanup).toHaveBeenCalledTimes(1);
+  });
+
+  it("fetches remote explicit image descriptions through the media attachment cache", async () => {
+    mocks.normalizeMediaAttachments.mockReturnValue([
+      { index: 0, url: "https://httpbin.org/image/png", mime: "image/png" },
+    ]);
+    mocks.buildProviderRegistry.mockReturnValue(
+      new Map([["zai", { id: "zai", capabilities: ["image"] }]]),
+    );
+    mocks.getBuffer.mockResolvedValue({
+      buffer: Buffer.from("remote-png"),
+      fileName: "png",
+      mime: "image/png",
+      size: 10,
+    });
+
+    await expect(
+      describeImageFileWithModel({
+        filePath: "https://httpbin.org/image/png",
+        provider: "zai",
+        model: "glm-4.6v",
+        prompt: "Describe it",
+        cfg: {} as OpenClawConfig,
+        agentDir: "/tmp/agent",
+        timeoutMs: 45_000,
+      }),
+    ).resolves.toEqual({ text: "generic image ok", model: "vision" });
+
+    expect(mocks.readLocalFileSafely).not.toHaveBeenCalled();
+    expect(mocks.normalizeMediaAttachments).toHaveBeenCalledWith({
+      MediaUrl: "https://httpbin.org/image/png",
+      MediaType: "image/*",
+    });
+    expect(mocks.createMediaAttachmentCache).toHaveBeenCalledWith(
+      [{ index: 0, url: "https://httpbin.org/image/png", mime: "image/png" }],
+      { ssrfPolicy: undefined },
+    );
+    expect(mocks.getBuffer).toHaveBeenCalledWith({
+      attachmentIndex: 0,
+      maxBytes: 10 * 1024 * 1024,
+      timeoutMs: 45_000,
+    });
+    expect(mocks.describeImageWithModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        buffer: Buffer.from("remote-png"),
+        fileName: "png",
+        mime: "image/png",
+        provider: "zai",
+        model: "glm-4.6v",
+      }),
+    );
+    expect(mocks.cleanup).toHaveBeenCalledOnce();
   });
 
   it("routes direct image description through a provider-specific image hook", async () => {

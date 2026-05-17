@@ -7,7 +7,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createDiscordActionGate,
   isDiscordAccountEnabledForRuntime,
+  listDiscordAccountIds,
   listEnabledDiscordAccounts,
+  resolveDefaultDiscordAccountId,
   resolveDiscordAccount,
   resolveDiscordAccountDisabledReason,
   resolveDiscordMaxLinesPerMessage,
@@ -72,6 +74,28 @@ describe("Discord defaultAccount omission contract", () => {
       assert();
     },
   );
+
+  it("keeps the implicit default account when named accounts are added to top-level credentials", () => {
+    const cfg = {
+      channels: {
+        discord: {
+          token: "token-default",
+          accounts: {
+            work: {
+              enabled: false,
+              token: "token-work",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(listDiscordAccountIds(cfg)).toEqual(["default", "work"]);
+    expect(resolveDefaultDiscordAccountId(cfg)).toBe("default");
+    expect(listEnabledDiscordAccounts(cfg).map((account) => account.accountId)).toEqual([
+      "default",
+    ]);
+  });
 });
 
 describe("resolveDiscordAccount allowFrom precedence", () => {

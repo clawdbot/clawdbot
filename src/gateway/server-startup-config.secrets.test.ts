@@ -386,8 +386,9 @@ describe("gateway startup config secret preflight", () => {
   });
 
   it("uses gateway auth strings resolved during startup preflight for bootstrap auth", async () => {
-    const prepareRuntimeSecretsSnapshot = vi.fn(async ({ config }) =>
-      preparedSnapshot({
+    const prepareRuntimeSecretsSnapshot = vi.fn(async ({ config }) => ({
+      ...preparedSnapshot(config),
+      config: {
         ...config,
         gateway: {
           ...config.gateway,
@@ -396,8 +397,9 @@ describe("gateway startup config secret preflight", () => {
             token: "resolved-gateway-token",
           },
         },
-      }),
-    );
+      },
+    }));
+    const activateRuntimeSecretsSnapshot = vi.fn();
 
     const result = await prepareGatewayStartupConfig({
       configSnapshot: buildSnapshot({
@@ -421,12 +423,82 @@ describe("gateway startup config secret preflight", () => {
         },
         emitStateEvent: vi.fn(),
         prepareRuntimeSecretsSnapshot,
-        activateRuntimeSecretsSnapshot: vi.fn(),
+        activateRuntimeSecretsSnapshot,
+      }),
+    });
+
+    expect(result.auth.mode).toBe("token");
+    expect(result.auth.token).toBe("resolved-gateway-token");
+    expect(result.cfg.gateway?.auth?.token).toBe("resolved-gateway-token");
+    expect(prepareRuntimeSecretsSnapshot).toHaveBeenCalledTimes(1);
+    expect(activateRuntimeSecretsSnapshot).toHaveBeenCalledTimes(1);
+    expect(activateRuntimeSecretsSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          gateway: expect.objectContaining({
+            auth: expect.objectContaining({
+              token: "resolved-gateway-token",
+            }),
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("falls back to a fresh startup activation when the preflight snapshot source is not reusable", async () => {
+    const prepareRuntimeSecretsSnapshot = vi.fn(async ({ config }) => ({
+      ...preparedSnapshot(
+        prepareRuntimeSecretsSnapshot.mock.calls.length === 1
+          ? {
+              ...config,
+              diagnostics: {
+                enabled: true,
+              },
+            }
+          : config,
+      ),
+      config: {
+        ...config,
+        gateway: {
+          ...config.gateway,
+          auth: {
+            ...config.gateway?.auth,
+            token: "resolved-gateway-token",
+          },
+        },
+      },
+    }));
+    const activateRuntimeSecretsSnapshot = vi.fn();
+
+    const result = await prepareGatewayStartupConfig({
+      configSnapshot: buildSnapshot({
+        secrets: {
+          providers: {
+            default: { source: "env" },
+          },
+        },
+        gateway: {
+          auth: {
+            mode: "token",
+            token: { source: "env", provider: "default", id: "GATEWAY_TOKEN_REF" },
+          },
+        },
+      }),
+      activateRuntimeSecrets: createRuntimeSecretsActivator({
+        logSecrets: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+        },
+        emitStateEvent: vi.fn(),
+        prepareRuntimeSecretsSnapshot,
+        activateRuntimeSecretsSnapshot,
       }),
     });
 
     expect(result.auth.mode).toBe("token");
     expect(result.auth.token).toBe("resolved-gateway-token");
     expect(prepareRuntimeSecretsSnapshot).toHaveBeenCalledTimes(2);
+    expect(activateRuntimeSecretsSnapshot).toHaveBeenCalledTimes(1);
   });
 });

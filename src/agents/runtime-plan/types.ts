@@ -175,6 +175,10 @@ export type AgentRuntimeReplyPayload = {
   replyToCurrent?: boolean;
   audioAsVoice?: boolean;
   spokenText?: string;
+  ttsSupplement?: {
+    spokenText: string;
+    visibleTextAlreadyDelivered?: boolean;
+  };
   isError?: boolean;
   isReasoning?: boolean;
   isCompactionNotice?: boolean;

@@ -28,6 +28,10 @@ const inspectPortUsage = vi.fn(async (port: number) => ({
   listeners: [],
   hints: [],
 }));
+const inspectPortConnections = vi.fn(async (port: number) => ({
+  port,
+  connections: [],
+}));
 
 function collectMatching<T, U>(
   items: readonly T[],
@@ -114,6 +118,7 @@ vi.mock("../daemon/inspect.js", () => ({
 }));
 
 vi.mock("../infra/ports.js", () => ({
+  inspectPortConnections: (port: number) => inspectPortConnections(port),
   inspectPortUsage: (port: number) => inspectPortUsage(port),
   formatPortDiagnostics: () => ["Port 18789 is already in use."],
 }));
@@ -192,6 +197,7 @@ describe("daemon-cli coverage", () => {
     serviceReadCommand.mockResolvedValue(null);
     resolveGatewayProbeAuthSafeWithSecretInputs.mockClear();
     findExtraGatewayServices.mockClear();
+    inspectPortConnections.mockClear();
     buildGatewayInstallPlan.mockClear();
   });
 

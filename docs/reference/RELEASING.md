@@ -78,11 +78,16 @@ the maintainer-only release runbook.
    file, lane, workflow job, package profile, provider, or model allowlist that
    proves the fix. Rerun the full umbrella only when the changed surface makes
    prior evidence stale.
-9. For beta, tag `vYYYY.M.D-beta.N`, then run `OpenClaw Release Publish` from
-   the matching `release/YYYY.M.D` branch. It verifies `pnpm plugins:sync:check`,
-   dispatches all publishable plugin packages to npm and the same set to
-   ClawHub in parallel, and then promotes the prepared OpenClaw npm preflight
-   artifact with the matching dist-tag as soon as plugin npm publish succeeds.
+9. For beta, tag `vYYYY.M.D-beta.N`, then run `pnpm release:candidate -- --tag
+vYYYY.M.D-beta.N` from the matching `release/YYYY.M.D` branch. The helper runs
+   the local generated-release checks, dispatches or verifies the full release
+   validation and npm preflight evidence, runs Parallels and Telegram package
+   proof, records plugin npm and ClawHub plans, and prints the exact
+   `OpenClaw Release Publish` command only after the evidence bundle is green.
+   `OpenClaw Release Publish` dispatches the selected or all-publishable plugin
+   packages to npm and the same set to ClawHub in parallel, and then promotes the
+   prepared OpenClaw npm preflight artifact with the matching dist-tag as soon as
+   plugin npm publish succeeds.
    After the OpenClaw npm publish child succeeds, it creates or updates the
    matching GitHub release/prerelease page from the complete matching
    `CHANGELOG.md` section. Stable releases published to npm `latest` become the
@@ -90,22 +95,18 @@ the maintainer-only release runbook.
    created with GitHub `latest=false`. The workflow also uploads the preflight
    dependency evidence to the GitHub release as
    `openclaw-<version>-dependency-evidence.zip` for post-release incident
-   response.
-   ClawHub publishing may still be running while OpenClaw npm publishes, but the
-   release publish workflow prints the child run IDs immediately. By default it
-   does not wait for ClawHub after dispatching it, so OpenClaw npm availability
-   is not blocked by slower ClawHub approvals or registry work; set
-   `wait_for_clawhub=true` when ClawHub must block workflow completion. The
-   ClawHub path retries transient CLI dependency install failures, publishes
-   preview-passing plugins even when one preview cell flakes, and ends with
-   registry verification for every expected plugin version so partial publishes
-   remain visible and retryable. After publish, run
-   `pnpm release:verify-beta -- YYYY.M.D-beta.N --openclaw-npm-run <run-id> --plugin-npm-run <run-id> --plugin-clawhub-run <run-id>`
-   to verify the GitHub prerelease, npm `beta` dist-tags, npm integrity,
-   published install path, ClawHub exact versions, ClawHub artifacts, and child
-   workflow conclusions from one command. Add `--rerun-failed-clawhub` when the
-   ClawHub sidecar failed only in retryable jobs and should be rerun in place.
-   Then run the post-publish package acceptance against the published
+   response. The publish workflow prints child run IDs immediately, auto-approves
+   release environment gates the workflow token is allowed to approve, summarizes
+   failed child jobs with log tails, closes out the GitHub release and dependency
+   evidence as soon as OpenClaw npm publish succeeds, waits for ClawHub whenever
+   OpenClaw npm is being published, then runs `pnpm release:verify-beta` and
+   uploads postpublish evidence for the GitHub release, npm package, selected
+   plugin npm packages, selected ClawHub packages, child workflow run IDs, and
+   optional NPM Telegram run ID. The ClawHub path retries transient CLI
+   dependency install failures, publishes preview-passing plugins even when one
+   preview cell flakes, and ends with registry verification for every expected
+   plugin version so partial publishes remain visible and retryable. Then run the post-publish
+   package acceptance against the published
    `openclaw@YYYY.M.D-beta.N` or
    `openclaw@beta` package. If a pushed or published prerelease needs a fix,
    cut the next matching prerelease number; do not delete or rewrite the old

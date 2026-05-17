@@ -1,6 +1,7 @@
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it } from "vitest";
 import {
+  buildTurnStartParams,
   buildThreadResumeParams,
   buildThreadStartParams,
   resolveReasoningEffort,
@@ -13,6 +14,7 @@ function createAttemptParams(params: {
   authProfileProviders?: Record<string, string>;
   bootstrapContextMode?: "full" | "lightweight";
   bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
+  images?: EmbeddedRunAttemptParams["images"];
 }): EmbeddedRunAttemptParams {
   const authProfileProviders =
     params.authProfileProviders ??
@@ -22,11 +24,13 @@ function createAttemptParams(params: {
   return {
     provider: params.provider,
     modelId: "gpt-5.4",
+    prompt: "test prompt",
     authProfileId: params.authProfileId,
     ...(params.bootstrapContextMode ? { bootstrapContextMode: params.bootstrapContextMode } : {}),
     ...(params.bootstrapContextRunKind
       ? { bootstrapContextRunKind: params.bootstrapContextRunKind }
       : {}),
+    ...(params.images ? { images: params.images } : {}),
     authProfileStore: {
       version: 1,
       profiles: Object.fromEntries(
@@ -132,6 +136,31 @@ describe("Codex app-server native code mode config", () => {
       "features.code_mode": true,
       "features.code_mode_only": true,
     });
+  });
+});
+
+describe("Codex app-server turn input image sanitizing", () => {
+  it("replaces malformed inline images before turn/start", () => {
+    const request = buildTurnStartParams(
+      createAttemptParams({
+        provider: "openai",
+        images: [{ type: "image", mimeType: "image/jpeg", data: "not base64!" }] as never,
+      }),
+      {
+        threadId: "thread-1",
+        cwd: "/repo",
+        appServer: createAppServerOptions() as never,
+      },
+    );
+
+    expect(request.input).toEqual([
+      { type: "text", text: "test prompt", text_elements: [] },
+      {
+        type: "text",
+        text: "[codex user input] omitted image payload: invalid inline image data",
+        text_elements: [],
+      },
+    ]);
   });
 });
 

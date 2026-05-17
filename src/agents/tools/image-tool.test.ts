@@ -181,7 +181,9 @@ async function createOpenClawCodingToolsWithFreshModules(options?: CreateOpenCla
   const defaultImageModels = new Map<string, string>([
     ["anthropic", "claude-opus-4-6"],
     ["minimax", "MiniMax-VL-01"],
+    ["minimax-cn", "MiniMax-VL-01"],
     ["minimax-portal", "MiniMax-VL-01"],
+    ["minimax-portal-cn", "MiniMax-VL-01"],
     ["openai", "gpt-5.4-mini"],
     ["opencode", "gpt-5-nano"],
     ["opencode-go", "kimi-k2.6"],
@@ -482,7 +484,9 @@ function installImageUnderstandingProviderStubs(...providers: MediaUnderstanding
   const defaultImageModels = new Map<string, string>([
     ["anthropic", "claude-opus-4-6"],
     ["minimax", "MiniMax-VL-01"],
+    ["minimax-cn", "MiniMax-VL-01"],
     ["minimax-portal", "MiniMax-VL-01"],
+    ["minimax-portal-cn", "MiniMax-VL-01"],
     ["openai", "gpt-5.4-mini"],
     ["opencode", "gpt-5-nano"],
     ["opencode-go", "kimi-k2.6"],
@@ -761,6 +765,127 @@ describe("image tool implicit imageModel config", () => {
         fallbacks: ["openai/gpt-5.4-mini", "anthropic/claude-opus-4-6"],
       });
       expect(typeof createImageTool({ config: cfg, agentDir })?.execute).toBe("function");
+    });
+  });
+
+  it("keeps MiniMax CN chat metadata off automatic image routing", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "minimax-cn/MiniMax-M2.5" } } },
+        models: {
+          mode: "merge",
+          providers: {
+            "minimax-cn": {
+              baseUrl: "https://api.minimaxi.com/anthropic",
+              apiKey: "${MINIMAX_API_KEY}",
+              api: "anthropic-messages",
+              models: [makeModelDefinition("MiniMax-M2.5", ["text", "image"])],
+            },
+          },
+        },
+      };
+      const authStore = {
+        version: 1,
+        profiles: {
+          mini: { type: "api_key", provider: "minimax-cn", key: "minimax-test" },
+          miniGlobal: { type: "api_key", provider: "minimax", key: "minimax-test" },
+        },
+      } as const;
+
+      expect(resolveImageModelConfigForTool({ cfg, agentDir, authStore })).toEqual({
+        primary: "minimax-cn/MiniMax-VL-01",
+      });
+    });
+  });
+
+  it("prefers configured MiniMax CN image alias over canonical auto fallback", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const defaultImageModels = new Map<string, string>([
+        ["anthropic", "claude-opus-4-6"],
+        ["minimax", "MiniMax-VL-01"],
+        ["minimax-cn", "MiniMax-VL-01"],
+        ["openai", "gpt-5.4-mini"],
+      ]);
+      __testing.setProviderDepsForTest({
+        buildProviderRegistry: (overrides?: Record<string, MediaUnderstandingProvider>) =>
+          imageProviderHarness.buildProviderRegistry(overrides),
+        getMediaUnderstandingProvider: (
+          id: string,
+          registry: Map<string, MediaUnderstandingProvider>,
+        ) => imageProviderHarness.getMediaUnderstandingProvider(id, registry),
+        describeImageWithModel: describeGenericImageWithModel,
+        describeImagesWithModel: describeGenericImagesWithModel,
+        resolveAutoMediaKeyProviders: ({ capability }) =>
+          capability === "image" ? ["openai", "anthropic", "minimax-cn", "minimax"] : [],
+        resolveDefaultMediaModel: ({ providerId, capability }) =>
+          capability === "image" ? defaultImageModels.get(providerId.toLowerCase()) : undefined,
+      });
+      const cfg: OpenClawConfig = {
+        models: {
+          mode: "merge",
+          providers: {
+            "minimax-cn": {
+              baseUrl: "https://api.minimaxi.com/anthropic",
+              apiKey: "${MINIMAX_API_KEY}",
+              api: "anthropic-messages",
+              models: [makeModelDefinition("MiniMax-M2.5", ["text", "image"])],
+            },
+          },
+        },
+      };
+      const authStore = {
+        version: 1,
+        profiles: {
+          mini: { type: "api_key", provider: "minimax-cn", key: "minimax-test" },
+          miniGlobal: { type: "api_key", provider: "minimax", key: "minimax-test" },
+        },
+      } as const;
+
+      expect(resolveImageModelConfigForTool({ cfg, agentDir, authStore })).toEqual({
+        primary: "minimax-cn/MiniMax-VL-01",
+      });
+    });
+  });
+
+  it("keeps canonical MiniMax fallback when configured CN alias has no image candidate", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      __testing.setProviderDepsForTest({
+        buildProviderRegistry: (overrides?: Record<string, MediaUnderstandingProvider>) =>
+          imageProviderHarness.buildProviderRegistry(overrides),
+        getMediaUnderstandingProvider: (
+          id: string,
+          registry: Map<string, MediaUnderstandingProvider>,
+        ) => imageProviderHarness.getMediaUnderstandingProvider(id, registry),
+        describeImageWithModel: describeGenericImageWithModel,
+        describeImagesWithModel: describeGenericImagesWithModel,
+        resolveAutoMediaKeyProviders: ({ capability }) =>
+          capability === "image" ? ["minimax"] : [],
+        resolveDefaultMediaModel: ({ providerId, capability }) =>
+          capability === "image" && providerId === "minimax" ? "MiniMax-VL-01" : undefined,
+      });
+      const cfg: OpenClawConfig = {
+        models: {
+          mode: "merge",
+          providers: {
+            "minimax-cn": {
+              baseUrl: "https://api.minimaxi.com/anthropic",
+              apiKey: "${MINIMAX_API_KEY}",
+              api: "anthropic-messages",
+              models: [],
+            },
+          },
+        },
+      };
+      const authStore = {
+        version: 1,
+        profiles: {
+          miniGlobal: { type: "api_key", provider: "minimax", key: "minimax-test" },
+        },
+      } as const;
+
+      expect(resolveImageModelConfigForTool({ cfg, agentDir, authStore })).toEqual({
+        primary: "minimax/MiniMax-VL-01",
+      });
     });
   });
 

@@ -1105,6 +1105,7 @@
                   "channels/access-groups",
                   "channels/group-messages",
                   "channels/groups",
+                  "channels/ambient-room-events",
                   "channels/broadcast-groups",
                   "channels/channel-routing",
                   "channels/location",

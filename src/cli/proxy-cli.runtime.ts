@@ -195,9 +195,14 @@ function formatProxyValidationNextSteps(result: ProxyValidationResult): string[]
       "Enable proxy.enabled with proxy.proxyUrl or OPENCLAW_PROXY_URL, or pass --proxy-url for an explicit one-off validation.",
     ];
   }
+  if (result.config.errors.some((error) => error.includes("proxy CA file could not be read"))) {
+    return [
+      "Confirm proxy.tls.caFile or --proxy-ca-file points to a readable PEM CA file for the HTTPS proxy endpoint.",
+    ];
+  }
   if (result.config.errors.length > 0) {
     return [
-      "Fix proxy.proxyUrl, OPENCLAW_PROXY_URL, or --proxy-url so it uses a reachable http:// proxy.",
+      "Fix proxy.proxyUrl, OPENCLAW_PROXY_URL, or --proxy-url so it uses a reachable http:// or https:// proxy.",
     ];
   }
   if (result.checks.some((check) => !check.ok && check.kind === "allowed")) {
@@ -254,6 +259,7 @@ function formatProxyValidationText(result: ProxyValidationResult): string {
 export async function runProxyValidateCommand(opts: {
   json?: boolean;
   proxyUrl?: string;
+  proxyCaFile?: string;
   allowedUrls?: string[];
   deniedUrls?: string[];
   apnsReachability?: boolean;
@@ -265,6 +271,7 @@ export async function runProxyValidateCommand(opts: {
     config: config?.proxy,
     env: process.env,
     proxyUrlOverride: opts.proxyUrl,
+    proxyCaFileOverride: opts.proxyCaFile,
     allowedUrls: opts.allowedUrls,
     deniedUrls: opts.deniedUrls,
     apnsReachability: opts.apnsReachability,

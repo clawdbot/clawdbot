@@ -6,9 +6,12 @@ import {
   markAutoFallbackPrimaryProbe,
 } from "../../agents/agent-scope.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
+import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
+import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
+import { isCliProvider } from "../../agents/model-selection-cli.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import {
   buildAgentRuntimeDeliveryPlan,
@@ -17,12 +20,16 @@ import {
 import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
-import { registerAgentRunContext } from "../../infra/agent-events.js";
+import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import { resolveRunAfterAutoFallbackPrimaryProbeRecheck } from "./agent-runner-execution.js";
+import { runCliAgentWithLifecycle } from "./agent-runner-cli-dispatch.js";
+import {
+  resolveRunAfterAutoFallbackPrimaryProbeRecheck,
+  resolveSessionRuntimeOverrideForProvider,
+} from "./agent-runner-execution.js";
 import { runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
 import {
   resolveQueuedReplyExecutionConfig,
@@ -351,6 +358,13 @@ export function createFollowupRunner(params: {
       fallbackProvider = run.provider;
       fallbackModel = run.model;
       replyOperation.setPhase("running");
+      let pendingDeferredCliTerminal:
+        | {
+            provider: string;
+            model: string;
+            startedAt: number;
+          }
+        | undefined;
       try {
         const outcomePlan = buildAgentRuntimeOutcomePlan();
         const fallbackResult = await runWithModelFallback<EmbeddedAgentRunResult>({
@@ -371,8 +385,114 @@ export function createFollowupRunner(params: {
             const authProfile = resolveRunAuthProfile(candidateRun, provider, {
               config: runtimeConfig,
             });
+            const sessionRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
+              provider,
+              entry: activeSessionEntry,
+            });
+            const cliExecutionProvider =
+              sessionRuntimeOverride === "pi"
+                ? provider
+                : ((sessionRuntimeOverride && isCliProvider(sessionRuntimeOverride, runtimeConfig)
+                    ? sessionRuntimeOverride
+                    : undefined) ??
+                  resolveCliRuntimeExecutionProvider({
+                    provider,
+                    cfg: runtimeConfig,
+                    agentId: run.agentId,
+                    modelId: model,
+                  }) ??
+                  provider);
             let attemptCompactionCount = 0;
             try {
+              if (isCliProvider(cliExecutionProvider, runtimeConfig)) {
+                const isRoomEventCliRun = queued.currentInboundEventKind === "room_event";
+                const cliSessionBinding = isRoomEventCliRun
+                  ? undefined
+                  : getCliSessionBinding(activeSessionEntry, cliExecutionProvider);
+                const cliLifecycleStartedAt = Date.now();
+                pendingDeferredCliTerminal = {
+                  provider,
+                  model,
+                  startedAt: cliLifecycleStartedAt,
+                };
+                const result = await runCliAgentWithLifecycle({
+                  runId,
+                  provider: cliExecutionProvider,
+                  startedAt: cliLifecycleStartedAt,
+                  emitLifecycleTerminal: false,
+                  onAgentRunStart: () => opts?.onAgentRunStart?.(runId),
+                  suppressAssistantBridge: run.silentExpected,
+                  runParams: {
+                    replyOperation,
+                    sessionId: run.sessionId,
+                    sessionKey: replySessionKey,
+                    agentId: run.agentId,
+                    trigger: opts?.isHeartbeat === true ? "heartbeat" : "user",
+                    sessionFile: run.sessionFile,
+                    workspaceDir: run.workspaceDir,
+                    config: runtimeConfig,
+                    prompt: queued.prompt,
+                    transcriptPrompt: queued.transcriptPrompt,
+                    currentInboundEventKind: queued.currentInboundEventKind,
+                    currentInboundContext: queued.currentInboundContext,
+                    inputProvenance: run.inputProvenance,
+                    provider: cliExecutionProvider,
+                    model,
+                    ...resolveRunAuthProfile(candidateRun, cliExecutionProvider, {
+                      config: runtimeConfig,
+                    }),
+                    thinkLevel: run.thinkLevel,
+                    timeoutMs: run.timeoutMs,
+                    runId,
+                    extraSystemPrompt: run.extraSystemPrompt,
+                    sourceReplyDeliveryMode: run.sourceReplyDeliveryMode,
+                    silentReplyPromptMode: run.silentReplyPromptMode,
+                    extraSystemPromptStatic: run.extraSystemPromptStatic,
+                    ownerNumbers: run.ownerNumbers,
+                    cliSessionId: cliSessionBinding?.sessionId,
+                    cliSessionBinding,
+                    bootstrapPromptWarningSignaturesSeen,
+                    bootstrapPromptWarningSignature:
+                      bootstrapPromptWarningSignaturesSeen[
+                        bootstrapPromptWarningSignaturesSeen.length - 1
+                      ],
+                    images: queuedImages,
+                    imageOrder: queuedImageOrder,
+                    skillsSnapshot: run.skillsSnapshot,
+                    messageChannel: queued.originatingChannel ?? undefined,
+                    messageProvider: resolveOriginMessageProvider({
+                      originatingChannel: queued.originatingChannel,
+                      provider: run.messageProvider,
+                    }),
+                    agentAccountId: run.agentAccountId,
+                    senderIsOwner: run.senderIsOwner,
+                    disableTools: opts?.disableTools,
+                    abortSignal: queued.abortSignal ?? opts?.abortSignal,
+                  },
+                  transformResult: (rawResult) =>
+                    isRoomEventCliRun && rawResult.meta.agentMeta
+                      ? (() => {
+                          const { cliSessionBinding: _cliSessionBinding, ...agentMeta } =
+                            rawResult.meta.agentMeta;
+                          return {
+                            ...rawResult,
+                            meta: {
+                              ...rawResult.meta,
+                              agentMeta: {
+                                ...agentMeta,
+                                sessionId: "",
+                              },
+                            },
+                          };
+                        })()
+                      : rawResult,
+                });
+                bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
+                  result.meta?.systemPromptReport,
+                );
+                return result;
+              }
+              pendingDeferredCliTerminal = undefined;
               const result = await runEmbeddedPiAgent({
                 allowGatewaySubagentBinding: true,
                 replyOperation,
@@ -466,6 +586,22 @@ export function createFollowupRunner(params: {
         runResult = fallbackResult.result;
         fallbackProvider = fallbackResult.provider;
         fallbackModel = fallbackResult.model;
+        if (
+          pendingDeferredCliTerminal &&
+          pendingDeferredCliTerminal.provider === fallbackProvider &&
+          pendingDeferredCliTerminal.model === fallbackModel
+        ) {
+          emitAgentEvent({
+            runId,
+            stream: "lifecycle",
+            data: {
+              phase: "end",
+              startedAt: pendingDeferredCliTerminal.startedAt,
+              endedAt: Date.now(),
+            },
+          });
+        }
+        pendingDeferredCliTerminal = undefined;
         await clearRecoveredAutoFallbackPrimaryProbe({
           provider: fallbackProvider,
           model: fallbackModel,
@@ -473,6 +609,19 @@ export function createFollowupRunner(params: {
       } catch (err) {
         const message = formatErrorMessage(err);
         replyOperation.fail("run_failed", err);
+        if (pendingDeferredCliTerminal) {
+          emitAgentEvent({
+            runId,
+            stream: "lifecycle",
+            data: {
+              phase: "error",
+              startedAt: pendingDeferredCliTerminal.startedAt,
+              endedAt: Date.now(),
+              error: message,
+            },
+          });
+          pendingDeferredCliTerminal = undefined;
+        }
         defaultRuntime.error?.(`Followup agent failed before reply: ${message}`);
         return;
       }

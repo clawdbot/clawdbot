@@ -1,4 +1,9 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  _resetActiveManagedProxyStateForTests,
+  registerActiveManagedProxyUrl,
+  stopActiveManagedProxyRegistration,
+} from "./proxy/active-proxy-state.js";
 
 const PROXY_ENV_KEYS = [
   "HTTPS_PROXY",
@@ -39,11 +44,11 @@ const {
   }
   class ProxyAgent {
     static lastCreated: ProxyAgent | undefined;
-    proxyUrl: string;
-    constructor(proxyUrl: string) {
-      this.proxyUrl = proxyUrl;
+    readonly proxyUrl: string | undefined;
+    constructor(public readonly options: { uri?: string; proxyTls?: unknown } | string) {
+      this.proxyUrl = typeof options === "string" ? options : options.uri;
       ProxyAgent.lastCreated = this;
-      proxyAgentSpy(proxyUrl);
+      proxyAgentSpy(options);
     }
   }
   class EnvHttpProxyAgent {
@@ -142,6 +147,11 @@ describe("makeProxyFetch", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    _resetActiveManagedProxyStateForTests();
+  });
+
+  afterEach(() => {
+    _resetActiveManagedProxyStateForTests();
   });
 
   it("uses undici fetch with ProxyAgent dispatcher", async () => {
@@ -152,12 +162,32 @@ describe("makeProxyFetch", () => {
     expect(proxyAgentSpy).not.toHaveBeenCalled();
     await proxyFetch("https://api.example.com/v1/audio");
 
-    expect(proxyAgentSpy).toHaveBeenCalledWith(proxyUrl);
+    expect(proxyAgentSpy).toHaveBeenCalledWith({ uri: proxyUrl });
     expect(undiciFetch).toHaveBeenCalledOnce();
     const [input] = requireUndiciFetchCall();
     const init = requireUndiciFetchInit();
     expect(input).toBe("https://api.example.com/v1/audio");
     expect(init.dispatcher).toBe(getLastAgent());
+  });
+
+  it("adds active managed proxy CA trust to explicit proxy fetch dispatchers", async () => {
+    const registration = registerActiveManagedProxyUrl(new URL("https://proxy.test:8443"), {
+      proxyTls: { ca: "explicit-proxy-fetch-ca" },
+    });
+    undiciFetch.mockResolvedValue({ ok: true });
+
+    try {
+      const proxyFetch = makeProxyFetch("https://proxy.test:8443");
+
+      await proxyFetch("https://api.example.com/v1/audio");
+
+      expect(proxyAgentSpy).toHaveBeenCalledWith({
+        uri: "https://proxy.test:8443",
+        proxyTls: { ca: "explicit-proxy-fetch-ca" },
+      });
+    } finally {
+      stopActiveManagedProxyRegistration(registration);
+    }
   });
 
   it("reuses the same ProxyAgent across calls", async () => {
@@ -306,10 +336,12 @@ describe("resolveProxyFetchFromEnv", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.unstubAllEnvs();
+    _resetActiveManagedProxyStateForTests();
     clearProxyEnv();
   });
   afterEach(() => {
     vi.unstubAllEnvs();
+    _resetActiveManagedProxyStateForTests();
     restoreProxyEnv();
   });
 
@@ -335,6 +367,29 @@ describe("resolveProxyFetchFromEnv", () => {
     const init = requireUndiciFetchInit();
     expect(input).toBe("https://api.example.com");
     expect(init.dispatcher).toBe(EnvHttpProxyAgent.lastCreated);
+  });
+
+  it("adds active managed proxy CA trust to env proxy fetch dispatchers", () => {
+    const registration = registerActiveManagedProxyUrl(new URL("https://proxy.test:8443"), {
+      proxyTls: { ca: "proxy-fetch-ca" },
+    });
+
+    try {
+      const fetchFn = requireProxyFetch(
+        resolveProxyFetchFromEnv({
+          HTTP_PROXY: "",
+          HTTPS_PROXY: "https://proxy.test:8443",
+        }),
+      );
+
+      expect(fetchFn).toBeTypeOf("function");
+      expect(envAgentSpy).toHaveBeenCalledWith({
+        httpsProxy: "https://proxy.test:8443",
+        proxyTls: { ca: "proxy-fetch-ca" },
+      });
+    } finally {
+      stopActiveManagedProxyRegistration(registration);
+    }
   });
 
   it("converts global FormData bodies when using proxy env fetch", async () => {

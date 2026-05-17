@@ -11,6 +11,7 @@ import {
   isPotentialTruncatedFinal,
   mergeChannelProgressDraftLine,
   resolveChannelPreviewStreamMode,
+  resolveChannelProgressDraftMaxLineChars,
   resolveChannelProgressDraftLabel,
   resolveChannelProgressDraftMaxLines,
   resolveChannelProgressDraftRender,
@@ -247,8 +248,11 @@ describe("channel-streaming", () => {
   });
 
   it("formats bounded progress draft text", () => {
-    const entry = { streaming: { progress: { label: "Shelling", maxLines: 2, render: "rich" } } };
+    const entry = {
+      streaming: { progress: { label: "Shelling", maxLines: 2, maxLineChars: 80, render: "rich" } },
+    };
     expect(resolveChannelProgressDraftMaxLines(entry)).toBe(2);
+    expect(resolveChannelProgressDraftMaxLineChars(entry)).toBe(80);
     expect(resolveChannelProgressDraftRender(entry)).toBe("rich");
     expect(
       formatChannelProgressDraftText({
@@ -288,7 +292,7 @@ describe("channel-streaming", () => {
         entry: { streaming: { progress: { label: false } } },
         lines: line ? [line] : [],
       }),
-    ).toBe("🩹 1 modified; extensions/discord/src/monitor/message-handler.draft-prev…");
+    ).toBe("🩹 1 modified; extensions/discord/src/monitor/message-handler.draft-preview.ts");
   });
 
   it("bounds progress draft line length to reduce edit reflow", () => {
@@ -298,7 +302,18 @@ describe("channel-streaming", () => {
         lines: ["x".repeat(160)],
         formatLine: (line) => `\`${line}\``,
       }),
-    ).toBe(`Shelling\n• \`${"x".repeat(71)}…\``);
+    ).toBe(`Shelling\n• \`${"x".repeat(119)}…\``);
+  });
+
+  it("honors configured progress draft line length and cuts prose on word boundaries", () => {
+    expect(
+      formatChannelProgressDraftText({
+        entry: { streaming: { progress: { label: "Shelling", maxLineChars: 64 } } },
+        lines: [
+          "I'm checking whether the generated video exists or if the generator bailed while writing output.",
+        ],
+      }),
+    ).toBe("Shelling\n• I'm checking whether the generated video exists or if the…");
   });
 
   it("keeps compacted raw progress lines from leaking unmatched markdown backticks", () => {
@@ -319,7 +334,9 @@ describe("channel-streaming", () => {
       lines: line ? [line] : [],
     });
 
-    expect(text).toBe("Shelling\n🛠️ run node script…th/that/keeps/going/and/going/index…");
+    expect(text).toBe(
+      "Shelling\n🛠️ run node script…enclaw/some/really/deep/path/that/keeps/going/and/going/index…",
+    );
     expect(text.match(/`/g) ?? []).toHaveLength(0);
   });
 

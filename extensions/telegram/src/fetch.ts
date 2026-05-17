@@ -3,6 +3,8 @@ import * as dns from "node:dns";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
+  createHttp1EnvHttpProxyAgent,
+  createHttp1ProxyAgent,
   createPinnedLookup,
   hasEnvHttpProxyAgentConfigured,
   resolveEnvHttpProxyAgentOptions,
@@ -16,7 +18,7 @@ import {
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { Agent, EnvHttpProxyAgent, ProxyAgent, fetch as undiciFetch } from "undici";
+import { Agent, fetch as undiciFetch } from "undici";
 import { normalizeTelegramApiRoot } from "./api-root.js";
 import {
   resolveTelegramAutoSelectFamilyDecision,
@@ -68,7 +70,10 @@ type RequestInitWithDispatcher = RequestInit & {
   dispatcher?: unknown;
 };
 
-type TelegramDispatcher = Agent | EnvHttpProxyAgent | ProxyAgent;
+type TelegramDispatcher =
+  | Agent
+  | ReturnType<typeof createHttp1EnvHttpProxyAgent>
+  | ReturnType<typeof createHttp1ProxyAgent>;
 
 type TelegramDispatcherMode = "direct" | "env-proxy" | "explicit-proxy";
 
@@ -310,10 +315,10 @@ function createTelegramDispatcher(policy: PinnedDispatcherPolicy): {
       uri: policy.proxyUrl,
       ...poolOptions,
       ...(requestTlsOptions ? { requestTls: requestTlsOptions } : {}),
-    } satisfies ConstructorParameters<typeof ProxyAgent>[0];
+    } satisfies Parameters<typeof createHttp1ProxyAgent>[0];
     try {
       return {
-        dispatcher: new ProxyAgent(proxyOptions),
+        dispatcher: createHttp1ProxyAgent(proxyOptions),
         mode: "explicit-proxy",
         effectivePolicy: policy,
       };
@@ -331,10 +336,10 @@ function createTelegramDispatcher(policy: PinnedDispatcherPolicy): {
       ...resolveEnvHttpProxyAgentOptions(),
       ...(connectOptions ? { connect: connectOptions } : {}),
       ...(proxyTlsOptions ? { proxyTls: proxyTlsOptions } : {}),
-    } satisfies ConstructorParameters<typeof EnvHttpProxyAgent>[0];
+    } satisfies Parameters<typeof createHttp1EnvHttpProxyAgent>[0];
     try {
       return {
-        dispatcher: new EnvHttpProxyAgent(proxyOptions),
+        dispatcher: createHttp1EnvHttpProxyAgent(proxyOptions),
         mode: "env-proxy",
         effectivePolicy: policy,
       };

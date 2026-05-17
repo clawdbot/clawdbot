@@ -8,7 +8,7 @@
   },
   "type": "module",
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "0.74.0",
+    "@earendil-works/pi-coding-agent": "0.74.1",
     "@openai/codex": "0.130.0",
     "ajv": "8.20.0",
     "ws": "8.20.1",

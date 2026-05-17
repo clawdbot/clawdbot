@@ -161,7 +161,10 @@ describe("connectApnsHttp2Session", () => {
   });
 
   it("uses an HTTP CONNECT tunnel when managed proxy is active", async () => {
-    const registration = registerActiveManagedProxyUrl(new URL("http://proxy.example:8080"));
+    const registration = registerActiveManagedProxyUrl(new URL("https://proxy.example:8443"), {
+      loopbackMode: "gateway-only",
+      proxyTls: { ca: "active-proxy-ca" },
+    });
     const { connectApnsHttp2Session } = await import("./push-apns-http2.js");
 
     const session = await connectApnsHttp2Session({
@@ -177,7 +180,8 @@ describe("connectApnsHttp2Session", () => {
     if (!(proxyUrl instanceof URL)) {
       throw new Error("expected active managed proxy URL");
     }
-    expect(proxyUrl.href).toBe("http://proxy.example:8080/");
+    expect(proxyUrl.href).toBe("https://proxy.example:8443/");
+    expect(tunnelCall.proxyTls).toEqual({ ca: "active-proxy-ca" });
     expect(tunnelCall.targetHost).toBe("api.push.apple.com");
     expect(tunnelCall.targetPort).toBe(443);
     expect(tunnelCall.timeoutMs).toBe(10_000);
@@ -217,6 +221,7 @@ describe("connectApnsHttp2Session", () => {
     const result = await probeApnsHttp2ReachabilityViaProxy({
       authority: "https://api.sandbox.push.apple.com",
       proxyUrl: "http://proxy.example:8080",
+      proxyTls: { ca: "probe-proxy-ca" },
       timeoutMs: 10_000,
     });
 
@@ -232,6 +237,7 @@ describe("connectApnsHttp2Session", () => {
       throw new Error("expected explicit proxy URL");
     }
     expect(proxyUrl.href).toBe("http://proxy.example:8080/");
+    expect(tunnelCall.proxyTls).toEqual({ ca: "probe-proxy-ca" });
     expect(tunnelCall?.targetHost).toBe("api.sandbox.push.apple.com");
     expect(tunnelCall?.targetPort).toBe(443);
     expect(tunnelCall?.timeoutMs).toBe(10_000);

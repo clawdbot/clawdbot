@@ -278,6 +278,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
         progress: {
           label: "auto",
           maxLines: 8,
+          maxLineChars: 120,
           toolProgress: true,
         },
       },
@@ -824,7 +825,7 @@ The gateway hot-reloads `messages` config after the file is saved. Restart only 
 
 `messages.groupChat.historyLimit` sets the global default. Channels can override with `channels.<channel>.historyLimit` (or per-account). Set `0` to disable.
 
-`messages.groupChat.unmentionedInbound: "room_event"` submits unmentioned always-on group/channel messages as quiet room context. Mentioned messages, commands, and direct messages remain user requests.
+`messages.groupChat.unmentionedInbound: "room_event"` submits unmentioned always-on group/channel messages as quiet room context on supported channels. Mentioned messages, commands, and direct messages remain user requests. See [Ambient room events](/channels/ambient-room-events) for complete Discord, Slack, and Telegram examples.
 
 `messages.visibleReplies` is the global source-event default; `messages.groupChat.visibleReplies` overrides it for group/channel source events. When `messages.visibleReplies` is unset, a harness can provide its own direct/source default; the Codex harness defaults to `message_tool`. Channel allowlists and mention gating still decide whether an event is processed.
 

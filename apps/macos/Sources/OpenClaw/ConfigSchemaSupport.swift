@@ -208,6 +208,25 @@ func isSensitivePath(_ path: ConfigPath) -> Bool {
         || key.hasSuffix("key")
 }
 
+func labelForConfigPath(_ path: ConfigPath) -> String? {
+    for segment in path.reversed() {
+        if case let .key(key) = segment {
+            return humanizeConfigKey(key)
+        }
+    }
+    return nil
+}
+
+func humanizeConfigKey(_ key: String) -> String {
+    key.replacingOccurrences(of: "_", with: " ")
+        .replacingOccurrences(of: "-", with: " ")
+        .replacingOccurrences(
+            of: "([a-z0-9])([A-Z])",
+            with: "$1 $2",
+            options: .regularExpression)
+        .capitalized
+}
+
 func pathKey(_ path: ConfigPath) -> String {
     path.compactMap { segment -> String? in
         switch segment {

@@ -1,18 +1,57 @@
 import { randomUUID } from "node:crypto";
-import { wrapFetchWithAbortSignal } from "openclaw/plugin-sdk/fetch-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  createHttp1EnvHttpProxyAgent,
+  createHttp1ProxyAgent,
+  resolveEnvHttpProxyAgentOptions,
+  wrapFetchWithAbortSignal,
+} from "openclaw/plugin-sdk/fetch-runtime";
 import {
   captureHttpExchange,
   resolveEffectiveDebugProxyUrl,
 } from "openclaw/plugin-sdk/proxy-capture";
 import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
+import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { Agent, ProxyAgent, fetch as undiciFetch } from "undici";
+import { Agent, fetch as undiciFetch } from "undici";
 import { createDiscordDnsLookup } from "../network-config.js";
 import { withValidatedDiscordProxy } from "../proxy-fetch.js";
 
 const discordDnsLookup = createDiscordDnsLookup();
 
-type DiscordRestDispatcher = InstanceType<typeof Agent> | InstanceType<typeof ProxyAgent>;
+type DiscordRestDispatcher =
+  | InstanceType<typeof Agent>
+  | ReturnType<typeof createHttp1EnvHttpProxyAgent>
+  | ReturnType<typeof createHttp1ProxyAgent>;
+
+function createDirectDiscordRestDispatcher(): InstanceType<typeof Agent> {
+  return new Agent({
+    allowH2: false,
+    connect: { lookup: discordDnsLookup },
+  });
+}
+
+function createEnvProxyDiscordRestDispatcher(
+  runtime: RuntimeEnv,
+): ReturnType<typeof createHttp1EnvHttpProxyAgent> | undefined {
+  const envProxyOptions = resolveEnvHttpProxyAgentOptions();
+  if (!envProxyOptions) {
+    return undefined;
+  }
+  try {
+    return createHttp1EnvHttpProxyAgent({
+      ...envProxyOptions,
+      connect: { lookup: discordDnsLookup },
+    });
+  } catch (err) {
+    runtime.error?.(
+      danger(
+        `discord: env proxy unavailable for REST fetch; using direct dispatcher: ${formatErrorMessage(err)}`,
+      ),
+    );
+    return undefined;
+  }
+}
 
 function createDiscordRestFetchWithDispatcher(dispatcher: DiscordRestDispatcher): typeof fetch {
   return wrapFetchWithAbortSignal(((input: RequestInfo | URL, init?: RequestInit) =>
@@ -42,12 +81,7 @@ export function resolveDiscordRestFetch(
   const effectiveProxyUrl = resolveEffectiveDebugProxyUrl(proxyUrl);
   if (effectiveProxyUrl) {
     const fetcher = withValidatedDiscordProxy(effectiveProxyUrl, runtime, (proxy) =>
-      createDiscordRestFetchWithDispatcher(
-        new ProxyAgent({
-          uri: proxy,
-          allowH2: false,
-        }),
-      ),
+      createDiscordRestFetchWithDispatcher(createHttp1ProxyAgent({ uri: proxy })),
     );
     if (!fetcher) {
       return fetch;
@@ -57,10 +91,7 @@ export function resolveDiscordRestFetch(
   }
 
   const fetcher = createDiscordRestFetchWithDispatcher(
-    new Agent({
-      allowH2: false,
-      connect: { lookup: discordDnsLookup },
-    }),
+    createEnvProxyDiscordRestDispatcher(runtime) ?? createDirectDiscordRestDispatcher(),
   );
   return fetcher;
 }

@@ -1,6 +1,9 @@
 import type { RetryOptions, WebClientOptions } from "@slack/web-api";
 import { HttpsProxyAgent } from "https-proxy-agent";
-import { resolveEnvHttpProxyUrl } from "openclaw/plugin-sdk/fetch-runtime";
+import {
+  resolveActiveManagedProxyTlsOptions,
+  resolveEnvHttpProxyUrl,
+} from "openclaw/plugin-sdk/fetch-runtime";
 
 export const SLACK_DEFAULT_RETRY_OPTIONS: RetryOptions = {
   retries: 2,
@@ -70,8 +73,10 @@ function resolveSlackProxyAgent(): HttpsProxyAgent<string> | undefined {
   if (isHostExcludedByNoProxy("slack.com")) {
     return undefined;
   }
+  const proxyTls = resolveActiveManagedProxyTlsOptions({ proxyUrl });
+  const proxyAgentOptions = proxyTls?.ca ? { ca: proxyTls.ca } : undefined;
   try {
-    return new HttpsProxyAgent(proxyUrl);
+    return new HttpsProxyAgent(proxyUrl, proxyAgentOptions);
   } catch {
     // Malformed proxy URL; degrade gracefully to direct connection.
     return undefined;

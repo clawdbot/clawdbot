@@ -1210,6 +1210,9 @@ export const uk: TranslationMap = {
       ascending: "За зростанням",
       descending: "За спаданням",
       reset: "Скинути",
+      emptyTitle: "No scheduled jobs yet.",
+      emptyHint: "Create one from a plain-language prompt; advanced fields can wait.",
+      emptyFilteredHint: "Clear or change filters to see scheduled jobs.",
       noMatching: "Немає відповідних завдань.",
       loading: "Завантаження...",
       loadMore: "Завантажити більше завдань",
@@ -1245,6 +1248,7 @@ export const uk: TranslationMap = {
     form: {
       editJob: "Редагувати завдання",
       newJob: "Нове завдання",
+      advancedJob: "Advanced job",
       updateSubtitle: "Оновіть вибране заплановане завдання.",
       createSubtitle: "Створіть заплановане пробудження або запуск агента.",
       required: "Обов’язково",

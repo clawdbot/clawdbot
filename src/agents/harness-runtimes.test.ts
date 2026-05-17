@@ -20,6 +20,33 @@ describe("collectConfiguredAgentHarnessRuntimes", () => {
     );
   });
 
+  it("can ignore implicit OpenAI Codex runtime preferences", () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.5",
+          models: {
+            "openai/gpt-5.4": {},
+            "anthropic/claude-opus-4-7": {
+              agentRuntime: { id: "codex" },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      collectConfiguredAgentHarnessRuntimes(
+        config,
+        {},
+        {
+          includeEnvRuntime: false,
+          includeImplicitRuntimePreferences: false,
+        },
+      ),
+    ).toEqual(["codex"]);
+  });
+
   it("requires Codex for selectable per-agent OpenAI models", () => {
     const config = {
       agents: {

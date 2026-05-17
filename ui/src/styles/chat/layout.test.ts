@@ -67,4 +67,15 @@ describe("chat layout styles", () => {
     expect(css).toContain("@media (max-width: 860px)");
     expect(css).toContain("width: 44px;");
   });
+
+  it("keeps the initial chat loading skeleton wide enough to read as message bubbles", () => {
+    const css = readLayoutCss();
+
+    expect(css).toContain(".chat-loading-skeleton .chat-msg");
+    expect(css).toContain("width: min(560px, 82%);");
+    expect(css).toContain(".chat-loading-skeleton .chat-line.user .chat-msg");
+    expect(css).toContain("width: min(360px, 70%);");
+    expect(css).toContain(".chat-loading-skeleton .chat-bubble");
+    expect(css).toContain("width: 100%;");
+  });
 });

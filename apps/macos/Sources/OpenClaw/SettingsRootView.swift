@@ -7,15 +7,18 @@ struct SettingsRootView: View {
     private let permissionMonitor = PermissionMonitor.shared
     @State private var monitoringPermissions = false
     @State private var selectedTab: SettingsTab = .general
+    @State private var cachedTabs: Set<SettingsTab>
     @State private var snapshotPaths: (configPath: String?, stateDir: String?) = (nil, nil)
     let updater: UpdaterProviding?
     private let isPreview = ProcessInfo.processInfo.isPreview
     private let isNixMode = ProcessInfo.processInfo.isNixMode
 
     init(state: AppState, updater: UpdaterProviding?, initialTab: SettingsTab? = nil) {
+        let initial = initialTab ?? .general
         self.state = state
         self.updater = updater
-        self._selectedTab = State(initialValue: initialTab ?? .general)
+        self._selectedTab = State(initialValue: initial)
+        self._cachedTabs = State(initialValue: [initial])
     }
 
     var body: some View {
@@ -37,7 +40,7 @@ struct SettingsRootView: View {
                 if self.isNixMode {
                     self.nixManagedBanner
                 }
-                self.detailView(for: self.selectedTab)
+                self.cachedDetailViews
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .padding(.horizontal, 22)
@@ -45,10 +48,12 @@ struct SettingsRootView: View {
         }
         .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight, alignment: .topLeading)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(SettingsWindowChromeConfigurator())
+        .toolbar(removing: .sidebarToggle)
         .onReceive(NotificationCenter.default.publisher(for: .openclawSelectSettingsTab)) { note in
             if let tab = note.object as? SettingsTab {
                 withAnimation(.spring(response: 0.32, dampingFraction: 0.85)) {
-                    self.selectedTab = tab
+                    self.selectedTab = self.validTab(for: tab)
                 }
             }
         }
@@ -56,6 +61,7 @@ struct SettingsRootView: View {
             if let pending = SettingsTabRouter.consumePending() {
                 self.selectedTab = self.validTab(for: pending)
             }
+            self.cacheSelectedTab()
             self.updatePermissionMonitoring(for: self.selectedTab)
         }
         .onChange(of: self.state.debugPaneEnabled) { _, enabled in
@@ -64,6 +70,7 @@ struct SettingsRootView: View {
             }
         }
         .onChange(of: self.selectedTab) { _, newValue in
+            self.cachedTabs.insert(newValue)
             self.updatePermissionMonitoring(for: newValue)
         }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
@@ -75,12 +82,6 @@ struct SettingsRootView: View {
             guard !self.isPreview else { return }
             await self.refreshPerms()
         }
-        .task {
-            guard !self.isPreview else { return }
-            async let schemaLoad: Void = ChannelsStore.shared.loadConfigSchema()
-            async let configLoad: Void = ChannelsStore.shared.loadConfig(force: false)
-            _ = await (schemaLoad, configLoad)
-        }
         .task(id: self.state.connectionMode) {
             guard !self.isPreview else { return }
             await self.refreshSnapshotPaths()
@@ -89,6 +90,11 @@ struct SettingsRootView: View {
 
     private var visibleGroups: [SettingsTabGroup] {
         SettingsTabGroup.defaultGroups(showDebug: self.state.debugPaneEnabled)
+    }
+
+    private var cachedDetailTabs: [SettingsTab] {
+        let cached = self.cachedTabs.union([self.selectedTab])
+        return self.visibleGroups.flatMap(\.tabs).filter { cached.contains($0) }
     }
 
     private var nixManagedBanner: some View {
@@ -121,13 +127,27 @@ struct SettingsRootView: View {
         .cornerRadius(10)
     }
 
+    private var cachedDetailViews: some View {
+        ZStack(alignment: .topLeading) {
+            ForEach(self.cachedDetailTabs) { tab in
+                self.detailView(for: tab)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .opacity(tab == self.selectedTab ? 1 : 0)
+                    .allowsHitTesting(tab == self.selectedTab)
+                    .disabled(tab != self.selectedTab)
+                    .accessibilityHidden(tab != self.selectedTab)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
     @ViewBuilder
     private func detailView(for tab: SettingsTab) -> some View {
         switch tab {
         case .general:
-            GeneralSettings(state: self.state, page: .general)
+            GeneralSettings(state: self.state, page: .general, isActive: self.selectedTab == tab)
         case .connection:
-            GeneralSettings(state: self.state, page: .connection)
+            GeneralSettings(state: self.state, page: .connection, isActive: self.selectedTab == tab)
         case .permissions:
             PermissionsSettings(
                 status: self.permissionMonitor.status,
@@ -136,17 +156,17 @@ struct SettingsRootView: View {
         case .voiceWake:
             VoiceWakeSettings(state: self.state, isActive: self.selectedTab == .voiceWake)
         case .channels:
-            ChannelsSettings()
+            ChannelsSettings(isActive: self.selectedTab == tab)
         case .skills:
             SkillsSettings(state: self.state)
         case .cron:
-            CronSettings()
+            CronSettings(isActive: self.selectedTab == tab)
         case .execApprovals:
             ExecApprovalsSettings()
         case .sessions:
             SessionsSettings()
         case .instances:
-            InstancesSettings()
+            InstancesSettings(isActive: self.selectedTab == tab)
         case .config:
             ConfigSettings()
         case .debug:
@@ -159,6 +179,10 @@ struct SettingsRootView: View {
     private func validTab(for requested: SettingsTab) -> SettingsTab {
         if requested == .debug, !self.state.debugPaneEnabled { return .general }
         return requested
+    }
+
+    private func cacheSelectedTab() {
+        self.cachedTabs.insert(self.selectedTab)
     }
 
     @MainActor
@@ -251,6 +275,77 @@ enum SettingsTab: CaseIterable, Identifiable, Hashable {
         case .config: "slider.horizontal.3"
         case .debug: "ant"
         case .about: "info.circle"
+        }
+    }
+}
+
+private struct SettingsWindowChromeConfigurator: NSViewRepresentable {
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        self.configureWindow(for: view, coordinator: context.coordinator)
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        self.configureWindow(for: nsView, coordinator: context.coordinator)
+    }
+
+    private func configureWindow(for view: NSView, coordinator: Coordinator) {
+        DispatchQueue.main.async {
+            guard let window = view.window else { return }
+            window.styleMask.remove(.fullSizeContentView)
+            window.titleVisibility = .visible
+            window.titlebarAppearsTransparent = true
+            window.toolbarStyle = .unifiedCompact
+            coordinator.installToolbar(on: window)
+        }
+    }
+
+    @MainActor
+    final class Coordinator: NSObject, NSToolbarDelegate {
+        private static let toolbarIdentifier = NSToolbar.Identifier("OpenClawSettingsToolbar")
+        private let items: [NSToolbarItem.Identifier] = [
+            .toggleSidebar,
+            .flexibleSpace,
+        ]
+
+        func installToolbar(on window: NSWindow) {
+            if window.toolbar?.identifier == Self.toolbarIdentifier {
+                return
+            }
+
+            let toolbar = NSToolbar(identifier: Self.toolbarIdentifier)
+            toolbar.delegate = self
+            toolbar.displayMode = .iconOnly
+            window.toolbar = toolbar
+        }
+
+        func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+            self.items
+        }
+
+        func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
+            self.items
+        }
+
+        func toolbar(
+            _ toolbar: NSToolbar,
+            itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
+            willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem?
+        {
+            guard itemIdentifier == .toggleSidebar else { return nil }
+            let item = NSToolbarItem(itemIdentifier: .toggleSidebar)
+            item.label = "Toggle Sidebar"
+            item.paletteLabel = "Toggle Sidebar"
+            item.toolTip = "Toggle Sidebar"
+            item.image = NSImage(systemSymbolName: "sidebar.left", accessibilityDescription: "Toggle Sidebar")
+            item.action = #selector(NSSplitViewController.toggleSidebar(_:))
+            item.target = nil
+            return item
         }
     }
 }

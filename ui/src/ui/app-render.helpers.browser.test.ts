@@ -1,7 +1,7 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { t } from "../i18n/index.ts";
-import { renderChatControls, renderChatMobileToggle } from "./app-render.helpers.ts";
+import { renderChatControls, renderChatMobileToggle, renderTab } from "./app-render.helpers.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import type { SessionsListResult } from "./types.ts";
 
@@ -19,6 +19,8 @@ function createState(overrides: Partial<AppViewState> = {}) {
     chatSending: false,
     chatStream: null,
     onboarding: false,
+    basePath: "",
+    tab: "chat",
     sessionKey: "main",
     sessionsHideCron: true,
     sessionsResult: {
@@ -91,6 +93,22 @@ function requireElement<T extends Element>(element: T | null | undefined, label:
 }
 
 describe("chat header controls (browser)", () => {
+  it("keeps the sidebar settings entry active for nested settings tabs", async () => {
+    const state = createState({ tab: "appearance" });
+    const container = document.createElement("div");
+    render(renderTab(state, "config"), container);
+    await Promise.resolve();
+
+    const link = requireElement(
+      container.querySelector<HTMLAnchorElement>(".nav-item"),
+      "nav item",
+    );
+    expect(link.classList.contains("nav-item--active")).toBe(true);
+    expect(link.getAttribute("href")).toBe("/config");
+    expect(link.getAttribute("title")).toBe("Settings");
+    expect(link.textContent?.trim()).toBe("Settings");
+  });
+
   it("renders explicit hover tooltip metadata for the top-right action buttons", async () => {
     const container = document.createElement("div");
     render(renderChatControls(createState()), container);

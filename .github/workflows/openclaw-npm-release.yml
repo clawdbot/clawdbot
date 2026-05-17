@@ -88,6 +88,28 @@ jobs:
           ref: ${{ inputs.tag }}
           fetch-depth: 0
 
+      - name: Validate Tideclaw alpha preflight target
+        if: startsWith(github.ref, 'refs/heads/tideclaw/alpha/')
+        env:
+          RELEASE_REF: ${{ inputs.tag }}
+          WORKFLOW_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${RELEASE_REF}" == *"-alpha."* && ! "${RELEASE_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            echo "Tideclaw alpha preflight runs must target an alpha prerelease tag or SHA." >&2
+            exit 1
+          fi
+          if [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
+            echo "Tideclaw alpha preflight runs must run from tideclaw/alpha/YYYY-MM-DD-HHMMZ." >&2
+            exit 1
+          fi
+          alpha_branch="${WORKFLOW_REF#refs/heads/}"
+          git fetch --no-tags origin "+refs/heads/${alpha_branch}:refs/remotes/origin/${alpha_branch}"
+          if ! git merge-base --is-ancestor HEAD "refs/remotes/origin/${alpha_branch}"; then
+            echo "Alpha preflight target must be reachable from ${alpha_branch}." >&2
+            exit 1
+          fi
+
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
@@ -191,7 +213,7 @@ jobs:
         id: packed_tarball
         env:
           OPENCLAW_PREPACK_PREPARED: "1"
-          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_REF: ${{ inputs.tag }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           DEPENDENCY_EVIDENCE_DIR: ${{ steps.dependency_evidence.outputs.dir }}
         run: |
@@ -259,6 +281,11 @@ jobs:
           fi
           RELEASE_SHA="$(git rev-parse HEAD)"
           PACKAGE_VERSION="$(node -p "require('./package.json').version")"
+          if [[ "${RELEASE_REF}" =~ ^[0-9a-fA-F]{40}$ ]]; then
+            RELEASE_TAG="v${PACKAGE_VERSION}"
+          else
+            RELEASE_TAG="${RELEASE_REF}"
+          fi
           TARBALL_NAME="$(basename "$PACK_PATH")"
           TARBALL_SHA256="$(sha256sum "$PACK_PATH" | awk '{print $1}')"
           ARTIFACT_DIR="$RUNNER_TEMP/openclaw-npm-preflight"
@@ -290,6 +317,7 @@ jobs:
           );
           NODE
           echo "dir=$ARTIFACT_DIR" >> "$GITHUB_OUTPUT"
+          echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Verify prepared npm tarball install
         env:
@@ -312,10 +340,26 @@ jobs:
           path: ${{ steps.dependency_evidence.outputs.dir }}
           if-no-files-found: error
 
+      - name: Upload dependency release evidence tag alias
+        if: ${{ steps.packed_tarball.outputs.release_tag != inputs.tag }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: openclaw-release-dependency-evidence-${{ steps.packed_tarball.outputs.release_tag }}
+          path: ${{ steps.dependency_evidence.outputs.dir }}
+          if-no-files-found: error
+
       - name: Upload prepared npm publish bundle
         uses: actions/upload-artifact@v7
         with:
           name: openclaw-npm-preflight-${{ inputs.tag }}
+          path: ${{ steps.packed_tarball.outputs.dir }}
+          if-no-files-found: error
+
+      - name: Upload prepared npm publish bundle tag alias
+        if: ${{ steps.packed_tarball.outputs.release_tag != inputs.tag }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: openclaw-npm-preflight-${{ steps.packed_tarball.outputs.release_tag }}
           path: ${{ steps.packed_tarball.outputs.dir }}
           if-no-files-found: error
 
@@ -325,13 +369,19 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Require main or release workflow ref for publish
+      - name: Require trusted workflow ref for publish
         env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           WORKFLOW_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
-          if [[ "${WORKFLOW_REF}" != "refs/heads/main" ]] && [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ ]]; then
-            echo "Real publish runs must be dispatched from main or release/YYYY.M.D. Use preflight_only=true for other branch validation."
+          tideclaw_alpha_publish=false
+          if [[ "${RELEASE_TAG}" == *"-alpha."* && "${RELEASE_NPM_DIST_TAG}" == "alpha" && "${WORKFLOW_REF}" =~ ^refs/heads/tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
+            tideclaw_alpha_publish=true
+          fi
+          if [[ "${WORKFLOW_REF}" != "refs/heads/main" ]] && [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ ]] && [[ "${tideclaw_alpha_publish}" != "true" ]]; then
+            echo "Real publish runs must be dispatched from main, release/YYYY.M.D, or a Tideclaw alpha branch for alpha prereleases. Use preflight_only=true for other branch validation."
             exit 1
           fi
 
@@ -387,6 +437,28 @@ jobs:
           ref: refs/tags/${{ inputs.tag }}
           fetch-depth: 0
 
+      - name: Validate Tideclaw alpha publish target
+        if: startsWith(github.ref, 'refs/heads/tideclaw/alpha/')
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          WORKFLOW_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${RELEASE_TAG}" == *"-alpha."* ]]; then
+            echo "Tideclaw alpha publish runs must target an alpha prerelease tag." >&2
+            exit 1
+          fi
+          if [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
+            echo "Tideclaw alpha publish runs must run from tideclaw/alpha/YYYY-MM-DD-HHMMZ." >&2
+            exit 1
+          fi
+          alpha_branch="${WORKFLOW_REF#refs/heads/}"
+          git fetch --no-tags origin "+refs/heads/${alpha_branch}:refs/remotes/origin/${alpha_branch}"
+          if ! git merge-base --is-ancestor HEAD "refs/remotes/origin/${alpha_branch}"; then
+            echo "Alpha publish tag must be reachable from ${alpha_branch}." >&2
+            exit 1
+          fi
+
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
@@ -427,13 +499,45 @@ jobs:
           printf '%s' "$RUN_JSON" | node -e 'const fs = require("node:fs"); const run = JSON.parse(fs.readFileSync(0, "utf8")); const checks = [["workflowName", "Full Release Validation"], ["headBranch", process.env.EXPECTED_WORKFLOW_BRANCH], ["event", "workflow_dispatch"], ["status", "completed"], ["conclusion", "success"]]; for (const [key, expected] of checks) { if (run[key] !== expected) { console.error(`Referenced full release validation run ${process.env.FULL_RELEASE_VALIDATION_RUN_ID} must have ${key}=${expected}, got ${run[key] ?? "<missing>"}.`); process.exit(1); } } console.log(`Using full release validation run ${process.env.FULL_RELEASE_VALIDATION_RUN_ID}: ${run.url}`);'
 
       - name: Download prepared npm tarball
-        uses: actions/download-artifact@v8
-        with:
-          name: openclaw-npm-preflight-${{ inputs.tag }}
-          path: preflight-tarball
-          repository: ${{ github.repository }}
-          run-id: ${{ inputs.preflight_run_id }}
-          github-token: ${{ github.token }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+
+          download_preflight_artifact() {
+            local preferred_name fallback_name
+            preferred_name="openclaw-npm-preflight-${RELEASE_TAG}"
+            rm -rf preflight-tarball
+            mkdir -p preflight-tarball
+            if gh run download "${PREFLIGHT_RUN_ID}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --name "${preferred_name}" \
+              --dir preflight-tarball; then
+              echo "Downloaded ${preferred_name}."
+              return 0
+            fi
+
+            echo "::warning::${preferred_name} not found; checking run artifacts for a single compatible preflight artifact."
+            mapfile -t matches < <(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/runs/${PREFLIGHT_RUN_ID}/artifacts" \
+              --jq '.artifacts[] | select(.expired != true) | .name' |
+              grep '^openclaw-npm-preflight-' || true)
+            if [[ "${#matches[@]}" != "1" ]]; then
+              echo "Expected ${preferred_name}, or exactly one openclaw-npm-preflight-* fallback artifact in run ${PREFLIGHT_RUN_ID}." >&2
+              printf 'Available preflight candidates:\n' >&2
+              printf -- '- %s\n' "${matches[@]:-<none>}" >&2
+              exit 1
+            fi
+            fallback_name="${matches[0]}"
+            gh run download "${PREFLIGHT_RUN_ID}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --name "${fallback_name}" \
+              --dir preflight-tarball
+            echo "Downloaded fallback preflight artifact ${fallback_name}."
+          }
+
+          download_preflight_artifact
 
       - name: Download full release validation manifest
         uses: actions/download-artifact@v8

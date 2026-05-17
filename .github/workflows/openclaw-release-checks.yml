@@ -113,13 +113,21 @@ jobs:
       release_package_spec: ${{ steps.inputs.outputs.release_package_spec }}
       package_acceptance_package_spec: ${{ steps.inputs.outputs.package_acceptance_package_spec }}
     steps:
-      - name: Require main or release workflow ref for release checks
+      - name: Require trusted workflow ref for release checks
         env:
+          RELEASE_REF: ${{ inputs.ref }}
           WORKFLOW_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
-          if [[ "${WORKFLOW_REF}" != "refs/heads/main" ]] && [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ ]] && [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/release-ci/[0-9a-f]{12}-[0-9]+$ ]]; then
-            echo "Release checks must be dispatched from main, release/YYYY.M.D, or a Full Release Validation release-ci/<sha>-<timestamp> ref so workflow logic and secrets stay controlled." >&2
+          tideclaw_alpha_check=false
+          if [[ "${WORKFLOW_REF}" =~ ^refs/heads/tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
+            workflow_branch="${WORKFLOW_REF#refs/heads/}"
+            if [[ "${RELEASE_REF}" == *"-alpha."* || "${RELEASE_REF}" =~ ^[0-9a-fA-F]{40}$ || "${RELEASE_REF}" == "${workflow_branch}" || "${RELEASE_REF}" == "refs/heads/${workflow_branch}" ]]; then
+              tideclaw_alpha_check=true
+            fi
+          fi
+          if [[ "${WORKFLOW_REF}" != "refs/heads/main" ]] && [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$ ]] && [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/release-ci/[0-9a-f]{12}-[0-9]+$ ]] && [[ "${tideclaw_alpha_check}" != "true" ]]; then
+            echo "Release checks must be dispatched from main, release/YYYY.M.D, a Full Release Validation release-ci/<sha>-<timestamp> ref, or a Tideclaw alpha branch for alpha prereleases." >&2
             exit 1
           fi
 
@@ -218,6 +226,25 @@ jobs:
             exit 1
           fi
           echo "sha=${selected_sha,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Validate Tideclaw alpha target matches workflow branch
+        if: startsWith(github.ref, 'refs/heads/tideclaw/alpha/')
+        working-directory: workflow
+        env:
+          SELECTED_SHA: ${{ steps.ref.outputs.sha }}
+          WORKFLOW_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${WORKFLOW_REF}" =~ ^refs/heads/tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
+            echo "Tideclaw alpha release checks must run from tideclaw/alpha/YYYY-MM-DD-HHMMZ." >&2
+            exit 1
+          fi
+          alpha_branch="${WORKFLOW_REF#refs/heads/}"
+          git fetch --no-tags origin "+refs/heads/${alpha_branch}:refs/remotes/origin/${alpha_branch}"
+          if ! git merge-base --is-ancestor "${SELECTED_SHA}" "refs/remotes/origin/${alpha_branch}"; then
+            echo "Alpha release target ${SELECTED_SHA} must be reachable from ${alpha_branch}." >&2
+            exit 1
+          fi
 
       - name: Capture selected inputs
         id: inputs

@@ -71,6 +71,7 @@ export type QaDreamingStatus = {
 
 export type QaRawSessionStoreEntry = {
   sessionId?: string;
+  sessionFile?: string;
   status?: string;
   spawnedBy?: string;
   label?: string;

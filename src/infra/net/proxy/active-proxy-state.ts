@@ -1,4 +1,5 @@
 import type { ProxyConfig } from "../../../config/zod-schema.proxy.js";
+import type { ManagedProxyTlsOptions } from "./proxy-tls.js";
 
 export type ActiveManagedProxyUrl = Readonly<URL>;
 
@@ -7,11 +8,18 @@ export type ActiveManagedProxyLoopbackMode = NonNullable<NonNullable<ProxyConfig
 export type ActiveManagedProxyRegistration = {
   proxyUrl: ActiveManagedProxyUrl;
   loopbackMode: ActiveManagedProxyLoopbackMode;
+  proxyTls?: ManagedProxyTlsOptions;
   stopped: boolean;
+};
+
+export type RegisterActiveManagedProxyOptions = {
+  loopbackMode?: ActiveManagedProxyLoopbackMode;
+  proxyTls?: ManagedProxyTlsOptions;
 };
 
 let activeProxyUrl: ActiveManagedProxyUrl | undefined;
 let activeProxyLoopbackMode: ActiveManagedProxyLoopbackMode | undefined;
+let activeProxyTlsOptions: ManagedProxyTlsOptions | undefined;
 let activeProxyRegistrationCount = 0;
 
 function parseActiveManagedProxyLoopbackMode(
@@ -35,9 +43,12 @@ function readInheritedActiveManagedProxyLoopbackMode(): ActiveManagedProxyLoopba
 
 export function registerActiveManagedProxyUrl(
   proxyUrl: URL,
-  loopbackMode: ActiveManagedProxyLoopbackMode = "gateway-only",
+  options: ActiveManagedProxyLoopbackMode | RegisterActiveManagedProxyOptions = "gateway-only",
 ): ActiveManagedProxyRegistration {
   const normalizedProxyUrl = new URL(proxyUrl.href);
+  const loopbackMode =
+    typeof options === "string" ? options : (options.loopbackMode ?? "gateway-only");
+  const proxyTls = typeof options === "string" ? undefined : options.proxyTls;
   if (activeProxyUrl !== undefined) {
     if (activeProxyUrl.href !== normalizedProxyUrl.href) {
       throw new Error(
@@ -51,14 +62,33 @@ export function registerActiveManagedProxyUrl(
           "stop the current proxy before changing proxy.loopbackMode.",
       );
     }
+    if (!areProxyTlsOptionsEqual(activeProxyTlsOptions, proxyTls)) {
+      throw new Error(
+        "proxy: cannot activate a managed proxy with different proxy TLS options while another proxy is active; " +
+          "stop the current proxy before changing proxy.tls.",
+      );
+    }
     activeProxyRegistrationCount += 1;
-    return { proxyUrl: activeProxyUrl, loopbackMode, stopped: false };
+    return {
+      proxyUrl: activeProxyUrl,
+      loopbackMode,
+      proxyTls: activeProxyTlsOptions,
+      stopped: false,
+    };
   }
 
   activeProxyUrl = normalizedProxyUrl;
   activeProxyLoopbackMode = loopbackMode;
+  activeProxyTlsOptions = proxyTls;
   activeProxyRegistrationCount = 1;
-  return { proxyUrl: activeProxyUrl, loopbackMode, stopped: false };
+  return { proxyUrl: activeProxyUrl, loopbackMode, proxyTls, stopped: false };
+}
+
+function areProxyTlsOptionsEqual(
+  left: ManagedProxyTlsOptions | undefined,
+  right: ManagedProxyTlsOptions | undefined,
+): boolean {
+  return left?.ca === right?.ca;
 }
 
 export function stopActiveManagedProxyRegistration(
@@ -75,6 +105,7 @@ export function stopActiveManagedProxyRegistration(
   if (activeProxyRegistrationCount === 0) {
     activeProxyUrl = undefined;
     activeProxyLoopbackMode = undefined;
+    activeProxyTlsOptions = undefined;
   }
 }
 
@@ -86,8 +117,13 @@ export function getActiveManagedProxyUrl(): ActiveManagedProxyUrl | undefined {
   return activeProxyUrl;
 }
 
+export function getActiveManagedProxyTlsOptions(): ManagedProxyTlsOptions | undefined {
+  return activeProxyTlsOptions;
+}
+
 export function _resetActiveManagedProxyStateForTests(): void {
   activeProxyUrl = undefined;
   activeProxyLoopbackMode = undefined;
+  activeProxyTlsOptions = undefined;
   activeProxyRegistrationCount = 0;
 }

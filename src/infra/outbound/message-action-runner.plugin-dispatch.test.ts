@@ -480,6 +480,7 @@ describe("runMessageAction plugin dispatch", () => {
         sessionKey: "agent:alpha:main",
         sessionId: "session-123",
         agentId: "alpha",
+        inboundEventKind: "room_event",
         toolContext: {
           currentChannelProvider: "gatewaychat",
           currentMessageId: "wamid.1",
@@ -506,6 +507,7 @@ describe("runMessageAction plugin dispatch", () => {
           sessionKey: "agent:alpha:main",
           sessionId: "session-123",
           agentId: "alpha",
+          inboundTurnKind: "room_event",
           idempotencyKey: "idem-gateway-action",
         },
         "gateway call params",

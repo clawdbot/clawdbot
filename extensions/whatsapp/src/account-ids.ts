@@ -4,7 +4,11 @@ const {
   listConfiguredAccountIds,
   listAccountIds,
   resolveDefaultAccountId: resolveDefaultWhatsAppAccountId,
-} = createAccountListHelpers("whatsapp");
+} = createAccountListHelpers("whatsapp", {
+  implicitDefaultAccount: {
+    channelKeys: ["authDir"],
+  },
+});
 
 export {
   listConfiguredAccountIds,

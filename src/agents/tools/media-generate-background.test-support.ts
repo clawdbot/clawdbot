@@ -2,6 +2,7 @@ import { expect, vi } from "vitest";
 
 type MockWithReset = {
   mockReset(): void;
+  mockResolvedValue?(value: unknown): void;
 };
 
 export const taskExecutorMocks = {
@@ -22,6 +23,8 @@ export const taskDeliveryRuntimeMocks = {
 type TaskExecutorBackgroundMocks = {
   createRunningTaskRun: MockWithReset;
   recordTaskRunProgressByRunId: MockWithReset;
+  completeTaskRunByRunId: MockWithReset;
+  failTaskRunByRunId: MockWithReset;
 };
 
 type TaskDeliveryBackgroundMocks = {
@@ -134,7 +137,16 @@ export function resetMediaBackgroundMocks({
 }: MediaBackgroundResetMocks): void {
   taskExecutorMocks.createRunningTaskRun.mockReset();
   taskExecutorMocks.recordTaskRunProgressByRunId.mockReset();
+  taskExecutorMocks.completeTaskRunByRunId.mockReset();
+  taskExecutorMocks.failTaskRunByRunId.mockReset();
   taskDeliveryRuntimeMocks.sendMessage.mockReset();
+  taskDeliveryRuntimeMocks.sendMessage.mockResolvedValue?.({
+    channel: "discord",
+    to: "channel:1",
+    via: "direct",
+    mediaUrl: null,
+    result: { messageId: "msg-1" },
+  });
   announceDeliveryMocks.deliverSubagentAnnouncement.mockReset();
 }
 

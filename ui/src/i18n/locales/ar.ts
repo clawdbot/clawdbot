@@ -1192,6 +1192,9 @@ export const ar: TranslationMap = {
       ascending: "تصاعدي",
       descending: "تنازلي",
       reset: "إعادة تعيين",
+      emptyTitle: "No scheduled jobs yet.",
+      emptyHint: "Create one from a plain-language prompt; advanced fields can wait.",
+      emptyFilteredHint: "Clear or change filters to see scheduled jobs.",
       noMatching: "لا توجد مهام مطابقة.",
       loading: "جارٍ التحميل...",
       loadMore: "تحميل المزيد من المهام",
@@ -1227,6 +1230,7 @@ export const ar: TranslationMap = {
     form: {
       editJob: "تعديل المهمة",
       newJob: "مهمة جديدة",
+      advancedJob: "Advanced job",
       updateSubtitle: "حدّث المهمة المجدولة المحددة.",
       createSubtitle: "أنشئ تنبيهًا مجدولًا أو تشغيل وكيل.",
       required: "مطلوب",

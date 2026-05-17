@@ -8,7 +8,11 @@ import {
 } from "openclaw/plugin-sdk/channel-streaming";
 import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
 import { createClaimableDedupe, type ClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
-import { isReasoningReplyPayload } from "openclaw/plugin-sdk/reply-payload";
+import {
+  buildTtsSupplementMediaPayload,
+  getReplyPayloadTtsSupplement,
+  isReasoningReplyPayload,
+} from "openclaw/plugin-sdk/reply-payload";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
@@ -330,7 +334,7 @@ type MattermostDraftPreviewDeliverParams = {
   resolvePreviewFinalText: (text?: string) => string | undefined;
   previewState: MattermostDraftPreviewState;
   logVerboseMessage: (message: string) => void;
-  deliverFinal: () => Promise<void>;
+  deliverPayload: (payload: ReplyPayload) => Promise<void>;
 };
 
 export async function deliverMattermostReplyWithDraftPreview(
@@ -353,10 +357,13 @@ export async function deliverMattermostReplyWithDraftPreview(
       },
       buildFinalEdit: (payload) => {
         const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
-        const previewFinalText = params.resolvePreviewFinalText(payload.text);
+        const ttsSupplement = getReplyPayloadTtsSupplement(payload);
+        const previewFinalText = params.resolvePreviewFinalText(
+          payload.text ?? ttsSupplement?.spokenText,
+        );
 
         if (
-          hasMedia ||
+          (hasMedia && !ttsSupplement) ||
           typeof previewFinalText !== "string" ||
           payload.isError ||
           !canFinalizeMattermostPreviewInPlace({
@@ -376,14 +383,24 @@ export async function deliverMattermostReplyWithDraftPreview(
       onPreviewFinalized: () => {
         params.previewState.finalizedViaPreviewPost = true;
       },
+      buildSupplementalPayload: (payload) =>
+        getReplyPayloadTtsSupplement(payload) ? buildTtsSupplementMediaPayload(payload) : undefined,
+      deliverSupplemental: async (payload) => {
+        await params.deliverPayload(payload);
+      },
       logPreviewEditFailure: (err) => {
         params.logVerboseMessage(
           `mattermost preview final edit failed; falling back to normal send (${String(err)})`,
         );
       },
     }),
-    deliverNormally: async () => {
-      await params.deliverFinal();
+    deliverNormally: async (payload) => {
+      const supplement = getReplyPayloadTtsSupplement(payload);
+      await params.deliverPayload(
+        supplement && !payload.text?.trim() && supplement.visibleTextAlreadyDelivered !== true
+          ? { ...payload, text: supplement.spokenText }
+          : payload,
+      );
     },
   });
 }
@@ -1711,18 +1728,18 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                 resolvePreviewFinalText,
                 previewState,
                 logVerboseMessage,
-                deliverFinal: async () => {
+                deliverPayload: async (payloadToDeliver) => {
                   const outcome = await deliverMattermostReplyPayload({
                     core,
                     cfg,
-                    payload,
+                    payload: payloadToDeliver,
                     to,
                     accountId: account.accountId,
                     agentId: route.agentId,
                     replyToId: resolveMattermostReplyRootId({
                       kind,
                       threadRootId: effectiveReplyToId,
-                      replyToId: payload.replyToId,
+                      replyToId: payloadToDeliver.replyToId,
                     }),
                     textLimit,
                     tableMode,
@@ -1730,7 +1747,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                   });
                   const deliveryLog = formatMattermostFinalDeliveryOutcomeLog({
                     outcome,
-                    payload,
+                    payload: payloadToDeliver,
                     to,
                     accountId: account.accountId,
                     agentId: route.agentId,

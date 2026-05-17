@@ -61,13 +61,33 @@ export class GatewayRequestError extends Error {
   readonly retryAfterMs?: number;
 
   constructor(error: GatewayErrorInfo) {
-    super(formatConnectErrorMessage({ message: error.message, details: error.details }));
+    super(
+      formatConnectErrorMessage({
+        message: error.message,
+        details: enrichProtocolMismatchDetails(error.message, error.details),
+      }),
+    );
     this.name = "GatewayRequestError";
     this.gatewayCode = error.code;
     this.details = error.details;
     this.retryable = error.retryable === true;
     this.retryAfterMs = error.retryAfterMs;
   }
+}
+
+function enrichProtocolMismatchDetails(message: string | undefined, details: unknown): unknown {
+  if (readConnectErrorDetailCode(details) === ConnectErrorDetailCodes.PROTOCOL_MISMATCH) {
+    return details;
+  }
+  if (!message?.toLowerCase().includes("protocol mismatch")) {
+    return details;
+  }
+  return {
+    code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
+    clientMinProtocol: MIN_CLIENT_PROTOCOL_VERSION,
+    clientMaxProtocol: PROTOCOL_VERSION,
+    ...(details && typeof details === "object" && !Array.isArray(details) ? details : {}),
+  };
 }
 
 export function resolveGatewayErrorDetailCode(

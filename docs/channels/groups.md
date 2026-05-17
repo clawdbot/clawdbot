@@ -8,6 +8,8 @@ sidebarTitle: "Groups"
 
 OpenClaw treats group chats consistently across surfaces: Discord, iMessage, Matrix, Microsoft Teams, Signal, Slack, Telegram, WhatsApp, Zalo.
 
+For always-on rooms that should provide quiet context unless the agent explicitly sends a visible message, see [Ambient room events](/channels/ambient-room-events).
+
 ## Beginner intro (2 minutes)
 
 OpenClaw "lives" on your own messaging accounts. There is no separate WhatsApp bot user. If **you** are in a group, OpenClaw can see that group and respond there.
@@ -64,7 +66,7 @@ This replaces the old pattern of forcing the model to answer `NO_REPLY` for most
 
 Typing indicators are still sent for direct group requests. Ambient always-on room events, when enabled, stay strict and quiet unless the agent calls the message tool.
 
-To submit unmentioned always-on group chatter as quiet room context instead of user requests:
+To submit unmentioned always-on group chatter as quiet room context instead of user requests, use [Ambient room events](/channels/ambient-room-events):
 
 ```json5
 {
@@ -77,6 +79,8 @@ To submit unmentioned always-on group chatter as quiet room context instead of u
 ```
 
 The default is `unmentionedInbound: "user_request"`.
+
+Mentioned messages, commands, abort requests, and DMs stay user requests.
 
 To restore legacy automatic final replies for group/channel requests:
 
@@ -367,7 +371,7 @@ Replying to a bot message counts as an implicit mention when the channel support
     - Allowlisting a group or sender does not disable mention gating; set that group's `requireMention` to `false` when all messages should trigger.
     - Automatic group chat prompt context carries the resolved silent-reply instruction every turn; workspace files should not duplicate `NO_REPLY` mechanics.
     - Groups where automatic silent replies are allowed treat clean empty or reasoning-only model turns as silent, equivalent to `NO_REPLY`. Direct chats never receive `NO_REPLY` guidance, and message-tool-only group replies stay quiet by not calling `message(action=send)`.
-    - Ambient always-on group chatter uses user-request semantics by default. Set `messages.groupChat.unmentionedInbound: "room_event"` to submit it as quiet context instead.
+    - Ambient always-on group chatter uses user-request semantics by default. Set `messages.groupChat.unmentionedInbound: "room_event"` to submit it as quiet context instead. See [Ambient room events](/channels/ambient-room-events) for setup examples.
     - Room events are not stored as fake user requests, and private assistant text from no-message-tool room events is not replayed as chat history.
     - Discord defaults live in `channels.discord.guilds."*"` (overridable per guild/channel).
     - Group history context is wrapped uniformly across channels. Mention-gated groups keep pending skipped messages; always-on groups may also retain recent processed room messages when the channel supports it. Use `messages.groupChat.historyLimit` for the global default and `channels.<channel>.historyLimit` (or `channels.<channel>.accounts.*.historyLimit`) for overrides. Set `0` to disable.

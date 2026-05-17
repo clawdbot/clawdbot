@@ -1,4 +1,7 @@
-import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
+import {
+  createAccountListHelpers,
+  hasConfiguredAccountValue,
+} from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { resolveMergedAccountConfig } from "openclaw/plugin-sdk/account-resolution";
 import {
@@ -41,7 +44,15 @@ export type ResolvedMattermostAccount = {
   blockStreamingCoalesce?: MattermostAccountConfig["blockStreamingCoalesce"];
 };
 
-const mattermostAccountHelpers = createAccountListHelpers("mattermost");
+const mattermostAccountHelpers = createAccountListHelpers("mattermost", {
+  hasImplicitDefaultAccount: (cfg) => {
+    const mattermost = cfg.channels?.mattermost;
+    return Boolean(
+      mattermost?.baseUrl?.trim() &&
+      (hasConfiguredAccountValue(mattermost.botToken) || process.env.MATTERMOST_BOT_TOKEN?.trim()),
+    );
+  },
+});
 
 export function listMattermostAccountIds(cfg: OpenClawConfig): string[] {
   return mattermostAccountHelpers.listAccountIds(cfg);

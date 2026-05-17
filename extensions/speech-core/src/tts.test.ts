@@ -211,6 +211,7 @@ async function expectTtsPayloadResult(params: {
     expect(result.audioAsVoice).toBe(params.audioAsVoice);
     expect(result.mediaUrl).toMatch(new RegExp(`voice-\\d+\\.${params.mediaExtension ?? "ogg"}$`));
     expect(result.spokenText).toBe(params.text);
+    expect(result.ttsSupplement).toEqual({ spokenText: params.text });
     expect((result as { trustedLocalMedia?: boolean }).trustedLocalMedia).toBe(true);
 
     mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
@@ -447,6 +448,7 @@ describe("speech-core native voice-note routing", () => {
       expect(result.mediaUrl).toMatch(/voice-\d+\.ogg$/);
       expect(result.audioAsVoice).toBe(true);
       expect(result.text).toBeUndefined();
+      expect(result.ttsSupplement).toBeUndefined();
       mediaDir = result.mediaUrl ? path.dirname(result.mediaUrl) : undefined;
     } finally {
       if (mediaDir) {

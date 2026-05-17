@@ -69,9 +69,10 @@ const {
   restartScheduledTask,
   resolveTaskScriptPath,
   stopScheduledTask,
+  uninstallScheduledTask,
 } = await import("./schtasks.js");
 
-function resolveStartupEntryPath(env: Record<string, string>) {
+function resolveStartupEntryPath(env: Record<string, string>, extension = "cmd") {
   return path.join(
     env.APPDATA,
     "Microsoft",
@@ -79,7 +80,7 @@ function resolveStartupEntryPath(env: Record<string, string>) {
     "Start Menu",
     "Programs",
     "Startup",
-    "OpenClaw Gateway.cmd",
+    `OpenClaw Gateway.${extension}`,
   );
 }
 
@@ -210,6 +211,27 @@ describe("Windows startup fallback", () => {
       expectStartupFallbackSpawn();
       expect(childUnref).toHaveBeenCalled();
       expect(printed).toContain("Installed Windows login item");
+    });
+  });
+
+  it("uses a hidden Startup-folder launcher when requested", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      addStartupFallbackMissingResponses([
+        { code: 5, stdout: "", stderr: "ERROR: Access is denied." },
+      ]);
+
+      const result = await installGatewayScheduledTask({
+        ...env,
+        OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1",
+      });
+
+      const startupEntryPath = resolveStartupEntryPath(env, "vbs");
+      const startupScript = await fs.readFile(startupEntryPath, "utf8");
+      expect(result.scriptPath).toBe(resolveTaskScriptPath(env));
+      expect(startupScript).toContain("WScript.Shell");
+      expect(startupScript).toContain("gateway.cmd");
+      expect(startupScript).toContain(`Run """${result.scriptPath}""", 0, False`);
+      expectStartupFallbackSpawn();
     });
   });
 
@@ -378,6 +400,40 @@ describe("Windows startup fallback", () => {
       await writeStartupFallbackEntry(env);
 
       await expect(isScheduledTaskInstalled({ env })).resolves.toBe(true);
+    });
+  });
+
+  it("keeps legacy Startup-folder cmd entries visible after hidden launcher opt-in", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      addStartupFallbackMissingResponses();
+      await writeStartupFallbackEntry(env);
+
+      await expect(
+        isScheduledTaskInstalled({
+          env: {
+            ...env,
+            OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1",
+          },
+        }),
+      ).resolves.toBe(true);
+    });
+  });
+
+  it("removes legacy Startup-folder cmd entries after hidden launcher opt-in", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      schtasksResponses.push({ code: 0, stdout: "", stderr: "" });
+      const startupEntryPath = await writeStartupFallbackEntry(env);
+      const stdout = new PassThrough();
+
+      await uninstallScheduledTask({
+        env: {
+          ...env,
+          OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1",
+        },
+        stdout,
+      });
+
+      await expect(fs.access(startupEntryPath)).rejects.toThrow();
     });
   });
 

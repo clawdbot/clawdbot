@@ -136,6 +136,123 @@ describe("normalizeToolParameterSchema", () => {
     });
   });
 
+  it("inlines nested local $ref schemas for provider-neutral tools", () => {
+    expect(
+      normalizeToolParameterSchema({
+        type: "object",
+        required: ["parent"],
+        properties: {
+          parent: {
+            $ref: "#/$defs/Parent",
+            description: "Notion parent",
+          },
+        },
+        $defs: {
+          Parent: {
+            oneOf: [
+              {
+                type: "object",
+                required: ["page_id"],
+                properties: { page_id: { type: "string" } },
+              },
+              {
+                type: "object",
+                required: ["database_id"],
+                properties: { database_id: { type: "string" } },
+              },
+            ],
+          },
+        },
+      }),
+    ).toEqual({
+      type: "object",
+      required: ["parent"],
+      properties: {
+        parent: {
+          description: "Notion parent",
+          oneOf: [
+            {
+              type: "object",
+              required: ["page_id"],
+              properties: { page_id: { type: "string" } },
+            },
+            {
+              type: "object",
+              required: ["database_id"],
+              properties: { database_id: { type: "string" } },
+            },
+          ],
+        },
+      },
+    });
+  });
+
+  it("inlines local $ref schemas that target nested JSON Pointer paths", () => {
+    expect(
+      normalizeToolParameterSchema({
+        type: "object",
+        properties: {
+          pageId: { $ref: "#/$defs/Parent/properties/page_id" },
+          legacyDatabaseId: { $ref: "#/definitions/Parent/properties/database_id" },
+        },
+        $defs: {
+          Parent: {
+            type: "object",
+            properties: {
+              page_id: { type: "string", description: "Page id" },
+            },
+          },
+        },
+        definitions: {
+          Parent: {
+            type: "object",
+            properties: {
+              database_id: { type: "string", description: "Database id" },
+            },
+          },
+        },
+      }),
+    ).toEqual({
+      type: "object",
+      properties: {
+        pageId: { type: "string", description: "Page id" },
+        legacyDatabaseId: { type: "string", description: "Database id" },
+      },
+    });
+  });
+
+  it("preserves local definitions when a local $ref cannot be resolved", () => {
+    expect(
+      normalizeToolParameterSchema({
+        type: "object",
+        properties: {
+          missing: { $ref: "#/$defs/Missing/properties/id" },
+        },
+        $defs: {
+          Present: {
+            type: "object",
+            properties: {
+              id: { type: "string" },
+            },
+          },
+        },
+      }),
+    ).toEqual({
+      type: "object",
+      properties: {
+        missing: { $ref: "#/$defs/Missing/properties/id" },
+      },
+      $defs: {
+        Present: {
+          type: "object",
+          properties: {
+            id: { type: "string" },
+          },
+        },
+      },
+    });
+  });
+
   it("cleans tuple items schemas", () => {
     const cleaned = cleanToolSchemaForGemini({
       type: "object",

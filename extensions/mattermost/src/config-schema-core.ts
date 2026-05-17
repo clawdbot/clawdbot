@@ -84,6 +84,7 @@ const MattermostStreamingProgressSchema = z
     label: z.union([z.string(), z.literal(false)]).optional(),
     labels: z.array(z.string()).optional(),
     maxLines: z.number().int().positive().optional(),
+    maxLineChars: z.number().int().positive().optional(),
     toolProgress: z.boolean().optional(),
   })
   .strict();

@@ -9,6 +9,7 @@ export type SessionState = {
   lastLongRunningWarnAgeMs?: number;
   state: SessionStateValue;
   queueDepth: number;
+  activeQueuedTurn?: boolean;
   toolCallHistory?: ToolCallRecord[];
   toolLoopWarningBuckets?: Map<string, number>;
   commandPollCounts?: Map<string, { count: number; lastPollAt: number }>;
@@ -104,6 +105,7 @@ function mergeSessionState(target: SessionState, source: SessionState): void {
   target.generation = Math.max(target.generation ?? 0, source.generation ?? 0);
   target.lastActivity = Math.max(target.lastActivity, source.lastActivity);
   target.queueDepth += source.queueDepth;
+  target.activeQueuedTurn ||= source.activeQueuedTurn;
   target.lastStuckWarnAgeMs =
     target.lastStuckWarnAgeMs === undefined || source.lastStuckWarnAgeMs === undefined
       ? undefined

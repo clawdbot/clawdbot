@@ -658,6 +658,36 @@ installed and enabled. If you need strict proof while testing, set provider or
 model `agentRuntime.id: "codex"`. A forced Codex runtime fails instead of
 falling back to PI.
 
+**OpenAI Codex runtime falls back to the API-key path:** collect a redacted
+gateway excerpt that shows the model, runtime, selected provider, and failure.
+Ask affected collaborators to run this read-only command on their OpenClaw host:
+
+```bash
+(
+  pattern='openai/gpt-5\.[45]|agentRuntime(\.id)?|harnessRuntime|Runtime: OpenAI Codex|openai-codex|resolveSelectedOpenAIPiRuntimeProvider|candidateProvider[": ]+openai|status[": ]+401|Incorrect API key|No API key|api-key path|API-key path|OAuth'
+
+  if ls /tmp/openclaw/openclaw-*.log >/dev/null 2>&1; then
+    grep -E -i -n "$pattern" /tmp/openclaw/openclaw-*.log 2>/dev/null || true
+  else
+    journalctl --user -u openclaw-gateway --since today --no-pager 2>/dev/null \
+      | grep -E -i "$pattern" || true
+  fi
+) | sed -E \
+    -e 's/(Authorization: Bearer )[A-Za-z0-9._~+\/-]+/\1[REDACTED]/Ig' \
+    -e 's/(Bearer )[A-Za-z0-9._~+\/-]+/\1[REDACTED]/Ig' \
+    -e 's/(api[_ -]?key[=: ]+)[^ ,}"]+/\1[REDACTED]/Ig' \
+    -e 's/(OPENAI_API_KEY[=: ]+)[^ ,}"]+/\1[REDACTED]/Ig' \
+    -e 's/sk-[A-Za-z0-9_-]{12,}/sk-[REDACTED]/g' \
+    -e 's/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/[EMAIL-REDACTED]/g' \
+  | tail -200
+```
+
+Useful excerpts usually include `openai/gpt-5.5` or `openai/gpt-5.4`,
+`Runtime: OpenAI Codex`, `agentRuntime.id` or `harnessRuntime`,
+`candidateProvider: "openai"`, and a `401`, `Incorrect API key`, or
+`No API key` result. A corrected run should show the `openai-codex` OAuth
+path instead of a plain OpenAI API-key failure.
+
 **Legacy `openai-codex/*` config remains:** run `openclaw doctor --fix`.
 Doctor rewrites legacy model refs to `openai/*`, removes stale session and
 whole-agent runtime pins, and preserves existing auth-profile overrides.

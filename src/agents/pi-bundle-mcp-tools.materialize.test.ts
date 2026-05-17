@@ -1,3 +1,4 @@
+import { validateToolArguments } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import {
@@ -168,5 +169,73 @@ describe("createBundleMcpToolRuntime", () => {
       "multi__mu",
       "multi__zeta",
     ]);
+  });
+
+  it("normalizes local $ref schemas from MCP tools before exposing them", async () => {
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: makeToolRuntime({
+        tools: [
+          {
+            serverName: "notion",
+            safeServerName: "notion",
+            toolName: "API-post-page",
+            description: "Create a page",
+            inputSchema: {
+              type: "object",
+              required: ["parent"],
+              properties: {
+                parent: { $ref: "#/$defs/parentRequest" },
+              },
+              $defs: {
+                parentRequest: {
+                  oneOf: [
+                    {
+                      type: "object",
+                      required: ["page_id"],
+                      properties: { page_id: { type: "string" } },
+                    },
+                    {
+                      type: "object",
+                      required: ["database_id"],
+                      properties: { database_id: { type: "string" } },
+                    },
+                  ],
+                },
+              },
+            },
+            fallbackDescription: "Create a page",
+          },
+        ],
+      }),
+    });
+
+    expect(runtime.tools[0]?.parameters).toEqual({
+      type: "object",
+      required: ["parent"],
+      properties: {
+        parent: {
+          oneOf: [
+            {
+              type: "object",
+              required: ["page_id"],
+              properties: { page_id: { type: "string" } },
+            },
+            {
+              type: "object",
+              required: ["database_id"],
+              properties: { database_id: { type: "string" } },
+            },
+          ],
+        },
+      },
+    });
+    expect(
+      validateToolArguments(runtime.tools[0], {
+        type: "toolCall",
+        id: "call-page",
+        name: "notion__API-post-page",
+        arguments: { parent: { page_id: "page-id" } },
+      }),
+    ).toEqual({ parent: { page_id: "page-id" } });
   });
 });

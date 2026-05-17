@@ -67,6 +67,18 @@ export type SubagentRunRecord = {
   pendingFinalDeliveryAttemptCount?: number;
   pendingFinalDeliveryLastError?: string | null;
   pendingFinalDeliveryPayload?: PendingFinalDeliveryPayload;
+  deliverySuspendedAt?: number;
+  deliverySuspendedReason?: "retry-limit" | "expiry";
+  deliveryDiscardedAt?: number;
+  deliveryDiscardReason?: "expired" | "pressure-pruned";
+  deliveryDiscardedPayloadSummary?: {
+    requesterSessionKey?: string;
+    childSessionKey?: string;
+    childRunId?: string;
+    endedAt?: number;
+    status?: string;
+    lastError?: string | null;
+  };
   completionAnnouncedAt?: number;
   attachmentsDir?: string;
   attachmentsRootDir?: string;

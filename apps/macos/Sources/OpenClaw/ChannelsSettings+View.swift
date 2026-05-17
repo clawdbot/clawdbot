@@ -2,34 +2,49 @@ import SwiftUI
 
 extension ChannelsSettings {
     var body: some View {
-        HStack(spacing: 0) {
-            self.sidebar
+        let channels = self.orderedChannels
+        return HStack(spacing: 0) {
+            self.sidebar(channels: channels)
             self.detail
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
-            self.store.start()
-            self.ensureSelection()
+            self.updateActiveWork(active: self.isActive)
+            self.ensureSelection(in: channels)
         }
-        .onChange(of: self.orderedChannels) { _, _ in
-            self.ensureSelection()
+        .onChange(of: self.isActive) { _, active in
+            self.updateActiveWork(active: active)
+        }
+        .onChange(of: channels) { _, newValue in
+            self.ensureSelection(in: newValue)
         }
         .onDisappear { self.store.stop() }
     }
 
-    private var sidebar: some View {
-        SettingsSidebarScroll {
+    private func updateActiveWork(active: Bool) {
+        if active {
+            self.store.start()
+        } else {
+            self.store.stop()
+        }
+    }
+
+    private func sidebar(channels: [ChannelItem]) -> some View {
+        let enabled = channels.filter { self.channelEnabled($0) }
+        let available = channels.filter { !self.channelEnabled($0) }
+
+        return SettingsSidebarScroll {
             LazyVStack(alignment: .leading, spacing: 8) {
-                if !self.enabledChannels.isEmpty {
+                if !enabled.isEmpty {
                     self.sidebarSectionHeader("Configured")
-                    ForEach(self.enabledChannels) { channel in
+                    ForEach(enabled) { channel in
                         self.sidebarRow(channel)
                     }
                 }
 
-                if !self.availableChannels.isEmpty {
+                if !available.isEmpty {
                     self.sidebarSectionHeader("Available")
-                    ForEach(self.availableChannels) { channel in
+                    ForEach(available) { channel in
                         self.sidebarRow(channel)
                     }
                 }

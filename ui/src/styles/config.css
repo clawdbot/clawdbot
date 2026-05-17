@@ -8,7 +8,7 @@
   grid-template-columns: minmax(0, 1fr);
   gap: 0;
   height: calc(100vh - 160px);
-  margin: 0 -16px -32px;
+  margin: 12px 0 0;
   border-radius: var(--radius-xl);
   border: 1px solid var(--border);
   background: var(--panel);
@@ -28,18 +28,15 @@
   }
 }
 
-/* Mobile: adjust margins to match mobile .content padding (4px 4px 16px) */
 @media (max-width: 600px) {
   .config-layout {
-    margin: 0;
-    /* safest: no negative margin cancellation on mobile */
+    margin: 8px 0 0;
   }
 }
 
-/* Small mobile: even smaller padding */
 @media (max-width: 400px) {
   .config-layout {
-    margin: 0;
+    margin: 8px 0 0;
   }
 }
 
@@ -187,8 +184,8 @@
   align-items: flex-start;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 10px 16px;
-  padding: 10px 20px;
+  gap: 12px 18px;
+  padding: 14px 24px;
   background: var(--bg-accent);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
@@ -293,8 +290,8 @@
 .config-top-tabs {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 20px;
+  gap: 12px;
+  padding: 14px 24px 12px;
   background: var(--bg-accent);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
@@ -315,7 +312,7 @@
 .config-top-tabs__scroller {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   min-width: 0;
   flex: 1 1 auto;
   flex-wrap: nowrap;
@@ -331,7 +328,8 @@
   flex: 0 0 auto;
   border: 1px solid var(--border);
   border-radius: var(--radius-full);
-  padding: 5px 12px;
+  min-height: 36px;
+  padding: 8px 14px;
   background: var(--bg-elevated);
   color: var(--muted);
   font-size: 11.5px;
@@ -1957,7 +1955,7 @@
   .config-layout {
     height: calc(100vh - 100px);
     height: calc(100dvh - 100px);
-    margin: 0 -8px -16px;
+    margin: 8px 0 0;
     border-radius: var(--radius-md);
   }
 
@@ -2059,7 +2057,7 @@
 
 @media (max-width: 900px) {
   .config-actions {
-    padding: 10px 14px;
+    padding: 12px 16px;
   }
 
   .config-actions__left,

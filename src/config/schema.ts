@@ -25,6 +25,9 @@ type JsonSchemaObject = JsonSchemaNode & {
   required?: string[];
   additionalProperties?: JsonSchemaObject | boolean;
   items?: JsonSchemaObject | JsonSchemaObject[];
+  anyOf?: JsonSchemaObject[];
+  oneOf?: JsonSchemaObject[];
+  allOf?: JsonSchemaObject[];
 };
 
 const asJsonSchemaObject = (value: unknown): JsonSchemaObject | null =>
@@ -62,6 +65,8 @@ const LOOKUP_SCHEMA_BOOLEAN_KEYS = new Set([
   "writeOnly",
 ]);
 const MAX_LOOKUP_PATH_SEGMENTS = 32;
+const LOOKUP_SCHEMA_COMPOSITION_KEYS = ["anyOf", "oneOf", "allOf"] as const;
+const LOOKUP_SCHEMA_NESTED_FORM_DEPTH = 4;
 
 function isObjectSchema(schema: JsonSchemaObject): boolean {
   const type = schema.type;
@@ -655,7 +660,7 @@ function resolveLookupChildSchema(
   return null;
 }
 
-function stripSchemaForLookup(schema: JsonSchemaObject): JsonSchemaNode {
+function stripSchemaForLookup(schema: JsonSchemaObject, nestedFormDepth = 0): JsonSchemaNode {
   const next: JsonSchemaNode = {};
 
   for (const [key, value] of Object.entries(schema)) {
@@ -700,6 +705,41 @@ function stripSchemaForLookup(schema: JsonSchemaObject): JsonSchemaNode {
         typeof value === "boolean")
     ) {
       next[key] = value;
+    }
+  }
+
+  if (
+    schema.properties &&
+    ((nestedFormDepth > 0 && nestedFormDepth <= LOOKUP_SCHEMA_NESTED_FORM_DEPTH) ||
+      (schema.additionalProperties && typeof schema.additionalProperties === "object"))
+  ) {
+    next.properties = Object.fromEntries(
+      Object.entries(schema.properties).map(([key, child]) => [
+        key,
+        stripSchemaForLookup(child, nestedFormDepth + 1),
+      ]),
+    );
+  }
+  if (schema.additionalProperties && typeof schema.additionalProperties === "object") {
+    next.additionalProperties = stripSchemaForLookup(
+      schema.additionalProperties,
+      nestedFormDepth + 1,
+    );
+  }
+  if (Array.isArray(schema.items)) {
+    next.items = schema.items.map((item) => stripSchemaForLookup(item, nestedFormDepth + 1));
+  } else if (schema.items && typeof schema.items === "object") {
+    next.items = stripSchemaForLookup(schema.items, nestedFormDepth + 1);
+  }
+  if (nestedFormDepth <= LOOKUP_SCHEMA_NESTED_FORM_DEPTH) {
+    for (const key of LOOKUP_SCHEMA_COMPOSITION_KEYS) {
+      const variants = schema[key];
+      if (!Array.isArray(variants)) {
+        continue;
+      }
+      next[key] = variants
+        .filter((variant) => variant && typeof variant === "object")
+        .map((variant) => stripSchemaForLookup(variant, nestedFormDepth + 1));
     }
   }
 
@@ -749,12 +789,13 @@ export function lookupConfigSchema(
   response: ConfigSchemaResponse,
   path: string,
 ): ConfigSchemaLookupResult | null {
+  const wantsRoot = path.trim() === ".";
   const normalizedPath = normalizeLookupPath(path);
-  if (!normalizedPath) {
+  if (!normalizedPath && !wantsRoot) {
     return null;
   }
   const parts = splitLookupPath(normalizedPath);
-  if (parts.length === 0 || parts.length > MAX_LOOKUP_PATH_SEGMENTS) {
+  if ((!wantsRoot && parts.length === 0) || parts.length > MAX_LOOKUP_PATH_SEGMENTS) {
     return null;
   }
 
@@ -772,10 +813,10 @@ export function lookupConfigSchema(
 
   const resolvedHint = resolveUiHintMatch(response.uiHints, normalizedPath);
   return {
-    path: normalizedPath,
+    path: wantsRoot ? "." : normalizedPath,
     schema: stripSchemaForLookup(current),
     hint: resolvedHint?.hint,
     hintPath: resolvedHint?.path,
-    children: buildLookupChildren(current, normalizedPath, response.uiHints),
+    children: buildLookupChildren(current, wantsRoot ? "" : normalizedPath, response.uiHints),
   };
 }

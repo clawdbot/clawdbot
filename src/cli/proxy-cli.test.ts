@@ -24,6 +24,7 @@ describe("proxy cli", () => {
     expect(validate?.options.map((option) => option.long)).toEqual([
       "--json",
       "--proxy-url",
+      "--proxy-ca-file",
       "--allowed-url",
       "--denied-url",
       "--apns-reachable",

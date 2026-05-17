@@ -53,6 +53,10 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     return mockedLog.warn.mock.calls.map(([message]) => String(message));
   }
 
+  function infoMessages(): string[] {
+    return mockedLog.info.mock.calls.map(([message]) => String(message));
+  }
+
   function expectWarnMessageWith(text: string): void {
     expect(warnMessages().join("\n")).toContain(text);
   }
@@ -349,6 +353,12 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
       },
     ]);
     expect(result.meta.livenessState).toBe("blocked");
+    expect(infoMessages().join("\n")).toContain(
+      "strict-agentic execution contract active: runId=run-strict-agentic-auto-activated",
+    );
+    expect(infoMessages().join("\n")).toContain(
+      "provider=openai-codex/gpt-5.4 harness=codex configured=unspecified",
+    );
   });
 
   it("respects explicit default contract opt-out on GPT-5 openai runs", async () => {

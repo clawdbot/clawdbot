@@ -1207,6 +1207,9 @@ export const id: TranslationMap = {
       ascending: "Naik",
       descending: "Turun",
       reset: "Atur Ulang",
+      emptyTitle: "No scheduled jobs yet.",
+      emptyHint: "Create one from a plain-language prompt; advanced fields can wait.",
+      emptyFilteredHint: "Clear or change filters to see scheduled jobs.",
       noMatching: "Tidak ada tugas yang cocok.",
       loading: "Memuat...",
       loadMore: "Muat lebih banyak tugas",
@@ -1242,6 +1245,7 @@ export const id: TranslationMap = {
     form: {
       editJob: "Edit Tugas",
       newJob: "Tugas Baru",
+      advancedJob: "Advanced job",
       updateSubtitle: "Perbarui tugas terjadwal yang dipilih.",
       createSubtitle: "Buat bangun terjadwal atau proses agen.",
       required: "Wajib",

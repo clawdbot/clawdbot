@@ -107,19 +107,19 @@ runtime before the provider request is made.
 
 This table maps common inference tasks to the corresponding infer command.
 
-| Task                         | Command                                                                                       | Notes                                                 |
-| ---------------------------- | --------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| Run a text/model prompt      | `openclaw infer model run --prompt "..." --json`                                              | Uses the normal local path by default                 |
-| Run a model prompt on images | `openclaw infer model run --prompt "Describe this" --file ./image.png --model provider/model` | Repeat `--file` for multiple image inputs             |
-| Generate an image            | `openclaw infer image generate --prompt "..." --json`                                         | Use `image edit` when starting from an existing file  |
-| Describe an image file       | `openclaw infer image describe --file ./image.png --prompt "..." --json`                      | `--model` must be an image-capable `<provider/model>` |
-| Transcribe audio             | `openclaw infer audio transcribe --file ./memo.m4a --json`                                    | `--model` must be `<provider/model>`                  |
-| Synthesize speech            | `openclaw infer tts convert --text "..." --output ./speech.mp3 --json`                        | `tts status` is gateway-oriented                      |
-| Generate a video             | `openclaw infer video generate --prompt "..." --json`                                         | Supports provider hints such as `--resolution`        |
-| Describe a video file        | `openclaw infer video describe --file ./clip.mp4 --json`                                      | `--model` must be `<provider/model>`                  |
-| Search the web               | `openclaw infer web search --query "..." --json`                                              |                                                       |
-| Fetch a web page             | `openclaw infer web fetch --url https://example.com --json`                                   |                                                       |
-| Create embeddings            | `openclaw infer embedding create --text "..." --json`                                         |                                                       |
+| Task                          | Command                                                                                       | Notes                                                 |
+| ----------------------------- | --------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| Run a text/model prompt       | `openclaw infer model run --prompt "..." --json`                                              | Uses the normal local path by default                 |
+| Run a model prompt on images  | `openclaw infer model run --prompt "Describe this" --file ./image.png --model provider/model` | Repeat `--file` for multiple image inputs             |
+| Generate an image             | `openclaw infer image generate --prompt "..." --json`                                         | Use `image edit` when starting from an existing file  |
+| Describe an image file or URL | `openclaw infer image describe --file ./image.png --prompt "..." --json`                      | `--model` must be an image-capable `<provider/model>` |
+| Transcribe audio              | `openclaw infer audio transcribe --file ./memo.m4a --json`                                    | `--model` must be `<provider/model>`                  |
+| Synthesize speech             | `openclaw infer tts convert --text "..." --output ./speech.mp3 --json`                        | `tts status` is gateway-oriented                      |
+| Generate a video              | `openclaw infer video generate --prompt "..." --json`                                         | Supports provider hints such as `--resolution`        |
+| Describe a video file         | `openclaw infer video describe --file ./clip.mp4 --json`                                      | `--model` must be `<provider/model>`                  |
+| Search the web                | `openclaw infer web search --query "..." --json`                                              |                                                       |
+| Fetch a web page              | `openclaw infer web fetch --url https://example.com --json`                                   |                                                       |
+| Create embeddings             | `openclaw infer embedding create --text "..." --json`                                         |                                                       |
 
 ## Behavior
 
@@ -128,6 +128,7 @@ This table maps common inference tasks to the corresponding infer command.
 - Use `--provider` or `--model provider/model` when a specific backend is required.
 - Use `model run --thinking <level>` to pass a one-shot thinking/reasoning level (`off`, `minimal`, `low`, `medium`, `high`, `adaptive`, `xhigh`, or `max`) while keeping the run raw.
 - For `image describe`, `audio transcribe`, and `video describe`, `--model` must use the form `<provider/model>`.
+- For `image describe`, `--file` accepts local paths and HTTP(S) image URLs. Remote URLs use the normal media-fetch SSRF policy.
 - For `image describe`, an explicit `--model` runs that provider/model directly. The model must be image-capable in the model catalog or provider config. `codex/<model>` runs a bounded Codex app-server image-understanding turn; `openai-codex/<model>` uses the OpenAI Codex OAuth provider path.
 - Stateless execution commands default to local.
 - Gateway-managed state commands default to gateway.
@@ -192,6 +193,7 @@ openclaw infer image generate --prompt "slow image backend" --timeout-ms 180000 
 openclaw infer image edit --file ./logo.png --model openai/gpt-image-1.5 --output-format png --background transparent --prompt "keep the logo, remove the background" --json
 openclaw infer image edit --file ./poster.png --prompt "make this a vertical story ad" --size 2160x3840 --aspect-ratio 9:16 --resolution 4K --json
 openclaw infer image describe --file ./photo.jpg --json
+openclaw infer image describe --file https://example.com/photo.png --json
 openclaw infer image describe --file ./receipt.jpg --prompt "Extract the merchant, date, and total" --json
 openclaw infer image describe-many --file ./before.png --file ./after.png --prompt "Compare the screenshots and list visible UI changes" --json
 openclaw infer image describe --file ./ui-screenshot.png --model openai/gpt-4.1-mini --json

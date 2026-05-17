@@ -70,6 +70,18 @@ describe("resolveOpenAICompletionsCompatDefaults", () => {
       }).supportsUsageInStreaming,
     ).toBe(false);
   });
+
+  it("uses Together reasoning payload format for Together-family providers", () => {
+    const defaults = resolveOpenAICompletionsCompatDefaults({
+      provider: "together",
+      endpointClass: "custom",
+      knownProviderFamily: "together",
+    });
+
+    expect(defaults.thinkingFormat).toBe("together");
+    expect(defaults.supportsReasoningEffort).toBe(false);
+    expect(defaults.maxTokensField).toBe("max_tokens");
+  });
 });
 
 describe("detectOpenAICompletionsCompat", () => {

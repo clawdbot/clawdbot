@@ -36,7 +36,12 @@ const JsonRecordSchema = z.record(z.string(), z.unknown());
 const {
   listAccountIds: listGoogleChatAccountIds,
   resolveDefaultAccountId: resolveDefaultGoogleChatAccountId,
-} = createAccountListHelpers("googlechat");
+} = createAccountListHelpers("googlechat", {
+  implicitDefaultAccount: {
+    channelKeys: ["serviceAccount", "serviceAccountRef", "serviceAccountFile"],
+    envVars: [ENV_SERVICE_ACCOUNT, ENV_SERVICE_ACCOUNT_FILE],
+  },
+});
 export { listGoogleChatAccountIds, resolveDefaultGoogleChatAccountId };
 
 function mergeGoogleChatAccountConfig(

@@ -89,6 +89,15 @@ const {
 
 vi.mock("node:net", () => ({
   connect: netConnectSpy,
+  isIP: (host: string) => {
+    if (host === "127.0.0.1") {
+      return 4;
+    }
+    if (host === "::1") {
+      return 6;
+    }
+    return 0;
+  },
 }));
 
 vi.mock("node:tls", () => ({
@@ -155,6 +164,7 @@ describe("openHttpConnectTunnel", () => {
 
     await openHttpConnectTunnel({
       proxyUrl: new URL("https://proxy.example:8443"),
+      proxyTls: { ca: "proxy-ca" },
       targetHost: "api.sandbox.push.apple.com",
       targetPort: 443,
     });
@@ -164,11 +174,34 @@ describe("openHttpConnectTunnel", () => {
       port: 8443,
       servername: "proxy.example",
       ALPNProtocols: ["http/1.1"],
+      ca: "proxy-ca",
     });
     expect(tlsConnectSpy).toHaveBeenLastCalledWith({
       socket: proxySocket,
       servername: "api.sandbox.push.apple.com",
       ALPNProtocols: ["h2"],
+    });
+  });
+
+  it("omits SNI for HTTPS proxy IP literals", async () => {
+    const proxySocket = new FakeSocket("HTTP/1.1 200 Connection Established\r\n\r\n");
+    const targetTlsSocket = new FakeSocket();
+    setNextProxyTlsSocket(proxySocket);
+    setNextTargetTlsSocket(targetTlsSocket);
+    const { openHttpConnectTunnel } = await import("./http-connect-tunnel.js");
+
+    await openHttpConnectTunnel({
+      proxyUrl: new URL("https://127.0.0.1:8443"),
+      proxyTls: { ca: "proxy-ca" },
+      targetHost: "api.sandbox.push.apple.com",
+      targetPort: 443,
+    });
+
+    expect(requireFirstTlsConnectOptions()).toEqual({
+      host: "127.0.0.1",
+      port: 8443,
+      ALPNProtocols: ["http/1.1"],
+      ca: "proxy-ca",
     });
   });
 

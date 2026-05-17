@@ -1969,6 +1969,13 @@ export async function runCodexAppServerAttempt(
         signal: runAbortController.signal,
       });
       const turnStartErrorMessage = usageLimitError?.message ?? formatErrorMessage(turnStartError);
+      if (isInvalidCodexImagePayloadError(turnStartErrorMessage)) {
+        await clearCodexBindingAfterInvalidImagePayload(activeSessionFile, {
+          phase: "turn_start",
+          threadId: thread.threadId,
+          error: turnStartErrorMessage,
+        });
+      }
       emitCodexAppServerEvent(params, {
         stream: "codex_app_server.lifecycle",
         data: { phase: "turn_start_failed", error: turnStartErrorMessage },
@@ -2055,7 +2062,9 @@ export async function runCodexAppServerAttempt(
   });
   projector = new CodexAppServerEventProjector(params, thread.threadId, activeTurnId, {
     nativePostToolUseRelayEnabled:
-      nativeHookRelay?.allowedEvents.includes("post_tool_use") === true,
+      nativeHookRelay?.allowedEvents.includes("post_tool_use") === true &&
+      nativeHookRelay.shouldRelayEvent("post_tool_use"),
+    trajectoryRecorder,
   });
   if (
     isTerminalTurnStatus(turn.turn.status) ||
@@ -2170,6 +2179,14 @@ export async function runCodexAppServerAttempt(
         : finalPromptError
           ? formatErrorMessage(finalPromptError)
           : undefined;
+    if (isInvalidCodexImagePayloadError(finalPromptErrorMessage)) {
+      await clearCodexBindingAfterInvalidImagePayload(activeSessionFile, {
+        phase: "turn_completed",
+        threadId: thread.threadId,
+        turnId: activeTurnId,
+        error: finalPromptErrorMessage,
+      });
+    }
     if (shouldRefreshCodexRateLimitsForUsageLimitMessage(finalPromptErrorMessage)) {
       finalPromptError = await refreshCodexUsageLimitErrorMessage({
         client,
@@ -3181,6 +3198,38 @@ function readCodexErrorPayload(error: unknown): {
   };
 }
 
+function isInvalidCodexImagePayloadError(message: unknown): boolean {
+  if (typeof message !== "string" || !message.trim()) {
+    return false;
+  }
+  const normalizedMessage = message.replace(/[_-]+/gu, " ");
+  return (
+    /\b(?:invalid|malformed)\b[\s\S]{0,120}\b(?:image|image url|base64)\b/iu.test(
+      normalizedMessage,
+    ) ||
+    /\b(?:image|image url|base64)\b[\s\S]{0,120}\b(?:invalid|malformed)\b/iu.test(normalizedMessage)
+  );
+}
+
+async function clearCodexBindingAfterInvalidImagePayload(
+  sessionFile: string,
+  fields: { phase: string; threadId?: string; turnId?: string; error?: string },
+): Promise<void> {
+  const currentBinding = await readCodexAppServerBinding(sessionFile);
+  if (fields.threadId && currentBinding && currentBinding.threadId !== fields.threadId) {
+    embeddedAgentLog.warn(
+      "codex app-server image payload error detected for unbound thread; preserving thread binding",
+      { ...fields, boundThreadId: currentBinding.threadId },
+    );
+    return;
+  }
+  embeddedAgentLog.warn(
+    "codex app-server image payload error detected; clearing thread binding",
+    fields,
+  );
+  await clearCodexAppServerBinding(sessionFile);
+}
+
 function describeNotificationActivity(
   notification: CodexServerNotification,
 ): Record<string, unknown> | undefined {
@@ -3881,6 +3930,7 @@ export const __testing = {
   filterCodexDynamicToolsForAllowlist,
   filterToolsForVisionInputs,
   handleDynamicToolCallWithTimeout,
+  isInvalidCodexImagePayloadError,
   remapCodexContextFilePath,
   resolveDynamicToolCallTimeoutMs,
   restrictCodexAppServerSandboxForOpenClawSandbox,

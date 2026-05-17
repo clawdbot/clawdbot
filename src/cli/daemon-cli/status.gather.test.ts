@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StaleOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
+import type { PortConnections } from "../../infra/ports.js";
 import type { GatewayRestartHandoff } from "../../infra/restart-handoff.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { VERSION } from "../../version.js";
@@ -38,6 +39,12 @@ const inspectPortUsage = vi.fn(async (port: number) => ({
   listeners: [],
   hints: [],
 }));
+const inspectPortConnections = vi.fn<(port: number) => Promise<PortConnections>>(
+  async (port: number) => ({
+    port,
+    connections: [],
+  }),
+);
 const readLastGatewayErrorLine = vi.fn(async (_env?: NodeJS.ProcessEnv) => null);
 const readGatewayRestartHandoffSync = vi.fn<
   (_env?: NodeJS.ProcessEnv) => GatewayRestartHandoff | null
@@ -166,6 +173,7 @@ vi.mock("../../gateway/net.js", () => ({
 }));
 
 vi.mock("../../infra/ports.js", () => ({
+  inspectPortConnections: (port: number) => inspectPortConnections(port),
   inspectPortUsage: (port: number) => inspectPortUsage(port),
   formatPortDiagnostics: () => [],
 }));
@@ -222,6 +230,7 @@ describe("gatherDaemonStatus", () => {
     findStaleOpenClawUpdateLaunchdJobs.mockResolvedValue([]);
     loadGatewayTlsRuntime.mockClear();
     inspectGatewayRestart.mockClear();
+    inspectPortConnections.mockClear();
     readGatewayRestartHandoffSync.mockClear();
     readConfigFileSnapshotCalls.mockClear();
     loadConfigCalls.mockClear();
@@ -484,6 +493,59 @@ describe("gatherDaemonStatus", () => {
 
     expect(readGatewayRestartHandoffSync).not.toHaveBeenCalled();
     expect(findStaleOpenClawUpdateLaunchdJobs).not.toHaveBeenCalled();
+    expect(inspectPortConnections).not.toHaveBeenCalled();
+  });
+
+  it("surfaces established gateway connections during deep status", async () => {
+    inspectPortConnections.mockResolvedValueOnce({
+      port: 19001,
+      connections: [
+        {
+          pid: 4242,
+          ppid: 1,
+          command: "node",
+          commandLine: "node /tmp/newer-openclaw/dist/index.js logs --follow",
+          address: "TCP 127.0.0.1:50123->127.0.0.1:19001 (ESTABLISHED)",
+          direction: "client",
+        },
+      ],
+    });
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: false,
+      deep: true,
+    });
+
+    expect(inspectPortConnections).toHaveBeenCalledWith(19001);
+    expect(status.connections?.established).toEqual([
+      {
+        pid: 4242,
+        ppid: 1,
+        command: "node",
+        commandLine: "node /tmp/newer-openclaw/dist/index.js logs --follow",
+        address: "TCP 127.0.0.1:50123->127.0.0.1:19001 (ESTABLISHED)",
+        direction: "client",
+      },
+    ]);
+  });
+
+  it("skips established gateway connection scans for remote gateway status", async () => {
+    daemonLoadedConfig = {
+      gateway: {
+        mode: "remote",
+        remote: { url: "wss://gateway.example" },
+      },
+    };
+
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: false,
+      deep: true,
+    });
+
+    expect(inspectPortConnections).not.toHaveBeenCalled();
+    expect(status.connections).toBeUndefined();
   });
 
   it("uses the fast config path for plain same-file status reads", async () => {

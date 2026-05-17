@@ -1,8 +1,10 @@
 import * as net from "node:net";
 import * as tls from "node:tls";
+import type { ManagedProxyTlsOptions } from "./proxy/proxy-tls.js";
 
 export type HttpConnectTunnelParams = {
   proxyUrl: URL;
+  proxyTls?: ManagedProxyTlsOptions;
   targetHost: string;
   targetPort: number;
   timeoutMs?: number;
@@ -107,8 +109,9 @@ function isSuccessfulConnectStatusLine(statusLine: string): boolean {
   return /^HTTP\/1\.[01] 2\d\d\b/.test(statusLine);
 }
 
-function connectToProxy(proxy: URL): ProxySocket {
+function connectToProxy(proxy: URL, proxyTls: ManagedProxyTlsOptions | undefined): ProxySocket {
   const proxyHost = resolveProxyHost(proxy);
+  const proxyServername = net.isIP(proxyHost) === 0 ? proxyHost : undefined;
   const connectOptions = {
     host: proxyHost,
     port: resolveProxyPort(proxy),
@@ -116,8 +119,9 @@ function connectToProxy(proxy: URL): ProxySocket {
   if (proxy.protocol === "https:") {
     return tls.connect({
       ...connectOptions,
-      servername: proxyHost,
+      ...(proxyServername ? { servername: proxyServername } : {}),
       ALPNProtocols: ["http/1.1"],
+      ...(proxyTls?.ca ? { ca: proxyTls.ca } : {}),
     });
   }
   return net.connect(connectOptions);
@@ -140,7 +144,7 @@ class HttpConnectTunnelAttempt {
   public start(): void {
     try {
       this.startTimeout();
-      this.proxySocket = connectToProxy(this.proxy);
+      this.proxySocket = connectToProxy(this.proxy, this.params.proxyTls);
       this.proxySocket.once(
         this.proxy.protocol === "https:" ? "secureConnect" : "connect",
         this.onProxyConnected,

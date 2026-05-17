@@ -2,8 +2,8 @@
 // swiftlint:disable file_length
 import Foundation
 
-public let GATEWAY_PROTOCOL_VERSION = 5
-public let GATEWAY_MIN_PROTOCOL_VERSION = 5
+public let GATEWAY_PROTOCOL_VERSION = 4
+public let GATEWAY_MIN_PROTOCOL_VERSION = 4
 
 private struct GatewayAnyCodingKey: CodingKey, Hashable {
     let stringValue: String
@@ -541,7 +541,7 @@ public struct MessageActionParams: Codable, Sendable {
     public let senderisowner: Bool?
     public let sessionkey: String?
     public let sessionid: String?
-    public let inboundeventkind: String?
+    public let inboundturnkind: String?
     public let agentid: String?
     public let toolcontext: [String: AnyCodable]?
     public let idempotencykey: String
@@ -555,7 +555,7 @@ public struct MessageActionParams: Codable, Sendable {
         senderisowner: Bool?,
         sessionkey: String?,
         sessionid: String?,
-        inboundeventkind: String? = nil,
+        inboundturnkind: String? = nil,
         agentid: String?,
         toolcontext: [String: AnyCodable]?,
         idempotencykey: String)
@@ -568,7 +568,7 @@ public struct MessageActionParams: Codable, Sendable {
         self.senderisowner = senderisowner
         self.sessionkey = sessionkey
         self.sessionid = sessionid
-        self.inboundeventkind = inboundeventkind
+        self.inboundturnkind = inboundturnkind
         self.agentid = agentid
         self.toolcontext = toolcontext
         self.idempotencykey = idempotencykey
@@ -583,7 +583,7 @@ public struct MessageActionParams: Codable, Sendable {
         case senderisowner = "senderIsOwner"
         case sessionkey = "sessionKey"
         case sessionid = "sessionId"
-        case inboundeventkind = "inboundEventKind"
+        case inboundturnkind = "inboundTurnKind"
         case agentid = "agentId"
         case toolcontext = "toolContext"
         case idempotencykey = "idempotencyKey"

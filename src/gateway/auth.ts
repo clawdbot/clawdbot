@@ -125,13 +125,14 @@ export function hasForwardedRequestHeaders(req?: IncomingMessage): boolean {
   if (!req) {
     return false;
   }
+  const headers = req.headers ?? {};
 
   return Boolean(
-    req.headers?.forwarded ||
-    req.headers?.["x-forwarded-for"] ||
-    req.headers?.["x-forwarded-proto"] ||
-    req.headers?.["x-real-ip"] ||
-    req.headers?.["x-forwarded-host"],
+    headers.forwarded ||
+    headers["x-real-ip"] ||
+    Object.keys(headers).some((header) =>
+      normalizeLowercaseStringOrEmpty(header).startsWith("x-forwarded-"),
+    ),
   );
 }
 
@@ -476,6 +477,26 @@ async function authorizeGatewayConnectCore(
         return originResult;
       }
       return { ok: true, method: "trusted-proxy", user: result.user };
+    }
+    if (localDirect && auth.password && connectAuth?.password) {
+      if (limiter) {
+        const rlCheck: RateLimitCheckResult = limiter.check(ip, rateLimitScope);
+        if (!rlCheck.allowed) {
+          return {
+            ok: false,
+            reason: "rate_limited",
+            rateLimited: true,
+            retryAfterMs: rlCheck.retryAfterMs,
+          };
+        }
+      }
+      return authorizePasswordAuth({
+        authPassword: auth.password,
+        connectPassword: connectAuth.password,
+        limiter,
+        ip,
+        rateLimitScope,
+      });
     }
     return { ok: false, reason: result.reason };
   }

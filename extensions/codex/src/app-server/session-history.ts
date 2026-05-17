@@ -6,6 +6,7 @@ import {
   parseSessionEntries,
 } from "@earendil-works/pi-coding-agent";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { sanitizeCodexHistoryImagePayloads } from "./image-payload-sanitizer.js";
 
 function isMissingFileError(error: unknown): boolean {
   return Boolean(
@@ -30,7 +31,10 @@ export async function readCodexMirroredSessionHistoryMessages(
     const sessionEntries = entries.filter(
       (entry): entry is SessionEntry => entry.type !== "session",
     );
-    return buildSessionContext(sessionEntries).messages;
+    return sanitizeCodexHistoryImagePayloads(
+      buildSessionContext(sessionEntries).messages,
+      "codex mirrored history",
+    );
   } catch (error) {
     if (isMissingFileError(error)) {
       return [];

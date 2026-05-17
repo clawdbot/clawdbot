@@ -15,7 +15,11 @@ export type ResolvedIMessageAccount = {
   configured: boolean;
 };
 
-const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("imessage");
+const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("imessage", {
+  implicitDefaultAccount: {
+    channelKeys: ["cliPath", "dbPath"],
+  },
+});
 export const listIMessageAccountIds = listAccountIds;
 export const resolveDefaultIMessageAccountId = resolveDefaultAccountId;
 

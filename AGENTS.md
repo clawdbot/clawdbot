@@ -43,6 +43,7 @@ Skills own workflows; root owns hard policy and routing.
 - Do not fix repeated request-time discovery with scattered caches. Move the canonical fact earlier; reuse prepared runtime objects; delete duplicate lookup branches.
 - Inline code comments: brief notes for tricky, bug-prone, or previously buggy logic.
 - Gateway protocol changes: additive first; incompatible needs versioning/docs/client follow-through.
+- Protocol version bumps: explicit owner confirmation only; never automatic/generated.
 - Config contract: exported types, schema/help, metadata, baselines, docs aligned. Retired public keys stay retired; compat in raw migration/doctor only.
 - Prompt cache: deterministic ordering for maps/sets/registries/plugin lists/files/network results before model/tool payloads. Preserve old transcript bytes when possible.
 

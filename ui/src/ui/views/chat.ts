@@ -1003,6 +1003,7 @@ export function renderChat(props: ChatProps) {
   const requestUpdate = props.onRequestUpdate ?? (() => {});
   const splitRatio = props.splitRatio ?? 0.6;
   const sidebarOpen = Boolean(props.sidebarOpen && props.onCloseSidebar);
+  const displayStream = props.stream ?? (canAbort ? "" : null);
 
   const handleCodeBlockCopy = (e: Event) => {
     const btn = (e.target as HTMLElement).closest(".code-block-copy");
@@ -1024,7 +1025,7 @@ export function renderChat(props: ChatProps) {
     messages: props.messages,
     toolMessages: props.toolMessages,
     streamSegments: props.streamSegments,
-    stream: props.stream,
+    stream: displayStream,
     streamStartedAt: props.streamStartedAt,
     showToolCalls: props.showToolCalls,
     searchOpen: vs.searchOpen,

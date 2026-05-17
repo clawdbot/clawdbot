@@ -287,7 +287,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       senderIsOwner?: boolean;
       sessionKey?: string;
       sessionId?: string;
-      inboundEventKind?: "user_request" | "room_event";
+      inboundTurnKind?: "user_request" | "room_event";
       agentId?: string;
       toolContext?: {
         currentChannelId?: string;
@@ -365,7 +365,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           senderIsOwner,
           sessionKey: normalizeOptionalString(request.sessionKey) ?? undefined,
           sessionId: normalizeOptionalString(request.sessionId) ?? undefined,
-          inboundEventKind: request.inboundEventKind,
+          inboundEventKind: request.inboundTurnKind,
           agentId: normalizeOptionalString(request.agentId) ?? undefined,
           mediaLocalRoots: getAgentScopedMediaLocalRoots(
             cfg,

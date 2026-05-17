@@ -13,6 +13,7 @@ function runAllowlistWarningStep(params: {
   label: string;
   suppressUnavailableCoreToolWarning?: boolean;
   suppressUnavailableCoreToolWarningAllowlist?: string[];
+  unavailableCoreToolReason?: string;
 }) {
   const warnings: string[] = [];
   const tools = [{ name: "exec" }] as unknown as DummyTool[];
@@ -28,6 +29,7 @@ function runAllowlistWarningStep(params: {
         suppressUnavailableCoreToolWarning: params.suppressUnavailableCoreToolWarning,
         suppressUnavailableCoreToolWarningAllowlist:
           params.suppressUnavailableCoreToolWarningAllowlist,
+        unavailableCoreToolReason: params.unavailableCoreToolReason,
       },
     ],
   });
@@ -104,6 +106,18 @@ describe("tool-policy-pipeline", () => {
     });
     expect(warnings).toEqual([
       "tools: tools.allow allowlist contains unknown entries (apply_patch). These entries are shipped core tools but unavailable in the current runtime/provider/model/config.",
+    ]);
+  });
+
+  test("includes the active reason for unavailable core tool warnings", () => {
+    const warnings = runAllowlistWarningStep({
+      allow: ["apply_patch", "wat"],
+      label: "tools.allow",
+      unavailableCoreToolReason:
+        "memory-triggered compaction runs expose only read and append-only write",
+    });
+    expect(warnings).toEqual([
+      "tools: tools.allow allowlist contains unknown entries (apply_patch, wat). Some entries are shipped core tools but unavailable here: memory-triggered compaction runs expose only read and append-only write; other entries won't match any tool unless the plugin is enabled.",
     ]);
   });
 

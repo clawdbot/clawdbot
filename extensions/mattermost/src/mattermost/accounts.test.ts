@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../runtime-api.js";
 import {
+  listMattermostAccountIds,
   resolveDefaultMattermostAccountId,
   resolveMattermostAccount,
   resolveMattermostReplyToMode,
@@ -51,6 +52,27 @@ describe("resolveDefaultMattermostAccountId", () => {
       },
     };
 
+    expect(resolveDefaultMattermostAccountId(cfg)).toBe("default");
+  });
+
+  it("keeps the implicit default account when named accounts are added to top-level credentials", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          botToken: "tok-default",
+          baseUrl: "https://chat.example.com",
+          accounts: {
+            work: {
+              enabled: false,
+              botToken: "tok-work",
+              baseUrl: "https://work.example.com",
+            },
+          },
+        },
+      },
+    };
+
+    expect(listMattermostAccountIds(cfg)).toEqual(["default", "work"]);
     expect(resolveDefaultMattermostAccountId(cfg)).toBe("default");
   });
 });

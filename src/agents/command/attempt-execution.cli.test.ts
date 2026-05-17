@@ -187,6 +187,39 @@ describe("CLI attempt execution", () => {
     });
   }
 
+  async function writeClaudeCliAssistantTranscript(cliSessionId: string) {
+    const homeDir = path.join(tmpDir, `home-${cliSessionId}`);
+    const projectsDir = path.join(homeDir, ".claude", "projects", "demo-workspace");
+    process.env.HOME = homeDir;
+    await fs.mkdir(projectsDir, { recursive: true });
+    await fs.writeFile(
+      path.join(projectsDir, `${cliSessionId}.jsonl`),
+      `${JSON.stringify({
+        type: "assistant",
+        message: { role: "assistant", content: [{ type: "text", text: "old reply" }] },
+      })}\n`,
+      "utf-8",
+    );
+  }
+
+  function makeClaudeCliSessionEntry(
+    openclawSessionId: string,
+    cliSessionId: string,
+  ): SessionEntry {
+    return {
+      sessionId: openclawSessionId,
+      updatedAt: Date.now(),
+      cliSessionBindings: {
+        "claude-cli": {
+          sessionId: cliSessionId,
+          authProfileId: "anthropic:claude-cli",
+        },
+      },
+      cliSessionIds: { "claude-cli": cliSessionId },
+      claudeCliSessionId: cliSessionId,
+    };
+  }
+
   it("clears stale Claude CLI session IDs before retrying after session expiration", async () => {
     const sessionKey = "agent:main:subagent:cli-expired";
     const homeDir = path.join(tmpDir, "home");
@@ -263,6 +296,73 @@ describe("CLI attempt execution", () => {
     >;
     expect(persisted[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
     expect(persisted[sessionKey]?.claudeCliSessionId).toBeUndefined();
+  });
+
+  it("clears reused Claude CLI session IDs after AbortError without retrying", async () => {
+    const sessionKey = "agent:main:direct:cli-abort";
+    const cliSessionId = "abort-poisoned-session";
+    await writeClaudeCliAssistantTranscript(cliSessionId);
+    const sessionEntry = makeClaudeCliSessionEntry("session-cli-abort", cliSessionId);
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    const abortError = Object.assign(new Error("aborted"), { name: "AbortError" });
+    runCliAgentMock.mockRejectedValueOnce(abortError);
+
+    await expect(
+      runClaudeCliAttempt({
+        sessionKey,
+        sessionEntry,
+        sessionStore,
+        body: "resume after abort",
+        runId: "run-cli-abort",
+      }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+
+    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
+    expect(firstRunCliAgentArg().cliSessionId).toBe(cliSessionId);
+    expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+    expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
+    expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();
+
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      SessionEntry
+    >;
+    expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+    expect(persisted[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
+    expect(persisted[sessionKey]?.claudeCliSessionId).toBeUndefined();
+  });
+
+  it("clears reused Claude CLI session IDs after non-expired failover without retrying", async () => {
+    const sessionKey = "agent:main:direct:cli-timeout";
+    const cliSessionId = "timeout-poisoned-session";
+    await writeClaudeCliAssistantTranscript(cliSessionId);
+    const sessionEntry = makeClaudeCliSessionEntry("session-cli-timeout", cliSessionId);
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    runCliAgentMock.mockRejectedValueOnce(
+      new FailoverError("CLI produced no output for 60s", {
+        reason: "timeout",
+        provider: "claude-cli",
+        model: "opus",
+      }),
+    );
+
+    await expect(
+      runClaudeCliAttempt({
+        sessionKey,
+        sessionEntry,
+        sessionStore,
+        body: "resume after timeout",
+        runId: "run-cli-timeout",
+      }),
+    ).rejects.toMatchObject({ name: "FailoverError", reason: "timeout" });
+
+    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
+    expect(firstRunCliAgentArg().cliSessionId).toBe(cliSessionId);
+    expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+    expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
+    expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();
   });
 
   it("does not pass --resume when the stored Claude CLI transcript is missing", async () => {

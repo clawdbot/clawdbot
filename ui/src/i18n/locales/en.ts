@@ -1169,7 +1169,7 @@ export const en: TranslationMap = {
       whenHint: "Pick a schedule. You can fine-tune it later.",
       howHeading: "How should it work?",
       howHint: "Choose how results are delivered.",
-      title: "New Automation",
+      title: "New Cron Job",
     },
     summary: {
       enabled: "Enabled",
@@ -1198,6 +1198,9 @@ export const en: TranslationMap = {
       ascending: "Ascending",
       descending: "Descending",
       reset: "Reset",
+      emptyTitle: "No scheduled jobs yet.",
+      emptyHint: "Create one from a plain-language prompt; advanced fields can wait.",
+      emptyFilteredHint: "Clear or change filters to see scheduled jobs.",
       noMatching: "No matching jobs.",
       loading: "Loading...",
       loadMore: "Load more jobs",
@@ -1233,6 +1236,7 @@ export const en: TranslationMap = {
     form: {
       editJob: "Edit Job",
       newJob: "New Job",
+      advancedJob: "Advanced job",
       updateSubtitle: "Update the selected scheduled job.",
       createSubtitle: "Create a scheduled wakeup or agent run.",
       required: "Required",

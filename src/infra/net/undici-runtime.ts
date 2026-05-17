@@ -1,4 +1,6 @@
 import { createRequire } from "node:module";
+import net from "node:net";
+import { addActiveManagedProxyTlsOptions } from "./proxy/managed-proxy-undici.js";
 import { resolveUndiciAutoSelectFamilyConnectOptions } from "./undici-family-policy.js";
 
 export const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
@@ -21,6 +23,9 @@ type UndiciEnvHttpProxyAgentOptions = ConstructorParameters<
   UndiciRuntimeDeps["EnvHttpProxyAgent"]
 >[0];
 type UndiciProxyAgentOptions = ConstructorParameters<UndiciRuntimeDeps["ProxyAgent"]>[0];
+type UndiciProxyAgentOptionsRecord = Exclude<UndiciProxyAgentOptions, string | URL>;
+type UndiciProxyClientFactory = NonNullable<UndiciProxyAgentOptionsRecord["clientFactory"]>;
+type UnknownFunction = (...args: unknown[]) => unknown;
 
 // Guarded fetch dispatchers intentionally stay on HTTP/1.1. Undici 8 enables
 // HTTP/2 ALPN by default, but our guarded paths rely on dispatcher overrides
@@ -64,6 +69,64 @@ function isUndiciGlobalDispatcherDeps(value: unknown): value is UndiciGlobalDisp
     typeof (value as UndiciGlobalDispatcherDeps).getGlobalDispatcher === "function" &&
     typeof (value as UndiciGlobalDispatcherDeps).setGlobalDispatcher === "function"
   );
+}
+
+function loadUndiciProxyPoolCtor(): typeof import("undici").Pool {
+  const override = (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY];
+  if (
+    typeof override === "object" &&
+    override !== null &&
+    typeof (override as { Pool?: unknown }).Pool === "function"
+  ) {
+    return (override as { Pool: typeof import("undici").Pool }).Pool;
+  }
+
+  const require = createRequire(import.meta.url);
+  return (require("undici") as typeof import("undici")).Pool;
+}
+
+function stripIpServernameFromConnectOptions(options: unknown): unknown {
+  if (!isObjectRecord(options) || typeof options.servername !== "string") {
+    return options;
+  }
+  const servername = options.servername.replace(/^\[|\]$/g, "");
+  if (net.isIP(servername) === 0) {
+    return options;
+  }
+  const next = { ...options };
+  delete next.servername;
+  return next;
+}
+
+function stripIpServernameFromConnect(connect: unknown): unknown {
+  if (typeof connect !== "function") {
+    return connect;
+  }
+  return (options: unknown, callback: unknown): unknown =>
+    (connect as UnknownFunction)(stripIpServernameFromConnectOptions(options), callback);
+}
+
+function createIpSafeProxyClientFactory(): UndiciProxyClientFactory {
+  return (origin, options) => {
+    const Pool = loadUndiciProxyPoolCtor();
+    const clientOptions = isObjectRecord(options)
+      ? { ...options, connect: stripIpServernameFromConnect(options.connect) }
+      : options;
+    return new Pool(
+      origin,
+      clientOptions as ConstructorParameters<typeof import("undici").Pool>[1],
+    );
+  };
+}
+
+function addIpSafeProxyClientFactory<TOptions extends object>(options: TOptions): TOptions {
+  if ("clientFactory" in options) {
+    return options;
+  }
+  return {
+    ...options,
+    clientFactory: createIpSafeProxyClientFactory(),
+  };
 }
 
 export function loadUndiciRuntimeDeps(): UndiciRuntimeDeps {
@@ -157,10 +220,14 @@ export function createHttp1EnvHttpProxyAgent(
 ): import("undici").EnvHttpProxyAgent {
   const { EnvHttpProxyAgent } = loadUndiciRuntimeDeps();
   return new EnvHttpProxyAgent(
-    withHttp1OnlyDispatcherOptions(options, timeoutMs, {
-      connect: true,
-      proxyTls: true,
-    }),
+    withHttp1OnlyDispatcherOptions(
+      addIpSafeProxyClientFactory(addActiveManagedProxyTlsOptions(options) ?? {}),
+      timeoutMs,
+      {
+        connect: true,
+        proxyTls: true,
+      },
+    ),
   );
 }
 
@@ -174,8 +241,12 @@ export function createHttp1ProxyAgent(
       ? { uri: options.toString() }
       : { ...options };
   return new ProxyAgent(
-    withHttp1OnlyDispatcherOptions(normalized as object, timeoutMs, {
-      proxyTls: true,
-    }) as UndiciProxyAgentOptions,
+    withHttp1OnlyDispatcherOptions(
+      addIpSafeProxyClientFactory(addActiveManagedProxyTlsOptions(normalized as object)),
+      timeoutMs,
+      {
+        proxyTls: true,
+      },
+    ) as UndiciProxyAgentOptions,
   );
 }

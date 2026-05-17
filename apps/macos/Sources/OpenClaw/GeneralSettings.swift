@@ -14,6 +14,7 @@ struct GeneralSettings: View {
     @Bindable var state: AppState
     @AppStorage(cameraEnabledKey) private var cameraEnabled: Bool = false
     let page: Page
+    let isActive: Bool
     private let healthStore = HealthStore.shared
     private let gatewayManager = GatewayProcessManager.shared
     @State private var gatewayDiscovery = GatewayDiscoveryModel(
@@ -30,9 +31,10 @@ struct GeneralSettings: View {
         88
     }
 
-    init(state: AppState, page: Page = .general) {
+    init(state: AppState, page: Page = .general, isActive: Bool = true) {
         self.state = state
         self.page = page
+        self.isActive = isActive
     }
 
     var body: some View {
@@ -45,18 +47,21 @@ struct GeneralSettings: View {
                     self.connectionPage
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: 620, alignment: .leading)
             .padding(.bottom, 16)
         }
         .onAppear {
-            guard !self.isPreview else { return }
-            self.refreshGatewayStatus()
+            self.updateActiveWork(active: self.isActive)
+        }
+        .onChange(of: self.isActive) { _, active in
+            self.updateActiveWork(active: active)
         }
         .onChange(of: self.state.canvasEnabled) { _, enabled in
             if !enabled {
                 CanvasManager.shared.hideAll()
             }
         }
+        .onDisappear { self.gatewayDiscovery.stop() }
     }
 
     private var generalPage: some View {
@@ -128,14 +133,24 @@ struct GeneralSettings: View {
                 self.connectionSection
             }
         }
-        .onAppear { self.gatewayDiscovery.start() }
-        .onDisappear { self.gatewayDiscovery.stop() }
     }
 
     private var activeBinding: Binding<Bool> {
         Binding(
             get: { !self.state.isPaused },
             set: { self.state.isPaused = !$0 })
+    }
+
+    private func updateActiveWork(active: Bool) {
+        guard !self.isPreview else { return }
+        if active {
+            self.refreshGatewayStatus()
+            if self.page == .connection {
+                self.gatewayDiscovery.start()
+            }
+        } else {
+            self.gatewayDiscovery.stop()
+        }
     }
 
     private var connectionSection: some View {

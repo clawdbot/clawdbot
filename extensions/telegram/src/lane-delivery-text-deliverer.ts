@@ -6,7 +6,11 @@ import {
   isPotentialTruncatedFinal,
   selectLongerFinalText,
 } from "openclaw/plugin-sdk/channel-streaming";
-import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import {
+  buildTtsSupplementMediaPayload,
+  getReplyPayloadTtsSupplement,
+  resolveSendableOutboundReplyParts,
+} from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { TelegramInlineButtons } from "./button-types.js";
 import type { TelegramDraftStream } from "./draft-stream.js";
@@ -199,6 +203,15 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     text: string,
     options?: { stripButtons?: boolean; fallbackButtons?: TelegramInlineButtons },
   ): ReplyPayload => {
+    if (getReplyPayloadTtsSupplement(payload)) {
+      return withFallbackTelegramButtons(
+        withMediaChannelData(
+          buildTtsSupplementMediaPayload(params.applyTextToPayload(payload, text)),
+          options,
+        ),
+        options?.fallbackButtons,
+      );
+    }
     if (payload.audioAsVoice === true) {
       const {
         text: _text,

@@ -1175,6 +1175,9 @@ export const zh_TW: TranslationMap = {
       ascending: "升序",
       descending: "降序",
       reset: "重設",
+      emptyTitle: "No scheduled jobs yet.",
+      emptyHint: "Create one from a plain-language prompt; advanced fields can wait.",
+      emptyFilteredHint: "Clear or change filters to see scheduled jobs.",
       noMatching: "沒有符合的工作。",
       loading: "載入中...",
       loadMore: "載入更多工作",
@@ -1210,6 +1213,7 @@ export const zh_TW: TranslationMap = {
     form: {
       editJob: "編輯工作",
       newJob: "新增工作",
+      advancedJob: "Advanced job",
       updateSubtitle: "更新所選的排程工作。",
       createSubtitle: "建立排程喚醒或 Agent 執行。",
       required: "必填",

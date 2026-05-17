@@ -115,6 +115,9 @@ describe("config schema", () => {
     expect(res.uiHints["mcp.servers.*.headers.*"]?.sensitive).toBe(true);
     expect(res.uiHints["mcp.servers.*.url"]?.tags).toContain(SENSITIVE_URL_HINT_TAG);
     expect(res.uiHints["models.providers.*.baseUrl"]?.tags).toContain(SENSITIVE_URL_HINT_TAG);
+    expect(res.uiHints["proxy.tls.caFile"]?.tags).toEqual(
+      expect.arrayContaining(["security", "network", "storage"]),
+    );
     expect(res.version).toBeTypeOf("string");
     expect(res.version.trim().length).toBeGreaterThan(0);
     expect(res.generatedAt).toBeTypeOf("string");
@@ -336,6 +339,13 @@ describe("config schema", () => {
     const tags = deriveTagsForPath("gateway.auth.token");
     expect(tags).toContain("security");
     expect(tags).toContain("auth");
+  });
+
+  it("classifies managed proxy CA files as security-relevant config", () => {
+    const tags = deriveTagsForPath("proxy.tls.caFile");
+    expect(tags).toContain("security");
+    expect(tags).toContain("network");
+    expect(tags).toContain("storage");
   });
 
   it("derives tools/performance tags for web fetch timeout paths", () => {
@@ -636,17 +646,52 @@ describe("config schema", () => {
     expect(schema?.properties).toBeUndefined();
   });
 
-  it("returns a shallow lookup schema without nested composition keywords", () => {
+  it("looks up root config schema children without returning the full schema tree", () => {
+    const lookup = lookupConfigSchema(baseSchema, ".");
+    expect(lookup?.path).toBe(".");
+    expect(lookup?.children.map((child) => child.key)).toContain("gateway");
+    expect(lookup?.children.find((child) => child.key === "gateway")?.path).toBe("gateway");
+    const schema = lookup?.schema as { properties?: unknown } | undefined;
+    expect(schema?.properties).toBeUndefined();
+  });
+
+  it("returns a shallow lookup schema with top-level composition for editing", () => {
     const lookup = lookupConfigSchema(baseSchema, "agents.list.0.runtime");
     expect(lookup?.path).toBe("agents.list.0.runtime");
     expect(lookup?.hintPath).toBe("agents.list[].runtime");
-    // The shallow lookup schema carries field docs, but should not expose
-    // nested composition keywords (allOf, oneOf, etc.).
     expect(lookup?.schema).not.toHaveProperty("allOf");
     expect(lookup?.schema).not.toHaveProperty("oneOf");
-    expect(lookup?.schema).not.toHaveProperty("anyOf");
+    const schema = lookup?.schema as { anyOf?: Array<{ properties?: Record<string, unknown> }> };
+    expect(schema.anyOf?.some((variant) => variant.properties?.type)).toBe(true);
     expect(lookup?.schema).toHaveProperty("title", "Agent Runtime");
     expect(lookup?.schema).toHaveProperty("description");
+  });
+
+  it("keeps scoped collection item schemas for form editing", () => {
+    const lookup = lookupConfigSchema(baseSchema, "agents.list");
+    expect(lookup?.schema).toHaveProperty("items");
+    const schema = lookup?.schema as
+      | {
+          items?: {
+            properties?: Record<
+              string,
+              { anyOf?: Array<{ properties?: Record<string, unknown> }> }
+            >;
+          };
+        }
+      | undefined;
+    expect(schema?.items?.properties).toHaveProperty("runtime");
+    const runtimeVariants = schema?.items?.properties?.runtime?.anyOf ?? [];
+    expect(runtimeVariants.length).toBeGreaterThan(0);
+    expect(runtimeVariants.some((variant) => variant.properties?.type)).toBe(true);
+  });
+
+  it("keeps scoped map properties for form editing", () => {
+    const lookup = lookupConfigSchema(baseSchema, "env");
+    expect(lookup?.children.map((child) => child.key)).toEqual(["shellEnv", "vars", "*"]);
+    const schema = lookup?.schema as { properties?: Record<string, unknown> } | undefined;
+    expect(schema?.properties).toHaveProperty("shellEnv");
+    expect(schema?.properties).toHaveProperty("vars");
   });
 
   it("matches wildcard ui hints for concrete lookup paths", () => {

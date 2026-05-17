@@ -42,6 +42,10 @@ Notes:
 - When `gateway.auth.mode="trusted-proxy"`, the HTTP request must come from a
   configured trusted proxy source; same-host loopback proxies require explicit
   `gateway.auth.trustedProxy.allowLoopback = true`.
+- Internal same-host callers that bypass the proxy can use
+  `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD` as a local direct
+  fallback. Any `Forwarded`, `X-Forwarded-*`, or `X-Real-IP` header evidence
+  keeps the request on the trusted-proxy path instead.
 - If `gateway.auth.rateLimit` is configured and too many auth failures occur, the endpoint returns `429` with `Retry-After`.
 
 ## Security boundary (important)

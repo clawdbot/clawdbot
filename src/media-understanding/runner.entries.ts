@@ -34,6 +34,7 @@ import { MediaUnderstandingSkipError } from "./errors.js";
 import { fileExists } from "./fs.js";
 import { describeImageWithModel } from "./image-runtime.js";
 import { extractGeminiResponse } from "./output-extract.js";
+import { normalizeMediaExecutionProviderId } from "./provider-id.js";
 import { getMediaUnderstandingProvider, normalizeMediaProviderId } from "./provider-registry.js";
 import { resolveMaxBytes, resolveMaxChars, resolvePrompt, resolveTimeoutMs } from "./resolve.js";
 import type {
@@ -566,6 +567,7 @@ export async function runProviderEntry(params: {
     throw new Error(`Provider entry missing provider for ${capability}`);
   }
   const providerId = normalizeMediaProviderId(providerIdRaw);
+  const requestProviderId = normalizeMediaExecutionProviderId(providerIdRaw);
   const { maxBytes, maxChars, timeoutMs, prompt } = resolveEntryRunOptions({
     capability,
     entry,
@@ -587,13 +589,13 @@ export async function runProviderEntry(params: {
       timeoutMs,
     });
     const requestOverrides = resolveMediaRequestOverrides(params.config);
-    const provider = getMediaUnderstandingProvider(providerId, params.providerRegistry);
+    const provider = getMediaUnderstandingProvider(requestProviderId, params.providerRegistry);
     const imageInput = {
       buffer: media.buffer,
       fileName: media.fileName,
       mime: media.mime,
       model: modelId,
-      provider: providerId,
+      provider: requestProviderId,
       prompt: requestOverrides.prompt ?? prompt,
       timeoutMs,
       profile: entry.profile,
@@ -608,7 +610,7 @@ export async function runProviderEntry(params: {
       kind: "image.description",
       attachmentIndex: params.attachmentIndex,
       text: trimOutput(result.text, maxChars),
-      provider: providerId,
+      provider: requestProviderId,
       model: result.model ?? modelId,
     };
   }

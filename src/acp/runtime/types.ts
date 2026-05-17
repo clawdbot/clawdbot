@@ -116,11 +116,48 @@ export type AcpRuntimeEvent =
       type: "error";
       message: string;
       code?: string;
+      detailCode?: string;
       retryable?: boolean;
     };
 
+export type AcpRuntimeTurnResultError = {
+  message: string;
+  code?: string;
+  detailCode?: string;
+  retryable?: boolean;
+};
+
+export type AcpRuntimeTurnResult =
+  | {
+      status: "completed";
+      stopReason?: string;
+    }
+  | {
+      status: "cancelled";
+      stopReason?: string;
+    }
+  | {
+      status: "failed";
+      error: AcpRuntimeTurnResultError;
+    };
+
+export interface AcpRuntimeTurn {
+  readonly requestId: string;
+  readonly events: AsyncIterable<AcpRuntimeEvent>;
+  readonly result: Promise<AcpRuntimeTurnResult>;
+  cancel(input?: { reason?: string }): Promise<void>;
+  closeStream(input?: { reason?: string }): Promise<void>;
+}
+
 export interface AcpRuntime {
   ensureSession(input: AcpRuntimeEnsureInput): Promise<AcpRuntimeHandle>;
+
+  /**
+   * Preferred turn API. Live events are streamed separately from the terminal
+   * result so adapters can report failures without relying on legacy done/error
+   * events in the stream.
+   */
+  startTurn?(input: AcpRuntimeTurnInput): AcpRuntimeTurn;
 
   runTurn(input: AcpRuntimeTurnInput): AsyncIterable<AcpRuntimeEvent>;
 

@@ -12,6 +12,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createMediaAttachmentCache, normalizeMediaAttachments } from "./runner.attachments.js";
 import { withMediaFixture } from "./runner.test-utils.js";
+import type { MediaUnderstandingProvider } from "./types.js";
 
 type TestCatalogEntry = {
   id: string;
@@ -273,7 +274,7 @@ describe("runCapability image skip", () => {
           imageModel: { primary: "openrouter/google/gemini-2.5-flash" },
         },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
 
     await expect(
       resolveAutoImageModel({
@@ -286,13 +287,13 @@ describe("runCapability image skip", () => {
     });
   });
 
-  it("falls back from an active text model to the provider image default", async () => {
+  it("falls back from a MiniMax chat model to the provider image default", async () => {
     catalog = [
       {
         id: "MiniMax-M2.7",
         name: "MiniMax M2.7",
         provider: "minimax-portal",
-        input: ["text"] as const,
+        input: ["text", "image"] as const,
       },
       {
         id: "MiniMax-VL-01",
@@ -302,7 +303,20 @@ describe("runCapability image skip", () => {
       },
     ];
     vi.stubEnv("MINIMAX_API_KEY", "test-minimax-key");
-    const cfg = {} as OpenClawConfig;
+    const cfg = {
+      models: {
+        providers: {
+          "minimax-portal": {
+            models: [
+              {
+                id: "MiniMax-M2.7",
+                input: ["text", "image"],
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
     const pluginRegistry = createEmptyPluginRegistry();
     pluginRegistry.mediaUnderstandingProviders.push({
       pluginId: "minimax",
@@ -326,6 +340,300 @@ describe("runCapability image skip", () => {
       ).resolves.toEqual({
         provider: "minimax-portal",
         model: "MiniMax-VL-01",
+      });
+    } finally {
+      setActivePluginRegistry(createEmptyPluginRegistry());
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("does not native-skip MiniMax chat models that claim image input", async () => {
+    catalog = [
+      {
+        id: "MiniMax-M2.7",
+        name: "MiniMax M2.7",
+        provider: "minimax-portal",
+        input: ["text", "image"] as const,
+      },
+    ];
+    vi.stubEnv("MINIMAX_API_KEY", "test-minimax-key");
+    const cfg = {
+      models: {
+        providers: {
+          "minimax-portal": {
+            models: [
+              {
+                id: "MiniMax-M2.7",
+                input: ["text", "image"],
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const pluginRegistry = createEmptyPluginRegistry();
+    pluginRegistry.mediaUnderstandingProviders.push({
+      pluginId: "minimax",
+      pluginName: "MiniMax Provider",
+      source: "test",
+      provider: {
+        id: "minimax-portal",
+        capabilities: ["image"],
+        defaultModels: { image: "MiniMax-VL-01" },
+        describeImage: async (req) => ({ text: "vlm ok", model: req.model }),
+      },
+    });
+    setCompatibleActiveMediaUnderstandingRegistry(pluginRegistry, cfg);
+
+    try {
+      await withMediaFixture(
+        {
+          filePrefix: "openclaw-minimax-vlm-no-native-skip",
+          extension: "png",
+          mediaType: "image/png",
+          fileContents: Buffer.from("image"),
+        },
+        async ({ ctx, media, cache }) => {
+          const result = await runCapability({
+            capability: "image",
+            cfg,
+            ctx,
+            attachments: cache,
+            media,
+            agentDir: "/tmp",
+            providerRegistry: buildProviderRegistry(undefined, cfg),
+            activeModel: { provider: "minimax-portal", model: "MiniMax-M2.7" },
+          });
+
+          expect(result.decision.outcome).toBe("success");
+          expect(requireCapabilityOutput(result, 0)).toEqual({
+            kind: "image.description",
+            attachmentIndex: 0,
+            provider: "minimax-portal",
+            model: "MiniMax-VL-01",
+            text: "vlm ok",
+          });
+        },
+      );
+    } finally {
+      setActivePluginRegistry(createEmptyPluginRegistry());
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("preserves MiniMax CN aliases from configured provider routing", async () => {
+    const seenProviders: string[] = [];
+    const cfg = {
+      models: {
+        providers: {
+          "minimax-cn": {
+            apiKey: "test-minimax-key",
+            baseUrl: "https://api.minimaxi.com/anthropic",
+            models: [],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const pluginRegistry = createEmptyPluginRegistry();
+    pluginRegistry.mediaUnderstandingProviders.push({
+      pluginId: "minimax",
+      pluginName: "MiniMax Provider",
+      source: "test",
+      provider: {
+        id: "minimax",
+        capabilities: ["image"],
+        defaultModels: { image: "MiniMax-VL-01" },
+        describeImage: async (req) => {
+          seenProviders.push(req.provider);
+          return { text: "cn vlm ok", model: req.model };
+        },
+      },
+    });
+    setCompatibleActiveMediaUnderstandingRegistry(pluginRegistry, cfg);
+
+    try {
+      await withMediaFixture(
+        {
+          filePrefix: "openclaw-minimax-cn-provider",
+          extension: "png",
+          mediaType: "image/png",
+          fileContents: Buffer.from("image"),
+        },
+        async ({ ctx, media, cache }) => {
+          const result = await runCapability({
+            capability: "image",
+            cfg,
+            ctx,
+            attachments: cache,
+            media,
+            agentDir: "/tmp",
+            providerRegistry: buildProviderRegistry(undefined, cfg),
+          });
+
+          expect(result.decision.outcome).toBe("success");
+          expect(seenProviders).toEqual(["minimax-cn"]);
+          expect(requireCapabilityOutput(result, 0)).toEqual({
+            kind: "image.description",
+            attachmentIndex: 0,
+            provider: "minimax-cn",
+            model: "MiniMax-VL-01",
+            text: "cn vlm ok",
+          });
+        },
+      );
+    } finally {
+      setActivePluginRegistry(createEmptyPluginRegistry());
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("keeps MiniMax auto routing on VLM when registry lacks a default model", async () => {
+    let seenModel: string | undefined;
+    await withMediaFixture(
+      {
+        filePrefix: "openclaw-minimax-vlm-default",
+        extension: "png",
+        mediaType: "image/png",
+        fileContents: Buffer.from("image"),
+      },
+      async ({ ctx, media, cache }) => {
+        const cfg = {
+          models: {
+            providers: {
+              minimax: {
+                apiKey: "test-minimax-key",
+                baseUrl: "https://api.minimax.io/anthropic",
+                models: [
+                  {
+                    id: "MiniMax-M2.5",
+                    name: "MiniMax M2.5",
+                    reasoning: false,
+                    input: ["text", "image"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 128_000,
+                    maxTokens: 8_192,
+                  },
+                ],
+              },
+            },
+          },
+        } as OpenClawConfig;
+
+        const result = await runCapability({
+          capability: "image",
+          cfg,
+          ctx,
+          attachments: cache,
+          media,
+          agentDir: "/tmp",
+          providerRegistry: new Map([
+            [
+              "minimax",
+              {
+                id: "minimax",
+                capabilities: ["image"],
+                describeImage: async (req) => {
+                  seenModel = req.model;
+                  return { text: "vlm ok", model: req.model };
+                },
+              },
+            ],
+          ]),
+        });
+
+        expect(result.decision.outcome).toBe("success");
+        expect(seenModel).toBe("MiniMax-VL-01");
+        expect(requireCapabilityOutput(result, 0)).toMatchObject({
+          provider: "minimax",
+          model: "MiniMax-VL-01",
+          text: "vlm ok",
+        });
+      },
+    );
+  });
+
+  it("keeps non-MiniMax media aliases canonical for image execution", async () => {
+    const seenProviders: string[] = [];
+    const cfg = {
+      tools: {
+        media: {
+          image: {
+            models: [{ provider: "gemini", model: "gemini-3-flash-preview" }],
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const providerRegistry = new Map<string, MediaUnderstandingProvider>([
+      [
+        "google",
+        {
+          id: "google",
+          capabilities: ["image" as const],
+          describeImage: async (req) => {
+            seenProviders.push(req.provider);
+            return { text: "google ok", model: req.model };
+          },
+        },
+      ],
+    ]);
+
+    await withMediaFixture(
+      {
+        filePrefix: "openclaw-gemini-media-alias",
+        extension: "png",
+        mediaType: "image/png",
+        fileContents: Buffer.from("image"),
+      },
+      async ({ ctx, media, cache }) => {
+        const result = await runCapability({
+          capability: "image",
+          cfg,
+          ctx,
+          attachments: cache,
+          media,
+          agentDir: "/tmp",
+          providerRegistry,
+        });
+
+        expect(result.decision.outcome).toBe("success");
+        expect(seenProviders).toEqual(["google"]);
+        expect(requireCapabilityOutput(result, 0)).toEqual({
+          kind: "image.description",
+          attachmentIndex: 0,
+          provider: "google",
+          model: "gemini-3-flash-preview",
+          text: "google ok",
+        });
+      },
+    );
+  });
+
+  it("canonicalizes non-MiniMax active media aliases for auto image resolution", async () => {
+    vi.stubEnv("GEMINI_API_KEY", "test-gemini-key");
+    const cfg = {} as OpenClawConfig;
+    const pluginRegistry = createEmptyPluginRegistry();
+    pluginRegistry.mediaUnderstandingProviders.push({
+      pluginId: "google",
+      pluginName: "Google Provider",
+      source: "test",
+      provider: {
+        id: "google",
+        capabilities: ["image"],
+        defaultModels: { image: "gemini-3-flash-preview" },
+        describeImage: async () => ({ text: "ok" }),
+      },
+    });
+    setCompatibleActiveMediaUnderstandingRegistry(pluginRegistry, cfg);
+
+    try {
+      await expect(
+        resolveAutoImageModel({
+          cfg,
+          activeModel: { provider: "gemini", model: "gemini-3-flash-preview" },
+        }),
+      ).resolves.toEqual({
+        provider: "google",
+        model: "gemini-3-flash-preview",
       });
     } finally {
       setActivePluginRegistry(createEmptyPluginRegistry());

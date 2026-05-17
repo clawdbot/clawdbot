@@ -18,7 +18,7 @@ import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
 import { ChatState, loadChatHistory } from "./controllers/chat.ts";
 import { createSessionAndRefresh, loadSessions } from "./controllers/sessions.ts";
 import { icons } from "./icons.ts";
-import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
+import { iconForTab, isSettingsTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
 import { isCronSessionKey, parseSessionKey, resolveSessionDisplayName } from "./session-display.ts";
 import {
   normalizeAgentId,
@@ -181,7 +181,7 @@ const NEW_CHAT_CREATE_FAILED_MESSAGE =
 
 export function renderTab(state: AppViewState, tab: Tab, opts?: { collapsed?: boolean }) {
   const href = pathForTab(tab, state.basePath);
-  const isActive = state.tab === tab;
+  const isActive = tab === "config" ? isSettingsTab(state.tab) : state.tab === tab;
   const collapsed = opts?.collapsed ?? state.settings.navCollapsed;
   return html`
     <a
@@ -672,17 +672,17 @@ export function dismissChatError(state: AppViewState) {
   }
 }
 
-export async function createChatSession(state: AppViewState) {
+export async function createChatSession(state: AppViewState): Promise<boolean> {
   if (!state.client || !state.connected) {
-    return;
+    return false;
   }
   if (!canSwitchToNewChatSession(state)) {
     state.lastError = NEW_CHAT_ACTIVE_RUN_MESSAGE;
-    return;
+    return false;
   }
   if (state.sessionsLoading) {
     state.lastError = NEW_CHAT_SESSIONS_LOADING_MESSAGE;
-    return;
+    return false;
   }
 
   state.lastError = null;
@@ -720,7 +720,7 @@ export async function createChatSession(state: AppViewState) {
           ? NEW_CHAT_SESSIONS_LOADING_MESSAGE
           : NEW_CHAT_CREATE_FAILED_MESSAGE);
     }
-    return;
+    return false;
   }
 
   const preservedDraft = state.chatMessage;
@@ -728,6 +728,7 @@ export async function createChatSession(state: AppViewState) {
   switchChatSession(state, nextSessionKey);
   state.chatMessage = preservedDraft;
   state.chatAttachments = preservedAttachments;
+  return true;
 }
 
 async function refreshSessionOptions(state: AppViewState) {

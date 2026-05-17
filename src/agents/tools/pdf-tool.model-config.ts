@@ -5,6 +5,7 @@ import {
   resolveDefaultMediaModel,
 } from "../../media-understanding/defaults.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
+import { isMinimaxVlmProvider } from "../minimax-vlm.js";
 import {
   coerceImageModelConfig,
   type ImageModelConfig,
@@ -45,6 +46,7 @@ function resolveImageCandidateRefs(params: {
           workspaceDir: params.workspaceDir,
           providerId,
           capability: "image",
+          includeConfiguredImageModels: !isMinimaxVlmProvider(providerId),
         });
       return modelId ? `${providerId}/${modelId}` : null;
     })
@@ -106,6 +108,7 @@ export function resolvePdfModelConfigForTool(params: {
       workspaceDir: params.workspaceDir,
       providerId: primary.provider,
       capability: "image",
+      includeConfiguredImageModels: !isMinimaxVlmProvider(primary.provider),
     });
   const primarySupportsNativePdf = providerSupportsNativePdfDocument({
     cfg: params.cfg,
@@ -136,6 +139,7 @@ export function resolvePdfModelConfigForTool(params: {
       const providerId = providerKey.trim();
       if (
         !providerId ||
+        isMinimaxVlmProvider(providerId) ||
         !hasAuthForProvider({
           provider: providerId,
           agentDir: params.agentDir,

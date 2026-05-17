@@ -54,6 +54,14 @@ type AttachmentCacheEntry = {
 
 let defaultLocalPathRoots: readonly string[] | undefined;
 
+function concreteMime(mime: string | undefined): string | undefined {
+  const normalized = mime?.trim();
+  if (!normalized || normalized.endsWith("/*")) {
+    return undefined;
+  }
+  return normalized;
+}
+
 function getDefaultLocalPathRoots(): readonly string[] {
   defaultLocalPathRoots ??= mergeInboundPathRoots(getDefaultMediaLocalRoots());
   return defaultLocalPathRoots;
@@ -128,7 +136,7 @@ export class MediaAttachmentCache {
           entry.buffer = buffer;
           entry.bufferMime =
             entry.bufferMime ??
-            entry.attachment.mime ??
+            concreteMime(entry.attachment.mime) ??
             (await detectMime({
               buffer,
               filePath,
@@ -169,7 +177,7 @@ export class MediaAttachmentCache {
       });
       entry.buffer = fetched.buffer;
       entry.bufferMime =
-        entry.attachment.mime ??
+        concreteMime(entry.attachment.mime) ??
         fetched.contentType ??
         (await detectMime({
           buffer: fetched.buffer,

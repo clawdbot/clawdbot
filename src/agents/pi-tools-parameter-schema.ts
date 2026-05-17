@@ -309,14 +309,184 @@ function stripEmptyArrayItemsFromArraySchemas(schema: unknown): unknown {
   return changed ? Object.fromEntries(entries) : schema;
 }
 
+type SchemaDefs = {
+  $defs: Map<string, unknown>;
+  definitions: Map<string, unknown>;
+};
+
+function copySchemaMeta(from: Record<string, unknown>, to: Record<string, unknown>): void {
+  for (const key of ["title", "description", "default"] as const) {
+    if (key in from && from[key] !== undefined) {
+      to[key] = from[key];
+    }
+  }
+}
+
+function extendSchemaDefs(
+  defs: SchemaDefs | undefined,
+  schema: Record<string, unknown>,
+): SchemaDefs | undefined {
+  const defsEntry =
+    schema.$defs && typeof schema.$defs === "object" && !Array.isArray(schema.$defs)
+      ? (schema.$defs as Record<string, unknown>)
+      : undefined;
+  const legacyDefsEntry =
+    schema.definitions &&
+    typeof schema.definitions === "object" &&
+    !Array.isArray(schema.definitions)
+      ? (schema.definitions as Record<string, unknown>)
+      : undefined;
+
+  if (!defsEntry && !legacyDefsEntry) {
+    return defs;
+  }
+
+  const next: SchemaDefs = defs
+    ? {
+        $defs: new Map(defs.$defs),
+        definitions: new Map(defs.definitions),
+      }
+    : {
+        $defs: new Map<string, unknown>(),
+        definitions: new Map<string, unknown>(),
+      };
+  if (defsEntry) {
+    for (const [key, value] of Object.entries(defsEntry)) {
+      next.$defs.set(key, value);
+    }
+  }
+  if (legacyDefsEntry) {
+    for (const [key, value] of Object.entries(legacyDefsEntry)) {
+      next.definitions.set(key, value);
+    }
+  }
+  return next;
+}
+
+function decodeJsonPointerSegment(segment: string): string {
+  return segment.replaceAll("~1", "/").replaceAll("~0", "~");
+}
+
+function resolveJsonPointerPath(value: unknown, segments: string[]): unknown {
+  let current = value;
+  for (const segment of segments) {
+    if (!current || typeof current !== "object") {
+      return undefined;
+    }
+    const key = decodeJsonPointerSegment(segment);
+    if (Array.isArray(current)) {
+      const index = Number(key);
+      if (!Number.isInteger(index) || index < 0 || index >= current.length) {
+        return undefined;
+      }
+      current = current[index];
+      continue;
+    }
+    const record = current as Record<string, unknown>;
+    if (!Object.prototype.hasOwnProperty.call(record, key)) {
+      return undefined;
+    }
+    current = record[key];
+  }
+  return current;
+}
+
+function tryResolveLocalRef(ref: string, defs: SchemaDefs | undefined): unknown {
+  if (!defs) {
+    return undefined;
+  }
+  const match = ref.match(/^#\/(\$defs|definitions)\/([^/]+)(?:\/(.*))?$/);
+  if (!match) {
+    return undefined;
+  }
+  const namespace = match[1] === "$defs" ? defs.$defs : defs.definitions;
+  const name = decodeJsonPointerSegment(match[2] ?? "");
+  const resolved = name ? namespace.get(name) : undefined;
+  if (resolved === undefined) {
+    return undefined;
+  }
+  const remainingPath = match[3] ? match[3].split("/") : [];
+  return resolveJsonPointerPath(resolved, remainingPath);
+}
+
+function inlineLocalSchemaRefsWithDefs(
+  schema: unknown,
+  defs: SchemaDefs | undefined,
+  refStack: Set<string> | undefined,
+  state: { unresolvedLocalRefs: boolean },
+): unknown {
+  if (!schema || typeof schema !== "object") {
+    return schema;
+  }
+  if (Array.isArray(schema)) {
+    return schema.map((entry) => inlineLocalSchemaRefsWithDefs(entry, defs, refStack, state));
+  }
+
+  const obj = schema as Record<string, unknown>;
+  const nextDefs = extendSchemaDefs(defs, obj);
+  const refValue = typeof obj.$ref === "string" ? obj.$ref : undefined;
+
+  if (refValue) {
+    if (refStack?.has(refValue)) {
+      return {};
+    }
+    const resolved = tryResolveLocalRef(refValue, nextDefs);
+    if (resolved === undefined) {
+      if (refValue.startsWith("#/")) {
+        state.unresolvedLocalRefs = true;
+      }
+      return { ...obj };
+    }
+    const nextRefStack = refStack ? new Set(refStack) : new Set<string>();
+    nextRefStack.add(refValue);
+    const inlined = inlineLocalSchemaRefsWithDefs(resolved, nextDefs, nextRefStack, state);
+    if (!inlined || typeof inlined !== "object" || Array.isArray(inlined)) {
+      return inlined;
+    }
+    const result: Record<string, unknown> = { ...(inlined as Record<string, unknown>) };
+    copySchemaMeta(obj, result);
+    return result;
+  }
+
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (key === "$defs" || key === "definitions") {
+      continue;
+    }
+    result[key] = inlineLocalSchemaRefsWithDefs(value, nextDefs, refStack, state);
+  }
+  if (state.unresolvedLocalRefs) {
+    if ("$defs" in obj) {
+      result.$defs = obj.$defs;
+    }
+    if ("definitions" in obj) {
+      result.definitions = obj.definitions;
+    }
+  }
+  return result;
+}
+
+export function inlineLocalToolSchemaRefs(schema: unknown): TSchema {
+  if (!schema || typeof schema !== "object") {
+    return schema as TSchema;
+  }
+  const defs = extendSchemaDefs(undefined, schema as Record<string, unknown>);
+  return inlineLocalSchemaRefsWithDefs(schema, defs, undefined, {
+    unresolvedLocalRefs: false,
+  }) as TSchema;
+}
+
 export function normalizeToolParameterSchema(
   schema: unknown,
   options?: { modelProvider?: string; modelId?: string; modelCompat?: ModelCompatConfig },
 ): TSchema {
+  const inlinedSchema = inlineLocalToolSchemaRefs(schema);
   const schemaRecord =
-    schema && typeof schema === "object" ? (schema as Record<string, unknown>) : undefined;
+    inlinedSchema && typeof inlinedSchema === "object"
+      ? (inlinedSchema as Record<string, unknown>)
+      : undefined;
   if (!schemaRecord) {
-    return schema as TSchema;
+    return inlinedSchema;
   }
 
   // Provider quirks:
@@ -378,9 +548,9 @@ export function normalizeToolParameterSchema(
     if (conditionalKey === "allOf") {
       // Top-level `allOf` is not safely flattenable with the same heuristics we
       // use for unions. Keep it explicit rather than silently rewriting it.
-      return applyProviderCleaning(schema);
+      return applyProviderCleaning(inlinedSchema);
     }
-    return applyProviderCleaning(schema);
+    return applyProviderCleaning(inlinedSchema);
   }
   const variants = schemaRecord[flattenableVariantKey] as unknown[];
   const mergedProperties: Record<string, unknown> = {};

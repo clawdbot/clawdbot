@@ -1280,6 +1280,86 @@ describe("stuck session diagnostics threshold", () => {
     );
   });
 
+  it("does not count the active processing message as queued liveness backlog", () => {
+    const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
+
+    startDiagnosticHeartbeat(
+      {
+        diagnostics: {
+          enabled: true,
+        },
+      },
+      {
+        emitMemorySample: createEmitMemorySampleMock(),
+        sampleLiveness: () => ({
+          reasons: ["event_loop_delay"],
+          intervalMs: 30_000,
+          eventLoopDelayP99Ms: 53.6,
+          eventLoopDelayMaxMs: 2_761.9,
+          eventLoopUtilization: 0.785,
+          cpuCoreRatio: 0.378,
+        }),
+      },
+    );
+
+    logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "discord" });
+    logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+    vi.advanceTimersByTime(30_000);
+
+    expectNoLoggerMessageContaining(warnSpy, "liveness warning:");
+    requireMatchingRecord(
+      getDiagnosticStabilitySnapshot({ limit: 10 }).events,
+      {
+        type: "diagnostic.liveness.warning",
+        level: "info",
+        active: 1,
+        waiting: 0,
+        queued: 0,
+      },
+      "active processing liveness stability event",
+    );
+  });
+
+  it("counts messages queued behind already active work as liveness backlog", () => {
+    const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
+
+    startDiagnosticHeartbeat(
+      {
+        diagnostics: {
+          enabled: true,
+        },
+      },
+      {
+        emitMemorySample: createEmitMemorySampleMock(),
+        sampleLiveness: () => ({
+          reasons: ["event_loop_delay"],
+          intervalMs: 30_000,
+          eventLoopDelayP99Ms: 53.6,
+          eventLoopDelayMaxMs: 2_761.9,
+          eventLoopUtilization: 0.785,
+          cpuCoreRatio: 0.378,
+        }),
+      },
+    );
+
+    logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+    logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "discord" });
+    vi.advanceTimersByTime(30_000);
+
+    expectLoggerMessageContaining(warnSpy, "liveness warning:");
+    requireMatchingRecord(
+      getDiagnosticStabilitySnapshot({ limit: 10 }).events,
+      {
+        type: "diagnostic.liveness.warning",
+        level: "warning",
+        active: 1,
+        waiting: 0,
+        queued: 1,
+      },
+      "queued backlog liveness stability event",
+    );
+  });
+
   it("does not let idle liveness samples suppress later active-work warnings", () => {
     const warnSpy = vi.spyOn(diagnosticLogger, "warn").mockImplementation(() => undefined);
 

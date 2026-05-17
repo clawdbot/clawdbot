@@ -1177,6 +1177,9 @@ export const th: TranslationMap = {
       ascending: "น้อยไปมาก",
       descending: "มากไปน้อย",
       reset: "รีเซ็ต",
+      emptyTitle: "No scheduled jobs yet.",
+      emptyHint: "Create one from a plain-language prompt; advanced fields can wait.",
+      emptyFilteredHint: "Clear or change filters to see scheduled jobs.",
       noMatching: "ไม่พบงานที่ตรงกัน",
       loading: "กำลังโหลด...",
       loadMore: "โหลดงานเพิ่มเติม",
@@ -1212,6 +1215,7 @@ export const th: TranslationMap = {
     form: {
       editJob: "แก้ไขงาน",
       newJob: "งานใหม่",
+      advancedJob: "Advanced job",
       updateSubtitle: "อัปเดตงานตามกำหนดเวลาที่เลือก",
       createSubtitle: "สร้างการปลุกหรืองานรันของเอเจนต์ตามกำหนดเวลา",
       required: "จำเป็น",

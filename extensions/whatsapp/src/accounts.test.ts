@@ -1,6 +1,11 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolveWhatsAppAccount, resolveWhatsAppAuthDir } from "./accounts.js";
+import {
+  listWhatsAppAccountIds,
+  resolveDefaultWhatsAppAccountId,
+  resolveWhatsAppAccount,
+  resolveWhatsAppAuthDir,
+} from "./accounts.js";
 
 describe("resolveWhatsAppAuthDir", () => {
   const stubCfg = { channels: { whatsapp: { accounts: {} } } } as Parameters<
@@ -35,6 +40,23 @@ describe("resolveWhatsAppAuthDir", () => {
       accountId: "",
     });
     expect(authDir).toMatch(/whatsapp[/\\]default$/);
+  });
+
+  it("preserves top-level default account when named accounts are configured", () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          authDir: "~/.openclaw/whatsapp-default",
+          accounts: {
+            work: { enabled: false },
+          },
+        },
+      },
+    } as Parameters<typeof resolveWhatsAppAccount>[0]["cfg"];
+
+    expect(listWhatsAppAccountIds(cfg)).toEqual(["default", "work"]);
+    expect(resolveDefaultWhatsAppAccountId(cfg)).toBe("default");
+    expect(resolveWhatsAppAccount({ cfg }).authDir).toMatch(/whatsapp-default$/);
   });
 
   it("preserves valid accountId unchanged", () => {

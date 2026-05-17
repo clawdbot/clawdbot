@@ -1078,7 +1078,7 @@ export function renderQuickSettings(props: QuickSettingsProps) {
   return html`
     <div class="qs-container">
       <div class="qs-header">
-        <h2 class="qs-header__title">${icons.settings} Settings</h2>
+        <h2 class="qs-header__title">${icons.settings} Quick Settings</h2>
         <button class="btn btn--sm" @click=${props.onAdvancedSettings}>
           Advanced ${icons.chevronRight}
         </button>

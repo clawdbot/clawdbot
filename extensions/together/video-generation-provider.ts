@@ -21,6 +21,7 @@ import type {
 import { TOGETHER_BASE_URL } from "./models.js";
 
 const DEFAULT_TOGETHER_VIDEO_MODEL = "Wan-AI/Wan2.2-T2V-A14B";
+const TOGETHER_VIDEO_BASE_URL = "https://api.together.xyz/v2";
 const DEFAULT_TIMEOUT_MS = 120_000;
 const POLL_INTERVAL_MS = 5_000;
 const MAX_POLL_ATTEMPTS = 120;
@@ -45,9 +46,18 @@ type TogetherVideoResponse = {
 };
 
 function resolveTogetherVideoBaseUrl(req: VideoGenerationRequest): string {
-  return (
-    normalizeOptionalString(req.cfg?.models?.providers?.together?.baseUrl) ?? TOGETHER_BASE_URL
-  );
+  const configuredBaseUrl = normalizeOptionalString(req.cfg?.models?.providers?.together?.baseUrl);
+  if (
+    !configuredBaseUrl ||
+    stripTrailingSlash(configuredBaseUrl) === stripTrailingSlash(TOGETHER_BASE_URL)
+  ) {
+    return TOGETHER_VIDEO_BASE_URL;
+  }
+  return configuredBaseUrl;
+}
+
+function stripTrailingSlash(value: string): string {
+  return value.replace(/\/+$/u, "");
 }
 
 function toDataUrl(buffer: Buffer, mimeType: string): string {
@@ -176,7 +186,7 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         resolveProviderHttpRequestConfig({
           baseUrl: resolveTogetherVideoBaseUrl(req),
-          defaultBaseUrl: TOGETHER_BASE_URL,
+          defaultBaseUrl: TOGETHER_VIDEO_BASE_URL,
           allowPrivateNetwork: false,
           defaultHeaders: {
             Authorization: `Bearer ${auth.apiKey}`,

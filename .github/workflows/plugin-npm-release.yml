@@ -25,7 +25,7 @@ on:
           - selected
           - all-publishable
       ref:
-        description: Commit SHA on main or a release branch to publish from (copy from the preview run)
+        description: Commit SHA on main, a release branch, or the matching Tideclaw alpha branch to publish from
         required: true
         type: string
       plugins:
@@ -71,7 +71,9 @@ jobs:
         id: ref
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-      - name: Validate ref is on main or a release branch
+      - name: Validate ref is on a trusted publish branch
+        env:
+          WORKFLOW_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
           git fetch --no-tags origin \
@@ -85,7 +87,14 @@ jobs:
               exit 0
             fi
           done < <(git for-each-ref --format='%(refname)' refs/remotes/origin/release)
-          echo "Plugin npm publishes must target a commit reachable from main or release/*." >&2
+          if [[ "${WORKFLOW_REF}" =~ ^refs/heads/tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
+            alpha_branch="${WORKFLOW_REF#refs/heads/}"
+            git fetch --no-tags origin "+refs/heads/${alpha_branch}:refs/remotes/origin/${alpha_branch}"
+            if git merge-base --is-ancestor HEAD "refs/remotes/origin/${alpha_branch}"; then
+              exit 0
+            fi
+          fi
+          echo "Plugin npm publishes must target a commit reachable from main, release/*, or the matching Tideclaw alpha branch." >&2
           exit 1
 
       - name: Validate publishable plugin metadata
@@ -150,6 +159,19 @@ jobs:
 
           echo "Already published / skipped:"
           jq -r '.skippedPublished[]? | "- \(.packageName)@\(.version)"' .local/plugin-npm-release-plan.json
+
+      - name: Validate Tideclaw alpha plugin channels
+        if: startsWith(github.ref, 'refs/heads/tideclaw/alpha/')
+        run: |
+          set -euo pipefail
+          invalid="$(
+            jq -r '.candidates[]? | select(.publishTag != "alpha" or .channel != "alpha") | "- \(.packageName)@\(.version) [\(.publishTag)]"' .local/plugin-npm-release-plan.json
+          )"
+          if [[ -n "${invalid}" ]]; then
+            echo "Tideclaw alpha plugin npm publishes may only publish alpha plugin versions." >&2
+            printf '%s\n' "${invalid}" >&2
+            exit 1
+          fi
 
   preview_plugin_pack:
     needs: preview_plugins_npm

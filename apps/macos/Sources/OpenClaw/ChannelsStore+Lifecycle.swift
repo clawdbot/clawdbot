@@ -22,13 +22,15 @@ func whatsappLoginWaitRequestTimeoutMs(
 extension ChannelsStore {
     func start() {
         guard !self.isPreview else { return }
+        self.startCount += 1
+        guard self.startCount == 1 else { return }
         guard self.pollTask == nil else { return }
         self.pollTask = Task.detached { [weak self] in
             guard let self else { return }
+            await self.refresh(probe: false)
             async let schemaLoad: Void = self.loadConfigSchema()
             async let configLoad: Void = self.loadConfig(force: false)
-            async let statusRefresh: Void = self.refresh(probe: true)
-            _ = await (schemaLoad, configLoad, statusRefresh)
+            _ = await (schemaLoad, configLoad)
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: UInt64(self.interval * 1_000_000_000))
                 await self.refresh(probe: false)
@@ -37,6 +39,10 @@ extension ChannelsStore {
     }
 
     func stop() {
+        guard !self.isPreview else { return }
+        guard self.startCount > 0 else { return }
+        self.startCount -= 1
+        guard self.startCount == 0 else { return }
         self.pollTask?.cancel()
         self.pollTask = nil
     }
@@ -47,14 +53,15 @@ extension ChannelsStore {
         defer { self.isRefreshing = false }
 
         do {
+            let statusTimeoutMs = probe ? 8000 : 2500
             let params: [String: AnyCodable] = [
                 "probe": AnyCodable(probe),
-                "timeoutMs": AnyCodable(8000),
+                "timeoutMs": AnyCodable(statusTimeoutMs),
             ]
             let snap: ChannelsStatusSnapshot = try await GatewayConnection.shared.requestDecoded(
                 method: .channelsStatus,
                 params: params,
-                timeoutMs: 12000)
+                timeoutMs: probe ? 12000 : 5000)
             self.snapshot = snap
             self.lastSuccess = Date()
             self.lastError = nil

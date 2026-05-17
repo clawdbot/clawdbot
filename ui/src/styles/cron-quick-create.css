@@ -1,9 +1,25 @@
 /* ── Cron Quick Create Wizard ── */
 
 .cqc-container {
-  max-width: 600px;
-  margin: 0 auto;
-  padding: 32px 20px 56px;
+  width: min(680px, calc(100vw - 40px));
+  max-height: min(760px, calc(100vh - 56px));
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--card);
+  box-shadow: var(--shadow-xl);
+  padding: 28px;
+}
+
+.cqc-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 28px;
+  background: color-mix(in srgb, #000 58%, transparent);
+  backdrop-filter: blur(8px);
 }
 
 .cqc-header {
@@ -28,6 +44,11 @@
   width: 20px;
   height: 20px;
   color: var(--accent);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .cqc-header__close {
@@ -56,6 +77,11 @@
 .cqc-header__close svg {
   width: 14px;
   height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 /* ── Step Indicator ── */
@@ -343,10 +369,23 @@
 
 .cqc-actions {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: space-between;
   gap: 8px;
+  flex-wrap: wrap;
   padding-top: 20px;
   border-top: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+}
+
+.cqc-actions__secondary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.cqc-advanced-button {
+  color: var(--muted);
 }
 
 .cqc-actions .btn.primary {
@@ -364,7 +403,13 @@
 
 @media (max-width: 480px) {
   .cqc-container {
-    padding: 20px 14px 40px;
+    width: calc(100vw - 20px);
+    max-height: calc(100vh - 20px);
+    padding: 20px 14px 28px;
+  }
+
+  .cqc-backdrop {
+    padding: 10px;
   }
 
   .cqc-preset-grid {
@@ -374,5 +419,13 @@
   .cqc-step__line {
     width: 32px;
     margin: 0 6px;
+  }
+
+  .cqc-actions {
+    align-items: stretch;
+  }
+
+  .cqc-actions__secondary {
+    flex: 1 1 100%;
   }
 }

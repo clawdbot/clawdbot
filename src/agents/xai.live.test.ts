@@ -32,7 +32,7 @@ type AssistantLikeMessage = {
 };
 
 function resolveLiveXaiModel() {
-  return getModel("xai", "grok-4.3" as never) ?? getModel("xai", "grok-4");
+  return getModel("xai", "grok-4.3") ?? getModel("xai", "grok-4.20-0309-reasoning");
 }
 
 function requireLiveValue<T>(value: T | null | undefined, label: string): T {

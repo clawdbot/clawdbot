@@ -150,4 +150,22 @@ describe("OpenAI Codex routing policy", () => {
       }),
     ).toEqual(["openai-codex"]);
   });
+
+  it("routes openai provider to openai-codex when harness runtime is codex", () => {
+    expect(
+      resolveSelectedOpenAIPiRuntimeProvider({
+        provider: "openai",
+        harnessRuntime: "codex",
+      }),
+    ).toBe("openai-codex");
+  });
+
+  it("does not route non-OpenAI providers when runtime is codex", () => {
+    expect(
+      resolveSelectedOpenAIPiRuntimeProvider({
+        provider: "anthropic",
+        harnessRuntime: "codex",
+      }),
+    ).toBe("anthropic");
+  });
 });

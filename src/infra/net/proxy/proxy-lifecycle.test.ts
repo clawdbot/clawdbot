@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
@@ -42,7 +45,10 @@ vi.mock("../../../logger.js", () => ({
 }));
 
 import { logInfo, logWarn } from "../../../logger.js";
-import { _resetActiveManagedProxyStateForTests } from "./active-proxy-state.js";
+import {
+  _resetActiveManagedProxyStateForTests,
+  getActiveManagedProxyTlsOptions,
+} from "./active-proxy-state.js";
 import {
   ensureInheritedManagedProxyRoutingActive,
   resetProxyLifecycleForTests,
@@ -85,9 +91,11 @@ describe("startProxy", () => {
     "no_proxy",
     "NO_PROXY",
     "OPENCLAW_PROXY_ACTIVE",
+    "OPENCLAW_PROXY_CA_FILE",
     "OPENCLAW_PROXY_LOOPBACK_MODE",
     "OPENCLAW_PROXY_URL",
   ];
+  const tempDirs: string[] = [];
 
   beforeEach(() => {
     for (const key of envKeysToClean) {
@@ -106,6 +114,9 @@ describe("startProxy", () => {
   });
 
   afterEach(() => {
+    for (const dir of tempDirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
     for (const key of envKeysToClean) {
       if (savedEnv[key] === undefined) {
         delete process.env[key];
@@ -114,6 +125,14 @@ describe("startProxy", () => {
       }
     }
   });
+
+  function writeTempCa(contents = "proxy-ca"): string {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "openclaw-proxy-lifecycle-ca-"));
+    tempDirs.push(dir);
+    const caFile = path.join(dir, "proxy-ca.pem");
+    writeFileSync(caFile, contents, "utf8");
+    return caFile;
+  }
 
   it("returns null silently and does not touch env when not explicitly enabled", async () => {
     const handle = await startProxy(undefined);
@@ -177,13 +196,78 @@ describe("startProxy", () => {
     expect(process.env["HTTP_PROXY"]).toBe("http://127.0.0.1:3129");
   });
 
-  it("throws for HTTPS proxy URLs from OPENCLAW_PROXY_URL", async () => {
+  it("uses HTTPS proxy URLs from OPENCLAW_PROXY_URL", async () => {
     process.env["OPENCLAW_PROXY_URL"] = "https://127.0.0.1:3128";
 
-    await expect(startProxy({ enabled: true })).rejects.toThrow("http:// forward proxy");
+    const handle = await startProxy({ enabled: true });
 
-    expect(process.env["HTTP_PROXY"]).toBeUndefined();
-    expect(mockLogWarn).not.toHaveBeenCalled();
+    expect(expectProxyHandle(handle).proxyUrl).toBe("https://127.0.0.1:3128");
+    expect(process.env["HTTP_PROXY"]).toBe("https://127.0.0.1:3128");
+    expect(installGlobalProxyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: "managed",
+        proxyUrl: "https://127.0.0.1:3128",
+      }),
+    );
+  });
+
+  it("passes configured proxy CA trust to Proxyline", async () => {
+    const caFile = writeTempCa("active-proxy-ca");
+
+    const handle = await startProxy({
+      enabled: true,
+      proxyUrl: "https://127.0.0.1:3128",
+      tls: { caFile },
+    });
+
+    expect(getActiveManagedProxyTlsOptions()).toEqual({ ca: "active-proxy-ca" });
+    expect(process.env["OPENCLAW_PROXY_CA_FILE"]).toBe(caFile);
+    expect(installGlobalProxyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        proxyTls: { ca: "active-proxy-ca" },
+      }),
+    );
+
+    await stopProxy(expectProxyHandle(handle));
+  });
+
+  it("does not load configured proxy CA files for plain HTTP proxy URLs", async () => {
+    const missingCaFile = path.join(os.tmpdir(), "openclaw-missing-http-proxy-ca.pem");
+
+    const handle = await startProxy({
+      enabled: true,
+      proxyUrl: "http://127.0.0.1:3128",
+      tls: { caFile: missingCaFile },
+    });
+
+    expect(expectProxyHandle(handle).proxyUrl).toBe("http://127.0.0.1:3128");
+    expect(installGlobalProxyMock).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        proxyTls: expect.anything(),
+      }),
+    );
+
+    await stopProxy(handle);
+  });
+
+  it("loads inherited HTTPS proxy CA trust for child routing", () => {
+    const caFile = writeTempCa("inherited-https-proxy-ca");
+    process.env["OPENCLAW_PROXY_ACTIVE"] = "1";
+    process.env["OPENCLAW_PROXY_LOOPBACK_MODE"] = "gateway-only";
+    process.env["HTTP_PROXY"] = "https://proxy.example:8443";
+    process.env["OPENCLAW_PROXY_CA_FILE"] = caFile;
+
+    ensureInheritedManagedProxyRoutingActive();
+
+    expect(getActiveManagedProxyTlsOptions()).toBeUndefined();
+    expect(installGlobalProxyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ifActive: "reuse-compatible",
+        mode: "managed",
+        proxyTls: { ca: "inherited-https-proxy-ca" },
+        proxyUrl: "https://proxy.example:8443",
+      }),
+    );
   });
 
   it("sets process proxy env vars for inherited clients", async () => {

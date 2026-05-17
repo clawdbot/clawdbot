@@ -94,7 +94,8 @@ const MusicGenerateToolSchema = Type.Object({
   prompt: Type.Optional(Type.String({ description: "Music generation prompt." })),
   lyrics: Type.Optional(
     Type.String({
-      description: "Optional lyrics to guide sung output when the provider supports it.",
+      description:
+        "Exact sung lyrics only when the user supplies lyrics or asks for vocal words. For song/style requests, use prompt instead.",
     }),
   ),
   instrumental: Type.Optional(
@@ -600,7 +601,7 @@ export function createMusicGenerateTool(options?: {
     name: "music_generate",
     displaySummary: "Generate music",
     description:
-      'Generate music using configured providers. In session-backed chats, generation runs as a background task; do not call music_generate again for the same request, wait for the completion event, then send the generated attachments through the message tool. Use action="status" to inspect the active task.',
+      'Create actual audio/music tracks from song, jingle, beat, loop, soundtrack, anthem, or instrumental requests. If the user asks to make/generate/create a song or music, call music_generate; do not just write lyrics unless they ask for lyrics/text only. Put style, genre, mood, tempo, instruments, and purpose in prompt. Use lyrics only for exact sung words. In session-backed chats, generation runs as a background task; do not call music_generate again for the same request, wait for the completion event, then send the generated attachments through the message tool. Use action="status" to inspect the active task.',
     parameters: MusicGenerateToolSchema,
     execute: async (_toolCallId, rawArgs) => {
       const args = rawArgs as Record<string, unknown>;

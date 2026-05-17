@@ -183,4 +183,19 @@ describe("pairing connect details", () => {
       }),
     ).toBe("scope upgrade pending approval (requestId: req-123)");
   });
+
+  it("formats protocol mismatch details with both client and gateway versions", () => {
+    expect(
+      formatConnectErrorMessage({
+        message: "protocol mismatch",
+        details: {
+          code: "PROTOCOL_MISMATCH",
+          clientMinProtocol: 5,
+          clientMaxProtocol: 5,
+          expectedProtocol: 4,
+          minimumProbeProtocol: 4,
+        },
+      }),
+    ).toBe("protocol mismatch: Control UI v5, Gateway v4, probe min v4");
+  });
 });

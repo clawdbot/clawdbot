@@ -104,6 +104,7 @@ export type ConfigProps = {
   assistantName: string;
   configPath?: string | null;
   navRootLabel?: string;
+  showRootTab?: boolean;
   includeSections?: string[];
   excludeSections?: string[];
   includeVirtualSections?: boolean;
@@ -1191,6 +1192,7 @@ export function resetConfigViewStateForTests() {
 
 export function renderConfig(props: ConfigProps) {
   const showModeToggle = props.showModeToggle ?? false;
+  const showRootTab = props.showRootTab ?? true;
   const validity = props.valid == null ? "unknown" : props.valid ? "valid" : "invalid";
   const includeVirtualSections = props.includeVirtualSections ?? true;
   const include = props.includeSections?.length ? new Set(props.includeSections) : null;
@@ -1250,7 +1252,9 @@ export function renderConfig(props: ConfigProps) {
   const effectiveSubsection = null;
 
   const topTabs = [
-    { key: null as string | null, label: props.navRootLabel ?? "Settings" },
+    ...(showRootTab
+      ? [{ key: null as string | null, label: props.navRootLabel ?? "Settings" }]
+      : []),
     ...[...visibleCategories, ...(otherCategory ? [otherCategory] : [])].flatMap((cat) =>
       cat.sections.map((s) => ({ key: s.key, label: s.label })),
     ),

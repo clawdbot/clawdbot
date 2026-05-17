@@ -1010,6 +1010,18 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional SNI/server-name override used when establishing TLS to the proxy.",
   "models.providers.*.request.proxy.tls.insecureSkipVerify":
     "Skips proxy TLS certificate verification. Use only for controlled development environments.",
+  proxy:
+    "Operator-managed forward proxy routing for OpenClaw runtime HTTP, HTTPS, WebSocket, and supported raw-egress paths. Use this when central egress control is part of the deployment boundary.",
+  "proxy.enabled":
+    "Enables operator-managed proxy routing. When enabled, OpenClaw fails startup if no managed proxy URL is configured.",
+  "proxy.proxyUrl":
+    "Managed forward proxy URL. Use http:// for a plain CONNECT proxy or https:// when the connection to the proxy endpoint itself must use TLS.",
+  "proxy.tls":
+    "TLS settings used when connecting to the managed proxy endpoint. These settings apply to proxy TLS, not destination TLS after CONNECT.",
+  "proxy.tls.caFile":
+    "Filesystem path to a custom CA bundle used to verify an HTTPS managed proxy endpoint certificate.",
+  "proxy.loopbackMode":
+    'Controls Gateway loopback control-plane routing while managed proxy mode is active: "gateway-only", "proxy", or "block".',
   "models.providers.*.request.tls":
     "Optional TLS settings used when connecting directly to the upstream model endpoint.",
   "models.providers.*.request.tls.ca":

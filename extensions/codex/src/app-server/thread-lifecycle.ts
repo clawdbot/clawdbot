@@ -15,6 +15,7 @@ import {
   resolveCodexContextEngineProjectionMaxChars,
   resolveCodexContextEngineProjectionReserveTokens,
 } from "./context-engine-projection.js";
+import { invalidInlineImageText, sanitizeInlineImageDataUrl } from "./image-payload-sanitizer.js";
 import {
   isCodexPluginThreadBindingStale,
   mergeCodexThreadConfigs,
@@ -803,15 +804,17 @@ function buildUserInput(
   params: EmbeddedRunAttemptParams,
   promptText: string = params.prompt,
 ): CodexUserInput[] {
-  return [
-    { type: "text", text: promptText, text_elements: [] },
-    ...(params.images ?? []).map(
-      (image): CodexUserInput => ({
-        type: "image",
-        url: `data:${image.mimeType};base64,${image.data}`,
-      }),
-    ),
-  ];
+  const imageInputs = (params.images ?? []).map((image): CodexUserInput => {
+    const imageUrl = sanitizeInlineImageDataUrl(`data:${image.mimeType};base64,${image.data}`);
+    return imageUrl
+      ? { type: "image", url: imageUrl }
+      : {
+          type: "text",
+          text: invalidInlineImageText("codex user input"),
+          text_elements: [],
+        };
+  });
+  return [{ type: "text", text: promptText, text_elements: [] }, ...imageInputs];
 }
 
 export function resolveCodexAppServerModelProvider(params: {

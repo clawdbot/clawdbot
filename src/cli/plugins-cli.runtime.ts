@@ -1,4 +1,8 @@
 import {
+  collectConfiguredRuntimePluginIds,
+  resolveConfiguredRuntimePluginInstallCandidate,
+} from "../commands/doctor/shared/configured-runtime-plugin-installs.js";
+import {
   assertConfigWriteAllowedInCurrentMode,
   getRuntimeConfig,
   readConfigFileSnapshot,
@@ -65,6 +69,99 @@ function isErroredConfigSelectedShadowDiagnostic(params: {
       plugin.origin === "config" &&
       plugin.status === "error",
   );
+}
+
+function formatConfiguredRuntimePluginInstallSpec(params: {
+  clawhubSpec?: string;
+  defaultChoice?: string;
+  npmSpec?: string;
+  pluginId: string;
+}): string {
+  const clawhubSpec = params.clawhubSpec?.trim();
+  const npmSpec = params.npmSpec?.trim();
+  if (clawhubSpec && params.defaultChoice !== "npm") {
+    return clawhubSpec;
+  }
+  return npmSpec ?? clawhubSpec ?? params.pluginId;
+}
+
+function pluginIdListIncludes(list: readonly string[] | undefined, pluginId: string): boolean {
+  return Array.isArray(list) && list.some((entry) => entry.trim() === pluginId);
+}
+
+function formatBlockedRuntimePluginGuidance(params: {
+  cfg: OpenClawConfig;
+  pluginId: string;
+}): string | undefined {
+  const pluginId = params.pluginId;
+  const alternative =
+    pluginId === "acpx" ? "disable ACP/acpx in acp config" : 'change the runtime policy to "pi"';
+  if (params.cfg.plugins?.enabled === false) {
+    return `Enable plugin loading and the "${pluginId}" plugin, or ${alternative}.`;
+  }
+  if (pluginIdListIncludes(params.cfg.plugins?.deny, pluginId)) {
+    return `Remove "${pluginId}" from plugins.deny and enable the "${pluginId}" plugin, or ${alternative}.`;
+  }
+  if (params.cfg.plugins?.entries?.[pluginId]?.enabled === false) {
+    return `Set plugins.entries.${pluginId}.enabled=true or remove that disabled entry, or ${alternative}.`;
+  }
+  return undefined;
+}
+
+function formatDisabledRuntimePluginGuidance(params: {
+  cfg: OpenClawConfig;
+  pluginId: string;
+}): string {
+  const allow = params.cfg.plugins?.allow;
+  const alternative =
+    params.pluginId === "acpx"
+      ? "disable ACP/acpx in acp config"
+      : 'change the runtime policy to "pi"';
+  if (Array.isArray(allow) && allow.length > 0 && !allow.includes(params.pluginId)) {
+    return `Add "${params.pluginId}" to plugins.allow and enable the plugin, or ${alternative}.`;
+  }
+  return `Enable the "${params.pluginId}" plugin, or ${alternative}.`;
+}
+
+function collectConfiguredRuntimePluginWarnings(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  plugins: readonly { enabled?: boolean; id: string; status?: string }[];
+}): string[] {
+  const enabledPluginIds = new Set(
+    params.plugins
+      .filter((plugin) => plugin.enabled !== false && plugin.status !== "disabled")
+      .map((plugin) => plugin.id),
+  );
+  return collectConfiguredRuntimePluginIds(params.cfg, params.env, {
+    includeEnvRuntime: false,
+    includeImplicitRuntimePreferences: false,
+    includeLegacyAgentRuntimes: false,
+  }).flatMap((runtimeId) => {
+    const candidate = resolveConfiguredRuntimePluginInstallCandidate(runtimeId);
+    if (!candidate || enabledPluginIds.has(runtimeId)) {
+      return [];
+    }
+    const disabledPluginRecord = params.plugins.find((plugin) => plugin.id === runtimeId);
+    const blockedGuidance = formatBlockedRuntimePluginGuidance({
+      cfg: params.cfg,
+      pluginId: runtimeId,
+    });
+    if (blockedGuidance) {
+      return [
+        `- Configured runtime "${runtimeId}" requires the ${candidate.label} plugin, but "${runtimeId}" is blocked by plugin configuration. ${blockedGuidance}`,
+      ];
+    }
+    if (disabledPluginRecord) {
+      return [
+        `- Configured runtime "${runtimeId}" requires the ${candidate.label} plugin, but "${runtimeId}" is disabled. ${formatDisabledRuntimePluginGuidance({ cfg: params.cfg, pluginId: runtimeId })}`,
+      ];
+    }
+    const installSpec = formatConfiguredRuntimePluginInstallSpec(candidate);
+    return [
+      `- Configured runtime "${runtimeId}" requires the ${candidate.label} plugin, but no enabled "${runtimeId}" plugin was found. Run "openclaw doctor --fix" to install ${installSpec}, or install it manually with "openclaw plugins install ${installSpec}".`,
+    ];
+  });
 }
 
 export async function runPluginsEnableCommand(id: string): Promise<void> {
@@ -240,10 +337,16 @@ export async function runPluginsDoctorCommand(): Promise<void> {
     doctorFixCommand: "openclaw doctor --fix",
     autoRepairBlocked: isStalePluginAutoRepairBlocked(sourceCfg ?? cfg, process.env),
   });
+  const configuredRuntimePluginWarnings = collectConfiguredRuntimePluginWarnings({
+    cfg: sourceCfg ?? cfg,
+    env: process.env,
+    plugins: report.plugins,
+  });
   const hasInstallTreeIssues =
     errors.length > 0 || diags.length > 0 || shadowed.length > 0 || compatibility.length > 0;
+  const pluginConfigWarnings = [...stalePluginConfigWarnings, ...configuredRuntimePluginWarnings];
 
-  if (!hasInstallTreeIssues && stalePluginConfigWarnings.length === 0) {
+  if (!hasInstallTreeIssues && pluginConfigWarnings.length === 0) {
     defaultRuntime.log("No plugin issues detected.");
     return;
   }
@@ -301,14 +404,14 @@ export async function runPluginsDoctorCommand(): Promise<void> {
       lines.push(`- ${formatPluginCompatibilityNotice(notice)} [${marker}]`);
     }
   }
-  if (stalePluginConfigWarnings.length > 0) {
+  if (pluginConfigWarnings.length > 0) {
     if (lines.length > 0) {
       lines.push("");
     }
     lines.push(theme.warn("Plugin configuration:"));
-    lines.push(...stalePluginConfigWarnings);
+    lines.push(...pluginConfigWarnings);
   }
-  if (!hasInstallTreeIssues && stalePluginConfigWarnings.length > 0) {
+  if (!hasInstallTreeIssues && pluginConfigWarnings.length > 0) {
     if (lines.length > 0) {
       lines.push("");
     }

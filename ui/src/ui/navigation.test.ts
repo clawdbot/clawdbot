@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   TAB_GROUPS,
+  SETTINGS_TABS,
   iconForTab,
   inferBasePathFromPathname,
+  isSettingsTab,
   normalizeBasePath,
   normalizePath,
   pathForTab,
@@ -12,8 +14,10 @@ import {
   type Tab,
 } from "./navigation.ts";
 
-/** All valid tab identifiers derived from TAB_GROUPS */
-const ALL_TABS: Tab[] = TAB_GROUPS.flatMap((group) => group.tabs) as Tab[];
+/** All valid tab identifiers derived from visible groups plus routed settings slices. */
+const ALL_TABS: Tab[] = Array.from(
+  new Set<Tab>([...(TAB_GROUPS.flatMap((group) => group.tabs) as Tab[]), ...SETTINGS_TABS]),
+);
 
 const leadingSlashNormalizerCases = [
   { name: "normalizeBasePath", normalize: normalizeBasePath, input: "ui", expected: "/ui" },
@@ -66,7 +70,7 @@ describe("titleForTab", () => {
       skills: "Skills",
       nodes: "Nodes",
       dreams: "Dreaming",
-      config: "Config",
+      config: "Settings",
       communications: "Communications",
       appearance: "Appearance",
       automation: "Automation",
@@ -214,5 +218,22 @@ describe("TAB_GROUPS", () => {
     const allTabs = TAB_GROUPS.flatMap((g) => g.tabs);
     const uniqueTabs = new Set(allTabs);
     expect(uniqueTabs.size).toBe(allTabs.length);
+  });
+
+  it("keeps detailed settings slices routed but out of the root sidebar", () => {
+    const settings = TAB_GROUPS.find((group) => group.label === "settings");
+    expect(settings?.tabs).toEqual(["config"]);
+    expect(SETTINGS_TABS).toEqual([
+      "config",
+      "channels",
+      "communications",
+      "appearance",
+      "automation",
+      "infrastructure",
+      "aiAgents",
+      "debug",
+      "logs",
+    ]);
+    expect(SETTINGS_TABS.every((tab) => isSettingsTab(tab))).toBe(true);
   });
 });

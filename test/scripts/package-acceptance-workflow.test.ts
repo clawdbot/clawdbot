@@ -921,6 +921,9 @@ describe("package artifact reuse", () => {
     expect(packageJson.scripts?.["release:candidate"]).toBe(
       "node scripts/release-candidate-checklist.mjs",
     );
+    expect(packageJson.scripts?.["release:beta"]).toBe(
+      "node scripts/release-candidate-checklist.mjs",
+    );
     expect(packageJson.scripts?.["release:fast-pretag-check"]).toBe(
       "bash scripts/release-fast-pretag-check.sh",
     );
@@ -930,6 +933,20 @@ describe("package artifact reuse", () => {
     expect(releaseWorkflow).toContain("Plugin npm run ID");
     expect(releaseWorkflow).toContain("Plugin ClawHub run ID");
     expect(releaseWorkflow).toContain("OpenClaw npm run ID");
+    expect(releaseWorkflow).toContain("npm_telegram_run_id");
+    expect(releaseWorkflow).toContain("Approve release gate from OpenClaw Release Publish wrapper");
+    expect(releaseWorkflow).toContain("release:verify-beta");
+    expect(releaseWorkflow).toContain('--workflow-ref "${CHILD_WORKFLOW_REF}"');
+    expect(releaseWorkflow).toContain('verify_args+=(--plugins "${PLUGINS}")');
+    expect(releaseWorkflow).toContain("openclaw-release-postpublish-evidence");
+    expect(releaseWorkflow).toContain("Failed child job summary");
+    expect(releaseWorkflow).toContain("final verification waits for ClawHub");
+    expect(releaseWorkflow).toContain(
+      '[[ "${WAIT_FOR_CLAWHUB}" == "true" || "${PUBLISH_OPENCLAW_NPM}" == "true" ]]',
+    );
+    expect(releaseWorkflow.lastIndexOf("create_or_update_github_release")).toBeLessThan(
+      releaseWorkflow.indexOf('if [[ -n "${clawhub_pid}" ]] && ! wait "${clawhub_pid}"'),
+    );
     expect(releaseWorkflow).toContain("finished with ${conclusion} in ${duration_label}");
   });
 

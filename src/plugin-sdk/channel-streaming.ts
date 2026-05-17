@@ -113,7 +113,7 @@ export const DEFAULT_PROGRESS_DRAFT_LABELS = [
 ] as const;
 
 export const DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS = 5_000;
-const DEFAULT_PROGRESS_DRAFT_MAX_LINE_CHARS = 72;
+const DEFAULT_PROGRESS_DRAFT_MAX_LINE_CHARS = 120;
 const MIN_TRUNCATED_FINAL_PREFIX_CHARS = 48;
 const MIN_TRUNCATED_FINAL_CONTINUATION_CHARS = 24;
 
@@ -747,6 +747,14 @@ export function resolveChannelProgressDraftMaxLines(
   return configured && configured > 0 ? configured : defaultValue;
 }
 
+export function resolveChannelProgressDraftMaxLineChars(
+  entry: StreamingCompatEntry | null | undefined,
+  defaultValue = DEFAULT_PROGRESS_DRAFT_MAX_LINE_CHARS,
+): number {
+  const configured = asInteger(resolveChannelProgressDraftConfig(entry).maxLineChars);
+  return configured && configured > 0 ? configured : defaultValue;
+}
+
 export function resolveChannelProgressDraftRender(
   entry: StreamingCompatEntry | null | undefined,
   defaultValue: ChannelProgressDraftRenderMode = "text",
@@ -781,6 +789,15 @@ function removeUnbalancedInlineBackticks(value: string): string {
     return value;
   }
   return value.trimStart().startsWith("`") ? value.replaceAll("`", "'") : value.replaceAll("`", "");
+}
+
+function compactPlainProgressLine(line: string, maxChars: number): string {
+  const head = sliceCodePoints(line, 0, maxChars - 1).trimEnd();
+  const boundary = head.search(/\s+\S*$/u);
+  if (boundary > Math.floor(maxChars * 0.6)) {
+    return `${head.slice(0, boundary).trimEnd()}…`;
+  }
+  return `${head}…`;
 }
 
 function compactChannelProgressDraftLine(line: string, maxChars: number): string {
@@ -825,9 +842,7 @@ function compactChannelProgressDraftLine(line: string, maxChars: number): string
     }
   }
 
-  return removeUnbalancedInlineBackticks(
-    `${sliceCodePoints(normalized, 0, maxChars - 1).trimEnd()}…`,
-  );
+  return removeUnbalancedInlineBackticks(compactPlainProgressLine(normalized, maxChars));
 }
 
 function getProgressDraftLineText(line: string | ChannelProgressDraftLine): string {
@@ -912,6 +927,7 @@ export function formatChannelProgressDraftText(params: {
     random: params.random,
   });
   const maxLines = resolveChannelProgressDraftMaxLines(params.entry);
+  const maxLineChars = resolveChannelProgressDraftMaxLineChars(params.entry);
   const formatLine = params.formatLine ?? ((line: string) => line);
   const bullet = params.bullet ?? "•";
   const rawLines: Array<string | ChannelProgressDraftLine | { draftLabel: string }> = label
@@ -925,7 +941,7 @@ export function formatChannelProgressDraftText(params: {
         : typeof line === "string"
           ? line
           : getProgressDraftLineText(line);
-      const text = compactChannelProgressDraftLine(rawText, DEFAULT_PROGRESS_DRAFT_MAX_LINE_CHARS);
+      const text = compactChannelProgressDraftLine(rawText, maxLineChars);
       return text ? { text, isLabelLine } : undefined;
     })
     .filter((line): line is { text: string; isLabelLine: boolean } => Boolean(line))

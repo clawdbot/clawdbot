@@ -298,6 +298,7 @@ describe("createPinnedDispatcher", () => {
         autoSelectFamilyAttemptTimeout: 300,
         lookup,
       },
+      clientFactory: expect.any(Function),
       allowH2: false,
       proxyTls: {
         autoSelectFamily: true,
@@ -324,6 +325,7 @@ describe("createPinnedDispatcher", () => {
 
     expect(proxyAgentCtor).toHaveBeenCalledWith({
       uri: "http://127.0.0.1:7890",
+      clientFactory: expect.any(Function),
       proxyTls: {
         autoSelectFamily: true,
         autoSelectFamilyAttemptTimeout: 300,
@@ -359,6 +361,7 @@ describe("createPinnedDispatcher", () => {
 
     expect(proxyAgentCtor).toHaveBeenCalledWith({
       uri: "http://127.0.0.1:7890",
+      clientFactory: expect.any(Function),
       requestTls: {
         autoSelectFamily: false,
         lookup,

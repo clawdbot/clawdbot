@@ -1,4 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_PROXY_VALIDATION_ALLOWED_URLS,
   resolveProxyValidationConfig,
@@ -6,6 +9,22 @@ import {
 } from "./proxy-validation.js";
 
 describe("proxy validation", () => {
+  const tempDirs: string[] = [];
+
+  afterEach(() => {
+    for (const dir of tempDirs.splice(0)) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  function writeTempCa(contents = "proxy-ca"): string {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "openclaw-proxy-validation-ca-"));
+    tempDirs.push(dir);
+    const caFile = path.join(dir, "proxy-ca.pem");
+    writeFileSync(caFile, contents, "utf8");
+    return caFile;
+  }
+
   it("resolves proxy URL overrides before config and OPENCLAW_PROXY_URL", () => {
     const result = resolveProxyValidationConfig({
       proxyUrlOverride: "http://override-proxy.example:3128",
@@ -166,7 +185,7 @@ describe("proxy validation", () => {
     });
   });
 
-  it("rejects non-http proxy URLs", () => {
+  it("accepts HTTPS proxy URLs", () => {
     const result = resolveProxyValidationConfig({
       config: {
         enabled: true,
@@ -175,7 +194,24 @@ describe("proxy validation", () => {
       env: {},
     });
 
-    expect(result.errors).toEqual(["proxyUrl must use http://"]);
+    expect(result).toEqual({
+      enabled: true,
+      proxyUrl: "https://proxy.example:3128",
+      source: "config",
+      errors: [],
+    });
+  });
+
+  it("rejects unsupported proxy URL protocols", () => {
+    const result = resolveProxyValidationConfig({
+      config: {
+        enabled: true,
+        proxyUrl: "socks5://proxy.example:1080",
+      },
+      env: {},
+    });
+
+    expect(result.errors).toEqual(["proxyUrl must use http:// or https://"]);
   });
 
   it("checks default allowed and denied destinations through the proxy", async () => {
@@ -459,6 +495,128 @@ describe("proxy validation", () => {
         },
       ],
     });
+  });
+
+  it("passes CLI proxy CA file contents to validation checks", async () => {
+    const caFile = writeTempCa("cli-proxy-ca");
+    const fetchCheck = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    const apnsCheck = vi
+      .fn()
+      .mockResolvedValue({ status: 403, apnsId: "00000000-0000-0000-0000-000000000000" });
+
+    const result = await runProxyValidation({
+      proxyUrlOverride: "https://proxy.example:8443",
+      proxyCaFileOverride: caFile,
+      allowedUrls: ["https://example.com/"],
+      deniedUrls: [],
+      apnsReachability: true,
+      fetchCheck,
+      apnsCheck,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(fetchCheck).toHaveBeenCalledWith({
+      proxyUrl: "https://proxy.example:8443",
+      targetUrl: "https://example.com/",
+      timeoutMs: 5000,
+      proxyTls: { ca: "cli-proxy-ca" },
+    });
+    expect(apnsCheck).toHaveBeenCalledWith({
+      proxyUrl: "https://proxy.example:8443",
+      authority: "https://api.sandbox.push.apple.com",
+      timeoutMs: 5000,
+      proxyTls: { ca: "cli-proxy-ca" },
+    });
+  });
+
+  it("does not inherit configured proxy CA files for explicit proxy URL validation", async () => {
+    const configCaFile = writeTempCa("stale-config-proxy-ca");
+    const fetchCheck = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+
+    const result = await runProxyValidation({
+      proxyUrlOverride: "https://override-proxy.example:8443",
+      config: {
+        enabled: true,
+        proxyUrl: "https://config-proxy.example:8443",
+        tls: { caFile: configCaFile },
+      },
+      allowedUrls: ["https://example.com/"],
+      deniedUrls: [],
+      fetchCheck,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.config.proxyCaFile).toBeUndefined();
+    expect(fetchCheck).toHaveBeenCalledWith({
+      proxyUrl: "https://override-proxy.example:8443",
+      targetUrl: "https://example.com/",
+      timeoutMs: 5000,
+    });
+  });
+
+  it("does not load proxy CA files for plain HTTP proxy validation", async () => {
+    const missingCaFile = path.join(os.tmpdir(), "openclaw-missing-http-proxy-validation-ca.pem");
+    const fetchCheck = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+
+    const result = await runProxyValidation({
+      proxyUrlOverride: "http://proxy.example:8080",
+      proxyCaFileOverride: missingCaFile,
+      allowedUrls: ["https://example.com/"],
+      deniedUrls: [],
+      fetchCheck,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(fetchCheck).toHaveBeenCalledWith({
+      proxyUrl: "http://proxy.example:8080",
+      targetUrl: "https://example.com/",
+      timeoutMs: 5000,
+    });
+  });
+
+  it("uses configured proxy CA file contents when no CLI override is supplied", async () => {
+    const caFile = writeTempCa("config-proxy-ca");
+    const fetchCheck = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+
+    await runProxyValidation({
+      config: {
+        enabled: true,
+        proxyUrl: "https://proxy.example:8443",
+        tls: { caFile },
+      },
+      env: {},
+      allowedUrls: ["https://example.com/"],
+      deniedUrls: [],
+      fetchCheck,
+    });
+
+    expect(fetchCheck).toHaveBeenCalledWith({
+      proxyUrl: "https://proxy.example:8443",
+      targetUrl: "https://example.com/",
+      timeoutMs: 5000,
+      proxyTls: { ca: "config-proxy-ca" },
+    });
+  });
+
+  it("fails closed before probing when proxy CA file cannot be loaded", async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), "openclaw-proxy-validation-missing-ca-"));
+    tempDirs.push(dir);
+    const fetchCheck = vi.fn();
+
+    const result = await runProxyValidation({
+      proxyUrlOverride: "https://proxy.example:8443",
+      proxyCaFileOverride: path.join(dir, "missing.pem"),
+      allowedUrls: ["https://example.com/"],
+      deniedUrls: [],
+      fetchCheck,
+    });
+
+    expect(fetchCheck).not.toHaveBeenCalled();
+    expect(result.ok).toBe(false);
+    expect(result.config.errors).toEqual([
+      expect.stringContaining("proxy CA file could not be read"),
+    ]);
+    expect(result.checks).toEqual([]);
   });
 
   it("accepts APNs 403 reachability with InvalidProviderToken when apns-id is unavailable", async () => {

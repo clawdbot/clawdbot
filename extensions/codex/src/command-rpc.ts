@@ -23,6 +23,7 @@ type AuthProfileOrderConfig = Parameters<
 export type CodexControlRequestOptions = {
   config?: AuthProfileOrderConfig;
   authProfileId?: string;
+  agentDir?: string;
   isolated?: boolean;
 };
 
@@ -68,6 +69,7 @@ export async function codexControlRequest(
     startOptions: runtime.start,
     config: options.config,
     authProfileId: options.authProfileId,
+    agentDir: options.agentDir,
     isolated: options.isolated,
   });
 }

@@ -55,6 +55,18 @@ describe("sidebar menu trigger styles", () => {
     expect(css).toContain(".topbar-nav-toggle {");
     expect(css).toContain("display: none;");
   });
+
+  it("keeps the sidebar new-session button inset and its icon visible", () => {
+    const css = readLayoutCss();
+
+    expect(css).toMatch(/\.sidebar-sessions \{[\s\S]*padding: 0 8px;/);
+    expect(css).toMatch(/\.sidebar-new-session \{[\s\S]*min-height: 38px;/);
+    expect(css).toMatch(/\.sidebar-new-session \{[\s\S]*box-sizing: border-box;/);
+    expect(css).toMatch(
+      /\.sidebar-new-session__icon svg \{[\s\S]*stroke: currentColor;[\s\S]*fill: none;/,
+    );
+    expect(css).toMatch(/\.sidebar--collapsed \.sidebar-sessions \{[\s\S]*padding: 0;/);
+  });
 });
 
 describe("grouped chat width styles", () => {

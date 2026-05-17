@@ -1213,6 +1213,9 @@ export const tr: TranslationMap = {
       ascending: "Artan",
       descending: "Azalan",
       reset: "Sıfırla",
+      emptyTitle: "No scheduled jobs yet.",
+      emptyHint: "Create one from a plain-language prompt; advanced fields can wait.",
+      emptyFilteredHint: "Clear or change filters to see scheduled jobs.",
       noMatching: "Eşleşen iş yok.",
       loading: "Yükleniyor...",
       loadMore: "Daha fazla iş yükle",
@@ -1248,6 +1251,7 @@ export const tr: TranslationMap = {
     form: {
       editJob: "İşi Düzenle",
       newJob: "Yeni İş",
+      advancedJob: "Advanced job",
       updateSubtitle: "Seçili zamanlanmış işi güncelleyin.",
       createSubtitle: "Zamanlanmış bir uyandırma veya aracı çalıştırması oluşturun.",
       required: "Gerekli",

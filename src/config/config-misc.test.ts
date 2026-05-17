@@ -949,7 +949,7 @@ describe("broadcast", () => {
 });
 
 describe("model compat config schema", () => {
-  it.each(["zai", "qwen", "qwen-chat-template"] as const)(
+  it.each(["together", "zai", "qwen", "qwen-chat-template"] as const)(
     "accepts full openai-completions compat fields with %s thinking format",
     (thinkingFormat) => {
       const res = OpenClawSchema.safeParse({

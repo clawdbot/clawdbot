@@ -34,6 +34,8 @@ const attemptExecutionMocks = vi.hoisted(() => ({
   emitAcpLifecycleStart: vi.fn(),
   emitAcpLifecycleEnd: vi.fn(),
   emitAcpLifecycleError: vi.fn(),
+  emitAcpPromptSubmitted: vi.fn(),
+  emitAcpRuntimeEvent: vi.fn(),
   persistAcpTurnTranscript: vi.fn(
     async ({ sessionEntry }: { sessionEntry?: unknown }) => sessionEntry,
   ),
@@ -74,6 +76,8 @@ vi.mock("../agents/command/attempt-execution.runtime.js", () => {
     emitAcpLifecycleStart: attemptExecutionMocks.emitAcpLifecycleStart,
     emitAcpLifecycleEnd: attemptExecutionMocks.emitAcpLifecycleEnd,
     emitAcpLifecycleError: attemptExecutionMocks.emitAcpLifecycleError,
+    emitAcpPromptSubmitted: attemptExecutionMocks.emitAcpPromptSubmitted,
+    emitAcpRuntimeEvent: attemptExecutionMocks.emitAcpRuntimeEvent,
     emitAcpAssistantDelta: ({
       runId,
       text,

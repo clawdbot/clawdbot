@@ -446,6 +446,7 @@
   min-height: 0;
   flex: 1;
   display: flex;
+  flex-direction: column;
 }
 
 .sidebar-shell__footer {
@@ -501,6 +502,164 @@
   overflow-x: hidden;
   padding: 0;
   scrollbar-width: none;
+}
+
+.sidebar-sessions {
+  display: grid;
+  gap: 10px;
+  flex-shrink: 0;
+  padding: 0 8px;
+  margin-bottom: 16px;
+}
+
+.sidebar-new-session {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 38px;
+  box-sizing: border-box;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border) 70%);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent) 11%, var(--bg-elevated) 89%);
+  color: var(--text-strong);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.2;
+  transition:
+    background var(--duration-fast) ease,
+    border-color var(--duration-fast) ease,
+    color var(--duration-fast) ease,
+    transform var(--duration-fast) ease;
+}
+
+.sidebar-new-session:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 18%, var(--bg-hover) 82%);
+  border-color: color-mix(in srgb, var(--accent) 44%, var(--border) 56%);
+  transform: translateY(-1px);
+}
+
+.sidebar-new-session:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.sidebar-new-session__icon,
+.sidebar-new-session__icon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.sidebar-new-session__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: currentColor;
+}
+
+.sidebar-new-session__icon svg {
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.8px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.sidebar-recent-sessions {
+  display: grid;
+  gap: 6px;
+}
+
+.sidebar-recent-sessions__label {
+  padding: 0 10px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--muted) 78%, var(--text) 22%);
+}
+
+.sidebar-recent-sessions__list {
+  display: grid;
+  gap: 4px;
+}
+
+.sidebar-recent-session {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 40px;
+  padding: 7px 9px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  color: var(--muted);
+  text-decoration: none;
+  transition:
+    background var(--duration-fast) ease,
+    border-color var(--duration-fast) ease,
+    color var(--duration-fast) ease;
+}
+
+.sidebar-recent-session:hover {
+  background: color-mix(in srgb, var(--bg-hover) 78%, transparent);
+  border-color: color-mix(in srgb, var(--border) 70%, transparent);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.sidebar-recent-session--active {
+  background: color-mix(in srgb, var(--accent-subtle) 68%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--text-strong);
+}
+
+.sidebar-recent-session__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--muted) 46%, transparent);
+}
+
+.sidebar-recent-session--active .sidebar-recent-session__dot {
+  background: var(--accent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.sidebar-recent-session__body {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sidebar-recent-session__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.sidebar-recent-session__meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.sidebar-recent-session__live {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-full);
+  background: var(--ok);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--ok) 12%, transparent);
 }
 
 .sidebar-nav::-webkit-scrollbar {
@@ -715,6 +874,19 @@
 
 .sidebar--collapsed .sidebar-nav {
   padding: 0;
+}
+
+.sidebar--collapsed .sidebar-sessions {
+  justify-items: center;
+  padding: 0;
+  margin-bottom: 14px;
+}
+
+.sidebar--collapsed .sidebar-new-session {
+  width: 44px;
+  min-height: 44px;
+  padding: 0;
+  border-radius: var(--radius-lg);
 }
 
 .sidebar--collapsed .nav-section {

@@ -241,6 +241,74 @@ describe("registerStatusHealthSessionsCommands", () => {
     });
   });
 
+  it("dispatches sessions list as an alias for bare sessions (regression for #81139)", async () => {
+    await runCli(["sessions", "list"]);
+
+    expect(sessionsCommand).toHaveBeenCalledTimes(1);
+    expectCommandOptions(sessionsCommand, {
+      json: false,
+      allAgents: false,
+      agent: undefined,
+      store: undefined,
+    });
+  });
+
+  it("forwards sessions parent options through the list alias", async () => {
+    await runCli([
+      "sessions",
+      "--json",
+      "--verbose",
+      "--store",
+      "/tmp/sessions.json",
+      "--agent",
+      "work",
+      "--all-agents",
+      "--active",
+      "120",
+      "--limit",
+      "25",
+      "list",
+    ]);
+
+    expect(setVerbose).toHaveBeenCalledWith(true);
+    expectCommandOptions(sessionsCommand, {
+      json: true,
+      store: "/tmp/sessions.json",
+      agent: "work",
+      allAgents: true,
+      active: "120",
+      limit: "25",
+    });
+  });
+
+  it("forwards sessions list-side options", async () => {
+    await runCli([
+      "sessions",
+      "list",
+      "--json",
+      "--verbose",
+      "--store",
+      "/tmp/sessions.json",
+      "--agent",
+      "work",
+      "--all-agents",
+      "--active",
+      "120",
+      "--limit",
+      "25",
+    ]);
+
+    expect(setVerbose).toHaveBeenCalledWith(true);
+    expectCommandOptions(sessionsCommand, {
+      json: true,
+      store: "/tmp/sessions.json",
+      agent: "work",
+      allAgents: true,
+      active: "120",
+      limit: "25",
+    });
+  });
+
   it("runs sessions cleanup subcommand with forwarded options", async () => {
     await runCli([
       "sessions",

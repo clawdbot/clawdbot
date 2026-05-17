@@ -1265,7 +1265,7 @@ describe("gateway send mirroring", () => {
         emoji: "✅",
       },
       requesterSenderId: "trusted-user",
-      inboundEventKind: "room_event",
+      inboundTurnKind: "room_event",
       toolContext: {
         currentGraphChannelId: "graph:team/chan",
         currentChannelProvider: "whatsapp",

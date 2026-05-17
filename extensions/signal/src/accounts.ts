@@ -16,7 +16,11 @@ export type ResolvedSignalAccount = {
   config: SignalAccountConfig;
 };
 
-const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("signal");
+const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("signal", {
+  implicitDefaultAccount: {
+    channelKeys: ["account"],
+  },
+});
 export const listSignalAccountIds = listAccountIds;
 export const resolveDefaultSignalAccountId = resolveDefaultAccountId;
 

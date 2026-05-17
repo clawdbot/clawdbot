@@ -180,6 +180,7 @@ function formatDiagnosticWorkLabel(
     sessionKey?: string;
     state: SessionStateValue;
     queueDepth: number;
+    activeQueuedTurn?: boolean;
     lastActivity: number;
   },
   now: number,
@@ -217,10 +218,14 @@ function getDiagnosticWorkSnapshot(now = Date.now()): DiagnosticWorkSnapshot {
       waitingCount += 1;
       pushLimitedDiagnosticLabel(waitingLabels, formatDiagnosticWorkLabel(state, now));
     }
-    if (state.queueDepth > 0) {
+    const queuedBacklog = Math.max(
+      0,
+      state.queueDepth - (state.state === "processing" && state.activeQueuedTurn ? 1 : 0),
+    );
+    if (queuedBacklog > 0) {
       pushLimitedDiagnosticLabel(queuedLabels, formatDiagnosticWorkLabel(state, now));
     }
-    queuedCount += state.queueDepth;
+    queuedCount += queuedBacklog;
   }
 
   return { activeCount, waitingCount, queuedCount, activeLabels, waitingLabels, queuedLabels };
@@ -686,8 +691,12 @@ export function logSessionStateChange(
   state.generation = (state.generation ?? 0) + 1;
   state.lastStuckWarnAgeMs = undefined;
   state.lastLongRunningWarnAgeMs = undefined;
+  if (params.state === "processing" && prevState !== "processing") {
+    state.activeQueuedTurn = state.queueDepth > 0;
+  }
   if (params.state === "idle") {
     state.queueDepth = Math.max(0, state.queueDepth - 1);
+    state.activeQueuedTurn = false;
   }
   if (!isProbeSession && diag.isEnabled("debug")) {
     diag.debug(

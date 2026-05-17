@@ -72,6 +72,20 @@ function formatCliVersionLine(cli: DaemonStatus["cli"]): string | null {
   return cli.entrypoint ? `${cli.version} (${shortenHomePath(cli.entrypoint)})` : cli.version;
 }
 
+function formatConnectionLine(
+  connection: NonNullable<DaemonStatus["connections"]>["established"][number],
+) {
+  const pid = connection.pid ? `pid=${connection.pid}` : "pid=?";
+  const ppid = connection.ppid ? ` ppid=${connection.ppid}` : "";
+  const direction = ` ${connection.direction}`;
+  const command = connection.command ? ` ${connection.command}` : "";
+  const address = connection.address ? ` ${connection.address}` : "";
+  const commandLine = connection.commandLine
+    ? ` cmd=${shortenHomePath(connection.commandLine)}`
+    : "";
+  return `${pid}${ppid}${direction}${command}${address}${commandLine}`;
+}
+
 export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
   if (opts.json) {
     const sanitized = sanitizeDaemonStatusForJson(status);
@@ -280,6 +294,26 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     defaultRuntime.error(
       errorText(
         `Fix: run ${formatCliCommand("openclaw gateway restart")} and re-check with ${formatCliCommand("openclaw gateway status --deep")}.`,
+      ),
+    );
+    spacer();
+  }
+
+  if (status.connections?.established.length) {
+    defaultRuntime.log(
+      `${label("Established clients:")} ${infoText(String(status.connections.established.length))}`,
+    );
+    for (const connection of status.connections.established.slice(0, 8)) {
+      defaultRuntime.log(`  ${infoText(formatConnectionLine(connection))}`);
+    }
+    if (status.connections.established.length > 8) {
+      defaultRuntime.log(
+        `  ${infoText(`... ${status.connections.established.length - 8} more connection(s)`)}`,
+      );
+    }
+    defaultRuntime.log(
+      warnText(
+        "If logs show protocol mismatch after rollback, stop stale OpenClaw client processes listed here and re-run gateway status.",
       ),
     );
     spacer();

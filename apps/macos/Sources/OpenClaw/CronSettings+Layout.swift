@@ -9,8 +9,10 @@ extension CronSettings {
             Spacer(minLength: 0)
         }
         .onAppear {
-            self.store.start()
-            self.channelsStore.start()
+            self.updateActiveWork(active: self.isActive)
+        }
+        .onChange(of: self.isActive) { _, active in
+            self.updateActiveWork(active: active)
         }
         .onDisappear {
             self.store.stop()
@@ -52,6 +54,16 @@ extension CronSettings {
                 guard let newValue else { return }
                 Task { await self.store.refreshRuns(jobId: newValue) }
             }
+    }
+
+    private func updateActiveWork(active: Bool) {
+        if active {
+            self.store.start()
+            self.channelsStore.start()
+        } else {
+            self.store.stop()
+            self.channelsStore.stop()
+        }
     }
 
     var schedulerBanner: some View {

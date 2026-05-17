@@ -4,6 +4,7 @@ export { createAccountActionGate } from "../channels/plugins/account-action-gate
 export {
   createAccountListHelpers,
   describeAccountSnapshot,
+  hasConfiguredAccountValue,
   listCombinedAccountIds,
   mergeAccountConfig,
   resolveListedDefaultAccountId,

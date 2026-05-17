@@ -61,6 +61,7 @@ export function registerProxyCli(program: Command) {
     .description("Validate the operator-managed network proxy")
     .option("--json", "Print machine-readable JSON")
     .option("--proxy-url <url>", "Proxy URL to validate instead of config/env")
+    .option("--proxy-ca-file <path>", "CA bundle file for verifying an HTTPS proxy endpoint")
     .option(
       "--allowed-url <url>",
       "Destination expected to succeed through the proxy",
@@ -74,6 +75,7 @@ export function registerProxyCli(program: Command) {
       async (opts: {
         json?: boolean;
         proxyUrl?: string;
+        proxyCaFile?: string;
         allowedUrl?: string[];
         deniedUrl?: string[];
         apnsReachable?: boolean;
@@ -84,6 +86,7 @@ export function registerProxyCli(program: Command) {
         await runtime.runProxyValidateCommand({
           json: opts.json,
           proxyUrl: opts.proxyUrl,
+          proxyCaFile: opts.proxyCaFile,
           allowedUrls: opts.allowedUrl,
           deniedUrls: opts.deniedUrl,
           apnsReachability: opts.apnsReachable,

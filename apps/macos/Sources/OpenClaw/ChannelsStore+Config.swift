@@ -37,6 +37,38 @@ extension ChannelsStore {
         }
     }
 
+    @discardableResult
+    func loadConfigSchemaLookup(path: String, force: Bool = false) async -> ConfigSchemaLookupNode? {
+        let sourceKey = self.currentConfigCacheSourceKey()
+        self.resetConfigSchemaCacheIfSourceChanged(sourceKey)
+        let normalizedPath = Self.normalizeConfigLookupPath(path)
+        if !force, let cached = self.configLookupNode(path: normalizedPath) {
+            return cached
+        }
+        if self.configLookupLoadingPaths.contains(normalizedPath) {
+            return self.configLookupNode(path: normalizedPath)
+        }
+
+        self.configLookupLoadingPaths.insert(normalizedPath)
+        defer { self.configLookupLoadingPaths.remove(normalizedPath) }
+
+        do {
+            let res: ConfigSchemaLookupResult = try await GatewayConnection.shared.requestDecoded(
+                method: .configSchemaLookup,
+                params: ["path": AnyCodable(normalizedPath)],
+                timeoutMs: 5000)
+            guard let node = self.makeConfigLookupNode(res) else {
+                self.configStatus = "Config schema lookup returned an unsupported payload."
+                return nil
+            }
+            self.applyConfigLookupNode(node, sourceKey: sourceKey)
+            return node
+        } catch {
+            self.configStatus = error.localizedDescription
+            return nil
+        }
+    }
+
     func loadConfig(force: Bool = true) async {
         let sourceKey = self.currentConfigCacheSourceKey()
         self.resetConfigCacheIfSourceChanged(sourceKey)
@@ -100,6 +132,44 @@ extension ChannelsStore {
         self.configSchemaSourceKey = sourceKey
     }
 
+    func configLookupNode(path: String) -> ConfigSchemaLookupNode? {
+        let normalizedPath = Self.normalizeConfigLookupPath(path)
+        if normalizedPath == "." {
+            return self.configLookupRoot
+        }
+        return self.configLookupCache[normalizedPath]
+    }
+
+    func makeConfigLookupNode(_ res: ConfigSchemaLookupResult) -> ConfigSchemaLookupNode? {
+        let schemaValue = res.schema.foundationValue
+        guard let schema = ConfigSchemaNode(raw: schemaValue) else { return nil }
+        let hint = res.hint.map { ConfigUiHint(raw: $0.mapValues(\.foundationValue)) }
+        let children = res.children.compactMap(ConfigSchemaLookupChild.init(raw:))
+        return ConfigSchemaLookupNode(
+            path: Self.normalizeConfigLookupPath(res.path),
+            schema: schema,
+            hint: hint,
+            hintPath: res.hintpath,
+            children: children)
+    }
+
+    func applyConfigLookupNode(_ node: ConfigSchemaLookupNode, sourceKey: String) {
+        guard self.configSchemaSourceKey == sourceKey else { return }
+        if node.path == "." {
+            self.configLookupRoot = node
+        } else {
+            self.configLookupCache[node.path] = node
+        }
+        if let hint = node.hint {
+            self.configUiHints[node.path] = hint
+        }
+        for child in node.children {
+            if let hint = child.hint {
+                self.configUiHints[child.path] = hint
+            }
+        }
+    }
+
     private func applyUIConfig(_ snap: ConfigSnapshot) {
         let ui = snap.config?["ui"]?.dictionaryValue
         let rawSeam = ui?["seamColor"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -154,6 +224,9 @@ extension ChannelsStore {
         }
         guard cachedSourceKey != sourceKey else { return }
         self.configSchema = nil
+        self.configLookupRoot = nil
+        self.configLookupCache.removeAll(keepingCapacity: true)
+        self.configLookupLoadingPaths.removeAll(keepingCapacity: true)
         self.configUiHints = [:]
         self.configSchemaSourceKey = sourceKey
     }
@@ -202,6 +275,11 @@ extension ChannelsStore {
             "token:\(Self.configFingerprint(env["OPENCLAW_GATEWAY_TOKEN"]))",
             "password:\(Self.configFingerprint(env["OPENCLAW_GATEWAY_PASSWORD"]))",
         ].joined(separator: "|")
+    }
+
+    static func normalizeConfigLookupPath(_ path: String) -> String {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "." : trimmed
     }
 
     private static func configFingerprint(_ value: Any?) -> String {

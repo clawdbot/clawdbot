@@ -9,6 +9,8 @@ import {
   resolveBrowserActionContext,
 } from "./shared.js";
 
+const DEFAULT_WAIT_CONDITION_TIMEOUT_MS = 20000;
+
 export function registerBrowserFormWaitEvalCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
@@ -67,22 +69,31 @@ export function registerBrowserFormWaitEvalCommands(
             ? (opts.load as "load" | "domcontentloaded" | "networkidle")
             : undefined;
         const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined;
+        const timeMs = Number.isFinite(opts.time) ? opts.time : undefined;
+        const text = normalizeOptionalString(opts.text);
+        const textGone = normalizeOptionalString(opts.textGone);
+        const url = normalizeOptionalString(opts.url);
+        const fn = normalizeOptionalString(opts.fn);
+        const waitConditionCount = [text, textGone, sel, url, load, fn].filter(Boolean).length;
+        const outerTimeoutBaseMs =
+          (timeMs ?? 0) + waitConditionCount * (timeoutMs ?? DEFAULT_WAIT_CONDITION_TIMEOUT_MS) ||
+          undefined;
         const result = await callBrowserAct<{ result?: unknown }>({
           parent,
           profile,
           body: {
             kind: "wait",
-            timeMs: Number.isFinite(opts.time) ? opts.time : undefined,
-            text: normalizeOptionalString(opts.text),
-            textGone: normalizeOptionalString(opts.textGone),
+            timeMs,
+            text,
+            textGone,
             selector: sel,
-            url: normalizeOptionalString(opts.url),
+            url,
             loadState: load,
-            fn: normalizeOptionalString(opts.fn),
+            fn,
             targetId: normalizeOptionalString(opts.targetId),
             timeoutMs,
           },
-          timeoutMs,
+          timeoutMs: outerTimeoutBaseMs,
         });
         logBrowserActionResult(parent, result, "wait complete");
       } catch (err) {

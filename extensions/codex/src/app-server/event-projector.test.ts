@@ -1253,6 +1253,217 @@ describe("CodexAppServerEventProjector", () => {
     expect(toolResultContentItem.content).toBe("ok");
   });
 
+  it("synthesizes native tool progress from turn completion snapshots", async () => {
+    const onAgentEvent = vi.fn();
+    const onToolResult = vi.fn();
+    const trajectoryRecorder = {
+      filePath: "trajectory.jsonl",
+      recordEvent: vi.fn(),
+      flush: vi.fn(async () => undefined),
+    };
+    const projector = await createProjector(
+      {
+        ...(await createParams()),
+        verboseLevel: "on",
+        onAgentEvent,
+        onToolResult,
+      },
+      {
+        trajectoryRecorder,
+      },
+    );
+
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "commandExecution",
+          id: "cmd-snapshot",
+          command: "pnpm test extensions/codex",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput: "ok",
+          exitCode: 0,
+          durationMs: 42,
+        },
+      ]),
+    );
+
+    const itemStart = findAgentEvent(onAgentEvent, {
+      stream: "item",
+      phase: "start",
+      itemId: "cmd-snapshot",
+    }).data;
+    expect(itemStart.kind).toBe("command");
+    expect(itemStart.name).toBe("bash");
+    expect(itemStart.suppressChannelProgress).toBe(true);
+    const toolStart = findAgentEvent(onAgentEvent, {
+      stream: "tool",
+      phase: "start",
+      itemId: "cmd-snapshot",
+      name: "bash",
+    }).data;
+    expect(toolStart.args).toEqual({ command: "pnpm test extensions/codex", cwd: "/workspace" });
+    const toolResult = findAgentEvent(onAgentEvent, {
+      stream: "tool",
+      phase: "result",
+      itemId: "cmd-snapshot",
+      name: "bash",
+    }).data;
+    expect(toolResult.status).toBe("completed");
+    expect(toolResult.isError).toBe(false);
+    expect(onToolResult).toHaveBeenCalledWith({
+      text: "🛠️ `run tests (workspace)`",
+    });
+    expect(trajectoryRecorder.recordEvent).toHaveBeenCalledWith("tool.call", {
+      threadId: THREAD_ID,
+      turnId: TURN_ID,
+      itemId: "cmd-snapshot",
+      toolCallId: "cmd-snapshot",
+      name: "bash",
+      arguments: { command: "pnpm test extensions/codex", cwd: "/workspace" },
+    });
+    expect(trajectoryRecorder.recordEvent).toHaveBeenCalledWith("tool.result", {
+      threadId: THREAD_ID,
+      turnId: TURN_ID,
+      itemId: "cmd-snapshot",
+      toolCallId: "cmd-snapshot",
+      name: "bash",
+      status: "completed",
+      isError: false,
+      result: { status: "completed", exitCode: 0, durationMs: 42 },
+      output: "ok",
+    });
+  });
+
+  it("does not duplicate native tool starts when the snapshot completes a started item", async () => {
+    const onAgentEvent = vi.fn();
+    const trajectoryRecorder = {
+      filePath: "trajectory.jsonl",
+      recordEvent: vi.fn(),
+      flush: vi.fn(async () => undefined),
+    };
+    const projector = await createProjector(
+      { ...(await createParams()), onAgentEvent },
+      { trajectoryRecorder },
+    );
+    const commandItem = {
+      type: "commandExecution",
+      id: "cmd-started",
+      command: "pnpm test extensions/codex",
+      cwd: "/workspace",
+      processId: null,
+      source: "agent",
+      status: "completed",
+      commandActions: [],
+      aggregatedOutput: "ok",
+      exitCode: 0,
+      durationMs: 42,
+    };
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: { ...commandItem, status: "inProgress", aggregatedOutput: null, exitCode: null },
+      }),
+    );
+    await projector.handleNotification(turnCompleted([commandItem]));
+
+    const toolEvents = onAgentEvent.mock.calls
+      .map((call) => requireRecord(call[0], "agent event"))
+      .filter((event) => event.stream === "tool")
+      .map((event) => requireRecord(event.data, "agent event data"));
+    expect(
+      toolEvents.filter((event) => event.phase === "start" && event.itemId === "cmd-started"),
+    ).toHaveLength(1);
+    expect(
+      toolEvents.filter((event) => event.phase === "result" && event.itemId === "cmd-started"),
+    ).toHaveLength(1);
+    expect(
+      trajectoryRecorder.recordEvent.mock.calls.filter(([type]) => type === "tool.call"),
+    ).toHaveLength(1);
+    expect(
+      trajectoryRecorder.recordEvent.mock.calls.filter(([type]) => type === "tool.result"),
+    ).toHaveLength(1);
+  });
+
+  it("does not synthesize completed progress for running turn completion snapshots", async () => {
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
+
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "commandExecution",
+          id: "cmd-running-snapshot",
+          command: "pnpm test extensions/codex",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "inProgress",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: null,
+          durationMs: null,
+        },
+      ]),
+    );
+
+    const toolEvents = onAgentEvent.mock.calls
+      .map((call) => requireRecord(call[0], "agent event"))
+      .filter((event) => event.stream === "tool")
+      .map((event) => requireRecord(event.data, "agent event data"));
+    expect(toolEvents).toEqual([]);
+  });
+
+  it("does not synthesize progress for stale prior-turn snapshot items", async () => {
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
+
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "commandExecution",
+          id: "cmd-prior-turn",
+          turnId: "turn-old",
+          command: "pnpm test extensions/codex",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput: "ok",
+          exitCode: 0,
+          durationMs: 42,
+        },
+        {
+          type: "commandExecution",
+          id: "cmd-current-turn",
+          turnId: TURN_ID,
+          command: "pnpm test extensions/codex",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput: "ok",
+          exitCode: 0,
+          durationMs: 42,
+        },
+      ]),
+    );
+
+    const toolEvents = onAgentEvent.mock.calls
+      .map((call) => requireRecord(call[0], "agent event"))
+      .filter((event) => event.stream === "tool")
+      .map((event) => requireRecord(event.data, "agent event data"));
+    expect(toolEvents.map((event) => event.itemId)).toEqual([
+      "cmd-current-turn",
+      "cmd-current-turn",
+    ]);
+  });
+
   it("orders declined native tool diagnostics after their start event", async () => {
     const projector = await createProjector();
     const diagnosticEvents: DiagnosticEventPayload[] = [];

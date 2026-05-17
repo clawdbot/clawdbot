@@ -45,6 +45,10 @@ export function buildCodexNativeHookRelayConfig(params: {
   const hookState: JsonObject = {};
   for (const event of events) {
     const codexEvent = CODEX_HOOK_EVENT_BY_NATIVE_EVENT[event];
+    if (!params.relay.shouldRelayEvent(event)) {
+      config[`hooks.${codexEvent}`] = [] satisfies JsonValue;
+      continue;
+    }
     const command = params.relay.commandForEvent(event);
     const timeout = normalizeHookTimeoutSec(params.hookTimeoutSec);
     config[`hooks.${codexEvent}`] = [

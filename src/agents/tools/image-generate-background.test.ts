@@ -124,10 +124,11 @@ describe("image generate background helpers", () => {
     });
   });
 
-  it("routes failure completion notices through the message tool", async () => {
+  it("delivers failure completion notices directly", async () => {
     announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
-      delivered: true,
+      delivered: false,
       path: "direct",
+      error: "completion agent did not deliver through the message tool",
     });
     const completion = createMediaCompletionFixture({
       runId: "tool:image_generate:abc",
@@ -141,8 +142,12 @@ describe("image generate background helpers", () => {
       statusLabel: "failed",
     });
 
-    expectReplyInstructionContains("failure summary");
-    expectReplyInstructionContains("the user will NOT see your normal assistant final reply");
-    expectReplyInstructionContains('message tool with action="send"');
+    expect(taskDeliveryRuntimeMocks.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "Image generation failed: provider failed",
+        idempotencyKey: "image_generate:task-123:error:direct",
+      }),
+    );
+    expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledTimes(1);
   });
 });

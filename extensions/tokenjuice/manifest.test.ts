@@ -17,7 +17,7 @@ describe("tokenjuice package manifest", () => {
       fs.readFileSync(new URL("./package.json", import.meta.url), "utf8"),
     ) as TokenjuicePackageManifest;
 
-    expect(packageJson.dependencies?.tokenjuice).toBe("0.7.0");
+    expect(packageJson.dependencies?.tokenjuice).toBe("0.7.1");
   });
 
   it("declares runtime-neutral tool result middleware ownership in the manifest contract", () => {

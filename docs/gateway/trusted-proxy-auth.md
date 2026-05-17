@@ -98,7 +98,7 @@ Implications:
 - `allowLoopback` trusts local processes on the Gateway host to the same degree as the reverse proxy. Enable it only when the Gateway is still firewalled from direct remote access and the local proxy strips or overwrites client-supplied identity headers.
 - Internal Gateway clients that do not travel through the reverse proxy should use `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD`, not trusted-proxy identity headers.
 - Non-loopback Control UI deployments still need explicit `gateway.controlUi.allowedOrigins`.
-- **Forwarded-header evidence overrides loopback locality for local direct fallback.** If a request arrives on loopback but carries `X-Forwarded-For` / `X-Forwarded-Host` / `X-Forwarded-Proto` headers pointing at a non-local origin, that evidence disqualifies local-direct password fallback and device-identity gating. With `allowLoopback: true`, trusted-proxy auth can still accept the request as a same-host proxy request, while `requiredHeaders` and `allowUsers` continue to apply.
+- **Forwarded-header evidence overrides loopback locality for local direct fallback.** If a request arrives on loopback but carries `Forwarded`, any `X-Forwarded-*`, or `X-Real-IP` header evidence, that evidence disqualifies local-direct password fallback and device-identity gating. With `allowLoopback: true`, trusted-proxy auth can still accept the request as a same-host proxy request, while `requiredHeaders` and `allowUsers` continue to apply.
 
 </Warning>
 

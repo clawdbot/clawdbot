@@ -5,7 +5,7 @@
   "description": "OpenClaw Ollama provider plugin",
   "type": "module",
   "dependencies": {
-    "@earendil-works/pi-ai": "0.74.0",
+    "@earendil-works/pi-ai": "0.74.1",
     "typebox": "1.1.38"
   },
   "devDependencies": {

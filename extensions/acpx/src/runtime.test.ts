@@ -2,7 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { AcpRuntimeError, type AcpRuntime, type AcpRuntimeEvent } from "../runtime-api.js";
+import {
+  AcpRuntimeError,
+  type AcpRuntime,
+  type AcpRuntimeEvent,
+  type AcpRuntimeTurn,
+} from "../runtime-api.js";
 import { OPENCLAW_ACPX_LEASE_ID_ARG, OPENCLAW_GATEWAY_INSTANCE_ID_ARG } from "./process-lease.js";
 import { AcpxRuntime, __testing } from "./runtime.js";
 
@@ -31,6 +36,7 @@ function makeRuntime(
     cancel: AcpRuntime["cancel"];
     close: AcpRuntime["close"];
     ensureSession: AcpRuntime["ensureSession"];
+    startTurn: NonNullable<AcpRuntime["startTurn"]>;
     runTurn: AcpRuntime["runTurn"];
     getStatus: NonNullable<AcpRuntime["getStatus"]>;
     setConfigOption: NonNullable<AcpRuntime["setConfigOption"]>;
@@ -73,6 +79,7 @@ function makeRuntime(
           cancel: AcpRuntime["cancel"];
           close: AcpRuntime["close"];
           ensureSession: AcpRuntime["ensureSession"];
+          startTurn: NonNullable<AcpRuntime["startTurn"]>;
           runTurn: AcpRuntime["runTurn"];
           getStatus: NonNullable<AcpRuntime["getStatus"]>;
           setConfigOption: NonNullable<AcpRuntime["setConfigOption"]>;
@@ -402,6 +409,206 @@ describe("AcpxRuntime fresh reset wrapper", () => {
         retryable: false,
       },
     ]);
+  });
+
+  it("adds Codex wrapper stderr tail to generic startTurn failure results", async () => {
+    const wrapperRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acpx-runtime-"));
+    await fs.writeFile(
+      path.join(wrapperRoot, "codex-acp-wrapper.stderr.lease-start-turn.log"),
+      "Unhandled error during turn: adapter disconnected after progress\n",
+      "utf8",
+    );
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:codex:acp:test",
+        agentCommand: CODEX_ACP_WRAPPER_COMMAND,
+        openclawLeaseId: "lease-start-turn",
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore, {
+      openclawWrapperRoot: wrapperRoot,
+      agentRegistry: {
+        resolve: (agentName: string) =>
+          agentName === "codex" ? CODEX_ACP_WRAPPER_COMMAND : agentName,
+        list: () => ["codex"],
+      },
+    });
+    vi.spyOn(delegate, "startTurn").mockImplementation(
+      (input): AcpRuntimeTurn => ({
+        requestId: input.requestId,
+        events: (async function* () {
+          yield {
+            type: "text_delta" as const,
+            stream: "output" as const,
+            text: "Vou mapear o fluxo real primeiro...",
+          };
+        })(),
+        result: Promise.resolve({
+          status: "failed" as const,
+          error: {
+            message: "Internal error",
+            retryable: false,
+          },
+        }),
+        cancel: vi.fn(async () => {}),
+        closeStream: vi.fn(async () => {}),
+      }),
+    );
+
+    const turn = runtime.startTurn({
+      handle: {
+        sessionKey: "agent:codex:acp:test",
+        backend: "acpx",
+        runtimeSessionName: "agent:codex:acp:test",
+        acpxRecordId: "agent:codex:acp:test",
+      },
+      text: "Reply exactly OK",
+      mode: "prompt",
+      requestId: "turn-1",
+    });
+    const events: AcpRuntimeEvent[] = [];
+    for await (const event of turn.events) {
+      events.push(event);
+    }
+
+    await expect(turn.result).resolves.toMatchObject({
+      status: "failed",
+      error: {
+        code: "ACP_TURN_FAILED",
+        message: expect.stringContaining("adapter disconnected after progress"),
+        retryable: false,
+      },
+    });
+    expect(events).toEqual([
+      {
+        type: "text_delta",
+        stream: "output",
+        text: "Vou mapear o fluxo real primeiro...",
+      },
+    ]);
+  });
+
+  it("adds Codex wrapper stderr tail when startTurn creation throws", async () => {
+    const wrapperRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acpx-runtime-"));
+    await fs.writeFile(
+      path.join(wrapperRoot, "codex-acp-wrapper.stderr.lease-start-turn-create.log"),
+      "Unhandled error during turn: adapter failed before returning turn\n",
+      "utf8",
+    );
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:codex:acp:test",
+        agentCommand: CODEX_ACP_WRAPPER_COMMAND,
+        openclawLeaseId: "lease-start-turn-create",
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore, {
+      openclawWrapperRoot: wrapperRoot,
+      agentRegistry: {
+        resolve: (agentName: string) =>
+          agentName === "codex" ? CODEX_ACP_WRAPPER_COMMAND : agentName,
+        list: () => ["codex"],
+      },
+    });
+    vi.spyOn(delegate, "startTurn").mockImplementation(() => {
+      throw new Error("Internal error");
+    });
+
+    const turn = runtime.startTurn({
+      handle: {
+        sessionKey: "agent:codex:acp:test",
+        backend: "acpx",
+        runtimeSessionName: "agent:codex:acp:test",
+        acpxRecordId: "agent:codex:acp:test",
+      },
+      text: "Reply exactly OK",
+      mode: "prompt",
+      requestId: "turn-1",
+    });
+
+    await expect(turn.result).rejects.toMatchObject({
+      name: "AcpRuntimeError",
+      code: "ACP_TURN_FAILED",
+      message: expect.stringContaining("adapter failed before returning turn"),
+    });
+  });
+
+  it("disables delegate prompt timeout for OpenClaw-managed turns", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:codex:acp:test",
+        agentCommand: CODEX_ACP_COMMAND,
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore, {
+      timeoutMs: 1,
+      agentRegistry: {
+        resolve: (agentName: string) => (agentName === "codex" ? CODEX_ACP_COMMAND : agentName),
+        list: () => ["codex"],
+      },
+    });
+    const runTurn = vi.spyOn(delegate, "runTurn").mockImplementation(async function* () {
+      yield { type: "done" };
+    });
+    const startTurn = vi.spyOn(delegate, "startTurn").mockImplementation(
+      (input): AcpRuntimeTurn => ({
+        requestId: input.requestId,
+        events: (async function* () {
+          yield { type: "done" as const, stopReason: "end_turn" };
+        })(),
+        result: Promise.resolve({
+          status: "completed" as const,
+          stopReason: "end_turn",
+        }),
+        cancel: vi.fn(async () => {}),
+        closeStream: vi.fn(async () => {}),
+      }),
+    );
+
+    for await (const _event of runtime.runTurn({
+      handle: {
+        sessionKey: "agent:codex:acp:test",
+        backend: "acpx",
+        runtimeSessionName: "agent:codex:acp:test",
+        acpxRecordId: "agent:codex:acp:test",
+      },
+      text: "Reply exactly OK",
+      mode: "prompt",
+      requestId: "turn-1",
+    })) {
+      // no-op
+    }
+
+    expect(runTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeoutMs: 0,
+      }),
+    );
+
+    const turn = runtime.startTurn({
+      handle: {
+        sessionKey: "agent:codex:acp:test",
+        backend: "acpx",
+        runtimeSessionName: "agent:codex:acp:test",
+        acpxRecordId: "agent:codex:acp:test",
+      },
+      text: "Reply exactly OK",
+      mode: "prompt",
+      requestId: "turn-2",
+    });
+    for await (const _event of turn.events) {
+      // no-op
+    }
+    await turn.result;
+
+    expect(startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeoutMs: 0,
+      }),
+    );
   });
 
   it("does not normalize model startup for non-Codex ACP agents", async () => {

@@ -146,6 +146,43 @@ describe("Codex native hook relay config", () => {
     });
   });
 
+  it("clears requested hook events when the relay reports no local work", () => {
+    expect(
+      buildCodexNativeHookRelayConfig({
+        relay: createRelay({ inactiveEvents: ["post_tool_use", "before_agent_finalize"] }),
+        events: ["pre_tool_use", "post_tool_use", "before_agent_finalize"],
+      }),
+    ).toEqual({
+      "features.hooks": true,
+      "hooks.PreToolUse": [
+        {
+          hooks: [
+            {
+              type: "command",
+              command:
+                "openclaw hooks relay --provider codex --relay-id relay-1 --event pre_tool_use",
+              timeout: 5,
+              async: false,
+              statusMessage: "OpenClaw native hook relay",
+            },
+          ],
+        },
+      ],
+      "hooks.PostToolUse": [],
+      "hooks.Stop": [],
+      "hooks.state": {
+        "/<session-flags>/config.toml:pre_tool_use:0:0": {
+          enabled: true,
+          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        },
+        "<session-flags>/config.toml:pre_tool_use:0:0": {
+          enabled: true,
+          trusted_hash: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+        },
+      },
+    });
+  });
+
   it("omits matchers so Codex MCP tool names reach the relay with a stable trust hash", () => {
     const config = buildCodexNativeHookRelayConfig({
       relay: createRelay(),
@@ -171,7 +208,10 @@ describe("Codex native hook relay config", () => {
   });
 });
 
-function createRelay(): NativeHookRelayRegistrationHandle {
+function createRelay(options?: {
+  inactiveEvents?: readonly NativeHookRelayRegistrationHandle["allowedEvents"][number][];
+}): NativeHookRelayRegistrationHandle {
+  const inactiveEvents = new Set(options?.inactiveEvents ?? []);
   return {
     relayId: "relay-1",
     provider: "codex",
@@ -180,6 +220,7 @@ function createRelay(): NativeHookRelayRegistrationHandle {
     runId: "run-1",
     allowedEvents: ["pre_tool_use", "post_tool_use", "permission_request", "before_agent_finalize"],
     expiresAtMs: Date.now() + 1000,
+    shouldRelayEvent: (event) => !inactiveEvents.has(event),
     commandForEvent: (event) =>
       `openclaw hooks relay --provider codex --relay-id relay-1 --event ${event}`,
     renew: () => undefined,

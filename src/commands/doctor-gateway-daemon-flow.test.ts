@@ -21,6 +21,7 @@ const service = vi.hoisted(() => ({
 const note = vi.hoisted(() => vi.fn());
 const sleep = vi.hoisted(() => vi.fn(async () => {}));
 const healthCommand = vi.hoisted(() => vi.fn(async () => {}));
+const inspectPortConnections = vi.hoisted(() => vi.fn());
 const inspectPortUsage = vi.hoisted(() => vi.fn());
 const formatPortDiagnostics = vi.hoisted(() => vi.fn(() => ["Port 18789 is already in use."]));
 const isExpectedGatewayListeners = vi.hoisted(() => vi.fn(() => false));
@@ -88,6 +89,7 @@ vi.mock("../daemon/systemd.js", async () => {
 });
 
 vi.mock("../infra/ports.js", () => ({
+  inspectPortConnections,
   inspectPortUsage,
   formatPortDiagnostics,
   isExpectedGatewayListeners,
@@ -163,6 +165,10 @@ describe("maybeRepairGatewayDaemon", () => {
       status: "free",
       listeners: [],
       hints: [],
+    });
+    inspectPortConnections.mockResolvedValue({
+      port: 18789,
+      connections: [],
     });
     isExpectedGatewayListeners.mockReturnValue(false);
   });
@@ -324,6 +330,72 @@ describe("maybeRepairGatewayDaemon", () => {
     await runNonInteractiveRepair();
 
     expect(readGatewayRestartHandoffSync).not.toHaveBeenCalled();
+    expect(inspectPortConnections).not.toHaveBeenCalled();
+  });
+
+  it("reports established gateway clients during deep doctor", async () => {
+    setPlatform("linux");
+    inspectPortConnections.mockResolvedValueOnce({
+      port: 18789,
+      connections: [
+        {
+          pid: 4242,
+          command: "node",
+          commandLine: "/tmp/newer-openclaw/bin/openclaw logs --follow",
+          address: "TCP 127.0.0.1:50123->127.0.0.1:18789 (ESTABLISHED)",
+          direction: "client",
+        },
+      ],
+    });
+
+    await maybeRepairGatewayDaemon({
+      cfg: { gateway: {} },
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      prompter: createDoctorPrompter({
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        options: { deep: true, nonInteractive: true },
+      }),
+      options: { deep: true, nonInteractive: true },
+      gatewayDetailsMessage: "details",
+      healthOk: false,
+    });
+
+    const gatewayClientNote = note.mock.calls.find(([, label]) => label === "Gateway clients");
+    expect(gatewayClientNote?.[0]).toContain("pid=4242");
+    expect(gatewayClientNote?.[0]).toContain("protocol mismatch after rollback");
+  });
+
+  it("reports established gateway clients during healthy deep doctor", async () => {
+    setPlatform("linux");
+    inspectPortConnections.mockResolvedValueOnce({
+      port: 18789,
+      connections: [
+        {
+          pid: 5151,
+          command: "node",
+          commandLine: "/tmp/newer-openclaw/bin/openclaw logs --follow",
+          address: "TCP 127.0.0.1:50123->127.0.0.1:18789 (ESTABLISHED)",
+          direction: "client",
+        },
+      ],
+    });
+
+    await maybeRepairGatewayDaemon({
+      cfg: { gateway: {} },
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      prompter: createDoctorPrompter({
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+        options: { deep: true, nonInteractive: true },
+      }),
+      options: { deep: true, nonInteractive: true },
+      gatewayDetailsMessage: "details",
+      healthOk: true,
+    });
+
+    expect(inspectPortUsage).not.toHaveBeenCalled();
+    const gatewayClientNote = note.mock.calls.find(([, label]) => label === "Gateway clients");
+    expect(gatewayClientNote?.[0]).toContain("pid=5151");
+    expect(gatewayClientNote?.[0]).toContain("protocol mismatch after rollback");
   });
 
   it("suppresses busy-port note for expected Gateway listeners", async () => {

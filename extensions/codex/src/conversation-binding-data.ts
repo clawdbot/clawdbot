@@ -8,6 +8,7 @@ export type CodexAppServerConversationBindingData = {
   version: 1;
   sessionFile: string;
   workspaceDir: string;
+  agentDir?: string;
 };
 
 export type CodexCliNodeConversationBindingData = {
@@ -25,12 +26,15 @@ export type CodexConversationBindingData =
 export function createCodexConversationBindingData(params: {
   sessionFile: string;
   workspaceDir: string;
+  agentDir?: string;
 }): CodexAppServerConversationBindingData {
+  const agentDir = params.agentDir?.trim();
   return {
     kind: "codex-app-server-session",
     version: BINDING_DATA_VERSION,
     sessionFile: params.sessionFile,
     workspaceDir: params.workspaceDir,
+    ...(agentDir ? { agentDir } : {}),
   };
 }
 
@@ -98,6 +102,7 @@ export function readCodexConversationBindingDataRecord(
       typeof data.workspaceDir === "string" && data.workspaceDir.trim()
         ? data.workspaceDir
         : process.cwd(),
+    agentDir: typeof data.agentDir === "string" && data.agentDir.trim() ? data.agentDir : undefined,
   };
 }
 

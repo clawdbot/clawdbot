@@ -14,11 +14,30 @@ import { extractToolPayload } from "openclaw/plugin-sdk/tool-payload";
 import { afterEach, describe, expect, it } from "vitest";
 import { createQaBusState, startQaBusServer } from "../../qa-lab/bus-api.js";
 import { qaChannelPlugin, setQaChannelRuntime } from "../api.js";
+import { listQaChannelAccountIds, resolveDefaultQaChannelAccountId } from "./accounts.js";
 
 type QaRunPreparedTurn = Parameters<PluginRuntime["channel"]["turn"]["runPrepared"]>[0];
 
 afterEach(() => {
   resetPluginRuntimeStateForTest();
+});
+
+describe("QA channel account resolution", () => {
+  it("preserves top-level default account when named accounts are configured", () => {
+    const cfg = {
+      channels: {
+        "qa-channel": {
+          baseUrl: "http://127.0.0.1:8787",
+          accounts: {
+            work: { enabled: false },
+          },
+        },
+      },
+    };
+
+    expect(listQaChannelAccountIds(cfg)).toEqual(["default", "work"]);
+    expect(resolveDefaultQaChannelAccountId(cfg)).toBe("default");
+  });
 });
 
 function installQaChannelTestRegistry() {

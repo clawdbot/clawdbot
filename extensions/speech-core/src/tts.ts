@@ -12,6 +12,7 @@ import type {
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import {
+  markReplyPayloadAsTtsSupplement,
   resolveSendableOutboundReplyParts,
   type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
@@ -1845,13 +1846,16 @@ export async function maybeApplyTtsToPayload(params: {
       latencyMs: result.latencyMs,
     };
 
-    return {
+    const payloadWithAudio = {
       ...nextPayload,
       mediaUrl: result.audioPath,
       audioAsVoice: result.audioAsVoice || params.payload.audioAsVoice,
       spokenText: textForAudio,
       trustedLocalMedia: true,
     } as ReplyPayload;
+    return nextPayload.text?.trim()
+      ? markReplyPayloadAsTtsSupplement(payloadWithAudio)
+      : payloadWithAudio;
   }
 
   lastTtsAttempt = {

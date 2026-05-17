@@ -1,4 +1,7 @@
-import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
+import {
+  createAccountListHelpers,
+  hasConfiguredAccountValue,
+} from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { resolveMergedAccountConfig } from "openclaw/plugin-sdk/account-resolution";
 import { resolveDefaultSecretProviderAlias } from "openclaw/plugin-sdk/provider-auth";
@@ -15,7 +18,17 @@ const DEFAULT_RECONNECT_MS = 1_500;
 const {
   listAccountIds: listClickClackAccountIds,
   resolveDefaultAccountId: resolveDefaultClickClackAccountId,
-} = createAccountListHelpers("clickclack", { normalizeAccountId });
+} = createAccountListHelpers("clickclack", {
+  normalizeAccountId,
+  hasImplicitDefaultAccount: (cfg) => {
+    const channel = cfg.channels?.clickclack;
+    return Boolean(
+      channel?.baseUrl?.trim() &&
+      hasConfiguredAccountValue(channel.token) &&
+      channel.workspace?.trim(),
+    );
+  },
+});
 
 export { DEFAULT_ACCOUNT_ID, listClickClackAccountIds, resolveDefaultClickClackAccountId };
 

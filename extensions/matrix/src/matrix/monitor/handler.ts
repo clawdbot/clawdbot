@@ -25,6 +25,10 @@ import { hasFinalInboundReplyDispatch } from "openclaw/plugin-sdk/inbound-reply-
 import type { ChannelBotLoopProtectionFacts } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { mergePairLoopGuardConfig } from "openclaw/plugin-sdk/pair-loop-guard-runtime";
 import { buildInboundHistoryFromEntries } from "openclaw/plugin-sdk/reply-history";
+import {
+  buildTtsSupplementMediaPayload,
+  getReplyPayloadTtsSupplement,
+} from "openclaw/plugin-sdk/reply-payload";
 import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import {
@@ -1769,12 +1773,19 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           deliver: async (payload: ReplyPayload, info: { kind: string }) => {
             if (draftStream && info.kind !== "tool" && !payload.isCompactionNotice) {
               const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
+              const ttsSupplement = getReplyPayloadTtsSupplement(payload);
+              const fallbackPayload =
+                ttsSupplement &&
+                ttsSupplement.visibleTextAlreadyDelivered !== true &&
+                !payload.text?.trim()
+                  ? { ...payload, text: ttsSupplement.spokenText }
+                  : payload;
 
               if (draftConsumed) {
                 await draftStream.discardPending();
                 await deliverMatrixReplies({
                   cfg,
-                  replies: [payload],
+                  replies: [fallbackPayload],
                   roomId,
                   client,
                   runtime,
@@ -1874,7 +1885,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                     await redactMatrixDraftEvent(client, roomId, draftEventId);
                     await deliverMatrixReplies({
                       cfg,
-                      replies: [payload],
+                      replies: [fallbackPayload],
                       roomId,
                       client,
                       runtime,
@@ -1890,7 +1901,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 draftConsumed = true;
               } else if (draftEventId && hasMedia && !payloadReplyMismatch) {
                 let textEditOk = !mustDeliverFinalNormally;
-                const payloadText = payload.text;
+                const payloadText = payload.text ?? ttsSupplement?.spokenText;
                 const payloadTextMatchesDraft =
                   typeof payloadText === "string" && draftStream.matchesPreparedText(payloadText);
                 const reusesDraftTextUnchanged =
@@ -1917,15 +1928,25 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 } else if (textEditOk && reusesDraftTextUnchanged) {
                   textEditOk = await draftStream.finalizeLive();
                 }
-                const reusesDraftAsFinalText = Boolean(payload.text?.trim()) && textEditOk;
+                const reusesDraftAsFinalText = Boolean(payloadText?.trim()) && textEditOk;
                 if (!reusesDraftAsFinalText) {
                   await redactMatrixDraftEvent(client, roomId, draftEventId);
                 }
+                const mediaPayload =
+                  ttsSupplement && reusesDraftAsFinalText
+                    ? buildTtsSupplementMediaPayload(payload)
+                    : {
+                        ...payload,
+                        text: reusesDraftAsFinalText
+                          ? undefined
+                          : (payload.text ??
+                            (ttsSupplement?.visibleTextAlreadyDelivered === true
+                              ? undefined
+                              : ttsSupplement?.spokenText)),
+                      };
                 await deliverMatrixReplies({
                   cfg,
-                  replies: [
-                    { ...payload, text: reusesDraftAsFinalText ? undefined : payload.text },
-                  ],
+                  replies: [mediaPayload],
                   roomId,
                   client,
                   runtime,
@@ -1946,7 +1967,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 }
                 const deliveredFallback = await deliverMatrixReplies({
                   cfg,
-                  replies: [payload],
+                  replies: [fallbackPayload],
                   roomId,
                   client,
                   runtime,

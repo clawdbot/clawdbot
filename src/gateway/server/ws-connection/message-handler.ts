@@ -548,10 +548,13 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             minimumProbeProtocol: MIN_PROBE_PROTOCOL_VERSION,
           });
           logWsControl.warn(
-            `protocol mismatch conn=${connId} remote=${remoteAddr ?? "?"} client=${clientLabel} ${connectParams.client.mode} v${connectParams.client.version}`,
+            `protocol mismatch conn=${connId} peer=${formatForLog(peerLabel)} remote=${remoteAddr ?? "?"} remotePort=${remotePort ?? "?"} client=${formatForLog(clientLabel)} ${connectParams.client.mode} v${formatForLog(connectParams.client.version)} min=${minProtocol} max=${maxProtocol} expected=${PROTOCOL_VERSION} probeMin=${MIN_PROBE_PROTOCOL_VERSION} instance=${formatForLog(connectParams.client.instanceId ?? "n/a")}`,
           );
           sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, "protocol mismatch", {
             details: {
+              code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
+              clientMinProtocol: minProtocol,
+              clientMaxProtocol: maxProtocol,
               expectedProtocol: PROTOCOL_VERSION,
               minimumProbeProtocol: MIN_PROBE_PROTOCOL_VERSION,
             },

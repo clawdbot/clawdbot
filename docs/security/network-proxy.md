@@ -40,7 +40,12 @@ Internally, OpenClaw installs Proxyline as the process-level routing runtime for
 
 Some plugins own custom transports that need explicit proxy wiring even when process-level routing exists. For example, Telegram's Bot API transport uses its own HTTP/1 undici dispatcher and therefore honors process proxy env plus the managed `OPENCLAW_PROXY_URL` fallback in that owner-specific transport path.
 
-The proxy URL itself must use `http://`. HTTPS destinations are still supported through the proxy with HTTP `CONNECT`; this only means OpenClaw expects a plain HTTP forward-proxy listener such as `http://127.0.0.1:3128`.
+The proxy URL itself can use either `http://` or `https://`. These schemes describe the connection from OpenClaw to the proxy endpoint:
+
+- `http://proxy.example:3128`: OpenClaw opens a plain TCP connection to the forward proxy and sends HTTP proxy requests, including `CONNECT` for HTTPS destinations.
+- `https://proxy.example:8443`: OpenClaw opens TLS to the proxy endpoint, verifies the proxy certificate, and then sends HTTP proxy requests inside that TLS session.
+
+Destination HTTPS is separate from proxy endpoint TLS. For an HTTPS destination, OpenClaw still asks the proxy for an HTTP `CONNECT` tunnel and then starts destination TLS through that tunnel.
 
 While the proxy is active, OpenClaw clears `no_proxy` and `NO_PROXY`. Those bypass lists are destination-based, so leaving `localhost` or `127.0.0.1` there would let high-risk SSRF targets skip the filtering proxy.
 
@@ -60,6 +65,16 @@ On shutdown, OpenClaw restores the previous proxy environment and resets cached 
 proxy:
   enabled: true
   proxyUrl: http://127.0.0.1:3128
+```
+
+For an HTTPS proxy endpoint with a private proxy CA:
+
+```yaml
+proxy:
+  enabled: true
+  proxyUrl: https://proxy.corp.example:8443
+  tls:
+    caFile: /etc/openclaw/proxy-ca.pem
 ```
 
 You can also provide the URL through the environment, while keeping `proxy.enabled=true` in config:
@@ -150,6 +165,12 @@ Validate the proxy from the same host, container, or service account that runs O
 openclaw proxy validate --proxy-url http://127.0.0.1:3128
 ```
 
+For an HTTPS proxy endpoint signed by a private CA:
+
+```bash
+openclaw proxy validate --proxy-url https://proxy.corp.example:8443 --proxy-ca-file /etc/openclaw/proxy-ca.pem
+```
+
 By default, when no custom destinations are provided, the command checks that `https://example.com/` succeeds and starts a temporary loopback canary that the proxy must not reach. The default denied check passes when the proxy returns a non-2xx denial response or blocks the canary with a transport failure; it fails if a successful response reaches the canary. If no proxy is enabled and configured, validation reports a config problem; use `--proxy-url` for a one-off preflight before changing config. Use `--allowed-url` and `--denied-url` to test deployment-specific expectations. Add `--apns-reachable` to also verify direct APNs HTTP/2 delivery can open a CONNECT tunnel through the proxy and receive a sandbox APNs response; the probe uses an intentionally invalid provider token, so `403 InvalidProviderToken` is expected and counts as reachable. Custom denied destinations are fail-closed: any HTTP response means the destination was reachable through the proxy, and any transport error is reported as inconclusive because OpenClaw cannot prove the proxy blocked a reachable origin. On validation failure, the command exits with code 1.
 
 Use `--json` for automation. The JSON output contains the overall result, the effective proxy config source, any config errors, and each destination check. Proxy URL credentials are redacted in text and JSON output:
@@ -190,11 +211,28 @@ curl -x http://127.0.0.1:3128 http://169.254.169.254/
 
 The public request should succeed. The loopback and metadata requests should be blocked by the proxy. For `openclaw proxy validate`, the built-in loopback canary can distinguish a proxy denial from a reachable origin. Custom `--denied-url` checks do not have that canary, so treat both HTTP responses and ambiguous transport failures as validation failures unless your proxy exposes a deployment-specific denial signal you can verify separately.
 
+## Proxy CA trust
+
+Use managed `proxy.tls.caFile` when the proxy endpoint itself uses a certificate signed by a private CA:
+
+```yaml
+proxy:
+  enabled: true
+  proxyUrl: https://proxy.corp.example:8443
+  tls:
+    caFile: /etc/openclaw/proxy-ca.pem
+```
+
+That CA is used for TLS verification of the proxy endpoint. It is not a destination MITM trust setting, a client certificate, or a replacement for the proxy's destination policy.
+
+Use `NODE_EXTRA_CA_CERTS` only when the whole Node process must trust an additional CA from process startup, such as when an enterprise TLS inspection system re-signs destination certificates for every HTTPS client in the process. `NODE_EXTRA_CA_CERTS` is process-global and must be present before Node starts. Prefer `proxy.tls.caFile` for HTTPS proxy endpoint trust because it is scoped to managed proxy routing.
+
 Then enable OpenClaw proxy routing:
 
 ```bash
 openclaw config set proxy.enabled true
-openclaw config set proxy.proxyUrl http://127.0.0.1:3128
+openclaw config set proxy.proxyUrl https://proxy.corp.example:8443
+openclaw config set proxy.tls.caFile /etc/openclaw/proxy-ca.pem
 openclaw gateway run
 ```
 
@@ -203,7 +241,9 @@ or set:
 ```yaml
 proxy:
   enabled: true
-  proxyUrl: http://127.0.0.1:3128
+  proxyUrl: https://proxy.corp.example:8443
+  tls:
+    caFile: /etc/openclaw/proxy-ca.pem
 ```
 
 ## Limits

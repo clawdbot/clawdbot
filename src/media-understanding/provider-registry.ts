@@ -41,7 +41,7 @@ function hydrateModelBackedMediaProvider(
   };
 }
 
-export { normalizeMediaProviderId } from "./provider-id.js";
+export { normalizeMediaExecutionProviderId, normalizeMediaProviderId } from "./provider-id.js";
 
 export function buildMediaUnderstandingRegistry(
   overrides?: Record<string, MediaUnderstandingProvider>,

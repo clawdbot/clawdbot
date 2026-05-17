@@ -19,6 +19,10 @@ export type GatewayInjectedTranscriptAppendResult = {
   error?: string;
 };
 
+export type GatewayInjectedTtsSupplementMarker = {
+  textSha256: string;
+};
+
 function resolveInjectedAssistantContent(params: {
   message: string;
   label?: string;
@@ -51,6 +55,7 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   content?: Array<Record<string, unknown>>;
   idempotencyKey?: string;
   abortMeta?: GatewayInjectedAbortMeta;
+  ttsSupplement?: GatewayInjectedTtsSupplementMarker;
   now?: number;
   config?: OpenClawConfig;
 }): Promise<GatewayInjectedTranscriptAppendResult> {
@@ -91,6 +96,7 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
     provider: "openclaw",
     model: "gateway-injected",
     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
+    ...(params.ttsSupplement ? { openclawTtsSupplement: params.ttsSupplement } : {}),
     ...(params.abortMeta
       ? {
           openclawAbort: {

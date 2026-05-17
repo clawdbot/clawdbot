@@ -16,7 +16,14 @@ export function createBrowserProgram(params?: { withGatewayUrl?: boolean }): {
   if (params?.withGatewayUrl) {
     browser.option("--url <url>", "Gateway WebSocket URL");
   }
-  const parentOpts = (cmd: Command): BrowserParentOpts => cmd.parent?.opts?.() as BrowserParentOpts;
+  const parentOpts = (cmd: Command): BrowserParentOpts => {
+    for (let current: Command | null | undefined = cmd; current; current = current.parent) {
+      if (current.name() === "browser") {
+        return current.opts() as BrowserParentOpts;
+      }
+    }
+    return cmd.parent?.opts?.() as BrowserParentOpts;
+  };
   return { program, browser, parentOpts };
 }
 

@@ -2,6 +2,7 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { isMinimaxVlmModel, isMinimaxVlmProvider } from "../agents/minimax-vlm.js";
 import { findNormalizedProviderValue } from "../agents/provider-id.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import {
@@ -26,7 +27,7 @@ import { MediaAttachmentCache, selectAttachments } from "./attachments.js";
 import { isMediaUnderstandingSkipError } from "./errors.js";
 import { fileExists } from "./fs.js";
 import { extractGeminiResponse } from "./output-extract.js";
-import { normalizeMediaProviderId } from "./provider-id.js";
+import { normalizeMediaExecutionProviderId, normalizeMediaProviderId } from "./provider-id.js";
 import {
   buildMediaUnderstandingRegistry,
   getMediaUnderstandingProvider,
@@ -73,7 +74,7 @@ function resolveLiteralProviderApiKey(
   cfg: OpenClawConfig | undefined,
   providerId: string,
 ): string | null {
-  const value = cfg?.models?.providers?.[providerId]?.apiKey;
+  const value = findNormalizedProviderValue(cfg?.models?.providers, providerId)?.apiKey;
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
 }
 
@@ -98,11 +99,14 @@ function resolveConfiguredKeyProviderOrder(params: {
   fallbackProviders: readonly string[];
 }): string[] {
   const configuredProviders = Object.keys(params.cfg.models?.providers ?? {})
-    .map((providerId) => normalizeMediaProviderId(providerId))
+    .map((providerId) => normalizeMediaExecutionProviderId(providerId))
     .filter(Boolean)
     .filter((providerId, index, values) => values.indexOf(providerId) === index)
     .filter((providerId) =>
-      providerSupportsCapability(params.providerRegistry.get(providerId), params.capability),
+      providerSupportsCapability(
+        params.providerRegistry.get(normalizeMediaProviderId(providerId)),
+        params.capability,
+      ),
     );
 
   return [...new Set([...configuredProviders, ...params.fallbackProviders])];
@@ -112,6 +116,9 @@ function resolveConfiguredImageModelId(params: {
   cfg: OpenClawConfig;
   providerId: string;
 }): string | undefined {
+  if (isMinimaxVlmProvider(params.providerId)) {
+    return undefined;
+  }
   const configured = resolveConfiguredImageModel(params);
   const id = configured?.id?.trim();
   return id || undefined;
@@ -145,7 +152,7 @@ function resolveCatalogImageModelId(params: {
 }): string | undefined {
   const matches = params.catalog.filter(
     (entry) =>
-      normalizeMediaProviderId(entry.provider) === params.providerId &&
+      normalizeMediaProviderId(entry.provider) === normalizeMediaProviderId(params.providerId) &&
       params.modelSupportsVision(entry),
   );
   if (matches.length === 0) {
@@ -200,6 +207,12 @@ async function explicitImageModelVisionStatus(params: {
   providerId: string;
   model: string;
 }): Promise<"supported" | "unsupported" | "unknown"> {
+  if (
+    isMinimaxVlmProvider(params.providerId) &&
+    !isMinimaxVlmModel(params.providerId, params.model)
+  ) {
+    return "unsupported";
+  }
   const configured = resolveConfiguredImageModel(params);
   if (configured?.id?.trim() === params.model && configured.input?.includes("image")) {
     return "supported";
@@ -230,6 +243,9 @@ async function resolveAutoImageModelId(params: {
     if (explicitStatus !== "unsupported") {
       return explicit;
     }
+  }
+  if (isMinimaxVlmProvider(params.providerId)) {
+    return "MiniMax-VL-01";
   }
   const configuredModel = resolveConfiguredImageModelId(params);
   if (configuredModel) {
@@ -736,7 +752,7 @@ async function resolveActiveModelEntry(params: {
   if (!activeProviderRaw) {
     return null;
   }
-  const providerId = normalizeMediaProviderId(activeProviderRaw);
+  const providerId = normalizeMediaExecutionProviderId(activeProviderRaw);
   if (!providerId) {
     return null;
   }
@@ -940,6 +956,7 @@ export async function runCapability(params: {
   if (
     capability === "image" &&
     activeProvider &&
+    !isMinimaxVlmProvider(activeProvider) &&
     !hasExplicitImageUnderstandingConfig({ cfg, config })
   ) {
     const { findModelInCatalog, loadModelCatalog, modelSupportsVision } =

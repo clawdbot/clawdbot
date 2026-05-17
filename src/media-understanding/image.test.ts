@@ -335,6 +335,135 @@ describe("describeImageWithModel", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
+  it("uses canonical MiniMax CN baseUrl for VLM alias fallback", async () => {
+    const authStorage = {
+      setRuntimeApiKey: setRuntimeApiKeyMock,
+    };
+    resolveModelAsyncMock.mockResolvedValue({
+      authStorage,
+      modelRegistry: { find: vi.fn(() => null) },
+      error: "Unknown model: minimax-cn/MiniMax-VL-01",
+    });
+
+    await expect(
+      describeImageWithModel({
+        cfg: {
+          models: {
+            providers: {
+              minimax: {
+                apiKey: "minimax-test-key",
+                baseUrl: "https://api.minimaxi.com/anthropic",
+                models: [],
+              },
+            },
+          },
+        },
+        agentDir: "/tmp/openclaw-agent",
+        provider: "minimax-cn",
+        model: "MiniMax-VL-01",
+        buffer: Buffer.from("png-bytes"),
+        fileName: "image.png",
+        mime: "image/png",
+        prompt: "Describe the image.",
+        timeoutMs: 1000,
+      }),
+    ).resolves.toEqual({
+      text: "portal ok",
+      model: "MiniMax-VL-01",
+    });
+
+    expect(resolveApiKeyForProviderMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "minimax",
+      }),
+    );
+    const [fetchUrl] = requireFirstMockCall(fetchMock, "fetch");
+    expect(fetchUrl).toBe("https://api.minimaxi.com/v1/coding_plan/vlm");
+  });
+
+  it("uses MiniMax CN alias auth when the alias apiKey is a SecretRef", async () => {
+    const authStorage = {
+      setRuntimeApiKey: setRuntimeApiKeyMock,
+    };
+    resolveModelAsyncMock.mockResolvedValue({
+      authStorage,
+      modelRegistry: { find: vi.fn(() => null) },
+      error: "Unknown model: minimax-cn/MiniMax-VL-01",
+    });
+
+    await expect(
+      describeImageWithModel({
+        cfg: {
+          models: {
+            providers: {
+              "minimax-cn": {
+                apiKey: { source: "file", provider: "default", id: "/providers/minimax-cn/apiKey" },
+                baseUrl: "https://api.minimaxi.com/anthropic",
+                models: [],
+              },
+            },
+          },
+        },
+        agentDir: "/tmp/openclaw-agent",
+        provider: "minimax-cn",
+        model: "MiniMax-VL-01",
+        buffer: Buffer.from("png-bytes"),
+        fileName: "image.png",
+        mime: "image/png",
+        prompt: "Describe the image.",
+        timeoutMs: 1000,
+      }),
+    ).resolves.toEqual({
+      text: "portal ok",
+      model: "MiniMax-VL-01",
+    });
+
+    expect(resolveApiKeyForProviderMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "minimax-cn",
+      }),
+    );
+    const [fetchUrl] = requireFirstMockCall(fetchMock, "fetch");
+    expect(fetchUrl).toBe("https://api.minimaxi.com/v1/coding_plan/vlm");
+  });
+
+  it("does not inherit global MiniMax baseUrl for CN VLM aliases", async () => {
+    const authStorage = {
+      setRuntimeApiKey: setRuntimeApiKeyMock,
+    };
+    resolveModelAsyncMock.mockResolvedValue({
+      authStorage,
+      modelRegistry: { find: vi.fn(() => null) },
+      error: "Unknown model: minimax-cn/MiniMax-VL-01",
+    });
+
+    await expect(
+      describeImageWithModel({
+        cfg: {
+          models: {
+            providers: {
+              minimax: { baseUrl: "https://api.minimax.io/anthropic", models: [] },
+            },
+          },
+        },
+        agentDir: "/tmp/openclaw-agent",
+        provider: "minimax-cn",
+        model: "MiniMax-VL-01",
+        buffer: Buffer.from("png-bytes"),
+        fileName: "image.png",
+        mime: "image/png",
+        prompt: "Describe the image.",
+        timeoutMs: 1000,
+      }),
+    ).resolves.toEqual({
+      text: "portal ok",
+      model: "MiniMax-VL-01",
+    });
+
+    const [fetchUrl] = requireFirstMockCall(fetchMock, "fetch");
+    expect(fetchUrl).toBe("https://api.minimaxi.com/v1/coding_plan/vlm");
+  });
+
   it("carries workspaceDir through image model and stream resolution", async () => {
     discoverModelsMock.mockReturnValue({
       find: vi.fn(() => ({

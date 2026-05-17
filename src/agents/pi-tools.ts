@@ -990,6 +990,10 @@ export function createOpenClawCodingTools(options?: {
       toolsForMemoryFlush.push(tool);
     }
   }
+  const unavailableCoreToolReason =
+    isMemoryFlushRun && memoryFlushWritePath
+      ? "memory-triggered compaction runs expose only read and append-only write"
+      : undefined;
   const toolsForMessageProvider = filterToolsByMessageProvider(
     toolsForMemoryFlush,
     options?.messageProvider,
@@ -1031,10 +1035,19 @@ export function createOpenClawCodingTools(options?: {
         groupPolicy: groupPolicyWithToolSearchControls,
         senderPolicy: senderPolicyWithToolSearchControls,
         agentId,
+        unavailableCoreToolReason,
       }),
-      { policy: sandboxToolPolicyWithToolSearchControls, label: "sandbox tools.allow" },
-      { policy: subagentPolicyWithToolSearchControls, label: "subagent tools.allow" },
-      { policy: inheritedToolPolicy, label: "inherited tools" },
+      {
+        policy: sandboxToolPolicyWithToolSearchControls,
+        label: "sandbox tools.allow",
+        unavailableCoreToolReason,
+      },
+      {
+        policy: subagentPolicyWithToolSearchControls,
+        label: "subagent tools.allow",
+        unavailableCoreToolReason,
+      },
+      { policy: inheritedToolPolicy, label: "inherited tools", unavailableCoreToolReason },
     ],
   });
   if (shouldInheritEffectiveToolAllowlist) {

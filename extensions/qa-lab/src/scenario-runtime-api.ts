@@ -60,6 +60,11 @@ export type QaScenarioRuntimeDeps = {
   readEffectiveTools: QaScenarioRuntimeFunction;
   readSkillStatus: QaScenarioRuntimeFunction;
   readRawQaSessionStore: QaScenarioRuntimeFunction;
+  readGatewayLogs: QaScenarioRuntimeFunction;
+  markGatewayLogCursor: QaScenarioRuntimeFunction;
+  scanGatewayLogSentinels: QaScenarioRuntimeFunction;
+  assertNoGatewayLogSentinels: QaScenarioRuntimeFunction;
+  readSessionTranscriptSummary: QaScenarioRuntimeFunction;
   runQaCli: QaScenarioRuntimeFunction;
   extractMediaPathFromText: QaScenarioRuntimeFunction;
   resolveGeneratedImagePath: QaScenarioRuntimeFunction;
@@ -145,6 +150,11 @@ type QaScenarioRuntimeApi<
   readEffectiveTools: TDeps["readEffectiveTools"];
   readSkillStatus: TDeps["readSkillStatus"];
   readRawQaSessionStore: TDeps["readRawQaSessionStore"];
+  readGatewayLogs: TDeps["readGatewayLogs"];
+  markGatewayLogCursor: TDeps["markGatewayLogCursor"];
+  scanGatewayLogSentinels: TDeps["scanGatewayLogSentinels"];
+  assertNoGatewayLogSentinels: TDeps["assertNoGatewayLogSentinels"];
+  readSessionTranscriptSummary: TDeps["readSessionTranscriptSummary"];
   runQaCli: TDeps["runQaCli"];
   extractMediaPathFromText: TDeps["extractMediaPathFromText"];
   resolveGeneratedImagePath: TDeps["resolveGeneratedImagePath"];
@@ -245,6 +255,11 @@ export function createQaScenarioRuntimeApi<
     readEffectiveTools: params.deps.readEffectiveTools,
     readSkillStatus: params.deps.readSkillStatus,
     readRawQaSessionStore: params.deps.readRawQaSessionStore,
+    readGatewayLogs: params.deps.readGatewayLogs,
+    markGatewayLogCursor: params.deps.markGatewayLogCursor,
+    scanGatewayLogSentinels: params.deps.scanGatewayLogSentinels,
+    assertNoGatewayLogSentinels: params.deps.assertNoGatewayLogSentinels,
+    readSessionTranscriptSummary: params.deps.readSessionTranscriptSummary,
     runQaCli: params.deps.runQaCli,
     extractMediaPathFromText: params.deps.extractMediaPathFromText,
     resolveGeneratedImagePath: params.deps.resolveGeneratedImagePath,

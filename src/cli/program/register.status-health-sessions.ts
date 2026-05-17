@@ -26,6 +26,57 @@ function resolveVerbose(opts: { verbose?: boolean; debug?: boolean }): boolean {
   return Boolean(opts.verbose || opts.debug);
 }
 
+type SessionsListCliOptions = {
+  json?: boolean;
+  verbose?: boolean;
+  store?: string;
+  agent?: string;
+  allAgents?: boolean;
+  active?: string;
+  limit?: string;
+};
+
+function addSessionsListOptions(command: Command): Command {
+  return command
+    .option("--json", "Output as JSON", false)
+    .option("--verbose", "Verbose logging", false)
+    .option("--store <path>", "Path to session store (default: resolved from config)")
+    .option("--agent <id>", "Agent id to inspect (default: configured default agent)")
+    .option("--all-agents", "Aggregate sessions across all configured agents", false)
+    .option("--active <minutes>", "Only show sessions updated within the past N minutes")
+    .option("--limit <count>", 'Max sessions to show (default: 100; use "all" for full output)');
+}
+
+function mergeSessionsListOptions(
+  opts: SessionsListCliOptions,
+  parentOpts?: SessionsListCliOptions,
+): SessionsListCliOptions {
+  return {
+    json: Boolean(opts.json || parentOpts?.json),
+    verbose: Boolean(opts.verbose || parentOpts?.verbose),
+    store: opts.store ?? parentOpts?.store,
+    agent: opts.agent ?? parentOpts?.agent,
+    allAgents: Boolean(opts.allAgents || parentOpts?.allAgents),
+    active: opts.active ?? parentOpts?.active,
+    limit: opts.limit ?? parentOpts?.limit,
+  };
+}
+
+async function runSessionsListCli(opts: SessionsListCliOptions): Promise<void> {
+  setVerbose(Boolean(opts.verbose));
+  await sessionsCommand(
+    {
+      json: Boolean(opts.json),
+      store: opts.store,
+      agent: opts.agent,
+      allAgents: Boolean(opts.allAgents),
+      active: opts.active,
+      limit: opts.limit,
+    },
+    defaultRuntime,
+  );
+}
+
 function parseTimeoutMs(timeout: unknown): number | null | undefined {
   const parsed = parsePositiveIntOrUndefined(timeout);
   if (timeout !== undefined && parsed === undefined) {
@@ -123,16 +174,9 @@ export function registerStatusHealthSessionsCommands(program: Command) {
       });
     });
 
-  const sessionsCmd = program
-    .command("sessions")
-    .description("List stored conversation sessions")
-    .option("--json", "Output as JSON", false)
-    .option("--verbose", "Verbose logging", false)
-    .option("--store <path>", "Path to session store (default: resolved from config)")
-    .option("--agent <id>", "Agent id to inspect (default: configured default agent)")
-    .option("--all-agents", "Aggregate sessions across all configured agents", false)
-    .option("--active <minutes>", "Only show sessions updated within the past N minutes")
-    .option("--limit <count>", 'Max sessions to show (default: 100; use "all" for full output)')
+  const sessionsCmd = addSessionsListOptions(
+    program.command("sessions").description("List stored conversation sessions"),
+  )
     .addHelpText(
       "after",
       () =>
@@ -154,20 +198,16 @@ export function registerStatusHealthSessionsCommands(program: Command) {
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/sessions", "docs.openclaw.ai/cli/sessions")}\n`,
     )
     .action(async (opts) => {
-      setVerbose(Boolean(opts.verbose));
-      await sessionsCommand(
-        {
-          json: Boolean(opts.json),
-          store: opts.store as string | undefined,
-          agent: opts.agent as string | undefined,
-          allAgents: Boolean(opts.allAgents),
-          active: opts.active as string | undefined,
-          limit: opts.limit as string | undefined,
-        },
-        defaultRuntime,
-      );
+      await runSessionsListCli(opts as SessionsListCliOptions);
     });
   sessionsCmd.enablePositionalOptions();
+
+  addSessionsListOptions(
+    sessionsCmd.command("list").description("List stored conversation sessions"),
+  ).action(async (opts, command) => {
+    const parentOpts = command.parent?.opts() as SessionsListCliOptions | undefined;
+    await runSessionsListCli(mergeSessionsListOptions(opts as SessionsListCliOptions, parentOpts));
+  });
 
   sessionsCmd
     .command("cleanup")

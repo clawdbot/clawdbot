@@ -5,6 +5,7 @@ import {
   createSession,
   readEffectiveTools,
   readRawQaSessionStore,
+  readSessionTranscriptSummary,
   readSkillStatus,
 } from "./suite-runtime-agent-session.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
@@ -111,6 +112,63 @@ describe("qa suite runtime agent session helpers", () => {
     ).resolves.toEqual({
       "session-1": { sessionId: "session-1", status: "ready" },
     });
+  });
+
+  it("summarizes a QA session transcript by session key", async () => {
+    const tempRoot = await makeTempDir("qa-session-transcript-");
+    const storeDir = path.join(tempRoot, "state", "agents", "qa", "sessions");
+    await fs.mkdir(storeDir, { recursive: true });
+    await fs.writeFile(
+      path.join(storeDir, "sessions.json"),
+      JSON.stringify({
+        "agent:qa:webchat": { sessionId: "session-1", sessionFile: "session-1.jsonl" },
+      }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(storeDir, "session-1.jsonl"),
+      [
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "tool_use",
+                name: "message",
+                input: { action: "send", text: "hello" },
+              },
+            ],
+          },
+        }),
+        JSON.stringify({ message: { role: "assistant", content: "Sent." } }),
+      ].join("\n"),
+      "utf8",
+    );
+
+    await expect(
+      readSessionTranscriptSummary(
+        {
+          gateway: { tempRoot },
+        } as never,
+        "agent:qa:webchat",
+      ),
+    ).resolves.toEqual({
+      finalText: "Sent.",
+      hasDirectReplySelfMessage: true,
+    });
+  });
+
+  it("fails closed when a requested QA session transcript entry is missing", async () => {
+    const tempRoot = await makeTempDir("qa-session-transcript-missing-");
+
+    await expect(
+      readSessionTranscriptSummary(
+        {
+          gateway: { tempRoot },
+        } as never,
+        "agent:qa:missing",
+      ),
+    ).rejects.toThrow("session transcript entry not found");
   });
 
   it("returns an empty session store when the file does not exist", async () => {

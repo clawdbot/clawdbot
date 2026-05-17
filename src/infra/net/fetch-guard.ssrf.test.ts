@@ -241,6 +241,7 @@ describe("fetchWithSsrFGuard hardening", () => {
           autoSelectFamily: true,
           autoSelectFamilyAttemptTimeout: 300,
         },
+        clientFactory: expect.any(Function),
         proxyTls: {
           autoSelectFamily: true,
           autoSelectFamilyAttemptTimeout: 300,
@@ -600,6 +601,7 @@ describe("fetchWithSsrFGuard hardening", () => {
 
     expect(proxyAgentCtor).toHaveBeenCalledWith({
       uri: "http://proxy.example:7890",
+      clientFactory: expect.any(Function),
       proxyTls: {
         autoSelectFamily: true,
         autoSelectFamilyAttemptTimeout: 300,

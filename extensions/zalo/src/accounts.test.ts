@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { resolveZaloAccount } from "./accounts.js";
+import {
+  listEnabledZaloAccounts,
+  listZaloAccountIds,
+  resolveDefaultZaloAccountId,
+  resolveZaloAccount,
+} from "./accounts.js";
 
 describe("resolveZaloAccount", () => {
   it("resolves account config when account key casing differs from normalized id", () => {
@@ -66,5 +71,25 @@ describe("resolveZaloAccount", () => {
     expect(resolved.accountId).toBe("work");
     expect(resolved.name).toBe("Work");
     expect(resolved.token).toBe("work-token");
+  });
+
+  it("keeps the implicit default account when named accounts are added to top-level credentials", () => {
+    const cfg = {
+      channels: {
+        zalo: {
+          botToken: "default-token",
+          accounts: {
+            work: {
+              enabled: false,
+              botToken: "work-token",
+            },
+          },
+        },
+      },
+    };
+
+    expect(listZaloAccountIds(cfg)).toEqual(["default", "work"]);
+    expect(resolveDefaultZaloAccountId(cfg)).toBe("default");
+    expect(listEnabledZaloAccounts(cfg).map((account) => account.accountId)).toEqual(["default"]);
   });
 });

@@ -2977,7 +2977,7 @@ describe("task-registry", () => {
       await flushAsyncWork();
       expectRecordFields(sentMessageCall(), {
         content:
-          "Background task update: ACP background task. No output for 1s. It may be waiting for input.",
+          "Background task update: ACP background task. No prompt submission observed for 1s after child start.",
       });
 
       expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);

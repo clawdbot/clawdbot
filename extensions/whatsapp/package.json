@@ -12,8 +12,7 @@
     "baileys": "7.0.0-rc11",
     "https-proxy-agent": "9.0.0",
     "jimp": "1.6.1",
-    "typebox": "1.1.38",
-    "undici": "8.3.0"
+    "typebox": "1.1.38"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",

@@ -918,17 +918,41 @@ describe("capability cli", () => {
     },
   );
 
-  it("runs gateway model probes without chat-agent prompt policy or tools", async () => {
+  it("runs gateway model probes in fresh raw sessions without chat-agent prompt policy or tools", async () => {
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,
       argv: ["capability", "model", "run", "--prompt", "hello", "--gateway", "--json"],
     });
 
     const gatewayCall = firstGatewayCall();
+    const sessionId = gatewayCall?.params?.sessionId;
     expect(gatewayCall?.method).toBe("agent");
+    expect(typeof sessionId).toBe("string");
+    if (typeof sessionId !== "string") {
+      throw new Error("expected gateway model run session id");
+    }
+    expect(sessionId).toEqual(expect.stringMatching(/^model-run-[0-9a-f-]{36}$/));
+    expect(gatewayCall?.params?.sessionKey).toBe(`agent:main:explicit:${sessionId}`);
     expect(gatewayCall?.params?.cleanupBundleMcpOnRunEnd).toBe(true);
     expect(gatewayCall?.params?.modelRun).toBe(true);
     expect(gatewayCall?.params?.promptMode).toBe("none");
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "model", "run", "--prompt", "again", "--gateway", "--json"],
+    });
+
+    const gatewayCalls = mocks.callGateway.mock.calls as unknown as Array<[GatewayCall]>;
+    const nextGatewayCall = gatewayCalls[1]?.[0];
+    const nextSessionId = nextGatewayCall?.params?.sessionId;
+    expect(nextGatewayCall?.method).toBe("agent");
+    expect(typeof nextSessionId).toBe("string");
+    if (typeof nextSessionId !== "string") {
+      throw new Error("expected second gateway model run session id");
+    }
+    expect(nextSessionId).toEqual(expect.stringMatching(/^model-run-[0-9a-f-]{36}$/));
+    expect(nextGatewayCall?.params?.sessionKey).toBe(`agent:main:explicit:${nextSessionId}`);
+    expect(nextSessionId).not.toBe(sessionId);
   });
 
   it("surfaces gateway model fallback attempts in model probe JSON", async () => {
@@ -1125,6 +1149,26 @@ describe("capability cli", () => {
     expect(outputs[0]?.kind).toBe("image.description");
   });
 
+  it("keeps image describe HTTP URLs as URLs", async () => {
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "image",
+        "describe",
+        "--file",
+        "https://httpbin.org/image/png",
+        "--json",
+      ],
+    });
+
+    const describeCall = imageDescribeCall();
+    expect(describeCall?.filePath).toBe("https://httpbin.org/image/png");
+    const output = firstJsonOutput();
+    const outputs = output?.outputs as Array<Record<string, unknown>>;
+    expect(outputs[0]?.path).toBe("https://httpbin.org/image/png");
+  });
+
   it("passes image describe prompts through media understanding", async () => {
     await runRegisteredCli({
       register: registerCapabilityCli as (program: Command) => void,
@@ -1219,6 +1263,28 @@ describe("capability cli", () => {
     expect(mocks.describeImageFile).not.toHaveBeenCalled();
     const outputs = firstJsonOutput()?.outputs as Array<Record<string, unknown>>;
     expect(outputs[0]?.path).toBe("https://example.com/photo.png");
+  });
+
+  it("keeps explicit-model image describe HTTP URLs as URLs", async () => {
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "image",
+        "describe",
+        "--file",
+        "https://httpbin.org/image/png",
+        "--model",
+        "minimax-cn/MiniMax-VL-01",
+        "--json",
+      ],
+    });
+
+    const describeCall = firstImageDescribeWithModelCall();
+    expect(describeCall?.filePath).toBe("https://httpbin.org/image/png");
+    expect(describeCall?.provider).toBe("minimax-cn");
+    expect(describeCall?.model).toBe("MiniMax-VL-01");
+    expect(mocks.describeImageFile).not.toHaveBeenCalled();
   });
 
   it("passes describe-many prompts to each image", async () => {

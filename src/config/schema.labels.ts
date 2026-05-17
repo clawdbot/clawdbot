@@ -606,6 +606,12 @@ export const FIELD_LABELS: Record<string, string> = {
   "models.providers.*.request.proxy.tls.serverName": "Model Provider Request Proxy TLS Server Name",
   "models.providers.*.request.proxy.tls.insecureSkipVerify":
     "Model Provider Request Proxy TLS Skip Verify",
+  proxy: "Managed Proxy",
+  "proxy.enabled": "Managed Proxy Enabled",
+  "proxy.proxyUrl": "Managed Proxy URL",
+  "proxy.tls": "Managed Proxy TLS",
+  "proxy.tls.caFile": "Managed Proxy TLS CA File",
+  "proxy.loopbackMode": "Managed Proxy Loopback Mode",
   "models.providers.*.request.tls": "Model Provider Request TLS",
   "models.providers.*.request.tls.ca": "Model Provider Request TLS CA",
   "models.providers.*.request.tls.cert": "Model Provider Request TLS Cert",

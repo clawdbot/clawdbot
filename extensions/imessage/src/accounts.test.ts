@@ -1,7 +1,28 @@
 import { describe, expect, it } from "vitest";
-import { resolveIMessageAccount } from "./accounts.js";
+import {
+  listIMessageAccountIds,
+  resolveDefaultIMessageAccountId,
+  resolveIMessageAccount,
+} from "./accounts.js";
 
 describe("resolveIMessageAccount", () => {
+  it("preserves top-level default account when named accounts are configured", () => {
+    const cfg = {
+      channels: {
+        imessage: {
+          cliPath: "/usr/local/bin/imsg",
+          accounts: {
+            work: { enabled: false },
+          },
+        },
+      },
+    } as never;
+
+    expect(listIMessageAccountIds(cfg)).toEqual(["default", "work"]);
+    expect(resolveDefaultIMessageAccountId(cfg)).toBe("default");
+    expect(resolveIMessageAccount({ cfg }).config.cliPath).toBe("/usr/local/bin/imsg");
+  });
+
   it("uses configured defaultAccount when accountId is omitted", () => {
     const resolved = resolveIMessageAccount({
       cfg: {

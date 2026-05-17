@@ -3,9 +3,11 @@ import SwiftUI
 
 struct InstancesSettings: View {
     var store: InstancesStore
+    let isActive: Bool
 
-    init(store: InstancesStore = .shared) {
+    init(store: InstancesStore = .shared, isActive: Bool = true) {
         self.store = store
+        self.isActive = isActive
     }
 
     var body: some View {
@@ -29,8 +31,19 @@ struct InstancesSettings: View {
             }
             Spacer()
         }
-        .onAppear { self.store.start() }
+        .onAppear { self.updateActiveWork(active: self.isActive) }
+        .onChange(of: self.isActive) { _, active in
+            self.updateActiveWork(active: active)
+        }
         .onDisappear { self.store.stop() }
+    }
+
+    private func updateActiveWork(active: Bool) {
+        if active {
+            self.store.start()
+        } else {
+            self.store.stop()
+        }
     }
 
     private var header: some View {

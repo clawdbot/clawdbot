@@ -1916,6 +1916,116 @@ describe("processDiscordMessage draft streaming", () => {
     expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps the preview and sends media-only for TTS supplement finals", async () => {
+    const draftStream = createMockDraftStreamForTest();
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.dispatcher.sendFinalReply({
+        mediaUrl: "https://example.com/tts.mp3",
+        audioAsVoice: true,
+        spokenText: "Spoken answer",
+        ttsSupplement: { spokenText: "Spoken answer" },
+      } as never);
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: { streamMode: "partial", maxLinesPerMessage: 5 },
+      replyToMode: "first",
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.flush).toHaveBeenCalledTimes(1);
+    expect(draftStream.discardPending).not.toHaveBeenCalled();
+    expect(draftStream.clear).not.toHaveBeenCalled();
+    expectPreviewEditContent("Spoken answer");
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+    expect(firstMockArg(deliverDiscordReply, "deliverDiscordReply")).toMatchObject({
+      replyToId: "m1",
+      replies: [
+        {
+          mediaUrl: "https://example.com/tts.mp3",
+          audioAsVoice: true,
+          spokenText: "Spoken answer",
+          ttsSupplement: { spokenText: "Spoken answer" },
+        },
+      ],
+    });
+  });
+
+  it("falls back with visible text when TTS supplement preview finalization fails", async () => {
+    const draftStream = createMockDraftStreamForTest();
+    editMessageDiscord.mockRejectedValueOnce(new Error("edit failed"));
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.dispatcher.sendFinalReply({
+        mediaUrl: "https://example.com/tts.mp3",
+        audioAsVoice: true,
+        spokenText: "Spoken answer",
+        ttsSupplement: { spokenText: "Spoken answer" },
+      } as never);
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: { streamMode: "partial", maxLinesPerMessage: 5 },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.flush).toHaveBeenCalledTimes(1);
+    expect(draftStream.discardPending).toHaveBeenCalled();
+    expect(draftStream.clear).toHaveBeenCalled();
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+    expect(firstMockArg(deliverDiscordReply, "deliverDiscordReply")).toMatchObject({
+      replies: [
+        {
+          text: "Spoken answer",
+          mediaUrl: "https://example.com/tts.mp3",
+          audioAsVoice: true,
+          spokenText: "Spoken answer",
+          ttsSupplement: { spokenText: "Spoken answer" },
+        },
+      ],
+    });
+  });
+
+  it("keeps already-delivered TTS supplement fallback audio-only", async () => {
+    editMessageDiscord.mockRejectedValueOnce(new Error("edit failed"));
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.dispatcher.sendFinalReply({
+        mediaUrl: "https://example.com/tts.mp3",
+        audioAsVoice: true,
+        spokenText: "Spoken answer",
+        ttsSupplement: {
+          spokenText: "Spoken answer",
+          visibleTextAlreadyDelivered: true,
+        },
+      } as never);
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: { streamMode: "partial", maxLinesPerMessage: 5 },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+    expect(firstMockArg(deliverDiscordReply, "deliverDiscordReply")).toMatchObject({
+      replies: [
+        {
+          mediaUrl: "https://example.com/tts.mp3",
+          audioAsVoice: true,
+          spokenText: "Spoken answer",
+          ttsSupplement: {
+            spokenText: "Spoken answer",
+            visibleTextAlreadyDelivered: true,
+          },
+        },
+      ],
+    });
+  });
+
   it("does not flush draft previews for error finals before normal delivery", async () => {
     const draftStream = createMockDraftStreamForTest();
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
@@ -2206,7 +2316,7 @@ describe("processDiscordMessage draft streaming", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(draftStream.update).toHaveBeenCalledWith(
-      "Clawing...\n🩹 1 modified; extensions/discord/src/monitor/message-handler.draft-prev…",
+      "Clawing...\n🩹 1 modified; extensions/discord/src/monitor/message-handler.draft-preview.ts",
     );
     const updates = draftStream.update.mock.calls.map((call) => call[0]);
     expect(updates.join("\n")).not.toContain("Apply Patch");

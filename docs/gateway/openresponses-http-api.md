@@ -23,6 +23,7 @@ Operational behavior matches [OpenAI Chat Completions](/gateway/openai-http-api)
 - use the matching Gateway HTTP auth path:
   - shared-secret auth (`gateway.auth.mode="token"` or `"password"`): `Authorization: Bearer <token-or-password>`
   - trusted-proxy auth (`gateway.auth.mode="trusted-proxy"`): identity-aware proxy headers from a configured trusted proxy source; same-host loopback proxies require explicit `gateway.auth.trustedProxy.allowLoopback = true`
+  - trusted-proxy local direct fallback: same-host callers with no `Forwarded`, `X-Forwarded-*`, or `X-Real-IP` headers can use `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD`
   - private-ingress open auth (`gateway.auth.mode="none"`): no auth header
 - treat the endpoint as full operator access for the gateway instance
 - for shared-secret auth modes (`token` and `password`), ignore narrower bearer-declared `x-openclaw-scopes` values and restore the normal full operator defaults

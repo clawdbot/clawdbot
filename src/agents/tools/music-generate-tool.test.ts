@@ -232,6 +232,24 @@ describe("createMusicGenerateTool", () => {
     );
   });
 
+  it("tells song requests to generate audio instead of only lyrics", () => {
+    const tool = expectMusicGenerateTool(
+      createMusicGenerateTool({
+        config: asConfig({
+          agents: {
+            defaults: {
+              musicGenerationModel: { primary: "google/lyria-3-clip-preview" },
+            },
+          },
+        }),
+      }),
+    );
+
+    expect(tool.description).toContain("call music_generate");
+    expect(tool.description).toContain("do not just write lyrics");
+    expect(JSON.stringify(tool.parameters)).toContain("For song/style requests, use prompt");
+  });
+
   it("does not load runtime providers while registering an explicitly configured tool", () => {
     const listProviders = vi
       .spyOn(musicGenerationRuntime, "listRuntimeMusicGenerationProviders")

@@ -489,6 +489,14 @@ describe("chat loading skeleton", () => {
     expect(container.querySelector(".agent-chat__welcome")).toBeNull();
   });
 
+  it("shows the reading indicator instead of the skeleton while an active run has no stream yet", () => {
+    const container = renderChatView({ canAbort: true, loading: true });
+
+    expect(container.querySelector(".chat-loading-skeleton")).toBeNull();
+    expect(container.querySelectorAll(".chat-reading-indicator")).toHaveLength(1);
+    expect(container.querySelector(".agent-chat__welcome")).toBeNull();
+  });
+
   it("keeps existing messages visible without the skeleton during a background reload", () => {
     const container = renderChatView({
       loading: true,

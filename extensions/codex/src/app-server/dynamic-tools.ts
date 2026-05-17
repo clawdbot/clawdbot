@@ -19,6 +19,7 @@ import {
   wrapToolWithBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { CodexDynamicToolsLoading } from "./config.js";
+import { invalidInlineImageText, sanitizeInlineImageDataUrl } from "./image-payload-sanitizer.js";
 import {
   type CodexDynamicToolCallOutputContentItem,
   type CodexDynamicToolCallParams,
@@ -375,10 +376,14 @@ function convertToolContent(
   if (content.type === "text") {
     return [{ type: "inputText", text: content.text }];
   }
+  const imageUrl = sanitizeInlineImageDataUrl(`data:${content.mimeType};base64,${content.data}`);
+  if (!imageUrl) {
+    return [{ type: "inputText", text: invalidInlineImageText("codex dynamic tool") }];
+  }
   return [
     {
       type: "inputImage",
-      imageUrl: `data:${content.mimeType};base64,${content.data}`,
+      imageUrl,
     },
   ];
 }

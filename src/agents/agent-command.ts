@@ -575,7 +575,23 @@ async function agentCommandInternal(
           mode: "prompt",
           requestId: runId,
           signal: opts.abortSignal,
+          onLifecycle: (event) => {
+            if (event.type === "prompt_submitted") {
+              attemptExecutionRuntime.emitAcpPromptSubmitted({
+                runId,
+                sessionKey,
+                at: event.at,
+              });
+            }
+          },
           onEvent: (event) => {
+            if (event.type !== "text_delta") {
+              attemptExecutionRuntime.emitAcpRuntimeEvent({
+                runId,
+                sessionKey,
+                event,
+              });
+            }
             if (event.type === "done") {
               stopReason = event.stopReason;
               return;

@@ -139,10 +139,11 @@ describe("music generate background helpers", () => {
     expectReplyInstructionContains("the media must be sent as message-tool attachments");
   });
 
-  it("routes failure completion notices through the message tool", async () => {
+  it("delivers failure completion notices directly", async () => {
     announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
-      delivered: true,
+      delivered: false,
       path: "direct",
+      error: "completion agent did not deliver through the message tool",
     });
     const completion = createMediaCompletionFixture({
       runId: "tool:music_generate:abc",
@@ -156,9 +157,13 @@ describe("music generate background helpers", () => {
       statusLabel: "failed",
     });
 
-    expectReplyInstructionContains("failure summary");
-    expectReplyInstructionContains("the user will NOT see your normal assistant final reply");
-    expectReplyInstructionContains('message tool with action="send"');
+    expect(taskDeliveryRuntimeMocks.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "Music generation failed: provider failed",
+        idempotencyKey: "music_generate:task-123:error:direct",
+      }),
+    );
+    expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledTimes(1);
   });
 
   it.each(["agent:main:discord:guild-123:channel-456", "agent:main:whatsapp:123@g.us"])(

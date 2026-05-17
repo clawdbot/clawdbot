@@ -181,8 +181,13 @@ export function resolveSelectedOpenAIPiRuntimeProvider(params: {
     return OPENAI_CODEX_PROVIDER_ID;
   }
   const runtime = normalizeEmbeddedAgentRuntime(params.agentHarnessId ?? params.harnessRuntime);
-  return isOpenAIProvider(params.provider) &&
-    runtime === "pi" &&
+  if (!isOpenAIProvider(params.provider)) {
+    return params.provider;
+  }
+  if (runtime === "codex") {
+    return OPENAI_CODEX_PROVIDER_ID;
+  }
+  return runtime === "pi" &&
     !params.authProfileId?.trim() &&
     configuredOpenAIAuthOrderStartsWithCodexProfile(params.config)
     ? OPENAI_CODEX_PROVIDER_ID

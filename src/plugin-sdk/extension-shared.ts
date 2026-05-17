@@ -1,6 +1,7 @@
 import { createAmbientNodeProxyAgent, hasAmbientNodeProxyConfigured } from "@openclaw/proxyline";
 import type { z } from "zod";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveActiveManagedProxyTlsOptions } from "../infra/net/proxy/managed-proxy-undici.js";
 import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
 import { runPassiveAccountLifecycle } from "./channel-lifecycle.core.js";
 import { createLoggerBackedRuntime } from "./runtime-logger.js";
@@ -237,7 +238,11 @@ export async function resolveAmbientNodeProxyAgent<TAgent>(params?: {
     return undefined;
   }
   try {
-    const agent = createAmbientNodeProxyAgent({ protocol });
+    const proxyTls = resolveActiveManagedProxyTlsOptions();
+    const agent = createAmbientNodeProxyAgent({
+      protocol,
+      ...(proxyTls ? { proxyTls } : {}),
+    });
     if (agent === undefined) {
       return undefined;
     }

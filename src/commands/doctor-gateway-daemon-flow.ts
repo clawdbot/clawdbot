@@ -17,8 +17,10 @@ import { renderSystemdUnavailableHints } from "../daemon/systemd-hints.js";
 import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
 import {
   formatPortDiagnostics,
+  inspectPortConnections,
   inspectPortUsage,
   isExpectedGatewayListeners,
+  type PortConnection,
 } from "../infra/ports.js";
 import {
   formatGatewayRestartHandoffDiagnostic,
@@ -111,6 +113,40 @@ function renderBlockingSystemGatewayServices(services: ExtraGatewayService[]): s
   ].join("\n");
 }
 
+function renderEstablishedGatewayConnections(connections: PortConnection[]): string {
+  return [
+    "Established Gateway TCP clients detected:",
+    ...connections.slice(0, 8).map((connection) => {
+      const pid = connection.pid ? `pid=${connection.pid}` : "pid=?";
+      const direction = connection.direction;
+      const command = connection.command ? ` ${connection.command}` : "";
+      const address = connection.address ? ` ${connection.address}` : "";
+      const commandLine = connection.commandLine ? ` cmd=${connection.commandLine}` : "";
+      return `- ${pid} ${direction}${command}${address}${commandLine}`;
+    }),
+    ...(connections.length > 8 ? [`- ... ${connections.length - 8} more connection(s)`] : []),
+    "If logs show protocol mismatch after rollback, stop stale OpenClaw client processes listed here and rerun doctor.",
+  ].join("\n");
+}
+
+async function maybeReportEstablishedGatewayClients(params: {
+  cfg: OpenClawConfig;
+  deep: boolean;
+  port?: number;
+}): Promise<void> {
+  if (!params.deep || params.cfg.gateway?.mode === "remote") {
+    return;
+  }
+  const port = params.port ?? resolveGatewayPort(params.cfg, process.env);
+  const connections = await inspectPortConnections(port).catch(() => null);
+  const establishedClients = connections?.connections.filter(
+    (connection) => connection.direction !== "server",
+  );
+  if (establishedClients && establishedClients.length > 0) {
+    note(renderEstablishedGatewayConnections(establishedClients), "Gateway clients");
+  }
+}
+
 export async function maybeRepairGatewayDaemon(params: {
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;
@@ -120,6 +156,10 @@ export async function maybeRepairGatewayDaemon(params: {
   healthOk: boolean;
 }) {
   if (params.healthOk) {
+    await maybeReportEstablishedGatewayClients({
+      cfg: params.cfg,
+      deep: params.options.deep ?? false,
+    });
     return;
   }
 
@@ -182,6 +222,11 @@ export async function maybeRepairGatewayDaemon(params: {
   if (params.cfg.gateway?.mode !== "remote") {
     const port = resolveGatewayPort(params.cfg, process.env);
     const diagnostics = await inspectPortUsage(port);
+    await maybeReportEstablishedGatewayClients({
+      cfg: params.cfg,
+      deep: params.options.deep ?? false,
+      port,
+    });
     if (
       diagnostics.status === "busy" &&
       !isExpectedGatewayListeners(diagnostics.listeners, diagnostics.port)

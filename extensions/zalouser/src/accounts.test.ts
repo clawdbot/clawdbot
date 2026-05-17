@@ -66,6 +66,23 @@ describe("zalouser account resolution", () => {
     expect(listZalouserAccountIds(cfg)).toEqual(["default", "personal", "work"]);
   });
 
+  it("preserves top-level default account when named accounts are configured", () => {
+    const cfg = asConfig({
+      channels: {
+        zalouser: {
+          profile: "personal",
+          accounts: {
+            work: { enabled: false },
+          },
+        },
+      },
+    });
+
+    expect(listZalouserAccountIds(cfg)).toEqual(["default", "work"]);
+    expect(resolveDefaultZalouserAccountId(cfg)).toBe("default");
+    expect(resolveZalouserAccountSync({ cfg }).profile).toBe("personal");
+  });
+
   it("uses configured defaultAccount when present", () => {
     const cfg = asConfig({
       channels: {

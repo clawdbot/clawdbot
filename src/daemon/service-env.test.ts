@@ -839,6 +839,17 @@ describe("buildNodeServiceEnvironment", () => {
       "/home/user/.nvm/versions/node/v22.22.0/bin",
     );
   });
+
+  it("marks Windows node tasks for hidden launcher startup", () => {
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "C:\\Users\\alice" },
+      platform: "win32",
+    });
+
+    expect(env.OPENCLAW_WINDOWS_TASK_NAME).toBe("OpenClaw Node");
+    expect(env.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER).toBe("1");
+    expect(env.OPENCLAW_TASK_SCRIPT_NAME).toBe("node.cmd");
+  });
 });
 
 describe("shared Node TLS env defaults matrix", () => {

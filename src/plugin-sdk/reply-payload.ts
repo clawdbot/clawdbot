@@ -7,6 +7,13 @@ import { normalizeLowercaseStringOrEmpty, readStringValue } from "../shared/stri
 export type { MediaPayload, MediaPayloadInput } from "../channels/plugins/media-payload.js";
 export { buildMediaPayload } from "../channels/plugins/media-payload.js";
 export type ReplyPayload = Omit<InternalReplyPayload, "trustedLocalMedia">;
+export type { ReplyPayloadTtsSupplement } from "../auto-reply/reply-payload.js";
+export {
+  buildTtsSupplementMediaPayload,
+  getReplyPayloadTtsSupplement,
+  isReplyPayloadTtsSupplement,
+  markReplyPayloadAsTtsSupplement,
+} from "../auto-reply/reply-payload.js";
 
 export type OutboundReplyPayload = {
   text?: string;

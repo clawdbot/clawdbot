@@ -37,6 +37,20 @@ function toFiniteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+function normalizeStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((item): item is string => typeof item === "string" && item.length > 0);
+}
+
+function formatProxyEnvSummary(keys: string[]): string {
+  if (keys.length === 0) {
+    return "proxy env: none";
+  }
+  return `proxy env: ${keys.join(", ")}`;
+}
+
 function resolveAcpStreamLogPathFromSessionFile(sessionFile: string, sessionId: string): string {
   const baseDir = path.dirname(path.resolve(sessionFile));
   return path.join(baseDir, `${sessionId}.acp-stream.jsonl`);
@@ -243,6 +257,11 @@ export function startAcpSpawnParentStreamRelay(params: {
   let pendingText = "";
   let lastProgressAt = Date.now();
   let stallNotified = false;
+  let promptSubmittedAt: number | undefined;
+  let firstRuntimeEventAt: number | undefined;
+  let firstVisibleOutputAt: number | undefined;
+  let lastRuntimeEventType: string | undefined;
+  let proxyEnvKeysAtPrompt: string[] = [];
   let flushTimer: NodeJS.Timeout | undefined;
   let relayLifetimeTimer: NodeJS.Timeout | undefined;
 
@@ -284,6 +303,34 @@ export function startAcpSpawnParentStreamRelay(params: {
     flushTimer.unref?.();
   };
 
+  const buildNoOutputNotice = () => {
+    const seconds = Math.round(noOutputNoticeMs / 1000);
+    if (!promptSubmittedAt) {
+      return {
+        summary: `No prompt submission observed for ${seconds}s after child start.`,
+        text: `${relayLabel} session started but no prompt submission was observed for ${seconds}s.`,
+      };
+    }
+    if (!firstRuntimeEventAt) {
+      const proxySummary = formatProxyEnvSummary(proxyEnvKeysAtPrompt);
+      return {
+        summary: `Prompt submitted but no ACP runtime event for ${seconds}s (${proxySummary}).`,
+        text: `${relayLabel} prompt was submitted but no ACP runtime event arrived for ${seconds}s (${proxySummary}). Check upstream connectivity, auth, or proxy/network access in the gateway child environment.`,
+      };
+    }
+    if (!firstVisibleOutputAt) {
+      const lastEvent = lastRuntimeEventType ? ` Last ACP event: ${lastRuntimeEventType}.` : "";
+      return {
+        summary: `ACP runtime active but no visible assistant output for ${seconds}s.${lastEvent}`,
+        text: `${relayLabel} has ACP runtime activity but no visible assistant output for ${seconds}s.${lastEvent} It may be working, blocked on a tool, or failing before visible output.`,
+      };
+    }
+    return {
+      summary: `No visible output for ${seconds}s. It may be waiting for input.`,
+      text: `${relayLabel} has produced no visible output for ${seconds}s. It may be waiting for interactive input.`,
+    };
+  };
+
   const noOutputWatcherTimer = setInterval(() => {
     if (disposed || noOutputNoticeMs <= 0) {
       return;
@@ -295,17 +342,15 @@ export function startAcpSpawnParentStreamRelay(params: {
       return;
     }
     stallNotified = true;
+    const notice = buildNoOutputNotice();
     recordTaskRunProgressByRunId({
       runId,
       runtime: "acp",
       sessionKey: params.childSessionKey,
       lastEventAt: Date.now(),
-      eventSummary: `No output for ${Math.round(noOutputNoticeMs / 1000)}s. It may be waiting for input.`,
+      eventSummary: notice.summary,
     });
-    emit(
-      `${relayLabel} has produced no output for ${Math.round(noOutputNoticeMs / 1000)}s. It may be waiting for interactive input.`,
-      `${contextPrefix}:stall`,
-    );
+    emit(notice.text, `${contextPrefix}:stall`);
   }, noOutputPollMs);
   noOutputWatcherTimer.unref?.();
 
@@ -365,6 +410,7 @@ export function startAcpSpawnParentStreamRelay(params: {
       }
 
       lastProgressAt = Date.now();
+      firstVisibleOutputAt ??= lastProgressAt;
       pendingText += delta;
       if (pendingText.length > STREAM_BUFFER_MAX_CHARS) {
         pendingText = pendingText.slice(-STREAM_BUFFER_MAX_CHARS);
@@ -374,6 +420,34 @@ export function startAcpSpawnParentStreamRelay(params: {
         return;
       }
       scheduleFlush();
+      return;
+    }
+
+    if (event.stream === "acp") {
+      const data = event.data as
+        | {
+            phase?: unknown;
+            at?: unknown;
+            eventType?: unknown;
+            proxyEnvKeys?: unknown;
+          }
+        | undefined;
+      const phase = normalizeOptionalString(data?.phase);
+      logEvent("acp", { phase: phase ?? "unknown", data: event.data });
+      if (phase === "prompt_submitted") {
+        const at = toFiniteNumber(data?.at) ?? Date.now();
+        promptSubmittedAt ??= at;
+        proxyEnvKeysAtPrompt = normalizeStringArray(data?.proxyEnvKeys);
+        lastProgressAt = Date.now();
+        return;
+      }
+      if (phase === "runtime_event") {
+        const eventType = normalizeOptionalString(data?.eventType);
+        firstRuntimeEventAt ??= Date.now();
+        lastRuntimeEventType = eventType;
+        lastProgressAt = Date.now();
+        return;
+      }
       return;
     }
 

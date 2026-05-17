@@ -1,6 +1,9 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import {
+  listEnabledSlackAccounts,
+  listSlackAccountIds,
+  resolveDefaultSlackAccountId,
   resolveSlackAccount,
   resolveSlackAccountAllowFrom,
   resolveSlackAccountDmPolicy,
@@ -29,6 +32,49 @@ describe("resolveSlackAccount allowFrom precedence", () => {
     expect(resolved.name).toBe("Work");
     expect(resolved.botToken).toBe("xoxb-work");
     expect(resolved.appToken).toBe("xapp-work");
+  });
+
+  it("keeps the implicit default account when named accounts are added to top-level credentials", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          botToken: "xoxb-default",
+          appToken: "xapp-default",
+          accounts: {
+            work: {
+              enabled: false,
+              botToken: "xoxb-work",
+              appToken: "xapp-work",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(listSlackAccountIds(cfg)).toEqual(["default", "work"]);
+    expect(resolveDefaultSlackAccountId(cfg)).toBe("default");
+    expect(listEnabledSlackAccounts(cfg).map((account) => account.accountId)).toEqual(["default"]);
+  });
+
+  it("does not synthesize a default account from only shared optional tokens", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          appToken: "xapp-shared",
+          userToken: "xoxp-shared",
+          accounts: {
+            work: {
+              botToken: "xoxb-work",
+              appToken: "xapp-work",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(listSlackAccountIds(cfg)).toEqual(["work"]);
+    expect(resolveDefaultSlackAccountId(cfg)).toBe("work");
+    expect(listEnabledSlackAccounts(cfg).map((account) => account.accountId)).toEqual(["work"]);
   });
 
   it("prefers accounts.default.allowFrom over top-level for default account", () => {

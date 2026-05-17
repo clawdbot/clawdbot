@@ -174,12 +174,11 @@ device id, so `nodes pending` does not show orphaned rows after a revoke.
 
 Gateway pairing treats a connection as loopback only when both the raw socket
 and any upstream proxy evidence agree. If a request arrives on loopback but
-carries `X-Forwarded-For` / `X-Forwarded-Host` / `X-Forwarded-Proto` headers
-that point at a non-local origin, that forwarded-header evidence disqualifies
-the loopback locality claim. The pairing path then requires explicit approval
-instead of silently treating the request as a same-host connect. See
-[Trusted Proxy Auth](/gateway/trusted-proxy-auth) for the equivalent rule on
-operator auth.
+carries `Forwarded`, any `X-Forwarded-*`, or `X-Real-IP` header evidence, that
+forwarded-header evidence disqualifies the loopback locality claim. The pairing
+path then requires explicit approval instead of silently treating the request as
+a same-host connect. See [Trusted Proxy Auth](/gateway/trusted-proxy-auth) for
+the equivalent rule on operator auth.
 
 ## Storage (local, private)
 

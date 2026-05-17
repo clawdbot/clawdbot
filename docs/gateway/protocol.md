@@ -639,12 +639,12 @@ terminal summary, and sanitized error text.
 ### Client constants
 
 The reference client in `src/gateway/client.ts` uses these defaults. Values are
-stable across protocol v5 and are the expected baseline for third-party clients.
+stable across protocol v4 and are the expected baseline for third-party clients.
 
 | Constant                                  | Default                                               | Source                                                                                     |
 | ----------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `PROTOCOL_VERSION`                        | `5`                                                   | `src/gateway/protocol/version.ts`                                                          |
-| `MIN_CLIENT_PROTOCOL_VERSION`             | `5`                                                   | `src/gateway/protocol/version.ts`                                                          |
+| `PROTOCOL_VERSION`                        | `4`                                                   | `src/gateway/protocol/version.ts`                                                          |
+| `MIN_CLIENT_PROTOCOL_VERSION`             | `4`                                                   | `src/gateway/protocol/version.ts`                                                          |
 | Request timeout (per RPC)                 | `30_000` ms                                           | `src/gateway/client.ts` (`requestTimeoutMs`)                                               |
 | Preauth / connect-challenge timeout       | `15_000` ms                                           | `src/gateway/handshake-timeouts.ts` (config/env can raise the paired server/client budget) |
 | Initial reconnect backoff                 | `1_000` ms                                            | `src/gateway/client.ts` (`backoffMs`)                                                      |

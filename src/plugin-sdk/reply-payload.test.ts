@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  buildTtsSupplementMediaPayload,
   countOutboundMedia,
   createNormalizedOutboundDeliverer,
   deliverFormattedTextWithAttachments,
@@ -7,8 +8,10 @@ import {
   hasOutboundMedia,
   hasOutboundReplyContent,
   hasOutboundText,
+  getReplyPayloadTtsSupplement,
   isReasoningReplyPayload,
   isNumericTargetId,
+  markReplyPayloadAsTtsSupplement,
   normalizeOutboundReplyPayload,
   resolveOutboundMediaUrls,
   resolveSendableOutboundReplyParts,
@@ -251,6 +254,48 @@ describe("normalizeOutboundReplyPayload", () => {
       sensitiveMedia: true,
       replyToId: undefined,
       mediaUrls: undefined,
+    });
+  });
+});
+
+describe("TTS supplement payload helpers", () => {
+  it("marks media payloads as TTS supplements without treating spokenText alone as enough", () => {
+    const explicitTtsCommandPayload = {
+      mediaUrl: "file:///tmp/tts.mp3",
+      spokenText: "read this",
+    };
+
+    expect(getReplyPayloadTtsSupplement(explicitTtsCommandPayload)).toBeUndefined();
+
+    const marked = markReplyPayloadAsTtsSupplement(explicitTtsCommandPayload, "read this");
+
+    expect(getReplyPayloadTtsSupplement(marked)).toEqual({ spokenText: "read this" });
+    expect(
+      getReplyPayloadTtsSupplement(
+        markReplyPayloadAsTtsSupplement(explicitTtsCommandPayload, "read this", {
+          visibleTextAlreadyDelivered: true,
+        }),
+      ),
+    ).toEqual({ spokenText: "read this", visibleTextAlreadyDelivered: true });
+  });
+
+  it("strips visible content while keeping TTS supplement media fallback text", () => {
+    expect(
+      buildTtsSupplementMediaPayload(
+        markReplyPayloadAsTtsSupplement({
+          text: "visible",
+          mediaUrl: "file:///tmp/tts.mp3",
+          audioAsVoice: true,
+          presentation: { title: "visible", blocks: [] },
+          interactive: { blocks: [] },
+          btw: { question: "side" },
+        }),
+      ),
+    ).toEqual({
+      mediaUrl: "file:///tmp/tts.mp3",
+      audioAsVoice: true,
+      spokenText: "visible",
+      ttsSupplement: { spokenText: "visible" },
     });
   });
 });

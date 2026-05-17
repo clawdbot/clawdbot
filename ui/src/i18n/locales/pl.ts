@@ -1213,6 +1213,9 @@ export const pl: TranslationMap = {
       ascending: "Rosnąco",
       descending: "Malejąco",
       reset: "Resetuj",
+      emptyTitle: "No scheduled jobs yet.",
+      emptyHint: "Create one from a plain-language prompt; advanced fields can wait.",
+      emptyFilteredHint: "Clear or change filters to see scheduled jobs.",
       noMatching: "Brak pasujących zadań.",
       loading: "Ładowanie...",
       loadMore: "Wczytaj więcej zadań",
@@ -1248,6 +1251,7 @@ export const pl: TranslationMap = {
     form: {
       editJob: "Edytuj zadanie",
       newJob: "Nowe zadanie",
+      advancedJob: "Advanced job",
       updateSubtitle: "Zaktualizuj wybrane zaplanowane zadanie.",
       createSubtitle: "Utwórz zaplanowane wybudzenie lub uruchomienie agenta.",
       required: "Wymagane",

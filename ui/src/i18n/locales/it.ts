@@ -1216,6 +1216,9 @@ export const it: TranslationMap = {
       ascending: "Crescente",
       descending: "Decrescente",
       reset: "Reimposta",
+      emptyTitle: "No scheduled jobs yet.",
+      emptyHint: "Create one from a plain-language prompt; advanced fields can wait.",
+      emptyFilteredHint: "Clear or change filters to see scheduled jobs.",
       noMatching: "Nessun processo corrispondente.",
       loading: "Caricamento...",
       loadMore: "Carica altri processi",
@@ -1251,6 +1254,7 @@ export const it: TranslationMap = {
     form: {
       editJob: "Modifica processo",
       newJob: "Nuovo processo",
+      advancedJob: "Advanced job",
       updateSubtitle: "Aggiorna il processo pianificato selezionato.",
       createSubtitle: "Crea un risveglio pianificato o un'esecuzione dell'agente.",
       required: "Obbligatorio",

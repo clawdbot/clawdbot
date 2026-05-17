@@ -129,8 +129,8 @@
       "advanced": true
     },
     "timeoutSeconds": {
-      "label": "Prompt Timeout Seconds",
-      "help": "Timeout for each embedded runtime turn. Defaults to 120 seconds so slower Gemini CLI ACP startups have room to initialize.",
+      "label": "Runtime Operation Timeout Seconds",
+      "help": "Timeout for embedded ACP runtime startup and control operations. ACP turns use OpenClaw agent/run timeouts.",
       "advanced": true
     },
     "queueOwnerTtlSeconds": {

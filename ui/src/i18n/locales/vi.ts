@@ -1200,6 +1200,9 @@ export const vi: TranslationMap = {
       ascending: "Tăng dần",
       descending: "Giảm dần",
       reset: "Đặt lại",
+      emptyTitle: "No scheduled jobs yet.",
+      emptyHint: "Create one from a plain-language prompt; advanced fields can wait.",
+      emptyFilteredHint: "Clear or change filters to see scheduled jobs.",
       noMatching: "Không có tác vụ khớp.",
       loading: "Đang tải...",
       loadMore: "Tải thêm tác vụ",
@@ -1235,6 +1238,7 @@ export const vi: TranslationMap = {
     form: {
       editJob: "Chỉnh sửa tác vụ",
       newJob: "Tác vụ mới",
+      advancedJob: "Advanced job",
       updateSubtitle: "Cập nhật tác vụ đã lên lịch được chọn.",
       createSubtitle: "Tạo một lần đánh thức hoặc chạy agent theo lịch.",
       required: "Bắt buộc",

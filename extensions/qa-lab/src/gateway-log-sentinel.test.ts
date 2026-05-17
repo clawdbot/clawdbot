@@ -13,6 +13,7 @@ describe("gateway log sentinels", () => {
         "2026-05-13T00:00:01Z plugin before_prompt_build hook failed: TypeError: boom",
         "2026-05-13T00:00:02Z plugin before_tool_call crashed while evaluating policy",
         "2026-05-13T00:00:03Z plugin manifest invalid: missing contracts.tools registration",
+        "[plugins] plugin must declare contracts.tools for: runtime_tool",
         "2026-05-13T00:00:04Z codex app-server attempt timed out after 180000ms",
         "2026-05-13T00:00:05Z codex_app_server progress stalled for run abc123",
         "2026-05-13T00:00:06Z cron payload model openai/gpt-5.4 is not in model allowlist",
@@ -23,6 +24,7 @@ describe("gateway log sentinels", () => {
     expect(findings.map((finding) => finding.kind)).toEqual([
       "plugin-hook-failure",
       "plugin-hook-failure",
+      "plugin-contract-error",
       "plugin-contract-error",
       "codex-app-server-timeout",
       "stalled-agent-run",

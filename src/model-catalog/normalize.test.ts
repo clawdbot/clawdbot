@@ -53,7 +53,7 @@ describe("model catalog normalization", () => {
                 compat: {
                   supportsTools: true,
                   supportsStore: "yes",
-                  thinkingFormat: "qwen-chat-template",
+                  thinkingFormat: "together",
                   unknownFlag: true,
                 },
                 status: "preview",
@@ -138,7 +138,7 @@ describe("model catalog normalization", () => {
               },
               compat: {
                 supportsTools: true,
-                thinkingFormat: "qwen-chat-template",
+                thinkingFormat: "together",
               },
               status: "preview",
               statusReason: "rolling out",

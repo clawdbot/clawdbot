@@ -1209,6 +1209,9 @@ export const fa: TranslationMap = {
       ascending: "صعودی",
       descending: "نزولی",
       reset: "بازنشانی",
+      emptyTitle: "No scheduled jobs yet.",
+      emptyHint: "Create one from a plain-language prompt; advanced fields can wait.",
+      emptyFilteredHint: "Clear or change filters to see scheduled jobs.",
       noMatching: "کار منطبقی وجود ندارد.",
       loading: "در حال بارگیری...",
       loadMore: "بارگیری کارهای بیشتر",
@@ -1244,6 +1247,7 @@ export const fa: TranslationMap = {
     form: {
       editJob: "ویرایش کار",
       newJob: "کار جدید",
+      advancedJob: "Advanced job",
       updateSubtitle: "کار زمان‌بندی‌شده انتخاب‌شده را به‌روزرسانی کنید.",
       createSubtitle: "یک بیدارباش زمان‌بندی‌شده یا اجرای عامل ایجاد کنید.",
       required: "ضروری",

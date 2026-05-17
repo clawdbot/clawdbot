@@ -42,6 +42,8 @@ export type ChannelStreamingProgressConfig = {
   labels?: string[];
   /** Maximum number of progress lines to keep below the label. Default: 8. */
   maxLines?: number;
+  /** Maximum characters per compact progress line before truncation. Default: 120. */
+  maxLineChars?: number;
   /** Progress draft renderer. "text" is the portable fallback; "rich" lets supported channels use structured UI. */
   render?: "text" | "rich";
   /** Include compact tool/task progress in the draft. Default: true. */

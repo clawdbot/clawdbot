@@ -107,6 +107,28 @@ describe("media understanding attachments SSRF", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("uses fetched content type instead of wildcard selection hints", async () => {
+    const url = "http://198.18.0.153/image";
+    const fetchSpy = vi.fn().mockResolvedValue(
+      new Response("image", {
+        headers: { "content-type": "image/png" },
+      }),
+    );
+    globalThis.fetch = withFetchPreconnect(fetchSpy);
+    const cache = new MediaAttachmentCache([{ index: 0, url, mime: "image/*" }], {
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+    });
+
+    const result = await cache.getBuffer({
+      attachmentIndex: 0,
+      maxBytes: 1024,
+      timeoutMs: 1000,
+    });
+
+    expect(result.mime).toBe("image/png");
+    expect(result.fileName).toBe("image.png");
+  });
+
   it("reads local attachments inside configured roots", async () => {
     await withLocalAttachmentCache("openclaw-media-cache-allowed-", async ({ cache }) => {
       const result = await cache.getBuffer({ attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 });

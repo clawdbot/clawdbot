@@ -1212,6 +1212,9 @@ export const nl: TranslationMap = {
       ascending: "Oplopend",
       descending: "Aflopend",
       reset: "Resetten",
+      emptyTitle: "No scheduled jobs yet.",
+      emptyHint: "Create one from a plain-language prompt; advanced fields can wait.",
+      emptyFilteredHint: "Clear or change filters to see scheduled jobs.",
       noMatching: "Geen overeenkomende taken.",
       loading: "Laden...",
       loadMore: "Meer taken laden",
@@ -1247,6 +1250,7 @@ export const nl: TranslationMap = {
     form: {
       editJob: "Taak bewerken",
       newJob: "Nieuwe taak",
+      advancedJob: "Advanced job",
       updateSubtitle: "Werk de geselecteerde geplande taak bij.",
       createSubtitle: "Maak een geplande wakeup of agent-run.",
       required: "Vereist",

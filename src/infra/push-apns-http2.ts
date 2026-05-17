@@ -2,8 +2,10 @@ import http2 from "node:http2";
 import { openHttpConnectTunnel } from "./net/http-connect-tunnel.js";
 import {
   getActiveManagedProxyUrl,
+  getActiveManagedProxyTlsOptions,
   type ActiveManagedProxyUrl,
 } from "./net/proxy/active-proxy-state.js";
+import type { ManagedProxyTlsOptions } from "./net/proxy/proxy-tls.js";
 
 const APNS_DEFAULT_PORT = "443";
 
@@ -24,6 +26,7 @@ export type ConnectApnsHttp2SessionParams = {
 export type ProbeApnsHttp2ReachabilityViaProxyParams = {
   authority: string;
   proxyUrl: string;
+  proxyTls?: ManagedProxyTlsOptions;
   timeoutMs: number;
 };
 
@@ -61,11 +64,13 @@ function assertApnsAuthority(authority: string): ApnsAuthority {
 async function openProxiedApnsHttp2Session(params: {
   authority: ApnsAuthority;
   proxyUrl: ActiveManagedProxyUrl;
+  proxyTls?: ManagedProxyTlsOptions;
   timeoutMs: number;
 }): Promise<http2.ClientHttp2Session> {
   const apnsHost = new URL(params.authority).hostname;
   const tlsSocket = await openHttpConnectTunnel({
     proxyUrl: params.proxyUrl,
+    ...(params.proxyTls ? { proxyTls: params.proxyTls } : {}),
     targetHost: apnsHost,
     targetPort: 443,
     timeoutMs: params.timeoutMs,
@@ -88,6 +93,7 @@ export async function connectApnsHttp2Session(
   return await openProxiedApnsHttp2Session({
     authority,
     proxyUrl,
+    proxyTls: getActiveManagedProxyTlsOptions(),
     timeoutMs: params.timeoutMs,
   });
 }
@@ -99,6 +105,7 @@ export async function probeApnsHttp2ReachabilityViaProxy(
   const session = await openProxiedApnsHttp2Session({
     authority,
     proxyUrl: new URL(params.proxyUrl),
+    ...(params.proxyTls ? { proxyTls: params.proxyTls } : {}),
     timeoutMs: params.timeoutMs,
   });
 

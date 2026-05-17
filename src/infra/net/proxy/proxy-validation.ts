@@ -4,6 +4,11 @@ import type { ProxyConfig } from "../../../config/zod-schema.proxy.js";
 import { probeApnsHttp2ReachabilityViaProxy } from "../../push-apns-http2.js";
 import { fetchWithRuntimeDispatcher } from "../runtime-fetch.js";
 import { createHttp1ProxyAgent } from "../undici-runtime.js";
+import {
+  loadManagedProxyTlsOptions,
+  resolveManagedProxyCaFileForUrl,
+  type ManagedProxyTlsOptions,
+} from "./proxy-tls.js";
 
 export const DEFAULT_PROXY_VALIDATION_ALLOWED_URLS = ["https://example.com/"] as const;
 export const DEFAULT_PROXY_VALIDATION_APNS_AUTHORITY = "https://api.sandbox.push.apple.com";
@@ -17,6 +22,7 @@ export type ProxyValidationConfigSource = "override" | "config" | "env" | "missi
 export type ProxyValidationResolvedConfig = {
   enabled: boolean;
   proxyUrl?: string;
+  proxyCaFile?: string;
   source: ProxyValidationConfigSource;
   errors: string[];
 };
@@ -39,6 +45,7 @@ export type ProxyValidationResult = {
 
 export type ProxyValidationFetchCheckParams = {
   proxyUrl: string;
+  proxyTls?: ManagedProxyTlsOptions;
   targetUrl: string;
   timeoutMs: number;
 };
@@ -55,6 +62,7 @@ export type ProxyValidationFetchCheck = (
 
 export type ProxyValidationApnsCheckParams = {
   proxyUrl: string;
+  proxyTls?: ManagedProxyTlsOptions;
   authority: string;
   timeoutMs: number;
 };
@@ -75,6 +83,7 @@ export type ResolveProxyValidationConfigOptions = {
   config?: ProxyConfig;
   env?: NodeJS.ProcessEnv | Partial<Record<"OPENCLAW_PROXY_URL", string | undefined>>;
   proxyUrlOverride?: string;
+  proxyCaFileOverride?: string;
 };
 
 export type RunProxyValidationOptions = ResolveProxyValidationConfigOptions & {
@@ -92,9 +101,10 @@ function normalizeProxyUrl(value: string | undefined): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
-function isHttpProxyUrl(value: string): boolean {
+function isHttpOrHttpsProxyUrl(value: string): boolean {
   try {
-    return new URL(value).protocol === "http:";
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:";
   } catch {
     return false;
   }
@@ -104,8 +114,8 @@ function validateProxyUrl(value: string | undefined): string[] {
   if (!value) {
     return ["proxy validation requires proxy.proxyUrl, --proxy-url, or OPENCLAW_PROXY_URL"];
   }
-  if (!isHttpProxyUrl(value)) {
-    return ["proxyUrl must use http://"];
+  if (!isHttpOrHttpsProxyUrl(value)) {
+    return ["proxyUrl must use http:// or https://"];
   }
   return [];
 }
@@ -133,9 +143,14 @@ export function resolveProxyValidationConfig(
 ): ProxyValidationResolvedConfig {
   const overrideUrl = normalizeProxyUrl(options.proxyUrlOverride);
   if (overrideUrl) {
+    const proxyCaFile = resolveManagedProxyCaFileForUrl({
+      proxyUrl: overrideUrl,
+      caFileOverride: options.proxyCaFileOverride,
+    });
     return {
       enabled: true,
       proxyUrl: overrideUrl,
+      ...(proxyCaFile ? { proxyCaFile } : {}),
       source: "override",
       errors: validateResolvedProxy("override", true, overrideUrl),
     };
@@ -143,9 +158,15 @@ export function resolveProxyValidationConfig(
 
   const configUrl = normalizeProxyUrl(options.config?.proxyUrl);
   if (configUrl) {
+    const proxyCaFile = resolveManagedProxyCaFileForUrl({
+      proxyUrl: configUrl,
+      config: options.config,
+      caFileOverride: options.proxyCaFileOverride,
+    });
     return {
       enabled: options.config?.enabled === true,
       proxyUrl: configUrl,
+      ...(proxyCaFile ? { proxyCaFile } : {}),
       source: "config",
       errors: validateResolvedProxy("config", options.config?.enabled === true, configUrl),
     };
@@ -153,9 +174,15 @@ export function resolveProxyValidationConfig(
 
   const envUrl = normalizeProxyUrl(options.env?.OPENCLAW_PROXY_URL);
   if (envUrl) {
+    const proxyCaFile = resolveManagedProxyCaFileForUrl({
+      proxyUrl: envUrl,
+      config: options.config,
+      caFileOverride: options.proxyCaFileOverride,
+    });
     return {
       enabled: options.config?.enabled === true,
       proxyUrl: envUrl,
+      ...(proxyCaFile ? { proxyCaFile } : {}),
       source: "env",
       errors: validateResolvedProxy("env", options.config?.enabled === true, envUrl),
     };
@@ -180,10 +207,17 @@ export function resolveProxyValidationConfig(
 
 async function defaultProxyValidationFetchCheck({
   proxyUrl,
+  proxyTls,
   targetUrl,
   timeoutMs,
 }: ProxyValidationFetchCheckParams): Promise<ProxyValidationFetchCheckResult> {
-  const dispatcher = createHttp1ProxyAgent({ uri: proxyUrl }, timeoutMs);
+  const dispatcher = createHttp1ProxyAgent(
+    {
+      uri: proxyUrl,
+      ...(proxyTls ? { proxyTls } : {}),
+    },
+    timeoutMs,
+  );
   try {
     const response = await fetchWithRuntimeDispatcher(targetUrl, {
       dispatcher,
@@ -202,10 +236,16 @@ async function defaultProxyValidationFetchCheck({
 
 async function defaultProxyValidationApnsCheck({
   proxyUrl,
+  proxyTls,
   authority,
   timeoutMs,
 }: ProxyValidationApnsCheckParams): Promise<ProxyValidationApnsCheckResult> {
-  const result = await probeApnsHttp2ReachabilityViaProxy({ proxyUrl, authority, timeoutMs });
+  const result = await probeApnsHttp2ReachabilityViaProxy({
+    proxyUrl,
+    ...(proxyTls ? { proxyTls } : {}),
+    authority,
+    timeoutMs,
+  });
   return {
     status: result.status,
     apnsId: result.responseHeaders?.["apns-id"],
@@ -329,6 +369,7 @@ async function resolveDeniedTargets(
 async function runAllowedCheck(params: {
   url: string;
   proxyUrl: string;
+  proxyTls?: ManagedProxyTlsOptions;
   timeoutMs: number;
   fetchCheck: ProxyValidationFetchCheck;
 }): Promise<ProxyValidationCheck> {
@@ -344,6 +385,7 @@ async function runAllowedCheck(params: {
   try {
     const result = await params.fetchCheck({
       proxyUrl: params.proxyUrl,
+      ...(params.proxyTls ? { proxyTls: params.proxyTls } : {}),
       targetUrl: params.url,
       timeoutMs: params.timeoutMs,
     });
@@ -370,6 +412,7 @@ async function runAllowedCheck(params: {
 async function runDeniedCheck(params: {
   target: ProxyValidationDeniedTarget;
   proxyUrl: string;
+  proxyTls?: ManagedProxyTlsOptions;
   timeoutMs: number;
   fetchCheck: ProxyValidationFetchCheck;
 }): Promise<ProxyValidationCheck> {
@@ -385,6 +428,7 @@ async function runDeniedCheck(params: {
   try {
     const result = await params.fetchCheck({
       proxyUrl: params.proxyUrl,
+      ...(params.proxyTls ? { proxyTls: params.proxyTls } : {}),
       targetUrl: params.target.url,
       timeoutMs: params.timeoutMs,
     });
@@ -440,12 +484,14 @@ async function runDeniedCheck(params: {
 async function runApnsReachabilityCheck(params: {
   authority: string;
   proxyUrl: string;
+  proxyTls?: ManagedProxyTlsOptions;
   timeoutMs: number;
   apnsCheck: ProxyValidationApnsCheck;
 }): Promise<ProxyValidationCheck> {
   try {
     const result = await params.apnsCheck({
       proxyUrl: params.proxyUrl,
+      ...(params.proxyTls ? { proxyTls: params.proxyTls } : {}),
       authority: params.authority,
       timeoutMs: params.timeoutMs,
     });
@@ -499,6 +545,19 @@ export async function runProxyValidation(
   }
 
   const timeoutMs = normalizeTimeoutMs(options.timeoutMs);
+  let proxyTls: ManagedProxyTlsOptions | undefined;
+  try {
+    proxyTls = await loadManagedProxyTlsOptions(config.proxyCaFile);
+  } catch (err) {
+    return {
+      ok: false,
+      config: {
+        ...config,
+        errors: [...config.errors, err instanceof Error ? err.message : String(err)],
+      },
+      checks: [],
+    };
+  }
   const fetchCheck = options.fetchCheck ?? defaultProxyValidationFetchCheck;
   const apnsCheck = options.apnsCheck ?? defaultProxyValidationApnsCheck;
   const apnsAuthority = options.apnsAuthority ?? DEFAULT_PROXY_VALIDATION_APNS_AUTHORITY;
@@ -508,11 +567,25 @@ export async function runProxyValidation(
 
   try {
     for (const url of allowedUrls) {
-      checks.push(await runAllowedCheck({ url, proxyUrl: config.proxyUrl, timeoutMs, fetchCheck }));
+      checks.push(
+        await runAllowedCheck({
+          url,
+          proxyUrl: config.proxyUrl,
+          proxyTls,
+          timeoutMs,
+          fetchCheck,
+        }),
+      );
     }
     for (const target of deniedTargets.targets) {
       checks.push(
-        await runDeniedCheck({ target, proxyUrl: config.proxyUrl, timeoutMs, fetchCheck }),
+        await runDeniedCheck({
+          target,
+          proxyUrl: config.proxyUrl,
+          proxyTls,
+          timeoutMs,
+          fetchCheck,
+        }),
       );
     }
     if (options.apnsReachability === true) {
@@ -520,6 +593,7 @@ export async function runProxyValidation(
         await runApnsReachabilityCheck({
           authority: apnsAuthority,
           proxyUrl: config.proxyUrl,
+          proxyTls,
           timeoutMs,
           apnsCheck,
         }),

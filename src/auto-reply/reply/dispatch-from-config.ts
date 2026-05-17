@@ -84,7 +84,11 @@ import {
   resolveCommandTurnTargetSessionKey,
 } from "../command-turn-context.js";
 import type { BlockReplyContext } from "../get-reply-options.types.js";
-import { getReplyPayloadMetadata, type ReplyPayload } from "../reply-payload.js";
+import {
+  getReplyPayloadMetadata,
+  markReplyPayloadAsTtsSupplement,
+  type ReplyPayload,
+} from "../reply-payload.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import { normalizeVerboseLevel } from "../thinking.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
@@ -1700,12 +1704,16 @@ export async function dispatchReplyFromConfig(
           if (ttsSyntheticReply.mediaUrl) {
             // Send TTS-only payload (no text, just audio) so it doesn't duplicate the block content.
             // Keep the spoken text only for hooks/archive consumers.
-            const ttsOnlyPayload: ReplyPayload = {
-              mediaUrl: ttsSyntheticReply.mediaUrl,
-              audioAsVoice: ttsSyntheticReply.audioAsVoice,
-              spokenText: accumulatedBlockTtsText,
-              trustedLocalMedia: true,
-            };
+            const ttsOnlyPayload = markReplyPayloadAsTtsSupplement(
+              {
+                mediaUrl: ttsSyntheticReply.mediaUrl,
+                audioAsVoice: ttsSyntheticReply.audioAsVoice,
+                spokenText: accumulatedBlockTtsText,
+                trustedLocalMedia: true,
+              },
+              accumulatedBlockTtsText,
+              { visibleTextAlreadyDelivered: true },
+            );
             const normalizedTtsOnlyPayload = await normalizeReplyMediaPayload(ttsOnlyPayload);
             const result = await routeReplyToOriginating(normalizedTtsOnlyPayload);
             if (result) {

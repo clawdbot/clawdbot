@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, expect, test, vi } from "vitest";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import { buildSessionHistorySnapshot, SessionHistorySseState } from "./session-history-state.js";
@@ -99,6 +100,61 @@ describe("SessionHistorySseState", () => {
 
     expect(appended?.messageSeq).toBe(9);
     expect(state.snapshot().messages.at(-1)?.__openclaw?.seq).toBe(9);
+  });
+
+  test("requests refresh when inline TTS supplement merges into an existing assistant message", () => {
+    const visibleText = "Here is the answer.";
+    const textSha256 = createHash("sha256").update(visibleText).digest("hex");
+    const state = SessionHistorySseState.fromRawSnapshot({
+      target: { sessionId: "sess-main" },
+      rawMessages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: visibleText }],
+          __openclaw: { seq: 2 },
+        },
+      ],
+    });
+
+    const appended = state.appendInlineMessage({
+      message: {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Audio reply" },
+          {
+            type: "attachment",
+            attachment: {
+              url: "/tmp/tts.mp3",
+              kind: "audio",
+              label: "tts.mp3",
+              mimeType: "audio/mpeg",
+            },
+          },
+        ],
+        openclawTtsSupplement: { textSha256, spokenText: visibleText },
+      },
+      messageSeq: 3,
+    });
+
+    expect(appended).toEqual({ shouldRefresh: true });
+    expect(state.snapshot().messages).toEqual([
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: visibleText },
+          {
+            type: "attachment",
+            attachment: {
+              url: "/tmp/tts.mp3",
+              kind: "audio",
+              label: "tts.mp3",
+              mimeType: "audio/mpeg",
+            },
+          },
+        ],
+        __openclaw: { seq: 2 },
+      },
+    ]);
   });
 
   test("requests refresh for non-monotonic carried inline sequence", () => {

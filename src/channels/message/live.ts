@@ -31,6 +31,8 @@ export type FinalizableLivePreviewAdapter<TPayload, TId, TEdit> = {
     receipt: MessageReceipt,
     liveState: LiveMessageState<TPayload>,
   ) => Promise<void> | void;
+  buildSupplementalPayload?: (payload: TPayload) => TPayload | undefined;
+  deliverSupplemental?: (payload: TPayload) => Promise<boolean | void>;
   handlePreviewEditError?: (params: {
     error: unknown;
     id: TId;
@@ -114,6 +116,8 @@ export async function deliverFinalizableLivePreview<TPayload, TId, TEdit>(params
     receipt: MessageReceipt,
     liveState: LiveMessageState<TPayload>,
   ) => Promise<void> | void;
+  buildSupplementalPayload?: (payload: TPayload) => TPayload | undefined;
+  deliverSupplemental?: (payload: TPayload) => Promise<boolean | void>;
   handlePreviewEditError?: (params: {
     error: unknown;
     id: TId;
@@ -178,6 +182,10 @@ export async function deliverFinalizableLivePreview<TPayload, TId, TEdit>(params
           createPreviewMessageReceipt({ id: finalizedId });
         liveState = markLiveMessageFinalized(liveState, receipt);
         await params.onPreviewFinalized?.(finalizedId, receipt, liveState);
+        const supplementalPayload = params.buildSupplementalPayload?.(params.payload);
+        if (supplementalPayload !== undefined) {
+          await params.deliverSupplemental?.(supplementalPayload);
+        }
         return { kind: "preview-finalized", liveState };
       }
     }
@@ -240,6 +248,12 @@ export async function deliverWithFinalizableLivePreviewAdapter<TPayload, TId, TE
       : {}),
     ...(params.adapter.onPreviewFinalized
       ? { onPreviewFinalized: params.adapter.onPreviewFinalized }
+      : {}),
+    ...(params.adapter.buildSupplementalPayload
+      ? { buildSupplementalPayload: params.adapter.buildSupplementalPayload }
+      : {}),
+    ...(params.adapter.deliverSupplemental
+      ? { deliverSupplemental: params.adapter.deliverSupplemental }
       : {}),
     ...(params.adapter.handlePreviewEditError
       ? { handlePreviewEditError: params.adapter.handlePreviewEditError }

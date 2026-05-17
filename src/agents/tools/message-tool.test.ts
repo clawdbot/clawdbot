@@ -72,6 +72,7 @@ const mocks = vi.hoisted(() => ({
 
       maybeCollectSecretPath(`channels.${scopedChannel}.token`, scopedConfig.token);
       maybeCollectSecretPath(`channels.${scopedChannel}.botToken`, scopedConfig.botToken);
+      maybeCollectSecretPath(`channels.${scopedChannel}.appPassword`, scopedConfig.appPassword);
       if (scopedAccountId) {
         const accountRecord =
           scopedConfig.accounts &&
@@ -106,6 +107,7 @@ const mocks = vi.hoisted(() => ({
 type RunMessageActionInput = {
   agentId?: string;
   cfg?: unknown;
+  defaultAccountId?: string;
   params?: Record<string, unknown>;
   requesterSenderId?: string;
   sandboxRoot?: string;
@@ -421,6 +423,241 @@ describe("message tool secret scoping", () => {
 
     expect(input?.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(input?.toolContext?.currentChannelProvider).toBe("webchat");
+  });
+
+  it("uses a non-webchat session key when ambient current channel drifted to webchat", async () => {
+    mockSendResult();
+
+    const input = await executeSend({
+      action: { message: "hi" },
+      toolOptions: {
+        config: {
+          channels: {
+            telegram: {
+              botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+            },
+          },
+        } as never,
+        sourceReplyDeliveryMode: "message_tool_only",
+        currentChannelProvider: "webchat",
+        agentSessionKey: "agent:main:telegram:group:-5150615830",
+      },
+    });
+
+    expect(input?.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(input?.toolContext?.currentChannelProvider).toBe("telegram");
+    expect(input?.toolContext?.currentChannelId).toBe("-5150615830");
+    expect(input?.params).toEqual({ action: "send", message: "hi" });
+
+    const secretResolveCall = latestSecretResolveCall();
+    expect(Array.from(secretResolveCall.targetIds ?? [])).toEqual(["channels.telegram.botToken"]);
+  });
+
+  it("preserves direct session keys as explicit user targets when ambient channel drifted to webchat", async () => {
+    mockSendResult({ channel: "discord", to: "user:123456789" });
+
+    const input = await executeSend({
+      action: { message: "hi" },
+      toolOptions: {
+        config: {
+          channels: {
+            discord: {
+              token: { source: "env", provider: "default", id: "DISCORD_TOKEN" },
+            },
+          },
+        } as never,
+        sourceReplyDeliveryMode: "message_tool_only",
+        currentChannelProvider: "webchat",
+        agentSessionKey: "agent:main:discord:direct:123456789",
+      },
+    });
+
+    expect(input?.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(input?.toolContext?.currentChannelProvider).toBe("discord");
+    expect(input?.toolContext?.currentChannelId).toBe("user:123456789");
+    expect(input?.params).toEqual({ action: "send", message: "hi" });
+
+    const secretResolveCall = latestSecretResolveCall();
+    expect(Array.from(secretResolveCall.targetIds ?? [])).toEqual(["channels.discord.token"]);
+  });
+
+  it("preserves MS Teams DM session keys as explicit user targets when ambient channel drifted to webchat", async () => {
+    mockSendResult({ channel: "msteams", to: "user:user-1" });
+
+    const input = await executeSend({
+      action: { message: "hi" },
+      toolOptions: {
+        config: {
+          channels: {
+            msteams: {
+              appPassword: { source: "env", provider: "default", id: "MSTEAMS_APP_PASSWORD" },
+            },
+          },
+        } as never,
+        sourceReplyDeliveryMode: "message_tool_only",
+        currentChannelProvider: "webchat",
+        agentSessionKey: "agent:main:msteams:dm:user-1",
+      },
+    });
+
+    expect(input?.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(input?.toolContext?.currentChannelProvider).toBe("msteams");
+    expect(input?.toolContext?.currentChannelId).toBe("user:user-1");
+    expect(input?.params).toEqual({ action: "send", message: "hi" });
+
+    const secretResolveCall = latestSecretResolveCall();
+    expect(Array.from(secretResolveCall.targetIds ?? [])).toEqual(["channels.msteams.appPassword"]);
+  });
+
+  it("keeps provider-native direct session targets when ambient channel drifted to webchat", async () => {
+    mockSendResult({ channel: "telegram", to: "123456789" });
+
+    const input = await executeSend({
+      action: { message: "hi" },
+      toolOptions: {
+        config: {
+          channels: {
+            telegram: {
+              botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+            },
+          },
+        } as never,
+        sourceReplyDeliveryMode: "message_tool_only",
+        currentChannelProvider: "webchat",
+        agentSessionKey: "agent:main:telegram:direct:123456789",
+      },
+    });
+
+    expect(input?.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(input?.toolContext?.currentChannelProvider).toBe("telegram");
+    expect(input?.toolContext?.currentChannelId).toBe("123456789");
+    expect(input?.params).toEqual({ action: "send", message: "hi" });
+
+    const secretResolveCall = latestSecretResolveCall();
+    expect(Array.from(secretResolveCall.targetIds ?? [])).toEqual(["channels.telegram.botToken"]);
+  });
+
+  it("uses account-scoped session keys for secret and account fallback when ambient channel drifted to webchat", async () => {
+    mockSendResult({ channel: "discord", to: "user:123456789" });
+
+    const input = await executeSend({
+      action: { message: "hi" },
+      toolOptions: {
+        config: {
+          channels: {
+            discord: {
+              token: { source: "env", provider: "default", id: "DISCORD_TOKEN" },
+              accounts: {
+                ops: { token: { source: "env", provider: "default", id: "DISCORD_OPS_TOKEN" } },
+              },
+            },
+          },
+        } as never,
+        sourceReplyDeliveryMode: "message_tool_only",
+        currentChannelProvider: "webchat",
+        agentSessionKey: "agent:main:discord:ops:direct:123456789",
+      },
+    });
+
+    expect(input?.defaultAccountId).toBe("ops");
+    expect(input?.params?.accountId).toBe("ops");
+    expect(input?.toolContext?.currentChannelProvider).toBe("discord");
+    expect(input?.toolContext?.currentChannelId).toBe("user:123456789");
+
+    const secretResolveCall = latestSecretResolveCall();
+    expect(Array.from(secretResolveCall.targetIds ?? [])).toEqual([
+      "channels.discord.token",
+      "channels.discord.accounts.ops.token",
+    ]);
+  });
+
+  it("keeps account-scoped direct keys when account id matches a peer marker", async () => {
+    mockSendResult({ channel: "discord", to: "user:123456789" });
+
+    const input = await executeSend({
+      action: { message: "hi" },
+      toolOptions: {
+        config: {
+          channels: {
+            discord: {
+              token: { source: "env", provider: "default", id: "DISCORD_TOKEN" },
+              accounts: {
+                direct: {
+                  token: { source: "env", provider: "default", id: "DISCORD_DIRECT_TOKEN" },
+                },
+              },
+            },
+          },
+        } as never,
+        sourceReplyDeliveryMode: "message_tool_only",
+        currentChannelProvider: "webchat",
+        agentSessionKey: "agent:main:discord:direct:direct:123456789",
+      },
+    });
+
+    expect(input?.defaultAccountId).toBe("direct");
+    expect(input?.params?.accountId).toBe("direct");
+    expect(input?.toolContext?.currentChannelProvider).toBe("discord");
+    expect(input?.toolContext?.currentChannelId).toBe("user:123456789");
+
+    const secretResolveCall = latestSecretResolveCall();
+    expect(Array.from(secretResolveCall.targetIds ?? [])).toEqual([
+      "channels.discord.token",
+      "channels.discord.accounts.direct.token",
+    ]);
+  });
+
+  it("handles legacy dm markers when ambient channel drifted to webchat", async () => {
+    mockSendResult({ channel: "slack", to: "user:u123" });
+
+    const input = await executeSend({
+      action: { message: "hi" },
+      toolOptions: {
+        config: {
+          channels: {
+            slack: {
+              botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
+            },
+          },
+        } as never,
+        sourceReplyDeliveryMode: "message_tool_only",
+        currentChannelProvider: "webchat",
+        agentSessionKey: "agent:main:slack:dm:u123:thread:171.222",
+      },
+    });
+
+    expect(input?.toolContext?.currentChannelProvider).toBe("slack");
+    expect(input?.toolContext?.currentChannelId).toBe("user:u123");
+    expect(input?.toolContext?.currentThreadTs).toBe("171.222");
+    expect(input?.toolContext?.replyToMode).toBe("all");
+
+    const secretResolveCall = latestSecretResolveCall();
+    expect(Array.from(secretResolveCall.targetIds ?? [])).toEqual(["channels.slack.botToken"]);
+  });
+
+  it("carries session-key thread suffixes into inferred channel context", async () => {
+    mockSendResult({ channel: "slack", to: "channel:c1" });
+
+    const input = await executeSend({
+      action: { message: "hi" },
+      toolOptions: {
+        config: {
+          channels: {
+            slack: {
+              botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
+            },
+          },
+        } as never,
+        sourceReplyDeliveryMode: "message_tool_only",
+        currentChannelProvider: "webchat",
+        agentSessionKey: "agent:main:slack:channel:c1:thread:1710000000.9999",
+      },
+    });
+
+    expect(input?.toolContext?.currentChannelProvider).toBe("slack");
+    expect(input?.toolContext?.currentChannelId).toBe("c1");
+    expect(input?.toolContext?.currentThreadTs).toBe("1710000000.9999");
+    expect(input?.toolContext?.replyToMode).toBe("all");
   });
 
   it("scopes command-time secret resolution to the selected channel/account", async () => {
