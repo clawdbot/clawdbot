@@ -537,6 +537,13 @@ describe("qa cli registration", () => {
     expect(options.allowFailures).toBe(true);
   });
 
+  it("forwards --pack for suite runs", async () => {
+    await program.parseAsync(["node", "openclaw", "qa", "suite", "--pack", "personal-agent"]);
+
+    const options = requireQaSuiteOptions();
+    expect(options.pack).toBe("personal-agent");
+  });
+
   it("routes credential add flags into the qa runtime command", async () => {
     await program.parseAsync([
       "node",

@@ -486,6 +486,7 @@ Paths:
     - `readOnlyRoot: true` prevents writes; set `readOnlyRoot: false` or bake a custom image.
     - `user` must be root for package installs (omit `user` or set `user: "0:0"`).
     - Sandbox exec does **not** inherit host `process.env`. Use `agents.defaults.sandbox.docker.env` (or a custom image) for skill API keys.
+    - Values in `agents.defaults.sandbox.docker.env` are passed as explicit Docker container environment variables. Anyone with Docker daemon access can inspect them with Docker metadata commands such as `docker inspect`. Use a custom image, mounted secret file, or another secret delivery path if that metadata exposure is not acceptable.
 
   </Accordion>
 </AccordionGroup>

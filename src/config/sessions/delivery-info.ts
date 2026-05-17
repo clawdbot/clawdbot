@@ -7,6 +7,7 @@ import { deliveryContextFromSession } from "../../utils/delivery-context.shared.
 import { getRuntimeConfig } from "../io.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveStorePath } from "./paths.js";
+import { normalizeStoreSessionKey } from "./store-entry.js";
 import { loadSessionStore } from "./store.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "./targets.js";
 import { parseSessionThreadInfo } from "./thread-info.js";
@@ -104,13 +105,23 @@ function findSessionEntryInStore(
   };
   for (const key of keys) {
     const trimmed = key.trim();
-    const normalized = normalizeLowercaseStringOrEmpty(key);
+    const normalized = normalizeStoreSessionKey(key);
+    const foldedLegacyKey = normalizeLowercaseStringOrEmpty(normalized);
     let foundRoutableCandidate = false;
     if (Object.prototype.hasOwnProperty.call(store, normalized)) {
       foundRoutableCandidate ||= hasRoutableDeliveryContext(
         deliveryContextFromSession(store[normalized]),
       );
       acceptCandidate(store[normalized]);
+    }
+    if (
+      foldedLegacyKey !== normalized &&
+      Object.prototype.hasOwnProperty.call(store, foldedLegacyKey)
+    ) {
+      foundRoutableCandidate ||= hasRoutableDeliveryContext(
+        deliveryContextFromSession(store[foldedLegacyKey]),
+      );
+      acceptCandidate(store[foldedLegacyKey]);
     }
     if (trimmed !== normalized && Object.prototype.hasOwnProperty.call(store, trimmed)) {
       foundRoutableCandidate ||= hasRoutableDeliveryContext(
@@ -122,6 +133,9 @@ function findSessionEntryInStore(
       normalizedIndex ??= buildFreshestSessionEntryIndex(store);
       const freshest = normalizedIndex.get(normalized);
       acceptCandidate(freshest);
+      if (foldedLegacyKey !== normalized) {
+        acceptCandidate(normalizedIndex.get(foldedLegacyKey));
+      }
     }
   }
   return bestEntry;
@@ -132,7 +146,7 @@ function buildFreshestSessionEntryIndex(
 ): Map<string, SessionEntry> {
   const index = new Map<string, SessionEntry>();
   for (const [key, entry] of Object.entries(store)) {
-    const normalized = normalizeLowercaseStringOrEmpty(key);
+    const normalized = normalizeStoreSessionKey(key);
     const existing = index.get(normalized);
     const entryRoutable = hasRoutableDeliveryContext(deliveryContextFromSession(entry));
     const existingRoutable = hasRoutableDeliveryContext(deliveryContextFromSession(existing));
@@ -142,6 +156,22 @@ function buildFreshestSessionEntryIndex(
       (entryRoutable === existingRoutable && (entry.updatedAt ?? 0) > (existing.updatedAt ?? 0))
     ) {
       index.set(normalized, entry);
+    }
+    const foldedLegacyKey = normalizeLowercaseStringOrEmpty(normalized);
+    if (foldedLegacyKey === normalized) {
+      continue;
+    }
+    const foldedExisting = index.get(foldedLegacyKey);
+    const foldedExistingRoutable = hasRoutableDeliveryContext(
+      deliveryContextFromSession(foldedExisting),
+    );
+    if (
+      !foldedExisting ||
+      (entryRoutable && !foldedExistingRoutable) ||
+      (entryRoutable === foldedExistingRoutable &&
+        (entry.updatedAt ?? 0) > (foldedExisting.updatedAt ?? 0))
+    ) {
+      index.set(foldedLegacyKey, entry);
     }
   }
   return index;

@@ -534,6 +534,38 @@ describe("session_status tool", () => {
     expect(details.sessionKey).toBe("main");
   });
 
+  it("uses runSessionKey thinking level for implicit no-arg status lookups (#82669)", async () => {
+    resetSessionStore({
+      "agent:main:telegram:default:direct:1234": {
+        sessionId: "s-tg-direct",
+        updatedAt: 5,
+        status: "done",
+        thinkingLevel: "off",
+      },
+      "agent:main:main": {
+        sessionId: "s-main",
+        updatedAt: 10,
+        status: "running",
+        thinkingLevel: "high",
+      },
+    });
+
+    const tool = createSessionStatusTool({
+      agentSessionKey: "agent:main:telegram:default:direct:1234",
+      runSessionKey: "agent:main:main",
+      config: mockConfig as never,
+    });
+
+    const result = await tool.execute("call-implicit-run-session-thinking", {});
+    const details = result.details as { ok?: boolean; sessionKey?: string };
+    expect(details.ok).toBe(true);
+    expect(details.sessionKey).toBe("agent:main:main");
+
+    const statusArg = mockCallArg(buildStatusMessageMock) as Record<string, unknown>;
+    const sessionEntry = statusArg.sessionEntry as SessionEntry;
+    expect(sessionEntry.thinkingLevel).toBe("high");
+  });
+
   it("resolves sessionKey=current to runSessionKey under default tree visibility (#76708)", async () => {
     resetSessionStore({
       "agent:main:telegram:default:direct:1234": {

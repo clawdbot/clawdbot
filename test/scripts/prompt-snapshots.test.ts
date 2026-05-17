@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import {
   createFormattedPromptSnapshotFiles,
   deleteStalePromptSnapshotFiles,
@@ -13,6 +13,8 @@ import {
   renderCodexModelInstructions,
   runCodexModelPromptFixtureSync,
 } from "../../scripts/sync-codex-model-prompt-fixture.js";
+import { expectNoReaddirSyncDuring } from "../../src/test-utils/fs-scan-assertions.js";
+import { toRepoRelativePath } from "../../src/test-utils/repo-files.js";
 import {
   CODEX_MODEL_PROMPT_FIXTURE_DIR,
   CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR,
@@ -106,7 +108,7 @@ function listFindCommittedPromptSnapshotFiles(): string[] | null {
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.length > 0)
-    .map((filePath) => path.relative(process.cwd(), filePath).split(path.sep).join("/"))
+    .map((filePath) => toRepoRelativePath(process.cwd(), filePath))
     .toSorted();
 }
 
@@ -118,16 +120,12 @@ describe("happy path prompt snapshots", () => {
   }, 300_000);
 
   it("lists committed Codex prompt snapshot artifacts without scanning directories in-process", () => {
-    const readDir = vi.spyOn(fs, "readdirSync");
-    try {
+    expectNoReaddirSyncDuring(() => {
       const committed = listCommittedPromptSnapshotFiles();
 
       expect(committed.length).toBeGreaterThan(0);
       expect(committed.every((file) => file.endsWith(".md") || file.endsWith(".json"))).toBe(true);
-      expect(readDir).not.toHaveBeenCalled();
-    } finally {
-      readDir.mockRestore();
-    }
+    });
   });
 
   it("matches the committed Codex prompt snapshot artifacts", async () => {

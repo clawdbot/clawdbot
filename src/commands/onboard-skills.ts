@@ -2,6 +2,8 @@ import { installSkill } from "../agents/skills-install.js";
 import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveBrewExecutable } from "../infra/brew.js";
+import { isContainerEnvironment } from "../infra/container-environment.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import { t } from "../wizard/i18n/index.js";
@@ -29,6 +31,17 @@ function formatSkillHint(skill: {
   }
   const maxLen = 90;
   return combined.length > maxLen ? `${combined.slice(0, maxLen - 1)}…` : combined;
+}
+
+function isBrewOnlyInstallableSkill(skill: {
+  install: Array<{ kind: string }>;
+  missing: { bins: string[] };
+}): boolean {
+  return (
+    skill.install.length > 0 &&
+    skill.missing.bins.length > 0 &&
+    skill.install.every((option) => option.kind === "brew")
+  );
 }
 
 function upsertSkillEntry(
@@ -82,9 +95,26 @@ export async function setupSkills(
     return cfg;
   }
 
-  const installable = missing.filter(
+  const baseInstallable = missing.filter(
     (skill) => skill.install.length > 0 && skill.missing.bins.length > 0,
   );
+  let brewAvailable: boolean | undefined;
+  const detectBrewOnce = async () => {
+    brewAvailable ??= (await detectBinary("brew")) || resolveBrewExecutable() !== undefined;
+    return brewAvailable;
+  };
+  const inLinuxContainer = process.platform === "linux" && isContainerEnvironment();
+  let installable = baseInstallable;
+  if (inLinuxContainer && baseInstallable.length > 0 && !(await detectBrewOnce())) {
+    const hiddenBrewOnly = baseInstallable.filter(isBrewOnlyInstallableSkill);
+    installable = baseInstallable.filter((skill) => !isBrewOnlyInstallableSkill(skill));
+    if (hiddenBrewOnly.length > 0) {
+      await prompter.note(
+        [t("wizard.skills.containerBrewHidden"), t("wizard.skills.containerBrewManual")].join("\n"),
+        t("wizard.skills.containerInstallsTitle"),
+      );
+    }
+  }
   let next: OpenClawConfig = cfg;
   if (installable.length > 0) {
     const toInstall = await prompter.multiselect({
@@ -112,7 +142,7 @@ export async function setupSkills(
     const needsBrewPrompt =
       process.platform !== "win32" &&
       selectedSkills.some((skill) => skill.install.some((option) => option.kind === "brew")) &&
-      !(await detectBinary("brew"));
+      !(await detectBrewOnce());
 
     if (needsBrewPrompt) {
       await prompter.note(

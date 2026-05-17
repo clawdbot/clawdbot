@@ -708,6 +708,84 @@ describe("channelsAddCommand", () => {
     expectExternalChatEnabledConfigWrite();
   });
 
+  it("installs same-id externalized channel plugins before non-interactive add", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
+    setActivePluginRegistry(createTestRegistry());
+    const catalogEntry: ChannelPluginCatalogEntry = {
+      id: "whatsapp",
+      pluginId: "whatsapp",
+      meta: {
+        id: "whatsapp",
+        label: "WhatsApp",
+        selectionLabel: "WhatsApp",
+        docsPath: "/channels/whatsapp",
+        blurb: "WhatsApp channel",
+      },
+      install: {
+        npmSpec: "@openclaw/whatsapp",
+      },
+    };
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([catalogEntry]);
+    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockReturnValue(
+      createTestRegistry([
+        {
+          pluginId: "whatsapp",
+          plugin: {
+            ...createChannelTestPluginBase({
+              id: "whatsapp",
+              label: "WhatsApp",
+              docsPath: "/channels/whatsapp",
+            }),
+            setup: {
+              applyAccountConfig: ({ cfg, accountId, input }: ApplyAccountConfigParams) => ({
+                ...cfg,
+                channels: {
+                  ...cfg.channels,
+                  whatsapp: {
+                    enabled: true,
+                    accounts: {
+                      [accountId]: {
+                        enabled: true,
+                        authDir: input.authDir,
+                      },
+                    },
+                  },
+                },
+              }),
+            },
+          },
+          source: "test",
+        },
+      ]),
+    );
+
+    await channelsAddCommand(
+      {
+        channel: "whatsapp",
+        account: "work",
+        authDir: "/tmp/openclaw-wa-auth",
+      },
+      runtime,
+      { hasFlags: true },
+    );
+
+    expect(installCall().entry).toBe(catalogEntry);
+    expect(installCall().promptInstall).toBe(false);
+    expect(snapshotCall().pluginId).toBe("whatsapp");
+    expect(writtenChannel("whatsapp")).toEqual({
+      enabled: true,
+      accounts: {
+        work: {
+          enabled: true,
+          authDir: "/tmp/openclaw-wa-auth",
+        },
+      },
+    });
+    expect(refreshCall().reason).toBe("source-changed");
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
   it("uses setup-entry snapshots when an already loaded channel plugin has no setup adapter", async () => {
     configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
     setActivePluginRegistry(

@@ -44,7 +44,7 @@ const checks: Array<{ file: string; snippets: string[] }> = [
   {
     file: "v2/ThreadStartParams.ts",
     snippets: [
-      "permissions?: PermissionProfileSelectionParams | null",
+      "permissions?: string | null",
       "dynamicTools?: Array<DynamicToolSpec> | null",
       "experimentalRawEvents: boolean",
       "persistExtendedHistory: boolean",
@@ -52,10 +52,7 @@ const checks: Array<{ file: string; snippets: string[] }> = [
   },
   {
     file: "v2/TurnStartParams.ts",
-    snippets: [
-      "permissions?: PermissionProfileSelectionParams | null",
-      "serviceTier?: string | null",
-    ],
+    snippets: ["permissions?: string | null", "serviceTier?: string | null"],
   },
   {
     file: "ReviewDecision.ts",

@@ -74,6 +74,14 @@
         }
       ]
     },
+    "runtimeWorkspaceRoots": {
+      "description": "Thread-scoped runtime workspace roots used to materialize `:workspace_roots`.",
+      "default": [],
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/AbsolutePathBuf"
+      }
+    },
     "sandbox": {
       "description": "Legacy sandbox policy retained for compatibility. Experimental clients should prefer `permissionProfile` when they need exact runtime permissions.",
       "allOf": [
@@ -114,41 +122,8 @@
         "id": {
           "description": "Identifier from `default_permissions` or the implicit built-in default, such as `:workspace` or a user-defined `[permissions.<id>]` profile.",
           "type": "string"
-        },
-        "modifications": {
-          "description": "Bounded user-requested modifications applied on top of the named profile, if any.",
-          "default": [],
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/ActivePermissionProfileModification"
-          }
         }
       }
-    },
-    "ActivePermissionProfileModification": {
-      "oneOf": [
-        {
-          "description": "Additional concrete directory that should be writable.",
-          "type": "object",
-          "required": [
-            "path",
-            "type"
-          ],
-          "properties": {
-            "path": {
-              "$ref": "#/definitions/AbsolutePathBuf"
-            },
-            "type": {
-              "type": "string",
-              "enum": [
-                "additionalWritableRoot"
-              ],
-              "title": "AdditionalWritableRootActivePermissionProfileModificationType"
-            }
-          },
-          "title": "AdditionalWritableRootActivePermissionProfileModification"
-        }
-      ]
     },
     "AgentPath": {
       "type": "string"

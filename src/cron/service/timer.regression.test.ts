@@ -1620,6 +1620,12 @@ describe("cron service timer regressions", () => {
       id: "isolated-context-assembled-81368",
       name: "context assembled regression",
     },
+    {
+      phase: "before_agent_reply",
+      phaseText: "before-agent-reply",
+      id: "isolated-before-agent-reply-82811",
+      name: "before agent reply regression",
+    },
   ] satisfies Array<{
     phase: CronAgentExecutionPhase;
     phaseText: string;
@@ -1709,6 +1715,86 @@ describe("cron service timer regressions", () => {
       }
     },
   );
+
+  it("re-arms the pre-execution watchdog when before_agent_reply does not claim (#82811)", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = timerRegressionFixtures.makeStorePath();
+      const scheduledAt = Date.parse("2026-05-17T03:00:00.000Z");
+      const cronJob = createIsolatedRegressionJob({
+        id: "isolated-before-agent-reply-unhandled-82811",
+        name: "before agent reply unhandled regression",
+        scheduledAt,
+        schedule: { kind: "at", at: new Date(scheduledAt).toISOString() },
+        payload: { kind: "agentTurn", message: "work", timeoutSeconds: 1_200 },
+        state: { nextRunAtMs: scheduledAt },
+      });
+      await writeCronJobs(store.storePath, [cronJob]);
+
+      vi.setSystemTime(scheduledAt);
+      let now = scheduledAt;
+      const started = createDeferred<void>();
+      let abortObserved = false;
+      const cleanupTimedOutAgentRun = vi.fn(async () => {});
+      const state = createCronServiceState({
+        cronEnabled: true,
+        storePath: store.storePath,
+        log: noopLogger,
+        nowMs: () => now,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        cleanupTimedOutAgentRun,
+        runIsolatedAgentJob: vi.fn(
+          async ({
+            abortSignal,
+            onExecutionStarted,
+            onExecutionPhase,
+          }: {
+            abortSignal?: AbortSignal;
+            onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
+            onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
+          }) => {
+            onExecutionStarted?.({
+              jobId: "isolated-before-agent-reply-unhandled-82811",
+              phase: "runner_entered",
+            });
+            onExecutionPhase?.({
+              jobId: "isolated-before-agent-reply-unhandled-82811",
+              phase: "before_agent_reply",
+            });
+            onExecutionPhase?.({
+              jobId: "isolated-before-agent-reply-unhandled-82811",
+              phase: "runtime_plugins",
+            });
+            started.resolve();
+            abortSignal?.addEventListener(
+              "abort",
+              () => {
+                abortObserved = true;
+              },
+              { once: true },
+            );
+            return await new Promise<never>(() => {});
+          },
+        ),
+      });
+
+      const timerPromise = onTimer(state);
+      await started.promise;
+      await vi.advanceTimersByTimeAsync(60_100);
+      now += 60_100;
+      await timerPromise;
+
+      const job = requireJob(state, "isolated-before-agent-reply-unhandled-82811");
+      expect(abortObserved).toBe(true);
+      expect(job.state.lastStatus).toBe("error");
+      expect(job.state.lastError).toContain("stalled before execution start");
+      expect(job.state.lastError).toContain("runtime-plugins");
+      expect(cleanupTimedOutAgentRun).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it("keeps state updates when cron next-run computation throws after a successful run (#30905)", () => {
     const startedAt = Date.parse("2026-03-02T12:00:00.000Z");

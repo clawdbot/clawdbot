@@ -279,6 +279,121 @@ describe("buildToolSearchRunPlan", () => {
 });
 
 describe("normalizeMessagesForLlmBoundary", () => {
+  it("strips inbound metadata from historical user turns before model replay", () => {
+    const historicalEnvelope =
+      'Conversation info (untrusted metadata):\n```json\n{"channel":"telegram","chatType":"dm"}\n```\n\nSender (untrusted metadata):\n```json\n{"id":"user-1"}\n```\n\nActual historical ask';
+    const input = [
+      {
+        role: "user",
+        content: [{ type: "text", text: historicalEnvelope }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Historical answer" }],
+        timestamp: 2,
+      },
+    ];
+
+    const output = normalizeMessagesForLlmBoundary(
+      input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+    ) as unknown as Array<{ content?: Array<{ text?: string }> }>;
+
+    expect(output[0]?.content?.[0]?.text).toBe("Actual historical ask");
+    expect(JSON.stringify(output)).not.toContain("Conversation info");
+    expect(JSON.stringify(output)).not.toContain("Sender (untrusted metadata)");
+    expect(JSON.stringify(input)).toContain("Conversation info");
+  });
+
+  it("strips inbound metadata from string historical user turns", () => {
+    const input = [
+      {
+        role: "user",
+        content:
+          'Conversation info (untrusted metadata):\n```json\n{"channel":"telegram"}\n```\n\nPlain historical ask',
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Historical answer" }],
+        timestamp: 2,
+      },
+    ];
+
+    const output = normalizeMessagesForLlmBoundary(
+      input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+    ) as unknown as Array<{ content?: string }>;
+
+    expect(output[0]?.content).toBe("Plain historical ask");
+  });
+
+  it("preserves inbound metadata on the current user turn", () => {
+    const historicalEnvelope =
+      'Conversation info (untrusted metadata):\n```json\n{"channel":"discord"}\n```\n\nOld ask';
+    const currentEnvelope =
+      'Conversation info (untrusted metadata):\n```json\n{"channel":"discord","has_reply_context":true}\n```\n\nReply target of current user message (untrusted, for context):\n```json\n{"body":"quoted status body"}\n```\n\nCurrent ask';
+    const input = [
+      {
+        role: "user",
+        content: [{ type: "text", text: historicalEnvelope }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Historical answer" }],
+        timestamp: 2,
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: currentEnvelope }],
+        timestamp: 3,
+      },
+    ];
+
+    const output = normalizeMessagesForLlmBoundary(
+      input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+    ) as unknown as Array<{ content?: Array<{ text?: string }> }>;
+
+    expect(output[0]?.content?.[0]?.text).toBe("Old ask");
+    expect(output[2]?.content?.[0]?.text).toContain(
+      "Reply target of current user message (untrusted, for context):",
+    );
+    expect(output[2]?.content?.[0]?.text).toContain("quoted status body");
+  });
+
+  it("preserves current user inbound metadata through tool-result continuation", () => {
+    const currentEnvelope =
+      'Conversation info (untrusted metadata):\n```json\n{"channel":"discord","has_reply_context":true}\n```\n\nReply target of current user message (untrusted, for context):\n```json\n{"body":"quoted status body"}\n```\n\nCurrent ask';
+    const input = [
+      {
+        role: "user",
+        content: [{ type: "text", text: currentEnvelope }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text", text: "tool output" }],
+        timestamp: 3,
+      },
+    ];
+
+    const output = normalizeMessagesForLlmBoundary(
+      input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
+    ) as unknown as Array<{ content?: Array<{ text?: string }> }>;
+
+    expect(output[0]?.content?.[0]?.text).toContain(
+      "Reply target of current user message (untrusted, for context):",
+    );
+    expect(output[0]?.content?.[0]?.text).toContain("quoted status body");
+  });
+
   it("strips tool result details before provider conversion", () => {
     const input = [
       {

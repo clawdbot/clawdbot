@@ -414,6 +414,33 @@ describe("discordMessageActions", () => {
     });
   });
 
+  it("prepares inbound event delivery metadata for durable core sends", async () => {
+    const prepared = await discordMessageActions.prepareSendPayload?.({
+      ctx: {
+        channel: "discord",
+        action: "send",
+        cfg: {} as OpenClawConfig,
+        params: {},
+        sessionKey: "agent:main:discord:channel:c1",
+        inboundEventKind: "room_event",
+      },
+      to: "channel:123",
+      payload: { text: "hello" },
+    });
+
+    expect(prepared).toEqual({
+      text: "hello",
+      channelData: {
+        discord: {
+          __openclawInboundEventDelivery: {
+            sessionKey: "agent:main:discord:channel:c1",
+            inboundEventKind: "room_event",
+          },
+        },
+      },
+    });
+  });
+
   it("keeps non-serializable Discord component sends on the legacy action path", async () => {
     const prepared = await discordMessageActions.prepareSendPayload?.({
       ctx: {

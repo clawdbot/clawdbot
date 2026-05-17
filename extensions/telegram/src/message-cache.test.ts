@@ -142,6 +142,136 @@ describe("telegram message cache", () => {
     }
   });
 
+  it("records embedded reply targets as normal cached messages", async () => {
+    const storePath = `/tmp/openclaw-telegram-message-cache-reply-target-${process.pid}-${Date.now()}.json`;
+    const persistedPath = resolveTelegramMessageCachePath(storePath);
+    const chat = { id: 7, type: "group", title: "Ops" } as const;
+    await rm(persistedPath, { force: true });
+    try {
+      const firstCache = createTelegramMessageCache({ persistedPath });
+      firstCache.record({
+        accountId: "default",
+        chatId: 7,
+        msg: {
+          chat,
+          message_id: 102,
+          date: 1736380750,
+          text: "Why is there a 4th person?",
+          from: { id: 2, is_bot: false, first_name: "UserB" },
+          reply_to_message: {
+            chat,
+            message_id: 101,
+            date: 1736380700,
+            text: "Done, here is the image",
+            from: { id: 999, is_bot: true, first_name: "Bot" },
+            photo: [
+              {
+                file_id: "generated-photo-1",
+                file_unique_id: "generated-photo-unique-1",
+                width: 640,
+                height: 480,
+              },
+            ],
+          } as Message["reply_to_message"],
+        } as Message,
+      });
+
+      resetTelegramMessageCacheBucketsForTest();
+      const secondCache = createTelegramMessageCache({ persistedPath });
+      const current = {
+        chat,
+        message_id: 103,
+        date: 1736380800,
+        text: "Explain what went wrong",
+        from: { id: 1, is_bot: false, first_name: "UserA" },
+        reply_to_message: {
+          chat,
+          message_id: 102,
+          date: 1736380750,
+          text: "Why is there a 4th person?",
+          from: { id: 2, is_bot: false, first_name: "UserB" },
+        } as Message["reply_to_message"],
+      } as Message;
+      const chain = buildTelegramReplyChain({
+        cache: secondCache,
+        accountId: "default",
+        chatId: 7,
+        msg: current,
+      });
+      const context = buildTelegramConversationContext({
+        cache: secondCache,
+        accountId: "default",
+        chatId: 7,
+        messageId: "103",
+        replyChainNodes: chain,
+        recentLimit: 10,
+        replyTargetWindowSize: 2,
+      });
+
+      expect(chain.map((entry) => entry.messageId)).toEqual(["102", "101"]);
+      expect(chain[1]).toMatchObject({
+        sender: "Bot",
+        body: "Done, here is the image",
+        mediaRef: "telegram:file/generated-photo-1",
+      });
+      expect(context.map((entry) => entry.node.messageId)).toEqual(["101", "102"]);
+      expect(context.find((entry) => entry.node.messageId === "101")?.isReplyTarget).toBe(true);
+    } finally {
+      await rm(persistedPath, { force: true });
+    }
+  });
+
+  it("replaces authoritative edited message fields without stale caption carryover", () => {
+    const cache = createTelegramMessageCache();
+    const chat = { id: 7, type: "group", title: "Ops" } as const;
+    cache.record({
+      accountId: "default",
+      chatId: 7,
+      msg: {
+        chat,
+        message_id: 104,
+        date: 1736380900,
+        caption: "old caption",
+        from: { id: 999, is_bot: true, first_name: "Bot" },
+        photo: [
+          {
+            file_id: "generated-photo-2",
+            file_unique_id: "generated-photo-unique-2",
+            width: 640,
+            height: 480,
+          },
+        ],
+      } as Message,
+    });
+
+    const updated = cache.record({
+      accountId: "default",
+      chatId: 7,
+      msg: {
+        chat,
+        message_id: 104,
+        date: 1736380900,
+        edit_date: 1736380910,
+        from: { id: 999, is_bot: true, first_name: "Bot" },
+        photo: [
+          {
+            file_id: "generated-photo-2",
+            file_unique_id: "generated-photo-unique-2",
+            width: 640,
+            height: 480,
+          },
+        ],
+      } as Message,
+    });
+
+    expect(updated).toMatchObject({
+      messageId: "104",
+      body: "<media:image>",
+      mediaRef: "telegram:file/generated-photo-2",
+    });
+    expect(updated?.body).not.toBe("old caption");
+  });
+
   it("shares one persisted bucket across live cache instances", async () => {
     const storePath = `/tmp/openclaw-telegram-message-cache-shared-${process.pid}-${Date.now()}.json`;
     const persistedPath = resolveTelegramMessageCachePath(storePath);

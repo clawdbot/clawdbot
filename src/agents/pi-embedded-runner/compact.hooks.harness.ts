@@ -437,7 +437,15 @@ export async function loadCompactHooksHarness(): Promise<{
     applyAuthHeaderOverride: vi.fn((model: unknown) => model),
     applyLocalNoAuthHeaderOverride: vi.fn((model: unknown) => model),
     ensureAuthProfileStoreWithoutExternalProfiles: vi.fn(() => ({})),
-    getApiKeyForModel: vi.fn(async () => ({ apiKey: "test", mode: "env" })),
+    formatMissingAuthError: vi.fn(
+      (auth: { mode: string; source: string }, provider: string) =>
+        `No API key resolved for provider "${provider}" (auth mode: ${auth.mode}, checked: ${auth.source}).`,
+    ),
+    getApiKeyForModel: vi.fn(async () => ({
+      apiKey: "test",
+      mode: "env",
+      source: "test harness",
+    })),
     resolveModelAuthMode: vi.fn(() => "env"),
   }));
 

@@ -54,8 +54,7 @@ extension OnboardingView {
     }
 
     func finish() {
-        UserDefaults.standard.set(true, forKey: "openclaw.onboardingSeen")
-        UserDefaults.standard.set(currentOnboardingVersion, forKey: onboardingVersionKey)
+        OnboardingController.markComplete()
         OnboardingController.shared.close()
     }
 

@@ -1,4 +1,5 @@
 import { normalizeChatType } from "../../channels/chat-type.js";
+import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SessionSendPolicyDecision } from "../../sessions/send-policy.js";
 import {
@@ -10,6 +11,7 @@ import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
 
 export type SourceReplyDeliveryModeContext = {
   ChatType?: string;
+  InboundEventKind?: InboundEventKind;
   CommandAuthorized?: boolean;
   CommandBody?: string;
   CommandSource?: "text" | "native";
@@ -29,6 +31,9 @@ export function resolveSourceReplyDeliveryMode(params: {
   defaultVisibleReplies?: "automatic" | "message_tool";
 }): SourceReplyDeliveryMode {
   if (params.strictMessageToolOnly === true) {
+    return "message_tool_only";
+  }
+  if (params.ctx.InboundEventKind === "room_event") {
     return "message_tool_only";
   }
   if (

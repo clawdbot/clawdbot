@@ -57,6 +57,7 @@ const ALLOWED_GATEWAY_CONFIG_PATHS = [
   // or privilege boundary. Let agents repair silent group/channel rooms.
   "messages.visibleReplies",
   "messages.groupChat.visibleReplies",
+  "messages.groupChat.unmentionedInbound",
 ] as const;
 
 /** @internal Exposed for regression tests only; do not import from runtime code. */

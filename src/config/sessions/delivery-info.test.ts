@@ -371,6 +371,28 @@ describe("extractDeliveryInfo", () => {
     });
   });
 
+  it("finds legacy lowercase Signal group entries for mixed-case group keys", () => {
+    const mixedGroupId = "VWATodkf2hc8zdOS76q9Tb0+5Bi522E03qLdaQ/9ypg=";
+    const queriedKey = `agent:main:signal:group:${mixedGroupId}`;
+    const legacyKey = queriedKey.toLowerCase();
+    storeState.store[legacyKey] = buildEntry({
+      channel: "signal",
+      to: `signal:group:${mixedGroupId}`,
+      accountId: "default",
+    });
+
+    const result = extractDeliveryInfo(queriedKey);
+
+    expect(result).toEqual({
+      deliveryContext: {
+        channel: "signal",
+        to: `signal:group:${mixedGroupId}`,
+        accountId: "default",
+      },
+      threadId: undefined,
+    });
+  });
+
   it("prefers the freshest routable alias even when the normalized key is already routable", () => {
     const queriedKey = "agent:main:matrix:channel:!MiXeDCase:Example.Org";
     const canonicalKey = "agent:main:matrix:channel:!mixedcase:example.org";

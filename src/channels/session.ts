@@ -1,5 +1,6 @@
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { GroupKeyResolution } from "../config/sessions/types.js";
+import { normalizeSessionKeyPreservingOpaquePeerIds } from "../sessions/session-key-utils.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { InboundLastRouteUpdate } from "./session.types.js";
 export type { InboundLastRouteUpdate, RecordInboundSession } from "./session.types.js";
@@ -39,7 +40,7 @@ export async function recordInboundSession(params: {
   trackSessionMetaTask?: (task: Promise<unknown>) => void;
 }): Promise<void> {
   const { storePath, sessionKey, ctx, groupResolution, createIfMissing } = params;
-  const canonicalSessionKey = normalizeLowercaseStringOrEmpty(sessionKey);
+  const canonicalSessionKey = normalizeSessionKeyPreservingOpaquePeerIds(sessionKey);
   const runtime = await loadInboundSessionRuntime();
   const metaTask = runtime
     .recordSessionMetaFromInbound({
@@ -60,7 +61,7 @@ export async function recordInboundSession(params: {
   if (shouldSkipPinnedMainDmRouteUpdate(update.mainDmOwnerPin)) {
     return;
   }
-  const targetSessionKey = normalizeLowercaseStringOrEmpty(update.sessionKey);
+  const targetSessionKey = normalizeSessionKeyPreservingOpaquePeerIds(update.sessionKey);
   await runtime.updateLastRoute({
     storePath,
     sessionKey: targetSessionKey,

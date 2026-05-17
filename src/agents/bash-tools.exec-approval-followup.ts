@@ -4,7 +4,10 @@ import {
 } from "../infra/outbound/best-effort-delivery.js";
 import { sendMessage } from "../infra/outbound/message.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { isGatewayMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 import { buildExecApprovalFollowupIdempotencyKey } from "./bash-tools.exec-approval-followup-state.js";
 import {
@@ -122,6 +125,51 @@ function formatDirectExecApprovalFollowupText(
 
 function buildSessionResumeFallbackPrefix(): string {
   return "Automatic session resume failed, so sending the status directly.\n\n";
+}
+
+function readGatewayStatus(value: unknown): string | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? normalizeOptionalString((value as { status?: unknown }).status)
+    : undefined;
+}
+
+function readGatewayRunId(value: unknown): string | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? normalizeOptionalString((value as { runId?: unknown }).runId)
+    : undefined;
+}
+
+function buildFollowupWaitError(params: { status?: string; error?: unknown }): Error {
+  const suffix =
+    typeof params.error === "string" && params.error.trim()
+      ? `: ${params.error.trim()}`
+      : params.status
+        ? `: ${params.status}`
+        : "";
+  return new Error(`exec approval followup session resume failed${suffix}`);
+}
+
+function isSuccessfulFollowupStatus(status: string | undefined): boolean {
+  return status === "ok";
+}
+
+async function waitForAgentFollowupRun(params: {
+  runId: string;
+  timeoutMs: number;
+}): Promise<void> {
+  const wait = await callGatewayTool(
+    "agent.wait",
+    { timeoutMs: params.timeoutMs + 2_000 },
+    {
+      runId: params.runId,
+      timeoutMs: params.timeoutMs,
+    },
+  );
+  const status = readGatewayStatus(wait);
+  if (isSuccessfulFollowupStatus(status)) {
+    return;
+  }
+  throw buildFollowupWaitError({ status, error: wait.error });
 }
 
 function shouldPrefixDirectFollowupWithSessionResumeFailure(params: {
@@ -249,25 +297,34 @@ export async function sendExecApprovalFollowup(
 
   if (sessionKey && params.direct !== true) {
     try {
-      await callGatewayTool(
-        "agent",
-        { timeoutMs: 60_000 },
-        buildAgentFollowupArgs({
-          approvalId: params.approvalId,
-          sessionKey,
-          resultText,
-          deliveryTarget,
-          sessionOnlyOriginChannel,
-          turnSourceChannel: params.turnSourceChannel,
-          turnSourceTo: params.turnSourceTo,
-          turnSourceAccountId: params.turnSourceAccountId,
-          turnSourceThreadId: params.turnSourceThreadId,
-          internalRuntimeHandoffId: params.internalRuntimeHandoffId,
-          idempotencyKey: params.idempotencyKey,
-        }),
-        { expectFinal: true },
-      );
-      return true;
+      const agentArgs = buildAgentFollowupArgs({
+        approvalId: params.approvalId,
+        sessionKey,
+        resultText,
+        deliveryTarget,
+        sessionOnlyOriginChannel,
+        turnSourceChannel: params.turnSourceChannel,
+        turnSourceTo: params.turnSourceTo,
+        turnSourceAccountId: params.turnSourceAccountId,
+        turnSourceThreadId: params.turnSourceThreadId,
+        internalRuntimeHandoffId: params.internalRuntimeHandoffId,
+        idempotencyKey: params.idempotencyKey,
+      });
+      const accepted = await callGatewayTool("agent", { timeoutMs: 60_000 }, agentArgs);
+      const status = readGatewayStatus(accepted);
+      if (isSuccessfulFollowupStatus(status)) {
+        return true;
+      }
+      if (status === "accepted" || status === "in_flight" || status === "pending") {
+        const runId =
+          readGatewayRunId(accepted) ?? normalizeOptionalString(agentArgs.idempotencyKey);
+        if (!runId) {
+          throw buildFollowupWaitError({ status: "missing-run-id" });
+        }
+        await waitForAgentFollowupRun({ runId, timeoutMs: 60_000 });
+        return true;
+      }
+      throw buildFollowupWaitError({ status, error: accepted.error });
     } catch (err) {
       sessionError = err;
     }

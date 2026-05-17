@@ -126,6 +126,15 @@ describe("normalizeAssistantReplayContent", () => {
     expect(repaired.content).toEqual([{ type: "text", text: FALLBACK_TEXT }]);
   });
 
+  it("converts mid-turn zero-usage null stop turns to a replay sentinel", () => {
+    const falseSuccessStop = bedrockAssistant(null, "stop");
+    const messages = [userMessage("hello"), falseSuccessStop, userMessage("retry")];
+    const out = normalizeAssistantReplayContent(messages);
+    expect(out).not.toBe(messages);
+    const repaired = out[1] as AgentMessage & { content: { type: string; text: string }[] };
+    expect(repaired.content).toEqual([{ type: "text", text: FALLBACK_TEXT }]);
+  });
+
   it("preserves empty content with non-error stopReasons (toolUse, length) untouched", () => {
     // Boundary lock: only `stopReason:"error"` should trip the sentinel
     // substitution. `toolUse` and `length` are reachable in practice when a
@@ -145,6 +154,21 @@ describe("normalizeAssistantReplayContent", () => {
     const out = normalizeAssistantReplayContent(messages);
     const wrapped = out[1] as AgentMessage & { content: { type: string; text: string }[] };
     expect(wrapped.content).toEqual([{ type: "text", text: "plain string content" }]);
+  });
+
+  it("wraps legacy object assistant content as a single block (regression)", () => {
+    const block = { type: "text", text: "plain object content" };
+    const messages = [userMessage("hi"), bedrockAssistant(block, "stop")];
+    const out = normalizeAssistantReplayContent(messages);
+    const wrapped = out[1] as AgentMessage & { content: unknown[] };
+    expect(wrapped.content).toEqual([block]);
+  });
+
+  it("normalizes null assistant content to an empty block array (regression)", () => {
+    const messages = [userMessage("hi"), bedrockAssistant(null, "toolUse")];
+    const out = normalizeAssistantReplayContent(messages);
+    const normalized = out[1] as AgentMessage & { content: unknown[] };
+    expect(normalized.content).toEqual([]);
   });
 
   it("drops metadata-only legacy string assistant content from replay", () => {

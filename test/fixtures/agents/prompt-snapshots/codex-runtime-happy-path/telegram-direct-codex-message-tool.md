@@ -217,8 +217,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 140
   },
   "dynamicToolsJson": {
-    "chars": 44064,
-    "roughTokens": 11016
+    "chars": 44042,
+    "roughTokens": 11011
   },
   "openClawDeveloperInstructions": {
     "chars": 4412,
@@ -229,8 +229,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 6748
   },
   "totalWithDynamicToolsJson": {
-    "chars": 71058,
-    "roughTokens": 17765
+    "chars": 71036,
+    "roughTokens": 17759
   },
   "userInputText": {
     "chars": 370,
@@ -579,7 +579,7 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
           "type": "string"
         },
         "asDocument": {
-          "description": "Send image/GIF as document to avoid Telegram compression. Alias for forceDocument (Telegram only).",
+          "description": "Send image/GIF/video as document to avoid channel compression. Alias for forceDocument.",
           "type": "boolean"
         },
         "asVoice": {
@@ -656,7 +656,7 @@ Full JSON: `codex-dynamic-tools.telegram-direct.json`
           "type": "string"
         },
         "forceDocument": {
-          "description": "Send image/GIF as document to avoid Telegram compression (Telegram only).",
+          "description": "Send image/GIF/video as document to avoid channel compression.",
           "type": "boolean"
         },
         "gatewayToken": {

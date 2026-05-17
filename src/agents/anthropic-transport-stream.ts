@@ -207,6 +207,12 @@ function isKimiAnthropicProvider(provider: string | undefined): boolean {
   return /^kimi(?:-|$)/.test(normalizeLowercaseStringOrEmpty(provider ?? ""));
 }
 
+function supportsReasoningContentReplay(
+  model: Pick<AnthropicTransportModel, "provider" | "baseUrl">,
+): boolean {
+  return resolveProviderEndpoint(model.baseUrl).endpointClass === "xiaomi-native";
+}
+
 function buildAnthropicBetaHeader(
   model: AnthropicTransportModel,
   betaFeatures: readonly string[],
@@ -288,8 +294,10 @@ function convertAnthropicMessages(
   messages: Context["messages"],
   model: AnthropicTransportModel,
   isOAuthToken: boolean,
+  options?: { allowReasoningContentReplay?: boolean },
 ) {
   const params: Array<Record<string, unknown>> = [];
+  const allowReasoningContentReplay = options?.allowReasoningContentReplay === true;
   const transformedMessages = transformTransportMessages(messages, model, normalizeToolCallId);
   for (let i = 0; i < transformedMessages.length; i += 1) {
     const msg = transformedMessages[i];
@@ -341,6 +349,7 @@ function convertAnthropicMessages(
     }
     if (msg.role === "assistant") {
       const blocks: Array<Record<string, unknown>> = [];
+      const reasoningContent: string[] = [];
       for (const block of msg.content) {
         if (block.type === "text") {
           if (block.text.trim().length > 0) {
@@ -368,9 +377,21 @@ function convertAnthropicMessages(
               text: sanitizeTransportPayloadText(block.thinking),
             });
           } else {
+            const thinking = sanitizeTransportPayloadText(block.thinking);
+            if (block.thinkingSignature === "reasoning_content") {
+              if (allowReasoningContentReplay) {
+                blocks.push({
+                  type: "thinking",
+                  thinking,
+                  signature: block.thinkingSignature,
+                });
+                reasoningContent.push(thinking);
+              }
+              continue;
+            }
             blocks.push({
               type: "thinking",
-              thinking: sanitizeTransportPayloadText(block.thinking),
+              thinking,
               signature: block.thinkingSignature,
             });
           }
@@ -386,10 +407,13 @@ function convertAnthropicMessages(
         }
       }
       if (blocks.length > 0) {
-        params.push({
-          role: "assistant",
-          content: blocks,
-        });
+        const assistantMsg: Record<string, unknown> = { role: "assistant", content: blocks };
+        if (reasoningContent.length > 0) {
+          assistantMsg.reasoning_content = reasoningContent.join("\n");
+        } else if (allowReasoningContentReplay) {
+          assistantMsg.reasoning_content = "";
+        }
+        params.push(assistantMsg);
       }
       continue;
     }
@@ -763,7 +787,10 @@ function buildAnthropicParams(
   const params: Record<string, unknown> = {
     model: model.id,
     messages: ensureNonEmptyAnthropicMessages(
-      convertAnthropicMessages(context.messages, model, isOAuthToken),
+      convertAnthropicMessages(context.messages, model, isOAuthToken, {
+        allowReasoningContentReplay:
+          supportsReasoningContentReplay(model) && options?.thinkingEnabled === true,
+      }),
     ),
     max_tokens: maxTokens,
     stream: true,
@@ -919,6 +946,117 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         );
         stream.push({ type: "start", partial: output as never });
         const blocks = output.content;
+        const allowReasoningContentReplay =
+          supportsReasoningContentReplay(model) && transportOptions.thinkingEnabled === true;
+        const reasoningContentThinkingBlocks = new Map<number, number>();
+        const reasoningContentTextBlocks = new Map<number, number>();
+        const eventIndexKey = (eventIndex: unknown) =>
+          typeof eventIndex === "number" ? eventIndex : -1;
+        const appendReasoningContentThinkingDelta = (
+          eventIndex: unknown,
+          rawText: unknown,
+        ): boolean => {
+          if (typeof rawText !== "string") {
+            return false;
+          }
+          const text = sanitizeTransportPayloadText(rawText);
+          if (text.length === 0) {
+            return false;
+          }
+          const key = eventIndexKey(eventIndex);
+          let contentIndex = reasoningContentThinkingBlocks.get(key);
+          let block =
+            contentIndex === undefined
+              ? undefined
+              : (output.content[contentIndex] as TransportContentBlock | undefined);
+          if (!block || block.type !== "thinking") {
+            block = { type: "thinking", thinking: "", thinkingSignature: "reasoning_content" };
+            output.content.push(block);
+            contentIndex = output.content.length - 1;
+            reasoningContentThinkingBlocks.set(key, contentIndex);
+            stream.push({
+              type: "thinking_start",
+              contentIndex,
+              partial: output as never,
+            });
+          }
+          block.thinking += text;
+          block.thinkingSignature = "reasoning_content";
+          stream.push({
+            type: "thinking_delta",
+            contentIndex,
+            delta: text,
+            partial: output as never,
+          });
+          return true;
+        };
+        const appendReasoningContentTextDelta = (
+          eventIndex: unknown,
+          rawText: unknown,
+        ): boolean => {
+          if (typeof rawText !== "string") {
+            return false;
+          }
+          const text = sanitizeTransportPayloadText(rawText);
+          if (text.length === 0) {
+            return false;
+          }
+          const key = eventIndexKey(eventIndex);
+          let contentIndex = reasoningContentTextBlocks.get(key);
+          let block =
+            contentIndex === undefined
+              ? undefined
+              : (output.content[contentIndex] as TransportContentBlock | undefined);
+          if (!block || block.type !== "text") {
+            block = { type: "text", text: "" };
+            output.content.push(block);
+            contentIndex = output.content.length - 1;
+            reasoningContentTextBlocks.set(key, contentIndex);
+            stream.push({
+              type: "text_start",
+              contentIndex,
+              partial: output as never,
+            });
+          }
+          block.text += text;
+          stream.push({
+            type: "text_delta",
+            contentIndex,
+            delta: text,
+            partial: output as never,
+          });
+          return true;
+        };
+        const finishReasoningContentSidecars = (eventIndex: unknown) => {
+          const key = eventIndexKey(eventIndex);
+          const thinkingContentIndex = reasoningContentThinkingBlocks.get(key);
+          if (thinkingContentIndex !== undefined) {
+            reasoningContentThinkingBlocks.delete(key);
+            const block = output.content[thinkingContentIndex];
+            if (block?.type === "thinking") {
+              stream.push({
+                type: "thinking_end",
+                contentIndex: thinkingContentIndex,
+                content: block.thinking,
+                partial: output as never,
+              });
+            }
+          }
+          const textContentIndex = reasoningContentTextBlocks.get(key);
+          if (textContentIndex === undefined) {
+            return;
+          }
+          reasoningContentTextBlocks.delete(key);
+          const block = output.content[textContentIndex];
+          if (block?.type === "text") {
+            stream.push({
+              type: "text_end",
+              contentIndex: textContentIndex,
+              content: block.text,
+              partial: output as never,
+            });
+          }
+        };
         for await (const event of anthropicStream) {
           if (event.type === "error") {
             const error = event.error as { message?: string } | undefined;
@@ -1047,6 +1185,42 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             const delta = event.delta as Record<string, unknown> | undefined;
             let index = blocks.findIndex((block) => block.index === event.index);
             let block = blocks[index];
+            if (allowReasoningContentReplay) {
+              const appendedThinking = appendReasoningContentThinkingDelta(
+                event.index,
+                delta?.reasoning_content,
+              );
+              const hasNativeAnthropicDelta =
+                (delta?.type === "text_delta" && typeof delta.text === "string") ||
+                (delta?.type === "thinking_delta" && typeof delta.thinking === "string") ||
+                (delta?.type === "input_json_delta" && typeof delta.partial_json === "string") ||
+                (delta?.type === "signature_delta" && typeof delta.signature === "string");
+              let appendedContent = false;
+              if (
+                !hasNativeAnthropicDelta &&
+                typeof delta?.content === "string" &&
+                delta.content.length > 0
+              ) {
+                const text = sanitizeTransportPayloadText(delta.content);
+                if (text.length > 0) {
+                  if (block?.type === "text") {
+                    block.text += text;
+                    stream.push({
+                      type: "text_delta",
+                      contentIndex: index,
+                      delta: text,
+                      partial: output as never,
+                    });
+                    appendedContent = true;
+                  } else {
+                    appendedContent = appendReasoningContentTextDelta(event.index, text);
+                  }
+                }
+              }
+              if ((appendedThinking || appendedContent) && !hasNativeAnthropicDelta) {
+                continue;
+              }
+            }
             if (!block && delta?.type === "text_delta" && typeof delta.text === "string") {
               const recoveredIndex = typeof event.index === "number" ? event.index : blocks.length;
               block = { type: "text", text: "", index: recoveredIndex };
@@ -1114,6 +1288,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             const index = blocks.findIndex((block) => block.index === event.index);
             const block = blocks[index];
             if (!block) {
+              finishReasoningContentSidecars(event.index);
               continue;
             }
             delete block.index;
@@ -1124,6 +1299,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
                 content: block.text,
                 partial: output as never,
               });
+              finishReasoningContentSidecars(event.index);
               continue;
             }
             if (block.type === "thinking") {
@@ -1133,6 +1309,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
                 content: block.thinking,
                 partial: output as never,
               });
+              finishReasoningContentSidecars(event.index);
               continue;
             }
             if (block.type === "toolCall") {
@@ -1146,6 +1323,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
                 toolCall: block as never,
                 partial: output as never,
               });
+              finishReasoningContentSidecars(event.index);
             }
             continue;
           }

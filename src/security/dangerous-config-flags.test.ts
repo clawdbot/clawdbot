@@ -116,6 +116,20 @@ describe("collectEnabledInsecureOrDangerousFlags", () => {
     ]);
   });
 
+  it("collects configured security audit suppressions as a dangerous flag", () => {
+    expect(
+      collectEnabledInsecureOrDangerousFlagsFromContracts(
+        asConfig({
+          security: {
+            audit: {
+              suppressions: [{ checkId: "plugins.code_safety" }],
+            },
+          },
+        }),
+      ),
+    ).toContain("security.audit.suppressions configured (1)");
+  });
+
   it("uses stable agent ids for per-agent dangerous sandbox flags", () => {
     expect(
       collectEnabledInsecureOrDangerousFlagsFromContracts(

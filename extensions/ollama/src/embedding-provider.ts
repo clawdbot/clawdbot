@@ -25,8 +25,8 @@ export type OllamaEmbeddingProvider = {
   id: string;
   model: string;
   maxInputTokens?: number;
-  embedQuery: (text: string) => Promise<number[]>;
-  embedBatch: (texts: string[]) => Promise<number[][]>;
+  embedQuery: (text: string, options?: { signal?: AbortSignal }) => Promise<number[]>;
+  embedBatch: (texts: string[], options?: { signal?: AbortSignal }) => Promise<number[][]>;
 };
 
 type OllamaEmbeddingOptions = {
@@ -90,12 +90,14 @@ function sanitizeAndNormalizeEmbedding(vec: unknown[]): number[] {
 async function withRemoteHttpResponse<T>(params: {
   url: string;
   init?: RequestInit;
+  signal?: AbortSignal;
   ssrfPolicy?: SsrFPolicy;
   onResponse: (response: Response) => Promise<T>;
 }): Promise<T> {
   const { response, release } = await fetchWithSsrFGuard({
     url: params.url,
     init: params.init,
+    signal: params.signal,
     policy: params.ssrfPolicy,
     auditContext: "memory-remote",
   });
@@ -322,10 +324,11 @@ export async function createOllamaEmbeddingProvider(
   const client = resolveOllamaEmbeddingClient(options);
   const embedUrl = `${client.baseUrl.replace(/\/$/, "")}/api/embed`;
 
-  const embedMany = async (input: string | string[]): Promise<number[][]> => {
+  const embedMany = async (input: string | string[], signal?: AbortSignal): Promise<number[][]> => {
     const json = await withRemoteHttpResponse({
       url: embedUrl,
       ssrfPolicy: client.ssrfPolicy,
+      signal,
       init: {
         method: "POST",
         headers: client.headers,
@@ -355,22 +358,23 @@ export async function createOllamaEmbeddingProvider(
     });
   };
 
-  const embedOne = async (text: string): Promise<number[]> => {
-    const [embedding] = await embedMany(text);
+  const embedOne = async (text: string, signal?: AbortSignal): Promise<number[]> => {
+    const [embedding] = await embedMany(text, signal);
     if (!embedding) {
       throw new Error("Ollama embed response returned no embedding");
     }
     return embedding;
   };
 
-  const embedQuery = async (text: string): Promise<number[]> =>
-    await embedOne(applyQueryInstructionTemplate(client.model, text));
+  const embedQuery = async (text: string, options?: { signal?: AbortSignal }): Promise<number[]> =>
+    await embedOne(applyQueryInstructionTemplate(client.model, text), options?.signal);
 
   const provider: OllamaEmbeddingProvider = {
     id: "ollama",
     model: client.model,
     embedQuery,
-    embedBatch: async (texts) => (texts.length === 0 ? [] : await embedMany(texts)),
+    embedBatch: async (texts, options) =>
+      texts.length === 0 ? [] : await embedMany(texts, options?.signal),
   };
 
   return {

@@ -87,12 +87,7 @@ async function copyPortableAuthProfiles(params: {
     return { copied: 0, skipped: portable.skippedProfileIds.length };
   }
   await fs.mkdir(path.dirname(params.destAuthPath), { recursive: true });
-  saveJsonFile(
-    params.destAuthPath,
-    buildPersistedAuthProfileSecretsStore(portable.store, undefined, {
-      agentDir: path.dirname(params.destAuthPath),
-    }),
-  );
+  saveJsonFile(params.destAuthPath, buildPersistedAuthProfileSecretsStore(portable.store));
   return {
     copied: portable.copiedProfileIds.length,
     skipped: portable.skippedProfileIds.length,
@@ -353,10 +348,7 @@ export async function agentsAddCommand(
           });
           if (shouldCopy) {
             await fs.mkdir(path.dirname(destAuthPath), { recursive: true });
-            saveJsonFile(
-              destAuthPath,
-              buildPersistedAuthProfileSecretsStore(portable.store, undefined, { agentDir }),
-            );
+            saveJsonFile(destAuthPath, buildPersistedAuthProfileSecretsStore(portable.store));
             const skippedText =
               portable.skippedProfileIds.length > 0
                 ? ` ${formatSkippedOAuthProfilesMessage({

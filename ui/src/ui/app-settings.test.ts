@@ -60,6 +60,7 @@ type SettingsHost = {
   logsAtBottom: boolean;
   eventLog: unknown[];
   eventLogBuffer: unknown[];
+  password?: string;
   basePath: string;
   themeMedia: MediaQueryList | null;
   themeMediaHandler: ((event: MediaQueryListEvent) => void) | null;
@@ -158,6 +159,7 @@ const createHost = (tab: Tab): SettingsHost => ({
   logsAtBottom: false,
   eventLog: [],
   eventLogBuffer: [],
+  password: "",
   basePath: "",
   themeMedia: null,
   themeMediaHandler: null,
@@ -426,6 +428,37 @@ describe("applySettingsFromUrl", () => {
     expect(host.settings.token).toBe("hash-token");
     expect(window.location.search).toBe("");
     expect(window.location.hash).toBe("");
+  });
+
+  it("hydrates native Mac app auth before the first connection", () => {
+    setTestWindowUrl("https://control.example/ui/chat");
+    (
+      window as unknown as {
+        __OPENCLAW_NATIVE_CONTROL_AUTH__?: {
+          gatewayUrl?: string;
+          token?: string;
+          password?: string;
+        };
+      }
+    ).__OPENCLAW_NATIVE_CONTROL_AUTH__ = {
+      gatewayUrl: "wss://control.example/ui/",
+      token: "device-token",
+      password: "shared-password",
+    };
+    const host = createHost("chat");
+
+    applySettingsFromUrl(host);
+
+    expect(host.settings.gatewayUrl).toBe("wss://control.example/ui/");
+    expect(host.settings.token).toBe("device-token");
+    expect(host.password).toBe("shared-password");
+    expect(
+      (
+        window as unknown as {
+          __OPENCLAW_NATIVE_CONTROL_AUTH__?: unknown;
+        }
+      ).__OPENCLAW_NATIVE_CONTROL_AUTH__,
+    ).toBeUndefined();
   });
 
   it("resets stale persisted session selection to main when a token is supplied without a session", () => {

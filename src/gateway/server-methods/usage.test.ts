@@ -158,7 +158,7 @@ describe("gateway usage helpers", () => {
     expect(b.totals.totalTokens).toBe(1);
     expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(loadCostUsageSummaryFromCache).mock.calls.at(0)?.[0]?.refreshMode).toBe(
-      "sync-when-empty",
+      "background",
     );
   });
 });

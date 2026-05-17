@@ -47,9 +47,13 @@ const LOOPBACK_ENTRIES = "localhost,127.0.0.1,[::1]";
 
 function noProxyAlreadyCoversLocalhost(): boolean {
   const current = process.env.NO_PROXY || process.env.no_proxy || "";
-  return (
-    current.includes("localhost") && current.includes("127.0.0.1") && current.includes("[::1]")
+  const entries = new Set(
+    current
+      .split(",")
+      .map((entry) => entry.trim().toLowerCase())
+      .filter(Boolean),
   );
+  return entries.has("localhost") && entries.has("127.0.0.1") && entries.has("[::1]");
 }
 
 export async function withNoProxyForLocalhost<T>(fn: () => Promise<T>): Promise<T> {

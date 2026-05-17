@@ -1,15 +1,15 @@
 import { stripTelegramInternalPrefixes } from "./targets.js";
 
-export type TelegramInboundTurnDeliveryEnd = () => void;
-export type TelegramInboundTurnDeliveryKind = "user_request" | "room_event";
+export type TelegramInboundEventDeliveryEnd = () => void;
+export type TelegramInboundEventDeliveryKind = "user_request" | "room_event";
 
-type ActiveTurn = {
+type ActiveInboundEvent = {
   outboundTo: string;
   outboundAccountId?: string;
-  markInboundTurnDelivered: () => void;
+  markInboundEventDelivered: () => void;
 };
 
-const registry = new Map<string, ActiveTurn>();
+const registry = new Map<string, ActiveInboundEvent>();
 
 function normalizeTelegramDeliveryTarget(value: string): string {
   return stripTelegramInternalPrefixes(value).toLowerCase();
@@ -39,56 +39,56 @@ function telegramDeliveryTargetsMatch(expected: string, actual: string): boolean
   );
 }
 
-export function resolveTelegramInboundTurnDeliveryCorrelationKey(
+export function resolveTelegramInboundEventDeliveryCorrelationKey(
   sessionKey: string | undefined,
-  inboundTurnKind?: string,
+  inboundEventKind?: string,
 ): string | undefined {
   const key = sessionKey?.trim();
   if (!key) {
     return undefined;
   }
-  return inboundTurnKind === "room_event" ? `${key}:room_event` : key;
+  return inboundEventKind === "room_event" ? `${key}:room_event` : key;
 }
 
-export function beginTelegramInboundTurnDeliveryCorrelation(
+export function beginTelegramInboundEventDeliveryCorrelation(
   sessionKey: string | undefined,
-  turn: ActiveTurn,
-  options?: { inboundTurnKind?: string },
-): TelegramInboundTurnDeliveryEnd {
-  const key = resolveTelegramInboundTurnDeliveryCorrelationKey(
+  event: ActiveInboundEvent,
+  options?: { inboundEventKind?: string },
+): TelegramInboundEventDeliveryEnd {
+  const key = resolveTelegramInboundEventDeliveryCorrelationKey(
     sessionKey,
-    options?.inboundTurnKind,
+    options?.inboundEventKind,
   );
   if (!key) {
     return () => {};
   }
-  registry.set(key, turn);
+  registry.set(key, event);
   return () => {
-    if (registry.get(key) === turn) {
+    if (registry.get(key) === event) {
       registry.delete(key);
     }
   };
 }
 
-export function notifyTelegramInboundTurnOutboundSuccess(params: {
+export function notifyTelegramInboundEventOutboundSuccess(params: {
   sessionKey: string | undefined;
   to: string;
   accountId?: string | null;
-  inboundTurnKind?: string;
+  inboundEventKind?: string;
 }): void {
-  const key = resolveTelegramInboundTurnDeliveryCorrelationKey(
+  const key = resolveTelegramInboundEventDeliveryCorrelationKey(
     params.sessionKey,
-    params.inboundTurnKind,
+    params.inboundEventKind,
   );
   if (!key) {
     return;
   }
-  const turn = registry.get(key);
-  if (!turn || !telegramDeliveryTargetsMatch(turn.outboundTo, params.to)) {
+  const event = registry.get(key);
+  if (!event || !telegramDeliveryTargetsMatch(event.outboundTo, params.to)) {
     return;
   }
-  if (turn.outboundAccountId && params.accountId && params.accountId !== turn.outboundAccountId) {
+  if (event.outboundAccountId && params.accountId && params.accountId !== event.outboundAccountId) {
     return;
   }
-  turn.markInboundTurnDelivered();
+  event.markInboundEventDelivered();
 }

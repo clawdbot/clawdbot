@@ -91,7 +91,12 @@ function readXaiCreateResponse(payload: Record<string, unknown>): XaiVideoCreate
 }
 
 function readXaiStatusResponse(payload: Record<string, unknown>): XaiVideoStatusResponse {
-  const status = normalizeOptionalString(payload.status);
+  const rawStatus = normalizeOptionalString(payload.status);
+  // xAI's /v1/videos/{id} endpoint currently returns "pending" (with a progress
+  // integer) for in-flight jobs. Treat it as "processing" so polling continues
+  // instead of failing with XAI_VIDEO_MALFORMED_RESPONSE.
+  const status =
+    rawStatus === "pending" || rawStatus === "in_progress" ? "processing" : rawStatus;
   if (!status || !["queued", "processing", "done", "failed", "expired"].includes(status)) {
     throw new Error(XAI_VIDEO_MALFORMED_RESPONSE);
   }

@@ -762,12 +762,13 @@ export function resolveDeletedAgentIdFromSessionKey(
   return agentId;
 }
 
-export function loadSessionEntry(sessionKey: string) {
+export function loadSessionEntry(sessionKey: string, opts?: { agentId?: string }) {
   const cfg = getRuntimeConfig();
   const key = normalizeOptionalString(sessionKey) ?? "";
   const target = resolveGatewaySessionStoreTarget({
     cfg,
     key,
+    ...(opts?.agentId ? { agentId: opts.agentId } : {}),
   });
   const storePath = target.storePath;
   const store = loadSessionStore(storePath);
@@ -1271,6 +1272,7 @@ function resolveExplicitDeletedLegacyMainStoreTarget(params: {
 export function resolveGatewaySessionStoreTarget(params: {
   cfg: OpenClawConfig;
   key: string;
+  agentId?: string;
   scanLegacyKeys?: boolean;
   store?: Record<string, SessionEntry>;
 }): {
@@ -1293,7 +1295,11 @@ export function resolveGatewaySessionStoreTarget(params: {
     cfg: params.cfg,
     sessionKey: key,
   });
-  const agentId = resolveSessionStoreAgentId(params.cfg, canonicalKey);
+  const requestedAgentId = normalizeOptionalString(params.agentId);
+  const agentId =
+    canonicalKey === "global" && requestedAgentId
+      ? normalizeAgentId(requestedAgentId)
+      : resolveSessionStoreAgentId(params.cfg, canonicalKey);
   const { storePath, store } = resolveGatewaySessionStoreLookup({
     cfg: params.cfg,
     key,

@@ -76,6 +76,18 @@ struct GatewayEndpointStoreTests {
         #expect(token == "remote-token")
     }
 
+    @Test func `remote password resolver trims remote config password`() {
+        let root: [String: Any] = [
+            "gateway": [
+                "remote": [
+                    "password": "  remote-pass  ",
+                ],
+            ],
+        ]
+
+        #expect(GatewayRemoteConfig.resolvePasswordString(root: root) == "remote-pass")
+    }
+
     @Test func `resolve gateway password falls back to launchd`() {
         let snapshot = self.makeLaunchAgentSnapshot(
             env: ["OPENCLAW_GATEWAY_PASSWORD": "launchd-pass"],
@@ -272,15 +284,50 @@ struct GatewayEndpointStoreTests {
         #expect(url.query == nil)
     }
 
+    @Test func `dashboard URL can use native auth token override`() throws {
+        let config: GatewayConnection.Config = try (
+            url: #require(URL(string: "ws://127.0.0.1:18789")),
+            token: nil,
+            password: "sekret") // pragma: allowlist secret
+
+        let url = try GatewayEndpointStore.dashboardURL(
+            for: config,
+            mode: .local,
+            localBasePath: "/control",
+            authToken: "device-token")
+        #expect(url.absoluteString == "http://127.0.0.1:18789/control/#token=device-token")
+        #expect(url.query == nil)
+    }
+
     @Test func `normalize gateway url adds default port for loopback ws`() {
         let url = GatewayRemoteConfig.normalizeGatewayUrl("ws://127.0.0.1")
         #expect(url?.port == 18789)
         #expect(url?.absoluteString == "ws://127.0.0.1:18789")
     }
 
-    @Test func `normalize gateway url rejects non loopback ws`() {
+    @Test func `normalize gateway url accepts private network ws`() {
+        let url = GatewayRemoteConfig.normalizeGatewayUrl("ws://192.168.0.202:18789")
+        #expect(url?.absoluteString == "ws://192.168.0.202:18789")
+    }
+
+    @Test func `normalize gateway url accepts tailnet ws`() {
+        let url = GatewayRemoteConfig.normalizeGatewayUrl("ws://100.123.224.76:18789")
+        #expect(url?.absoluteString == "ws://100.123.224.76:18789")
+    }
+
+    @Test func `normalize gateway url rejects public host ws`() {
         let url = GatewayRemoteConfig.normalizeGatewayUrl("ws://gateway.example:18789")
         #expect(url == nil)
+    }
+
+    @Test func `normalize gateway url rejects private ipv4 suffix host bypasses`() {
+        #expect(GatewayRemoteConfig.normalizeGatewayUrl("ws://192.168.0.202.attacker.example:18789") == nil)
+        #expect(GatewayRemoteConfig.normalizeGatewayUrl("ws://100.123.224.76.attacker.example:18789") == nil)
+    }
+
+    @Test func `normalize gateway url rejects ipv6 prefix hostname bypasses`() {
+        #expect(GatewayRemoteConfig.normalizeGatewayUrl("ws://fcorp.example:18789") == nil)
+        #expect(GatewayRemoteConfig.normalizeGatewayUrl("ws://fd-example.com:18789") == nil)
     }
 
     @Test func `normalize gateway url rejects prefix bypass loopback host`() {

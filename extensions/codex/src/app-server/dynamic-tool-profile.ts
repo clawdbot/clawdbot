@@ -8,6 +8,10 @@ export const CODEX_APP_SERVER_OWNED_DYNAMIC_TOOL_EXCLUDES = [
   "exec",
   "process",
   "update_plan",
+  "tool_call",
+  "tool_describe",
+  "tool_search",
+  "tool_search_code",
 ] as const;
 
 const DYNAMIC_TOOL_NAME_ALIASES: Record<string, string> = {

@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  buildChannelTurnContextMock,
+  buildChannelInboundEventContextMock,
   dispatchReplyWithBufferedBlockDispatcher,
   finalizeInboundContextMock,
   registerPluginHttpRouteMock,
@@ -55,7 +55,7 @@ describe("Synology channel wiring integration", () => {
   beforeEach(() => {
     registerPluginHttpRouteMock.mockClear();
     dispatchReplyWithBufferedBlockDispatcher.mockClear();
-    buildChannelTurnContextMock.mockClear();
+    buildChannelInboundEventContextMock.mockClear();
     finalizeInboundContextMock.mockClear();
     resolveAgentRouteMock.mockClear();
     setSynologyRuntimeConfigForTest({});

@@ -5,6 +5,7 @@ import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
 import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { estimateStringChars, estimateTokensFromChars } from "../utils/cjk-chars.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { extractToolCallNames, hasToolCall } from "../utils/transcript-tools.js";
 import { stripEnvelope } from "./chat-sanitize.js";
@@ -1159,6 +1160,85 @@ function resolvePositiveUsageNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
 }
 
+function extractTranscriptContentEstimatedChars(content: unknown): number {
+  if (typeof content === "string") {
+    const normalized = stripInlineDirectiveTagsForDisplay(content).text.trim();
+    return normalized ? estimateStringChars(normalized) : 0;
+  }
+  if (!Array.isArray(content)) {
+    return 0;
+  }
+  let chars = 0;
+  for (const part of content) {
+    if (!part || typeof part !== "object" || Array.isArray(part)) {
+      continue;
+    }
+    const record = part as Record<string, unknown>;
+    if (typeof record.text !== "string") {
+      continue;
+    }
+    const type = typeof record.type === "string" ? record.type : "text";
+    if (type !== "text" && type !== "output_text" && type !== "input_text") {
+      continue;
+    }
+    const normalized = stripInlineDirectiveTagsForDisplay(record.text).text.trim();
+    if (normalized) {
+      chars += estimateStringChars(normalized);
+    }
+  }
+  return chars;
+}
+
+function extractTranscriptTokenEstimateFromLine(line: string): {
+  estimatedChars: number;
+  hasModelIdentity: boolean;
+} | null {
+  if (isOversizedTranscriptLine(line)) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(line) as Record<string, unknown>;
+    const message =
+      parsed.message && typeof parsed.message === "object" && !Array.isArray(parsed.message)
+        ? (parsed.message as Record<string, unknown>)
+        : undefined;
+    if (!message) {
+      return null;
+    }
+    const role = typeof message.role === "string" ? message.role : undefined;
+    if (role !== "user" && role !== "assistant") {
+      return null;
+    }
+    const modelProvider =
+      typeof message.provider === "string"
+        ? message.provider.trim()
+        : typeof parsed.provider === "string"
+          ? parsed.provider.trim()
+          : undefined;
+    const model =
+      typeof message.model === "string"
+        ? message.model.trim()
+        : typeof parsed.model === "string"
+          ? parsed.model.trim()
+          : undefined;
+    const isDeliveryMirror =
+      role === "assistant" && modelProvider === "openclaw" && model === "delivery-mirror";
+    if (isDeliveryMirror) {
+      return null;
+    }
+    const contentChars = extractTranscriptContentEstimatedChars(message.content);
+    if (contentChars <= 0) {
+      return null;
+    }
+    return {
+      estimatedChars: contentChars,
+      hasModelIdentity: role === "assistant" && Boolean(modelProvider || model),
+    };
+  } catch {
+    return null;
+  }
+}
+
 function extractUsageSnapshotFromTranscriptLine(
   line: string,
 ): SessionTranscriptUsageSnapshot | null {
@@ -1261,8 +1341,17 @@ function extractAggregateUsageFromTranscriptLines(
   let sawCacheWrite = false;
   let costUsdTotal = 0;
   let sawCost = false;
+  let estimatedTranscriptChars = 0;
+  let sawEstimatedTranscriptContent = false;
+  let sawEstimateModelIdentity = false;
 
   for (const line of lines) {
+    const estimate = extractTranscriptTokenEstimateFromLine(line);
+    if (estimate) {
+      estimatedTranscriptChars += estimate.estimatedChars;
+      sawEstimatedTranscriptContent = true;
+      sawEstimateModelIdentity ||= estimate.hasModelIdentity;
+    }
     const current = extractUsageSnapshotFromTranscriptLine(line);
     if (!current) {
       continue;
@@ -1317,6 +1406,17 @@ function extractAggregateUsageFromTranscriptLines(
   }
   if (sawCost) {
     snapshot.costUsd = costUsdTotal;
+  }
+  if (
+    typeof snapshot.totalTokens !== "number" &&
+    sawEstimatedTranscriptContent &&
+    sawEstimateModelIdentity
+  ) {
+    const estimatedTotalTokens = estimateTokensFromChars(estimatedTranscriptChars);
+    if (estimatedTotalTokens > 0) {
+      snapshot.totalTokens = estimatedTotalTokens;
+      snapshot.totalTokensFresh = true;
+    }
   }
   return snapshot;
 }

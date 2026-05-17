@@ -5,6 +5,7 @@ import path from "node:path";
 import JSON5 from "json5";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { ensureOwnerDisplaySecret } from "../agents/owner-display.js";
+import { isVerbose } from "../global-state.js";
 import { loadDotEnv } from "../infra/dotenv.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
@@ -238,6 +239,12 @@ export type ConfigWriteOptions = {
    * Omitted means the observer should use its normal reload plan.
    */
   afterWrite?: ConfigWriteAfterWrite;
+  /**
+   * Legacy root keys to preserve on disk while excluding them from write validation.
+   * This is for doctor repair of historical config metadata that should not become
+   * part of the public schema contract again.
+   */
+  preservedLegacyRootKeys?: readonly string[];
   /**
    * Skip plugin-aware validation before writing. Use only for safe partial
    * migrations (e.g. legacy key removal) where the base schema is valid but
@@ -1228,7 +1235,10 @@ async function collectInvalidConfigLegacyIssues(
 }
 
 export function createConfigIO(
-  overrides: ConfigIoDeps & { pluginValidation?: "full" | "skip" } = {},
+  overrides: ConfigIoDeps & {
+    pluginValidation?: "full" | "skip";
+    preservedLegacyRootKeys?: readonly string[];
+  } = {},
 ) {
   const deps = normalizeDeps(overrides);
   const configPath = resolveConfigPathForDeps(deps);
@@ -1579,6 +1589,7 @@ export function createConfigIO(
         pluginValidation: overrides.pluginValidation,
         loadPluginMetadataSnapshot: loadValidationPluginMetadataSnapshot,
         sourceRaw: snapshotParsed,
+        preservedLegacyRootKeys: overrides.preservedLegacyRootKeys,
       });
       if (!validated.ok) {
         observeLoadConfigSnapshot({
@@ -1798,6 +1809,7 @@ export function createConfigIO(
           pluginValidation: overrides.pluginValidation,
           loadPluginMetadataSnapshot: loadValidationPluginMetadataSnapshot,
           sourceRaw: effectiveParsed,
+          preservedLegacyRootKeys: overrides.preservedLegacyRootKeys,
         }),
       );
       if (!validated.ok) {
@@ -2042,6 +2054,7 @@ export function createConfigIO(
     const validated = validateConfigObjectRawWithPlugins(persistCandidate, {
       env: deps.env,
       pluginValidation: options.skipPluginValidation ? "skip" : "full",
+      preservedLegacyRootKeys: options.preservedLegacyRootKeys,
     });
     if (!validated.ok) {
       const issue = validated.issues[0];
@@ -2144,6 +2157,9 @@ export function createConfigIO(
       const isVitest = deps.env.VITEST === "true";
       const shouldLogInVitest = deps.env.OPENCLAW_TEST_CONFIG_OVERWRITE_LOG === "1";
       if (isVitest && !shouldLogInVitest) {
+        return;
+      }
+      if (!isVerbose() && deps.env.OPENCLAW_CONFIG_OVERWRITE_LOG !== "1" && !shouldLogInVitest) {
         return;
       }
       deps.logger.warn(
@@ -2369,10 +2385,14 @@ export async function readSourceConfigBestEffort(): Promise<OpenClawConfig> {
 export async function readConfigFileSnapshot(options?: {
   measure?: ConfigSnapshotReadMeasure;
   skipPluginValidation?: boolean;
+  preservedLegacyRootKeys?: readonly string[];
 }): Promise<ConfigFileSnapshot> {
   return await createConfigIO({
     ...(options?.measure ? { measure: options.measure } : {}),
     ...(options?.skipPluginValidation ? { pluginValidation: "skip" } : {}),
+    ...(options?.preservedLegacyRootKeys
+      ? { preservedLegacyRootKeys: options.preservedLegacyRootKeys }
+      : {}),
   }).readConfigFileSnapshot();
 }
 
@@ -2423,7 +2443,12 @@ export async function writeConfigFile(
   cfg: OpenClawConfig,
   options: ConfigWriteOptions = {},
 ): Promise<ConfigWriteResult> {
-  const io = createConfigIO(options.skipPluginValidation ? { pluginValidation: "skip" } : {});
+  const io = createConfigIO({
+    ...(options.skipPluginValidation ? { pluginValidation: "skip" as const } : {}),
+    ...(options.preservedLegacyRootKeys
+      ? { preservedLegacyRootKeys: options.preservedLegacyRootKeys }
+      : {}),
+  });
   assertConfigWriteAllowedInCurrentMode({ configPath: io.configPath });
   let nextCfg = cfg;
   const runtimeConfigSnapshot = getRuntimeConfigSnapshotState();
@@ -2452,6 +2477,7 @@ export async function writeConfigFile(
     skipRuntimeSnapshotRefresh: options.skipRuntimeSnapshotRefresh,
     skipOutputLogs: options.skipOutputLogs,
     skipPluginValidation: options.skipPluginValidation,
+    preservedLegacyRootKeys: options.preservedLegacyRootKeys,
   });
   if (
     options.skipRuntimeSnapshotRefresh &&

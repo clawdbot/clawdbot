@@ -165,9 +165,7 @@ describe("pw-session getPageForTargetId", () => {
       expect(fetchInit.headers).toEqual({});
       expect(fetchInit.redirect).toBe("manual");
       expect(fetchInit.signal).toBeInstanceOf(AbortSignal);
-      if (fetchInit.dispatcher === undefined) {
-        throw new Error("expected extension fallback fetch dispatcher");
-      }
+      expect(fetchInit.dispatcher).toBeUndefined();
     } finally {
       fetchSpy.mockRestore();
     }

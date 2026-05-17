@@ -962,6 +962,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       },
       env: {
         OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR: "1",
       },
     });
 
@@ -1061,6 +1062,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       },
       env: {
         OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR: "1",
       },
     });
 
@@ -1077,7 +1079,53 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     });
   });
 
-  it("does not install channel-selected external plugins during the package update doctor pass", async () => {
+  it("does not install channel-selected external plugins during an opted-in package update doctor pass", async () => {
+    mocks.listChannelPluginCatalogEntries.mockReturnValue([
+      {
+        id: "discord",
+        pluginId: "discord",
+        meta: { label: "Discord" },
+        install: {
+          npmSpec: "@openclaw/discord",
+        },
+      },
+    ]);
+
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingConfiguredPluginInstalls({
+      cfg: {
+        channels: {
+          discord: { enabled: true, token: "secret" },
+        },
+      },
+      env: {
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+        OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR: "1",
+      },
+    });
+
+    expect(mocks.updateNpmInstalledPlugins).not.toHaveBeenCalled();
+    expect(mocks.installPluginFromClawHub).not.toHaveBeenCalled();
+    expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
+    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
+    expect(result).toEqual({ changes: [], warnings: [], records: {} });
+  });
+
+  it("installs channel-selected external plugins during a legacy package update doctor pass", async () => {
+    mocks.installPluginFromNpmSpec.mockResolvedValueOnce({
+      ok: true,
+      pluginId: "discord",
+      targetDir: "/tmp/openclaw-plugins/discord",
+      version: "2026.5.17",
+      npmResolution: {
+        name: "@openclaw/discord",
+        version: "2026.5.17",
+        resolvedSpec: "@openclaw/discord@2026.5.17",
+        integrity: "sha512-discord",
+        resolvedAt: "2026-05-17T00:00:00.000Z",
+      },
+    });
     mocks.listChannelPluginCatalogEntries.mockReturnValue([
       {
         id: "discord",
@@ -1102,11 +1150,104 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       },
     });
 
-    expect(mocks.updateNpmInstalledPlugins).not.toHaveBeenCalled();
+    expect(mocks.installPluginFromNpmSpec).toHaveBeenCalledTimes(1);
+    expect(result.changes).toEqual([
+      'Installed missing configured plugin "discord" from @openclaw/discord.',
+    ]);
+    expectRecordFields(result.records.discord, {
+      source: "npm",
+      installPath: "/tmp/openclaw-plugins/discord",
+    });
+  });
+
+  it("prefers npm over ClawHub during a legacy package update doctor pass", async () => {
+    mocks.installPluginFromNpmSpec.mockResolvedValueOnce({
+      ok: true,
+      pluginId: "whatsapp",
+      targetDir: "/tmp/openclaw-plugins/whatsapp",
+      version: "2026.5.17",
+      npmResolution: {
+        name: "@openclaw/whatsapp",
+        version: "2026.5.17",
+        resolvedSpec: "@openclaw/whatsapp@2026.5.17",
+        integrity: "sha512-whatsapp",
+        resolvedAt: "2026-05-17T00:00:00.000Z",
+      },
+    });
+    mocks.listChannelPluginCatalogEntries.mockReturnValue([
+      {
+        id: "whatsapp",
+        pluginId: "whatsapp",
+        meta: { label: "WhatsApp" },
+        install: {
+          clawhubSpec: "clawhub:@openclaw/whatsapp",
+          npmSpec: "@openclaw/whatsapp",
+          defaultChoice: "clawhub",
+        },
+      },
+    ]);
+
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingConfiguredPluginInstalls({
+      cfg: {
+        channels: {
+          whatsapp: { enabled: true, allowFrom: ["+15555550123"] },
+        },
+      },
+      env: {
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+      },
+    });
+
     expect(mocks.installPluginFromClawHub).not.toHaveBeenCalled();
+    expectRecordFields(mockCallArg(mocks.installPluginFromNpmSpec), {
+      spec: "@openclaw/whatsapp",
+      expectedPluginId: "whatsapp",
+    });
+    expect(result.changes).toEqual([
+      'Installed missing configured plugin "whatsapp" from @openclaw/whatsapp.',
+    ]);
+    expectRecordFields(result.records.whatsapp, {
+      source: "npm",
+      installPath: "/tmp/openclaw-plugins/whatsapp",
+    });
+  });
+
+  it("keeps ClawHub-only candidates available during a legacy package update doctor pass", async () => {
+    mocks.listChannelPluginCatalogEntries.mockReturnValue([
+      {
+        id: "matrix",
+        pluginId: "matrix",
+        meta: { label: "Matrix" },
+        install: {
+          clawhubSpec: "clawhub:@openclaw/plugin-matrix@stable",
+          defaultChoice: "clawhub",
+        },
+      },
+    ]);
+
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingConfiguredPluginInstalls({
+      cfg: {
+        channels: {
+          matrix: { enabled: true, homeserver: "https://matrix.example.org" },
+        },
+      },
+      env: {
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
+      },
+    });
+
+    expectRecordFields(mockCallArg(mocks.installPluginFromClawHub), {
+      spec: "clawhub:@openclaw/plugin-matrix@stable",
+      expectedPluginId: "matrix",
+    });
     expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
-    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).not.toHaveBeenCalled();
-    expect(result).toEqual({ changes: [], warnings: [], records: {} });
+    expect(result.changes).toEqual([
+      'Installed missing configured plugin "matrix" from clawhub:@openclaw/plugin-matrix@stable.',
+    ]);
   });
 
   it("does not install configured plugins when plugins are globally disabled", async () => {
@@ -2537,6 +2678,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       warnings: [
         `Failed to install missing configured plugin "brave" from ${expectedNpmInstallSpec("@openclaw/brave-plugin")}: network unavailable`,
       ],
+      failedPluginIds: ["brave"],
       records,
     });
   });

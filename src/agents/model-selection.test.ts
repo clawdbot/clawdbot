@@ -695,6 +695,25 @@ describe("model-selection", () => {
       ).toBe("qwen-dashscope");
     });
 
+    it("infers provider from raw configured ids when manifest policies add prefixes", () => {
+      const cfg = {
+        models: {
+          providers: {
+            nvidia: {
+              models: [{ id: "llama-fast" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      expect(
+        inferUniqueProviderFromConfiguredModels({
+          cfg,
+          model: "llama-fast",
+        }),
+      ).toBe("nvidia");
+    });
+
     it("infers Google provider from canonicalized configured provider catalogs", () => {
       const cfg = {
         models: {
@@ -1653,6 +1672,34 @@ describe("model-selection", () => {
         setLoggerOverride(null);
         resetLogger();
       }
+    });
+
+    it("normalizes bare configured default model strings with manifest policies", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "llama-fast" },
+          },
+        },
+        models: {
+          providers: {
+            nvidia: {
+              models: [{ id: "llama-fast" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const result = resolveConfiguredModelRef({
+        cfg,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.4",
+      });
+
+      expect(result).toEqual({
+        provider: "nvidia",
+        model: "nvidia/llama-fast",
+      });
     });
 
     it("prefers slash-form aliases for configured default models", () => {

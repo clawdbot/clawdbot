@@ -5,6 +5,7 @@ const ArtifactQueryParamsProperties = {
   sessionKey: Type.Optional(NonEmptyString),
   runId: Type.Optional(NonEmptyString),
   taskId: Type.Optional(NonEmptyString),
+  agentId: Type.Optional(NonEmptyString),
 };
 
 export const ArtifactQueryParamsSchema = Type.Object(ArtifactQueryParamsProperties, {

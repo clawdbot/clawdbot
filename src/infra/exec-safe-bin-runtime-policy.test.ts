@@ -8,6 +8,7 @@ import {
   resolveExecSafeBinRuntimePolicy,
   resolveMergedSafeBinProfileFixtures,
 } from "./exec-safe-bin-runtime-policy.js";
+import { isTrustedSafeBinPath } from "./exec-safe-bin-trust.js";
 
 describe("exec safe-bin runtime policy", () => {
   const interpreterCases: Array<{ bin: string; expected: boolean }> = [
@@ -133,6 +134,155 @@ describe("exec safe-bin runtime policy", () => {
     expect(optedIn.trustedSafeBinDirs.has(path.resolve("/opt/homebrew/bin"))).toBe(true);
     expect(optedIn.trustedSafeBinDirs.has(path.resolve("/usr/local/bin"))).toBe(true);
   });
+
+  it.runIf(process.platform !== "win32")(
+    "expands trusted package-manager symlink dirs to current safe-bin target dirs",
+    async () => {
+      await withTempDir({ prefix: "openclaw-safe-bin-trusted-symlink-" }, async (root) => {
+        const trustedDir = path.join(root, "bin");
+        const targetDir = path.join(root, "cellar", "jq", "1.7.1", "bin");
+        const target = path.join(targetDir, "jq");
+        const link = path.join(trustedDir, "jq");
+        await fs.mkdir(trustedDir, { recursive: true });
+        await fs.mkdir(targetDir, { recursive: true });
+        await fs.writeFile(target, "#!/bin/sh\n", "utf8");
+        await fs.chmod(target, 0o755);
+        await fs.symlink(target, link);
+
+        const policy = resolveExecSafeBinRuntimePolicy({
+          local: {
+            safeBins: ["jq"],
+            safeBinTrustedDirs: [trustedDir],
+          },
+        });
+
+        expect(
+          isTrustedSafeBinPath({
+            resolvedPath: await fs.realpath(target),
+            trustedDirs: policy.trustedSafeBinDirs,
+          }),
+        ).toBe(true);
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "refreshes trusted package-manager target dirs when safe-bin symlinks retarget",
+    async () => {
+      await withTempDir({ prefix: "openclaw-safe-bin-trusted-retarget-" }, async (root) => {
+        const trustedDir = path.join(root, "bin");
+        const targetDir1 = path.join(root, "cellar", "jq", "1.7.1", "bin");
+        const targetDir2 = path.join(root, "cellar", "jq", "1.8.0", "bin");
+        const target1 = path.join(targetDir1, "jq");
+        const target2 = path.join(targetDir2, "jq");
+        const link = path.join(trustedDir, "jq");
+        await fs.mkdir(trustedDir, { recursive: true });
+        await fs.mkdir(targetDir1, { recursive: true });
+        await fs.mkdir(targetDir2, { recursive: true });
+        await fs.writeFile(target1, "#!/bin/sh\n", "utf8");
+        await fs.writeFile(target2, "#!/bin/sh\n", "utf8");
+        await fs.chmod(target1, 0o755);
+        await fs.chmod(target2, 0o755);
+        await fs.symlink(target1, link);
+
+        const first = resolveExecSafeBinRuntimePolicy({
+          local: {
+            safeBins: ["jq"],
+            safeBinTrustedDirs: [trustedDir],
+          },
+        });
+        const realTarget1 = await fs.realpath(target1);
+        expect(
+          isTrustedSafeBinPath({
+            resolvedPath: realTarget1,
+            trustedDirs: first.trustedSafeBinDirs,
+          }),
+        ).toBe(true);
+
+        await fs.unlink(link);
+        await fs.symlink(target2, link);
+
+        const second = resolveExecSafeBinRuntimePolicy({
+          local: {
+            safeBins: ["jq"],
+            safeBinTrustedDirs: [trustedDir],
+          },
+        });
+        const realTarget2 = await fs.realpath(target2);
+        expect(
+          isTrustedSafeBinPath({
+            resolvedPath: realTarget1,
+            trustedDirs: second.trustedSafeBinDirs,
+          }),
+        ).toBe(false);
+        expect(
+          isTrustedSafeBinPath({
+            resolvedPath: realTarget2,
+            trustedDirs: second.trustedSafeBinDirs,
+          }),
+        ).toBe(true);
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "does not derive target-dir trust from non-executable safe-bin links",
+    async () => {
+      await withTempDir({ prefix: "openclaw-safe-bin-trusted-nonexec-" }, async (root) => {
+        const trustedDir = path.join(root, "bin");
+        const nonExecutableDir = path.join(root, "targets", "nonexec");
+        const directoryTarget = path.join(root, "targets", "directory");
+        const executableDir = path.join(root, "targets", "executable");
+        const nonExecutable = path.join(nonExecutableDir, "placeholder");
+        const executableInNonExecutableDir = path.join(nonExecutableDir, "jq");
+        const executableInDirectoryParent = path.join(root, "targets", "curl");
+        const executable = path.join(executableDir, "jq");
+        const nonExecutableLink = path.join(trustedDir, "jq");
+        const directoryLink = path.join(trustedDir, "curl");
+
+        await fs.mkdir(trustedDir, { recursive: true });
+        await fs.mkdir(nonExecutableDir, { recursive: true });
+        await fs.mkdir(directoryTarget, { recursive: true });
+        await fs.mkdir(executableDir, { recursive: true });
+        await fs.writeFile(nonExecutable, "#!/bin/sh\n", "utf8");
+        await fs.chmod(nonExecutable, 0o644);
+        await fs.writeFile(executableInNonExecutableDir, "#!/bin/sh\n", "utf8");
+        await fs.chmod(executableInNonExecutableDir, 0o755);
+        await fs.writeFile(executableInDirectoryParent, "#!/bin/sh\n", "utf8");
+        await fs.chmod(executableInDirectoryParent, 0o755);
+        await fs.writeFile(executable, "#!/bin/sh\n", "utf8");
+        await fs.chmod(executable, 0o755);
+        await fs.symlink(nonExecutable, nonExecutableLink);
+        await fs.symlink(directoryTarget, directoryLink);
+
+        const policy = resolveExecSafeBinRuntimePolicy({
+          local: {
+            safeBins: ["jq", "curl"],
+            safeBinTrustedDirs: [trustedDir],
+          },
+        });
+
+        expect(
+          isTrustedSafeBinPath({
+            resolvedPath: await fs.realpath(executable),
+            trustedDirs: policy.trustedSafeBinDirs,
+          }),
+        ).toBe(false);
+        expect(
+          isTrustedSafeBinPath({
+            resolvedPath: await fs.realpath(executableInNonExecutableDir),
+            trustedDirs: policy.trustedSafeBinDirs,
+          }),
+        ).toBe(false);
+        expect(
+          isTrustedSafeBinPath({
+            resolvedPath: await fs.realpath(executableInDirectoryParent),
+            trustedDirs: policy.trustedSafeBinDirs,
+          }),
+        ).toBe(false);
+      });
+    },
+  );
 
   it("emits runtime warning when explicitly trusted dir is writable", async () => {
     if (process.platform === "win32") {

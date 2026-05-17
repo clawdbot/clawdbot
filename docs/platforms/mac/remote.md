@@ -1,17 +1,17 @@
 ---
-summary: "macOS app flow for controlling a remote OpenClaw gateway over SSH"
+summary: "macOS app flow for controlling a remote OpenClaw gateway"
 read_when:
   - Setting up or debugging remote mac control
 title: "Remote control"
 ---
 
-This flow lets the macOS app act as a full remote control for an OpenClaw gateway running on another host (desktop/server). It's the app's **Remote over SSH** (remote run) feature. All features-health checks, Voice Wake forwarding, and Web Chat-reuse the same remote SSH configuration from _Settings → General_.
+This flow lets the macOS app act as a full remote control for an OpenClaw gateway running on another host (desktop/server). The app can connect directly to trusted LAN/Tailnet gateway URLs or manage an SSH tunnel when the remote gateway is loopback-only. Health checks, Voice Wake forwarding, and Web Chat reuse the same remote configuration from _Settings → General_.
 
 ## Modes
 
 - **Local (this Mac)**: Everything runs on the laptop. No SSH involved.
 - **Remote over SSH (default)**: OpenClaw commands are executed on the remote host. The mac app opens an SSH connection with `-o BatchMode` plus your chosen identity/key and a local port-forward.
-- **Remote direct (ws/wss)**: No SSH tunnel. The mac app connects to the gateway URL directly (for example, via Tailscale Serve or a public HTTPS reverse proxy).
+- **Remote direct (ws/wss)**: No SSH tunnel. The mac app connects to the gateway URL directly (for example, via LAN, Tailscale, Tailscale Serve, or a public HTTPS reverse proxy).
 
 ## Remote transports
 
@@ -24,6 +24,8 @@ In SSH tunnel mode, discovered LAN/tailnet hostnames are saved as
 `gateway.remote.sshTarget`. The app keeps `gateway.remote.url` on the local
 tunnel endpoint, for example `ws://127.0.0.1:18789`, so CLI, Web Chat, and
 the local node-host service all use the same safe loopback transport.
+If the local tunnel port differs from the remote gateway port, set
+`gateway.remote.remotePort` to the port on the remote host.
 
 Browser automation in remote mode is owned by the CLI node host, not by the
 native macOS app node. The app starts the installed node host service when
@@ -36,12 +38,33 @@ node.
 
 1. Install Node + pnpm and build/install the OpenClaw CLI (`pnpm install && pnpm build && pnpm link --global`).
 2. Ensure `openclaw` is on PATH for non-interactive shells (symlink into `/usr/local/bin` or `/opt/homebrew/bin` if needed).
-3. Open SSH with key auth. We recommend **Tailscale** IPs for stable reachability off-LAN.
+3. For SSH transport only: open SSH with key auth. We recommend **Tailscale** IPs for stable reachability off-LAN.
 
 ## macOS app setup
 
+To preconfigure the app without the welcome flow:
+
+```bash
+openclaw-mac configure-remote \
+  --ssh-target user@gateway.local \
+  --local-port 18789 \
+  --remote-port 18789 \
+  --token "$OPENCLAW_GATEWAY_TOKEN"
+```
+
+For a gateway already reachable on a trusted LAN or Tailnet, skip SSH entirely:
+
+```bash
+openclaw-mac configure-remote \
+  --direct-url ws://192.168.0.202:18789 \
+  --token "$OPENCLAW_GATEWAY_TOKEN"
+```
+
+This writes the remote config, marks onboarding complete, and lets the app own
+the selected transport when it starts.
+
 1. Open _Settings → General_.
-2. Under **OpenClaw runs**, pick **Remote over SSH** and set:
+2. Under **OpenClaw runs**, pick **Remote** and set:
    - **Transport**: **SSH tunnel** or **Direct (ws/wss)**.
    - **SSH target**: `user@host` (optional `:port`).
      - If the gateway is on the same LAN and advertises Bonjour, pick it from the discovered list to auto-fill this field.
@@ -50,7 +73,7 @@ node.
    - **Project root** (advanced): remote checkout path used for commands.
    - **CLI path** (advanced): optional path to a runnable `openclaw` entrypoint/binary (auto-filled when advertised).
 3. Hit **Test remote**. Success indicates the remote `openclaw status --json` runs correctly. Failures usually mean PATH/CLI issues; exit 127 means the CLI isn't found remotely.
-4. Health checks and Web Chat will now run through this SSH tunnel automatically.
+4. Health checks and Web Chat will now run through the selected transport automatically.
 
 ## Web Chat
 
@@ -65,7 +88,7 @@ node.
 
 ## Security notes
 
-- Prefer loopback binds on the remote host and connect via SSH or Tailscale.
+- Prefer loopback binds on the remote host and connect via SSH, Tailscale Serve, or a trusted Tailnet/LAN direct URL.
 - SSH tunneling uses strict host-key checking; trust the host key first so it exists in `~/.ssh/known_hosts`.
 - If you bind the Gateway to a non-loopback interface, require valid Gateway auth: token, password, or an identity-aware reverse proxy with `gateway.auth.mode: "trusted-proxy"`.
 - See [Security](/gateway/security) and [Tailscale](/gateway/tailscale).

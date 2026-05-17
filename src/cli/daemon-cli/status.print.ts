@@ -4,7 +4,10 @@ import {
   resolveGatewaySystemdServiceName,
 } from "../../daemon/constants.js";
 import { renderGatewayServiceCleanupHints } from "../../daemon/inspect.js";
-import { resolveGatewayLogPaths, resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
+import {
+  resolveGatewayRestartLogPath,
+  resolveGatewaySupervisorLogPaths,
+} from "../../daemon/restart-logs.js";
 import {
   isSystemdUnavailableDetail,
   renderSystemdUnavailableHints,
@@ -393,9 +396,9 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
         errorText(`Logs: journalctl --user -u ${unit}.service -n 200 --no-pager`),
       );
     } else if (process.platform === "darwin") {
-      const logs = resolveGatewayLogPaths(serviceEnv);
+      const logs = resolveGatewaySupervisorLogPaths(serviceEnv, { platform: "darwin" });
       defaultRuntime.error(`${errorText("Logs:")} ${shortenHomePath(logs.stdoutPath)}`);
-      defaultRuntime.error(`${errorText("Errors:")} ${shortenHomePath(logs.stderrPath)}`);
+      defaultRuntime.error(`${errorText("Errors:")} suppressed`);
     }
     defaultRuntime.error(
       `${errorText("Restart log:")} ${shortenHomePath(resolveGatewayRestartLogPath(serviceEnv))}`,

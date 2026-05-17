@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  buildCurrentTurnPrompt,
-  buildCurrentTurnPromptContextPrefix,
+  buildCurrentInboundPrompt,
+  buildCurrentInboundPromptContextPrefix,
   buildRuntimeContextSystemContext,
   queueRuntimeContextForNextTurn,
   resolveRuntimeContextPromptParts,
@@ -83,27 +83,27 @@ describe("runtime context prompt submission", () => {
 
   it("uses current-turn context as prompt-local text", () => {
     expect(
-      buildCurrentTurnPromptContextPrefix({
+      buildCurrentInboundPromptContextPrefix({
         text: "Conversation info (untrusted metadata):\n```json\n{}\n```",
       }),
     ).toBe("Conversation info (untrusted metadata):\n```json\n{}\n```");
   });
 
   it("omits empty current-turn context", () => {
-    expect(buildCurrentTurnPromptContextPrefix(undefined)).toBe("");
-    expect(buildCurrentTurnPromptContextPrefix({ text: "   " })).toBe("");
+    expect(buildCurrentInboundPromptContextPrefix(undefined)).toBe("");
+    expect(buildCurrentInboundPromptContextPrefix({ text: "   " })).toBe("");
   });
 
   it("joins current-turn context and prompt with the requested separator", () => {
     expect(
-      buildCurrentTurnPrompt({
+      buildCurrentInboundPrompt({
         context: { text: "Current message:\n#34975 obviyus:", promptJoiner: " " },
         prompt: "What do you mean hidden?",
       }),
     ).toBe("Current message:\n#34975 obviyus: What do you mean hidden?");
 
     expect(
-      buildCurrentTurnPrompt({
+      buildCurrentInboundPrompt({
         context: { text: "Conversation context:" },
         prompt: "visible ask",
       }),

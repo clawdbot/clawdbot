@@ -757,6 +757,29 @@ canonical replacement.
 
   </Accordion>
 
+  <Accordion title="deactivate hook → gateway_stop">
+    **Old**: `api.on("deactivate", handler)`.
+
+    **New**: `api.on("gateway_stop", handler)`. The event and context are the
+    same shutdown cleanup contract; only the hook name changes.
+
+    ```typescript
+    // Before
+    api.on("deactivate", async (event, ctx) => {
+      await stopPluginService(ctx);
+    });
+
+    // After
+    api.on("gateway_stop", async (event, ctx) => {
+      await stopPluginService(ctx);
+    });
+    ```
+
+    `deactivate` remains wired as a deprecated compatibility alias until after
+    2026-08-16.
+
+  </Accordion>
+
   <Accordion title="Provider discovery types → provider catalog types">
     Four discovery type aliases are now thin wrappers over the
     catalog-era types:

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { createNodeEvalArgs } from "../../../src/test-utils/node-process.js";
 
 type CommandResult = {
   stdout: string;
@@ -104,7 +105,7 @@ describe("OpenClaw SDK package e2e", () => {
       });
       if (event.type !== "run.started") throw new Error("unexpected event normalization");
     `;
-    await runCommand(process.execPath, ["--input-type=module", "-e", importScript], {
+    await runCommand(process.execPath, createNodeEvalArgs(importScript, { evalFlag: "-e" }), {
       cwd: tempDir,
     });
   });

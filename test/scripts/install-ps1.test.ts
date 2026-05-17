@@ -90,8 +90,15 @@ describe("install.ps1 failure handling", () => {
     expect(npmInstallBody).toContain('$env:NPM_CONFIG_FUND = "false"');
     expect(npmInstallBody).toContain('$env:NPM_CONFIG_AUDIT = "false"');
     expect(npmInstallBody).toContain('$env:NPM_CONFIG_SCRIPT_SHELL = "cmd.exe"');
+    expect(npmInstallBody).toContain('$freshnessArgs = @("--min-release-age=0")');
+    expect(npmInstallBody).toContain("Remove-Item Env:NPM_CONFIG_BEFORE");
+    expect(npmInstallBody).toContain("Remove-Item Env:NPM_CONFIG_MIN_RELEASE_AGE");
     expect(npmInstallBody).toContain('$env:NODE_LLAMA_CPP_SKIP_DOWNLOAD = "1"');
+    expect(npmInstallBody).toContain(
+      '$npmOutput = & (Get-NpmCommandPath) install -g @freshnessArgs "$installSpec"',
+    );
     expect(npmInstallBody).toContain("$env:NPM_CONFIG_LOGLEVEL = $prevLogLevel");
+    expect(npmInstallBody).toContain("$env:NPM_CONFIG_BEFORE = $prevBefore");
     expect(npmInstallBody).toContain(
       "$env:NODE_LLAMA_CPP_SKIP_DOWNLOAD = $prevNodeLlamaSkipDownload",
     );

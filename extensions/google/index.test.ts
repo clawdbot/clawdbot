@@ -10,7 +10,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createCapturedThinkingConfigStream } from "openclaw/plugin-sdk/provider-test-contracts";
 import type { RealtimeVoiceProviderPlugin } from "openclaw/plugin-sdk/realtime-voice";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { registerGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
 import googlePlugin from "./index.js";
 import { registerGoogleProvider } from "./provider-registration.js";
@@ -21,6 +21,12 @@ const googleProviderPlugin = {
     registerGoogleGeminiCliProvider(api);
   },
 };
+
+const refreshGeminiCliOAuthTokenMock = vi.hoisted(() => vi.fn());
+
+vi.mock("./oauth.runtime.js", () => ({
+  refreshGeminiCliOAuthToken: refreshGeminiCliOAuthTokenMock,
+}));
 
 describe("google provider plugin hooks", () => {
   it("owns replay policy and reasoning mode for the direct Gemini provider", async () => {
@@ -264,5 +270,41 @@ describe("google provider plugin hooks", () => {
     expect(bridge.sendAudio(Buffer.alloc(160))).toBeUndefined();
     expect(bridge.setMediaTimestamp(20)).toBeUndefined();
     expect(bridge.sendUserMessage?.("hello")).toBeUndefined();
+  });
+
+  it("refreshes Gemini CLI OAuth through the provider-owned refresh hook", async () => {
+    refreshGeminiCliOAuthTokenMock.mockResolvedValueOnce({
+      type: "oauth",
+      provider: "google-gemini-cli",
+      access: "fresh-access",
+      refresh: "fresh-refresh",
+      expires: Date.now() + 60_000,
+      email: "user@example.com",
+      projectId: "project-1",
+    });
+
+    const { providers } = await registerProviderPlugin({
+      plugin: googleProviderPlugin,
+      id: "google",
+      name: "Google Provider",
+    });
+    const provider = requireRegisteredProvider(providers, "google-gemini-cli");
+    const credential = {
+      type: "oauth" as const,
+      provider: "google-gemini-cli",
+      access: "stale-access",
+      refresh: "stale-refresh",
+      expires: Date.now() - 60_000,
+      email: "user@example.com",
+      projectId: "project-1",
+    };
+
+    await expect(provider.refreshOAuth?.(credential)).resolves.toMatchObject({
+      access: "fresh-access",
+      refresh: "fresh-refresh",
+      email: "user@example.com",
+      projectId: "project-1",
+    });
+    expect(refreshGeminiCliOAuthTokenMock).toHaveBeenCalledWith(credential);
   });
 });

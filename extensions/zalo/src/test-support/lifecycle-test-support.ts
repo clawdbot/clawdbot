@@ -123,7 +123,7 @@ export function createImageUpdate(params?: {
 
 export function createImageLifecycleCore() {
   const finalizeInboundContextMock = vi.fn((ctx: Record<string, unknown>) => ctx);
-  const buildChannelTurnContextMock = vi.fn(
+  const buildChannelInboundEventContextMock = vi.fn(
     (params: {
       channel: string;
       accountId?: string;
@@ -329,7 +329,7 @@ export function createImageLifecycleCore() {
           },
         ) as unknown as PluginRuntime["channel"]["turn"]["runAssembled"],
         buildContext:
-          buildChannelTurnContextMock as unknown as PluginRuntime["channel"]["turn"]["buildContext"],
+          buildChannelInboundEventContextMock as unknown as PluginRuntime["channel"]["turn"]["buildContext"],
       },
       commands: {
         shouldComputeCommandAuthorized: vi.fn(

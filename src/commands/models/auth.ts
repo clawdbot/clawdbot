@@ -14,7 +14,7 @@ import { externalCliDiscoveryForProviderAuth } from "../../agents/auth-profiles.
 import {
   listProfilesForProvider,
   promoteAuthProfileInOrder,
-  upsertAuthProfile,
+  upsertAuthProfileWithLock,
 } from "../../agents/auth-profiles/profiles.js";
 import { loadAuthProfileStoreForRuntime } from "../../agents/auth-profiles/store.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
@@ -56,6 +56,8 @@ import { validateAnthropicSetupToken } from "../auth-token.js";
 import { repairCodexRuntimePluginInstallForModelSelection } from "../codex-runtime-plugin-install.js";
 import { isRemoteEnvironment } from "../oauth-env.js";
 import { loadValidConfigOrThrow, resolveKnownAgentId, updateConfig } from "./shared.js";
+
+type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
 
 function guardCancel<T>(value: T | symbol): T {
   if (typeof value === "symbol" || isCancel(value)) {
@@ -311,7 +313,7 @@ async function persistProviderAuthResult(params: {
     ? normalizeAgentModelRefForConfig(params.result.defaultModel)
     : undefined;
   for (const profile of params.result.profiles) {
-    upsertAuthProfile({
+    await upsertAuthProfileWithLockOrThrow({
       profileId: profile.profileId,
       credential: profile.credential,
       agentDir: params.agentDir,
@@ -525,7 +527,7 @@ export async function modelsAuthPasteTokenCommand(
       })
     : undefined;
 
-  upsertAuthProfile({
+  await upsertAuthProfileWithLockOrThrow({
     profileId,
     credential: {
       type: "token",
@@ -544,6 +546,15 @@ export async function modelsAuthPasteTokenCommand(
     runtime.log("Anthropic setup-token auth is supported in OpenClaw.");
     runtime.log("OpenClaw prefers Claude CLI reuse when it is available on the host.");
     runtime.log("Anthropic staff told us this OpenClaw path is allowed again.");
+  }
+}
+
+async function upsertAuthProfileWithLockOrThrow(params: UpsertAuthProfileParams): Promise<void> {
+  const updated = await upsertAuthProfileWithLock(params);
+  if (!updated) {
+    throw new Error(
+      "Failed to update auth profile store; the auth store lock may be busy. Wait a moment and retry.",
+    );
   }
 }
 

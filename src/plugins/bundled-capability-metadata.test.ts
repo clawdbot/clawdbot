@@ -1,7 +1,8 @@
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { expectNoReaddirSyncDuring } from "../test-utils/fs-scan-assertions.js";
+import { listGitTrackedFiles, toRepoRelativePath } from "../test-utils/repo-files.js";
 import { normalizeBundledPluginStringList } from "./bundled-plugin-scan.js";
 import {
   BUNDLED_AUTO_ENABLE_PROVIDER_PLUGIN_IDS,
@@ -15,21 +16,15 @@ import type { OpenClawPackageManifest } from "./manifest.js";
 import type { PluginManifest } from "./manifest.js";
 
 function listGitExtensionPackagePaths(extensionsDir: string): string[] | null {
-  const relativeDir = path.relative(repoRoot, extensionsDir).split(path.sep).join("/");
+  const relativeDir = toRepoRelativePath(repoRoot, extensionsDir);
   if (!relativeDir || relativeDir.startsWith("..") || path.isAbsolute(relativeDir)) {
     return null;
   }
-  const result = spawnSync("git", ["ls-files", "--", relativeDir], {
-    cwd: repoRoot,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  if (result.status !== 0) {
+  const files = listGitTrackedFiles({ repoRoot, pathspecs: relativeDir });
+  if (!files) {
     return null;
   }
-  return result.stdout
-    .split("\n")
-    .map((line) => line.trim().replaceAll("\\", "/"))
+  return files
     .filter((line) => /^extensions\/[^/]+\/package\.json$/u.test(line))
     .map((line) => path.join(repoRoot, ...line.split("/")))
     .toSorted();
@@ -69,16 +64,12 @@ function readManifestRecords(): PluginManifest[] {
 describe("bundled capability metadata", () => {
   it("lists bundled extension packages from git without scanning extension dirs", () => {
     const extensionsDir = path.join(repoRoot, "extensions");
-    const readDir = vi.spyOn(fs, "readdirSync");
-    try {
+    expectNoReaddirSyncDuring(() => {
       const packagePaths = listExtensionPackagePaths(extensionsDir);
 
       expect(packagePaths.length).toBeGreaterThan(0);
       expect(packagePaths.every((file) => file.endsWith("package.json"))).toBe(true);
-      expect(readDir).not.toHaveBeenCalled();
-    } finally {
-      readDir.mockRestore();
-    }
+    });
   });
 
   it("keeps contract snapshots aligned with bundled plugin manifests", () => {

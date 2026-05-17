@@ -30,7 +30,8 @@ function writeExternalAnthropicVertexPlugin(rootDir: string): void {
       version: "0.0.0",
       type: "module",
       openclaw: {
-        extensions: ["./index.js", "./api.js"],
+        extensions: ["./index.ts"],
+        runtimeExtensions: ["./dist/index.js"],
       },
     }),
     "utf8",
@@ -44,8 +45,10 @@ function writeExternalAnthropicVertexPlugin(rootDir: string): void {
     }),
     "utf8",
   );
+  const distDir = path.join(rootDir, "dist");
+  fs.mkdirSync(distDir, { recursive: true });
   fs.writeFileSync(
-    path.join(rootDir, "api.js"),
+    path.join(distDir, "api.js"),
     [
       "export function createAnthropicVertexStreamFnForModel(model, env) {",
       "  return async () => ({ marker: 'external-vertex', baseUrl: model.baseUrl, envMarker: env.OPENCLAW_TEST_MARKER });",
@@ -54,7 +57,7 @@ function writeExternalAnthropicVertexPlugin(rootDir: string): void {
     ].join("\n"),
     "utf8",
   );
-  fs.writeFileSync(path.join(rootDir, "index.js"), "export default {};\n", "utf8");
+  fs.writeFileSync(path.join(distDir, "index.js"), "export default {};\n", "utf8");
 }
 
 afterEach(() => {

@@ -2,6 +2,24 @@ import Foundation
 import Observation
 import SwiftUI
 
+struct ExecApprovalsSettings: View {
+    var body: some View {
+        ScrollView(.vertical) {
+            VStack(alignment: .leading, spacing: 18) {
+                SettingsPageHeader(
+                    title: "Exec Approvals",
+                    subtitle: "Control how agent shell commands are approved on this Mac.")
+
+                SettingsSection("Policy") {
+                    SystemRunSettingsView()
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 4)
+        }
+    }
+}
+
 struct SystemRunSettingsView: View {
     @State private var model = ExecApprovalsSettingsModel()
     @State private var tab: ExecApprovalsSettingsTab = .policy

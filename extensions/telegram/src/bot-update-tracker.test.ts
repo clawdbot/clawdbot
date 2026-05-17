@@ -133,6 +133,70 @@ describe("createTelegramUpdateTracker", () => {
     });
   });
 
+  it("can keep a persistence floor while replaying older spooled updates", async () => {
+    const onAcceptedUpdateId = vi.fn();
+    const tracker = createTelegramUpdateTracker({
+      initialUpdateId: null,
+      persistenceFloorUpdateId: 42,
+      ackPolicy: "after_agent_dispatch",
+      onAcceptedUpdateId,
+    });
+
+    const oldPending = tracker.beginUpdate(updateCtx(42));
+    if (!oldPending.accepted) {
+      throw new Error("expected old spooled update to be accepted");
+    }
+    tracker.finishUpdate(oldPending.update, { completed: false });
+
+    const newer = tracker.beginUpdate(updateCtx(43));
+    if (!newer.accepted) {
+      throw new Error("expected newer update to be accepted");
+    }
+    tracker.finishUpdate(newer.update, { completed: true });
+    await flushTrackerMicrotasks();
+
+    expect(onAcceptedUpdateId).toHaveBeenCalledWith(43);
+    expectTrackerState(tracker.getState(), {
+      highestAcceptedUpdateId: 43,
+      highestPersistedAcceptedUpdateId: 43,
+      highestCompletedUpdateId: 43,
+      safeCompletedUpdateId: 43,
+      failedUpdateIds: [42],
+    } satisfies Partial<TelegramUpdateTrackerState>);
+  });
+
+  it("keeps below-floor spool replays dispatchable after newer updates advance", () => {
+    const tracker = createTelegramUpdateTracker({
+      initialUpdateId: null,
+      persistenceFloorUpdateId: 42,
+      ackPolicy: "after_agent_dispatch",
+    });
+
+    const newer = tracker.beginUpdate(updateCtx(43));
+    if (!newer.accepted) {
+      throw new Error("expected newer update to be accepted");
+    }
+    tracker.finishUpdate(newer.update, { completed: true });
+
+    const oldReplay = tracker.beginUpdate(updateCtx(42));
+    if (!oldReplay.accepted) {
+      throw new Error("expected below-floor replay to remain accepted");
+    }
+    tracker.finishUpdate(oldReplay.update, { completed: true });
+
+    expect(tracker.beginUpdate(updateCtx(42))).toEqual({
+      accepted: false,
+      reason: "accepted-watermark",
+    });
+    expectTrackerState(tracker.getState(), {
+      highestAcceptedUpdateId: 43,
+      highestCompletedUpdateId: 43,
+      safeCompletedUpdateId: 43,
+      pendingUpdateIds: [],
+      failedUpdateIds: [],
+    } satisfies Partial<TelegramUpdateTrackerState>);
+  });
+
   it("serializes and coalesces accepted offset persistence", async () => {
     const firstWrite = deferred();
     const secondWrite = deferred();

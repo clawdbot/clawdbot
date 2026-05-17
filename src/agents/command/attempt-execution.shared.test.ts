@@ -1,9 +1,13 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "../internal-events.js";
 import {
+  persistSessionEntry,
   resolveAcpPromptBody,
   resolveInternalEventTranscriptBody,
 } from "./attempt-execution.shared.js";
@@ -73,5 +77,36 @@ describe("attempt execution prompt materialization", () => {
     expect(transcriptBody).toContain("inspect ACP delivery");
     expect(transcriptBody).not.toContain(INTERNAL_RUNTIME_CONTEXT_BEGIN);
     expect(transcriptBody).not.toContain(INTERNAL_RUNTIME_CONTEXT_END);
+  });
+});
+
+describe("persistSessionEntry", () => {
+  it("clears stale local entries when guarded persistence sees no persisted entry", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-store-"));
+    try {
+      const storePath = path.join(dir, "sessions.json");
+      const sessionStore = {
+        main: {
+          sessionId: "stale",
+          updatedAt: 1,
+        },
+      };
+
+      const persisted = await persistSessionEntry({
+        sessionStore,
+        sessionKey: "main",
+        storePath,
+        entry: {
+          sessionId: "stale",
+          updatedAt: 2,
+        },
+        shouldPersist: (entry) => Boolean(entry),
+      });
+
+      expect(persisted).toBeUndefined();
+      expect(sessionStore.main).toBeUndefined();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

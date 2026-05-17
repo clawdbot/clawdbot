@@ -306,6 +306,35 @@ describe("startGatewayMaintenanceTimers", () => {
     stopMaintenanceTimers(timers);
   });
 
+  it("keeps active exec approval dedupe aliases past the normal ttl", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const deps = createMaintenanceTimerDeps();
+    const now = Date.now();
+    const runId = "exec-approval-followup:req-active:nonce:retry-1";
+    deps.chatAbortControllers.set(runId, createActiveRun("agent:main:main", "agent"));
+    deps.dedupe.set("agent:exec-approval-followup:req-active", {
+      ts: now - DEDUPE_TTL_MS - 1,
+      ok: true,
+      payload: { runId, status: "accepted" },
+    });
+    deps.dedupe.set("agent:exec-approval-followup:req-stale", {
+      ts: now - DEDUPE_TTL_MS - 1,
+      ok: true,
+      payload: { runId: "exec-approval-followup:req-stale:nonce:retry-1", status: "accepted" },
+    });
+
+    const timers = startGatewayMaintenanceTimers(deps);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(deps.dedupe.has("agent:exec-approval-followup:req-active")).toBe(true);
+    expect(deps.dedupe.has("agent:exec-approval-followup:req-stale")).toBe(false);
+
+    stopMaintenanceTimers(timers);
+  });
+
   it("evicts dedupe overflow by oldest timestamp even after reinsertion", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));

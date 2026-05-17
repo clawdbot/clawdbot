@@ -300,6 +300,10 @@ export const zh_CN = {
     },
     skills: {
       configure: "现在配置技能？（推荐）",
+      containerBrewHidden:
+        "在 Linux 容器中会隐藏仅支持 brew 的技能安装项，因为官方镜像不包含 Homebrew。",
+      containerBrewManual: "请使用预装 Homebrew 的自定义镜像，或手动安装这些依赖。",
+      containerInstallsTitle: "容器技能安装",
       docsLine: "文档：https://docs.openclaw.ai/skills",
       enterEnv: "输入 {env}",
       homebrewCommand: "显示 Homebrew 安装命令？",
@@ -422,7 +426,8 @@ export const zh_CN = {
       scanDenied: "用户拒绝授权。改为手动输入。",
       scanError: "注册错误：{error}。改为手动输入。",
       scanExpired: "会话已过期。改为手动输入。",
-      scanQr: "请用手机上的 Lark/飞书扫描二维码。如果手机应用没有反应，请重新运行设置并选择手动输入。",
+      scanQr:
+        "请用手机上的 Lark/飞书扫描二维码。如果手机应用没有反应，请重新运行设置并选择手动输入。",
       scanTimedOut: "扫码超时。改为手动输入。",
       scanTitle: "Feishu 扫码创建",
       scanUnavailable: "当前环境不支持扫码创建。改为手动输入。",

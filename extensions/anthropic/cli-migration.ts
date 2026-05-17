@@ -35,23 +35,29 @@ function toAnthropicModelRef(raw: string): string | null {
   return `anthropic/${modelId}`;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
 function rewriteModelSelection(model: AgentDefaultsModel): {
   value: AgentDefaultsModel;
   primary?: string;
+  runtimeRefs: string[];
   changed: boolean;
 } {
   if (typeof model === "string") {
     const converted = toAnthropicModelRef(model);
     return converted
-      ? { value: converted, primary: converted, changed: true }
-      : { value: model, changed: false };
+      ? { value: converted, primary: converted, runtimeRefs: [converted], changed: true }
+      : { value: model, runtimeRefs: [], changed: false };
   }
   if (!model || typeof model !== "object" || Array.isArray(model)) {
-    return { value: model, changed: false };
+    return { value: model, runtimeRefs: [], changed: false };
   }
 
   const current = model as Record<string, unknown>;
   const next: Record<string, unknown> = { ...current };
+  const runtimeRefs: string[] = [];
   let changed = false;
   let primary: string | undefined;
 
@@ -60,15 +66,23 @@ function rewriteModelSelection(model: AgentDefaultsModel): {
     if (converted) {
       next.primary = converted;
       primary = converted;
+      runtimeRefs.push(converted);
       changed = true;
     }
   }
 
   const currentFallbacks = current.fallbacks;
   if (Array.isArray(currentFallbacks)) {
-    const nextFallbacks = currentFallbacks.map((entry) =>
-      typeof entry === "string" ? (toAnthropicModelRef(entry) ?? entry) : entry,
-    );
+    const nextFallbacks = currentFallbacks.map((entry) => {
+      if (typeof entry !== "string") {
+        return entry;
+      }
+      const converted = toAnthropicModelRef(entry);
+      if (converted) {
+        runtimeRefs.push(converted);
+      }
+      return converted ?? entry;
+    });
     if (nextFallbacks.some((entry, index) => entry !== currentFallbacks[index])) {
       next.fallbacks = nextFallbacks;
       changed = true;
@@ -78,6 +92,7 @@ function rewriteModelSelection(model: AgentDefaultsModel): {
   return {
     value: changed ? next : model,
     ...(primary ? { primary } : {}),
+    runtimeRefs,
     changed,
   };
 }
@@ -116,11 +131,19 @@ function rewriteModelEntryMap(models: Record<string, unknown> | undefined): {
 
 function seedClaudeCliAllowlist(
   models: NonNullable<AgentDefaultsModels>,
+  selectedRefs: readonly string[] = [],
 ): NonNullable<AgentDefaultsModels> {
   const next = { ...models };
+  const runtimeRefs = new Set<string>();
   for (const ref of CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS) {
     const canonicalRef = toAnthropicModelRef(ref) ?? ref;
-    next[canonicalRef] = next[canonicalRef] ?? {};
+    runtimeRefs.add(canonicalRef);
+  }
+  for (const ref of selectedRefs) {
+    runtimeRefs.add(ref);
+  }
+  for (const ref of runtimeRefs) {
+    next[ref] = modelEntryWithClaudeCliRuntime(next[ref]);
   }
   return next;
 }
@@ -134,6 +157,21 @@ function selectClaudeCliRuntime(agentRuntime: AgentDefaultsRuntimePolicy | undef
     ...agentRuntime,
     id: CLAUDE_CLI_BACKEND_ID,
   };
+}
+
+function modelEntryWithClaudeCliRuntime(entry: unknown): Record<string, unknown> {
+  const base = isRecord(entry) ? { ...entry } : {};
+  const currentRuntimeId = isRecord(base.agentRuntime) ? base.agentRuntime.id : undefined;
+  const currentRuntime =
+    typeof currentRuntimeId === "string" ? normalizeLowercaseStringOrEmpty(currentRuntimeId) : "";
+  if (currentRuntime && currentRuntime !== "auto") {
+    return base;
+  }
+  base.agentRuntime = {
+    ...(isRecord(base.agentRuntime) ? base.agentRuntime : {}),
+    id: CLAUDE_CLI_BACKEND_ID,
+  };
+  return base;
 }
 
 export function hasClaudeCliAuth(options?: { allowKeychainPrompt?: boolean }): boolean {
@@ -187,7 +225,10 @@ export function buildAnthropicCliMigrationResult(
   const existingModels = (rewrittenModels.value ??
     defaults?.models ??
     {}) as NonNullable<AgentDefaultsModels>;
-  const nextModels = seedClaudeCliAllowlist(existingModels);
+  const nextModels = seedClaudeCliAllowlist(existingModels, [
+    ...rewrittenModel.runtimeRefs,
+    ...rewrittenModels.migrated,
+  ]);
   const defaultModel = rewrittenModel.primary ?? "anthropic/claude-opus-4-7";
 
   return {

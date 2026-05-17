@@ -16,6 +16,7 @@ import { isCronSessionKey, isSubagentSessionKey } from "../../../routing/session
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
+import { buildActiveImageGenerationTaskPromptContextForSession } from "../../image-generation-task-status.js";
 import { buildActiveMusicGenerationTaskPromptContextForSession } from "../../music-generation-task-status.js";
 import { resolveProcessToolScopeKey } from "../../pi-tools.js";
 import { prependSystemPromptAdditionAfterCacheBoundary } from "../../system-prompt-cache-boundary.js";
@@ -479,6 +480,7 @@ export function resolveAttemptPrependSystemContext(params: {
   const activeMediaTaskPromptContexts =
     params.trigger === "user" || params.trigger === "manual"
       ? [
+          buildActiveImageGenerationTaskPromptContextForSession(params.sessionKey),
           buildActiveVideoGenerationTaskPromptContextForSession(params.sessionKey),
           buildActiveMusicGenerationTaskPromptContextForSession(params.sessionKey),
         ]

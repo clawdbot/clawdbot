@@ -1,7 +1,8 @@
+import path from "node:path";
 import { createCodingTools, createReadTool } from "@earendil-works/pi-coding-agent";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import { HEARTBEAT_RESPONSE_TOOL_NAME } from "../auto-reply/heartbeat-tool-response.js";
-import type { InboundTurnKind } from "../channels/turn/kind.js";
+import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import { resolveExecCommandHighlighting } from "../config/exec-command-highlighting.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -61,6 +62,7 @@ import type { AnyAgentTool } from "./pi-tools.types.js";
 import type { SandboxContext } from "./sandbox.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./sandbox/constants.js";
 import { resolveSenderToolPolicy } from "./sender-tool-policy.js";
+import type { SkillSnapshot } from "./skills/types.js";
 import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
@@ -79,6 +81,7 @@ import {
   applyOwnerOnlyToolPolicy,
   collectExplicitAllowlist,
   collectExplicitDenylist,
+  expandToolGroups,
   hasRestrictiveAllowPolicy,
   mergeAlsoAllowPolicy,
   normalizeToolName,
@@ -125,6 +128,23 @@ function readOnlyAgentWorkspaceMount(
       hostRoot: sandbox.agentWorkspaceDir,
     },
   ];
+}
+
+function resolveSkillReadRoots(skillsSnapshot?: SkillSnapshot): string[] | undefined {
+  const roots = new Set<string>();
+  for (const skill of skillsSnapshot?.resolvedSkills ?? []) {
+    const baseDir = typeof skill.baseDir === "string" ? skill.baseDir.trim() : "";
+    const filePath = typeof skill.filePath === "string" ? skill.filePath.trim() : "";
+    const root = baseDir || (filePath ? path.dirname(filePath) : "");
+    if (!root || !path.isAbsolute(root)) {
+      continue;
+    }
+    roots.add(path.resolve(root));
+  }
+  if (roots.size === 0) {
+    return undefined;
+  }
+  return Array.from(roots);
 }
 
 type BashToolsModule = typeof import("./bash-tools.js");
@@ -410,7 +430,7 @@ export function createOpenClawCodingTools(options?: {
   requireExplicitMessageTarget?: boolean;
   /** Visible source replies must be sent through the message tool when set to message_tool_only. */
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-  inboundTurnKind?: InboundTurnKind;
+  inboundEventKind?: InboundEventKind;
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
   /** Keep the message tool available even when the selected profile omits it. */
@@ -444,6 +464,8 @@ export function createOpenClawCodingTools(options?: {
   recordToolPrepStage?: (name: string) => void;
   /** Live observer called after wrapped tool outcomes are recorded. */
   onToolOutcome?: ToolOutcomeObserver;
+  /** Runtime-only resolved skill paths that the read tool may load under workspaceOnly. */
+  skillsSnapshot?: SkillSnapshot;
 }): AnyAgentTool[] {
   const execToolName = "exec";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
@@ -524,10 +546,17 @@ export function createOpenClawCodingTools(options?: {
   const mergeToolSearchControlAllowlist = <TPolicy extends { allow?: string[] }>(
     policy: TPolicy | undefined,
   ) => mergeAlsoAllowPolicy(policy, toolSearchControlAllowlist);
+  const runtimeToolAllowlistIncludesMessage = expandToolGroups(
+    options?.runtimeToolAllowlist ?? [],
+  ).some((toolName) => {
+    const normalized = normalizeToolName(toolName);
+    return normalized === "*" || normalized === "message";
+  });
   const runtimeProfileAlsoAllow = [
     ...(options?.forceMessageTool || options?.sourceReplyDeliveryMode === "message_tool_only"
       ? ["message"]
       : []),
+    ...(runtimeToolAllowlistIncludesMessage ? ["message"] : []),
     ...(forceHeartbeatTool ? [HEARTBEAT_RESPONSE_TOOL_NAME] : []),
     ...toolSearchControlAllowlist,
   ];
@@ -615,6 +644,7 @@ export function createOpenClawCodingTools(options?: {
   const includeChannelTools = toolConstructionPlan.includeChannelTools;
   const includePluginTools = toolConstructionPlan.includePluginTools;
   const workspaceOnly = fsPolicy.workspaceOnly;
+  const skillReadRoots = sandboxRoot ? undefined : resolveSkillReadRoots(options?.skillsSnapshot);
   const applyPatchConfig = execConfig.applyPatch;
   // Secure by default: apply_patch is workspace-contained unless explicitly disabled.
   // (tools.fs.workspaceOnly is a separate umbrella flag for read/write/edit/apply_patch.)
@@ -660,7 +690,13 @@ export function createOpenClawCodingTools(options?: {
           modelContextWindowTokens: options?.modelContextWindowTokens,
           imageSanitization,
         });
-        base.push(workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped);
+        base.push(
+          workspaceOnly
+            ? wrapToolWorkspaceRootGuardWithOptions(wrapped, workspaceRoot, {
+                additionalRoots: skillReadRoots,
+              })
+            : wrapped,
+        );
         continue;
       }
       if (tool.name === "bash" || tool.name === execToolName) {
@@ -910,7 +946,7 @@ export function createOpenClawCodingTools(options?: {
           modelHasVision: options?.modelHasVision,
           requireExplicitMessageTarget: options?.requireExplicitMessageTarget,
           sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
-          inboundTurnKind: options?.inboundTurnKind,
+          inboundEventKind: options?.inboundEventKind,
           disableMessageTool: options?.disableMessageTool,
           enableHeartbeatTool,
           disablePluginTools: !includePluginTools,

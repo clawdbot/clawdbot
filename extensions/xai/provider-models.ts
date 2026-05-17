@@ -7,7 +7,7 @@ import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coe
 import { resolveXaiCatalogEntry, XAI_BASE_URL } from "./model-definitions.js";
 import { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
 
-const XAI_MODERN_MODEL_PREFIXES = ["grok-3", "grok-4", "grok-code-fast"] as const;
+const XAI_MODERN_MODEL_PREFIXES = ["grok-4.3", "grok-4.20"] as const;
 
 export function isModernXaiModel(modelId: string): boolean {
   const lower = normalizeOptionalLowercaseString(modelId) ?? "";

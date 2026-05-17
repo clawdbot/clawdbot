@@ -10,16 +10,17 @@ function hasFinding(
   return findings.some((finding) => finding.checkId === checkId && finding.severity === severity);
 }
 
-function requireDangerousFlagsFinding(
+function requireDangerousFlagsFindings(
   findings: ReturnType<typeof collectGatewayConfigFindings>,
   label: string,
 ) {
-  const finding = findings.find((entry) => entry.checkId === "config.insecure_or_dangerous_flags");
-  if (!finding) {
+  const dangerousFindings = findings.filter(
+    (entry) => entry.checkId === "config.insecure_or_dangerous_flags",
+  );
+  if (dangerousFindings.length === 0) {
     throw new Error(`Expected dangerous flags finding for ${label}`);
   }
-  expect(finding.checkId, label).toBe("config.insecure_or_dangerous_flags");
-  return finding;
+  return dangerousFindings;
 }
 
 function requireFinding(
@@ -97,10 +98,13 @@ describe("security audit gateway exposure findings", () => {
         );
         expect(exposureFinding.severity, testCase.name).toBe(testCase.expectedFinding.severity);
       }
-      const finding = requireDangerousFlagsFinding(findings, testCase.name);
-      expect(finding.severity, testCase.name).toBe("warn");
+      const dangerousFindings = requireDangerousFlagsFindings(findings, testCase.name);
+      expect(dangerousFindings.every((finding) => finding.severity === "warn")).toBe(true);
       for (const snippet of testCase.expectedDangerousDetails) {
-        expect(finding.detail, `${testCase.name}:${snippet}`).toContain(snippet);
+        expect(
+          dangerousFindings.some((finding) => finding.detail.includes(snippet)),
+          `${testCase.name}:${snippet}`,
+        ).toBe(true);
       }
     }
   });
@@ -174,10 +178,12 @@ describe("security audit gateway exposure findings", () => {
     expect(
       findings.some((finding) => finding.checkId === "gateway.control_ui.allowed_origins_required"),
     ).toBe(false);
-    const flags = requireDangerousFlagsFinding(findings, "host header origin fallback");
-    expect(flags.detail).toContain(
-      "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true",
-    );
+    const flags = requireDangerousFlagsFindings(findings, "host header origin fallback");
+    expect(
+      flags.some((finding) =>
+        finding.detail.includes("gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true"),
+      ),
+    ).toBe(true);
   });
 
   it.each([

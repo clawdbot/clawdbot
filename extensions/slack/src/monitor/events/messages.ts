@@ -1,6 +1,6 @@
 import type { SlackEventMiddlewareArgs } from "@slack/bolt";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { danger } from "openclaw/plugin-sdk/runtime-env";
+import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import type { SlackAppMentionEvent, SlackMessageEvent } from "../../types.js";
 import { normalizeSlackChannelType } from "../channel-type.js";
@@ -18,6 +18,7 @@ type SlackAssistantMessageRecord = {
   thread_ts?: unknown;
   files?: unknown;
   attachments?: unknown;
+  assistant_thread?: unknown;
   metadata?: unknown;
   blocks?: unknown;
 };
@@ -107,6 +108,11 @@ function resolveAssistantMessageChangedInbound(params: {
     botUserId: params.ctx.botUserId,
   });
   if (!senderId) {
+    if (shouldLogVerbose()) {
+      logVerbose(
+        `slack: assistant_app_thread message_changed in DM channel=${changed.channel} dropped: no sender resolved from metadata`,
+      );
+    }
     return undefined;
   }
   return {
@@ -118,6 +124,11 @@ function resolveAssistantMessageChangedInbound(params: {
     ts: asString(message.ts) ?? asString(changed.event_ts),
     thread_ts: asString(message.thread_ts),
     event_ts: changed.event_ts,
+    assistant_thread:
+      asRecord(message.assistant_thread) ??
+      asRecord(
+        (changed as SlackMessageChangedEvent & { assistant_thread?: unknown }).assistant_thread,
+      ),
     files: Array.isArray(message.files) ? (message.files as SlackMessageEvent["files"]) : undefined,
     attachments: Array.isArray(message.attachments)
       ? (message.attachments as SlackMessageEvent["attachments"])

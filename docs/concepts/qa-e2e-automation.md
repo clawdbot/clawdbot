@@ -231,6 +231,9 @@ Host and Multipass suite runs execute multiple selected scenarios in parallel
 with isolated gateway workers by default. `qa-channel` defaults to concurrency
 4, capped by the selected scenario count. Use `--concurrency <count>` to tune
 the worker count, or `--concurrency 1` for serial execution.
+Use `--pack personal-agent` to run the personal assistant benchmark pack. The
+pack selector is additive with repeated `--scenario` flags: explicit scenarios
+run first, then pack scenarios run in pack order with duplicates removed.
 The command exits non-zero when any scenario fails. Use `--allow-failures` when
 you want artifacts without a failing exit code.
 Live runs forward the supported QA auth inputs that are practical for the
@@ -304,6 +307,25 @@ Output artifacts:
 - `telegram-qa-report.md`
 - `telegram-qa-summary.json` - includes per-reply RTT (driver send → observed SUT reply) starting with the canary.
 - `telegram-qa-observed-messages.json` - bodies redacted unless `OPENCLAW_QA_TELEGRAM_CAPTURE_CONTENT=1`.
+
+Package RTT comparison uses the same Telegram credential contract while keeping
+its RTT sample controls on the RTT harness path:
+
+```bash
+pnpm rtt openclaw@beta \
+  --credential-source convex \
+  --credential-role maintainer \
+  --samples 20 \
+  --sample-timeout-ms 30000
+```
+
+When `--credential-source convex` is set, the RTT Docker wrapper leases a
+`kind: "telegram"` credential, exports the leased group/driver/SUT bot env into
+the installed-package run, heartbeats the lease, and releases it on shutdown.
+`--samples` and `--sample-timeout-ms` still feed
+`OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES` and
+`OPENCLAW_NPM_TELEGRAM_SAMPLE_TIMEOUT_MS`, so `result.json` remains comparable
+across env-backed and Convex-backed RTT runs.
 
 ### Discord QA
 
@@ -806,6 +828,7 @@ When no `--judge-model` is passed, the judges default to
 ## Related docs
 
 - [Matrix QA](/concepts/qa-matrix)
+- [Personal agent benchmark pack](/concepts/personal-agent-benchmark-pack)
 - [QA Channel](/channels/qa-channel)
 - [Testing](/help/testing)
 - [Dashboard](/web/dashboard)

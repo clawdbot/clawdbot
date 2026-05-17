@@ -21,6 +21,7 @@ const hoisted = await vi.hoisted(async () => {
     accessMock: vi.fn(async (_filePath: string) => undefined),
     pathExistsMock: vi.fn(async (_filePath: string) => true),
     exportHtmlTemplateContents: new Map<string, string>(),
+    sessionTranscriptContent: "",
   };
 });
 
@@ -73,7 +74,7 @@ vi.mock("node:fs/promises", async () => {
     writeFile: hoisted.writeFileMock,
     readFile: vi.fn(async (filePath: string, encoding?: BufferEncoding) => {
       if (filePath === "/tmp/target-store/session.jsonl") {
-        return "";
+        return hoisted.sessionTranscriptContent;
       }
       for (const [suffix, contents] of hoisted.exportHtmlTemplateContents) {
         if (filePath.endsWith(suffix)) {
@@ -182,6 +183,7 @@ describe("buildExportSessionReply", () => {
     hoisted.accessMock.mockResolvedValue(undefined);
     hoisted.pathExistsMock.mockResolvedValue(true);
     hoisted.exportHtmlTemplateContents.clear();
+    hoisted.sessionTranscriptContent = "";
   });
 
   it("resolves store and transcript paths from the target session agent", async () => {
@@ -312,5 +314,41 @@ describe("buildExportSessionReply", () => {
     expect(html).toContain("const marker = '$&$1';");
     expect(html).toContain("const markedMarker = '$&$1';");
     expect(html).toContain("const highlightMarker = '$&$1';");
+  });
+
+  it("reports malformed transcript rows without leaking parser details", async () => {
+    hoisted.sessionTranscriptContent = [
+      JSON.stringify({ type: "session", version: 3, id: "session-1" }),
+      '{"type":"message",',
+      JSON.stringify({
+        type: "message",
+        id: "entry-1",
+        timestamp: "2026-05-16T00:00:00.000Z",
+        message: { role: "user", content: "valid user" },
+      }),
+      JSON.stringify({
+        type: "message",
+        id: "entry-2",
+        timestamp: "2026-05-16T00:00:01.000Z",
+        message: { content: "missing role" },
+      }),
+      JSON.stringify({
+        type: "message",
+        id: "entry-3",
+        timestamp: "2026-05-16T00:00:02.000Z",
+        message: { role: "assistant", content: "valid assistant" },
+      }),
+    ].join("\n");
+
+    const reply = await buildExportSessionReply(makeParams());
+
+    expect(reply.text).toContain("📊 Entries: 2");
+    expect(reply.text).toContain(
+      "⚠️ Skipped 1 malformed transcript row that was not valid JSON. rows 2",
+    );
+    expect(reply.text).toContain(
+      "⚠️ Skipped 1 malformed transcript row that was not a session entry. rows 4",
+    );
+    expect(reply.text).not.toMatch(/Unexpected|SyntaxError|position/i);
   });
 });

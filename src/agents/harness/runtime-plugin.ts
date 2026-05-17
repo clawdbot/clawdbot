@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withActivatedPluginIds } from "../../plugins/activation-context.js";
-import { resolveAgentHarnessPolicy } from "./selection.js";
+import { resolveAgentHarnessPolicy } from "./policy.js";
 
 export async function ensureSelectedAgentHarnessPlugin(params: {
   provider: string;
@@ -8,8 +8,10 @@ export async function ensureSelectedAgentHarnessPlugin(params: {
   config?: OpenClawConfig;
   agentId?: string;
   sessionKey?: string;
+  agentHarnessRuntimeOverride?: string;
   workspaceDir: string;
 }): Promise<void> {
+  const runtimeOverride = params.agentHarnessRuntimeOverride?.trim();
   const policy = resolveAgentHarnessPolicy({
     provider: params.provider,
     modelId: params.modelId,
@@ -17,7 +19,11 @@ export async function ensureSelectedAgentHarnessPlugin(params: {
     agentId: params.agentId,
     sessionKey: params.sessionKey,
   });
-  if (policy.runtime !== "codex") {
+  const runtime =
+    runtimeOverride && runtimeOverride !== "auto" && runtimeOverride !== "default"
+      ? runtimeOverride
+      : policy.runtime;
+  if (runtime !== "codex") {
     return;
   }
 

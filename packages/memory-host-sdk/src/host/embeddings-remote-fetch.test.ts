@@ -10,6 +10,7 @@ vi.mock("./post-json.js", () => ({
 function requirePostJsonParams(): {
   url?: unknown;
   headers?: unknown;
+  signal?: unknown;
   body?: unknown;
   errorPrefix?: unknown;
 } {
@@ -49,6 +50,23 @@ describe("fetchRemoteEmbeddingVectors", () => {
     expect(postJsonParams.headers).toEqual({ Authorization: "Bearer test" });
     expect(postJsonParams.body).toEqual({ input: ["one", "two", "three"] });
     expect(postJsonParams.errorPrefix).toBe("embedding fetch failed");
+  });
+
+  it("passes abort signals to the JSON request", async () => {
+    const controller = new AbortController();
+    postJsonMock.mockImplementationOnce(async (params) => {
+      return await params.parse({ data: [{ embedding: [0.1] }] });
+    });
+
+    await fetchRemoteEmbeddingVectors({
+      url: "https://memory.example/v1/embeddings",
+      headers: {},
+      signal: controller.signal,
+      body: { input: ["one"] },
+      errorPrefix: "embedding fetch failed",
+    });
+
+    expect(requirePostJsonParams().signal).toBe(controller.signal);
   });
 
   it("throws a status-rich error on non-ok responses", async () => {

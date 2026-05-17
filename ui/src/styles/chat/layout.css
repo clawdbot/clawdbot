@@ -702,12 +702,27 @@
 }
 
 .agent-chat__talk-options {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
-  gap: 8px;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
   padding: 10px;
   border-bottom: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
   background: color-mix(in srgb, var(--bg-elevated) 72%, transparent);
+}
+
+.agent-chat__talk-options-primary {
+  display: grid;
+  grid-template-columns: minmax(132px, 0.8fr) minmax(160px, 1fr) minmax(132px, 0.8fr);
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.agent-chat__talk-options-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+  gap: 8px;
+  margin-top: 8px;
 }
 
 .agent-chat__talk-options label {
@@ -731,6 +746,50 @@
   font: inherit;
   font-size: 0.75rem;
   padding: 0 8px;
+}
+
+.agent-chat__talk-options-advanced {
+  flex: 0 1 420px;
+  min-width: 220px;
+  color: var(--muted);
+}
+
+.agent-chat__talk-options-advanced summary {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 8px;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.75rem;
+  font-weight: 500;
+  list-style: none;
+  user-select: none;
+}
+
+.agent-chat__talk-options-advanced summary::-webkit-details-marker {
+  display: none;
+}
+
+.agent-chat__talk-options-advanced summary::after {
+  content: "";
+  width: 7px;
+  height: 7px;
+  margin-left: 8px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(45deg) translateY(-1px);
+  transition: transform var(--duration-fast) ease;
+}
+
+.agent-chat__talk-options-advanced[open] summary {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.agent-chat__talk-options-advanced[open] summary::after {
+  transform: rotate(225deg) translate(-1px, -1px);
 }
 
 .agent-chat__input-divider {
@@ -827,6 +886,21 @@
 }
 
 @media (max-width: 860px) {
+  .agent-chat__talk-options {
+    flex-direction: column;
+  }
+
+  .agent-chat__talk-options-primary,
+  .agent-chat__talk-options-grid {
+    width: 100%;
+    grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  }
+
+  .agent-chat__talk-options-advanced {
+    flex-basis: auto;
+    width: 100%;
+  }
+
   .agent-chat__input-btn,
   .agent-chat__toolbar .btn--ghost,
   .chat-send-btn {
@@ -1217,6 +1291,21 @@
   grid-template-areas: "session model thinking";
 }
 
+.chat-controls__session-row--has-quota {
+  grid-template-columns:
+    minmax(116px, 5fr) minmax(132px, 7fr) minmax(132px, 5fr)
+    minmax(128px, 4fr) minmax(104px, auto);
+  grid-template-areas: "agent session model thinking quota";
+}
+
+.chat-controls__session-row--single-agent.chat-controls__session-row--has-quota {
+  grid-template-columns: minmax(132px, 7fr) minmax(132px, 5fr) minmax(128px, 4fr) minmax(
+      104px,
+      auto
+    );
+  grid-template-areas: "session model thinking quota";
+}
+
 .chat-controls__session-picker {
   grid-area: session;
 }
@@ -1268,6 +1357,49 @@
   grid-area: thinking;
   min-width: 0;
   max-width: none;
+}
+
+.chat-controls__quota {
+  grid-area: quota;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  box-sizing: border-box;
+  min-width: 104px;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--card) 86%, var(--bg-elevated) 14%);
+  color: var(--fg);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.chat-controls__quota:hover {
+  border-color: color-mix(in srgb, var(--accent) 44%, var(--border));
+  background: color-mix(in srgb, var(--accent-subtle) 28%, var(--card));
+}
+
+.chat-controls__quota-label {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.chat-controls__quota-value {
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-controls__quota--warn .chat-controls__quota-value {
+  color: var(--warn);
+}
+
+.chat-controls__quota--danger .chat-controls__quota-value {
+  color: var(--danger);
 }
 
 .chat-controls__thinking {

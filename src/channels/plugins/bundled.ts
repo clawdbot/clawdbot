@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type {
   BundledChannelLegacySessionSurface,
@@ -160,19 +161,25 @@ function resolveBundledChannelBoundaryRoot(params: {
   metadata: BundledChannelPluginMetadata;
   modulePath: string;
 }): string {
+  const isModuleUnderRoot = (root: string) => isPathInside(path.resolve(root), params.modulePath);
   const overrideRoot = params.pluginsDir
     ? path.resolve(params.pluginsDir, params.metadata.dirName)
     : null;
-  if (
-    overrideRoot &&
-    (params.modulePath === overrideRoot ||
-      params.modulePath.startsWith(`${overrideRoot}${path.sep}`))
-  ) {
+  if (overrideRoot && isModuleUnderRoot(overrideRoot)) {
     return overrideRoot;
   }
   const distRoot = path.resolve(params.packageRoot, "dist", "extensions", params.metadata.dirName);
-  if (params.modulePath === distRoot || params.modulePath.startsWith(`${distRoot}${path.sep}`)) {
+  if (isModuleUnderRoot(distRoot)) {
     return distRoot;
+  }
+  const distRuntimeRoot = path.resolve(
+    params.packageRoot,
+    "dist-runtime",
+    "extensions",
+    params.metadata.dirName,
+  );
+  if (isModuleUnderRoot(distRuntimeRoot)) {
+    return distRuntimeRoot;
   }
   return path.resolve(params.packageRoot, "extensions", params.metadata.dirName);
 }

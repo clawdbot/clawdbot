@@ -104,7 +104,7 @@ describe("evaluateStoredCredentialEligibility", () => {
     expect(result).toEqual({ eligible: false, reasonCode: "invalid_expires" });
   });
 
-  it("marks oauth with oauthRef as eligible", () => {
+  it("marks oauth without inline credential material as ineligible", () => {
     const result = evaluateStoredCredentialEligibility({
       credential: {
         type: "oauth",
@@ -112,14 +112,9 @@ describe("evaluateStoredCredentialEligibility", () => {
         access: "",
         refresh: "",
         expires: now + 60_000,
-        oauthRef: {
-          source: "openclaw-credentials",
-          provider: "openai-codex",
-          id: "0123456789abcdef0123456789abcdef",
-        },
       },
       now,
     });
-    expect(result).toEqual({ eligible: true, reasonCode: "ok" });
+    expect(result).toEqual({ eligible: false, reasonCode: "missing_credential" });
   });
 });

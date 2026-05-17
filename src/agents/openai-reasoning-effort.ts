@@ -39,6 +39,9 @@ function readCompatReasoningEfforts(compat: unknown): OpenAIApiReasoningEffort[]
   if (!compat || typeof compat !== "object") {
     return undefined;
   }
+  if ((compat as { supportsReasoningEffort?: unknown }).supportsReasoningEffort === false) {
+    return [];
+  }
   const raw = (compat as { supportedReasoningEfforts?: unknown }).supportedReasoningEfforts;
   if (!Array.isArray(raw)) {
     return undefined;

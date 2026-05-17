@@ -76,6 +76,7 @@ openclaw pairing approve telegram <CODE>
 
 <Note>
 Token resolution order is account-aware. In practice, config values win over env fallback, and `TELEGRAM_BOT_TOKEN` only applies to the default account.
+After a successful startup, OpenClaw caches the bot identity in the state directory for up to 24 hours so restarts can avoid an extra Telegram `getMe` call; changing or removing the token clears that cache.
 </Note>
 
 ## Telegram side settings

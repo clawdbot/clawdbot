@@ -66,20 +66,17 @@ function selectQaSuiteScenarios(params: {
 }) {
   const requestedScenarioIds =
     params.scenarioIds && params.scenarioIds.length > 0 ? new Set(params.scenarioIds) : null;
-  const requestedScenarios = requestedScenarioIds
-    ? params.scenarios.filter((scenario) => requestedScenarioIds.has(scenario.id))
-    : params.scenarios;
   if (requestedScenarioIds) {
-    const foundScenarioIds = new Set(requestedScenarios.map((scenario) => scenario.id));
+    const scenarioById = new Map(params.scenarios.map((scenario) => [scenario.id, scenario]));
     const missingScenarioIds = [...requestedScenarioIds].filter(
-      (scenarioId) => !foundScenarioIds.has(scenarioId),
+      (scenarioId) => !scenarioById.has(scenarioId),
     );
     if (missingScenarioIds.length > 0) {
       throw new Error(`unknown QA scenario id(s): ${missingScenarioIds.join(", ")}`);
     }
-    return requestedScenarios;
+    return [...requestedScenarioIds].map((scenarioId) => scenarioById.get(scenarioId)!);
   }
-  return requestedScenarios.filter((scenario) =>
+  return params.scenarios.filter((scenario) =>
     scenarioMatchesLiveLane({
       scenario,
       providerMode: params.providerMode,

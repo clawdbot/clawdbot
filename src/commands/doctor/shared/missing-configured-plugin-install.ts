@@ -50,7 +50,10 @@ import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.
 import { resolveUserPath } from "../../../utils.js";
 import { VERSION } from "../../../version.js";
 import { asObjectRecord } from "./object.js";
-import { isUpdatePackageSwapInProgress } from "./update-phase.js";
+import {
+  isLegacyPackageUpdateDoctorPass,
+  shouldDeferConfiguredPluginInstallRepair,
+} from "./update-phase.js";
 
 type DownloadableInstallCandidate = {
   pluginId: string;
@@ -763,10 +766,12 @@ async function installCandidate(params: {
   records: Record<string, PluginInstallRecord>;
   updateChannel?: UpdateChannel;
   mode?: "install" | "update";
+  preferNpm?: boolean;
 }): Promise<{
   records: Record<string, PluginInstallRecord>;
   changes: string[];
   warnings: string[];
+  failedPluginId?: string;
 }> {
   const { candidate } = params;
   const extensionsDir = resolveDefaultPluginExtensionsDir();
@@ -785,7 +790,11 @@ async function installCandidate(params: {
     : null;
   const clawhubInstallSpec = clawhubSpecs?.installSpec ?? candidate.clawhubSpec;
   const npmInstallSpec = npmSpecs?.installSpec ?? candidate.npmSpec;
-  if (clawhubInstallSpec && candidate.defaultChoice !== "npm") {
+  const shouldTryClawHub =
+    clawhubInstallSpec &&
+    !(params.preferNpm && npmInstallSpec) &&
+    candidate.defaultChoice !== "npm";
+  if (shouldTryClawHub) {
     const clawhubResult = await installPluginFromClawHub({
       spec: clawhubInstallSpec,
       extensionsDir,
@@ -815,6 +824,7 @@ async function installCandidate(params: {
         warnings: [
           `Failed to install missing configured plugin "${candidate.pluginId}" from ${clawhubInstallSpec}: ${clawhubResult.error}`,
         ],
+        failedPluginId: candidate.pluginId,
       };
     }
     changes.push(
@@ -828,6 +838,7 @@ async function installCandidate(params: {
       warnings: [
         `Failed to install missing configured plugin "${candidate.pluginId}": missing npm spec.`,
       ],
+      failedPluginId: candidate.pluginId,
     };
   }
   const result = await installPluginFromNpmSpec({
@@ -847,6 +858,7 @@ async function installCandidate(params: {
       warnings: [
         `Failed to install missing configured plugin "${candidate.pluginId}" from ${npmInstallSpec}: ${result.error}`,
       ],
+      failedPluginId: candidate.pluginId,
     };
   }
   const pluginId = result.pluginId;
@@ -873,6 +885,7 @@ async function installCandidate(params: {
 export type RepairMissingPluginInstallsResult = {
   changes: string[];
   warnings: string[];
+  failedPluginIds?: string[];
   /**
    * The full install-record map after repair. Equal to the input
    * `baselineRecords` (or the disk-loaded records when no baseline was
@@ -1001,11 +1014,13 @@ async function repairMissingPluginInstalls(params: {
   const officialReplacementPluginIds = new Set(officialReplacementInstallCandidates.keys());
   const changes: string[] = [];
   const warnings: string[] = [];
+  const failedPluginIds = new Set<string>();
   const deferredPluginIds = new Set<string>();
   const updateChannel = resolveRegistryUpdateChannel({
     configChannel: normalizeUpdateChannel(params.cfg.update?.channel),
     currentVersion: VERSION,
   });
+  const preferNpmInstalls = isLegacyPackageUpdateDoctorPass(env);
   let nextRecords = records;
 
   for (const [pluginId, record] of Object.entries(records)) {
@@ -1020,7 +1035,7 @@ async function repairMissingPluginInstalls(params: {
     changes.push(`Removed stale managed install record for bundled plugin "${pluginId}".`);
   }
 
-  if (isUpdatePackageSwapInProgress(env)) {
+  if (shouldDeferConfiguredPluginInstallRepair(env)) {
     const updateDeferredPluginIds = collectUpdateDeferredPluginIds({
       cfg: params.cfg,
       env,
@@ -1091,6 +1106,7 @@ async function repairMissingPluginInstalls(params: {
         );
       } else if (outcome.status === "error") {
         warnings.push(outcome.message);
+        failedPluginIds.add(outcome.pluginId);
       }
     }
     nextRecords = updateResult.config.plugins?.installs ?? nextRecords;
@@ -1164,6 +1180,7 @@ async function repairMissingPluginInstalls(params: {
       records: nextRecords,
       updateChannel,
       mode: shouldReplaceBrokenOfficialInstall ? "update" : "install",
+      preferNpm: preferNpmInstalls,
     });
     if (shouldReplaceBrokenOfficialInstall) {
       const installedRecord = installed.records[candidate.pluginId];
@@ -1186,6 +1203,9 @@ async function repairMissingPluginInstalls(params: {
     nextRecords = installed.records;
     changes.push(...installed.changes);
     warnings.push(...installed.warnings);
+    if (installed.failedPluginId) {
+      failedPluginIds.add(installed.failedPluginId);
+    }
   }
 
   if (nextRecords !== records) {
@@ -1198,5 +1218,16 @@ async function repairMissingPluginInstalls(params: {
     // a stale snapshot.
     await writePersistedInstalledPluginIndexInstallRecords(nextRecords, { env });
   }
-  return { changes, warnings, records: nextRecords };
+  return {
+    changes,
+    warnings,
+    ...(failedPluginIds.size > 0
+      ? {
+          failedPluginIds: [...failedPluginIds].toSorted((left, right) =>
+            left.localeCompare(right),
+          ),
+        }
+      : {}),
+    records: nextRecords,
+  };
 }

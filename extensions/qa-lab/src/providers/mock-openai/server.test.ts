@@ -1526,6 +1526,48 @@ describe("qa mock openai server", () => {
       "Protocol note: I checked memory and the current Project Nebula codename is ORBIT-10.",
     );
 
+    const memoryFollowupPrefersSessionResult = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        stream: true,
+        input: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "Session memory ranking check: what is the current Project Nebula codename? Use memory tools first.",
+              },
+            ],
+          },
+          {
+            type: "function_call_output",
+            output: JSON.stringify({
+              results: [
+                {
+                  path: "MEMORY.md",
+                  startLine: 1,
+                  endLine: 2,
+                },
+                {
+                  path: "sessions/qa-session-memory-ranking.jsonl",
+                  startLine: 2,
+                  endLine: 3,
+                },
+              ],
+            }),
+          },
+        ],
+      }),
+    });
+    expect(memoryFollowupPrefersSessionResult.status).toBe(200);
+    expect(await memoryFollowupPrefersSessionResult.text()).toContain(
+      "Protocol note: I checked memory and the current Project Nebula codename is ORBIT-10.",
+    );
+
     const activeMemorySearch = await fetch(`${server.baseUrl}/v1/responses`, {
       method: "POST",
       headers: {

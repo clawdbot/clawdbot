@@ -5870,6 +5870,14 @@ td.data-table-key-col {
   color: var(--text-strong);
 }
 
+.ov-card__value .warn {
+  color: var(--warning, #b7791f);
+}
+
+.ov-card__value .danger {
+  color: var(--danger);
+}
+
 .ov-card__hint {
   font-size: 12px;
   color: var(--muted);
@@ -5895,6 +5903,10 @@ td.data-table-key-col {
 
 .ov-cards .ov-card:nth-child(4) {
   animation-delay: 150ms;
+}
+
+.ov-cards .ov-card:nth-child(5) {
+  animation-delay: 200ms;
 }
 
 /* ── Attention items ── */

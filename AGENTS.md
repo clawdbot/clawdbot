@@ -35,7 +35,9 @@ Skills own workflows; root owns hard policy and routing.
 - External official plugins own package/deps and are excluded from core dist; core uses registry-aware `facade-runtime` or generic contracts.
 - Externalizing a bundled plugin: update package excludes, official catalogs, docs, tests, and prove core runtime paths resolve installed plugin roots before root-dep removal.
 - Legacy config repair belongs in `openclaw doctor --fix`, not startup/load-time core migrations. Runtime paths use canonical contracts.
-- New seams: backward-compatible, documented, versioned. Third-party plugins exist.
+- Fix shape: prefer bounded owner-boundary refactors over local patches/shims when they remove stale abstractions, duplicate policy, or wrong ownership.
+- Compat default: no new internal shims, aliases, fallback APIs, or legacy names just to reduce diff. Migrate callers and delete old paths.
+- Public plugin API is the only compat exception: document/version breaks, aggressively deprecate unused SDK surface, and migrate ALL bundled/internal plugins to the modern API in the same change.
 - Channels are implementation under `src/channels/**`; plugin authors get SDK seams. Providers own auth/catalog/runtime hooks; core owns generic loop.
 - Hot paths should carry prepared facts forward: provider id, model ref, channel id, target, capability family, attachment class. Do not rediscover with broad plugin/provider/channel/capability loaders.
 - Do not fix repeated request-time discovery with scattered caches. Move the canonical fact earlier; reuse prepared runtime objects; delete duplicate lookup branches.
@@ -63,6 +65,7 @@ Skills own workflows; root owns hard policy and routing.
 ## Validation
 
 - Use `$openclaw-testing` for test/CI choice and `$crabbox` for remote/full/E2E proof.
+- Crabbox request means real scenario proof: install/update/call/repro user path; not just copy tests and run them remotely.
 - Small/narrow tests, lints, format checks, and type probes are fine locally only in a healthy normal checkout.
 - In Codex worktrees, direct local `pnpm test*`, `pnpm check*`, `pnpm crabbox:run`, and `scripts/committer` can trigger pnpm dependency reconciliation or install prompts. Prefer `node` wrappers locally and Crabbox/Testbox for pnpm-gated proof.
 - Full suites, broad changed gates, Docker/package/E2E/live/cross-OS proof, or anything that bogs down the Mac: Crabbox/Testbox.

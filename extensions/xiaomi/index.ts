@@ -1,5 +1,8 @@
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
-import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  applyModelCompatPatch,
+  buildProviderReplayFamilyHooks,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import { PROVIDER_LABELS } from "openclaw/plugin-sdk/provider-usage";
 import { applyXiaomiConfig, XIAOMI_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildXiaomiProvider } from "./provider-catalog.js";
@@ -36,6 +39,8 @@ export default defineSingleProviderPluginEntry({
       family: "openai-compatible",
       dropReasoningFromHistory: false,
     }),
+    normalizeResolvedModel: ({ model }) =>
+      applyModelCompatPatch(model, { omitEmptyArrayItems: true }),
     wrapStreamFn: (ctx) => createMiMoThinkingWrapper(ctx.streamFn, ctx.thinkingLevel),
     resolveThinkingProfile: ({ modelId }) => resolveMiMoThinkingProfile(modelId),
     isModernModelRef: ({ modelId }) => Boolean(resolveMiMoThinkingProfile(modelId)),

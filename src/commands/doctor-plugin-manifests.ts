@@ -15,6 +15,7 @@ const LEGACY_MANIFEST_CONTRACT_KEYS = [
   "speechProviders",
   "mediaUnderstandingProviders",
   "imageGenerationProviders",
+  "tools",
 ] as const;
 
 type LegacyManifestContractMigration = {

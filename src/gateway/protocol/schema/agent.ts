@@ -6,6 +6,19 @@ import {
 } from "../../../agents/internal-event-contract.js";
 import { InputProvenanceSchema, NonEmptyString, SessionLabelString } from "./primitives.js";
 
+export const AgentGeneratedAttachmentSchema = Type.Object(
+  {
+    type: Type.Optional(Type.String({ enum: ["image", "audio", "video", "file"] })),
+    path: Type.Optional(Type.String()),
+    url: Type.Optional(Type.String()),
+    mediaUrl: Type.Optional(Type.String()),
+    filePath: Type.Optional(Type.String()),
+    mimeType: Type.Optional(Type.String()),
+    name: Type.Optional(Type.String()),
+  },
+  { additionalProperties: false },
+);
+
 export const AgentInternalEventSchema = Type.Object(
   {
     type: Type.Literal(AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION),
@@ -17,6 +30,7 @@ export const AgentInternalEventSchema = Type.Object(
     status: Type.String({ enum: [...AGENT_INTERNAL_EVENT_STATUSES] }),
     statusLabel: Type.String(),
     result: Type.String(),
+    attachments: Type.Optional(Type.Array(AgentGeneratedAttachmentSchema)),
     mediaUrls: Type.Optional(Type.Array(Type.String())),
     statsLine: Type.Optional(Type.String()),
     replyInstruction: Type.String(),
@@ -79,7 +93,7 @@ export const MessageActionParamsSchema = Type.Object(
     senderIsOwner: Type.Optional(Type.Boolean()),
     sessionKey: Type.Optional(Type.String()),
     sessionId: Type.Optional(Type.String()),
-    inboundTurnKind: Type.Optional(Type.String({ enum: ["user_request", "room_event"] })),
+    inboundEventKind: Type.Optional(Type.String({ enum: ["user_request", "room_event"] })),
     agentId: Type.Optional(Type.String()),
     toolContext: Type.Optional(MessageActionToolContextSchema),
     idempotencyKey: NonEmptyString,

@@ -100,3 +100,31 @@ export function sanitizeEnvVars(
 
   return { allowed, blocked, warnings };
 }
+
+export function sanitizeExplicitSandboxEnvVars(
+  envVars: Record<string, string | undefined>,
+): EnvVarSanitizationResult {
+  const allowed: Record<string, string> = {};
+  const blocked: string[] = [];
+  const warnings: string[] = [];
+
+  for (const [rawKey, value] of Object.entries(envVars)) {
+    const key = rawKey.trim();
+    if (!key || value === undefined) {
+      continue;
+    }
+
+    const warning = validateEnvVarValue(value);
+    if (warning) {
+      if (warning === "Contains null bytes") {
+        blocked.push(key);
+        continue;
+      }
+      warnings.push(`${key}: ${warning}`);
+    }
+
+    allowed[key] = value;
+  }
+
+  return { allowed, blocked, warnings };
+}

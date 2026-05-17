@@ -204,7 +204,7 @@ content across files is capped by `agents.defaults.bootstrapTotalMaxChars`
 (default: 60000). Missing files inject a short missing-file marker. When truncation
 occurs, OpenClaw can inject a concise system-prompt warning notice; control this with
 `agents.defaults.bootstrapPromptTruncationWarning` (`off`, `once`, `always`;
-default: `once`). Detailed raw/injected counts stay in diagnostics such as
+default: `always`). Detailed raw/injected counts stay in diagnostics such as
 `/context`, `/status`, doctor, and logs.
 
 For memory files, truncation is not data loss: the file remains intact on disk,

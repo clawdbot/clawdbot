@@ -33,36 +33,45 @@ vi.mock("../config/paths.js", () => ({
 vi.mock("../agents/auth-profiles/profiles.js", async () => {
   const fs = await import("node:fs");
   const path = await import("node:path");
-  return {
-    upsertAuthProfile: (params: { profileId: string; credential: unknown; agentDir?: string }) => {
-      const stateDir = process.env.OPENCLAW_STATE_DIR ?? "/tmp/openclaw-state";
-      const agentDir = params.agentDir ?? path.join(stateDir, "agents", "main", "agent");
-      const file = path.join(agentDir, "auth-profiles.json");
-      fs.mkdirSync(agentDir, { recursive: true });
-      const existing = (() => {
-        try {
-          return JSON.parse(fs.readFileSync(file, "utf8")) as {
-            version?: number;
-            profiles?: Record<string, unknown>;
-          };
-        } catch {
-          return { version: 1, profiles: {} };
-        }
-      })();
-      fs.writeFileSync(
-        file,
-        `${JSON.stringify(
-          {
-            version: existing.version ?? 1,
-            profiles: {
-              ...existing.profiles,
-              [params.profileId]: params.credential,
-            },
+  const upsert = (params: { profileId: string; credential: unknown; agentDir?: string }) => {
+    const stateDir = process.env.OPENCLAW_STATE_DIR ?? "/tmp/openclaw-state";
+    const agentDir = params.agentDir ?? path.join(stateDir, "agents", "main", "agent");
+    const file = path.join(agentDir, "auth-profiles.json");
+    fs.mkdirSync(agentDir, { recursive: true });
+    const existing = (() => {
+      try {
+        return JSON.parse(fs.readFileSync(file, "utf8")) as {
+          version?: number;
+          profiles?: Record<string, unknown>;
+        };
+      } catch {
+        return { version: 1, profiles: {} };
+      }
+    })();
+    fs.writeFileSync(
+      file,
+      `${JSON.stringify(
+        {
+          version: existing.version ?? 1,
+          profiles: {
+            ...existing.profiles,
+            [params.profileId]: params.credential,
           },
-          null,
-          2,
-        )}\n`,
-      );
+        },
+        null,
+        2,
+      )}\n`,
+    );
+  };
+  return {
+    upsertAuthProfile: upsert,
+    upsertAuthProfileWithLock: async (params: {
+      profileId: string;
+      credential: unknown;
+      agentDir?: string;
+    }) => {
+      upsert(params);
+      return { version: 1, profiles: {} };
     },
   };
 });

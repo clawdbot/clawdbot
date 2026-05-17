@@ -306,6 +306,7 @@ export function createMemorySearchTool(options: {
             });
             rawResults = await filterMemorySearchHitsBySessionVisibility({
               cfg,
+              agentId,
               requesterSessionKey: options.agentSessionKey,
               sandboxed: options.sandboxed === true,
               hits: rawResults,

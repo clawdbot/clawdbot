@@ -7,6 +7,7 @@ const loadConfigMock = vi.hoisted(() => vi.fn());
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const resolveGatewayPortMock = vi.hoisted(() => vi.fn(() => 18789));
 const copyToClipboardMock = vi.hoisted(() => vi.fn(async () => false));
+const ensureGatewayReadyForOperationMock = vi.hoisted(() => vi.fn());
 const {
   runtimeLogs,
   runtimeErrors,
@@ -28,6 +29,10 @@ vi.mock("../config/config.js", async (importOriginal) => {
 
 vi.mock("../infra/clipboard.js", () => ({
   copyToClipboard: copyToClipboardMock,
+}));
+
+vi.mock("../commands/gateway-readiness.js", () => ({
+  ensureGatewayReadyForOperation: ensureGatewayReadyForOperationMock,
 }));
 
 vi.mock("../infra/device-bootstrap.js", () => ({
@@ -120,6 +125,11 @@ describe("cli integration: qr + dashboard token SecretRef", () => {
   beforeEach(() => {
     resetRuntimeCapture();
     vi.clearAllMocks();
+    ensureGatewayReadyForOperationMock.mockResolvedValue({
+      ready: true,
+      status: {},
+      recovered: false,
+    });
     runtimeExit.mockImplementation(() => {});
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;

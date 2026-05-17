@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { buildChannelTurnContext, type BuildChannelTurnContextParams } from "./context.js";
+import {
+  buildChannelInboundEventContext,
+  type BuildChannelInboundEventContextParams,
+} from "./context.js";
 
 function createBaseContextParams(
-  overrides: Partial<BuildChannelTurnContextParams> = {},
-): BuildChannelTurnContextParams {
+  overrides: Partial<BuildChannelInboundEventContextParams> = {},
+): BuildChannelInboundEventContextParams {
   return {
     channel: "test",
     accountId: "acct",
@@ -36,9 +39,9 @@ function createBaseContextParams(
   };
 }
 
-describe("buildChannelTurnContext", () => {
-  it("maps normalized turn facts into a finalized message context", () => {
-    const ctx = buildChannelTurnContext({
+describe("buildChannelInboundEventContext", () => {
+  it("maps normalized inbound facts into a finalized message context", () => {
+    const ctx = buildChannelInboundEventContext({
       channel: "test",
       accountId: "acct",
       provider: "test-provider",
@@ -133,7 +136,7 @@ describe("buildChannelTurnContext", () => {
 
     const expectedFields = {
       Body: "[User One] hello",
-      InboundTurnKind: "user_request",
+      InboundEventKind: "user_request",
       BodyForAgent: "hello",
       RawBody: "hello",
       CommandBody: "/status",
@@ -193,7 +196,7 @@ describe("buildChannelTurnContext", () => {
   });
 
   it("uses resolved command authorization instead of recomputing authorizers", () => {
-    const ctx = buildChannelTurnContext(
+    const ctx = buildChannelInboundEventContext(
       createBaseContextParams({
         access: {
           commands: {
@@ -212,21 +215,21 @@ describe("buildChannelTurnContext", () => {
   });
 
   it("carries room event semantics into the finalized context", () => {
-    const ctx = buildChannelTurnContext(
+    const ctx = buildChannelInboundEventContext(
       createBaseContextParams({
         message: {
-          inboundTurnKind: "room_event",
+          inboundEventKind: "room_event",
           rawBody: "side chatter",
           envelopeFrom: "User One",
         },
       }),
     );
 
-    expect(ctx.InboundTurnKind).toBe("room_event");
+    expect(ctx.InboundEventKind).toBe("room_event");
   });
 
   it("keeps legacy command authorization fallback for authorizer arrays", () => {
-    const ctx = buildChannelTurnContext(
+    const ctx = buildChannelInboundEventContext(
       createBaseContextParams({
         access: {
           commands: {
@@ -242,7 +245,7 @@ describe("buildChannelTurnContext", () => {
   });
 
   it("derives command turns from normalized command facts", () => {
-    const ctx = buildChannelTurnContext(
+    const ctx = buildChannelInboundEventContext(
       createBaseContextParams({
         message: {
           rawBody: "/status",
@@ -276,7 +279,7 @@ describe("buildChannelTurnContext", () => {
   });
 
   it("keeps explicit command turns ahead of normalized command facts", () => {
-    const ctx = buildChannelTurnContext(
+    const ctx = buildChannelInboundEventContext(
       createBaseContextParams({
         message: {
           rawBody: "/status",
@@ -308,7 +311,7 @@ describe("buildChannelTurnContext", () => {
   });
 
   it("filters supplemental context with channel visibility policy", () => {
-    const ctx = buildChannelTurnContext(
+    const ctx = buildChannelInboundEventContext(
       createBaseContextParams({
         supplemental: {
           quote: {
@@ -341,7 +344,7 @@ describe("buildChannelTurnContext", () => {
   });
 
   it("keeps quoted context in allowlist_quote mode", () => {
-    const ctx = buildChannelTurnContext(
+    const ctx = buildChannelInboundEventContext(
       createBaseContextParams({
         supplemental: {
           quote: {
@@ -366,7 +369,7 @@ describe("buildChannelTurnContext", () => {
   });
 
   it("drops supplemental context with unknown sender allow state in restrictive modes", () => {
-    const ctx = buildChannelTurnContext(
+    const ctx = buildChannelInboundEventContext(
       createBaseContextParams({
         supplemental: {
           quote: {

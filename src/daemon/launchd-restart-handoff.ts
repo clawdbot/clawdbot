@@ -8,7 +8,7 @@ import { sanitizeForLog } from "../terminal/ansi.js";
 import { resolveGatewayLaunchAgentLabel } from "./constants.js";
 import { renderPosixRestartLogSetup } from "./restart-logs.js";
 
-type LaunchdRestartHandoffMode = "kickstart" | "start-after-exit";
+type LaunchdRestartHandoffMode = "kickstart" | "reload" | "start-after-exit";
 
 type LaunchdRestartHandoffResult = {
   ok: boolean;
@@ -140,6 +140,30 @@ else
     launchctl kickstart -k "$service_target"
     status=$?
   fi
+fi
+if [ "$status" -eq 0 ]; then
+  printf '[%s] openclaw restart done source=launchd-handoff mode=${mode}\\n' "$(date -u +%FT%TZ)" >&2
+else
+  printf '[%s] openclaw restart failed source=launchd-handoff mode=${mode} status=%s\\n' "$(date -u +%FT%TZ)" "$status" >&2
+fi
+exit "$status"
+`;
+  }
+
+  if (mode === "reload") {
+    // Reloading is required after plist content changes; kickstart alone keeps
+    // launchd's already-loaded stdout/stderr/stdin paths.
+    return `service_target="$1"
+domain="$2"
+plist_path="$3"
+${waitForCallerPid}
+status=0
+launchctl enable "$service_target"
+launchctl bootout "$service_target" >/dev/null 2>&1 || true
+if launchctl bootstrap "$domain" "$plist_path"; then
+  status=0
+else
+  status=$?
 fi
 if [ "$status" -eq 0 ]; then
   printf '[%s] openclaw restart done source=launchd-handoff mode=${mode}\\n' "$(date -u +%FT%TZ)" >&2

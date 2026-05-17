@@ -156,6 +156,33 @@ describe("edit tool recovery hardening", () => {
     expectRecoveredText(result, `Successfully replaced text in ${filePath}.`);
   });
 
+  it("recovers post-write failures when edit calls use file_path", async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-edit-recovery-"));
+    const workspaceDir = path.join(tmpDir, ".openclaw", "workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    const filePath = path.join(workspaceDir, "AGENTS.md");
+    await fs.writeFile(filePath, "# Agent\nold instruction\n", "utf-8");
+
+    const tool = createRecoveredEditTool({
+      root: tmpDir,
+      readFile: (absolutePath) => fs.readFile(absolutePath, "utf-8"),
+      execute: async () => {
+        await fs.writeFile(filePath, "# Agent\nnew instruction\n", "utf-8");
+        throw new Error("Simulated post-write failure (e.g. generateDiffString)");
+      },
+    });
+    const result = await tool.execute(
+      "call-1",
+      {
+        file_path: filePath,
+        edits: [{ oldText: "old instruction", newText: "new instruction" }],
+      },
+      undefined,
+    );
+
+    expectRecoveredText(result, `Successfully replaced text in ${filePath}.`);
+  });
+
   it("does not recover false success when the file never changed", async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-edit-recovery-"));
     const filePath = path.join(tmpDir, "demo.txt");

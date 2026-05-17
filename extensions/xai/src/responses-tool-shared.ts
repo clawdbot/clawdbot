@@ -90,6 +90,26 @@ export function resolveXaiResponseTextAndCitations(data: XaiWebSearchResponse): 
   };
 }
 
+export function requireXaiResponseTextAndCitations(
+  data: XaiWebSearchResponse,
+  label: string,
+): {
+  content: string;
+  citations: string[];
+} {
+  const { text, annotationCitations } = extractXaiWebSearchContent(data);
+  if (!text) {
+    throw new Error(`${label}: malformed JSON response`);
+  }
+  return {
+    content: text,
+    citations:
+      Array.isArray(data.citations) && data.citations.length > 0
+        ? data.citations
+        : annotationCitations,
+  };
+}
+
 export function resolveXaiResponseTextCitationsAndInline(
   data: XaiWebSearchResponse,
   inlineCitationsEnabled: boolean,
@@ -109,9 +129,31 @@ export function resolveXaiResponseTextCitationsAndInline(
   };
 }
 
+export function requireXaiResponseTextCitationsAndInline(
+  data: XaiWebSearchResponse,
+  label: string,
+  inlineCitationsEnabled: boolean,
+): {
+  content: string;
+  citations: string[];
+  inlineCitations?: XaiWebSearchResponse["inline_citations"];
+} {
+  const { content, citations } = requireXaiResponseTextAndCitations(data, label);
+  return {
+    content,
+    citations,
+    inlineCitations:
+      inlineCitationsEnabled && Array.isArray(data.inline_citations)
+        ? data.inline_citations
+        : undefined,
+  };
+}
+
 export const __testing = {
   buildXaiResponsesToolBody,
   extractXaiWebSearchContent,
+  requireXaiResponseTextCitationsAndInline,
+  requireXaiResponseTextAndCitations,
   resolveXaiResponseTextCitationsAndInline,
   resolveXaiResponseTextAndCitations,
   resolveXaiResponsesEndpoint,

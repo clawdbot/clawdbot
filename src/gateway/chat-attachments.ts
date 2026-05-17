@@ -428,6 +428,23 @@ export async function parseMessageWithAttachments(
   };
 }
 
+export async function resolveChatAttachmentLooksLikeImage(
+  attachment: ChatAttachment,
+  index = 0,
+): Promise<boolean> {
+  const normalized = normalizeAttachment(attachment, index, {
+    stripDataUrlPrefix: true,
+    requireImageMime: false,
+  });
+  if (!isValidBase64(normalized.base64)) {
+    throw new Error(`attachment ${normalized.label}: invalid base64 content`);
+  }
+  const providedMime = normalizeMime(normalized.mime);
+  const sniffedMime = normalizeMime(await sniffMimeFromBase64(normalized.base64));
+  const labelMime = normalizeMime(mimeTypeFromFilePath(normalized.label));
+  return isImageMime(resolveAttachmentMime({ sniffedMime, providedMime, labelMime }));
+}
+
 /**
  * @deprecated Use parseMessageWithAttachments instead.
  * This function converts images to markdown data URLs which Claude API cannot process as images.

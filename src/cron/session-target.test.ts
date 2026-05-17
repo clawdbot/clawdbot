@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  resolveCronCurrentSessionTarget,
   resolveCronDeliverySessionKey,
   resolveCronFailureNotificationSessionKey,
   resolveCronNotificationSessionKey,
@@ -17,6 +18,19 @@ describe("cron session target helpers", () => {
     expect(() => resolveCronSessionTargetSessionKey("session:../../outside")).toThrow(
       "invalid cron sessionTarget session id",
     );
+  });
+
+  it("resolves current targets to the creator session key", () => {
+    expect(
+      resolveCronCurrentSessionTarget({
+        sessionTarget: "current",
+        sessionKey: " agent:main:telegram:direct:123 ",
+      }),
+    ).toBe("session:agent:main:telegram:direct:123");
+  });
+
+  it("falls back current targets to isolated without a creator session key", () => {
+    expect(resolveCronCurrentSessionTarget({ sessionTarget: "current" })).toBe("isolated");
   });
 
   it("prefers sessionTarget over creator sessionKey for delivery", () => {

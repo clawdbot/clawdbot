@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createEmbeddedRunStageTracker,
+  EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE,
   formatEmbeddedRunStageSummary,
   shouldWarnEmbeddedRunStageSummary,
 } from "./attempt-stage-timing.js";
@@ -64,6 +65,24 @@ describe("embedded run stage timing", () => {
       }),
     ).toBe(
       "embedded run startup stages: runId=r1 totalMs=80 stages=workspace:25ms@25ms,tools:55ms@80ms",
+    );
+  });
+
+  it("names first-attempt dispatch subspans for slow startup summaries", () => {
+    let clock = 0;
+    const tracker = createEmbeddedRunStageTracker({ now: () => clock });
+
+    clock = 10;
+    tracker.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.workspace);
+    clock = 40;
+    tracker.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.prompt);
+    clock = 90;
+    tracker.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.runtimePlan);
+    clock = 91;
+    tracker.mark(EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE.dispatch);
+
+    expect(formatEmbeddedRunStageSummary("startup", tracker.snapshot())).toBe(
+      "startup totalMs=91 stages=attempt-workspace:10ms@10ms,attempt-prompt:30ms@40ms,attempt-runtime-plan:50ms@90ms,attempt-dispatch:1ms@91ms",
     );
   });
 });

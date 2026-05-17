@@ -1,3 +1,4 @@
+import type { MessageMetadata } from "@slack/types";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   chunkMarkdownTextWithMode,
@@ -43,6 +44,7 @@ export async function deliverReplies(params: {
   replyThreadTs?: string;
   replyToMode: "off" | "first" | "all" | "batched";
   identity?: SlackSendIdentity;
+  metadata?: MessageMetadata;
 }) {
   for (const payload of params.replies) {
     const threadTs = resolveDeliveredSlackReplyThreadTs({
@@ -71,6 +73,7 @@ export async function deliverReplies(params: {
         accountId: params.accountId,
         ...(slackBlocks?.length ? { blocks: slackBlocks } : {}),
         ...(params.identity ? { identity: params.identity } : {}),
+        ...(params.metadata ? { metadata: params.metadata } : {}),
       });
       params.runtime.log?.(`delivered reply to ${params.target}`);
       continue;
@@ -95,6 +98,7 @@ export async function deliverReplies(params: {
           threadTs,
           accountId: params.accountId,
           ...(params.identity ? { identity: params.identity } : {}),
+          ...(params.metadata ? { metadata: params.metadata } : {}),
         });
       },
       sendMedia: async ({ mediaUrl, caption }) => {
@@ -105,6 +109,7 @@ export async function deliverReplies(params: {
           threadTs,
           accountId: params.accountId,
           ...(params.identity ? { identity: params.identity } : {}),
+          ...(params.metadata ? { metadata: params.metadata } : {}),
         });
       },
     });

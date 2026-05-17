@@ -85,4 +85,51 @@ describe("qa suite", () => {
     );
     expect(qaSuiteProgressTesting.sanitizeQaSuiteProgressValue("\u0000\u0001")).toBe("<empty>");
   });
+
+  it("builds a codex mock runtime env patch that stays on the QA mock provider", () => {
+    expect(
+      qaSuiteProgressTesting.buildQaRuntimeEnvPatch({
+        providerMode: "mock-openai",
+        forcedRuntime: "codex",
+        mockBaseUrl: "http://127.0.0.1:44080",
+      }),
+    ).toEqual({
+      OPENCLAW_BUILD_PRIVATE_QA: "1",
+      OPENCLAW_QA_FORCE_RUNTIME: "codex",
+      OPENCLAW_CODEX_APP_SERVER_ARGS:
+        "app-server -c openai_base_url=http://127.0.0.1:44080/v1 --listen stdio://",
+      OPENAI_API_KEY: "qa-mock-openai-key",
+      CODEX_API_KEY: "qa-mock-openai-key",
+    });
+  });
+
+  it("omits mock OpenAI rewiring for non-codex runtime overrides", () => {
+    expect(
+      qaSuiteProgressTesting.buildQaRuntimeEnvPatch({
+        providerMode: "mock-openai",
+        forcedRuntime: "pi",
+        mockBaseUrl: "http://127.0.0.1:44080",
+      }),
+    ).toEqual({
+      OPENCLAW_BUILD_PRIVATE_QA: "1",
+      OPENCLAW_QA_FORCE_RUNTIME: "pi",
+    });
+  });
+
+  it("remaps mock-openai model refs onto the app-server OpenAI provider for codex cells only", () => {
+    expect(
+      qaSuiteProgressTesting.remapModelRefForForcedRuntime({
+        modelRef: "mock-openai/gpt-5.5",
+        providerMode: "mock-openai",
+        forcedRuntime: "codex",
+      }),
+    ).toBe("openai/gpt-5.5");
+    expect(
+      qaSuiteProgressTesting.remapModelRefForForcedRuntime({
+        modelRef: "mock-openai/gpt-5.5",
+        providerMode: "mock-openai",
+        forcedRuntime: "pi",
+      }),
+    ).toBe("mock-openai/gpt-5.5");
+  });
 });

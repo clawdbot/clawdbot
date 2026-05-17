@@ -81,6 +81,7 @@ let package = Package(
             dependencies: [
                 "OpenClawIPC",
                 "OpenClaw",
+                "OpenClawMacCLI",
                 "OpenClawDiscovery",
                 .product(name: "OpenClawProtocol", package: "OpenClawKit"),
                 .product(name: "SwabbleKit", package: "swabble"),

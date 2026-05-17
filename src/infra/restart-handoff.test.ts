@@ -73,6 +73,56 @@ describe("gateway restart handoff", () => {
     expect(persisted?.reason).toBe("plugin source changed");
   });
 
+  it("persists restart trace timing for supervised process handoff", () => {
+    const env = createHandoffEnv();
+
+    const handoff = expectWrittenHandoff({
+      env,
+      pid: 12_345,
+      restartKind: "full-process",
+      supervisorMode: "launchd",
+      createdAt: 1_000,
+      restartTrace: {
+        startedAt: 10_000,
+        lastAt: 10_250,
+      },
+    });
+
+    expect(handoff.restartTrace).toStrictEqual({
+      startedAt: 10_000,
+      lastAt: 10_250,
+    });
+    expect(readGatewayRestartHandoffSync(env, 1_500)?.restartTrace).toStrictEqual({
+      startedAt: 10_000,
+      lastAt: 10_250,
+    });
+  });
+
+  it("keeps restart trace timing for slow but valid drains", () => {
+    const env = createHandoffEnv();
+
+    const handoff = expectWrittenHandoff({
+      env,
+      pid: 12_345,
+      restartKind: "full-process",
+      supervisorMode: "launchd",
+      createdAt: 1_000,
+      restartTrace: {
+        startedAt: 10_000,
+        lastAt: 310_000,
+      },
+    });
+
+    expect(handoff.restartTrace).toStrictEqual({
+      startedAt: 10_000,
+      lastAt: 310_000,
+    });
+    expect(readGatewayRestartHandoffSync(env, 1_500)?.restartTrace).toStrictEqual({
+      startedAt: 10_000,
+      lastAt: 310_000,
+    });
+  });
+
   it("consumes a fresh handoff by exited pid instead of current process pid", () => {
     const env = createHandoffEnv();
 

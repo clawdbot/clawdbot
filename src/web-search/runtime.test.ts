@@ -138,11 +138,13 @@ describe("web search runtime", () => {
   let runWebSearch: typeof import("./runtime.js").runWebSearch;
   let activateSecretsRuntimeSnapshot: typeof import("../secrets/runtime.js").activateSecretsRuntimeSnapshot;
   let clearSecretsRuntimeSnapshot: typeof import("../secrets/runtime.js").clearSecretsRuntimeSnapshot;
+  let setRuntimeConfigSnapshot: typeof import("../config/config.js").setRuntimeConfigSnapshot;
 
   beforeAll(async () => {
     ({ runWebSearch } = await import("./runtime.js"));
     ({ activateSecretsRuntimeSnapshot, clearSecretsRuntimeSnapshot } =
       await import("../secrets/runtime.js"));
+    ({ setRuntimeConfigSnapshot } = await import("../config/config.js"));
   });
 
   beforeEach(() => {
@@ -323,6 +325,45 @@ describe("web search runtime", () => {
       provider: "custom",
       result: {
         query: "runtime-source",
+        apiKey: "resolved-custom-key",
+      },
+    });
+  });
+
+  it("can prefer an explicitly resolved input config over a pinned config snapshot", async () => {
+    const provider = createCustomSearchProvider({
+      createTool: ({ config }) => ({
+        description: "custom",
+        parameters: {},
+        execute: async (args) => ({
+          ...args,
+          apiKey: getCustomSearchApiKey(config),
+        }),
+      }),
+    });
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([provider]);
+    resolvePluginWebSearchProvidersMock.mockReturnValue([provider]);
+
+    setRuntimeConfigSnapshot(
+      createCustomSearchConfig({
+        source: "env",
+        provider: "default",
+        id: "CUSTOM_SEARCH_API_KEY",
+      }),
+    );
+
+    await expect(
+      runWebSearch({
+        config: createCustomSearchConfig("resolved-custom-key"),
+        preferInputConfig: true,
+        providerId: "custom",
+        preferRuntimeProviders: false,
+        args: { query: "resolved-input" },
+      }),
+    ).resolves.toEqual({
+      provider: "custom",
+      result: {
+        query: "resolved-input",
         apiKey: "resolved-custom-key",
       },
     });

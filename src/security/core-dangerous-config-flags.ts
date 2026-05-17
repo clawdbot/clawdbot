@@ -24,5 +24,9 @@ export function collectCoreInsecureOrDangerousFlags(cfg: OpenClawConfig): string
   if (cfg.tools?.exec?.applyPatch?.workspaceOnly === false) {
     enabledFlags.push("tools.exec.applyPatch.workspaceOnly=false");
   }
+  const auditSuppressionCount = cfg.security?.audit?.suppressions?.length ?? 0;
+  if (auditSuppressionCount > 0) {
+    enabledFlags.push(`security.audit.suppressions configured (${auditSuppressionCount})`);
+  }
   return enabledFlags;
 }

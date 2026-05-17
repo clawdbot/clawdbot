@@ -539,6 +539,24 @@ describe("readRemoteMediaBuffer", () => {
     });
   });
 
+  it("passes request timeout through the guarded fetch path", async () => {
+    const fetchImpl = vi.fn(async () => new Response("ok", { status: 200 }));
+
+    await readRemoteMediaBuffer({
+      url: "https://example.com/file.bin",
+      fetchImpl,
+      lookupFn: makeLookupFn(),
+      maxBytes: 1024,
+      timeoutMs: 1234,
+    });
+
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+    expect(requireFetchGuardRequest()).toMatchObject({
+      url: "https://example.com/file.bin",
+      timeoutMs: 1234,
+    });
+  });
+
   it("streams successful responses directly into the media store", async () => {
     const fetchImpl = vi.fn(
       async () =>

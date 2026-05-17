@@ -14,6 +14,7 @@ import {
 } from "openclaw/plugin-sdk/provider-stream-family";
 import { buildOpenRouterImageGenerationProvider } from "./image-generation-provider.js";
 import { openrouterMediaUnderstandingProvider } from "./media-understanding-provider.js";
+import { buildOpenRouterMusicGenerationProvider } from "./music-generation-provider.js";
 import { applyOpenrouterConfig, OPENROUTER_DEFAULT_MODEL_REF } from "./onboard.js";
 import {
   buildOpenrouterProvider,
@@ -114,6 +115,7 @@ export default definePluginEntry({
             groupId: "openrouter",
             groupLabel: "OpenRouter",
             groupHint: "API key",
+            onboardingScopes: ["text-inference", "music-generation"],
           },
         }),
       ],
@@ -168,6 +170,7 @@ export default definePluginEntry({
     });
     api.registerMediaUnderstandingProvider(openrouterMediaUnderstandingProvider);
     api.registerImageGenerationProvider(buildOpenRouterImageGenerationProvider());
+    api.registerMusicGenerationProvider(buildOpenRouterMusicGenerationProvider());
     api.registerVideoGenerationProvider(buildOpenRouterVideoGenerationProvider());
     api.registerModelCatalogProvider({
       provider: PROVIDER_ID,

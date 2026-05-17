@@ -7,6 +7,7 @@ import {
   resolveAuthProfileDisplayLabel,
   resolveAuthProfileOrder,
 } from "./auth-profiles.js";
+import { isStoredCredentialCompatibleWithAuthProvider } from "./auth-profiles/order.js";
 import {
   readClaudeCliCredentialsCached,
   readCodexCliCredentialsCached,
@@ -21,6 +22,7 @@ export function resolveModelAuthLabel(params: {
   agentDir?: string;
   workspaceDir?: string;
   includeExternalProfiles?: boolean;
+  acceptedProviderIds?: readonly string[];
 }): string | undefined {
   const resolvedProvider = params.provider?.trim();
   if (!resolvedProvider) {
@@ -39,17 +41,37 @@ export function resolveModelAuthLabel(params: {
           }),
         });
   const profileOverride = params.sessionEntry?.authProfileOverride?.trim();
-  const order = resolveAuthProfileOrder({
-    cfg: params.cfg,
-    store,
-    provider: providerKey,
-    preferredProfile: profileOverride,
-  });
+  const acceptedProviderKeys = [
+    ...new Set(
+      [...(params.acceptedProviderIds ?? []).map(normalizeProviderId), providerKey].filter(Boolean),
+    ),
+  ];
+  const order = [
+    ...new Set(
+      acceptedProviderKeys.flatMap((acceptedProvider) =>
+        resolveAuthProfileOrder({
+          cfg: params.cfg,
+          store,
+          provider: acceptedProvider,
+          preferredProfile: profileOverride,
+        }),
+      ),
+    ),
+  ];
   const candidates = [profileOverride, ...order].filter(Boolean) as string[];
 
   for (const profileId of candidates) {
     const profile = store.profiles[profileId];
-    if (!profile || normalizeProviderId(profile.provider) !== providerKey) {
+    if (
+      !profile ||
+      !acceptedProviderKeys.some((acceptedProvider) =>
+        isStoredCredentialCompatibleWithAuthProvider({
+          cfg: params.cfg,
+          provider: acceptedProvider,
+          credential: profile,
+        }),
+      )
+    ) {
       continue;
     }
     const label = resolveAuthProfileDisplayLabel({

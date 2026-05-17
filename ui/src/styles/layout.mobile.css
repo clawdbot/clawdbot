@@ -47,6 +47,21 @@
     grid-template-areas: "session model thinking";
   }
 
+  .chat-controls__session-row--has-quota {
+    grid-template-columns:
+      minmax(96px, 5fr) minmax(112px, 7fr) minmax(116px, 5fr)
+      minmax(112px, 4fr) minmax(96px, auto);
+    grid-template-areas: "agent session model thinking quota";
+  }
+
+  .chat-controls__session-row--single-agent.chat-controls__session-row--has-quota {
+    grid-template-columns: minmax(112px, 7fr) minmax(116px, 5fr) minmax(112px, 4fr) minmax(
+        96px,
+        auto
+      );
+    grid-template-areas: "session model thinking quota";
+  }
+
   .chat-controls__agent {
     grid-area: agent;
   }
@@ -61,6 +76,11 @@
 
   .chat-controls__thinking-select {
     grid-area: thinking;
+  }
+
+  .chat-controls__quota {
+    grid-area: quota;
+    min-width: 96px;
   }
 
   .chat-controls__session,
@@ -460,6 +480,22 @@
       "model model";
   }
 
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-row--has-quota {
+    grid-template-areas:
+      "agent session"
+      "model thinking"
+      "quota quota";
+  }
+
+  .chat-mobile-controls-wrapper
+    .chat-controls-dropdown
+    .chat-controls__session-row--single-agent.chat-controls__session-row--has-quota {
+    grid-template-areas:
+      "session thinking"
+      "model model"
+      "quota quota";
+  }
+
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session {
     min-width: unset;
     max-width: unset;
@@ -486,6 +522,12 @@
     min-width: 0;
     max-width: none;
     width: 100%;
+  }
+
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__quota {
+    width: 100%;
+    min-width: 0;
+    min-height: 40px;
   }
 
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__thinking-select-full {

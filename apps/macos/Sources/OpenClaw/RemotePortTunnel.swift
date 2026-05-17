@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import OpenClawKit
 import OSLog
 #if canImport(Darwin)
 import Darwin
@@ -8,7 +9,7 @@ import Darwin
 /// Port forwarding tunnel for remote mode.
 ///
 /// Uses `ssh -N -L` to forward the remote gateway ports to localhost.
-final class RemotePortTunnel {
+final class RemotePortTunnel: @unchecked Sendable {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "remote.tunnel")
 
     let process: Process
@@ -56,9 +57,8 @@ final class RemotePortTunnel {
             preferred: preferredLocalPort,
             allowRandom: allowRandomLocalPort)
         let sshHost = parsed.host.trimmingCharacters(in: .whitespacesAndNewlines)
-        let remotePortOverride =
-            allowRemoteUrlOverride && remotePort == GatewayEnvironment.gatewayPort()
-            ? Self.resolveRemotePortOverride(for: sshHost)
+        let remotePortOverride = allowRemoteUrlOverride
+            ? Self.resolveRemotePortOverride(defaultRemotePort: remotePort, for: sshHost)
             : nil
         let resolvedRemotePort = remotePortOverride ?? remotePort
         if let override = remotePortOverride {
@@ -76,6 +76,7 @@ final class RemotePortTunnel {
             "-o", "ServerAliveInterval=15",
             "-o", "ServerAliveCountMax=3",
             "-o", "TCPKeepAlive=yes",
+            "-n",
             "-N",
             "-L", "\(localPort):127.0.0.1:\(resolvedRemotePort)",
         ] + CommandResolver.strictHostKeyCheckingSSHOptions + CommandResolver.updateHostKeysSSHOptions
@@ -113,13 +114,7 @@ final class RemotePortTunnel {
 
         try process.run()
 
-        // If ssh exits immediately (e.g. local port already in use), surface stderr and ensure we stop monitoring.
-        try? await Task.sleep(nanoseconds: 150_000_000) // 150ms
-        if !process.isRunning {
-            let stderr = Self.drainStderr(stderrHandle)
-            let msg = stderr.isEmpty ? "ssh tunnel exited immediately" : "ssh tunnel failed: \(stderr)"
-            throw NSError(domain: "RemotePortTunnel", code: 4, userInfo: [NSLocalizedDescriptionKey: msg])
-        }
+        try await Self.waitForListener(process: process, localPort: localPort, stderrHandle: stderrHandle)
 
         // Track tunnel so we can clean up stale listeners on restart.
         Task {
@@ -133,8 +128,40 @@ final class RemotePortTunnel {
         return RemotePortTunnel(process: process, localPort: localPort, stderrHandle: stderrHandle)
     }
 
-    private static func resolveRemotePortOverride(for sshHost: String) -> Int? {
+    private static func waitForListener(
+        process: Process,
+        localPort: UInt16,
+        stderrHandle: FileHandle) async throws
+    {
+        let deadline = Date().addingTimeInterval(6)
+        repeat {
+            if !process.isRunning {
+                let stderr = Self.drainStderr(stderrHandle)
+                let msg = stderr.isEmpty ? "ssh tunnel exited before listening" : "ssh tunnel failed: \(stderr)"
+                throw NSError(domain: "RemotePortTunnel", code: 4, userInfo: [NSLocalizedDescriptionKey: msg])
+            }
+            if await PortGuardian.shared.isListening(port: Int(localPort), pid: process.processIdentifier) {
+                return
+            }
+            do {
+                try await Task.sleep(nanoseconds: 100_000_000)
+            } catch {
+                process.terminate()
+                throw error
+            }
+        } while Date() < deadline
+
+        process.terminate()
+        let stderr = Self.drainStderr(stderrHandle)
+        let msg = stderr.isEmpty ? "ssh tunnel did not open local port \(localPort)" : "ssh tunnel failed: \(stderr)"
+        throw NSError(domain: "RemotePortTunnel", code: 4, userInfo: [NSLocalizedDescriptionKey: msg])
+    }
+
+    private static func resolveRemotePortOverride(defaultRemotePort: Int, for sshHost: String) -> Int? {
         let root = OpenClawConfigFile.loadDict()
+        if let port = GatewayRemoteConfig.resolveRemotePort(root: root) {
+            return port
+        }
         guard let gateway = root["gateway"] as? [String: Any],
               let remote = gateway["remote"] as? [String: Any],
               let urlRaw = remote["url"] as? String
@@ -149,6 +176,9 @@ final class RemotePortTunnel {
               !host.isEmpty
         else {
             return nil
+        }
+        if LoopbackHost.isLoopbackHost(host) {
+            return port == defaultRemotePort ? nil : port
         }
         guard let sshKey = OpenClawConfigFile.canonicalHostForComparison(sshHost),
               let urlKey = OpenClawConfigFile.canonicalHostForComparison(host)
@@ -299,8 +329,13 @@ final class RemotePortTunnel {
         self.portIsFree(port)
     }
 
+    static func _testResolveRemotePortOverride(defaultRemotePort: Int, sshHost: String) -> Int? {
+        self.resolveRemotePortOverride(defaultRemotePort: defaultRemotePort, for: sshHost)
+    }
+
     static func _testDrainStderr(_ handle: FileHandle) -> String {
         self.drainStderr(handle)
     }
+
     #endif
 }

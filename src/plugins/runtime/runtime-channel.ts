@@ -51,7 +51,7 @@ import {
 import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load.js";
 import { recordInboundSession } from "../../channels/session.js";
 import {
-  buildChannelTurnContext,
+  buildChannelInboundEventContext,
   runChannelTurn,
   runPreparedChannelTurn,
   runResolvedChannelTurn,
@@ -184,7 +184,7 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
       run: runChannelTurn,
       runAssembled: dispatchAssembledChannelTurn,
       runResolved: runResolvedChannelTurn,
-      buildContext: buildChannelTurnContext,
+      buildContext: buildChannelInboundEventContext,
       runPrepared: runPreparedChannelTurn,
       dispatchAssembled: dispatchAssembledChannelTurn,
     },

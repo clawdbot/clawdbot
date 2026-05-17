@@ -292,6 +292,24 @@ describe("runCli exit behavior", () => {
     expect(disposeRegisteredAgentHarnessesMock).toHaveBeenCalledTimes(1);
   });
 
+  it("shows the standard spinner while loading the full CLI", async () => {
+    tryRouteCliMock.mockResolvedValueOnce(false);
+    const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
+    buildProgramMock.mockReturnValueOnce({
+      commands: [{ name: () => "config", aliases: () => [] }],
+      parseAsync,
+    });
+
+    await runCli(["node", "openclaw", "config"]);
+
+    expect(createCliProgressMock).toHaveBeenCalledWith({
+      label: "Loading OpenClaw CLI…",
+      indeterminate: true,
+      delayMs: 0,
+    });
+    expect(progressDoneMock).toHaveBeenCalledTimes(1);
+  });
+
   it("pauses non-tty stdin after full CLI command completion", async () => {
     tryRouteCliMock.mockResolvedValueOnce(false);
     const parseAsync = vi.fn().mockResolvedValueOnce(undefined);

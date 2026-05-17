@@ -1,7 +1,7 @@
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { execNodeEvalSync } from "../test-utils/node-process.js";
 import {
   cleanupTrackedTempDirs,
   makeTrackedTempDir,
@@ -85,9 +85,8 @@ export const copiedRuntimeMarker = {
         dep: mod.copiedRuntimeMarker?.resolveOutboundSendDep?.(),
       }));
     `;
-    const raw = execFileSync(process.execPath, ["--input-type=module", "--eval", script], {
+    const raw = execNodeEvalSync(script, {
       cwd: process.cwd(),
-      encoding: "utf-8",
     });
     const result = JSON.parse(raw) as {
       withoutAliasThrew: boolean;

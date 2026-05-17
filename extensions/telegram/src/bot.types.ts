@@ -23,6 +23,7 @@ export type TelegramBotOptions = {
   minimumClientTimeoutSeconds?: number;
   updateOffset?: {
     lastUpdateId?: number | null;
+    persistenceFloorUpdateId?: number | null;
     onUpdateId?: (updateId: number) => void | Promise<void>;
   };
   testTimings?: {

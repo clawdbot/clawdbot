@@ -207,6 +207,32 @@ describe("media-generation runtime shared candidates", () => {
 
     expect(candidates).toEqual([{ provider: "fal", model: "fal-ai/flux/dev" }]);
   });
+
+  it("prefers explicit provider refs over colliding slash-containing model IDs", () => {
+    const candidates = resolveCapabilityModelCandidates({
+      cfg: {} as OpenClawConfig,
+      modelConfig: {
+        primary: "google/lyria-3-pro-preview",
+      },
+      parseModelRef,
+      listProviders: () => [
+        {
+          id: "google",
+          defaultModel: "lyria-3-clip-preview",
+          models: ["lyria-3-clip-preview", "lyria-3-pro-preview"],
+          isConfigured: () => true,
+        },
+        {
+          id: "openrouter",
+          defaultModel: "google/lyria-3-clip-preview",
+          models: ["google/lyria-3-clip-preview", "google/lyria-3-pro-preview"],
+          isConfigured: () => true,
+        },
+      ],
+    });
+
+    expect(candidates[0]).toEqual({ provider: "google", model: "lyria-3-pro-preview" });
+  });
 });
 
 describe("media-generation runtime shared normalization", () => {

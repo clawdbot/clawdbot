@@ -52,7 +52,7 @@ describe("createVideoGenerateTool status actions", () => {
     expect(result?.content).toStrictEqual([
       {
         type: "text",
-        text: "Video generation task task-active is already running with openai.\nProgress: Generating video.\nDo not call video_generate again for this request. Wait for the completion event; I will post the finished video here.",
+        text: "Video generation task task-active is already running with openai.\nProgress: Generating video.\nDo not call video_generate again for this request. Wait for the completion event; the completion agent will send the finished video here.",
       },
     ]);
     const text = content?.text ?? "";

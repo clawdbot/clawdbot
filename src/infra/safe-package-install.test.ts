@@ -51,9 +51,11 @@ describe("safe npm install helpers", () => {
     );
 
     expect(env.PATH).toBe("/usr/bin:/bin");
+    expect(env.NPM_CONFIG_BEFORE).toBe("");
     expect(env.COREPACK_ENABLE_DOWNLOAD_PROMPT).toBe("0");
     expect(env.NPM_CONFIG_IGNORE_SCRIPTS).toBe("true");
     expect(env.npm_config_audit).toBe("false");
+    expect(env.npm_config_before).toBe("");
     expect(env.npm_config_cache).toBe("/tmp/openclaw-npm-cache");
     expect(env.npm_config_dry_run).toBe("false");
     expect(env.npm_config_fetch_retries).toBe("5");
@@ -74,6 +76,8 @@ describe("safe npm install helpers", () => {
     expect(env.npm_config_yes).toBe("true");
     expect(env.npm_config_include_workspace_root).toBeUndefined();
     expect(env.npm_config_workspace).toBeUndefined();
+    expect(env["npm_config_min-release-age"]).toBe("0");
+    expect(env.npm_config_min_release_age).toBe("");
   });
 
   it("does not inherit host legacy peer dependency mode by default", () => {

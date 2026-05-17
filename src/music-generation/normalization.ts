@@ -20,6 +20,14 @@ type ResolvedMusicGenerationOverrides = {
   normalization?: MusicGenerationNormalization;
 };
 
+function resolveModelBooleanSupport(
+  model: string,
+  defaultSupport: boolean | undefined,
+  supportByModel: Readonly<Record<string, boolean>> | undefined,
+): boolean {
+  return supportByModel?.[model] ?? defaultSupport === true;
+}
+
 export function resolveMusicGenerationOverrides(params: {
   provider: MusicGenerationProvider;
   model: string;
@@ -50,12 +58,22 @@ export function resolveMusicGenerationOverrides(params: {
     };
   }
 
-  if (lyrics?.trim() && !caps.supportsLyrics) {
+  if (
+    lyrics?.trim() &&
+    !resolveModelBooleanSupport(params.model, caps.supportsLyrics, caps.supportsLyricsByModel)
+  ) {
     ignoredOverrides.push({ key: "lyrics", value: lyrics });
     lyrics = undefined;
   }
 
-  if (typeof instrumental === "boolean" && !caps.supportsInstrumental) {
+  if (
+    typeof instrumental === "boolean" &&
+    !resolveModelBooleanSupport(
+      params.model,
+      caps.supportsInstrumental,
+      caps.supportsInstrumentalByModel,
+    )
+  ) {
     ignoredOverrides.push({ key: "instrumental", value: instrumental });
     instrumental = undefined;
   }

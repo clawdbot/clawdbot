@@ -215,4 +215,124 @@ struct ChannelsSettingsSmokeTests {
                 didRunFinalWait: &didRunFinalWait,
                 now: Date(timeInterval: 1.5, since: startedAt)) == nil)
     }
+
+    @Test func `cached config loads return without clearing dirty draft`() async {
+        let store = makeChannelsStore(channels: [:])
+        store.configSchema = ConfigSchemaNode(raw: ["type": "object"])
+        store.configSchemaSourceKey = "source-a"
+        store.configLoaded = true
+        store.configSourceKey = "source-a"
+        store.configDraft = ["channels": ["discord": ["enabled": true]]]
+        store.configDirty = true
+
+        store.resetConfigSchemaCacheIfSourceChanged("source-a")
+        store.resetConfigCacheIfSourceChanged("source-a")
+
+        #expect(store.configSchema != nil)
+        #expect(store.configDraft["channels"] != nil)
+        #expect(store.configDirty == true)
+    }
+
+    @Test func `config cache clears dirty draft when source changes`() {
+        let store = makeChannelsStore(channels: [:])
+        store.configSchema = ConfigSchemaNode(raw: ["type": "object"])
+        store.configSchemaSourceKey = "source-a"
+        store.configUiHints = ["channels.discord.enabled": ConfigUiHint(raw: ["label": "Discord"])]
+        store.configLoaded = true
+        store.configSourceKey = "source-a"
+        store.configRoot = ["channels": ["discord": ["enabled": false]]]
+        store.configDraft = ["channels": ["discord": ["enabled": true]]]
+        store.configDirty = true
+
+        store.resetConfigSchemaCacheIfSourceChanged("source-b")
+        store.resetConfigCacheIfSourceChanged("source-b")
+
+        #expect(store.configSchema == nil)
+        #expect(store.configUiHints.isEmpty)
+        #expect(store.configLoaded == false)
+        #expect(store.configRoot.isEmpty)
+        #expect(store.configDraft.isEmpty)
+        #expect(store.configDirty == false)
+        #expect(store.configSchemaSourceKey == "source-b")
+        #expect(store.configSourceKey == "source-b")
+    }
+
+    @Test func `schema response is ignored after source changes`() {
+        let store = makeChannelsStore(channels: [:])
+        store.configSchemaSourceKey = "source-b"
+        let res = ConfigSchemaResponse(
+            schema: SnapshotAnyCodable(["type": "object", "properties": ["stale": ["type": "string"]]]),
+            uihints: ["stale": SnapshotAnyCodable(["label": "Stale"])],
+            version: "1",
+            generatedat: "now")
+
+        store.applyConfigSchemaResponse(res, sourceKey: "source-a")
+
+        #expect(store.configSchema == nil)
+        #expect(store.configUiHints.isEmpty)
+        #expect(store.configSchemaSourceKey == "source-b")
+    }
+
+    @Test func `non forced config snapshots do not overwrite dirty draft`() {
+        let store = makeChannelsStore(channels: [:])
+        store.configSourceKey = "source-a"
+        store.configLoaded = true
+        store.configDraft = ["channels": ["discord": ["enabled": true]]]
+        store.configDirty = true
+        let snap = ConfigSnapshot(
+            path: nil,
+            exists: true,
+            raw: nil,
+            hash: nil,
+            parsed: nil,
+            valid: true,
+            config: ["channels": SnapshotAnyCodable(["discord": ["enabled": false]])],
+            issues: nil)
+
+        store.applyConfigSnapshot(snap, sourceKey: "source-a", force: false)
+
+        let channels = store.configDraft["channels"] as? [String: Any]
+        let discord = channels?["discord"] as? [String: Any]
+        #expect(discord?["enabled"] as? Bool == true)
+        #expect(store.configDirty == true)
+
+        store.applyConfigSnapshot(snap, sourceKey: "source-a", force: true)
+
+        let forcedChannels = store.configDraft["channels"] as? [String: Any]
+        let forcedDiscord = forcedChannels?["discord"] as? [String: Any]
+        #expect(forcedDiscord?["enabled"] as? Bool == false)
+        #expect(store.configDirty == false)
+    }
+
+    @Test func `forced config load queues behind background load`() {
+        let store = makeChannelsStore(channels: [:])
+        store.configLoading = true
+        store.configLoadingSourceKey = "source-a"
+
+        #expect(store.queueConfigReloadIfLoading(sourceKey: "source-a", force: false) == true)
+        #expect(store.configForceReloadPending == false)
+
+        #expect(store.queueConfigReloadIfLoading(sourceKey: "source-a", force: true) == true)
+        #expect(store.configForceReloadPending == true)
+
+        store.configForceReloadPending = false
+        #expect(store.queueConfigReloadIfLoading(sourceKey: "source-b", force: false) == true)
+        #expect(store.configForceReloadPending == true)
+    }
+
+    @Test func `schema reload queues behind background load after source changes`() {
+        let store = makeChannelsStore(channels: [:])
+        store.configSchemaLoading = true
+        store.configSchemaLoadingSourceKey = "source-a"
+
+        #expect(store.queueConfigSchemaReloadIfLoading(sourceKey: "source-a", force: false) == true)
+        #expect(store.configSchemaReloadPending == false)
+
+        #expect(store.queueConfigSchemaReloadIfLoading(sourceKey: "source-a", force: true) == true)
+        #expect(store.configSchemaReloadPending == true)
+
+        store.configSchemaReloadPending = false
+        #expect(store.queueConfigSchemaReloadIfLoading(sourceKey: "source-b", force: false) == true)
+        #expect(store.configSchemaReloadPending == true)
+    }
 }

@@ -1834,13 +1834,16 @@ async function buildResponsesPayload(
     const results = Array.isArray(toolJson?.results)
       ? (toolJson.results as Array<Record<string, unknown>>)
       : [];
-    const first = results[0];
-    const firstPath = typeof first?.path === "string" ? first.path : undefined;
-    if (first?.source === "sessions" || firstPath?.startsWith("sessions/")) {
+    const preferredSessionResult = results.find((result) => {
+      const resultPath = typeof result.path === "string" ? result.path : undefined;
+      return result.source === "sessions" || resultPath?.startsWith("sessions/");
+    });
+    if (preferredSessionResult) {
       return buildAssistantEvents(
         "Protocol note: I checked memory and the current Project Nebula codename is ORBIT-10.",
       );
     }
+    const first = results[0];
     if (
       typeof first?.path === "string" &&
       (typeof first.startLine === "number" || typeof first.endLine === "number")

@@ -606,7 +606,7 @@ describe("incrementCompactionCount", () => {
     const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].compactionCount).toBe(1);
     expect(stored[sessionKey].totalTokens).toBe(180_000);
-    expect(stored[sessionKey].totalTokensFresh).toBe(true);
+    expect(stored[sessionKey].totalTokensFresh).toBe(false);
   });
 
   it("updates sessionId and sessionFile when compaction rotated transcripts", async () => {
@@ -732,12 +732,13 @@ describe("incrementCompactionCount", () => {
     expect(stored[sessionKey].compactionCount).toBe(1);
   });
 
-  it("does not update totalTokens when tokensAfter is not provided", async () => {
+  it("marks totalTokens stale when tokensAfter is not provided", async () => {
     const entry = {
       sessionId: "s1",
       updatedAt: Date.now(),
       compactionCount: 0,
       totalTokens: 180_000,
+      totalTokensFresh: true,
     } as SessionEntry;
     const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
 
@@ -752,5 +753,6 @@ describe("incrementCompactionCount", () => {
     expect(stored[sessionKey].compactionCount).toBe(1);
     // totalTokens unchanged
     expect(stored[sessionKey].totalTokens).toBe(180_000);
+    expect(stored[sessionKey].totalTokensFresh).toBe(false);
   });
 });

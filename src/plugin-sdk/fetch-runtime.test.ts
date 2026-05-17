@@ -1,7 +1,7 @@
-import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
+import { execNodeEvalSync } from "../test-utils/node-process.js";
 
 describe("plugin SDK fetch runtime", () => {
   it("does not initialize the undici global dispatcher on import", () => {
@@ -27,11 +27,7 @@ describe("plugin SDK fetch runtime", () => {
       delete env[key];
     }
 
-    const output = execFileSync(
-      process.execPath,
-      ["--import", "tsx", "--input-type=module", "--eval", source],
-      { cwd: process.cwd(), encoding: "utf8", env },
-    );
+    const output = execNodeEvalSync(source, { env, imports: ["tsx"] });
 
     expect(output.trim()).toBe("ok");
   });

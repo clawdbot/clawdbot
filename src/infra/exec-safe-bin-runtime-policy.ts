@@ -127,6 +127,7 @@ export function resolveExecSafeBinRuntimePolicy(params: {
   ];
   const trustedSafeBinDirs = getTrustedSafeBinDirs({
     extraDirs: explicitTrustedSafeBinDirs,
+    safeBins: Array.from(safeBins),
   });
   const writableTrustedSafeBinDirs = listWritableExplicitTrustedSafeBinDirs(
     explicitTrustedSafeBinDirs,

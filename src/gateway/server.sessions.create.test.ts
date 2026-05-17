@@ -167,7 +167,7 @@ test("sessions.create replaces a dead main entry with a fresh session id", async
     expect(created.payload?.sessionId).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
     );
-    expect(created.payload?.entry?.label).toBe("Ops Main");
+    expect(created.payload?.entry?.label).toBeUndefined();
     expect(created.payload?.entry?.sessionFile).not.toBe("stale.jsonl");
 
     const rawStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<

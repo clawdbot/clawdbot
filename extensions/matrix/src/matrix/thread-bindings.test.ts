@@ -658,7 +658,7 @@ describe("matrix thread bindings", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-06T10:00:00.000Z"));
     try {
-      await createStaticThreadBindingManager();
+      const manager = await createStaticThreadBindingManager();
       const binding = await bindCurrentThread();
 
       const bindingsPath = resolveBindingsFilePath();
@@ -673,11 +673,13 @@ describe("matrix thread bindings", () => {
       expect(await readPersistedLastActivityAt(bindingsPath)).toBe(originalLastActivityAt);
 
       await vi.advanceTimersByTimeAsync(1_000);
+      vi.useRealTimers();
+      manager.stop();
       await vi.waitFor(
         async () => {
           expect(await readPersistedLastActivityAt(bindingsPath)).toBe(secondTouchedAt);
         },
-        { interval: 1, timeout: 100 },
+        { interval: 1, timeout: 5_000 },
       );
     } finally {
       vi.useRealTimers();

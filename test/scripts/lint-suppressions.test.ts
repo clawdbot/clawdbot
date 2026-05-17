@@ -1,7 +1,8 @@
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { expectNoReaddirSyncDuring } from "../../src/test-utils/fs-scan-assertions.js";
+import { listGitTrackedFiles, toRepoRelativePath } from "../../src/test-utils/repo-files.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
 const CODE_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]);
@@ -32,22 +33,11 @@ function isProductionCodeFile(relativePath: string): boolean {
 }
 
 function listGitCodeFiles(root: string): string[] | null {
-  const result = spawnSync("git", ["ls-files", "--", root], {
-    cwd: repoRoot,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  if (result.status !== 0) {
-    return null;
-  }
-  return result.stdout
-    .split("\n")
-    .map((line) => line.trim().replaceAll("\\", "/"))
-    .filter((line) => line.length > 0 && isProductionCodeFile(line));
+  return listGitTrackedFiles({ repoRoot, pathspecs: root })?.filter(isProductionCodeFile) ?? null;
 }
 
 function walkCodeFiles(dir: string, files: string[] = []): string[] {
-  const relativeRoot = path.relative(repoRoot, dir).replaceAll(path.sep, "/");
+  const relativeRoot = toRepoRelativePath(repoRoot, dir);
   if (relativeRoot && !relativeRoot.startsWith("..") && !path.isAbsolute(relativeRoot)) {
     const gitFiles = listGitCodeFiles(relativeRoot);
     if (gitFiles) {
@@ -68,7 +58,7 @@ function walkCodeFiles(dir: string, files: string[] = []): string[] {
       walkCodeFiles(fullPath, files);
       continue;
     }
-    const relativePath = path.relative(repoRoot, fullPath).replaceAll(path.sep, "/");
+    const relativePath = toRepoRelativePath(repoRoot, fullPath);
     if (!isProductionCodeFile(relativePath)) {
       continue;
     }
@@ -107,16 +97,12 @@ function summarizeSuppressions(entries: readonly SuppressionEntry[]): string[] {
 
 describe("production lint suppressions", () => {
   it("lists production files from git without walking source roots", () => {
-    const readdirSync = vi.spyOn(fs, "readdirSync");
-    try {
+    expectNoReaddirSyncDuring(() => {
       const files = ROOTS.flatMap((root) => walkCodeFiles(path.join(repoRoot, root))).toSorted();
 
       expect(files.length).toBeGreaterThan(0);
       expect(files.some((file) => file.endsWith(".test.ts"))).toBe(false);
-      expect(readdirSync).not.toHaveBeenCalled();
-    } finally {
-      readdirSync.mockRestore();
-    }
+    });
   });
 
   it("keeps the intentional production suppression tail on an explicit allowlist", () => {

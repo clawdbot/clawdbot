@@ -115,7 +115,7 @@ describe("followup queue collect routing", () => {
       key,
       createRun({
         prompt: "one",
-        currentTurnKind: "user_request",
+        currentInboundEventKind: "user_request",
         originatingChannel: "slack",
         originatingTo: "channel:A",
       }),
@@ -125,7 +125,7 @@ describe("followup queue collect routing", () => {
       key,
       createRun({
         prompt: "two",
-        currentTurnKind: "user_request",
+        currentInboundEventKind: "user_request",
         originatingChannel: "slack",
         originatingTo: "channel:A",
       }),
@@ -175,8 +175,8 @@ describe("followup queue collect routing", () => {
     if (!first) {
       throw new Error("expected queued followup");
     }
-    first.currentTurnKind = "room_event";
-    first.currentTurnContext = { text: "room event body" };
+    first.currentInboundEventKind = "room_event";
+    first.currentInboundContext = { text: "room event body" };
     first.abortSignal = controller.signal;
     first.deliveryCorrelations = [{ begin }];
     first.queuedLifecycle = lifecycle;
@@ -195,8 +195,8 @@ describe("followup queue collect routing", () => {
 
     expect(calls).toHaveLength(2);
     expect(calls[0]?.prompt).toBe("[OpenClaw room event]");
-    expect(calls[0]?.currentTurnKind).toBe("room_event");
-    expect(calls[0]?.currentTurnContext?.text).toBe("room event body");
+    expect(calls[0]?.currentInboundEventKind).toBe("room_event");
+    expect(calls[0]?.currentInboundContext?.text).toBe("room event body");
     expect(calls[0]?.abortSignal).toBe(controller.signal);
     expect(calls[0]?.deliveryCorrelations?.[0]?.begin).toBe(begin);
     expect(calls[0]?.queuedLifecycle).toBe(lifecycle);
@@ -1243,8 +1243,8 @@ describe("followup queue collect routing", () => {
       key,
       {
         ...createRun({ prompt: "dropped ambient" }),
-        currentTurnKind: "room_event",
-        currentTurnContext: { text: "dropped context" },
+        currentInboundEventKind: "room_event",
+        currentInboundContext: { text: "dropped context" },
       },
       settings,
     );
@@ -1252,8 +1252,8 @@ describe("followup queue collect routing", () => {
       key,
       {
         ...createRun({ prompt: "live ambient" }),
-        currentTurnKind: "room_event",
-        currentTurnContext: { text: "live context" },
+        currentInboundEventKind: "room_event",
+        currentInboundContext: { text: "live context" },
         abortSignal: controller.signal,
         deliveryCorrelations: [{ begin }],
         queuedLifecycle: { onComplete },
@@ -1266,8 +1266,8 @@ describe("followup queue collect routing", () => {
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
-    expect(calls[0]?.currentTurnKind).toBe("room_event");
-    expect(calls[0]?.currentTurnContext?.text).toBe("live context");
+    expect(calls[0]?.currentInboundEventKind).toBe("room_event");
+    expect(calls[0]?.currentInboundContext?.text).toBe("live context");
     expect(calls[0]?.abortSignal).toBe(controller.signal);
     expect(calls[0]?.queuedLifecycle?.onComplete).toBe(onComplete);
     expect(calls[0]?.deliveryCorrelations?.[0]?.begin).toBe(begin);
@@ -1294,8 +1294,8 @@ describe("followup queue collect routing", () => {
       key,
       {
         ...createRun({ prompt: "dropped ambient" }),
-        currentTurnKind: "room_event",
-        currentTurnContext: { text: "dropped context" },
+        currentInboundEventKind: "room_event",
+        currentInboundContext: { text: "dropped context" },
         abortSignal: controller.signal,
         queuedLifecycle: { onComplete },
       },
@@ -1312,8 +1312,8 @@ describe("followup queue collect routing", () => {
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
-    expect(calls[0]?.currentTurnKind).toBeUndefined();
-    expect(calls[0]?.currentTurnContext).toBeUndefined();
+    expect(calls[0]?.currentInboundEventKind).toBeUndefined();
+    expect(calls[0]?.currentInboundContext).toBeUndefined();
     expect(calls[0]?.abortSignal).toBeUndefined();
     expect(onComplete).toHaveBeenCalledTimes(1);
   });
@@ -1347,8 +1347,8 @@ describe("followup queue collect routing", () => {
       key,
       {
         ...createRun({ prompt: "dropped ambient" }),
-        currentTurnKind: "room_event",
-        currentTurnContext: { text: "dropped context" },
+        currentInboundEventKind: "room_event",
+        currentInboundContext: { text: "dropped context" },
         queuedLifecycle: { onComplete },
       },
       settings,

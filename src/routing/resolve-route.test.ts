@@ -422,6 +422,18 @@ describe("resolveAgentRoute", () => {
     expect(route.sessionKey).toBe("agent:main:discord:channel:1468834856187203680");
   });
 
+  test("preserves mixed-case Signal group ids in route session keys", () => {
+    const mixedGroupId = "VWATodkf2hc8zdOS76q9Tb0+5Bi522E03qLdaQ/9ypg=";
+    const route = resolveAgentRoute({
+      cfg: {},
+      channel: "signal",
+      accountId: null,
+      peer: { kind: "group", id: mixedGroupId },
+    });
+    expect(route.sessionKey).toBe(`agent:main:signal:group:${mixedGroupId}`);
+    expect(route.lastRoutePolicy).toBe("session");
+  });
+
   test.each([
     {
       name: "peer+guild binding does not act as guild-wide fallback when peer mismatches (#14752)",

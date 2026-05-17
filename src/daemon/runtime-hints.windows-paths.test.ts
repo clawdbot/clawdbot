@@ -5,12 +5,18 @@ const resolveGatewayLogPathsMock = vi.fn(() => ({
   stdoutPath: "C:\\tmp\\openclaw-state\\logs\\gateway.log",
   stderrPath: "C:\\tmp\\openclaw-state\\logs\\gateway.err.log",
 }));
+const resolveGatewaySupervisorLogPathsMock = vi.fn(() => ({
+  logDir: "C:\\Users\\test\\Library\\Logs\\openclaw",
+  stdoutPath: "C:\\Users\\test\\Library\\Logs\\openclaw\\gateway.log",
+  stderrPath: "C:\\Users\\test\\Library\\Logs\\openclaw\\gateway.err.log",
+}));
 const resolveGatewayRestartLogPathMock = vi.fn(
   () => "C:\\tmp\\openclaw-state\\logs\\gateway-restart.log",
 );
 
 vi.mock("./restart-logs.js", () => ({
   resolveGatewayLogPaths: resolveGatewayLogPathsMock,
+  resolveGatewaySupervisorLogPaths: resolveGatewaySupervisorLogPathsMock,
   resolveGatewayRestartLogPath: resolveGatewayRestartLogPathMock,
 }));
 
@@ -29,7 +35,7 @@ describe("buildPlatformRuntimeLogHints", () => {
         windowsTaskName: "OpenClaw Gateway",
       }),
     ).toEqual([
-      "Launchd stdout (if installed): /tmp/openclaw-state/logs/gateway.log",
+      "Launchd stdout (if installed): /Users/test/Library/Logs/openclaw/gateway.log",
       "Launchd stderr (if installed): suppressed",
       "Restart attempts: /tmp/openclaw-state/logs/gateway-restart.log",
     ]);

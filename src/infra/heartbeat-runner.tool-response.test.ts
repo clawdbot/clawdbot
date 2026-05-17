@@ -5,8 +5,13 @@ import {
   createHeartbeatToolResponsePayload,
   type HeartbeatToolResponse,
 } from "../auto-reply/heartbeat-tool-response.js";
+import {
+  GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+  HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
+} from "../auto-reply/reply/agent-runner-failure-copy.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../auto-reply/types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "./heartbeat-events.js";
 import { runHeartbeatOnce, type HeartbeatDeps } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import {
@@ -21,6 +26,7 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
+    resetHeartbeatEventsForTest();
   });
 
   function createConfig(params: {
@@ -260,6 +266,41 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
       expectTelegramSend(sendTelegram, {
         text: usageLimitMessage,
         cfg,
+      });
+    });
+  });
+
+  it("rewrites foreground generic runner failure payloads before heartbeat delivery", async () => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = createConfig({ tmpDir, storePath });
+      await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: TELEGRAM_GROUP,
+      });
+      replySpy.mockResolvedValue(
+        markReplyPayloadForSourceSuppressionDelivery({
+          text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+        }),
+      );
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        deps: createDeps({ sendTelegram, getReplyFromConfig: replySpy }),
+      });
+
+      expect(result.status).toBe("ran");
+      expectTelegramSend(sendTelegram, {
+        text: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
+        cfg,
+      });
+      expect(HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT).not.toContain("/new");
+      expect(getLastHeartbeatEvent()).toMatchObject({
+        status: "failed",
+        reason: "agent-runner-failure",
+        preview: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
+        channel: "telegram",
       });
     });
   });

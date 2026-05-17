@@ -55,6 +55,7 @@ export type SessionsPreviewParams = SchemaType<"SessionsPreviewParams">;
 export type SessionsDescribeParams = SchemaType<"SessionsDescribeParams">;
 export type SessionsResolveParams = SchemaType<"SessionsResolveParams">;
 export type SessionCompactionCheckpoint = SchemaType<"SessionCompactionCheckpoint">;
+export type SessionOperationEvent = SchemaType<"SessionOperationEvent">;
 export type SessionsCompactionListParams = SchemaType<"SessionsCompactionListParams">;
 export type SessionsCompactionGetParams = SchemaType<"SessionsCompactionGetParams">;
 export type SessionsCompactionBranchParams = SchemaType<"SessionsCompactionBranchParams">;

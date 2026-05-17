@@ -3,6 +3,7 @@ import Foundation
 public enum DeepLinkRoute: Sendable, Equatable {
     case agent(AgentDeepLink)
     case gateway(GatewayConnectDeepLink)
+    case dashboard
 }
 
 public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
@@ -265,6 +266,9 @@ public enum DeepLinkParser {
                     bootstrapToken: nil,
                     token: query["token"],
                     password: query["password"]))
+
+        case "dashboard":
+            return .dashboard
 
         default:
             return nil

@@ -186,9 +186,17 @@ function buildProjectContextSection(params: {
     const hasSoulFile = params.files.some(
       (file) => getContextFileBasename(file.path) === "soul.md",
     );
+    const hasMemoryFile = params.files.some(
+      (file) => getContextFileBasename(file.path) === "memory.md",
+    );
     lines.push("The following project context files have been loaded:");
     if (hasSoulFile) {
       lines.push("SOUL.md: persona/tone. Follow it unless higher-priority instructions override.");
+    }
+    if (hasMemoryFile) {
+      lines.push(
+        "MEMORY.md: durable user preferences and behavior guidance. Keep following it throughout the session unless higher-priority instructions override.",
+      );
     }
     lines.push("");
   }
@@ -508,7 +516,7 @@ function buildMessagingSection(params: {
   return [
     "## Messaging",
     messageToolOnly
-      ? "- Reply in current session → private by default for this source channel; use `message(action=send)` for visible channel output."
+      ? "- Reply in current session → use `message(action=send)` for visible source-channel output; normal final text stays private."
       : "- Reply in current session → automatically routes to the source channel (Signal, Telegram, etc.)",
     "- Cross-session messaging → use sessions_send(sessionKey, message)",
     subagentOrchestrationGuidance,
@@ -526,7 +534,7 @@ function buildMessagingSection(params: {
             ? `- No current/default source channel: include \`channel\` for proactive sends; valid ids: ${params.messageChannelOptions}.`
             : "- Pass `channel` only when sending outside the current/default source channel.",
           messageToolOnly
-            ? "- If you use `message` (`action=send`) to deliver visible output, do not repeat that visible content in your final answer; final answers are private in this mode."
+            ? "- If you use `message` (`action=send`) to deliver visible output, do not repeat that visible content in your final answer."
             : suppressSilentTokenGuidance
               ? "- Do not use `message(action=send)` to deliver the current source-channel reply; reply normally so OpenClaw can route it once."
               : `- If you use \`message\` (\`action=send\`) to deliver your user-visible reply, respond with ONLY: ${SILENT_REPLY_TOKEN} (avoid duplicate replies).`,

@@ -11,8 +11,10 @@ import {
 describe("command-startup-policy", () => {
   it("matches config guard bypass commands", () => {
     expect(shouldBypassConfigGuardForCommandPath(["backup", "create"])).toBe(true);
+    expect(shouldBypassConfigGuardForCommandPath(["config"])).toBe(true);
     expect(shouldBypassConfigGuardForCommandPath(["config", "validate"])).toBe(true);
     expect(shouldBypassConfigGuardForCommandPath(["config", "schema"])).toBe(true);
+    expect(shouldBypassConfigGuardForCommandPath(["config", "set"])).toBe(false);
     expect(shouldBypassConfigGuardForCommandPath(["status"])).toBe(false);
   });
 

@@ -331,7 +331,7 @@ export async function createBedrockEmbeddingProvider(
     family,
   });
 
-  const invoke = async (body: string): Promise<string> => {
+  const invoke = async (body: string, signal?: AbortSignal): Promise<string> => {
     await refreshAwsSharedConfigCacheForBedrock();
     const sdk = new BedrockRuntimeClient({ region: client.region });
     try {
@@ -342,6 +342,7 @@ export async function createBedrockEmbeddingProvider(
           contentType: "application/json",
           accept: "application/json",
         }),
+        signal ? { abortSignal: signal } : undefined,
       );
       return new TextDecoder().decode(res.body);
     } finally {
@@ -351,37 +352,46 @@ export async function createBedrockEmbeddingProvider(
 
   const isCohere = family === "cohere-v3" || family === "cohere-v4";
 
-  const embedSingle = async (text: string): Promise<number[]> => {
-    const raw = await invoke(buildBody(family, text, client.dimensions));
+  const embedSingle = async (text: string, signal?: AbortSignal): Promise<number[]> => {
+    const raw = await invoke(buildBody(family, text, client.dimensions), signal);
     return sanitizeAndNormalizeEmbedding(parseSingle(family, raw));
   };
 
   const embedCohere = async (
     texts: string[],
     inputType: "search_query" | "search_document",
+    signal?: AbortSignal,
   ): Promise<number[][]> => {
-    const raw = await invoke(buildCohereBody(family, texts, inputType, client.dimensions));
+    const raw = await invoke(buildCohereBody(family, texts, inputType, client.dimensions), signal);
     return parseCohereBatch(family, raw).map((e) => sanitizeAndNormalizeEmbedding(e));
   };
 
-  const embedQuery = async (text: string): Promise<number[]> => {
+  const embedQuery = async (
+    text: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<number[]> => {
     if (!text.trim()) {
       return [];
     }
     if (isCohere) {
-      return (await embedCohere([text], "search_query"))[0] ?? [];
+      return (await embedCohere([text], "search_query", options?.signal))[0] ?? [];
     }
-    return embedSingle(text);
+    return embedSingle(text, options?.signal);
   };
 
-  const embedBatch = async (texts: string[]): Promise<number[][]> => {
+  const embedBatch = async (
+    texts: string[],
+    options?: { signal?: AbortSignal },
+  ): Promise<number[][]> => {
     if (texts.length === 0) {
       return [];
     }
     if (isCohere) {
-      return embedCohere(texts, "search_document");
+      return embedCohere(texts, "search_document", options?.signal);
     }
-    return Promise.all(texts.map((t) => (t.trim() ? embedSingle(t) : Promise.resolve([]))));
+    return Promise.all(
+      texts.map((t) => (t.trim() ? embedSingle(t, options?.signal) : Promise.resolve([]))),
+    );
   };
 
   return {

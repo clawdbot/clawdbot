@@ -272,14 +272,14 @@ export function collectGatewayConfigFindings(
   const enabledDangerousFlags = (
     options.collectDangerousConfigFlags ?? collectCoreInsecureOrDangerousFlags
   )(cfg);
-  if (enabledDangerousFlags.length > 0) {
+  for (const enabledFlag of enabledDangerousFlags) {
     findings.push({
       checkId: "config.insecure_or_dangerous_flags",
       severity: "warn",
-      title: "Insecure or dangerous config flags enabled",
-      detail: `Detected ${enabledDangerousFlags.length} enabled flag(s): ${enabledDangerousFlags.join(", ")}.`,
+      title: "Insecure or dangerous config flag enabled",
+      detail: `Detected enabled flag: ${enabledFlag}.`,
       remediation:
-        "Disable these flags when not actively debugging, or keep deployment scoped to trusted/local-only networks.",
+        "Disable this flag when not actively debugging, or keep deployment scoped to trusted/local-only networks.",
     });
   }
 

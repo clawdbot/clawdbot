@@ -4,6 +4,12 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const execFileMock = vi.hoisted(() => vi.fn());
+const existsSyncMock = vi.hoisted(() => vi.fn(() => false));
+
+vi.mock("node:fs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:fs")>()),
+  existsSync: existsSyncMock,
+}));
 
 vi.mock("node:child_process", async () => {
   const { mockNodeChildProcessExecFile } = await import("openclaw/plugin-sdk/test-node-mocks");
@@ -138,6 +144,11 @@ const assertRestartSuccess = async (env: NodeJS.ProcessEnv) => {
   expect(requireFirstWrite(write)).toContain("Restarted systemd service");
 };
 
+beforeEach(() => {
+  existsSyncMock.mockReset();
+  existsSyncMock.mockReturnValue(false);
+});
+
 describe("systemd availability", () => {
   beforeEach(() => {
     execFileMock.mockReset();
@@ -148,6 +159,25 @@ describe("systemd availability", () => {
       cb(null, "", "");
     });
     await expect(isSystemdUserServiceAvailable()).resolves.toBe(true);
+  });
+
+  it("repairs missing user bus environment when the runtime bus exists", async () => {
+    mockEffectiveUid(1000);
+    existsSyncMock.mockReturnValue(true);
+    execFileMock.mockImplementation((_cmd, args, opts, cb) => {
+      assertUserSystemctlArgs(args, "status");
+      expect(opts.env.XDG_RUNTIME_DIR).toBe("/run/user/1000");
+      expect(opts.env.DBUS_SESSION_BUS_ADDRESS).toBe("unix:path=/run/user/1000/bus");
+      cb(null, "", "");
+    });
+
+    await expect(
+      isSystemdUserServiceAvailable({
+        USER: "debian",
+        XDG_RUNTIME_DIR: undefined,
+        DBUS_SESSION_BUS_ADDRESS: undefined,
+      }),
+    ).resolves.toBe(true);
   });
 
   it("returns false when systemd user bus is unavailable", async () => {

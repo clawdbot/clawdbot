@@ -75,6 +75,39 @@ function ensureKimiAnthropicMaxTokens(
   payloadObj.max_tokens = current === undefined ? required : Math.max(current, required);
 }
 
+function messageHasOpenAIToolCalls(message: Record<string, unknown>): boolean {
+  return Array.isArray(message.tool_calls) && message.tool_calls.length > 0;
+}
+
+function ensureKimiOpenAIReasoningContent(payloadObj: Record<string, unknown>): void {
+  if (!Array.isArray(payloadObj.messages)) {
+    return;
+  }
+  for (const message of payloadObj.messages) {
+    if (!message || typeof message !== "object") {
+      continue;
+    }
+    const record = message as Record<string, unknown>;
+    if (record.role !== "assistant" || !messageHasOpenAIToolCalls(record)) {
+      continue;
+    }
+    if (!("reasoning_content" in record)) {
+      record.reasoning_content = "";
+    }
+  }
+}
+
+function stripKimiOpenAIReasoningContent(payloadObj: Record<string, unknown>): void {
+  if (!Array.isArray(payloadObj.messages)) {
+    return;
+  }
+  for (const message of payloadObj.messages) {
+    if (message && typeof message === "object") {
+      delete (message as Record<string, unknown>).reasoning_content;
+    }
+  }
+}
+
 function normalizeKimiThinkingType(value: unknown): KimiThinkingType | undefined {
   if (typeof value === "boolean") {
     return value ? "enabled" : "disabled";
@@ -331,6 +364,10 @@ export function createKimiThinkingWrapper(
         model.api === "anthropic-messages" ? { ...normalized } : { type: normalized.type };
       if (model.api === "anthropic-messages") {
         ensureKimiAnthropicMaxTokens(payloadObj, normalized);
+      } else if (normalized.type === "enabled") {
+        ensureKimiOpenAIReasoningContent(payloadObj);
+      } else {
+        stripKimiOpenAIReasoningContent(payloadObj);
       }
       delete payloadObj.reasoning;
       delete payloadObj.reasoning_effort;

@@ -74,11 +74,25 @@ export async function waitForLocalOAuthCallback(params: {
     let timeout: NodeJS.Timeout | null = null;
     const server = createServer((req, res) => {
       try {
+        applyOAuthCallbackCorsHeaders(req, res);
         const requestUrl = new URL(req.url ?? "/", `http://${hostname}:${params.port}`);
         if (requestUrl.pathname !== params.callbackPath) {
           res.statusCode = 404;
           res.setHeader("Content-Type", "text/plain");
           res.end("Not found");
+          return;
+        }
+
+        if (req.method === "OPTIONS") {
+          res.statusCode = 204;
+          res.end();
+          return;
+        }
+
+        if (req.method !== "GET") {
+          res.statusCode = 405;
+          res.setHeader("Content-Type", "text/plain");
+          res.end("Method not allowed");
           return;
         }
 
@@ -158,6 +172,37 @@ export async function waitForLocalOAuthCallback(params: {
       finish(new Error("OAuth callback timeout"));
     }, params.timeoutMs);
   });
+}
+
+function applyOAuthCallbackCorsHeaders(
+  req: import("node:http").IncomingMessage,
+  res: import("node:http").ServerResponse,
+): void {
+  const origin = req.headers.origin;
+  if (typeof origin === "string" && isHttpOrigin(origin)) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin, Access-Control-Request-Method, Access-Control-Request-Headers");
+  }
+
+  const requestedHeaders = req.headers["access-control-request-headers"];
+  res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    typeof requestedHeaders === "string" && requestedHeaders.trim().length > 0
+      ? requestedHeaders
+      : "content-type",
+  );
+  res.setHeader("Access-Control-Allow-Private-Network", "true");
+  res.setHeader("Access-Control-Max-Age", "600");
+}
+
+function isHttpOrigin(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return (url.protocol === "http:" || url.protocol === "https:") && url.origin === value;
+  } catch {
+    return false;
+  }
 }
 
 function escapeHtmlText(value: string): string {

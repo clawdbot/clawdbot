@@ -489,6 +489,43 @@ describe("memory-wiki gateway methods", () => {
     });
   });
 
+  it("passes the default agent scope to shared wiki.search gateway calls", async () => {
+    const { config } = await createVault({ prefix: "memory-wiki-gateway-" });
+    const { api, registerGatewayMethod } = createPluginApi();
+    const appConfig = {
+      agents: {
+        list: [{ id: "main", default: true }],
+      },
+    };
+
+    registerMemoryWikiGatewayMethods({ api, config, appConfig });
+    const handler = findGatewayHandler(registerGatewayMethod, "wiki.search");
+    if (!handler) {
+      throw new Error("wiki.search handler missing");
+    }
+    const respond = vi.fn();
+
+    await handler({
+      params: {
+        query: "sessions",
+        corpus: "memory",
+        backend: "shared",
+      },
+      respond,
+    });
+
+    expect(searchMemoryWiki).toHaveBeenCalledWith({
+      config,
+      appConfig,
+      agentId: "main",
+      query: "sessions",
+      maxResults: undefined,
+      searchBackend: "shared",
+      searchCorpus: "memory",
+      mode: undefined,
+    });
+  });
+
   it("registers wiki.ingest with admin scope and keeps compile at write scope", async () => {
     const { config } = await createVault({ prefix: "memory-wiki-gateway-" });
     const { api, registerGatewayMethod } = createPluginApi();

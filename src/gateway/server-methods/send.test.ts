@@ -1265,7 +1265,7 @@ describe("gateway send mirroring", () => {
         emoji: "✅",
       },
       requesterSenderId: "trusted-user",
-      inboundTurnKind: "room_event",
+      inboundEventKind: "room_event",
       toolContext: {
         currentGraphChannelId: "graph:team/chan",
         currentChannelProvider: "whatsapp",
@@ -1293,7 +1293,7 @@ describe("gateway send mirroring", () => {
       { channel: "whatsapp" },
     );
     expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledWith(
-      expect.objectContaining({ inboundTurnKind: "room_event" }),
+      expect.objectContaining({ inboundEventKind: "room_event" }),
     );
   });
 
@@ -1325,17 +1325,21 @@ describe("gateway send mirroring", () => {
       "send-test-message-action-media-roots",
     );
 
-    const { respond } = await runMessageActionRequest({
-      channel: "telegram",
-      action: "sendAttachment",
-      params: { chatId: "123", mediaUrl: `${TEST_AGENT_WORKSPACE}/render.png` },
-      agentId: "work",
-      idempotencyKey: "idem-message-action-media-roots",
-    });
+    const { respond } = await runMessageActionRequest(
+      {
+        channel: "telegram",
+        action: "sendAttachment",
+        params: { chatId: "123", mediaUrl: `${TEST_AGENT_WORKSPACE}/render.png` },
+        agentId: "work",
+        idempotencyKey: "idem-message-action-media-roots",
+      },
+      { connect: { scopes: ["operator.write"] } },
+    );
 
     expect(firstRespondCall(respond)[0]).toBe(true);
     const actionCall = lastDispatchChannelMessageActionCall();
     expect(actionCall?.mediaLocalRoots).toContain(TEST_AGENT_WORKSPACE);
+    expect(actionCall?.gatewayClientScopes).toEqual(["operator.write"]);
   });
 
   it("forces senderIsOwner=false for narrowly-scoped callers but honors it for full operators", async () => {

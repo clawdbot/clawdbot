@@ -7,6 +7,7 @@ import {
   normalizeWhatsAppMessagingTarget,
   normalizeWhatsAppTarget,
 } from "./normalize-target.js";
+import { resolveWhatsAppOutboundTarget } from "./resolve-outbound-target.js";
 
 describe("normalizeWhatsAppTarget", () => {
   it("preserves group JIDs", () => {
@@ -14,6 +15,15 @@ describe("normalizeWhatsAppTarget", () => {
     expect(normalizeWhatsAppTarget("123456789-987654321@g.us")).toBe("123456789-987654321@g.us");
     expect(normalizeWhatsAppTarget("whatsapp:120363401234567890@g.us")).toBe(
       "120363401234567890@g.us",
+    );
+    expect(normalizeWhatsAppTarget("group:120363401234567890@g.us")).toBe(
+      "120363401234567890@g.us",
+    );
+    expect(normalizeWhatsAppTarget("whatsapp:group:120363401234567890@g.us")).toBe(
+      "120363401234567890@g.us",
+    );
+    expect(normalizeWhatsAppTarget(" WhatsApp:Group:123456789-987654321@G.US ")).toBe(
+      "123456789-987654321@g.us",
     );
   });
 
@@ -46,9 +56,9 @@ describe("normalizeWhatsAppTarget", () => {
     expect(normalizeWhatsAppTarget("whatsapp:")).toBeNull();
     expect(normalizeWhatsAppTarget("@g.us")).toBeNull();
     expect(normalizeWhatsAppTarget("whatsapp:group:@g.us")).toBeNull();
-    expect(normalizeWhatsAppTarget("whatsapp:group:120363401234567890@g.us")).toBeNull();
-    expect(normalizeWhatsAppTarget("group:123456789-987654321@g.us")).toBeNull();
-    expect(normalizeWhatsAppTarget(" WhatsApp:Group:123456789-987654321@G.US ")).toBeNull();
+    expect(normalizeWhatsAppTarget("group:+15551234567")).toBeNull();
+    expect(normalizeWhatsAppTarget("group:abc@g.us")).toBeNull();
+    expect(normalizeWhatsAppTarget("group:120363401234567890@newsletter")).toBeNull();
     expect(normalizeWhatsAppTarget("abc@s.whatsapp.net")).toBeNull();
     expect(normalizeWhatsAppTarget("abc@newsletter")).toBeNull();
   });
@@ -95,7 +105,7 @@ describe("isWhatsAppGroupJid", () => {
     expect(isWhatsAppGroupJid("120363401234567890@g.us")).toBe(true);
     expect(isWhatsAppGroupJid("123456789-987654321@g.us")).toBe(true);
     expect(isWhatsAppGroupJid("whatsapp:120363401234567890@g.us")).toBe(true);
-    expect(isWhatsAppGroupJid("whatsapp:group:120363401234567890@g.us")).toBe(false);
+    expect(isWhatsAppGroupJid("whatsapp:group:120363401234567890@g.us")).toBe(true);
     expect(isWhatsAppGroupJid("x@g.us")).toBe(false);
     expect(isWhatsAppGroupJid("@g.us")).toBe(false);
     expect(isWhatsAppGroupJid("120@g.usx")).toBe(false);
@@ -114,7 +124,20 @@ describe("looksLikeWhatsAppTargetId", () => {
     expect(looksLikeWhatsAppTargetId("whatsapp:+15555550123")).toBe(true);
     expect(looksLikeWhatsAppTargetId("15555550123@c.us")).toBe(true);
     expect(looksLikeWhatsAppTargetId("120363401234567890@newsletter")).toBe(true);
+    expect(looksLikeWhatsAppTargetId("whatsapp:group:120363401234567890@g.us")).toBe(true);
     expect(looksLikeWhatsAppTargetId("+15555550123")).toBe(true);
     expect(looksLikeWhatsAppTargetId("")).toBe(false);
+  });
+});
+
+describe("resolveWhatsAppOutboundTarget", () => {
+  it("accepts group-prefixed WhatsApp group JIDs", () => {
+    expect(
+      resolveWhatsAppOutboundTarget({
+        to: "whatsapp:group:120363401234567890@g.us",
+        allowFrom: undefined,
+        mode: "explicit",
+      }),
+    ).toEqual({ ok: true, to: "120363401234567890@g.us" });
   });
 });

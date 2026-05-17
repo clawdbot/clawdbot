@@ -12,6 +12,7 @@ await installDiscordOutboundModuleSpies(hoisted);
 
 let normalizeDiscordOutboundTarget: typeof import("./normalize.js").normalizeDiscordOutboundTarget;
 let discordOutbound: typeof import("./outbound-adapter.js").discordOutbound;
+let beginDiscordInboundEventDeliveryCorrelation: typeof import("./inbound-event-delivery.js").beginDiscordInboundEventDeliveryCorrelation;
 
 type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
 
@@ -39,6 +40,7 @@ function mockObjectArg(
 beforeAll(async () => {
   ({ normalizeDiscordOutboundTarget } = await import("./normalize.js"));
   ({ discordOutbound } = await import("./outbound-adapter.js"));
+  ({ beginDiscordInboundEventDeliveryCorrelation } = await import("./inbound-event-delivery.js"));
 });
 
 describe("normalizeDiscordOutboundTarget", () => {
@@ -457,6 +459,47 @@ describe("discordOutbound", () => {
     });
 
     expect(touchThread).toHaveBeenCalledWith({ threadId: "thread-1" });
+  });
+
+  it("notifies inbound event delivery after shared outbound delivery succeeds", async () => {
+    const markDelivered = vi.fn();
+    const end = beginDiscordInboundEventDeliveryCorrelation(
+      "agent:main:discord:channel:c1",
+      {
+        outboundTo: "thread-1",
+        outboundAccountId: "default",
+        markInboundEventDelivered: markDelivered,
+      },
+      { inboundEventKind: "room_event" },
+    );
+
+    try {
+      await discordOutbound.afterDeliverPayload?.({
+        cfg: {},
+        target: {
+          channel: "discord",
+          to: "channel:parent-1",
+          accountId: "default",
+          threadId: "thread-1",
+        },
+        payload: {
+          text: "delivered",
+          channelData: {
+            discord: {
+              __openclawInboundEventDelivery: {
+                sessionKey: "agent:main:discord:channel:c1",
+                inboundEventKind: "room_event",
+              },
+            },
+          },
+        },
+        results: [{ channel: "discord", messageId: "msg-1" }],
+      });
+    } finally {
+      end();
+    }
+
+    expect(markDelivered).toHaveBeenCalledTimes(1);
   });
 
   it("sends component payload media sequences with the component message first", async () => {

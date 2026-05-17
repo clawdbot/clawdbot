@@ -364,6 +364,67 @@ describe("runCapability image skip", () => {
     }
   });
 
+  it("passes workspaceDir to auto image provider auth checks", async () => {
+    const modelAuth = await import("../agents/model-auth.js");
+    const hasAvailableAuthForProvider = vi.mocked(modelAuth.hasAvailableAuthForProvider);
+    hasAvailableAuthForProvider.mockClear();
+    hasAvailableAuthForProvider.mockImplementation(
+      async (params) => params.workspaceDir === "/tmp/openclaw-workspace",
+    );
+
+    try {
+      await withMediaFixture(
+        {
+          filePrefix: "openclaw-image-workspace-auth",
+          extension: "png",
+          mediaType: "image/png",
+          fileContents: Buffer.from("image"),
+        },
+        async ({ ctx, media, cache }) => {
+          const result = await runCapability({
+            capability: "image",
+            cfg: {} as OpenClawConfig,
+            ctx,
+            attachments: cache,
+            media,
+            agentDir: "/tmp/openclaw-agent",
+            workspaceDir: "/tmp/openclaw-workspace",
+            providerRegistry: new Map([
+              [
+                "workspace-vision",
+                {
+                  id: "workspace-vision",
+                  capabilities: ["image"],
+                  describeImage: async (req) => ({
+                    text: "workspace auth ok",
+                    model: req.model,
+                  }),
+                },
+              ],
+            ]),
+            activeModel: { provider: "workspace-vision", model: "vision-v1" },
+          });
+
+          expect(result.decision.outcome).toBe("success");
+          expect(requireCapabilityOutput(result, 0)).toMatchObject({
+            provider: "workspace-vision",
+            model: "vision-v1",
+            text: "workspace auth ok",
+          });
+          expect(hasAvailableAuthForProvider).toHaveBeenCalledWith(
+            expect.objectContaining({
+              provider: "workspace-vision",
+              agentDir: "/tmp/openclaw-agent",
+              workspaceDir: "/tmp/openclaw-workspace",
+            }),
+          );
+        },
+      );
+    } finally {
+      hasAvailableAuthForProvider.mockImplementation(async () => true);
+    }
+  });
+
   it("auto-selects configured OpenRouter image providers with a resolved model", async () => {
     let seenModel: string | undefined;
     await withMediaFixture(

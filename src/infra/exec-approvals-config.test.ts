@@ -63,6 +63,7 @@ describe("exec approvals node host allowlist check", () => {
       resolution: {
         rawExecutable: "python3",
         resolvedPath: "/usr/bin/python3",
+        resolvedRealPath: "/usr/bin/python3",
         executableName: "python3",
       },
       entries: [{ pattern: "/usr/bin/python3" }],

@@ -532,6 +532,107 @@ describe("Discord model picker rendering", () => {
     expect(submitState?.modelIndex).toBe(3);
   });
 
+  it("defaults the runtime picker to the first effective runtime choice", () => {
+    const data = createModelsProviderData({
+      openai: ["gpt-4.1", "gpt-4o", "o3"],
+      anthropic: ["claude-sonnet-4-5"],
+    });
+    data.runtimeChoicesByProvider = new Map([
+      [
+        "openai",
+        [
+          {
+            id: "codex",
+            label: "OpenAI Codex",
+            description: "Use the OpenAI Codex runtime selected by the effective harness policy.",
+          },
+          {
+            id: "pi",
+            label: "OpenClaw Pi Default",
+            description: "Use the built-in OpenClaw Pi runtime.",
+          },
+        ],
+      ],
+    ]);
+
+    const rows = renderModelsViewRows({
+      command: "models",
+      userId: "42",
+      data,
+      provider: "openai",
+      page: 1,
+      providerPage: 2,
+      currentModel: "openai/gpt-4o",
+      pendingModel: "openai/o3",
+      pendingModelIndex: 3,
+    });
+
+    expect(rows).toHaveLength(4);
+    const runtimeSelect = rows[1]?.components?.find(
+      (component) => component.type === DISCORD_STRING_SELECT_COMPONENT_TYPE,
+    );
+    if (!runtimeSelect) {
+      throw new Error("models view did not render a runtime select");
+    }
+    expect(runtimeSelect.options?.find((option) => option.value === "codex")?.default).toBe(true);
+    expect(runtimeSelect.options?.find((option) => option.value === "pi")?.default).toBe(false);
+
+    const modelSelect = rows[2]?.components?.find(
+      (component) => component.type === DISCORD_STRING_SELECT_COMPONENT_TYPE,
+    );
+    const parsedModelSelectState = parseDiscordModelPickerCustomId(modelSelect?.custom_id ?? "");
+    expect(parsedModelSelectState?.runtime).toBeUndefined();
+
+    const navButtons = rows[3]?.components ?? [];
+    const submitState = parseDiscordModelPickerCustomId(navButtons.at(-1)?.custom_id ?? "");
+    expect(submitState?.action).toBe("submit");
+    expect(submitState?.runtime).toBeUndefined();
+    expect(submitState?.modelIndex).toBe(3);
+  });
+
+  it("carries only explicit runtime picker state into model submit ids", () => {
+    const data = createModelsProviderData({
+      openai: ["gpt-4.1", "gpt-4o"],
+    });
+    data.runtimeChoicesByProvider = new Map([
+      [
+        "openai",
+        [
+          {
+            id: "codex",
+            label: "OpenAI Codex",
+            description: "Use the OpenAI Codex runtime selected by the effective harness policy.",
+          },
+          {
+            id: "pi",
+            label: "OpenClaw Pi Default",
+            description: "Use the built-in OpenClaw Pi runtime.",
+          },
+        ],
+      ],
+    ]);
+
+    const rows = renderModelsViewRows({
+      command: "models",
+      userId: "42",
+      data,
+      provider: "openai",
+      currentModel: "openai/gpt-4.1",
+      pendingModel: "openai/gpt-4o",
+      pendingModelIndex: 2,
+      pendingRuntime: "pi",
+    });
+
+    const modelSelect = rows[2]?.components?.find(
+      (component) => component.type === DISCORD_STRING_SELECT_COMPONENT_TYPE,
+    );
+    expect(parseDiscordModelPickerCustomId(modelSelect?.custom_id ?? "")?.runtime).toBe("pi");
+    const submitState = parseDiscordModelPickerCustomId(
+      rows[3]?.components?.at(-1)?.custom_id ?? "",
+    );
+    expect(submitState?.runtime).toBe("pi");
+  });
+
   it("renders not-found model view with a back button", () => {
     const data = createModelsProviderData({ openai: ["gpt-4o"] });
 
@@ -683,6 +784,38 @@ describe("Discord model picker recents view", () => {
     );
     expect(backState.action).toBe("back");
     expect(backState.view).toBe("models");
+  });
+
+  it("preserves explicit runtime state on recents submit and back buttons", () => {
+    const data = createModelsProviderData({
+      openai: ["gpt-4.1", "gpt-4o"],
+    });
+
+    const rows = renderRecentsViewRows({
+      command: "model",
+      userId: "42",
+      data,
+      quickModels: ["openai/gpt-4o"],
+      currentModel: "openai/gpt-4o",
+      runtime: "codex",
+    });
+
+    const defaultState = requireValue(
+      parseDiscordModelPickerCustomId(rows[0]?.components?.[0]?.custom_id ?? ""),
+      "default recents button custom id should parse",
+    );
+    const recentState = requireValue(
+      parseDiscordModelPickerCustomId(rows[1]?.components?.[0]?.custom_id ?? ""),
+      "recent model button custom id should parse",
+    );
+    const backState = requireValue(
+      parseDiscordModelPickerCustomId(rows[2]?.components?.[0]?.custom_id ?? ""),
+      "recents back button custom id should parse",
+    );
+
+    expect(defaultState.runtime).toBe("codex");
+    expect(recentState.runtime).toBe("codex");
+    expect(backState.runtime).toBe("codex");
   });
 
   it("includes (default) suffix on default model button label", () => {

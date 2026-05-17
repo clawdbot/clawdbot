@@ -57,11 +57,14 @@ function prioritizeProvider(
   if (!providerId) {
     return [...providers];
   }
-  const preferredProvider = providers.find((provider) => provider.id === providerId);
+  const preferredProvider = resolveDirectiveProvider(providers, providerId);
   if (!preferredProvider) {
     return [...providers];
   }
-  return [preferredProvider, ...providers.filter((provider) => provider.id !== providerId)];
+  return [
+    preferredProvider,
+    ...providers.filter((provider) => provider.id !== preferredProvider.id),
+  ];
 }
 
 function resolveDirectiveProvider(

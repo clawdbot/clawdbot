@@ -734,6 +734,28 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
+  it("adds MEMORY guidance when a memory file is present", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      contextFiles: [
+        {
+          path: "MEMORY.md",
+          content: "NEVER use [[tts:...]] or TTS commands; ALWAYS use local Piper.",
+        },
+      ],
+      ttsHint:
+        "Voice (TTS) is enabled.\nUse [[tts:...]] and optional [[tts:text]]...[[/tts:text]] to control voice/expressiveness.",
+    });
+
+    expect(prompt).toContain(
+      "MEMORY.md: durable user preferences and behavior guidance. Keep following it throughout the session unless higher-priority instructions override.",
+    );
+    expect(prompt.indexOf("NEVER use [[tts:...]]")).toBeGreaterThan(-1);
+    expect(prompt.lastIndexOf("## Voice (TTS)")).toBeGreaterThan(
+      prompt.indexOf("NEVER use [[tts:...]]"),
+    );
+  });
+
   it("omits project context when no context files are injected", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -907,12 +929,11 @@ describe("buildAgentSystemPrompt", () => {
       },
     });
 
-    expect(prompt).toContain("private by default for this source channel");
-    expect(prompt).toContain("use `message(action=send)` for visible channel output");
+    expect(prompt).toContain("use `message(action=send)` for visible source-channel output");
     expect(prompt).toContain("Attach media with message-tool attachment fields");
     expect(prompt).not.toContain("Attach media: `MEDIA:<path-or-url>`");
     expect(prompt).toContain("The target defaults to the current source channel");
-    expect(prompt).toContain("final answers are private in this mode");
+    expect(prompt).toContain("do not repeat that visible content in your final answer");
     expect(prompt).not.toContain("## Silent Replies");
     expect(prompt).not.toContain(SILENT_REPLY_TOKEN);
     expect(prompt).not.toContain(

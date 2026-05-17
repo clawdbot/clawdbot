@@ -1,5 +1,5 @@
 import { toPosixPath } from "./output.js";
-import { resolveGatewayLogPaths, resolveGatewayRestartLogPath } from "./restart-logs.js";
+import { resolveGatewayRestartLogPath, resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
 
 function toDarwinDisplayPath(value: string): string {
   return toPosixPath(value).replace(/^[A-Za-z]:/, "");
@@ -14,7 +14,7 @@ export function buildPlatformRuntimeLogHints(params: {
   const platform = params.platform ?? process.platform;
   const env = { ...process.env, ...params.env };
   if (platform === "darwin") {
-    const logs = resolveGatewayLogPaths(env);
+    const logs = resolveGatewaySupervisorLogPaths(env, { platform });
     return [
       `Launchd stdout (if installed): ${toDarwinDisplayPath(logs.stdoutPath)}`,
       "Launchd stderr (if installed): suppressed",

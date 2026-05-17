@@ -329,17 +329,7 @@ export function buildStatusSessionsRows(params: {
   muted: (value: string) => string;
 }) {
   if (params.recent.length === 0) {
-    return [
-      {
-        Key: params.muted("no sessions yet"),
-        Kind: "",
-        Age: "",
-        Model: "",
-        Runtime: "",
-        Tokens: "",
-        ...(params.verbose ? { Cache: "" } : {}),
-      },
-    ];
+    return [];
   }
   return params.recent.map((sess) => ({
     Key: params.shortenText(sess.key, 32),

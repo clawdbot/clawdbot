@@ -964,9 +964,9 @@ export type PluginEmbeddingProvider = {
   id: string;
   model: string;
   maxInputTokens?: number;
-  embedQuery: (text: string) => Promise<number[]>;
-  embedBatch: (texts: string[]) => Promise<number[][]>;
-  embedBatchInputs?: (inputs: unknown[]) => Promise<number[][]>;
+  embedQuery: (text: string, options?: { signal?: AbortSignal }) => Promise<number[]>;
+  embedBatch: (texts: string[], options?: { signal?: AbortSignal }) => Promise<number[][]>;
+  embedBatchInputs?: (inputs: unknown[], options?: { signal?: AbortSignal }) => Promise<number[][]>;
   client?: unknown;
 };
 
@@ -1129,7 +1129,7 @@ export type ProviderPluginWizardSetup = {
    * Interactive onboarding surfaces where this auth choice should appear.
    * Defaults to `["text-inference"]` when omitted.
    */
-  onboardingScopes?: Array<"text-inference" | "image-generation">;
+  onboardingScopes?: Array<"text-inference" | "image-generation" | "music-generation">;
   /**
    * Optional model-allowlist prompt policy applied after this auth choice is
    * selected in configure/onboarding flows.

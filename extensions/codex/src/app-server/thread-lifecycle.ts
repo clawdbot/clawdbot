@@ -85,6 +85,7 @@ export async function startOrResumeThread(params: {
   appServer: CodexAppServerRuntimeOptions;
   developerInstructions?: string;
   config?: JsonObject;
+  finalConfigPatch?: JsonObject;
   mcpServersFingerprint?: string;
   mcpServersFingerprintEvaluated?: boolean;
   pluginThreadConfig?: CodexPluginThreadConfigProvider;
@@ -230,7 +231,11 @@ export async function startOrResumeThread(params: {
     } else {
       try {
         const authProfileId = params.params.authProfileId ?? binding.authProfileId;
-        const resumeConfig = mergeCodexThreadConfigs(params.config, userMcpServersConfigPatch);
+        const resumeConfig = mergeCodexThreadConfigs(
+          params.config,
+          userMcpServersConfigPatch,
+          params.finalConfigPatch,
+        );
         const response = assertCodexThreadResumeResponse(
           await params.client.request(
             "thread/resume",
@@ -324,6 +329,7 @@ export async function startOrResumeThread(params: {
     params.config,
     userMcpServersConfigPatch,
     pluginThreadConfig?.configPatch,
+    params.finalConfigPatch,
   );
   const response = assertCodexThreadStartResponse(
     await params.client.request(

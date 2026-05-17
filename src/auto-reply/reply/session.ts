@@ -601,7 +601,9 @@ export async function initSessionState(params: {
   // previous interaction that happened inside a topic/thread.
   const lastThreadIdRaw = isSystemEvent
     ? baseEntry?.lastThreadId
-    : ctx.MessageThreadId || (isThread ? baseEntry?.lastThreadId : undefined);
+    : (ctx.MessageThreadId ??
+      ctx.TransportThreadId ??
+      (isThread ? baseEntry?.lastThreadId : undefined));
   const deliveryFields = isSystemEvent
     ? normalizeSessionDeliveryFields({
         channel: baseEntry?.channel,

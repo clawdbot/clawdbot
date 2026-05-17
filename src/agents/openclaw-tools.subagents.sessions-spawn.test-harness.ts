@@ -16,6 +16,13 @@ type SubagentSpawnTesting = (typeof import("./subagent-spawn.js"))["__testing"];
 type CreateOpenClawToolsOpts = Parameters<CreateSessionsSpawnTool>[0];
 type GatewayRequest = { method?: string; params?: unknown; timeoutMs?: number };
 type AgentWaitCall = { runId?: string; timeoutMs?: number };
+type TestSessionEntry = {
+  sessionId: string;
+  updatedAt: number;
+  startedAt?: number;
+  endedAt?: number;
+  status?: "running" | "done" | "failed" | "killed" | "timeout";
+};
 type SessionsSpawnGatewayMockOptions = {
   includeSessionsList?: boolean;
   includeChatHistory?: boolean;
@@ -24,6 +31,7 @@ type SessionsSpawnGatewayMockOptions = {
   onSessionsPatch?: (params: unknown) => void;
   onSessionsDelete?: (params: unknown) => void;
   agentWaitResult?: { status: "ok" | "timeout"; startedAt: number; endedAt: number };
+  subagentSessionEntryPatch?: Partial<TestSessionEntry>;
 };
 type EventWaiter = {
   label: string;
@@ -35,7 +43,7 @@ type EventWaiter = {
 
 const hoisted = vi.hoisted(() => {
   const callGatewayMock = vi.fn();
-  const sessionStore: Record<string, { sessionId: string; updatedAt: number }> = {};
+  const sessionStore: Record<string, TestSessionEntry> = {};
   let nextRunId = 0;
   const defaultConfigOverride = {
     session: {
@@ -269,6 +277,7 @@ export function setupSessionsSpawnGatewayMock(setupOpts: SessionsSpawnGatewayMoc
           hoisted.sessionStore[childSessionKey] = {
             sessionId: `sess-${childSessionKey}`,
             updatedAt: Date.now(),
+            ...setupOpts.subagentSessionEntryPatch,
           };
         }
         setupOpts.onAgentSubagentSpawn?.(params);
@@ -347,6 +356,8 @@ vi.mock("../config/sessions.js", () => ({
     ...existing,
     ...patch,
   }),
+  resolveAgentIdFromSessionKey: (sessionKey: string) =>
+    sessionKey.match(/^agent:([^:]+)/)?.[1] ?? "main",
   resolveAgentMainSessionKey: (params: {
     cfg?: { session?: { mainKey?: string } };
     agentId: string;

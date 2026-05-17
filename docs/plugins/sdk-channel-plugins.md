@@ -158,7 +158,7 @@ Most channel plugins do not need approval-specific code.
 - `availability` - whether the account is configured and whether a request should be handled
 - `presentation` - map the shared approval view model into pending/resolved/expired native payloads or final actions
 - `transport` - prepare targets plus send/update/delete native approval messages
-- `interactions` - optional bind/unbind/clear-action hooks for native buttons or reactions
+- `interactions` - optional bind/unbind/clear-action hooks for native buttons or reactions, plus an optional `cancelDelivered` hook. Implement `cancelDelivered` when `deliverPending` registers in-process or persistent state (such as a reaction target store) so that state can be released if a handler stop cancels the delivery before `bindPending` runs or when `bindPending` returns no handle
 - `observe` - optional delivery diagnostics hooks
 - If the channel needs runtime-owned objects such as a client, token, Bolt app, or webhook receiver, register them through `openclaw/plugin-sdk/channel-runtime-context`. The generic runtime-context registry lets core bootstrap capability-driven handlers from channel startup state without adding approval-specific wrapper glue.
 - Reach for the lower-level `createChannelApprovalHandler` or `createChannelNativeApprovalRuntime` only when the capability-driven seam is not expressive enough yet.
@@ -357,9 +357,7 @@ If you only need `implicitMentionKindWhen` and
 `openclaw/plugin-sdk/channel-mention-gating` to avoid loading unrelated inbound
 runtime helpers.
 
-The older `resolveMentionGating*` helpers remain on
-`openclaw/plugin-sdk/channel-inbound` as compatibility exports only. New code
-should use `resolveInboundMentionDecision({ facts, policy })`.
+Use `resolveInboundMentionDecision({ facts, policy })` for mention gating.
 
 ## Walkthrough
 
@@ -739,7 +737,7 @@ Write colocated tests in `src/channel.test.ts`:
     TTS, STT, media, subagent via api.runtime
   </Card>
   <Card title="Channel turn kernel" icon="bolt" href="/plugins/sdk-channel-turn">
-    Shared inbound turn lifecycle: ingest, resolve, record, dispatch, finalize
+    Shared inbound event lifecycle: ingest, resolve, record, dispatch, finalize
   </Card>
 </CardGroup>
 

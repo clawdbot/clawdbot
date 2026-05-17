@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   isCatalogChannelInstalled: vi.fn<(params: { entry: ChannelPluginCatalogEntry }) => boolean>(
     () => true,
   ),
+  resolveMissingOfficialExternalChannelPluginRepairHint: vi.fn(),
   callGateway: vi.fn(),
   resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
   resolveDefaultAgentId: vi.fn(() => "main"),
@@ -52,6 +53,11 @@ vi.mock("./channel-setup/trusted-catalog.js", () => ({
 
 vi.mock("./channel-setup/discovery.js", () => ({
   isCatalogChannelInstalled: mocks.isCatalogChannelInstalled,
+}));
+
+vi.mock("../plugins/official-external-plugin-repair-hints.js", () => ({
+  resolveMissingOfficialExternalChannelPluginRepairHint:
+    mocks.resolveMissingOfficialExternalChannelPluginRepairHint,
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
@@ -120,6 +126,8 @@ describe("channels list", () => {
     mocks.listTrustedChannelPluginCatalogEntries.mockReturnValue([]);
     mocks.isCatalogChannelInstalled.mockReset();
     mocks.isCatalogChannelInstalled.mockReturnValue(true);
+    mocks.resolveMissingOfficialExternalChannelPluginRepairHint.mockReset();
+    mocks.resolveMissingOfficialExternalChannelPluginRepairHint.mockReturnValue(null);
     mocks.callGateway.mockReset();
     mocks.callGateway.mockRejectedValue(new Error("gateway unavailable"));
   });
@@ -353,6 +361,92 @@ describe("channels list", () => {
     expect(output).not.toContain("QQ Bot");
     // Hint user about --all
     expect(output).toContain("--all");
+  });
+
+  it("default output shows configured official external channels when the plugin is missing", async () => {
+    const runtime = createTestRuntime();
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([]);
+    mocks.listTrustedChannelPluginCatalogEntries.mockReturnValue([
+      createCatalogEntry("discord", "Discord"),
+    ]);
+    mocks.isCatalogChannelInstalled.mockReturnValue(false);
+    mocks.resolveMissingOfficialExternalChannelPluginRepairHint.mockReturnValue({
+      pluginId: "discord",
+      channelId: "discord",
+      label: "Discord",
+      installSpec: "@openclaw/discord",
+      installCommand: "openclaw plugins install @openclaw/discord",
+      doctorFixCommand: "openclaw doctor --fix",
+      repairHint:
+        "Install the official external plugin with: openclaw plugins install @openclaw/discord, or run: openclaw doctor --fix.",
+    });
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {
+        channels: {
+          discord: { enabled: true, token: "secret" },
+        },
+      },
+    });
+
+    await channelsListCommand({}, runtime);
+
+    expect(mocks.resolveMissingOfficialExternalChannelPluginRepairHint).toHaveBeenCalledWith({
+      config: {
+        channels: {
+          discord: { enabled: true, token: "secret" },
+        },
+      },
+      channelId: "discord",
+      workspaceDir: "/tmp/workspace",
+    });
+    const output = stripAnsi(loggedText(runtime));
+    expect(output).toContain("Discord");
+    expect(output).toContain("not installed");
+    expect(output).toContain("configured");
+    expect(output).toContain("disabled");
+    expect(output).toContain(
+      "run openclaw plugins install @openclaw/discord or openclaw doctor --fix",
+    );
+    expect(output).not.toContain("no configured chat channels");
+  });
+
+  it("JSON output includes configured official external channels when the plugin is missing", async () => {
+    const runtime = createTestRuntime();
+    mocks.listReadOnlyChannelPluginsForConfig.mockReturnValue([]);
+    mocks.listTrustedChannelPluginCatalogEntries.mockReturnValue([
+      createCatalogEntry("discord", "Discord"),
+    ]);
+    mocks.isCatalogChannelInstalled.mockReturnValue(false);
+    mocks.resolveMissingOfficialExternalChannelPluginRepairHint.mockReturnValue({
+      pluginId: "discord",
+      channelId: "discord",
+      label: "Discord",
+      installSpec: "@openclaw/discord",
+      installCommand: "openclaw plugins install @openclaw/discord",
+      doctorFixCommand: "openclaw doctor --fix",
+      repairHint:
+        "Install the official external plugin with: openclaw plugins install @openclaw/discord, or run: openclaw doctor --fix.",
+    });
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {
+        channels: {
+          discord: { enabled: true, token: "secret" },
+        },
+      },
+    });
+
+    await channelsListCommand({ json: true }, runtime);
+
+    const payload = JSON.parse(loggedText(runtime)) as {
+      chat: Record<string, { accounts: string[]; origin: string; installed: boolean }>;
+    };
+    expect(payload.chat.discord).toEqual({
+      accounts: [],
+      installed: false,
+      origin: "configured",
+    });
   });
 
   it("--all surfaces uninstalled catalog channels with installed=false / not configured / not enabled", async () => {

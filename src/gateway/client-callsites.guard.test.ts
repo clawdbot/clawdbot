@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { toRepoRelativePath } from "../test-utils/repo-files.js";
 
 const GATEWAY_CLIENT_CONSTRUCTOR_PATTERN = /new\s+GatewayClient\s*\(/;
 
@@ -52,7 +53,7 @@ describe("GatewayClient production callsites", () => {
     ];
     const callsites: string[] = [];
     for (const fullPath of sourceFiles) {
-      const relativePath = path.relative(root, fullPath).replaceAll(path.sep, "/");
+      const relativePath = toRepoRelativePath(root, fullPath);
       const content = await fs.readFile(fullPath, "utf8");
       if (GATEWAY_CLIENT_CONSTRUCTOR_PATTERN.test(content)) {
         callsites.push(relativePath);

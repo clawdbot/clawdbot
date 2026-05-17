@@ -106,6 +106,16 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   },
   { commandPath: ["configure"], policy: { bypassConfigGuard: true, loadPlugins: "never" } },
   {
+    commandPath: ["config"],
+    exact: true,
+    policy: { bypassConfigGuard: true, loadPlugins: "never", networkProxy: "bypass" },
+  },
+  {
+    commandPath: ["config", "models"],
+    exact: true,
+    policy: { bypassConfigGuard: true, loadPlugins: "never", networkProxy: "bypass" },
+  },
+  {
     commandPath: ["migrate"],
     policy: { bypassConfigGuard: true, loadPlugins: "never", networkProxy: "bypass" },
   },

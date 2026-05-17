@@ -74,10 +74,12 @@ Options:
 - In `gateway.mode=remote`, remote client fields (`gateway.remote.token` / `gateway.remote.password`) are also eligible per remote precedence rules.
 - Node host auth resolution only honors `OPENCLAW_GATEWAY_*` env vars.
 
-For a node connecting to a non-loopback `ws://` Gateway on a trusted private
-network, set `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1`. Without it, node startup
-fails closed and asks you to use `wss://`, an SSH tunnel, or Tailscale.
-This is a process-environment opt-in, not an `openclaw.json` config key.
+For a node connecting to a plaintext `ws://` Gateway, loopback, private IP
+literals, `.local`, and Tailnet `*.ts.net` hosts are accepted. For other
+trusted private-DNS names, set `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1`; without
+it, node startup fails closed and asks you to use `wss://`, an SSH tunnel, or
+Tailscale. This is a process-environment opt-in, not an `openclaw.json` config
+key.
 `openclaw node install` persists it into the supervised node service when it is
 present in the install command environment.
 

@@ -307,6 +307,126 @@ describe("kimi tool-call markup wrapper", () => {
     });
   });
 
+  it("backfills Kimi OpenAI-compatible tool-call reasoning_content when thinking is enabled", () => {
+    const { streamFn: baseStreamFn, getCapturedPayload } = createPayloadCapturingStream({
+      messages: [
+        { role: "user", content: "run pwd" },
+        {
+          role: "assistant",
+          content: null,
+          tool_calls: [
+            {
+              id: "call_1",
+              type: "function",
+              function: { name: "exec", arguments: "{\"command\":\"pwd\"}" },
+            },
+          ],
+        },
+        {
+          role: "assistant",
+          content: "kept",
+          reasoning_content: "native reasoning",
+          tool_calls: [
+            {
+              id: "call_2",
+              type: "function",
+              function: { name: "read", arguments: "{}" },
+            },
+          ],
+        },
+      ],
+    });
+
+    const wrapped = createKimiThinkingWrapper(baseStreamFn, "enabled");
+    void wrapped(
+      {
+        api: "openai-completions",
+        provider: "kimi",
+        id: "kimi-for-coding",
+      } as Model<"openai-completions">,
+      { messages: [] } as Context,
+      {},
+    );
+
+    expect(getCapturedPayload()).toEqual({
+      messages: [
+        { role: "user", content: "run pwd" },
+        {
+          role: "assistant",
+          content: null,
+          reasoning_content: "",
+          tool_calls: [
+            {
+              id: "call_1",
+              type: "function",
+              function: { name: "exec", arguments: "{\"command\":\"pwd\"}" },
+            },
+          ],
+        },
+        {
+          role: "assistant",
+          content: "kept",
+          reasoning_content: "native reasoning",
+          tool_calls: [
+            {
+              id: "call_2",
+              type: "function",
+              function: { name: "read", arguments: "{}" },
+            },
+          ],
+        },
+      ],
+      thinking: { type: "enabled" },
+    });
+  });
+
+  it("strips Kimi OpenAI-compatible replay reasoning_content when thinking is disabled", () => {
+    const { streamFn: baseStreamFn, getCapturedPayload } = createPayloadCapturingStream({
+      messages: [
+        {
+          role: "assistant",
+          content: null,
+          reasoning_content: "old reasoning",
+          tool_calls: [
+            {
+              id: "call_1",
+              type: "function",
+              function: { name: "exec", arguments: "{\"command\":\"pwd\"}" },
+            },
+          ],
+        },
+      ],
+    });
+
+    const wrapped = createKimiThinkingWrapper(baseStreamFn, "disabled");
+    void wrapped(
+      {
+        api: "openai-completions",
+        provider: "kimi",
+        id: "kimi-for-coding",
+      } as Model<"openai-completions">,
+      { messages: [] } as Context,
+      {},
+    );
+
+    expect(getCapturedPayload()).toEqual({
+      messages: [
+        {
+          role: "assistant",
+          content: null,
+          tool_calls: [
+            {
+              id: "call_1",
+              type: "function",
+              function: { name: "exec", arguments: "{\"command\":\"pwd\"}" },
+            },
+          ],
+        },
+      ],
+      thinking: { type: "disabled" },
+    });
+  });
+
   it("enables Kimi Anthropic thinking with a high budget and enough output room", () => {
     const { streamFn: baseStreamFn, getCapturedPayload } = createPayloadCapturingStream();
 

@@ -10,25 +10,31 @@ struct PermissionsSettings: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                SystemRunSettingsView()
+            VStack(alignment: .leading, spacing: 18) {
+                SettingsPageHeader(
+                    title: "Permissions",
+                    subtitle: "macOS access for notifications, capture, voice, and device context.")
 
-                Text("Allow these so OpenClaw can notify and capture when needed.")
-                    .padding(.top, 4)
-                    .fixedSize(horizontal: false, vertical: true)
+                SettingsSection("System Access") {
+                    PermissionStatusList(status: self.status, refresh: self.refresh)
+                        .padding(.horizontal, 2)
+                }
 
-                PermissionStatusList(status: self.status, refresh: self.refresh)
-                    .padding(.horizontal, 2)
-                    .padding(.vertical, 6)
+                SettingsSection("Location") {
+                    LocationAccessSettings()
+                }
 
-                LocationAccessSettings()
-
-                Button("Restart onboarding") { self.showOnboarding() }
-                    .buttonStyle(.bordered)
+                SettingsSection("Setup") {
+                    Button("Restart onboarding") { self.showOnboarding() }
+                        .buttonStyle(.bordered)
+                    Text("Use this if macOS prompts were skipped or permissions need a fresh walkthrough.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 12)
+            .padding(.trailing, SettingsLayout.scrollbarGutter)
+            .padding(.vertical, 4)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }

@@ -183,7 +183,7 @@ export async function resolveGatewayInteractiveSurfaceAuth(params: {
             path: "gateway.remote.password",
             value: params.config.gateway?.remote?.password,
           });
-    const token = explicitToken ?? remoteToken.value;
+    const token = explicitToken ?? remoteToken.value ?? envToken;
     const password = explicitPassword ?? envPassword ?? remotePassword.value;
     return token || password
       ? { token, password }

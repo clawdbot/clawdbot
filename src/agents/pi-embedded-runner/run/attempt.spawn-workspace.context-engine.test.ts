@@ -593,7 +593,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
           "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
         ].join("\n"),
         transcriptPrompt: "what does this mean?",
-        currentTurnContext: {
+        currentInboundContext: {
           text: [
             "Reply target of current user message (untrusted, for context):",
             "```json",
@@ -732,11 +732,11 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       attemptOverrides: {
         prompt: "[OpenClaw room event]",
         transcriptPrompt: "",
-        currentTurnKind: "room_event",
-        currentTurnContext: {
+        currentInboundEventKind: "room_event",
+        currentInboundContext: {
           text: [
-            "[OpenClaw turn]",
-            "kind: room_event",
+            "[OpenClaw room event]",
+            "inbound_event_kind: room_event",
             "visible_reply_contract: message_tool_only",
             "Room context:\n#2001 Alice: lunch at 2?\n#2002 Bob: works",
             "Current event:\n#2003 Bob: hey claw summarize the plan",
@@ -754,8 +754,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       },
     });
 
-    expect(seenPrompt).toContain("[OpenClaw turn]");
-    expect(seenPrompt).toContain("kind: room_event");
+    expect(seenPrompt).toContain("[OpenClaw room event]");
+    expect(seenPrompt).toContain("inbound_event_kind: room_event");
     expect(seenPrompt).toContain("visible_reply_contract: message_tool_only");
     expect(seenPrompt).toContain("Current event:\n#2003 Bob: hey claw summarize the plan");
     expect(seenPrompt?.trim().endsWith("[OpenClaw room event]")).toBe(true);

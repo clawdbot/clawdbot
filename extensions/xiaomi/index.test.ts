@@ -242,6 +242,22 @@ describe("xiaomi provider plugin", () => {
     expect(replayPolicy?.validateAnthropicTurns).toBe(true);
   });
 
+  it("marks resolved MiMo models for empty array items omission", async () => {
+    const provider = await registerSingleProviderPlugin(xiaomiPlugin);
+    const model = mimoReasoningModel("mimo-v2.5");
+
+    const normalized = provider.normalizeResolvedModel?.({
+      provider: "xiaomi",
+      modelId: model.id,
+      modelApi: model.api,
+      model,
+    } as never);
+
+    expect(
+      (normalized?.compat as { omitEmptyArrayItems?: unknown } | undefined)?.omitEmptyArrayItems,
+    ).toBe(true);
+  });
+
   it("advertises thinking profiles for MiMo reasoning models only", async () => {
     const provider = await registerSingleProviderPlugin(xiaomiPlugin);
     const resolveThinkingProfile = requireThinkingProfileResolver(provider);

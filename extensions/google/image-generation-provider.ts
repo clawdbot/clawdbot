@@ -17,6 +17,7 @@ import {
 import { normalizeGoogleModelId, resolveGoogleGenerativeAiHttpRequestConfig } from "./api.js";
 
 const DEFAULT_GOOGLE_IMAGE_MODEL = "gemini-3.1-flash-image-preview";
+const DEFAULT_IMAGE_TIMEOUT_MS = 180_000;
 const DEFAULT_OUTPUT_MIME = "image/png";
 const GOOGLE_SUPPORTED_SIZES = [
   "1024x1024",
@@ -217,7 +218,7 @@ export function buildGoogleImageGenerationProvider(): ImageGenerationProvider {
               : {}),
           },
         },
-        timeoutMs: req.timeoutMs ?? 60_000,
+        timeoutMs: req.timeoutMs ?? DEFAULT_IMAGE_TIMEOUT_MS,
         fetchFn: fetch,
         pinDns: false,
         allowPrivateNetwork,

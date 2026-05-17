@@ -35,6 +35,11 @@ const hoisted = vi.hoisted(() => ({
     label?: string;
     title?: string;
   }>,
+  activeEmbeddedRunCount: { value: 0 },
+  activeEmbeddedRunSessionIds: [] as string[],
+  activeEmbeddedRunSessionKeys: [] as string[],
+  markRestartAbortedMainSessions: vi.fn(async (_params: unknown) => ({ marked: 1, skipped: 0 })),
+  runtimeConfig: { value: { session: { store: "/tmp/active-sessions.json" } } as OpenClawConfig },
 }));
 
 vi.mock("../hooks/gmail-watcher.js", () => ({
@@ -76,6 +81,20 @@ vi.mock("../tasks/task-registry.maintenance.js", async () => {
   };
 });
 
+vi.mock("../agents/pi-embedded-runner/run-state.js", () => ({
+  getActiveEmbeddedRunCount: () => hoisted.activeEmbeddedRunCount.value,
+  listActiveEmbeddedRunSessionIds: () => hoisted.activeEmbeddedRunSessionIds,
+  listActiveEmbeddedRunSessionKeys: () => hoisted.activeEmbeddedRunSessionKeys,
+}));
+
+vi.mock("../agents/main-session-restart-recovery.js", () => ({
+  markRestartAbortedMainSessions: hoisted.markRestartAbortedMainSessions,
+}));
+
+vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: () => hoisted.runtimeConfig.value,
+}));
+
 function createReloadHandlersForTest(logReload = { info: vi.fn(), warn: vi.fn() }) {
   const cron = { start: vi.fn(async () => {}), stop: vi.fn() };
   const heartbeatRunner = {
@@ -115,6 +134,11 @@ afterEach(() => {
   hoisted.stopGmailWatcher.mockClear();
   hoisted.activeTaskCount.value = 0;
   hoisted.activeTaskBlockers.length = 0;
+  hoisted.activeEmbeddedRunCount.value = 0;
+  hoisted.activeEmbeddedRunSessionIds.length = 0;
+  hoisted.activeEmbeddedRunSessionKeys.length = 0;
+  hoisted.markRestartAbortedMainSessions.mockClear();
+  hoisted.runtimeConfig.value = { session: { store: "/tmp/active-sessions.json" } };
 });
 
 describe("gateway restart deferral preflight", () => {
@@ -124,6 +148,8 @@ describe("gateway restart deferral preflight", () => {
     const logReload = { info: vi.fn(), warn: vi.fn() };
     const { requestGatewayRestart } = createReloadHandlersForTest(logReload);
     hoisted.activeTaskCount.value = 1;
+    hoisted.activeEmbeddedRunSessionIds.push("session-issue-82433");
+    hoisted.activeEmbeddedRunSessionKeys.push("agent:main:issue-82433");
     hoisted.activeTaskBlockers.push({
       taskId: "task-nightly",
       runId: "run-nightly",
@@ -171,6 +197,15 @@ describe("gateway restart deferral preflight", () => {
       await Promise.resolve();
 
       expect(signalSpy).toHaveBeenCalledTimes(1);
+      expect(hoisted.markRestartAbortedMainSessions).toHaveBeenCalledWith({
+        cfg: {
+          gateway: { reload: { deferralTimeoutMs: 1_000 } },
+        },
+        additionalCfgs: [{ session: { store: "/tmp/active-sessions.json" } }],
+        sessionIds: new Set(["session-issue-82433"]),
+        sessionKeys: new Set(["agent:main:issue-82433"]),
+        reason: "config reload forced restart",
+      });
       expect(logReload.warn.mock.calls).toEqual([
         [
           "config change requires gateway restart (gateway.port) — deferring until 1 background task run(s) complete",

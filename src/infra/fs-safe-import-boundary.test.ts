@@ -1,7 +1,9 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { expectNoReaddirSyncDuring } from "../test-utils/fs-scan-assertions.js";
+import { listGitTrackedFiles, toRepoRelativePath } from "../test-utils/repo-files.js";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../..");
 const SCAN_ROOTS = ["src", "packages", "extensions"] as const;
@@ -21,25 +23,18 @@ function listSourceFiles(dir: string): string[] {
 }
 
 function listExternalSourceFiles(dir: string): string[] | null {
-  const repoPath = toRepoPath(dir);
+  const repoPath = toRepoRelativePath(REPO_ROOT, dir);
   return listGitSourceFiles(repoPath) ?? listFindSourceFiles(dir);
 }
 
 function listGitSourceFiles(repoPath: string): string[] | null {
-  const result = spawnSync("git", ["ls-files", "--", repoPath], {
-    cwd: REPO_ROOT,
-    encoding: "utf8",
-    maxBuffer: 1024 * 1024 * 8,
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  if (result.status !== 0) {
+  const files = listGitTrackedFiles({ repoRoot: REPO_ROOT, pathspecs: repoPath });
+  if (!files) {
     return null;
   }
-  return result.stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
+  return files
     .map((filePath) => path.join(REPO_ROOT, filePath))
+    .filter((filePath) => fs.existsSync(filePath))
     .filter(isSourceFile)
     .toSorted();
 }
@@ -81,27 +76,19 @@ function walkSourceFiles(dir: string): string[] {
   return files;
 }
 
-function toRepoPath(filePath: string): string {
-  return path.relative(REPO_ROOT, filePath).replaceAll(path.sep, "/");
-}
-
 describe("fs-safe import boundary", () => {
   it("lists source files without scanning boundary roots in-process", () => {
-    const readDir = vi.spyOn(fs, "readdirSync");
-    try {
+    expectNoReaddirSyncDuring(() => {
       const files = SCAN_ROOTS.flatMap((root) => listSourceFiles(path.join(REPO_ROOT, root)));
 
       expect(files.length).toBeGreaterThan(0);
       expect(files.every(isSourceFile)).toBe(true);
-      expect(readDir).not.toHaveBeenCalled();
-    } finally {
-      readDir.mockRestore();
-    }
+    });
   });
 
   it("keeps direct fs-safe imports behind OpenClaw policy wrappers", () => {
     const violations = SCAN_ROOTS.flatMap((root) => listSourceFiles(path.join(REPO_ROOT, root)))
-      .map(toRepoPath)
+      .map((filePath) => toRepoRelativePath(REPO_ROOT, filePath))
       .filter((filePath) => {
         if (ALLOWED_PREFIXES.some((prefix) => filePath.startsWith(prefix))) {
           return false;

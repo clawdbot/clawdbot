@@ -85,17 +85,22 @@ function mergeVideoGenerationModeCapabilities<
   if (!base) {
     return overlay;
   }
+  const overlayOptions = overlay.providerOptions;
+  const hasOverlayOptions = Object.hasOwn(overlay, "providerOptions");
+  const mergedProviderOptions =
+    hasOverlayOptions && overlayOptions && Object.keys(overlayOptions).length === 0
+      ? overlayOptions
+      : base.providerOptions || overlayOptions
+        ? {
+            ...base.providerOptions,
+            ...overlayOptions,
+          }
+        : undefined;
+
   return {
     ...base,
     ...overlay,
-    ...(base.providerOptions || overlay.providerOptions
-      ? {
-          providerOptions: {
-            ...base.providerOptions,
-            ...overlay.providerOptions,
-          },
-        }
-      : {}),
+    ...(mergedProviderOptions ? { providerOptions: mergedProviderOptions } : {}),
   } as T;
 }
 
@@ -103,17 +108,22 @@ export function mergeVideoGenerationProviderCapabilities(
   base: VideoGenerationProviderCapabilities,
   overlay: VideoGenerationProviderCapabilities,
 ): VideoGenerationProviderCapabilities {
+  const overlayOptions = overlay.providerOptions;
+  const hasOverlayOptions = Object.hasOwn(overlay, "providerOptions");
+  const mergedProviderOptions =
+    hasOverlayOptions && overlayOptions && Object.keys(overlayOptions).length === 0
+      ? overlayOptions
+      : base.providerOptions || overlayOptions
+        ? {
+            ...base.providerOptions,
+            ...overlayOptions,
+          }
+        : undefined;
+
   return {
     ...base,
     ...overlay,
-    ...(base.providerOptions || overlay.providerOptions
-      ? {
-          providerOptions: {
-            ...base.providerOptions,
-            ...overlay.providerOptions,
-          },
-        }
-      : {}),
+    ...(mergedProviderOptions ? { providerOptions: mergedProviderOptions } : {}),
     generate: mergeVideoGenerationModeCapabilities(base.generate, overlay.generate),
     imageToVideo: mergeVideoGenerationModeCapabilities(base.imageToVideo, overlay.imageToVideo),
     videoToVideo: mergeVideoGenerationModeCapabilities(base.videoToVideo, overlay.videoToVideo),

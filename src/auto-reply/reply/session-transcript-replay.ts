@@ -6,8 +6,40 @@ import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
 /** Tail kept so DM continuity survives silent session rotations. */
 export const DEFAULT_REPLAY_MAX_MESSAGES = 6;
 
-type SessionRecord = { message?: { role?: unknown } };
+type SessionRecord = {
+  type?: unknown;
+  id?: unknown;
+  parentId?: unknown;
+  timestamp?: unknown;
+  message?: { role?: unknown };
+};
 type KeptRecord = { role: "user" | "assistant"; line: string };
+
+function isValidReplayTimestamp(value: unknown): boolean {
+  if (typeof value === "number") {
+    return Number.isFinite(value);
+  }
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function replayableRole(record: SessionRecord | null): "user" | "assistant" | undefined {
+  if (
+    !record ||
+    record.type !== "message" ||
+    typeof record.id !== "string" ||
+    record.id.trim().length === 0 ||
+    !isValidReplayTimestamp(record.timestamp) ||
+    !(
+      record.parentId === null ||
+      record.parentId === undefined ||
+      typeof record.parentId === "string"
+    )
+  ) {
+    return undefined;
+  }
+  const role = record.message?.role;
+  return role === "user" || role === "assistant" ? role : undefined;
+}
 
 /**
  * Copy the tail of user/assistant JSONL records from a prior transcript into a
@@ -35,8 +67,8 @@ export async function replayRecentUserAssistantMessages(params: {
         continue;
       }
       try {
-        const role = (JSON.parse(line) as SessionRecord | null)?.message?.role;
-        if (role === "user" || role === "assistant") {
+        const role = replayableRole(JSON.parse(line) as SessionRecord | null);
+        if (role) {
           kept.push({ role, line });
         }
       } catch {

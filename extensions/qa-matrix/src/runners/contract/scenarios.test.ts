@@ -351,6 +351,7 @@ describe("matrix live qa scenarios", () => {
       "matrix-inbound-edit-ignored",
       "matrix-inbound-edit-no-duplicate-trigger",
       "matrix-e2ee-basic-reply",
+      "matrix-e2ee-state-after-missing-encryption",
       "matrix-e2ee-thread-follow-up",
       "matrix-e2ee-bootstrap-success",
       "matrix-e2ee-recovery-key-lifecycle",
@@ -1032,6 +1033,226 @@ describe("matrix live qa scenarios", () => {
         requireMention: true,
       },
     ]);
+  });
+
+  it("runs the Matrix E2EE state_after regression scenario through the gateway fault proxy", async () => {
+    const outputDir = await mkdtemp(path.join(os.tmpdir(), "matrix-e2ee-state-after-"));
+    const gatewayConfigPath = path.join(outputDir, "gateway-config.json");
+    try {
+      await writeTestJsonFile(gatewayConfigPath, {
+        channels: {
+          matrix: {
+            defaultAccount: "sut",
+            accounts: {
+              sut: {
+                accessToken: "sut-token",
+                enabled: true,
+                homeserver: "http://127.0.0.1:28008/",
+                network: {
+                  existing: true,
+                },
+                userId: "@sut:matrix-qa.test",
+              },
+            },
+          },
+        },
+      });
+      const proxyStop = vi.fn().mockResolvedValue(undefined);
+      const proxyHits = vi.fn().mockReturnValue([]);
+      startMatrixQaFaultProxy.mockResolvedValue({
+        baseUrl: "http://127.0.0.1:39879",
+        hits: proxyHits,
+        stop: proxyStop,
+      });
+      let replyToken = "";
+      const driverStop = vi.fn().mockResolvedValue(undefined);
+      const driverClient = {
+        prime: vi.fn().mockResolvedValue("s1"),
+        sendTextMessage: vi.fn(async ({ body }) => {
+          replyToken = String(body).match(/MATRIX_QA_E2EE_STATE_AFTER_[A-Z0-9]+/)?.[0] ?? "";
+          return "$state-after-trigger";
+        }),
+        stop: driverStop,
+        waitForRoomEvent: vi.fn(async ({ predicate }) => {
+          const event = {
+            body: replyToken,
+            eventId: "$state-after-reply",
+            kind: "message",
+            roomId: "!state-after:matrix-qa.test",
+            sender: "@sut:matrix-qa.test",
+            type: "m.room.message",
+          };
+          expect(predicate(event)).toBe(true);
+          return { event, since: "s2" };
+        }),
+      };
+      createMatrixQaE2eeScenarioClient.mockResolvedValueOnce(driverClient);
+      const restartGatewayAfterStateMutation = vi.fn(async (mutateState) => {
+        await mutateState({ stateDir: path.join(outputDir, "state") });
+      });
+
+      const scenario = requireMatrixQaScenario("matrix-e2ee-state-after-missing-encryption");
+
+      const result = await runMatrixQaScenario(scenario, {
+        ...matrixQaScenarioContext(),
+        driverDeviceId: "DRIVERDEVICE",
+        gatewayRuntimeEnv: {
+          OPENCLAW_CONFIG_PATH: gatewayConfigPath,
+          PATH: process.env.PATH,
+        },
+        outputDir,
+        restartGatewayAfterStateMutation,
+        sutAccountId: "sut",
+        topology: {
+          defaultRoomId: "!main:matrix-qa.test",
+          defaultRoomKey: "main",
+          rooms: [
+            {
+              encrypted: true,
+              key: matrixQaE2eeRoomKey("matrix-e2ee-state-after-missing-encryption"),
+              kind: "group",
+              memberRoles: ["driver", "observer", "sut"],
+              memberUserIds: [
+                "@driver:matrix-qa.test",
+                "@observer:matrix-qa.test",
+                "@sut:matrix-qa.test",
+              ],
+              name: "E2EE",
+              requireMention: true,
+              roomId: "!state-after:matrix-qa.test",
+            },
+          ],
+        },
+      });
+      const artifacts = result.artifacts as {
+        reply?: { eventId?: unknown; tokenMatched?: unknown };
+        roomId?: unknown;
+        stateAfterFaultHitCount?: unknown;
+        stateAfterFaultRuleId?: unknown;
+        strippedSyncStateAfterParam?: unknown;
+      };
+      expect(artifacts.reply?.eventId).toBe("$state-after-reply");
+      expect(artifacts.reply?.tokenMatched).toBe(true);
+      expect(artifacts.roomId).toBe("!state-after:matrix-qa.test");
+      expect(artifacts.stateAfterFaultHitCount).toBe(0);
+      expect(artifacts.stateAfterFaultRuleId).toBe("sync-state-after-missing-encryption");
+      expect(artifacts.strippedSyncStateAfterParam).toBe(true);
+
+      const restoredConfig = JSON.parse(await readFile(gatewayConfigPath, "utf8")) as {
+        channels: {
+          matrix: {
+            accounts: {
+              sut: {
+                homeserver?: string;
+                network?: Record<string, unknown>;
+              };
+            };
+          };
+        };
+      };
+      expect(restoredConfig.channels.matrix.accounts.sut.homeserver).toBe(
+        "http://127.0.0.1:28008/",
+      );
+      expect(restoredConfig.channels.matrix.accounts.sut.network).toEqual({ existing: true });
+      expect(restartGatewayAfterStateMutation).toHaveBeenCalledTimes(2);
+      expect(proxyStop).toHaveBeenCalledTimes(1);
+
+      const proxyArgs = mockObjectArg(startMatrixQaFaultProxy, "startMatrixQaFaultProxy") as {
+        rules: Array<{
+          match: (params: {
+            bearerToken?: string;
+            headers: Record<string, string>;
+            method: string;
+            path: string;
+            search: string;
+          }) => boolean;
+          mutateResponse: (params: {
+            request: unknown;
+            response: {
+              body: Buffer;
+              headers: Headers;
+              status: number;
+            };
+          }) =>
+            | {
+                body: Buffer;
+                headers: Headers;
+                status: number;
+              }
+            | Promise<{
+                body: Buffer;
+                headers: Headers;
+                status: number;
+              }>;
+        }>;
+        targetBaseUrl?: unknown;
+      };
+      const [faultRule] = proxyArgs.rules;
+      if (!faultRule) {
+        throw new Error("expected Matrix QA fault proxy rule");
+      }
+      expect(proxyArgs.targetBaseUrl).toBe("http://127.0.0.1:28008/");
+      expect(
+        faultRule.match({
+          bearerToken: "sut-token",
+          headers: {},
+          method: "GET",
+          path: "/_matrix/client/v3/sync",
+          search: "?timeout=30000&org.matrix.msc4222.use_state_after=true",
+        }),
+      ).toBe(true);
+      expect(
+        faultRule.match({
+          bearerToken: "sut-token",
+          headers: {},
+          method: "GET",
+          path: "/_matrix/client/v3/sync",
+          search: "?timeout=30000",
+        }),
+      ).toBe(false);
+      const mutated = await faultRule.mutateResponse({
+        request: {},
+        response: {
+          body: Buffer.from(
+            JSON.stringify({
+              rooms: {
+                join: {
+                  "!state-after:matrix-qa.test": {
+                    "org.matrix.msc4222.state_after": {
+                      events: [{ type: "m.room.encryption" }, { type: "m.room.name" }],
+                    },
+                  },
+                },
+              },
+            }),
+          ),
+          headers: new Headers({ "content-type": "application/json" }),
+          status: 200,
+        },
+      });
+      expect(JSON.parse(mutated.body.toString("utf8"))).toEqual({
+        rooms: {
+          join: {
+            "!state-after:matrix-qa.test": {
+              "org.matrix.msc4222.state_after": {
+                events: [{ type: "m.room.name" }],
+              },
+            },
+          },
+        },
+      });
+
+      const e2eeClientOptions = mockObjectArg(
+        createMatrixQaE2eeScenarioClient,
+        "createMatrixQaE2eeScenarioClient",
+      );
+      expect(e2eeClientOptions.baseUrl).toBe("http://127.0.0.1:28008/");
+      expect(mockObjectArg(driverClient.sendTextMessage, "sendTextMessage").roomId).toBe(
+        "!state-after:matrix-qa.test",
+      );
+    } finally {
+      await rm(outputDir, { force: true, recursive: true });
+    }
   });
 
   it("resolves scenario room ids from provisioned topology keys", () => {

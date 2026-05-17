@@ -13,6 +13,7 @@ import { loadWorkspaceHookEntries } from "../hooks/workspace.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { buildPluginDiagnosticsReport } from "../plugins/status.js";
 import { defaultRuntime } from "../runtime.js";
+import { decorativeEmoji, decorativePrefix } from "../terminal/decorative-emoji.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
@@ -103,14 +104,15 @@ function formatHookStatus(hook: HookStatusEntry): string {
     return theme.success("✓ ready");
   }
   if (!hook.enabledByConfig) {
-    return theme.warn("⏸ disabled");
+    return theme.warn(decorativePrefix("⏸", "disabled"));
   }
   return theme.error("✗ missing");
 }
 
 function formatHookName(hook: HookStatusEntry): string {
-  const emoji = hook.emoji ?? "🔗";
-  return `${emoji} ${theme.command(hook.name)}`;
+  const emoji = hook.emoji ?? decorativeEmoji("🔗");
+  const name = theme.command(hook.name);
+  return emoji ? `${emoji} ${name}` : name;
 }
 
 function formatHookSource(hook: HookStatusEntry): string {
@@ -266,14 +268,14 @@ export function formatHookInfo(
   }
 
   const lines: string[] = [];
-  const emoji = hook.emoji ?? "🔗";
+  const emoji = hook.emoji ?? decorativeEmoji("🔗");
   const status = hook.loadable
     ? theme.success("✓ Ready")
     : !hook.enabledByConfig
-      ? theme.warn("⏸ Disabled")
+      ? theme.warn(decorativePrefix("⏸", "Disabled"))
       : theme.error("✗ Missing requirements");
 
-  lines.push(`${emoji} ${theme.heading(hook.name)} ${status}`);
+  lines.push(`${emoji ? `${emoji} ` : ""}${theme.heading(hook.name)} ${status}`);
   lines.push("");
   lines.push(hook.description);
   lines.push("");
@@ -409,7 +411,8 @@ export function formatHooksCheck(report: HookStatusReport, opts: HooksCheckOptio
       if (hook.missing.os.length > 0) {
         reasons.push(`os: ${hook.missing.os.join(", ")}`);
       }
-      lines.push(`  ${hook.emoji ?? "🔗"} ${hook.name} - ${reasons.join("; ")}`);
+      const emoji = hook.emoji ?? decorativeEmoji("🔗");
+      lines.push(`  ${emoji ? `${emoji} ` : ""}${hook.name} - ${reasons.join("; ")}`);
     }
   }
 
@@ -432,7 +435,7 @@ export async function enableHook(hookName: string): Promise<void> {
     ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
   });
   defaultRuntime.log(
-    `${theme.success("✓")} Enabled hook: ${hook.emoji ?? "🔗"} ${theme.command(hookName)}`,
+    `${theme.success("✓")} Enabled hook: ${hook.emoji ? `${hook.emoji} ${theme.command(hookName)}` : decorativePrefix("🔗", theme.command(hookName))}`,
   );
 }
 
@@ -447,7 +450,7 @@ export async function disableHook(hookName: string): Promise<void> {
     ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
   });
   defaultRuntime.log(
-    `${theme.warn("⏸")} Disabled hook: ${hook.emoji ?? "🔗"} ${theme.command(hookName)}`,
+    `${theme.warn(decorativePrefix("⏸", "Disabled hook:"))} ${hook.emoji ? `${hook.emoji} ${theme.command(hookName)}` : decorativePrefix("🔗", theme.command(hookName))}`,
   );
 }
 

@@ -11,6 +11,11 @@ private func setupCode(from payload: String) -> String {
 }
 
 @Suite struct DeepLinksSecurityTests {
+    @Test func dashboardDeepLinkParses() {
+        let url = URL(string: "openclaw://dashboard")!
+        #expect(DeepLinkParser.parse(url) == .dashboard)
+    }
+
     @Test func gatewayDeepLinkRejectsInsecureNonLoopbackWs() {
         let url = URL(
             string: "openclaw://gateway?host=attacker.example&port=18789&tls=0&token=abc")!

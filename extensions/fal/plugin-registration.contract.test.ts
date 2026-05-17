@@ -4,6 +4,7 @@ describePluginRegistrationContract({
   pluginId: "fal",
   providerIds: ["fal"],
   imageGenerationProviderIds: ["fal"],
+  musicGenerationProviderIds: ["fal"],
   videoGenerationProviderIds: ["fal"],
   requireGenerateImage: true,
   requireGenerateVideo: true,

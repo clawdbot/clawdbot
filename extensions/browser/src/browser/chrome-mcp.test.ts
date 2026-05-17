@@ -1,4 +1,6 @@
 import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clickChromeMcpElement,
@@ -119,6 +121,7 @@ describe("chrome MCP page parsing", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllEnvs();
   });
 
   it("parses list_pages text responses when structuredContent is missing", async () => {
@@ -228,6 +231,61 @@ describe("chrome MCP page parsing", () => {
       "--experimentalStructuredContent",
       "--experimental-page-id-routing",
     ]);
+  });
+
+  it("redacts remote CDP URL secrets from attach failures", async () => {
+    const secretToken = "browserless-secret-token-1234567890"; // pragma: allowlist secret
+    const user = "browser-user";
+    const password = "browser-password-1234567890"; // pragma: allowlist secret
+    const cdpUrl = `wss://${user}:${password}@browserless.example/chrome?token=${secretToken}`;
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-chrome-mcp-test-"));
+    const configPath = path.join(tempDir, "openclaw.json");
+    await fs.writeFile(configPath, JSON.stringify({ logging: { redactSensitive: "off" } }));
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+    const fakeMcpCommand = path.join(tempDir, "fake-mcp.mjs");
+    await fs.writeFile(
+      fakeMcpCommand,
+      `#!/usr/bin/env node
+      const cdpUrl = process.argv.find((arg) => arg.includes("browserless.example")) ?? "";
+      let input = "";
+      process.stdin.on("data", (chunk) => {
+        input += chunk;
+        const match = input.match(/"id"\\s*:\\s*(\\d+)/);
+        if (!match) return;
+        const body = JSON.stringify({
+          jsonrpc: "2.0",
+          id: Number(match[1]),
+          error: { code: -32000, message: "attach failed for " + cdpUrl },
+        });
+        process.stdout.write(body + "\\n");
+      });
+    `,
+    );
+    await fs.chmod(fakeMcpCommand, 0o755);
+
+    let message = "";
+    try {
+      await ensureChromeMcpAvailable(
+        "remote-profile",
+        {
+          cdpUrl,
+          mcpCommand: fakeMcpCommand,
+        },
+        { ephemeral: true },
+      );
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+
+    expect(message).toContain("Chrome MCP existing-session attach failed");
+    expect(message).toContain("attach failed");
+    expect(message).toContain("browserless.example");
+    expect(message).not.toContain(cdpUrl);
+    expect(message).not.toContain(user);
+    expect(message).not.toContain(password);
+    expect(message).not.toContain(secretToken);
   });
 
   it("parses new_page text responses and returns the created tab", async () => {

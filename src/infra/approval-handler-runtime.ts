@@ -270,6 +270,12 @@ export function createChannelApprovalNativeRuntimeAdapter<
                     await spec.interactions?.clearPendingActions?.(params as never),
                 }
               : {}),
+            ...(spec.interactions.cancelDelivered
+              ? {
+                  cancelDelivered: async (params) =>
+                    await spec.interactions?.cancelDelivered?.(params as never),
+                }
+              : {}),
           },
         }
       : {}),
@@ -442,6 +448,7 @@ export async function createChannelApprovalHandlerFromCapability(params: {
   }
   const log = createSubsystemLogger(params.label);
   const activeEntries = new Map<string, ActiveApprovalEntries>();
+  let stopped = false;
   const resolveApprovalKind =
     nativeRuntime.resolveApprovalKind ??
     ((request: ApprovalRequest) =>
@@ -514,6 +521,21 @@ export async function createChannelApprovalHandlerFromCapability(params: {
         if (!entry) {
           return null;
         }
+        if (stopped) {
+          // onStopped fired between deliverPending and bindPending. The wrapped
+          // entry is not yet in activeEntries, so there is no map leak, but
+          // adapters that register side-effects inside deliverPending (e.g. the
+          // Matrix reaction target store) need explicit cleanup. unbindPending
+          // would violate its contract without a binding, so route cleanup
+          // through the optional cancelDelivered hook, which takes the entry.
+          await nativeRuntime.interactions?.cancelDelivered?.({
+            ...baseContext,
+            entry,
+            request,
+            approvalKind,
+          });
+          return null;
+        }
         const binding = await nativeRuntime.interactions?.bindPending?.({
           ...baseContext,
           entry,
@@ -522,6 +544,29 @@ export async function createChannelApprovalHandlerFromCapability(params: {
           view: pendingContent.view,
           pendingPayload: pendingContent.payload,
         });
+        if (stopped) {
+          if (binding !== undefined && binding !== null) {
+            await nativeRuntime.interactions?.unbindPending?.({
+              ...baseContext,
+              entry,
+              binding,
+              request,
+              approvalKind,
+            });
+          } else {
+            // bindPending returned without a binding handle, but deliverPending
+            // may have left side-effects. Adapters that wire the same store
+            // from both deliverPending and bindPending (e.g. Matrix) drain it
+            // via the binding branch above; this branch covers the rest.
+            await nativeRuntime.interactions?.cancelDelivered?.({
+              ...baseContext,
+              entry,
+              request,
+              approvalKind,
+            });
+          }
+          return null;
+        }
         const wrapped: WrappedPendingEntry = {
           entry,
           ...(binding === undefined || binding === null ? {} : { binding }),
@@ -654,6 +699,7 @@ export async function createChannelApprovalHandlerFromCapability(params: {
         });
       },
       onStopped: async () => {
+        stopped = true;
         if (activeEntries.size === 0) {
           activeEntries.clear();
           return;

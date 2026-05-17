@@ -71,6 +71,19 @@ describe("plugin node capability helpers", () => {
     expect(normalized.rewrittenUrl).toBeUndefined();
   });
 
+  test("marks malformed request targets without throwing", () => {
+    for (const rawUrl of ["//", "///", "//${jndi:ldap://example}.action"]) {
+      const normalized = normalizePluginNodeCapabilityScopedUrl(rawUrl);
+      expect(normalized).toMatchObject({
+        pathname: "/",
+        scopedPath: false,
+        malformedScopedPath: true,
+      });
+      expect(normalized.capability).toBeUndefined();
+      expect(normalized.rewrittenUrl).toBeUndefined();
+    }
+  });
+
   test("stores capabilities per plugin surface", () => {
     const client = makeClient();
     setClientPluginNodeCapability({

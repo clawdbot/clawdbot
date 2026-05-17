@@ -278,6 +278,15 @@ function resolveOllamaThinkParamValue(
   return undefined;
 }
 
+function shouldForwardNativeOllamaThink(
+  model: ProviderRuntimeModel | undefined,
+  think: OllamaThinkValue,
+): boolean {
+  // Ollama accepts top-level `think` as the native chat contract, but rejects
+  // truthy values for models known not to expose thinking support.
+  return think === false || model?.reasoning !== false;
+}
+
 function resolveOllamaConfiguredNumCtx(model: ProviderRuntimeModel): number | undefined {
   const raw = model.params?.num_ctx;
   if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) {
@@ -341,7 +350,7 @@ function resolveOllamaTopLevelParams(
     }
   }
   const think = resolveOllamaThinkParamValue(params);
-  if (think !== undefined) {
+  if (think !== undefined && shouldForwardNativeOllamaThink(model, think)) {
     requestParams.think = think;
   }
   return Object.keys(requestParams).length > 0 ? requestParams : undefined;
@@ -390,7 +399,7 @@ export function createConfiguredOllamaCompatStreamWrapper(
     runtimeThinkValue === false && configuredThinkValue !== undefined
       ? undefined
       : runtimeThinkValue;
-  if (ollamaThinkValue !== undefined) {
+  if (ollamaThinkValue !== undefined && shouldForwardNativeOllamaThink(model, ollamaThinkValue)) {
     streamFn = createOllamaThinkingWrapper(streamFn, ollamaThinkValue);
   }
 

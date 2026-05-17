@@ -14,11 +14,14 @@ import {
   analyzeShellCommand,
   isWindowsPlatform,
   matchAllowlist,
+  resolveExecutableTrustPath,
   resolveExecutionTargetCandidatePath,
   resolveExecutionTargetResolution,
+  resolveExecutionTargetTrustPath,
   resolveCommandResolutionFromArgv,
   resolvePolicyTargetCandidatePath,
   resolvePolicyTargetResolution,
+  resolvePolicyTargetTrustPath,
   splitCommandChain,
   splitCommandChainWithOperators,
   type ExecCommandAnalysis,
@@ -96,13 +99,14 @@ export function isSafeBinUsage(params: {
   if (!matchesSafeBin) {
     return false;
   }
-  if (!resolution?.resolvedPath) {
+  const trustPath = resolveExecutableTrustPath(resolution);
+  if (!trustPath) {
     return false;
   }
   const isTrustedPath = params.isTrustedSafeBinPathFn ?? isTrustedSafeBinPath;
   if (
     !isTrustedPath({
-      resolvedPath: resolution.resolvedPath,
+      resolvedPath: trustPath,
       trustedDirs: params.trustedSafeBinDirs,
     })
   ) {
@@ -212,7 +216,8 @@ function isSkillAutoAllowedSegment(params: {
   }
   const resolution = params.segment.resolution;
   const execution = resolveExecutionTargetResolution(resolution);
-  if (!execution?.resolvedPath) {
+  const trustPath = resolveExecutionTargetTrustPath(resolution);
+  if (!execution?.resolvedPath || !trustPath) {
     return false;
   }
   const rawExecutable = execution.rawExecutable?.trim() ?? "";
@@ -220,7 +225,7 @@ function isSkillAutoAllowedSegment(params: {
     return false;
   }
   const executableName = normalizeSkillBinName(execution.executableName);
-  const resolvedPath = normalizeSkillBinResolvedPath(execution.resolvedPath);
+  const resolvedPath = normalizeSkillBinResolvedPath(trustPath);
   if (!executableName || !resolvedPath) {
     return false;
   }
@@ -439,6 +444,7 @@ function executableResolutionsReferToSameTarget(
   return (
     left.rawExecutable === right.rawExecutable &&
     left.resolvedPath === right.resolvedPath &&
+    left.resolvedRealPath === right.resolvedRealPath &&
     left.executableName === right.executableName
   );
 }
@@ -534,9 +540,10 @@ function resolveSegmentAllowlistMatch(params: {
     params.segment.resolution,
     params.context.cwd,
   );
+  const trustPath = resolvePolicyTargetTrustPath(params.segment.resolution, params.context.cwd);
   const candidateResolution =
     candidatePath && executableResolution
-      ? { ...executableResolution, resolvedPath: candidatePath }
+      ? { ...executableResolution, resolvedPath: candidatePath, resolvedRealPath: trustPath }
       : executableResolution;
   const inlineCommand = extractBindableShellWrapperInlineCommand(allowlistSegment.argv);
   const powerShellFileScriptArgv = resolvePowerShellFileScriptArgv({
@@ -573,6 +580,7 @@ function resolveSegmentAllowlistMatch(params: {
         {
           rawExecutable: shellPositionalArgvCandidatePath,
           resolvedPath: shellPositionalArgvCandidatePath,
+          resolvedRealPath: resolveCandidateTrustPath(shellPositionalArgvCandidatePath),
           executableName: path.basename(shellPositionalArgvCandidatePath),
         },
         undefined,
@@ -602,6 +610,7 @@ function resolveSegmentAllowlistMatch(params: {
           {
             rawExecutable: shellScriptCandidatePath,
             resolvedPath: shellScriptCandidatePath,
+            resolvedRealPath: resolveCandidateTrustPath(shellScriptCandidatePath),
             executableName: path.basename(shellScriptCandidatePath),
           },
           shellScriptArgv,
@@ -1096,6 +1105,17 @@ function addAllowAlwaysPattern(
   }
 }
 
+function resolveCandidateTrustPath(candidatePath: string | undefined): string | undefined {
+  if (!candidatePath) {
+    return undefined;
+  }
+  return resolveExecutableTrustPath({
+    rawExecutable: candidatePath,
+    resolvedPath: candidatePath,
+    executableName: path.basename(candidatePath),
+  });
+}
+
 function collectAllowAlwaysPatterns(params: {
   segment: ExecCommandSegment;
   cwd?: string;
@@ -1123,7 +1143,7 @@ function collectAllowAlwaysPatterns(params: {
           resolution: resolveCommandResolutionFromArgv(trustPlan.argv, params.cwd, params.env),
         };
 
-  const candidatePath = resolveExecutionTargetCandidatePath(segment.resolution, params.cwd);
+  const candidatePath = resolveExecutionTargetTrustPath(segment.resolution, params.cwd);
   if (!candidatePath) {
     return;
   }
@@ -1152,7 +1172,10 @@ function collectAllowAlwaysPatterns(params: {
         })
       : undefined;
   if (positionalArgvPath) {
-    addAllowAlwaysPattern(params.out, positionalArgvPath);
+    addAllowAlwaysPattern(
+      params.out,
+      resolveCandidateTrustPath(positionalArgvPath) ?? positionalArgvPath,
+    );
     return;
   }
   if (!inlineCommand) {
@@ -1163,13 +1186,14 @@ function collectAllowAlwaysPatterns(params: {
         cwd: params.cwd,
       });
     if (scriptPath) {
+      const scriptTrustPath = resolveCandidateTrustPath(scriptPath) ?? scriptPath;
       const argPattern = buildScriptArgPatternFromArgv(
         powerShellFileScriptArgv ?? params.segment.argv,
         scriptPath,
         params.cwd,
         params.platform,
       );
-      addAllowAlwaysPattern(params.out, scriptPath, argPattern);
+      addAllowAlwaysPattern(params.out, scriptTrustPath, argPattern);
     }
     return;
   }

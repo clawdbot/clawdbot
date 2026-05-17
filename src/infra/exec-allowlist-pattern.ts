@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { expandHomePrefix } from "./home-dir.js";
 
@@ -19,6 +20,19 @@ function tryRealpath(value: string): string | null {
   } catch {
     return null;
   }
+}
+
+function hasDotPathSegment(value: string): boolean {
+  return value
+    .replace(/\\/g, "/")
+    .split("/")
+    .some((segment) => segment === "." || segment === "..");
+}
+
+function normalizeDotPathSegments(value: string): string {
+  const normalized =
+    process.platform === "win32" ? path.win32.normalize(value) : path.posix.normalize(value);
+  return normalizeMatchTarget(normalized);
 }
 
 function escapeRegExpLiteral(input: string): string {
@@ -81,5 +95,10 @@ export function matchesExecAllowlistPattern(pattern: string, target: string): bo
   }
   normalizedPattern = normalizeMatchTarget(normalizedPattern);
   normalizedTarget = normalizeMatchTarget(normalizedTarget);
+  // Normalize only the target. Glob patterns are operator-authored strings, and
+  // normalizing them can change wildcard structure such as `*/..`.
+  if (hasWildcard && hasDotPathSegment(normalizedTarget)) {
+    normalizedTarget = normalizeDotPathSegments(normalizedTarget);
+  }
   return compileGlobRegex(normalizedPattern).test(normalizedTarget);
 }

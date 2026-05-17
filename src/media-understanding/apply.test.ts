@@ -991,6 +991,56 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Body).toBe("[Image]\nDescription:\nshared description");
   });
 
+  it("uses media workspace for staged files and agent workspace for provider resolution", async () => {
+    const mediaWorkspaceDir = await createTempMediaDir();
+    const relativeImagePath = path.join("media", "inbound", "workspace.jpg");
+    const imagePath = path.join(mediaWorkspaceDir, relativeImagePath);
+    await fs.mkdir(path.dirname(imagePath), { recursive: true });
+    await fs.writeFile(imagePath, "image-bytes");
+    const describeImage = vi.fn(async () => ({ text: "workspace image" }));
+    const ctx: MsgContext = {
+      Body: "<media:image>",
+      MediaPath: relativeImagePath,
+      MediaType: "image/jpeg",
+      MediaWorkspaceDir: mediaWorkspaceDir,
+    };
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          image: {
+            enabled: true,
+            models: [{ provider: "openai", model: "gpt-5.4" }],
+          },
+        },
+      },
+    };
+
+    const result = await applyMediaUnderstanding({
+      ctx,
+      cfg,
+      agentDir: "/tmp/openclaw-agent",
+      workspaceDir: "/tmp/openclaw-workspace",
+      providers: {
+        openai: {
+          id: "openai",
+          capabilities: ["image"],
+          describeImage,
+        },
+      },
+    });
+
+    expect(result.appliedImage).toBe(true);
+    expect(describeImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentDir: "/tmp/openclaw-agent",
+        workspaceDir: "/tmp/openclaw-workspace",
+        fileName: "workspace.jpg",
+        provider: "openai",
+        model: "gpt-5.4",
+      }),
+    );
+  });
+
   it("uses active model when enabled and models are missing", async () => {
     const audioPath = await createTempMediaFile({
       fileName: "fallback.ogg",

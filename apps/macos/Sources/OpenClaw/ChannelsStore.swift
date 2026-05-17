@@ -240,6 +240,12 @@ final class ChannelsStore {
     var configSchemaLoading = false
     var configSchema: ConfigSchemaNode?
     var configUiHints: [String: ConfigUiHint] = [:]
+    var configSchemaSourceKey: String?
+    var configSchemaLoadingSourceKey: String?
+    var configSchemaReloadPending = false
+    var configLoading = false
+    var configLoadingSourceKey: String?
+    var configForceReloadPending = false
     var configDraft: [String: Any] = [:]
     var configDirty = false
 
@@ -248,6 +254,7 @@ final class ChannelsStore {
     var pollTask: Task<Void, Never>?
     var configRoot: [String: Any] = [:]
     var configLoaded = false
+    var configSourceKey: String?
 
     func channelMetaEntry(_ id: String) -> ChannelsStatusSnapshot.ChannelUiMetaEntry? {
         self.snapshot?.channelMeta?.first(where: { $0.id == id })

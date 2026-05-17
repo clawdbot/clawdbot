@@ -397,12 +397,20 @@ export function createSessionStatusTool(opts?: {
       });
 
       const requestedKeyParam = readStringParam(params, "sessionKey");
+      const isImplicitRunSessionStatus =
+        requestedKeyParam === undefined && Boolean(opts?.runSessionKey?.trim());
       let requestedKeyRaw = requestedKeyParam ?? opts?.agentSessionKey;
+
+      // No-arg status should prefer the live run session when available (#82669).
+      if (isImplicitRunSessionStatus) {
+        requestedKeyRaw = opts?.runSessionKey;
+      }
 
       // Track whether this is a semantic-current request (literal "current" or a
       // current-client alias) BEFORE any rewrite, so visibility treats it as self.
       const isSemanticCurrentRequest =
         requestedKeyRaw === "current" ||
+        isImplicitRunSessionStatus ||
         Boolean(
           resolveCurrentSessionClientAlias({
             key: requestedKeyRaw ?? "",
@@ -558,7 +566,7 @@ export function createSessionStatusTool(opts?: {
         const fallback = resolveImplicitCurrentSessionFallback({
           allowFallback: isSemanticCurrentRequest || requestedKeyParam === undefined,
           fallbackKey:
-            isSemanticCurrentRequest && opts?.runSessionKey
+            (isSemanticCurrentRequest || isImplicitRunSessionStatus) && opts?.runSessionKey
               ? opts.runSessionKey
               : storeScopedRequesterKey,
         });

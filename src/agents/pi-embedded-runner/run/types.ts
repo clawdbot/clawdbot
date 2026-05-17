@@ -122,6 +122,7 @@ export type EmbeddedRunAttemptResult = {
   heartbeatToolResponse?: HeartbeatToolResponse;
   toolMediaUrls?: string[];
   toolAudioAsVoice?: boolean;
+  toolTrustedLocalMedia?: boolean;
   successfulCronAdds?: number;
   cloudCodeAssistFormatError: boolean;
   attemptUsage?: NormalizedUsage;

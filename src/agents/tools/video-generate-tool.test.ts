@@ -578,7 +578,7 @@ describe("createVideoGenerateTool", () => {
       createdAt: Date.now(),
     });
     const wakeSpy = vi
-      .spyOn(videoGenerateBackground, "wakeVideoGenerationTaskCompletion")
+      .spyOn(videoGenerateBackground.videoGenerationTaskLifecycle, "wakeTaskCompletion")
       .mockResolvedValue(undefined);
     const saveSpy = vi.spyOn(mediaStore, "saveMediaBuffer");
     vi.spyOn(videoGenerationRuntime, "generateVideo").mockResolvedValue({

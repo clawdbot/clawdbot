@@ -223,11 +223,12 @@ export function createGatewayAuxHandlers(params: {
               }
             }),
           log: params.log,
-          resolveSecrets: async ({ commandName, targetIds }) => {
+          resolveSecrets: async ({ commandName, targetIds, providerOverrides }) => {
             const { assignments, diagnostics, inactiveRefPaths } =
-              resolveCommandSecretsFromActiveRuntimeSnapshot({
+              await resolveCommandSecretsFromActiveRuntimeSnapshot({
                 commandName,
                 targetIds: new Set(targetIds),
+                ...(providerOverrides ? { providerOverrides } : {}),
               });
             if (assignments.length === 0) {
               return {

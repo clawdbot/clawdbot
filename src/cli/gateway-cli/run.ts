@@ -15,6 +15,7 @@ import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
 import {
   defaultGatewayBindMode,
   isContainerEnvironment,
+  isLoopbackHost,
   resolveGatewayBindHost,
 } from "../../gateway/net.js";
 import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
@@ -215,6 +216,18 @@ function formatModeErrorList(modes: readonly string[]): string {
     return `${quoted[0]} or ${quoted[1]}`;
   }
   return `${quoted.slice(0, -1).join(", ")}, or ${quoted[quoted.length - 1]}`;
+}
+
+function shouldBlockGatewayBindWithoutExplicitAuth(params: {
+  bindHost: string;
+  hasSharedSecret: boolean;
+  resolvedAuthMode: GatewayAuthMode;
+}): boolean {
+  return (
+    !isLoopbackHost(params.bindHost) &&
+    !params.hasSharedSecret &&
+    params.resolvedAuthMode !== "trusted-proxy"
+  );
 }
 
 async function maybeLogPendingControlUiBuild(cfg: OpenClawConfig): Promise<void> {
@@ -723,7 +736,6 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   const hasSharedSecret =
     (resolvedAuthMode === "token" && tokenConfigured) ||
     (resolvedAuthMode === "password" && passwordConfigured);
-  const canBootstrapToken = resolvedAuthMode === "token" && !tokenConfigured;
   const authHints: string[] = [];
   if (miskeys.hasGatewayToken) {
     authHints.push('Found "gateway.token" in config. Use "gateway.auth.token" instead.');
@@ -751,11 +763,13 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
       "Gateway auth mode=none explicitly configured; all gateway connections are unauthenticated.",
     );
   }
+  const healthHost = await resolveGatewayBindHost(bind, cfg.gateway?.customBindHost);
   if (
-    bind !== "loopback" &&
-    !hasSharedSecret &&
-    !canBootstrapToken &&
-    resolvedAuthMode !== "trusted-proxy"
+    shouldBlockGatewayBindWithoutExplicitAuth({
+      bindHost: healthHost,
+      hasSharedSecret,
+      resolvedAuthMode,
+    })
   ) {
     defaultRuntime.error(
       [
@@ -786,7 +800,6 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
 
   gatewayLog.info("starting...");
   startupTrace.mark("cli.gateway-loop");
-  const healthHost = await resolveGatewayBindHost(bind, cfg.gateway?.customBindHost);
   let startupConfigSnapshotReadForNextStart = startupConfigSnapshotRead;
   const startLoop = async () =>
     await runGatewayLoop({

@@ -49,9 +49,15 @@ function resolveSearchConfig(cfg?: OpenClawConfig): WebSearchConfig {
   return resolveWebProviderConfig(cfg, "search") as NonNullable<WebSearchConfig> | undefined;
 }
 
-function resolveWebSearchRuntimeConfig(config?: OpenClawConfig): OpenClawConfig | undefined {
+function resolveWebSearchRuntimeConfig(params?: {
+  config?: OpenClawConfig;
+  preferInputConfig?: boolean;
+}): OpenClawConfig | undefined {
+  if (params?.preferInputConfig && params.config) {
+    return params.config;
+  }
   return selectApplicableRuntimeConfig({
-    inputConfig: config,
+    inputConfig: params?.config,
     runtimeConfig: getRuntimeConfigSnapshot(),
     runtimeSourceConfig: getRuntimeConfigSourceSnapshot(),
   });
@@ -111,14 +117,14 @@ export function isWebSearchProviderConfigured(params: {
   >;
   config?: OpenClawConfig;
 }): boolean {
-  const config = resolveWebSearchRuntimeConfig(params.config);
+  const config = resolveWebSearchRuntimeConfig({ config: params.config });
   return hasEntryCredential(params.provider, config, resolveSearchConfig(config));
 }
 
 export function listWebSearchProviders(params?: {
   config?: OpenClawConfig;
 }): PluginWebSearchProviderEntry[] {
-  const config = resolveWebSearchRuntimeConfig(params?.config);
+  const config = resolveWebSearchRuntimeConfig({ config: params?.config });
   return resolveRuntimeWebSearchProviders({
     config,
     bundledAllowlistCompat: true,
@@ -128,7 +134,7 @@ export function listWebSearchProviders(params?: {
 export function listConfiguredWebSearchProviders(params?: {
   config?: OpenClawConfig;
 }): PluginWebSearchProviderEntry[] {
-  const config = resolveWebSearchRuntimeConfig(params?.config);
+  const config = resolveWebSearchRuntimeConfig({ config: params?.config });
   return resolvePluginWebSearchProviders({
     config,
     bundledAllowlistCompat: true,
@@ -140,7 +146,7 @@ export function resolveWebSearchProviderId(params: {
   config?: OpenClawConfig;
   providers?: PluginWebSearchProviderEntry[];
 }): string {
-  const config = resolveWebSearchRuntimeConfig(params.config);
+  const config = resolveWebSearchRuntimeConfig({ config: params.config });
   const search = params.search ?? resolveSearchConfig(config);
   const providers = sortWebSearchProvidersForAutoDetect(
     params.providers ??
@@ -248,7 +254,10 @@ function resolveWebSearchProviderLoadScope(params: {
 export function resolveWebSearchDefinition(
   options?: ResolveWebSearchDefinitionParams,
 ): { provider: PluginWebSearchProviderEntry; definition: WebSearchProviderToolDefinition } | null {
-  const config = resolveWebSearchRuntimeConfig(options?.config);
+  const config = resolveWebSearchRuntimeConfig({
+    config: options?.config,
+    preferInputConfig: options?.preferInputConfig,
+  });
   const search = resolveSearchConfig(config);
   const runtimeWebSearch = options?.runtimeWebSearch ?? getActiveRuntimeWebToolsMetadata()?.search;
   const loadScope = resolveWebSearchProviderLoadScope({
@@ -307,7 +316,10 @@ export function resolveWebSearchDefinition(
 function resolveWebSearchCandidates(
   options?: ResolveWebSearchDefinitionParams,
 ): PluginWebSearchProviderEntry[] {
-  const config = resolveWebSearchRuntimeConfig(options?.config);
+  const config = resolveWebSearchRuntimeConfig({
+    config: options?.config,
+    preferInputConfig: options?.preferInputConfig,
+  });
   const search = resolveSearchConfig(config);
   const runtimeWebSearch = options?.runtimeWebSearch ?? getActiveRuntimeWebToolsMetadata()?.search;
   if (!resolveWebSearchEnabled({ search, sandboxed: options?.sandboxed })) {
@@ -402,7 +414,10 @@ function isStructuredAvailabilityError(result: unknown): result is { error: stri
 }
 
 export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSearchResult> {
-  const config = resolveWebSearchRuntimeConfig(params.config);
+  const config = resolveWebSearchRuntimeConfig({
+    config: params.config,
+    preferInputConfig: params.preferInputConfig,
+  });
   const search = resolveSearchConfig(config);
   const runtimeWebSearch = params.runtimeWebSearch ?? getActiveRuntimeWebToolsMetadata()?.search;
   const candidates = resolveWebSearchCandidates({

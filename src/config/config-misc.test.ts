@@ -606,6 +606,7 @@ describe("gateway.remote.transport", () => {
     const res = validateConfigObject({
       gateway: {
         remote: {
+          enabled: true,
           transport: "direct",
           url: "wss://gateway.example.ts.net",
         },
@@ -625,6 +626,35 @@ describe("gateway.remote.transport", () => {
     expect(res.ok).toBe(false);
     if (!res.ok) {
       expect(res.issues[0]?.path).toBe("gateway.remote.transport");
+    }
+  });
+
+  it("accepts macOS SSH remote port", () => {
+    const res = validateConfigObject({
+      gateway: {
+        remote: {
+          remotePort: 18789,
+          sshTarget: "user@example.test",
+          transport: "ssh",
+          url: "ws://127.0.0.1:18789",
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects invalid macOS SSH remote port", () => {
+    const res = validateConfigObject({
+      gateway: {
+        remote: {
+          remotePort: 0,
+          transport: "ssh",
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("gateway.remote.remotePort");
     }
   });
 });

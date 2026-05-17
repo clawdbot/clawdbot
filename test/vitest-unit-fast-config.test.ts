@@ -1,5 +1,5 @@
-import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
+import { spawnNodeEvalSync } from "../src/test-utils/node-process.js";
 import { createCommandsLightVitestConfig } from "./vitest/vitest.commands-light.config.ts";
 import { createPluginSdkLightVitestConfig } from "./vitest/vitest.plugin-sdk-light.config.ts";
 import {
@@ -62,17 +62,20 @@ describe("unit-fast vitest lane", () => {
       await import("./test/vitest/vitest.unit-fast.config.ts?io-probe=" + Date.now());
       console.log(readdirSyncCalls);
     `;
-    const result = spawnSync(
-      process.execPath,
-      ["--import", "tsx", "--input-type=module", "-e", script],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-      },
-    );
+    const result = spawnNodeEvalSync(script, {
+      env: { ...process.env, FORCE_COLOR: "0", NO_COLOR: "1" },
+      evalFlag: "-e",
+      imports: ["tsx"],
+    });
 
     expect(result.status, result.stderr).toBe(0);
-    expect(Number(result.stdout.trim())).toBeLessThan(20);
+    const numericOutputLines = result.stdout
+      .trim()
+      .split(/\r?\n/u)
+      .map((line) => Number(line.trim()))
+      .filter(Number.isFinite);
+    expect(numericOutputLines.length, result.stdout).toBeGreaterThan(0);
+    expect(numericOutputLines.at(-1)).toBeLessThan(20);
   });
 
   it("runs cache-friendly tests without the reset-heavy runner or runtime setup", () => {

@@ -8,6 +8,7 @@ export const GATEWAY_SUPERVISOR_RESTART_HANDOFF_FILENAME =
   "gateway-supervisor-restart-handoff.json";
 export const GATEWAY_SUPERVISOR_RESTART_HANDOFF_KIND = "gateway-supervisor-restart-handoff";
 const GATEWAY_RESTART_HANDOFF_TTL_MS = 60_000;
+const GATEWAY_RESTART_TRACE_HANDOFF_MAX_DURATION_MS = 10 * 60_000;
 const GATEWAY_RESTART_HANDOFF_MAX_BYTES = 4096;
 const MAX_INTENT_ID_LENGTH = 120;
 const MAX_PROCESS_INSTANCE_ID_LENGTH = 120;
@@ -37,6 +38,10 @@ export type GatewayRestartHandoff = {
   source: GatewayRestartHandoffSource;
   restartKind: GatewayRestartHandoffRestartKind;
   supervisorMode: GatewayRestartHandoffSupervisorMode;
+  restartTrace?: {
+    startedAt: number;
+    lastAt: number;
+  };
 };
 
 function formatShortDuration(ms: number): string {
@@ -130,6 +135,30 @@ function normalizeTtlMs(value: number | undefined): number {
   return Math.min(Math.floor(value), GATEWAY_RESTART_HANDOFF_TTL_MS);
 }
 
+function normalizeRestartTraceHandoff(
+  value: unknown,
+): GatewayRestartHandoff["restartTrace"] | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as { startedAt?: unknown; lastAt?: unknown };
+  if (
+    typeof record.startedAt !== "number" ||
+    !Number.isFinite(record.startedAt) ||
+    typeof record.lastAt !== "number" ||
+    !Number.isFinite(record.lastAt) ||
+    record.startedAt <= 0 ||
+    record.lastAt < record.startedAt ||
+    record.lastAt - record.startedAt > GATEWAY_RESTART_TRACE_HANDOFF_MAX_DURATION_MS
+  ) {
+    return undefined;
+  }
+  return {
+    startedAt: record.startedAt,
+    lastAt: record.lastAt,
+  };
+}
+
 function normalizeSource(
   source: GatewayRestartHandoffSource | undefined,
   reason: string | undefined,
@@ -218,6 +247,7 @@ function parseGatewayRestartHandoff(raw: string): GatewayRestartHandoff | null {
   if (parsed.processInstanceId !== undefined && typeof parsed.processInstanceId !== "string") {
     return null;
   }
+  const restartTrace = normalizeRestartTraceHandoff(parsed.restartTrace);
 
   const processInstanceId = normalizeText(parsed.processInstanceId, MAX_PROCESS_INSTANCE_ID_LENGTH);
   const reason = normalizeText(parsed.reason, MAX_REASON_LENGTH);
@@ -233,6 +263,7 @@ function parseGatewayRestartHandoff(raw: string): GatewayRestartHandoff | null {
     source: parsed.source,
     restartKind: parsed.restartKind,
     supervisorMode: parsed.supervisorMode,
+    ...(restartTrace ? { restartTrace } : {}),
   };
 }
 
@@ -257,6 +288,7 @@ export function writeGatewayRestartHandoffSync(opts: {
   source?: GatewayRestartHandoffSource;
   restartKind: GatewayRestartHandoffRestartKind;
   supervisorMode?: GatewayRestartHandoffSupervisorMode | null;
+  restartTrace?: GatewayRestartHandoff["restartTrace"];
   ttlMs?: number;
   createdAt?: number;
 }): GatewayRestartHandoff | null {
@@ -277,6 +309,7 @@ export function writeGatewayRestartHandoffSync(opts: {
   const ttlMs = normalizeTtlMs(opts.ttlMs);
   const reason = normalizeText(opts.reason, MAX_REASON_LENGTH);
   const processInstanceId = normalizeText(opts.processInstanceId, MAX_PROCESS_INSTANCE_ID_LENGTH);
+  const restartTrace = normalizeRestartTraceHandoff(opts.restartTrace);
   const payload: GatewayRestartHandoff = {
     kind: GATEWAY_SUPERVISOR_RESTART_HANDOFF_KIND,
     version: 1,
@@ -289,6 +322,7 @@ export function writeGatewayRestartHandoffSync(opts: {
     source: normalizeSource(opts.source, reason),
     restartKind: opts.restartKind,
     supervisorMode,
+    ...(restartTrace ? { restartTrace } : {}),
   };
 
   let tmpPath: string | undefined;

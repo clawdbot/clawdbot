@@ -1,27 +1,27 @@
 import { describe, expect, it } from "vitest";
 import {
-  beginTelegramInboundTurnDeliveryCorrelation,
-  notifyTelegramInboundTurnOutboundSuccess,
-} from "./inbound-turn-delivery.js";
+  beginTelegramInboundEventDeliveryCorrelation,
+  notifyTelegramInboundEventOutboundSuccess,
+} from "./inbound-event-delivery.js";
 
-describe("telegram inbound turn delivery", () => {
+describe("telegram inbound event delivery", () => {
   it("marks delivered once for a matching outbound send then clears correlation", () => {
     let count = 0;
-    const end = beginTelegramInboundTurnDeliveryCorrelation("sess:z", {
+    const end = beginTelegramInboundEventDeliveryCorrelation("sess:z", {
       outboundTo: "999",
       outboundAccountId: "a1",
-      markInboundTurnDelivered: () => {
+      markInboundEventDelivered: () => {
         count += 1;
       },
     });
-    notifyTelegramInboundTurnOutboundSuccess({
+    notifyTelegramInboundEventOutboundSuccess({
       sessionKey: "sess:z",
       to: "999",
       accountId: "a1",
     });
     expect(count).toBe(1);
     end();
-    notifyTelegramInboundTurnOutboundSuccess({
+    notifyTelegramInboundEventOutboundSuccess({
       sessionKey: "sess:z",
       to: "999",
       accountId: "a1",
@@ -31,13 +31,13 @@ describe("telegram inbound turn delivery", () => {
 
   it("ignores outbound sends to another destination", () => {
     let count = 0;
-    const end = beginTelegramInboundTurnDeliveryCorrelation("sess:y", {
+    const end = beginTelegramInboundEventDeliveryCorrelation("sess:y", {
       outboundTo: "1",
-      markInboundTurnDelivered: () => {
+      markInboundEventDelivered: () => {
         count += 1;
       },
     });
-    notifyTelegramInboundTurnOutboundSuccess({
+    notifyTelegramInboundEventOutboundSuccess({
       sessionKey: "sess:y",
       to: "2",
       accountId: undefined,
@@ -48,14 +48,14 @@ describe("telegram inbound turn delivery", () => {
 
   it("matches provider-prefixed Telegram targets for delivery correlation", () => {
     let count = 0;
-    const end = beginTelegramInboundTurnDeliveryCorrelation("sess:prefixed", {
+    const end = beginTelegramInboundEventDeliveryCorrelation("sess:prefixed", {
       outboundTo: "-100123",
-      markInboundTurnDelivered: () => {
+      markInboundEventDelivered: () => {
         count += 1;
       },
     });
 
-    notifyTelegramInboundTurnOutboundSuccess({
+    notifyTelegramInboundEventOutboundSuccess({
       sessionKey: "sess:prefixed",
       to: "telegram:-100123",
     });
@@ -66,14 +66,14 @@ describe("telegram inbound turn delivery", () => {
 
   it("matches Telegram topic targets by conversation for delivery correlation", () => {
     let count = 0;
-    const end = beginTelegramInboundTurnDeliveryCorrelation("sess:topic", {
+    const end = beginTelegramInboundEventDeliveryCorrelation("sess:topic", {
       outboundTo: "-100123",
-      markInboundTurnDelivered: () => {
+      markInboundEventDelivered: () => {
         count += 1;
       },
     });
 
-    notifyTelegramInboundTurnOutboundSuccess({
+    notifyTelegramInboundEventOutboundSuccess({
       sessionKey: "sess:topic",
       to: "telegram:-100123:topic:77",
     });
@@ -84,21 +84,21 @@ describe("telegram inbound turn delivery", () => {
 
   it("matches legacy Telegram group targets for delivery correlation", () => {
     let count = 0;
-    const end = beginTelegramInboundTurnDeliveryCorrelation(
+    const end = beginTelegramInboundEventDeliveryCorrelation(
       "sess:legacy-group",
       {
         outboundTo: "-100123",
-        markInboundTurnDelivered: () => {
+        markInboundEventDelivered: () => {
           count += 1;
         },
       },
-      { inboundTurnKind: "room_event" },
+      { inboundEventKind: "room_event" },
     );
 
-    notifyTelegramInboundTurnOutboundSuccess({
+    notifyTelegramInboundEventOutboundSuccess({
       sessionKey: "sess:legacy-group",
       to: "telegram:group:-100123:topic:77",
-      inboundTurnKind: "room_event",
+      inboundEventKind: "room_event",
     });
 
     expect(count).toBe(1);
@@ -107,33 +107,33 @@ describe("telegram inbound turn delivery", () => {
 
   it("keeps topic-scoped delivery correlations topic-specific", () => {
     let count = 0;
-    const end = beginTelegramInboundTurnDeliveryCorrelation(
+    const end = beginTelegramInboundEventDeliveryCorrelation(
       "sess:topic-specific",
       {
         outboundTo: "telegram:group:-100123:topic:77",
-        markInboundTurnDelivered: () => {
+        markInboundEventDelivered: () => {
           count += 1;
         },
       },
-      { inboundTurnKind: "room_event" },
+      { inboundEventKind: "room_event" },
     );
 
-    notifyTelegramInboundTurnOutboundSuccess({
+    notifyTelegramInboundEventOutboundSuccess({
       sessionKey: "sess:topic-specific",
       to: "telegram:group:-100123:topic:88",
-      inboundTurnKind: "room_event",
+      inboundEventKind: "room_event",
     });
-    notifyTelegramInboundTurnOutboundSuccess({
+    notifyTelegramInboundEventOutboundSuccess({
       sessionKey: "sess:topic-specific",
       to: "telegram:group:-100123",
-      inboundTurnKind: "room_event",
+      inboundEventKind: "room_event",
     });
 
     expect(count).toBe(0);
-    notifyTelegramInboundTurnOutboundSuccess({
+    notifyTelegramInboundEventOutboundSuccess({
       sessionKey: "sess:topic-specific",
       to: "telegram:group:-100123:topic:77",
-      inboundTurnKind: "room_event",
+      inboundEventKind: "room_event",
     });
     expect(count).toBe(1);
     end();
@@ -142,32 +142,32 @@ describe("telegram inbound turn delivery", () => {
   it("keeps user-request and room-event delivery correlations separate", () => {
     let userRequestCount = 0;
     let roomEventCount = 0;
-    const endUserRequest = beginTelegramInboundTurnDeliveryCorrelation("sess:x", {
+    const endUserRequest = beginTelegramInboundEventDeliveryCorrelation("sess:x", {
       outboundTo: "999",
-      markInboundTurnDelivered: () => {
+      markInboundEventDelivered: () => {
         userRequestCount += 1;
       },
     });
-    const endRoomEvent = beginTelegramInboundTurnDeliveryCorrelation(
+    const endRoomEvent = beginTelegramInboundEventDeliveryCorrelation(
       "sess:x",
       {
         outboundTo: "999",
-        markInboundTurnDelivered: () => {
+        markInboundEventDelivered: () => {
           roomEventCount += 1;
         },
       },
-      { inboundTurnKind: "room_event" },
+      { inboundEventKind: "room_event" },
     );
 
-    notifyTelegramInboundTurnOutboundSuccess({
+    notifyTelegramInboundEventOutboundSuccess({
       sessionKey: "sess:x",
       to: "999",
-      inboundTurnKind: "room_event",
+      inboundEventKind: "room_event",
     });
     expect(roomEventCount).toBe(1);
     expect(userRequestCount).toBe(0);
 
-    notifyTelegramInboundTurnOutboundSuccess({
+    notifyTelegramInboundEventOutboundSuccess({
       sessionKey: "sess:x",
       to: "999",
     });
@@ -181,32 +181,32 @@ describe("telegram inbound turn delivery", () => {
   it("keeps a newer overlapping room-event correlation when an older one ends", () => {
     let firstCount = 0;
     let secondCount = 0;
-    const endFirst = beginTelegramInboundTurnDeliveryCorrelation(
+    const endFirst = beginTelegramInboundEventDeliveryCorrelation(
       "sess:overlap",
       {
         outboundTo: "999",
-        markInboundTurnDelivered: () => {
+        markInboundEventDelivered: () => {
           firstCount += 1;
         },
       },
-      { inboundTurnKind: "room_event" },
+      { inboundEventKind: "room_event" },
     );
-    const endSecond = beginTelegramInboundTurnDeliveryCorrelation(
+    const endSecond = beginTelegramInboundEventDeliveryCorrelation(
       "sess:overlap",
       {
         outboundTo: "999",
-        markInboundTurnDelivered: () => {
+        markInboundEventDelivered: () => {
           secondCount += 1;
         },
       },
-      { inboundTurnKind: "room_event" },
+      { inboundEventKind: "room_event" },
     );
 
     endFirst();
-    notifyTelegramInboundTurnOutboundSuccess({
+    notifyTelegramInboundEventOutboundSuccess({
       sessionKey: "sess:overlap",
       to: "999",
-      inboundTurnKind: "room_event",
+      inboundEventKind: "room_event",
     });
 
     expect(firstCount).toBe(0);

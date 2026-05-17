@@ -1,9 +1,11 @@
 import { spawnSync } from "node:child_process";
 import fs, { readFileSync } from "node:fs";
-import { dirname, relative, resolve, sep } from "node:path";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
+import { listGitTrackedFiles, toRepoRelativePath } from "../../test-utils/repo-files.js";
 
 const SRC_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const REPO_ROOT = resolve(SRC_ROOT, "..");
@@ -146,7 +148,7 @@ function listTsFiles(rootRelativePath: string, filter: FileFilter = {}): string[
       if (!entry.isFile() || !entry.name.endsWith(".ts")) {
         continue;
       }
-      const repoRelativePath = relative(REPO_ROOT, fullPath).split(sep).join("/");
+      const repoRelativePath = toRepoRelativePath(REPO_ROOT, fullPath);
       if (filter.excludeTests && repoRelativePath.endsWith(".test.ts")) {
         continue;
       }
@@ -164,28 +166,24 @@ function listTsFiles(rootRelativePath: string, filter: FileFilter = {}): string[
 }
 
 function listExternalTsFiles(rootRelativePath: string, filter: FileFilter): string[] | null {
-  return listGitTrackedTsFiles(rootRelativePath, filter) ?? listFindTsFiles(rootRelativePath, filter);
+  return (
+    listGitTrackedTsFiles(rootRelativePath, filter) ?? listFindTsFiles(rootRelativePath, filter)
+  );
 }
 
 function listGitTrackedTsFiles(rootRelativePath: string, filter: FileFilter): string[] | null {
   if (!rootRelativePath || rootRelativePath.startsWith("..")) {
     return null;
   }
-  const result = spawnSync("git", ["ls-files", "--", rootRelativePath], {
-    cwd: REPO_ROOT,
-    encoding: "utf8",
-    maxBuffer: 16 * 1024 * 1024,
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  if (result.status !== 0) {
+  const files = listGitTrackedFiles({ repoRoot: REPO_ROOT, pathspecs: rootRelativePath });
+  if (!files) {
     return null;
   }
-  return result.stdout
-    .split("\n")
-    .map((line) => line.trim().replaceAll("\\", "/"))
+  return files
     .filter((line) => line.endsWith(".ts"))
     .filter((line) => !(filter.excludeTests && line.endsWith(".test.ts")))
     .filter((line) => !(filter.testOnly && !line.endsWith(".test.ts")))
+    .filter((line) => fs.existsSync(resolve(REPO_ROOT, line)))
     .toSorted();
 }
 
@@ -223,7 +221,7 @@ function listFindTsFiles(rootRelativePath: string, filter: FileFilter): string[]
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.length > 0)
-    .map((line) => relative(REPO_ROOT, line).split(sep).join("/"))
+    .map((line) => toRepoRelativePath(REPO_ROOT, line))
     .filter((line) => line.endsWith(".ts"))
     .filter((line) => !(filter.excludeTests && line.endsWith(".test.ts")))
     .filter((line) => !(filter.testOnly && !line.endsWith(".test.ts")))
@@ -296,17 +294,16 @@ function collectTypedHookNames(source: string): string[] {
 
 describe("plugin contract boundary invariants", () => {
   it("lists boundary invariant source files without walking roots in-process", () => {
-    const readDir = vi.spyOn(fs, "readdirSync");
     try {
-      tsFilesCache.clear();
-      const files = listTsFiles("src", { excludeTests: true });
+      expectNoReaddirSyncDuring(() => {
+        tsFilesCache.clear();
+        const files = listTsFiles("src", { excludeTests: true });
 
-      expect(files.length).toBeGreaterThan(0);
-      expect(files.every((file) => file.startsWith("src/") && file.endsWith(".ts"))).toBe(true);
-      expect(files.some((file) => file.endsWith(".test.ts"))).toBe(false);
-      expect(readDir).not.toHaveBeenCalled();
+        expect(files.length).toBeGreaterThan(0);
+        expect(files.every((file) => file.startsWith("src/") && file.endsWith(".ts"))).toBe(true);
+        expect(files.some((file) => file.endsWith(".test.ts"))).toBe(false);
+      });
     } finally {
-      readDir.mockRestore();
       tsFilesCache.clear();
     }
   });

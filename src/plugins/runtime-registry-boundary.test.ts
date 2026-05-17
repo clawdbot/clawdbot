@@ -2,7 +2,9 @@ import { spawnSync } from "node:child_process";
 import fs, { readFileSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { expectNoFsSyncDuring } from "../test-utils/fs-scan-assertions.js";
+import { listGitTrackedFiles, toRepoRelativePath } from "../test-utils/repo-files.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const allowedRuntimeResolverRefs = new Set([
@@ -25,21 +27,14 @@ function listExternalSourceFiles(dir: string): string[] | null {
 }
 
 function listGitSourceFiles(dir: string): string[] | null {
-  const relativeRoot = toPosix(relative(repoRoot, dir)) || ".";
-  const result = spawnSync("git", ["ls-files", "--", relativeRoot], {
-    cwd: repoRoot,
-    encoding: "utf8",
-    maxBuffer: 1024 * 1024 * 4,
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  if (result.status !== 0) {
+  const relativeRoot = toRepoRelativePath(repoRoot, dir) || ".";
+  const files = listGitTrackedFiles({ repoRoot, pathspecs: relativeRoot });
+  if (!files) {
     return null;
   }
-  return result.stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
+  return files
     .map((file) => resolve(repoRoot, file))
+    .filter((filePath) => fs.existsSync(filePath))
     .filter(isProductionTypeScriptFile)
     .toSorted();
 }
@@ -87,25 +82,14 @@ function isProductionTypeScriptFile(path: string): boolean {
   return path.endsWith(".ts") && !path.endsWith(".test.ts") && !path.endsWith(".test.tsx");
 }
 
-function toPosix(value: string): string {
-  return value.split("\\").join("/");
-}
-
 describe("runtime plugin registry boundary", () => {
   it("lists source files without scanning src in-process", () => {
-    const readDir = vi.spyOn(fs, "readdirSync");
-    const stat = vi.spyOn(fs, "statSync");
-    try {
+    expectNoFsSyncDuring(() => {
       const files = listSourceFiles(resolve(repoRoot, "src"));
 
       expect(files.length).toBeGreaterThan(0);
       expect(files.every(isProductionTypeScriptFile)).toBe(true);
-      expect(readDir).not.toHaveBeenCalled();
-      expect(stat).not.toHaveBeenCalled();
-    } finally {
-      readDir.mockRestore();
-      stat.mockRestore();
-    }
+    }, ["readdirSync", "statSync"]);
   });
 
   it("keeps runtime registry resolution behind the loader boundary", () => {

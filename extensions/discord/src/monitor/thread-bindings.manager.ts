@@ -451,7 +451,7 @@ export function createThreadBindingManager(params: {
           }),
         });
         // Use bot send path for farewell messages so unbound threads don't process
-        // webhook echoes as fresh inbound turns when allowBots is enabled.
+        // webhook echoes as fresh inbound events when allowBots is enabled.
         if (cfg) {
           void maybeSendBindingMessage({
             cfg,

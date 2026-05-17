@@ -262,13 +262,15 @@ function resolveProviderIndexInstallCatalogEntries(params: {
   return entries;
 }
 
-function isProviderFlowScope(value: unknown): value is "text-inference" | "image-generation" {
-  return value === "text-inference" || value === "image-generation";
+function isProviderFlowScope(
+  value: unknown,
+): value is "text-inference" | "image-generation" | "music-generation" {
+  return value === "text-inference" || value === "image-generation" || value === "music-generation";
 }
 
 function normalizeProviderAuthChoiceScopes(
   scopes: OfficialExternalProviderAuthChoice["onboardingScopes"],
-): ("text-inference" | "image-generation")[] | undefined {
+): ("text-inference" | "image-generation" | "music-generation")[] | undefined {
   if (!Array.isArray(scopes)) {
     return undefined;
   }

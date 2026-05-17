@@ -1212,12 +1212,22 @@ export async function resolveModelAsync(
       workspaceDir,
     });
     if (staticCatalogModel) {
+      const overriddenStaticCatalogModel = applyConfiguredProviderOverrides({
+        provider: normalizedRef.provider,
+        discoveredModel: staticCatalogModel,
+        providerConfig,
+        modelId: normalizedRef.model,
+        cfg,
+        runtimeHooks,
+        workspaceDir,
+        preferDiscoveredModelMetadata: true,
+      });
       model = normalizeResolvedModel({
         provider: normalizedRef.provider,
         cfg,
         agentDir: resolvedAgentDir,
         workspaceDir,
-        model: staticCatalogModel,
+        model: overriddenStaticCatalogModel,
         runtimeHooks,
       });
     }

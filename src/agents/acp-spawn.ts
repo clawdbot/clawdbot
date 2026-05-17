@@ -1440,6 +1440,7 @@ export async function spawnAcpDirect(
       sessionKey,
       shouldDeleteSession: true,
       deleteTranscript: true,
+      runtimeCloseHandle: initializedRuntime,
     });
     return createAcpSpawnFailure({
       status: "error",

@@ -54,7 +54,7 @@ describe("status.command-sections", () => {
     expect(lines.at(-1)).toBe("muted(Deep probe: cmd:openclaw security audit --deep)");
   });
 
-  it("builds verbose sessions rows and empty fallback rows", () => {
+  it("builds verbose sessions rows and returns no rows for empty sessions", () => {
     const verboseRows = buildStatusSessionsRows({
       recent: [
         {
@@ -125,17 +125,7 @@ describe("status.command-sections", () => {
       muted: (value) => `muted(${value})`,
     });
 
-    expect(emptyRows).toEqual([
-      {
-        Key: "muted(no sessions yet)",
-        Kind: "",
-        Age: "",
-        Model: "",
-        Runtime: "",
-        Tokens: "",
-        Cache: "",
-      },
-    ]);
+    expect(emptyRows).toEqual([]);
   });
 
   it("maps health channel detail lines into status rows", () => {

@@ -208,6 +208,39 @@ describe("redactSensitiveText", () => {
     expect(output).toBe("Authorization: Bearer abcdef…ghij");
   });
 
+  it("masks Basic authorization header tokens", () => {
+    const secret = "c2VjcmV0OnBhc3M=";
+    const output = redactSensitiveText(`Authorization: Basic ${secret}`, {
+      mode: "tools",
+      patterns: defaults,
+    });
+
+    expect(output).toBe("Authorization: Basic ***");
+    expect(output).not.toContain(secret);
+  });
+
+  it("masks named Gateway security headers", () => {
+    const openClawToken = "supersecretgatewaytoken1234567890";
+    const pomeriumJwt = "eyJheaderabcd.eyJpayloadabcd.signatureabcd123456";
+    const apiKey = "shortsecret";
+    const input = [
+      `X-OpenClaw-Token: ${openClawToken}`,
+      `x-pomerium-jwt-assertion: ${pomeriumJwt}`,
+      `X-Api-Key=${apiKey}`,
+    ].join("\n");
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+
+    expect(output).toContain("X-OpenClaw-Token: supers…7890");
+    expect(output).toContain("x-pomerium-jwt-assertion: eyJhea…3456");
+    expect(output).toContain("X-Api-Key=***");
+    expect(output).not.toContain(openClawToken);
+    expect(output).not.toContain(pomeriumJwt);
+    expect(output).not.toContain(apiKey);
+  });
+
   it("masks token prefixes embedded after adjacent text", () => {
     const token = `ghp_${"a".repeat(5_000)}`;
     const output = redactSensitiveText(`prefix-${token} suffix`, {

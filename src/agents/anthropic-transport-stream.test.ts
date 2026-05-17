@@ -581,6 +581,238 @@ describe("anthropic transport stream", () => {
     expect(result.usage.output).toBe(9);
   });
 
+  it("captures OpenAI-style reasoning_content deltas from Anthropic-compatible streams", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: { id: "msg_1", usage: { input_tokens: 6, output_tokens: 0 } },
+        },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { content: "", reasoning_content: "Need " },
+        },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { content: "", reasoning_content: "context." },
+        },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { content: "Visible answer.", reasoning_content: "" },
+        },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { content: " Continued.", reasoning_content: null },
+        },
+        {
+          type: "content_block_stop",
+          index: 0,
+        },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn" },
+          usage: { input_tokens: 6, output_tokens: 2 },
+        },
+      ]),
+    );
+    const model = makeAnthropicTransportModel({
+      id: "mimo-v2.5",
+      name: "MiMo V2.5",
+      provider: "xiaomi-token-plan-ams",
+      baseUrl: "https://token-plan-ams.xiaomimimo.com/anthropic",
+    });
+
+    const firstResult = await runTransportStream(
+      model,
+      {
+        messages: [{ role: "user", content: "think" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-xiaomi-test",
+        reasoning: "high",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(firstResult.content).toEqual([
+      {
+        type: "thinking",
+        thinking: "Need context.",
+        thinkingSignature: "reasoning_content",
+      },
+      {
+        type: "text",
+        text: "Visible answer. Continued.",
+      },
+    ]);
+
+    await runTransportStream(
+      model,
+      {
+        messages: [
+          { role: "user", content: "think" },
+          {
+            ...firstResult,
+            timestamp: 0,
+          },
+          { role: "user", content: "continue" },
+        ],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-xiaomi-test",
+        reasoning: "high",
+      } as AnthropicStreamOptions,
+    );
+
+    const assistantMessage = findRecord(
+      latestAnthropicRequest().payload.messages,
+      (record) => record.role === "assistant",
+    );
+    expect(assistantMessage.reasoning_content).toBe("Need context.");
+    expect(assistantMessage.content).toEqual([
+      {
+        type: "thinking",
+        thinking: "Need context.",
+        signature: "reasoning_content",
+      },
+      { type: "text", text: "Visible answer. Continued." },
+    ]);
+  });
+
+  it("captures reasoning_content after compatible streams start a text block", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: { id: "msg_1", usage: { input_tokens: 6, output_tokens: 0 } },
+        },
+        {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "text", text: "" },
+        },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { content: "Visible ", reasoning_content: "Need " },
+        },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { content: "answer.", reasoning_content: null },
+        },
+        {
+          type: "content_block_stop",
+          index: 0,
+        },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn" },
+          usage: { input_tokens: 6, output_tokens: 2 },
+        },
+      ]),
+    );
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel({
+        id: "mimo-v2.5",
+        name: "MiMo V2.5",
+        provider: "xiaomi-token-plan-ams",
+        baseUrl: "https://token-plan-ams.xiaomimimo.com/anthropic",
+      }),
+      {
+        messages: [{ role: "user", content: "think" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-xiaomi-test",
+        reasoning: "high",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: "Visible answer.",
+      },
+      {
+        type: "thinking",
+        thinking: "Need ",
+        thinkingSignature: "reasoning_content",
+      },
+    ]);
+  });
+
+  it("preserves native text_delta chunks that also carry reasoning_content", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: { id: "msg_1", usage: { input_tokens: 6, output_tokens: 0 } },
+        },
+        {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "text", text: "" },
+        },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: {
+            type: "text_delta",
+            content: "Visible ",
+            text: "Visible ",
+            reasoning_content: "Need ",
+          },
+        },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: "answer." },
+        },
+        {
+          type: "content_block_stop",
+          index: 0,
+        },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn" },
+          usage: { input_tokens: 6, output_tokens: 2 },
+        },
+      ]),
+    );
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel({
+        id: "mimo-v2.5",
+        name: "MiMo V2.5",
+        provider: "xiaomi-token-plan-ams",
+        baseUrl: "https://token-plan-ams.xiaomimimo.com/anthropic",
+      }),
+      {
+        messages: [{ role: "user", content: "think" }],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-xiaomi-test",
+        reasoning: "high",
+      } as AnthropicStreamOptions,
+    );
+
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: "Visible answer.",
+      },
+      {
+        type: "thinking",
+        thinking: "Need ",
+        thinkingSignature: "reasoning_content",
+      },
+    ]);
+  });
+
   it("recovers orphan text deltas when an Anthropic-compatible provider omits block start", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([
@@ -728,6 +960,285 @@ describe("anthropic transport stream", () => {
       (record) => record.type === "tool_use" && record.name === "lookup",
     );
     expect(toolUse.input).toEqual({});
+  });
+
+  it("replays reasoning_content from compatible Anthropic thinking blocks", async () => {
+    await runTransportStream(
+      makeAnthropicTransportModel({
+        id: "mimo-v2.6-pro",
+        name: "MiMo V2.6 Pro",
+        provider: "xiaomi",
+        baseUrl: "https://token-plan-ams.xiaomimimo.com/anthropic",
+      }),
+      {
+        messages: [
+          { role: "user", content: "hello" },
+          {
+            role: "assistant",
+            provider: "xiaomi",
+            api: "anthropic-messages",
+            model: "mimo-v2.6-pro",
+            stopReason: "stop",
+            timestamp: 0,
+            content: [
+              {
+                type: "thinking",
+                thinking: "Need to answer politely.",
+                thinkingSignature: "reasoning_content",
+              },
+              { type: "text", text: "Hello!" },
+              {
+                type: "thinking",
+                thinking: "Then ask a follow-up.",
+                thinkingSignature: "reasoning_content",
+              },
+            ],
+          },
+          { role: "user", content: "again" },
+        ],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-xiaomi-test",
+        reasoning: "high",
+      } as AnthropicStreamOptions,
+    );
+
+    const assistantMessage = findRecord(
+      latestAnthropicRequest().payload.messages,
+      (record) => record.role === "assistant",
+    );
+    expect(assistantMessage.reasoning_content).toBe(
+      "Need to answer politely.\nThen ask a follow-up.",
+    );
+    expect(assistantMessage).not.toHaveProperty("reasoning");
+    expect(assistantMessage).not.toHaveProperty("reasoning_text");
+    expect(assistantMessage.content).toEqual([
+      {
+        type: "thinking",
+        thinking: "Need to answer politely.",
+        signature: "reasoning_content",
+      },
+      { type: "text", text: "Hello!" },
+      {
+        type: "thinking",
+        thinking: "Then ask a follow-up.",
+        signature: "reasoning_content",
+      },
+    ]);
+  });
+
+  it("backfills empty reasoning_content for compatible Anthropic tool-use replays", async () => {
+    await runTransportStream(
+      makeAnthropicTransportModel({
+        id: "mimo-v2.6-pro",
+        name: "MiMo V2.6 Pro",
+        provider: "xiaomi",
+        baseUrl: "https://token-plan-ams.xiaomimimo.com/anthropic",
+      }),
+      {
+        messages: [
+          { role: "user", content: "look this up" },
+          {
+            role: "assistant",
+            provider: "xiaomi",
+            api: "anthropic-messages",
+            model: "mimo-v2.6-pro",
+            stopReason: "toolUse",
+            timestamp: 0,
+            content: [{ type: "toolCall", id: "call_1", name: "lookup", arguments: {} }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            content: [{ type: "text", text: "found" }],
+            isError: false,
+          },
+          { role: "user", content: "continue" },
+        ],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-xiaomi-test",
+        reasoning: "high",
+      } as AnthropicStreamOptions,
+    );
+
+    const assistantMessage = findRecord(
+      latestAnthropicRequest().payload.messages,
+      (record) => record.role === "assistant",
+    );
+    expect(assistantMessage.reasoning_content).toBe("");
+    expect(assistantMessage.content).toEqual([
+      { type: "tool_use", id: "call_1", name: "lookup", input: {} },
+    ]);
+  });
+
+  it("backfills empty reasoning_content for compatible Anthropic text replays", async () => {
+    await runTransportStream(
+      makeAnthropicTransportModel({
+        id: "mimo-v2.6-pro",
+        name: "MiMo V2.6 Pro",
+        provider: "xiaomi",
+        baseUrl: "https://token-plan-ams.xiaomimimo.com/anthropic",
+      }),
+      {
+        messages: [
+          { role: "user", content: "hello" },
+          {
+            role: "assistant",
+            provider: "xiaomi",
+            api: "anthropic-messages",
+            model: "mimo-v2.6-pro",
+            stopReason: "stop",
+            timestamp: 0,
+            content: [{ type: "text", text: "Hello!" }],
+          },
+          { role: "user", content: "again" },
+        ],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-xiaomi-test",
+        reasoning: "high",
+      } as AnthropicStreamOptions,
+    );
+
+    const assistantMessage = findRecord(
+      latestAnthropicRequest().payload.messages,
+      (record) => record.role === "assistant",
+    );
+    expect(assistantMessage.reasoning_content).toBe("");
+    expect(assistantMessage.content).toEqual([{ type: "text", text: "Hello!" }]);
+  });
+
+  it("does not backfill reasoning_content for generic Anthropic-compatible tool-use replays", async () => {
+    await runTransportStream(
+      makeAnthropicTransportModel({
+        id: "claude-sonnet-4-6",
+        name: "Claude Sonnet 4.6",
+        provider: "gateway",
+        baseUrl: "https://gateway.example.com/anthropic",
+      }),
+      {
+        messages: [
+          { role: "user", content: "look this up" },
+          {
+            role: "assistant",
+            provider: "gateway",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-6",
+            stopReason: "toolUse",
+            timestamp: 0,
+            content: [{ type: "toolCall", id: "call_1", name: "lookup", arguments: {} }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            content: [{ type: "text", text: "found" }],
+            isError: false,
+          },
+          { role: "user", content: "continue" },
+        ],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-gateway-test",
+        reasoning: "high",
+      } as AnthropicStreamOptions,
+    );
+
+    const assistantMessage = findRecord(
+      latestAnthropicRequest().payload.messages,
+      (record) => record.role === "assistant",
+    );
+    expect(assistantMessage).not.toHaveProperty("reasoning_content");
+    expect(assistantMessage.content).toEqual([
+      { type: "tool_use", id: "call_1", name: "lookup", input: {} },
+    ]);
+  });
+
+  it("does not replay reasoning_content when compatible Anthropic thinking is disabled", async () => {
+    await runTransportStream(
+      makeAnthropicTransportModel({
+        id: "mimo-v2.6-pro",
+        name: "MiMo V2.6 Pro",
+        provider: "xiaomi",
+        baseUrl: "https://token-plan-ams.xiaomimimo.com/anthropic",
+      }),
+      {
+        messages: [
+          { role: "user", content: "hello" },
+          {
+            role: "assistant",
+            provider: "xiaomi",
+            api: "anthropic-messages",
+            model: "mimo-v2.6-pro",
+            stopReason: "stop",
+            timestamp: 0,
+            content: [
+              {
+                type: "thinking",
+                thinking: "Need to answer politely.",
+                thinkingSignature: "reasoning_content",
+              },
+              { type: "text", text: "Hello!" },
+            ],
+          },
+          { role: "user", content: "again" },
+        ],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-xiaomi-test",
+      } as AnthropicStreamOptions,
+    );
+
+    const assistantMessage = findRecord(
+      latestAnthropicRequest().payload.messages,
+      (record) => record.role === "assistant",
+    );
+    expect(latestAnthropicRequest().payload.thinking).toEqual({ type: "disabled" });
+    expect(assistantMessage).not.toHaveProperty("reasoning_content");
+    expect(assistantMessage.content).toEqual([{ type: "text", text: "Hello!" }]);
+  });
+
+  it("does not replay synthetic reasoning_content to native Anthropic models", async () => {
+    await runTransportStream(
+      makeAnthropicTransportModel({
+        id: "claude-sonnet-4-6",
+        name: "Claude Sonnet 4.6",
+        provider: "anthropic",
+        baseUrl: "https://api.anthropic.com",
+      }),
+      {
+        messages: [
+          { role: "user", content: "hello" },
+          {
+            role: "assistant",
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-6",
+            stopReason: "stop",
+            timestamp: 0,
+            content: [
+              {
+                type: "thinking",
+                thinking: "Private replay text.",
+                thinkingSignature: "reasoning_content",
+              },
+              { type: "text", text: "Visible reply." },
+            ],
+          },
+          { role: "user", content: "again" },
+        ],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+      } as AnthropicStreamOptions,
+    );
+
+    const assistantMessage = findRecord(
+      latestAnthropicRequest().payload.messages,
+      (record) => record.role === "assistant",
+    );
+    expect(assistantMessage).not.toHaveProperty("reasoning_content");
+    expect(assistantMessage.content).toEqual([{ type: "text", text: "Visible reply." }]);
   });
 
   it.each([

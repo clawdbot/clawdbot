@@ -6,6 +6,8 @@ import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 
 export type RttProviderMode = "mock-openai" | "live-frontier";
+export type RttCredentialSource = "env" | "convex";
+export type RttCredentialRole = "maintainer" | "ci";
 
 type RttResult = {
   package: {
@@ -72,6 +74,58 @@ const REQUIRED_TELEGRAM_ENV = [
   "OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN",
 ] as const;
 
+export function parseRttCredentialSource(value: string): RttCredentialSource {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "env" || normalized === "convex") {
+    return normalized;
+  }
+  throw new Error(`--credential-source must be env or convex; got: ${value}`);
+}
+
+export function parseRttCredentialRole(value: string): RttCredentialRole {
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "maintainer" || normalized === "ci") {
+    return normalized;
+  }
+  throw new Error(`--credential-role must be maintainer or ci; got: ${value}`);
+}
+
+function resolveRttCredentialSource(
+  env: NodeJS.ProcessEnv,
+  credentialSource?: RttCredentialSource,
+): RttCredentialSource {
+  if (credentialSource) {
+    return credentialSource;
+  }
+  const rawSource =
+    env.OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE ?? env.OPENCLAW_QA_CREDENTIAL_SOURCE;
+  if (rawSource?.trim()) {
+    return parseRttCredentialSource(rawSource);
+  }
+  if (
+    env.CI &&
+    env.OPENCLAW_QA_CONVEX_SITE_URL?.trim() &&
+    (env.OPENCLAW_QA_CONVEX_SECRET_CI?.trim() || env.OPENCLAW_QA_CONVEX_SECRET_MAINTAINER?.trim())
+  ) {
+    return "convex";
+  }
+  return "env";
+}
+
+function resolveRttCredentialRole(
+  env: NodeJS.ProcessEnv,
+  credentialRole?: RttCredentialRole,
+): RttCredentialRole {
+  if (credentialRole) {
+    return credentialRole;
+  }
+  const rawRole = env.OPENCLAW_NPM_TELEGRAM_CREDENTIAL_ROLE ?? env.OPENCLAW_QA_CREDENTIAL_ROLE;
+  if (rawRole?.trim()) {
+    return parseRttCredentialRole(rawRole);
+  }
+  return env.CI ? "ci" : "maintainer";
+}
+
 export function validateOpenClawPackageSpec(spec: string) {
   if (!OPENCLAW_PACKAGE_SPEC_RE.test(spec)) {
     throw new Error(
@@ -117,6 +171,8 @@ export function extractRtt(summary: TelegramQaSummary) {
 
 export function createHarnessEnv(params: {
   baseEnv: NodeJS.ProcessEnv;
+  credentialRole?: RttCredentialRole;
+  credentialSource?: RttCredentialSource;
   packageTgz?: string;
   providerMode: RttProviderMode;
   scenarios: string[];
@@ -133,6 +189,12 @@ export function createHarnessEnv(params: {
     ...(params.packageTgz ? { OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ: params.packageTgz } : {}),
     OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL: `${params.spec} (${params.version})`,
     OPENCLAW_NPM_TELEGRAM_PROVIDER_MODE: params.providerMode,
+    ...(params.credentialSource
+      ? { OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE: params.credentialSource }
+      : {}),
+    ...(params.credentialRole
+      ? { OPENCLAW_NPM_TELEGRAM_CREDENTIAL_ROLE: params.credentialRole }
+      : {}),
     OPENCLAW_NPM_TELEGRAM_SCENARIOS: params.scenarios.join(","),
     OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR: params.rawOutputDir,
     OPENCLAW_NPM_TELEGRAM_FAST: params.baseEnv.OPENCLAW_NPM_TELEGRAM_FAST ?? "1",
@@ -143,7 +205,32 @@ export function createHarnessEnv(params: {
   };
 }
 
-export function assertRequiredEnv(env: NodeJS.ProcessEnv) {
+export function assertRequiredEnv(
+  env: NodeJS.ProcessEnv,
+  options: {
+    credentialRole?: RttCredentialRole;
+    credentialSource?: RttCredentialSource;
+  } = {},
+) {
+  const credentialSource = resolveRttCredentialSource(env, options.credentialSource);
+  if (credentialSource === "convex") {
+    const missing: string[] = [];
+    const credentialRole = resolveRttCredentialRole(env, options.credentialRole);
+    if (!env.OPENCLAW_QA_CONVEX_SITE_URL?.trim()) {
+      missing.push("OPENCLAW_QA_CONVEX_SITE_URL");
+    }
+    if (credentialRole === "ci" && !env.OPENCLAW_QA_CONVEX_SECRET_CI?.trim()) {
+      missing.push("OPENCLAW_QA_CONVEX_SECRET_CI");
+    }
+    if (credentialRole === "maintainer" && !env.OPENCLAW_QA_CONVEX_SECRET_MAINTAINER?.trim()) {
+      missing.push("OPENCLAW_QA_CONVEX_SECRET_MAINTAINER");
+    }
+    if (missing.length > 0) {
+      throw new Error(`Missing Convex Telegram QA credential env: ${missing.join(", ")}`);
+    }
+    return;
+  }
+
   const missing = REQUIRED_TELEGRAM_ENV.filter((key) => !env[key]?.trim());
   if (missing.length > 0) {
     throw new Error(`Missing Telegram QA env: ${missing.join(", ")}`);

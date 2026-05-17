@@ -19,6 +19,7 @@ import {
   SAFE_BIN_PROFILES,
   resolveSafeBinProfiles,
 } from "./exec-safe-bin-policy.js";
+import { buildTrustedSafeBinDirs } from "./exec-safe-bin-trust.js";
 
 describe("exec approvals safe bins", () => {
   type SafeBinCase = {
@@ -330,6 +331,44 @@ describe("exec approvals safe bins", () => {
       trustedSafeBinDirs: new Set(["/custom/bin"]),
     });
     expect(ok).toBe(true);
+  });
+
+  it("checks safe-bin trusted dirs against the real executable identity", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const resolution = {
+      rawExecutable: "jq",
+      resolvedPath: "/opt/homebrew/bin/jq",
+      resolvedRealPath: "/opt/homebrew/Cellar/jq/1.7.1/bin/jq",
+      executableName: "jq",
+    };
+    expect(
+      isSafeBinUsage({
+        argv: ["jq", ".foo"],
+        resolution,
+        safeBins: normalizeSafeBins(["jq"]),
+        trustedSafeBinDirs: new Set(["/opt/homebrew/bin"]),
+      }),
+    ).toBe(false);
+    expect(
+      isSafeBinUsage({
+        argv: ["jq", ".foo"],
+        resolution,
+        safeBins: normalizeSafeBins(["jq"]),
+        trustedSafeBinDirs: buildTrustedSafeBinDirs({
+          extraDirs: ["/opt/homebrew/Cellar/jq/1.7.1/bin"],
+        }),
+      }),
+    ).toBe(true);
+    expect(
+      isSafeBinUsage({
+        argv: ["jq", ".foo"],
+        resolution,
+        safeBins: normalizeSafeBins(["jq"]),
+        trustedSafeBinDirs: new Set(["/tmp/other-bin"]),
+      }),
+    ).toBe(false);
   });
 
   it("supports injected platform for deterministic safe-bin checks", () => {

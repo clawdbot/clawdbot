@@ -17,6 +17,10 @@ export type MemoryEmbeddingBatchOptions = {
   debug: (message: string, data?: Record<string, unknown>) => void;
 };
 
+export type MemoryEmbeddingProviderCallOptions = {
+  signal?: AbortSignal;
+};
+
 export type MemoryEmbeddingProviderRuntime = {
   id: string;
   cacheKeyData?: Record<string, unknown>;
@@ -29,9 +33,15 @@ export type MemoryEmbeddingProvider = {
   id: string;
   model: string;
   maxInputTokens?: number;
-  embedQuery: (text: string) => Promise<number[]>;
-  embedBatch: (texts: string[]) => Promise<number[][]>;
-  embedBatchInputs?: (inputs: EmbeddingInput[]) => Promise<number[][]>;
+  embedQuery: (text: string, options?: MemoryEmbeddingProviderCallOptions) => Promise<number[]>;
+  embedBatch: (
+    texts: string[],
+    options?: MemoryEmbeddingProviderCallOptions,
+  ) => Promise<number[][]>;
+  embedBatchInputs?: (
+    inputs: EmbeddingInput[],
+    options?: MemoryEmbeddingProviderCallOptions,
+  ) => Promise<number[][]>;
 };
 
 export type MemoryEmbeddingProviderCreateOptions = {

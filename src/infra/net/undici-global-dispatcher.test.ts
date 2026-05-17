@@ -1,7 +1,7 @@
-import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { execNodeEvalSync } from "../../test-utils/node-process.js";
 
 const {
   Agent,
@@ -196,11 +196,7 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
       delete env[key];
     }
 
-    const output = execFileSync(
-      process.execPath,
-      ["--import", "tsx", "--input-type=module", "--eval", source],
-      { cwd: process.cwd(), encoding: "utf8", env },
-    );
+    const output = execNodeEvalSync(source, { env, imports: ["tsx"] });
 
     expect(output.trim()).toBe("ok");
   });

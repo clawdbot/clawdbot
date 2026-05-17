@@ -622,6 +622,27 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
+  it("suppresses final text blocks already delivered through partial preview streaming", async () => {
+    const onPartialReply = vi.fn();
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      await params.onPartialReply?.({ text: "First block\n\nSecond block" });
+      return {
+        payloads: [{ text: "First block" }, { text: "Second block" }],
+        meta: {},
+      };
+    });
+
+    const { run } = createMinimalRun({
+      opts: { onPartialReply },
+      typingMode: "message",
+    });
+
+    const result = await run();
+
+    expect(onPartialReply).toHaveBeenCalledWith({ text: "First block\n\nSecond block" });
+    expect(result).toBeUndefined();
+  });
+
   it("suppresses narrated silent-turn partials, block replies, and final payloads", async () => {
     const onPartialReply = vi.fn();
     const onBlockReply = vi.fn();
@@ -917,10 +938,10 @@ describe("runReplyAgent typing (heartbeat)", () => {
     vi.useRealTimers();
   });
 
-  it("announces model fallback only when verbose mode is enabled", async () => {
+  it("announces model fallback transitions across verbose levels", async () => {
     const cases = [
-      { name: "verbose on", verbose: "on" as const, expectNotice: true },
-      { name: "verbose off", verbose: "off" as const, expectNotice: false },
+      { name: "verbose on", verbose: "on" as const },
+      { name: "verbose off", verbose: "off" as const },
     ] as const;
     for (const testCase of cases) {
       const sessionEntry: SessionEntry = {
@@ -974,18 +995,119 @@ describe("runReplyAgent typing (heartbeat)", () => {
       const payload = Array.isArray(res)
         ? (res[0] as { text?: string })
         : (res as { text?: string });
-      if (testCase.expectNotice) {
-        expect(payload.text, testCase.name).toContain("Model Fallback:");
-        expect(payload.text, testCase.name).toContain("deepinfra/moonshotai/Kimi-K2.5");
-        expect(sessionEntry.fallbackNoticeReason, testCase.name).toBe("rate limit");
-        continue;
-      }
-      expect(payload.text, testCase.name).not.toContain("Model Fallback:");
+      expect(payload.text, testCase.name).toContain("Model Fallback:");
+      expect(payload.text, testCase.name).toContain("deepinfra/moonshotai/Kimi-K2.5");
+      expect(sessionEntry.fallbackNoticeReason, testCase.name).toBe("rate limit");
       expect(
         phases.filter((phase) => phase === "fallback"),
         testCase.name,
       ).toHaveLength(1);
       expect(phases, testCase.name).toContain("fallback_step");
+    }
+  });
+
+  it("keeps fallback transition notices when block streaming has no final text", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const onBlockReply = vi.fn();
+
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+      await params.onBlockReply?.({ text: "streamed answer" });
+      return { payloads: [], meta: {} };
+    });
+    const fallbackSpy = vi
+      .spyOn(modelFallbackModule, "runWithModelFallback")
+      .mockImplementationOnce(
+        async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          result: await run("deepinfra", "moonshotai/Kimi-K2.5"),
+          provider: "deepinfra",
+          model: "moonshotai/Kimi-K2.5",
+          attempts: [
+            {
+              provider: "fireworks",
+              model: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
+              error: "Provider fireworks is in cooldown (all profiles unavailable)",
+              reason: "rate_limit",
+            },
+          ],
+        }),
+      );
+    try {
+      const { run } = createMinimalRun({
+        blockStreamingEnabled: true,
+        opts: { onBlockReply },
+        sessionEntry,
+        sessionStore,
+        sessionKey: "main",
+      });
+      const res = await run();
+      const payloads = Array.isArray(res) ? res : res ? [res] : [];
+
+      expect(onBlockReply).toHaveBeenCalled();
+      expect(payloads).toHaveLength(1);
+      expect(payloads[0]?.text).toContain("Model Fallback:");
+      expect(payloads[0]?.text).not.toContain("streamed answer");
+    } finally {
+      fallbackSpy.mockRestore();
+    }
+  });
+
+  it("threads fallback notices without consuming the first assistant reply slot", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "final" }],
+      meta: {},
+    });
+    const fallbackSpy = vi
+      .spyOn(modelFallbackModule, "runWithModelFallback")
+      .mockImplementationOnce(
+        async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+          result: await run("deepinfra", "moonshotai/Kimi-K2.5"),
+          provider: "deepinfra",
+          model: "moonshotai/Kimi-K2.5",
+          attempts: [
+            {
+              provider: "fireworks",
+              model: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
+              error: "Provider fireworks is in cooldown (all profiles unavailable)",
+              reason: "rate_limit",
+            },
+          ],
+        }),
+      );
+    try {
+      const { run } = createMinimalRun({
+        sessionEntry,
+        sessionStore,
+        sessionKey: "main",
+        runOverrides: {
+          config: {
+            channels: {
+              whatsapp: {
+                replyToMode: "first",
+              },
+            },
+          },
+        },
+      });
+      const res = await run();
+      const payloads = Array.isArray(res) ? res : res ? [res] : [];
+
+      expect(payloads).toHaveLength(2);
+      expect(payloads[0]?.text).toContain("Model Fallback:");
+      expect(payloads[0]?.replyToId).toBe("msg");
+      expect(payloads[1]?.text).toBe("final");
+      expect(payloads[1]?.replyToId).toBe("msg");
+    } finally {
+      fallbackSpy.mockRestore();
     }
   });
 
@@ -1121,7 +1243,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(payload?.text).toContain("no visible reply");
   });
 
-  it("does not surface fallback silence when fallback already replied through a messaging tool", async () => {
+  it("announces fallback without silence failure when fallback already replied through a messaging tool", async () => {
     state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "already sent" }],
       messagingToolSentTexts: ["already sent"],
@@ -1162,7 +1284,12 @@ describe("runReplyAgent typing (heartbeat)", () => {
         },
       });
 
-      await expect(run()).resolves.toBeUndefined();
+      const res = await run();
+      const payload = Array.isArray(res) ? res[0] : res;
+
+      expect(payload?.isError).not.toBe(true);
+      expect(payload?.text).toContain("Model Fallback:");
+      expect(payload?.text).not.toContain("no visible reply");
     } finally {
       fallbackSpy.mockRestore();
     }
@@ -1222,7 +1349,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
-  it("does not surface fallback silence when fallback already completed a cron side effect", async () => {
+  it("announces fallback without silence failure when fallback already completed a cron side effect", async () => {
     state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "NO_REPLY" }],
       successfulCronAdds: 1,
@@ -1262,13 +1389,18 @@ describe("runReplyAgent typing (heartbeat)", () => {
         },
       });
 
-      await expect(run()).resolves.toBeUndefined();
+      const res = await run();
+      const payload = Array.isArray(res) ? res[0] : res;
+
+      expect(payload?.isError).not.toBe(true);
+      expect(payload?.text).toContain("Model Fallback:");
+      expect(payload?.text).not.toContain("no visible reply");
     } finally {
       fallbackSpy.mockRestore();
     }
   });
 
-  it("does not surface fallback silence when fallback committed target-only messaging delivery", async () => {
+  it("announces fallback without silence failure when fallback committed target-only messaging delivery", async () => {
     state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "NO_REPLY" }],
       messagingToolSentTargets: [{ tool: "message", provider: "discord", to: "channel:C1" }],
@@ -1308,13 +1440,18 @@ describe("runReplyAgent typing (heartbeat)", () => {
         },
       });
 
-      await expect(run()).resolves.toBeUndefined();
+      const res = await run();
+      const payload = Array.isArray(res) ? res[0] : res;
+
+      expect(payload?.isError).not.toBe(true);
+      expect(payload?.text).toContain("Model Fallback:");
+      expect(payload?.text).not.toContain("no visible reply");
     } finally {
       fallbackSpy.mockRestore();
     }
   });
 
-  it("does not surface fallback silence when fallback already delivered an approval prompt", async () => {
+  it("announces fallback without silence failure when fallback already delivered an approval prompt", async () => {
     state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [],
       didSendDeterministicApprovalPrompt: true,
@@ -1351,7 +1488,12 @@ describe("runReplyAgent typing (heartbeat)", () => {
         },
       });
 
-      await expect(run()).resolves.toBeUndefined();
+      const res = await run();
+      const payload = Array.isArray(res) ? res[0] : res;
+
+      expect(payload?.isError).not.toBe(true);
+      expect(payload?.text).toContain("Model Fallback:");
+      expect(payload?.text).not.toContain("no visible reply");
     } finally {
       fallbackSpy.mockRestore();
     }
@@ -1608,7 +1750,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
-  it("emits fallback lifecycle events while verbose is off", async () => {
+  it("announces fallback transitions and emits lifecycle events while verbose is off", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
@@ -1676,8 +1818,8 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
       const firstText = Array.isArray(first) ? first[0]?.text : first?.text;
       const secondText = Array.isArray(second) ? second[0]?.text : second?.text;
-      expect(firstText).not.toContain("Model Fallback:");
-      expect(secondText).not.toContain("Model Fallback cleared:");
+      expect(firstText).toContain("Model Fallback:");
+      expect(secondText).toContain("Model Fallback cleared:");
       expect(countMatching(phases, (phase) => phase === "fallback")).toBe(1);
       expect(countMatching(phases, (phase) => phase === "fallback_cleared")).toBe(1);
     } finally {

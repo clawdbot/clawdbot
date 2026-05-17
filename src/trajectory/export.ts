@@ -84,9 +84,11 @@ function isSessionFileEntry(value: unknown): value is FileEntry {
 function parseSessionEntries(content: string): {
   entries: FileEntry[];
   warnings: JsonlParseWarning[];
+  rowByEntry: Map<FileEntry, number>;
 } {
   const entries: FileEntry[] = [];
   const warnings: JsonlParseWarning[] = [];
+  const rowByEntry = new Map<FileEntry, number>();
   const rows = content.split(/\r?\n/u);
   for (const [index, rawLine] of rows.entries()) {
     const line = rawLine.trim();
@@ -105,6 +107,7 @@ function parseSessionEntries(content: string): {
         continue;
       }
       entries.push(parsed);
+      rowByEntry.set(parsed, index + 1);
     } catch {
       warnings.push({
         source: "session",
@@ -114,7 +117,7 @@ function parseSessionEntries(content: string): {
       });
     }
   }
-  return { entries, warnings };
+  return { entries, warnings, rowByEntry };
 }
 
 function migrateLegacySessionEntries(entries: FileEntry[]): void {
@@ -166,9 +169,11 @@ async function readSessionBranch(filePath: string): Promise<{
   branchEntries: SessionEntry[];
   warnings: JsonlParseWarning[];
 }> {
-  const { entries: fileEntries, warnings } = parseSessionEntries(
-    await fsp.readFile(filePath, "utf8"),
-  );
+  const {
+    entries: fileEntries,
+    warnings,
+    rowByEntry,
+  } = parseSessionEntries(await fsp.readFile(filePath, "utf8"));
   migrateLegacySessionEntries(fileEntries);
   const header =
     fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
@@ -182,10 +187,42 @@ async function readSessionBranch(filePath: string): Promise<{
   const byId = new Map(entries.map((entry) => [entry.id, entry]));
   const leafId = entries.at(-1)?.id ?? null;
   const branchEntries: SessionEntry[] = [];
-  let current = leafId ? byId.get(leafId) : undefined;
-  while (current) {
+  const seen = new Set<string>();
+  let currentId = leafId;
+  while (currentId) {
+    if (seen.has(currentId)) {
+      const cycleEntry = byId.get(currentId);
+      warnings.push({
+        source: "session",
+        code: "cyclic-session-branch",
+        row: cycleEntry ? (rowByEntry.get(cycleEntry) ?? 0) : 0,
+        message: "Stopped trajectory session branch export at a cyclic parent link.",
+      });
+      break;
+    }
+    seen.add(currentId);
+    const current = byId.get(currentId);
+    if (!current) {
+      warnings.push({
+        source: "session",
+        code: "incomplete-session-branch",
+        row: 0,
+        message: "Exported the reachable session branch suffix after a missing parent link.",
+      });
+      break;
+    }
     branchEntries.unshift(current);
-    current = current.parentId ? byId.get(current.parentId) : undefined;
+    const parentId = typeof current.parentId === "string" ? current.parentId : null;
+    if (parentId && !byId.has(parentId)) {
+      warnings.push({
+        source: "session",
+        code: "incomplete-session-branch",
+        row: rowByEntry.get(current) ?? 0,
+        message: "Exported the reachable session branch suffix after a missing parent link.",
+      });
+      break;
+    }
+    currentId = parentId;
   }
   return { header, leafId, branchEntries, warnings };
 }
@@ -829,6 +866,10 @@ function buildArtifactsCapture(params: {
     promptError:
       runtimeArtifacts?.promptError ?? runtimeEnd?.promptError ?? runtimeCompletion?.promptError,
     promptErrorSource: runtimeArtifacts?.promptErrorSource ?? runtimeCompletion?.promptErrorSource,
+    terminalError:
+      runtimeArtifacts?.terminalError ??
+      runtimeEnd?.terminalError ??
+      runtimeCompletion?.terminalError,
     usage: runtimeArtifacts?.usage ?? runtimeCompletion?.usage,
     promptCache: runtimeArtifacts?.promptCache ?? runtimeCompletion?.promptCache,
     compactionCount: runtimeArtifacts?.compactionCount ?? runtimeCompletion?.compactionCount,

@@ -101,6 +101,7 @@ function mergeBuiltInFactoryAllowlist(...lists: Array<string[] | undefined>): st
 export function resolveImageToolFactoryAvailable(params: {
   config?: OpenClawConfig;
   agentDir?: string;
+  workspaceDir?: string;
   modelHasVision?: boolean;
   authStore?: AuthProfileStore;
 }): boolean {
@@ -112,6 +113,7 @@ export function resolveImageToolFactoryAvailable(params: {
   }
   const snapshot = loadCapabilityMetadataSnapshot({
     config: params.config,
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });
   return (
     hasSnapshotCapabilityAvailability({

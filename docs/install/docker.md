@@ -142,6 +142,12 @@ The setup script accepts these optional environment variables:
 | `OTEL_SEMCONV_STABILITY_OPT_IN`            | Opt in to latest experimental GenAI semantic attributes         |
 | `OPENCLAW_OTEL_PRELOADED`                  | Skip starting a second OpenTelemetry SDK when one is preloaded  |
 
+The official Docker image does not ship Homebrew. During onboarding, OpenClaw
+hides brew-only skill dependency installers when it is running in a Linux
+container without `brew`; those dependencies must be provided by a custom image
+or installed manually. For dependencies available from Debian packages, use
+`OPENCLAW_DOCKER_APT_PACKAGES` during image build.
+
 Maintainers can test bundled plugin source against a packaged image by mounting
 one plugin source directory over its packaged source path, for example
 `OPENCLAW_EXTRA_MOUNTS=/path/to/fork/extensions/synology-chat:/app/extensions/synology-chat:ro`.

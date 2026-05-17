@@ -75,6 +75,36 @@ describe("video-generation capability overlays", () => {
     });
   });
 
+  it("lets explicit empty providerOptions overlays clear inherited declarations", () => {
+    const merged = mergeVideoGenerationProviderCapabilities(
+      {
+        providerOptions: { seed: "number" },
+        generate: {
+          providerOptions: { seed: "number" },
+        },
+        imageToVideo: {
+          enabled: true,
+          maxInputImages: 4,
+          providerOptions: { seed: "number" },
+        },
+      },
+      {
+        providerOptions: {},
+        generate: {
+          providerOptions: {},
+        },
+        imageToVideo: {
+          enabled: true,
+          providerOptions: {},
+        },
+      },
+    );
+
+    expect(merged.providerOptions).toEqual({});
+    expect(merged.generate?.providerOptions).toEqual({});
+    expect(merged.imageToVideo?.providerOptions).toEqual({});
+  });
+
   it("checks reference inputs against overlaid provider capabilities", async () => {
     const provider: VideoGenerationProvider = {
       id: "openrouter",

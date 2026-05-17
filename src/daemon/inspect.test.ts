@@ -267,6 +267,27 @@ describe("findExtraGatewayServices (darwin / scanLaunchdDir) — real filesystem
     }
   });
 
+  it("does not report non-gateway LaunchAgents that mention clawdbot in environment values", async () => {
+    const tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-"));
+    const launchdDir = path.join(tmpHome, "Library", "LaunchAgents");
+    try {
+      await fs.mkdir(launchdDir, { recursive: true });
+      await fs.writeFile(
+        path.join(launchdDir, "com.github.facebook.watchman.plist"),
+        `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+<key>Label</key><string>com.github.facebook.watchman</string>
+<key>EnvironmentVariables</key><dict><key>PATH</key><string>/Users/test/Projects/clawdbot2/node_modules/.bin:/opt/homebrew/bin</string></dict>
+<key>ProgramArguments</key><array><string>/opt/homebrew/bin/watchman</string><string>--foreground</string></array>
+</dict></plist>`,
+      );
+      const result = await findExtraGatewayServices({ HOME: tmpHome });
+      expect(result).toStrictEqual([]);
+    } finally {
+      await fs.rm(tmpHome, { recursive: true, force: true });
+    }
+  });
+
   it("reports custom LaunchAgents that execute openclaw gateway", async () => {
     const tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-"));
     const launchdDir = path.join(tmpHome, "Library", "LaunchAgents");

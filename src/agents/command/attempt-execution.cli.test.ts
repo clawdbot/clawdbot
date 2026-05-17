@@ -913,6 +913,88 @@ describe("CLI attempt execution", () => {
     });
   });
 
+  it("forwards user-pinned OpenAI API-key backup profiles to Codex harness runs", async () => {
+    const { clearAgentHarnesses, registerAgentHarness } = await import("../harness/registry.js");
+    const sessionKey = "agent:main:direct:openai-codex-api-key";
+    const sessionEntry: SessionEntry = {
+      sessionId: "openclaw-session-openai-codex-api-key",
+      updatedAt: Date.now(),
+      authProfileOverride: "openai:backup",
+      authProfileOverrideSource: "user",
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    await fs.writeFile(
+      path.join(tmpDir, "auth-profiles.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          profiles: {
+            "openai:backup": {
+              type: "api_key",
+              provider: "openai",
+              key: "sk-test",
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    clearAgentHarnesses();
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex",
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt: vi.fn(),
+    });
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      meta: { durationMs: 1 },
+    } satisfies EmbeddedPiRunResult);
+
+    try {
+      await runAgentAttempt({
+        providerOverride: "openai",
+        originalProvider: "openai",
+        modelOverride: "gpt-5.4",
+        cfg: {} as OpenClawConfig,
+        sessionEntry,
+        sessionId: sessionEntry.sessionId,
+        sessionKey,
+        sessionAgentId: "main",
+        sessionFile: path.join(tmpDir, "session.jsonl"),
+        workspaceDir: tmpDir,
+        body: "use backup auth",
+        isFallbackRetry: false,
+        resolvedThinkLevel: "medium",
+        timeoutMs: 1_000,
+        runId: "run-openai-codex-api-key-backup",
+        opts: { senderIsOwner: false } as Parameters<typeof runAgentAttempt>[0]["opts"],
+        runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+        spawnedBy: undefined,
+        messageChannel: undefined,
+        skillsSnapshot: undefined,
+        resolvedVerboseLevel: undefined,
+        agentDir: tmpDir,
+        onAgentEvent: vi.fn(),
+        authProfileProvider: "openai",
+        sessionStore,
+        storePath,
+        sessionHasHistory: false,
+      });
+    } finally {
+      clearAgentHarnesses();
+    }
+
+    expectMockArgFields(runEmbeddedPiAgentMock, {
+      provider: "openai",
+      model: "gpt-5.4",
+      authProfileId: "openai:backup",
+      authProfileIdSource: "user",
+    });
+  });
+
   it("keeps one-shot model runs on the raw embedded provider path", async () => {
     const sessionKey = "agent:main:direct:model-run-raw";
     const sessionEntry: SessionEntry = {
@@ -1283,6 +1365,7 @@ describe("embedded attempt harness pinning", () => {
   });
 
   it("auto-forwards OpenAI Codex auth profiles to default Codex harness runs", async () => {
+    const { clearAgentHarnesses, registerAgentHarness } = await import("../harness/registry.js");
     const sessionEntry: SessionEntry = {
       sessionId: "codex-auth-session",
       updatedAt: Date.now(),
@@ -1305,34 +1388,45 @@ describe("embedded attempt harness pinning", () => {
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
       meta: { durationMs: 1 },
     } satisfies EmbeddedPiRunResult);
-
-    await runAgentAttempt({
-      providerOverride: "openai",
-      originalProvider: "openai",
-      modelOverride: "gpt-5.4",
-      cfg: {} as OpenClawConfig,
-      sessionEntry,
-      sessionId: sessionEntry.sessionId,
-      sessionKey: "agent:main:main",
-      sessionAgentId: "main",
-      sessionFile: path.join(tmpDir, "session.jsonl"),
-      workspaceDir: tmpDir,
-      body: "continue",
-      isFallbackRetry: false,
-      resolvedThinkLevel: "medium",
-      timeoutMs: 1_000,
-      runId: "run-codex-auto-auth-profile",
-      opts: { senderIsOwner: false } as Parameters<typeof runAgentAttempt>[0]["opts"],
-      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
-      spawnedBy: undefined,
-      messageChannel: undefined,
-      skillsSnapshot: undefined,
-      resolvedVerboseLevel: undefined,
-      agentDir: tmpDir,
-      onAgentEvent: vi.fn(),
-      authProfileProvider: "openai",
-      sessionHasHistory: true,
+    clearAgentHarnesses();
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex",
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt: vi.fn(),
     });
+
+    try {
+      await runAgentAttempt({
+        providerOverride: "openai",
+        originalProvider: "openai",
+        modelOverride: "gpt-5.4",
+        cfg: {} as OpenClawConfig,
+        sessionEntry,
+        sessionId: sessionEntry.sessionId,
+        sessionKey: "agent:main:main",
+        sessionAgentId: "main",
+        sessionFile: path.join(tmpDir, "session.jsonl"),
+        workspaceDir: tmpDir,
+        body: "continue",
+        isFallbackRetry: false,
+        resolvedThinkLevel: "medium",
+        timeoutMs: 1_000,
+        runId: "run-codex-auto-auth-profile",
+        opts: { senderIsOwner: false } as Parameters<typeof runAgentAttempt>[0]["opts"],
+        runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+        spawnedBy: undefined,
+        messageChannel: undefined,
+        skillsSnapshot: undefined,
+        resolvedVerboseLevel: undefined,
+        agentDir: tmpDir,
+        onAgentEvent: vi.fn(),
+        authProfileProvider: "openai",
+        sessionHasHistory: true,
+      });
+    } finally {
+      clearAgentHarnesses();
+    }
 
     expectMockArgFields(runEmbeddedPiAgentMock, {
       agentHarnessId: undefined,
@@ -1425,7 +1519,7 @@ describe("embedded attempt harness pinning", () => {
     });
   });
 
-  it("routes explicit OpenAI PI runs with Codex OAuth through the legacy Codex auth transport", async () => {
+  it("routes explicit OpenAI PI runs with Codex OAuth through PI and the legacy Codex auth transport", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "explicit-pi-codex-oauth-session",
       updatedAt: Date.now(),
@@ -1477,7 +1571,8 @@ describe("embedded attempt harness pinning", () => {
     expectMockArgFields(runEmbeddedPiAgentMock, {
       provider: "openai-codex",
       model: "gpt-5.4",
-      agentHarnessId: undefined,
+      agentHarnessId: "pi",
+      agentHarnessRuntimeOverride: "pi",
       authProfileId: "openai-codex:work",
       authProfileIdSource: "user",
     });

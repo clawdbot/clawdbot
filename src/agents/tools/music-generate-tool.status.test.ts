@@ -52,7 +52,7 @@ describe("createMusicGenerateTool status actions", () => {
     expect(result?.content).toStrictEqual([
       {
         type: "text",
-        text: "Music generation task task-active is already running with google.\nProgress: Generating music.\nDo not call music_generate again for this request. Wait for the completion event; I will post the finished music here.",
+        text: "Music generation task task-active is already running with google.\nProgress: Generating music.\nDo not call music_generate again for this request. Wait for the completion event; the completion agent will send the finished music here.",
       },
     ]);
     const text = content?.text ?? "";

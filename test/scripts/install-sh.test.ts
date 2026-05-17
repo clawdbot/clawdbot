@@ -34,6 +34,13 @@ describe("install.sh", () => {
     expect(rawAptInstalls).toStrictEqual([]);
   });
 
+  it("clears npm freshness filters for package installs", () => {
+    expect(script).toContain("env -u NPM_CONFIG_BEFORE -u npm_config_before");
+    expect(script).toContain('freshness_flag="--min-release-age=0"');
+    expect(script).toContain('freshness_flag="--before=$(date -u');
+    expect(script).toContain('cmd+=(--no-fund --no-audit "$freshness_flag" install -g "$spec")');
+  });
+
   it("exports noninteractive apt env during Linux startup", () => {
     expect(script).toMatch(
       /detect_os_or_die\s+if \[\[ "\$OS" == "linux" \]\]; then\s+export DEBIAN_FRONTEND="\$\{DEBIAN_FRONTEND:-noninteractive\}"\s+export NEEDRESTART_MODE="\$\{NEEDRESTART_MODE:-a\}"\s+fi/m,

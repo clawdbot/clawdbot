@@ -3,6 +3,7 @@ import { getModel, streamSimple } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { isLiveTestEnabled } from "./live-test-helpers.js";
+import { isLiveBillingDrift } from "./live-test-provider-drift.js";
 import { applyExtraParamsToAgent } from "./pi-embedded-runner.js";
 
 const OPENAI_KEY = process.env.OPENAI_API_KEY ?? "";
@@ -125,15 +126,26 @@ describeAnthropicLive("pi embedded extra params (anthropic live)", () => {
         stop_reason?: string;
         usage?: { service_tier?: string };
       };
-      expect(res.ok, json.error?.message ?? `HTTP ${res.status}`).toBe(true);
+      const errorMessage = json.error?.message ?? `HTTP ${res.status}`;
+      if (!res.ok && isLiveBillingDrift(errorMessage)) {
+        console.warn(`[anthropic:live] skip service_tier ${serviceTier}: billing drift`);
+        return null;
+      }
+      expect(res.ok, errorMessage).toBe(true);
       return json;
     };
 
     const standard = await runProbe("standard_only");
+    if (!standard) {
+      return;
+    }
     expect(standard.usage?.service_tier).toBe("standard");
     expect(standard.stop_reason).toBe("end_turn");
 
     const fast = await runProbe("auto");
+    if (!fast) {
+      return;
+    }
     expect(["standard", "priority"]).toContain(fast.usage?.service_tier);
     expect(fast.stop_reason).toBe("end_turn");
   }, 45_000);

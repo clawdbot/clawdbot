@@ -142,9 +142,44 @@ async function resolveImageRuntime(params: {
   profile?: string;
   preferredProfile?: string;
   authStore?: ImageDescriptionRequest["authStore"];
+  workspaceDir?: string;
 }): Promise<{ apiKey: string; model: Model<Api> }> {
-  await ensureOpenClawModelsJson(params.cfg, params.agentDir);
   const resolvedRef = normalizeModelRef(params.provider, params.model);
+  const fastResolved = await resolveModelAsync(
+    resolvedRef.provider,
+    resolvedRef.model,
+    params.agentDir,
+    params.cfg,
+    {
+      allowBundledStaticCatalogFallback: true,
+      skipPiDiscovery: true,
+      skipProviderRuntimeHooks: true,
+      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    },
+  );
+  if (fastResolved.model?.input?.includes("image")) {
+    const normalizedResolved = await resolveModelAsync(
+      resolvedRef.provider,
+      resolvedRef.model,
+      params.agentDir,
+      params.cfg,
+      {
+        allowBundledStaticCatalogFallback: true,
+        skipPiDiscovery: true,
+        ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+      },
+    );
+    if (normalizedResolved.model?.input?.includes("image")) {
+      return await prepareResolvedImageRuntime(
+        params,
+        normalizedResolved.model,
+        normalizedResolved.authStorage,
+      );
+    }
+  }
+
+  const modelsOptions = params.workspaceDir ? { workspaceDir: params.workspaceDir } : undefined;
+  await ensureOpenClawModelsJson(params.cfg, params.agentDir, modelsOptions);
   const resolved = await resolveModelAsync(
     resolvedRef.provider,
     resolvedRef.model,
@@ -152,6 +187,7 @@ async function resolveImageRuntime(params: {
     params.cfg,
     {
       allowBundledStaticCatalogFallback: true,
+      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     },
   );
   const { authStorage } = resolved;
@@ -172,10 +208,29 @@ async function resolveImageRuntime(params: {
         `(resolved ${model.provider}/${model.id} input: ${formatModelInputCapabilities(model.input)})`,
     );
   }
+  return await prepareResolvedImageRuntime(params, model, authStorage);
+}
+
+async function prepareResolvedImageRuntime(
+  params: {
+    cfg: ImageDescriptionRequest["cfg"];
+    agentDir: string;
+    provider: string;
+    model: string;
+    profile?: string;
+    preferredProfile?: string;
+    authStore?: ImageDescriptionRequest["authStore"];
+    workspaceDir?: string;
+  },
+  resolvedModel: Model<Api>,
+  authStorage: Awaited<ReturnType<typeof resolveModelAsync>>["authStorage"],
+): Promise<{ apiKey: string; model: Model<Api> }> {
+  let model = resolvedModel;
   const apiKeyInfo = await getApiKeyForModel({
     model,
     cfg: params.cfg,
     agentDir: params.agentDir,
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     profileId: params.profile,
     preferredProfile: params.preferredProfile,
     store: params.authStore,
@@ -305,6 +360,7 @@ function resolveConfiguredProviderBaseUrl(
 async function resolveMinimaxVlmFallbackRuntime(params: {
   cfg: ImageDescriptionRequest["cfg"];
   agentDir: string;
+  workspaceDir?: string;
   provider: string;
   profile?: string;
   preferredProfile?: string;
@@ -315,6 +371,7 @@ async function resolveMinimaxVlmFallbackRuntime(params: {
     profileId: params.profile,
     preferredProfile: params.preferredProfile,
     agentDir: params.agentDir,
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });
   return {
     apiKey: requireApiKey(auth, params.provider),
@@ -403,6 +460,7 @@ async function describeImagesWithModelInternal(
     model,
     cfg: params.cfg,
     agentDir: params.agentDir,
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });
 
   const context = buildImageContext(prompt, params.images, {
@@ -488,6 +546,7 @@ export async function describeImageWithModel(
     preferredProfile: params.preferredProfile,
     authStore: params.authStore,
     agentDir: params.agentDir,
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     cfg: params.cfg,
   });
 }
@@ -514,6 +573,7 @@ export async function describeImageWithModelPayloadTransform(
       preferredProfile: params.preferredProfile,
       authStore: params.authStore,
       agentDir: params.agentDir,
+      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
       cfg: params.cfg,
     },
     onPayload,

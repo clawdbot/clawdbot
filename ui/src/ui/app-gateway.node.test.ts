@@ -49,6 +49,9 @@ vi.mock("./gateway.ts", async (importOriginal) => {
       if (method === "models.authStatus") {
         return { ts: 0, providers: [] };
       }
+      if (method === "sessions.list") {
+        return { count: 0, sessions: [] };
+      }
       return {};
     });
 

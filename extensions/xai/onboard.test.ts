@@ -19,25 +19,60 @@ describe("xai onboard", () => {
   });
 
   it("merges xAI models and keeps existing provider overrides", () => {
-    const cfg = applyXaiProviderConfig(
-      createLegacyProviderConfig({
-        providerId: "xai",
-        api: "anthropic-messages",
-        modelId: "custom-model",
-        modelName: "Custom",
-      }),
+    const legacy = createLegacyProviderConfig({
+      providerId: "xai",
+      api: "anthropic-messages",
+      modelId: "custom-model",
+      modelName: "Custom",
+    });
+    const xaiProvider = legacy.models?.providers?.xai;
+    if (!xaiProvider) {
+      throw new Error("expected xAI provider fixture");
+    }
+    xaiProvider.models.push(
+      {
+        id: "grok-3",
+        name: "Grok 3",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1000,
+        maxTokens: 100,
+      },
+      {
+        id: "grok-code-fast-1",
+        name: "Grok Code Fast 1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1000,
+        maxTokens: 100,
+      },
     );
+
+    const cfg = applyXaiProviderConfig(legacy);
 
     expect(cfg.models?.providers?.xai?.baseUrl).toBe("https://api.x.ai/v1");
     expect(cfg.models?.providers?.xai?.api).toBe("openai-responses");
     expect(cfg.models?.providers?.xai?.apiKey).toBe("old-key");
-    const modelIds = cfg.models?.providers?.xai?.models.map((m) => m.id) ?? [];
-    expect(modelIds).toContain("custom-model");
-    expect(modelIds).toContain("grok-4.3");
-    expect(modelIds).toContain("grok-4");
-    expect(modelIds).toContain("grok-4-1-fast");
-    expect(modelIds).toContain("grok-4.20-beta-latest-reasoning");
-    expect(modelIds).toContain("grok-code-fast-1");
+    expect(cfg.models?.providers?.xai?.models.map((m) => m.id)).toEqual([
+      "custom-model",
+      "grok-4.3",
+      "grok-4.20-beta-latest-reasoning",
+      "grok-4.20-beta-latest-non-reasoning",
+    ]);
+  });
+
+  it("publishes current xAI models newest first for fresh setup", () => {
+    const cfg = applyXaiProviderConfig({});
+
+    expect(cfg.models?.providers?.xai?.baseUrl).toBe("https://api.x.ai/v1");
+    expect(cfg.models?.providers?.xai?.api).toBe("openai-responses");
+    expect(cfg.models?.providers?.xai?.models.map((m) => m.id)).toEqual([
+      "grok-4.3",
+      "grok-4.20-beta-latest-reasoning",
+      "grok-4.20-beta-latest-non-reasoning",
+    ]);
   });
 
   it("adds expected alias for the default model", () => {

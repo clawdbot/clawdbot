@@ -1,5 +1,6 @@
 import { monitorEventLoopDelay, performance } from "node:perf_hooks";
 import { getRuntimeConfig } from "../config/config.js";
+import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   areDiagnosticsEnabledForProcess,
@@ -125,6 +126,22 @@ type StartDiagnosticHeartbeatOptions = {
   recoverStuckSession?: RecoverStuckSession;
   startupGraceMs?: number;
 };
+
+function resolveDiagnosticSessionStorePaths(config?: OpenClawConfig): string[] | undefined {
+  if (!config) {
+    return undefined;
+  }
+  try {
+    const paths = resolveAllAgentSessionStoreTargetsSync(config).map((target) => target.storePath);
+    return paths.length > 0 ? paths : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function shouldWriteCriticalMemoryPressureBundle(config?: OpenClawConfig): boolean {
+  return config?.diagnostics?.memoryPressureSnapshot === true;
+}
 
 let diagnosticLivenessMonitor: EventLoopDelayMonitor | null = null;
 let lastDiagnosticLivenessWallAt = 0;
@@ -995,9 +1012,15 @@ export function startDiagnosticHeartbeat(
     const shouldEmitLivenessReport = shouldEmitLivenessEvent || shouldEmitLivenessWarning;
     const shouldRecordMemorySample =
       shouldEmitLivenessReport || hasRecentDiagnosticActivity(now) || hasOpenDiagnosticWork(work);
-    (opts?.emitMemorySample ?? emitDiagnosticMemorySample)({
-      emitSample: shouldRecordMemorySample,
-    });
+    if (opts?.emitMemorySample) {
+      opts.emitMemorySample({ emitSample: shouldRecordMemorySample });
+    } else {
+      emitDiagnosticMemorySample({
+        emitSample: shouldRecordMemorySample,
+        writeCriticalBundle: shouldWriteCriticalMemoryPressureBundle(heartbeatConfig),
+        resolveSessionStorePaths: () => resolveDiagnosticSessionStorePaths(heartbeatConfig),
+      });
+    }
 
     if (!shouldRecordMemorySample) {
       return;

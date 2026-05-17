@@ -93,4 +93,31 @@ describe("buildStatusCommandReportLines", () => {
     expect(lines).not.toContain("# Usage");
     expect(lines.at(-1)).toBe("FAQ");
   });
+
+  it("renders empty channels and sessions as plain messages", async () => {
+    const lines = await buildStatusCommandReportLines({
+      heading: (text) => `# ${text}`,
+      muted: (text) => `muted(${text})`,
+      renderTable: createRenderTable(),
+      width: 120,
+      overviewRows: [{ Item: "OS", Value: "macOS" }],
+      showTaskMaintenanceHint: false,
+      taskMaintenanceHint: "ignored",
+      pluginCompatibilityLines: [],
+      pairingRecoveryLines: [],
+      securityAuditLines: ["audit line"],
+      channelsColumns: [{ key: "Channel", header: "Channel" }],
+      channelsRows: [],
+      sessionsColumns: [{ key: "Key", header: "Key" }],
+      sessionsRows: [],
+      footerLines: ["FAQ"],
+    });
+
+    expect(lines).toContain("# Channels");
+    expect(lines).toContain("muted(No channels configured)");
+    expect(lines).toContain("# Sessions");
+    expect(lines).toContain("muted(No sessions)");
+    expect(lines).not.toContain("table:Channel:0");
+    expect(lines).not.toContain("table:Key:0");
+  });
 });

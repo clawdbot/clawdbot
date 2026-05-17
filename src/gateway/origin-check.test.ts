@@ -21,6 +21,48 @@ describe("checkBrowserOrigin", () => {
       expected: { ok: false as const, reason: "origin not allowed" },
     },
     {
+      name: "accepts same-origin private LAN host without dangerous fallback",
+      input: {
+        requestHost: "192.168.0.202:18789",
+        origin: "http://192.168.0.202:18789",
+      },
+      expected: { ok: true as const, matchedBy: "private-same-origin" as const },
+    },
+    {
+      name: "accepts same-origin tailnet host without dangerous fallback",
+      input: {
+        requestHost: "peters-mac-studio-1.example.ts.net:18789",
+        origin: "http://peters-mac-studio-1.example.ts.net:18789",
+      },
+      expected: { ok: true as const, matchedBy: "private-same-origin" as const },
+    },
+    {
+      name: "accepts same-origin loopback host for local clients",
+      input: {
+        requestHost: "127.0.0.1:18789",
+        origin: "http://127.0.0.1:18789",
+        isLocalClient: true,
+      },
+      expected: { ok: true as const, matchedBy: "private-same-origin" as const },
+    },
+    {
+      name: "rejects same-origin loopback host for non-local clients",
+      input: {
+        requestHost: "127.0.0.1:18789",
+        origin: "http://127.0.0.1:18789",
+        isLocalClient: false,
+      },
+      expected: { ok: false as const, reason: "origin not allowed" },
+    },
+    {
+      name: "rejects same-origin public host without dangerous fallback",
+      input: {
+        requestHost: "attacker.example.com:18789",
+        origin: "http://attacker.example.com:18789",
+      },
+      expected: { ok: false as const, reason: "origin not allowed" },
+    },
+    {
       name: "accepts local loopback mismatches for local clients",
       input: {
         requestHost: "127.0.0.1:18789",
@@ -34,6 +76,15 @@ describe("checkBrowserOrigin", () => {
       input: {
         requestHost: "127.0.0.1:18789",
         origin: "http://localhost:5173",
+        isLocalClient: false,
+      },
+      expected: { ok: false as const, reason: "origin not allowed" },
+    },
+    {
+      name: "rejects same-origin loopback host matches for non-local clients",
+      input: {
+        requestHost: "127.0.0.1:18789",
+        origin: "http://127.0.0.1:18789",
         isLocalClient: false,
       },
       expected: { ok: false as const, reason: "origin not allowed" },

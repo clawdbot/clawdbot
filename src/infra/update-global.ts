@@ -6,9 +6,9 @@ import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/runtime-sidecar-paths.
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { pathExists } from "../utils.js";
 import {
+  applyNpmFreshnessBypassEnv,
   applyPosixNpmScriptShellEnv,
-  hasNpmScriptShellSetting,
-  resolvePosixNpmScriptShell,
+  createNpmFreshnessBypassArgs,
 } from "./npm-install-env.js";
 import {
   collectPackageDistInventory,
@@ -42,10 +42,6 @@ const GLOBAL_RENAME_PREFIX = ".";
 export const OPENCLAW_MAIN_PACKAGE_SPEC = "github:openclaw/openclaw#main";
 const COREPACK_ENABLE_DOWNLOAD_PROMPT_DEFAULT = "0";
 const NPM_GLOBAL_INSTALL_QUIET_FLAGS = ["--no-fund", "--no-audit", "--loglevel=error"] as const;
-const NPM_GLOBAL_INSTALL_OMIT_OPTIONAL_FLAGS = [
-  "--omit=optional",
-  ...NPM_GLOBAL_INSTALL_QUIET_FLAGS,
-] as const;
 const PNPM_OPENCLAW_BUILD_ALLOWLIST_FLAG = `--allow-build=${PRIMARY_PACKAGE_NAME}`;
 const FIRST_PACKAGED_DIST_INVENTORY_VERSION = { major: 2026, minor: 4, patch: 15 };
 const OMITTED_PRIVATE_QA_BUNDLED_PLUGIN_ROOTS = new Set([
@@ -372,19 +368,6 @@ export async function createGlobalInstallEnv(
 ): Promise<NodeJS.ProcessEnv | undefined> {
   const pathPrepend = await resolvePortableGitPathPrepend();
   const sourceEnv = env ?? process.env;
-  const hasCorepackDownloadPromptSetting = Boolean(
-    sourceEnv.COREPACK_ENABLE_DOWNLOAD_PROMPT?.trim(),
-  );
-  const missingPosixScriptShell =
-    Boolean(resolvePosixNpmScriptShell(sourceEnv)) && !hasNpmScriptShellSetting(sourceEnv);
-  const requiresMergedEnv =
-    pathPrepend.length > 0 ||
-    process.platform === "win32" ||
-    !hasCorepackDownloadPromptSetting ||
-    missingPosixScriptShell;
-  if (!requiresMergedEnv) {
-    return env;
-  }
   const merged = Object.fromEntries(
     Object.entries(sourceEnv)
       .filter(([, value]) => value != null)
@@ -393,6 +376,7 @@ export async function createGlobalInstallEnv(
   applyPathPrepend(merged, pathPrepend);
   applyWindowsPackageInstallEnv(merged);
   applyCorepackDownloadPromptEnv(merged);
+  applyNpmFreshnessBypassEnv(merged);
   applyPosixNpmScriptShellEnv(merged);
   return merged;
 }
@@ -745,6 +729,7 @@ export function globalInstallArgs(
     ...(installPrefix ? ["--prefix", installPrefix] : []),
     spec,
     ...NPM_GLOBAL_INSTALL_QUIET_FLAGS,
+    ...createNpmFreshnessBypassArgs(),
   ];
 }
 
@@ -764,7 +749,9 @@ export function globalInstallFallbackArgs(
     "-g",
     ...(installPrefix ? ["--prefix", installPrefix] : []),
     spec,
-    ...NPM_GLOBAL_INSTALL_OMIT_OPTIONAL_FLAGS,
+    "--omit=optional",
+    ...NPM_GLOBAL_INSTALL_QUIET_FLAGS,
+    ...createNpmFreshnessBypassArgs(),
   ];
 }
 

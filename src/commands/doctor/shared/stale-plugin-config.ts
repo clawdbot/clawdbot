@@ -325,6 +325,7 @@ export function collectStalePluginConfigWarnings(params: {
 export function maybeRepairStalePluginConfig(
   cfg: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
+  params?: { preservePluginIds?: Iterable<string> },
 ): {
   config: OpenClawConfig;
   changes: string[];
@@ -337,7 +338,14 @@ export function maybeRepairStalePluginConfig(
     return { config: cfg, changes: [] };
   }
 
-  const hits = scanStalePluginConfigWithState(cfg, registryState);
+  const preservePluginIds = new Set(
+    [...(params?.preservePluginIds ?? [])]
+      .map((pluginId) => normalizePluginId(pluginId))
+      .filter((pluginId): pluginId is string => Boolean(pluginId)),
+  );
+  const hits = scanStalePluginConfigWithState(cfg, registryState).filter(
+    (hit) => !preservePluginIds.has(normalizePluginId(hit.pluginId)),
+  );
   if (hits.length === 0) {
     return { config: cfg, changes: [] };
   }

@@ -5,9 +5,16 @@ export type EmbeddingProvider = {
   id: string;
   model: string;
   maxInputTokens?: number;
-  embedQuery: (text: string) => Promise<number[]>;
-  embedBatch: (texts: string[]) => Promise<number[][]>;
-  embedBatchInputs?: (inputs: EmbeddingInput[]) => Promise<number[][]>;
+  embedQuery: (text: string, options?: EmbeddingProviderCallOptions) => Promise<number[]>;
+  embedBatch: (texts: string[], options?: EmbeddingProviderCallOptions) => Promise<number[][]>;
+  embedBatchInputs?: (
+    inputs: EmbeddingInput[],
+    options?: EmbeddingProviderCallOptions,
+  ) => Promise<number[][]>;
+};
+
+export type EmbeddingProviderCallOptions = {
+  signal?: AbortSignal;
 };
 
 export type EmbeddingProviderId = string;

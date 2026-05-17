@@ -83,7 +83,7 @@ describe("foreground reply freshness", () => {
     resetGlobalHookRunner();
   });
 
-  it("suppresses an older foreground final after a newer inbound turn starts for the same session target", async () => {
+  it("suppresses an older foreground final after a newer inbound event starts for the same session target", async () => {
     const deliveries: Delivery[] = [];
     const olderStarted = createDeferred<void>();
     const releaseOlderFinal = createDeferred<void>();

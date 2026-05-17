@@ -11,7 +11,7 @@ export function makePathEnv(binDir: string): NodeJS.ProcessEnv {
 }
 
 export function makeTempDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-exec-approvals-"));
+  return fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-exec-approvals-")));
 }
 
 export function makeMockExecutableResolution(params: {

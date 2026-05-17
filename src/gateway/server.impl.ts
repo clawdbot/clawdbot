@@ -32,6 +32,7 @@ import {
 } from "../infra/diagnostics-timeline.js";
 import { isTruthyEnvValue, isVitestRuntimeEnv, logAcceptedEnvOption } from "../infra/env.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
+import { readGatewayRestartHandoffSync } from "../infra/restart-handoff.js";
 import { setGatewaySigusr1RestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import type { VoiceWakeRoutingConfig } from "../infra/voicewake-routing.js";
@@ -73,6 +74,14 @@ import {
   listChannelPluginConfigTargetIds,
   pluginConfigTargetsChanged,
 } from "./plugin-channel-reload-targets.js";
+import {
+  collectGatewayProcessMemoryUsageMb,
+  finishGatewayRestartTrace,
+  recordGatewayRestartTraceDetail,
+  recordGatewayRestartTraceSpan,
+  resumeGatewayRestartTraceFromEnv,
+  resumeGatewayRestartTraceFromHandoff,
+} from "./restart-trace.js";
 import { resolveGatewayControlUiRootState } from "./server-control-ui-root.js";
 import { createLazyGatewayCronState } from "./server-cron-lazy.js";
 import { applyGatewayLaneConcurrency } from "./server-lanes.js";
@@ -296,13 +305,14 @@ function createGatewayStartupTrace() {
     eventLoopSample: ReturnType<typeof takeEventLoopSample>,
     extras: ReadonlyArray<readonly [string, number | string]> = [],
   ) => {
+    const metrics = [
+      ["eventLoopMax", `${(eventLoopSample?.maxMs ?? 0).toFixed(1)}ms`] as const,
+      ...extras,
+    ];
+    recordGatewayRestartTraceSpan(`restart.ready.${name}`, durationMs, totalMs, metrics);
     if (logEnabled) {
-      const metrics = [
-        `eventLoopMax=${(eventLoopSample?.maxMs ?? 0).toFixed(1)}ms`,
-        ...extras.map(([key, value]) => formatMetric(key, value)),
-      ].join(" ");
       log.info(
-        `startup trace: ${name} ${durationMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms ${metrics}`,
+        `startup trace: ${name} ${durationMs.toFixed(1)}ms total=${totalMs.toFixed(1)}ms ${metrics.map(([key, value]) => formatMetric(key, value)).join(" ")}`,
       );
     }
   };
@@ -333,6 +343,7 @@ function createGatewayStartupTrace() {
     },
     detail(name: string, metrics: ReadonlyArray<readonly [string, number | string]>) {
       const attributes = Object.fromEntries(metrics);
+      recordGatewayRestartTraceDetail(`restart.ready.${name}`, metrics);
       if (logEnabled) {
         log.info(
           `startup trace: ${name} ${metrics.map(([key, value]) => formatMetric(key, value)).join(" ")}`,
@@ -417,18 +428,6 @@ function formatRuntimeGatewayAuthTokenWarning(): string {
     "In Nix mode, set gateway.auth.token in your Nix-managed OpenClaw config and rebuild.",
     "For the first-party Nix flow, see https://github.com/openclaw/nix-openclaw#quick-start and https://docs.openclaw.ai/install/nix.",
   ].join(" ");
-}
-
-function collectProcessMemoryUsageMb(): ReadonlyArray<readonly [string, number]> {
-  const usage = process.memoryUsage();
-  const toMb = (bytes: number) => bytes / 1024 / 1024;
-  return [
-    ["rssMb", toMb(usage.rss)],
-    ["heapTotalMb", toMb(usage.heapTotal)],
-    ["heapUsedMb", toMb(usage.heapUsed)],
-    ["externalMb", toMb(usage.external)],
-    ["arrayBuffersMb", toMb(usage.arrayBuffers)],
-  ];
 }
 
 async function stopTaskRegistryMaintenanceOnDemand(): Promise<void> {
@@ -543,6 +542,14 @@ export async function startGatewayServer(
     key: "OPENCLAW_RAW_STREAM_PATH",
     description: "raw stream log path override",
   });
+  if (!resumeGatewayRestartTraceFromEnv(process.env, [["source", "env"]])) {
+    const restartHandoff = readGatewayRestartHandoffSync();
+    resumeGatewayRestartTraceFromHandoff(restartHandoff?.restartTrace, [
+      ["source", restartHandoff?.source],
+      ["restartKind", restartHandoff?.restartKind],
+      ["supervisorMode", restartHandoff?.supervisorMode],
+    ]);
+  }
   const startupTrace = createGatewayStartupTrace();
   const startupConfigModulePromise = import("./server-startup-config.js");
   const reloadHandlersModulePromise = import("./server-reload-handlers.js");
@@ -1540,8 +1547,9 @@ export async function startGatewayServer(
           }),
       ),
     ));
-    startupTrace.detail("memory.ready", collectProcessMemoryUsageMb());
+    startupTrace.detail("memory.ready", collectGatewayProcessMemoryUsageMb());
     startupTrace.mark("ready");
+    finishGatewayRestartTrace("restart.ready", collectGatewayProcessMemoryUsageMb());
     postAttachRuntimeReturned = true;
     activateScheduledServicesWhenReady();
 
@@ -1632,11 +1640,11 @@ export async function startGatewayServer(
         logCron,
         log,
         recordPostReadyMemory: () => {
-          startupTrace.detail("memory.post-ready", collectProcessMemoryUsageMb());
+          startupTrace.detail("memory.post-ready", collectGatewayProcessMemoryUsageMb());
         },
       });
     } else {
-      startupTrace.detail("memory.post-ready", collectProcessMemoryUsageMb());
+      startupTrace.detail("memory.post-ready", collectGatewayProcessMemoryUsageMb());
     }
   } catch (err) {
     await closeOnStartupFailure();

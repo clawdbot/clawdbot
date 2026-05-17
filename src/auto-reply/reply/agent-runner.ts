@@ -921,7 +921,13 @@ function buildInlineRawTracePayload(params: {
 
 function joinCommitmentAssistantText(payloads: ReplyPayload[]): string {
   return payloads
-    .filter((payload) => !payload.isError && !payload.isReasoning && !payload.isCompactionNotice)
+    .filter(
+      (payload) =>
+        !payload.isError &&
+        !payload.isReasoning &&
+        !payload.isCompactionNotice &&
+        !payload.isFallbackNotice,
+    )
     .map((payload) => payload.text?.trim())
     .filter((text): text is string => Boolean(text))
     .join("\n")
@@ -1271,6 +1277,20 @@ export async function runReplyAgent(params: {
       : null;
 
   const replySessionKey = sessionKey ?? followupRun.run.sessionKey;
+  let latestPreviewStreamedText: string | undefined;
+  const effectiveOpts = opts?.onPartialReply
+    ? {
+        ...opts,
+        onPartialReply: async (
+          payload: Parameters<NonNullable<GetReplyOptions["onPartialReply"]>>[0],
+        ) => {
+          if (typeof payload.text === "string" && payload.text.trim()) {
+            latestPreviewStreamedText = payload.text;
+          }
+          await opts.onPartialReply?.(payload);
+        },
+      }
+    : opts;
   let replyOperation: ReplyOperation;
   try {
     replyOperation =
@@ -1453,7 +1473,7 @@ export async function runReplyAgent(params: {
         sessionCtx,
         replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
         replyOperation,
-        opts,
+        opts: effectiveOpts,
         typingSignals,
         blockReplyPipeline,
         blockStreamingEnabled,
@@ -1608,29 +1628,32 @@ export async function runReplyAgent(params: {
       lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
       promptTokens,
       usageIsContextSnapshot: usedCliProvider ? true : undefined,
+      isHeartbeat,
       modelUsed,
       providerUsed,
       contextTokensUsed,
       systemPromptReport: runResult.meta?.systemPromptReport,
       cliSessionId,
       cliSessionBinding,
+      preserveFreshTotalTokensOnStaleUsage: preflightCompactionApplied,
     });
 
+    const successfulSideEffectDelivery = hasSuccessfulSideEffectDelivery({
+      blockReplyPipeline,
+      directlySentBlockKeys,
+      messagingToolSentTexts: runResult.messagingToolSentTexts,
+      messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
+      messagingToolSentTargets: runResult.messagingToolSentTargets,
+      successfulCronAdds: runResult.successfulCronAdds,
+      didSendDeterministicApprovalPrompt: runResult.didSendDeterministicApprovalPrompt,
+    });
     const returnSilentFallbackFailureIfNeeded = async (): Promise<ReplyPayload | undefined> => {
       const silentFallbackFailurePayload = buildSilentFallbackFailurePayload({
         fallbackTransition,
         fallbackFailureKnown:
           fallbackAttempts.length > 0 || configuredFallbackModel.persistedAutoFallback,
         isHeartbeat,
-        hasSuccessfulSideEffectDelivery: hasSuccessfulSideEffectDelivery({
-          blockReplyPipeline,
-          directlySentBlockKeys,
-          messagingToolSentTexts: runResult.messagingToolSentTexts,
-          messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
-          messagingToolSentTargets: runResult.messagingToolSentTargets,
-          successfulCronAdds: runResult.successfulCronAdds,
-          didSendDeterministicApprovalPrompt: runResult.didSendDeterministicApprovalPrompt,
-        }),
+        hasSuccessfulSideEffectDelivery: successfulSideEffectDelivery,
         allowEmptyAssistantReplyAsSilent: followupRun.run.allowEmptyAssistantReplyAsSilent,
         silentExpected: followupRun.run.silentExpected,
       });
@@ -1647,10 +1670,69 @@ export async function runReplyAgent(params: {
       return returnWithQueuedFollowupDrain(silentFallbackFailurePayload);
     };
 
+    const fallbackNoticePayloads: ReplyPayload[] = [];
+    if (fallbackTransition.fallbackTransitioned) {
+      emitAgentEvent({
+        runId,
+        sessionKey,
+        stream: "lifecycle",
+        data: {
+          phase: "fallback",
+          selectedProvider,
+          selectedModel,
+          activeProvider: providerUsed,
+          activeModel: modelUsed,
+          reasonSummary: fallbackTransition.reasonSummary,
+          attemptSummaries: fallbackTransition.attemptSummaries,
+          attempts: fallbackAttempts,
+        },
+      });
+      const fallbackNotice = buildFallbackNotice({
+        selectedProvider,
+        selectedModel,
+        activeProvider: providerUsed,
+        activeModel: modelUsed,
+        attempts: fallbackAttempts,
+      });
+      if (fallbackNotice) {
+        fallbackNoticePayloads.push(
+          markReplyPayloadForSourceSuppressionDelivery({
+            text: fallbackNotice,
+            isFallbackNotice: true,
+          }),
+        );
+      }
+    }
+    if (fallbackTransition.fallbackCleared) {
+      emitAgentEvent({
+        runId,
+        sessionKey,
+        stream: "lifecycle",
+        data: {
+          phase: "fallback_cleared",
+          selectedProvider,
+          selectedModel,
+          activeProvider: providerUsed,
+          activeModel: modelUsed,
+          previousActiveModel: fallbackTransition.previousState.activeModel,
+        },
+      });
+      fallbackNoticePayloads.push(
+        markReplyPayloadForSourceSuppressionDelivery({
+          text: buildFallbackClearedNotice({
+            selectedProvider,
+            selectedModel,
+            previousActiveModel: fallbackTransition.previousState.activeModel,
+          }),
+          isFallbackNotice: true,
+        }),
+      );
+    }
+
     // Drain any late tool/block deliveries before deciding there's "nothing to send".
     // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and
     // keep the typing indicator stuck.
-    if (payloadArray.length === 0) {
+    if (payloadArray.length === 0 && fallbackNoticePayloads.length === 0) {
       const silentFallbackFailurePayload = await returnSilentFallbackFailureIfNeeded();
       if (silentFallbackFailurePayload) {
         return silentFallbackFailurePayload;
@@ -1660,12 +1742,16 @@ export async function runReplyAgent(params: {
 
     const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
     const payloadResult = await buildReplyPayloads({
-      payloads: payloadArray,
+      payloads:
+        fallbackNoticePayloads.length > 0
+          ? [...fallbackNoticePayloads, ...payloadArray]
+          : payloadArray,
       isHeartbeat,
       didLogHeartbeatStrip,
       silentExpected: followupRun.run.silentExpected,
       blockStreamingEnabled,
       blockReplyPipeline,
+      previewStreamedText: latestPreviewStreamedText,
       directlySentBlockKeys,
       replyToMode,
       replyToChannel,
@@ -1686,7 +1772,18 @@ export async function runReplyAgent(params: {
     const { replyPayloads } = payloadResult;
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
 
-    if (replyPayloads.length === 0) {
+    const hasReplyPayloadBeyondFallbackNotice = replyPayloads.some(
+      (payload) => !payload.isFallbackNotice,
+    );
+    const hasDeliveredBlockStream = Boolean(
+      blockReplyPipeline?.didStream() && !blockReplyPipeline.isAborted(),
+    );
+    const canDeliverStandaloneFallbackNotice =
+      hasDeliveredBlockStream || successfulSideEffectDelivery;
+    if (
+      replyPayloads.length === 0 ||
+      (!hasReplyPayloadBeyondFallbackNotice && !canDeliverStandaloneFallbackNotice)
+    ) {
       const silentFallbackFailurePayload = await returnSilentFallbackFailureIfNeeded();
       if (silentFallbackFailurePayload) {
         return silentFallbackFailurePayload;
@@ -1698,6 +1795,7 @@ export async function runReplyAgent(params: {
     const hasReminderCommitment = replyPayloads.some(
       (payload) =>
         !payload.isError &&
+        !payload.isFallbackNotice &&
         typeof payload.text === "string" &&
         hasUnbackedReminderCommitment(payload.text),
     );
@@ -1818,66 +1916,13 @@ export async function runReplyAgent(params: {
       });
     }
 
-    // If verbose is enabled, prepend operational run notices.
+    // Prepend verbose operational notices. Model fallback notices are prepared
+    // earlier so they pass through normal reply threading and stream-dedupe.
     let finalPayloads = guardedReplyPayloads;
-    const verboseNotices: ReplyPayload[] = [];
+    const prefixNotices: ReplyPayload[] = [];
 
     if (verboseEnabled && activeIsNewSession) {
-      verboseNotices.push({ text: `🧭 New session: ${followupRun.run.sessionId}` });
-    }
-
-    if (fallbackTransition.fallbackTransitioned) {
-      emitAgentEvent({
-        runId,
-        sessionKey,
-        stream: "lifecycle",
-        data: {
-          phase: "fallback",
-          selectedProvider,
-          selectedModel,
-          activeProvider: providerUsed,
-          activeModel: modelUsed,
-          reasonSummary: fallbackTransition.reasonSummary,
-          attemptSummaries: fallbackTransition.attemptSummaries,
-          attempts: fallbackAttempts,
-        },
-      });
-      if (verboseEnabled) {
-        const fallbackNotice = buildFallbackNotice({
-          selectedProvider,
-          selectedModel,
-          activeProvider: providerUsed,
-          activeModel: modelUsed,
-          attempts: fallbackAttempts,
-        });
-        if (fallbackNotice) {
-          verboseNotices.push({ text: fallbackNotice });
-        }
-      }
-    }
-    if (fallbackTransition.fallbackCleared) {
-      emitAgentEvent({
-        runId,
-        sessionKey,
-        stream: "lifecycle",
-        data: {
-          phase: "fallback_cleared",
-          selectedProvider,
-          selectedModel,
-          activeProvider: providerUsed,
-          activeModel: modelUsed,
-          previousActiveModel: fallbackTransition.previousState.activeModel,
-        },
-      });
-      if (verboseEnabled) {
-        verboseNotices.push({
-          text: buildFallbackClearedNotice({
-            selectedProvider,
-            selectedModel,
-            previousActiveModel: fallbackTransition.previousState.activeModel,
-          }),
-        });
-      }
+      prefixNotices.push({ text: `🧭 New session: ${followupRun.run.sessionId}` });
     }
 
     if (autoCompactionCount > 0) {
@@ -1925,10 +1970,10 @@ export async function runReplyAgent(params: {
 
       if (verboseEnabled) {
         const suffix = typeof count === "number" ? ` (count ${count})` : "";
-        verboseNotices.push({ text: `🧹 Auto-compaction complete${suffix}.` });
+        prefixNotices.push({ text: `🧹 Auto-compaction complete${suffix}.` });
       }
     }
-    const prefixPayloads = [...verboseNotices];
+    const prefixPayloads = [...prefixNotices];
     const isHookBlockedRun = runResult.meta?.error?.kind === "hook_block";
     const rawUserText = isHookBlockedRun
       ? runResult.meta?.finalPromptText

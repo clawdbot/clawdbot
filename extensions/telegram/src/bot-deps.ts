@@ -1,5 +1,5 @@
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
-import { buildChannelTurnContext } from "openclaw/plugin-sdk/channel-inbound";
+import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createChannelMessageReplyPipeline,
   deliverInboundReplyWithMessageSendContext,
@@ -35,7 +35,7 @@ export type TelegramBotDeps = {
   recordChannelActivity?: typeof recordChannelActivity;
   resolveInboundLastRouteSessionKey?: typeof resolveInboundLastRouteSessionKey;
   resolvePinnedMainDmOwnerFromAllowlist?: typeof resolvePinnedMainDmOwnerFromAllowlist;
-  buildChannelTurnContext?: typeof buildChannelTurnContext;
+  buildChannelInboundEventContext?: typeof buildChannelInboundEventContext;
   readChannelAllowFromStore: typeof readChannelAllowFromStore;
   upsertChannelPairingRequest: typeof upsertChannelPairingRequest;
   enqueueSystemEvent: typeof enqueueSystemEvent;
@@ -82,8 +82,8 @@ export const defaultTelegramBotDeps: TelegramBotDeps = {
   get resolvePinnedMainDmOwnerFromAllowlist() {
     return resolvePinnedMainDmOwnerFromAllowlist;
   },
-  get buildChannelTurnContext() {
-    return buildChannelTurnContext;
+  get buildChannelInboundEventContext() {
+    return buildChannelInboundEventContext;
   },
   get upsertChannelPairingRequest() {
     return upsertChannelPairingRequest;

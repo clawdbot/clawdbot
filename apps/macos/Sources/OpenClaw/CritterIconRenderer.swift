@@ -20,12 +20,11 @@ enum CritterIconRenderer {
 
     private struct Geometry {
         let bodyRect: CGRect
-        let bodyCorner: CGFloat
+        let leftArmRect: CGRect
+        let rightArmRect: CGRect
         let leftEarRect: CGRect
         let rightEarRect: CGRect
-        let earCorner: CGFloat
-        let earW: CGFloat
-        let earH: CGFloat
+        let antennaLineWidth: CGFloat
         let legW: CGFloat
         let legH: CGFloat
         let legSpacing: CGFloat
@@ -33,7 +32,7 @@ enum CritterIconRenderer {
         let legYBase: CGFloat
         let legLift: CGFloat
         let legHeightScale: CGFloat
-        let eyeW: CGFloat
+        let eyeSize: CGSize
         let eyeY: CGFloat
         let eyeOffset: CGFloat
 
@@ -43,46 +42,60 @@ enum CritterIconRenderer {
             let snapX = canvas.snapX
             let snapY = canvas.snapY
 
-            let bodyW = snapX(w * 0.78)
-            let bodyH = snapY(h * 0.58)
+            let bodyW = snapX(w * 0.68)
+            let bodyH = snapY(h * 0.68)
             let bodyX = snapX((w - bodyW) / 2)
-            let bodyY = snapY(h * 0.36)
-            let bodyCorner = snapX(w * 0.09)
+            let bodyY = snapY(h * 0.24)
 
-            let earW = snapX(w * 0.22)
-            let earH = snapY(bodyH * 0.54 * earScale * (1 - 0.08 * abs(earWiggle)))
-            let earCorner = snapX(earW * 0.24)
+            let armSize = snapX(w * 0.2)
+            let armY = snapY(bodyY + bodyH * 0.36)
+            let leftArmRect = CGRect(
+                x: snapX(bodyX - armSize * 0.62),
+                y: armY,
+                width: armSize,
+                height: armSize)
+            let rightArmRect = CGRect(
+                x: snapX(bodyX + bodyW - armSize * 0.38),
+                y: armY,
+                width: armSize,
+                height: armSize)
+
+            let antennaW = snapX(w * 0.22)
+            let antennaH = snapY(min(bodyH * 0.24 * earScale, h * 0.19))
+            let antennaLineWidth = max(snapX(w * 0.095), canvas.stepX * 2) * min(1.2, 0.94 + earScale * 0.06)
+            let antennaLift = snapY(earWiggle * 0.35)
             let leftEarRect = CGRect(
-                x: snapX(bodyX - earW * 0.55 + earWiggle),
-                y: snapY(bodyY + bodyH * 0.08 + earWiggle * 0.4),
-                width: earW,
-                height: earH)
+                x: snapX(bodyX + bodyW * 0.18 - antennaW * 0.35 - earWiggle * 0.28),
+                y: snapY(bodyY + bodyH * 0.86 + antennaLift),
+                width: antennaW,
+                height: antennaH)
             let rightEarRect = CGRect(
-                x: snapX(bodyX + bodyW - earW * 0.45 - earWiggle),
-                y: snapY(bodyY + bodyH * 0.08 - earWiggle * 0.4),
-                width: earW,
-                height: earH)
+                x: snapX(bodyX + bodyW * 0.82 - antennaW * 0.65 + earWiggle * 0.28),
+                y: snapY(bodyY + bodyH * 0.86 - antennaLift),
+                width: antennaW,
+                height: antennaH)
 
-            let legW = snapX(w * 0.11)
-            let legH = snapY(h * 0.26)
-            let legSpacing = snapX(w * 0.085)
-            let legsWidth = snapX(4 * legW + 3 * legSpacing)
+            let legW = snapX(w * 0.15)
+            let legH = snapY(h * 0.25)
+            let legSpacing = snapX(w * 0.16)
+            let legsWidth = snapX(2 * legW + legSpacing)
             let legStartX = snapX((w - legsWidth) / 2)
             let legLift = snapY(legH * 0.35 * legWiggle)
-            let legYBase = snapY(bodyY - legH + h * 0.05)
+            let legYBase = snapY(bodyY - legH * 0.58)
             let legHeightScale = 1 - 0.12 * legWiggle
 
-            let eyeW = snapX(bodyW * 0.2)
-            let eyeY = snapY(bodyY + bodyH * 0.56)
-            let eyeOffset = snapX(bodyW * 0.24)
+            let eyeSize = CGSize(
+                width: snapX(bodyW * 0.15),
+                height: snapY(bodyH * 0.2))
+            let eyeY = snapY(bodyY + bodyH * 0.58)
+            let eyeOffset = snapX(bodyW * 0.22)
 
             self.bodyRect = CGRect(x: bodyX, y: bodyY, width: bodyW, height: bodyH)
-            self.bodyCorner = bodyCorner
+            self.leftArmRect = leftArmRect
+            self.rightArmRect = rightArmRect
             self.leftEarRect = leftEarRect
             self.rightEarRect = rightEarRect
-            self.earCorner = earCorner
-            self.earW = earW
-            self.earH = earH
+            self.antennaLineWidth = antennaLineWidth
             self.legW = legW
             self.legH = legH
             self.legSpacing = legSpacing
@@ -90,7 +103,7 @@ enum CritterIconRenderer {
             self.legYBase = legYBase
             self.legLift = legLift
             self.legHeightScale = legHeightScale
-            self.eyeW = eyeW
+            self.eyeSize = eyeSize
             self.eyeY = eyeY
             self.eyeOffset = eyeOffset
         }
@@ -98,8 +111,6 @@ enum CritterIconRenderer {
 
     private struct FaceOptions {
         let blink: CGFloat
-        let earHoles: Bool
-        let earScale: CGFloat
         let eyesClosedLines: Bool
     }
 
@@ -125,16 +136,18 @@ enum CritterIconRenderer {
         }
         NSGraphicsContext.current = context
         context.imageInterpolation = .none
-        context.cgContext.setShouldAntialias(false)
+        context.cgContext.setShouldAntialias(true)
 
         let canvas = self.makeCanvas(for: rep, context: context)
-        let geometry = Geometry(canvas: canvas, legWiggle: legWiggle, earWiggle: earWiggle, earScale: earScale)
+        let geometry = Geometry(
+            canvas: canvas,
+            legWiggle: legWiggle,
+            earWiggle: earWiggle,
+            earScale: earHoles ? max(earScale, 1.2) : earScale)
 
         self.drawBody(in: canvas, geometry: geometry)
         let face = FaceOptions(
             blink: blink,
-            earHoles: earHoles,
-            earScale: earScale,
             eyesClosedLines: eyesClosedLines)
         self.drawFace(in: canvas, geometry: geometry, options: face)
 
@@ -186,25 +199,41 @@ enum CritterIconRenderer {
     }
 
     private static func drawBody(in canvas: Canvas, geometry: Geometry) {
+        canvas.context.setStrokeColor(NSColor.labelColor.cgColor)
+        canvas.context.setLineWidth(geometry.antennaLineWidth)
+        canvas.context.setLineCap(.round)
+        canvas.context.setLineJoin(.round)
+
+        let leftStart = CGPoint(
+            x: canvas.snapX(geometry.bodyRect.minX + geometry.bodyRect.width * 0.34),
+            y: canvas.snapY(geometry.bodyRect.maxY - geometry.antennaLineWidth * 0.22))
+        let leftEnd = CGPoint(
+            x: canvas.snapX(geometry.leftEarRect.minX),
+            y: canvas.snapY(geometry.leftEarRect.maxY))
+        let leftControl = CGPoint(
+            x: canvas.snapX(geometry.leftEarRect.midX),
+            y: canvas.snapY(geometry.leftEarRect.minY))
+        let rightStart = CGPoint(
+            x: canvas.snapX(geometry.bodyRect.maxX - geometry.bodyRect.width * 0.34),
+            y: canvas.snapY(geometry.bodyRect.maxY - geometry.antennaLineWidth * 0.22))
+        let rightEnd = CGPoint(
+            x: canvas.snapX(geometry.rightEarRect.maxX),
+            y: canvas.snapY(geometry.rightEarRect.maxY))
+        let rightControl = CGPoint(
+            x: canvas.snapX(geometry.rightEarRect.midX),
+            y: canvas.snapY(geometry.rightEarRect.minY))
+
+        let antennae = CGMutablePath()
+        antennae.move(to: leftStart)
+        antennae.addQuadCurve(to: leftEnd, control: leftControl)
+        antennae.move(to: rightStart)
+        antennae.addQuadCurve(to: rightEnd, control: rightControl)
+        canvas.context.addPath(antennae)
+        canvas.context.strokePath()
+
         canvas.context.setFillColor(NSColor.labelColor.cgColor)
 
-        canvas.context.addPath(CGPath(
-            roundedRect: geometry.bodyRect,
-            cornerWidth: geometry.bodyCorner,
-            cornerHeight: geometry.bodyCorner,
-            transform: nil))
-        canvas.context.addPath(CGPath(
-            roundedRect: geometry.leftEarRect,
-            cornerWidth: geometry.earCorner,
-            cornerHeight: geometry.earCorner,
-            transform: nil))
-        canvas.context.addPath(CGPath(
-            roundedRect: geometry.rightEarRect,
-            cornerWidth: geometry.earCorner,
-            cornerHeight: geometry.earCorner,
-            transform: nil))
-
-        for i in 0..<4 {
+        for i in 0..<2 {
             let x = geometry.legStartX + CGFloat(i) * (geometry.legW + geometry.legSpacing)
             let lift = i % 2 == 0 ? geometry.legLift : -geometry.legLift
             let rect = CGRect(
@@ -218,6 +247,10 @@ enum CritterIconRenderer {
                 cornerHeight: geometry.legW * 0.34,
                 transform: nil))
         }
+
+        canvas.context.addEllipse(in: geometry.leftArmRect)
+        canvas.context.addEllipse(in: geometry.rightArmRect)
+        canvas.context.addEllipse(in: geometry.bodyRect)
         canvas.context.fillPath()
     }
 
@@ -236,35 +269,8 @@ enum CritterIconRenderer {
             x: canvas.snapX(canvas.w / 2 + geometry.eyeOffset),
             y: canvas.snapY(geometry.eyeY))
 
-        if options.earHoles || options.earScale > 1.05 {
-            let holeW = canvas.snapX(geometry.earW * 0.6)
-            let holeH = canvas.snapY(geometry.earH * 0.46)
-            let holeCorner = canvas.snapX(holeW * 0.34)
-            let leftHoleRect = CGRect(
-                x: canvas.snapX(geometry.leftEarRect.midX - holeW / 2),
-                y: canvas.snapY(geometry.leftEarRect.midY - holeH / 2 + geometry.earH * 0.04),
-                width: holeW,
-                height: holeH)
-            let rightHoleRect = CGRect(
-                x: canvas.snapX(geometry.rightEarRect.midX - holeW / 2),
-                y: canvas.snapY(geometry.rightEarRect.midY - holeH / 2 + geometry.earH * 0.04),
-                width: holeW,
-                height: holeH)
-
-            canvas.context.addPath(CGPath(
-                roundedRect: leftHoleRect,
-                cornerWidth: holeCorner,
-                cornerHeight: holeCorner,
-                transform: nil))
-            canvas.context.addPath(CGPath(
-                roundedRect: rightHoleRect,
-                cornerWidth: holeCorner,
-                cornerHeight: holeCorner,
-                transform: nil))
-        }
-
         if options.eyesClosedLines {
-            let lineW = canvas.snapX(geometry.eyeW * 0.95)
+            let lineW = canvas.snapX(geometry.eyeSize.width * 1.15)
             let lineH = canvas.snapY(max(canvas.stepY * 2, geometry.bodyRect.height * 0.06))
             let corner = canvas.snapX(lineH * 0.6)
             let leftRect = CGRect(
@@ -289,34 +295,20 @@ enum CritterIconRenderer {
                 transform: nil))
         } else {
             let eyeOpen = max(0.05, 1 - options.blink)
-            let eyeH = canvas.snapY(geometry.bodyRect.height * 0.26 * eyeOpen)
+            let eyeH = canvas.snapY(geometry.eyeSize.height * eyeOpen)
+            let leftRect = CGRect(
+                x: canvas.snapX(leftCenter.x - geometry.eyeSize.width / 2),
+                y: canvas.snapY(leftCenter.y - eyeH / 2),
+                width: geometry.eyeSize.width,
+                height: eyeH)
+            let rightRect = CGRect(
+                x: canvas.snapX(rightCenter.x - geometry.eyeSize.width / 2),
+                y: canvas.snapY(rightCenter.y - eyeH / 2),
+                width: geometry.eyeSize.width,
+                height: eyeH)
 
-            let left = CGMutablePath()
-            left.move(to: CGPoint(
-                x: canvas.snapX(leftCenter.x - geometry.eyeW / 2),
-                y: canvas.snapY(leftCenter.y - eyeH)))
-            left.addLine(to: CGPoint(
-                x: canvas.snapX(leftCenter.x + geometry.eyeW / 2),
-                y: canvas.snapY(leftCenter.y)))
-            left.addLine(to: CGPoint(
-                x: canvas.snapX(leftCenter.x - geometry.eyeW / 2),
-                y: canvas.snapY(leftCenter.y + eyeH)))
-            left.closeSubpath()
-
-            let right = CGMutablePath()
-            right.move(to: CGPoint(
-                x: canvas.snapX(rightCenter.x + geometry.eyeW / 2),
-                y: canvas.snapY(rightCenter.y - eyeH)))
-            right.addLine(to: CGPoint(
-                x: canvas.snapX(rightCenter.x - geometry.eyeW / 2),
-                y: canvas.snapY(rightCenter.y)))
-            right.addLine(to: CGPoint(
-                x: canvas.snapX(rightCenter.x + geometry.eyeW / 2),
-                y: canvas.snapY(rightCenter.y + eyeH)))
-            right.closeSubpath()
-
-            canvas.context.addPath(left)
-            canvas.context.addPath(right)
+            canvas.context.addEllipse(in: leftRect)
+            canvas.context.addEllipse(in: rightRect)
         }
 
         canvas.context.fillPath()

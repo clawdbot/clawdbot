@@ -1,10 +1,12 @@
 import { execFile, spawnSync } from "node:child_process";
 import fs, { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { isScannable, scanDirectoryWithSummary } from "../security/skill-scanner.js";
+import { expectNoReaddirSyncDuring } from "../test-utils/fs-scan-assertions.js";
+import { listGitTrackedFiles, toRepoPath, toRepoRelativePath } from "../test-utils/repo-files.js";
 
 type NpmPackFile = {
   path?: unknown;
@@ -156,20 +158,7 @@ function listExternalPluginPackageDirs(): string[] | null {
 }
 
 function listGitExtensionPackageFiles(): string[] | null {
-  const result = spawnSync("git", ["ls-files", "--", "extensions/*/package.json"], {
-    cwd: process.cwd(),
-    encoding: "utf8",
-    maxBuffer: 1024 * 1024,
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  if (result.status !== 0) {
-    return null;
-  }
-  return result.stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .toSorted();
+  return listGitTrackedFiles({ pathspecs: "extensions/*/package.json" });
 }
 
 function listFindExtensionPackageFiles(): string[] | null {
@@ -190,7 +179,7 @@ function listFindExtensionPackageFiles(): string[] | null {
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.length > 0)
-    .map((file) => relative(process.cwd(), file).split(sep).join("/"))
+    .map((file) => toRepoRelativePath(process.cwd(), file))
     .toSorted();
 }
 
@@ -271,9 +260,7 @@ async function scanPublishablePluginPackage(plugin: PublishablePluginPackage): P
     if (finding.severity !== "critical") {
       continue;
     }
-    const packedPath = normalizePackedFindingPath(
-      relative(stageDir, finding.file).split(sep).join("/"),
-    );
+    const packedPath = normalizePackedFindingPath(toRepoPath(relative(stageDir, finding.file)));
     const key = `${plugin.packageName}:${finding.ruleId}:${packedPath}`;
     if (
       REQUIRED_REVIEWED_PUBLISHABLE_CRITICAL_FINDINGS.has(key) ||
@@ -294,18 +281,14 @@ async function scanPublishablePluginPackage(plugin: PublishablePluginPackage): P
 
 describe("publishable plugin npm package install security scan", () => {
   it("lists publishable plugin packages without scanning extension directories in-process", () => {
-    const readDir = vi.spyOn(fs, "readdirSync");
-    try {
+    expectNoReaddirSyncDuring(() => {
       const packages = collectPublishablePluginPackages();
 
       expect(packages.length).toBeGreaterThan(0);
       expect(
-        packages.every((plugin) => plugin.packageDir.split(sep).join("/").startsWith("extensions/")),
+        packages.every((plugin) => toRepoPath(plugin.packageDir).startsWith("extensions/")),
       ).toBe(true);
-      expect(readDir).not.toHaveBeenCalled();
-    } finally {
-      readDir.mockRestore();
-    }
+    });
   });
 
   it("keeps npm-published plugin files clear of unexpected critical hits", async () => {

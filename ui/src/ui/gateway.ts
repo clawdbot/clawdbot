@@ -16,6 +16,10 @@ import {
   isRetryableGatewayStartupUnavailableError,
   resolveGatewayStartupRetryAfterMs,
 } from "../../../src/gateway/protocol/startup-unavailable.js";
+import {
+  MIN_CLIENT_PROTOCOL_VERSION,
+  PROTOCOL_VERSION,
+} from "../../../src/gateway/protocol/version.js";
 import { clearDeviceAuthToken, loadDeviceAuthToken, storeDeviceAuthToken } from "./device-auth.ts";
 import { loadOrCreateDeviceIdentity, signDevicePayload } from "./device-identity.ts";
 import { generateUUID } from "./uuid.ts";
@@ -212,8 +216,8 @@ export type GatewayConnectClientInfo = {
 };
 
 export type GatewayConnectParams = {
-  minProtocol: 4;
-  maxProtocol: 4;
+  minProtocol: typeof MIN_CLIENT_PROTOCOL_VERSION;
+  maxProtocol: typeof PROTOCOL_VERSION;
   client: GatewayConnectClientInfo;
   role: string;
   scopes: string[];
@@ -574,8 +578,8 @@ export class GatewayBrowserClient {
 
   private buildConnectParams(plan: ConnectPlan): GatewayConnectParams {
     return {
-      minProtocol: 4,
-      maxProtocol: 4,
+      minProtocol: MIN_CLIENT_PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
       client: plan.client,
       role: plan.role,
       scopes: plan.scopes,

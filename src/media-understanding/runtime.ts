@@ -1,5 +1,6 @@
 import path from "node:path";
 import { readLocalFileSafely } from "../infra/fs-safe.js";
+import { DEFAULT_MAX_BYTES } from "./defaults.constants.js";
 import { describeImageWithModel } from "./image-runtime.js";
 import {
   buildMediaUnderstandingRegistry,
@@ -47,9 +48,9 @@ function resolveDecisionFailureReason(
   return normalizeDecisionReason(findDecisionReason(decision, "failed"));
 }
 
-function buildFileContext(params: { filePath: string; mime?: string }) {
+function buildFileContext(params: { filePath: string; mediaUrl?: string; mime?: string }) {
   return {
-    MediaPath: params.filePath,
+    ...(params.mediaUrl ? { MediaUrl: params.mediaUrl } : { MediaPath: params.filePath }),
     MediaType: params.mime,
   };
 }
@@ -125,6 +126,7 @@ export async function runMediaUnderstandingFile(
       attachments: cache,
       media: attachments,
       agentDir: params.agentDir,
+      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
       providerRegistry,
       config,
       activeModel: params.activeModel,
@@ -164,12 +166,33 @@ export async function describeImageFileWithModel(params: DescribeImageFileWithMo
   const timeoutMs = params.timeoutMs ?? 30_000;
   const providerRegistry = buildProviderRegistry(undefined, params.cfg);
   const provider = providerRegistry.get(normalizeMediaProviderId(params.provider));
-  const buffer = (await readLocalFileSafely({ filePath: params.filePath })).buffer;
+  let buffer: Buffer;
+  let fileName = path.basename(params.filePath);
+  let mime = params.mime;
+  if (params.mediaUrl) {
+    const cache = createMediaAttachmentCache(normalizeMediaAttachments(buildFileContext(params)), {
+      ssrfPolicy: params.cfg.tools?.web?.fetch?.ssrfPolicy,
+    });
+    try {
+      const media = await cache.getBuffer({
+        attachmentIndex: 0,
+        maxBytes: DEFAULT_MAX_BYTES.image,
+        timeoutMs,
+      });
+      buffer = media.buffer;
+      fileName = media.fileName;
+      mime = media.mime;
+    } finally {
+      await cache.cleanup();
+    }
+  } else {
+    buffer = (await readLocalFileSafely({ filePath: params.filePath })).buffer;
+  }
   const describeImage = provider?.describeImage ?? describeImageWithModel;
   return await describeImage({
     buffer,
-    fileName: path.basename(params.filePath),
-    mime: params.mime,
+    fileName,
+    mime,
     provider: params.provider,
     model: params.model,
     prompt: params.prompt,
@@ -177,6 +200,7 @@ export async function describeImageFileWithModel(params: DescribeImageFileWithMo
     timeoutMs,
     cfg: params.cfg,
     agentDir: params.agentDir ?? "",
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });
 }
 

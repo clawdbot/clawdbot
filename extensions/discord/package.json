@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/discord",
-  "version": "2026.5.16",
+  "version": "2026.5.17",
   "description": "OpenClaw Discord channel plugin",
   "repository": {
     "type": "git",
@@ -21,7 +21,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.5.16"
+    "openclaw": ">=2026.5.17"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -65,10 +65,10 @@
       "allowInvalidConfigRecovery": true
     },
     "compat": {
-      "pluginApi": ">=2026.5.16"
+      "pluginApi": ">=2026.5.17"
     },
     "build": {
-      "openclawVersion": "2026.5.16"
+      "openclawVersion": "2026.5.17"
     },
     "release": {
       "publishToClawHub": true,

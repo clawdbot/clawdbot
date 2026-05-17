@@ -14,6 +14,10 @@ export type ModelRef = {
   model: string;
 };
 
+export type ModelManifestNormalizationContext = {
+  manifestPlugins?: readonly Pick<PluginManifestRecord, "modelIdNormalization">[];
+};
+
 export function modelKey(provider: string, model: string) {
   return sharedModelKey(provider, model);
 }
@@ -39,10 +43,9 @@ export {
 function normalizeProviderModelId(
   provider: string,
   model: string,
-  options?: {
+  options?: ModelManifestNormalizationContext & {
     allowManifestNormalization?: boolean;
     allowPluginNormalization?: boolean;
-    manifestPlugins?: readonly Pick<PluginManifestRecord, "modelIdNormalization">[];
   },
 ): string {
   const staticModelId = normalizeStaticProviderModelId(provider, model, {
@@ -63,10 +66,9 @@ function normalizeProviderModelId(
   );
 }
 
-type ModelRefNormalizeOptions = {
+type ModelRefNormalizeOptions = ModelManifestNormalizationContext & {
   allowManifestNormalization?: boolean;
   allowPluginNormalization?: boolean;
-  manifestPlugins?: readonly Pick<PluginManifestRecord, "modelIdNormalization">[];
 };
 
 export function normalizeModelRef(

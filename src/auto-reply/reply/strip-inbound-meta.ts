@@ -1,12 +1,14 @@
 /**
  * Strips OpenClaw-injected inbound metadata blocks from a user-role message
- * text before it is displayed in any UI surface (TUI, webchat, macOS app).
+ * text before it is displayed in any UI surface (TUI, webchat, macOS app) or
+ * replayed as historical context to the model.
  *
  * Background: `buildInboundUserContextPrefix` in `inbound-meta.ts` prepends
  * structured metadata blocks (Conversation info, Sender info, reply context,
  * etc.) directly to the stored user message content so the LLM can access
- * them. These blocks are AI-facing only and must never surface in user-visible
- * chat history.
+ * them. These blocks are current-turn AI-facing context only and must never
+ * surface in user-visible chat history or accumulate in historical prompt
+ * replay.
  *
  * Also strips the timestamp prefix injected by `injectTimestamp` so UI surfaces
  * do not show AI-facing envelope metadata as user text.

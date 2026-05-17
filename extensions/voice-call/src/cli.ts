@@ -61,6 +61,7 @@ export const __testing = {
     voiceCallCliDeps.callGatewayFromCli = next ?? callGatewayFromCli;
   },
   isGatewayUnavailableForLocalFallback,
+  parseVoiceCallIntOption,
 };
 
 function writeStdoutLine(...values: unknown[]): void {
@@ -69,6 +70,19 @@ function writeStdoutLine(...values: unknown[]): void {
 
 function writeStdoutJson(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
+}
+
+function parseVoiceCallIntOption(
+  raw: string | undefined,
+  optionName: string,
+  opts?: { min?: number },
+): number {
+  const min = opts?.min ?? 0;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < min) {
+    throw new Error(`Invalid numeric value for ${optionName}: ${raw ?? ""}`);
+  }
+  return parsed;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -708,8 +722,8 @@ export function registerVoiceCallCli(params: {
     .option("--poll <ms>", "Poll interval in ms", "250")
     .action(async (options: { file: string; since?: string; poll?: string }) => {
       const file = options.file;
-      const since = Math.max(0, Number(options.since ?? 0));
-      const pollMs = Math.max(50, Number(options.poll ?? 250));
+      const since = parseVoiceCallIntOption(options.since, "--since", { min: 0 });
+      const pollMs = parseVoiceCallIntOption(options.poll, "--poll", { min: 50 });
 
       if (!fs.existsSync(file)) {
         logger.error(`No log file at ${file}`);
@@ -758,7 +772,7 @@ export function registerVoiceCallCli(params: {
     .option("--last <n>", "Analyze last N records", "200")
     .action(async (options: { file: string; last?: string }) => {
       const file = options.file;
-      const last = Math.max(1, Number(options.last ?? 200));
+      const last = parseVoiceCallIntOption(options.last, "--last", { min: 1 });
 
       if (!fs.existsSync(file)) {
         throw new Error("No log file at " + file);
@@ -805,7 +819,11 @@ export function registerVoiceCallCli(params: {
     .action(
       async (options: { mode?: string; port?: string; path?: string; servePath?: string }) => {
         const mode = resolveMode(options.mode ?? "funnel");
-        const servePort = Number(options.port ?? config.serve.port ?? 3334);
+        const servePort = parseVoiceCallIntOption(
+          options.port ?? String(config.serve.port ?? 3334),
+          "--port",
+          { min: 1 },
+        );
         const servePath = options.servePath ?? config.serve.path ?? "/voice/webhook";
         const tsPath = options.path ?? config.tailscale?.path ?? servePath;
 

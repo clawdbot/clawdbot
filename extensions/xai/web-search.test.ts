@@ -3,7 +3,7 @@ import { NON_ENV_SECRETREF_MARKER } from "openclaw/plugin-sdk/provider-auth-runt
 import { createNonExitingRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { withEnv, withEnvAsync, withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveXaiCatalogEntry } from "./model-definitions.js";
+import { buildXaiCatalogModels, resolveXaiCatalogEntry } from "./model-definitions.js";
 import { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
 import { resolveFallbackXaiAuth } from "./src/tool-auth-shared.js";
 import { wrapXaiWebSearchError } from "./src/web-search-shared.js";
@@ -419,6 +419,39 @@ describe("xai web search config resolution", () => {
     );
   });
 
+  it("rejects xAI web search success JSON without answer text", async () => {
+    const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
+      Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ output: [] }),
+      } as Response),
+    );
+    global.fetch = withFetchPreconnect(mockFetch);
+    const provider = createXaiWebSearchProvider();
+    const tool = provider.createTool({
+      config: {
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                webSearch: {
+                  apiKey: "xai-test-key", // pragma: allowlist secret
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    await expect(tool.execute({ query: "OpenClaw" })).rejects.toThrow(
+      "xAI web search failed: malformed JSON response",
+    );
+  });
+
   it("normalizes deprecated grok 4.20 beta model ids to GA ids", () => {
     expect(
       resolveXaiWebSearchModel({
@@ -541,6 +574,14 @@ describe("xai web search response parsing", () => {
 });
 
 describe("xai provider models", () => {
+  it("publishes only current selectable chat models newest first", () => {
+    expect(buildXaiCatalogModels().map((model) => model.id)).toEqual([
+      "grok-4.3",
+      "grok-4.20-beta-latest-reasoning",
+      "grok-4.20-beta-latest-non-reasoning",
+    ]);
+  });
+
   it("publishes Grok 4.3 as the default chat model", () => {
     expectCatalogEntry("grok-4.3", {
       id: "grok-4.3",
@@ -552,7 +593,7 @@ describe("xai provider models", () => {
     });
   });
 
-  it("publishes the newer Grok fast and code models in the bundled catalog", () => {
+  it("keeps retired Grok fast and code slugs resolving for compatibility", () => {
     expectCatalogEntry("grok-4-1-fast", {
       id: "grok-4-1-fast",
       reasoning: true,
@@ -615,8 +656,8 @@ describe("xai provider models", () => {
   it("marks current Grok families as modern while excluding multi-agent ids", () => {
     expect(isModernXaiModel("grok-4.3")).toBe(true);
     expect(isModernXaiModel("grok-4.20-beta-latest-reasoning")).toBe(true);
-    expect(isModernXaiModel("grok-code-fast-1")).toBe(true);
-    expect(isModernXaiModel("grok-3-mini-fast")).toBe(true);
+    expect(isModernXaiModel("grok-code-fast-1")).toBe(false);
+    expect(isModernXaiModel("grok-3-mini-fast")).toBe(false);
     expect(isModernXaiModel("grok-4.20-multi-agent-experimental-beta-0304")).toBe(false);
   });
 

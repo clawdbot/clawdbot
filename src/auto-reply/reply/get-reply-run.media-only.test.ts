@@ -678,7 +678,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(result).toEqual({ text: "ok" });
 
     const call = requireRunReplyAgentCall();
-    expect(call.followupRun.currentTurnContext?.text).toContain(
+    expect(call.followupRun.currentInboundContext?.text).toContain(
       "Thread starter (untrusted, for context):",
     );
     expect(call.followupRun.prompt).not.toContain("[Thread starter - for context]");
@@ -782,8 +782,10 @@ describe("runPreparedReply media-only handling", () => {
     expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
     const call = requireRunReplyAgentCall();
     expect(call?.followupRun.prompt).toBe("");
-    expect(call?.followupRun.currentTurnContext?.text).toContain("Chat history since last reply");
-    expect(call?.followupRun.currentTurnContext?.text).toContain("what changed?");
+    expect(call?.followupRun.currentInboundContext?.text).toContain(
+      "Chat history since last reply",
+    );
+    expect(call?.followupRun.currentInboundContext?.text).toContain("what changed?");
     expect(call?.followupRun.prompt).not.toContain("[User sent media without caption]");
   });
 
@@ -864,7 +866,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(result).toEqual({ text: "ok" });
     expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
     const call = requireRunReplyAgentCall();
-    expect(call?.followupRun.currentTurnContext?.text).toContain("webchat:local");
+    expect(call?.followupRun.currentInboundContext?.text).toContain("webchat:local");
     expect(call?.followupRun.prompt).toContain("[User sent media without caption]");
   });
 
@@ -1140,6 +1142,154 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.followupRun.run.authProfileId).toBe("profile-after-wait");
     expect(vi.mocked(resolveSessionAuthProfileOverride)).toHaveBeenCalledTimes(1);
   });
+
+  it("resolves image override auth profile without mutating stored session profile", async () => {
+    const { resolveSessionAuthProfileOverride } =
+      await import("../../agents/auth-profiles/session-override.js");
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-image-auth",
+      sessionFile: "/tmp/session-image-auth.jsonl",
+      authProfileOverride: "anthropic:work",
+      authProfileOverrideSource: "user",
+      updatedAt: 1,
+    };
+    const sessionStore: Record<string, SessionEntry> = {
+      "session-key": sessionEntry,
+    };
+    vi.mocked(resolveSessionAuthProfileOverride).mockImplementationOnce(async (params) => {
+      expect(params.provider).toBe("openai");
+      expect(params.storePath).toBeUndefined();
+      expect(params.sessionEntry).not.toBe(sessionEntry);
+      expect(params.sessionStore).not.toBe(sessionStore);
+      if (params.sessionEntry) {
+        params.sessionEntry.authProfileOverride = "openai:vision";
+        params.sessionEntry.authProfileOverrideSource = "auto";
+      }
+      return "openai:vision";
+    });
+
+    await runPreparedReply(
+      baseParams({
+        provider: "openai",
+        model: "gpt-4o",
+        defaultProvider: "anthropic",
+        defaultModel: "claude-opus-4-1",
+        hasAppliedImageModelOverride: true,
+        isNewSession: false,
+        sessionId: "session-image-auth",
+        sessionEntry,
+        sessionStore,
+        storePath: "/tmp/sessions.json",
+      }),
+    );
+
+    const call = requireLastRunReplyAgentCall();
+    expect(call?.followupRun.run.authProfileId).toBe("openai:vision");
+    expect(call?.followupRun.run.authProfileIdSource).toBe("auto");
+    expect(sessionEntry.authProfileOverride).toBe("anthropic:work");
+    expect(sessionEntry.authProfileOverrideSource).toBe("user");
+    expect(sessionStore["session-key"]?.authProfileOverride).toBe("anthropic:work");
+  });
+
+  it("isolates image override auth profile when the override provider matches the default provider", async () => {
+    const { resolveSessionAuthProfileOverride } =
+      await import("../../agents/auth-profiles/session-override.js");
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-image-default-provider-auth",
+      sessionFile: "/tmp/session-image-default-provider-auth.jsonl",
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-1",
+      authProfileOverride: "anthropic:work",
+      authProfileOverrideSource: "user",
+      updatedAt: 1,
+    };
+    const sessionStore: Record<string, SessionEntry> = {
+      "session-key": sessionEntry,
+    };
+    vi.mocked(resolveSessionAuthProfileOverride).mockImplementationOnce(async (params) => {
+      expect(params.provider).toBe("openai");
+      expect(params.storePath).toBeUndefined();
+      expect(params.sessionEntry).not.toBe(sessionEntry);
+      expect(params.sessionStore).not.toBe(sessionStore);
+      if (params.sessionEntry) {
+        params.sessionEntry.authProfileOverride = "openai:vision";
+        params.sessionEntry.authProfileOverrideSource = "auto";
+      }
+      return "openai:vision";
+    });
+
+    await runPreparedReply(
+      baseParams({
+        provider: "openai",
+        model: "gpt-4o",
+        defaultProvider: "openai",
+        defaultModel: "gpt-4o-mini",
+        hasAppliedImageModelOverride: true,
+        isNewSession: false,
+        sessionId: "session-image-default-provider-auth",
+        sessionEntry,
+        sessionStore,
+        storePath: "/tmp/sessions.json",
+      }),
+    );
+
+    const call = requireLastRunReplyAgentCall();
+    expect(call?.followupRun.run.authProfileId).toBe("openai:vision");
+    expect(call?.followupRun.run.authProfileIdSource).toBe("auto");
+    expect(sessionEntry.authProfileOverride).toBe("anthropic:work");
+    expect(sessionStore["session-key"]?.authProfileOverride).toBe("anthropic:work");
+  });
+
+  it("isolates image override auth profile from the pre-override runtime provider", async () => {
+    const { resolveSessionAuthProfileOverride } =
+      await import("../../agents/auth-profiles/session-override.js");
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-image-runtime-provider-auth",
+      sessionFile: "/tmp/session-image-runtime-provider-auth.jsonl",
+      modelProvider: "anthropic",
+      model: "claude-opus-4-1",
+      authProfileOverride: "anthropic:work",
+      authProfileOverrideSource: "user",
+      updatedAt: 1,
+    };
+    const sessionStore: Record<string, SessionEntry> = {
+      "session-key": sessionEntry,
+    };
+    vi.mocked(resolveSessionAuthProfileOverride).mockImplementationOnce(async (params) => {
+      expect(params.provider).toBe("openai");
+      expect(params.storePath).toBeUndefined();
+      expect(params.sessionEntry).not.toBe(sessionEntry);
+      expect(params.sessionStore).not.toBe(sessionStore);
+      if (params.sessionEntry) {
+        params.sessionEntry.authProfileOverride = "openai:vision";
+        params.sessionEntry.authProfileOverrideSource = "auto";
+      }
+      return "openai:vision";
+    });
+
+    await runPreparedReply(
+      baseParams({
+        provider: "openai",
+        model: "gpt-4o",
+        defaultProvider: "openai",
+        defaultModel: "gpt-4o-mini",
+        hasAppliedImageModelOverride: true,
+        imageModelOverrideBaseProvider: "anthropic",
+        isNewSession: false,
+        sessionId: "session-image-runtime-provider-auth",
+        sessionEntry,
+        sessionStore,
+        storePath: "/tmp/sessions.json",
+      }),
+    );
+
+    const call = requireLastRunReplyAgentCall();
+    expect(call?.followupRun.run.authProfileId).toBe("openai:vision");
+    expect(call?.followupRun.run.authProfileIdSource).toBe("auto");
+    expect(sessionEntry.authProfileOverride).toBe("anthropic:work");
+    expect(sessionStore["session-key"]?.authProfileOverride).toBe("anthropic:work");
+  });
+
   it("re-resolves same-session ownership after session-id rotation during async prep", async () => {
     const { resolveSessionAuthProfileOverride } =
       await import("../../agents/auth-profiles/session-override.js");
@@ -1308,12 +1458,12 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.transcriptCommandBody).toBe("what does this mean?");
     expect(call?.followupRun.prompt).toContain("what does this mean?");
     expect(call?.followupRun.transcriptPrompt).toBe("what does this mean?");
-    expect(call?.followupRun.currentTurnContext?.promptJoiner).toBe(" ");
-    expect(call?.followupRun.currentTurnContext?.text).toContain("Current message:");
-    expect(call?.followupRun.currentTurnContext?.text).toContain(
+    expect(call?.followupRun.currentInboundContext?.promptJoiner).toBe(" ");
+    expect(call?.followupRun.currentInboundContext?.text).toContain("Current message:");
+    expect(call?.followupRun.currentInboundContext?.text).toContain(
       '[Replying to: "quoted status body"]',
     );
-    expect(call?.followupRun.currentTurnContext?.text).not.toContain(
+    expect(call?.followupRun.currentInboundContext?.text).not.toContain(
       "Reply target of current user message",
     );
   });
@@ -1323,7 +1473,7 @@ describe("runPreparedReply media-only handling", () => {
       [
         "Conversation info (untrusted metadata):",
         "```json",
-        JSON.stringify({ message_id: "35676", turn_kind: "room_event" }, null, 2),
+        JSON.stringify({ message_id: "35676", inbound_event_kind: "room_event" }, null, 2),
         "```",
         "",
         "Conversation context (untrusted, chronological, selected for current message):",
@@ -1350,7 +1500,7 @@ describe("runPreparedReply media-only handling", () => {
           Provider: "telegram",
           Surface: "telegram",
           ChatType: "group",
-          InboundTurnKind: "room_event",
+          InboundEventKind: "room_event",
           MessageSid: "35676",
           SenderName: "Keśava",
         },
@@ -1362,17 +1512,17 @@ describe("runPreparedReply media-only handling", () => {
     expect(call?.transcriptCommandBody).toBe("");
     expect(call?.followupRun.prompt).toBe("[OpenClaw room event]");
     expect(call?.followupRun.transcriptPrompt).toBe("");
-    expect(call?.followupRun.currentTurnKind).toBe("room_event");
+    expect(call?.followupRun.currentInboundEventKind).toBe("room_event");
     expect(call?.followupRun.run.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(call?.followupRun.run.suppressNextUserMessagePersistence).toBe(true);
-    expect(call?.followupRun.currentTurnContext?.text).toContain(
+    expect(call?.followupRun.currentInboundContext?.text).toContain(
       "#35675 obviyus ->#35674: Are you fr fr",
     );
-    expect(call?.followupRun.currentTurnContext?.text).toContain("[OpenClaw turn]");
-    expect(call?.followupRun.currentTurnContext?.text).toContain(
+    expect(call?.followupRun.currentInboundContext?.text).toContain("[OpenClaw room event]");
+    expect(call?.followupRun.currentInboundContext?.text).toContain(
       "visible_reply_contract: message_tool_only",
     );
-    expect(call?.followupRun.currentTurnContext?.text).toContain(
+    expect(call?.followupRun.currentInboundContext?.text).toContain(
       "Current event:\n#35676 Keśava: No wtf",
     );
   });
@@ -1411,7 +1561,7 @@ describe("runPreparedReply media-only handling", () => {
           Provider: "telegram",
           Surface: "telegram",
           ChatType: "group",
-          InboundTurnKind: "room_event",
+          InboundEventKind: "room_event",
           MessageSid: "992",
           SenderName: "Alice",
         },
@@ -1424,8 +1574,8 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.isActive).toBe(true);
     expect(call.resolvedQueue.mode).toBe("steer");
     expect(call.followupRun.prompt).toBe("[OpenClaw room event]");
-    expect(call.followupRun.currentTurnKind).toBe("room_event");
-    expect(call.followupRun.currentTurnContext?.text).toContain("Current event:");
+    expect(call.followupRun.currentInboundEventKind).toBe("room_event");
+    expect(call.followupRun.currentInboundContext?.text).toContain("Current event:");
   });
 
   it("queues active room events instead of interrupting active user requests", async () => {
@@ -1460,7 +1610,7 @@ describe("runPreparedReply media-only handling", () => {
           Provider: "telegram",
           Surface: "telegram",
           ChatType: "group",
-          InboundTurnKind: "room_event",
+          InboundEventKind: "room_event",
           MessageSid: "993",
           SenderName: "Alice",
         },
@@ -1496,7 +1646,7 @@ describe("runPreparedReply media-only handling", () => {
           Provider: "telegram",
           Surface: "telegram",
           ChatType: "group",
-          InboundTurnKind: "room_event",
+          InboundEventKind: "room_event",
           MessageSid: "991",
           SenderName: "Alice",
         },
@@ -1505,7 +1655,7 @@ describe("runPreparedReply media-only handling", () => {
 
     const call = requireLastRunReplyAgentCall();
     expect(call?.followupRun.run.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(call?.followupRun.currentTurnContext?.text).toContain(
+    expect(call?.followupRun.currentInboundContext?.text).toContain(
       "visible_reply_contract: message_tool_only",
     );
   });
@@ -1792,6 +1942,38 @@ describe("runPreparedReply media-only handling", () => {
 
     const call = requireRunReplyAgentCall();
     expect(call?.followupRun.originatingAccountId).toBe("work");
+  });
+
+  it("uses transport thread metadata for followup originatingThreadId", async () => {
+    await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "",
+          RawBody: "",
+          CommandBody: "",
+          ThreadHistoryBody: "Earlier message in this thread",
+          OriginatingChannel: "slack",
+          OriginatingTo: "user:U1",
+          ChatType: "direct",
+          MessageThreadId: undefined,
+          TransportThreadId: "650.000",
+        },
+        sessionCtx: {
+          Body: "",
+          BodyStripped: "",
+          ThreadHistoryBody: "Earlier message in this thread",
+          MediaPath: "/tmp/input.png",
+          Provider: "slack",
+          ChatType: "direct",
+          OriginatingChannel: "slack",
+          OriginatingTo: "user:U1",
+          TransportThreadId: "650.000",
+        },
+      }),
+    );
+
+    const call = requireRunReplyAgentCall();
+    expect(call?.followupRun.originatingThreadId).toBe("650.000");
   });
 
   it("passes suppressTyping through typing mode resolution", async () => {

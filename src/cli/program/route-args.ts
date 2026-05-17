@@ -182,11 +182,19 @@ export function parseConfigGetRouteArgs(argv: string[]) {
 export function parseConfigUnsetRouteArgs(argv: string[]) {
   const path = parseSinglePositional(argv, {
     commandPath: ["config", "unset"],
+    booleanFlags: ["--dry-run", "--allow-exec", "--json"],
   });
   if (!path) {
     return null;
   }
-  return { path };
+  return {
+    path,
+    cliOptions: {
+      dryRun: hasFlag(argv, "--dry-run"),
+      allowExec: hasFlag(argv, "--allow-exec"),
+      json: hasFlag(argv, "--json"),
+    },
+  };
 }
 
 export function parseModelsListRouteArgs(argv: string[]) {

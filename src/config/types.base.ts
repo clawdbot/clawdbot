@@ -311,6 +311,8 @@ export type DiagnosticsConfig = {
   stuckSessionWarnMs?: number;
   /** Threshold in ms before eligible stalled active work may be aborted for recovery. */
   stuckSessionAbortMs?: number;
+  /** Capture a redacted stability snapshot when memory pressure reaches critical. Default: false. */
+  memoryPressureSnapshot?: boolean;
   otel?: DiagnosticsOtelConfig;
   cacheTrace?: DiagnosticsCacheTraceConfig;
 };

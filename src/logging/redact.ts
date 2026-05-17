@@ -56,6 +56,8 @@ const DEFAULT_REDACT_PATTERNS: string[] = [
   String.raw`--(?:api[-_]?key|hook[-_]?token|token|secret|password|passwd|${PAYMENT_CREDENTIAL_QUERY_KEYS})\s+(["']?)([^\s"']+)\1`,
   // Authorization headers.
   String.raw`Authorization\s*[:=]\s*Bearer\s+([A-Za-z0-9._\-+=]+)`,
+  String.raw`Authorization\s*[:=]\s*Basic\s+([A-Za-z0-9+/=]+)`,
+  String.raw`(?:X-OpenClaw-Token|x-pomerium-jwt-assertion|X-Api-Key|X-Auth-Token)\s*[:=]\s*([^\s"',;]+)`,
   String.raw`\bBearer\s+([A-Za-z0-9._\-+=]{18,})\b`,
   // Standalone token assignments in CLI or HTTP diagnostics. URL query params
   // are handled above so non-secret params survive and long values stay hinted.

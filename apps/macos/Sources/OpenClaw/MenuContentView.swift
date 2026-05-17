@@ -111,11 +111,7 @@ struct MenuContent: View {
                 self.voiceWakeMicMenu
             }
             Divider()
-            Button {
-                Task { @MainActor in
-                    await self.openDashboard()
-                }
-            } label: {
+            Link(destination: URL(string: "openclaw://dashboard")!) {
                 Label("Open Dashboard", systemImage: "gauge")
             }
             Button {
@@ -339,20 +335,6 @@ struct MenuContent: View {
         self.openSettings()
         DispatchQueue.main.async {
             NotificationCenter.default.post(name: .openclawSelectSettingsTab, object: tab)
-        }
-    }
-
-    @MainActor
-    private func openDashboard() async {
-        do {
-            let config = try await GatewayEndpointStore.shared.requireConfig()
-            let url = try GatewayEndpointStore.dashboardURL(for: config, mode: self.state.connectionMode)
-            NSWorkspace.shared.open(url)
-        } catch {
-            let alert = NSAlert()
-            alert.messageText = "Dashboard unavailable"
-            alert.informativeText = error.localizedDescription
-            alert.runModal()
         }
     }
 

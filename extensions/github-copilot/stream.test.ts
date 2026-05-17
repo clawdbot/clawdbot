@@ -64,6 +64,7 @@ describe("wrapCopilotAnthropicStream", () => {
       messages,
       hasImages: true,
     });
+    expect(expectedCopilotHeaders["Accept-Encoding"]).toBe("identity");
 
     void wrapped(
       {

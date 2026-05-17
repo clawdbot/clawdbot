@@ -561,7 +561,14 @@ jobs:
               exit 0
             fi
             if [[ "$attempt" == "5" ]]; then
-              exit 1
+              {
+                echo "### Clawgrit report publish skipped"
+                echo
+                echo "Kova artifacts were uploaded, but publishing the optional clawgrit report failed after ${attempt} attempts."
+                echo "Check the \`CLAWGRIT_REPORTS_TOKEN\` secret or the reports repository permissions."
+              } >> "$GITHUB_STEP_SUMMARY"
+              echo "::warning::Kova artifacts uploaded, but optional clawgrit report publish failed after ${attempt} attempts."
+              exit 0
             fi
             sleep $((attempt * 2))
             git -C "$reports_root" fetch --depth=1 origin main

@@ -4,6 +4,7 @@ export { resolveOpenAIStrictToolSetting } from "./openai-strict-tool-setting.js"
 
 type ToolSchemaCompatInput = {
   unsupportedToolSchemaKeywords?: unknown;
+  omitEmptyArrayItems?: unknown;
 };
 
 type ToolWithParameters = {
@@ -14,13 +15,20 @@ type ToolWithParameters = {
 function resolveToolSchemaModelCompat(
   compat: ToolSchemaCompatInput | null | undefined,
 ): ModelCompatConfig | undefined {
-  if (!compat || !Array.isArray(compat.unsupportedToolSchemaKeywords)) {
+  if (!compat) {
+    return undefined;
+  }
+  const unsupportedToolSchemaKeywords = Array.isArray(compat.unsupportedToolSchemaKeywords)
+    ? compat.unsupportedToolSchemaKeywords.filter(
+        (keyword): keyword is string => typeof keyword === "string",
+      )
+    : [];
+  if (unsupportedToolSchemaKeywords.length === 0 && compat.omitEmptyArrayItems !== true) {
     return undefined;
   }
   return {
-    unsupportedToolSchemaKeywords: compat.unsupportedToolSchemaKeywords.filter(
-      (keyword): keyword is string => typeof keyword === "string",
-    ),
+    ...(unsupportedToolSchemaKeywords.length > 0 ? { unsupportedToolSchemaKeywords } : {}),
+    ...(compat.omitEmptyArrayItems === true ? { omitEmptyArrayItems: true } : {}),
   };
 }
 

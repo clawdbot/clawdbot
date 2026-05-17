@@ -117,6 +117,38 @@ describe("exec approvals allowlist evaluation", () => {
     expect(result.allowlistSatisfied).toBe(true);
   });
 
+  it("matches auto-allow skill bins against the executable trust realpath", () => {
+    const analysis = {
+      ok: true,
+      segments: [
+        {
+          raw: "skill-bin",
+          argv: ["skill-bin", "--help"],
+          resolution: makeMockCommandResolution({
+            execution: makeMockExecutableResolution({
+              rawExecutable: "skill-bin",
+              resolvedPath: "/tmp/symlink-bin/skill-bin",
+              resolvedRealPath: "/opt/skills/skill-bin",
+              executableName: "skill-bin",
+            }),
+          }),
+        },
+      ],
+    };
+
+    const trustedRealPath = evaluateAutoAllowSkills({
+      analysis,
+      resolvedPath: "/opt/skills/skill-bin",
+    });
+    expect(trustedRealPath.allowlistSatisfied).toBe(true);
+
+    const trustedSymlinkPath = evaluateAutoAllowSkills({
+      analysis,
+      resolvedPath: "/tmp/symlink-bin/skill-bin",
+    });
+    expectAutoAllowSkillsMiss(trustedSymlinkPath);
+  });
+
   it("does not satisfy auto-allow skills for explicit relative paths", () => {
     const analysis = {
       ok: true,

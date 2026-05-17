@@ -83,8 +83,12 @@ function replaceAt(
   newValue: JsoncValue,
 ): JsoncValue | null {
   const seg = segments[i];
-  if (seg === undefined) {return newValue;}
-  if (seg.length === 0) {return null;}
+  if (seg === undefined) {
+    return newValue;
+  }
+  if (seg.length === 0) {
+    return null;
+  }
 
   if (current.kind === "object") {
     // Positional tokens resolve against the entries' ordered key list;
@@ -96,16 +100,24 @@ function replaceAt(
         size: current.entries.length,
         keys: current.entries.map((e) => e.key),
       });
-      if (resolved === null) {return null;}
+      if (resolved === null) {
+        return null;
+      }
       segNorm = resolved;
     }
     const lookupKey = isQuotedSeg(segNorm) ? unquoteSeg(segNorm) : segNorm;
     const idx = current.entries.findIndex((e) => e.key === lookupKey);
-    if (idx === -1) {return null;}
+    if (idx === -1) {
+      return null;
+    }
     const child = current.entries[idx];
-    if (child === undefined) {return null;}
+    if (child === undefined) {
+      return null;
+    }
     const replacedChild = replaceAt(child.value, segments, i + 1, newValue);
-    if (replacedChild === null) {return null;}
+    if (replacedChild === null) {
+      return null;
+    }
     const newEntry: JsoncEntry = { ...child, value: replacedChild };
     const newEntries = current.entries.slice();
     newEntries[idx] = newEntry;
@@ -123,15 +135,23 @@ function replaceAt(
         indexable: true,
         size: current.items.length,
       });
-      if (resolved === null) {return null;}
+      if (resolved === null) {
+        return null;
+      }
       segNorm = resolved;
     }
     const idx = Number(segNorm);
-    if (!Number.isInteger(idx) || idx < 0 || idx >= current.items.length) {return null;}
+    if (!Number.isInteger(idx) || idx < 0 || idx >= current.items.length) {
+      return null;
+    }
     const child = current.items[idx];
-    if (child === undefined) {return null;}
+    if (child === undefined) {
+      return null;
+    }
     const replacedChild = replaceAt(child, segments, i + 1, newValue);
-    if (replacedChild === null) {return null;}
+    if (replacedChild === null) {
+      return null;
+    }
     const newItems = current.items.slice();
     newItems[idx] = replacedChild;
     return {
@@ -145,14 +165,21 @@ function replaceAt(
 }
 
 function pickLineIndex(ast: JsonlAst, addr: string): number {
+  if (addr === "$first") {
+    return ast.lines.findIndex((line) => line.kind === "value");
+  }
   if (addr === "$last") {
     for (let i = ast.lines.length - 1; i >= 0; i--) {
-      if (ast.lines[i]?.kind === "value") {return i;}
+      if (ast.lines[i]?.kind === "value") {
+        return i;
+      }
     }
     return -1;
   }
   const m = /^L(\d+)$/.exec(addr);
-  if (m === null || m[1] === undefined) {return -1;}
+  if (m === null || m[1] === undefined) {
+    return -1;
+  }
   const target = Number(m[1]);
   return ast.lines.findIndex((l) => l.line === target);
 }

@@ -105,6 +105,7 @@ export function createSubscriptionMock(): SubscriptionMock {
     getMessagingToolSentTargets: () => [] as MessagingToolSend[],
     getHeartbeatToolResponse: () => undefined,
     getPendingToolMediaReply: () => null,
+    getVisibleBlockReplyCount: () => 0,
     getSuccessfulCronAdds: () => 0,
     getReplayState: () => ({
       replayInvalid: false,

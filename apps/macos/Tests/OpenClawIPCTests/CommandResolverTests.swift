@@ -179,6 +179,28 @@ import Testing
         }
     }
 
+    @Test func `empty remote defaults fall back to config remote values`() {
+        let defaults = self.makeDefaults()
+        defaults.set(AppState.ConnectionMode.remote.rawValue, forKey: connectionModeKey)
+        defaults.set(" ", forKey: remoteTargetKey)
+        defaults.set("", forKey: remoteIdentityKey)
+
+        let settings = CommandResolver.connectionSettings(
+            defaults: defaults,
+            configRoot: [
+                "gateway": [
+                    "mode": "remote",
+                    "remote": [
+                        "sshTarget": "alice@gateway.local",
+                        "sshIdentity": "/tmp/config-id",
+                    ],
+                ],
+            ])
+
+        #expect(settings.target == "alice@gateway.local")
+        #expect(settings.identity == "/tmp/config-id")
+    }
+
     @Test func `rejects unsafe SSH targets`() {
         #expect(CommandResolver.parseSSHTarget("-oProxyCommand=calc") == nil)
         #expect(CommandResolver.parseSSHTarget("host:-oProxyCommand=calc") == nil)
@@ -207,5 +229,24 @@ import Testing
         if cmd.count >= 2 {
             #expect(cmd[1] == "daemon")
         }
+    }
+
+    @Test func `remote settings fall back to config ssh target`() {
+        let defaults = self.makeDefaults()
+        let settings = CommandResolver.connectionSettings(
+            defaults: defaults,
+            configRoot: [
+                "gateway": [
+                    "mode": "remote",
+                    "remote": [
+                        "sshTarget": "alice@gateway.example:2222",
+                        "sshIdentity": "/tmp/id_ed25519",
+                    ],
+                ],
+            ])
+
+        #expect(settings.mode == .remote)
+        #expect(settings.target == "alice@gateway.example:2222")
+        #expect(settings.identity == "/tmp/id_ed25519")
     }
 }

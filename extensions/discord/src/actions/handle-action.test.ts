@@ -6,6 +6,8 @@ const handleDiscordActionMock = vi
   .spyOn(runtimeModule, "handleDiscordAction")
   .mockResolvedValue({ content: [], details: { ok: true } });
 const { handleDiscordMessageAction } = await import("./handle-action.js");
+const { beginDiscordInboundEventDeliveryCorrelation } =
+  await import("../inbound-event-delivery.js");
 
 function discordConfig(actions?: Record<string, boolean>): OpenClawConfig {
   return {
@@ -199,6 +201,68 @@ describe("handleDiscordMessageAction", () => {
       cfg,
       options: defaultActionOptions(),
     });
+  });
+
+  it("notifies inbound event delivery after message sends", async () => {
+    const markDelivered = vi.fn();
+    const end = beginDiscordInboundEventDeliveryCorrelation(
+      "agent:main:discord:channel:c1",
+      {
+        outboundTo: "channel:c1",
+        outboundAccountId: "default",
+        markInboundEventDelivered: markDelivered,
+      },
+      { inboundEventKind: "room_event" },
+    );
+
+    try {
+      await handleDiscordMessageAction({
+        action: "send",
+        params: {
+          to: "channel:c1",
+          message: "hello",
+        },
+        cfg: discordConfig(),
+        accountId: "default",
+        sessionKey: "agent:main:discord:channel:c1",
+        inboundEventKind: "room_event",
+      });
+    } finally {
+      end();
+    }
+
+    expect(markDelivered).toHaveBeenCalledTimes(1);
+  });
+
+  it("notifies inbound event delivery after visible message actions", async () => {
+    const markDelivered = vi.fn();
+    const end = beginDiscordInboundEventDeliveryCorrelation(
+      "agent:main:discord:channel:c1",
+      {
+        outboundTo: "channel:c1",
+        outboundAccountId: "default",
+        markInboundEventDelivered: markDelivered,
+      },
+      { inboundEventKind: "room_event" },
+    );
+
+    try {
+      await handleDiscordMessageAction({
+        action: "upload-file",
+        params: {
+          to: "channel:c1",
+          filePath: "/tmp/image.png",
+        },
+        cfg: discordConfig(),
+        accountId: "default",
+        sessionKey: "agent:main:discord:channel:c1",
+        inboundEventKind: "room_event",
+      });
+    } finally {
+      end();
+    }
+
+    expect(markDelivered).toHaveBeenCalledTimes(1);
   });
 
   it("maps upload-file to Discord sendMessage with media read context", async () => {

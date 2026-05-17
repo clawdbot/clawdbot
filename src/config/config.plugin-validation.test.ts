@@ -330,6 +330,147 @@ describe("config plugin validation", () => {
     ).toBe(false);
   });
 
+  it("warns instead of failing when an official external memory slot plugin is not installed", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "pi" }] },
+        plugins: {
+          slots: { memory: "memory-lancedb" },
+          entries: { "memory-lancedb": { enabled: true } },
+        },
+      },
+      {
+        env: suiteEnv(),
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [],
+            diagnostics: [],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    const slotMessage =
+      "plugin not installed: memory-lancedb — gateway will run without persistent memory until installed; install the official external plugin with: openclaw plugins install @openclaw/memory-lancedb";
+    const entryMessage =
+      "plugin not installed: memory-lancedb — install the official external plugin with: openclaw plugins install @openclaw/memory-lancedb";
+    expectPathMessage(res.warnings, "plugins.slots.memory", slotMessage);
+    expectPathMessage(res.warnings, "plugins.entries.memory-lancedb", entryMessage);
+  });
+
+  it("keeps no-persistent-memory wording scoped to the selected missing memory slot", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "pi" }] },
+        plugins: {
+          slots: { memory: "none" },
+          entries: { "memory-lancedb": { enabled: true } },
+          allow: ["memory-lancedb"],
+        },
+      },
+      {
+        env: suiteEnv(),
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [],
+            diagnostics: [],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    const message =
+      "plugin not installed: memory-lancedb — install the official external plugin with: openclaw plugins install @openclaw/memory-lancedb";
+    expectPathMessage(res.warnings, "plugins.entries.memory-lancedb", message);
+    expectPathMessage(res.warnings, "plugins.allow", message);
+    expect(
+      (res.warnings ?? []).some((warning) =>
+        warning.message.includes("gateway will run without persistent memory"),
+      ),
+    ).toBe(false);
+  });
+
+  it("keeps official external non-memory plugins fatal in the memory slot", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "pi" }] },
+        plugins: {
+          slots: { memory: "brave" },
+          entries: { brave: { enabled: true } },
+        },
+      },
+      {
+        env: suiteEnv(),
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [],
+            diagnostics: [],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(false);
+    if (res.ok) {
+      return;
+    }
+    expectPathMessage(res.issues, "plugins.slots.memory", "plugin not found: brave");
+    expectPathMessage(
+      res.warnings,
+      "plugins.entries.brave",
+      "plugin not installed: brave — install the official external plugin with: openclaw plugins install @openclaw/brave-plugin",
+    );
+  });
+
+  it("keeps blocked official external memory slot plugins fatal", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "pi" }] },
+        plugins: {
+          slots: { memory: "memory-lancedb" },
+          entries: { "memory-lancedb": { enabled: true } },
+        },
+      },
+      {
+        env: suiteEnv(),
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [],
+            diagnostics: [
+              {
+                level: "warn",
+                pluginId: "memory-lancedb",
+                message: "blocked plugin candidate: fixture safety block",
+              },
+            ],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(false);
+    if (res.ok) {
+      return;
+    }
+    expectPathMessageIncludes(
+      res.issues,
+      "plugins.slots.memory",
+      "plugin present but blocked: memory-lancedb",
+    );
+    expectPathMessageIncludes(
+      res.warnings,
+      "plugins.entries.memory-lancedb",
+      "plugin present but blocked: memory-lancedb",
+    );
+    expect(
+      res.warnings?.some((warning) =>
+        warning.message.includes("plugin not installed: memory-lancedb"),
+      ),
+    ).toBe(false);
+  });
+
   it.runIf(process.platform !== "win32")(
     "reports configured blocked plugins without stale not-found wording",
     async () => {

@@ -1,5 +1,6 @@
 import { Type, type TSchema } from "typebox";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
+import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import {
   channelSupportsMessageCapability,
@@ -11,7 +12,6 @@ import {
 import { CHANNEL_MESSAGE_ACTION_NAMES } from "../../channels/plugins/message-action-names.js";
 import type { ChannelMessageCapability } from "../../channels/plugins/message-capabilities.js";
 import type { ChannelMessageActionName } from "../../channels/plugins/types.public.js";
-import type { InboundTurnKind } from "../../channels/turn/kind.js";
 import { resolveCommandSecretRefsViaGateway } from "../../cli/command-secret-gateway.js";
 import { getScopedChannelsCommandSecretTargets } from "../../cli/command-secret-targets.js";
 import { resolveMessageSecretScope } from "../../cli/message-secret-scope.js";
@@ -219,13 +219,13 @@ function buildSendSchema(options: { includePresentation: boolean; includeDeliver
     gifPlayback: Type.Optional(Type.Boolean()),
     forceDocument: Type.Optional(
       Type.Boolean({
-        description: "Send image/GIF as document to avoid Telegram compression (Telegram only).",
+        description: "Send image/GIF/video as document to avoid channel compression.",
       }),
     ),
     asDocument: Type.Optional(
       Type.Boolean({
         description:
-          "Send image/GIF as document to avoid Telegram compression. Alias for forceDocument (Telegram only).",
+          "Send image/GIF/video as document to avoid channel compression. Alias for forceDocument.",
       }),
     ),
   };
@@ -571,7 +571,7 @@ type MessageToolOptions = {
   sandboxRoot?: string;
   requireExplicitTarget?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-  inboundTurnKind?: InboundTurnKind;
+  inboundEventKind?: InboundEventKind;
   requesterSenderId?: string;
   senderIsOwner?: boolean;
 };
@@ -772,7 +772,7 @@ function appendMessageToolVisibleReplyHint(
   const targetGuidance = requireExplicitTarget
     ? "Include target when sending."
     : "The target defaults to the current source conversation, so omit target unless sending elsewhere.";
-  return `${description} For this turn, visible replies to the current source conversation must use action="send" with message. ${targetGuidance} Normal final answers are private and are not posted.`;
+  return `${description} For this turn, use action="send" with message for visible replies to the current source conversation. ${targetGuidance} Normal final answers stay private.`;
 }
 
 function appendMessageToolReadHint(
@@ -962,7 +962,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         agentId: resolvedAgentId,
         sandboxRoot: options?.sandboxRoot,
         sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
-        inboundTurnKind: options?.inboundTurnKind,
+        inboundEventKind: options?.inboundEventKind,
         abortSignal: signal,
       });
 

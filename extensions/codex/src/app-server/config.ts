@@ -4,7 +4,8 @@ import { hostname as readHostName } from "node:os";
 import { z } from "zod";
 import type { CodexSandboxPolicy, CodexServiceTier } from "./protocol.js";
 
-const START_OPTIONS_KEY_SECRET = randomBytes(32);
+const START_OPTIONS_KEY_SECRET_SYMBOL = Symbol.for("openclaw.codexAppServerStartOptionsKeySecret");
+const START_OPTIONS_KEY_SECRET = getStartOptionsKeySecret();
 const UNIX_CODEX_REQUIREMENTS_PATH = "/etc/codex/requirements.toml";
 const WINDOWS_CODEX_REQUIREMENTS_SUFFIX = "\\OpenAI\\Codex\\requirements.toml";
 
@@ -989,6 +990,14 @@ function hashSecretForKey(value: string | undefined, label: string): string | nu
     .update("\0")
     .update(value)
     .digest("hex");
+}
+
+function getStartOptionsKeySecret(): Buffer {
+  const globalState = globalThis as typeof globalThis & {
+    [START_OPTIONS_KEY_SECRET_SYMBOL]?: Buffer;
+  };
+  globalState[START_OPTIONS_KEY_SECRET_SYMBOL] ??= randomBytes(32);
+  return globalState[START_OPTIONS_KEY_SECRET_SYMBOL];
 }
 
 function splitShellWords(value: string): string[] {

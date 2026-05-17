@@ -307,6 +307,11 @@ export const en = {
     },
     skills: {
       configure: "Configure skills now? (recommended)",
+      containerBrewHidden:
+        "Brew-only skill installs are hidden in Linux containers because the official image does not ship Homebrew.",
+      containerBrewManual:
+        "Use a custom image with Homebrew preinstalled or install those dependencies manually.",
+      containerInstallsTitle: "Container skill installs",
       docsLine: "Docs: https://docs.openclaw.ai/skills",
       enterEnv: "Enter {env}",
       homebrewCommand: "Show Homebrew install command?",

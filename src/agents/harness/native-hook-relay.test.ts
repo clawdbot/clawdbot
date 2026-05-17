@@ -173,6 +173,40 @@ describe("native hook relay registry", () => {
     });
   });
 
+  it("renews relay ttl without rotating the direct hook bridge", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-renewed-bridge-session",
+      sessionId: "session-1",
+      runId: "run-1",
+      allowedEvents: ["pre_tool_use"],
+      ttlMs: 10_000,
+    });
+    const before = await waitForNativeHookRelayBridgeRecord(relay.relayId);
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    relay.renew(20_000);
+
+    const after = await waitForNativeHookRelayBridgeRecord(relay.relayId);
+    expect(after.port).toBe(before.port);
+    expect(after.token).toBe(before.token);
+    expect(after.expiresAtMs).toBeGreaterThan(before.expiresAtMs as number);
+
+    const response = await invokeNativeHookRelayBridge({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "pre_tool_use",
+      timeoutMs: 2_000,
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        tool_input: { command: "pnpm test" },
+      },
+    });
+
+    expect(response).toEqual({ stdout: "", stderr: "", exitCode: 0 });
+  });
+
   it("keeps direct bridge registry files private and loopback-only", async () => {
     const relay = registerNativeHookRelay({
       provider: "codex",

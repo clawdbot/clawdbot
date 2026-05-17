@@ -145,6 +145,9 @@ async function resolveHelloWithModelDefaults(params: {
   sessionEntry?: SessionEntry;
   agentCfg?: { reasoningDefault?: "off" | "on" | "stream" };
   commandAuthorized?: boolean;
+  hasOneTurnModelOverride?: boolean;
+  provider?: string;
+  model?: string;
   ctx?: Parameters<typeof buildTestCtx>[0];
 }) {
   const resolveDefaultThinkingLevel = vi.fn(async () => params.defaultThinking);
@@ -190,8 +193,9 @@ async function resolveHelloWithModelDefaults(params: {
     defaultProvider: "openai",
     defaultModel: "gpt-4o-mini",
     aliasIndex: { byAlias: new Map(), byKey: new Map() },
-    provider: "openai",
-    model: "gpt-4o-mini",
+    provider: params.provider ?? "openai",
+    model: params.model ?? "gpt-4o-mini",
+    hasOneTurnModelOverride: params.hasOneTurnModelOverride,
     hasResolvedHeartbeatModelOverride: false,
     typing: makeTypingController(),
     opts: undefined,
@@ -312,6 +316,21 @@ describe("resolveReplyDirectives", () => {
       enabled: sessionEntry?.sessionId === "target-session",
     }));
     mocks.resolveReplyExecOverrides.mockReturnValue(undefined);
+  });
+
+  it("passes one-turn model override state into model selection", async () => {
+    await resolveHelloWithModelDefaults({
+      defaultThinking: "off",
+      defaultReasoning: "on",
+      provider: "openai",
+      model: "gpt-4o-mini",
+      hasOneTurnModelOverride: true,
+    });
+
+    const modelSelectionInput = mockCallInput(mocks.createModelSelectionState);
+    expect(modelSelectionInput.provider).toBe("openai");
+    expect(modelSelectionInput.model).toBe("gpt-4o-mini");
+    expect(modelSelectionInput.hasOneTurnModelOverride).toBe(true);
   });
 
   it("prefers the target session entry from sessionStore for directive state", async () => {

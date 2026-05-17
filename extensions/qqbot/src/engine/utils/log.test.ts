@@ -25,4 +25,16 @@ describe("QQBot debug logging", () => {
 
     expect(logSpy).toHaveBeenCalledWith("prefix line one line two");
   });
+
+  it.each(["0", "false", "off", "no"])(
+    "does not enable debug logging for QQBOT_DEBUG=%s",
+    (value) => {
+      process.env.QQBOT_DEBUG = value;
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+      debugLog("private message text");
+
+      expect(logSpy).not.toHaveBeenCalled();
+    },
+  );
 });

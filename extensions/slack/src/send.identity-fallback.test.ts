@@ -82,10 +82,12 @@ describe("sendMessageSlack customize-scope fallback", () => {
       text: "hello",
       username: "Bot",
       icon_url: "https://example.com/bot.png",
+      unfurl_links: false,
     });
     expect(secondCall).toEqual({
       channel: "C123",
       text: "hello",
+      unfurl_links: false,
     });
     expect(vi.mocked(logVerbose)).toHaveBeenCalledWith(
       "slack send: missing chat:write.customize, retrying without custom identity",

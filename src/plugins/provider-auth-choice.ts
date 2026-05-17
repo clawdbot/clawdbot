@@ -3,7 +3,7 @@ import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
-import { upsertAuthProfile } from "../agents/auth-profiles.js";
+import { upsertAuthProfileWithLock } from "../agents/auth-profiles.js";
 import { formatLiteralProviderPrefixedModelRef } from "../agents/model-ref-shared.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
@@ -28,6 +28,8 @@ import { resolveProviderInstallCatalogEntry } from "./provider-install-catalog.j
 import { createVpsAwareOAuthHandlers } from "./provider-oauth-flow.js";
 import { isRemoteEnvironment, openUrl } from "./setup-browser.js";
 import type { ProviderAuthMethod, ProviderAuthOptionBag, ProviderPlugin } from "./types.js";
+
+type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
 
 export type ApplyProviderAuthChoiceParams = {
   authChoice: string;
@@ -289,7 +291,7 @@ export async function runProviderPluginAuthMethod(params: {
   }
 
   for (const profile of result.profiles) {
-    upsertAuthProfile({
+    await upsertAuthProfileWithLockOrThrow({
       profileId: profile.profileId,
       credential: profile.credential,
       agentDir,
@@ -587,4 +589,13 @@ export async function applyAuthChoicePluginProvider(
   }
 
   return { config: nextConfig };
+}
+
+async function upsertAuthProfileWithLockOrThrow(params: UpsertAuthProfileParams): Promise<void> {
+  const updated = await upsertAuthProfileWithLock(params);
+  if (!updated) {
+    throw new Error(
+      "Failed to update auth profile store; the auth store lock may be busy. Wait a moment and retry.",
+    );
+  }
 }

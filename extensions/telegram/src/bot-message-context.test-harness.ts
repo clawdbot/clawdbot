@@ -1,4 +1,4 @@
-import { buildChannelTurnContext } from "openclaw/plugin-sdk/channel-inbound";
+import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import type { BuildTelegramMessageContextParams, TelegramMediaRef } from "./bot-message-context.js";
 
 export const baseTelegramMessageContextConfig = {
@@ -27,7 +27,7 @@ type BuildTelegramMessageContextForTestParams = {
 };
 
 const telegramMessageContextSessionRuntimeForTest = {
-  buildChannelTurnContext,
+  buildChannelInboundEventContext,
   readSessionUpdatedAt: () => undefined,
   recordInboundSession: async () => undefined,
   resolveInboundLastRouteSessionKey: ({ route, sessionKey }) =>

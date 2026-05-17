@@ -124,4 +124,49 @@ describe("Matrix QA fault proxy", () => {
       },
     ]);
   });
+
+  it("mutates matching forwarded Matrix responses", async () => {
+    const target = await startTargetServer();
+    proxy = await startMatrixQaFaultProxy({
+      targetBaseUrl: target.baseUrl,
+      rules: [
+        {
+          id: "sync-state-after",
+          match: (request) =>
+            request.method === "GET" &&
+            request.path === "/_matrix/client/v3/sync" &&
+            request.search.includes("org.matrix.msc4222.use_state_after=true"),
+          mutateResponse: ({ response }) => ({
+            ...response,
+            body: Buffer.from(JSON.stringify({ forwarded: true, mutated: true })),
+          }),
+        },
+      ],
+    });
+
+    const mutated = await fetch(
+      `${proxy.baseUrl}/_matrix/client/v3/sync?timeout=0&org.matrix.msc4222.use_state_after=true`,
+      {
+        headers: { authorization: "Bearer driver-token" },
+      },
+    );
+
+    expect(mutated.status).toBe(200);
+    await expect(mutated.json()).resolves.toEqual({ forwarded: true, mutated: true });
+    expect(proxy.hits()).toEqual([
+      {
+        method: "GET",
+        path: "/_matrix/client/v3/sync",
+        ruleId: "sync-state-after",
+      },
+    ]);
+    expect(target.requests).toEqual([
+      {
+        authorization: "Bearer driver-token",
+        body: "",
+        method: "GET",
+        url: "/_matrix/client/v3/sync?timeout=0&org.matrix.msc4222.use_state_after=true",
+      },
+    ]);
+  });
 });

@@ -20,6 +20,7 @@ const tempDirs = createTrackedTempDirs();
 
 afterEach(async () => {
   __setFsSafeTestHooksForTest(undefined);
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
   await tempDirs.cleanup();
 });
@@ -182,6 +183,15 @@ describe("fs-safe", () => {
       await fs.writeFile(originalPath, "inside");
       await fs.writeFile(outsidePath, "outside");
 
+      const originalRealpath = fs.realpath.bind(fs);
+      const realpathSpy = vi.spyOn(fs, "realpath");
+      realpathSpy.mockImplementation(async (target) => {
+        if (typeof target === "string" && target.startsWith("/dev/fd/")) {
+          return movedPath;
+        }
+        return await originalRealpath(target);
+      });
+
       const handle = await fs.open(originalPath, "r");
       try {
         await fs.rename(originalPath, movedPath);
@@ -189,8 +199,35 @@ describe("fs-safe", () => {
 
         const resolved = await resolveOpenedFileRealPathForHandle(handle, originalPath);
 
-        await expect(fs.realpath(movedPath)).resolves.toBe(resolved);
+        expect(resolved).toBe(movedPath);
         await expect(handle.readFile({ encoding: "utf8" })).resolves.toBe("inside");
+      } finally {
+        await handle.close().catch(() => {});
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "falls back to the io path when /dev/fd realpath does not resolve to the opened file",
+    async () => {
+      const root = await tempDirs.make("openclaw-fs-safe-root-");
+      const filePath = path.join(root, "inside.txt");
+      await fs.writeFile(filePath, "inside");
+
+      const originalRealpath = fs.realpath.bind(fs);
+      const realpathSpy = vi.spyOn(fs, "realpath");
+      realpathSpy.mockImplementation(async (target) => {
+        if (typeof target === "string" && target.startsWith("/dev/fd/")) {
+          return "/dev/fd/inside.txt";
+        }
+        return await originalRealpath(target);
+      });
+
+      const handle = await fs.open(filePath, "r");
+      try {
+        await expect(resolveOpenedFileRealPathForHandle(handle, filePath)).resolves.toBe(
+          await originalRealpath(filePath),
+        );
       } finally {
         await handle.close().catch(() => {});
       }

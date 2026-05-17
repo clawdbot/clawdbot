@@ -631,6 +631,36 @@
         "api": "openai-codex-responses",
         "models": [
           {
+            "id": "gpt-5.5",
+            "name": "gpt-5.5",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 400000,
+            "contextTokens": 272000,
+            "maxTokens": 128000,
+            "cost": {
+              "input": 5,
+              "output": 30,
+              "cacheRead": 0.5,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "gpt-5.4",
+            "name": "gpt-5.4",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1050000,
+            "contextTokens": 272000,
+            "maxTokens": 128000,
+            "cost": {
+              "input": 2.5,
+              "output": 15,
+              "cacheRead": 0.25,
+              "cacheWrite": 0
+            }
+          },
+          {
             "id": "gpt-5.4-pro",
             "name": "gpt-5.4-pro",
             "reasoning": true,

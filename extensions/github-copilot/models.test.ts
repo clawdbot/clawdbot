@@ -412,6 +412,10 @@ describe("github-copilot token", () => {
 
     expect(res.token).toBe("fresh;proxy-ep=https://proxy.contoso.test;");
     expect(res.baseUrl).toBe("https://api.contoso.test");
+    const [, calledInit] = fetchImpl.mock.calls[0] ?? [];
+    expect(((calledInit as RequestInit).headers as Record<string, string>)["Accept-Encoding"]).toBe(
+      "identity",
+    );
     expect(jsonStoreMocks.saveJsonFile).toHaveBeenCalledTimes(1);
   });
 });
@@ -536,6 +540,9 @@ describe("fetchCopilotModelCatalog", () => {
     expect((calledInit as RequestInit).method).toBe("GET");
     expect(((calledInit as RequestInit).headers as Record<string, string>).Authorization).toBe(
       "Bearer tid=test",
+    );
+    expect(((calledInit as RequestInit).headers as Record<string, string>)["Accept-Encoding"]).toBe(
+      "identity",
     );
 
     expect(out.map((m) => m.id)).toEqual([

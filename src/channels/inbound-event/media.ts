@@ -1,7 +1,7 @@
 import type { HistoryMediaEntry } from "../../auto-reply/reply/history.types.js";
-import type { InboundMediaFacts } from "./types.js";
+import type { InboundMediaFacts } from "../turn/types.js";
 
-export type ChannelTurnMediaInput = {
+export type ChannelInboundMediaInput = {
   path?: string | null;
   url?: string | null;
   contentType?: string | null;
@@ -10,7 +10,7 @@ export type ChannelTurnMediaInput = {
   messageId?: string | null;
 };
 
-export type ChannelTurnMediaPayload = {
+export type ChannelInboundMediaPayload = {
   MediaPath?: string;
   MediaUrl?: string;
   MediaType?: string;
@@ -41,11 +41,11 @@ function mediaType(media: InboundMediaFacts): string | undefined {
 }
 
 export function toInboundMediaFacts(
-  media: readonly ChannelTurnMediaInput[] | null | undefined,
+  media: readonly ChannelInboundMediaInput[] | null | undefined,
   defaults: {
     kind?: InboundMediaFacts["kind"];
     messageId?: string;
-    transcribed?: (media: ChannelTurnMediaInput, index: number) => boolean;
+    transcribed?: (media: ChannelInboundMediaInput, index: number) => boolean;
   } = {},
 ): InboundMediaFacts[] {
   if (!Array.isArray(media)) {
@@ -62,7 +62,7 @@ export function toInboundMediaFacts(
 }
 
 export function toHistoryMediaEntries(
-  media: readonly ChannelTurnMediaInput[] | null | undefined,
+  media: readonly ChannelInboundMediaInput[] | null | undefined,
   defaults: {
     kind?: InboundMediaFacts["kind"];
     messageId?: string;
@@ -77,9 +77,9 @@ export function toHistoryMediaEntries(
   }));
 }
 
-export function buildChannelTurnMediaPayload(
+export function buildChannelInboundMediaPayload(
   media: readonly InboundMediaFacts[] | null | undefined,
-): ChannelTurnMediaPayload {
+): ChannelInboundMediaPayload {
   const entries = Array.isArray(media) ? media : [];
   const transcribedIndexes = entries
     .map((item, index) => (item.transcribed ? index : undefined))

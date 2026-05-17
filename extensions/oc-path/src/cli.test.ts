@@ -100,6 +100,22 @@ describe("openclaw path CLI", () => {
       expect(out.match.valueText).toBe("1.0");
     });
 
+    it("CLI-R04 finds a leaf in yaml and prints it", async () => {
+      const filePath = join(workspaceDir, "workflow.yaml");
+      writeFileSync(filePath, "name: inbox-triage\nsteps:\n  - id: fetch\n", "utf-8");
+      const rt = createTestRuntime();
+      await pathResolveCommand(
+        "oc://workflow.yaml/steps/0/id",
+        { cwd: workspaceDir, json: true },
+        rt,
+      );
+      expect(rt.exitCode).toBe(0);
+      const out = JSON.parse(stdoutText(rt));
+      expect(out.resolved).toBe(true);
+      expect(out.match.kind).toBe("leaf");
+      expect(out.match.valueText).toBe("fetch");
+    });
+
     it("CLI-R02 returns 1 for not-found path", async () => {
       const filePath = join(workspaceDir, "gateway.jsonc");
       writeFileSync(filePath, '{ "version": "1.0" }', "utf-8");
@@ -273,6 +289,23 @@ describe("openclaw path CLI", () => {
       expect(rt.exitCode).toBe(2);
       expect(stderrText(rt)).toContain("requires");
     });
+
+    it("CLI-S05 malformed yaml returns structured parse-error", async () => {
+      const filePath = join(workspaceDir, "workflow.yaml");
+      const before = "key: value\n  bad indent: oops\n";
+      writeFileSync(filePath, before, "utf-8");
+      const rt = createTestRuntime();
+      await pathSetCommand(
+        "oc://workflow.yaml/key",
+        "new-value",
+        { cwd: workspaceDir, json: true },
+        rt,
+      );
+      expect(rt.exitCode).toBe(1);
+      const out = JSON.parse(stdoutText(rt));
+      expect(out).toMatchObject({ ok: false, reason: "parse-error" });
+      expect(readFileSync(filePath, "utf-8")).toBe(before);
+    });
   });
 
   describe("find", () => {
@@ -329,6 +362,18 @@ describe("openclaw path CLI", () => {
       expect(rt.exitCode).toBe(0);
       const out = JSON.parse(stdoutText(rt));
       expect(out.kind).toBe("md");
+      expect(out.bytes).toBe(before);
+    });
+
+    it("CLI-E04 round-trips yaml verbatim", async () => {
+      const filePath = join(workspaceDir, "workflow.yaml");
+      const before = "# keep comment\nname: inbox-triage\nsteps:\n  - id: fetch\n";
+      writeFileSync(filePath, before, "utf-8");
+      const rt = createTestRuntime();
+      await pathEmitCommand(filePath, { json: true }, rt);
+      expect(rt.exitCode).toBe(0);
+      const out = JSON.parse(stdoutText(rt));
+      expect(out.kind).toBe("yaml");
       expect(out.bytes).toBe(before);
     });
 

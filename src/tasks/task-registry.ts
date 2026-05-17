@@ -19,6 +19,7 @@ import {
   shouldAutoDeliverTaskStateChange,
   shouldAutoDeliverTaskTerminalUpdate,
   shouldSuppressDuplicateTerminalDelivery,
+  shouldUseParentReviewTaskTerminalMessage,
 } from "./task-executor-policy.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import {
@@ -1152,15 +1153,22 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
         lastEventAt: Date.now(),
       });
     }
-    const eventText = formatTaskTerminalMessage(latest);
-    if (!canDeliverTaskToRequesterOrigin(latest)) {
+    const shouldRouteParentReview = shouldUseParentReviewTaskTerminalMessage(latest);
+    const canDeliverDirect = canDeliverTaskToRequesterOrigin(latest);
+    const directEventText = formatTaskTerminalMessage(latest);
+    const sessionEventText = formatTaskTerminalMessage(
+      latest,
+      shouldRouteParentReview ? { surface: "parent_session" } : undefined,
+    );
+    if (shouldRouteParentReview || !canDeliverDirect) {
       try {
-        queueTaskSystemEvent(latest, eventText);
+        queueTaskSystemEvent(latest, sessionEventText);
         if (latest.terminalOutcome === "blocked") {
           queueBlockedTaskFollowup(latest);
         }
         return updateTask(taskId, {
-          deliveryStatus: "session_queued",
+          deliveryStatus:
+            shouldRouteParentReview && canDeliverDirect ? "pending" : "session_queued",
           lastEventAt: Date.now(),
         });
       } catch (error) {
@@ -1184,7 +1192,7 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
         to: owner.requesterOrigin?.to ?? "",
         accountId: owner.requesterOrigin?.accountId,
         threadId: owner.requesterOrigin?.threadId,
-        content: eventText,
+        content: directEventText,
         agentId: requesterAgentId,
         idempotencyKey,
         mirror: {
@@ -1208,7 +1216,7 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
         error,
       });
       try {
-        queueTaskSystemEvent(latest, eventText);
+        queueTaskSystemEvent(latest, sessionEventText);
         if (latest.terminalOutcome === "blocked") {
           queueBlockedTaskFollowup(latest);
         }

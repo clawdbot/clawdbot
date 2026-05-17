@@ -842,7 +842,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(savedBinding?.contextEngine?.projection?.epoch).toBe("epoch-after");
   });
 
-  it("keeps current-turn context at the front of the Codex context-engine prompt", async () => {
+  it("keeps current inbound context at the front of the Codex context-engine prompt", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     SessionManager.open(sessionFile).appendMessage(
@@ -852,7 +852,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
     params.contextEngine = contextEngine;
-    params.currentTurnContext = {
+    params.currentInboundContext = {
       text: [
         "Conversation context (untrusted, chronological, selected for current message):",
         "#6474 Sun 2026-05-10 22:22 GMT+5:30 [reply target] OpenClaw: anchor REPLYCTX this is the old message",

@@ -6,6 +6,7 @@ import { packageNameMatchesId } from "../infra/install-safe-path.js";
 import {
   resolveNpmPackArchiveMetadata,
   resolveNpmSpecMetadata,
+  createNpmMetadataEnv,
   type NpmIntegrityDrift,
   type NpmSpecResolution,
 } from "../infra/install-source-utils.js";
@@ -218,10 +219,7 @@ async function resolveTrustedOfficialPrereleaseResolution(params: {
     ["npm", "view", params.spec.name, "versions", "--json"],
     {
       timeoutMs: Math.max(params.timeoutMs, 60_000),
-      env: {
-        COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
-        NPM_CONFIG_IGNORE_SCRIPTS: "true",
-      },
+      env: createNpmMetadataEnv(),
     },
   );
   if (versions.code !== 0) {

@@ -1,10 +1,12 @@
 import type { QaProviderMode } from "./model-selection.js";
+import type { RuntimeId, RuntimeParityResult } from "./runtime-parity.js";
 
 type QaSuiteSummaryScenario = {
   name: string;
   status: "pass" | "fail";
   steps: unknown[];
   details?: string;
+  runtimeParity?: RuntimeParityResult;
 };
 
 export type QaSuiteSummaryJson = {
@@ -35,6 +37,7 @@ export type QaSuiteSummaryJson = {
     fastMode: boolean;
     concurrency: number;
     scenarioIds: string[] | null;
+    runtimePair?: [RuntimeId, RuntimeId] | null;
   };
 };
 

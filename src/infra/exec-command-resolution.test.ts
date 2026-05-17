@@ -10,8 +10,11 @@ import {
   resolveCommandResolution,
   resolveCommandResolutionFromArgv,
   resolveAllowlistCandidatePath,
+  resolveApprovalAuditTrustPath,
   resolveExecutionTargetCandidatePath,
+  resolveExecutionTargetTrustPath,
   resolvePolicyTargetCandidatePath,
+  resolvePolicyTargetTrustPath,
 } from "./exec-approvals.js";
 
 function buildNestedEnvShellCommand(params: {
@@ -203,6 +206,35 @@ describe("exec-command-resolution", () => {
     expect(resolution?.policy.resolvedPath).toBe(busybox);
     expect(resolvePolicyTargetCandidatePath(resolution ?? null, dir)).toBe(busybox);
     expect(resolution?.execution.executableName.toLowerCase()).toContain("sh");
+  });
+
+  it("exposes canonical trust paths separately from display candidate paths", () => {
+    const resolution = {
+      execution: {
+        rawExecutable: "rg",
+        resolvedPath: "/opt/homebrew/bin/rg",
+        resolvedRealPath: "/opt/homebrew/Cellar/ripgrep/14.1.1/bin/rg",
+        executableName: "rg",
+      },
+      policy: {
+        rawExecutable: "rg",
+        resolvedPath: "/opt/homebrew/bin/rg",
+        resolvedRealPath: "/opt/homebrew/Cellar/ripgrep/14.1.1/bin/rg",
+        executableName: "rg",
+      },
+    };
+
+    expect(resolveExecutionTargetCandidatePath(resolution)).toBe("/opt/homebrew/bin/rg");
+    expect(resolveExecutionTargetTrustPath(resolution)).toBe(
+      "/opt/homebrew/Cellar/ripgrep/14.1.1/bin/rg",
+    );
+    expect(resolvePolicyTargetCandidatePath(resolution)).toBe("/opt/homebrew/bin/rg");
+    expect(resolvePolicyTargetTrustPath(resolution)).toBe(
+      "/opt/homebrew/Cellar/ripgrep/14.1.1/bin/rg",
+    );
+    expect(resolveApprovalAuditTrustPath(resolution)).toBe(
+      "/opt/homebrew/Cellar/ripgrep/14.1.1/bin/rg",
+    );
   });
 
   it("does not satisfy inner-shell allowlists when invoked through busybox wrappers", () => {

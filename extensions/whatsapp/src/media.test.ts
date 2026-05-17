@@ -5,6 +5,7 @@ import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { captureEnv } from "openclaw/plugin-sdk/test-env";
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
+import { withMockedWindowsPlatform, withRestoredMocks } from "openclaw/plugin-sdk/test-node-mocks";
 import { optimizeImageToPng } from "openclaw/plugin-sdk/web-media";
 import sharp from "sharp";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
@@ -370,41 +371,36 @@ describe("local media root guard", () => {
     // actually holds `tinyPngFile` on this Linux test runner (#60713).
     const realTmpRoot = resolvePreferredOpenClawTmpDir();
 
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    const lstatSpy = vi
-      .spyOn(fs, "lstat")
-      .mockResolvedValue(cloneStatWithDev(actualLstat, zeroDev));
-    const statSpy = vi.spyOn(fs, "stat").mockResolvedValue(cloneStatWithDev(actualStat, zeroDev));
+    await withMockedWindowsPlatform(async () => {
+      const lstatSpy = vi
+        .spyOn(fs, "lstat")
+        .mockResolvedValue(cloneStatWithDev(actualLstat, zeroDev));
+      const statSpy = vi.spyOn(fs, "stat").mockResolvedValue(cloneStatWithDev(actualStat, zeroDev));
 
-    try {
-      const result = await loadWebMedia(tinyPngFile, 1024 * 1024, {
-        localRoots: [realTmpRoot],
+      await withRestoredMocks([lstatSpy, statSpy], async () => {
+        const result = await loadWebMedia(tinyPngFile, 1024 * 1024, {
+          localRoots: [realTmpRoot],
+        });
+        expect(result.kind).toBe("image");
+        expect(result.buffer.length).toBeGreaterThan(0);
       });
-      expect(result.kind).toBe("image");
-      expect(result.buffer.length).toBeGreaterThan(0);
-    } finally {
-      statSpy.mockRestore();
-      lstatSpy.mockRestore();
-      platformSpy.mockRestore();
-    }
+    });
   });
 
   it("rejects Windows network paths before filesystem checks", async () => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    const realpathSpy = vi.spyOn(fs, "realpath");
+    await withMockedWindowsPlatform(async () => {
+      const realpathSpy = vi.spyOn(fs, "realpath");
 
-    try {
-      await expectLocalMediaAccessCode(
-        loadWebMedia("\\\\attacker\\share\\evil.png", 1024 * 1024, {
-          localRoots: [resolvePreferredOpenClawTmpDir()],
-        }),
-        "network-path-not-allowed",
-      );
-      expect(realpathSpy).not.toHaveBeenCalled();
-    } finally {
-      realpathSpy.mockRestore();
-      platformSpy.mockRestore();
-    }
+      await withRestoredMocks([realpathSpy], async () => {
+        await expectLocalMediaAccessCode(
+          loadWebMedia("\\\\attacker\\share\\evil.png", 1024 * 1024, {
+            localRoots: [resolvePreferredOpenClawTmpDir()],
+          }),
+          "network-path-not-allowed",
+        );
+        expect(realpathSpy).not.toHaveBeenCalled();
+      });
+    });
   });
 
   it("requires readFile override for localRoots bypass", async () => {

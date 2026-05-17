@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as modelThinkingDefault from "../agents/model-thinking-default.js";
+import type { SessionEntry } from "../config/sessions.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import {
   makeCfg,
@@ -21,10 +22,13 @@ import {
 } from "./isolated-agent.turn-test-helpers.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./isolated-agent/run.suite-helpers.js";
 import {
+  dispatchCronDeliveryMock,
   mockRunCronFallbackPassthrough,
   runEmbeddedPiAgentMock,
   updateSessionStoreMock,
 } from "./isolated-agent/run.test-harness.js";
+import { normalizeCronJobCreate } from "./normalize.js";
+import type { CronJob } from "./types.js";
 
 setupRunCronIsolatedAgentTurnSuite();
 
@@ -148,7 +152,7 @@ describe("runCronIsolatedAgentTurn session identity", () => {
     });
   });
 
-  it("persists rotated transcript identity for session-bound cron runs", async () => {
+  it("persists rotated transcript identity for current-bound cron runs", async () => {
     await withTempHome(async (home) => {
       const deps = makeDeps();
       const boundSessionKey = "agent:main:telegram:direct:42";
@@ -177,27 +181,25 @@ describe("runCronIsolatedAgentTurn session identity", () => {
           },
         },
       });
-      updateSessionStoreMock.mockImplementation(async (_storePath, update) => {
-        const store = {
-          [boundSessionKey]: {
-            sessionId: "bound-session",
-            sessionFile: originalSessionFile,
-            updatedAt: Date.now(),
-            lastInteractionAt: Date.now() - 1_000,
-            systemSent: true,
-          },
-        };
+      updateSessionStoreMock.mockImplementation(async (targetStorePath, update) => {
+        const raw = await fs.readFile(targetStorePath, "utf-8");
+        const store = JSON.parse(raw) as Record<string, SessionEntry>;
         update(store);
+        await fs.writeFile(targetStorePath, JSON.stringify(store, null, 2), "utf-8");
       });
+      const currentBoundJob = normalizeCronJobCreate(
+        {
+          ...makeJob(DEFAULT_AGENT_TURN_PAYLOAD),
+          sessionTarget: "current",
+          delivery: { mode: "none" },
+        },
+        { sessionContext: { sessionKey: boundSessionKey } },
+      ) as CronJob;
 
       const res = await runCronIsolatedAgentTurn({
         cfg: makeCfg(home, storePath),
         deps,
-        job: {
-          ...makeJob(DEFAULT_AGENT_TURN_PAYLOAD),
-          sessionTarget: `session:${boundSessionKey}`,
-          delivery: { mode: "none" },
-        },
+        job: currentBoundJob,
         message: DEFAULT_MESSAGE,
         sessionKey: boundSessionKey,
         lane: "cron",
@@ -205,6 +207,9 @@ describe("runCronIsolatedAgentTurn session identity", () => {
 
       expect(res.status).toBe("ok");
       expect(res.sessionId).toBe("bound-session-rotated");
+      expect(dispatchCronDeliveryMock.mock.calls.at(-1)?.[0]).toEqual(
+        expect.objectContaining({ sessionId: "bound-session-rotated" }),
+      );
 
       const finalPersist = updateSessionStoreMock.mock.calls.at(-1);
       expect(finalPersist?.[0]).toBe(storePath);
@@ -216,6 +221,13 @@ describe("runCronIsolatedAgentTurn session identity", () => {
           sessionFile: rotatedSessionFile,
           usageFamilyKey: boundSessionKey,
           usageFamilySessionIds: ["bound-session", "bound-session-rotated"],
+        }),
+      );
+
+      await expect(readSessionEntry(storePath, boundSessionKey)).resolves.toEqual(
+        expect.objectContaining({
+          sessionId: "bound-session-rotated",
+          sessionFile: rotatedSessionFile,
         }),
       );
     });

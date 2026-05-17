@@ -126,7 +126,9 @@ function buildManifestCatalogModel(
   if (model.maxTokens === undefined) {
     throw new Error(`Manifest modelCatalog row ${model.id} is missing maxTokens`);
   }
-  const id = normalizeConfiguredProviderCatalogModelId(providerId, model.id);
+  const id = normalizeConfiguredProviderCatalogModelId(providerId, model.id, {
+    allowManifestNormalization: false,
+  });
   return {
     id,
     name: model.name ?? id,

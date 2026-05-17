@@ -134,7 +134,7 @@ export function loadBundledPluginPublicArtifactModuleSync<T extends object>(para
     rootPath: location.boundaryRoot,
     boundaryLabel:
       location.boundaryRoot === OPENCLAW_PACKAGE_ROOT ? "OpenClaw package root" : "plugin root",
-    rejectHardlinks: true,
+    rejectHardlinks: false,
   });
   if (!opened.ok) {
     throw new Error(

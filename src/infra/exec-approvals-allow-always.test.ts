@@ -224,6 +224,27 @@ describe("resolveAllowAlwaysPatterns", () => {
     expect(patterns).toStrictEqual([]);
   });
 
+  it("persists allow-always executable patterns with the trust realpath", () => {
+    const patterns = resolveAllowAlwaysPatterns({
+      segments: [
+        {
+          raw: "rg -n needle",
+          argv: ["rg", "-n", "needle"],
+          resolution: makeMockCommandResolution({
+            execution: makeMockExecutableResolution({
+              rawExecutable: "rg",
+              resolvedPath: "/opt/homebrew/bin/rg",
+              resolvedRealPath: "/opt/homebrew/Cellar/ripgrep/14.1.1/bin/rg",
+              executableName: "rg",
+            }),
+          }),
+        },
+      ],
+    });
+
+    expect(patterns).toEqual(["/opt/homebrew/Cellar/ripgrep/14.1.1/bin/rg"]);
+  });
+
   it("persists benign awk interpreters when strict inline-eval is enabled", () => {
     if (process.platform === "win32") {
       return;

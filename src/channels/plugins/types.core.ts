@@ -9,7 +9,7 @@ import type { MessagePresentation } from "../../interactive/payload.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { PollInput } from "../../polls.js";
 import type { ChatType } from "../chat-type.js";
-import type { InboundTurnKind } from "../turn/kind.js";
+import type { InboundEventKind } from "../inbound-event/kind.js";
 import type { ChannelId } from "./channel-id.types.js";
 import type { ChannelMessageActionName as ChannelMessageActionNameFromList } from "./message-action-names.js";
 import type { ChannelMessageCapability } from "./message-capabilities.js";
@@ -454,6 +454,7 @@ export type ChannelThreadingContext = {
   ReplyToIdFull?: string;
   ThreadLabel?: string;
   MessageThreadId?: string | number;
+  TransportThreadId?: string | number;
   /** Platform-native channel/conversation id (e.g. Slack DM channel "D…" id). */
   NativeChannelId?: string;
 };
@@ -682,7 +683,7 @@ export type ChannelMessageActionContext = {
   senderIsOwner?: boolean;
   sessionKey?: string | null;
   sessionId?: string | null;
-  inboundTurnKind?: InboundTurnKind;
+  inboundEventKind?: InboundEventKind;
   agentId?: string | null;
   gateway?: {
     url?: string;
@@ -694,6 +695,7 @@ export type ChannelMessageActionContext = {
   };
   toolContext?: ChannelThreadingToolContext;
   dryRun?: boolean;
+  gatewayClientScopes?: readonly string[];
 };
 
 export type ChannelToolSend = {

@@ -60,7 +60,7 @@ function readEditReplacements(record: Record<string, unknown> | undefined): Edit
 function readEditToolParams(params: unknown): EditToolParams {
   const record = getToolParamsRecord(params);
   return {
-    pathParam: readStringParam(record, "path"),
+    pathParam: readStringParam(record, "path", "file_path", "filePath", "filepath", "file"),
     edits: readEditReplacements(record),
   };
 }

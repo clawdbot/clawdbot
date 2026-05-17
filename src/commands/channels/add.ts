@@ -303,7 +303,7 @@ async function channelsAddCommandImpl(
 
   const rawChannel = opts.channel ?? "";
   let channel = normalizeChannelId(rawChannel);
-  let catalogEntry = channel ? undefined : await resolveCatalogChannelEntry(rawChannel, nextConfig);
+  let catalogEntry = await resolveCatalogChannelEntry(rawChannel, nextConfig);
   const resolveWorkspaceDir = () =>
     resolveAgentWorkspaceDir(nextConfig, resolveDefaultAgentId(nextConfig));
   // May load a scoped plugin when the channel is not already registered.
@@ -333,10 +333,14 @@ async function channelsAddCommandImpl(
     );
   };
 
-  if (!channel && catalogEntry) {
+  if (catalogEntry) {
     const workspaceDir = resolveWorkspaceDir();
     const { isCatalogChannelInstalled } = await import("../channel-setup/discovery.js");
+    const registeredPlugin = channel ? getLoadedChannelPlugin(channel) : undefined;
+    const bundledSetupPlugin = channel ? getBundledChannelSetupPlugin(channel) : undefined;
     if (
+      !registeredPlugin &&
+      !bundledSetupPlugin &&
       !isCatalogChannelInstalled({
         cfg: nextConfig,
         entry: catalogEntry,
@@ -363,7 +367,7 @@ async function channelsAddCommandImpl(
         ...(result.pluginId ? { pluginId: result.pluginId } : {}),
       };
     }
-    channel = normalizeChannelId(catalogEntry.id) ?? (catalogEntry.id as ChannelId);
+    channel ??= normalizeChannelId(catalogEntry.id) ?? (catalogEntry.id as ChannelId);
   }
 
   if (!channel) {

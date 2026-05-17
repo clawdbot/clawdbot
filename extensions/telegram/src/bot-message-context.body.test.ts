@@ -130,6 +130,71 @@ describe("resolveTelegramInboundBody", () => {
     expect(result?.bodyText).toBe("<media:document> (2 attachments)");
   });
 
+  it("lets catch-all mention patterns activate captionless group photos", async () => {
+    const logger = { info: vi.fn() };
+
+    const result = await resolveTelegramBody({
+      cfg: {
+        channels: { telegram: {} },
+        messages: { groupChat: { mentionPatterns: [".*"] } },
+      } as never,
+      msg: {
+        message_id: 6,
+        date: 1_700_000_006,
+        chat: { id: -1001234567890, type: "supergroup", title: "Test Group" },
+        from: { id: 46, first_name: "Eve" },
+        photo: [{ file_id: "photo-4", file_unique_id: "photo-u4", width: 120, height: 80 }],
+        entities: [],
+      } as never,
+      allMedia: [{ path: "/tmp/photo.webp", contentType: "image/webp" }],
+      isGroup: true,
+      chatId: -1001234567890,
+      senderId: "46",
+      senderUsername: "",
+      groupConfig: { requireMention: true } as never,
+      requireMention: true,
+      logger,
+    });
+
+    expect(logger.info).not.toHaveBeenCalled();
+    expect(result?.rawBody).toBe("<media:image>");
+    expect(result?.bodyText).toBe("<media:image>");
+    expect(result?.effectiveWasMentioned).toBe(true);
+  });
+
+  it("keeps captionless group photos quiet for nonmatching mention patterns", async () => {
+    const logger = { info: vi.fn() };
+
+    const result = await resolveTelegramBody({
+      cfg: {
+        channels: { telegram: {} },
+        messages: { groupChat: { mentionPatterns: ["\\bbot\\b"] } },
+      } as never,
+      msg: {
+        message_id: 7,
+        date: 1_700_000_007,
+        chat: { id: -1001234567890, type: "supergroup", title: "Test Group" },
+        from: { id: 46, first_name: "Eve" },
+        photo: [{ file_id: "photo-5", file_unique_id: "photo-u5", width: 120, height: 80 }],
+        entities: [],
+      } as never,
+      allMedia: [{ path: "/tmp/photo.webp", contentType: "image/webp" }],
+      isGroup: true,
+      chatId: -1001234567890,
+      senderId: "46",
+      senderUsername: "",
+      groupConfig: { requireMention: true } as never,
+      requireMention: true,
+      logger,
+    });
+
+    expect(logger.info).toHaveBeenCalledWith(
+      { chatId: -1001234567890, reason: "no-mention" },
+      "skipping group message",
+    );
+    expect(result).toBeNull();
+  });
+
   it("does not transcribe group audio for unauthorized senders", async () => {
     transcribeFirstAudioMock.mockReset();
     const logger = { info: vi.fn() };

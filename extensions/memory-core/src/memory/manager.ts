@@ -246,6 +246,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       hasIndexedMeta: Boolean(meta),
     });
     this.batch = this.resolveBatchConfig();
+    if (!transient) {
+      this.ensureSessionStartupCatchup();
+    }
   }
 
   private applyProviderResult(providerResult: EmbeddingProviderResult): void {

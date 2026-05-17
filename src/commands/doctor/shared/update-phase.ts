@@ -2,6 +2,8 @@ import { isTruthyEnvValue } from "../../../infra/env.js";
 
 export const UPDATE_IN_PROGRESS_ENV = "OPENCLAW_UPDATE_IN_PROGRESS";
 export const UPDATE_POST_CORE_CONVERGENCE_ENV = "OPENCLAW_UPDATE_POST_CORE_CONVERGENCE";
+export const UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV =
+  "OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR";
 
 /**
  * True iff the caller is the doctor pass that runs WHILE the core package
@@ -31,6 +33,29 @@ export function isUpdatePackageSwapInProgress(env: NodeJS.ProcessEnv): boolean {
     return false;
   }
   return isTruthyEnvValue(env[UPDATE_IN_PROGRESS_ENV]);
+}
+
+/**
+ * True iff configured plugin install repair should be deferred because the
+ * updater guarantees a later post-core convergence pass. Older updaters only
+ * set `OPENCLAW_UPDATE_IN_PROGRESS`; when they run a newer doctor from the
+ * swapped package, repair must proceed there or externalized plugins stay
+ * missing until the operator manually runs doctor.
+ */
+export function shouldDeferConfiguredPluginInstallRepair(env: NodeJS.ProcessEnv): boolean {
+  return (
+    isUpdatePackageSwapInProgress(env) &&
+    isTruthyEnvValue(env[UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV])
+  );
+}
+
+/**
+ * True iff this newer doctor is running under an older updater. Legacy
+ * updaters set only `OPENCLAW_UPDATE_IN_PROGRESS`; they do not opt into the
+ * post-core convergence pass, so configured plugin repair must happen now.
+ */
+export function isLegacyPackageUpdateDoctorPass(env: NodeJS.ProcessEnv): boolean {
+  return isUpdatePackageSwapInProgress(env) && !shouldDeferConfiguredPluginInstallRepair(env);
 }
 
 /**

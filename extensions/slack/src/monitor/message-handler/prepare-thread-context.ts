@@ -103,6 +103,7 @@ export async function resolveSlackThreadContextData(params: {
   roomLabel: string;
   storePath: string;
   sessionKey: string;
+  forceInitialHistory?: boolean;
   allowFromLower: string[];
   allowNameMatching: boolean;
   contextVisibilityMode: ContextVisibilityMode;
@@ -213,7 +214,10 @@ export async function resolveSlackThreadContextData(params: {
 
   const threadInitialHistoryLimit = params.account.config?.thread?.initialHistoryLimit ?? 20;
 
-  if (threadInitialHistoryLimit > 0 && !threadSessionPreviousTimestamp) {
+  if (
+    threadInitialHistoryLimit > 0 &&
+    (!threadSessionPreviousTimestamp || params.forceInitialHistory)
+  ) {
     const currentBotRootTs = starter?.ts ?? params.threadTs;
     const threadHistory = await resolveSlackThreadHistory({
       channelId: params.message.channel,

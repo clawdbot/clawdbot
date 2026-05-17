@@ -9,7 +9,11 @@ import {
 } from "../../auth-profiles.js";
 import { FailoverError, resolveFailoverStatus } from "../../failover-error.js";
 import { shouldAllowCooldownProbeForReason } from "../../failover-policy.js";
-import { getApiKeyForModel, type ResolvedProviderAuth } from "../../model-auth.js";
+import {
+  formatMissingAuthError,
+  getApiKeyForModel,
+  type ResolvedProviderAuth,
+} from "../../model-auth.js";
 import {
   classifyFailoverReason,
   isFailoverErrorMessage,
@@ -365,9 +369,7 @@ export function createEmbeddedRunAuthController(params: {
     if (!apiKeyInfo.apiKey) {
       if (apiKeyInfo.mode !== "aws-sdk") {
         const runtimeModel = params.getRuntimeModel();
-        throw new Error(
-          `No API key resolved for provider "${runtimeModel.provider}" (auth mode: ${apiKeyInfo.mode}).`,
-        );
+        throw new Error(formatMissingAuthError(apiKeyInfo, runtimeModel.provider));
       }
       // AWS SDK auth via IMDS / instance role / ECS task role: no explicit API
       // key is available but the SDK default credential chain can resolve

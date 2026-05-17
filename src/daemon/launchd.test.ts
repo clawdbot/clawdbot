@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS,
   LAUNCH_AGENT_PROCESS_TYPE,
+  LAUNCH_AGENT_STDIN_PATH,
   LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS,
   LAUNCH_AGENT_UMASK_DECIMAL,
 } from "./launchd-plist.js";
@@ -751,6 +752,10 @@ describe("launchd install", () => {
     const plist = state.files.get(plistPath) ?? "";
     expect(plist).toContain("<key>KeepAlive</key>");
     expect(plist).toContain("<true/>");
+    expect(plist).toContain("<key>StandardInPath</key>");
+    expect(plist).toContain(`<string>${LAUNCH_AGENT_STDIN_PATH}</string>`);
+    expect(plist).toContain("<key>StandardOutPath</key>");
+    expect(plist).toContain("<string>/Users/test/Library/Logs/openclaw/gateway.log</string>");
     expect(plist).not.toContain("<key>SuccessfulExit</key>");
     expect(plist).toContain("<key>ExitTimeOut</key>");
     expect(plist).toContain(`<integer>${LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS}</integer>`);
@@ -792,7 +797,9 @@ describe("launchd install", () => {
     });
 
     const plist = state.files.get(plistPath) ?? "";
+    expect(plist).toContain("<key>StandardInPath</key>");
     expect(plist).toContain("<key>StandardOutPath</key>");
+    expect(plist).toContain("<string>/Users/test/Library/Logs/openclaw/gateway.log</string>");
     expect(plist).toContain("<key>StandardErrorPath</key>");
     expect(plist).toContain("<string>/dev/null</string>");
     expect(plist).toContain("<key>KeepAlive</key>");
@@ -1158,6 +1165,45 @@ describe("launchd install", () => {
     expect(launchctlCommandNames()).not.toContain("bootstrap");
   });
 
+  it("reloads launchd after rewriting an existing plist", async () => {
+    const env = {
+      ...createDefaultLaunchdEnv(),
+      OPENCLAW_GATEWAY_PORT: "18789",
+    };
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    state.files.set(
+      plistPath,
+      [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<plist version="1.0">',
+        "  <dict>",
+        "    <key>Label</key>",
+        "    <string>ai.openclaw.gateway</string>",
+        "    <key>ProgramArguments</key>",
+        "    <array>",
+        "      <string>node</string>",
+        "      <string>gateway.js</string>",
+        "    </array>",
+        "    <key>StandardOutPath</key>",
+        "    <string>/Users/test/.openclaw-default/logs/gateway.log</string>",
+        "  </dict>",
+        "</plist>",
+      ].join("\n"),
+    );
+
+    await restartLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+    });
+
+    const plist = state.files.get(plistPath) ?? "";
+    expect(plist).toContain("<key>StandardInPath</key>");
+    expect(plist).toContain("<string>/dev/null</string>");
+    expect(plist).toContain("<string>/Users/test/Library/Logs/openclaw/gateway.log</string>");
+    expect(launchctlCommandNames()).toEqual(["enable", "bootout", "enable", "bootstrap"]);
+    expect(launchctlCommandNames()).not.toContain("kickstart");
+  });
+
   it("uses the configured gateway port for stale cleanup", async () => {
     const env = {
       ...createDefaultLaunchdEnv(),
@@ -1196,6 +1242,24 @@ describe("launchd install", () => {
       ...createDefaultLaunchdEnv(),
       OPENCLAW_GATEWAY_PORT: "19002",
     };
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    const originalPlist = [
+      '<?xml version="1.0" encoding="UTF-8"?>',
+      '<plist version="1.0">',
+      "  <dict>",
+      "    <key>Label</key>",
+      "    <string>ai.openclaw.gateway</string>",
+      "    <key>ProgramArguments</key>",
+      "    <array>",
+      "      <string>node</string>",
+      "      <string>gateway.js</string>",
+      "    </array>",
+      "    <key>StandardOutPath</key>",
+      "    <string>/Users/test/.openclaw-default/logs/gateway.log</string>",
+      "  </dict>",
+      "</plist>",
+    ].join("\n");
+    state.files.set(plistPath, originalPlist);
     inspectPortUsage.mockResolvedValue({
       port: 19002,
       status: "busy",
@@ -1215,6 +1279,8 @@ describe("launchd install", () => {
 
     expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(19002);
     expect(inspectPortUsage).toHaveBeenCalledWith(19002);
+    expect(state.files.get(plistPath)).toBe(originalPlist);
+    expect(state.fileWrites).toHaveLength(0);
     expect(launchctlCommandNames()).not.toContain("kickstart");
   });
 
@@ -1302,6 +1368,45 @@ describe("launchd install", () => {
       mode: "kickstart",
       waitForPid: process.pid,
     });
+    expect(state.launchctlCalls).toStrictEqual([]);
+  });
+
+  it("hands plist reload off when current LaunchAgent needs rewritten paths", async () => {
+    const env = createDefaultLaunchdEnv();
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    launchdRestartHandoffState.isCurrentProcessLaunchdServiceLabel.mockReturnValue(true);
+    state.files.set(
+      plistPath,
+      [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<plist version="1.0">',
+        "  <dict>",
+        "    <key>Label</key>",
+        "    <string>ai.openclaw.gateway</string>",
+        "    <key>ProgramArguments</key>",
+        "    <array>",
+        "      <string>node</string>",
+        "      <string>gateway.js</string>",
+        "    </array>",
+        "    <key>StandardOutPath</key>",
+        "    <string>/Users/test/.openclaw-default/logs/gateway.log</string>",
+        "  </dict>",
+        "</plist>",
+      ].join("\n"),
+    );
+
+    const result = await restartLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+    });
+
+    expect(result).toEqual({ outcome: "scheduled" });
+    expect(launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff).toHaveBeenCalledWith({
+      env,
+      mode: "reload",
+      waitForPid: process.pid,
+    });
+    expect(state.files.get(plistPath)).toContain("/Users/test/Library/Logs/openclaw/gateway.log");
     expect(state.launchctlCalls).toStrictEqual([]);
   });
 

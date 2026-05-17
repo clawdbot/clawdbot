@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 import {
   getRegistryJitiMocks,
@@ -62,9 +63,7 @@ describe("doctor-contract-registry module loader", () => {
       plugins: [{ id: "test-plugin", rootDir: pluginRoot }],
       diagnostics: [],
     });
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-
-    try {
+    withMockedPlatform("win32", () => {
       expect(
         listPluginDoctorLegacyConfigRules({
           workspaceDir: pluginRoot,
@@ -76,9 +75,7 @@ describe("doctor-contract-registry module loader", () => {
           message: "legacy demo key",
         },
       ]);
-    } finally {
-      platformSpy.mockRestore();
-    }
+    });
 
     expect(mocks.createJiti).not.toHaveBeenCalled();
   });
@@ -103,9 +100,7 @@ describe("doctor-contract-registry module loader", () => {
       plugins: [{ id: "test-plugin", rootDir: pluginRoot }],
       diagnostics: [],
     });
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-
-    try {
+    withMockedPlatform("win32", () => {
       expect(
         listPluginDoctorLegacyConfigRules({
           workspaceDir: pluginRoot,
@@ -117,9 +112,7 @@ describe("doctor-contract-registry module loader", () => {
           message: "typescript contract",
         },
       ]);
-    } finally {
-      platformSpy.mockRestore();
-    }
+    });
 
     expect(mocks.createJiti).toHaveBeenCalledTimes(1);
     const [jitiPath, jitiOptions] = requireFirstCreateJitiCall();
@@ -129,7 +122,6 @@ describe("doctor-contract-registry module loader", () => {
 
   it("prefers doctor-contract-api over the broader contract-api surface", () => {
     const pluginRoot = makeTempDir();
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
     fs.writeFileSync(
       path.join(pluginRoot, "doctor-contract-api.cjs"),
       "module.exports = { legacyConfigRules: [{ path: ['plugins', 'entries', 'demo', 'doctor'], message: 'doctor contract' }] };\n",
@@ -145,7 +137,7 @@ describe("doctor-contract-registry module loader", () => {
       diagnostics: [],
     });
 
-    try {
+    withMockedPlatform("darwin", () => {
       expect(
         listPluginDoctorLegacyConfigRules({
           workspaceDir: pluginRoot,
@@ -158,14 +150,11 @@ describe("doctor-contract-registry module loader", () => {
         },
       ]);
       expect(mocks.createJiti).not.toHaveBeenCalled();
-    } finally {
-      platformSpy.mockRestore();
-    }
+    });
   });
 
   it("uses native require for compatible JavaScript contract modules", () => {
     const pluginRoot = makeTempDir();
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
     fs.writeFileSync(
       path.join(pluginRoot, "doctor-contract-api.cjs"),
       "module.exports = { legacyConfigRules: [{ path: ['plugins', 'entries', 'demo', 'legacy'], message: 'legacy demo key' }] };\n",
@@ -176,7 +165,7 @@ describe("doctor-contract-registry module loader", () => {
       diagnostics: [],
     });
 
-    try {
+    withMockedPlatform("darwin", () => {
       expect(
         listPluginDoctorLegacyConfigRules({
           workspaceDir: pluginRoot,
@@ -189,9 +178,7 @@ describe("doctor-contract-registry module loader", () => {
         },
       ]);
       expect(mocks.createJiti).not.toHaveBeenCalled();
-    } finally {
-      platformSpy.mockRestore();
-    }
+    });
   });
 
   it("loads session route-state owners from doctor contract modules", () => {

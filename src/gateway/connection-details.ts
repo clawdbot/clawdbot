@@ -1,5 +1,6 @@
 import { resolveConfigPath, resolveGatewayPort } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { redactSensitiveUrlLikeString } from "../shared/net/redact-sensitive-url.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { isSecureWebSocketUrl } from "./net.js";
 
@@ -51,6 +52,7 @@ export function buildGatewayConnectionDetailsWithResolvers(
   const urlSourceHint =
     options.urlSource ?? (cliUrlOverride ? "cli" : envUrlOverride ? "env" : undefined);
   const url = urlOverride || remoteUrl || localUrl;
+  const displayUrl = redactSensitiveUrlLikeString(url);
   const urlSource = urlOverride
     ? urlSourceHint === "env"
       ? "env OPENCLAW_GATEWAY_URL"
@@ -69,7 +71,7 @@ export function buildGatewayConnectionDetailsWithResolvers(
   if (!isSecureWebSocketUrl(url, { allowPrivateWs })) {
     throw new Error(
       [
-        `SECURITY ERROR: Gateway URL "${url}" uses plaintext ws:// to a non-loopback address.`,
+        `SECURITY ERROR: Gateway URL "${displayUrl}" uses plaintext ws:// to a non-loopback address.`,
         "Both credentials and chat data would be exposed to network interception.",
         `Source: ${urlSource}`,
         `Config: ${configPath}`,
@@ -87,7 +89,7 @@ export function buildGatewayConnectionDetailsWithResolvers(
   }
 
   const message = [
-    `Gateway target: ${url}`,
+    `Gateway target: ${displayUrl}`,
     `Source: ${urlSource}`,
     `Config: ${configPath}`,
     bindDetail,

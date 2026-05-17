@@ -513,7 +513,7 @@ export const buildTelegramMessageContext = async ({
     topicName,
     sessionRuntime,
   });
-  const canShowStatusReaction = ctxPayload.InboundTurnKind !== "room_event";
+  const canShowStatusReaction = ctxPayload.InboundEventKind !== "room_event";
   const ackReaction = resolveAckReaction(cfg, route.agentId, {
     channel: "telegram",
     accountId: account.accountId,

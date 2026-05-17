@@ -58,7 +58,12 @@ import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 
 const DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS = 120_000;
 const MAX_TIMER_SAFE_TIMEOUT_MS = 2_147_000_000;
-const AGENT_MEDIATED_COMPLETION_TOOLS = new Set(["music_generate", "video_generate"]);
+const AGENT_MEDIATED_COMPLETION_TOOLS = new Set([
+  "image_generate",
+  "music_generate",
+  "subagent_announce",
+  "video_generate",
+]);
 
 type SubagentAnnounceDeliveryDeps = {
   dispatchGatewayMethodInProcess: typeof dispatchGatewayMethodInProcess;
@@ -630,16 +635,18 @@ async function sendSubagentAnnounceDirectly(params: {
       expectsCompletionMessage: params.expectsCompletionMessage,
       sourceTool: params.sourceTool,
     });
+    const expectedMediaUrls = collectExpectedMediaFromInternalEvents(params.internalEvents);
     const requiresMessageToolDelivery =
       agentMediatedCompletion &&
-      completionRequiresMessageToolDelivery({
-        cfg,
-        requesterSessionKey: params.requesterSessionKey,
-        targetRequesterSessionKey: params.targetRequesterSessionKey,
-        requesterEntry,
-        directOrigin: effectiveDirectOrigin,
-        requesterSessionOrigin,
-      });
+      (expectedMediaUrls.length > 0 ||
+        completionRequiresMessageToolDelivery({
+          cfg,
+          requesterSessionKey: params.requesterSessionKey,
+          targetRequesterSessionKey: canonicalRequesterSessionKey,
+          requesterEntry,
+          directOrigin: effectiveDirectOrigin,
+          requesterSessionOrigin,
+        }));
     const completionSourceReplyDeliveryMode = requiresMessageToolDelivery
       ? "message_tool_only"
       : undefined;
@@ -675,20 +682,13 @@ async function sendSubagentAnnounceDirectly(params: {
           path: "steered",
         };
       }
-      const shouldFallbackToForcedAgentHandoff =
-        requiresMessageToolDelivery && wakeOutcome.reason === "source_reply_delivery_mode_mismatch";
-      if (requesterActivity.isActive && !shouldFallbackToForcedAgentHandoff) {
-        // Active requester sessions should receive completion data through their
-        // running agent turn. If wake fails, let the dispatch layer steer/retry;
-        // do not bypass the requester agent with raw child output.
-        return {
-          delivered: false,
-          path: "direct",
-          error: formatQueueWakeFailureError(
+      if (requesterActivity.isActive) {
+        defaultRuntime.log(
+          `[warn] Active requester session could not be woken for subagent completion; falling back to requester-agent handoff: ${formatQueueWakeFailureError(
             "active requester session could not be woken",
             wakeOutcome,
-          ),
-        };
+          )}`,
+        );
       }
     }
     if (params.signal?.aborted) {
@@ -772,7 +772,6 @@ async function sendSubagentAnnounceDirectly(params: {
         error: "completion agent did not deliver through the message tool",
       };
     }
-    const expectedMediaUrls = collectExpectedMediaFromInternalEvents(params.internalEvents);
     if (
       agentMediatedCompletion &&
       expectedMediaUrls.length > 0 &&

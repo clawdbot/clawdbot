@@ -1,10 +1,17 @@
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { buildDeepInfraSpeechProvider } from "./speech-provider.js";
 
-const { assertOkOrThrowHttpErrorMock, postJsonRequestMock, resolveProviderHttpRequestConfigMock } =
-  vi.hoisted(() => ({
+const {
+  assertOkOrThrowHttpErrorMock,
+  postJsonRequestMock,
+  readProviderBinaryResponseMock,
+  resolveProviderHttpRequestConfigMock,
+} = vi.hoisted(() => ({
     assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
     postJsonRequestMock: vi.fn(),
+    readProviderBinaryResponseMock: vi.fn(async (response: Response) => {
+      return new Uint8Array(await response.arrayBuffer());
+    }),
     resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => ({
       baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://api.deepinfra.com/v1/openai",
       allowPrivateNetwork: false,
@@ -16,6 +23,7 @@ const { assertOkOrThrowHttpErrorMock, postJsonRequestMock, resolveProviderHttpRe
 vi.mock("openclaw/plugin-sdk/provider-http", () => ({
   assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
   postJsonRequest: postJsonRequestMock,
+  readProviderBinaryResponse: readProviderBinaryResponseMock,
   resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
 }));
 
@@ -36,6 +44,7 @@ describe("deepinfra speech provider", () => {
   afterEach(() => {
     assertOkOrThrowHttpErrorMock.mockClear();
     postJsonRequestMock.mockReset();
+    readProviderBinaryResponseMock.mockClear();
     resolveProviderHttpRequestConfigMock.mockClear();
     vi.unstubAllEnvs();
   });

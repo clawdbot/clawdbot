@@ -6,9 +6,13 @@ usage() {
 Usage: codex-review [options]
 
 Options:
-  --mode auto|local|branch   Target selection. Default: auto.
+  --mode auto|local|branch|commit
+                              Target selection. Default: auto.
   --base REF                 Base ref for branch review. Default: PR base or origin/main.
+  --commit REF               Commit ref for commit review. Default: HEAD.
   --codex-bin PATH           Codex binary. Default: codex.
+  --full-access              Keep yolo/full-access mode enabled. Default.
+  --no-yolo                  Run nested Codex review with normal sandbox/approval prompts.
   --output FILE              Also save output to file.
   --parallel-tests CMD       Run review and test command concurrently.
   --dry-run                  Print selected commands, do not run.
@@ -17,13 +21,17 @@ Options:
 Modes:
   local   codex review --uncommitted
   branch  codex review --base <base>
+  commit  codex review --commit <commit>
   auto    dirty tree -> local, else PR/current branch -> branch
 EOF
 }
 
 mode=auto
 base_ref=
+commit_ref=HEAD
 codex_bin=${CODEX_BIN:-codex}
+codex_args=()
+yolo=${CODEX_REVIEW_YOLO:-1}
 output=${CODEX_REVIEW_OUTPUT:-}
 parallel_tests=
 dry_run=false
@@ -38,9 +46,21 @@ while [[ $# -gt 0 ]]; do
       base_ref=${2:-}
       shift 2
       ;;
+    --commit)
+      commit_ref=${2:-}
+      shift 2
+      ;;
     --codex-bin)
       codex_bin=${2:-}
       shift 2
+      ;;
+    --full-access)
+      yolo=1
+      shift
+      ;;
+    --no-yolo)
+      yolo=0
+      shift
       ;;
     --output)
       output=${2:-}
@@ -65,8 +85,13 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+case "$yolo" in
+  0|false|False|FALSE|no|No|NO|off|Off|OFF) ;;
+  *) codex_args+=(--dangerously-bypass-approvals-and-sandbox) ;;
+esac
+
 case "$mode" in
-  auto|local|branch) ;;
+  auto|local|branch|commit) ;;
   *)
     echo "invalid --mode: $mode" >&2
     exit 2
@@ -99,6 +124,8 @@ fi
 review_kind=
 if [[ "$mode" == local || ( "$mode" == auto && "$dirty" == true ) ]]; then
   review_kind=local
+elif [[ "$mode" == commit ]]; then
+  review_kind=commit
 elif [[ "$mode" == branch || ( "$mode" == auto && -n "$current_branch" && "$current_branch" != "main" ) ]]; then
   review_kind=branch
 else
@@ -107,9 +134,11 @@ else
 fi
 
 if [[ "$review_kind" == local ]]; then
-  review_cmd=("$codex_bin" review --uncommitted)
+  review_cmd=("$codex_bin" "${codex_args[@]}" review --uncommitted)
+elif [[ "$review_kind" == commit ]]; then
+  review_cmd=("$codex_bin" "${codex_args[@]}" review --commit "$commit_ref")
 else
-  review_cmd=("$codex_bin" review --base "$base_ref")
+  review_cmd=("$codex_bin" "${codex_args[@]}" review --base "$base_ref")
 fi
 
 printf 'codex-review target: %s\n' "$review_kind"
@@ -140,28 +169,92 @@ if [[ "$review_kind" == branch ]]; then
   }
 fi
 
+review_output=$output
+review_output_is_temp=false
+if [[ -z "$review_output" ]]; then
+  review_output=$(mktemp)
+  review_output_is_temp=true
+fi
+
+cleanup() {
+  if [[ "${review_output_is_temp:-false}" == true && -n "${review_output:-}" ]]; then
+    rm -f "$review_output"
+  fi
+}
+trap cleanup EXIT
+
 run_review() {
-  if [[ -n "$output" ]]; then
-    mkdir -p "$(dirname "$output")"
-    "${review_cmd[@]}" 2>&1 | tee "$output"
+  mkdir -p "$(dirname "$review_output")"
+  "${review_cmd[@]}" 2>&1 | tee "$review_output"
+}
+
+elapsed_since() {
+  local started_at=$1
+  local finished_at
+  finished_at=$(date +%s)
+  printf '%s\n' "$((finished_at - started_at))"
+}
+
+format_elapsed() {
+  local seconds=$1
+  if (( seconds < 60 )); then
+    printf '%ss\n' "$seconds"
   else
-    "${review_cmd[@]}"
+    printf '%sm%ss\n' "$((seconds / 60))" "$((seconds % 60))"
   fi
 }
 
+review_output_empty() {
+  [[ ! -s "$review_output" ]] || ! grep -q '[^[:space:]]' "$review_output"
+}
+
+review_output_has_findings() {
+  grep -Eq '\[P[0-3]\]' "$review_output"
+}
+
+report_clean_review_or_fail() {
+  local elapsed_text
+  elapsed_text=$(format_elapsed "${review_elapsed_seconds:-0}")
+
+  if review_output_has_findings; then
+    printf 'codex-review complete after %s\n' "$elapsed_text"
+    printf 'codex-review findings: accepted/actionable findings reported\n'
+    return 1
+  fi
+  if review_output_empty; then
+    printf 'codex-review complete after %s; no output\n' "$elapsed_text"
+    return 1
+  fi
+  printf 'codex-review complete after %s\n' "$elapsed_text"
+  printf 'codex-review clean: no accepted/actionable findings reported\n'
+}
+
 if [[ -z "$parallel_tests" ]]; then
+  review_started_at=$(date +%s)
+  set +e
   run_review
-  exit $?
+  review_status=$?
+  review_elapsed_seconds=$(elapsed_since "$review_started_at")
+  set -e
+  if [[ "$review_status" == 0 ]]; then
+    report_clean_review_or_fail
+    exit $?
+  fi
+  exit "$review_status"
 fi
 
 review_status_file=$(mktemp)
+review_elapsed_file=$(mktemp)
 tests_status_file=$(mktemp)
 
 (
   set +e
+  review_started_at=$(date +%s)
   run_review
   status=$?
+  elapsed=$(elapsed_since "$review_started_at")
   printf '%s\n' "$status" > "$review_status_file"
+  printf '%s\n' "$elapsed" > "$review_elapsed_file"
 ) &
 review_pid=$!
 
@@ -177,8 +270,9 @@ wait "$review_pid" || true
 wait "$tests_pid" || true
 
 review_status=$(cat "$review_status_file")
+review_elapsed_seconds=$(cat "$review_elapsed_file")
 tests_status=$(cat "$tests_status_file")
-rm -f "$review_status_file" "$tests_status_file"
+rm -f "$review_status_file" "$review_elapsed_file" "$tests_status_file"
 
 printf 'codex-review exit: %s\n' "$review_status"
 printf 'tests exit: %s\n' "$tests_status"
@@ -186,3 +280,5 @@ printf 'tests exit: %s\n' "$tests_status"
 if [[ "$review_status" != 0 || "$tests_status" != 0 ]]; then
   exit 1
 fi
+
+report_clean_review_or_fail

@@ -401,6 +401,56 @@ describe("plugin-sdk facade runtime", () => {
     });
   });
 
+  it("resolves a globally-installed plugin public surface from package dist", () => {
+    const lineDir = createTempDirSync("openclaw-facade-global-line-dist-");
+    fs.mkdirSync(path.join(lineDir, "dist"), { recursive: true });
+    fs.writeFileSync(
+      path.join(lineDir, "dist", "runtime-api.js"),
+      'export const marker = "global-line-dist";\n',
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(lineDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/line",
+        version: "0.0.0",
+        type: "module",
+        openclaw: {
+          extensions: ["./index.ts"],
+          runtimeExtensions: ["./dist/index.js"],
+          channel: { id: "line" },
+        },
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(lineDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "line",
+        channels: ["line"],
+        configSchema: { type: "object", additionalProperties: false, properties: {} },
+      }),
+      "utf8",
+    );
+
+    expect(
+      __testing.resolveRegistryPluginModuleLocationFromRegistry({
+        registry: [
+          {
+            id: "line",
+            rootDir: lineDir,
+            channels: ["line"],
+          },
+        ],
+        dirName: "line",
+        artifactBasename: "runtime-api.js",
+      }),
+    ).toEqual({
+      modulePath: path.join(lineDir, "dist", "runtime-api.js"),
+      boundaryRoot: lineDir,
+    });
+  });
+
   it("resolves a globally-installed plugin with an encoded scoped rootDir basename", () => {
     const encodedDir = createTempDirSync("openclaw-facade-encoded-line-");
     fs.mkdirSync(encodedDir, { recursive: true });

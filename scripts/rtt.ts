@@ -15,6 +15,10 @@ import {
   runHarness,
   validateOpenClawPackageSpec,
   writeJson,
+  parseRttCredentialRole,
+  parseRttCredentialSource,
+  type RttCredentialRole,
+  type RttCredentialSource,
   type RttProviderMode,
 } from "./lib/rtt-harness.ts";
 
@@ -26,7 +30,7 @@ const DEFAULT_SAMPLE_TIMEOUT_MS = 30_000;
 
 function usage() {
   return [
-    "Usage: pnpm rtt <openclaw@spec> [--package-tgz PATH] [--provider mock-openai|live-frontier] [--runs N] [--samples N] [--sample-timeout-ms N] [--timeout-ms N] [--harness-root PATH] [--output PATH]",
+    "Usage: pnpm rtt <openclaw@spec> [--package-tgz PATH] [--provider mock-openai|live-frontier] [--credential-source env|convex] [--credential-role maintainer|ci] [--runs N] [--samples N] [--sample-timeout-ms N] [--timeout-ms N] [--harness-root PATH] [--output PATH]",
     "",
     "Examples:",
     "  pnpm rtt openclaw@main --package-tgz .artifacts/package/openclaw.tgz",
@@ -63,6 +67,8 @@ function resolveHome(input: string) {
 
 function parseArgs(argv: string[]) {
   let spec: string | undefined;
+  let credentialRole: RttCredentialRole | undefined;
+  let credentialSource: RttCredentialSource | undefined;
   let packageTgz: string | undefined;
   let providerMode = DEFAULT_PROVIDER_MODE;
   let runs = 1;
@@ -80,6 +86,14 @@ function parseArgs(argv: string[]) {
     }
     if (arg === "--provider") {
       providerMode = parseProviderMode(argv[++index] ?? "");
+      continue;
+    }
+    if (arg === "--credential-source") {
+      credentialSource = parseRttCredentialSource(argv[++index] ?? "");
+      continue;
+    }
+    if (arg === "--credential-role") {
+      credentialRole = parseRttCredentialRole(argv[++index] ?? "");
       continue;
     }
     if (arg === "--package-tgz") {
@@ -137,6 +151,8 @@ function parseArgs(argv: string[]) {
     spec: validateOpenClawPackageSpec(spec),
     options: {
       packageTgz,
+      credentialRole,
+      credentialSource,
       providerMode,
       runs,
       samples,
@@ -164,6 +180,8 @@ async function runOne(params: {
   const startedAt = new Date();
   const env = createHarnessEnv({
     baseEnv: process.env,
+    credentialRole: params.options.credentialRole,
+    credentialSource: params.options.credentialSource,
     packageTgz: params.options.packageTgz,
     providerMode: params.options.providerMode,
     rawOutputDir,
@@ -215,7 +233,10 @@ async function runOne(params: {
 
 async function main() {
   const { spec, options } = parseArgs(process.argv.slice(2));
-  assertRequiredEnv(process.env);
+  assertRequiredEnv(process.env, {
+    credentialRole: options.credentialRole,
+    credentialSource: options.credentialSource,
+  });
   await assertHarnessRoot(options.harnessRoot);
   await assertDockerAvailable();
   if (spec === "openclaw@main" && !options.packageTgz) {

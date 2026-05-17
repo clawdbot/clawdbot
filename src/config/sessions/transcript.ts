@@ -14,7 +14,7 @@ import {
   resolveSessionTranscriptPath,
 } from "./paths.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
-import { loadSessionStore, normalizeStoreSessionKey } from "./store.js";
+import { loadSessionStore, resolveSessionStoreEntry } from "./store.js";
 import { parseSessionThreadInfo } from "./thread-info.js";
 import { appendSessionTranscriptMessage } from "./transcript-append.js";
 import { resolveMirroredTranscriptText } from "./transcript-mirror.js";
@@ -255,8 +255,8 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
 
   const storePath = params.storePath ?? resolveDefaultSessionStorePath(params.agentId);
   const store = loadSessionStore(storePath, { skipCache: true });
-  const normalizedKey = normalizeStoreSessionKey(sessionKey);
-  const entry = (store[normalizedKey] ?? store[sessionKey]) as SessionEntry | undefined;
+  const resolved = resolveSessionStoreEntry({ store, sessionKey });
+  const entry = resolved.existing;
   if (!entry?.sessionId) {
     return { ok: false, reason: `unknown sessionKey: ${sessionKey}` };
   }
@@ -265,7 +265,7 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   try {
     const resolvedSessionFile = await resolveAndPersistSessionFile({
       sessionId: entry.sessionId,
-      sessionKey,
+      sessionKey: resolved.normalizedKey,
       sessionStore: store,
       storePath,
       sessionEntry: entry,

@@ -244,6 +244,7 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
 
     const discoveryCall = firstDiscoveryRequest();
     expect(discoveryCall.url).toBe("https://proxy.example/v1/models");
+    expect(discoveryCall.init.headers["Accept-Encoding"]).toBe("identity");
     expect(discoveryCall.init.headers["X-Proxy-Token"]).toBe("proxy");
   });
 

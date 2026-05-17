@@ -481,6 +481,7 @@ export function createSessionsSpawnTool(
           agentId: requestedAgentId,
           model: modelOverride,
           thinking: thinkingOverrideRaw,
+          cwd,
           runTimeoutSeconds,
           thread,
           mode,

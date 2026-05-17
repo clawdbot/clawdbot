@@ -15,9 +15,9 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>2026.5.16</string>
+    <string>2026.5.17</string>
     <key>CFBundleVersion</key>
-    <string>2026051600</string>
+    <string>2026051700</string>
     <key>CFBundleIconFile</key>
     <string>OpenClaw</string>
     <key>CFBundleURLTypes</key>
@@ -53,6 +53,8 @@
 	<string>OpenClaw can share your location when requested by the agent.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
 	<string>OpenClaw can share your location when requested by the agent.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>OpenClaw uses the local network to connect to your remote OpenClaw gateway over LAN, Tailnet, or SSH.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>OpenClaw needs the mic for Voice Wake tests and agent audio capture.</string>
     <key>NSSpeechRecognitionUsageDescription</key>

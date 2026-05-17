@@ -148,9 +148,11 @@ describe("docker build helper", () => {
     expect(runner).toContain("phase_mark_start");
     expect(runner).toContain("run_agent_turn_bg");
     expect(runner).toContain("wait_agent_turn_batch");
+    expect(runner).toContain("agent_turn_outputs_include_billing_drift");
+    expect(runner).toContain("SKIP: Anthropic billing drift during installer agent tool smoke");
     expect(runner).not.toContain('run_agent_turn_bg "read proof"');
     expect(runner).toContain('run_agent_turn_bg "image write"');
-    expect(runner).toContain('run_agent_turn_logged "read proof copy"');
+    expect(runner).toContain('run_agent_turn_logged_or_skip_profile "read proof copy"');
     expect(wrapper).toContain("OPENCLAW_INSTALL_E2E_AGENT_TURNS_PARALLEL");
     expect(wrapper).toContain("OPENCLAW_INSTALL_E2E_AGENT_TOOL_SMOKE");
     expect(wrapper).toContain("OPENCLAW_INSTALL_E2E_OPENAI_MODEL");

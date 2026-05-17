@@ -11,6 +11,32 @@ PACKAGE_TGZ="${OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ:-${OPENCLAW_CURRENT_PACKAGE_TGZ
 PACKAGE_LABEL="${OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL:-}"
 OUTPUT_DIR="${OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR:-.artifacts/qa-e2e/npm-telegram-rtt}"
 
+resolve_credential_source() {
+  if [ -n "${OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE:-}" ]; then
+    printf "%s" "$OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE"
+    return 0
+  fi
+  if [ -n "${OPENCLAW_QA_CREDENTIAL_SOURCE:-}" ]; then
+    printf "%s" "$OPENCLAW_QA_CREDENTIAL_SOURCE"
+    return 0
+  fi
+  if [ -n "${CI:-}" ] && [ -n "${OPENCLAW_QA_CONVEX_SITE_URL:-}" ]; then
+    if [ -n "${OPENCLAW_QA_CONVEX_SECRET_CI:-}" ] || [ -n "${OPENCLAW_QA_CONVEX_SECRET_MAINTAINER:-}" ]; then
+      printf "convex"
+    fi
+  fi
+}
+
+resolve_credential_role() {
+  if [ -n "${OPENCLAW_NPM_TELEGRAM_CREDENTIAL_ROLE:-}" ]; then
+    printf "%s" "$OPENCLAW_NPM_TELEGRAM_CREDENTIAL_ROLE"
+    return 0
+  fi
+  if [ -n "${OPENCLAW_QA_CREDENTIAL_ROLE:-}" ]; then
+    printf "%s" "$OPENCLAW_QA_CREDENTIAL_ROLE"
+  fi
+}
+
 validate_openclaw_package_spec() {
   local spec="$1"
   if [[ "$spec" =~ ^openclaw@(main|alpha|beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-(alpha|beta)\.[1-9][0-9]*)?)$ ]]; then
@@ -60,12 +86,101 @@ if [ -z "$PACKAGE_LABEL" ]; then
   fi
 fi
 
-for key in \
-  OPENCLAW_QA_TELEGRAM_GROUP_ID \
-  OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN \
-  OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN; do
-  if [ -z "${!key:-}" ]; then
-    echo "Missing required env: $key" >&2
+credential_source="$(resolve_credential_source)"
+credential_role="$(resolve_credential_role)"
+if [ -z "$credential_role" ] && [ "$credential_source" = "convex" ]; then
+  if [ -n "${CI:-}" ]; then
+    credential_role="ci"
+  else
+    credential_role="maintainer"
+  fi
+fi
+
+validate_credential_source() {
+  case "$credential_source" in
+    "" | env | convex) ;;
+    *)
+      echo "OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE must be env or convex; got: $credential_source" >&2
+      exit 1
+      ;;
+  esac
+}
+
+validate_credential_role() {
+  case "$credential_role" in
+    "" | maintainer | ci) ;;
+    *)
+      echo "OPENCLAW_NPM_TELEGRAM_CREDENTIAL_ROLE must be maintainer or ci; got: $credential_role" >&2
+      exit 1
+      ;;
+  esac
+}
+
+validate_credential_source
+validate_credential_role
+
+validate_credential_preflight() {
+  if [ "$credential_source" = "convex" ]; then
+    if [ -z "${OPENCLAW_QA_CONVEX_SITE_URL:-}" ]; then
+      echo "Missing required env for Convex credential mode: OPENCLAW_QA_CONVEX_SITE_URL" >&2
+      exit 1
+    fi
+    if [ "$credential_role" = "ci" ]; then
+      if [ -z "${OPENCLAW_QA_CONVEX_SECRET_CI:-}" ]; then
+        echo "Missing required env for Convex ci credential mode: OPENCLAW_QA_CONVEX_SECRET_CI" >&2
+        exit 1
+      fi
+      return 0
+    fi
+    if [ "$credential_role" = "maintainer" ]; then
+      if [ -z "${OPENCLAW_QA_CONVEX_SECRET_MAINTAINER:-}" ]; then
+        echo "Missing required env for Convex maintainer credential mode: OPENCLAW_QA_CONVEX_SECRET_MAINTAINER" >&2
+        exit 1
+      fi
+      return 0
+    fi
+    if [ -z "${OPENCLAW_QA_CONVEX_SECRET_CI:-}" ] && [ -z "${OPENCLAW_QA_CONVEX_SECRET_MAINTAINER:-}" ]; then
+      echo "Missing required env for Convex credential mode: OPENCLAW_QA_CONVEX_SECRET_CI or OPENCLAW_QA_CONVEX_SECRET_MAINTAINER" >&2
+      exit 1
+    fi
+    return 0
+  fi
+
+  for key in \
+    OPENCLAW_QA_TELEGRAM_GROUP_ID \
+    OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN \
+    OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN; do
+    if [ -z "${!key:-}" ]; then
+      echo "Missing required env: $key" >&2
+      exit 1
+    fi
+  done
+}
+
+validate_credential_preflight
+
+if [ -n "$credential_source" ]; then
+  export OPENCLAW_QA_CREDENTIAL_SOURCE="$credential_source"
+fi
+if [ -n "$credential_role" ]; then
+  export OPENCLAW_QA_CREDENTIAL_ROLE="$credential_role"
+fi
+
+if [ -z "$credential_source" ] || [ "$credential_source" = "env" ]; then
+  for key in \
+    OPENCLAW_QA_TELEGRAM_GROUP_ID \
+    OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN \
+    OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN; do
+    if [ -z "${!key:-}" ]; then
+      echo "Missing required env: $key" >&2
+      exit 1
+    fi
+  done
+fi
+
+for value in "$credential_source" "$credential_role"; do
+  if [[ "$value" == *[$'\n\r']* ]]; then
+    echo "Credential source and role must be single-line values." >&2
     exit 1
   fi
 done
@@ -94,6 +209,36 @@ docker_env=(
   -e OPENCLAW_NPM_TELEGRAM_MAX_FAILURES="${OPENCLAW_NPM_TELEGRAM_MAX_FAILURES:-${OPENCLAW_NPM_TELEGRAM_WARM_SAMPLES:-20}}"
 )
 
+forward_env_if_set() {
+  local key="$1"
+  if [ -n "${!key:-}" ]; then
+    docker_env+=(-e "$key")
+  fi
+}
+
+if [ -n "${OPENCLAW_QA_CREDENTIAL_SOURCE:-}" ]; then
+  docker_env+=(-e OPENCLAW_QA_CREDENTIAL_SOURCE="$OPENCLAW_QA_CREDENTIAL_SOURCE")
+fi
+if [ -n "${OPENCLAW_QA_CREDENTIAL_ROLE:-}" ]; then
+  docker_env+=(-e OPENCLAW_QA_CREDENTIAL_ROLE="$OPENCLAW_QA_CREDENTIAL_ROLE")
+fi
+
+install_env=("${docker_env[@]}")
+
+for key in \
+  OPENCLAW_QA_CONVEX_SITE_URL \
+  OPENCLAW_QA_CONVEX_SECRET_CI \
+  OPENCLAW_QA_CONVEX_SECRET_MAINTAINER \
+  OPENCLAW_QA_CREDENTIAL_LEASE_TTL_MS \
+  OPENCLAW_QA_CREDENTIAL_HEARTBEAT_INTERVAL_MS \
+  OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS \
+  OPENCLAW_QA_CREDENTIAL_HTTP_TIMEOUT_MS \
+  OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX \
+  OPENCLAW_QA_CREDENTIAL_OWNER_ID \
+  OPENCLAW_QA_ALLOW_INSECURE_HTTP; do
+  forward_env_if_set "$key"
+done
+
 run_logged() {
   if ! "$@" >"$run_log" 2>&1; then
     cat "$run_log"
@@ -103,10 +248,29 @@ run_logged() {
   >"$run_log"
 }
 
+echo "Installing ${PACKAGE_LABEL} from ${package_install_source}..."
+run_logged docker run --rm \
+  "${install_env[@]}" \
+  ${package_mount_args[@]+"${package_mount_args[@]}"} \
+  -v "$npm_prefix_host:/npm-global" \
+  -i "$IMAGE_NAME" bash -s <<'EOF'
+set -euo pipefail
+
+export NPM_CONFIG_PREFIX="/npm-global"
+export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
+
+install_source="${OPENCLAW_NPM_TELEGRAM_INSTALL_SOURCE:?missing OPENCLAW_NPM_TELEGRAM_INSTALL_SOURCE}"
+package_label="${OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL:-$install_source}"
+
+npm install -g "$install_source" --no-fund --no-audit
+command -v openclaw
+openclaw --version
+node -p "require('/npm-global/lib/node_modules/openclaw/package.json').version"
+EOF
+
 echo "Running package Telegram RTT Docker E2E ($PACKAGE_LABEL)..."
 run_logged docker run --rm \
   "${docker_env[@]}" \
-  ${package_mount_args[@]+"${package_mount_args[@]}"} \
   -v "$ROOT_DIR/scripts:/app/scripts:ro" \
   -v "$ROOT_DIR/.artifacts:/app/.artifacts" \
   -v "$npm_prefix_host:/npm-global" \
@@ -118,7 +282,6 @@ export NPM_CONFIG_PREFIX="/npm-global"
 export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
 export OPENAI_API_KEY="sk-openclaw-rtt"
 export GATEWAY_AUTH_TOKEN_REF="openclaw-rtt"
-export TELEGRAM_BOT_TOKEN="$OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN"
 export OPENCLAW_DISABLE_BONJOUR="1"
 
 install_source="${OPENCLAW_NPM_TELEGRAM_INSTALL_SOURCE:?missing OPENCLAW_NPM_TELEGRAM_INSTALL_SOURCE}"
@@ -128,6 +291,10 @@ config_path="$HOME/.openclaw/openclaw.json"
 gateway_log="/tmp/openclaw-npm-telegram-rtt-gateway.log"
 mock_log="/tmp/openclaw-npm-telegram-rtt-mock.log"
 export MOCK_PORT="$mock_port"
+credential_env_file=""
+credential_lease_file=""
+credential_heartbeat_pid=""
+rtt_shell_pid="$$"
 
 dump_logs() {
   local status="$1"
@@ -144,10 +311,50 @@ dump_logs() {
     fi
   done
 }
-trap 'status=$?; kill ${gateway_pid:-} ${mock_pid:-} 2>/dev/null || true; dump_logs "$status"; exit "$status"' EXIT
 
-echo "Installing ${package_label} from ${install_source}..."
-npm install -g "$install_source" --no-fund --no-audit
+cleanup() {
+  local status="$?"
+  kill ${gateway_pid:-} ${mock_pid:-} ${credential_heartbeat_pid:-} 2>/dev/null || true
+  if [ -n "$credential_lease_file" ] && [ -f "$credential_lease_file" ]; then
+    node /app/scripts/e2e/npm-telegram-rtt-credentials.mjs release --lease-file "$credential_lease_file" >/dev/null 2>&1 || true
+  fi
+  rm -f "$credential_env_file" "$credential_lease_file"
+  dump_logs "$status"
+  exit "$status"
+}
+
+start_credential_heartbeat() {
+  (
+    set +e
+    node /app/scripts/e2e/npm-telegram-rtt-credentials.mjs heartbeat --lease-file "$credential_lease_file" &
+    local heartbeat_child_pid="$!"
+    trap 'kill "$heartbeat_child_pid" 2>/dev/null || true; wait "$heartbeat_child_pid" 2>/dev/null || true; exit 0' TERM INT
+    wait "$heartbeat_child_pid"
+    local heartbeat_status="$?"
+    echo "Convex credential heartbeat exited with status $heartbeat_status" >&2
+    kill -TERM "$rtt_shell_pid" 2>/dev/null || true
+    exit "$heartbeat_status"
+  ) &
+  credential_heartbeat_pid="$!"
+}
+
+trap cleanup EXIT
+trap 'exit 1' TERM INT
+
+if [ "${OPENCLAW_QA_CREDENTIAL_SOURCE:-}" = "convex" ]; then
+  credential_env_file="$(mktemp "/tmp/openclaw-npm-telegram-rtt-credential-env.XXXXXX")"
+  credential_lease_file="$(mktemp "/tmp/openclaw-npm-telegram-rtt-credential-lease.XXXXXX")"
+  rm -f "$credential_env_file" "$credential_lease_file"
+  node /app/scripts/e2e/npm-telegram-rtt-credentials.mjs acquire \
+    --credential-env-file "$credential_env_file" \
+    --lease-file "$credential_lease_file"
+  # shellcheck source=/dev/null
+  source "$credential_env_file"
+  start_credential_heartbeat
+fi
+
+export TELEGRAM_BOT_TOKEN="${OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN:?missing OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN}"
+
 command -v openclaw
 openclaw --version
 installed_version="$(node -p "require('/npm-global/lib/node_modules/openclaw/package.json').version")"

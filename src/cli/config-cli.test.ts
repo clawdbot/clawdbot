@@ -950,6 +950,26 @@ describe("config cli", () => {
 
       expect(mockLog).toHaveBeenCalledWith("__OPENCLAW_REDACTED__");
     });
+
+    it("prints materialized subagent archive default", async () => {
+      const resolved: OpenClawConfig = {};
+      const config: OpenClawConfig = {
+        agents: {
+          defaults: {
+            maxConcurrent: 4,
+            subagents: {
+              maxConcurrent: 8,
+              archiveAfterMinutes: 60,
+            },
+          },
+        },
+      };
+      setSnapshot(resolved, config);
+
+      await runConfigCommand(["config", "get", "agents.defaults.subagents.archiveAfterMinutes"]);
+
+      expect(mockLog).toHaveBeenCalledWith("60");
+    });
   });
 
   describe("config validate", () => {
@@ -2693,6 +2713,181 @@ describe("config cli", () => {
       expect(firstWriteConfigOptions()).toEqual({
         unsetPaths: [["channels", "discord", "guilds", "123"]],
       });
+    });
+
+    it("dry-runs an unset without writing the config file", async () => {
+      const resolved: OpenClawConfig = {
+        agents: { list: [{ id: "main" }] },
+        gateway: { port: 18789 },
+        tools: {
+          profile: "coding",
+          alsoAllow: ["agents_list"],
+        },
+      };
+      setSnapshot(resolved, resolved);
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "unset", "tools.alsoAllow", "--dry-run"]);
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expectLogIncludes("Dry run successful: 1 update(s) validated against /tmp/openclaw.json.");
+      expect(mockReadConfigFileSnapshot).toHaveBeenCalledTimes(2);
+    });
+
+    it("prints JSON for config unset dry-run", async () => {
+      const resolved: OpenClawConfig = {
+        agents: { list: [{ id: "main" }] },
+        gateway: { port: 18789 },
+        tools: {
+          profile: "coding",
+          alsoAllow: ["agents_list"],
+        },
+      };
+      setSnapshot(resolved, resolved);
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "unset", "tools.alsoAllow", "--dry-run", "--json"]);
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expect(parseLastLogPayload()).toMatchObject({
+        ok: true,
+        operations: 1,
+        inputModes: ["unset"],
+        checks: {
+          schema: true,
+          resolvability: true,
+          resolvabilityComplete: true,
+        },
+      });
+    });
+
+    it("prints structured JSON when unset dry-run misses a path", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789 },
+        tools: {
+          profile: "coding",
+        },
+      };
+      setSnapshot(resolved, resolved);
+
+      await expect(
+        runConfigCommand(["config", "unset", "tools.alsoAllow", "--dry-run", "--json"]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expect(mockError).not.toHaveBeenCalled();
+      const payload = parseLastLogPayload() as {
+        ok: boolean;
+        inputModes: string[];
+        checks: { schema: boolean; resolvability: boolean; resolvabilityComplete: boolean };
+        errors?: Array<{ kind: string; message: string }>;
+      };
+      expect(payload.ok).toBe(false);
+      expect(payload.inputModes).toEqual(["unset"]);
+      expect(payload.checks).toEqual({
+        schema: false,
+        resolvability: false,
+        resolvabilityComplete: false,
+      });
+      expect(payload.errors).toEqual([
+        {
+          kind: "missing-path",
+          message: "Config path not found: tools.alsoAllow. Nothing was changed.",
+        },
+      ]);
+    });
+
+    it("validates existing refs when unset dry-run removes all secret providers", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789 },
+        secrets: {
+          providers: {
+            vaultfile: { source: "file", path: "/tmp/secrets.json", mode: "json" },
+          },
+        },
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              apiKey: {
+                source: "file",
+                provider: "vaultfile",
+                id: "/providers/search/apiKey",
+              },
+            },
+          },
+        } as never,
+      };
+      setSnapshot(resolved, resolved);
+      setSnapshot(resolved, resolved);
+      mockResolveSecretRefValue.mockRejectedValueOnce(new Error("provider removed"));
+
+      await expect(
+        runConfigCommand(["config", "unset", "secrets.providers", "--dry-run"]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      const [secretRef] = requireResolveSecretRefCall(0);
+      const secretRefRecord = requireRecord(secretRef, "existing SecretRef");
+      expect(secretRefRecord.provider).toBe("vaultfile");
+      expect(secretRefRecord.id).toBe("/providers/search/apiKey");
+      expectErrorIncludes("Dry run failed: 1 SecretRef assignment(s) could not be resolved.");
+      expectErrorIncludes("provider removed");
+    });
+
+    it("validates existing refs when unset dry-run removes secret defaults", async () => {
+      const resolved: OpenClawConfig = {
+        gateway: { port: 18789 },
+        secrets: {
+          defaults: {
+            env: "vaultenv",
+          },
+          providers: {
+            default: { source: "env" },
+            vaultenv: { source: "env" },
+          },
+        },
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              apiKey: "${WEB_SEARCH_API_KEY}",
+            },
+          },
+        } as never,
+      } as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "unset", "secrets.defaults", "--dry-run"]);
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      const [secretRef] = requireResolveSecretRefCall(0);
+      const secretRefRecord = requireRecord(secretRef, "defaulted SecretRef");
+      expect(secretRefRecord).toMatchObject({
+        source: "env",
+        provider: "default",
+        id: "WEB_SEARCH_API_KEY",
+      });
+      expectLogIncludes("Dry run successful: 1 update(s) validated against /tmp/openclaw.json.");
+    });
+
+    it("rejects config unset --json without --dry-run", async () => {
+      await expect(
+        runConfigCommand(["config", "unset", "tools.alsoAllow", "--json"]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expectErrorIncludes("--json can only be used with --dry-run.");
+    });
+
+    it("rejects config unset --allow-exec without --dry-run", async () => {
+      await expect(
+        runConfigCommand(["config", "unset", "tools.alsoAllow", "--allow-exec"]),
+      ).rejects.toThrow("__exit__:1");
+
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+      expectErrorIncludes("--allow-exec can only be used with --dry-run.");
     });
   });
 

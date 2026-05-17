@@ -15,7 +15,6 @@ import { detectMime } from "../media/mime.js";
 import { buildRandomTempFilePath } from "../plugin-sdk/temp-path.js";
 import { normalizeAttachmentPath } from "./attachments.normalize.js";
 import { MediaUnderstandingSkipError } from "./errors.js";
-import { fetchWithTimeout } from "./shared.js";
 import type { MediaAttachment } from "./types.js";
 
 type MediaBufferResult = {
@@ -66,16 +65,6 @@ export type MediaAttachmentCacheOptions = {
   ssrfPolicy?: SsrFPolicy;
   workspaceDir?: string;
 };
-
-function resolveRequestUrl(input: RequestInfo | URL): string {
-  if (typeof input === "string") {
-    return input;
-  }
-  if (input instanceof URL) {
-    return input.toString();
-  }
-  return input.url;
-}
 
 export class MediaAttachmentCache {
   private readonly entries = new Map<number, AttachmentCacheEntry>();
@@ -171,11 +160,9 @@ export class MediaAttachmentCache {
     }
 
     try {
-      const fetchImpl = (input: RequestInfo | URL, init?: RequestInit) =>
-        fetchWithTimeout(resolveRequestUrl(input), init ?? {}, params.timeoutMs, globalThis.fetch);
       const fetched = await readRemoteMediaBuffer({
         url,
-        fetchImpl,
+        timeoutMs: params.timeoutMs,
         maxBytes: params.maxBytes,
         ssrfPolicy: this.ssrfPolicy,
         retry: REMOTE_MEDIA_FETCH_RETRY,

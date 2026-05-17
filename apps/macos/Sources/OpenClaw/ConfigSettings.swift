@@ -24,7 +24,7 @@ struct ConfigSettings: View {
             guard !self.isPreview else { return }
             self.hasLoaded = true
             await self.store.loadConfigSchema()
-            await self.store.loadConfig()
+            await self.store.loadConfig(force: false)
         }
         .onAppear { self.ensureSelection() }
         .onChange(of: self.store.configSchemaLoading) { _, loading in

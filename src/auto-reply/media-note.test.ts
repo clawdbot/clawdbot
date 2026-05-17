@@ -1,4 +1,6 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { getMediaDir } from "../media/store.js";
 import { buildInboundMediaNote } from "./media-note.js";
 import {
   createSuccessfulAudioMediaDecision,
@@ -13,6 +15,18 @@ describe("buildInboundMediaNote", () => {
       MediaUrl: "/tmp/a.png",
     });
     expect(note).toBe("[media attached: /tmp/a.png (image/png) | /tmp/a.png]");
+  });
+
+  it("renders managed inbound media-store paths as media URIs", () => {
+    const inboundPath = path.join(getMediaDir(), "inbound", "photo---abc123.png");
+    const note = buildInboundMediaNote({
+      MediaPath: inboundPath,
+      MediaType: "image/png",
+      MediaUrl: inboundPath,
+    });
+    expect(note).toBe(
+      "[media attached: media://inbound/photo---abc123.png (image/png) | media://inbound/photo---abc123.png]",
+    );
   });
 
   it("formats multiple MediaPaths as numbered media notes", () => {

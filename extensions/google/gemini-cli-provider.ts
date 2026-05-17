@@ -122,6 +122,10 @@ export function buildGoogleGeminiCliProvider(): ProviderPlugin {
     ...GOOGLE_GEMINI_PROVIDER_HOOKS,
     isModernModelRef: ({ modelId }) => isModernGoogleModel(modelId),
     formatApiKey: (cred) => formatGoogleOauthApiKey(cred),
+    refreshOAuth: async (cred) => {
+      const { refreshGeminiCliOAuthToken } = await import("./oauth.runtime.js");
+      return await refreshGeminiCliOAuthToken(cred);
+    },
     resolveUsageAuth: async (ctx) => {
       const auth = await ctx.resolveOAuthToken();
       if (!auth) {

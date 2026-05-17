@@ -59,6 +59,7 @@ type ModelSnapshotEntry = {
   modelApi?: string | null;
   modelId?: string;
 };
+type AssistantReplayMessage = Extract<AgentMessage, { role: "assistant" }>;
 
 type ProviderReplayHookParams = {
   config?: OpenClawConfig;
@@ -355,7 +356,8 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
       touched = true;
       continue;
     }
-    const replayContent = (message as { content?: unknown }).content;
+    let assistantMessage: AssistantReplayMessage = message;
+    let replayContent = (message as { content?: unknown }).content;
     if (typeof replayContent === "string") {
       const normalized = normalizeAssistantReplayTextContent(message, replayContent);
       if (normalized) {
@@ -364,9 +366,15 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
       touched = true;
       continue;
     }
+    if (!Array.isArray(replayContent)) {
+      replayContent =
+        replayContent != null && typeof replayContent === "object" ? [replayContent] : [];
+      assistantMessage = { ...message, content: replayContent } as AssistantReplayMessage;
+      touched = true;
+    }
     if (Array.isArray(replayContent)) {
-      const normalized = normalizeAssistantReplayBlockContent(message, replayContent);
-      if (normalized !== message) {
+      const normalized = normalizeAssistantReplayBlockContent(assistantMessage, replayContent);
+      if (normalized !== assistantMessage) {
         if (normalized) {
           out.push(normalized);
         }
@@ -391,17 +399,17 @@ export function normalizeAssistantReplayContent(messages: AgentMessage[]): Agent
       // or completion and no content. Leaving other non-error empty-content
       // turns untouched preserves silent-reply semantics on every other code
       // path.
-      const stopReason = (message as { stopReason?: unknown }).stopReason;
-      if (stopReason === "error" || isZeroUsageEmptyStopAssistantTurn(message)) {
+      const stopReason = (assistantMessage as { stopReason?: unknown }).stopReason;
+      if (stopReason === "error" || isZeroUsageEmptyStopAssistantTurn(assistantMessage)) {
         out.push({
-          ...message,
+          ...assistantMessage,
           content: [{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }],
         });
         touched = true;
         continue;
       }
     }
-    out.push(message);
+    out.push(assistantMessage);
   }
 
   // Drop trailing stream-error / zero-usage-empty-stop placeholder turns. The

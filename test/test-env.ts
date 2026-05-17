@@ -305,6 +305,7 @@ function sanitizeLiveConfig(raw: string): string {
         defaults?: Record<string, unknown>;
         list?: Array<Record<string, unknown>>;
       };
+      diagnostics?: Record<string, unknown>;
     } = JSON5.parse(raw);
 
     if (!parsed || typeof parsed !== "object") {
@@ -326,6 +327,10 @@ function sanitizeLiveConfig(raw: string): string {
         delete nextEntry.agentDir;
         return nextEntry;
       });
+    }
+
+    if (parsed.diagnostics && typeof parsed.diagnostics === "object") {
+      delete parsed.diagnostics.memoryPressureSnapshot;
     }
 
     if (!isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST_NORMALIZE_CONFIG)) {

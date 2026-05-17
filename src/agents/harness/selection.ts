@@ -8,13 +8,16 @@ import type {
 } from "../pi-embedded-runner/run/types.js";
 import type { EmbeddedPiCompactResult } from "../pi-embedded-runner/types.js";
 import { createPiAgentHarness } from "./builtin-pi.js";
-import { resolveAgentHarnessPolicy, type AgentHarnessPolicy } from "./policy.js";
-import { listRegisteredAgentHarnesses } from "./registry.js";
+import {
+  resolveAgentHarnessPolicy as resolveConfiguredAgentHarnessPolicy,
+  type AgentHarnessPolicy,
+} from "./policy.js";
+import { getRegisteredAgentHarness, listRegisteredAgentHarnesses } from "./registry.js";
 import type { AgentHarness, AgentHarnessSupport } from "./types.js";
 import { adaptAgentHarnessToV2, runAgentHarnessV2LifecycleAttempt } from "./v2.js";
 
 const log = createSubsystemLogger("agents/harness");
-export { resolveAgentHarnessPolicy };
+export { resolveAgentHarnessPolicy } from "./policy.js";
 export type { AgentHarnessPolicy };
 
 type AgentHarnessSelectionCandidate = {
@@ -33,6 +36,8 @@ type AgentHarnessSelectionDecision = {
   selectedReason:
     | "forced_pi"
     | "forced_plugin"
+    // Implicit Codex preference found no registered Codex harness, so PI handled the run.
+    | "implicit_plugin_unavailable_pi"
     // Auto mode chose a registered plugin harness that supports the provider/model.
     | "auto_plugin"
     // Auto mode found no supporting plugin harness, so PI handled the run.
@@ -42,6 +47,31 @@ type AgentHarnessSelectionDecision = {
 
 function listPluginAgentHarnesses(): AgentHarness[] {
   return listRegisteredAgentHarnesses().map((entry) => entry.harness);
+}
+
+export function resolveAvailableAgentHarnessPolicy(params: {
+  provider?: string;
+  modelId?: string;
+  config?: OpenClawConfig;
+  agentId?: string;
+  sessionKey?: string;
+  env?: NodeJS.ProcessEnv;
+}): AgentHarnessPolicy {
+  return applyAgentHarnessAvailabilityPolicy(resolveConfiguredAgentHarnessPolicy(params));
+}
+
+function applyAgentHarnessAvailabilityPolicy(policy: AgentHarnessPolicy): AgentHarnessPolicy {
+  if (
+    policy.runtime === "codex" &&
+    policy.runtimeSource === "implicit" &&
+    !getRegisteredAgentHarness("codex")
+  ) {
+    return {
+      ...policy,
+      runtime: "pi",
+    };
+  }
+  return policy;
 }
 
 function compareHarnessSupport(
@@ -62,6 +92,7 @@ export function selectAgentHarness(params: {
   agentId?: string;
   sessionKey?: string;
   agentHarnessId?: string;
+  agentHarnessRuntimeOverride?: string;
 }): AgentHarness {
   return selectAgentHarnessDecision(params).harness;
 }
@@ -73,8 +104,18 @@ function selectAgentHarnessDecision(params: {
   agentId?: string;
   sessionKey?: string;
   agentHarnessId?: string;
+  agentHarnessRuntimeOverride?: string;
 }): AgentHarnessSelectionDecision {
-  const policy = resolveAgentHarnessPolicy(params);
+  const resolvedPolicy = resolveConfiguredAgentHarnessPolicy(params);
+  const runtimeOverride = params.agentHarnessRuntimeOverride?.trim();
+  const policy =
+    runtimeOverride && runtimeOverride !== "auto" && runtimeOverride !== "default"
+      ? ({
+          ...resolvedPolicy,
+          runtime: runtimeOverride,
+          runtimeSource: "model",
+        } as AgentHarnessPolicy)
+      : resolvedPolicy;
   // PI is intentionally not part of the plugin candidate list. Explicit plugin
   // runtimes fail closed; only `auto` may route an unmatched turn to PI.
   const pluginHarnesses = listPluginAgentHarnesses();
@@ -95,6 +136,17 @@ function selectAgentHarnessDecision(params: {
         harness: forced,
         policy,
         selectedReason: "forced_plugin",
+        candidates: listHarnessCandidates(pluginHarnesses),
+      });
+    }
+    if (runtime === "codex" && policy.runtimeSource === "implicit") {
+      return buildSelectionDecision({
+        harness: piHarness,
+        policy: {
+          ...policy,
+          runtime: "pi",
+        },
+        selectedReason: "implicit_plugin_unavailable_pi",
         candidates: listHarnessCandidates(pluginHarnesses),
       });
     }
@@ -147,6 +199,7 @@ export async function runAgentHarnessAttempt(
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     agentHarnessId: params.agentHarnessId,
+    agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
   });
   const harness = selection.harness;
   logAgentHarnessSelection(selection, {

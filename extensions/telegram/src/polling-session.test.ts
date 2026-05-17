@@ -52,7 +52,9 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
 
 let TelegramPollingSession: typeof import("./polling-session.js").TelegramPollingSession;
 let claimTelegramSpooledUpdate: typeof import("./telegram-ingress-spool.js").claimTelegramSpooledUpdate;
+let isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess: typeof import("./telegram-ingress-spool.js").isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess;
 let listTelegramSpooledUpdates: typeof import("./telegram-ingress-spool.js").listTelegramSpooledUpdates;
+let recoverStaleTelegramSpooledUpdateClaims: typeof import("./telegram-ingress-spool.js").recoverStaleTelegramSpooledUpdateClaims;
 let writeTelegramSpooledUpdate: typeof import("./telegram-ingress-spool.js").writeTelegramSpooledUpdate;
 
 type TelegramApiMiddleware = (
@@ -240,6 +242,7 @@ function createPollingSession(params: {
   log?: (message: string) => void;
   telegramTransport?: ReturnType<typeof makeTelegramTransport>;
   createTelegramTransport?: () => ReturnType<typeof makeTelegramTransport>;
+  getLastUpdateId?: () => number | null;
   stallThresholdMs?: number;
   setStatus?: (patch: Omit<ChannelAccountSnapshot, "accountId">) => void;
   isolatedIngress?: ConstructorParameters<typeof TelegramPollingSession>[0]["isolatedIngress"];
@@ -252,7 +255,7 @@ function createPollingSession(params: {
     proxyFetch: undefined,
     abortSignal: params.abortSignal,
     runnerOptions: {},
-    getLastUpdateId: () => null,
+    getLastUpdateId: params.getLastUpdateId ?? (() => null),
     persistUpdateId: async () => undefined,
     log: params.log ?? (() => undefined),
     telegramTransport: params.telegramTransport,
@@ -415,8 +418,13 @@ function startIsolatedIngressSession(params: {
 describe("TelegramPollingSession", () => {
   beforeAll(async () => {
     ({ TelegramPollingSession } = await import("./polling-session.js"));
-    ({ claimTelegramSpooledUpdate, listTelegramSpooledUpdates, writeTelegramSpooledUpdate } =
-      await import("./telegram-ingress-spool.js"));
+    ({
+      claimTelegramSpooledUpdate,
+      isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess,
+      listTelegramSpooledUpdates,
+      recoverStaleTelegramSpooledUpdateClaims,
+      writeTelegramSpooledUpdate,
+    } = await import("./telegram-ingress-spool.js"));
   });
 
   beforeEach(() => {
@@ -578,11 +586,77 @@ describe("TelegramPollingSession", () => {
           token: "tok",
         }),
       );
-      expect(
-        mockObjectArg(createTelegramBotMock, "createTelegramBot").updateOffset,
-      ).toBeUndefined();
+      expect(mockObjectArg(createTelegramBotMock, "createTelegramBot").updateOffset).toEqual({
+        lastUpdateId: null,
+        persistenceFloorUpdateId: null,
+        onUpdateId: expect.any(Function),
+      });
       expect(init).toHaveBeenCalledBefore(handleUpdate);
       expect(handleUpdate).toHaveBeenCalledWith({ update_id: 42, message: { text: "hello" } });
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("drains existing isolated ingress spool entries below the persisted offset", async () => {
+    const abort = new AbortController();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
+    const handleUpdate = vi.fn(async () => undefined);
+    createTelegramBotMock.mockReturnValueOnce({
+      api: {
+        deleteWebhook: vi.fn(async () => true),
+        config: { use: vi.fn() },
+      },
+      init: vi.fn(async () => undefined),
+      handleUpdate,
+      stop: vi.fn(async () => undefined),
+    });
+    await writeTelegramSpooledUpdate({
+      spoolDir: tempDir,
+      update: { update_id: 42, message: { text: "pre-upgrade pending" } },
+    });
+    let stopWorker: (() => void) | undefined;
+    const workerDone = new Promise<void>((resolve) => {
+      stopWorker = resolve;
+    });
+    const createWorker = vi.fn(() => ({
+      onMessage: vi.fn(() => () => undefined),
+      stop: vi.fn(async () => {
+        stopWorker?.();
+      }),
+      task: vi.fn(async () => {
+        await workerDone;
+      }),
+    }));
+
+    try {
+      const session = createPollingSession({
+        abortSignal: abort.signal,
+        getLastUpdateId: () => 42,
+        isolatedIngress: {
+          enabled: true,
+          spoolDir: tempDir,
+          createWorker,
+          drainIntervalMs: 10,
+        },
+      });
+
+      const runPromise = session.runUntilAbort();
+      await vi.waitFor(() => expect(handleUpdate).toHaveBeenCalledTimes(1));
+      await vi.waitFor(async () => expect(await fs.readdir(tempDir)).toEqual([]));
+      abort.abort();
+      await runPromise;
+
+      expect(createWorker).toHaveBeenCalledWith(expect.objectContaining({ initialUpdateId: 42 }));
+      expect(mockObjectArg(createTelegramBotMock, "createTelegramBot").updateOffset).toEqual({
+        lastUpdateId: null,
+        persistenceFloorUpdateId: 42,
+        onUpdateId: expect.any(Function),
+      });
+      expect(handleUpdate).toHaveBeenCalledWith({
+        update_id: 42,
+        message: { text: "pre-upgrade pending" },
+      });
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
@@ -757,8 +831,6 @@ describe("TelegramPollingSession", () => {
 
   it("keeps claims owned by another live process blocked", async () => {
     await withTempSpool(async (tempDir) => {
-      const abort = new AbortController();
-      const events: string[] = [];
       const interruptedUpdate = topicUpdate(42, 10, "active topic 10 turn");
       await writeSpooledTestUpdates(tempDir, [
         interruptedUpdate,
@@ -790,25 +862,18 @@ describe("TelegramPollingSession", () => {
         { mode: 0o600 },
       );
 
-      const { createWorker, runPromise, stopWorker } = startIsolatedIngressSession({
-        abort,
+      const recovered = await recoverStaleTelegramSpooledUpdateClaims({
         spoolDir: tempDir,
-        handleUpdate: async (update) => {
-          events.push(`handled:${update.update_id}`);
-        },
+        staleMs: 0,
+        shouldRecover: (claim) => !isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess(claim),
       });
 
-      await vi.waitFor(() => expect(createWorker).toHaveBeenCalledTimes(1));
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      expect(events).toEqual([]);
+      expect(recovered).toBe(0);
       expect(await pendingUpdateIds(tempDir)).toEqual([43]);
       expect((await fs.readdir(tempDir)).toSorted()).toEqual([
         "0000000000000042.json.processing",
         "0000000000000043.json",
       ]);
-      abort.abort();
-      stopWorker();
-      await runPromise;
     });
   });
 

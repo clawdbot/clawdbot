@@ -74,6 +74,7 @@ type MatrixQaScenarioId =
   | "matrix-inbound-edit-ignored"
   | "matrix-inbound-edit-no-duplicate-trigger"
   | "matrix-e2ee-basic-reply"
+  | "matrix-e2ee-state-after-missing-encryption"
   | "matrix-e2ee-thread-follow-up"
   | "matrix-e2ee-bootstrap-success"
   | "matrix-e2ee-recovery-key-lifecycle"
@@ -834,6 +835,16 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     topology: buildMatrixQaE2eeScenarioTopology({
       scenarioId: "matrix-e2ee-basic-reply",
       name: "Matrix QA E2EE Basic Reply Room",
+    }),
+    configOverrides: MATRIX_QA_E2EE_CONFIG,
+  },
+  {
+    id: "matrix-e2ee-state-after-missing-encryption",
+    timeoutMs: MATRIX_QA_E2EE_REPLY_TIMEOUT_MS,
+    title: "Matrix E2EE sync state_after opt-in stays disabled for encrypted rooms",
+    topology: buildMatrixQaE2eeScenarioTopology({
+      scenarioId: "matrix-e2ee-state-after-missing-encryption",
+      name: "Matrix QA E2EE State After Missing Encryption Room",
     }),
     configOverrides: MATRIX_QA_E2EE_CONFIG,
   },

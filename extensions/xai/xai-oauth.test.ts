@@ -27,7 +27,7 @@ describe("xAI OAuth", () => {
     expect(isTrustedXaiOAuthEndpoint("not a url")).toBe(false);
   });
 
-  it("builds the Hermes-compatible authorize URL for OpenClaw", () => {
+  it("builds the xAI authorize URL for OpenClaw", () => {
     const url = new URL(
       buildXaiOAuthAuthorizeUrl({
         authorizationEndpoint: "https://auth.x.ai/oauth2/authorize",

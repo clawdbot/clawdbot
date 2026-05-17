@@ -2,7 +2,9 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { expectNoReaddirSyncDuring } from "../test-utils/fs-scan-assertions.js";
+import { listGitTrackedFiles, toRepoRelativePath } from "../test-utils/repo-files.js";
 
 const PLUGIN_DOCS_DIR = path.join(process.cwd(), "docs", "plugins");
 
@@ -19,23 +21,16 @@ function listMarkdownFiles(dir: string): string[] {
 }
 
 function listExternalMarkdownFiles(dir: string): string[] | null {
-  const repoPath = path.relative(process.cwd(), dir).split(path.sep).join("/");
+  const repoPath = toRepoRelativePath(process.cwd(), dir);
   return listGitMarkdownFiles(repoPath) ?? listFindMarkdownFiles(dir);
 }
 
 function listGitMarkdownFiles(repoPath: string): string[] | null {
-  const result = spawnSync("git", ["ls-files", "--", repoPath], {
-    cwd: process.cwd(),
-    encoding: "utf8",
-    maxBuffer: 1024 * 1024,
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  if (result.status !== 0) {
+  const files = listGitTrackedFiles({ pathspecs: repoPath });
+  if (!files) {
     return null;
   }
-  return result.stdout
-    .split("\n")
-    .map((line) => line.trim())
+  return files
     .filter((line) => line.endsWith(".md"))
     .map((filePath) => path.join(process.cwd(), filePath))
     .toSorted();
@@ -73,16 +68,12 @@ function walkMarkdownFiles(dir: string): string[] {
 
 describe("plugin docs examples", () => {
   it("lists plugin docs without scanning directories in-process", () => {
-    const readDir = vi.spyOn(fs, "readdirSync");
-    try {
+    expectNoReaddirSyncDuring(() => {
       const files = listMarkdownFiles(PLUGIN_DOCS_DIR);
 
       expect(files.length).toBeGreaterThan(0);
       expect(files.every((filePath) => filePath.endsWith(".md"))).toBe(true);
-      expect(readDir).not.toHaveBeenCalled();
-    } finally {
-      readDir.mockRestore();
-    }
+    });
   });
 
   it("keeps plugin docs JSON fences parseable", () => {
@@ -93,7 +84,7 @@ describe("plugin docs examples", () => {
       for (const match of blocks) {
         const lang = match[1] ?? "";
         const code = match[2] ?? "";
-        const relativePath = path.relative(process.cwd(), docPath).split(path.sep).join("/");
+        const relativePath = toRepoRelativePath(process.cwd(), docPath);
         const location = `${relativePath}:${lineNumberAt(markdown, match.index ?? 0)}`;
         try {
           if (lang === "json") {

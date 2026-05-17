@@ -1,7 +1,7 @@
 import { DEFAULT_ACCOUNT_ID, type OpenClawConfig } from "openclaw/plugin-sdk/account-resolution";
 import { registerPluginHttpRoute } from "openclaw/plugin-sdk/webhook-ingress";
 import { listAccountIds, resolveAccount } from "./accounts.js";
-import { dispatchSynologyChatInboundTurn } from "./inbound-turn.js";
+import { dispatchSynologyChatInboundEvent } from "./inbound-event.js";
 import type { ResolvedSynologyChatAccount } from "./types.js";
 import { createWebhookHandler, type WebhookHandlerDeps } from "./webhook-handler.js";
 
@@ -189,7 +189,7 @@ export function registerSynologyWebhookRoute(params: {
   const handler = createWebhookHandler({
     account,
     deliver: async (msg) =>
-      await dispatchSynologyChatInboundTurn({
+      await dispatchSynologyChatInboundEvent({
         account,
         msg,
         log: createUnknownArgsLogAdapter(log),

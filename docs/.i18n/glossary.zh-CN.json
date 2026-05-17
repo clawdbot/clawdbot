@@ -108,6 +108,10 @@
     "target": "Gateway 网关"
   },
   {
+    "source": "Gateway health",
+    "target": "Gateway 健康"
+  },
+  {
     "source": "Gateway RPC reference",
     "target": "Gateway RPC 参考"
   },

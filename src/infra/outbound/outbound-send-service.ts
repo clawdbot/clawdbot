@@ -1,12 +1,12 @@
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import type {
   ChannelId,
   ChannelMessageActionContext,
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.public.js";
-import type { InboundTurnKind } from "../../channels/turn/kind.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OutboundMediaAccess, OutboundMediaReadFile } from "../../media/load-options.js";
@@ -46,7 +46,7 @@ export type OutboundSendContext = {
   accountId?: string | null;
   senderIsOwner?: boolean;
   sessionId?: string;
-  inboundTurnKind?: InboundTurnKind;
+  inboundEventKind?: InboundEventKind;
   gateway?: OutboundGatewayContext;
   toolContext?: ChannelThreadingToolContext;
   deps?: OutboundSendDeps;
@@ -161,7 +161,7 @@ async function tryHandleWithPluginAction(params: {
     senderIsOwner: params.ctx.senderIsOwner,
     sessionKey: params.ctx.sessionKey,
     sessionId: params.ctx.sessionId,
-    inboundTurnKind: params.ctx.inboundTurnKind,
+    inboundEventKind: params.ctx.inboundEventKind,
     agentId: params.ctx.agentId,
     gateway: params.ctx.gateway,
     toolContext: params.ctx.toolContext,
@@ -197,6 +197,7 @@ function createChannelActionContext(params: {
     senderIsOwner: params.ctx.senderIsOwner,
     sessionKey: params.ctx.sessionKey,
     sessionId: params.ctx.sessionId,
+    inboundEventKind: params.ctx.inboundEventKind,
     agentId: params.ctx.agentId,
     gateway: params.ctx.gateway,
     toolContext: params.ctx.toolContext,

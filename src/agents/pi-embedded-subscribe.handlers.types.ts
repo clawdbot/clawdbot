@@ -105,6 +105,7 @@ export type EmbeddedPiSubscribeState = {
   pendingToolMediaUrls: string[];
   pendingToolAudioAsVoice: boolean;
   pendingToolTrustedLocalMedia: boolean;
+  visibleBlockReplyCount: number;
   pendingAssistantReplyDirectives?: Pick<
     BlockReplyPayload,
     "mediaUrls" | "audioAsVoice" | "replyToId" | "replyToTag" | "replyToCurrent"

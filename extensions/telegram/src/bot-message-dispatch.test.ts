@@ -6,7 +6,7 @@ import {
   createSequencedTestDraftStream,
   createTestDraftStream,
 } from "./draft-stream.test-helpers.js";
-import { notifyTelegramInboundTurnOutboundSuccess } from "./inbound-turn-delivery.js";
+import { notifyTelegramInboundEventOutboundSuccess } from "./inbound-event-delivery.js";
 
 type DispatchReplyWithBufferedBlockDispatcherArgs = Parameters<
   TelegramBotDeps["dispatchReplyWithBufferedBlockDispatcher"]
@@ -1296,6 +1296,38 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(editMessageTelegram).not.toHaveBeenCalled();
   });
 
+  it("uses the transcript final when progress-mode final text is truncated", async () => {
+    setupDraftStreams({ answerMessageId: 2001 });
+    const fullAnswer =
+      "Ja. Hier nochmal sauber Schritt fuer Schritt. Einen API Key kopiert man aus der Google Cloud Console. Danach pruefst du die Projekt- und API-Einstellungen.";
+    const truncatedFinal =
+      "Ja. Hier nochmal sauber Schritt fuer Schritt. Einen API Key kopiert man...";
+    const context = createContext();
+    context.ctxPayload.SessionKey = "agent:default:telegram:direct:123";
+    loadSessionStore.mockReturnValue({
+      "agent:default:telegram:direct:123": { sessionId: "s1" },
+    });
+    readLatestAssistantTextFromSessionTranscript.mockResolvedValue({
+      text: fullAnswer,
+      timestamp: Date.now() + 1_000,
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await dispatcherOptions.deliver({ text: truncatedFinal }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({
+      context,
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress" } },
+    });
+
+    expectDeliveredReply(0, { text: fullAnswer });
+  });
+
   it("streams the first long final chunk and sends follow-up chunks", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     const longText = "one ".repeat(80);
@@ -1318,21 +1350,52 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(editMessageTelegram).not.toHaveBeenCalled();
   });
 
-  it("falls back to normal send for media and clears the pending stream", async () => {
+  it("keeps streamed final text in place when late media arrives", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
-      await dispatcherOptions.deliver(
-        { text: "Photo", mediaUrl: "https://example.com/a.png" },
-        { kind: "final" },
-      );
-      return { queuedFinal: true };
-    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Photo" });
+        await dispatcherOptions.deliver(
+          { text: "Photo", mediaUrl: "https://example.com/a.png" },
+          { kind: "final" },
+        );
+        return { queuedFinal: true };
+      },
+    );
 
     await dispatchWithContext({ context: createContext() });
 
-    expect(answerDraftStream.clear).toHaveBeenCalled();
-    expect(answerDraftStream.update).not.toHaveBeenCalledWith("Photo");
-    expectDeliveredReply(0, { text: "Photo", mediaUrl: "https://example.com/a.png" });
+    expect(answerDraftStream.clear).not.toHaveBeenCalled();
+    expect(answerDraftStream.update).toHaveBeenCalledWith("Photo");
+    expectDeliveredReply(0, { text: undefined, mediaUrl: "https://example.com/a.png" });
+  });
+
+  it("attaches interactive buttons to streamed text when late media arrives", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Photo" });
+        await dispatcherOptions.deliver(
+          {
+            text: "Photo",
+            mediaUrl: "https://example.com/a.png",
+            interactive: {
+              blocks: [{ type: "buttons", buttons: [{ label: "OK", value: "ok" }] }],
+            },
+          },
+          { kind: "final" },
+        );
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(answerDraftStream.update).toHaveBeenCalledWith("Photo");
+    expectRecordFields(mockCallArg(editMessageTelegram, 0, 3), {
+      buttons: [[{ text: "OK", callback_data: "ok" }]],
+    });
+    expectDeliveredReply(0, { text: undefined, mediaUrl: "https://example.com/a.png" });
   });
 
   it("shows Telegram progress drafts immediately for explicit tool starts", async () => {
@@ -1453,6 +1516,30 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
+  it("streams interactive buttons into the same message", async () => {
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        {
+          text: "Choose",
+          interactive: {
+            blocks: [{ type: "buttons", buttons: [{ label: "OK", value: "ok" }] }],
+          },
+        },
+        { kind: "final" },
+      );
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(answerDraftStream.update).toHaveBeenCalledWith("Choose");
+    expectRecordFields(mockCallArg(editMessageTelegram, 0, 3), {
+      buttons: [[{ text: "OK", callback_data: "ok" }]],
+    });
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
   it("streams reasoning and answer text on separate lanes", async () => {
     const { answerDraftStream, reasoningDraftStream } = setupDraftStreams({
       answerMessageId: 2001,
@@ -1569,7 +1656,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       context: createContext({
         statusReactionController: statusReactionController as never,
         ctxPayload: {
-          InboundTurnKind: "room_event",
+          InboundEventKind: "room_event",
           SessionKey: "agent:main:telegram:group:-100123",
           ChatType: "group",
           MessageSid: "99",
@@ -1651,7 +1738,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     const createRoomContext = (messageId: number, body: string) =>
       createContext({
         ctxPayload: {
-          InboundTurnKind: "room_event",
+          InboundEventKind: "room_event",
           SessionKey: "agent:main:telegram:group:-100123",
           ChatType: "group",
           MessageSid: String(messageId),
@@ -1726,7 +1813,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     const createRoomContext = (messageId: number, body: string) =>
       createContext({
         ctxPayload: {
-          InboundTurnKind: "room_event",
+          InboundEventKind: "room_event",
           SessionKey: "agent:main:telegram:group:-100123",
           ChatType: "group",
           MessageSid: String(messageId),
@@ -1751,10 +1838,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
       streamMode: "partial",
     });
     await firstStartGate;
-    notifyTelegramInboundTurnOutboundSuccess({
+    notifyTelegramInboundEventOutboundSuccess({
       sessionKey: "agent:main:telegram:group:-100123",
       to: "telegram:-100123",
-      inboundTurnKind: "room_event",
+      inboundEventKind: "room_event",
     });
     const secondPromise = dispatchWithContext({
       context: createRoomContext(100, "ambient two"),
@@ -1807,7 +1894,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     const createRoomContext = (messageId: number, body: string) =>
       createContext({
         ctxPayload: {
-          InboundTurnKind: "room_event",
+          InboundEventKind: "room_event",
           SessionKey: "agent:main:telegram:group:-100123",
           ChatType: "group",
           MessageSid: String(messageId),
@@ -1833,10 +1920,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
       streamMode: "partial",
     });
     await firstStartGate;
-    notifyTelegramInboundTurnOutboundSuccess({
+    notifyTelegramInboundEventOutboundSuccess({
       sessionKey: "agent:main:telegram:group:-100123",
       to: "telegram:group:-100123:topic:88",
-      inboundTurnKind: "room_event",
+      inboundEventKind: "room_event",
     });
     const secondPromise = dispatchWithContext({
       context: createRoomContext(100, "ambient two"),
@@ -1891,7 +1978,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     ) =>
       createContext({
         ctxPayload: {
-          InboundTurnKind: kind,
+          InboundEventKind: kind,
           SessionKey: "agent:main:telegram:group:-100123",
           ChatType: "group",
           MessageSid: String(messageId),
@@ -1977,7 +2064,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     ) =>
       createContext({
         ctxPayload: {
-          InboundTurnKind: kind,
+          InboundEventKind: kind,
           SessionKey: "agent:main:telegram:group:-100123",
           ChatType: "group",
           MessageSid: String(messageId),
@@ -2052,7 +2139,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     ) =>
       createContext({
         ctxPayload: {
-          InboundTurnKind: kind,
+          InboundEventKind: kind,
           SessionKey: "agent:main:telegram:group:-100123",
           ChatType: "group",
           MessageSid: String(messageId),
@@ -2098,7 +2185,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     await dispatchWithContext({
       context: createContext({
         ctxPayload: {
-          InboundTurnKind: "room_event",
+          InboundEventKind: "room_event",
           SessionKey: "agent:main:telegram:group:-100123",
           ChatType: "group",
           MessageSid: "101",

@@ -1,11 +1,5 @@
 import type { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import { getRuntimeConfig } from "../config/config.js";
-import {
-  loadSessionStore,
-  resolveAgentIdFromSessionKey,
-  resolveStorePath,
-  type SessionEntry,
-} from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ResolveContextEngineOptions } from "../context-engine/registry.js";
 import type { ContextEngine, SubagentEndReason } from "../context-engine/types.js";
@@ -17,7 +11,6 @@ import { importRuntimeModule } from "../shared/runtime-import.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { ensureRuntimePluginsLoaded as ensureRuntimePluginsLoadedFn } from "./runtime-plugins.js";
-import type { SubagentRunOutcome } from "./subagent-announce-output.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_ERROR,
@@ -64,6 +57,12 @@ import {
 } from "./subagent-registry-state.js";
 import { configureSubagentRegistrySteerRuntime } from "./subagent-registry-steer-runtime.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import {
+  loadSubagentSessionEntry,
+  resolveCompletionFromSessionEntry,
+  resolveSubagentSessionCompletion,
+  type SubagentSessionStoreCache,
+} from "./subagent-session-reconciliation.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
 
 export type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -199,90 +198,6 @@ const SESSION_RUN_TTL_MS = 5 * 60_000; // 5 minutes
 const PENDING_LIFECYCLE_TERMINAL_TTL_MS = 5 * 60_000; // 5 minutes
 /** Grace period before treating a "running" subagent without a live run context as stale. */
 const STALE_ACTIVE_SUBAGENT_GRACE_MS = process.env.OPENCLAW_TEST_FAST === "1" ? 1_000 : 60_000;
-
-function findSessionEntryByKey(store: Record<string, SessionEntry>, sessionKey: string) {
-  const direct = store[sessionKey];
-  if (direct) {
-    return direct;
-  }
-  const normalized = sessionKey.trim().toLowerCase();
-  for (const [key, entry] of Object.entries(store)) {
-    if (key.trim().toLowerCase() === normalized) {
-      return entry;
-    }
-  }
-  return undefined;
-}
-
-function loadSubagentSessionEntry(
-  childSessionKey: string,
-  storeCache: Map<string, Record<string, SessionEntry>>,
-): SessionEntry | undefined {
-  const key = childSessionKey.trim();
-  if (!key) {
-    return undefined;
-  }
-  const agentId = resolveAgentIdFromSessionKey(key);
-  const storePath = resolveStorePath(getRuntimeConfig().session?.store, { agentId });
-  let store = storeCache.get(storePath);
-  if (!store) {
-    store = loadSessionStore(storePath);
-    storeCache.set(storePath, store);
-  }
-  return findSessionEntryByKey(store, key);
-}
-
-function resolveCompletionFromSessionEntry(
-  sessionEntry: SessionEntry | undefined,
-  fallbackEndedAt: number,
-): {
-  endedAt: number;
-  outcome: SubagentRunOutcome;
-  reason: SubagentLifecycleEndedReason;
-} | null {
-  const status = sessionEntry?.status;
-  const endedAt =
-    typeof sessionEntry?.endedAt === "number" && Number.isFinite(sessionEntry.endedAt)
-      ? sessionEntry.endedAt
-      : fallbackEndedAt;
-
-  if (status === "done") {
-    return {
-      endedAt,
-      outcome: { status: "ok" },
-      reason: SUBAGENT_ENDED_REASON_COMPLETE,
-    };
-  }
-  if (status === "timeout") {
-    return {
-      endedAt,
-      outcome: { status: "timeout" },
-      reason: SUBAGENT_ENDED_REASON_COMPLETE,
-    };
-  }
-  if (status === "failed") {
-    return {
-      endedAt,
-      outcome: { status: "error", error: "session completed before registry settled" },
-      reason: SUBAGENT_ENDED_REASON_ERROR,
-    };
-  }
-  if (status === "killed") {
-    return {
-      endedAt,
-      outcome: { status: "error", error: "subagent run terminated" },
-      reason: SUBAGENT_ENDED_REASON_KILLED,
-    };
-  }
-  if (status !== "running" && typeof sessionEntry?.endedAt === "number") {
-    return {
-      endedAt,
-      outcome: { status: "ok" },
-      reason: SUBAGENT_ENDED_REASON_COMPLETE,
-    };
-  }
-  return null;
-}
 
 function loadContextEngineInitModule(): Promise<ContextEngineInitModule> {
   return contextEngineInitLoader.load();
@@ -747,7 +662,7 @@ async function sweepSubagentRuns() {
   sweepInProgress = true;
   try {
     const now = Date.now();
-    const storeCache = new Map<string, Record<string, SessionEntry>>();
+    const storeCache: SubagentSessionStoreCache = new Map();
     let mutated = false;
     for (const [runId, entry] of subagentRuns.entries()) {
       if (typeof entry.endedAt !== "number") {
@@ -774,8 +689,13 @@ async function sweepSubagentRuns() {
             continue;
           }
 
-          const sessionEntry = loadSubagentSessionEntry(entry.childSessionKey, storeCache);
-          const completion = resolveCompletionFromSessionEntry(sessionEntry, now);
+          const sessionEntry = loadSubagentSessionEntry({
+            childSessionKey: entry.childSessionKey,
+            storeCache,
+          });
+          const completion = resolveCompletionFromSessionEntry(sessionEntry, now, {
+            notBeforeMs: entry.startedAt ?? entry.createdAt,
+          });
           if (completion) {
             await completeSubagentRun({
               runId,
@@ -986,6 +906,7 @@ const subagentRunManager = createSubagentRunManager({
   clearPendingLifecycleError,
   resolveSubagentWaitTimeoutMs,
   scheduleOrphanRecovery: (args) => scheduleSubagentOrphanRecovery(args),
+  resolveSubagentSessionCompletion,
   notifyContextEngineSubagentEnded,
   completeCleanupBookkeeping,
   completeSubagentRun,

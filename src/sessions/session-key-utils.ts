@@ -21,14 +21,56 @@ export type RawSessionConversationRef = {
   prefix: string;
 };
 
+export function normalizeSessionPeerId(params: {
+  channel: string | undefined | null;
+  peerKind?: string | null;
+  peerId?: string | null;
+}): string {
+  const peerId = (params.peerId ?? "").trim();
+  if (!peerId) {
+    return "";
+  }
+  const channel = normalizeLowercaseStringOrEmpty(params.channel);
+  const peerKind = normalizeLowercaseStringOrEmpty(params.peerKind);
+  return channel === "signal" && peerKind === "group"
+    ? peerId
+    : normalizeLowercaseStringOrEmpty(peerId);
+}
+
+const SIGNAL_GROUP_SESSION_SEGMENT_RE = /(^|:)signal:group:([^:]+)/gi;
+
+export function normalizeSessionKeyPreservingOpaquePeerIds(
+  sessionKey: string | undefined | null,
+): string {
+  const raw = normalizeOptionalString(sessionKey);
+  if (!raw) {
+    return "";
+  }
+
+  let normalized = "";
+  let cursor = 0;
+  for (const match of raw.matchAll(SIGNAL_GROUP_SESSION_SEGMENT_RE)) {
+    const matchIndex = match.index ?? 0;
+    const matched = match[0] ?? "";
+    const peerId = match[2] ?? "";
+    const peerStart = matchIndex + matched.length - peerId.length;
+    normalized += normalizeLowercaseStringOrEmpty(raw.slice(cursor, peerStart));
+    normalized += peerId.trim();
+    cursor = matchIndex + matched.length;
+  }
+  normalized += normalizeLowercaseStringOrEmpty(raw.slice(cursor));
+  return normalized;
+}
+
 /**
  * Parse agent-scoped session keys in a canonical, case-insensitive way.
- * Returned values are normalized to lowercase for stable comparisons/routing.
+ * Returned values are canonicalized for stable comparisons/routing while
+ * preserving provider-owned opaque peer IDs.
  */
 export function parseAgentSessionKey(
   sessionKey: string | undefined | null,
 ): ParsedAgentSessionKey | null {
-  const raw = normalizeOptionalLowercaseString(sessionKey);
+  const raw = normalizeSessionKeyPreservingOpaquePeerIds(sessionKey);
   if (!raw) {
     return null;
   }

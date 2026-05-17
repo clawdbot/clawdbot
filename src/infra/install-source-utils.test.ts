@@ -210,7 +210,13 @@ describe("packNpmSpecToArchive", () => {
         timeoutMs: 300_000,
         env: {
           COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
+          NPM_CONFIG_BEFORE: "",
           NPM_CONFIG_IGNORE_SCRIPTS: "true",
+          NPM_CONFIG_MIN_RELEASE_AGE: "",
+          "NPM_CONFIG_MIN-RELEASE-AGE": "",
+          npm_config_before: "",
+          "npm_config_min-release-age": "0",
+          npm_config_min_release_age: "",
         },
       },
     );

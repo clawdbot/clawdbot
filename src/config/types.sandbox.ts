@@ -17,7 +17,7 @@ export type SandboxDockerSettings = {
   user?: string;
   /** Drop Linux capabilities. */
   capDrop?: string[];
-  /** Extra environment variables for sandbox exec. */
+  /** Explicit environment variables for sandbox container creation and exec. */
   env?: Record<string, string>;
   /** Optional setup command run once after container creation (array entries are joined by newline). */
   setupCommand?: string;

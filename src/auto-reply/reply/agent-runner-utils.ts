@@ -149,6 +149,7 @@ export function buildThreadingToolContext(params: {
         ReplyToId: sessionCtx.ReplyToId,
         ThreadLabel: sessionCtx.ThreadLabel,
         MessageThreadId: sessionCtx.MessageThreadId,
+        TransportThreadId: sessionCtx.TransportThreadId,
         NativeChannelId: sessionCtx.NativeChannelId,
       },
       hasRepliedRef,

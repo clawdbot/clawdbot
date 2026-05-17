@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   loadInstalledPluginIndex: vi.fn(),
   maybeRepairGroupAllowFromFallback: vi.fn(),
   maybeRepairManagedNpmOpenClawPeerLinks: vi.fn(),
+  maybeRepairLegacyOAuthSidecarProfiles: vi.fn(),
   maybeRepairOpenPolicyAllowFrom: vi.fn(),
   maybeRepairStaleManagedNpmBundledPlugins: vi.fn(),
   maybeRepairStalePluginConfig: vi.fn(),
@@ -27,6 +28,10 @@ vi.mock("../../config/plugin-auto-enable.js", () => ({
 vi.mock("../doctor-plugin-registry.js", () => ({
   maybeRepairManagedNpmOpenClawPeerLinks: mocks.maybeRepairManagedNpmOpenClawPeerLinks,
   maybeRepairStaleManagedNpmBundledPlugins: mocks.maybeRepairStaleManagedNpmBundledPlugins,
+}));
+
+vi.mock("../doctor-auth-oauth-sidecar.js", () => ({
+  maybeRepairLegacyOAuthSidecarProfiles: mocks.maybeRepairLegacyOAuthSidecarProfiles,
 }));
 
 vi.mock("./shared/missing-configured-plugin-install.js", () => ({
@@ -207,6 +212,11 @@ describe("doctor repair sequencing", () => {
       changes: [],
     }));
     mocks.maybeRepairManagedNpmOpenClawPeerLinks.mockResolvedValue(false);
+    mocks.maybeRepairLegacyOAuthSidecarProfiles.mockResolvedValue({
+      detected: [],
+      changes: [],
+      warnings: [],
+    });
     mocks.maybeRepairOpenPolicyAllowFrom.mockImplementation((cfg: OpenClawConfig) => ({
       config: cfg,
       changes: [],
@@ -341,6 +351,48 @@ describe("doctor repair sequencing", () => {
     expect(peerLinkCall?.config.plugins?.entries?.["google-meet"]).toEqual({ enabled: true });
     expect(peerLinkCall?.prompter).toEqual({ shouldRepair: true });
     expect(peerLinkCall?.env).toBe(process.env);
+  });
+
+  it("migrates legacy OAuth sidecars before stale OAuth shadow cleanup", async () => {
+    const events: string[] = [];
+    mocks.maybeRepairLegacyOAuthSidecarProfiles.mockImplementationOnce(async () => {
+      events.push("sidecar-oauth");
+      return {
+        detected: ["auth-profiles.json"],
+        changes: ["Migrated 1 sidecar-backed Codex OAuth profile."],
+        warnings: ["Sidecar warning"],
+      };
+    });
+    mocks.repairStaleOAuthProfileShadows.mockImplementationOnce(async () => {
+      events.push("stale-oauth-shadows");
+      return {
+        changes: ["Removed stale OAuth auth profile shadow openai-codex."],
+        warnings: [],
+      };
+    });
+
+    const result = await runDoctorRepairSequence({
+      state: {
+        cfg: {} as OpenClawConfig,
+        candidate: {} as OpenClawConfig,
+        pendingChanges: false,
+        fixHints: [],
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(events).toEqual(["sidecar-oauth", "stale-oauth-shadows"]);
+    expect(mocks.maybeRepairLegacyOAuthSidecarProfiles).toHaveBeenCalledWith({
+      cfg: {},
+      prompter: { confirmAutoFix: expect.any(Function) },
+      emitNotes: false,
+      env: process.env,
+    });
+    expect(result.changeNotes).toEqual([
+      "Migrated 1 sidecar-backed Codex OAuth profile.",
+      "Removed stale OAuth auth profile shadow openai-codex.",
+    ]);
+    expect(result.warningNotes).toEqual(["Sidecar warning"]);
   });
 
   it("emits Discord warnings when unsafe numeric ids block repair", async () => {
@@ -535,18 +587,6 @@ describe("doctor repair sequencing", () => {
       ],
       warnings: [],
     });
-    mocks.maybeRepairStalePluginConfig.mockImplementationOnce((cfg: OpenClawConfig) => ({
-      config: {
-        ...cfg,
-        plugins: {
-          ...cfg.plugins,
-          allow: [],
-          entries: {},
-        },
-      },
-      changes: ["- plugins.entries: removed 1 stale plugin entry (brave)"],
-    }));
-
     const result = await runDoctorRepairSequence({
       state: {
         cfg: {
@@ -610,18 +650,30 @@ describe("doctor repair sequencing", () => {
       warnings: [
         'Failed to install missing configured plugin "brave" from @openclaw/brave-plugin: package install failed',
       ],
+      failedPluginIds: ["brave"],
     });
-    mocks.maybeRepairStalePluginConfig.mockImplementationOnce((cfg: OpenClawConfig) => ({
-      config: {
-        ...cfg,
-        plugins: {
-          ...cfg.plugins,
-          allow: [],
-          entries: {},
-        },
+    mocks.maybeRepairStalePluginConfig.mockImplementationOnce(
+      (
+        cfg: OpenClawConfig,
+        _env: NodeJS.ProcessEnv | undefined,
+        params: { preservePluginIds?: string[] },
+      ) => {
+        expect(params.preservePluginIds).toEqual(["brave"]);
+        return {
+          config: {
+            ...cfg,
+            plugins: {
+              ...cfg.plugins,
+              allow: ["brave"],
+              entries: {
+                brave: cfg.plugins?.entries?.brave,
+              },
+            },
+          },
+          changes: ["plugins.entries: removed 1 stale plugin entry (old-plugin)"],
+        };
       },
-      changes: ["plugins.entries: removed 1 stale plugin entry (brave)"],
-    }));
+    );
 
     const result = await runDoctorRepairSequence({
       state: {
@@ -640,6 +692,9 @@ describe("doctor repair sequencing", () => {
                     },
                   },
                 },
+              },
+              "old-plugin": {
+                enabled: true,
               },
             },
           },
@@ -660,6 +715,9 @@ describe("doctor repair sequencing", () => {
                   },
                 },
               },
+              "old-plugin": {
+                enabled: true,
+              },
             },
           },
         } as OpenClawConfig,
@@ -669,12 +727,68 @@ describe("doctor repair sequencing", () => {
       doctorFixCommand: "openclaw doctor --fix",
     });
 
-    expect(mocks.maybeRepairStalePluginConfig).not.toHaveBeenCalled();
     expect(result.state.candidate.plugins?.allow).toEqual(["brave"]);
     expect(result.state.candidate.plugins?.entries?.brave?.enabled).toBe(true);
-    expect(result.state.pendingChanges).toBe(false);
+    expect(result.state.candidate.plugins?.entries?.["old-plugin"]).toBeUndefined();
+    expect(result.state.pendingChanges).toBe(true);
+    expect(result.changeNotes).toContain(
+      "plugins.entries: removed 1 stale plugin entry (old-plugin)",
+    );
     expect(result.warningNotes).toStrictEqual([
       'Failed to install missing configured plugin "brave" from @openclaw/brave-plugin: package install failed',
+    ]);
+  });
+
+  it("preserves configured channels when their install repair fails", async () => {
+    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValueOnce({
+      changes: [],
+      warnings: [
+        'Failed to install missing configured channel plugin "whatsapp" from @openclaw/whatsapp: package install failed',
+      ],
+      failedPluginIds: ["whatsapp"],
+    });
+    mocks.maybeRepairStalePluginConfig.mockImplementationOnce(
+      (
+        cfg: OpenClawConfig,
+        _env: NodeJS.ProcessEnv | undefined,
+        params: { preservePluginIds?: string[] },
+      ) => {
+        expect(params.preservePluginIds).toEqual(["whatsapp"]);
+        return {
+          config: cfg,
+          changes: [],
+        };
+      },
+    );
+
+    const result = await runDoctorRepairSequence({
+      state: {
+        cfg: {
+          channels: {
+            whatsapp: {
+              allowFrom: ["+15555550123"],
+            },
+          },
+        } as OpenClawConfig,
+        candidate: {
+          channels: {
+            whatsapp: {
+              allowFrom: ["+15555550123"],
+            },
+          },
+        } as OpenClawConfig,
+        pendingChanges: false,
+        fixHints: [],
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(mocks.maybeRepairStalePluginConfig).toHaveBeenCalledOnce();
+    expect(result.state.candidate.channels?.whatsapp).toEqual({
+      allowFrom: ["+15555550123"],
+    });
+    expect(result.warningNotes).toStrictEqual([
+      'Failed to install missing configured channel plugin "whatsapp" from @openclaw/whatsapp: package install failed',
     ]);
   });
 });

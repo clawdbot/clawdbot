@@ -38,8 +38,19 @@ export function getCurrentDiagnosticPhase(): string | undefined {
   return activePhaseStack.at(-1)?.name;
 }
 
+function resolveRecentPhaseLimit(limit: number): number | null {
+  if (!Number.isFinite(limit) || limit <= 0) {
+    return null;
+  }
+  return Math.floor(limit);
+}
+
 export function getRecentDiagnosticPhases(limit = 8): DiagnosticPhaseSnapshot[] {
-  return recentPhases.slice(-Math.max(0, limit)).map((phase) => Object.assign({}, phase));
+  const resolved = resolveRecentPhaseLimit(limit);
+  if (resolved === null) {
+    return [];
+  }
+  return recentPhases.slice(-resolved).map((phase) => Object.assign({}, phase));
 }
 
 export function recordDiagnosticPhase(snapshot: DiagnosticPhaseSnapshot): void {

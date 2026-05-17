@@ -473,8 +473,9 @@ enumeration of `src/gateway/server-methods/*.ts`.
   events. In protocol v4, delta payloads carry `deltaText`; `message` remains
   the cumulative assistant snapshot. Non-prefix replacements set `replace=true`
   and use `deltaText` as the replacement text.
-- `session.message` and `session.tool`: transcript/event-stream updates for a
-  subscribed session.
+- `session.message`, `session.operation`, and `session.tool`: transcript,
+  in-flight session operation, and event-stream updates for a subscribed
+  session.
 - `sessions.changed`: session index or metadata changed.
 - `presence`: system presence snapshot updates.
 - `tick`: periodic keepalive / liveness event.
@@ -638,12 +639,12 @@ terminal summary, and sanitized error text.
 ### Client constants
 
 The reference client in `src/gateway/client.ts` uses these defaults. Values are
-stable across protocol v4 and are the expected baseline for third-party clients.
+stable across protocol v5 and are the expected baseline for third-party clients.
 
 | Constant                                  | Default                                               | Source                                                                                     |
 | ----------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `PROTOCOL_VERSION`                        | `4`                                                   | `src/gateway/protocol/version.ts`                                                          |
-| `MIN_CLIENT_PROTOCOL_VERSION`             | `4`                                                   | `src/gateway/protocol/version.ts`                                                          |
+| `PROTOCOL_VERSION`                        | `5`                                                   | `src/gateway/protocol/version.ts`                                                          |
+| `MIN_CLIENT_PROTOCOL_VERSION`             | `5`                                                   | `src/gateway/protocol/version.ts`                                                          |
 | Request timeout (per RPC)                 | `30_000` ms                                           | `src/gateway/client.ts` (`requestTimeoutMs`)                                               |
 | Preauth / connect-challenge timeout       | `15_000` ms                                           | `src/gateway/handshake-timeouts.ts` (config/env can raise the paired server/client budget) |
 | Initial reconnect backoff                 | `1_000` ms                                            | `src/gateway/client.ts` (`backoffMs`)                                                      |

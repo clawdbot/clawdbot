@@ -408,6 +408,142 @@ describe("Discord model picker interactions", () => {
     });
   });
 
+  it("persists the selected runtime outside the hidden /model pipeline", async () => {
+    const context = createModelPickerContext();
+    const pickerData = createDefaultModelPickerData();
+    pickerData.runtimeChoicesByProvider = new Map([
+      [
+        "openai",
+        [
+          { id: "codex", label: "Codex", description: "Use Codex." },
+          { id: "pi", label: "OpenClaw Pi Default", description: "Use Pi." },
+        ],
+      ],
+    ]);
+    const modelCommand = createModelCommandDefinition();
+
+    vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
+    mockModelCommandPipeline(modelCommand);
+
+    const dispatchSpy = createDispatchSpy();
+    const submitInteraction = await runSubmitButton({
+      context,
+      data: { ...createModelsViewSubmitData(), r: "codex" },
+      dispatchCommandInteraction: dispatchSpy,
+    });
+
+    expect(submitInteraction.editReply).toHaveBeenCalledTimes(1);
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    expectDispatchedModelSelection({
+      dispatchSpy,
+      model: "openai/gpt-4o",
+    });
+    const store = loadSessionStore(
+      resolveStorePath(context.cfg.session?.store, { agentId: "main" }),
+      {
+        skipCache: true,
+      },
+    );
+    const entry = Object.values(store).find(
+      (candidate) =>
+        candidate.providerOverride === "openai" && candidate.modelOverride === "gpt-4o",
+    );
+    expect(typeof entry?.sessionId).toBe("string");
+    expect(entry?.sessionId).not.toBe("");
+    expect(entry?.agentRuntimeOverride).toBe("codex");
+  });
+
+  it("does not carry the current runtime to another provider", async () => {
+    const context = createModelPickerContext();
+    (context.cfg as { agents?: { defaults?: { agentRuntime?: { id: string } } } }).agents = {
+      defaults: { agentRuntime: { id: "codex" } },
+    };
+    const pickerData = createDefaultModelPickerData();
+    pickerData.runtimeChoicesByProvider = new Map([
+      [
+        "openai",
+        [
+          { id: "codex", label: "Codex", description: "Use Codex." },
+          { id: "pi", label: "OpenClaw Pi Default", description: "Use Pi." },
+        ],
+      ],
+    ]);
+    const modelCommand = createModelCommandDefinition();
+
+    vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
+    mockModelCommandPipeline(modelCommand);
+
+    const dispatchSpy = createDispatchSpy();
+    await runSubmitButton({
+      context,
+      data: { ...createModelsViewSubmitData(), p: "anthropic", mi: "1" },
+      dispatchCommandInteraction: dispatchSpy,
+    });
+
+    expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    expectDispatchedModelSelection({
+      dispatchSpy,
+      model: "anthropic/claude-sonnet-4-5",
+    });
+    const store = loadSessionStore(
+      resolveStorePath(context.cfg.session?.store, { agentId: "main" }),
+      {
+        skipCache: true,
+      },
+    );
+    const entry = Object.values(store).find(
+      (candidate) =>
+        candidate.providerOverride === "anthropic" &&
+        candidate.modelOverride === "claude-sonnet-4-5",
+    );
+    expect(entry?.agentRuntimeOverride).toBeUndefined();
+  });
+
+  it("does not treat legacy agentRuntime config as current picker state", async () => {
+    const context = createModelPickerContext();
+    (context.cfg as { agents?: { defaults?: { agentRuntime?: { id: string } } } }).agents = {
+      defaults: { agentRuntime: { id: "claude-cli" } },
+    };
+    const pickerData = createDefaultModelPickerData();
+    pickerData.runtimeChoicesByProvider = new Map([
+      [
+        "anthropic",
+        [
+          { id: "pi", label: "OpenClaw Pi Default", description: "Use Pi." },
+          { id: "claude-cli", label: "Claude CLI", description: "Use Claude CLI." },
+        ],
+      ],
+    ]);
+    const modelCommand = createModelCommandDefinition();
+
+    vi.spyOn(modelPickerModule, "loadDiscordModelPickerData").mockResolvedValue(pickerData);
+    mockModelCommandPipeline(modelCommand);
+
+    const dispatchSpy = createDispatchSpy();
+    await runSubmitButton({
+      context,
+      data: { ...createModelsViewSubmitData(), p: "anthropic", mi: "1" },
+      dispatchCommandInteraction: dispatchSpy,
+    });
+
+    expectDispatchedModelSelection({
+      dispatchSpy,
+      model: "anthropic/claude-sonnet-4-5",
+    });
+    const store = loadSessionStore(
+      resolveStorePath(context.cfg.session?.store, { agentId: "main" }),
+      {
+        skipCache: true,
+      },
+    );
+    const entry = Object.values(store).find(
+      (candidate) =>
+        candidate.providerOverride === "anthropic" &&
+        candidate.modelOverride === "claude-sonnet-4-5",
+    );
+    expect(entry?.agentRuntimeOverride).toBeUndefined();
+  });
+
   it("applies the selected model even when component thread parent.name throws on a partial channel", async () => {
     const context = createModelPickerContext();
     const pickerData = createDefaultModelPickerData();

@@ -69,6 +69,26 @@ describe("exec allowlist matching", () => {
     }
   });
 
+  it.runIf(process.platform !== "win32")(
+    "rejects wildcard path matches that escape through dot segments",
+    () => {
+      expect(
+        matchAllowlist([{ pattern: "/usr/bin/**" }], {
+          rawExecutable: "/usr/bin/../../bin/sh",
+          resolvedPath: "/usr/bin/../../bin/sh",
+          executableName: "sh",
+        }),
+      ).toBeNull();
+      expect(
+        matchAllowlist([{ pattern: "/usr/bin/**" }], {
+          rawExecutable: "/usr/bin/sub/../env",
+          resolvedPath: "/usr/bin/sub/../env",
+          executableName: "env",
+        })?.pattern,
+      ).toBe("/usr/bin/**");
+    },
+  );
+
   it("matches absolute paths containing regex metacharacters literally", () => {
     const plusPathCases = ["/usr/bin/g++", "/usr/bin/clang++"] as const;
     for (const candidatePath of plusPathCases) {
@@ -101,5 +121,31 @@ describe("exec allowlist matching", () => {
     for (const { pattern, resolution } of literalCases) {
       expect(matchAllowlist([{ pattern }], resolution)?.pattern).toBe(pattern);
     }
+  });
+
+  it("matches path-shaped allowlist entries against the executable trust realpath", () => {
+    const resolution = {
+      rawExecutable: "rg",
+      resolvedPath: "/opt/homebrew/bin/rg",
+      resolvedRealPath: "/opt/homebrew/Cellar/ripgrep/14.1.1/bin/rg",
+      executableName: "rg",
+    };
+
+    expect(
+      matchAllowlist([{ pattern: "/opt/homebrew/Cellar/ripgrep/14.1.1/bin/rg" }], resolution)
+        ?.pattern,
+    ).toBe("/opt/homebrew/Cellar/ripgrep/14.1.1/bin/rg");
+    expect(matchAllowlist([{ pattern: "/opt/homebrew/bin/rg" }], resolution)).toBeNull();
+  });
+
+  it("keeps basename allowlist entries on the PATH-resolved executable name", () => {
+    const resolution = {
+      rawExecutable: "rg",
+      resolvedPath: "/opt/homebrew/bin/rg",
+      resolvedRealPath: "/opt/homebrew/Cellar/ripgrep/14.1.1/bin/rg",
+      executableName: "rg",
+    };
+
+    expect(matchAllowlist([{ pattern: "rg" }], resolution)?.pattern).toBe("rg");
   });
 });

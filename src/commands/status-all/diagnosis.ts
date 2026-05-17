@@ -1,6 +1,10 @@
 import type { ProgressReporter } from "../../cli/progress.js";
 import { formatConfigIssueLine } from "../../config/issue-format.js";
-import { resolveGatewayLogPaths, resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
+import {
+  resolveGatewayLogPaths,
+  resolveGatewayRestartLogPath,
+  resolveGatewaySupervisorLogPaths,
+} from "../../daemon/restart-logs.js";
 import {
   formatPortDiagnostics,
   isDualStackLoopbackGatewayListeners,
@@ -231,7 +235,9 @@ export async function appendStatusAllDiagnosis(params: {
   params.progress.setLabel("Reading logs…");
   const logPaths = (() => {
     try {
-      return resolveGatewayLogPaths(process.env);
+      return process.platform === "darwin"
+        ? resolveGatewaySupervisorLogPaths(process.env, { platform: "darwin" })
+        : resolveGatewayLogPaths(process.env);
     } catch {
       return null;
     }

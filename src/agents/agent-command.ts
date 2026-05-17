@@ -20,6 +20,7 @@ import {
 import { formatErrorMessage } from "../infra/errors.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
 import {
   isSubagentSessionKey,
   normalizeAgentId,
@@ -36,17 +37,23 @@ import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import { createTrajectoryRuntimeRecorder } from "../trajectory/runtime.js";
+import { resolveUserPath } from "../utils.js";
 import { resolveMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentRuntimeConfig } from "./agent-runtime-config.js";
 import {
+  clearAutoFallbackPrimaryProbeSelection,
+  entryMatchesAutoFallbackPrimaryProbe,
   hasSessionAutoModelFallbackProvenance,
   listAgentIds,
+  markAutoFallbackPrimaryProbe,
+  resolveAutoFallbackPrimaryProbe,
   resolveAgentDir,
   resolveEffectiveModelFallbacks,
   resolveSessionAgentId,
   resolveAgentSkillsFilter,
   resolveAgentWorkspaceDir,
 } from "./agent-scope.js";
+import { isStoredCredentialCompatibleWithAuthProvider } from "./auth-profiles/order.js";
 import { clearSessionAuthProfileOverride } from "./auth-profiles/session-override.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
 import {
@@ -61,11 +68,12 @@ import type { AgentCommandIngressOpts, AgentCommandOpts } from "./command/types.
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import { resolveFastModeState } from "./fast-mode.js";
 import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
-import { resolveAgentHarnessPolicy } from "./harness/selection.js";
+import { resolveAvailableAgentHarnessPolicy } from "./harness/selection.js";
 import { AGENT_LANE_SUBAGENT } from "./lanes.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch.js";
 import { loadManifestModelCatalog } from "./model-catalog.js";
 import { runWithModelFallback } from "./model-fallback.js";
+import type { ModelManifestNormalizationContext } from "./model-selection-normalize.js";
 import {
   buildConfiguredModelCatalog,
   modelKey,
@@ -225,6 +233,9 @@ type PersistSessionEntryParams = {
 type OverrideFieldClearedByDelete =
   | "providerOverride"
   | "modelOverride"
+  | "modelOverrideSource"
+  | "modelOverrideFallbackOriginProvider"
+  | "modelOverrideFallbackOriginModel"
   | "authProfileOverride"
   | "authProfileOverrideSource"
   | "authProfileOverrideCompactionCount"
@@ -236,6 +247,9 @@ type OverrideFieldClearedByDelete =
 const OVERRIDE_FIELDS_CLEARED_BY_DELETE: OverrideFieldClearedByDelete[] = [
   "providerOverride",
   "modelOverride",
+  "modelOverrideSource",
+  "modelOverrideFallbackOriginProvider",
+  "modelOverrideFallbackOriginModel",
   "authProfileOverride",
   "authProfileOverrideSource",
   "authProfileOverrideCompactionCount",
@@ -247,8 +261,12 @@ const OVERRIDE_FIELDS_CLEARED_BY_DELETE: OverrideFieldClearedByDelete[] = [
 
 const OVERRIDE_VALUE_MAX_LENGTH = 256;
 
-async function persistSessionEntry(params: PersistSessionEntryParams): Promise<void> {
-  await persistSessionEntryBase({
+async function persistSessionEntry(
+  params: PersistSessionEntryParams & {
+    shouldPersist?: (entry: SessionEntry | undefined) => boolean;
+  },
+): Promise<SessionEntry | undefined> {
+  return await persistSessionEntryBase({
     ...params,
     clearedFields: OVERRIDE_FIELDS_CLEARED_BY_DELETE,
   });
@@ -324,27 +342,6 @@ async function prepareAgentCommandExecution(
     }
   }
   const agentCfg = cfg.agents?.defaults;
-  const configuredModel = resolveConfiguredModelRef({
-    cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-  });
-  const configuredThinkingCatalog = buildConfiguredModelCatalog({ cfg });
-  const thinkingLevelsHint = formatThinkingLevels(
-    configuredModel.provider,
-    configuredModel.model,
-    ", ",
-    configuredThinkingCatalog.length > 0 ? configuredThinkingCatalog : undefined,
-  );
-
-  const thinkOverride = normalizeThinkLevel(opts.thinking);
-  const thinkOnce = normalizeThinkLevel(opts.thinkingOnce);
-  if (opts.thinking && !thinkOverride) {
-    throw new Error(`Invalid thinking level. Use one of: ${thinkingLevelsHint}.`);
-  }
-  if (opts.thinkingOnce && !thinkOnce) {
-    throw new Error(`Invalid one-shot thinking level. Use one of: ${thinkingLevelsHint}.`);
-  }
 
   const verboseOverride = normalizeVerboseLevel(opts.verbose);
   if (opts.verbose && !verboseOverride) {
@@ -399,13 +396,46 @@ async function prepareAgentCommandExecution(
   // Internal callers (for example subagent spawns) may pin workspace inheritance.
   const workspaceDirRaw =
     normalizedSpawned.workspaceDir ?? resolveAgentWorkspaceDir(cfg, sessionAgentId);
+  const workspaceDir = resolveUserPath(workspaceDirRaw);
   const agentDir = resolveAgentDir(cfg, sessionAgentId);
-  const workspace = await ensureAgentWorkspace({
+  const manifestMetadataSnapshot = loadManifestMetadataSnapshot({
+    config: cfg,
+    workspaceDir,
+    env: process.env,
+  });
+  const modelManifestContext = {
+    manifestPlugins: manifestMetadataSnapshot.plugins,
+  } satisfies ModelManifestNormalizationContext;
+  const configuredModel = resolveConfiguredModelRef({
+    cfg,
+    defaultProvider: DEFAULT_PROVIDER,
+    defaultModel: DEFAULT_MODEL,
+    ...modelManifestContext,
+  });
+  const configuredThinkingCatalog = buildConfiguredModelCatalog({
+    cfg,
+    workspaceDir,
+    ...modelManifestContext,
+  });
+  const thinkingLevelsHint = formatThinkingLevels(
+    configuredModel.provider,
+    configuredModel.model,
+    ", ",
+    configuredThinkingCatalog.length > 0 ? configuredThinkingCatalog : undefined,
+  );
+  const thinkOverride = normalizeThinkLevel(opts.thinking);
+  const thinkOnce = normalizeThinkLevel(opts.thinkingOnce);
+  if (opts.thinking && !thinkOverride) {
+    throw new Error(`Invalid thinking level. Use one of: ${thinkingLevelsHint}.`);
+  }
+  if (opts.thinkingOnce && !thinkOnce) {
+    throw new Error(`Invalid one-shot thinking level. Use one of: ${thinkingLevelsHint}.`);
+  }
+  await ensureAgentWorkspace({
     dir: workspaceDirRaw,
     ensureBootstrapFiles: !agentCfg?.skipBootstrap,
     skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
   });
-  const workspaceDir = workspace.dir;
   const runId = opts.runId?.trim() || sessionId;
   const { getAcpSessionManager } = await loadAcpManagerRuntime();
   const acpManager = getAcpSessionManager();
@@ -445,6 +475,7 @@ async function prepareAgentCommandExecution(
     outboundSession,
     workspaceDir,
     agentDir,
+    modelManifestContext,
     runId,
     acpManager,
     acpResolution,
@@ -484,6 +515,7 @@ async function agentCommandInternal(
     runId,
     acpManager,
     acpResolution,
+    modelManifestContext,
   } = prepared;
   let sessionEntry = prepared.sessionEntry;
 
@@ -735,10 +767,12 @@ async function agentCommandInternal(
     const configuredDefaultRef = resolveDefaultModelForAgent({
       cfg,
       agentId: sessionAgentId,
+      ...modelManifestContext,
     });
     const { provider: defaultProvider, model: defaultModel } = normalizeModelRef(
       configuredDefaultRef.provider,
       configuredDefaultRef.model,
+      modelManifestContext,
     );
     let provider = defaultProvider;
     let model = defaultModel;
@@ -771,6 +805,7 @@ async function agentCommandInternal(
       catalog: [],
       defaultProvider,
       defaultModel,
+      ...modelManifestContext,
     });
 
     if (needsModelCatalog) {
@@ -781,6 +816,7 @@ async function agentCommandInternal(
         defaultProvider,
         defaultModel,
         agentId: sessionAgentId,
+        ...modelManifestContext,
       });
       allowedModelCatalog = visibilityPolicy.allowedCatalog;
     }
@@ -803,7 +839,11 @@ async function agentCommandInternal(
       const overrideProvider = sessionEntry.providerOverride?.trim() || defaultProvider;
       const overrideModel = sessionEntry.modelOverride?.trim();
       if (overrideModel) {
-        const normalizedOverride = normalizeModelRef(overrideProvider, overrideModel);
+        const normalizedOverride = normalizeModelRef(
+          overrideProvider,
+          overrideModel,
+          modelManifestContext,
+        );
         const key = modelKey(normalizedOverride.provider, normalizedOverride.model);
         if (!visibilityPolicy.allowsKey(key)) {
           const { updated } = applyModelOverrideToSessionEntry({
@@ -826,21 +866,40 @@ async function agentCommandInternal(
     let storedModelOverride = sessionEntry?.modelOverride?.trim();
     if (storedModelOverride) {
       const candidateProvider = storedProviderOverride || defaultProvider;
-      const normalizedStored = normalizeModelRef(candidateProvider, storedModelOverride);
+      const normalizedStored = normalizeModelRef(
+        candidateProvider,
+        storedModelOverride,
+        modelManifestContext,
+      );
       const key = modelKey(normalizedStored.provider, normalizedStored.model);
       if (visibilityPolicy.allowsKey(key)) {
         provider = normalizedStored.provider;
         model = normalizedStored.model;
       }
     }
+    const autoFallbackPrimaryProbe = !hasExplicitRunOverride
+      ? resolveAutoFallbackPrimaryProbe({
+          entry: sessionEntry,
+          sessionKey,
+          primaryProvider: defaultProvider,
+          primaryModel: defaultModel,
+        })
+      : undefined;
+    let autoFallbackPrimaryProbeSessionEntry: SessionEntry | undefined;
+    if (autoFallbackPrimaryProbe && sessionEntry) {
+      provider = autoFallbackPrimaryProbe.provider;
+      model = autoFallbackPrimaryProbe.model;
+      autoFallbackPrimaryProbeSessionEntry = { ...sessionEntry };
+      clearAutoFallbackPrimaryProbeSelection(autoFallbackPrimaryProbeSessionEntry);
+    }
     let providerForAuthProfileValidation = provider;
     if (hasExplicitRunOverride) {
       const explicitRef = explicitModelOverride
         ? explicitProviderOverride
-          ? normalizeModelRef(explicitProviderOverride, explicitModelOverride)
-          : parseModelRef(explicitModelOverride, provider)
+          ? normalizeModelRef(explicitProviderOverride, explicitModelOverride, modelManifestContext)
+          : parseModelRef(explicitModelOverride, provider, modelManifestContext)
         : explicitProviderOverride
-          ? normalizeModelRef(explicitProviderOverride, model)
+          ? normalizeModelRef(explicitProviderOverride, model, modelManifestContext)
           : null;
       if (!explicitRef) {
         throw new Error("Invalid model override.");
@@ -867,17 +926,23 @@ async function agentCommandInternal(
     model = allowedInitialSelection.model;
     providerForAuthProfileValidation = provider;
 
-    let sessionEntryForAttempt = sessionEntry;
-    if (sessionEntry) {
-      const authProfileId = sessionEntry.authProfileOverride;
+    await ensureSelectedAgentHarnessPlugin({
+      config: cfg,
+      provider,
+      modelId: model,
+      agentId: sessionAgentId,
+      sessionKey,
+      workspaceDir,
+    });
+
+    let sessionEntryForAttempt = autoFallbackPrimaryProbeSessionEntry ?? sessionEntry;
+    if (sessionEntryForAttempt) {
+      const authProfileId = sessionEntryForAttempt.authProfileOverride;
       if (authProfileId) {
-        const entry = sessionEntry;
+        const entry = sessionEntryForAttempt;
         const store = ensureAuthProfileStore();
         const profile = store.profiles[authProfileId];
-        const profileAuthProvider = profile
-          ? resolveProviderIdForAuth(profile.provider, { config: cfg, workspaceDir })
-          : undefined;
-        const validationHarnessPolicy = resolveAgentHarnessPolicy({
+        const validationHarnessPolicy = resolveAvailableAgentHarnessPolicy({
           provider: providerForAuthProfileValidation,
           modelId: model,
           config: cfg,
@@ -887,11 +952,21 @@ async function agentCommandInternal(
         const acceptedAuthProviders = listOpenAIAuthProfileProvidersForAgentRuntime({
           provider: providerForAuthProfileValidation,
           harnessRuntime: validationHarnessPolicy.runtime,
+          config: cfg,
         }).map((candidateProvider) =>
           resolveProviderIdForAuth(candidateProvider, { config: cfg, workspaceDir }),
         );
-        if (!profile || !acceptedAuthProviders.includes(profileAuthProvider ?? "")) {
-          if (hasExplicitRunOverride) {
+        const profileMatchesRuntime =
+          profile &&
+          acceptedAuthProviders.some((candidateProvider) =>
+            isStoredCredentialCompatibleWithAuthProvider({
+              cfg,
+              provider: candidateProvider,
+              credential: profile,
+            }),
+          );
+        if (!profileMatchesRuntime) {
+          if (hasExplicitRunOverride || autoFallbackPrimaryProbe) {
             sessionEntryForAttempt = {
               ...entry,
               authProfileOverride: undefined,
@@ -966,14 +1041,6 @@ async function agentCommandInternal(
         }
       }
     }
-    await ensureSelectedAgentHarnessPlugin({
-      config: cfg,
-      provider,
-      modelId: model,
-      agentId: sessionAgentId,
-      sessionKey,
-      workspaceDir,
-    });
     const { resolveSessionTranscriptFile } = await loadTranscriptResolveRuntime();
     let sessionFile: string | undefined;
     if (sessionStore && sessionKey) {
@@ -1016,6 +1083,7 @@ async function agentCommandInternal(
     let fallbackModel = model;
     const MAX_LIVE_SWITCH_RETRIES = 5;
     let liveSwitchRetries = 0;
+    let autoFallbackPrimaryProbeInterruptedByLiveSwitch = false;
     const fallbackTrajectoryRecorder = createTrajectoryRuntimeRecorder({
       cfg,
       runId,
@@ -1046,6 +1114,7 @@ async function agentCommandInternal(
           cfg,
           provider,
           model,
+          ...modelManifestContext,
           runId,
           agentDir,
           fallbacksOverride: effectiveFallbacksOverride,
@@ -1059,6 +1128,22 @@ async function agentCommandInternal(
               result,
             }),
           run: async (providerOverride, modelOverride, runOptions) => {
+            const isAutoFallbackPrimaryProbeCandidate =
+              autoFallbackPrimaryProbe &&
+              providerOverride === autoFallbackPrimaryProbe.provider &&
+              modelOverride === autoFallbackPrimaryProbe.model;
+            const attemptSessionEntry =
+              autoFallbackPrimaryProbe &&
+              providerOverride === autoFallbackPrimaryProbe.fallbackProvider &&
+              !isAutoFallbackPrimaryProbeCandidate
+                ? sessionEntry
+                : sessionEntryForAttempt;
+            if (isAutoFallbackPrimaryProbeCandidate) {
+              markAutoFallbackPrimaryProbe({
+                probe: autoFallbackPrimaryProbe,
+                sessionKey,
+              });
+            }
             const isFallbackRetry = fallbackAttemptIndex > 0;
             fallbackAttemptIndex += 1;
             opts.onActiveModelSelected?.({
@@ -1071,7 +1156,7 @@ async function agentCommandInternal(
               modelFallbacksOverride: effectiveFallbacksOverride,
               originalProvider: provider,
               cfg,
-              sessionEntry: sessionEntryForAttempt,
+              sessionEntry: attemptSessionEntry,
               sessionId,
               sessionKey,
               sessionAgentId,
@@ -1123,6 +1208,49 @@ async function agentCommandInternal(
         result = fallbackResult.result;
         fallbackProvider = fallbackResult.provider;
         fallbackModel = fallbackResult.model;
+        if (
+          autoFallbackPrimaryProbe &&
+          !autoFallbackPrimaryProbeInterruptedByLiveSwitch &&
+          sessionEntry &&
+          sessionStore &&
+          sessionKey &&
+          entryMatchesAutoFallbackPrimaryProbe(sessionEntry, autoFallbackPrimaryProbe)
+        ) {
+          const nextSessionEntry = { ...sessionEntry };
+          if (
+            fallbackProvider === autoFallbackPrimaryProbe.provider &&
+            fallbackModel === autoFallbackPrimaryProbe.model
+          ) {
+            clearAutoFallbackPrimaryProbeSelection(nextSessionEntry);
+          } else {
+            nextSessionEntry.providerOverride = fallbackProvider;
+            nextSessionEntry.modelOverride = fallbackModel;
+            nextSessionEntry.modelOverrideSource = "auto";
+            nextSessionEntry.modelOverrideFallbackOriginProvider =
+              autoFallbackPrimaryProbe.provider;
+            nextSessionEntry.modelOverrideFallbackOriginModel = autoFallbackPrimaryProbe.model;
+            if (
+              nextSessionEntry.authProfileOverrideSource === "auto" &&
+              fallbackProvider !== autoFallbackPrimaryProbe.fallbackProvider
+            ) {
+              delete nextSessionEntry.authProfileOverride;
+              delete nextSessionEntry.authProfileOverrideSource;
+              delete nextSessionEntry.authProfileOverrideCompactionCount;
+            }
+            nextSessionEntry.updatedAt = Date.now();
+          }
+          const persistedEntry = await persistSessionEntry({
+            sessionStore,
+            sessionKey,
+            storePath,
+            entry: nextSessionEntry,
+            shouldPersist: (current) =>
+              Boolean(
+                current && entryMatchesAutoFallbackPrimaryProbe(current, autoFallbackPrimaryProbe),
+              ),
+          });
+          sessionEntry = persistedEntry ?? sessionEntry;
+        }
         if (fallbackResult.attempts.length > 0 && result.meta.agentMeta) {
           result = {
             ...result,
@@ -1178,7 +1306,7 @@ async function agentCommandInternal(
               { cause: err },
             );
           }
-          const switchRef = normalizeModelRef(err.provider, err.model);
+          const switchRef = normalizeModelRef(err.provider, err.model, modelManifestContext);
           const switchKey = modelKey(switchRef.provider, switchRef.model);
           if (!visibilityPolicy.allowsKey(switchKey)) {
             log.info(
@@ -1205,6 +1333,9 @@ async function agentCommandInternal(
           }
           const previousProvider = provider;
           const previousModel = model;
+          if (autoFallbackPrimaryProbe) {
+            autoFallbackPrimaryProbeInterruptedByLiveSwitch = true;
+          }
           provider = err.provider;
           model = err.model;
           fallbackProvider = err.provider;

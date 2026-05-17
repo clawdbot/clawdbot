@@ -94,6 +94,26 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(args[1]).not.toContain('basename "$service_target"');
   });
 
+  it("bootouts and bootstraps for reload mode", () => {
+    spawnMock.mockReturnValue({ pid: 4242, unref: unrefMock });
+
+    scheduleDetachedLaunchdRestartHandoff({
+      env: {
+        HOME: "/Users/test",
+        OPENCLAW_PROFILE: "default",
+      },
+      mode: "reload",
+      waitForPid: 9876,
+    });
+
+    const [, args] = requireSpawnCall();
+    expect(args[1]).toContain("openclaw restart attempt source=launchd-handoff mode=reload");
+    expect(args[1]).toContain('launchctl enable "$service_target"');
+    expect(args[1]).toContain('launchctl bootout "$service_target"');
+    expect(args[1]).toContain('if launchctl bootstrap "$domain" "$plist_path"; then');
+    expect(args[1]).not.toContain('launchctl kickstart -k "$service_target"');
+  });
+
   it("sanitizes restart helper environment overrides before spawning", () => {
     spawnMock.mockReturnValue({ pid: 4242, unref: unrefMock });
 

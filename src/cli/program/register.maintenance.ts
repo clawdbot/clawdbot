@@ -49,10 +49,12 @@ export function registerMaintenanceCommands(program: Command) {
         `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/dashboard", "docs.openclaw.ai/cli/dashboard")}\n`,
     )
     .option("--no-open", "Print URL but do not launch a browser")
+    .option("--yes", "Start/install the gateway without prompting when needed", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         await dashboardCommand(defaultRuntime, {
           noOpen: opts.open === false,
+          yes: Boolean(opts.yes),
         });
       });
     });

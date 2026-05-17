@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -81,10 +80,6 @@ import { __testing } from "./agents.commands.add.js";
 import { agentsAddCommand } from "./agents.js";
 
 const runtime = createTestRuntime();
-
-function oauthProfileSecretId(authStorePath: string, profileId: string): string {
-  return createHash("sha256").update(`${authStorePath}\0${profileId}`).digest("hex").slice(0, 32);
-}
 
 describe("agents add command", () => {
   beforeEach(() => {
@@ -198,7 +193,7 @@ describe("agents add command", () => {
     }
   });
 
-  it("copies portable Codex OAuth profiles without inline token material", async () => {
+  it("copies portable Codex OAuth profiles inline", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agents-add-oauth-copy-"));
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = root;
@@ -232,8 +227,8 @@ describe("agents add command", () => {
 
       expect(result).toEqual({ copied: 1, skipped: 0 });
       const copiedRaw = await fs.readFile(destAuthPath, "utf8");
-      expect(copiedRaw).not.toContain("codex-copy-access-token");
-      expect(copiedRaw).not.toContain("codex-copy-refresh-token");
+      expect(copiedRaw).toContain("codex-copy-access-token");
+      expect(copiedRaw).toContain("codex-copy-refresh-token");
       const copied = JSON.parse(copiedRaw) as {
         profiles: Record<string, Record<string, unknown>>;
       };
@@ -241,13 +236,10 @@ describe("agents add command", () => {
       expect(credential).toStrictEqual({
         type: "oauth",
         provider: "openai-codex",
+        access: "codex-copy-access-token",
+        refresh: "codex-copy-refresh-token",
         expires,
         copyToAgents: true,
-        oauthRef: {
-          source: "openclaw-credentials",
-          provider: "openai-codex",
-          id: oauthProfileSecretId(destAuthPath, "openai-codex:default"),
-        },
       });
     } finally {
       if (previousStateDir === undefined) {
@@ -255,6 +247,50 @@ describe("agents add command", () => {
       } else {
         process.env.OPENCLAW_STATE_DIR = previousStateDir;
       }
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("skips legacy sidecar-backed Codex OAuth profiles when seeding a new agent store", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agents-add-oauth-ref-skip-"));
+    try {
+      const sourceAgentDir = path.join(root, "main", "agent");
+      const destAgentDir = path.join(root, "work", "agent");
+      const destAuthPath = path.join(destAgentDir, "auth-profiles.json");
+      await fs.mkdir(sourceAgentDir, { recursive: true });
+      await fs.writeFile(
+        path.join(sourceAgentDir, "auth-profiles.json"),
+        `${JSON.stringify(
+          {
+            version: AUTH_STORE_VERSION,
+            profiles: {
+              "openai-codex:default": {
+                type: "oauth",
+                provider: "openai-codex",
+                copyToAgents: true,
+                expires: Date.now() + 60_000,
+                oauthRef: {
+                  source: "openclaw-credentials",
+                  provider: "openai-codex",
+                  id: "0123456789abcdef0123456789abcdef",
+                },
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+
+      const result = await __testing.copyPortableAuthProfiles({
+        sourceAgentDir,
+        destAuthPath,
+      });
+
+      expect(result).toEqual({ copied: 0, skipped: 1 });
+      await expect(fs.stat(destAuthPath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
   });

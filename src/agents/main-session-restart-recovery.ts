@@ -10,12 +10,15 @@ import { resolveStateDir } from "../config/paths.js";
 import {
   type SessionEntry,
   loadSessionStore,
+  resolveAllAgentSessionStoreTargetsSync,
   resolveSessionFilePath,
   resolveSessionTranscriptPathInDir,
   updateSessionStore,
 } from "../config/sessions.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { readSessionMessagesAsync } from "../gateway/session-utils.fs.js";
+import { resolveGatewaySessionStoreTarget } from "../gateway/session-utils.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { CommandLane } from "../process/lanes.js";
 import { isAcpSessionKey, isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
@@ -38,6 +41,17 @@ function shouldSkipMainRecovery(entry: SessionEntry, sessionKey: string): boolea
   return (
     isSubagentSessionKey(sessionKey) || isCronSessionKey(sessionKey) || isAcpSessionKey(sessionKey)
   );
+}
+
+function normalizeStringSet(values: Iterable<string> | undefined): Set<string> {
+  const normalized = new Set<string>();
+  for (const value of values ?? []) {
+    const trimmed = value.trim();
+    if (trimmed) {
+      normalized.add(trimmed);
+    }
+  }
+  return normalized;
 }
 
 function normalizeTranscriptLockPath(lockPath: string): string | undefined {
@@ -72,6 +86,104 @@ function resolveEntryTranscriptLockPaths(params: {
   );
   push(() => resolveSessionTranscriptPathInDir(params.entry.sessionId, params.sessionsDir));
   return [...paths];
+}
+
+export async function markRestartAbortedMainSessions(params: {
+  cfg?: OpenClawConfig;
+  additionalCfgs?: Iterable<OpenClawConfig | undefined>;
+  stateDir?: string;
+  sessionKeys?: Iterable<string>;
+  sessionIds?: Iterable<string>;
+  reason?: string;
+}): Promise<{ marked: number; skipped: number }> {
+  const sessionKeys = normalizeStringSet(params.sessionKeys);
+  const sessionIds = normalizeStringSet(params.sessionIds);
+  const preferSessionIdMatch = sessionIds.size > 0;
+  const result = { marked: 0, skipped: 0 };
+  if (sessionKeys.size === 0 && sessionIds.size === 0) {
+    return result;
+  }
+
+  const storePaths = new Set<string>();
+  const env =
+    params.stateDir === undefined
+      ? process.env
+      : { ...process.env, OPENCLAW_STATE_DIR: params.stateDir };
+  const stateDir = resolveStateDir(env);
+  const configs = [params.cfg, ...(params.additionalCfgs ?? [])].filter(
+    (cfg): cfg is OpenClawConfig => Boolean(cfg),
+  );
+  for (const cfg of configs) {
+    try {
+      for (const target of resolveAllAgentSessionStoreTargetsSync(cfg, { env })) {
+        storePaths.add(path.resolve(target.storePath));
+      }
+    } catch (err) {
+      log.warn(`failed to resolve configured session stores for restart marker: ${String(err)}`);
+    }
+    for (const sessionKey of sessionKeys) {
+      try {
+        const target = resolveGatewaySessionStoreTarget({
+          cfg,
+          key: sessionKey,
+          scanLegacyKeys: true,
+        });
+        storePaths.add(path.resolve(target.storePath));
+        for (const storeKey of target.storeKeys) {
+          const trimmed = storeKey.trim();
+          if (trimmed) {
+            sessionKeys.add(trimmed);
+          }
+        }
+      } catch (err) {
+        log.warn(
+          `failed to resolve session store for restart marker ${sessionKey}: ${String(err)}`,
+        );
+      }
+    }
+  }
+
+  for (const sessionsDir of await resolveAgentSessionDirs(stateDir)) {
+    storePaths.add(path.join(sessionsDir, "sessions.json"));
+  }
+
+  for (const storePath of storePaths) {
+    await updateSessionStore(
+      storePath,
+      (store) => {
+        for (const [sessionKey, entry] of Object.entries(store)) {
+          if (!entry || entry.status !== "running") {
+            continue;
+          }
+          const matches =
+            typeof entry.sessionId === "string" && sessionIds.has(entry.sessionId)
+              ? true
+              : !preferSessionIdMatch && sessionKeys.has(sessionKey);
+          if (!matches) {
+            continue;
+          }
+          if (shouldSkipMainRecovery(entry, sessionKey)) {
+            result.skipped++;
+            continue;
+          }
+          entry.abortedLastRun = true;
+          entry.updatedAt = Date.now();
+          store[sessionKey] = entry;
+          result.marked++;
+        }
+      },
+      { skipMaintenance: true },
+    );
+  }
+
+  if (result.marked > 0) {
+    log.warn(
+      `marked ${result.marked} interrupted main session(s) for restart recovery${
+        params.reason ? ` (${params.reason})` : ""
+      }`,
+    );
+  }
+  return result;
 }
 
 function getMessageRole(message: unknown): string | undefined {
@@ -345,20 +457,37 @@ async function recoverStore(params: {
   return result;
 }
 
+async function resolveRestartRecoveryStorePaths(params: {
+  cfg?: OpenClawConfig;
+  stateDir?: string;
+}): Promise<string[]> {
+  const storePaths = new Set<string>();
+  const stateDir = params.stateDir ?? resolveStateDir(process.env);
+  for (const sessionsDir of await resolveAgentSessionDirs(stateDir)) {
+    storePaths.add(path.join(sessionsDir, "sessions.json"));
+  }
+  if (params.cfg) {
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    for (const target of resolveAllAgentSessionStoreTargetsSync(params.cfg, { env })) {
+      storePaths.add(path.resolve(target.storePath));
+    }
+  }
+  return [...storePaths].toSorted((a, b) => a.localeCompare(b));
+}
+
 export async function recoverRestartAbortedMainSessions(
   params: {
+    cfg?: OpenClawConfig;
     stateDir?: string;
     resumedSessionKeys?: Set<string>;
   } = {},
 ): Promise<{ recovered: number; failed: number; skipped: number }> {
   const result = { recovered: 0, failed: 0, skipped: 0 };
   const resumedSessionKeys = params.resumedSessionKeys ?? new Set<string>();
-  const stateDir = params.stateDir ?? resolveStateDir(process.env);
-  const sessionDirs = await resolveAgentSessionDirs(stateDir);
 
-  for (const sessionsDir of sessionDirs) {
+  for (const storePath of await resolveRestartRecoveryStorePaths(params)) {
     const storeResult = await recoverStore({
-      storePath: path.join(sessionsDir, "sessions.json"),
+      storePath,
       resumedSessionKeys,
     });
     result.recovered += storeResult.recovered;
@@ -376,6 +505,7 @@ export async function recoverRestartAbortedMainSessions(
 
 export function scheduleRestartAbortedMainSessionRecovery(
   params: {
+    cfg?: OpenClawConfig;
     delayMs?: number;
     maxRetries?: number;
     stateDir?: string;
@@ -388,6 +518,7 @@ export function scheduleRestartAbortedMainSessionRecovery(
   const attemptRecovery = (attempt: number, delay: number) => {
     setTimeout(() => {
       void recoverRestartAbortedMainSessions({
+        cfg: params.cfg,
         stateDir: params.stateDir,
         resumedSessionKeys,
       })

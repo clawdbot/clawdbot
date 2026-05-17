@@ -76,6 +76,7 @@ const UPGRADE_SURVIVOR_SCENARIOS = [
   "base",
   "feishu-channel",
   "bootstrap-persona",
+  "channel-post-core-restore",
   "plugin-deps-cleanup",
   "configured-plugin-installs",
   "stale-source-plugin-shadow",

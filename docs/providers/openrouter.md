@@ -4,6 +4,7 @@ read_when:
   - You want a single API key for many LLMs
   - You want to run models via OpenRouter in OpenClaw
   - You want to use OpenRouter for image generation
+  - You want to use OpenRouter for music generation
   - You want to use OpenRouter for video generation
 title: "OpenRouter"
 ---
@@ -106,6 +107,34 @@ bundled `google/veo-3.1-fast` default advertises the currently supported 4/6/8
 second durations, `720P`/`1080P` resolutions, and `16:9`/`9:16` aspect
 ratios. Video-to-video is not registered for OpenRouter because the upstream
 video generation API currently accepts text and image references.
+
+## Music generation
+
+OpenRouter can also back the `music_generate` tool through chat completions
+audio output. Use an OpenRouter audio model under
+`agents.defaults.musicGenerationModel`:
+
+```json5
+{
+  env: { OPENROUTER_API_KEY: "sk-or-..." },
+  agents: {
+    defaults: {
+      musicGenerationModel: {
+        primary: "openrouter/google/lyria-3-pro-preview",
+        timeoutMs: 180_000,
+      },
+    },
+  },
+}
+```
+
+The bundled OpenRouter music provider defaults to
+`google/lyria-3-pro-preview` and also exposes
+`google/lyria-3-clip-preview`. OpenClaw sends `modalities: ["text",
+"audio"]`, enables streaming, collects the streamed audio chunks, and saves
+the result as generated media for channel delivery. Reference images are
+accepted for Lyria models through the shared `music_generate image=...`
+parameter.
 
 ## Text-to-speech
 

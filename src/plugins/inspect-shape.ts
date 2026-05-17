@@ -9,6 +9,8 @@ export type PluginCapabilityKind =
   | "realtime-voice"
   | "media-understanding"
   | "image-generation"
+  | "video-generation"
+  | "music-generation"
   | "web-search"
   | "agent-harness"
   | "context-engine"
@@ -44,6 +46,8 @@ function buildPluginCapabilityEntries(
     { kind: "realtime-voice" as const, ids: plugin.realtimeVoiceProviderIds },
     { kind: "media-understanding" as const, ids: plugin.mediaUnderstandingProviderIds },
     { kind: "image-generation" as const, ids: plugin.imageGenerationProviderIds },
+    { kind: "video-generation" as const, ids: plugin.videoGenerationProviderIds },
+    { kind: "music-generation" as const, ids: plugin.musicGenerationProviderIds },
     { kind: "web-search" as const, ids: plugin.webSearchProviderIds },
     { kind: "agent-harness" as const, ids: plugin.agentHarnessIds },
     {

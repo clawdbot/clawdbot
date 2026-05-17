@@ -307,6 +307,40 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     expect(attemptParams?.internalEvents).toBe(internalEvents);
   });
 
+  it("marks user-triggered session queue work as foreground", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+    const observedPriorities: unknown[] = [];
+
+    await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      trigger: "user",
+      runId: "run-user-session-priority",
+      enqueue: async (task, opts) => {
+        observedPriorities.push(opts?.priority);
+        return await task();
+      },
+    });
+
+    expect(observedPriorities[0]).toBe("foreground");
+  });
+
+  it("marks cron-triggered session queue work as background", async () => {
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+    const observedPriorities: unknown[] = [];
+
+    await runEmbeddedPiAgent({
+      ...overflowBaseRunParams,
+      trigger: "cron",
+      runId: "run-cron-session-priority",
+      enqueue: async (task, opts) => {
+        observedPriorities.push(opts?.priority);
+        return await task();
+      },
+    });
+
+    expect(observedPriorities[0]).toBe("background");
+  });
+
   it("forwards explicit OpenAI Codex auth profiles to codex plugin harnesses", async () => {
     const { clearAgentHarnesses, registerAgentHarness } = await import("../harness/registry.js");
     const pluginRunAttempt = vi.fn<AgentHarness["runAttempt"]>(async () =>

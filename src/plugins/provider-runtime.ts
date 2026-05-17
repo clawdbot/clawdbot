@@ -19,6 +19,7 @@ import {
   resolveProviderExtraParamsForTransport,
   resolveProviderFollowupFallbackRoute,
   ensureProviderRuntimePluginHandle,
+  resolveLoadedProviderRuntimePlugin,
   resolveProviderHookPlugin,
   resolveProviderPluginsForHooks,
   resolveProviderRuntimePlugin,
@@ -598,9 +599,14 @@ export function resolveProviderStreamFn(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  allowRuntimePluginLoad?: boolean;
   context: ProviderCreateStreamFnContext;
 }) {
-  return resolveProviderRuntimePlugin(params)?.createStreamFn?.(params.context) ?? undefined;
+  const plugin =
+    params.allowRuntimePluginLoad === false
+      ? resolveLoadedProviderRuntimePlugin(params)
+      : resolveProviderRuntimePlugin(params);
+  return plugin?.createStreamFn?.(params.context) ?? undefined;
 }
 
 export function resolveProviderTransportTurnStateWithPlugin(params: {

@@ -829,6 +829,77 @@ jobs:
           retention-days: 14
           if-no-files-found: warn
 
+  qa_lab_runtime_parity_release_checks:
+    name: Run QA Lab runtime parity lane
+    needs: [resolve_target]
+    if: contains(fromJSON('["all","qa","qa-parity"]'), needs.resolve_target.outputs.rerun_group)
+    continue-on-error: true
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      QA_PARITY_CONCURRENCY: "1"
+      OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: "180000"
+      OPENAI_API_KEY: ""
+      ANTHROPIC_API_KEY: ""
+      OPENCLAW_LIVE_OPENAI_KEY: ""
+      OPENCLAW_LIVE_ANTHROPIC_KEY: ""
+      OPENCLAW_LIVE_GEMINI_KEY: ""
+      OPENCLAW_LIVE_SETUP_TOKEN_VALUE: ""
+      OPENCLAW_BUILD_PRIVATE_QA: "1"
+      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          ref: ${{ needs.resolve_target.outputs.revision }}
+          fetch-depth: 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "true"
+
+      - name: Build private QA runtime
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
+        run: pnpm build
+
+      - name: Run runtime parity lane
+        run: |
+          set -euo pipefail
+          pnpm openclaw qa suite \
+            --provider-mode mock-openai \
+            --parity-pack agentic \
+            --concurrency "${QA_PARITY_CONCURRENCY}" \
+            --model "${OPENCLAW_CI_OPENAI_MODEL}" \
+            --alt-model "openai/gpt-5.5-alt" \
+            --runtime-pair pi,codex \
+            --output-dir ".artifacts/qa-e2e/runtime-parity"
+
+      - name: Generate runtime parity report
+        if: always()
+        run: |
+          set -euo pipefail
+          pnpm openclaw qa parity-report \
+            --repo-root . \
+            --runtime-axis \
+            --summary .artifacts/qa-e2e/runtime-parity/qa-suite-summary.json \
+            --output-dir .artifacts/qa-e2e/runtime-parity-report
+
+      - name: Upload runtime parity artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-qa-runtime-parity-${{ needs.resolve_target.outputs.revision }}
+          path: .artifacts/qa-e2e/
+          retention-days: 14
+          if-no-files-found: warn
+
   qa_live_matrix_release_checks:
     name: Run QA Lab live Matrix lane
     needs: [resolve_target]
@@ -1304,6 +1375,7 @@ jobs:
       - package_acceptance_release_checks
       - qa_lab_parity_lane_release_checks
       - qa_lab_parity_report_release_checks
+      - qa_lab_runtime_parity_release_checks
       - qa_live_matrix_release_checks
       - qa_live_telegram_release_checks
       - qa_live_discord_release_checks
@@ -1328,6 +1400,7 @@ jobs:
             "package_acceptance_release_checks=${{ needs.package_acceptance_release_checks.result }}" \
             "qa_lab_parity_lane_release_checks=${{ needs.qa_lab_parity_lane_release_checks.result }}" \
             "qa_lab_parity_report_release_checks=${{ needs.qa_lab_parity_report_release_checks.result }}" \
+            "qa_lab_runtime_parity_release_checks=${{ needs.qa_lab_runtime_parity_release_checks.result }}" \
             "qa_live_matrix_release_checks=${{ needs.qa_live_matrix_release_checks.result }}" \
             "qa_live_telegram_release_checks=${{ needs.qa_live_telegram_release_checks.result }}" \
             "qa_live_discord_release_checks=${{ needs.qa_live_discord_release_checks.result }}" \

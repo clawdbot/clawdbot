@@ -61,6 +61,7 @@ registerGetReplyRuntimeOverrides(mocks);
 
 let getReplyFromConfig: typeof import("./get-reply.js").getReplyFromConfig;
 let resolveDefaultModelMock: typeof import("./directive-handling.defaults.js").resolveDefaultModel;
+let resolveModelRefFromStringMock: typeof import("../../agents/model-selection.js").resolveModelRefFromString;
 let loadConfigMock: typeof import("../../config/config.js").getRuntimeConfig;
 let runPreparedReplyMock: typeof import("./get-reply-run.js").runPreparedReply;
 
@@ -68,6 +69,8 @@ async function loadGetReplyRuntimeForTest() {
   ({ getReplyFromConfig } = await loadGetReplyModuleForTest({ cacheKey: import.meta.url }));
   ({ resolveDefaultModel: resolveDefaultModelMock } =
     await import("./directive-handling.defaults.js"));
+  ({ resolveModelRefFromString: resolveModelRefFromStringMock } =
+    await import("../../agents/model-selection.js"));
   ({ getRuntimeConfig: loadConfigMock } = await import("../../config/config.js"));
   ({ runPreparedReply: runPreparedReplyMock } = await import("./get-reply-run.js"));
 }
@@ -82,7 +85,13 @@ function requirePreparedReplyParams() {
 
 function requireDirectiveParams() {
   const directiveParams = mocks.resolveReplyDirectives.mock.calls[0]?.[0] as
-    | { sessionKey?: string; workspaceDir?: string }
+    | {
+        sessionKey?: string;
+        workspaceDir?: string;
+        provider?: string;
+        model?: string;
+        hasOneTurnModelOverride?: boolean;
+      }
     | undefined;
   if (!directiveParams) {
     throw new Error("expected directive params");
@@ -115,6 +124,8 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       defaultModel: "gpt-4o-mini",
       aliasIndex: emptyAliasIndex(),
     });
+    vi.mocked(resolveModelRefFromStringMock).mockReset();
+    vi.mocked(resolveModelRefFromStringMock).mockReturnValue(null);
     vi.mocked(loadConfigMock).mockReset();
     vi.mocked(runPreparedReplyMock).mockReset();
     vi.mocked(loadConfigMock).mockReturnValue({});
@@ -191,6 +202,40 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(vi.mocked(loadConfigMock)).not.toHaveBeenCalled();
     expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
     expect(vi.mocked(runPreparedReplyMock)).toHaveBeenCalledOnce();
+  });
+
+  it("passes image model overrides as one-turn selections to prepared replies", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-image-model-directives-"));
+    const cfg = markCompleteReplyConfig({
+      agents: {
+        defaults: {
+          model: "openai/gpt-4o",
+          models: {
+            "openai/gpt-4o": {},
+          },
+          workspace: home,
+        },
+      },
+      session: { store: path.join(home, "sessions.json") },
+    } as OpenClawConfig);
+    vi.mocked(resolveDefaultModelMock).mockReturnValueOnce({
+      defaultProvider: "openai",
+      defaultModel: "gpt-4o",
+      aliasIndex: emptyAliasIndex(),
+    });
+    vi.mocked(resolveModelRefFromStringMock).mockReturnValueOnce({
+      ref: { provider: "openai", model: "gpt-4o-mini" },
+    });
+
+    await expect(
+      getReplyFromConfig(buildGetReplyCtx(), { modelOverride: "openai/gpt-4o-mini" }, cfg),
+    ).resolves.toEqual({ text: "ok" });
+
+    expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
+    const preparedReplyParams = requirePreparedReplyParams();
+    expect(preparedReplyParams.provider).toBe("openai");
+    expect(preparedReplyParams.model).toBe("gpt-4o-mini");
+    expect(preparedReplyParams.hasAppliedImageModelOverride).toBe(true);
   });
 
   it("clears stale ack-only heartbeat pending delivery before replay", async () => {

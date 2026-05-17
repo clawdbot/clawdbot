@@ -81,6 +81,8 @@ const CLI_RUNTIME_PROVIDER_IDS = new Set(
   ),
 );
 
+const RUNTIME_COMPARISON_PROVIDER_ALIASES = new Map<string, string>([["openai-codex", "openai"]]);
+
 export function listLegacyRuntimeModelProviderAliases(): readonly LegacyRuntimeModelProviderAlias[] {
   return LEGACY_RUNTIME_MODEL_PROVIDER_ALIASES;
 }
@@ -139,7 +141,12 @@ export function isCliRuntimeAlias(runtime: string | undefined): boolean {
 }
 
 function canonicalizeRuntimeAliasProvider(provider: string): string {
-  return resolveLegacyRuntimeModelProviderAlias(provider)?.provider ?? provider;
+  const normalized = normalizeProviderId(provider);
+  return (
+    RUNTIME_COMPARISON_PROVIDER_ALIASES.get(normalized) ??
+    resolveLegacyRuntimeModelProviderAlias(provider)?.provider ??
+    provider
+  );
 }
 
 function normalizeRuntimeModelRefForComparison(raw: string): string {

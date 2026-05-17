@@ -135,6 +135,8 @@ export function createSessionConversationTestRegistry() {
         },
         capabilities: { chatTypes: ["direct", "group", "thread"] },
         messaging: {
+          resolveSessionTarget: ({ kind, id }: { kind: string; id: string }) =>
+            kind === "group" ? id : `channel:${id}`,
           normalizeTarget: (raw: string) => raw.replace(/^group:/, ""),
           resolveSessionConversation: resolveTelegramSessionConversation,
         },

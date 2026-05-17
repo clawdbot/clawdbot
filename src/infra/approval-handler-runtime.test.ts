@@ -364,4 +364,138 @@ describe("createLazyChannelApprovalNativeRuntimeAdapter", () => {
     expect(onDelivered).toHaveBeenCalledWith({ request: { id: "exec:1" } });
     expect(load).toHaveBeenCalledTimes(1);
   });
+
+  it("unbinds in-flight wrapped entry when stop() fires between bindPending and activeEntries.set", async () => {
+    const bindGate = { resolve: () => {}, promise: Promise.resolve() };
+    const bindPromise = new Promise<void>((resolve) => {
+      bindGate.resolve = resolve;
+    });
+    bindGate.promise = bindPromise;
+    const deliverPending = vi.fn().mockResolvedValue({ messageId: "in-flight" });
+    const bindPending = vi.fn(async () => {
+      await bindPromise;
+      return { bindingId: "bound-in-flight" };
+    });
+    const unbindPending = vi.fn();
+
+    const runtime = await createTestApprovalHandler(
+      makeNativeApprovalCapability({
+        deliverPending,
+        bindPending,
+        unbindPending,
+      }),
+    );
+    const approvalRuntime = expectApprovalRuntime(runtime);
+    const request = makeExecApprovalRequest("exec:in-flight");
+
+    const inflight = approvalRuntime.handleRequested(request);
+    // Flush microtasks so deliverPending resolves and bindPending parks at the gate.
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+
+    // stop() flips the stopped flag while bindPending is parked.
+    await approvalRuntime.stop();
+    bindGate.resolve();
+    await inflight;
+
+    expect(unbindPending).toHaveBeenCalledTimes(1);
+    const unbind = firstCallArg(unbindPending) as
+      | { entry?: unknown; binding?: unknown; request?: unknown }
+      | undefined;
+    expect(unbind?.entry).toEqual({ messageId: "in-flight" });
+    expect(unbind?.binding).toEqual({ bindingId: "bound-in-flight" });
+    expect(unbind?.request).toBe(request);
+  });
+
+  it("invokes cancelDelivered when stop() fires between deliverPending and bindPending", async () => {
+    const deliverGate = { resolve: () => {}, promise: Promise.resolve() };
+    const deliverPromise = new Promise<void>((resolve) => {
+      deliverGate.resolve = resolve;
+    });
+    deliverGate.promise = deliverPromise;
+    const deliveredEntry = { messageId: "pre-bind" };
+    const deliverPending = vi.fn(async () => {
+      await deliverPromise;
+      return deliveredEntry;
+    });
+    const bindPending = vi.fn().mockResolvedValue({ bindingId: "should-not-bind" });
+    const unbindPending = vi.fn();
+    const cancelDelivered = vi.fn();
+
+    const runtime = await createTestApprovalHandler(
+      makeNativeApprovalCapability({
+        deliverPending,
+        bindPending,
+        unbindPending,
+        cancelDelivered,
+      }),
+    );
+    const approvalRuntime = expectApprovalRuntime(runtime);
+    const request = makeExecApprovalRequest("exec:pre-bind");
+
+    const inflight = approvalRuntime.handleRequested(request);
+    // Flush microtasks so deliverPending is awaited and parked at the gate.
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+
+    // stop() flips the stopped flag while deliverPending is still pending.
+    await approvalRuntime.stop();
+    deliverGate.resolve();
+    await inflight;
+
+    expect(bindPending).not.toHaveBeenCalled();
+    expect(unbindPending).not.toHaveBeenCalled();
+    expect(cancelDelivered).toHaveBeenCalledTimes(1);
+    const cancel = firstCallArg(cancelDelivered) as
+      | { entry?: unknown; request?: unknown; approvalKind?: string }
+      | undefined;
+    expect(cancel?.entry).toBe(deliveredEntry);
+    expect(cancel?.request).toBe(request);
+    expect(cancel?.approvalKind).toBe("exec");
+  });
+
+  it("invokes cancelDelivered when stop() fires after bindPending returned null", async () => {
+    const bindGate = { resolve: () => {}, promise: Promise.resolve() };
+    const bindPromise = new Promise<void>((resolve) => {
+      bindGate.resolve = resolve;
+    });
+    bindGate.promise = bindPromise;
+    const deliveredEntry = { messageId: "post-bind-null" };
+    const deliverPending = vi.fn().mockResolvedValue(deliveredEntry);
+    const bindPending = vi.fn(async () => {
+      await bindPromise;
+      return null;
+    });
+    const unbindPending = vi.fn();
+    const cancelDelivered = vi.fn();
+
+    const runtime = await createTestApprovalHandler(
+      makeNativeApprovalCapability({
+        deliverPending,
+        bindPending,
+        unbindPending,
+        cancelDelivered,
+      }),
+    );
+    const approvalRuntime = expectApprovalRuntime(runtime);
+    const request = makeExecApprovalRequest("exec:post-bind-null");
+
+    const inflight = approvalRuntime.handleRequested(request);
+    // Flush microtasks so deliverPending resolves and bindPending awaits the gate.
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => setTimeout(r, 0));
+
+    // stop() flips the stopped flag while bindPending is parked; it then resolves to null.
+    await approvalRuntime.stop();
+    bindGate.resolve();
+    await inflight;
+
+    expect(unbindPending).not.toHaveBeenCalled();
+    expect(cancelDelivered).toHaveBeenCalledTimes(1);
+    const cancel = firstCallArg(cancelDelivered) as
+      | { entry?: unknown; request?: unknown }
+      | undefined;
+    expect(cancel?.entry).toBe(deliveredEntry);
+    expect(cancel?.request).toBe(request);
+  });
 });

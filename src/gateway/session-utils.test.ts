@@ -9,6 +9,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import {
+  canonicalizeSpawnedByForAgent,
   buildGatewaySessionRow,
   capArrayByJsonBytes,
   classifySessionKey,
@@ -648,6 +649,34 @@ describe("gateway session utils", () => {
     expect(resolveSessionStoreKey({ cfg, sessionKey: "agent:alpha:MySession" })).toBe(
       "agent:alpha:mysession",
     );
+  });
+
+  test("resolveSessionStoreKey preserves Signal group ids", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      agents: { list: [{ id: "ops", default: true }] },
+    } as OpenClawConfig;
+    const mixedGroupId = "VWATodkf2hc8zdOS76q9Tb0+5Bi522E03qLdaQ/9ypg=";
+    expect(resolveSessionStoreKey({ cfg, sessionKey: `Signal:Group:${mixedGroupId}` })).toBe(
+      `agent:ops:signal:group:${mixedGroupId}`,
+    );
+    expect(
+      resolveSessionStoreKey({ cfg, sessionKey: `Agent:Alpha:Signal:Group:${mixedGroupId}` }),
+    ).toBe(`agent:alpha:signal:group:${mixedGroupId}`);
+  });
+
+  test("canonicalizeSpawnedByForAgent preserves Signal group ids", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+    } as OpenClawConfig;
+    const mixedGroupId = "VWATodkf2hc8zdOS76q9Tb0+5Bi522E03qLdaQ/9ypg=";
+
+    expect(canonicalizeSpawnedByForAgent(cfg, "ops", `Signal:Group:${mixedGroupId}`)).toBe(
+      `agent:ops:signal:group:${mixedGroupId}`,
+    );
+    expect(
+      canonicalizeSpawnedByForAgent(cfg, "ops", `Agent:Main:Signal:Group:${mixedGroupId}`),
+    ).toBe(`agent:main:signal:group:${mixedGroupId}`);
   });
 
   test("resolveSessionStoreKey honors global scope", () => {

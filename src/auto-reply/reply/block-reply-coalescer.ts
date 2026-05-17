@@ -26,6 +26,7 @@ export function createBlockReplyCoalescer(params: {
   let bufferAudioAsVoice: ReplyPayload["audioAsVoice"];
   let bufferIsReasoning: ReplyPayload["isReasoning"];
   let bufferIsCompactionNotice: ReplyPayload["isCompactionNotice"];
+  let bufferIsFallbackNotice: ReplyPayload["isFallbackNotice"];
   let idleTimer: NodeJS.Timeout | undefined;
 
   const clearIdleTimer = () => {
@@ -42,6 +43,7 @@ export function createBlockReplyCoalescer(params: {
     bufferAudioAsVoice = undefined;
     bufferIsReasoning = undefined;
     bufferIsCompactionNotice = undefined;
+    bufferIsFallbackNotice = undefined;
   };
 
   const scheduleIdleFlush = () => {
@@ -73,6 +75,7 @@ export function createBlockReplyCoalescer(params: {
       audioAsVoice: bufferAudioAsVoice,
       isReasoning: bufferIsReasoning,
       isCompactionNotice: bufferIsCompactionNotice,
+      isFallbackNotice: bufferIsFallbackNotice,
     };
     resetBuffer();
     await onFlush(payload);
@@ -105,6 +108,7 @@ export function createBlockReplyCoalescer(params: {
       bufferAudioAsVoice = payload.audioAsVoice;
       bufferIsReasoning = payload.isReasoning;
       bufferIsCompactionNotice = payload.isCompactionNotice;
+      bufferIsFallbackNotice = payload.isFallbackNotice;
       bufferText = text;
       void flush({ force: true });
       return;
@@ -118,7 +122,8 @@ export function createBlockReplyCoalescer(params: {
     const visibilityConflict =
       bufferText &&
       (bufferIsReasoning !== payload.isReasoning ||
-        bufferIsCompactionNotice !== payload.isCompactionNotice);
+        bufferIsCompactionNotice !== payload.isCompactionNotice ||
+        bufferIsFallbackNotice !== payload.isFallbackNotice);
     if (
       bufferText &&
       (replyToConflict || bufferAudioAsVoice !== payload.audioAsVoice || visibilityConflict)
@@ -131,6 +136,7 @@ export function createBlockReplyCoalescer(params: {
       bufferAudioAsVoice = payload.audioAsVoice;
       bufferIsReasoning = payload.isReasoning;
       bufferIsCompactionNotice = payload.isCompactionNotice;
+      bufferIsFallbackNotice = payload.isFallbackNotice;
     }
 
     const nextText = bufferText ? `${bufferText}${joiner}${text}` : text;
@@ -141,6 +147,7 @@ export function createBlockReplyCoalescer(params: {
         bufferAudioAsVoice = payload.audioAsVoice;
         bufferIsReasoning = payload.isReasoning;
         bufferIsCompactionNotice = payload.isCompactionNotice;
+        bufferIsFallbackNotice = payload.isFallbackNotice;
         if (text.length >= maxChars) {
           void onFlush(payload);
           return;

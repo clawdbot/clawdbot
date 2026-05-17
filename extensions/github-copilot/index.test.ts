@@ -14,11 +14,26 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { _setGitHubCopilotDeviceFlowFetchGuardForTesting } from "./login.js";
 
 const mocks = vi.hoisted(() => ({
   githubCopilotLoginCommand: vi.fn(),
+  fetchWithSsrFGuard: vi.fn(async (params: { url: string; init?: RequestInit }) => ({
+    response: await fetch(params.url, params.init),
+    release: vi.fn(async () => {}),
+  })),
   resolveCopilotApiToken: vi.fn(),
 }));
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
+    "openclaw/plugin-sdk/ssrf-runtime",
+  );
+  return {
+    ...actual,
+    fetchWithSsrFGuard: mocks.fetchWithSsrFGuard,
+  };
+});
 
 vi.mock("./register.runtime.js", () => ({
   DEFAULT_COPILOT_API_BASE_URL: "https://api.githubcopilot.test",
@@ -49,6 +64,7 @@ type GithubCopilotTestModelCatalogProvider = {
 afterEach(async () => {
   vi.clearAllMocks();
   vi.unstubAllGlobals();
+  _setGitHubCopilotDeviceFlowFetchGuardForTesting(null);
   clearRuntimeAuthProfileStoreSnapshots();
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
@@ -313,7 +329,7 @@ describe("github-copilot plugin", () => {
         },
       }),
     );
-    const fetchMock = vi.fn(async (input: unknown) => {
+    const fetchMock = vi.fn(async (input: unknown, _init?: RequestInit) => {
       const target =
         typeof input === "string"
           ? input
@@ -343,6 +359,11 @@ describe("github-copilot plugin", () => {
       throw new Error(`unexpected fetch in github-copilot refresh test: ${target}`);
     });
     vi.stubGlobal("fetch", fetchMock);
+    _setGitHubCopilotDeviceFlowFetchGuardForTesting(async (params) => ({
+      response: await fetchMock(params.url, params.init),
+      finalUrl: params.url,
+      release: async () => {},
+    }));
     const prompter = {
       confirm: vi.fn(async () => true),
       note: vi.fn(),

@@ -1,3 +1,4 @@
+import * as fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -324,8 +325,11 @@ export type SystemdUnitScope = "system" | "user";
 
 async function execSystemctl(
   args: string[],
+  env?: GatewayServiceEnv,
 ): Promise<{ stdout: string; stderr: string; code: number }> {
-  return await execFileUtf8("systemctl", args);
+  return await execFileUtf8("systemctl", args, {
+    env: env ? resolveSystemctlProcessEnv(env) : process.env,
+  });
 }
 
 function readSystemctlDetail(result: { stdout: string; stderr: string }): string {
@@ -424,6 +428,30 @@ function readSystemctlEffectiveUid(): number | null {
   }
 }
 
+function resolveSystemctlProcessEnv(env: GatewayServiceEnv): NodeJS.ProcessEnv {
+  const processEnv = { ...process.env, ...env };
+  if (processEnv.XDG_RUNTIME_DIR?.trim() && processEnv.DBUS_SESSION_BUS_ADDRESS?.trim()) {
+    return processEnv;
+  }
+
+  const uid = readSystemctlEffectiveUid();
+  if (uid === null || uid === 0) {
+    return processEnv;
+  }
+
+  const runtimeDir = processEnv.XDG_RUNTIME_DIR?.trim() || `/run/user/${uid}`;
+  const busPath = path.posix.join(runtimeDir, "bus");
+  if (!fsSync.existsSync(busPath)) {
+    return processEnv;
+  }
+
+  return {
+    ...processEnv,
+    XDG_RUNTIME_DIR: runtimeDir,
+    DBUS_SESSION_BUS_ADDRESS: processEnv.DBUS_SESSION_BUS_ADDRESS?.trim() || `unix:path=${busPath}`,
+  };
+}
+
 function isNonRootUser(user: string | null): user is string {
   return Boolean(user && user !== "root");
 }
@@ -480,11 +508,14 @@ async function execSystemctlUser(
     const machineScopeArgs = resolveSystemctlMachineUserScopeArgs(machineUser);
     if (machineScopeArgs.length > 0) {
       // Do not fall through to bare --user: under sudo that can target root's user manager.
-      return await execSystemctl([...machineScopeArgs, ...args]);
+      return await execSystemctl([...machineScopeArgs, ...args], env);
     }
   }
 
-  const directResult = await execSystemctl([...resolveSystemctlDirectUserScopeArgs(), ...args]);
+  const directResult = await execSystemctl(
+    [...resolveSystemctlDirectUserScopeArgs(), ...args],
+    env,
+  );
   if (directResult.code === 0) {
     return directResult;
   }
@@ -498,7 +529,7 @@ async function execSystemctlUser(
   if (machineScopeArgs.length === 0) {
     return directResult;
   }
-  return await execSystemctl([...machineScopeArgs, ...args]);
+  return await execSystemctl([...machineScopeArgs, ...args], env);
 }
 
 export async function isSystemdUserServiceAvailable(

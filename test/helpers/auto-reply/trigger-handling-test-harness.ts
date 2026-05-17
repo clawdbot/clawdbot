@@ -76,6 +76,8 @@ vi.doMock("../../../src/agents/pi-embedded-runner/runs.js", () => ({
       : undefined,
   queueEmbeddedPiMessageWithOutcome: (sessionId: string, text: string, options?: unknown) =>
     piEmbeddedMocks.queueEmbeddedPiMessageWithOutcome(sessionId, text, options),
+  resolveActiveEmbeddedRunSessionId: (...args: unknown[]) =>
+    piEmbeddedMocks.resolveActiveEmbeddedRunSessionId(...args),
 }));
 
 const providerUsageMocks = vi.hoisted(() => ({

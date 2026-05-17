@@ -517,6 +517,16 @@ describe("chrome.ts internal", () => {
     });
 
     it("clears stale singleton locks and retries once after profile-in-use launch failure", async () => {
+      const configPath = path.join(tmpDir, "openclaw.json");
+      await fsp.writeFile(
+        configPath,
+        JSON.stringify({
+          logging: {
+            redactPatterns: ["profile appears to be in use by another Chromium process"],
+          },
+        }),
+      );
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
       let cdpReachable = false;
       vi.stubGlobal(
         "fetch",
@@ -1012,6 +1022,10 @@ describe("chrome.ts internal", () => {
     it("buffers stderr chunks when Chrome emits diagnostics while CDP comes up", async () => {
       // Covers onStderr (pushing chunks to stderrChunks) plus the
       // stderrHint truthy branch on failure.
+      const configDir = await fsp.mkdtemp(path.join(os.tmpdir(), "openclaw-redact-off-"));
+      const configPath = path.join(configDir, "openclaw.json");
+      await fsp.writeFile(configPath, JSON.stringify({ logging: { redactSensitive: "off" } }));
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
       vi.spyOn(fs, "existsSync").mockImplementation((p) => {
         const s = String(p);
         if (
@@ -1027,10 +1041,11 @@ describe("chrome.ts internal", () => {
         return false;
       });
       const fakeProc = makeFakeProc();
+      const secretToken = "chrome-stderr-secret-1234567890"; // pragma: allowlist secret
       spawnMock.mockImplementation(() => {
         // Synthesize stderr data shortly after spawn.
         void Promise.resolve().then(() =>
-          fakeProc.stderr.emit("data", Buffer.from("chrome crash log\n")),
+          fakeProc.stderr.emit("data", Buffer.from(`chrome crash log token=${secretToken}\n`)),
         );
         return fakeProc;
       });
@@ -1048,7 +1063,16 @@ describe("chrome.ts internal", () => {
         noSandbox: true,
         extraArgs: [],
       } as unknown as ResolvedBrowserConfig;
-      await expect(launchOpenClawChrome(resolved, profile)).rejects.toThrow(/Chrome stderr:/);
+      let message = "";
+      try {
+        await launchOpenClawChrome(resolved, profile);
+      } catch (err) {
+        message = err instanceof Error ? err.message : String(err);
+      }
+      expect(message).toContain("Chrome stderr:");
+      expect(message).toContain("chrome crash log");
+      expect(message).not.toContain(secretToken);
+      await fsp.rm(configDir, { recursive: true, force: true });
     });
 
     it("omits the sandbox hint on non-linux platforms", async () => {

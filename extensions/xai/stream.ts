@@ -42,8 +42,12 @@ function supportsExplicitImageInput(model: { input?: unknown }): boolean {
   return Array.isArray(model.input) && model.input.includes("image");
 }
 
-function supportsReasoningControls(model: { reasoning?: unknown }): boolean {
-  return model.reasoning === true;
+function supportsReasoningControls(model: { compat?: unknown; reasoning?: unknown }): boolean {
+  const compat =
+    model.compat && typeof model.compat === "object"
+      ? (model.compat as { supportsReasoningEffort?: unknown })
+      : undefined;
+  return model.reasoning === true && compat?.supportsReasoningEffort !== false;
 }
 
 const TOOL_RESULT_IMAGE_REPLAY_TEXT = "Attached image(s) from tool result:";

@@ -148,7 +148,7 @@ describe("telegram bot message processor", () => {
           To: "telegram:123",
           ChatType: "group",
           RawBody: "ambient",
-          InboundTurnKind: "room_event",
+          InboundEventKind: "room_event",
         },
       }),
     );

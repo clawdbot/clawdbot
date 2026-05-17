@@ -1,4 +1,12 @@
 // Shared inbound parsing helpers for channel plugins.
+import {
+  buildChannelInboundEventContext,
+  filterChannelInboundSupplementalContext,
+  type BuildChannelInboundEventContextParams,
+  type BuiltChannelInboundEventContext,
+} from "../channels/inbound-event/context.js";
+import type { InboundEventKind } from "../channels/inbound-event/kind.js";
+
 export {
   createInboundDebouncer,
   resolveInboundDebounceMs,
@@ -51,20 +59,61 @@ export { formatLocationText, toLocationContext } from "../channels/location.js";
 export { logInboundDrop } from "../channels/logging.js";
 export { resolveInboundSessionEnvelopeContext } from "../channels/session-envelope.js";
 export {
-  buildChannelTurnContext,
-  filterChannelTurnSupplementalContext,
-} from "../channels/turn/context.js";
-export type {
-  BuildChannelTurnContextParams,
-  BuiltChannelTurnContext,
-} from "../channels/turn/context.js";
+  classifyChannelInboundEvent,
+  resolveUnmentionedGroupInboundPolicy,
+} from "../channels/inbound-event/classification.js";
+export type { ClassifyChannelInboundEventParams } from "../channels/inbound-event/classification.js";
+export { buildChannelInboundEventContext, filterChannelInboundSupplementalContext };
+export type { BuildChannelInboundEventContextParams, BuiltChannelInboundEventContext };
+
+export type BuildChannelTurnContextParams = Omit<
+  BuildChannelInboundEventContextParams,
+  "message"
+> & {
+  message: BuildChannelInboundEventContextParams["message"] & {
+    inboundTurnKind?: InboundEventKind;
+  };
+};
+export type BuiltChannelTurnContext = BuiltChannelInboundEventContext & {
+  InboundTurnKind: InboundEventKind;
+};
+
+export function buildChannelTurnContext(
+  params: BuildChannelTurnContextParams,
+): BuiltChannelTurnContext {
+  const inboundEventKind = params.message.inboundEventKind ?? params.message.inboundTurnKind;
+  const ctx = buildChannelInboundEventContext({
+    ...params,
+    message: {
+      ...params.message,
+      ...(inboundEventKind ? { inboundEventKind } : {}),
+    },
+  });
+  return {
+    ...ctx,
+    InboundTurnKind: ctx.InboundEventKind,
+  };
+}
+
+export const filterChannelTurnSupplementalContext = filterChannelInboundSupplementalContext;
+
 export {
-  buildChannelTurnMediaPayload,
   toHistoryMediaEntries,
   toInboundMediaFacts,
-} from "../channels/turn/media.js";
-export type { ChannelTurnMediaInput, ChannelTurnMediaPayload } from "../channels/turn/media.js";
-export type { CommandFacts, InboundMediaFacts, InboundTurnKind } from "../channels/turn/types.js";
+  buildChannelInboundMediaPayload,
+  buildChannelInboundMediaPayload as buildChannelTurnMediaPayload,
+} from "../channels/inbound-event/media.js";
+export type {
+  ChannelInboundMediaInput,
+  ChannelInboundMediaInput as ChannelTurnMediaInput,
+  ChannelInboundMediaPayload,
+  ChannelInboundMediaPayload as ChannelTurnMediaPayload,
+} from "../channels/inbound-event/media.js";
+export type { CommandFacts, InboundMediaFacts } from "../channels/turn/types.js";
+export type {
+  InboundEventKind,
+  InboundEventKind as InboundTurnKind,
+} from "../channels/inbound-event/kind.js";
 export {
   createCommandTurnContext,
   isAuthorizedTextSlashCommandTurn,

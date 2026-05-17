@@ -8,7 +8,7 @@ title: "Docs"
 
 # `openclaw docs`
 
-Search the live OpenClaw docs index from the terminal. The command shells out to the public Mintlify-hosted docs MCP search endpoint at `https://docs.openclaw.ai/mcp.SearchOpenClaw` and renders the results in your terminal.
+Search the live OpenClaw docs index from the terminal. The command shells out to the public Mintlify-hosted docs MCP search endpoint at `https://docs.openclaw.ai/mcp.search_open_claw` and renders the results in your terminal.
 
 ## Usage
 

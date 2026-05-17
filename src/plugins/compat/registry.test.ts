@@ -136,6 +136,11 @@ const knownDeprecatedSurfaceMarkers = [
     marker: "@deprecated Use `openclaw/plugin-sdk/channel-message`.",
   },
   {
+    code: "legacy-deactivate-hook-alias",
+    file: "src/plugins/hook-types.ts",
+    marker: "@deprecated Use gateway_stop",
+  },
+  {
     code: "channel-route-key-aliases",
     file: "src/plugin-sdk/channel-route.ts",
     marker: "channelRouteIdentityKey",

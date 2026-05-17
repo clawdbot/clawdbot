@@ -4,6 +4,8 @@ import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-s
 export type MemorySourceFileStateRow = {
   path: string;
   hash: string;
+  mtime?: number;
+  size?: number;
 };
 
 type MemorySourceStateDb = {
@@ -13,7 +15,7 @@ type MemorySourceStateDb = {
   };
 };
 
-export const MEMORY_SOURCE_FILE_STATE_SQL = `SELECT path, hash FROM files WHERE source = ?`;
+export const MEMORY_SOURCE_FILE_STATE_SQL = `SELECT path, hash, mtime, size FROM files WHERE source = ?`;
 export const MEMORY_SOURCE_FILE_HASH_SQL = `SELECT hash FROM files WHERE path = ? AND source = ?`;
 
 export function loadMemorySourceFileState(params: {

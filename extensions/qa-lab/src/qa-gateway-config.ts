@@ -126,6 +126,9 @@ export function buildQaGatewayConfig(params: {
   return {
     plugins: {
       allow: allowedPlugins,
+      slots: {
+        memory: "memory-core",
+      },
       entries: {
         acpx: {
           enabled: true,

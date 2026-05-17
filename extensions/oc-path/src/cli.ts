@@ -16,6 +16,7 @@ import {
   emitJsonc,
   emitJsonl,
   emitMd,
+  emitYaml,
   findOcPaths,
   formatOcPath,
   inferKind,
@@ -23,6 +24,7 @@ import {
   parseJsonl,
   parseMd,
   parseOcPath,
+  parseYaml,
   resolveOcPath,
   setOcPath,
   type OcAst,
@@ -166,6 +168,9 @@ async function loadAst(absPath: string, fileName: string): Promise<OcAst> {
   if (kind === "jsonl") {
     return parseJsonl(raw).ast;
   }
+  if (kind === "yaml") {
+    return parseYaml(raw).ast;
+  }
   return parseMd(raw).ast;
 }
 
@@ -179,6 +184,8 @@ function emitForKind(ast: OcAst, fileName?: string): string {
       return emitJsonl(ast, opts);
     case "md":
       return emitMd(ast, opts);
+    case "yaml":
+      return emitYaml(ast, opts);
   }
   return "";
 }

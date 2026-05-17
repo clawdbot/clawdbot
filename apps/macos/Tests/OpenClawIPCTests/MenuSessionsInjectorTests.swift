@@ -118,9 +118,12 @@ struct MenuSessionsInjectorTests {
         injector.injectForTesting(into: menu)
         let contextItem = try #require(menu.items.first { $0.tag == 9_415_557 && $0.title == "Context" })
         let contextSubmenu = try #require(contextItem.submenu)
-        #expect(menu.items.filter { $0.tag == 9_415_557 && $0.title == "Context" }.count == 1)
+        #expect(menu.items.count(where: { $0.tag == 9_415_557 && $0.title == "Context" }) == 1)
         #expect(menu.items.contains { $0.tag == 9_415_557 && $0.isSeparatorItem })
-        #expect(contextSubmenu.items.compactMap { $0.representedObject as? String }.filter { ["main", "discord:group:alpha"].contains($0) }.count == 2)
+        #expect(contextSubmenu.items.compactMap { $0.representedObject as? String }.count(where: { [
+            "main",
+            "discord:group:alpha",
+        ].contains($0) }) == 2)
         #expect(contextSubmenu.items.allSatisfy { $0.title != "Usage cost (30 days)" })
         let sendHeartbeatsIndex = try #require(menu.items.firstIndex(where: { $0.title == "Send Heartbeats" }))
         let openDashboardIndex = try #require(menu.items.firstIndex(where: { $0.title == "Open Dashboard" }))
@@ -172,6 +175,22 @@ struct MenuSessionsInjectorTests {
         #expect(usageCostItem != nil)
         #expect(usageCostItem?.submenu != nil)
         #expect(usageCostItem?.submenu?.delegate == nil)
+    }
+
+    @Test func `status text keeps useful error detail`() {
+        let injector = MenuSessionsInjector()
+        let longError = """
+        Gateway connection dropped; gateway likely restarted.
+        Reconnect after the gateway finishes booting.
+        Details that should stay readable instead of collapsing into one tiny menu ellipsis.
+        """
+
+        let normalized = injector.testingControlChannelStatusText(for: .degraded(longError))
+
+        #expect(normalized.contains("Gateway connection dropped"))
+        #expect(normalized.contains("Reconnect after"))
+        #expect(normalized.count <= 180)
+        #expect(!normalized.contains("\n"))
     }
 
     @Test func `node status text distinguishes paired disconnected nodes`() {

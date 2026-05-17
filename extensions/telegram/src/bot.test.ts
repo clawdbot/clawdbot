@@ -2237,6 +2237,129 @@ describe("createTelegramBot", () => {
     expect(mediaFetch).toHaveBeenCalledTimes(1);
   });
 
+  it("hydrates bot reply targets cached from earlier Telegram replies", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
+    getFileSpy.mockClear();
+
+    const mediaFetch = vi.fn(
+      async () =>
+        new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+    );
+    const ssrfMock = mockPinnedHostnameResolution();
+
+    try {
+      createTelegramBot({
+        token: "tok",
+        telegramTransport: {
+          fetch: mediaFetch as typeof fetch,
+          sourceFetch: mediaFetch as typeof fetch,
+          close: async () => {},
+        },
+      });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+      const baseCtx = {
+        me: { id: 999, username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      };
+      const chat = { id: 7, type: "group", title: "Ops" };
+
+      await handler({
+        ...baseCtx,
+        message: {
+          chat,
+          message_id: 102,
+          text: "Why is there a 4th person?",
+          date: 1736380750,
+          from: { id: 2, is_bot: false, first_name: "UserB" },
+          reply_to_message: {
+            chat,
+            message_id: 101,
+            text: "Done, here is the image",
+            date: 1736380700,
+            from: { id: 999, is_bot: true, first_name: "OpenClaw" },
+            photo: [{ file_id: "generated-photo-1" }],
+          },
+        },
+      });
+
+      replySpy.mockClear();
+      getFileSpy.mockClear();
+      mediaFetch.mockClear();
+
+      await handler({
+        ...baseCtx,
+        message: {
+          chat,
+          message_id: 103,
+          text: "@openclaw_bot explain what went wrong",
+          date: 1736380800,
+          from: { id: 1, is_bot: false, first_name: "UserA" },
+          reply_to_message: {
+            chat,
+            message_id: 102,
+            text: "Why is there a 4th person?",
+            date: 1736380750,
+            from: { id: 2, is_bot: false, first_name: "UserB" },
+          },
+        },
+      });
+    } finally {
+      ssrfMock.mockRestore();
+    }
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = mockMsgContextArg(
+      replySpy as unknown as MockCallSource,
+      0,
+      0,
+      "replySpy call",
+    ) as {
+      ReplyChain?: Array<{
+        messageId?: string;
+        sender?: string;
+        body?: string;
+        mediaRef?: string;
+        mediaPath?: string;
+      }>;
+      UntrustedStructuredContext?: unknown[];
+    };
+    expect(payload.ReplyChain?.map((entry) => entry.messageId)).toEqual(["102", "101"]);
+    expect(payload.ReplyChain?.[1]).toMatchObject({
+      sender: "OpenClaw",
+      body: "Done, here is the image",
+      mediaRef: "telegram:file/generated-photo-1",
+    });
+    expect(payload.ReplyChain?.[1]?.mediaPath).toBeTypeOf("string");
+    const [conversationContext] = requireArray(
+      payload.UntrustedStructuredContext,
+      "structured context",
+    );
+    const contextRecord = requireRecord(conversationContext, "conversation context");
+    const contextPayload = requireRecord(contextRecord.payload, "conversation context payload");
+    const messages = requireArray(contextPayload.messages, "conversation context messages").map(
+      (message, index) => requireRecord(message, `conversation context message ${index + 1}`),
+    );
+    const messagesById = new Map(messages.map((message) => [message.message_id, message]));
+    expect(messagesById.get("101")).toMatchObject({
+      sender: "OpenClaw",
+      body: "Done, here is the image",
+      media_ref: "telegram:file/generated-photo-1",
+      is_reply_target: true,
+    });
+    expect(messagesById.get("102")).toMatchObject({
+      sender: "UserB",
+      body: "Why is there a 4th person?",
+      reply_to_id: "101",
+      is_reply_target: true,
+    });
+    expect(getFileSpy).toHaveBeenCalledWith("generated-photo-1");
+    expect(mediaFetch).toHaveBeenCalledTimes(1);
+  });
+
   it("does not fetch reply media for unauthorized DM replies", async () => {
     onSpy.mockClear();
     replySpy.mockClear();

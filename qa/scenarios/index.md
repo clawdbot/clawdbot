@@ -32,6 +32,8 @@ Theme directories:
 - `media/` - image understanding and generation
 - `memory/` - recall, ranking, active memory, and thread isolation
 - `models/` - provider capabilities and model switching
+- `personal/` - local personal assistant workflow checks for reminders,
+  replies, memory, redaction, and safe tool followthrough
 - `plugins/` - plugin, skill, and MCP tool integration
 - `runtime/` - turn recovery, compaction, approval, and inventory behavior
 - `scheduling/` - cron and recurring work

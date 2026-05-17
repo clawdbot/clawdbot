@@ -624,10 +624,21 @@ fix_npm_prefix_if_needed() {
 
 install_openclaw() {
   local requested="${OPENCLAW_VERSION:-latest}"
+  local freshness_flag="--min-release-age=0"
+  local min_release_age=""
+  min_release_age="$(env -u NPM_CONFIG_BEFORE -u npm_config_before "$(npm_bin)" config get min-release-age 2>/dev/null || true)"
+  if [[ -z "$min_release_age" || "$min_release_age" == "null" || "$min_release_age" == "undefined" ]]; then
+    local before_value=""
+    before_value="$(env -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "$(npm_bin)" config get before 2>/dev/null || true)"
+    if [[ -n "$before_value" && "$before_value" != "null" && "$before_value" != "undefined" ]]; then
+      freshness_flag="--before=$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')"
+    fi
+  fi
   local npm_args=(
     --loglevel "$NPM_LOGLEVEL"
     --no-fund
     --no-audit
+    "$freshness_flag"
   )
   emit_json "{\"event\":\"step\",\"name\":\"openclaw\",\"status\":\"start\",\"version\":\"${requested}\"}"
   log "Installing OpenClaw (${requested})..."
@@ -636,14 +647,14 @@ install_openclaw() {
   fi
 
   if [[ "${requested}" == "latest" ]]; then
-    if ! SHARP_IGNORE_GLOBAL_LIBVIPS="$SHARP_IGNORE_GLOBAL_LIBVIPS" "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@latest"; then
+    if ! env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "SHARP_IGNORE_GLOBAL_LIBVIPS=$SHARP_IGNORE_GLOBAL_LIBVIPS" "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@latest"; then
       log "npm install openclaw@latest failed; retrying openclaw@next"
       emit_json "{\"event\":\"step\",\"name\":\"openclaw\",\"status\":\"retry\",\"version\":\"next\"}"
-      SHARP_IGNORE_GLOBAL_LIBVIPS="$SHARP_IGNORE_GLOBAL_LIBVIPS" "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@next"
+      env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "SHARP_IGNORE_GLOBAL_LIBVIPS=$SHARP_IGNORE_GLOBAL_LIBVIPS" "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@next"
       requested="next"
     fi
   else
-    SHARP_IGNORE_GLOBAL_LIBVIPS="$SHARP_IGNORE_GLOBAL_LIBVIPS" "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@${requested}"
+    env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "SHARP_IGNORE_GLOBAL_LIBVIPS=$SHARP_IGNORE_GLOBAL_LIBVIPS" "$(npm_bin)" install -g --prefix "$(node_dir)" "${npm_args[@]}" "openclaw@${requested}"
   fi
 
   mkdir -p "${PREFIX}/bin"

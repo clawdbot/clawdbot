@@ -21,6 +21,7 @@ export const ENV_SECRET_REF_ID_RE = /^[A-Z][A-Z0-9_]{0,127}$/;
 export const LEGACY_SECRETREF_ENV_MARKER_PREFIX = "secretref-env:"; // pragma: allowlist secret
 export const LEGACY_DOUBLE_UNDERSCORE_ENV_MARKER_PREFIX = "__env__:"; // pragma: allowlist secret
 const ENV_SECRET_TEMPLATE_RE = /^\$\{([A-Z][A-Z0-9_]{0,127})\}$/;
+const ENV_SECRET_SHORTHAND_RE = /^\$([A-Z][A-Z0-9_]{0,127})$/;
 export type SecretInputStringResolutionMode = "strict" | "inspect";
 export type SecretInputStringResolution =
   | { status: "available"; value: string; ref: null }
@@ -73,7 +74,8 @@ export function parseEnvTemplateSecretRef(
   if (typeof value !== "string") {
     return null;
   }
-  const match = ENV_SECRET_TEMPLATE_RE.exec(value.trim());
+  const trimmed = value.trim();
+  const match = ENV_SECRET_TEMPLATE_RE.exec(trimmed) ?? ENV_SECRET_SHORTHAND_RE.exec(trimmed);
   if (!match) {
     return null;
   }

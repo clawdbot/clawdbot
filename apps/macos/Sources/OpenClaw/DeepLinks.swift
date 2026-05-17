@@ -69,6 +69,8 @@ final class DeepLinkHandler {
             await self.handleAgent(link: link, originalURL: url)
         case .gateway:
             break
+        case .dashboard:
+            await self.openDashboard()
         }
     }
 
@@ -177,6 +179,14 @@ final class DeepLinkHandler {
     }
 
     // MARK: - UI
+
+    private func openDashboard() async {
+        do {
+            try await DashboardManager.shared.show()
+        } catch {
+            self.presentAlert(title: "Dashboard unavailable", message: error.localizedDescription)
+        }
+    }
 
     private func confirm(title: String, message: String) -> Bool {
         let alert = NSAlert()

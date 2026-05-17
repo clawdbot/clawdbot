@@ -1544,6 +1544,55 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
     expect(sessionEntry.thinkingLevel).toBe("medium");
   });
 
+  it.each([
+    ["openai", "gpt-5.5"],
+    ["openai-codex", "gpt-5.5"],
+  ])("accepts xhigh for %s/%s when catalog marks reasoning support", async (provider, model) => {
+    setDirectiveTestProviders([
+      {
+        id: provider,
+        label: provider,
+        auth: [],
+        resolveThinkingProfile: ({ modelId }) => ({
+          levels:
+            modelId === "gpt-5.5"
+              ? [
+                  { id: "off" },
+                  { id: "minimal" },
+                  { id: "low" },
+                  { id: "medium" },
+                  { id: "high" },
+                  { id: "xhigh" },
+                ]
+              : [{ id: "off" }],
+        }),
+      },
+    ]);
+    const sessionEntry = createSessionEntry();
+    const sessionStore = { [sessionKey]: sessionEntry };
+    const catalogEntry = {
+      provider,
+      id: model,
+      name: model,
+      reasoning: true,
+    };
+
+    const result = await handleDirectiveOnly(
+      createHandleParams({
+        directives: parseInlineDirectives("/think xhigh"),
+        provider,
+        model,
+        allowedModelCatalog: [catalogEntry],
+        thinkingCatalog: [catalogEntry],
+        sessionEntry,
+        sessionStore,
+      }),
+    );
+
+    expect(result?.text).toContain("Thinking level set to xhigh.");
+    expect(sessionEntry.thinkingLevel).toBe("xhigh");
+  });
+
   it("persists verbose on and off directives", async () => {
     const sessionEntry = createSessionEntry();
     const sessionStore = { [sessionKey]: sessionEntry };

@@ -56,7 +56,7 @@ async function deliverSynologyChatReply(params: {
   return { visibleReplySent: ok };
 }
 
-export async function dispatchSynologyChatInboundTurn(params: {
+export async function dispatchSynologyChatInboundEvent(params: {
   account: ResolvedSynologyChatAccount;
   msg: SynologyInboundMessage;
   log?: SynologyChannelLog;

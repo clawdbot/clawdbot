@@ -713,12 +713,23 @@ run_npm_global_install() {
     local spec="$1"
     local log="$2"
 
+    local freshness_flag="--min-release-age=0"
+    local min_release_age=""
+    min_release_age="$(env -u NPM_CONFIG_BEFORE -u npm_config_before npm config get min-release-age 2>/dev/null || true)"
+    if [[ -z "$min_release_age" || "$min_release_age" == "null" || "$min_release_age" == "undefined" ]]; then
+        local before_value=""
+        before_value="$(env -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age npm config get before 2>/dev/null || true)"
+        if [[ -n "$before_value" && "$before_value" != "null" && "$before_value" != "undefined" ]]; then
+            freshness_flag="--before=$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')"
+        fi
+    fi
+
     local -a cmd
-    cmd=(env "SHARP_IGNORE_GLOBAL_LIBVIPS=$SHARP_IGNORE_GLOBAL_LIBVIPS" npm --loglevel "$NPM_LOGLEVEL")
+    cmd=(env -u NPM_CONFIG_BEFORE -u npm_config_before -u NPM_CONFIG_MIN_RELEASE_AGE -u npm_config_min_release_age -u npm_config_min-release-age "SHARP_IGNORE_GLOBAL_LIBVIPS=$SHARP_IGNORE_GLOBAL_LIBVIPS" npm --loglevel "$NPM_LOGLEVEL")
     if [[ -n "$NPM_SILENT_FLAG" ]]; then
         cmd+=("$NPM_SILENT_FLAG")
     fi
-    cmd+=(--no-fund --no-audit install -g "$spec")
+    cmd+=(--no-fund --no-audit "$freshness_flag" install -g "$spec")
     local cmd_display=""
     printf -v cmd_display '%q ' "${cmd[@]}"
     LAST_NPM_INSTALL_CMD="${cmd_display% }"

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./tools/gateway.js", () => ({
-  callGatewayTool: vi.fn(async () => ({ ok: true })),
+  callGatewayTool: vi.fn(async () => ({ status: "ok" })),
 }));
 
 vi.mock("../infra/outbound/message.js", () => ({
@@ -42,7 +42,22 @@ function expectGatewayAgentFollowup(expected: Record<string, unknown>) {
   for (const [key, value] of Object.entries(expected)) {
     expect(params[key]).toBe(value);
   }
-  expect(call[3]).toEqual({ expectFinal: true });
+  expect(call[3]).toBeUndefined();
+  return params;
+}
+
+function expectGatewayAgentWait(expected: Record<string, unknown>) {
+  const call = (callGatewayTool as { mock?: { calls?: unknown[][] } }).mock?.calls?.[1];
+  if (!call) {
+    throw new Error("expected agent.wait call");
+  }
+  expect(call[0]).toBe("agent.wait");
+  requireRecord(call[1], "gateway wait context");
+  const params = requireRecord(call[2], "gateway wait params");
+  for (const [key, value] of Object.entries(expected)) {
+    expect(params[key]).toBe(value);
+  }
+  expect(call[3]).toBeUndefined();
   return params;
 }
 
@@ -130,6 +145,41 @@ describe("exec approval followup", () => {
       accountId: target.accountId,
       threadId: target.threadId,
       idempotencyKey: `exec-approval-followup:req-${target.channel}`,
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("waits for accepted agent followups without direct fallback", async () => {
+    vi.mocked(callGatewayTool)
+      .mockResolvedValueOnce({
+        runId: "exec-approval-followup:req-wait:nonce:nonce-wait",
+        status: "accepted",
+      })
+      .mockResolvedValueOnce({
+        runId: "exec-approval-followup:req-wait:nonce:nonce-wait",
+        status: "ok",
+      });
+
+    await sendExecApprovalFollowup({
+      approvalId: "req-wait",
+      sessionKey: "agent:main:telegram:direct:123",
+      turnSourceChannel: "telegram",
+      turnSourceTo: "123",
+      turnSourceAccountId: "default",
+      resultText: "Exec finished (gateway id=req-wait, session=sess_1, code 0)\nall good",
+      idempotencyKey: "exec-approval-followup:req-wait:nonce:nonce-wait",
+    });
+
+    expectGatewayAgentFollowup({
+      sessionKey: "agent:main:telegram:direct:123",
+      deliver: true,
+      channel: "telegram",
+      to: "123",
+      idempotencyKey: "exec-approval-followup:req-wait:nonce:nonce-wait",
+    });
+    expectGatewayAgentWait({
+      runId: "exec-approval-followup:req-wait:nonce:nonce-wait",
+      timeoutMs: 60_000,
     });
     expect(sendMessage).not.toHaveBeenCalled();
   });

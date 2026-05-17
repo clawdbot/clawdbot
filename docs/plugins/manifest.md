@@ -328,24 +328,24 @@ OpenClaw reads this before provider runtime loads.
 Provider setup lists use these manifest choices, descriptor-derived setup
 choices, and install-catalog metadata without loading provider runtime.
 
-| Field                 | Required | Type                                            | What it means                                                                                            |
-| --------------------- | -------- | ----------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `provider`            | Yes      | `string`                                        | Provider id this choice belongs to.                                                                      |
-| `method`              | Yes      | `string`                                        | Auth method id to dispatch to.                                                                           |
-| `choiceId`            | Yes      | `string`                                        | Stable auth-choice id used by onboarding and CLI flows.                                                  |
-| `choiceLabel`         | No       | `string`                                        | User-facing label. If omitted, OpenClaw falls back to `choiceId`.                                        |
-| `choiceHint`          | No       | `string`                                        | Short helper text for the picker.                                                                        |
-| `assistantPriority`   | No       | `number`                                        | Lower values sort earlier in assistant-driven interactive pickers.                                       |
-| `assistantVisibility` | No       | `"visible"` \| `"manual-only"`                  | Hide the choice from assistant pickers while still allowing manual CLI selection.                        |
-| `deprecatedChoiceIds` | No       | `string[]`                                      | Legacy choice ids that should redirect users to this replacement choice.                                 |
-| `groupId`             | No       | `string`                                        | Optional group id for grouping related choices.                                                          |
-| `groupLabel`          | No       | `string`                                        | User-facing label for that group.                                                                        |
-| `groupHint`           | No       | `string`                                        | Short helper text for the group.                                                                         |
-| `optionKey`           | No       | `string`                                        | Internal option key for simple one-flag auth flows.                                                      |
-| `cliFlag`             | No       | `string`                                        | CLI flag name, such as `--openrouter-api-key`.                                                           |
-| `cliOption`           | No       | `string`                                        | Full CLI option shape, such as `--openrouter-api-key <key>`.                                             |
-| `cliDescription`      | No       | `string`                                        | Description used in CLI help.                                                                            |
-| `onboardingScopes`    | No       | `Array<"text-inference" \| "image-generation">` | Which onboarding surfaces this choice should appear in. If omitted, it defaults to `["text-inference"]`. |
+| Field                 | Required | Type                                                                  | What it means                                                                                            |
+| --------------------- | -------- | --------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `provider`            | Yes      | `string`                                                              | Provider id this choice belongs to.                                                                      |
+| `method`              | Yes      | `string`                                                              | Auth method id to dispatch to.                                                                           |
+| `choiceId`            | Yes      | `string`                                                              | Stable auth-choice id used by onboarding and CLI flows.                                                  |
+| `choiceLabel`         | No       | `string`                                                              | User-facing label. If omitted, OpenClaw falls back to `choiceId`.                                        |
+| `choiceHint`          | No       | `string`                                                              | Short helper text for the picker.                                                                        |
+| `assistantPriority`   | No       | `number`                                                              | Lower values sort earlier in assistant-driven interactive pickers.                                       |
+| `assistantVisibility` | No       | `"visible"` \| `"manual-only"`                                        | Hide the choice from assistant pickers while still allowing manual CLI selection.                        |
+| `deprecatedChoiceIds` | No       | `string[]`                                                            | Legacy choice ids that should redirect users to this replacement choice.                                 |
+| `groupId`             | No       | `string`                                                              | Optional group id for grouping related choices.                                                          |
+| `groupLabel`          | No       | `string`                                                              | User-facing label for that group.                                                                        |
+| `groupHint`           | No       | `string`                                                              | Short helper text for the group.                                                                         |
+| `optionKey`           | No       | `string`                                                              | Internal option key for simple one-flag auth flows.                                                      |
+| `cliFlag`             | No       | `string`                                                              | CLI flag name, such as `--openrouter-api-key`.                                                           |
+| `cliOption`           | No       | `string`                                                              | Full CLI option shape, such as `--openrouter-api-key <key>`.                                             |
+| `cliDescription`      | No       | `string`                                                              | Description used in CLI help.                                                                            |
+| `onboardingScopes`    | No       | `Array<"text-inference" \| "image-generation" \| "music-generation">` | Which onboarding surfaces this choice should appear in. If omitted, it defaults to `["text-inference"]`. |
 
 ## commandAliases reference
 

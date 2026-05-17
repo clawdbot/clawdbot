@@ -1,7 +1,9 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { expectNoReaddirSyncDuring } from "../../../test-utils/fs-scan-assertions.js";
+import { listGitTrackedFiles, toRepoRelativePath } from "../../../test-utils/repo-files.js";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "../../../..");
 const SRC_ROOT = path.join(REPO_ROOT, "src");
@@ -28,21 +30,14 @@ function listExternalSourceFiles(dir: string): string[] | null {
 }
 
 function listGitSourceFiles(dir: string): string[] | null {
-  const relativeRoot = path.relative(REPO_ROOT, dir).replaceAll(path.sep, "/");
-  const result = spawnSync("git", ["ls-files", "--", relativeRoot], {
-    cwd: REPO_ROOT,
-    encoding: "utf8",
-    maxBuffer: 1024 * 1024 * 4,
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  if (result.status !== 0) {
+  const relativeRoot = toRepoRelativePath(REPO_ROOT, dir);
+  const files = listGitTrackedFiles({ repoRoot: REPO_ROOT, pathspecs: relativeRoot });
+  if (!files) {
     return null;
   }
-  return result.stdout
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
+  return files
     .map((file) => path.join(REPO_ROOT, file))
+    .filter((filePath) => fs.existsSync(filePath))
     .filter(isOwnedSourceFile)
     .toSorted();
 }
@@ -118,7 +113,7 @@ function isUnderDoctorRoot(file: string): boolean {
 function collectViolations(files: string[]): string[] {
   const violations: string[] = [];
   for (const file of files) {
-    const rel = path.relative(REPO_ROOT, file).replaceAll(path.sep, "/");
+    const rel = toRepoRelativePath(REPO_ROOT, file);
     const sourceBytes = fs.readFileSync(file);
     const hasRepairFlag = sourceBytes.includes(LEGACY_REPAIR_FLAG_BYTES);
     const hasMigrationModule = sourceBytes.includes(LEGACY_MIGRATION_MODULE_BYTES);
@@ -140,16 +135,12 @@ function collectViolations(files: string[]): string[] {
 
 describe("legacy config write ownership", () => {
   it("lists ownership scan files without scanning source directories in-process", () => {
-    const readDir = vi.spyOn(fs, "readdirSync");
-    try {
+    expectNoReaddirSyncDuring(() => {
       const files = collectSourceFiles(SRC_ROOT);
 
       expect(files.length).toBeGreaterThan(0);
       expect(files.every(isOwnedSourceFile)).toBe(true);
-      expect(readDir).not.toHaveBeenCalled();
-    } finally {
-      readDir.mockRestore();
-    }
+    });
   });
 
   it("keeps legacy config repair flags and migration modules under doctor", () => {

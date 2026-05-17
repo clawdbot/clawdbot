@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
+import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import {
   handleReset,
   normalizeGatewayTokenInput,
@@ -10,6 +11,7 @@ import {
   probeGatewayReachable,
   resolveBrowserOpenCommand,
   resolveControlUiLinks,
+  summarizeExistingConfig,
   validateGatewayPasswordInput,
 } from "./onboard-helpers.js";
 
@@ -104,49 +106,47 @@ describe("openUrl", () => {
     vi.stubEnv("VITEST", "");
     vi.stubEnv("NODE_ENV", "");
     vi.stubEnv("SystemRoot", "C:\\Windows");
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     vi.stubEnv("NODE_ENV", "development");
     const rundll32 = path.win32.join("C:\\Windows", "System32", "rundll32.exe");
 
     const url =
       "https://accounts.google.com/o/oauth2/v2/auth?client_id=abc&response_type=code&redirect_uri=http%3A%2F%2Flocalhost";
 
-    const ok = await openUrl(url);
-    expect(ok).toBe(true);
+    await withMockedPlatform("win32", async () => {
+      const ok = await openUrl(url);
+      expect(ok).toBe(true);
 
-    expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(1);
-    const [argv, options] = requireFirstRunCommandCall();
-    expect(argv).toEqual([rundll32, "url.dll,FileProtocolHandler", url]);
-    expect(options?.timeoutMs).toBe(5_000);
-    expect(options?.windowsVerbatimArguments).toBeUndefined();
-
-    platformSpy.mockRestore();
+      expect(mocks.runCommandWithTimeout).toHaveBeenCalledTimes(1);
+      const [argv, options] = requireFirstRunCommandCall();
+      expect(argv).toEqual([rundll32, "url.dll,FileProtocolHandler", url]);
+      expect(options?.timeoutMs).toBe(5_000);
+      expect(options?.windowsVerbatimArguments).toBeUndefined();
+    });
   });
 
   it("does not pass non-http URLs to the OS browser handler", async () => {
     vi.stubEnv("VITEST", "");
     vi.stubEnv("NODE_ENV", "development");
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 
-    const ok = await openUrl("file://C:/Users/test/secrets.txt");
+    await withMockedPlatform("win32", async () => {
+      const ok = await openUrl("file://C:/Users/test/secrets.txt");
 
-    expect(ok).toBe(false);
-    expect(mocks.runCommandWithTimeout).not.toHaveBeenCalled();
-
-    platformSpy.mockRestore();
+      expect(ok).toBe(false);
+      expect(mocks.runCommandWithTimeout).not.toHaveBeenCalled();
+    });
   });
 });
 
 describe("resolveBrowserOpenCommand", () => {
   it("uses trusted rundll32 on win32", async () => {
     vi.stubEnv("SystemRoot", "C:\\Windows");
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const rundll32 = path.win32.join("C:\\Windows", "System32", "rundll32.exe");
 
-    const resolved = await resolveBrowserOpenCommand();
-    expect(resolved.argv).toEqual([rundll32, "url.dll,FileProtocolHandler"]);
-    expect(resolved.command).toBe(rundll32);
-    platformSpy.mockRestore();
+    await withMockedPlatform("win32", async () => {
+      const resolved = await resolveBrowserOpenCommand();
+      expect(resolved.argv).toEqual([rundll32, "url.dll,FileProtocolHandler"]);
+      expect(resolved.command).toBe(rundll32);
+    });
   });
 });
 
@@ -203,6 +203,59 @@ describe("probeGatewayReachable", () => {
       ok: false,
       detail: "connect failed: timeout",
     });
+  });
+});
+
+describe("summarizeExistingConfig", () => {
+  it("collapses gateway fields into a friendly remote summary", () => {
+    expect(
+      summarizeExistingConfig({
+        agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
+        gateway: {
+          mode: "remote",
+          port: 18789,
+          bind: "lan",
+          remote: { url: "ws://192.168.0.202:18789" },
+        },
+      }),
+    ).toBe("Model: openai/gpt-5.4\nGateway: remote via LAN at ws://192.168.0.202:18789");
+  });
+
+  it("uses the port when no remote gateway URL is configured", () => {
+    expect(
+      summarizeExistingConfig({
+        gateway: {
+          mode: "local",
+          port: 18789,
+          bind: "loopback",
+        },
+      }),
+    ).toBe("Gateway: local via loopback on :18789");
+  });
+
+  it("does not show a stale remote URL as active for local gateway mode", () => {
+    expect(
+      summarizeExistingConfig({
+        gateway: {
+          mode: "local",
+          port: 18789,
+          bind: "loopback",
+          remote: { url: "ws://192.168.0.202:18789" },
+        },
+      }),
+    ).toBe("Gateway: local via loopback on :18789");
+  });
+
+  it("surfaces missing remote URL instead of falling back to port for remote mode", () => {
+    expect(
+      summarizeExistingConfig({
+        gateway: {
+          mode: "remote",
+          port: 18789,
+          bind: "lan",
+        },
+      }),
+    ).toBe("Gateway: remote via LAN (missing remote URL)");
   });
 });
 

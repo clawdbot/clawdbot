@@ -100,6 +100,29 @@ describe("openclaw-tools update_plan gating", () => {
     expect(toolNames(tools)).toContain("message");
   });
 
+  it("keeps explicitly allowed message tool in embedded completions", () => {
+    setEmbeddedMode(true);
+    const fromRuntimeAllowlist = createOpenClawTools({
+      config: {} as OpenClawConfig,
+      disablePluginTools: true,
+      pluginToolAllowlist: ["message"],
+    });
+    const fromGlobalAlsoAllow = createOpenClawTools({
+      config: { tools: { profile: "minimal", alsoAllow: ["message"] } } as OpenClawConfig,
+      disablePluginTools: true,
+    });
+    const denied = createOpenClawTools({
+      config: {} as OpenClawConfig,
+      disablePluginTools: true,
+      pluginToolAllowlist: ["message"],
+      pluginToolDenylist: ["message"],
+    });
+
+    expect(toolNames(fromRuntimeAllowlist)).toContain("message");
+    expect(toolNames(fromGlobalAlsoAllow)).toContain("message");
+    expect(toolNames(denied)).not.toContain("message");
+  });
+
   it("registers update_plan when explicitly enabled", () => {
     const config = {
       tools: {

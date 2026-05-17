@@ -1,9 +1,10 @@
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "../src/plugin-sdk/test-helpers/public-artifacts.js";
+import { expectNoReaddirSyncDuring } from "../src/test-utils/fs-scan-assertions.js";
+import { listGitTrackedFiles, toRepoRelativePath } from "../src/test-utils/repo-files.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const ALLOWED_EXTENSION_PUBLIC_SURFACE_BASENAMES = new Set(
@@ -20,23 +21,11 @@ const ROOTDIR_BOUNDARY_CANARY_RE =
   /(^|\/)__rootdir_boundary_canary__\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/u;
 
 function listGitFiles(dir: string): string[] | null {
-  const relativeRoot = path.relative(repoRoot, dir).replaceAll(path.sep, "/");
+  const relativeRoot = toRepoRelativePath(repoRoot, dir);
   if (!relativeRoot || relativeRoot.startsWith("..") || path.isAbsolute(relativeRoot)) {
     return null;
   }
-  const result = spawnSync("git", ["ls-files", "--", relativeRoot], {
-    cwd: repoRoot,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  if (result.status !== 0) {
-    return null;
-  }
-  return result.stdout
-    .split("\n")
-    .map((line) => line.trim().replaceAll("\\", "/"))
-    .filter((line) => line.length > 0)
-    .toSorted((left, right) => left.localeCompare(right));
+  return listGitTrackedFiles({ repoRoot, pathspecs: relativeRoot });
 }
 
 function walk(dir: string, entries: string[] = []): string[] {
@@ -60,7 +49,7 @@ function walk(dir: string, entries: string[] = []): string[] {
     if (!entry.name.endsWith(".test.ts") && !entry.name.endsWith(".test.tsx")) {
       continue;
     }
-    entries.push(path.relative(repoRoot, fullPath).replaceAll(path.sep, "/"));
+    entries.push(toRepoRelativePath(repoRoot, fullPath));
   }
   return entries;
 }
@@ -91,7 +80,7 @@ function walkCode(dir: string, entries: string[] = []): string[] {
     if (!entry.name.endsWith(".ts") && !entry.name.endsWith(".tsx")) {
       continue;
     }
-    const relativePath = path.relative(repoRoot, fullPath).replaceAll(path.sep, "/");
+    const relativePath = toRepoRelativePath(repoRoot, fullPath);
     if (ROOTDIR_BOUNDARY_CANARY_RE.test(relativePath)) {
       continue;
     }
@@ -197,8 +186,7 @@ function isAllowedCoreContractSuite(file: string, imports: readonly string[]): b
 
 describe("non-extension test boundaries", () => {
   it("lists boundary scan files from git without walking repo roots", () => {
-    const readdirSync = vi.spyOn(fs, "readdirSync");
-    try {
+    expectNoReaddirSyncDuring(() => {
       const srcTests = walk(path.join(repoRoot, "src"));
       const srcCode = walkCode(path.join(repoRoot, "src"));
       const pluginIds = collectBundledPluginIds();
@@ -206,10 +194,7 @@ describe("non-extension test boundaries", () => {
       expect(srcTests.length).toBeGreaterThan(0);
       expect(srcCode.length).toBeGreaterThan(0);
       expect(pluginIds.size).toBeGreaterThan(0);
-      expect(readdirSync).not.toHaveBeenCalled();
-    } finally {
-      readdirSync.mockRestore();
-    }
+    });
   });
 
   it("keeps plugin-owned behavior suites under the bundled plugin tree", () => {

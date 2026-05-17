@@ -23,7 +23,7 @@ export type ChannelOutboundContext = {
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   gifPlayback?: boolean;
-  /** Send image as document to avoid Telegram compression. */
+  /** Send image, GIF, or video as document to avoid channel compression. */
   forceDocument?: boolean;
   replyToId?: string | null;
   replyToIdSource?: "explicit" | "implicit";

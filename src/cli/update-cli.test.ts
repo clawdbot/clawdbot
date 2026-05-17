@@ -50,6 +50,13 @@ const launchdUpdateCleanupMocks = vi.hoisted(() => ({
   disableCurrentOpenClawUpdateLaunchdJob: vi.fn(async () => false),
 }));
 const nodeVersionSatisfiesEngine = vi.fn();
+const execFile = vi.fn((...args: unknown[]) => {
+  const callback = args.at(-1);
+  if (typeof callback === "function") {
+    callback(null, new Date(Date.now() - 1000).toString(), "");
+  }
+  return new EventEmitter();
+});
 const spawn = vi.fn();
 const { defaultRuntime: runtimeCapture, resetRuntimeCapture } = createCliRuntimeCapture();
 
@@ -90,6 +97,13 @@ vi.mock("../config/config.js", () => ({
       super(message);
       this.name = "ConfigMutationConflictError";
       this.currentHash = params.currentHash;
+    }
+  },
+  parseConfigJson5: (raw: string) => {
+    try {
+      return { ok: true, parsed: JSON.parse(raw) };
+    } catch (err) {
+      return { ok: false, error: String(err) };
     }
   },
   readConfigFileSnapshot: vi.fn(),
@@ -160,6 +174,7 @@ vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   return {
     ...actual,
+    execFile,
     spawn,
     spawnSync: vi.fn(() => ({
       pid: 0,
@@ -483,6 +498,7 @@ describe("update-cli", () => {
       "--no-fund",
       "--no-audit",
       "--loglevel=error",
+      "--min-release-age=0",
     ]);
     if (call?.[1] === undefined) {
       throw new Error("Expected package install command options");
@@ -932,15 +948,36 @@ describe("update-cli", () => {
         installPath: "/tmp/openclaw-demo-plugin",
       },
     } as const;
+    const preUpdateConfig = {
+      channels: {
+        whatsapp: {
+          enabled: true,
+          dmPolicy: "pairing",
+        },
+      },
+    } as OpenClawConfig;
     let capturedRecords: unknown;
+    let capturedSourceConfig: unknown;
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
+      ...baseSnapshot,
+      parsed: preUpdateConfig,
+      sourceConfig: preUpdateConfig,
+      config: preUpdateConfig,
+      runtimeConfig: preUpdateConfig,
+    });
     loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce(pluginInstallRecords);
     spawn.mockImplementationOnce((_node, _argv, options) => {
       const env = (options as { env?: NodeJS.ProcessEnv }).env;
       const recordsPath = env?.OPENCLAW_UPDATE_POST_CORE_INSTALL_RECORDS_PATH;
+      const sourceConfigPath = env?.OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH;
       if (!recordsPath) {
         throw new Error("missing post-core install records path");
       }
+      if (!sourceConfigPath) {
+        throw new Error("missing post-core source config path");
+      }
       capturedRecords = JSON.parse(fsSync.readFileSync(recordsPath, "utf-8"));
+      capturedSourceConfig = JSON.parse(fsSync.readFileSync(sourceConfigPath, "utf-8"));
       const child = new EventEmitter() as EventEmitter & {
         once: EventEmitter["once"];
       };
@@ -953,6 +990,10 @@ describe("update-cli", () => {
     await updateCommand({ yes: true, restart: false });
 
     expect(capturedRecords).toEqual(pluginInstallRecords);
+    expect(capturedSourceConfig).toEqual({
+      sourceConfig: preUpdateConfig,
+      authoredConfig: preUpdateConfig,
+    });
     expect(syncPluginsForUpdateChannel).not.toHaveBeenCalled();
     expect(updateNpmInstalledPlugins).not.toHaveBeenCalled();
   });
@@ -2577,7 +2618,16 @@ describe("update-cli", () => {
       .map(([argv]) => argv)
       .filter((argv) => argv[0] === "npm" && argv[1] === "i" && argv[2] === "-g");
     expect(installArgvs).toEqual([
-      ["npm", "i", "-g", "openclaw@latest", "--no-fund", "--no-audit", "--loglevel=error"],
+      [
+        "npm",
+        "i",
+        "-g",
+        "openclaw@latest",
+        "--no-fund",
+        "--no-audit",
+        "--loglevel=error",
+        "--min-release-age=0",
+      ],
       [
         "npm",
         "i",
@@ -2587,6 +2637,7 @@ describe("update-cli", () => {
         "--no-fund",
         "--no-audit",
         "--loglevel=error",
+        "--min-release-age=0",
       ],
     ]);
     expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
@@ -3126,6 +3177,665 @@ describe("update-cli", () => {
     expect(syncConfig?.meta?.lastTouchedVersion).toBe("2026.5.14");
     expect(lastWrite?.baseHash).toBe("post-doctor-hash");
     expect(lastWrite?.nextConfig?.meta?.lastTouchedVersion).toBe("2026.5.14");
+  });
+
+  it("restores pre-update channels when post-core resume sees post-doctor config without them", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    const configPath = path.join(tempDir, "openclaw.json");
+    const preUpdateConfig = {
+      update: { channel: "stable" },
+      channels: {
+        whatsapp: {
+          enabled: true,
+          dmPolicy: "pairing",
+        },
+      },
+    } as OpenClawConfig;
+    const postDoctorConfig = {
+      update: { channel: "stable" },
+      meta: { lastTouchedVersion: "2026.5.14" },
+    } as OpenClawConfig;
+    await fs.mkdir(tempDir, { recursive: true });
+    await fs.writeFile(`${configPath}.pre-update`, `${JSON.stringify(preUpdateConfig)}\n`, "utf-8");
+    await fs.writeFile(`${configPath}.bak`, `${JSON.stringify(postDoctorConfig)}\n`, "utf-8");
+    await fs.writeFile(configPath, `${JSON.stringify(postDoctorConfig)}\n`, "utf-8");
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
+      ...baseSnapshot,
+      path: configPath,
+      parsed: postDoctorConfig,
+      sourceConfig: postDoctorConfig,
+      config: postDoctorConfig,
+      runtimeConfig: postDoctorConfig,
+      hash: "post-doctor-hash",
+    });
+    syncPluginsForUpdateChannel.mockImplementation(async ({ config }) => ({
+      changed: false,
+      config,
+      summary: {
+        switchedToBundled: [],
+        switchedToNpm: [],
+        warnings: [],
+        errors: [],
+      },
+    }));
+    updateNpmInstalledPlugins.mockImplementation(async ({ config }) => ({
+      changed: false,
+      config,
+      outcomes: [],
+    }));
+
+    await withEnvAsync(
+      {
+        OPENCLAW_UPDATE_POST_CORE: "1",
+        OPENCLAW_UPDATE_POST_CORE_CHANNEL: "stable",
+      },
+      async () => {
+        await updateCommand({ yes: true, restart: false });
+      },
+    );
+
+    const syncConfig = syncPluginCall()?.config as
+      | (OpenClawConfig & { meta?: { lastTouchedVersion?: string } })
+      | undefined;
+    const lastWrite = lastReplaceConfigCall() as
+      | {
+          baseHash?: string;
+          nextConfig?: OpenClawConfig & {
+            meta?: { lastTouchedVersion?: string };
+            channels?: { whatsapp?: { enabled?: boolean; dmPolicy?: string } };
+          };
+        }
+      | undefined;
+    expect(syncConfig?.channels?.whatsapp).toEqual(preUpdateConfig.channels?.whatsapp);
+    expect(syncConfig?.meta?.lastTouchedVersion).toBe("2026.5.14");
+    expect(lastWrite?.baseHash).toBe("post-doctor-hash");
+    expect(lastWrite?.nextConfig?.channels?.whatsapp).toEqual(preUpdateConfig.channels?.whatsapp);
+    expect(lastWrite?.nextConfig?.meta?.lastTouchedVersion).toBe("2026.5.14");
+  });
+
+  it("restores pre-update channel model overrides when post-core resume restores a channel", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    const configPath = path.join(tempDir, "openclaw.json");
+    const preUpdateConfig = {
+      update: { channel: "stable" },
+      channels: {
+        whatsapp: {
+          enabled: true,
+          dmPolicy: "pairing",
+        },
+        telegram: {
+          enabled: true,
+        },
+        modelByChannel: {
+          openai: {
+            whatsapp: "openai/gpt-5.5",
+            telegram: "openai/gpt-5.4",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const postDoctorConfig = {
+      update: { channel: "stable" },
+      channels: {
+        telegram: {
+          enabled: true,
+        },
+        modelByChannel: {
+          openai: {
+            telegram: "openai/gpt-5.4",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    await fs.mkdir(tempDir, { recursive: true });
+    await fs.writeFile(`${configPath}.pre-update`, `${JSON.stringify(preUpdateConfig)}\n`, "utf-8");
+    await fs.writeFile(configPath, `${JSON.stringify(postDoctorConfig)}\n`, "utf-8");
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
+      ...baseSnapshot,
+      path: configPath,
+      parsed: postDoctorConfig,
+      sourceConfig: postDoctorConfig,
+      config: postDoctorConfig,
+      runtimeConfig: postDoctorConfig,
+      hash: "post-doctor-hash",
+    });
+    syncPluginsForUpdateChannel.mockImplementation(async ({ config }) => ({
+      changed: false,
+      config,
+      summary: {
+        switchedToBundled: [],
+        switchedToNpm: [],
+        warnings: [],
+        errors: [],
+      },
+    }));
+    updateNpmInstalledPlugins.mockImplementation(async ({ config }) => ({
+      changed: false,
+      config,
+      outcomes: [],
+    }));
+
+    await withEnvAsync(
+      {
+        OPENCLAW_UPDATE_POST_CORE: "1",
+        OPENCLAW_UPDATE_POST_CORE_CHANNEL: "stable",
+      },
+      async () => {
+        await updateCommand({ yes: true, restart: false });
+      },
+    );
+
+    const syncConfig = syncPluginCall()?.config as
+      | (OpenClawConfig & {
+          channels?: {
+            modelByChannel?: Record<string, Record<string, string>>;
+          };
+        })
+      | undefined;
+    const lastWrite = lastReplaceConfigCall() as
+      | {
+          nextConfig?: OpenClawConfig & {
+            channels?: {
+              modelByChannel?: Record<string, Record<string, string>>;
+            };
+          };
+        }
+      | undefined;
+    expect(syncConfig?.channels?.modelByChannel?.openai?.whatsapp).toBe("openai/gpt-5.5");
+    expect(syncConfig?.channels?.modelByChannel?.openai?.telegram).toBe("openai/gpt-5.4");
+    expect(lastWrite?.nextConfig?.channels?.modelByChannel?.openai?.whatsapp).toBe(
+      "openai/gpt-5.5",
+    );
+    expect(lastWrite?.nextConfig?.channels?.modelByChannel?.openai?.telegram).toBe(
+      "openai/gpt-5.4",
+    );
+  });
+
+  it("does not restore stale backup channels when current pre-update snapshot has none", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    const configPath = path.join(tempDir, "openclaw.json");
+    const removedChannelBackup = {
+      update: { channel: "stable" },
+      channels: {
+        whatsapp: {
+          enabled: true,
+          dmPolicy: "pairing",
+        },
+      },
+    } as OpenClawConfig;
+    const currentPreUpdateConfig = {
+      update: { channel: "stable" },
+    } as OpenClawConfig;
+    const postDoctorConfig = {
+      update: { channel: "stable" },
+    } as OpenClawConfig;
+    await fs.mkdir(tempDir, { recursive: true });
+    await fs.writeFile(
+      `${configPath}.pre-update`,
+      `${JSON.stringify(currentPreUpdateConfig)}\n`,
+      "utf-8",
+    );
+    await fs.writeFile(`${configPath}.bak`, `${JSON.stringify(removedChannelBackup)}\n`, "utf-8");
+    await fs.writeFile(configPath, `${JSON.stringify(postDoctorConfig)}\n`, "utf-8");
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
+      ...baseSnapshot,
+      path: configPath,
+      parsed: postDoctorConfig,
+      sourceConfig: postDoctorConfig,
+      config: postDoctorConfig,
+      runtimeConfig: postDoctorConfig,
+      hash: "post-doctor-hash",
+    });
+    syncPluginsForUpdateChannel.mockImplementation(async ({ config }) => ({
+      changed: false,
+      config,
+      summary: {
+        switchedToBundled: [],
+        switchedToNpm: [],
+        warnings: [],
+        errors: [],
+      },
+    }));
+    updateNpmInstalledPlugins.mockImplementation(async ({ config }) => ({
+      changed: false,
+      config,
+      outcomes: [],
+    }));
+
+    await withEnvAsync(
+      {
+        OPENCLAW_UPDATE_POST_CORE: "1",
+        OPENCLAW_UPDATE_POST_CORE_CHANNEL: "stable",
+      },
+      async () => {
+        await updateCommand({ yes: true, restart: false });
+      },
+    );
+
+    expect(syncPluginCall()?.config?.channels?.whatsapp).toBeUndefined();
+    expect(lastReplaceConfigCall()).toBeUndefined();
+  });
+
+  it("ignores pre-update channel snapshots older than the current update attempt", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    const configPath = path.join(tempDir, "openclaw.json");
+    const oldPreUpdateConfig = {
+      update: { channel: "stable" },
+      channels: {
+        whatsapp: {
+          enabled: true,
+          dmPolicy: "pairing",
+        },
+      },
+    } as OpenClawConfig;
+    const postDoctorConfig = {
+      update: { channel: "stable" },
+    } as OpenClawConfig;
+    const updateStartedAtMs = Date.now();
+    const staleTime = new Date(updateStartedAtMs - 60_000);
+    await fs.mkdir(tempDir, { recursive: true });
+    await fs.writeFile(
+      `${configPath}.pre-update`,
+      `${JSON.stringify(oldPreUpdateConfig)}\n`,
+      "utf-8",
+    );
+    await fs.writeFile(`${configPath}.bak`, `${JSON.stringify(oldPreUpdateConfig)}\n`, "utf-8");
+    await fs.utimes(`${configPath}.pre-update`, staleTime, staleTime);
+    await fs.utimes(`${configPath}.bak`, staleTime, staleTime);
+    await fs.writeFile(configPath, `${JSON.stringify(postDoctorConfig)}\n`, "utf-8");
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
+      ...baseSnapshot,
+      path: configPath,
+      parsed: postDoctorConfig,
+      sourceConfig: postDoctorConfig,
+      config: postDoctorConfig,
+      runtimeConfig: postDoctorConfig,
+      hash: "post-doctor-hash",
+    });
+    syncPluginsForUpdateChannel.mockImplementation(async ({ config }) => ({
+      changed: false,
+      config,
+      summary: {
+        switchedToBundled: [],
+        switchedToNpm: [],
+        warnings: [],
+        errors: [],
+      },
+    }));
+    updateNpmInstalledPlugins.mockImplementation(async ({ config }) => ({
+      changed: false,
+      config,
+      outcomes: [],
+    }));
+
+    await withEnvAsync(
+      {
+        OPENCLAW_UPDATE_POST_CORE: "1",
+        OPENCLAW_UPDATE_POST_CORE_CHANNEL: "stable",
+        OPENCLAW_UPDATE_POST_CORE_STARTED_AT_MS: String(updateStartedAtMs),
+      },
+      async () => {
+        await updateCommand({ yes: true, restart: false });
+      },
+    );
+
+    expect(syncPluginCall()?.config?.channels?.whatsapp).toBeUndefined();
+    expect(lastReplaceConfigCall()).toBeUndefined();
+  });
+
+  it("uses the Windows parent process start time for old post-core parents", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    const configPath = path.join(tempDir, "openclaw.json");
+    const preUpdateConfig = {
+      update: { channel: "stable" },
+      channels: {
+        whatsapp: {
+          enabled: true,
+          dmPolicy: "pairing",
+        },
+      },
+    } as OpenClawConfig;
+    const postDoctorConfig = {
+      update: { channel: "stable" },
+    } as OpenClawConfig;
+    await fs.mkdir(tempDir, { recursive: true });
+    await fs.writeFile(`${configPath}.pre-update`, `${JSON.stringify(preUpdateConfig)}\n`, "utf-8");
+    await fs.writeFile(configPath, `${JSON.stringify(postDoctorConfig)}\n`, "utf-8");
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
+      ...baseSnapshot,
+      path: configPath,
+      parsed: postDoctorConfig,
+      sourceConfig: postDoctorConfig,
+      config: postDoctorConfig,
+      runtimeConfig: postDoctorConfig,
+      hash: "post-doctor-hash",
+    });
+    syncPluginsForUpdateChannel.mockImplementation(async ({ config }) => ({
+      changed: false,
+      config,
+      summary: {
+        switchedToBundled: [],
+        switchedToNpm: [],
+        warnings: [],
+        errors: [],
+      },
+    }));
+    updateNpmInstalledPlugins.mockImplementation(async ({ config }) => ({
+      changed: false,
+      config,
+      outcomes: [],
+    }));
+    execFile.mockImplementationOnce((...args: unknown[]) => {
+      const [file, commandArgs] = args;
+      expect(file).toBe("powershell.exe");
+      expect(commandArgs).toContain("-NonInteractive");
+      const callback = args.at(-1);
+      if (typeof callback === "function") {
+        callback(null, new Date(Date.now() - 1_000).toISOString(), "");
+      }
+      return new EventEmitter();
+    });
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+    Object.defineProperty(process, "platform", {
+      configurable: true,
+      enumerable: true,
+      value: "win32",
+    });
+    try {
+      await withEnvAsync(
+        {
+          OPENCLAW_UPDATE_POST_CORE: "1",
+          OPENCLAW_UPDATE_POST_CORE_CHANNEL: "stable",
+        },
+        async () => {
+          await updateCommand({ yes: true, restart: false });
+        },
+      );
+    } finally {
+      if (platformDescriptor) {
+        Object.defineProperty(process, "platform", platformDescriptor);
+      }
+    }
+
+    expect(syncPluginCall()?.config?.channels?.whatsapp).toEqual(
+      preUpdateConfig.channels?.whatsapp,
+    );
+    expect(lastReplaceConfigCall()).toBeDefined();
+  });
+
+  it("ignores disk fallback snapshots when the update attempt start is unknown", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    const configPath = path.join(tempDir, "openclaw.json");
+    const preUpdateConfig = {
+      update: { channel: "stable" },
+      channels: {
+        whatsapp: {
+          enabled: true,
+          dmPolicy: "pairing",
+        },
+      },
+    } as OpenClawConfig;
+    const postDoctorConfig = {
+      update: { channel: "stable" },
+    } as OpenClawConfig;
+    await fs.mkdir(tempDir, { recursive: true });
+    await fs.writeFile(`${configPath}.pre-update`, `${JSON.stringify(preUpdateConfig)}\n`, "utf-8");
+    await fs.writeFile(`${configPath}.bak`, `${JSON.stringify(preUpdateConfig)}\n`, "utf-8");
+    await fs.writeFile(configPath, `${JSON.stringify(postDoctorConfig)}\n`, "utf-8");
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
+      ...baseSnapshot,
+      path: configPath,
+      parsed: postDoctorConfig,
+      sourceConfig: postDoctorConfig,
+      config: postDoctorConfig,
+      runtimeConfig: postDoctorConfig,
+      hash: "post-doctor-hash",
+    });
+    syncPluginsForUpdateChannel.mockImplementation(async ({ config }) => ({
+      changed: false,
+      config,
+      summary: {
+        switchedToBundled: [],
+        switchedToNpm: [],
+        warnings: [],
+        errors: [],
+      },
+    }));
+    updateNpmInstalledPlugins.mockImplementation(async ({ config }) => ({
+      changed: false,
+      config,
+      outcomes: [],
+    }));
+    execFile.mockImplementationOnce((...args: unknown[]) => {
+      const callback = args.at(-1);
+      if (typeof callback === "function") {
+        callback(new Error("ps unavailable"), "", "");
+      }
+      return new EventEmitter();
+    });
+
+    await withEnvAsync(
+      {
+        OPENCLAW_UPDATE_POST_CORE: "1",
+        OPENCLAW_UPDATE_POST_CORE_CHANNEL: "stable",
+      },
+      async () => {
+        await updateCommand({ yes: true, restart: false });
+      },
+    );
+
+    expect(syncPluginCall()?.config?.channels?.whatsapp).toBeUndefined();
+    expect(lastReplaceConfigCall()).toBeUndefined();
+  });
+
+  it("persists authored channel values when post-core restore input is resolved", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    const sourceConfigPath = path.join(tempDir, "source-config.json");
+    const resolvedPreUpdateConfig = {
+      update: { channel: "stable" },
+      channels: {
+        whatsapp: {
+          enabled: true,
+          token: "resolved-secret",
+        },
+      },
+    } as OpenClawConfig;
+    const authoredPreUpdateConfig = {
+      update: { channel: "stable" },
+      channels: {
+        whatsapp: {
+          enabled: true,
+          token: "${WHATSAPP_TOKEN}",
+        },
+      },
+    } as OpenClawConfig;
+    const postDoctorConfig = {
+      update: { channel: "stable" },
+      meta: { lastTouchedVersion: "2026.5.14" },
+    } as OpenClawConfig;
+    await fs.mkdir(tempDir, { recursive: true });
+    await fs.writeFile(
+      sourceConfigPath,
+      `${JSON.stringify({
+        sourceConfig: resolvedPreUpdateConfig,
+        authoredConfig: authoredPreUpdateConfig,
+      })}\n`,
+      "utf-8",
+    );
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
+      ...baseSnapshot,
+      sourceConfig: postDoctorConfig,
+      config: postDoctorConfig,
+      runtimeConfig: postDoctorConfig,
+      hash: "post-doctor-hash",
+    });
+    syncPluginsForUpdateChannel.mockImplementation(async ({ config }) => ({
+      changed: false,
+      config,
+      summary: {
+        switchedToBundled: [],
+        switchedToNpm: [],
+        warnings: [],
+        errors: [],
+      },
+    }));
+    updateNpmInstalledPlugins.mockImplementation(async ({ config }) => ({
+      changed: false,
+      config,
+      outcomes: [],
+    }));
+
+    await withEnvAsync(
+      {
+        OPENCLAW_UPDATE_POST_CORE: "1",
+        OPENCLAW_UPDATE_POST_CORE_CHANNEL: "stable",
+        OPENCLAW_UPDATE_POST_CORE_SOURCE_CONFIG_PATH: sourceConfigPath,
+      },
+      async () => {
+        await updateCommand({ yes: true, restart: false });
+      },
+    );
+
+    const syncConfig = syncPluginCall()?.config as
+      | (OpenClawConfig & { channels?: { whatsapp?: { token?: string } } })
+      | undefined;
+    const lastWrite = lastReplaceConfigCall() as
+      | {
+          nextConfig?: OpenClawConfig & {
+            channels?: { whatsapp?: { token?: string } };
+          };
+        }
+      | undefined;
+    expect(syncConfig?.channels?.whatsapp?.token).toBe("resolved-secret");
+    expect(lastWrite?.nextConfig?.channels?.whatsapp?.token).toBe("${WHATSAPP_TOKEN}");
+  });
+
+  it("resolves included pre-update channels for old post-core parents", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    const configPath = path.join(tempDir, "openclaw.json");
+    const channelsPath = path.join(tempDir, "channels.json5");
+    const includedChannels = {
+      whatsapp: {
+        enabled: true,
+        token: "${WHATSAPP_TOKEN}",
+      },
+    };
+    const preUpdateConfig = {
+      update: { channel: "stable" },
+      channels: { $include: "./channels.json5" },
+    } as OpenClawConfig;
+    const postDoctorConfig = {
+      update: { channel: "stable" },
+      channels: {},
+    } as OpenClawConfig;
+    await fs.mkdir(tempDir, { recursive: true });
+    await fs.writeFile(channelsPath, `${JSON.stringify(includedChannels)}\n`, "utf-8");
+    await fs.writeFile(`${configPath}.bak`, `${JSON.stringify(preUpdateConfig)}\n`, "utf-8");
+    await fs.writeFile(configPath, `${JSON.stringify(postDoctorConfig)}\n`, "utf-8");
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
+      ...baseSnapshot,
+      path: configPath,
+      parsed: postDoctorConfig,
+      sourceConfig: postDoctorConfig,
+      config: postDoctorConfig,
+      runtimeConfig: postDoctorConfig,
+      hash: "post-doctor-hash",
+    });
+    syncPluginsForUpdateChannel.mockImplementation(async ({ config }) => ({
+      changed: false,
+      config,
+      summary: {
+        switchedToBundled: [],
+        switchedToNpm: [],
+        warnings: [],
+        errors: [],
+      },
+    }));
+    updateNpmInstalledPlugins.mockImplementation(async ({ config }) => ({
+      changed: false,
+      config,
+      outcomes: [],
+    }));
+
+    await withEnvAsync(
+      {
+        OPENCLAW_UPDATE_POST_CORE: "1",
+        OPENCLAW_UPDATE_POST_CORE_CHANNEL: "stable",
+        WHATSAPP_TOKEN: "resolved-token",
+      },
+      async () => {
+        await updateCommand({ yes: true, restart: false });
+      },
+    );
+
+    const syncConfig = syncPluginCall()?.config as
+      | (OpenClawConfig & { channels?: { whatsapp?: { token?: string } } })
+      | undefined;
+    const lastWrite = lastReplaceConfigCall() as
+      | {
+          nextConfig?: OpenClawConfig & {
+            channels?: { $include?: string };
+          };
+        }
+      | undefined;
+    expect(syncConfig?.channels?.whatsapp?.token).toBe("resolved-token");
+    expect(lastWrite?.nextConfig?.channels).toEqual({ $include: "./channels.json5" });
+  });
+
+  it("ignores stale pre-update channel snapshots during post-core resume", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    const configPath = path.join(tempDir, "openclaw.json");
+    const staleConfig = {
+      channels: {
+        whatsapp: {
+          enabled: true,
+        },
+      },
+    } as OpenClawConfig;
+    const postDoctorConfig = {
+      update: { channel: "stable" },
+    } as OpenClawConfig;
+    await fs.mkdir(tempDir, { recursive: true });
+    await fs.writeFile(configPath, `${JSON.stringify(postDoctorConfig)}\n`, "utf-8");
+    await fs.writeFile(`${configPath}.pre-update`, `${JSON.stringify(staleConfig)}\n`, "utf-8");
+    const staleTime = new Date(Date.now() - 7 * 60 * 60 * 1000);
+    await fs.utimes(`${configPath}.pre-update`, staleTime, staleTime);
+    vi.mocked(readConfigFileSnapshot).mockResolvedValue({
+      ...baseSnapshot,
+      path: configPath,
+      sourceConfig: postDoctorConfig,
+      config: postDoctorConfig,
+      runtimeConfig: postDoctorConfig,
+      hash: "post-doctor-hash",
+    });
+    syncPluginsForUpdateChannel.mockImplementation(async ({ config }) => ({
+      changed: false,
+      config,
+      summary: {
+        switchedToBundled: [],
+        switchedToNpm: [],
+        warnings: [],
+        errors: [],
+      },
+    }));
+    updateNpmInstalledPlugins.mockImplementation(async ({ config }) => ({
+      changed: false,
+      config,
+      outcomes: [],
+    }));
+
+    await withEnvAsync(
+      {
+        OPENCLAW_UPDATE_POST_CORE: "1",
+        OPENCLAW_UPDATE_POST_CORE_CHANNEL: "stable",
+      },
+      async () => {
+        await updateCommand({ yes: true, restart: false });
+      },
+    );
+
+    expect(syncPluginCall()?.config?.channels?.whatsapp).toBeUndefined();
+    expect(lastReplaceConfigCall()).toBeUndefined();
   });
 
   it("uses source config and plugin index records for post-update plugin sync", async () => {
@@ -3825,6 +4535,7 @@ describe("update-cli", () => {
     await withEnvAsync(
       {
         OPENCLAW_UPDATE_IN_PROGRESS: undefined,
+        OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR: undefined,
         OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: undefined,
       },
       async () => {
@@ -3837,8 +4548,10 @@ describe("update-cli", () => {
         await updateFinalizeCommand({ json: true, yes: true, timeout: "9", restart: false });
 
         expect(doctorEnv?.OPENCLAW_UPDATE_IN_PROGRESS).toBe("1");
+        expect(doctorEnv?.OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR).toBe("1");
         expect(doctorEnv?.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE).toBe("1");
         expect(process.env.OPENCLAW_UPDATE_IN_PROGRESS).toBeUndefined();
+        expect(process.env.OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR).toBeUndefined();
         expect(process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE).toBeUndefined();
         expect(doctorCommand).toHaveBeenCalledWith(defaultRuntime, {
           nonInteractive: true,

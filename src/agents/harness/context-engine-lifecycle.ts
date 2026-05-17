@@ -230,6 +230,7 @@ export async function runHarnessContextEngineMaintenance(params: {
   sessionManager?: unknown;
   runtimeContext?: ContextEngineRuntimeContext;
   executionMode?: "foreground" | "background";
+  onDeferredMaintenance?: (promise: Promise<void>) => void;
   config?: SessionWriteLockAcquireTimeoutConfig;
 }) {
   return await runContextEngineMaintenance({
@@ -243,6 +244,7 @@ export async function runHarnessContextEngineMaintenance(params: {
     >[0]["sessionManager"],
     runtimeContext: params.runtimeContext,
     executionMode: params.executionMode,
+    onDeferredMaintenance: params.onDeferredMaintenance,
     config: params.config,
   });
 }

@@ -6,8 +6,14 @@ import OpenClawKit
 import SwiftUI
 
 struct GeneralSettings: View {
+    enum Page {
+        case general
+        case connection
+    }
+
     @Bindable var state: AppState
     @AppStorage(cameraEnabledKey) private var cameraEnabled: Bool = false
+    let page: Page
     private let healthStore = HealthStore.shared
     private let gatewayManager = GatewayProcessManager.shared
     @State private var gatewayDiscovery = GatewayDiscoveryModel(
@@ -24,64 +30,22 @@ struct GeneralSettings: View {
         88
     }
 
+    init(state: AppState, page: Page = .general) {
+        self.state = state
+        self.page = page
+    }
+
     var body: some View {
         ScrollView(.vertical) {
-            VStack(alignment: .leading, spacing: 18) {
-                VStack(alignment: .leading, spacing: 12) {
-                    SettingsToggleRow(
-                        title: "OpenClaw active",
-                        subtitle: "Pause to stop the OpenClaw gateway; no messages will be processed.",
-                        binding: self.activeBinding)
-
-                    self.connectionSection
-
-                    Divider()
-
-                    SettingsToggleRow(
-                        title: "Launch at login",
-                        subtitle: "Automatically start OpenClaw after you sign in.",
-                        binding: self.$state.launchAtLogin)
-
-                    SettingsToggleRow(
-                        title: "Show Dock icon",
-                        subtitle: "Keep OpenClaw visible in the Dock instead of menu-bar-only mode.",
-                        binding: self.$state.showDockIcon)
-
-                    SettingsToggleRow(
-                        title: "Play menu bar icon animations",
-                        subtitle: "Enable idle blinks and wiggles on the status icon.",
-                        binding: self.$state.iconAnimationsEnabled)
-
-                    SettingsToggleRow(
-                        title: "Allow Canvas",
-                        subtitle: "Allow the agent to show and control the Canvas panel.",
-                        binding: self.$state.canvasEnabled)
-
-                    SettingsToggleRow(
-                        title: "Allow Camera",
-                        subtitle: "Allow the agent to capture a photo or short video via the built-in camera.",
-                        binding: self.$cameraEnabled)
-
-                    SettingsToggleRow(
-                        title: "Enable Peekaboo Bridge",
-                        subtitle: "Allow signed tools (e.g. `peekaboo`) to drive UI automation via PeekabooBridge.",
-                        binding: self.$state.peekabooBridgeEnabled)
-
-                    SettingsToggleRow(
-                        title: "Enable debug tools",
-                        subtitle: "Show the Debug tab with development utilities.",
-                        binding: self.$state.debugPaneEnabled)
-                }
-
-                Spacer(minLength: 12)
-                HStack {
-                    Spacer()
-                    Button("Quit OpenClaw") { NSApp.terminate(nil) }
-                        .buttonStyle(.borderedProminent)
+            VStack(alignment: .leading, spacing: 20) {
+                switch self.page {
+                case .general:
+                    self.generalPage
+                case .connection:
+                    self.connectionPage
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 22)
             .padding(.bottom, 16)
         }
         .onAppear {
@@ -93,6 +57,79 @@ struct GeneralSettings: View {
                 CanvasManager.shared.hideAll()
             }
         }
+    }
+
+    private var generalPage: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            SettingsPageHeader(
+                title: "General",
+                subtitle: "Everyday OpenClaw app behavior.")
+
+            SettingsSection("App") {
+                SettingsToggleRow(
+                    title: "OpenClaw active",
+                    subtitle: "Pause to stop the OpenClaw gateway; no messages will be processed.",
+                    binding: self.activeBinding)
+
+                SettingsToggleRow(
+                    title: "Launch at login",
+                    subtitle: "Automatically start OpenClaw after you sign in.",
+                    binding: self.$state.launchAtLogin)
+
+                SettingsToggleRow(
+                    title: "Show Dock icon",
+                    subtitle: "Keep OpenClaw visible in the Dock. When off, windows still show the Dock icon while open.",
+                    binding: self.$state.showDockIcon)
+
+                SettingsToggleRow(
+                    title: "Play menu bar icon animations",
+                    subtitle: "Enable idle blinks and wiggles on the status icon.",
+                    binding: self.$state.iconAnimationsEnabled)
+            }
+
+            SettingsSection("Capabilities") {
+                SettingsToggleRow(
+                    title: "Allow Canvas",
+                    subtitle: "Allow the agent to show and control the Canvas panel.",
+                    binding: self.$state.canvasEnabled)
+
+                SettingsToggleRow(
+                    title: "Allow Camera",
+                    subtitle: "Allow the agent to capture a photo or short video via the built-in camera.",
+                    binding: self.$cameraEnabled)
+
+                SettingsToggleRow(
+                    title: "Enable Peekaboo Bridge",
+                    subtitle: "Allow signed tools (e.g. `peekaboo`) to drive UI automation via PeekabooBridge.",
+                    binding: self.$state.peekabooBridgeEnabled)
+            }
+
+            SettingsSection("Developer") {
+                SettingsToggleRow(
+                    title: "Enable debug tools",
+                    subtitle: "Show the Debug page with development utilities.",
+                    binding: self.$state.debugPaneEnabled)
+            }
+
+            HStack {
+                Spacer()
+                Button("Quit OpenClaw") { NSApp.terminate(nil) }
+                    .buttonStyle(.borderedProminent)
+            }
+        }
+    }
+
+    private var connectionPage: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            SettingsPageHeader(
+                title: "Connection",
+                subtitle: "Choose where the Gateway runs and how this Mac app reaches it.")
+            SettingsSection("Gateway") {
+                self.connectionSection
+            }
+        }
+        .onAppear { self.gatewayDiscovery.start() }
+        .onDisappear { self.gatewayDiscovery.stop() }
     }
 
     private var activeBinding: Binding<Bool> {
@@ -230,8 +267,6 @@ struct GeneralSettings: View {
             }
         }
         .transition(.opacity)
-        .onAppear { self.gatewayDiscovery.start() }
-        .onDisappear { self.gatewayDiscovery.stop() }
     }
 
     private var remoteTransportRow: some View {
@@ -285,7 +320,7 @@ struct GeneralSettings: View {
                     disabled: self.state.remoteUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
             Text(
-                "Direct mode requires wss:// for remote hosts. ws:// is only allowed for localhost/127.0.0.1.")
+                "Use wss:// for public hosts. ws:// is allowed for localhost, LAN, .local, and Tailnet hosts.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .padding(.leading, self.remoteLabelWidth + 10)

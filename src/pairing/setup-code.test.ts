@@ -551,6 +551,28 @@ describe("pairing setup code", () => {
     });
   });
 
+  it("allows tailnet bind setup urls when gateway TLS is enabled", async () => {
+    await expectResolvedSetupSuccessCase({
+      config: {
+        gateway: {
+          bind: "tailnet",
+          tls: {
+            enabled: true,
+          },
+          auth: { mode: "token", token: "tok_123" },
+        },
+      } satisfies ResolveSetupConfig,
+      options: {
+        networkInterfaces: () => createIpv4NetworkInterfaces("100.64.0.9"),
+      } satisfies ResolveSetupOptions,
+      expected: {
+        authLabel: "token",
+        url: "wss://100.64.0.9:18789",
+        urlSource: "gateway.bind=tailnet",
+      },
+    });
+  });
+
   it.each([
     {
       name: "errors when gateway is loopback only",

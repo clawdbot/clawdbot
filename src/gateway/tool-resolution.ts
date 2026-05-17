@@ -24,7 +24,7 @@ import {
 } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
-import type { InboundTurnKind } from "../channels/turn/kind.js";
+import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
@@ -37,7 +37,7 @@ export function resolveGatewayScopedTools(params: {
   sessionKey: string;
   messageProvider?: string;
   accountId?: string;
-  inboundTurnKind?: InboundTurnKind;
+  inboundEventKind?: InboundEventKind;
   agentTo?: string;
   agentThreadId?: string;
   allowGatewaySubagentBinding?: boolean;
@@ -63,7 +63,7 @@ export function resolveGatewayScopedTools(params: {
   const providerProfilePolicy = resolveToolProfilePolicy(providerProfile);
   const gatewayRequestedTools = params.gatewayRequestedTools ?? [];
   const sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined =
-    params.inboundTurnKind === "room_event" ? "message_tool_only" : undefined;
+    params.inboundEventKind === "room_event" ? "message_tool_only" : undefined;
   const runtimeAlsoAllow = sourceReplyDeliveryMode === "message_tool_only" ? ["message"] : [];
   const profilePolicyWithAlsoAllow = mergeAlsoAllowPolicy(profilePolicy, [
     ...(profileAlsoAllow ?? []),
@@ -141,7 +141,7 @@ export function resolveGatewayScopedTools(params: {
     agentSessionKey: params.sessionKey,
     agentChannel: params.messageProvider ?? undefined,
     agentAccountId: params.accountId,
-    inboundTurnKind: params.inboundTurnKind,
+    inboundEventKind: params.inboundEventKind,
     sourceReplyDeliveryMode,
     agentTo: params.agentTo,
     agentThreadId: params.agentThreadId,

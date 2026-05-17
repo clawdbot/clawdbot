@@ -47,6 +47,23 @@ describe("postJson", () => {
     expect(result).toEqual({ data: [{ embedding: [1, 2] }] });
   });
 
+  it("forwards abort signals to the remote HTTP request", async () => {
+    const controller = new AbortController();
+    remoteHttpMock.mockImplementationOnce(async (params) => {
+      expect(params.signal).toBe(controller.signal);
+      return await params.onResponse(jsonResponse({ ok: true }));
+    });
+
+    await postJson({
+      url: "https://memory.example/v1/post",
+      headers: {},
+      body: {},
+      signal: controller.signal,
+      errorPrefix: "post failed",
+      parse: (payload) => payload,
+    });
+  });
+
   it("attaches status to thrown error when requested", async () => {
     remoteHttpMock.mockImplementationOnce(async (params) => {
       return await params.onResponse(textResponse("bad gateway", 502));

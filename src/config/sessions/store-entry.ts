@@ -1,8 +1,9 @@
+import { normalizeSessionKeyPreservingOpaquePeerIds } from "../../sessions/session-key-utils.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import type { SessionEntry } from "./types.js";
 
 export function normalizeStoreSessionKey(sessionKey: string): string {
-  return normalizeLowercaseStringOrEmpty(sessionKey);
+  return normalizeSessionKeyPreservingOpaquePeerIds(sessionKey);
 }
 
 export function resolveSessionStoreEntry(params: {
@@ -15,6 +16,7 @@ export function resolveSessionStoreEntry(params: {
 } {
   const trimmedKey = params.sessionKey.trim();
   const normalizedKey = normalizeStoreSessionKey(trimmedKey);
+  const foldedLegacyKey = normalizeLowercaseStringOrEmpty(normalizedKey);
   const legacyKeySet = new Set<string>();
   if (
     trimmedKey !== normalizedKey &&
@@ -22,14 +24,26 @@ export function resolveSessionStoreEntry(params: {
   ) {
     legacyKeySet.add(trimmedKey);
   }
+  if (
+    foldedLegacyKey !== normalizedKey &&
+    Object.prototype.hasOwnProperty.call(params.store, foldedLegacyKey)
+  ) {
+    legacyKeySet.add(foldedLegacyKey);
+  }
   let existing =
-    params.store[normalizedKey] ?? (legacyKeySet.size > 0 ? params.store[trimmedKey] : undefined);
+    params.store[normalizedKey] ??
+    params.store[foldedLegacyKey] ??
+    (legacyKeySet.size > 0 ? params.store[trimmedKey] : undefined);
   let existingUpdatedAt = existing?.updatedAt ?? 0;
   for (const [candidateKey, candidateEntry] of Object.entries(params.store)) {
     if (candidateKey === normalizedKey) {
       continue;
     }
-    if (normalizeStoreSessionKey(candidateKey) !== normalizedKey) {
+    const candidateMatches =
+      normalizeStoreSessionKey(candidateKey) === normalizedKey ||
+      (foldedLegacyKey !== normalizedKey &&
+        normalizeLowercaseStringOrEmpty(candidateKey) === foldedLegacyKey);
+    if (!candidateMatches) {
       continue;
     }
     legacyKeySet.add(candidateKey);

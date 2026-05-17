@@ -101,6 +101,26 @@ Every coding-agent run follows this pattern:
 
 If you do not have a trustworthy notification route, say so and do not claim that completion will notify the user automatically.
 
+### Multi-hour issue-to-PR builds
+
+For feature builds, bug fixes, or product work that may take a long time, use a
+GitHub issue as the durable spec before starting Codex:
+
+1. Create or reuse the issue with `gh issue create` / `gh issue view`.
+2. Start Codex in the background and include the issue URL, target repo, target
+   branch/base, expected PR output, required proof, and the notification route.
+3. Tell Codex to create a branch, implement, run the relevant checks, run Codex
+   review/auto-review until there are no accepted actionable findings, and open
+   a PR linked to the issue.
+4. Return the issue URL and background `sessionId` immediately. If a dashboard
+   task/flow URL exists, return that too.
+5. Monitor with `process`. Abort with `process kill` for raw background runs, or
+   `tasks.cancel` when the work is mirrored into the Task Registry.
+
+Prefer a dashboard-backed issue-build/task-flow lane over a raw background
+process when available. Do not block the user on the issue creation or build
+loop; long-running work is expected.
+
 ---
 
 ## Notification Route

@@ -1,7 +1,6 @@
 import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
@@ -33,7 +32,12 @@ import {
 } from "../generated-attachments.js";
 import { ToolInputError, readNumberParam, readStringParam } from "./common.js";
 import { decodeDataUrl } from "./image-tool.helpers.js";
-import { withMediaGenerationTaskKeepalive } from "./media-generate-background-shared.js";
+import {
+  buildMediaGenerationStartedToolResult,
+  createDefaultMediaGenerateBackgroundScheduler,
+  scheduleMediaGenerationTaskCompletion,
+  type MediaGenerateBackgroundScheduler,
+} from "./media-generate-background-shared.js";
 import {
   applyMusicGenerationModelConfigDefaults,
   buildMediaReferenceDetails,
@@ -41,7 +45,6 @@ import {
   hasGenerationToolAvailability,
   normalizeMediaReferenceInputs,
   readBooleanToolParam,
-  readGenerationTimeoutMs,
   resolveCapabilityModelConfigForTool,
   resolveGenerateAction,
   resolveMediaToolLocalRoots,
@@ -57,9 +60,9 @@ import {
   completeMusicGenerationTaskRun,
   createMusicGenerationTaskRun,
   failMusicGenerationTaskRun,
+  musicGenerationTaskLifecycle,
   recordMusicGenerationTaskProgress,
   type MusicGenerationTaskHandle,
-  wakeMusicGenerationTaskCompletion,
 } from "./music-generate-background.js";
 import {
   createMusicGenerateDuplicateGuardResult,
@@ -78,7 +81,8 @@ const log = createSubsystemLogger("agents/tools/music-generate");
 const MAX_INPUT_IMAGES = 10;
 const SUPPORTED_OUTPUT_FORMATS = new Set<MusicGenerationOutputFormat>(["mp3", "wav"]);
 const DEFAULT_REFERENCE_FETCH_TIMEOUT_MS = 30_000;
-const MIN_MUSIC_GENERATION_TIMEOUT_MS = 10_000;
+const DEFAULT_MUSIC_GENERATION_TIMEOUT_MS = 300_000;
+const MIN_MUSIC_GENERATION_TIMEOUT_MS = 120_000;
 
 const MusicGenerateToolSchema = Type.Object({
   action: Type.Optional(
@@ -116,13 +120,6 @@ const MusicGenerateToolSchema = Type.Object({
   durationSeconds: Type.Optional(
     Type.Number({
       description: "Optional target duration in seconds when the provider supports duration hints.",
-      minimum: 1,
-    }),
-  ),
-  timeoutMs: Type.Optional(
-    Type.Number({
-      description:
-        "Optional provider request timeout in milliseconds. Values below 10000ms are raised to 10000ms.",
       minimum: 1,
     }),
   ),
@@ -243,8 +240,6 @@ type MusicGenerateSandboxConfig = {
   bridge: SandboxFsBridge;
 };
 
-type MusicGenerateBackgroundScheduler = (work: () => Promise<void>) => void;
-
 type MusicGenerationTimeoutNormalization = {
   requested: number;
   applied: number;
@@ -257,7 +252,7 @@ function normalizeMusicGenerationTimeoutMs(timeoutMs: number | undefined): {
   message?: string;
 } {
   if (timeoutMs === undefined) {
-    return {};
+    return { timeoutMs: DEFAULT_MUSIC_GENERATION_TIMEOUT_MS };
   }
   if (timeoutMs >= MIN_MUSIC_GENERATION_TIMEOUT_MS) {
     return { timeoutMs };
@@ -281,15 +276,10 @@ function normalizeMusicGenerationTimeoutMs(timeoutMs: number | undefined): {
   };
 }
 
-function defaultScheduleMusicGenerateBackgroundWork(work: () => Promise<void>) {
-  queueMicrotask(() => {
-    void work().catch((error) => {
-      log.error("Detached music generation job crashed", {
-        error,
-      });
-    });
-  });
-}
+const defaultScheduleMusicGenerateBackgroundWork = createDefaultMediaGenerateBackgroundScheduler({
+  toolName: "music_generate",
+  onCrash: (message, meta) => log.error(message, meta),
+});
 
 async function loadReferenceImages(params: {
   inputs: string[];
@@ -405,6 +395,8 @@ type ExecutedMusicGeneration = {
   provider: string;
   model: string;
   savedPaths: string[];
+  count: number;
+  paths: string[];
   attachments: AgentGeneratedAttachment[];
   contentText: string;
   details: Record<string, unknown>;
@@ -513,6 +505,8 @@ async function executeMusicGenerationJob(params: {
     provider: result.provider,
     model: result.model,
     savedPaths: savedTracks.map((track) => track.path),
+    count: savedTracks.length,
+    paths: savedTracks.map((track) => track.path),
     attachments,
     contentText: lines.join("\n"),
     wakeResult: lines.join("\n"),
@@ -575,7 +569,7 @@ export function createMusicGenerateTool(options?: {
   workspaceDir?: string;
   sandbox?: MusicGenerateSandboxConfig;
   fsPolicy?: ToolFsPolicy;
-  scheduleBackgroundWork?: MusicGenerateBackgroundScheduler;
+  scheduleBackgroundWork?: MediaGenerateBackgroundScheduler;
 }): AnyAgentTool | null {
   const cfg: OpenClawConfig = options?.config ?? getRuntimeConfig();
   if (
@@ -606,7 +600,7 @@ export function createMusicGenerateTool(options?: {
     name: "music_generate",
     displaySummary: "Generate music",
     description:
-      "Generate music using configured providers. Generated tracks are saved under OpenClaw-managed media storage and delivered automatically as attachments.",
+      'Generate music using configured providers. In session-backed chats, generation runs as a background task; do not call music_generate again for the same request, wait for the completion event, then send the generated attachments through the message tool. Use action="status" to inspect the active task.',
     parameters: MusicGenerateToolSchema,
     execute: async (_toolCallId, rawArgs) => {
       const args = rawArgs as Record<string, unknown>;
@@ -652,12 +646,8 @@ export function createMusicGenerateTool(options?: {
       });
       const format = normalizeOutputFormat(readStringParam(args, "format"));
       const filename = readStringParam(args, "filename");
-      const requestedTimeoutMs = readGenerationTimeoutMs(args);
-      const requestedGenerationTimeoutMs =
-        requestedTimeoutMs ?? musicGenerationModelConfig.timeoutMs;
-      const timeout = normalizeMusicGenerationTimeoutMs(requestedGenerationTimeoutMs);
+      const timeout = normalizeMusicGenerationTimeoutMs(musicGenerationModelConfig.timeoutMs);
       const timeoutMs = timeout.timeoutMs;
-      const referenceFetchTimeoutMs = requestedTimeoutMs === undefined ? undefined : timeoutMs;
       const imageInputs = normalizeReferenceImageInputs(args);
       const selectedModelRef =
         parseMusicGenerationModelRef(model) ??
@@ -676,7 +666,6 @@ export function createMusicGenerateTool(options?: {
         workspaceDir: options?.workspaceDir,
         sandboxConfig,
         ssrfPolicy: remoteMediaSsrfPolicy,
-        timeoutMs: referenceFetchTimeoutMs,
       });
       validateMusicGenerationCapabilities({
         provider: selectedProvider,
@@ -696,84 +685,40 @@ export function createMusicGenerateTool(options?: {
       const shouldDetach = Boolean(taskHandle && options?.agentSessionKey?.trim());
 
       if (shouldDetach) {
-        scheduleBackgroundWork(async () => {
-          try {
-            const executed = await withMediaGenerationTaskKeepalive({
-              handle: taskHandle,
-              progressSummary: "Generating music",
-              run: () =>
-                executeMusicGenerationJob({
-                  effectiveCfg,
-                  prompt,
-                  agentDir: options?.agentDir,
-                  model,
-                  lyrics,
-                  instrumental,
-                  durationSeconds,
-                  format,
-                  filename,
-                  loadedReferenceImages,
-                  taskHandle,
-                  autoProviderFallback: explicitModelConfig ? false : undefined,
-                  timeoutMs,
-                  timeoutNormalization: timeout.normalization,
-                }),
-            });
-            completeMusicGenerationTaskRun({
-              handle: taskHandle,
-              provider: executed.provider,
-              model: executed.model,
-              count: executed.savedPaths.length,
-              paths: executed.savedPaths,
-            });
-            try {
-              await wakeMusicGenerationTaskCompletion({
-                config: effectiveCfg,
-                handle: taskHandle,
-                status: "ok",
-                statusLabel: "completed successfully",
-                result: executed.wakeResult,
-                attachments: executed.attachments,
-              });
-            } catch (error) {
-              log.warn("Music generation completion wake failed after successful generation", {
-                taskId: taskHandle?.taskId,
-                runId: taskHandle?.runId,
-                error,
-              });
-            }
-          } catch (error) {
-            failMusicGenerationTaskRun({
-              handle: taskHandle,
-              error,
-            });
-            await wakeMusicGenerationTaskCompletion({
-              config: effectiveCfg,
-              handle: taskHandle,
-              status: "error",
-              statusLabel: "failed",
-              result: formatErrorMessage(error),
-            });
-            return;
-          }
+        scheduleMediaGenerationTaskCompletion({
+          lifecycle: musicGenerationTaskLifecycle,
+          handle: taskHandle,
+          scheduleBackgroundWork,
+          progressSummary: "Generating music",
+          config: effectiveCfg,
+          toolName: "Music generation",
+          onWakeFailure: (message, meta) => log.warn(message, meta),
+          run: () =>
+            executeMusicGenerationJob({
+              effectiveCfg,
+              prompt,
+              agentDir: options?.agentDir,
+              model,
+              lyrics,
+              instrumental,
+              durationSeconds,
+              format,
+              filename,
+              loadedReferenceImages,
+              taskHandle,
+              autoProviderFallback: explicitModelConfig ? false : undefined,
+              timeoutMs,
+              timeoutNormalization: timeout.normalization,
+            }),
         });
 
-        return {
-          content: [
-            {
-              type: "text",
-              text: [
-                `Background task started for music generation (${taskHandle?.taskId ?? "unknown"}). Do not call music_generate again for this request. Wait for the completion event; I'll post the finished music here when it's ready.`,
-                timeout.message,
-              ]
-                .filter((entry): entry is string => Boolean(entry))
-                .join("\n"),
-            },
-          ],
-          details: {
-            async: true,
-            status: "started",
-            ...buildTaskRunDetails(taskHandle),
+        return buildMediaGenerationStartedToolResult({
+          toolName: "music_generate",
+          generationLabel: "music",
+          completionLabel: "music",
+          taskHandle,
+          messages: [timeout.message],
+          detailExtras: {
             ...buildMediaReferenceDetails({
               entries: loadedReferenceImages,
               singleKey: "image",
@@ -795,7 +740,7 @@ export function createMusicGenerateTool(options?: {
                 }
               : {}),
           },
-        };
+        });
       }
 
       try {

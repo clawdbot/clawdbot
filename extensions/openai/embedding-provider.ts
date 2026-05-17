@@ -47,7 +47,11 @@ export async function createOpenAiEmbeddingProvider(
     return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
   };
 
-  const embed = async (input: string[], kind: "query" | "document"): Promise<number[][]> => {
+  const embed = async (
+    input: string[],
+    kind: "query" | "document",
+    signal?: AbortSignal,
+  ): Promise<number[][]> => {
     if (input.length === 0) {
       return [];
     }
@@ -57,6 +61,7 @@ export async function createOpenAiEmbeddingProvider(
       headers: client.headers,
       ssrfPolicy: client.ssrfPolicy,
       fetchImpl: client.fetchImpl,
+      signal,
       body: {
         model: client.model,
         input,
@@ -76,11 +81,11 @@ export async function createOpenAiEmbeddingProvider(
       ...(typeof OPENAI_MAX_INPUT_TOKENS[client.model] === "number"
         ? { maxInputTokens: OPENAI_MAX_INPUT_TOKENS[client.model] }
         : {}),
-      embedQuery: async (text) => {
-        const [vec] = await embed([text], "query");
+      embedQuery: async (text, options) => {
+        const [vec] = await embed([text], "query", options?.signal);
         return vec ?? [];
       },
-      embedBatch: async (texts) => await embed(texts, "document"),
+      embedBatch: async (texts, options) => await embed(texts, "document", options?.signal),
     },
     client,
   };

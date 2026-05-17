@@ -5906,6 +5906,45 @@ module.exports = {
     ]);
   });
 
+  it("normalizes legacy deactivate typed hooks onto gateway_stop", () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "legacy-deactivate-hook",
+      filename: "legacy-deactivate-hook.cjs",
+      body: `module.exports = { id: "legacy-deactivate-hook", register(api) {
+  api.on("deactivate", () => undefined);
+} };`,
+    });
+
+    const registry = loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["legacy-deactivate-hook"],
+        entries: {
+          "legacy-deactivate-hook": {
+            hooks: {
+              timeoutMs: 250,
+            },
+          },
+        },
+      },
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === "legacy-deactivate-hook")?.status).toBe(
+      "loaded",
+    );
+    expect(registry.typedHooks.map((entry) => entry.hookName)).toEqual(["gateway_stop"]);
+    expect(registry.typedHooks[0]?.timeoutMs).toBe(250);
+    expect(
+      registry.diagnostics.some(
+        (diag) =>
+          diag.pluginId === "legacy-deactivate-hook" &&
+          diag.message ===
+            'typed hook "deactivate" is deprecated (legacy-deactivate-hook-alias); use "gateway_stop". This compatibility alias will be removed after 2026-08-16.',
+      ),
+    ).toBe(true);
+  });
+
   it("ignores unknown typed hooks from plugins and keeps loading", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({

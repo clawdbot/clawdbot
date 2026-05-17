@@ -1,5 +1,9 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  MIN_CLIENT_PROTOCOL_VERSION,
+  PROTOCOL_VERSION,
+} from "../../../src/gateway/protocol/version.js";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { loadDeviceAuthToken, storeDeviceAuthToken } from "./device-auth.ts";
 import type { DeviceIdentity } from "./device-identity.ts";
@@ -102,6 +106,8 @@ type ConnectFrame = {
   method?: string;
   params?: {
     auth?: { token?: string; password?: string; deviceToken?: string };
+    maxProtocol?: number;
+    minProtocol?: number;
     scopes?: string[];
   };
 };
@@ -343,6 +349,8 @@ describe("GatewayBrowserClient", () => {
     const { connectFrame } = await startConnect(client);
 
     expect(connectFrame.method).toBe("connect");
+    expect(connectFrame.params?.minProtocol).toBe(MIN_CLIENT_PROTOCOL_VERSION);
+    expect(connectFrame.params?.maxProtocol).toBe(PROTOCOL_VERSION);
     expect(connectFrame.params?.scopes).toEqual([...CONTROL_UI_OPERATOR_SCOPES]);
   });
 

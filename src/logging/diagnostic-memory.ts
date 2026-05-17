@@ -3,6 +3,8 @@ import {
   type DiagnosticMemoryPressureEvent,
   type DiagnosticMemoryUsage,
 } from "../infra/diagnostic-events.js";
+import { writeDiagnosticMemoryPressureBundleSync } from "./diagnostic-stability-bundle.js";
+import { createSubsystemLogger } from "./subsystem.js";
 
 const MB = 1024 * 1024;
 const DEFAULT_RSS_WARNING_BYTES = 1536 * MB;
@@ -13,6 +15,8 @@ const DEFAULT_RSS_GROWTH_WARNING_BYTES = 512 * MB;
 const DEFAULT_RSS_GROWTH_CRITICAL_BYTES = 1024 * MB;
 const DEFAULT_GROWTH_WINDOW_MS = 10 * 60 * 1000;
 const DEFAULT_PRESSURE_REPEAT_MS = 5 * 60 * 1000;
+
+const log = createSubsystemLogger("gateway").child("diagnostics/memory");
 
 type DiagnosticMemoryThresholds = {
   rssWarningBytes?: number;
@@ -156,12 +160,42 @@ function shouldEmitPressure(
   return true;
 }
 
+function formatOptionalPressureMetric(label: string, value: number | undefined): string {
+  return typeof value === "number" && Number.isFinite(value) ? ` ${label}=${value}` : "";
+}
+
+function logMemoryPressure(params: {
+  pressure: Omit<DiagnosticMemoryPressureEvent, "seq" | "ts" | "type">;
+  writeCriticalBundle: boolean;
+}): void {
+  const { pressure } = params;
+  const message =
+    `memory pressure: level=${pressure.level} reason=${pressure.reason}` +
+    ` rssBytes=${pressure.memory.rssBytes}` +
+    ` heapUsedBytes=${pressure.memory.heapUsedBytes}` +
+    formatOptionalPressureMetric("thresholdBytes", pressure.thresholdBytes) +
+    formatOptionalPressureMetric("rssGrowthBytes", pressure.rssGrowthBytes) +
+    formatOptionalPressureMetric("windowMs", pressure.windowMs) +
+    (pressure.level === "critical"
+      ? ` memoryPressureSnapshot=${params.writeCriticalBundle ? "enabled" : "disabled"}`
+      : "");
+  if (pressure.level === "critical") {
+    log.warn(message);
+  } else {
+    log.info(message);
+  }
+}
+
 export function emitDiagnosticMemorySample(options?: {
   now?: number;
   memoryUsage?: NodeJS.MemoryUsage;
   uptimeMs?: number;
   thresholds?: DiagnosticMemoryThresholds;
   emitSample?: boolean;
+  writeCriticalBundle?: boolean;
+  stateDir?: string;
+  sessionStorePaths?: string[];
+  resolveSessionStorePaths?: () => string[] | undefined;
 }): DiagnosticMemoryUsage {
   const now = options?.now ?? Date.now();
   const memory = normalizeMemoryUsage(options?.memoryUsage ?? process.memoryUsage());
@@ -186,6 +220,28 @@ export function emitDiagnosticMemorySample(options?: {
       type: "diagnostic.memory.pressure",
       ...pressure,
     });
+    const writeCriticalBundle = options?.writeCriticalBundle === true;
+    logMemoryPressure({ pressure, writeCriticalBundle });
+    if (pressure.level === "critical" && writeCriticalBundle) {
+      const sessionStorePaths = options?.sessionStorePaths ?? options?.resolveSessionStorePaths?.();
+      const result = writeDiagnosticMemoryPressureBundleSync({
+        pressure,
+        stateDir: options?.stateDir,
+        sessionStorePaths,
+        now: new Date(now),
+      });
+      if (result.status === "written") {
+        log.warn(
+          `critical memory pressure bundle written: path=${result.path} reason=${pressure.reason} level=${pressure.level}`,
+        );
+      } else if (result.status === "failed") {
+        log.warn(`critical memory pressure bundle failed: ${String(result.error)}`);
+      }
+    } else if (pressure.level === "critical") {
+      log.warn(
+        "critical memory pressure snapshot disabled: diagnostics.memoryPressureSnapshot=false",
+      );
+    }
   }
   return memory;
 }

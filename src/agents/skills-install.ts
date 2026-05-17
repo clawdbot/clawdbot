@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveBrewExecutable as defaultResolveBrewExecutable } from "../infra/brew.js";
+import { isContainerEnvironment as defaultIsContainerEnvironment } from "../infra/container-environment.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   type InstallSafetyOverrides,
@@ -38,6 +39,7 @@ type SkillsInstallDeps = {
   loadWorkspaceSkillEntries: typeof defaultLoadWorkspaceSkillEntries;
   resolveNodeInstallStateDir: () => string;
   resolveBrewExecutable: () => string | undefined;
+  isContainerEnvironment: () => boolean;
   resolveSkillsInstallPreferences: typeof defaultResolveSkillsInstallPreferences;
 };
 
@@ -46,6 +48,7 @@ const defaultSkillsInstallDeps: SkillsInstallDeps = {
   loadWorkspaceSkillEntries: defaultLoadWorkspaceSkillEntries,
   resolveNodeInstallStateDir: resolveDefaultNodeInstallStateDir,
   resolveBrewExecutable: defaultResolveBrewExecutable,
+  isContainerEnvironment: defaultIsContainerEnvironment,
   resolveSkillsInstallPreferences: defaultResolveSkillsInstallPreferences,
 };
 
@@ -306,6 +309,11 @@ async function runBestEffortCommand(
 
 function resolveBrewMissingFailure(spec: SkillInstallSpec): SkillInstallResult {
   const formula = spec.formula ?? "this package";
+  if (process.platform === "linux" && getSkillsInstallDeps().isContainerEnvironment()) {
+    return createInstallFailure({
+      message: `brew not installed — Homebrew is not installed in this Linux container. Build a custom image with Homebrew or install "${formula}" manually using a supported system package before enabling this skill.`,
+    });
+  }
   const hint =
     process.platform === "linux"
       ? `Homebrew is not installed. Install it from https://brew.sh or install "${formula}" manually using your system package manager (e.g. apt, dnf, pacman).`

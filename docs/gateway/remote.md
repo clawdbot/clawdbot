@@ -1,19 +1,19 @@
 ---
-summary: "Remote access using SSH tunnels (Gateway WS) and tailnets"
+summary: "Remote access using Gateway WS, SSH tunnels, and tailnets"
 read_when:
   - Running or troubleshooting remote gateway setups
 title: "Remote access"
 ---
 
-This repo supports "remote over SSH" by keeping a single Gateway (the master) running on a dedicated host (desktop/server) and connecting clients to it.
+This repo supports remote gateway access by keeping a single Gateway (the master) running on a dedicated host (desktop/server) and connecting clients to it.
 
-- For **operators (you / the macOS app)**: SSH tunneling is the universal fallback.
+- For **operators (you / the macOS app)**: direct LAN/Tailnet WebSocket is simplest when the gateway is reachable; SSH tunneling is the universal fallback.
 - For **nodes (iOS/Android and future devices)**: connect to the Gateway **WebSocket** (LAN/tailnet or SSH tunnel as needed).
 
 ## The core idea
 
-- The Gateway WebSocket binds to **loopback** on your configured port (defaults to 18789).
-- For remote use, you forward that loopback port over SSH (or use a tailnet/VPN and tunnel less).
+- The Gateway WebSocket usually binds to **loopback** on your configured port (defaults to 18789).
+- For remote use, expose it through Tailscale Serve or a trusted LAN/Tailnet bind, or forward the loopback port over SSH.
 
 ## Common VPN and tailnet setups
 
@@ -24,6 +24,7 @@ Think of the **Gateway host** as where the agent lives. It owns sessions, auth p
 Run the Gateway on a persistent host (VPS or home server) and reach it via **Tailscale** or SSH.
 
 - **Best UX:** keep `gateway.bind: "loopback"` and use **Tailscale Serve** for the Control UI.
+- **Trusted LAN/Tailnet:** bind the gateway to a private interface and connect directly with `gateway.remote.transport: "direct"`.
 - **Fallback:** keep loopback plus SSH tunnel from any machine that needs access.
 - **Examples:** [exe.dev](/install/exe-dev) (easy VM) or [Hetzner](/install/hetzner) (production VPS).
 
@@ -33,8 +34,8 @@ Ideal when your laptop sleeps often but you want the agent always-on.
 
 The laptop does **not** run the agent. It connects remotely:
 
-- Use the macOS app's **Remote over SSH** mode (Settings → General → OpenClaw runs).
-- The app opens and manages the tunnel, so WebChat and health checks just work.
+- Use the macOS app's remote mode (Settings → General → OpenClaw runs).
+- The app connects directly when the gateway is reachable on LAN/Tailnet, or opens and manages an SSH tunnel when you choose SSH.
 
 Runbook: [macOS remote access](/platforms/mac/remote).
 
@@ -103,6 +104,23 @@ You can persist a remote target so CLI commands use it by default:
 When the gateway is loopback-only, keep the URL at `ws://127.0.0.1:18789` and open the SSH tunnel first.
 In the macOS app's SSH tunnel transport, discovered gateway hostnames belong in
 `gateway.remote.sshTarget`; `gateway.remote.url` remains the local tunnel URL.
+If those ports differ, set `gateway.remote.remotePort` to the gateway port on
+the SSH host.
+
+For a gateway already reachable on a trusted LAN or Tailnet, use direct mode:
+
+```json5
+{
+  gateway: {
+    mode: "remote",
+    remote: {
+      transport: "direct",
+      url: "ws://192.168.0.202:18789",
+      token: "your-token",
+    },
+  },
+}
+```
 
 ## Credential precedence
 
@@ -122,14 +140,15 @@ Gateway credential resolution follows one shared contract across call/probe/stat
 - Remote probe/status token checks are strict by default: they use `gateway.remote.token` only (no local token fallback) when targeting remote mode.
 - Gateway env overrides use `OPENCLAW_GATEWAY_*` only.
 
-## Chat UI over SSH
+## Chat UI remote access
 
 WebChat no longer uses a separate HTTP port. The SwiftUI chat UI connects directly to the Gateway WebSocket.
 
 - Forward `18789` over SSH (see above), then connect clients to `ws://127.0.0.1:18789`.
-- On macOS, prefer the app's "Remote over SSH" mode, which manages the tunnel automatically.
+- For LAN/Tailnet direct mode, connect clients to the configured private `ws://` or secure `wss://` URL.
+- On macOS, prefer the app's remote mode, which manages the selected transport automatically.
 
-## macOS app Remote over SSH
+## macOS app remote mode
 
 The macOS menu bar app can drive the same setup end-to-end (remote status checks, WebChat, and Voice Wake forwarding).
 
@@ -140,10 +159,7 @@ Runbook: [macOS remote access](/platforms/mac/remote).
 Short version: **keep the Gateway loopback-only** unless you're sure you need a bind.
 
 - **Loopback + SSH/Tailscale Serve** is the safest default (no public exposure).
-- Plaintext `ws://` is loopback-only by default. For trusted private networks,
-  set `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` on the client process as
-  break-glass. There is no `openclaw.json` equivalent; this must be process
-  environment for the client making the WebSocket connection.
+- Plaintext `ws://` is accepted for loopback, LAN, link-local, `.local`, `.ts.net`, and Tailscale CGNAT hosts. Public remote hosts must use `wss://`.
 - **Non-loopback binds** (`lan`/`tailnet`/`custom`, or `auto` when loopback is unavailable) must use gateway auth: token, password, or an identity-aware reverse proxy with `gateway.auth.mode: "trusted-proxy"`.
 - `gateway.remote.token` / `.password` are client credential sources. They do **not** configure server auth by themselves.
 - Local call paths can use `gateway.remote.*` as fallback only when `gateway.auth.*` is unset.

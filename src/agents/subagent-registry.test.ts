@@ -329,6 +329,177 @@ describe("subagent registry seam flow", () => {
     expect(run?.outcome).toBeUndefined();
   });
 
+  it("keeps parent run active when agent.wait times out before child session settles", async () => {
+    let waitAttempts = 0;
+    let resolveSecondWait: (value: {
+      status: "ok";
+      startedAt: number;
+      endedAt: number;
+    }) => void = () => {};
+    const secondWait = new Promise<{ status: "ok"; startedAt: number; endedAt: number }>(
+      (resolve) => {
+        resolveSecondWait = resolve;
+      },
+    );
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        waitAttempts += 1;
+        if (waitAttempts === 1) {
+          return { status: "timeout" };
+        }
+        return secondWait;
+      }
+      return {};
+    });
+    mocks.loadSessionStore.mockReturnValue({
+      "agent:main:subagent:child": {
+        sessionId: "sess-child",
+        updatedAt: 1,
+        status: "running",
+      },
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-waiter-timeout",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "eventually complete",
+      cleanup: "keep",
+    });
+
+    await waitForFast(() => {
+      expect(waitAttempts).toBeGreaterThanOrEqual(1);
+    });
+    await waitForFast(() => {
+      expect(waitAttempts).toBeGreaterThanOrEqual(2);
+    });
+    const activeRun = mod
+      .listSubagentRunsForRequester("agent:main:main")
+      .find((entry) => entry.runId === "run-waiter-timeout");
+    expect(activeRun?.endedAt).toBeUndefined();
+    expect(activeRun?.outcome).toBeUndefined();
+
+    resolveSecondWait({
+      status: "ok",
+      startedAt: 111,
+      endedAt: 222,
+    });
+    await waitForFast(() => {
+      const completedRun = mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((entry) => entry.runId === "run-waiter-timeout");
+      expect(waitAttempts).toBeGreaterThanOrEqual(2);
+      expect(completedRun?.endedAt).toBe(222);
+      expectRecordFields(completedRun?.outcome, { status: "ok" }, "completed run outcome");
+    });
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+  });
+
+  it("records terminal agent.wait timeouts even before session store timing is persisted", async () => {
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        return {
+          status: "timeout",
+          startedAt: 111,
+          endedAt: 222,
+          stopReason: "rpc",
+        };
+      }
+      return {};
+    });
+    mocks.loadSessionStore.mockReturnValue({
+      "agent:main:subagent:child": {
+        sessionId: "sess-child",
+        updatedAt: 1,
+        status: "running",
+      },
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-terminal-timeout",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "time out terminally",
+      cleanup: "keep",
+    });
+
+    await waitForFast(() => {
+      const run = mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((entry) => entry.runId === "run-terminal-timeout");
+      expect(run?.endedAt).toBe(222);
+      expectRecordFields(run?.outcome, { status: "timeout" }, "terminal timeout outcome");
+    });
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores stale terminal session-store rows from older child runs", async () => {
+    let waitAttempts = 0;
+    let resolveSecondWait: (value: {
+      status: "ok";
+      startedAt: number;
+      endedAt: number;
+    }) => void = () => {};
+    const secondWait = new Promise<{ status: "ok"; startedAt: number; endedAt: number }>(
+      (resolve) => {
+        resolveSecondWait = resolve;
+      },
+    );
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        waitAttempts += 1;
+        if (waitAttempts === 1) {
+          return { status: "timeout" };
+        }
+        return secondWait;
+      }
+      return {};
+    });
+    const staleEndedAt = Date.parse("2026-03-24T11:59:00Z");
+    mocks.loadSessionStore.mockReturnValue({
+      "agent:main:subagent:child": {
+        sessionId: "sess-child",
+        updatedAt: staleEndedAt,
+        status: "done",
+        startedAt: staleEndedAt - 100,
+        endedAt: staleEndedAt,
+      },
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-reactivated-timeout",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "new run after stale terminal row",
+      cleanup: "keep",
+    });
+
+    await waitForFast(() => {
+      expect(waitAttempts).toBeGreaterThanOrEqual(2);
+    });
+    const activeRun = mod
+      .listSubagentRunsForRequester("agent:main:main")
+      .find((entry) => entry.runId === "run-reactivated-timeout");
+    expect(activeRun?.endedAt).toBeUndefined();
+    expect(activeRun?.outcome).toBeUndefined();
+    expect(mocks.runSubagentAnnounceFlow).not.toHaveBeenCalled();
+
+    resolveSecondWait({
+      status: "ok",
+      startedAt: Date.parse("2026-03-24T12:00:01Z"),
+      endedAt: Date.parse("2026-03-24T12:00:02Z"),
+    });
+    await waitForFast(() => {
+      const completedRun = mod
+        .listSubagentRunsForRequester("agent:main:main")
+        .find((entry) => entry.runId === "run-reactivated-timeout");
+      expectRecordFields(completedRun?.outcome, { status: "ok" }, "reactivated run outcome");
+    });
+  });
+
   it("keeps sessions_yield-ended subagent runs paused instead of announcing no output", async () => {
     mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
       if (request.method === "agent.wait") {
@@ -397,6 +568,7 @@ describe("subagent registry seam flow", () => {
       },
     });
 
+    vi.setSystemTime(persistedStartedAt - 1);
     mod.registerSubagentRun({
       runId: "run-stale-terminal",
       childSessionKey: "agent:main:subagent:child",

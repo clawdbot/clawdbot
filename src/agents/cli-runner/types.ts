@@ -2,18 +2,20 @@ import type { ImageContent } from "@earendil-works/pi-ai";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
-import type { InboundTurnKind } from "../../channels/turn/kind.js";
+import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import type { CliSessionBinding } from "../../config/sessions.js";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import type { CliBackendConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ContextEngine } from "../../context-engine/types.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { BootstrapContextMode } from "../bootstrap-files.js";
 import type { ResolvedCliBackend } from "../cli-backends.js";
 import type { ContextWindowInfo } from "../context-window-guard.js";
+import type { EmbeddedAgentExecutionPhase } from "../pi-embedded-runner/execution-phase.js";
 import type {
-  CurrentTurnPromptContext,
+  CurrentInboundPromptContext,
   EmbeddedRunTrigger,
 } from "../pi-embedded-runner/run/params.js";
 import type { SkillSnapshot } from "../skills.js";
@@ -29,8 +31,8 @@ export type RunCliAgentParams = {
   config?: OpenClawConfig;
   prompt: string;
   transcriptPrompt?: string;
-  currentTurnKind?: InboundTurnKind;
-  currentTurnContext?: CurrentTurnPromptContext;
+  currentInboundEventKind?: InboundEventKind;
+  currentInboundContext?: CurrentInboundPromptContext;
   inputProvenance?: InputProvenance;
   provider: string;
   model?: string;
@@ -66,7 +68,7 @@ export type RunCliAgentParams = {
   abortSignal?: AbortSignal;
   onExecutionStarted?: () => void;
   onExecutionPhase?: (info: {
-    phase: "process_spawned" | "model_call_started";
+    phase: EmbeddedAgentExecutionPhase;
     provider?: string;
     model?: string;
     backend?: string;
@@ -114,6 +116,11 @@ export type PreparedCliRunContext = {
   backendResolved: ResolvedCliBackend;
   preparedBackend: CliPreparedBackend;
   reusableCliSession: CliReusableSession;
+  hadSessionFile: boolean;
+  contextEngineConfig: OpenClawConfig;
+  contextEngine?: ContextEngine;
+  contextEngineTurnPrompt?: string;
+  contextEngineDeferredTurnMaintenance?: Promise<void>;
   modelId: string;
   normalizedModel: string;
   contextWindowInfo?: ContextWindowInfo;

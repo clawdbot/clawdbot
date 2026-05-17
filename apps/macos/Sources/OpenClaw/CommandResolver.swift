@@ -426,10 +426,15 @@ enum CommandResolver {
     {
         let root = configRoot ?? OpenClawConfigFile.loadDict()
         let mode = ConnectionModeResolver.resolve(root: root, defaults: defaults).mode
-        let target = defaults.string(forKey: remoteTargetKey) ?? ""
-        let identity = defaults.string(forKey: remoteIdentityKey) ?? ""
-        let projectRoot = defaults.string(forKey: remoteProjectRootKey) ?? ""
-        let cliPath = defaults.string(forKey: remoteCliPathKey) ?? ""
+        let remote = (root["gateway"] as? [String: Any])?["remote"] as? [String: Any]
+        let target = defaults.string(forKey: remoteTargetKey)?.nonEmpty
+            ?? remote?["sshTarget"] as? String
+            ?? ""
+        let identity = defaults.string(forKey: remoteIdentityKey)?.nonEmpty
+            ?? remote?["sshIdentity"] as? String
+            ?? ""
+        let projectRoot = defaults.string(forKey: remoteProjectRootKey)?.nonEmpty ?? ""
+        let cliPath = defaults.string(forKey: remoteCliPathKey)?.nonEmpty ?? ""
         return RemoteSettings(
             mode: mode,
             target: self.sanitizedTarget(target),

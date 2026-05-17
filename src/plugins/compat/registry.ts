@@ -24,6 +24,22 @@ export const PLUGIN_COMPAT_RECORDS = [
       "Legacy `before_agent_start` hook compatibility remains wired while plugins migrate to modern hook stages.",
   },
   {
+    code: "legacy-deactivate-hook-alias",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-05-16",
+    deprecated: "2026-05-16",
+    warningStarts: "2026-05-16",
+    removeAfter: "2026-08-16",
+    replacement: "`gateway_stop` hook",
+    docsPath: "/plugins/hooks#upcoming-deprecations",
+    surfaces: ["api.on(\"deactivate\", ...)", "plugin typed hook registration"],
+    diagnostics: ["plugin runtime compatibility warning"],
+    tests: ["src/plugins/loader.test.ts"],
+    releaseNote:
+      "`api.on(\"deactivate\", ...)` remains wired as a deprecated compatibility alias while plugins migrate to `gateway_stop`.",
+  },
+  {
     code: "hook-only-plugin-shape",
     status: "active",
     owner: "sdk",

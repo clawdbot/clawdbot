@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { stripAnsi } from "../terminal/ansi.js";
 import { registerDevicesCli } from "./devices-cli.js";
 
 const mocks = vi.hoisted(() => ({
@@ -10,6 +11,7 @@ const mocks = vi.hoisted(() => ({
     writeJson: vi.fn(),
   },
   callGateway: vi.fn(),
+  formatGatewayTransportErrorJson: vi.fn(),
   buildGatewayConnectionDetails: vi.fn(() => ({
     url: "ws://127.0.0.1:18789",
     urlSource: "local loopback",
@@ -24,6 +26,7 @@ const mocks = vi.hoisted(() => ({
 const {
   runtime,
   callGateway,
+  formatGatewayTransportErrorJson,
   buildGatewayConnectionDetails,
   listDevicePairing,
   approveDevicePairing,
@@ -32,6 +35,7 @@ const {
 
 vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway,
+  formatGatewayTransportErrorJson: mocks.formatGatewayTransportErrorJson,
   buildGatewayConnectionDetails: mocks.buildGatewayConnectionDetails,
 }));
 
@@ -676,18 +680,43 @@ describe("devices cli list", () => {
 
     await runDevicesCommand(["list"]);
 
-    const output = readRuntimeOutput();
+    const output = stripAnsi(readRuntimeOutput());
     expect(output).not.toContain("\u001b");
     expect(output).not.toContain("\r");
     expect(output).toContain("BadName");
     expect(output).toContain("spoof");
     expect(output).toContain("Paired");
   });
+
+  it("emits JSON when the gateway transport fails in JSON mode", async () => {
+    const error = new Error("gateway closed (1006)");
+    const payload = {
+      ok: false,
+      error: {
+        type: "gateway_transport_error",
+        kind: "closed",
+        message: "gateway closed (1006)",
+      },
+      gateway: {
+        url: "ws://127.0.0.1:18789",
+        urlSource: "local loopback",
+      },
+    };
+    callGateway.mockRejectedValueOnce(error);
+    formatGatewayTransportErrorJson.mockReturnValueOnce(payload);
+
+    await runDevicesCommand(["list", "--json"]);
+
+    expect(formatGatewayTransportErrorJson).toHaveBeenCalledWith(error);
+    expect(runtime.writeJson).toHaveBeenCalledWith(payload);
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
 });
 
 beforeEach(() => {
   vi.clearAllMocks();
   runtime.exit.mockImplementation(() => {});
+  formatGatewayTransportErrorJson.mockReturnValue(null);
 });
 
 afterEach(() => {

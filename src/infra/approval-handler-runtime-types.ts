@@ -154,6 +154,13 @@ type ChannelApprovalNativeInteractionAdapterForView<
       phase: "resolved" | "expired";
     },
   ) => Promise<void>;
+  cancelDelivered?: (
+    params: ChannelApprovalCapabilityHandlerContext & {
+      entry: TPendingEntry;
+      request: ApprovalRequest;
+      approvalKind: ChannelApprovalKind;
+    },
+  ) => Promise<void> | void;
 };
 
 export type ChannelApprovalNativeInteractionAdapter<

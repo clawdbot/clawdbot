@@ -11,6 +11,7 @@
  * @see https://docs.slack.dev/reference/methods/chat.stopStream
  */
 
+import type { MessageMetadata } from "@slack/types";
 import type { WebClient } from "@slack/web-api";
 import type { ChatStreamer } from "@slack/web-api/dist/chat-stream.js";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -68,6 +69,7 @@ type StopSlackStreamParams = {
   session: SlackStreamSession;
   /** Optional final markdown text to append before stopping. */
   text?: string;
+  metadata?: MessageMetadata;
 };
 
 /**
@@ -210,7 +212,7 @@ export async function appendSlackStream(params: AppendSlackStreamParams): Promis
  * All other errors propagate unchanged.
  */
 export async function stopSlackStream(params: StopSlackStreamParams): Promise<void> {
-  const { session, text } = params;
+  const { session, text, metadata } = params;
 
   if (session.stopped) {
     logVerbose("slack-stream: stream already stopped, ignoring duplicate stop");
@@ -229,7 +231,10 @@ export async function stopSlackStream(params: StopSlackStreamParams): Promise<vo
   );
 
   try {
-    await session.streamer.stop(text ? { markdown_text: text } : undefined);
+    await session.streamer.stop({
+      ...(text ? { markdown_text: text } : {}),
+      ...(metadata ? { metadata } : {}),
+    });
     session.delivered = true;
     session.pendingText = "";
   } catch (err) {

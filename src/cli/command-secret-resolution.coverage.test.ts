@@ -4,6 +4,7 @@ import { readCommandSource } from "./command-source.test-helpers.js";
 
 const SECRET_TARGET_CALLSITES = [
   bundledPluginFile("memory-core", "src/cli.runtime.ts"),
+  "src/cli/capability-cli.ts",
   "src/cli/qr-cli.ts",
   "src/agents/agent-runtime-config.ts",
   "src/commands/agent.ts",

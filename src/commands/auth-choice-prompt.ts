@@ -1,7 +1,7 @@
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { WizardPrompter, WizardSelectOption } from "../wizard/prompts.js";
-import { buildAuthChoiceGroups } from "./auth-choice-options.js";
+import { buildAuthChoiceGroups, compareAuthChoiceGroups } from "./auth-choice-options.js";
 import type { AuthChoiceGroup } from "./auth-choice-options.static.js";
 import type { AuthChoice } from "./onboard-types.js";
 
@@ -12,14 +12,6 @@ type AuthChoiceOrBack = AuthChoice | typeof BACK_VALUE;
 
 function isGroupFeatured(group: AuthChoiceGroup): boolean {
   return group.options.some((option) => option.onboardingFeatured);
-}
-
-function compareLabelsCaseInsensitive(a: string, b: string): number {
-  return a.localeCompare(b, undefined, { sensitivity: "base" });
-}
-
-function compareGroupsByLabel(a: AuthChoiceGroup, b: AuthChoiceGroup): number {
-  return compareLabelsCaseInsensitive(a.label, b.label);
 }
 
 function groupToOption(group: AuthChoiceGroup): WizardSelectOption {
@@ -37,8 +29,8 @@ export async function promptAuthChoiceGrouped(params: {
   const { groups, skipOption } = buildAuthChoiceGroups(params);
   const availableGroups = groups.filter((group) => group.options.length > 0);
   const groupById = new Map(availableGroups.map((group) => [group.value, group] as const));
-  const featuredGroups = availableGroups.filter(isGroupFeatured).toSorted(compareGroupsByLabel);
-  const moreGroups = [...availableGroups].toSorted(compareGroupsByLabel);
+  const featuredGroups = availableGroups.filter(isGroupFeatured).toSorted(compareAuthChoiceGroups);
+  const moreGroups = [...availableGroups].toSorted(compareAuthChoiceGroups);
 
   const pickMethod = async (group: AuthChoiceGroup): Promise<AuthChoiceOrBack> => {
     if (group.options.length === 1) {

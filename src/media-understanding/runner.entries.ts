@@ -422,6 +422,7 @@ async function resolveProviderExecutionAuth(params: {
   cfg: OpenClawConfig;
   entry: MediaUnderstandingModelConfig;
   agentDir?: string;
+  workspaceDir?: string;
 }) {
   const literalApiKey = resolveLiteralProviderApiKey({
     cfg: params.cfg,
@@ -443,6 +444,7 @@ async function resolveProviderExecutionAuth(params: {
     profileId: params.entry.profile,
     preferredProfile: params.entry.preferredProfile,
     agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
   });
   return {
     apiKeys: collectProviderApiKeysForExecution({
@@ -459,12 +461,14 @@ async function resolveProviderExecutionContext(params: {
   entry: MediaUnderstandingModelConfig;
   config?: MediaUnderstandingConfig;
   agentDir?: string;
+  workspaceDir?: string;
 }) {
   const { apiKeys, providerConfig } = await resolveProviderExecutionAuth({
     providerId: params.providerId,
     cfg: params.cfg,
     entry: params.entry,
     agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
   });
   const baseUrl = params.entry.baseUrl ?? params.config?.baseUrl ?? providerConfig?.baseUrl;
   const mergedHeaders = {
@@ -552,6 +556,7 @@ export async function runProviderEntry(params: {
   attachmentIndex: number;
   cache: MediaAttachmentCache;
   agentDir?: string;
+  workspaceDir?: string;
   providerRegistry: ProviderRegistry;
   config?: MediaUnderstandingConfig;
 }): Promise<MediaUnderstandingOutput | null> {
@@ -594,6 +599,7 @@ export async function runProviderEntry(params: {
       profile: entry.profile,
       preferredProfile: entry.preferredProfile,
       agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
       cfg: params.cfg,
     };
     const describeImage = provider?.describeImage ?? describeImageWithModel;
@@ -634,6 +640,7 @@ export async function runProviderEntry(params: {
       entry,
       config: params.config,
       agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
     });
     const providerQuery = resolveProviderQuery({
       providerId,
@@ -646,6 +653,7 @@ export async function runProviderEntry(params: {
         cfg,
         providerId,
         capability: "audio",
+        workspaceDir: params.workspaceDir,
       }) ||
       entry.model;
     const result = await executeWithApiKeyRotation({
@@ -705,6 +713,7 @@ export async function runProviderEntry(params: {
     entry,
     config: params.config,
     agentDir: params.agentDir,
+    workspaceDir: params.workspaceDir,
   });
   const result = await executeWithApiKeyRotation({
     provider: providerId,

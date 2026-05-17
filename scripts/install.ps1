@@ -510,20 +510,32 @@ function Install-OpenClaw {
     }
     $installSpec = Resolve-NpmOpenClawInstallSpec -PackageName $packageName -RequestedTag $Tag
     Write-Host "[*] Installing OpenClaw ($installSpec)..." -ForegroundColor Yellow
+    $freshnessArgs = @("--min-release-age=0")
+    $minReleaseAge = (& (Get-NpmCommandPath) config get min-release-age 2>$null)
+    if ($LASTEXITCODE -ne 0 -or -not $minReleaseAge -or $minReleaseAge.Trim() -eq "null" -or $minReleaseAge.Trim() -eq "undefined") {
+        $beforeValue = (& (Get-NpmCommandPath) config get before 2>$null)
+        if ($LASTEXITCODE -eq 0 -and $beforeValue -and $beforeValue.Trim() -ne "null" -and $beforeValue.Trim() -ne "undefined") {
+            $freshnessArgs = @("--before=$((Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ"))")
+        }
+    }
     $prevLogLevel = $env:NPM_CONFIG_LOGLEVEL
     $prevUpdateNotifier = $env:NPM_CONFIG_UPDATE_NOTIFIER
     $prevFund = $env:NPM_CONFIG_FUND
     $prevAudit = $env:NPM_CONFIG_AUDIT
     $prevScriptShell = $env:NPM_CONFIG_SCRIPT_SHELL
     $prevNodeLlamaSkipDownload = $env:NODE_LLAMA_CPP_SKIP_DOWNLOAD
+    $prevBefore = $env:NPM_CONFIG_BEFORE
+    $prevMinReleaseAge = $env:NPM_CONFIG_MIN_RELEASE_AGE
     $env:NPM_CONFIG_LOGLEVEL = "error"
     $env:NPM_CONFIG_UPDATE_NOTIFIER = "false"
     $env:NPM_CONFIG_FUND = "false"
     $env:NPM_CONFIG_AUDIT = "false"
     $env:NPM_CONFIG_SCRIPT_SHELL = "cmd.exe"
     $env:NODE_LLAMA_CPP_SKIP_DOWNLOAD = "1"
+    Remove-Item Env:NPM_CONFIG_BEFORE -ErrorAction SilentlyContinue
+    Remove-Item Env:NPM_CONFIG_MIN_RELEASE_AGE -ErrorAction SilentlyContinue
     try {
-        $npmOutput = & (Get-NpmCommandPath) install -g "$installSpec" 2>&1
+        $npmOutput = & (Get-NpmCommandPath) install -g @freshnessArgs "$installSpec" 2>&1
         if ($LASTEXITCODE -ne 0) {
             Write-Host "[!] npm install failed" -ForegroundColor Red
             if ($npmOutput -match "spawn git" -or $npmOutput -match "ENOENT.*git") {
@@ -544,6 +556,8 @@ function Install-OpenClaw {
         $env:NPM_CONFIG_AUDIT = $prevAudit
         $env:NPM_CONFIG_SCRIPT_SHELL = $prevScriptShell
         $env:NODE_LLAMA_CPP_SKIP_DOWNLOAD = $prevNodeLlamaSkipDownload
+        $env:NPM_CONFIG_BEFORE = $prevBefore
+        $env:NPM_CONFIG_MIN_RELEASE_AGE = $prevMinReleaseAge
     }
     Write-Host "[OK] OpenClaw installed" -ForegroundColor Green
     return $true

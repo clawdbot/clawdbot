@@ -2,6 +2,10 @@ import {
   createPreviewMessageReceipt,
   type MessageReceipt,
 } from "openclaw/plugin-sdk/channel-message";
+import {
+  isPotentialTruncatedFinal,
+  selectLongerFinalText,
+} from "openclaw/plugin-sdk/channel-streaming";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { TelegramInlineButtons } from "./button-types.js";
@@ -19,6 +23,7 @@ export type DraftLaneState = {
 type LanePreviewFinalizedDelivery = {
   content: string;
   messageId: number;
+  buttonsAttached?: boolean;
   receipt: MessageReceipt;
 };
 
@@ -105,58 +110,121 @@ function compactChunks(chunks: readonly string[]): string[] {
   return out;
 }
 
-function stripTrailingEllipsis(text: string): string {
-  return text.replace(/(?:\s*(?:\.{3}|\u2026))+$/u, "").trimEnd();
-}
-
-const MIN_TRUNCATED_FINAL_PREFIX_CHARS = 48;
-const MIN_TRUNCATED_FINAL_CONTINUATION_CHARS = 24;
-
-function isPotentialTruncatedFinal(finalText: string): boolean {
-  const trimmedFinal = finalText.trimEnd();
-  const untruncatedFinal = stripTrailingEllipsis(trimmedFinal);
-  return (
-    untruncatedFinal.length >= MIN_TRUNCATED_FINAL_PREFIX_CHARS && untruncatedFinal !== trimmedFinal
-  );
-}
-
-function selectLongerPreviewForFinal(params: {
-  finalText: string;
-  candidateTexts: readonly (string | undefined)[];
-}): string | undefined {
-  const finalText = params.finalText.trimEnd();
-  const untruncatedFinal = stripTrailingEllipsis(finalText);
-  if (
-    untruncatedFinal.length < MIN_TRUNCATED_FINAL_PREFIX_CHARS ||
-    untruncatedFinal === finalText
-  ) {
-    return undefined;
-  }
-  for (const candidate of params.candidateTexts) {
-    const candidateText = candidate?.trimEnd();
-    if (
-      !candidateText ||
-      candidateText.length <= finalText.length ||
-      !candidateText.startsWith(untruncatedFinal)
-    ) {
-      continue;
-    }
-    const continuation = candidateText.slice(untruncatedFinal.length).trimStart();
-    if (
-      continuation.length >= MIN_TRUNCATED_FINAL_CONTINUATION_CHARS &&
-      /^[\p{L}\p{N}]/u.test(continuation)
-    ) {
-      return candidateText;
-    }
-  }
-  return undefined;
-}
-
 export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
   const followUpPayload = (payload: ReplyPayload, text: string) =>
     params.applyTextToFollowUpPayload
       ? params.applyTextToFollowUpPayload(payload, text)
       : params.applyTextToPayload(payload, text);
+  const textOnlyPayload = (payload: ReplyPayload): ReplyPayload => {
+    const {
+      mediaUrl: _mediaUrl,
+      mediaUrls: _mediaUrls,
+      audioAsVoice: _audioAsVoice,
+      spokenText: _spokenText,
+      ...rest
+    } = payload;
+    return rest;
+  };
+  const mediaChannelData = (
+    channelData: ReplyPayload["channelData"],
+    options?: { stripButtons?: boolean },
+  ): ReplyPayload["channelData"] => {
+    if (!options?.stripButtons) {
+      return channelData;
+    }
+    const telegramData = channelData?.telegram;
+    if (!telegramData || typeof telegramData !== "object" || Array.isArray(telegramData)) {
+      return channelData;
+    }
+    const { buttons: _buttons, ...telegramRest } = telegramData as Record<string, unknown>;
+    if (_buttons === undefined) {
+      return channelData;
+    }
+    const next: Record<string, unknown> = { ...channelData };
+    if (Object.keys(telegramRest).length > 0) {
+      next.telegram = telegramRest;
+    } else {
+      delete next.telegram;
+    }
+    return Object.keys(next).length > 0 ? next : undefined;
+  };
+  const withMediaChannelData = (
+    payload: ReplyPayload,
+    options?: { stripButtons?: boolean },
+  ): ReplyPayload => {
+    const channelData = mediaChannelData(payload.channelData, options);
+    if (channelData === payload.channelData) {
+      return payload;
+    }
+    if (channelData) {
+      return { ...payload, channelData };
+    }
+    const { channelData: _channelData, ...rest } = payload;
+    return rest;
+  };
+  const withFallbackTelegramButtons = (
+    payload: ReplyPayload,
+    buttons?: TelegramInlineButtons,
+  ): ReplyPayload => {
+    if (!buttons) {
+      return payload;
+    }
+    const channelData = payload.channelData ?? {};
+    const telegramData = channelData.telegram;
+    if (
+      telegramData &&
+      typeof telegramData === "object" &&
+      !Array.isArray(telegramData) &&
+      "buttons" in telegramData
+    ) {
+      return payload;
+    }
+    const telegramRest =
+      telegramData && typeof telegramData === "object" && !Array.isArray(telegramData)
+        ? (telegramData as Record<string, unknown>)
+        : {};
+    return {
+      ...payload,
+      channelData: {
+        ...channelData,
+        telegram: {
+          ...telegramRest,
+          buttons,
+        },
+      },
+    };
+  };
+  const mediaOnlyPayload = (
+    payload: ReplyPayload,
+    text: string,
+    options?: { stripButtons?: boolean; fallbackButtons?: TelegramInlineButtons },
+  ): ReplyPayload => {
+    if (payload.audioAsVoice === true) {
+      const {
+        text: _text,
+        presentation: _presentation,
+        interactive: _interactive,
+        btw: _btw,
+        spokenText: _spokenText,
+        ...voicePayload
+      } = params.applyTextToPayload(payload, text);
+      return withFallbackTelegramButtons(
+        withMediaChannelData({ ...voicePayload, spokenText: text }, options),
+        options?.fallbackButtons,
+      );
+    }
+    const {
+      text: _text,
+      presentation: _presentation,
+      interactive: _interactive,
+      btw: _btw,
+      ...rest
+    } = payload;
+    return withFallbackTelegramButtons(
+      withMediaChannelData(rest, options),
+      options?.fallbackButtons,
+    );
+  };
 
   const clearUnfinalizedStream = async (lane: DraftLaneState) => {
     if (!lane.stream || lane.finalized) {
@@ -191,7 +259,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
 
     const retainedPreview =
       isFinal && remainingChunks.length === 0 && isPotentialTruncatedFinal(text)
-        ? selectLongerPreviewForFinal({
+        ? selectLongerFinalText({
             finalText: text,
             candidateTexts: [
               await params.resolveFinalTextCandidate?.({ finalText: text, laneName }),
@@ -218,9 +286,11 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       if (deliveredStreamText !== undefined && deliveredStreamText !== previewText) {
         return undefined;
       }
+      let buttonsAttached = false;
       if (buttons) {
         try {
           await params.editStreamMessage({ laneName, messageId, text: previewText, buttons });
+          buttonsAttached = true;
         } catch (err) {
           params.log(`telegram: ${laneName} stream button edit failed: ${String(err)}`);
         }
@@ -233,7 +303,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       }
       lane.finalized = true;
       params.markDelivered();
-      return result("preview-finalized", { content: previewText, messageId });
+      return result("preview-finalized", { content: previewText, messageId, buttonsAttached });
     }
 
     lane.lastPartialText = firstChunk;
@@ -266,9 +336,11 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     }
 
     params.markDelivered();
+    let buttonsAttached = false;
     if (buttons) {
       try {
         await params.editStreamMessage({ laneName, messageId, text: firstChunk, buttons });
+        buttonsAttached = true;
       } catch (err) {
         params.log(`telegram: ${laneName} stream button edit failed: ${String(err)}`);
       }
@@ -282,7 +354,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         }
         await params.sendPayload(followUpPayload(payload, chunk));
       }
-      return result("preview-finalized", { content: text, messageId });
+      return result("preview-finalized", { content: text, messageId, buttonsAttached });
     }
 
     return result("preview-updated");
@@ -303,6 +375,41 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       : undefined;
     if (streamed) {
       return streamed;
+    }
+
+    if (
+      isFinal &&
+      reply.hasMedia &&
+      lane.stream &&
+      lane.hasStreamedMessage &&
+      !lane.finalized &&
+      text.trim().length > 0
+    ) {
+      const finalizedPreview = await streamText(
+        laneName,
+        lane,
+        text,
+        textOnlyPayload(payload),
+        true,
+        buttons,
+      );
+      if (finalizedPreview) {
+        const stripButtons =
+          finalizedPreview.kind === "preview-finalized" &&
+          finalizedPreview.delivery.buttonsAttached === true;
+        const mediaText =
+          finalizedPreview.kind === "preview-finalized" ? finalizedPreview.delivery.content : text;
+        await params.sendPayload(
+          mediaOnlyPayload(payload, mediaText, {
+            stripButtons,
+            fallbackButtons: stripButtons ? undefined : buttons,
+          }),
+          {
+            durable: true,
+          },
+        );
+        return finalizedPreview;
+      }
     }
 
     if (isFinal) {

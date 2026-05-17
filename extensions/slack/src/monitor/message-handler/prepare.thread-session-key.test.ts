@@ -1,4 +1,10 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  registerSessionBindingAdapter,
+  unregisterSessionBindingAdapter,
+  type SessionBindingAdapter,
+  type SessionBindingRecord,
+} from "openclaw/plugin-sdk/conversation-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveConfiguredBindingRouteMock = vi.hoisted(() => vi.fn());
@@ -505,5 +511,127 @@ describe("thread-level session keys", () => {
 
     expect(routing.sessionKey).toBe("agent:main:slack:direct:u3");
     expect(routing.threadContext.messageThreadId).toBe("1770408530.000000");
+  });
+
+  it("routes DM thread replies to the main DM session, not a thread-scoped session", () => {
+    const ctx = buildCtx({ replyToMode: "all", dmScope: "per-channel-peer" });
+    const account = buildAccount("all");
+
+    const routing = resolveSlackRoutingContext({
+      ctx,
+      account,
+      message: {
+        channel: "D456",
+        channel_type: "im",
+        user: "U3",
+        text: "reply in thread",
+        ts: "1770408540.000000",
+        thread_ts: "1770408530.000000",
+        parent_user_id: "B1",
+      } as SlackMessageEvent,
+      isDirectMessage: true,
+      isGroupDm: false,
+      isRoom: false,
+      isRoomish: false,
+    });
+
+    expect(routing.sessionKey).toBe("agent:main:slack:direct:u3");
+    expect(routing.sessionKey).not.toContain(":thread:");
+  });
+
+  it("routes Slack assistant DM threads to a thread-scoped session", () => {
+    const ctx = buildCtx({ replyToMode: "all", dmScope: "per-channel-peer" });
+    const account = buildAccount("all");
+
+    const routing = resolveSlackRoutingContext({
+      ctx,
+      account,
+      message: {
+        channel: "D456",
+        channel_type: "im",
+        user: "U3",
+        text: "assistant reply",
+        ts: "1770408540.000000",
+        thread_ts: "1770408530.000000",
+        parent_user_id: "B1",
+      } as SlackMessageEvent,
+      isDirectMessage: true,
+      isGroupDm: false,
+      isRoom: false,
+      isRoomish: false,
+      assistantThreadTs: "1770408530.000000",
+    });
+
+    expect(routing.sessionKey).toBe("agent:main:slack:direct:u3:thread:1770408530.000000");
+    expect(routing.threadContext.messageThreadId).toBe("1770408530.000000");
+  });
+
+  it("routes DM thread replies through explicit runtime conversation bindings", () => {
+    const targetSessionKey = "agent:review:acp:session-slack-dm";
+    const binding: SessionBindingRecord = {
+      bindingId: "test-slack-dm-thread-binding",
+      targetSessionKey,
+      targetKind: "session",
+      conversation: {
+        channel: "slack",
+        accountId: "default",
+        conversationId: "1770408530.000000",
+        parentConversationId: "user:U3",
+      },
+      status: "active",
+      boundAt: Date.now(),
+      metadata: {},
+    };
+    const resolveByConversation: SessionBindingAdapter["resolveByConversation"] = vi.fn((ref) =>
+      ref.channel === "slack" &&
+      ref.accountId === "default" &&
+      ref.conversationId === "1770408530.000000" &&
+      ref.parentConversationId === "user:U3"
+        ? binding
+        : null,
+    );
+    const touch: NonNullable<SessionBindingAdapter["touch"]> = vi.fn();
+    const adapter: SessionBindingAdapter = {
+      channel: "slack",
+      accountId: "default",
+      listBySession: () => [],
+      resolveByConversation,
+      touch,
+    };
+    registerSessionBindingAdapter(adapter);
+    try {
+      const ctx = buildCtx({ replyToMode: "all", dmScope: "per-channel-peer" });
+      const account = buildAccount("all");
+
+      const routing = resolveSlackRoutingContext({
+        ctx,
+        account,
+        message: {
+          channel: "D456",
+          channel_type: "im",
+          user: "U3",
+          text: "bound reply in thread",
+          ts: "1770408540.000000",
+          thread_ts: "1770408530.000000",
+          parent_user_id: "B1",
+        } as SlackMessageEvent,
+        isDirectMessage: true,
+        isGroupDm: false,
+        isRoom: false,
+        isRoomish: false,
+      });
+
+      expect(routing.sessionKey).toBe(targetSessionKey);
+      expect(routing.runtimeBoundSessionKey).toBe(targetSessionKey);
+      expect(resolveByConversation).toHaveBeenCalledWith({
+        channel: "slack",
+        accountId: "default",
+        conversationId: "1770408530.000000",
+        parentConversationId: "user:U3",
+      });
+      expect(touch).toHaveBeenCalledWith("test-slack-dm-thread-binding", undefined);
+    } finally {
+      unregisterSessionBindingAdapter({ channel: "slack", accountId: "default", adapter });
+    }
   });
 });

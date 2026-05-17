@@ -1,8 +1,8 @@
-import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import { readProviderJsonObjectResponse } from "openclaw/plugin-sdk/provider-http";
 import { postTrustedWebToolsJson, wrapWebContent } from "openclaw/plugin-sdk/provider-web-search";
 import {
   buildXaiResponsesToolBody,
-  resolveXaiResponseTextCitationsAndInline,
+  requireXaiResponseTextCitationsAndInline,
   resolveXaiResponsesEndpoint,
 } from "./responses-tool-shared.js";
 import {
@@ -132,11 +132,15 @@ export async function requestXaiXSearch(params: {
       errorLabel: "xAI",
     },
     async (response) => {
-      const data = await readProviderJsonResponse<XaiWebSearchResponse>(
+      const data = (await readProviderJsonObjectResponse(
         response,
         "xAI X search failed",
+      )) as XaiWebSearchResponse;
+      return requireXaiResponseTextCitationsAndInline(
+        data,
+        "xAI X search failed",
+        params.inlineCitations,
       );
-      return resolveXaiResponseTextCitationsAndInline(data, params.inlineCitations);
     },
   );
 }

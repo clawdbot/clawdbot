@@ -106,6 +106,22 @@ function modelKeyMatchKind(params: {
   });
 }
 
+function modelKeyIsProviderWildcard(params: {
+  key: string;
+  provider: string | undefined;
+}): boolean {
+  const slash = params.key.indexOf("/");
+  if (slash <= 0) {
+    return false;
+  }
+  if (
+    normalizeProviderId(params.key.slice(0, slash)) !== normalizeProviderId(params.provider ?? "")
+  ) {
+    return false;
+  }
+  return params.key.slice(slash + 1).trim() === "*";
+}
+
 function resolveAgentModelEntryRuntimePolicy(params: {
   config?: OpenClawConfig;
   provider?: string;
@@ -115,7 +131,7 @@ function resolveAgentModelEntryRuntimePolicy(params: {
   matchKind: Exclude<ModelEntryMatchKind, "none">;
 }): ResolvedModelRuntimePolicy {
   const modelId = normalizeModelIdForProvider(params.provider, params.modelId);
-  if (!params.config || !modelId) {
+  if (!params.config || (!modelId && params.matchKind !== "provider-wildcard")) {
     return {};
   }
   const { sessionAgentId } = resolveSessionAgentIds({
@@ -132,10 +148,10 @@ function resolveAgentModelEntryRuntimePolicy(params: {
   ];
   for (const models of modelMaps) {
     for (const [key, entry] of Object.entries(models ?? {})) {
-      if (
-        modelKeyMatchKind({ key, provider: params.provider, modelId }) === params.matchKind &&
-        hasRuntimePolicy(entry?.agentRuntime)
-      ) {
+      const matches = modelId
+        ? modelKeyMatchKind({ key, provider: params.provider, modelId }) === params.matchKind
+        : modelKeyIsProviderWildcard({ key, provider: params.provider });
+      if (matches && hasRuntimePolicy(entry?.agentRuntime)) {
         return { policy: entry.agentRuntime, source: "model" };
       }
     }
@@ -164,6 +180,13 @@ export function resolveModelRuntimePolicy(params: {
   agentId?: string;
   sessionKey?: string;
 }): ResolvedModelRuntimePolicy {
+  if (process.env.OPENCLAW_BUILD_PRIVATE_QA === "1") {
+    const forcedRuntime = process.env.OPENCLAW_QA_FORCE_RUNTIME?.trim().toLowerCase();
+    if (forcedRuntime === "pi" || forcedRuntime === "codex") {
+      return { policy: { id: forcedRuntime }, source: "model" };
+    }
+  }
+
   const agentModelPolicy = resolveAgentModelEntryRuntimePolicy({ ...params, matchKind: "exact" });
   if (agentModelPolicy.policy) {
     return agentModelPolicy;

@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/minimax-provider",
-  "version": "2026.5.16",
+  "version": "2026.5.17",
   "private": true,
   "description": "OpenClaw MiniMax provider and OAuth plugin",
   "type": "module",

@@ -68,6 +68,24 @@ function toFetchUrl(resource: RequestInfo | URL): string {
   return resource.url;
 }
 
+const MATRIX_STATE_AFTER_SYNC_PARAM = "org.matrix.msc4222.use_state_after";
+
+function withoutMatrixStateAfterSyncParam(rawUrl: string): string {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return rawUrl;
+  }
+
+  if (!url.pathname.endsWith("/sync") || !url.searchParams.has(MATRIX_STATE_AFTER_SYNC_PARAM)) {
+    return rawUrl;
+  }
+
+  url.searchParams.delete(MATRIX_STATE_AFTER_SYNC_PARAM);
+  return url.toString();
+}
+
 function buildBufferedResponse(params: {
   source: Response;
   body: ArrayBuffer;
@@ -213,7 +231,7 @@ export function createMatrixGuardedFetch(params: {
   dispatcherPolicy?: PinnedDispatcherPolicy;
 }): typeof fetch {
   return (async (resource: RequestInfo | URL, init?: RequestInit) => {
-    const url = toFetchUrl(resource);
+    const url = withoutMatrixStateAfterSyncParam(toFetchUrl(resource));
     const { signal, ...requestInit } = init ?? {};
     const { response, release } = await fetchWithMatrixGuardedRedirects({
       url,

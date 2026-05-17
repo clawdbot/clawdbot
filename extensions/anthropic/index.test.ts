@@ -264,7 +264,7 @@ describe("anthropic provider replay hooks", () => {
       "anthropic/claude-sonnet-4-5",
       "anthropic/claude-haiku-4-5",
     ]) {
-      expect(models[modelId]).toEqual({});
+      expect(models[modelId]).toEqual({ agentRuntime: { id: "claude-cli" } });
     }
   });
 

@@ -5,6 +5,8 @@ import {
   createNoopLogger,
   withCronServiceForTest,
 } from "./service.test-harness.js";
+import { createCronServiceState } from "./service/state.js";
+import { executeJobCore } from "./service/timer.js";
 import type { CronJob } from "./types.js";
 
 const noopLogger = createNoopLogger();
@@ -60,6 +62,39 @@ describe("CronService", () => {
   });
 
   it("skips main jobs with empty systemEvent text", async () => {
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeat = vi.fn();
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: "cron-empty-systemevent-test.json",
+      log: noopLogger,
+      nowMs: () => Date.now(),
+      enqueueSystemEvent,
+      requestHeartbeat,
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+    const job: CronJob = {
+      id: "empty-systemevent-test",
+      name: "empty systemEvent test",
+      enabled: true,
+      schedule: { kind: "at", at: "2025-12-13T00:00:01.000Z" },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "   " },
+      createdAtMs: Date.now(),
+      updatedAtMs: Date.now(),
+      state: {},
+    };
+
+    const result = await executeJobCore(state, job);
+
+    expect(result.status).toBe("skipped");
+    expect(result.error).toMatch(/non-empty/i);
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(requestHeartbeat).not.toHaveBeenCalled();
+  });
+
+  it("disables persisted main jobs with empty systemEvent text after skipping them", async () => {
     await withCronService(true, async ({ cron, enqueueSystemEvent, requestHeartbeat }) => {
       const atMs = Date.parse("2025-12-13T00:00:01.000Z");
       await cron.add({
@@ -78,8 +113,10 @@ describe("CronService", () => {
       expect(requestHeartbeat).not.toHaveBeenCalled();
 
       const job = await waitForFirstJob(cron, (current) => current?.state.lastStatus === "skipped");
+      expect(job?.enabled).toBe(false);
       expect(job?.state.lastStatus).toBe("skipped");
       expect(job?.state.lastError).toMatch(/non-empty/i);
+      expect(job?.state.nextRunAtMs).toBeUndefined();
     });
   });
 

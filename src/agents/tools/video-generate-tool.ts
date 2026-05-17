@@ -1,7 +1,6 @@
 import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
@@ -36,7 +35,12 @@ import {
 } from "../generated-attachments.js";
 import { ToolInputError, readNumberParam, readStringParam } from "./common.js";
 import { decodeDataUrl } from "./image-tool.helpers.js";
-import { withMediaGenerationTaskKeepalive } from "./media-generate-background-shared.js";
+import {
+  buildMediaGenerationStartedToolResult,
+  createDefaultMediaGenerateBackgroundScheduler,
+  scheduleMediaGenerationTaskCompletion,
+  type MediaGenerateBackgroundScheduler,
+} from "./media-generate-background-shared.js";
 import {
   applyVideoGenerationModelConfigDefaults,
   buildMediaReferenceDetails,
@@ -68,8 +72,8 @@ import {
   createVideoGenerationTaskRun,
   failVideoGenerationTaskRun,
   recordVideoGenerationTaskProgress,
+  videoGenerationTaskLifecycle,
   type VideoGenerationTaskHandle,
-  wakeVideoGenerationTaskCompletion,
 } from "./video-generate-background.js";
 import {
   createVideoGenerateDuplicateGuardResult,
@@ -404,17 +408,10 @@ type VideoGenerateSandboxConfig = {
   bridge: SandboxFsBridge;
 };
 
-type VideoGenerateBackgroundScheduler = (work: () => Promise<void>) => void;
-
-function defaultScheduleVideoGenerateBackgroundWork(work: () => Promise<void>) {
-  queueMicrotask(() => {
-    void work().catch((error) => {
-      log.error("Detached video generation job crashed", {
-        error,
-      });
-    });
-  });
-}
+const defaultScheduleVideoGenerateBackgroundWork = createDefaultMediaGenerateBackgroundScheduler({
+  toolName: "video_generate",
+  onCrash: (message, meta) => log.error(message, meta),
+});
 
 async function loadReferenceAssets(params: {
   inputs: string[];
@@ -544,6 +541,8 @@ type ExecutedVideoGeneration = {
   urlOnlyUrls: string[];
   /** Total generated video count, including url-only assets. */
   count: number;
+  paths: string[];
+  mediaUrls: string[];
   attachments: AgentGeneratedAttachment[];
   contentText: string;
   details: Record<string, unknown>;
@@ -733,6 +732,8 @@ async function executeVideoGenerationJob(params: {
     savedPaths: savedVideos.map((video) => video.path),
     urlOnlyUrls: urlOnlyVideos.map((video) => video.url),
     count: totalCount,
+    paths: savedVideos.map((video) => video.path),
+    mediaUrls: allMediaUrls,
     attachments,
     contentText: lines.join("\n"),
     wakeResult: lines.join("\n"),
@@ -807,7 +808,7 @@ export function createVideoGenerateTool(options?: {
   workspaceDir?: string;
   sandbox?: VideoGenerateSandboxConfig;
   fsPolicy?: ToolFsPolicy;
-  scheduleBackgroundWork?: VideoGenerateBackgroundScheduler;
+  scheduleBackgroundWork?: MediaGenerateBackgroundScheduler;
 }): AnyAgentTool | null {
   const cfg: OpenClawConfig = options?.config ?? getRuntimeConfig();
   if (
@@ -838,7 +839,7 @@ export function createVideoGenerateTool(options?: {
     name: "video_generate",
     displaySummary: "Generate videos",
     description:
-      "Generate videos using configured providers. Generated videos are saved under OpenClaw-managed media storage and delivered automatically as attachments. Duration requests may be rounded to the nearest provider-supported value.",
+      'Generate videos using configured providers. In session-backed chats, generation runs as a background task; do not call video_generate again for the same request, wait for the completion event, then send the generated attachments through the message tool. Use action="status" to inspect the active task. Duration requests may be rounded to the nearest provider-supported value.',
     parameters: VideoGenerateToolSchema,
     execute: async (_toolCallId, rawArgs) => {
       const args = rawArgs as Record<string, unknown>;
@@ -1007,83 +1008,43 @@ export function createVideoGenerateTool(options?: {
       const shouldDetach = Boolean(taskHandle && options?.agentSessionKey?.trim());
 
       if (shouldDetach) {
-        scheduleBackgroundWork(async () => {
-          try {
-            const executed = await withMediaGenerationTaskKeepalive({
-              handle: taskHandle,
-              progressSummary: "Generating video",
-              run: () =>
-                executeVideoGenerationJob({
-                  effectiveCfg,
-                  prompt,
-                  agentDir: options?.agentDir,
-                  model,
-                  size,
-                  aspectRatio,
-                  resolution,
-                  durationSeconds,
-                  audio,
-                  watermark,
-                  filename,
-                  loadedReferenceImages,
-                  loadedReferenceVideos,
-                  loadedReferenceAudios,
-                  taskHandle,
-                  providerOptions,
-                  autoProviderFallback: explicitModelConfig ? false : undefined,
-                  timeoutMs,
-                }),
-            });
-            completeVideoGenerationTaskRun({
-              handle: taskHandle,
-              provider: executed.provider,
-              model: executed.model,
-              count: executed.count,
-              paths: executed.savedPaths,
-            });
-            try {
-              await wakeVideoGenerationTaskCompletion({
-                config: effectiveCfg,
-                handle: taskHandle,
-                status: "ok",
-                statusLabel: "completed successfully",
-                result: executed.wakeResult,
-                attachments: executed.attachments,
-              });
-            } catch (error) {
-              log.warn("Video generation completion wake failed after successful generation", {
-                taskId: taskHandle?.taskId,
-                runId: taskHandle?.runId,
-                error,
-              });
-            }
-          } catch (error) {
-            failVideoGenerationTaskRun({
-              handle: taskHandle,
-              error,
-            });
-            await wakeVideoGenerationTaskCompletion({
-              config: effectiveCfg,
-              handle: taskHandle,
-              status: "error",
-              statusLabel: "failed",
-              result: formatErrorMessage(error),
-            });
-            return;
-          }
+        scheduleMediaGenerationTaskCompletion({
+          lifecycle: videoGenerationTaskLifecycle,
+          handle: taskHandle,
+          scheduleBackgroundWork,
+          progressSummary: "Generating video",
+          config: effectiveCfg,
+          toolName: "Video generation",
+          onWakeFailure: (message, meta) => log.warn(message, meta),
+          run: () =>
+            executeVideoGenerationJob({
+              effectiveCfg,
+              prompt,
+              agentDir: options?.agentDir,
+              model,
+              size,
+              aspectRatio,
+              resolution,
+              durationSeconds,
+              audio,
+              watermark,
+              filename,
+              loadedReferenceImages,
+              loadedReferenceVideos,
+              loadedReferenceAudios,
+              taskHandle,
+              providerOptions,
+              autoProviderFallback: explicitModelConfig ? false : undefined,
+              timeoutMs,
+            }),
         });
 
-        return {
-          content: [
-            {
-              type: "text",
-              text: `Background task started for video generation (${taskHandle?.taskId ?? "unknown"}). Do not call video_generate again for this request. Wait for the completion event; I'll post the finished video here when it's ready.`,
-            },
-          ],
-          details: {
-            async: true,
-            status: "started",
-            ...buildTaskRunDetails(taskHandle),
+        return buildMediaGenerationStartedToolResult({
+          toolName: "video_generate",
+          generationLabel: "video",
+          completionLabel: "video",
+          taskHandle,
+          detailExtras: {
             ...buildMediaReferenceDetails({
               entries: loadedReferenceImages,
               singleKey: "image",
@@ -1107,7 +1068,7 @@ export function createVideoGenerateTool(options?: {
             ...(filename ? { filename } : {}),
             ...(timeoutMs !== undefined ? { timeoutMs } : {}),
           },
-        };
+        });
       }
 
       try {

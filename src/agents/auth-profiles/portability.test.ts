@@ -56,6 +56,20 @@ describe("auth profile portability", () => {
     });
   });
 
+  it("does not copy empty OAuth profiles even when they opt in", () => {
+    const credential = {
+      type: "oauth",
+      provider: "openai-codex",
+      expires: Date.now() + 60_000,
+      copyToAgents: true,
+    } as AuthProfileCredential;
+
+    expect(resolveAuthProfilePortability(credential)).toEqual({
+      portable: false,
+      reason: "non-portable-oauth-refresh-token",
+    });
+  });
+
   it("lets static credentials opt out", () => {
     expect(
       resolveAuthProfilePortability({

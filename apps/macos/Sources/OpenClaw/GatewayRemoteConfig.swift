@@ -1,5 +1,8 @@
 import Foundation
 import OpenClawKit
+#if canImport(Darwin)
+import Darwin
+#endif
 
 enum GatewayRemoteConfig {
     enum TokenValue: Equatable {
@@ -69,6 +72,17 @@ enum GatewayRemoteConfig {
         }
     }
 
+    static func resolvePasswordString(root: [String: Any]) -> String? {
+        guard let gateway = root["gateway"] as? [String: Any],
+              let remote = gateway["remote"] as? [String: Any],
+              let raw = remote["password"] as? String
+        else {
+            return nil
+        }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     static func resolveTLSFingerprint(root: [String: Any]) -> String? {
         guard let gateway = root["gateway"] as? [String: Any],
               let remote = gateway["remote"] as? [String: Any],
@@ -85,6 +99,27 @@ enum GatewayRemoteConfig {
         return self.normalizeGatewayUrl(raw)
     }
 
+    static func resolveRemotePort(root: [String: Any]) -> Int? {
+        guard let gateway = root["gateway"] as? [String: Any],
+              let remote = gateway["remote"] as? [String: Any]
+        else {
+            return nil
+        }
+        let value = remote["remotePort"]
+        let port: Int? = switch value {
+        case let raw as Int:
+            raw
+        case let raw as NSNumber:
+            raw.intValue
+        case let raw as String:
+            Int(raw.trimmingCharacters(in: .whitespacesAndNewlines))
+        default:
+            nil
+        }
+        guard let port, port > 0, port <= 65535 else { return nil }
+        return port
+    }
+
     static func normalizeGatewayUrlString(_ raw: String) -> String? {
         self.normalizeGatewayUrl(raw)?.absoluteString
     }
@@ -96,7 +131,10 @@ enum GatewayRemoteConfig {
         guard scheme == "ws" || scheme == "wss" else { return nil }
         let host = url.host?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !host.isEmpty else { return nil }
-        if scheme == "ws", !LoopbackHost.isLoopbackHost(host) {
+        if scheme == "ws",
+           !LoopbackHost.isLoopbackHost(host),
+           !self.isTrustedPlaintextRemoteHost(host)
+        {
             return nil
         }
         if scheme == "ws", url.port == nil {
@@ -107,6 +145,59 @@ enum GatewayRemoteConfig {
             return components.url
         }
         return url
+    }
+
+    static func isTrustedPlaintextRemoteHost(_ host: String) -> Bool {
+        let lower = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !lower.isEmpty else { return false }
+        if lower == "localhost" || lower.hasSuffix(".local") || lower.hasSuffix(".ts.net") {
+            return true
+        }
+        if self.isPrivateIPv6Literal(lower) {
+            return true
+        }
+        guard let parts = self.ipv4Parts(lower) else { return false }
+        switch (parts[0], parts[1]) {
+        case (10, _), (192, 168), (169, 254):
+            return true
+        case (172, 16...31):
+            return true
+        case (100, 64...127):
+            return true
+        default:
+            return false
+        }
+    }
+
+    private static func ipv4Parts(_ value: String) -> [Int]? {
+        let labels = value.split(separator: ".", omittingEmptySubsequences: false)
+        guard labels.count == 4 else { return nil }
+        var parts: [Int] = []
+        parts.reserveCapacity(4)
+        for label in labels {
+            guard !label.isEmpty,
+                  label.allSatisfy(\.isNumber),
+                  let part = Int(label),
+                  part >= 0,
+                  part <= 255
+            else {
+                return nil
+            }
+            parts.append(part)
+        }
+        return parts
+    }
+
+    private static func isPrivateIPv6Literal(_ value: String) -> Bool {
+        #if canImport(Darwin)
+        var addr = in6_addr()
+        guard value.withCString({ inet_pton(AF_INET6, $0, &addr) }) == 1 else {
+            return false
+        }
+        return value.hasPrefix("fc") || value.hasPrefix("fd") || value.hasPrefix("fe80:")
+        #else
+        return false
+        #endif
     }
 
     static func defaultPort(for url: URL) -> Int? {

@@ -156,11 +156,11 @@ injection behavior from the shared defaults. Omitted fields inherit from
 ### `agents.defaults.bootstrapPromptTruncationWarning`
 
 Controls the agent-visible system-prompt notice when bootstrap context is truncated.
-Default: `"once"`.
+Default: `"always"`.
 
 - `"off"`: never inject truncation notice text into the system prompt.
-- `"once"`: inject a concise notice once per unique truncation signature (recommended).
-- `"always"`: inject a concise notice on every run when truncation exists.
+- `"once"`: inject a concise notice once per unique truncation signature.
+- `"always"`: inject a concise notice on every run when truncation exists (recommended).
 
 Detailed raw/injected counts and config tuning fields stay in diagnostics such
 as context/status reports and logs; routine WebChat user/runtime context only
@@ -168,7 +168,7 @@ gets the concise recovery notice.
 
 ```json5
 {
-  agents: { defaults: { bootstrapPromptTruncationWarning: "once" } }, // off | once | always
+  agents: { defaults: { bootstrapPromptTruncationWarning: "always" } }, // off | once | always
 }
 ```
 

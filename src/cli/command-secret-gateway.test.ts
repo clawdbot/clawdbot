@@ -172,6 +172,103 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     expect(readTalkProviderApiKey(result.resolvedConfig)).toBe("sk-live");
   });
 
+  it("passes command provider overrides to gateway secret resolution", async () => {
+    callGateway.mockResolvedValueOnce({
+      assignments: [
+        {
+          path: TALK_TEST_PROVIDER_API_KEY_PATH,
+          pathSegments: [...TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS],
+          value: "sk-live",
+        },
+      ],
+      diagnostics: [],
+    });
+    const config = buildTalkTestProviderConfig({
+      source: "env",
+      provider: "default",
+      id: "TALK_API_KEY",
+    });
+
+    await resolveCommandSecretRefsViaGateway({
+      config,
+      commandName: "infer web search",
+      targetIds: new Set(["talk.providers.*.apiKey"]),
+      providerOverrides: { webSearch: "tavily" },
+    });
+
+    expect(callGateway.mock.calls[0]?.[0]?.params).toEqual({
+      commandName: "infer web search",
+      targetIds: ["talk.providers.*.apiKey"],
+      providerOverrides: { webSearch: "tavily" },
+    });
+  });
+
+  it("applies provider overrides during unavailable-gateway local fallback", async () => {
+    const restoreDeps = commandSecretGatewayTesting.setDepsForTest({
+      collectConfigAssignments: ({ context }) => {
+        context.assignments.push({
+          path: "plugins.entries.google.config.webSearch.apiKey",
+        } as never);
+      },
+      resolveManifestContractOwnerPluginId: (params) =>
+        params.contract === "webSearchProviders" && params.value === "gemini"
+          ? "google"
+          : undefined,
+    });
+    const envKey = "WEB_SEARCH_GEMINI_OVERRIDE_LOCAL_FALLBACK";
+    await withEnvValue(envKey, "gemini-override-local-fallback-key", async () => {
+      try {
+        callGateway.mockRejectedValueOnce(new Error("gateway closed"));
+        const result = await resolveCommandSecretRefsViaGateway({
+          config: {
+            tools: {
+              web: {
+                search: {
+                  provider: "brave",
+                  apiKey: {
+                    source: "env",
+                    provider: "default",
+                    id: "WEB_SEARCH_BRAVE_MISSING_LOCAL_FALLBACK",
+                  },
+                },
+              },
+            },
+            plugins: {
+              entries: {
+                google: {
+                  config: {
+                    webSearch: {
+                      apiKey: { source: "env", provider: "default", id: envKey },
+                    },
+                  },
+                },
+              },
+            },
+          } as unknown as OpenClawConfig,
+          commandName: "infer web search",
+          targetIds: new Set([
+            "tools.web.search.apiKey",
+            "plugins.entries.google.config.webSearch.apiKey",
+          ]),
+          providerOverrides: { webSearch: "gemini" },
+        });
+
+        const googleWebSearchConfig = result.resolvedConfig.plugins?.entries?.google?.config as
+          | { webSearch?: { apiKey?: unknown } }
+          | undefined;
+        expect(result.resolvedConfig.tools?.web?.search?.provider).toBe("gemini");
+        expect(googleWebSearchConfig?.webSearch?.apiKey).toBe("gemini-override-local-fallback-key");
+        expect(result.targetStatesByPath["plugins.entries.google.config.webSearch.apiKey"]).toBe(
+          "resolved_local",
+        );
+        expect(result.targetStatesByPath["tools.web.search.apiKey"]).toBe("inactive_surface");
+        expectGatewayUnavailableLocalFallbackDiagnostics(result);
+      } finally {
+        restoreDeps();
+      }
+    });
+  });
+
   it("enforces unresolved checks only for allowed paths when provided", async () => {
     const restoreDeps = commandSecretGatewayTesting.setDepsForTest({
       analyzeCommandSecretAssignmentsFromSnapshot: () =>
@@ -425,6 +522,36 @@ describe("resolveCommandSecretRefsViaGateway", () => {
     });
   });
 
+  it("falls back to local resolution for legacy web fetch SecretRefs when gateway is unavailable", async () => {
+    const envKey = "WEB_FETCH_FIRECRAWL_LEGACY_LOCAL_FALLBACK";
+    await withEnvValue(envKey, "legacy-firecrawl-local-fallback-key", async () => {
+      callGateway.mockRejectedValueOnce(new Error("gateway closed"));
+      const result = await resolveCommandSecretRefsViaGateway({
+        config: {
+          tools: {
+            web: {
+              fetch: {
+                provider: "firecrawl",
+                firecrawl: {
+                  apiKey: { source: "env", provider: "default", id: envKey },
+                },
+              },
+            },
+          },
+        } as unknown as OpenClawConfig,
+        commandName: "infer web fetch",
+        targetIds: new Set(["tools.web.fetch.firecrawl.apiKey"]),
+      });
+
+      const resolvedFetch = result.resolvedConfig.tools?.web?.fetch as
+        | { firecrawl?: { apiKey?: unknown } }
+        | undefined;
+      expect(resolvedFetch?.firecrawl?.apiKey).toBe("legacy-firecrawl-local-fallback-key");
+      expect(result.targetStatesByPath["tools.web.fetch.firecrawl.apiKey"]).toBe("resolved_local");
+      expectGatewayUnavailableLocalFallbackDiagnostics(result);
+    });
+  });
+
   it("marks web SecretRefs inactive when the web surface is disabled during local fallback", async () => {
     const restoreDeps = commandSecretGatewayTesting.setDepsForTest({
       collectConfigAssignments: ({ context }) => {
@@ -467,6 +594,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
         } as OpenClawConfig,
         commandName: "agent",
         targetIds: new Set(["plugins.entries.google.config.webSearch.apiKey"]),
+        providerOverrides: { webSearch: "gemini" },
       });
 
       expect(result.hadUnresolvedTargets).toBe(false);

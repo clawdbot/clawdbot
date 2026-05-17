@@ -110,8 +110,9 @@ Open:
   `https://` dashboard URLs and `wss://` WebSocket URLs.
 - In identity-bearing modes such as Tailscale Serve or `trusted-proxy`, the
   WebSocket auth check is satisfied from request headers instead.
-- For non-loopback Control UI deployments, set `gateway.controlUi.allowedOrigins`
-  explicitly (full origins). Without it, gateway startup is refused by default.
+- For public non-loopback Control UI deployments, set `gateway.controlUi.allowedOrigins`
+  explicitly (full origins). Private same-origin LAN/Tailnet loads are accepted for loopback,
+  RFC1918/link-local, `.local`, `.ts.net`, and Tailscale CGNAT hosts.
 - `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true` enables
   Host-header origin fallback mode, but is a dangerous security downgrade.
 - With Serve, Tailscale identity headers can satisfy Control UI/WebSocket auth

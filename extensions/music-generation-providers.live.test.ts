@@ -30,8 +30,10 @@ import {
   resolveLiveMusicAuthStore,
 } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
+import falPlugin from "./fal/index.js";
 import googlePlugin from "./google/index.js";
 import minimaxPlugin from "./minimax/index.js";
+import openrouterPlugin from "./openrouter/index.js";
 import { maybeLoadShellEnvForGenerationProviders } from "./test-support/generation-live-test-helpers.js";
 
 const LIVE = isLiveTestEnabled();
@@ -50,6 +52,12 @@ type LiveProviderCase = {
 
 const CASES: LiveProviderCase[] = [
   {
+    plugin: falPlugin,
+    pluginId: "fal",
+    pluginName: "fal Provider",
+    providerId: "fal",
+  },
+  {
     plugin: googlePlugin,
     pluginId: "google",
     pluginName: "Google Provider",
@@ -60,6 +68,12 @@ const CASES: LiveProviderCase[] = [
     pluginId: "minimax",
     pluginName: "MiniMax Provider",
     providerId: "minimax",
+  },
+  {
+    plugin: openrouterPlugin,
+    pluginId: "openrouter",
+    pluginName: "OpenRouter Provider",
+    providerId: "openrouter",
   },
 ]
   .filter((entry) => (providerFilter ? providerFilter.has(entry.providerId) : true))
@@ -130,7 +144,7 @@ function resolveLiveLyrics(providerId: string): string | undefined {
 function resolveLiveMusicSkipReason(providerId: string, error: unknown): string | null {
   const message = error instanceof Error ? error.message : String(error);
   if (
-    providerId === "google" &&
+    (providerId === "google" || providerId === "openrouter") &&
     message.toLowerCase().includes("music generation response missing audio data")
   ) {
     return "transient no-audio response";

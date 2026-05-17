@@ -56,4 +56,19 @@ describe("normalizeExplicitSessionKey", () => {
       ),
     ).toBe("agent:fina:slack:dm:abc");
   });
+
+  it("preserves Signal group ids when explicit session keys are canonicalized", () => {
+    const mixedGroupId = "VWATodkf2hc8zdOS76q9Tb0+5Bi522E03qLdaQ/9ypg=";
+    expect(
+      normalizeExplicitSessionKey(
+        `Agent:Main:Signal:Group:${mixedGroupId}`,
+        makeCtx({
+          Provider: "signal",
+          ChatType: "group",
+          From: `signal:group:${mixedGroupId}`,
+          OriginatingTo: `signal:group:${mixedGroupId}`,
+        }),
+      ),
+    ).toBe(`agent:main:signal:group:${mixedGroupId}`);
+  });
 });

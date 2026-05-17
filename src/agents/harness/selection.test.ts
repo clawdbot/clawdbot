@@ -8,6 +8,8 @@ import type {
 import { clearAgentHarnesses, registerAgentHarness } from "./registry.js";
 import {
   maybeCompactAgentHarnessSession,
+  resolveAvailableAgentHarnessPolicy,
+  resolveAgentHarnessPolicy,
   runAgentHarnessAttempt,
   selectAgentHarness,
 } from "./selection.js";
@@ -201,6 +203,11 @@ describe("runAgentHarnessAttempt", () => {
   it("uses the Codex harness by default for OpenAI agent model runs", async () => {
     registerSuccessfulCodexHarness();
 
+    expect(resolveAgentHarnessPolicy({ provider: "openai", modelId: "gpt-5.4" })).toEqual({
+      runtime: "codex",
+      runtimeSource: "implicit",
+    });
+
     const result = await runAgentHarnessAttempt({
       ...createAttemptParams(),
       provider: "openai",
@@ -208,6 +215,26 @@ describe("runAgentHarnessAttempt", () => {
     });
     expect(result.sessionIdUsed).toBe("codex");
     expect(piRunAttempt).not.toHaveBeenCalled();
+  });
+
+  it("falls back to PI when the implicit OpenAI Codex harness is unavailable", async () => {
+    expect(resolveAgentHarnessPolicy({ provider: "openai", modelId: "gpt-5.4" })).toEqual({
+      runtime: "codex",
+      runtimeSource: "implicit",
+    });
+    expect(resolveAvailableAgentHarnessPolicy({ provider: "openai", modelId: "gpt-5.4" })).toEqual({
+      runtime: "pi",
+      runtimeSource: "implicit",
+    });
+
+    const result = await runAgentHarnessAttempt({
+      ...createAttemptParams(),
+      provider: "openai",
+      modelId: "gpt-5.4",
+    });
+
+    expect(result.sessionIdUsed).toBe("pi");
+    expect(piRunAttempt).toHaveBeenCalledTimes(1);
   });
 
   it("honors explicit PI runtime for OpenAI agent model runs", async () => {
@@ -366,6 +393,26 @@ describe("selectAgentHarness", () => {
     expect(supports).toHaveBeenCalledTimes(1);
   });
 
+  it("honors explicit PI runtime overrides when selecting a harness", async () => {
+    registerSuccessfulCodexHarness();
+
+    const harness = selectAgentHarness({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      agentHarnessRuntimeOverride: "pi",
+    });
+
+    expect(harness.id).toBe("pi");
+
+    const result = await runAgentHarnessAttempt({
+      ...createAttemptParams(),
+      provider: "openai",
+      modelId: "gpt-5.4",
+      agentHarnessRuntimeOverride: "pi",
+    });
+    expect(result.sessionIdUsed).toBe("pi");
+  });
+
   it("allows per-agent model runtime policy overrides", () => {
     const config = agentModelRuntimeConfig("anthropic/sonnet-4.6", "codex", "strict");
 
@@ -380,6 +427,10 @@ describe("selectAgentHarness", () => {
     expect(selectAgentHarness({ provider: "anthropic", modelId: "sonnet-4.6", config }).id).toBe(
       "pi",
     );
+  });
+
+  it("selects PI when the implicit OpenAI Codex harness is unavailable", () => {
+    expect(selectAgentHarness({ provider: "openai", modelId: "gpt-5.4" }).id).toBe("pi");
   });
 
   it("ignores legacy agentRuntime as a runtime policy source", () => {

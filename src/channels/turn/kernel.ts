@@ -3,6 +3,7 @@ import {
   clearHistoryEntriesIfEnabled,
   recordPendingHistoryEntryWithMedia,
 } from "../../auto-reply/reply/history.js";
+import { toHistoryMediaEntries } from "../inbound-event/media.js";
 import { createChannelReplyPipeline } from "../message/reply-pipeline.js";
 import type { CreateChannelReplyPipelineParams } from "../message/reply-pipeline.js";
 import { recordChannelBotPairLoopAndCheckSuppression } from "./bot-loop-protection.js";
@@ -12,9 +13,11 @@ import {
   isDurableInboundReplyDeliveryHandled,
   throwIfDurableInboundReplyDeliveryFailed,
 } from "./durable-delivery.js";
-import { toHistoryMediaEntries } from "./media.js";
-export { buildChannelTurnContext, filterChannelTurnSupplementalContext } from "./context.js";
-export type { BuildChannelTurnContextParams } from "./context.js";
+export {
+  buildChannelInboundEventContext,
+  filterChannelInboundSupplementalContext,
+} from "../inbound-event/context.js";
+export type { BuildChannelInboundEventContextParams } from "../inbound-event/context.js";
 export {
   clearChannelBotPairLoopGuardForTests,
   listTrackedChannelBotPairsForTests,
@@ -38,7 +41,7 @@ import type {
   AssembledChannelTurn,
   ChannelEventClass,
   ChannelTurnAdmission,
-  ChannelTurnDeliveryAdapter,
+  ChannelEventDeliveryAdapter,
   ChannelTurnHistoryFinalizeOptions,
   ChannelTurnLogEvent,
   ChannelTurnResolved,
@@ -67,7 +70,7 @@ export type {
   ChannelEventClass,
   ChannelTurnAdapter,
   ChannelTurnAdmission,
-  ChannelTurnDeliveryAdapter,
+  ChannelEventDeliveryAdapter,
   ChannelTurnDroppedHistoryOptions,
   ChannelTurnHistoryFinalizeOptions,
   ChannelTurnDispatcherOptions,
@@ -141,7 +144,7 @@ function emit(params: {
   });
 }
 
-export function createNoopChannelTurnDeliveryAdapter(): ChannelTurnDeliveryAdapter {
+export function createNoopChannelEventDeliveryAdapter(): ChannelEventDeliveryAdapter {
   return {
     deliver: async () => ({
       visibleReplySent: false,
@@ -632,7 +635,7 @@ export async function runChannelTurn<
       admission.kind === "observeOnly"
         ? {
             ...resolved,
-            delivery: createNoopChannelTurnDeliveryAdapter(),
+            delivery: createNoopChannelEventDeliveryAdapter(),
             admission,
             log: params.log,
             messageId: input.id,

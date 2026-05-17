@@ -91,11 +91,13 @@ type GatewayRestartIntentPayload = {
   kind: "gateway-restart";
   pid: number;
   createdAt: number;
+  reason?: string;
   force?: boolean;
   waitMs?: number;
 };
 
 export type GatewayRestartIntent = {
+  reason?: string;
   force?: boolean;
   waitMs?: number;
 };
@@ -125,6 +127,7 @@ export function writeGatewayRestartIntentSync(opts: {
   env?: NodeJS.ProcessEnv;
   targetPid?: number;
   intent?: GatewayRestartIntent;
+  reason?: string;
 }): boolean {
   const targetPid = normalizeRestartIntentPid(opts.targetPid);
   if (targetPid === null) {
@@ -133,10 +136,12 @@ export function writeGatewayRestartIntentSync(opts: {
   const env = opts.env ?? process.env;
   try {
     const intentPath = resolveGatewayRestartIntentPath(env);
+    const reason = normalizeRestartIntentReason(opts.reason ?? opts.intent?.reason);
     const payload: GatewayRestartIntentPayload = {
       kind: "gateway-restart",
       pid: targetPid,
       createdAt: Date.now(),
+      ...(reason ? { reason } : {}),
       ...(opts.intent?.force ? { force: true } : {}),
       ...(typeof opts.intent?.waitMs === "number" &&
       Number.isFinite(opts.intent.waitMs) &&
@@ -170,14 +175,17 @@ function parseGatewayRestartIntent(raw: string): GatewayRestartIntentPayload | n
       Number.isFinite(parsed.pid) &&
       typeof parsed.createdAt === "number" &&
       Number.isFinite(parsed.createdAt) &&
+      (parsed.reason === undefined || typeof parsed.reason === "string") &&
       (parsed.force === undefined || typeof parsed.force === "boolean") &&
       (parsed.waitMs === undefined ||
         (typeof parsed.waitMs === "number" && Number.isFinite(parsed.waitMs) && parsed.waitMs >= 0))
     ) {
+      const reason = normalizeRestartIntentReason(parsed.reason);
       return {
         kind: "gateway-restart",
         pid: parsed.pid,
         createdAt: parsed.createdAt,
+        ...(reason ? { reason } : {}),
         ...(parsed.force ? { force: true } : {}),
         ...(typeof parsed.waitMs === "number" ? { waitMs: Math.floor(parsed.waitMs) } : {}),
       };
@@ -186,6 +194,11 @@ function parseGatewayRestartIntent(raw: string): GatewayRestartIntentPayload | n
     return null;
   }
   return null;
+}
+
+function normalizeRestartIntentReason(reason: string | undefined): string | undefined {
+  const normalized = reason?.trim();
+  return normalized ? normalized.slice(0, 200) : undefined;
 }
 
 export function consumeGatewayRestartIntentPayloadSync(
@@ -217,6 +230,7 @@ export function consumeGatewayRestartIntentPayloadSync(
     return null;
   }
   return {
+    ...(payload.reason ? { reason: payload.reason } : {}),
     ...(payload.force ? { force: true } : {}),
     ...(typeof payload.waitMs === "number" ? { waitMs: payload.waitMs } : {}),
   };

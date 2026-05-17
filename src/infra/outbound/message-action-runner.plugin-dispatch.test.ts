@@ -215,7 +215,7 @@ async function executePluginAction(params: {
     | "accountId"
     | "gateway"
     | "toolContext"
-    | "inboundTurnKind"
+    | "inboundEventKind"
   > & {
     dryRun: boolean;
     agentId?: string;
@@ -235,7 +235,7 @@ async function executePluginAction(params: {
     accountId: params.ctx.accountId ?? undefined,
     gateway: params.ctx.gateway,
     toolContext: params.ctx.toolContext,
-    inboundTurnKind: params.ctx.inboundTurnKind,
+    inboundEventKind: params.ctx.inboundEventKind,
     dryRun: params.ctx.dryRun,
     agentId: params.ctx.agentId,
   });
@@ -393,7 +393,7 @@ describe("runMessageAction plugin dispatch", () => {
         sessionKey: "agent:alpha:main",
         sessionId: "session-123",
         agentId: "alpha",
-        inboundTurnKind: "room_event",
+        inboundEventKind: "room_event",
         toolContext: {
           currentChannelId: "oc_123",
           currentChannelProvider: "actionhub",
@@ -412,7 +412,7 @@ describe("runMessageAction plugin dispatch", () => {
           requesterSenderId: "trusted-user",
           sessionKey: "agent:alpha:main",
           sessionId: "session-123",
-          inboundTurnKind: "room_event",
+          inboundEventKind: "room_event",
           agentId: "alpha",
         },
         "plugin action call",

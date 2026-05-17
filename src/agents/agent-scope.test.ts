@@ -3,7 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import type { SessionEntry } from "../config/sessions.js";
 import {
+  clearAutoFallbackPrimaryProbeSelection,
+  markAutoFallbackPrimaryProbe,
   hasConfiguredModelFallbacks,
   resolveAgentConfig,
   resolveDefaultAgentDir,
@@ -19,6 +22,7 @@ import {
   resolveSubagentModelConfigSelection,
   resolveSubagentModelFallbacksOverride,
   resolveAgentWorkspaceDir,
+  resolveAutoFallbackPrimaryProbe,
   resolveAgentIdByWorkspacePath,
   resolveAgentIdsByWorkspacePath,
   setAgentEffectiveModelPrimary,
@@ -480,6 +484,276 @@ describe("resolveAgentConfig", () => {
         sessionKey: "agent:support:session",
       }),
     ).toEqual(["openai/gpt-5.4"]);
+  });
+
+  it("resolves throttled primary probes for auto fallback selections", () => {
+    const probeState = new Map<string, number>();
+    const entry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: 1,
+      providerOverride: "google",
+      modelOverride: "gemini-3-pro",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "anthropic",
+      modelOverrideFallbackOriginModel: "claude-sonnet-4-6",
+      authProfileOverride: "google:fallback",
+      authProfileOverrideSource: "auto",
+    };
+
+    expect(
+      resolveAutoFallbackPrimaryProbe({
+        entry,
+        sessionKey: "agent:main:session",
+        primaryProvider: "anthropic",
+        primaryModel: "claude-sonnet-4-6",
+        now: 1_000,
+        minIntervalMs: 60_000,
+        probeState,
+      }),
+    ).toMatchObject({
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      fallbackAuthProfileId: "google:fallback",
+      fallbackAuthProfileIdSource: "auto",
+    });
+    markAutoFallbackPrimaryProbe({
+      probe: {
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        fallbackProvider: "google",
+        fallbackModel: "gemini-3-pro",
+      },
+      sessionKey: "agent:main:session",
+      now: 1_000,
+      probeState,
+    });
+    expect(
+      resolveAutoFallbackPrimaryProbe({
+        entry,
+        sessionKey: "agent:main:session",
+        primaryProvider: "anthropic",
+        primaryModel: "claude-sonnet-4-6",
+        now: 30_000,
+        minIntervalMs: 60_000,
+        probeState,
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveAutoFallbackPrimaryProbe({
+        entry: {
+          ...entry,
+          providerOverride: "openai",
+          modelOverride: "gpt-5.4",
+        },
+        sessionKey: "agent:main:session",
+        primaryProvider: "anthropic",
+        primaryModel: "claude-sonnet-4-6",
+        now: 30_000,
+        minIntervalMs: 60_000,
+        probeState,
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveAutoFallbackPrimaryProbe({
+        entry,
+        sessionKey: "agent:main:session",
+        primaryProvider: "anthropic",
+        primaryModel: "claude-sonnet-4-6",
+        now: 70_000,
+        minIntervalMs: 60_000,
+        probeState,
+      }),
+    ).toMatchObject({ provider: "anthropic", model: "claude-sonnet-4-6" });
+  });
+
+  it("prunes stale and excess primary probe throttle entries", () => {
+    const probeState = new Map<string, number>();
+    const probe = {
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      fallbackProvider: "google",
+      fallbackModel: "gemini-3-pro",
+    };
+    markAutoFallbackPrimaryProbe({
+      probe,
+      sessionKey: "old",
+      now: 1_000,
+      minIntervalMs: 100,
+      maxTrackedProbeKeys: 3,
+      probeState,
+    });
+    for (let index = 0; index < 4; index += 1) {
+      markAutoFallbackPrimaryProbe({
+        probe,
+        sessionKey: `new-${index}`,
+        now: 2_000 + index,
+        minIntervalMs: 100,
+        maxTrackedProbeKeys: 3,
+        probeState,
+      });
+    }
+
+    expect(probeState.size).toBe(3);
+    expect(
+      resolveAutoFallbackPrimaryProbe({
+        entry: {
+          providerOverride: "google",
+          modelOverride: "gemini-3-pro",
+          modelOverrideSource: "auto",
+          modelOverrideFallbackOriginProvider: "anthropic",
+          modelOverrideFallbackOriginModel: "claude-sonnet-4-6",
+        },
+        sessionKey: "old",
+        primaryProvider: "anthropic",
+        primaryModel: "claude-sonnet-4-6",
+        now: 2_004,
+        minIntervalMs: 100,
+        maxTrackedProbeKeys: 3,
+        probeState,
+      }),
+    ).toMatchObject({ provider: "anthropic", model: "claude-sonnet-4-6" });
+  });
+
+  it("skips primary probes for strict or stale fallback selections", () => {
+    const baseEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: 1,
+      providerOverride: "google",
+      modelOverride: "gemini-3-pro",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "anthropic",
+      modelOverrideFallbackOriginModel: "claude-sonnet-4-6",
+    };
+
+    expect(
+      resolveAutoFallbackPrimaryProbe({
+        entry: { ...baseEntry, modelOverrideSource: "user" },
+        primaryProvider: "anthropic",
+        primaryModel: "claude-sonnet-4-6",
+        probeState: new Map(),
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveAutoFallbackPrimaryProbe({
+        entry: baseEntry,
+        primaryProvider: "openai",
+        primaryModel: "gpt-5.4",
+        probeState: new Map(),
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveAutoFallbackPrimaryProbe({
+        entry: {
+          ...baseEntry,
+          providerOverride: "anthropic",
+          modelOverride: "claude-sonnet-4-6",
+        },
+        primaryProvider: "anthropic",
+        primaryModel: "claude-sonnet-4-6",
+        probeState: new Map(),
+      }),
+    ).toBeUndefined();
+  });
+
+  it("recognizes recovered auto fallback provenance without a source marker", () => {
+    expect(
+      resolveAutoFallbackPrimaryProbe({
+        entry: {
+          providerOverride: "google",
+          modelOverride: "gemini-3-pro",
+          modelOverrideFallbackOriginProvider: "anthropic",
+          modelOverrideFallbackOriginModel: "claude-sonnet-4-6",
+        },
+        primaryProvider: "anthropic",
+        primaryModel: "claude-sonnet-4-6",
+        probeState: new Map(),
+      }),
+    ).toMatchObject({ provider: "anthropic", model: "claude-sonnet-4-6" });
+  });
+
+  it("preserves legacy auto auth provenance on primary probes", () => {
+    expect(
+      resolveAutoFallbackPrimaryProbe({
+        entry: {
+          providerOverride: "google",
+          modelOverride: "gemini-3-pro",
+          modelOverrideSource: "auto",
+          modelOverrideFallbackOriginProvider: "anthropic",
+          modelOverrideFallbackOriginModel: "claude-sonnet-4-6",
+          authProfileOverride: "fallback-key",
+          authProfileOverrideCompactionCount: 1,
+        },
+        primaryProvider: "anthropic",
+        primaryModel: "claude-sonnet-4-6",
+        probeState: new Map(),
+      }),
+    ).toMatchObject({
+      fallbackAuthProfileId: "fallback-key",
+      fallbackAuthProfileIdSource: "auto",
+    });
+  });
+
+  it("clears only auto-owned fallback selection state for a primary probe", () => {
+    const entry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: 1,
+      providerOverride: "google",
+      modelOverride: "gemini-3-pro",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "anthropic",
+      modelOverrideFallbackOriginModel: "claude-sonnet-4-6",
+      authProfileOverride: "fallback-key",
+      authProfileOverrideSource: "auto",
+      authProfileOverrideCompactionCount: 1,
+      fallbackNoticeSelectedModel: "google/gemini-3-pro",
+      fallbackNoticeActiveModel: "google/gemini-3-pro",
+      fallbackNoticeReason: "rate_limit",
+    };
+
+    clearAutoFallbackPrimaryProbeSelection(entry, 2);
+
+    expect(entry).toEqual({ sessionId: "session", updatedAt: 2 });
+  });
+
+  it("clears legacy auto auth selection when clearing primary probe state", () => {
+    const entry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: 1,
+      providerOverride: "google",
+      modelOverride: "gemini-3-pro",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "anthropic",
+      modelOverrideFallbackOriginModel: "claude-sonnet-4-6",
+      authProfileOverride: "fallback-key",
+      authProfileOverrideCompactionCount: 1,
+    };
+
+    clearAutoFallbackPrimaryProbeSelection(entry, 2);
+
+    expect(entry).toEqual({ sessionId: "session", updatedAt: 2 });
+  });
+
+  it("preserves user-owned auth selection when clearing primary probe state", () => {
+    const entry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: 1,
+      providerOverride: "google",
+      modelOverride: "gemini-3-pro",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "anthropic",
+      modelOverrideFallbackOriginModel: "claude-sonnet-4-6",
+      authProfileOverride: "selected-key",
+      authProfileOverrideSource: "user",
+    };
+
+    clearAutoFallbackPrimaryProbeSelection(entry, 2);
+
+    expect(entry).toEqual({
+      sessionId: "session",
+      updatedAt: 2,
+      authProfileOverride: "selected-key",
+      authProfileOverrideSource: "user",
+    });
   });
 
   it("computes whether any model fallbacks are configured via shared helper", () => {

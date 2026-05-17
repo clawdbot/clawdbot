@@ -1003,14 +1003,14 @@ Unit tests:
 Integration tests:
 
 - `channel.turn.run` simple adapter still records and sends.
-- Legacy assembled-turn delivery does not become durable unless the channel
+- Legacy assembled-event delivery does not become durable unless the channel
   explicitly opts in.
 - `channel.turn.runPrepared` bridge still records and finalizes.
 - Public compatibility helpers call caller-owned delivery callbacks by default
   and do not generic-send before those callbacks.
 - Durable fallback delivery replays the whole projected payload array after
   restart and cannot leave the later payloads unrecorded after an early crash.
-- Durable assembled-turn delivery returns platform message ids to the buffered
+- Durable assembled-event delivery returns platform message ids to the buffered
   dispatcher.
 - Custom delivery hooks still return platform message ids when durable delivery
   is disabled or unavailable.

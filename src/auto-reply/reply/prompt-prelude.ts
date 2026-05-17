@@ -1,5 +1,5 @@
-import type { CurrentTurnPromptContext } from "../../agents/pi-embedded-runner/run/params.js";
-import type { InboundTurnKind } from "../../channels/turn/kind.js";
+import type { CurrentInboundPromptContext } from "../../agents/pi-embedded-runner/run/params.js";
+import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../heartbeat.js";
@@ -20,7 +20,7 @@ export function buildReplyPromptBodies(params: {
   transcriptBody?: string;
   threadContextNote?: string;
   systemEventBlocks?: string[];
-  turnKind?: InboundTurnKind;
+  inboundEventKind?: InboundEventKind;
 }): {
   mediaNote?: string;
   mediaReplyHint?: string;
@@ -50,7 +50,7 @@ export function buildReplyPromptBodies(params: {
     ? [mediaNote, mediaReplyHint, prefixedBody].filter(Boolean).join("\n").trim()
     : prefixedBody;
   const transcriptBody = params.transcriptBody ?? params.effectiveBaseBody;
-  const includeMediaOnlyTranscript = mediaNote && params.turnKind !== "room_event";
+  const includeMediaOnlyTranscript = mediaNote && params.inboundEventKind !== "room_event";
   const transcriptCommandBodyRaw = transcriptBody
     ? mediaNote
       ? [mediaNote, transcriptBody].filter(Boolean).join("\n").trim()
@@ -81,7 +81,7 @@ export type ReplyPromptEnvelope = ReturnType<typeof buildReplyPromptBodies> & {
   /** User-visible body persisted to transcript before media/inter-session annotation. */
   transcriptBody: string;
   /** Runtime-only user context for backends that can carry it outside transcript text. */
-  currentTurnContext?: CurrentTurnPromptContext;
+  currentInboundContext?: CurrentInboundPromptContext;
 };
 
 export type ReplyPromptEnvelopeBase = {
@@ -90,7 +90,7 @@ export type ReplyPromptEnvelopeBase = {
   /** User-visible body persisted to transcript before media/inter-session annotation. */
   transcriptBody: string;
   /** Runtime-only user context for backends that can carry it outside transcript text. */
-  currentTurnContext?: CurrentTurnPromptContext;
+  currentInboundContext?: CurrentInboundPromptContext;
 };
 
 type ReplyPromptEnvelopeBaseParams = {
@@ -99,13 +99,13 @@ type ReplyPromptEnvelopeBaseParams = {
   baseBody: string;
   hasUserBody: boolean;
   inboundUserContext: string;
-  inboundUserContextPromptJoiner?: CurrentTurnPromptContext["promptJoiner"];
+  inboundUserContextPromptJoiner?: CurrentInboundPromptContext["promptJoiner"];
   isBareSessionReset: boolean;
   startupAction: ReplyPromptEnvelopeStartupAction;
   startupContextPrelude?: string | null;
   softResetTail?: string;
   isHeartbeat?: boolean;
-  turnKind?: InboundTurnKind;
+  inboundEventKind?: InboundEventKind;
 };
 
 function formatRoomEventLine(ctx: TemplateContext, body: string): string {
@@ -135,8 +135,8 @@ function resolveRoomEventBody(params: ReplyPromptEnvelopeBaseParams): string {
 function buildRoomEventContext(params: ReplyPromptEnvelopeBaseParams): string {
   const roomEventBody = resolveRoomEventBody(params);
   return [
-    "[OpenClaw turn]",
-    "kind: room_event",
+    "[OpenClaw room event]",
+    "inbound_event_kind: room_event",
     `visible_reply_contract: ${ROOM_EVENT_VISIBLE_REPLY_CONTRACT}`,
     params.inboundUserContext.trim() ? `Room context:\n${params.inboundUserContext.trim()}` : "",
     `Current event:\n${formatRoomEventLine(params.sessionCtx, roomEventBody)}`,
@@ -150,9 +150,11 @@ export function buildReplyPromptEnvelopeBase(
   params: ReplyPromptEnvelopeBaseParams,
 ): ReplyPromptEnvelopeBase {
   const softResetTail = params.softResetTail?.trim() ?? "";
-  const isRoomEvent = params.turnKind === "room_event";
+  const isRoomEvent = params.inboundEventKind === "room_event";
   const roomEventContext = buildRoomEventContext(params);
-  const currentTurnContextText = isRoomEvent ? roomEventContext : params.inboundUserContext.trim();
+  const currentInboundContextText = isRoomEvent
+    ? roomEventContext
+    : params.inboundUserContext.trim();
   const resetModelBody = params.isBareSessionReset
     ? [
         params.inboundUserContext,
@@ -179,10 +181,10 @@ export function buildReplyPromptEnvelopeBase(
         : params.hasUserBody
           ? params.baseBody
           : "[User sent media without caption]";
-  const currentTurnContext: CurrentTurnPromptContext | undefined =
-    !params.isBareSessionReset && currentTurnContextText
+  const currentInboundContext: CurrentInboundPromptContext | undefined =
+    !params.isBareSessionReset && currentInboundContextText
       ? {
-          text: currentTurnContextText,
+          text: currentInboundContextText,
           promptJoiner: params.inboundUserContextPromptJoiner,
         }
       : undefined;
@@ -190,7 +192,7 @@ export function buildReplyPromptEnvelopeBase(
   return {
     effectiveBaseBody,
     transcriptBody,
-    currentTurnContext,
+    currentInboundContext,
   };
 }
 
@@ -211,7 +213,7 @@ export function buildReplyPromptEnvelope(
     transcriptBody: base.transcriptBody,
     threadContextNote: params.threadContextNote,
     systemEventBlocks: params.systemEventBlocks,
-    turnKind: params.turnKind,
+    inboundEventKind: params.inboundEventKind,
   });
 
   return {

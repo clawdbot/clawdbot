@@ -25,10 +25,14 @@ export function resolveAwsSdkEnvVarName(env: NodeJS.ProcessEnv = process.env): s
   return undefined;
 }
 
+export function formatMissingAuthError(auth: ResolvedProviderAuth, provider: string): string {
+  return `No API key resolved for provider "${provider}" (auth mode: ${auth.mode}, checked: ${auth.source}).`;
+}
+
 export function requireApiKey(auth: ResolvedProviderAuth, provider: string): string {
   const key = normalizeSecretInput(auth.apiKey);
   if (key) {
     return key;
   }
-  throw new Error(`No API key resolved for provider "${provider}" (auth mode: ${auth.mode}).`);
+  throw new Error(formatMissingAuthError(auth, provider));
 }

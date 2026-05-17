@@ -409,6 +409,38 @@ describe("applyPatch", () => {
     });
   });
 
+  it("rejects move targets whose parent path is a symlink outside cwd", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    await withTempDir(async (dir) => {
+      const outsideDir = await fs.mkdtemp(path.join(path.dirname(dir), "openclaw-patch-outside-"));
+      try {
+        const sourcePath = path.join(dir, "source.txt");
+        const outsideTarget = path.join(outsideDir, "moved.txt");
+        const linkDir = path.join(dir, "link");
+        await fs.writeFile(sourcePath, "before\n", "utf8");
+        await fs.symlink(outsideDir, linkDir);
+
+        const patch = `*** Begin Patch
+*** Update File: source.txt
+*** Move to: link/moved.txt
+@@
+-before
++after
+*** End Patch`;
+
+        await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(
+          /path alias under sandbox root|symlink escapes sandbox root/i,
+        );
+        await expect(fs.readFile(sourcePath, "utf8")).resolves.toBe("before\n");
+        await expectMissingPath(fs.readFile(outsideTarget, "utf8"));
+      } finally {
+        await fs.rm(outsideDir, { recursive: true, force: true });
+      }
+    });
+  });
+
   it.runIf(process.platform !== "win32")(
     "does not delete out-of-root files when a checked directory is rebound before remove",
     async () => {

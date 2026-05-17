@@ -5,6 +5,7 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/
 import { validateSecretsResolveResult } from "../gateway/protocol/index.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveManifestContractOwnerPluginId } from "../plugins/plugin-registry.js";
+import { resolveBundledExplicitWebSearchProvidersFromPublicArtifacts } from "../plugins/web-provider-public-artifacts.explicit.js";
 import {
   analyzeCommandSecretAssignmentsFromSnapshot,
   type UnresolvedCommandSecretAssignment,
@@ -19,7 +20,10 @@ import {
   discoverConfigSecretTargetsByIds,
   type DiscoveredConfigSecretTarget,
 } from "../secrets/target-registry.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 
 type ResolveCommandSecretsResult = {
   resolvedConfig: OpenClawConfig;
@@ -56,8 +60,16 @@ type GatewaySecretsResolveResult = {
   inactiveRefPaths?: string[];
 };
 
-const WEB_RUNTIME_SECRET_TARGET_ID_PREFIXES = ["tools.web.search", "plugins.entries."] as const;
-const WEB_RUNTIME_SECRET_PATH_PREFIXES = ["tools.web.search.", "plugins.entries."] as const;
+const WEB_RUNTIME_SECRET_TARGET_ID_PREFIXES = [
+  "tools.web.search",
+  "tools.web.fetch",
+  "plugins.entries.",
+] as const;
+const WEB_RUNTIME_SECRET_PATH_PREFIXES = [
+  "tools.web.search.",
+  "tools.web.fetch.",
+  "plugins.entries.",
+] as const;
 
 type CommandSecretGatewayDeps = {
   analyzeCommandSecretAssignmentsFromSnapshot: typeof analyzeCommandSecretAssignmentsFromSnapshot;
@@ -65,6 +77,11 @@ type CommandSecretGatewayDeps = {
   discoverConfigSecretTargetsByIds: typeof discoverConfigSecretTargetsByIds;
   resolveManifestContractOwnerPluginId: typeof resolveManifestContractOwnerPluginId;
   resolveRuntimeWebTools: typeof resolveRuntimeWebTools;
+};
+
+export type CommandSecretsProviderOverrides = {
+  webSearch?: string;
+  webFetch?: string;
 };
 
 const commandSecretGatewayDeps: CommandSecretGatewayDeps = {
@@ -97,6 +114,115 @@ export const __testing = {
 function pluginIdFromRuntimeWebPath(path: string): string | undefined {
   const match = /^plugins\.entries\.([^.]+)\.config\.(webSearch|webFetch)\.apiKey$/.exec(path);
   return match?.[1];
+}
+
+function applyProviderOverridesToConfig(
+  config: OpenClawConfig,
+  overrides: CommandSecretsProviderOverrides | undefined,
+): OpenClawConfig {
+  if (
+    !normalizeOptionalString(overrides?.webSearch) &&
+    !normalizeOptionalString(overrides?.webFetch)
+  ) {
+    return config;
+  }
+  const next = structuredClone(config);
+  const tools = (next.tools ??= {}) as Record<string, unknown>;
+  const web = (tools.web ??= {}) as Record<string, unknown>;
+  const webSearch = normalizeOptionalString(overrides?.webSearch);
+  if (webSearch) {
+    const search = (web.search ??= {}) as Record<string, unknown>;
+    search.provider = webSearch;
+  }
+  const webFetch = normalizeOptionalString(overrides?.webFetch);
+  if (webFetch) {
+    const fetch = (web.fetch ??= {}) as Record<string, unknown>;
+    fetch.provider = webFetch;
+  }
+  return next;
+}
+
+function webSearchProviderUsesSharedSearchCredential(params: {
+  config: OpenClawConfig;
+  provider: string;
+}): boolean {
+  const sentinel = "__openclaw_shared_web_search_probe__";
+  const pluginId = commandSecretGatewayDeps.resolveManifestContractOwnerPluginId({
+    contract: "webSearchProviders",
+    value: params.provider,
+    origin: "bundled",
+    config: params.config,
+  });
+  if (!pluginId) {
+    return false;
+  }
+  const providers = resolveBundledExplicitWebSearchProvidersFromPublicArtifacts({
+    onlyPluginIds: [pluginId],
+  });
+  const provider = providers?.find((entry) => entry.id === params.provider);
+  return (
+    provider?.credentialPath === "tools.web.search.apiKey" ||
+    provider?.getCredentialValue({ apiKey: sentinel }) === sentinel ||
+    provider?.getConfiguredCredentialFallback?.(params.config)?.path === "tools.web.search.apiKey"
+  );
+}
+
+function isProviderOverridePath(params: {
+  config: OpenClawConfig;
+  path: string;
+  providerOverrides: CommandSecretsProviderOverrides | undefined;
+}): boolean {
+  const webSearch = normalizeOptionalString(params.providerOverrides?.webSearch);
+  if (webSearch) {
+    if (params.config.tools?.web?.search?.enabled === false) {
+      return false;
+    }
+    if (params.path === "tools.web.search.apiKey") {
+      return webSearchProviderUsesSharedSearchCredential({
+        config: params.config,
+        provider: webSearch,
+      });
+    }
+    const directSearchProvider = /^tools\.web\.search\.([^.]+)\.apiKey$/.exec(params.path)?.[1];
+    if (directSearchProvider) {
+      return directSearchProvider === webSearch;
+    }
+    const pluginId = pluginIdFromRuntimeWebPath(params.path);
+    if (pluginId && params.path.endsWith(".config.webSearch.apiKey")) {
+      return (
+        commandSecretGatewayDeps.resolveManifestContractOwnerPluginId({
+          contract: "webSearchProviders",
+          value: webSearch,
+          origin: "bundled",
+          config: params.config,
+        }) === pluginId
+      );
+    }
+  }
+
+  const webFetch = normalizeOptionalString(params.providerOverrides?.webFetch);
+  if (webFetch) {
+    if (params.config.tools?.web?.fetch?.enabled === false) {
+      return false;
+    }
+    const directFetchProvider = /^tools\.web\.fetch\.([^.]+)\.apiKey$/.exec(params.path)?.[1];
+    if (directFetchProvider) {
+      return directFetchProvider === webFetch;
+    }
+    const pluginId = pluginIdFromRuntimeWebPath(params.path);
+    if (pluginId && params.path.endsWith(".config.webFetch.apiKey")) {
+      return (
+        commandSecretGatewayDeps.resolveManifestContractOwnerPluginId({
+          contract: "webFetchProviders",
+          value: webFetch,
+          origin: "bundled",
+          config: params.config,
+        }) === pluginId
+      );
+    }
+  }
+
+  return false;
 }
 
 function normalizeCommandSecretResolutionMode(
@@ -136,7 +262,22 @@ function targetsRuntimeWebPath(path: string): boolean {
 function classifyRuntimeWebTargetPathState(params: {
   config: OpenClawConfig;
   path: string;
+  providerOverrides?: CommandSecretsProviderOverrides;
 }): "active" | "inactive" | "unknown" {
+  if (
+    (normalizeOptionalString(params.providerOverrides?.webSearch) ||
+      normalizeOptionalString(params.providerOverrides?.webFetch)) &&
+    isDirectRuntimeWebTargetPath(params.path)
+  ) {
+    return isProviderOverridePath({
+      config: params.config,
+      path: params.path,
+      providerOverrides: params.providerOverrides,
+    })
+      ? "active"
+      : "inactive";
+  }
+
   if (params.path === "tools.web.search.apiKey") {
     return params.config.tools?.web?.search?.enabled !== false ? "active" : "inactive";
   }
@@ -179,28 +320,74 @@ function classifyRuntimeWebTargetPathState(params: {
       : "inactive";
   }
 
-  const match = /^tools\.web\.search\.([^.]+)\.apiKey$/.exec(params.path);
-  if (!match) {
+  const directSearchMatch = /^tools\.web\.search\.([^.]+)\.apiKey$/.exec(params.path);
+  if (directSearchMatch) {
+    const search = params.config.tools?.web?.search;
+    if (search?.enabled === false) {
+      return "inactive";
+    }
+
+    const configuredProvider = normalizeLowercaseStringOrEmpty(search?.provider);
+    if (!configuredProvider) {
+      return "active";
+    }
+
+    return configuredProvider === directSearchMatch[1] ? "active" : "inactive";
+  }
+
+  const directFetchMatch = /^tools\.web\.fetch\.([^.]+)\.apiKey$/.exec(params.path);
+  if (!directFetchMatch) {
     return "unknown";
   }
 
-  const search = params.config.tools?.web?.search;
-  if (search?.enabled === false) {
+  const fetch = params.config.tools?.web?.fetch;
+  if (fetch?.enabled === false) {
     return "inactive";
   }
 
-  const configuredProvider = normalizeLowercaseStringOrEmpty(search?.provider);
+  const configuredProvider = normalizeLowercaseStringOrEmpty(fetch?.provider);
   if (!configuredProvider) {
     return "active";
   }
 
-  return configuredProvider === match[1] ? "active" : "inactive";
+  return configuredProvider === directFetchMatch[1] ? "active" : "inactive";
 }
 
 function describeInactiveRuntimeWebTargetPath(params: {
   config: OpenClawConfig;
   path: string;
+  providerOverrides?: CommandSecretsProviderOverrides;
 }): string | undefined {
+  if (
+    params.config.tools?.web?.search?.enabled === false &&
+    (params.path === "tools.web.search.apiKey" ||
+      params.path.startsWith("tools.web.search.") ||
+      params.path.includes(".webSearch."))
+  ) {
+    return "tools.web.search is disabled.";
+  }
+  if (
+    params.config.tools?.web?.fetch?.enabled === false &&
+    (params.path.startsWith("tools.web.fetch.") || params.path.includes(".webFetch."))
+  ) {
+    return "tools.web.fetch is disabled.";
+  }
+
+  const webSearchOverride = normalizeOptionalString(params.providerOverrides?.webSearch);
+  if (webSearchOverride && params.path.includes(".webSearch.")) {
+    return `tools.web.search.provider is "${webSearchOverride}".`;
+  }
+  if (webSearchOverride && params.path.startsWith("tools.web.search.")) {
+    return `tools.web.search.provider is "${webSearchOverride}".`;
+  }
+  const webFetchOverride = normalizeOptionalString(params.providerOverrides?.webFetch);
+  if (webFetchOverride && params.path.includes(".webFetch.")) {
+    return `tools.web.fetch.provider is "${webFetchOverride}".`;
+  }
+  if (webFetchOverride && params.path.startsWith("tools.web.fetch.")) {
+    return `tools.web.fetch.provider is "${webFetchOverride}".`;
+  }
+
   if (params.path === "tools.web.search.apiKey") {
     return params.config.tools?.web?.search?.enabled === false
       ? "tools.web.search is disabled."
@@ -239,19 +426,34 @@ function describeInactiveRuntimeWebTargetPath(params: {
     return undefined;
   }
 
-  const match = /^tools\.web\.search\.([^.]+)\.apiKey$/.exec(params.path);
-  if (!match) {
+  const directSearchMatch = /^tools\.web\.search\.([^.]+)\.apiKey$/.exec(params.path);
+  if (directSearchMatch) {
+    const search = params.config.tools?.web?.search;
+    if (search?.enabled === false) {
+      return "tools.web.search is disabled.";
+    }
+
+    const configuredProvider = normalizeLowercaseStringOrEmpty(search?.provider);
+    if (configuredProvider && configuredProvider !== directSearchMatch[1]) {
+      return `tools.web.search.provider is "${configuredProvider}".`;
+    }
+
     return undefined;
   }
 
-  const search = params.config.tools?.web?.search;
-  if (search?.enabled === false) {
-    return "tools.web.search is disabled.";
+  const directFetchMatch = /^tools\.web\.fetch\.([^.]+)\.apiKey$/.exec(params.path);
+  if (!directFetchMatch) {
+    return undefined;
   }
 
-  const configuredProvider = normalizeLowercaseStringOrEmpty(search?.provider);
-  if (configuredProvider && configuredProvider !== match[1]) {
-    return `tools.web.search.provider is "${configuredProvider}".`;
+  const fetch = params.config.tools?.web?.fetch;
+  if (fetch?.enabled === false) {
+    return "tools.web.fetch is disabled.";
+  }
+
+  const configuredProvider = normalizeLowercaseStringOrEmpty(fetch?.provider);
+  if (configuredProvider && configuredProvider !== directFetchMatch[1]) {
+    return `tools.web.fetch.provider is "${configuredProvider}".`;
   }
 
   return undefined;
@@ -407,8 +609,9 @@ function isUnsupportedSecretsResolveError(err: unknown): boolean {
 
 function isDirectRuntimeWebTargetPath(path: string): boolean {
   return (
+    path === "tools.web.search.apiKey" ||
     /^plugins\.entries\.[^.]+\.config\.(webSearch|webFetch)\.apiKey$/.test(path) ||
-    /^tools\.web\.search\.[^.]+\.apiKey$/.test(path)
+    /^tools\.web\.(search|fetch)\.[^.]+\.apiKey$/.test(path)
   );
 }
 
@@ -419,9 +622,10 @@ async function resolveCommandSecretRefsLocally(params: {
   preflightDiagnostics: string[];
   mode: CommandSecretResolutionMode;
   allowedPaths?: ReadonlySet<string>;
+  providerOverrides?: CommandSecretsProviderOverrides;
 }): Promise<ResolveCommandSecretsResult> {
-  const sourceConfig = params.config;
-  const resolvedConfig = structuredClone(params.config);
+  const sourceConfig = applyProviderOverridesToConfig(params.config, params.providerOverrides);
+  const resolvedConfig = structuredClone(sourceConfig);
   const context = createResolverContext({
     sourceConfig,
     env: process.env,
@@ -434,7 +638,7 @@ async function resolveCommandSecretRefsLocally(params: {
     targetsRuntimeWebPath(target.path),
   );
   commandSecretGatewayDeps.collectConfigAssignments({
-    config: structuredClone(params.config),
+    config: structuredClone(sourceConfig),
     context,
   });
   if (
@@ -471,12 +675,14 @@ async function resolveCommandSecretRefsLocally(params: {
     const runtimeState = classifyRuntimeWebTargetPathState({
       config: sourceConfig,
       path: target.path,
+      providerOverrides: params.providerOverrides,
     });
     if (runtimeState === "inactive") {
       inactiveRefPaths.add(target.path);
       const inactiveDetail = describeInactiveRuntimeWebTargetPath({
         config: sourceConfig,
         path: target.path,
+        providerOverrides: params.providerOverrides,
       });
       if (inactiveDetail) {
         runtimeWebInactiveDiagnostics.push(`${target.path}: ${inactiveDetail}`);
@@ -657,28 +863,30 @@ export async function resolveCommandSecretRefsViaGateway(params: {
   targetIds: Set<string>;
   mode?: CommandSecretResolutionModeInput;
   allowedPaths?: ReadonlySet<string>;
+  providerOverrides?: CommandSecretsProviderOverrides;
 }): Promise<ResolveCommandSecretsResult> {
   const mode = normalizeCommandSecretResolutionMode(params.mode);
+  const commandConfig = applyProviderOverridesToConfig(params.config, params.providerOverrides);
   const configuredTargetRefPaths = collectConfiguredTargetRefPaths({
-    config: params.config,
+    config: commandConfig,
     targetIds: params.targetIds,
     allowedPaths: params.allowedPaths,
   });
   if (configuredTargetRefPaths.size === 0) {
     return {
-      resolvedConfig: params.config,
+      resolvedConfig: commandConfig,
       diagnostics: [],
       targetStatesByPath: {},
       hadUnresolvedTargets: false,
     };
   }
   const preflight = classifyConfiguredTargetRefs({
-    config: params.config,
+    config: commandConfig,
     configuredTargetRefPaths,
   });
   if (!preflight.hasActiveConfiguredRef && !preflight.hasUnknownConfiguredRef) {
     return {
-      resolvedConfig: params.config,
+      resolvedConfig: commandConfig,
       diagnostics: preflight.diagnostics,
       targetStatesByPath: {},
       hadUnresolvedTargets: false,
@@ -694,6 +902,7 @@ export async function resolveCommandSecretRefsViaGateway(params: {
       params: {
         commandName: params.commandName,
         targetIds: [...params.targetIds],
+        ...(params.providerOverrides ? { providerOverrides: params.providerOverrides } : {}),
       },
       timeoutMs: 30_000,
       clientName: GATEWAY_CLIENT_NAMES.CLI,
@@ -708,6 +917,7 @@ export async function resolveCommandSecretRefsViaGateway(params: {
         preflightDiagnostics: preflight.diagnostics,
         mode,
         allowedPaths: params.allowedPaths,
+        providerOverrides: params.providerOverrides,
       });
       const recoveredLocally = Object.values(fallback.targetStatesByPath).some(
         (state) => state === "resolved_local",
@@ -741,7 +951,7 @@ export async function resolveCommandSecretRefsViaGateway(params: {
   }
 
   const parsed = parseGatewaySecretsResolveResult(payload);
-  const resolvedConfig = structuredClone(params.config);
+  const resolvedConfig = structuredClone(commandConfig);
   for (const assignment of parsed.assignments) {
     const pathSegments = assignment.pathSegments.filter((segment) => segment.length > 0);
     if (pathSegments.length === 0) {
@@ -762,7 +972,7 @@ export async function resolveCommandSecretRefsViaGateway(params: {
       ? new Set(parsed.inactiveRefPaths)
       : collectInactiveSurfacePathsFromDiagnostics(parsed.diagnostics);
   const analyzed = commandSecretGatewayDeps.analyzeCommandSecretAssignmentsFromSnapshot({
-    sourceConfig: params.config,
+    sourceConfig: commandConfig,
     resolvedConfig,
     targetIds: params.targetIds,
     inactiveRefPaths,
@@ -782,6 +992,7 @@ export async function resolveCommandSecretRefsViaGateway(params: {
         preflightDiagnostics: [],
         mode,
         allowedPaths: new Set(analyzed.unresolved.map((entry) => entry.path)),
+        providerOverrides: params.providerOverrides,
       });
       for (const unresolved of analyzed.unresolved) {
         if (localFallback.targetStatesByPath[unresolved.path] !== "resolved_local") {

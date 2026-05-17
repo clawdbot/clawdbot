@@ -182,6 +182,7 @@ function createRelay(): NativeHookRelayRegistrationHandle {
     expiresAtMs: Date.now() + 1000,
     commandForEvent: (event) =>
       `openclaw hooks relay --provider codex --relay-id relay-1 --event ${event}`,
+    renew: () => undefined,
     unregister: () => undefined,
   };
 }

@@ -362,7 +362,14 @@ describe("resolveTranscriptPolicy", () => {
     expect(responsesPolicy.dropReasoningFromHistory).toBe(false);
   });
 
-  it.each(["moonshotai/kimi-k2.6", "kimi-k2-thinking", "xiaomi/mimo-v2.6-pro"])(
+  it.each([
+    "kimi-for-coding",
+    "moonshotai/kimi-k2.6",
+    "kimi-k2-thinking",
+    "hf:moonshotai/kimi-k2-thinking",
+    "xiaomi/mimo-v2.6-pro",
+    "xiaomi/mimo-v2.6-pro:cloud",
+  ])(
     "preserves historical reasoning for %s replay-required OpenAI-compatible models",
     (modelId) => {
       const policy = resolveTranscriptPolicy({

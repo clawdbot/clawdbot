@@ -112,6 +112,8 @@ Current compatibility records include:
 
 - legacy broad SDK imports such as `openclaw/plugin-sdk/compat`
 - legacy hook-only plugin shapes and `before_agent_start`
+- legacy `api.on("deactivate", ...)` cleanup hook names while plugins migrate to
+  `gateway_stop`
 - legacy `activate(api)` plugin entrypoints while plugins migrate to
   `register(api)`
 - legacy SDK aliases such as `openclaw/extension-api`,

@@ -536,18 +536,18 @@ eventually finish the native turn with `turn/completed`. If the app-server goes
 quiet for `appServer.turnCompletionIdleTimeoutMs`, OpenClaw best-effort
 interrupts the Codex turn, records a diagnostic timeout, and releases the
 OpenClaw session lane so follow-up chat messages are not queued behind a stale
-native turn. Most non-terminal notifications for the same turn, including raw
-assistant `rawResponseItem/completed` items, disarm that short watchdog because
-Codex has proven the turn is still alive; raw `custom_tool_call_output`
-completions keep the short post-tool watchdog armed because they are the
-turn-scoped tool-result handoff. The longer terminal watchdog continues to
-protect genuinely stuck turns. Global app-server notifications, such as
-rate-limit updates, do not reset turn-idle progress. When Codex emits a completed
-`agentMessage` item and then goes quiet without `turn/completed`, OpenClaw treats
-the assistant output as effectively complete, best-effort interrupts the native
-Codex turn, and releases the session lane. Timeout diagnostics include the last
-app-server notification method and, for raw assistant response items, the item
-type, role, id, and a bounded assistant text preview.
+native turn. Most non-terminal notifications for the same turn disarm that short
+watchdog because Codex has proven the turn is still alive; raw
+`custom_tool_call_output` completions keep the short post-tool watchdog armed
+because they are the turn-scoped tool-result handoff. Global app-server
+notifications, such as rate-limit updates, do not reset turn-idle progress.
+Completed `agentMessage` items and pre-tool raw assistant
+`rawResponseItem/completed` items arm the assistant-output release: if Codex then
+goes quiet without `turn/completed`, OpenClaw best-effort interrupts the native
+turn and releases the session lane. Post-tool raw assistant progress keeps
+waiting for `turn/completed` or the terminal watchdog. Timeout diagnostics
+include the last app-server notification method and, for raw assistant response
+items, the item type, role, id, and a bounded assistant text preview.
 
 Environment overrides remain available for local testing:
 

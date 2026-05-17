@@ -96,7 +96,7 @@ function parseManifest(raw: string): BackupManifest {
   try {
     parsed = JSON.parse(raw);
   } catch (err) {
-    throw new Error(`Backup manifest is not valid JSON: ${String(err)}`, { cause: err });
+    throw new Error("Backup manifest is not valid JSON.", { cause: err });
   }
 
   if (!isRecord(parsed)) {

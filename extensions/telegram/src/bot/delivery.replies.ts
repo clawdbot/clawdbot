@@ -268,6 +268,16 @@ function isCaptionTooLong(err: unknown): boolean {
   return CAPTION_TOO_LONG_RE.test(formatErrorMessage(err));
 }
 
+function resolveVoiceFallbackText(reply: ReplyPayload): string | undefined {
+  if (reply.text?.trim()) {
+    return reply.text;
+  }
+  if (reply.spokenText?.trim()) {
+    return reply.spokenText;
+  }
+  return undefined;
+}
+
 async function sendTelegramVoiceFallbackText(opts: {
   bot: Bot;
   chatId: string;
@@ -337,8 +347,9 @@ async function deliverMediaReply(params: {
   replyToId?: number;
   replyToMode: ReplyToMode;
   progress: DeliveryProgress;
-}): Promise<number | undefined> {
+}): Promise<{ firstDeliveredMessageId?: number; visibleFallbackText?: string }> {
   let firstDeliveredMessageId: number | undefined;
+  let visibleFallbackText: string | undefined;
   let first = true;
   let pendingFollowUpText: string | undefined;
   for (const mediaUrl of params.mediaList) {
@@ -456,7 +467,7 @@ async function deliverMediaReply(params: {
           await sendVoiceMedia(mediaParams, (err) => !isVoiceMessagesForbidden(err));
         } catch (voiceErr) {
           if (isVoiceMessagesForbidden(voiceErr)) {
-            const fallbackText = params.reply.text;
+            const fallbackText = resolveVoiceFallbackText(params.reply);
             if (!fallbackText || !fallbackText.trim()) {
               throw voiceErr;
             }
@@ -487,6 +498,7 @@ async function deliverMediaReply(params: {
             if (firstDeliveredMessageId == null) {
               firstDeliveredMessageId = fallbackMessageId;
             }
+            visibleFallbackText = fallbackText;
             markReplyApplied(params.progress, voiceFallbackReplyTo);
             markDelivered(params.progress);
             continue;
@@ -499,7 +511,7 @@ async function deliverMediaReply(params: {
             delete noCaptionParams.caption;
             delete noCaptionParams.parse_mode;
             await sendVoiceMedia(noCaptionParams);
-            const fallbackText = params.reply.text;
+            const fallbackText = resolveVoiceFallbackText(params.reply);
             if (fallbackText?.trim()) {
               await sendTelegramVoiceFallbackText({
                 bot: params.bot,
@@ -513,6 +525,7 @@ async function deliverMediaReply(params: {
                 silent: params.silent,
                 replyMarkup: params.replyMarkup,
               });
+              visibleFallbackText = fallbackText;
             }
             markReplyApplied(params.progress, replyToMessageId);
             continue;
@@ -566,7 +579,7 @@ async function deliverMediaReply(params: {
       pendingFollowUpText = undefined;
     }
   }
-  return firstDeliveredMessageId;
+  return { firstDeliveredMessageId, visibleFallbackText };
 }
 
 async function maybePinFirstDeliveredMessage(params: {
@@ -784,6 +797,11 @@ export async function deliverReplies(params: {
     }
 
     const rawContent = resolvedReplyText;
+    const spokenHookContent =
+      !rawContent && reply.audioAsVoice === true && reply.spokenText?.trim()
+        ? reply.spokenText
+        : undefined;
+    const hookContent = spokenHookContent ?? rawContent;
     const replyToId =
       params.replyToMode === "off" ? undefined : resolveTelegramReplyId(reply.replyToId);
     const replyQuote = resolveReplyQuoteForSend({
@@ -798,7 +816,7 @@ export async function deliverReplies(params: {
       const hookResult = await hookRunner?.runMessageSending(
         {
           to: params.chatId,
-          content: rawContent,
+          content: hookContent,
           replyToId,
           threadId: params.thread?.id,
           metadata: {
@@ -816,12 +834,15 @@ export async function deliverReplies(params: {
       if (hookResult?.cancel) {
         continue;
       }
-      if (typeof hookResult?.content === "string" && hookResult.content !== rawContent) {
-        reply = { ...reply, text: hookResult.content };
+      if (typeof hookResult?.content === "string" && hookResult.content !== hookContent) {
+        reply = spokenHookContent
+          ? { ...reply, spokenText: hookResult.content }
+          : { ...reply, text: hookResult.content };
       }
     }
 
-    const contentForSentHook = reply.text || "";
+    let contentForSentHook =
+      reply.text || (reply.audioAsVoice === true ? resolveVoiceFallbackText(reply) : "") || "";
 
     try {
       const deliveredCountBeforeReply = progress.deliveredCount;
@@ -853,7 +874,7 @@ export async function deliverReplies(params: {
           progress,
         });
       } else {
-        firstDeliveredMessageId = await deliverMediaReply({
+        const mediaDelivery = await deliverMediaReply({
           reply,
           mediaList,
           bot: params.bot,
@@ -876,6 +897,10 @@ export async function deliverReplies(params: {
           replyToMode: params.replyToMode,
           progress,
         });
+        firstDeliveredMessageId = mediaDelivery.firstDeliveredMessageId;
+        if (mediaDelivery.visibleFallbackText) {
+          contentForSentHook = mediaDelivery.visibleFallbackText;
+        }
       }
       await maybePinFirstDeliveredMessage({
         pin: reply.delivery?.pin,

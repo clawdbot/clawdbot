@@ -28,6 +28,10 @@ vi.mock("./simple-completion-transport.js", () => ({
 }));
 
 vi.mock("./model-auth.js", () => ({
+  formatMissingAuthError: vi.fn(
+    (auth: { source: string; mode: string }, provider: string) =>
+      `No API key resolved for provider "${provider}" (auth mode: ${auth.mode}, checked: ${auth.source}).`,
+  ),
   getApiKeyForModel: hoisted.getApiKeyForModelMock,
   applyLocalNoAuthHeaderOverride: hoisted.applyLocalNoAuthHeaderOverrideMock,
 }));
@@ -170,7 +174,8 @@ describe("prepareSimpleCompletionModel", () => {
     });
 
     expect(result).toEqual({
-      error: 'No API key resolved for provider "anthropic" (auth mode: api-key).',
+      error:
+        'No API key resolved for provider "anthropic" (auth mode: api-key, checked: models.providers.anthropic).',
       auth: {
         source: "models.providers.anthropic",
         mode: "api-key",

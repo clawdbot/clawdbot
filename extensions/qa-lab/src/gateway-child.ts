@@ -497,6 +497,7 @@ export async function startQaGatewayChild(params: {
   enabledPluginIds?: string[];
   forwardHostHome?: boolean;
   mutateConfig?: (cfg: OpenClawConfig) => OpenClawConfig;
+  runtimeEnvPatch?: NodeJS.ProcessEnv;
 }) {
   const tempRoot = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-qa-suite-"),
@@ -674,6 +675,12 @@ export async function startQaGatewayChild(params: {
           forwardHostHomeForClaudeCli: liveProviderIds.includes("claude-cli"),
           claudeCliAuthMode: params.claudeCliAuthMode,
         });
+        if (params.runtimeEnvPatch) {
+          env = {
+            ...env,
+            ...params.runtimeEnvPatch,
+          };
+        }
       }
       await fs.writeFile(configPath, `${JSON.stringify(cfg, null, 2)}\n`, {
         encoding: "utf8",

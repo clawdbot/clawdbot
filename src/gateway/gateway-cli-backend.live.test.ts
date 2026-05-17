@@ -370,8 +370,10 @@ describeLive("gateway live (cli backend)", () => {
             ...(bootstrapWorkspace ? { workspace: bootstrapWorkspace.workspaceRootDir } : {}),
             model: { primary: configModelKey },
             models: {
-              [configModelKey]: {},
-              ...(modelSwitchTarget ? { [modelSwitchTarget]: {} } : {}),
+              [configModelKey]: { agentRuntime: modelSelection.agentRuntime },
+              ...(modelSwitchTarget
+                ? { [modelSwitchTarget]: { agentRuntime: modelSelection.agentRuntime } }
+                : {}),
             },
             agentRuntime: modelSelection.agentRuntime,
             cliBackends: {

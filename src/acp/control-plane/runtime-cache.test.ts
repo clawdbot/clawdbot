@@ -29,6 +29,7 @@ function mockState(sessionKey: string): CachedRuntimeState {
     backend: "acpx",
     agent: "codex",
     mode: "persistent",
+    configSignature: "config:test",
   };
 }
 

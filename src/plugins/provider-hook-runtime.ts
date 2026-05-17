@@ -214,6 +214,19 @@ export function resolveProviderRuntimePlugin(
   return plugin ?? undefined;
 }
 
+export function resolveLoadedProviderRuntimePlugin(
+  params: ProviderRuntimePluginLookupParams,
+): ProviderPlugin | undefined {
+  const apiOwnerHint = resolveProviderConfigApiOwnerHint({
+    provider: params.provider,
+    config: params.config,
+  });
+  return findProviderRuntimePluginInLoadedRegistries({
+    lookup: params,
+    apiOwnerHint,
+  });
+}
+
 export function resolveProviderHookPlugin(params: {
   provider: string;
   config?: OpenClawConfig;

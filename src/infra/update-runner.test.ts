@@ -5,6 +5,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../plugins/runtime-sidecar-paths.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import { pathExists } from "../utils.js";
 import { writePackageDistInventory } from "./package-dist-inventory.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
@@ -211,6 +212,7 @@ describe("runGatewayUpdate", () => {
       tag?: string;
       cwd?: string;
       devTargetRef?: string;
+      deferConfiguredPluginInstallRepair?: boolean;
     },
   ) {
     return runGatewayUpdate({
@@ -220,6 +222,9 @@ describe("runGatewayUpdate", () => {
       ...(options?.channel ? { channel: options.channel } : {}),
       ...(options?.tag ? { tag: options.tag } : {}),
       ...(options?.devTargetRef ? { devTargetRef: options.devTargetRef } : {}),
+      ...(options?.deferConfiguredPluginInstallRepair
+        ? { deferConfiguredPluginInstallRepair: true }
+        : {}),
     });
   }
 
@@ -230,6 +235,7 @@ describe("runGatewayUpdate", () => {
       tag?: string;
       cwd?: string;
       devTargetRef?: string;
+      deferConfiguredPluginInstallRepair?: boolean;
     },
   ) {
     return runWithCommand(runner, options);
@@ -280,15 +286,27 @@ describe("runGatewayUpdate", () => {
     return { nodeModules, pkgRoot };
   }
 
+  const npmGlobalInstallCommand = (spec: string, extraArgs: string[] = []) =>
+    [
+      "npm",
+      "i",
+      "-g",
+      spec,
+      ...extraArgs,
+      "--no-fund",
+      "--no-audit",
+      "--loglevel=error",
+      "--min-release-age=0",
+    ].join(" ");
+
   function createGlobalNpmUpdateRunner(params: {
     pkgRoot: string;
     nodeModules: string;
     onBaseInstall?: () => Promise<CommandResult>;
     onOmitOptionalInstall?: () => Promise<CommandResult>;
   }) {
-    const baseInstallKey = "npm i -g openclaw@latest --no-fund --no-audit --loglevel=error";
-    const omitOptionalInstallKey =
-      "npm i -g openclaw@latest --omit=optional --no-fund --no-audit --loglevel=error";
+    const baseInstallKey = npmGlobalInstallCommand("openclaw@latest");
+    const omitOptionalInstallKey = npmGlobalInstallCommand("openclaw@latest", ["--omit=optional"]);
 
     return async (argv: string[]): Promise<CommandResult> => {
       const key = argv.join(" ");
@@ -414,6 +432,38 @@ describe("runGatewayUpdate", () => {
       npm_config_resolution_mode: "highest",
       pnpm_config_resolution_mode: "highest",
     });
+  });
+
+  it("marks git update doctor passes for configured-plugin repair deferral when requested", async () => {
+    await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
+    await setupUiIndex();
+    const stableTag = "v1.0.1-1";
+    let doctorEnv: NodeJS.ProcessEnv | undefined;
+    const doctorNodePath = await resolveStableNodePath(process.execPath);
+    const doctorCommand = `${doctorNodePath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive --fix`;
+    const { runCommand } = createGitInstallRunner({
+      stableTag,
+      installCommand: "pnpm install",
+      buildCommand: "pnpm build",
+      uiBuildCommand: "pnpm ui:build",
+      doctorCommand,
+      onCommand: (key, options) => {
+        if (key === doctorCommand) {
+          doctorEnv = options?.env;
+        }
+        return undefined;
+      },
+    });
+
+    const result = await runWithCommand(runCommand, {
+      channel: "stable",
+      deferConfiguredPluginInstallRepair: true,
+    });
+
+    expect(result.status).toBe("ok");
+    expect(doctorEnv?.OPENCLAW_UPDATE_IN_PROGRESS).toBe("1");
+    expect(doctorEnv?.OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR).toBe("1");
+    expect(doctorEnv?.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE).toBe("1");
   });
 
   it("uses pnpm highest resolution mode for dev preflight installs", async () => {
@@ -848,9 +898,8 @@ describe("runGatewayUpdate", () => {
     let preflightInstallAttempts = 0;
     let preflightIgnoreScriptsAttempts = 0;
     let finalInstallAttempts = 0;
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 
-    try {
+    await withMockedWindowsPlatform(async () => {
       const runCommand = async (
         argv: string[],
         options?: { env?: NodeJS.ProcessEnv; cwd?: string; timeoutMs?: number },
@@ -953,9 +1002,7 @@ describe("runGatewayUpdate", () => {
       expect(result.steps.map((step) => step.name)).toContain("deps install (ignore scripts)");
       expect(calls).toContain("pnpm install --ignore-scripts");
       expect(calls).not.toContain("pnpm lint");
-    } finally {
-      platformSpy.mockRestore();
-    }
+    });
   });
 
   it("does not fail a good windows dev preflight only because worktree cleanup hit long paths", async () => {
@@ -965,9 +1012,8 @@ describe("runGatewayUpdate", () => {
     const upstreamSha = "upstream123";
     const doctorNodePath = await resolveStableNodePath(process.execPath);
     const doctorCommand = `${doctorNodePath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive --fix`;
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 
-    try {
+    await withMockedWindowsPlatform(async () => {
       const runCommand = async (
         argv: string[],
         options?: { env?: NodeJS.ProcessEnv; cwd?: string; timeoutMs?: number },
@@ -1055,9 +1101,7 @@ describe("runGatewayUpdate", () => {
       expect(cleanupStep?.stderrTail ?? "").toContain(
         "windows fallback cleanup removed preflight tree",
       );
-    } finally {
-      platformSpy.mockRestore();
-    }
+    });
   });
 
   it("falls back when dev preflight worktree cleanup times out", async () => {
@@ -1668,16 +1712,16 @@ describe("runGatewayUpdate", () => {
   it.each([
     {
       title: "updates global npm installs when detected",
-      expectedInstallCommand: "npm i -g openclaw@latest --no-fund --no-audit --loglevel=error",
+      expectedInstallCommand: npmGlobalInstallCommand("openclaw@latest"),
     },
     {
       title: "uses update channel for global npm installs when tag is omitted",
-      expectedInstallCommand: "npm i -g openclaw@beta --no-fund --no-audit --loglevel=error",
+      expectedInstallCommand: npmGlobalInstallCommand("openclaw@beta"),
       channel: "beta" as const,
     },
     {
       title: "updates global npm installs with tag override",
-      expectedInstallCommand: "npm i -g openclaw@beta --no-fund --no-audit --loglevel=error",
+      expectedInstallCommand: npmGlobalInstallCommand("openclaw@beta"),
       tag: "beta",
     },
   ])("$title", async ({ expectedInstallCommand, channel, tag }) => {
@@ -1696,16 +1740,13 @@ describe("runGatewayUpdate", () => {
 
   it("updates global npm installs from the GitHub main package spec", async () => {
     const { calls, result } = await runNpmGlobalUpdateCase({
-      expectedInstallCommand:
-        "npm i -g github:openclaw/openclaw#main --no-fund --no-audit --loglevel=error",
+      expectedInstallCommand: npmGlobalInstallCommand("github:openclaw/openclaw#main"),
       tag: "main",
     });
 
     expect(result.status).toBe("ok");
     expect(result.mode).toBe("npm");
-    expect(calls).toContain(
-      "npm i -g github:openclaw/openclaw#main --no-fund --no-audit --loglevel=error",
-    );
+    expect(calls).toContain(npmGlobalInstallCommand("github:openclaw/openclaw#main"));
   });
 
   it("runs doctor after global npm updates before reporting success", async () => {
@@ -1717,7 +1758,7 @@ describe("runGatewayUpdate", () => {
     const { calls, runCommand } = createGlobalInstallHarness({
       pkgRoot,
       npmRootOutput: nodeModules,
-      installCommand: "npm i -g openclaw@latest --no-fund --no-audit --loglevel=error",
+      installCommand: npmGlobalInstallCommand("openclaw@latest"),
       onInstall: async () => {
         await writeGlobalPackageVersion(pkgRoot);
         await writeGatewayEntrypoint(pkgRoot);
@@ -1756,7 +1797,7 @@ describe("runGatewayUpdate", () => {
     const { calls, runCommand } = createGlobalInstallHarness({
       pkgRoot,
       npmRootOutput: nodeModules,
-      installCommand: "npm i -g openclaw@latest --no-fund --no-audit --loglevel=error",
+      installCommand: npmGlobalInstallCommand("openclaw@latest"),
       onInstall: async () => {
         await writeGlobalPackageVersion(pkgRoot);
         await writeGatewayEntrypoint(pkgRoot);
@@ -1793,7 +1834,7 @@ describe("runGatewayUpdate", () => {
     const { calls, runCommand } = createGlobalInstallHarness({
       pkgRoot,
       npmRootOutput: nodeModules,
-      installCommand: "npm i -g openclaw@latest --no-fund --no-audit --loglevel=error",
+      installCommand: npmGlobalInstallCommand("openclaw@latest"),
       gitRootMode: "missing",
       onInstall: async () => writeGlobalPackageVersion(pkgRoot),
     });
@@ -1802,7 +1843,7 @@ describe("runGatewayUpdate", () => {
 
     expect(result.status).toBe("ok");
     expect(result.mode).toBe("npm");
-    expect(calls).toContain("npm i -g openclaw@latest --no-fund --no-audit --loglevel=error");
+    expect(calls).toContain(npmGlobalInstallCommand("openclaw@latest"));
   });
 
   it("cleans stale npm rename dirs before global update", async () => {
@@ -1861,7 +1902,7 @@ describe("runGatewayUpdate", () => {
 
   it("fails global npm update when the installed version misses the requested correction", async () => {
     const { calls, result } = await runNpmGlobalUpdateCase({
-      expectedInstallCommand: "npm i -g openclaw@2026.3.23-2 --no-fund --no-audit --loglevel=error",
+      expectedInstallCommand: npmGlobalInstallCommand("openclaw@2026.3.23-2"),
       tag: "2026.3.23-2",
     });
 
@@ -1871,12 +1912,12 @@ describe("runGatewayUpdate", () => {
     expect(result.steps.at(-1)?.stderrTail).toContain(
       "expected installed version 2026.3.23-2, found 2.0.0",
     );
-    expect(calls).toContain("npm i -g openclaw@2026.3.23-2 --no-fund --no-audit --loglevel=error");
+    expect(calls).toContain(npmGlobalInstallCommand("openclaw@2026.3.23-2"));
   });
 
   it("fails global npm update when bundled runtime sidecars are missing after install", async () => {
     const { nodeModules, pkgRoot } = await createGlobalPackageFixture(tempDir);
-    const expectedInstallCommand = "npm i -g openclaw@latest --no-fund --no-audit --loglevel=error";
+    const expectedInstallCommand = npmGlobalInstallCommand("openclaw@latest");
     const { runCommand } = createGlobalInstallHarness({
       pkgRoot,
       npmRootOutput: nodeModules,
@@ -1906,7 +1947,6 @@ describe("runGatewayUpdate", () => {
   });
 
   it("prepends portable Git PATH for global Windows npm updates", async () => {
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const localAppData = path.join(tempDir, "local-app-data");
     const portableGitMingw = path.join(
       localAppData,
@@ -1932,21 +1972,19 @@ describe("runGatewayUpdate", () => {
     const { runCommand } = createGlobalInstallHarness({
       pkgRoot,
       npmRootOutput: nodeModules,
-      installCommand: "npm i -g openclaw@latest --no-fund --no-audit --loglevel=error",
+      installCommand: npmGlobalInstallCommand("openclaw@latest"),
       onInstall: async (options) => {
         installEnv = options?.env;
         await writeGlobalPackageVersion(options?.packageRoot ?? pkgRoot);
       },
     });
 
-    try {
+    await withMockedWindowsPlatform(async () => {
       await withEnvAsync({ LOCALAPPDATA: localAppData }, async () => {
         const result = await runWithCommand(runCommand, { cwd: pkgRoot });
         expect(result.status).toBe("ok");
       });
-    } finally {
-      platformSpy.mockRestore();
-    }
+    });
 
     const mergedPath = installEnv?.Path ?? installEnv?.PATH ?? "";
     expect(mergedPath.split(path.delimiter).slice(0, 2)).toEqual([
@@ -1967,7 +2005,7 @@ describe("runGatewayUpdate", () => {
     const { runCommand } = createGlobalInstallHarness({
       pkgRoot,
       npmRootOutput: nodeModules,
-      installCommand: "npm i -g openclaw@latest --no-fund --no-audit --loglevel=error",
+      installCommand: npmGlobalInstallCommand("openclaw@latest"),
       onInstall: async (options) => {
         await writeGlobalPackageVersion(options?.packageRoot ?? pkgRoot);
         if (options?.installPrefix) {
@@ -2005,7 +2043,7 @@ describe("runGatewayUpdate", () => {
     const { calls, runCommand } = createGlobalInstallHarness({
       pkgRoot,
       pnpmRootOutput: nodeModules,
-      installCommand: "npm i -g openclaw@latest --no-fund --no-audit --loglevel=error",
+      installCommand: npmGlobalInstallCommand("openclaw@latest"),
       onInstall: async (options) => {
         await writeGlobalPackageVersion(options?.packageRoot ?? pkgRoot);
       },
@@ -2028,8 +2066,9 @@ describe("runGatewayUpdate", () => {
 
   it("uses OPENCLAW_UPDATE_PACKAGE_SPEC for global package updates", async () => {
     const { nodeModules, pkgRoot } = await createGlobalPackageFixture(tempDir);
-    const expectedInstallCommand =
-      "npm i -g http://10.211.55.2:8138/openclaw-next.tgz --no-fund --no-audit --loglevel=error";
+    const expectedInstallCommand = npmGlobalInstallCommand(
+      "http://10.211.55.2:8138/openclaw-next.tgz",
+    );
     const { calls, runCommand } = createGlobalInstallHarness({
       pkgRoot,
       npmRootOutput: nodeModules,

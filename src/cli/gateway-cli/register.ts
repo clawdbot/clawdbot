@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import type { HealthSummary } from "../../commands/health.js";
+import { formatGatewayTransportErrorJson } from "../../gateway/call.js";
 import type { CostUsageSummary } from "../../infra/session-cost-usage.js";
 import type {
   DiagnosticStabilityBundle,
@@ -97,8 +98,16 @@ function loadDaemonStatusGatherModule() {
   return daemonStatusGatherModuleLoader.load();
 }
 
-function runGatewayCommand(action: () => Promise<void>, label?: string) {
+function runGatewayCommand(action: () => Promise<void>, label?: string, opts?: { json?: boolean }) {
   return runCommandWithRuntime(defaultRuntime, action, (err) => {
+    if (opts?.json) {
+      const payload = formatGatewayTransportErrorJson(err);
+      if (payload) {
+        defaultRuntime.writeJson(payload);
+        defaultRuntime.exit(1);
+        return;
+      }
+    }
     const message = String(err);
     defaultRuntime.error(label ? `${label}: ${message}` : message);
     defaultRuntime.exit(1);
@@ -316,6 +325,42 @@ function renderStabilityBundleSummary(params: {
       lines.push(`${colorize(rich, theme.muted, "Error:")} ${errorParts.join(" ")}`);
     }
   }
+  const memoryPressure = bundle.evidence?.memoryPressure;
+  if (memoryPressure) {
+    lines.push(
+      `${colorize(rich, theme.muted, "Memory pressure:")} ${memoryPressure.level}/${
+        memoryPressure.reason
+      } rss=${formatBytes(memoryPressure.memory.rssBytes)} heap=${formatBytes(
+        memoryPressure.memory.heapUsedBytes,
+      )} threshold=${formatBytes(memoryPressure.thresholdBytes)}`,
+    );
+    if (memoryPressure.heapStatistics) {
+      lines.push(
+        `${colorize(rich, theme.muted, "V8 heap:")} used=${formatBytes(
+          memoryPressure.heapStatistics.usedHeapSizeBytes,
+        )} limit=${formatBytes(
+          memoryPressure.heapStatistics.heapSizeLimitBytes,
+        )} available=${formatBytes(memoryPressure.heapStatistics.totalAvailableSizeBytes)}`,
+      );
+    }
+    if (memoryPressure.activeResources) {
+      const resources = Object.entries(memoryPressure.activeResources.byType)
+        .map(([type, count]) => `${type}=${count}`)
+        .join(", ");
+      lines.push(
+        `${colorize(rich, theme.muted, "Active resources:")} total=${
+          memoryPressure.activeResources.total
+        }${resources ? ` · ${resources}` : ""}`,
+      );
+    }
+    if (memoryPressure.topSessionFiles?.length) {
+      const files = memoryPressure.topSessionFiles
+        .slice(0, 5)
+        .map((file) => `${file.relativePath}=${formatBytes(file.sizeBytes)}`)
+        .join(", ");
+      lines.push(`${colorize(rich, theme.muted, "Largest session files:")} ${files}`);
+    }
+  }
   lines.push("", ...renderStabilitySummary(snapshot, rich));
   return lines;
 }
@@ -459,30 +504,34 @@ export function registerGatewayCli(program: Command) {
       .command("health")
       .description("Fetch Gateway health")
       .action(async (opts, command) => {
-        await runGatewayCommand(async () => {
-          const rpcOpts = resolveGatewayRpcOptions(opts, command);
-          const [{ formatHealthChannelLines }, { styleHealthChannelLine }] = await Promise.all([
-            loadGatewayHealthModule(),
-            loadHealthStyleModule(),
-          ]);
-          const result = await callGatewayCli("health", rpcOpts);
-          if (rpcOpts.json) {
-            defaultRuntime.writeJson(result);
-            return;
-          }
-          const rich = isRich();
-          const obj: Record<string, unknown> = result && typeof result === "object" ? result : {};
-          const durationMs = typeof obj.durationMs === "number" ? obj.durationMs : null;
-          defaultRuntime.log(colorize(rich, theme.heading, "Gateway Health"));
-          defaultRuntime.log(
-            `${colorize(rich, theme.success, "OK")}${durationMs != null ? ` (${durationMs}ms)` : ""}`,
-          );
-          if (obj.channels && typeof obj.channels === "object") {
-            for (const line of formatHealthChannelLines(obj as HealthSummary)) {
-              defaultRuntime.log(styleHealthChannelLine(line, rich));
+        await runGatewayCommand(
+          async () => {
+            const rpcOpts = resolveGatewayRpcOptions(opts, command);
+            const [{ formatHealthChannelLines }, { styleHealthChannelLine }] = await Promise.all([
+              loadGatewayHealthModule(),
+              loadHealthStyleModule(),
+            ]);
+            const result = await callGatewayCli("health", rpcOpts);
+            if (rpcOpts.json) {
+              defaultRuntime.writeJson(result);
+              return;
             }
-          }
-        });
+            const rich = isRich();
+            const obj: Record<string, unknown> = result && typeof result === "object" ? result : {};
+            const durationMs = typeof obj.durationMs === "number" ? obj.durationMs : null;
+            defaultRuntime.log(colorize(rich, theme.heading, "Gateway Health"));
+            defaultRuntime.log(
+              `${colorize(rich, theme.success, "OK")}${durationMs != null ? ` (${durationMs}ms)` : ""}`,
+            );
+            if (obj.channels && typeof obj.channels === "object") {
+              for (const line of formatHealthChannelLines(obj as HealthSummary)) {
+                defaultRuntime.log(styleHealthChannelLine(line, rich));
+              }
+            }
+          },
+          undefined,
+          { json: Boolean(opts.json) },
+        );
       }),
   );
 

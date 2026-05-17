@@ -60,6 +60,8 @@ type FetchMediaOptions = {
   filePathHint?: string;
   maxBytes?: number;
   maxRedirects?: number;
+  /** Abort the guarded fetch request if it has not completed by this deadline (ms). */
+  timeoutMs?: number;
   /** Abort if the response body stops yielding data for this long (ms). */
   readIdleTimeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
@@ -157,6 +159,7 @@ async function fetchGuardedMediaResponse(
     fetchImpl,
     requestInit,
     maxRedirects,
+    timeoutMs,
     ssrfPolicy,
     lookupFn,
     dispatcherPolicy,
@@ -179,6 +182,7 @@ async function fetchGuardedMediaResponse(
         fetchImpl,
         init: requestInit,
         maxRedirects,
+        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
         policy: ssrfPolicy,
         lookupFn: attempt.lookupFn ?? lookupFn,
         dispatcherPolicy: attempt.dispatcherPolicy,

@@ -1,4 +1,5 @@
 import { defaultQaModelForMode, isQaFastModeEnabled } from "../../model-selection.js";
+import { normalizeCaptureSavedView, normalizeCaptureSavedViews } from "./capture-saved-view.js";
 import { formatErrorMessage } from "./errors.js";
 import {
   type Bootstrap,
@@ -16,7 +17,6 @@ import {
   type UiState,
   renderQaLabUi,
 } from "./ui-render.js";
-
 async function getJson<T>(path: string): Promise<T> {
   const response = await fetch(path);
   if (!response.ok) {
@@ -133,15 +133,17 @@ function loadCaptureSavedViews(): CaptureSavedView[] {
     if (!raw) {
       return [];
     }
-    const parsed = JSON.parse(raw) as unknown;
-    return Array.isArray(parsed) ? (parsed as CaptureSavedView[]) : [];
+    return normalizeCaptureSavedViews(JSON.parse(raw) as unknown);
   } catch {
     return [];
   }
 }
 
 function persistCaptureSavedViews(savedViews: CaptureSavedView[]) {
-  localStorage.setItem(CAPTURE_SAVED_VIEWS_KEY, JSON.stringify(savedViews));
+  localStorage.setItem(
+    CAPTURE_SAVED_VIEWS_KEY,
+    JSON.stringify(normalizeCaptureSavedViews(savedViews)),
+  );
 }
 
 function isEditableElement(target: EventTarget | null): boolean {
@@ -668,22 +670,26 @@ export async function createQaLabApp(root: HTMLDivElement) {
   }
 
   function applyCaptureSavedView(view: CaptureSavedView) {
-    state.selectedCaptureSessionIds = [...view.sessionIds];
-    state.captureKindFilter = [...view.kindFilter];
-    state.captureProviderFilter = [...view.providerFilter];
-    state.captureHostFilter = [...view.hostFilter];
-    state.captureSearchText = view.searchText;
-    state.captureHeaderMode = view.headerMode;
-    state.captureViewMode = view.viewMode;
-    state.captureGroupMode = view.groupMode;
-    state.captureTimelineLaneMode = view.timelineLaneMode;
-    state.captureTimelineLaneSort = view.timelineLaneSort;
-    state.captureTimelineZoom = view.timelineZoom;
-    state.captureTimelineSparklineMode = view.timelineSparklineMode;
-    state.captureErrorsOnly = view.errorsOnly;
-    state.captureDetailPlacement = view.detailPlacement;
-    state.capturePayloadDetailLayout = view.payloadLayout;
-    state.capturePayloadExtent = view.payloadExtent;
+    const normalized = normalizeCaptureSavedView(view);
+    if (!normalized) {
+      return;
+    }
+    state.selectedCaptureSessionIds = [...normalized.sessionIds];
+    state.captureKindFilter = [...normalized.kindFilter];
+    state.captureProviderFilter = [...normalized.providerFilter];
+    state.captureHostFilter = [...normalized.hostFilter];
+    state.captureSearchText = normalized.searchText;
+    state.captureHeaderMode = normalized.headerMode;
+    state.captureViewMode = normalized.viewMode;
+    state.captureGroupMode = normalized.groupMode;
+    state.captureTimelineLaneMode = normalized.timelineLaneMode;
+    state.captureTimelineLaneSort = normalized.timelineLaneSort;
+    state.captureTimelineZoom = normalized.timelineZoom;
+    state.captureTimelineSparklineMode = normalized.timelineSparklineMode;
+    state.captureErrorsOnly = normalized.errorsOnly;
+    state.captureDetailPlacement = normalized.detailPlacement;
+    state.capturePayloadDetailLayout = normalized.payloadLayout;
+    state.capturePayloadExtent = normalized.payloadExtent;
     state.selectedCaptureEventKey = null;
   }
 

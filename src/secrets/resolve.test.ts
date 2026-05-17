@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { INVALID_EXEC_SECRET_REF_IDS } from "../test-utils/secret-ref-test-vectors.js";
+import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import {
   resolveSecretRefString,
   resolveSecretRefValue,
@@ -503,9 +504,7 @@ describe("secret ref resolver", () => {
   });
 
   it("fails closed on Windows when file provider ACL source is unknown", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32" as unknown as NodeJS.Platform);
-
-    try {
+    await withMockedWindowsPlatform(async () => {
       const dir = await createCaseDir("win-acl");
       const filePath = path.join(dir, "secrets.json");
       await writeSecureFile(filePath, '{"token":"abc123"}');
@@ -524,15 +523,11 @@ describe("secret ref resolver", () => {
           },
         ),
       ).rejects.toThrow(/ACL verification unavailable on Windows/);
-    } finally {
-      vi.restoreAllMocks();
-    }
+    });
   });
 
   it("allows trusted file provider opt-out when Windows ACL source is unknown", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32" as unknown as NodeJS.Platform);
-
-    try {
+    await withMockedWindowsPlatform(async () => {
       const dir = await createCaseDir("win-acl-opt-out");
       const filePath = path.join(dir, "secrets.json");
       await writeSecureFile(filePath, '{"token":"abc123"}');
@@ -550,20 +545,14 @@ describe("secret ref resolver", () => {
         },
       );
       expect(value).toBe("abc123");
-    } finally {
-      vi.restoreAllMocks();
-    }
+    });
   });
 
   it("fails closed on Windows when exec provider ACL source is unknown", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32" as unknown as NodeJS.Platform);
-
-    try {
+    await withMockedWindowsPlatform(async () => {
       await expect(resolveExecSecret(execProtocolV1ScriptPath)).rejects.toThrow(
         /ACL verification unavailable on Windows/,
       );
-    } finally {
-      vi.restoreAllMocks();
-    }
+    });
   });
 });

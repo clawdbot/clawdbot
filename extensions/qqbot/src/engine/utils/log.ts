@@ -8,7 +8,23 @@
  * Self-contained within engine/ — no framework SDK dependency.
  */
 
-const isDebug = () => !!process.env.QQBOT_DEBUG;
+function isQqbotDebugEnabled(): boolean {
+  const value = process.env.QQBOT_DEBUG;
+  if (typeof value !== "string") {
+    return false;
+  }
+  switch (value.trim().toLowerCase()) {
+    case "1":
+    case "on":
+    case "true":
+    case "yes":
+      return true;
+    default:
+      return false;
+  }
+}
+
+const isDebug = () => isQqbotDebugEnabled();
 const MAX_LOG_VALUE_CHARS = 4096;
 
 export function sanitizeDebugLogValue(value: unknown): string {

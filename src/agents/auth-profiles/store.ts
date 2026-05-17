@@ -31,7 +31,6 @@ import {
   loadPersistedAuthProfileStore,
   mergeAuthProfileStores,
   mergeOAuthFileIntoStore,
-  removeDetachedOAuthProfileSecrets,
 } from "./persisted.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots as clearRuntimeAuthProfileStoreSnapshotsImpl,
@@ -456,6 +455,7 @@ function buildLocalAuthProfileStoreForSave(params: {
 
 export async function updateAuthProfileStoreWithLock(params: {
   agentDir?: string;
+  saveOptions?: SaveAuthProfileStoreOptions;
   updater: (store: AuthProfileStore) => boolean;
 }): Promise<AuthProfileStore | null> {
   const authPath = resolveAuthStorePath(params.agentDir);
@@ -469,7 +469,7 @@ export async function updateAuthProfileStoreWithLock(params: {
       const store = loadAuthProfileStoreForAgent(params.agentDir, { syncExternalCli: false });
       const shouldSave = params.updater(store);
       if (shouldSave) {
-        saveAuthProfileStore(store, params.agentDir);
+        saveAuthProfileStore(store, params.agentDir, params.saveOptions);
       }
       return store;
     });
@@ -479,9 +479,7 @@ export async function updateAuthProfileStoreWithLock(params: {
 }
 
 export function loadAuthProfileStore(): AuthProfileStore {
-  const asStore = loadPersistedAuthProfileStore(undefined, {
-    rewriteInlineOAuthSecrets: process.env.OPENCLAW_AUTH_STORE_READONLY !== "1",
-  });
+  const asStore = loadPersistedAuthProfileStore();
   if (asStore) {
     return overlayExternalAuthProfiles(asStore);
   }
@@ -518,9 +516,7 @@ function loadAuthProfileStoreForAgent(
       return cached;
     }
   }
-  const asStore = loadPersistedAuthProfileStore(agentDir, {
-    rewriteInlineOAuthSecrets: !readOnly && process.env.OPENCLAW_AUTH_STORE_READONLY !== "1",
-  });
+  const asStore = loadPersistedAuthProfileStore(agentDir);
   if (asStore) {
     const synced = maybeSyncPersistedExternalCliAuthProfiles({
       store: asStore,
@@ -750,10 +746,10 @@ export function saveAuthProfileStore(
   const authPath = resolveAuthStorePath(agentDir);
   const statePath = resolveAuthStatePath(agentDir);
   const localStore = buildLocalAuthProfileStoreForSave({ store, agentDir, options });
-  const previousRaw = loadJsonFile(authPath);
-  const payload = buildPersistedAuthProfileSecretsStore(localStore, undefined, { agentDir });
+  const payload = buildPersistedAuthProfileSecretsStore(localStore, undefined, {
+    existingRaw: loadJsonFile(authPath),
+  });
   saveJsonFile(authPath, payload);
-  removeDetachedOAuthProfileSecrets({ previousRaw, nextStore: payload });
   savePersistedAuthProfileState(localStore, agentDir);
   writeCachedAuthProfileStore({
     authPath,

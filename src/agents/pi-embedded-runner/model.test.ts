@@ -516,6 +516,57 @@ describe("resolveModel", () => {
     expect(discoverModels).not.toHaveBeenCalled();
   });
 
+  it("applies provider overrides to bundled static catalog rows while skipping PI discovery", async () => {
+    resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
+      provider: "mistral",
+      id: "mistral-medium-3-5",
+      name: "Mistral Medium 3.5",
+      api: "openai-completions",
+      baseUrl: "https://api.mistral.ai/v1",
+      input: ["text", "image"],
+      contextWindow: 262144,
+      maxTokens: 8192,
+    });
+    const cfg = {
+      models: {
+        providers: {
+          mistral: {
+            baseUrl: "https://mistral-proxy.example.com/v1",
+            api: "openai-completions",
+            headers: { "X-Proxy": "static-fast-path" },
+            request: { proxy: { mode: "explicit-proxy", url: "http://127.0.0.1:18080" } },
+            localService: {
+              command: "/opt/mistral/start",
+              args: ["--port", "18080"],
+              healthUrl: "http://127.0.0.1:18080/health",
+            },
+            models: [],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = await resolveModelAsync("mistral", "mistral-medium-3-5", "/tmp/agent", cfg, {
+      allowBundledStaticCatalogFallback: true,
+      runtimeHooks: createRuntimeHooks(),
+      skipPiDiscovery: true,
+    });
+    const model = expectResolvedModel(result);
+
+    expect(model.baseUrl).toBe("https://mistral-proxy.example.com/v1");
+    expect(model.headers).toEqual({ "X-Proxy": "static-fast-path" });
+    expect(getModelProviderRequestTransport(model)).toEqual({
+      proxy: { mode: "explicit-proxy", url: "http://127.0.0.1:18080" },
+    });
+    expect(getModelProviderLocalService(model)).toEqual({
+      command: "/opt/mistral/start",
+      args: ["--port", "18080"],
+      healthUrl: "http://127.0.0.1:18080/health",
+    });
+    expect(discoverAuthStorage).not.toHaveBeenCalled();
+    expect(discoverModels).not.toHaveBeenCalled();
+  });
+
   it("does not use bundled static catalog rows unless the caller opts in", async () => {
     const result = await resolveModelAsync(
       "mistral",

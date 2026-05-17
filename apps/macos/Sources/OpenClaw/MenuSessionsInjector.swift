@@ -65,28 +65,28 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
         self.inject(into: menu)
         self.injectNodes(into: menu)
 
-        // Refresh in background for the next open; keep width stable while open.
+        // Refresh in the background for the next open. Rebuilding custom menu
+        // rows while AppKit is tracking the menu causes visible flicker.
         self.loadTask?.cancel()
-        let forceRefresh = self.cachedSnapshot == nil || self.cachedErrorText != nil
-        self.loadTask = Task { [weak self] in
+        let shouldRepaintAfterRefresh = self.cachedSnapshot == nil || self.cachedErrorText != nil
+        self.loadTask = Task { [weak self, weak menu] in
             guard let self else { return }
+            let forceRefresh = shouldRepaintAfterRefresh
             await self.refreshCache(force: forceRefresh)
             await self.refreshUsageCache(force: forceRefresh)
             await self.refreshCostUsageCache(force: forceRefresh)
-            await MainActor.run {
-                guard self.isMenuOpen else { return }
-                self.inject(into: menu)
-                self.injectNodes(into: menu)
+            if shouldRepaintAfterRefresh {
+                await self.repaintOpenMenu(menu)
             }
         }
 
         self.nodesLoadTask?.cancel()
-        self.nodesLoadTask = Task { [weak self] in
+        let shouldRepaintNodesAfterRefresh = self.shouldRepaintNodesAfterRefresh()
+        self.nodesLoadTask = Task { [weak self, weak menu] in
             guard let self else { return }
             await self.nodesStore.refresh()
-            await MainActor.run {
-                guard self.isMenuOpen else { return }
-                self.injectNodes(into: menu)
+            if !shouldRepaintAfterRefresh, shouldRepaintNodesAfterRefresh {
+                await self.repaintOpenMenuNodes(menu)
             }
         }
     }
@@ -95,8 +95,6 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
         self.originalDelegate?.menuDidClose?(menu)
         self.isMenuOpen = false
         self.menuOpenWidth = nil
-        self.loadTask?.cancel()
-        self.nodesLoadTask?.cancel()
         self.cancelPreviewTasks()
     }
 
@@ -122,25 +120,18 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
         guard self.isMenuOpen, let menu = self.statusItem?.menu else { return }
         self.loadTask?.cancel()
         self.loadTask = Task { [weak self, weak menu] in
-            guard let self, let menu else { return }
+            guard let self else { return }
             await self.refreshCache(force: true)
             await self.refreshUsageCache(force: true)
             await self.refreshCostUsageCache(force: true)
-            await MainActor.run {
-                guard self.isMenuOpen else { return }
-                self.inject(into: menu)
-                self.injectNodes(into: menu)
-            }
+            await self.repaintOpenMenu(menu)
         }
 
         self.nodesLoadTask?.cancel()
         self.nodesLoadTask = Task { [weak self, weak menu] in
-            guard let self, let menu else { return }
+            guard let self else { return }
             await self.nodesStore.refresh()
-            await MainActor.run {
-                guard self.isMenuOpen else { return }
-                self.injectNodes(into: menu)
-            }
+            await self.repaintOpenMenuNodes(menu)
         }
     }
 
@@ -278,6 +269,28 @@ extension MenuSessionsInjector {
         _ = cursor
     }
 
+    private func repaintOpenMenu(_ menu: NSMenu?) async {
+        await MainActor.run {
+            guard self.isMenuOpen, let menu else { return }
+            self.inject(into: menu)
+            self.injectNodes(into: menu)
+        }
+    }
+
+    private func repaintOpenMenuNodes(_ menu: NSMenu?) async {
+        await MainActor.run {
+            guard self.isMenuOpen, let menu else { return }
+            self.injectNodes(into: menu)
+        }
+    }
+
+    private func shouldRepaintNodesAfterRefresh() -> Bool {
+        guard self.isControlChannelConnected else { return false }
+        return self.sortedNodeEntries().isEmpty
+            || self.nodesStore.lastError?.nonEmpty != nil
+            || self.nodesStore.statusMessage?.nonEmpty != nil
+    }
+
     private func buildContextSubmenu(
         width: CGFloat,
         isConnected: Bool,
@@ -374,7 +387,7 @@ extension MenuSessionsInjector {
             return self.cachedErrorText ?? "Loading…"
         }
 
-        return self.controlChannelStatusText(for: channelState)
+        return Self.menuStatusText(self.controlChannelStatusText(for: channelState))
     }
 
     private func activeRows(from snapshot: SessionStoreSnapshot) -> [SessionRow] {
@@ -527,7 +540,7 @@ extension MenuSessionsInjector {
         case .connecting:
             "Connecting…"
         case let .degraded(message):
-            message.nonEmpty ?? "Gateway disconnected"
+            Self.menuStatusText(message.nonEmpty ?? "Gateway disconnected")
         case .disconnected:
             "Gateway disconnected"
         }
@@ -684,7 +697,7 @@ extension MenuSessionsInjector {
         self.previewTasks.removeAll()
     }
 
-    private func makeMessageItem(text: String, symbolName: String, width: CGFloat, maxLines: Int? = 2) -> NSMenuItem {
+    private func makeMessageItem(text: String, symbolName: String, width: CGFloat, maxLines: Int? = 3) -> NSMenuItem {
         let view = AnyView(
             HStack(alignment: .top, spacing: 8) {
                 Image(systemName: symbolName)
@@ -809,6 +822,19 @@ extension MenuSessionsInjector {
             }
         }
         return "Sessions unavailable"
+    }
+
+    private static func menuStatusText(_ text: String) -> String {
+        let lines = text
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        let singleLine = (lines.isEmpty ? text : lines.joined(separator: " "))
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard singleLine.count > 180 else { return singleLine }
+        return "\(singleLine.prefix(177))…"
     }
 }
 
@@ -1281,6 +1307,14 @@ extension MenuSessionsInjector {
 
     func injectForTesting(into menu: NSMenu) {
         self.inject(into: menu)
+    }
+
+    func testingControlChannelStatusText(for state: ControlChannel.ConnectionState) -> String {
+        self.controlChannelStatusText(for: state)
+    }
+
+    func testingMenuStatusText(_ text: String) -> String {
+        Self.menuStatusText(text)
     }
 
     func testingFindInsertIndex(in menu: NSMenu) -> Int? {

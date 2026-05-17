@@ -390,7 +390,33 @@ describe("createLaneTextDeliverer", () => {
     expect(harness.lanes.answer.finalized).toBe(true);
   });
 
-  it("clears unfinalized stream state before non-stream final delivery", async () => {
+  it("keeps streamed final text in place when late media arrives", async () => {
+    const harness = createHarness({ answerMessageId: 999 });
+    harness.lanes.answer.hasStreamedMessage = true;
+
+    const result = await harness.deliverLaneText({
+      laneName: "answer",
+      text: "photo",
+      payload: { text: "photo", mediaUrl: "https://example.com/a.png" },
+      infoKind: "final",
+    });
+
+    const delivery = expectPreviewFinalized(result);
+    expect(delivery.content).toBe("photo");
+    expect(delivery.messageId).toBe(999);
+    expect(harness.clearDraftLane).not.toHaveBeenCalled();
+    expect(harness.answer?.clear).not.toHaveBeenCalled();
+    expect(harness.answer?.update).toHaveBeenCalledWith("photo");
+    expect(harness.stopDraftLane).toHaveBeenCalledTimes(1);
+    expect(harness.sendPayload).toHaveBeenCalledWith(
+      {
+        mediaUrl: "https://example.com/a.png",
+      },
+      { durable: true },
+    );
+  });
+
+  it("uses normal media final delivery when no preview has streamed", async () => {
     const harness = createHarness({ answerMessageId: 999 });
 
     const result = await harness.deliverLaneText({
@@ -402,11 +428,217 @@ describe("createLaneTextDeliverer", () => {
 
     expect(result.kind).toBe("sent");
     expect(harness.clearDraftLane).toHaveBeenCalledTimes(1);
-    expect(harness.answer?.clear).toHaveBeenCalledTimes(1);
     expect(harness.sendPayload).toHaveBeenCalledWith(
       {
         text: "photo",
         mediaUrl: "https://example.com/a.png",
+      },
+      { durable: true },
+    );
+  });
+
+  it("uses normal media final delivery when no stream exists", async () => {
+    const harness = createHarness({ answerStream: null });
+
+    const result = await harness.deliverLaneText({
+      laneName: "answer",
+      text: "photo",
+      payload: { text: "photo", mediaUrl: "https://example.com/a.png" },
+      infoKind: "final",
+    });
+
+    expect(result.kind).toBe("sent");
+    expect(harness.clearDraftLane).not.toHaveBeenCalled();
+    expect(harness.sendPayload).toHaveBeenCalledWith(
+      {
+        text: "photo",
+        mediaUrl: "https://example.com/a.png",
+      },
+      { durable: true },
+    );
+  });
+
+  it("strips rich fallback content from late media follow-up", async () => {
+    const harness = createHarness({ answerMessageId: 999 });
+    harness.lanes.answer.hasStreamedMessage = true;
+
+    const result = await harness.deliverLaneText({
+      laneName: "answer",
+      text: "photo",
+      payload: {
+        text: "photo",
+        mediaUrl: "https://example.com/a.png",
+        presentation: {
+          title: "Photo",
+          blocks: [{ type: "text", text: "Visible fallback" }],
+        },
+        interactive: {
+          blocks: [{ type: "buttons", buttons: [{ label: "OK", value: "ok" }] }],
+        },
+        btw: { question: "side question" },
+      },
+      infoKind: "final",
+    });
+
+    expectPreviewFinalized(result);
+    expect(harness.sendPayload).toHaveBeenCalledWith(
+      {
+        mediaUrl: "https://example.com/a.png",
+      },
+      { durable: true },
+    );
+  });
+
+  it("keeps text on late voice media so blocked voice sends can fall back", async () => {
+    const harness = createHarness({ answerMessageId: 999 });
+    harness.lanes.answer.hasStreamedMessage = true;
+
+    const result = await harness.deliverLaneText({
+      laneName: "answer",
+      text: "resolved voice fallback",
+      payload: {
+        text: "stale voice fallback",
+        mediaUrl: "https://example.com/note.ogg",
+        audioAsVoice: true,
+      },
+      infoKind: "final",
+    });
+
+    expectPreviewFinalized(result);
+    expect(harness.sendPayload).toHaveBeenCalledWith(
+      {
+        mediaUrl: "https://example.com/note.ogg",
+        audioAsVoice: true,
+        spokenText: "resolved voice fallback",
+      },
+      { durable: true },
+    );
+  });
+
+  it("uses retained final preview text for late voice media fallback", async () => {
+    const fullAnswer =
+      "A longer transcript-backed answer that has enough continuation text to avoid falling back to the truncated snapshot.";
+    const truncatedFinal = "A longer transcript-backed answer that has enough...";
+    const answer = createTestDraftStream({ messageId: 999 });
+    answer.lastDeliveredText.mockReturnValue(fullAnswer);
+    const harness = createHarness({
+      answerStream: answer,
+      resolveFinalTextCandidate: () => fullAnswer,
+    });
+    harness.lanes.answer.hasStreamedMessage = true;
+
+    const result = await harness.deliverLaneText({
+      laneName: "answer",
+      text: truncatedFinal,
+      payload: {
+        text: truncatedFinal,
+        mediaUrl: "https://example.com/note.ogg",
+        audioAsVoice: true,
+      },
+      infoKind: "final",
+    });
+
+    const delivery = expectPreviewFinalized(result);
+    expect(delivery.content).toBe(fullAnswer);
+    expect(harness.sendPayload).toHaveBeenCalledWith(
+      {
+        mediaUrl: "https://example.com/note.ogg",
+        audioAsVoice: true,
+        spokenText: fullAnswer,
+      },
+      { durable: true },
+    );
+  });
+
+  it("keeps inline buttons on the streamed text instead of late media", async () => {
+    const harness = createHarness({ answerMessageId: 999 });
+    harness.lanes.answer.hasStreamedMessage = true;
+    const buttons = [[{ text: "OK", callback_data: "ok" }]];
+
+    const result = await harness.deliverLaneText({
+      laneName: "answer",
+      text: "photo",
+      payload: {
+        text: "photo",
+        mediaUrl: "https://example.com/a.png",
+        channelData: { telegram: { buttons, effect: "spark" }, other: true },
+      },
+      infoKind: "final",
+      buttons,
+    });
+
+    expectPreviewFinalized(result);
+    expect(harness.editStreamMessage).toHaveBeenCalledWith({
+      laneName: "answer",
+      messageId: 999,
+      text: "photo",
+      buttons,
+    });
+    expect(harness.sendPayload).toHaveBeenCalledWith(
+      {
+        mediaUrl: "https://example.com/a.png",
+        channelData: { telegram: { effect: "spark" }, other: true },
+      },
+      { durable: true },
+    );
+  });
+
+  it("keeps inline buttons on late media when the stream button edit fails", async () => {
+    const harness = createHarness({ answerMessageId: 999 });
+    harness.lanes.answer.hasStreamedMessage = true;
+    harness.editStreamMessage.mockRejectedValueOnce(new Error("400: button rejected"));
+    const buttons = [[{ text: "OK", callback_data: "ok" }]];
+
+    const result = await harness.deliverLaneText({
+      laneName: "answer",
+      text: "photo",
+      payload: {
+        text: "photo",
+        mediaUrl: "https://example.com/a.png",
+        channelData: { telegram: { buttons, effect: "spark" }, other: true },
+      },
+      infoKind: "final",
+      buttons,
+    });
+
+    expectPreviewFinalized(result);
+    expect(harness.log).toHaveBeenCalledWith(
+      "telegram: answer stream button edit failed: Error: 400: button rejected",
+    );
+    expect(harness.sendPayload).toHaveBeenCalledWith(
+      {
+        mediaUrl: "https://example.com/a.png",
+        channelData: { telegram: { buttons, effect: "spark" }, other: true },
+      },
+      { durable: true },
+    );
+  });
+
+  it("preserves derived inline buttons on late media when the stream button edit fails", async () => {
+    const harness = createHarness({ answerMessageId: 999 });
+    harness.lanes.answer.hasStreamedMessage = true;
+    harness.editStreamMessage.mockRejectedValueOnce(new Error("400: button rejected"));
+    const buttons = [[{ text: "OK", callback_data: "ok" }]];
+
+    const result = await harness.deliverLaneText({
+      laneName: "answer",
+      text: "photo",
+      payload: {
+        text: "photo",
+        mediaUrl: "https://example.com/a.png",
+        interactive: {
+          blocks: [{ type: "buttons", buttons: [{ label: "OK", value: "ok" }] }],
+        },
+      },
+      infoKind: "final",
+      buttons,
+    });
+
+    expectPreviewFinalized(result);
+    expect(harness.sendPayload).toHaveBeenCalledWith(
+      {
+        mediaUrl: "https://example.com/a.png",
+        channelData: { telegram: { buttons } },
       },
       { durable: true },
     );

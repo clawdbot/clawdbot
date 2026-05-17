@@ -35,6 +35,7 @@ function expectFetchRemoteEmbeddingVectorsBody(body: Record<string, unknown>) {
     headers: { Authorization: "Bearer test" },
     ssrfPolicy: undefined,
     fetchImpl: undefined,
+    signal: undefined,
     body,
     errorPrefix: "openai embeddings failed",
   });

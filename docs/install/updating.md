@@ -111,6 +111,12 @@ OpenClaw retries once with `--omit=optional`. That retry helps hosts where nativ
 optional dependencies cannot compile, while keeping the original failure visible
 if the fallback also fails.
 
+OpenClaw-managed npm update and plugin-update commands also clear npm
+`min-release-age` quarantine for the child npm process. npm may report that
+policy as a derived `before` cutoff; both are useful for general supply-chain
+quarantine policies, but an explicit OpenClaw update means "install the selected
+OpenClaw release now."
+
 ```bash
 pnpm add -g openclaw@latest
 ```

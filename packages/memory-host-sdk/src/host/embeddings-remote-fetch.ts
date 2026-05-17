@@ -33,6 +33,7 @@ export async function fetchRemoteEmbeddingVectors(params: {
   headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
   fetchImpl?: typeof fetch;
+  signal?: AbortSignal;
   body: unknown;
   errorPrefix: string;
 }): Promise<number[][]> {
@@ -41,6 +42,7 @@ export async function fetchRemoteEmbeddingVectors(params: {
     headers: params.headers,
     ssrfPolicy: params.ssrfPolicy,
     fetchImpl: params.fetchImpl,
+    signal: params.signal,
     body: params.body,
     errorPrefix: params.errorPrefix,
     parse: (payload) => {

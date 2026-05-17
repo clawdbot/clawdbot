@@ -3054,6 +3054,59 @@ describe("persistSessionUsageUpdate", () => {
     expect(stored[sessionKey].totalTokensFresh).toBe(false);
   });
 
+  it("preserves fresh post-compaction totalTokens across stale usage updates", async () => {
+    const storePath = await createStorePath("openclaw-usage-");
+    const sessionKey = "main";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "s1",
+        updatedAt: Date.now(),
+        totalTokens: 42_000,
+        totalTokensFresh: true,
+      },
+    });
+
+    await persistSessionUsageUpdate({
+      storePath,
+      sessionKey,
+      usage: { input: 50_000, output: 5_000, total: 55_000 },
+      contextTokensUsed: 200_000,
+      preserveFreshTotalTokensOnStaleUsage: true,
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].totalTokens).toBe(42_000);
+    expect(stored[sessionKey].totalTokensFresh).toBe(true);
+  });
+
+  it("marks older fresh totalTokens stale when no compaction preservation is requested", async () => {
+    const storePath = await createStorePath("openclaw-usage-");
+    const sessionKey = "main";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "s1",
+        updatedAt: Date.now(),
+        totalTokens: 42_000,
+        totalTokensFresh: true,
+      },
+    });
+
+    await persistSessionUsageUpdate({
+      storePath,
+      sessionKey,
+      usage: { input: 50_000, output: 5_000, total: 55_000 },
+      contextTokensUsed: 200_000,
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].totalTokens).toBe(42_000);
+    expect(stored[sessionKey].totalTokensFresh).toBe(false);
+  });
+
   it("uses promptTokens when available without lastCallUsage", async () => {
     const storePath = await createStorePath("openclaw-usage-");
     const sessionKey = "main";
@@ -3231,6 +3284,40 @@ describe("persistSessionUsageUpdate", () => {
     expect(stored2[sessionKey].estimatedCostUsd).toBeCloseTo(0.007725, 8);
   });
 
+  it("preserves the displayed session model when heartbeat usage uses a heartbeat model", async () => {
+    const storePath = await createStorePath("openclaw-usage-heartbeat-model-");
+    const sessionKey = "main";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "s1",
+        updatedAt: Date.now(),
+        modelProvider: "openai-codex",
+        model: "gpt-5.4",
+      },
+    });
+
+    await persistSessionUsageUpdate({
+      storePath,
+      sessionKey,
+      isHeartbeat: true,
+      usage: { input: 1_200, output: 100, cacheRead: 300, cacheWrite: 10 },
+      lastCallUsage: { input: 900, output: 80, cacheRead: 200, cacheWrite: 5 },
+      providerUsed: "openai-codex",
+      modelUsed: "gpt-5.1-codex-mini",
+      contextTokensUsed: 128_000,
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].modelProvider).toBe("openai-codex");
+    expect(stored[sessionKey].model).toBe("gpt-5.4");
+    expect(stored[sessionKey].inputTokens).toBe(1_200);
+    expect(stored[sessionKey].outputTokens).toBe(100);
+    expect(stored[sessionKey].cacheRead).toBe(200);
+    expect(stored[sessionKey].totalTokens).toBe(1_105);
+  });
+
   it("persists zero estimatedCostUsd for free priced models", async () => {
     const storePath = await createStorePath("openclaw-usage-free-cost-");
     const sessionKey = "main";
@@ -3307,6 +3394,27 @@ describe("initSessionState stale threadId fallback", () => {
     });
     expect(mainResult.sessionEntry.lastThreadId).toBeUndefined();
     expect(mainResult.sessionEntry.deliveryContext?.threadId).toBeUndefined();
+  });
+
+  it("preserves explicit transport thread routing in non-thread sessions", async () => {
+    const storePath = await createStorePath("transport-thread-");
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "reply from Slack DM thread",
+        SessionKey: "agent:main:main",
+        OriginatingChannel: "slack",
+        OriginatingTo: "user:U1",
+        AccountId: "default",
+        TransportThreadId: "650.000",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.sessionEntry.lastThreadId).toBe("650.000");
+    expect(result.sessionEntry.deliveryContext?.threadId).toBe("650.000");
   });
 
   it("preserves lastThreadId within the same thread session", async () => {

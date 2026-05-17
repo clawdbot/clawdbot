@@ -79,4 +79,25 @@ describe("resolveCommandConfigWithSecrets", () => {
     });
     expect(result.effectiveConfig).toBe(effectiveConfig);
   });
+
+  it("passes provider overrides to command secret resolution", async () => {
+    const config = { tools: { web: { search: { provider: "tavily" } } } };
+    mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
+      resolvedConfig: config,
+      diagnostics: [],
+    });
+
+    await resolveCommandConfigWithSecrets({
+      config,
+      commandName: "infer web search",
+      targetIds: new Set(["plugins.entries.*.config.webSearch.apiKey"]),
+      providerOverrides: { webSearch: "tavily" },
+    });
+
+    expect(mocks.resolveCommandSecretRefsViaGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerOverrides: { webSearch: "tavily" },
+      }),
+    );
+  });
 });

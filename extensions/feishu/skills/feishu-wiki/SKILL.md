@@ -8,6 +8,8 @@ description: |
 
 Single tool `feishu_wiki` for knowledge base operations.
 
+Wiki `space_id` values are opaque strings. Always keep them quoted in tool calls, even when they contain only digits; passing a long numeric-looking ID as a number can corrupt the suffix due to JavaScript number precision limits.
+
 ## Token Extraction
 
 From URL `https://xxx.feishu.cn/wiki/ABC123def` → `token` = `ABC123def`

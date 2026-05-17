@@ -119,6 +119,10 @@ export function createLazyChannelApprovalNativeRuntimeAdapter<
         await (
           await loadOptional((runtime) => runtime.interactions?.clearPendingActions)
         )?.(runtimeParams),
+      cancelDelivered: async (runtimeParams) =>
+        await (
+          await loadOptional((runtime) => runtime.interactions?.cancelDelivered)
+        )?.(runtimeParams),
     },
     observe: {
       // Observe hooks are fire-and-forget at call sites. Reuse the already

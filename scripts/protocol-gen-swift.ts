@@ -41,7 +41,12 @@ const STRICT_LITERAL_STRUCTS = new Set([
 ]);
 
 const DEFAULTED_OPTIONAL_INIT_PARAMS: Record<string, Set<string>> = {
-  MessageActionParams: new Set(["inboundTurnKind"]),
+  SessionsAbortParams: new Set(["agentId"]),
+  SessionsUsageParams: new Set(["agentId"]),
+  ArtifactsListParams: new Set(["agentId"]),
+  ArtifactsGetParams: new Set(["agentId"]),
+  ArtifactsDownloadParams: new Set(["agentId"]),
+  MessageActionParams: new Set(["inboundEventKind"]),
   CronRunLogEntry: new Set(["failureNotificationDelivery"]),
 };
 
@@ -173,6 +178,22 @@ function swiftType(schema: JsonSchema, required: boolean, allowStructuralNamed =
   return isOptional ? `${base}?` : base;
 }
 
+function swiftInitializerParam(params: {
+  structName: string;
+  key: string;
+  name: string;
+  schema: JsonSchema;
+  required: boolean;
+  allowStructuralNamed?: boolean;
+}): string {
+  const type = swiftType(params.schema, true, params.allowStructuralNamed ?? true);
+  if (params.required) {
+    return `${params.name}: ${type}`;
+  }
+  const defaultNil = DEFAULTED_OPTIONAL_INIT_PARAMS[params.structName]?.has(params.key) ?? false;
+  return `${params.name}: ${type}?${defaultNil ? " = nil" : ""}`;
+}
+
 function emitEnum(name: string, schema: JsonSchema): string {
   const cases = schema.enum ?? [];
   return [
@@ -224,7 +245,13 @@ function emitStruct(name: string, schema: JsonSchema): string {
       .map(([key, prop]) => {
         const propName = safeName(key);
         const req = required.has(key);
-        return `        ${propName}: ${swiftType(prop, true, true)}${req ? "" : "?"}`;
+        return `        ${swiftInitializerParam({
+          structName: name,
+          key,
+          name: propName,
+          schema: prop,
+          required: req,
+        })}`;
       });
     lines.push(
       "\n    public init(\n" +
@@ -309,8 +336,13 @@ function emitStruct(name: string, schema: JsonSchema): string {
         .map(([key, prop]) => {
           const propName = safeName(key);
           const req = required.has(key);
-          const defaultValue = DEFAULTED_OPTIONAL_INIT_PARAMS[name]?.has(key) ? " = nil" : "";
-          return `        ${propName}: ${swiftType(prop, true, true)}${req ? "" : "?"}${defaultValue}`;
+          return `        ${swiftInitializerParam({
+            structName: name,
+            key,
+            name: propName,
+            schema: prop,
+            required: req,
+          })}`;
         })
         .join(",\n") +
       ")\n" +

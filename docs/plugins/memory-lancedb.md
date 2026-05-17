@@ -1,20 +1,32 @@
 ---
-summary: "Configure the bundled LanceDB memory plugin, including local Ollama-compatible embeddings"
+summary: "Configure the official external LanceDB memory plugin, including local Ollama-compatible embeddings"
 read_when:
-  - You are configuring the bundled memory-lancedb plugin
+  - You are configuring the memory-lancedb plugin
   - You want LanceDB-backed long-term memory with auto-recall or auto-capture
   - You are using local OpenAI-compatible embeddings such as Ollama
 title: "Memory LanceDB"
 sidebarTitle: "Memory LanceDB"
 ---
 
-`memory-lancedb` is a bundled memory plugin that stores long-term memory in
+`memory-lancedb` is an official external memory plugin that stores long-term memory in
 LanceDB and uses embeddings for recall. It can automatically recall relevant
 memories before a model turn and capture important facts after a response.
 
 Use it when you want a local vector database for memory, need an
 OpenAI-compatible embedding endpoint, or want to keep a memory database outside
 the default built-in memory store.
+
+## Installation
+
+Install `memory-lancedb` before setting `plugins.slots.memory = "memory-lancedb"`:
+
+```bash
+openclaw plugins install @openclaw/memory-lancedb
+```
+
+The plugin is published to npm and is not bundled into the OpenClaw runtime image.
+The installer writes the plugin entry and switches the memory slot when no other
+plugin owns it.
 
 <Note>
 `memory-lancedb` is an active memory plugin. Enable it by selecting the memory

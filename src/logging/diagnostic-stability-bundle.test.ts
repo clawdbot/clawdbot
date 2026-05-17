@@ -234,6 +234,26 @@ describe("diagnostic stability bundles", () => {
     Object.assign(bundle, {
       reason: "private reason token=secret",
       privateTopLevel: "top-level-secret",
+      evidence: {
+        memoryPressure: {
+          level: "critical",
+          reason: "rss_threshold",
+          memory: {
+            rssBytes: 4096,
+            heapTotalBytes: 2048,
+            heapUsedBytes: 1536,
+            externalBytes: 128,
+            arrayBuffersBytes: 64,
+          },
+          topSessionFiles: [
+            {
+              relativePath: "agents/main/sessions/raw-secret-session.jsonl",
+              sizeBytes: 4096,
+              mtimeMs: 1,
+            },
+          ],
+        },
+      },
       error: {
         name: "private error name",
         code: "ERR_TEST",
@@ -282,6 +302,9 @@ describe("diagnostic stability bundles", () => {
     expect(result.bundle.error?.code).toBe("ERR_TEST");
     expect(result.bundle.error?.message).toContain("OPENAI_API_KEY=");
     expect(result.bundle.error?.message).not.toContain("sk-1234567890abcdef");
+    expect(result.bundle.evidence?.memoryPressure?.topSessionFiles?.[0]?.relativePath).toBe(
+      "agents/<agent>/sessions/<session>.jsonl",
+    );
     expect(result.bundle.snapshot.events[0]).toEqual({
       seq: 1,
       ts: 1,
@@ -300,6 +323,7 @@ describe("diagnostic stability bundles", () => {
       "host-extra-secret",
       "snapshot-secret",
       "private event reason",
+      "raw-secret-session",
       "chat-id-secret",
       "event-error-secret",
       "private summary type",

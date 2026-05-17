@@ -30,13 +30,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -499,19 +502,12 @@ private fun AnnotatedString.Builder.appendInlineNode(
         }
       }
       is Link -> {
-        withStyle(
-          SpanStyle(
-            color = linkColor,
-            textDecoration = TextDecoration.Underline,
-          ),
-        ) {
-          appendInlineNode(
-            current.firstChild,
-            inlineCodeBg = inlineCodeBg,
-            inlineCodeColor = inlineCodeColor,
-            linkColor = linkColor,
-          )
-        }
+        appendLinkNode(
+          link = current,
+          inlineCodeBg = inlineCodeBg,
+          inlineCodeColor = inlineCodeColor,
+          linkColor = linkColor,
+        )
       }
       is MarkdownImage -> {
         val alt = buildPlainText(current.firstChild)
@@ -527,11 +523,67 @@ private fun AnnotatedString.Builder.appendInlineNode(
         }
       }
       else -> {
-        appendInlineNode(current.firstChild, inlineCodeBg = inlineCodeBg, inlineCodeColor = inlineCodeColor, linkColor = linkColor)
+        appendInlineNode(
+          current.firstChild,
+          inlineCodeBg = inlineCodeBg,
+          inlineCodeColor = inlineCodeColor,
+          linkColor = linkColor,
+        )
       }
     }
     current = current.next
   }
+}
+
+private fun AnnotatedString.Builder.appendLinkNode(
+  link: Link,
+  inlineCodeBg: Color,
+  inlineCodeColor: Color,
+  linkColor: Color,
+) {
+  val destination = link.destination?.trim().orEmpty()
+  val linkStyle =
+    SpanStyle(
+      color = linkColor,
+      textDecoration = TextDecoration.Underline,
+    )
+  if (destination.isEmpty()) {
+    withStyle(linkStyle) {
+      appendInlineNode(
+        link.firstChild,
+        inlineCodeBg = inlineCodeBg,
+        inlineCodeColor = inlineCodeColor,
+        linkColor = linkColor,
+      )
+    }
+    return
+  }
+
+  withLink(LinkAnnotation.Url(url = destination, styles = TextLinkStyles(style = linkStyle))) {
+    appendInlineNode(
+      link.firstChild,
+      inlineCodeBg = inlineCodeBg,
+      inlineCodeColor = inlineCodeColor,
+      linkColor = linkColor,
+    )
+  }
+}
+
+internal fun buildChatInlineMarkdown(
+  text: String,
+  linkColor: Color = Color.Blue,
+): AnnotatedString {
+  val document = markdownParser.parse(text) as Document
+  val paragraph = document.firstChild as? Paragraph ?: return AnnotatedString("")
+  return buildInlineMarkdown(
+    paragraph.firstChild,
+    InlineStyles(
+      inlineCodeBg = Color.Transparent,
+      inlineCodeColor = Color.Unspecified,
+      linkColor = linkColor,
+      baseCallout = TextStyle.Default,
+    ),
+  )
 }
 
 private fun buildPlainText(start: Node?): String {

@@ -9,6 +9,7 @@ import {
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "./internal-runtime-context.js";
 import {
+  markRestartAbortedMainSessions,
   markRestartAbortedMainSessionsFromLocks,
   recoverRestartAbortedMainSessions,
 } from "./main-session-restart-recovery.js";
@@ -78,6 +79,161 @@ function firstGatewayParams(): Record<string, unknown> {
 }
 
 describe("main-session-restart-recovery", () => {
+  it("marks only matching running main sessions by active session key", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+      },
+      "agent:main:completed": {
+        sessionId: "completed-session",
+        updatedAt: Date.now() - 10_000,
+        status: "done",
+      },
+      "agent:main:subagent:child": {
+        sessionId: "child-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        spawnDepth: 1,
+      },
+      "cron:nightly": {
+        sessionId: "cron-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+      },
+      "agent:main:other": {
+        sessionId: "other-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+      },
+    });
+
+    const result = await markRestartAbortedMainSessions({
+      stateDir: tmpDir,
+      sessionKeys: ["agent:main:main", "agent:main:completed", "agent:main:subagent:child"],
+    });
+
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    expect(result).toEqual({ marked: 1, skipped: 1 });
+    expect(store["agent:main:main"]?.abortedLastRun).toBe(true);
+    expect(store["agent:main:completed"]?.abortedLastRun).toBeUndefined();
+    expect(store["agent:main:subagent:child"]?.abortedLastRun).toBeUndefined();
+    expect(store["cron:nightly"]?.abortedLastRun).toBeUndefined();
+    expect(store["agent:main:other"]?.abortedLastRun).toBeUndefined();
+  });
+
+  it("marks active sessions in a configured custom session store", async () => {
+    const storePath = path.join(tmpDir, "custom", "sessions.json");
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:issue-82433": {
+            sessionId: "custom-session",
+            updatedAt: Date.now() - 10_000,
+            status: "running",
+          },
+        } satisfies Record<string, SessionEntry>,
+        null,
+        2,
+      ),
+    );
+    await writeTranscript(path.dirname(storePath), "custom-session", [
+      { role: "user", content: "continue this custom-store turn" },
+      { role: "toolResult", content: "custom result" },
+    ]);
+
+    const result = await markRestartAbortedMainSessions({
+      cfg: { session: { store: storePath } },
+      stateDir: tmpDir,
+      sessionKeys: ["agent:main:issue-82433"],
+    });
+
+    const store = loadSessionStore(storePath);
+    expect(result).toEqual({ marked: 1, skipped: 0 });
+    expect(store["agent:main:issue-82433"]?.abortedLastRun).toBe(true);
+
+    const recovery = await recoverRestartAbortedMainSessions({
+      cfg: { session: { store: storePath } },
+      stateDir: tmpDir,
+    });
+
+    expect(recovery).toEqual({ recovered: 1, failed: 0, skipped: 0 });
+  });
+
+  it("uses active session ids to avoid marking stale duplicate keys in another store", async () => {
+    const defaultSessionsDir = await makeSessionsDir();
+    await writeStore(defaultSessionsDir, {
+      "agent:main:issue-82433": {
+        sessionId: "stale-default-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+      },
+    });
+
+    const storePath = path.join(tmpDir, "custom-duplicate-key", "sessions.json");
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:issue-82433": {
+            sessionId: "active-custom-session",
+            updatedAt: Date.now() - 10_000,
+            status: "running",
+          },
+        } satisfies Record<string, SessionEntry>,
+        null,
+        2,
+      ),
+    );
+
+    const result = await markRestartAbortedMainSessions({
+      cfg: { session: { store: storePath } },
+      stateDir: tmpDir,
+      sessionIds: ["active-custom-session"],
+      sessionKeys: ["agent:main:issue-82433"],
+    });
+
+    const defaultStore = loadSessionStore(path.join(defaultSessionsDir, "sessions.json"));
+    const customStore = loadSessionStore(storePath);
+    expect(result).toEqual({ marked: 1, skipped: 0 });
+    expect(defaultStore["agent:main:issue-82433"]?.abortedLastRun).toBeUndefined();
+    expect(customStore["agent:main:issue-82433"]?.abortedLastRun).toBe(true);
+  });
+
+  it("marks custom-store sessions by session id when no session key is available", async () => {
+    const storePath = path.join(tmpDir, "custom-by-id", "sessions.json");
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:custom-by-id": {
+            sessionId: "custom-session-id-only",
+            updatedAt: Date.now() - 10_000,
+            status: "running",
+          },
+        } satisfies Record<string, SessionEntry>,
+        null,
+        2,
+      ),
+    );
+
+    const result = await markRestartAbortedMainSessions({
+      cfg: { session: { store: storePath } },
+      stateDir: tmpDir,
+      sessionIds: ["custom-session-id-only"],
+    });
+
+    const store = loadSessionStore(storePath);
+    expect(result).toEqual({ marked: 1, skipped: 0 });
+    expect(store["agent:main:custom-by-id"]?.abortedLastRun).toBe(true);
+  });
+
   it("marks only main running sessions whose transcript lock was cleaned", async () => {
     const sessionsDir = await makeSessionsDir();
     await writeStore(sessionsDir, {

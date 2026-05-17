@@ -27,7 +27,18 @@ function summarizeMusicGenerationCapabilities(
     edit?.maxInputImages ? `maxInputImages=${edit.maxInputImages}` : null,
     generate?.maxDurationSeconds ? `maxDurationSeconds=${generate.maxDurationSeconds}` : null,
     generate?.supportsLyrics ? "lyrics" : null,
+    generate?.supportsLyricsByModel && Object.keys(generate.supportsLyricsByModel).length > 0
+      ? `supportsLyricsByModel=${Object.entries(generate.supportsLyricsByModel)
+          .map(([modelId, supported]) => `${modelId}:${supported}`)
+          .join("; ")}`
+      : null,
     generate?.supportsInstrumental ? "instrumental" : null,
+    generate?.supportsInstrumentalByModel &&
+    Object.keys(generate.supportsInstrumentalByModel).length > 0
+      ? `supportsInstrumentalByModel=${Object.entries(generate.supportsInstrumentalByModel)
+          .map(([modelId, supported]) => `${modelId}:${supported}`)
+          .join("; ")}`
+      : null,
     generate?.supportsDuration ? "duration" : null,
     generate?.supportsFormat ? "format" : null,
     generate?.supportedFormats?.length

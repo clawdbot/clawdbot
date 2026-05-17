@@ -1,6 +1,9 @@
 import type { APISelectMenuOption } from "discord-api-types/v10";
 import { ButtonStyle } from "discord-api-types/v10";
-import type { ModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
+import type {
+  ModelsProviderData,
+  ModelsRuntimeChoice,
+} from "openclaw/plugin-sdk/models-provider-runtime";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   Button,
@@ -76,8 +79,10 @@ export type DiscordModelPickerModelViewParams = {
   page?: number;
   providerPage?: number;
   currentModel?: string;
+  currentRuntime?: string;
   pendingModel?: string;
   pendingModelIndex?: number;
+  pendingRuntime?: string;
   quickModels?: string[];
   layout?: DiscordModelPickerLayout;
 };
@@ -164,6 +169,59 @@ function createModelSelect(params: {
   return new DiscordModelPickerSelect();
 }
 
+function getRuntimeChoices(params: {
+  data: ModelsProviderData;
+  provider: string;
+}): ModelsRuntimeChoice[] {
+  const choices = params.data.runtimeChoicesByProvider?.get(normalizeProviderId(params.provider));
+  if (choices?.length) {
+    return choices;
+  }
+  return [
+    {
+      id: "pi",
+      label: "OpenClaw Pi Default",
+      description: "Use the built-in OpenClaw Pi runtime.",
+    },
+  ];
+}
+
+function resolveSelectedRuntime(params: {
+  data: ModelsProviderData;
+  provider: string;
+  currentRuntime?: string;
+  pendingRuntime?: string;
+}): string {
+  const choices = getRuntimeChoices({ data: params.data, provider: params.provider });
+  const allowed = new Set(choices.map((choice) => choice.id));
+  const pending = params.pendingRuntime?.trim();
+  if (pending && allowed.has(pending)) {
+    return pending;
+  }
+  const current = params.currentRuntime?.trim();
+  if (current && allowed.has(current)) {
+    return current;
+  }
+  return choices[0]?.id ?? "pi";
+}
+
+function resolveExplicitRuntimeState(params: {
+  choices: ModelsRuntimeChoice[];
+  currentRuntime?: string;
+  pendingRuntime?: string;
+}): string | undefined {
+  const allowed = new Set(params.choices.map((choice) => choice.id));
+  const pending = params.pendingRuntime?.trim();
+  if (pending && allowed.has(pending)) {
+    return pending;
+  }
+  const current = params.currentRuntime?.trim();
+  if (current && current !== "auto" && current !== "default" && allowed.has(current)) {
+    return current;
+  }
+  return undefined;
+}
+
 function buildRenderedShell(
   params: DiscordModelPickerRenderShellParams,
 ): DiscordModelPickerRenderedView {
@@ -241,8 +299,10 @@ function buildModelRows(params: {
   providerPage: number;
   modelPage: DiscordModelPickerModelPage;
   currentModel?: string;
+  currentRuntime?: string;
   pendingModel?: string;
   pendingModelIndex?: number;
+  pendingRuntime?: string;
   quickModels?: string[];
 }): { rows: DiscordModelPickerRow[]; buttonRow: Row<Button> } {
   const parsedCurrentModel = parseCurrentModelRef(params.currentModel);
@@ -279,6 +339,54 @@ function buildModelRows(params: {
     ]),
   );
 
+  const runtimeChoices = getRuntimeChoices({
+    data: params.data,
+    provider: params.modelPage.provider,
+  });
+  const selectedRuntime = resolveSelectedRuntime({
+    data: params.data,
+    provider: params.modelPage.provider,
+    currentRuntime: params.currentRuntime,
+    pendingRuntime: params.pendingRuntime,
+  });
+  const stateRuntime = resolveExplicitRuntimeState({
+    choices: runtimeChoices,
+    currentRuntime: params.currentRuntime,
+    pendingRuntime: params.pendingRuntime,
+  });
+
+  if (runtimeChoices.length > 1) {
+    rows.push(
+      new Row([
+        createModelSelect({
+          customId: buildDiscordModelPickerCustomId({
+            command: params.command,
+            action: "runtime",
+            view: "models",
+            provider: params.modelPage.provider,
+            runtime: selectedRuntime,
+            page: params.modelPage.page,
+            providerPage: providerPage.page,
+            modelIndex: params.pendingModelIndex,
+            userId: params.userId,
+          }),
+          options: runtimeChoices.map((choice) => {
+            const option: APISelectMenuOption = {
+              label: choice.label,
+              value: choice.id,
+              default: choice.id === selectedRuntime,
+            };
+            if (choice.description) {
+              option.description = choice.description;
+            }
+            return option;
+          }),
+          placeholder: "Select runtime",
+        }),
+      ]),
+    );
+  }
+
   const selectedModelRef = parsedPendingModel ?? parsedCurrentModel;
   const modelOptions: APISelectMenuOption[] = params.modelPage.items.map((model) => ({
     label: model,
@@ -296,6 +404,7 @@ function buildModelRows(params: {
           action: "model",
           view: "models",
           provider: params.modelPage.provider,
+          runtime: stateRuntime,
           page: params.modelPage.page,
           providerPage: providerPage.page,
           userId: params.userId,
@@ -327,6 +436,7 @@ function buildModelRows(params: {
         action: "cancel",
         view: "models",
         provider: params.modelPage.provider,
+        runtime: stateRuntime,
         page: params.modelPage.page,
         providerPage: providerPage.page,
         userId: params.userId,
@@ -341,6 +451,7 @@ function buildModelRows(params: {
         action: "reset",
         view: "models",
         provider: params.modelPage.provider,
+        runtime: stateRuntime,
         page: params.modelPage.page,
         providerPage: providerPage.page,
         userId: params.userId,
@@ -358,6 +469,7 @@ function buildModelRows(params: {
           action: "recents",
           view: "recents",
           provider: params.modelPage.provider,
+          runtime: stateRuntime,
           page: params.modelPage.page,
           providerPage: providerPage.page,
           userId: params.userId,
@@ -376,6 +488,7 @@ function buildModelRows(params: {
         action: "submit",
         view: "models",
         provider: params.modelPage.provider,
+        runtime: stateRuntime,
         page: params.modelPage.page,
         providerPage: providerPage.page,
         modelIndex: params.pendingModelIndex,
@@ -457,14 +570,21 @@ export function renderDiscordModelPickerModelsView(
     providerPage,
     modelPage,
     currentModel: params.currentModel,
+    currentRuntime: params.currentRuntime,
     pendingModel: params.pendingModel,
     pendingModelIndex: params.pendingModelIndex,
+    pendingRuntime: params.pendingRuntime,
     quickModels: params.quickModels,
   });
 
   const defaultModel = `${params.data.resolvedDefault.provider}/${params.data.resolvedDefault.model}`;
   const pendingLine = params.pendingModel
-    ? `Selected: ${params.pendingModel} (press Submit)`
+    ? `Selected: ${params.pendingModel} · runtime ${resolveSelectedRuntime({
+        data: params.data,
+        provider: modelPage.provider,
+        currentRuntime: params.currentRuntime,
+        pendingRuntime: params.pendingRuntime,
+      })} (press Submit)`
     : "Select a model, then press Submit.";
 
   return buildRenderedShell({
@@ -483,6 +603,7 @@ export type DiscordModelPickerRecentsViewParams = {
   data: ModelsProviderData;
   quickModels: string[];
   currentModel?: string;
+  runtime?: string;
   provider?: string;
   page?: number;
   providerPage?: number;
@@ -522,6 +643,7 @@ export function renderDiscordModelPickerRecentsView(
           view: "recents",
           recentSlot: 1,
           provider: params.provider,
+          runtime: params.runtime,
           page: params.page,
           providerPage: params.providerPage,
           userId: params.userId,
@@ -544,6 +666,7 @@ export function renderDiscordModelPickerRecentsView(
             view: "recents",
             recentSlot: i + 2,
             provider: params.provider,
+            runtime: params.runtime,
             page: params.page,
             providerPage: params.providerPage,
             userId: params.userId,
@@ -563,6 +686,7 @@ export function renderDiscordModelPickerRecentsView(
         action: "back",
         view: "models",
         provider: params.provider,
+        runtime: params.runtime,
         page: params.page,
         providerPage: params.providerPage,
         userId: params.userId,

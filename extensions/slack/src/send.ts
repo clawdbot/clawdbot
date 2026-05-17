@@ -1,3 +1,4 @@
+import type { MessageMetadata } from "@slack/types";
 import { type Block, type KnownBlock, type WebClient } from "@slack/web-api";
 import {
   createMessageReceiptFromOutboundResults,
@@ -85,6 +86,7 @@ type SlackBasePostMessagePayload = SlackPostThreadPayload & {
   channel: string;
   text: string;
   blocks?: (Block | KnownBlock)[];
+  metadata?: MessageMetadata;
   unfurl_links?: boolean;
   unfurl_media?: boolean;
 };
@@ -107,6 +109,7 @@ type SlackSendOpts = {
   replyBroadcast?: boolean;
   identity?: SlackSendIdentity;
   blocks?: (Block | KnownBlock)[];
+  metadata?: MessageMetadata;
 };
 
 type SlackWebApiErrorData = {
@@ -142,6 +145,7 @@ function buildSlackPostMessagePayload(params: {
   threadTs?: string;
   replyBroadcast?: boolean;
   blocks?: (Block | KnownBlock)[];
+  metadata?: MessageMetadata;
   unfurl?: SlackUnfurlOptions;
 }): SlackBasePostMessagePayload {
   const threadPayload =
@@ -156,6 +160,7 @@ function buildSlackPostMessagePayload(params: {
       channel: params.channelId,
       text: params.text,
       blocks: params.blocks,
+      ...(params.metadata ? { metadata: params.metadata } : {}),
       ...threadPayload,
       ...unfurlPayload,
     };
@@ -163,6 +168,7 @@ function buildSlackPostMessagePayload(params: {
   return {
     channel: params.channelId,
     text: params.text,
+    ...(params.metadata ? { metadata: params.metadata } : {}),
     ...threadPayload,
     ...unfurlPayload,
   };
@@ -313,6 +319,7 @@ async function postSlackMessageBestEffort(params: {
   replyBroadcast?: boolean;
   identity?: SlackSendIdentity;
   blocks?: (Block | KnownBlock)[];
+  metadata?: MessageMetadata;
   unfurl?: SlackUnfurlOptions;
 }) {
   const basePayload = buildSlackPostMessagePayload(params);
@@ -719,6 +726,7 @@ async function sendMessageSlackQueuedInner(params: {
       replyBroadcast: opts.replyBroadcast,
       identity: opts.identity,
       blocks,
+      metadata: opts.metadata,
       unfurl,
     });
     const messageId = response.ts ?? "unknown";
@@ -782,6 +790,7 @@ async function sendMessageSlackQueuedInner(params: {
         threadTs: opts.threadTs,
         replyBroadcast: sentMessageIds.length === 0 ? opts.replyBroadcast : undefined,
         identity: opts.identity,
+        metadata: sentMessageIds.length === 0 ? opts.metadata : undefined,
         unfurl,
       });
       lastMessageId = response.ts ?? lastMessageId;
@@ -798,6 +807,7 @@ async function sendMessageSlackQueuedInner(params: {
         threadTs: opts.threadTs,
         replyBroadcast: sentMessageIds.length === 0 ? opts.replyBroadcast : undefined,
         identity: opts.identity,
+        metadata: sentMessageIds.length === 0 ? opts.metadata : undefined,
         unfurl,
       });
       lastMessageId = response.ts ?? lastMessageId;

@@ -32,6 +32,47 @@ function createBackupManifest(assetArchivePath: string, archiveRoot = TEST_ARCHI
   };
 }
 
+async function createArchiveWithManifestContent(
+  options: {
+    tempPrefix: string;
+    manifestContent: string;
+    payloadArchivePath?: string;
+  },
+  run: (archivePath: string) => Promise<void>,
+) {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), options.tempPrefix));
+  const archivePath = path.join(tempDir, "broken.tar.gz");
+  const manifestPath = path.join(tempDir, "manifest.json");
+  const payloadPath = path.join(tempDir, "payload.txt");
+  const payloadArchivePath =
+    options.payloadArchivePath ?? `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw/payload.txt`;
+  try {
+    await fs.writeFile(manifestPath, options.manifestContent, "utf8");
+    await fs.writeFile(payloadPath, "payload\n", "utf8");
+    await tar.c(
+      {
+        file: archivePath,
+        gzip: true,
+        portable: true,
+        preservePaths: true,
+        onWriteEntry: (entry) => {
+          if (entry.path === manifestPath) {
+            entry.path = `${TEST_ARCHIVE_ROOT}/manifest.json`;
+            return;
+          }
+          if (entry.path === payloadPath) {
+            entry.path = payloadArchivePath;
+          }
+        },
+      },
+      [manifestPath, payloadPath],
+    );
+    await run(archivePath);
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+}
+
 async function withBrokenArchiveFixture(
   options: {
     tempPrefix: string;
@@ -194,6 +235,24 @@ describe("backupVerifyCommand", () => {
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
+  });
+
+  it("reports malformed manifest JSON without leaking parser internals", async () => {
+    await createArchiveWithManifestContent(
+      {
+        tempPrefix: "openclaw-backup-bad-manifest-json-",
+        manifestContent: '{"schemaVersion":1,',
+      },
+      async (archivePath) => {
+        const runtime = createBackupVerifyRuntime();
+        await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
+          /^Backup manifest is not valid JSON\.$/u,
+        );
+        await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.not.toThrow(
+          /position|Unexpected|Expected|SyntaxError/u,
+        );
+      },
+    );
   });
 
   it("rejects unsafe archive paths", async () => {

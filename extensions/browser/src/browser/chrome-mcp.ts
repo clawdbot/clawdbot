@@ -8,8 +8,10 @@ import {
   readStringValue,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { redactToolPayloadText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { asRecord } from "../record-shared.js";
+import { redactCdpUrl } from "./cdp.helpers.js";
 import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
 import type { BrowserTab } from "./client.types.js";
 import { BrowserProfileUnavailableError, BrowserTabNotFoundError } from "./errors.js";
@@ -87,6 +89,7 @@ const CHROME_MCP_NEW_PAGE_TIMEOUT_MS = 5_000;
 const CHROME_MCP_NAVIGATE_TIMEOUT_MS = 20_000;
 const CHROME_MCP_HANDSHAKE_TIMEOUT_MS = 30_000;
 const CHROME_MCP_STDERR_MAX_BYTES = 8 * 1024;
+const CDP_URL_IN_TEXT_RE = /\b(?:https?|wss?):\/\/[^\s"'<>`]+/gi;
 const STALE_SELECTED_PAGE_ERROR =
   "The selected page has been closed. Call list_pages to see open pages.";
 
@@ -377,6 +380,14 @@ function drainStderr(transport: StdioClientTransport): () => string {
   return () => Buffer.concat(chunks).toString("utf8").trim().slice(-CHROME_MCP_STDERR_MAX_BYTES);
 }
 
+function redactChromeMcpDiagnosticText(text: string): string {
+  return redactToolPayloadText(
+    text.replace(CDP_URL_IN_TEXT_RE, (match) =>
+      redactToolPayloadText(redactCdpUrl(match) ?? match),
+    ),
+  );
+}
+
 async function withChromeMcpHandshakeTimeout<T>(task: Promise<T>): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -432,18 +443,21 @@ async function createRealSession(
       const stderr = getStderr();
       if (stderr) {
         log.warn(
-          `Chrome MCP attach failed for profile "${profileName}". Subprocess stderr:\n${stderr}`,
+          `Chrome MCP attach failed for profile "${profileName}". Subprocess stderr:\n${redactChromeMcpDiagnosticText(stderr)}`,
         );
       }
       const targetLabel = options.browserUrl
-        ? `the configured Chrome endpoint (${options.browserUrl})`
+        ? `the configured Chrome endpoint (${redactToolPayloadText(redactCdpUrl(options.browserUrl) ?? options.browserUrl)})`
         : options.userDataDir
           ? `the configured Chromium user data dir (${options.userDataDir})`
           : "Google Chrome's default profile";
+      const detail = redactChromeMcpDiagnosticText(
+        err instanceof Error ? err.message : String(err),
+      );
       throw new BrowserProfileUnavailableError(
         `Chrome MCP existing-session attach failed for profile "${profileName}". ` +
           `Make sure ${targetLabel} is running locally with remote debugging enabled. ` +
-          `Details: ${err instanceof Error ? err.message : String(err)}`,
+          `Details: ${detail}`,
       );
     }
   })();

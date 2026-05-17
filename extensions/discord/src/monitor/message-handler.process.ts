@@ -1,3 +1,4 @@
+import path from "node:path";
 import { MessageFlags } from "discord-api-types/v10";
 import {
   formatReasoningMessage,
@@ -21,6 +22,7 @@ import {
   buildChannelProgressDraftLine,
   buildChannelProgressDraftLineForEntry,
   resolveChannelStreamingBlockEnabled,
+  resolveTranscriptBackedChannelFinalText,
 } from "openclaw/plugin-sdk/channel-streaming";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import {
@@ -32,10 +34,19 @@ import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-run
 import { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 import { resolveChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
+import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+import {
+  loadSessionStore,
+  readLatestAssistantTextFromSessionTranscript,
+  resolveAndPersistSessionFile,
+  resolveSessionStoreEntry,
+  resolveStorePath,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { createDiscordRestClient } from "../client.js";
+import { beginDiscordInboundEventDeliveryCorrelation } from "../inbound-event-delivery.js";
 import { removeReactionDiscord } from "../send.js";
 import { editMessageDiscord } from "../send.messages.js";
 import { resolveDiscordTargetChannelId } from "../send.shared.js";
@@ -115,6 +126,7 @@ export async function processDiscordMessage(
   ctx: DiscordMessagePreflightContext,
   observer?: DiscordMessageProcessObserver,
 ) {
+  const dispatchStartedAt = Date.now();
   const {
     cfg,
     discordConfig,
@@ -192,7 +204,16 @@ export async function processDiscordMessage(
     await loadReplyRuntime();
   const sourceReplyDeliveryMode = resolveChannelMessageSourceReplyDeliveryMode({
     cfg,
-    ctx: { ChatType: isGuildMessage ? "channel" : undefined },
+    ctx: {
+      ChatType: isDirectMessage
+        ? "direct"
+        : isGroupDm
+          ? "group"
+          : isGuildMessage
+            ? "channel"
+            : undefined,
+      InboundEventKind: ctx.inboundEventKind,
+    },
   });
   const sourceRepliesAreToolOnly = sourceReplyDeliveryMode === "message_tool_only";
   const ackReaction = resolveAckReaction(cfg, route.agentId, {
@@ -201,8 +222,10 @@ export async function processDiscordMessage(
   });
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
+  const isRoomEvent = ctx.inboundEventKind === "room_event";
   const shouldAckReaction = () =>
     Boolean(
+      !isRoomEvent &&
       ackReaction &&
       shouldAckReactionGate({
         scope: ackReactionScope,
@@ -218,6 +241,7 @@ export async function processDiscordMessage(
   const shouldSendAckReaction = shouldAckReaction();
   const statusReactionsExplicitlyEnabled = cfg.messages?.statusReactions?.enabled === true;
   const statusReactionsEnabled =
+    !isRoomEvent &&
     shouldSendAckReaction &&
     cfg.messages?.statusReactions?.enabled !== false &&
     (!sourceRepliesAreToolOnly || statusReactionsExplicitlyEnabled);
@@ -411,6 +435,59 @@ export async function processDiscordMessage(
     accountId,
   });
   const chunkMode = resolveChunkMode(cfg, "discord", accountId);
+  const clearGroupHistory = () => {
+    if (isDirectMessage) {
+      return;
+    }
+    createChannelHistoryWindow({ historyMap: guildHistories }).clear({
+      historyKey: messageChannelId,
+      limit: historyLimit,
+    });
+  };
+  const beginDeliveryCorrelation = () =>
+    isRoomEvent
+      ? beginDiscordInboundEventDeliveryCorrelation(
+          ctxPayload.SessionKey,
+          {
+            outboundTo: messageChannelId,
+            outboundAccountId: route.accountId,
+            markInboundEventDelivered: clearGroupHistory,
+          },
+          { inboundEventKind: ctxPayload.InboundEventKind },
+        )
+      : () => {};
+  const endDiscordInboundEventDeliveryCorrelation = beginDeliveryCorrelation();
+  const resolveCurrentTurnTranscriptFinalText = async (): Promise<string | undefined> => {
+    const sessionKey = ctxPayload.SessionKey;
+    if (!sessionKey) {
+      return undefined;
+    }
+    try {
+      const storePath = resolveStorePath(cfg.session?.store, { agentId: route.agentId });
+      const store = loadSessionStore(storePath, { clone: false });
+      const sessionEntry = resolveSessionStoreEntry({ store, sessionKey }).existing;
+      if (!sessionEntry?.sessionId) {
+        return undefined;
+      }
+      const { sessionFile } = await resolveAndPersistSessionFile({
+        sessionId: sessionEntry.sessionId,
+        sessionKey,
+        sessionStore: store,
+        storePath,
+        sessionEntry,
+        agentId: route.agentId,
+        sessionsDir: path.dirname(storePath),
+      });
+      const latest = await readLatestAssistantTextFromSessionTranscript(sessionFile);
+      if (!latest?.timestamp || latest.timestamp < dispatchStartedAt) {
+        return undefined;
+      }
+      return latest.text;
+    } catch (err) {
+      logVerbose(`discord transcript final candidate lookup failed: ${String(err)}`);
+      return undefined;
+    }
+  };
 
   const deliverChannelId = deliverTarget.startsWith("channel:")
     ? deliverTarget.slice("channel:".length)
@@ -453,9 +530,18 @@ export async function processDiscordMessage(
           // Reasoning/thinking payloads should not be delivered to Discord.
           return;
         }
+        const finalText =
+          isFinal && typeof payload.text === "string"
+            ? await resolveTranscriptBackedChannelFinalText({
+                finalText: payload.text,
+                resolveCandidateText: resolveCurrentTurnTranscriptFinalText,
+              })
+            : payload.text;
+        const effectivePayload =
+          finalText !== payload.text ? { ...payload, text: finalText } : payload;
         const draftStream = draftPreview.draftStream;
         if (draftStream && draftPreview.isProgressMode && info.kind === "block") {
-          const reply = resolveSendableOutboundReplyParts(payload);
+          const reply = resolveSendableOutboundReplyParts(effectivePayload);
           if (!reply.hasMedia && !payload.isError) {
             return;
           }
@@ -465,17 +551,16 @@ export async function processDiscordMessage(
           isFinal &&
           (!draftPreview.isProgressMode || draftPreview.hasProgressDraftStarted)
         ) {
-          const reply = resolveSendableOutboundReplyParts(payload);
+          const reply = resolveSendableOutboundReplyParts(effectivePayload);
           const hasMedia = reply.hasMedia;
-          const finalText = payload.text;
           const previewFinalText = draftPreview.resolvePreviewFinalText(finalText);
           const hasExplicitReplyDirective =
-            Boolean(payload.replyToTag || payload.replyToCurrent) ||
+            Boolean(effectivePayload.replyToTag || effectivePayload.replyToCurrent) ||
             (typeof finalText === "string" && /\[\[\s*reply_to(?:_current|\s*:)/i.test(finalText));
 
           const result = await deliverWithFinalizableLivePreviewAdapter({
             kind: info.kind,
-            payload,
+            payload: effectivePayload,
             adapter: defineFinalizableLivePreviewAdapter({
               draft: {
                 flush: () => draftPreview.flush(),
@@ -530,7 +615,7 @@ export async function processDiscordMessage(
               notifyFinalReplyStart();
               await deliverDiscordReply({
                 cfg,
-                replies: [payload],
+                replies: [effectivePayload],
                 target: deliverTarget,
                 token,
                 accountId,
@@ -568,7 +653,7 @@ export async function processDiscordMessage(
         }
         await deliverDiscordReply({
           cfg,
-          replies: [payload],
+          replies: [effectivePayload],
           target: deliverTarget,
           token,
           accountId,
@@ -639,12 +724,14 @@ export async function processDiscordMessage(
       ctxPayload,
       recordInboundSession,
       record: turn.record,
-      history: {
-        isGroup: isGuildMessage,
-        historyKey: messageChannelId,
-        historyMap: guildHistories,
-        limit: historyLimit,
-      },
+      history: isRoomEvent
+        ? undefined
+        : {
+            isGroup: isGuildMessage,
+            historyKey: messageChannelId,
+            historyMap: guildHistories,
+            limit: historyLimit,
+          },
       onPreDispatchFailure: settleDispatchBeforeStart,
       runDispatch: async () =>
         await dispatchInboundMessage({
@@ -656,6 +743,14 @@ export async function processDiscordMessage(
             abortSignal,
             skillFilter: channelConfig?.skills,
             sourceReplyDeliveryMode,
+            queuedDeliveryCorrelations: isRoomEvent
+              ? [{ begin: beginDeliveryCorrelation }]
+              : undefined,
+            suppressTyping: isRoomEvent ? true : undefined,
+            allowProgressCallbacksWhenSourceDeliverySuppressed:
+              sourceRepliesAreToolOnly && draftPreview.draftStream && draftPreview.isProgressMode
+                ? true
+                : undefined,
             disableBlockStreaming: sourceRepliesAreToolOnly
               ? true
               : (draftPreview.disableBlockStreamingForDraft ??
@@ -811,6 +906,7 @@ export async function processDiscordMessage(
     dispatchError = true;
     throw err;
   } finally {
+    endDiscordInboundEventDeliveryCorrelation();
     try {
       await draftPreview.cleanup();
     } finally {

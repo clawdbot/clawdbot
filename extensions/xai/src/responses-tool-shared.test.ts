@@ -98,4 +98,10 @@ describe("xai responses tool helpers", () => {
       inlineCitations: undefined,
     });
   });
+
+  it("rejects successful Responses tool payloads without answer text", () => {
+    expect(() => __testing.requireXaiResponseTextAndCitations({}, "xAI tool failed")).toThrow(
+      "xAI tool failed: malformed JSON response",
+    );
+  });
 });

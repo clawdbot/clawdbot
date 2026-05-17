@@ -865,7 +865,7 @@ describe("task-registry", () => {
     });
   });
 
-  it("delivers ACP completion to the requester channel when a delivery origin exists", async () => {
+  it("queues delegated ACP completion to the requester session when a delivery origin exists", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;
       resetTaskRegistryMemoryForTest();
@@ -903,6 +903,104 @@ describe("task-registry", () => {
 
       await waitForAssertion(() =>
         expectRecordFields(requireTaskByRunId("run-delivery"), {
+          status: "succeeded",
+          deliveryStatus: "pending",
+        }),
+      );
+      expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
+      expect(peekSystemEvents("agent:main:main")).toEqual([
+        expect.stringContaining("Background task ready for review: ACP background task"),
+      ]);
+    });
+  });
+
+  it("keeps direct delegated ACP completions pending so parent-review handoffs can retry", async () => {
+    await withTaskRegistryTempDir(
+      async (root) => {
+        process.env.OPENCLAW_STATE_DIR = root;
+        hoisted.sendMessageMock.mockResolvedValue({
+          channel: "notifychat",
+          to: "notifychat:123",
+          via: "direct",
+        });
+
+        const task = createTaskRecord({
+          runtime: "acp",
+          ownerKey: "agent:main:main",
+          scopeKind: "session",
+          requesterOrigin: {
+            channel: "notifychat",
+            to: "notifychat:123",
+          },
+          childSessionKey: "agent:main:acp:child",
+          runId: "run-delivery-retry",
+          task: "Investigate issue",
+          status: "succeeded",
+          deliveryStatus: "pending",
+        });
+
+        await waitForAssertion(() =>
+          expect(peekSystemEvents("agent:main:main")).toEqual([
+            expect.stringContaining("Background task ready for review: ACP background task"),
+          ]),
+        );
+        expectRecordFields(requireTaskById(task.taskId), {
+          deliveryStatus: "pending",
+        });
+
+        resetSystemEventsForTest();
+        reloadTaskRegistryFromStore();
+        await maybeDeliverTaskTerminalUpdate(task.taskId);
+
+        expectRecordFields(requireTaskById(task.taskId), {
+          deliveryStatus: "pending",
+        });
+        expect(peekSystemEvents("agent:main:main")).toEqual([
+          expect.stringContaining("Background task ready for review: ACP background task"),
+        ]);
+        expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
+      },
+      { durableStore: true },
+    );
+  });
+
+  it("delivers non-delegated ACP completion to the requester channel when a delivery origin exists", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryMemoryForTest();
+      hoisted.sendMessageMock.mockResolvedValue({
+        channel: "notifychat",
+        to: "notifychat:123",
+        via: "direct",
+      });
+
+      createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        requesterOrigin: {
+          channel: "notifychat",
+          to: "notifychat:123",
+          threadId: "321",
+        },
+        runId: "run-direct-delivery",
+        task: "Investigate issue",
+        status: "running",
+        deliveryStatus: "pending",
+        startedAt: 100,
+      });
+
+      emitAgentEvent({
+        runId: "run-direct-delivery",
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          endedAt: 250,
+        },
+      });
+
+      await waitForAssertion(() =>
+        expectRecordFields(requireTaskByRunId("run-direct-delivery"), {
           status: "succeeded",
           deliveryStatus: "delivered",
         }),
@@ -999,7 +1097,7 @@ describe("task-registry", () => {
       });
       expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
       expect(peekSystemEvents(ownerKey)).toEqual([
-        "Background task done: ACP background task (run run-grou).",
+        expect.stringContaining("Background task ready for review: ACP background task"),
       ]);
       expect(hasPendingHeartbeatWake()).toBe(true);
     });
@@ -1124,7 +1222,7 @@ describe("task-registry", () => {
       );
       const events = peekSystemEvents("agent:main:main");
       expect(events).toHaveLength(1);
-      expect(events[0]).toContain("Background task done: ACP background task");
+      expect(events[0]).toContain("Background task ready for review: ACP background task");
       expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
     });
   });
@@ -1204,11 +1302,14 @@ describe("task-registry", () => {
         },
       });
 
-      await waitForAssertion(() =>
-        expectRecordFields(sentMessageCall(), {
-          content: "Background task done: ACP background task (run run-deta).",
-        }),
-      );
+      await waitForAssertion(() => {
+        const events = peekSystemEvents("agent:main:main");
+        expect(events).toHaveLength(1);
+        expect(events[0]).toBe(
+          "Background task ready for review: ACP background task (run run-deta). Next: parent will review/verify before calling it done.",
+        );
+      });
+      expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
     });
   });
 
@@ -1279,14 +1380,15 @@ describe("task-registry", () => {
         terminalOutcome: "succeeded",
       });
 
-      await waitForAssertion(() =>
-        expectRecordFields(sentMessageCall(), {
-          content:
-            "Background task done: ACP background task (run run-succ). Created /tmp/file.txt and verified contents.",
-        }),
-      );
-      expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);
-      expect(hasPendingHeartbeatWake()).toBe(false);
+      await waitForAssertion(() => {
+        const events = peekSystemEvents("agent:main:main");
+        expect(events).toHaveLength(1);
+        expect(events[0]).toBe(
+          "Background task ready for review: ACP background task (run run-succ). Created /tmp/file.txt and verified contents. Next: parent will review/verify before calling it done.",
+        );
+      });
+      expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
+      expect(hasPendingHeartbeatWake()).toBe(true);
     });
   });
 
@@ -1419,15 +1521,18 @@ describe("task-registry", () => {
       await maybeDeliverTaskTerminalUpdate(directTask.taskId);
       await maybeDeliverTaskTerminalUpdate(spawnedTask.taskId);
 
-      expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(1);
+      expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
       expect(countMatching(listTaskRecords(), (task) => task.runId === "run-shared-delivery")).toBe(
         1,
       );
       expectRecordFields(requireTaskByRunId("run-shared-delivery"), {
         taskId: directTask.taskId,
         task: "Spawn ACP child",
-        deliveryStatus: "delivered",
+        deliveryStatus: "pending",
       });
+      expect(peekSystemEvents("agent:main:main")).toEqual([
+        expect.stringContaining("Background task ready for review: ACP background task"),
+      ]);
     });
   });
 
@@ -2764,12 +2869,10 @@ describe("task-registry", () => {
       });
       await flushAsyncWork();
 
-      expectRecordFields(sentMessageCall(), {
-        channel: "guildchat",
-        to: "guildchat:123",
-        content: "Background task done: ACP background task (run run-quie).",
-      });
-      expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);
+      expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
+      expect(peekSystemEvents("agent:main:main")).toEqual([
+        "Background task ready for review: ACP background task (run run-quie). Next: parent will review/verify before calling it done.",
+      ]);
       relay.dispose();
       vi.useRealTimers();
     });

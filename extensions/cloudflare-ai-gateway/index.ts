@@ -7,7 +7,7 @@ import {
   listProfilesForProvider,
   normalizeApiKeyInput,
   normalizeOptionalSecretInput,
-  upsertAuthProfile,
+  upsertAuthProfileWithLock,
   validateApiKeyInput,
 } from "openclaw/plugin-sdk/provider-auth";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -19,6 +19,16 @@ import { wrapCloudflareAiGatewayProviderStream } from "./stream-wrappers.js";
 const PROVIDER_ID = "cloudflare-ai-gateway";
 const PROVIDER_ENV_VAR = "CLOUDFLARE_AI_GATEWAY_API_KEY";
 const PROFILE_ID = "cloudflare-ai-gateway:default";
+type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
+
+async function upsertAuthProfileWithLockOrThrow(params: UpsertAuthProfileParams): Promise<void> {
+  const updated = await upsertAuthProfileWithLock(params);
+  if (!updated) {
+    throw new Error(
+      "Failed to update auth profile store; the auth store lock may be busy. Wait a moment and retry.",
+    );
+  }
+}
 
 function readRequiredTextInput(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -176,7 +186,7 @@ export default definePluginEntry({
               if (!credential) {
                 return null;
               }
-              upsertAuthProfile({
+              await upsertAuthProfileWithLockOrThrow({
                 profileId: PROFILE_ID,
                 credential,
                 agentDir: ctx.agentDir,

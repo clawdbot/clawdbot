@@ -7,6 +7,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 const REPO = "openclaw/openclaw";
 const REPO_URL = `https://github.com/${REPO}`;
@@ -48,6 +49,34 @@ function gh(args, { json = true, allowFailure = false } = {}) {
 
 function ghGraphQL(query, options = {}) {
   return gh(["api", "graphql", "-f", `query=${query}`], options);
+}
+
+function isBodyLocationType(locationType) {
+  return locationType === "issue_body" || locationType === "pull_request_body";
+}
+
+export function decideBodyRedaction(currentBody, redactedBody) {
+  const bodyChanged = String(currentBody) !== String(redactedBody);
+  return {
+    body_changed: bodyChanged,
+    notify_required: bodyChanged,
+  };
+}
+
+export function loadBodyRedactionResult(locationType, resultFile) {
+  if (!isBodyLocationType(locationType)) {
+    return { notify_required: true };
+  }
+  if (!resultFile) {
+    fail("Body notifications require a redaction result file from redact-body-if-needed");
+  }
+  if (!fs.existsSync(resultFile)) fail(`File not found: ${resultFile}`);
+
+  const result = JSON.parse(fs.readFileSync(resultFile, "utf8"));
+  if (typeof result.notify_required !== "boolean") {
+    fail(`Invalid redaction result file: missing boolean notify_required in ${resultFile}`);
+  }
+  return result;
 }
 
 function failOnGraphQLFailure(result, message) {
@@ -471,6 +500,43 @@ function cmdRedactBody(kind, number, bodyFile) {
 }
 
 /**
+ * redact-body-if-needed <issue|pr> <number> <current-body-file> <redacted-body-file> <result-file>
+ * PATCH only when the agent-produced redacted body differs from the current body.
+ */
+function cmdRedactBodyIfNeeded(kind, number, currentBodyFile, redactedBodyFile, resultFile) {
+  if (!kind || !number || !currentBodyFile || !redactedBodyFile || !resultFile) {
+    fail(
+      "Usage: redact-body-if-needed <issue|pr> <number> <current-body-file> <redacted-body-file> <result-file>",
+    );
+  }
+  if (!fs.existsSync(currentBodyFile)) fail(`File not found: ${currentBodyFile}`);
+  if (!fs.existsSync(redactedBodyFile)) fail(`File not found: ${redactedBodyFile}`);
+
+  const currentBody = fs.readFileSync(currentBodyFile, "utf8");
+  const redactedBody = fs.readFileSync(redactedBodyFile, "utf8");
+  const decision = decideBodyRedaction(currentBody, redactedBody);
+  const result = {
+    ok: true,
+    kind,
+    number: Number(number),
+    ...decision,
+  };
+
+  if (decision.body_changed) {
+    const endpoint =
+      kind === "pr" ? `repos/${REPO}/pulls/${number}` : `repos/${REPO}/issues/${number}`;
+    gh(["api", endpoint, "-X", "PATCH", "-F", `body=@${redactedBodyFile}`]);
+    result.redacted = true;
+  } else {
+    result.redacted = false;
+    result.reason = "current_body_already_redacted";
+  }
+
+  fs.writeFileSync(resultFile, `${JSON.stringify(result, null, 2)}\n`, { mode: 0o600 });
+  console.log(JSON.stringify(result));
+}
+
+/**
  * delete-comment <comment-id>
  * Delete a comment (and all its edit history).
  */
@@ -555,6 +621,17 @@ function cmdNotify(target, author, locationType, secretTypes, replyToNodeId) {
 
   const types = secretTypes.split(",").map((s) => s.trim());
   const typeList = types.map((t, i) => `${i + 1}. **${t}**`).join("\n");
+  const redactionResult = loadBodyRedactionResult(locationType, replyToNodeId);
+  if (isBodyLocationType(locationType) && !redactionResult.notify_required) {
+    console.log(
+      JSON.stringify({
+        ok: true,
+        skipped: true,
+        reason: "current_body_already_redacted",
+      }),
+    );
+    return;
+  }
 
   let locationDesc;
   let actionDesc;
@@ -758,12 +835,13 @@ function cmdSummary(jsonFile) {
 
 // ─── Dispatch ───────────────────────────────────────────────────────────────
 
-const [command, ...args] = process.argv.slice(2);
+const args = [];
 
-const commands = {
+export const commands = {
   "fetch-alert": () => cmdFetchAlert(args[0]),
   "fetch-content": () => cmdFetchContent(args[0]),
   "redact-body": () => cmdRedactBody(args[0], args[1], args[2]),
+  "redact-body-if-needed": () => cmdRedactBodyIfNeeded(args[0], args[1], args[2], args[3], args[4]),
   "delete-comment": () => cmdDeleteComment(args[0]),
   "delete-discussion-comment": () => cmdDeleteDiscussionComment(args[0]),
   "recreate-comment": () => cmdRecreateComment(args[0], args[1]),
@@ -774,26 +852,37 @@ const commands = {
   summary: () => cmdSummary(args[0]),
 };
 
-if (!command || !commands[command]) {
-  console.error(
-    [
-      "Usage: node secret-scanning.mjs <command> [args]",
-      "",
-      "Commands:",
-      "  fetch-alert <number>             Fetch alert metadata + locations",
-      "  fetch-content '<location-json>'   Fetch content for a location",
-      "  redact-body <issue|pr> <n> <file> PATCH body with redacted file",
-      "  delete-comment <comment-id>       Delete a comment",
-      "  delete-discussion-comment <node-id> Delete a discussion comment (GraphQL)",
-      "  recreate-comment <issue-n> <file> Create replacement comment",
-      "  recreate-discussion-comment <disc-node-id> <file> [reply-to-node-id] Create discussion comment (GraphQL)",
-      "  notify <target> <author> <type> <types> [reply-to-node-id] Post notification",
-      "  resolve <n> [resolution] [comment] Close alert",
-      "  list-open                          List open alerts",
-      "  summary <json-file>               Print formatted summary",
-    ].join("\n"),
-  );
-  process.exit(1);
+function main(argv = process.argv.slice(2)) {
+  const [command, ...commandArgs] = argv;
+  args.length = 0;
+  args.push(...commandArgs);
+
+  if (!command || !commands[command]) {
+    console.error(
+      [
+        "Usage: node secret-scanning.mjs <command> [args]",
+        "",
+        "Commands:",
+        "  fetch-alert <number>             Fetch alert metadata + locations",
+        "  fetch-content '<location-json>'   Fetch content for a location",
+        "  redact-body <issue|pr> <n> <file> PATCH body with redacted file",
+        "  redact-body-if-needed <issue|pr> <n> <current-file> <redacted-file> <result-file> PATCH body only if redaction changed it",
+        "  delete-comment <comment-id>       Delete a comment",
+        "  delete-discussion-comment <node-id> Delete a discussion comment (GraphQL)",
+        "  recreate-comment <issue-n> <file> Create replacement comment",
+        "  recreate-discussion-comment <disc-node-id> <file> [reply-to-node-id] Create discussion comment (GraphQL)",
+        "  notify <target> <author> <type> <types> [reply-to-node-id|body-result-file] Post notification",
+        "  resolve <n> [resolution] [comment] Close alert",
+        "  list-open                          List open alerts",
+        "  summary <json-file>               Print formatted summary",
+      ].join("\n"),
+    );
+    process.exit(1);
+  }
+
+  commands[command]();
 }
 
-commands[command]();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main();
+}

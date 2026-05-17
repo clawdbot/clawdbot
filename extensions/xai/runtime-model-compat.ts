@@ -2,6 +2,7 @@ import { applyXaiModelCompat } from "./model-compat.js";
 
 type XaiRuntimeModelCompat = {
   compat?: unknown;
+  id?: unknown;
   reasoning?: unknown;
   thinkingLevelMap?: XaiThinkingLevelMap;
 };
@@ -27,15 +28,45 @@ const XAI_REASONING_EFFORTS = {
   xhigh: "high",
 } satisfies NonNullable<XaiRuntimeModelCompat["thinkingLevelMap"]>;
 
+const XAI_SUPPORTED_REASONING_EFFORTS = ["low", "medium", "high"] as const;
+
+function normalizeXaiCompatModelId(id: unknown): string {
+  return typeof id === "string" ? id.trim().toLowerCase() : "";
+}
+
+function supportsConfigurableXaiReasoningEffort(model: XaiRuntimeModelCompat): boolean {
+  const id = normalizeXaiCompatModelId(model.id);
+  return model.reasoning === true && (id === "grok-4.3" || id.startsWith("grok-4.3-"));
+}
+
+function resolveXaiReasoningEffortCompat(model: XaiRuntimeModelCompat): Record<string, unknown> {
+  if (supportsConfigurableXaiReasoningEffort(model)) {
+    return {
+      supportsReasoningEffort: true,
+      supportedReasoningEfforts: [...XAI_SUPPORTED_REASONING_EFFORTS],
+    };
+  }
+  return { supportsReasoningEffort: false };
+}
+
 export function applyXaiRuntimeModelCompat<T extends XaiRuntimeModelCompat>(
   model: T,
-): T & { thinkingLevelMap: XaiThinkingLevelMap } {
+): T & { compat: Record<string, unknown>; thinkingLevelMap: XaiThinkingLevelMap } {
   const withCompat = applyXaiModelCompat(model);
+  const supportsReasoningEffort = supportsConfigurableXaiReasoningEffort(withCompat);
+  const existingCompat =
+    withCompat.compat && typeof withCompat.compat === "object"
+      ? (withCompat.compat as Record<string, unknown>)
+      : {};
   return {
     ...withCompat,
+    compat: {
+      ...existingCompat,
+      ...resolveXaiReasoningEffortCompat(withCompat),
+    },
     thinkingLevelMap: {
       ...withCompat.thinkingLevelMap,
-      ...(withCompat.reasoning ? XAI_REASONING_EFFORTS : XAI_UNSUPPORTED_REASONING_EFFORTS),
+      ...(supportsReasoningEffort ? XAI_REASONING_EFFORTS : XAI_UNSUPPORTED_REASONING_EFFORTS),
     },
   };
 }

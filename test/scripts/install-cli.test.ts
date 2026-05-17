@@ -90,4 +90,10 @@ describe("install-cli.sh", () => {
     expect(script).toContain('"$corepack_cmd" prepare "pnpm@${version}" --activate');
     expect(script).toContain('activate_repo_pnpm_version "$repo_dir"');
   });
+
+  it("clears npm freshness filters for package installs", () => {
+    expect(script).toContain('freshness_flag="--min-release-age=0"');
+    expect(script).toContain('freshness_flag="--before=$(date -u');
+    expect(script).toContain("env -u NPM_CONFIG_BEFORE -u npm_config_before");
+  });
 });

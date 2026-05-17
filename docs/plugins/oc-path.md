@@ -13,11 +13,13 @@ The bundled `oc-path` plugin adds the [`openclaw path`](/cli/path) CLI for the
 enable it.
 
 `oc://` addresses point at a single leaf (or a wildcard set of leaves) inside
-a workspace file. The plugin understands three kinds of files today:
+a workspace file. The plugin understands four kinds of files today:
 
 - **markdown** (`.md`, `.mdx`): frontmatter, sections, items, fields
 - **jsonc** (`.jsonc`, `.json5`, `.json`): comments and formatting preserved
 - **jsonl** (`.jsonl`, `.ndjson`): line-oriented records
+- **yaml** (`.yaml`, `.yml`, `.lobster`): map/sequence/scalar nodes through the
+  YAML document API
 
 Self-hosters and editor extensions use the CLI to read or write a single leaf
 without scripting against the SDK directly; agents and hooks treat it as a
@@ -29,7 +31,7 @@ sentinel guard apply uniformly across kinds.
 Enable `oc-path` when you want scripts, hooks, or local agent tooling to point
 at a precise piece of workspace state without inventing a parser for each file
 shape. A single `oc://` address can name a markdown frontmatter key, a section
-item, a JSONC config leaf, or a JSONL event field.
+item, a JSONC config leaf, a JSONL event field, or a YAML workflow step.
 
 That matters for maintainer workflows where the change should be small,
 auditable, and repeatable: inspect one value, find matching records, dry-run a
@@ -42,7 +44,7 @@ Common reasons to enable it:
 
 - **Local automation**: shell scripts can resolve or update one workspace value
   with `openclaw path … --json` instead of carrying separate markdown, JSONC,
-  and JSONL parsing code.
+  JSONL, and YAML parsing code.
 - **Agent-visible edits**: an agent can show a dry-run diff for one addressed
   leaf before writing, which is easier to review than a free-form file rewrite.
 - **Editor integrations**: an editor can map `oc://AGENTS.md/tools/gh` to the
@@ -115,11 +117,12 @@ openclaw plugins disable oc-path
 All parser dependencies are plugin-local — enabling `oc-path` does not pull
 new packages into the core runtime:
 
-| Dependency     | Purpose                                                             |
-| -------------- | ------------------------------------------------------------------- |
-| `commander`    | Subcommand wiring for `resolve`, `find`, `set`, `validate`, `emit`. |
-| `jsonc-parser` | JSONC parse + leaf edits with comments and trailing commas kept.    |
-| `markdown-it`  | Markdown tokenization for the section / item / field model.         |
+| Dependency     | Purpose                                                                |
+| -------------- | ---------------------------------------------------------------------- |
+| `commander`    | Subcommand wiring for `resolve`, `find`, `set`, `validate`, `emit`.    |
+| `jsonc-parser` | JSONC parse + leaf edits with comments and trailing commas kept.       |
+| `markdown-it`  | Markdown tokenization for the section / item / field model.            |
+| `yaml`         | YAML `Document` parse / emit / edit with comments and flow style kept. |
 
 JSONL stays hand-rolled — line-oriented parsing is simpler than any
 dependency, and the per-line JSONC parse already goes through `jsonc-parser`.
@@ -130,7 +133,7 @@ dependency, and the per-line JSONC parse already goes through `jsonc-parser`.
 | ------------------------------ | ------------------------------------------------------- |
 | `openclaw path` CLI            | `extensions/oc-path/cli-registration.ts`                |
 | `oc://` parser / formatter     | `extensions/oc-path/src/oc-path/oc-path.ts`             |
-| Per-kind parse / emit / edit   | `extensions/oc-path/src/oc-path/{md,jsonc,jsonl}`       |
+| Per-kind parse / emit / edit   | `extensions/oc-path/src/oc-path/{md,jsonc,jsonl,yaml}`  |
 | Universal resolve / find / set | `extensions/oc-path/src/oc-path/{resolve,find,edit}.ts` |
 | Redaction-sentinel guard       | `extensions/oc-path/src/oc-path/sentinel.ts`            |
 

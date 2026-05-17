@@ -346,6 +346,40 @@ describe("createOpenClawCodingTools", () => {
     expectListIncludes(options.pluginToolAllowlist, ["memory_search", "memory_get"]);
   });
 
+  it("preserves runtime-allowed message through restrictive profiles", () => {
+    const tools = createOpenClawCodingTools({
+      config: { tools: { profile: "minimal" } },
+      runtimeToolAllowlist: ["message"],
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: true,
+        includePluginTools: false,
+      },
+    });
+
+    expect(toolNameList(tools)).toContain("message");
+  });
+
+  it("preserves runtime allowlist groups containing message through restrictive profiles", () => {
+    for (const runtimeToolAllowlist of [["group:messaging"], ["group:openclaw"], ["*"]]) {
+      const tools = createOpenClawCodingTools({
+        config: { tools: { profile: "minimal" } },
+        runtimeToolAllowlist,
+        toolConstructionPlan: {
+          includeBaseCodingTools: false,
+          includeShellTools: false,
+          includeChannelTools: false,
+          includeOpenClawTools: true,
+          includePluginTools: false,
+        },
+      });
+
+      expect(toolNameList(tools)).toContain("message");
+    }
+  });
+
   it("passes source reply delivery mode to OpenClaw tool construction", () => {
     const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
     createOpenClawToolsMock.mockClear();

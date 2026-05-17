@@ -8,7 +8,7 @@ import type { RecordInboundSession } from "../session.types.js";
 import type { ChannelTurnResult, DispatchedChannelTurnResult } from "./kernel.js";
 import {
   clearChannelBotPairLoopGuardForTests,
-  createNoopChannelTurnDeliveryAdapter,
+  createNoopChannelEventDeliveryAdapter,
   dispatchAssembledChannelTurn,
   hasFinalChannelTurnDispatch,
   hasVisibleChannelTurnDispatch,
@@ -1094,7 +1094,7 @@ describe("channel turn kernel", () => {
             ctxPayload: createCtx(),
             recordInboundSession: createRecordInboundSession(),
             dispatchReplyWithBufferedBlockDispatcher,
-            delivery: createNoopChannelTurnDeliveryAdapter(),
+            delivery: createNoopChannelEventDeliveryAdapter(),
             record: {
               onRecordError: vi.fn(),
             },

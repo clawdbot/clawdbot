@@ -904,6 +904,18 @@ describe("mention helpers", () => {
     expect(matchesMentionPatterns("OPENCLAW: hi", regexes)).toBe(true);
   });
 
+  it("lets catch-all mention patterns match empty text", () => {
+    const catchAllRegexes = buildMentionRegexes({
+      messages: { groupChat: { mentionPatterns: [".*"] } },
+    });
+    const specificRegexes = buildMentionRegexes({
+      messages: { groupChat: { mentionPatterns: ["\\bopenclaw\\b"] } },
+    });
+
+    expect(matchesMentionPatterns("", catchAllRegexes)).toBe(true);
+    expect(matchesMentionPatterns("", specificRegexes)).toBe(false);
+  });
+
   it("uses per-agent mention patterns when configured", () => {
     const regexes = buildMentionRegexes(
       {

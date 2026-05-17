@@ -197,6 +197,35 @@ describe("xai stream wrappers", () => {
     expect(payload.reasoning_effort).toBe("high");
   });
 
+  it("strips reasoning controls when compat disables reasoning effort", () => {
+    const payload: Record<string, unknown> = {
+      reasoning: { effort: "high" },
+      reasoningEffort: "high",
+      reasoning_effort: "high",
+    };
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      options?.onPayload?.(payload, model);
+      return {} as ReturnType<StreamFn>;
+    };
+    const wrapped = createXaiToolPayloadCompatibilityWrapper(baseStreamFn);
+
+    void wrapped(
+      {
+        api: "openai-responses",
+        provider: "xai",
+        id: "grok-4.20-beta-latest-reasoning",
+        reasoning: true,
+        compat: { supportsReasoningEffort: false },
+      } as unknown as Model<"openai-responses">,
+      { messages: [] } as Context,
+      {},
+    );
+
+    expect(payload).not.toHaveProperty("reasoning");
+    expect(payload).not.toHaveProperty("reasoningEffort");
+    expect(payload).not.toHaveProperty("reasoning_effort");
+  });
+
   it("keeps native xAI Responses thinking efforts before pi-ai dispatches payloads", async () => {
     const payload = await captureXaiResponsesPayloadWithThinking();
 

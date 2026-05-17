@@ -49,7 +49,8 @@ Behavior:
 
 Logging:
 
-- launchd stdout/err: `/tmp/openclaw/openclaw-gateway.log`
+- launchd stdout: `~/Library/Logs/openclaw/gateway.log` (profiles use `gateway-<profile>.log`)
+- launchd stderr: suppressed
 
 ## Version compatibility
 

@@ -15,6 +15,7 @@ export type {
   MemoryEmbeddingBatchOptions,
   MemoryEmbeddingProvider,
   MemoryEmbeddingProviderAdapter,
+  MemoryEmbeddingProviderCallOptions,
   MemoryEmbeddingProviderCreateOptions,
   MemoryEmbeddingProviderCreateResult,
   MemoryEmbeddingProviderRuntime,

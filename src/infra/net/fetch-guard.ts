@@ -347,6 +347,7 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
   if (!defaultFetch) {
     throw new Error("fetch is not available");
   }
+  const isUsingMockedFetch = isMockedFetch(defaultFetch);
 
   const maxRedirects =
     typeof params.maxRedirects === "number" && Number.isFinite(params.maxRedirects)
@@ -413,6 +414,13 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
         shouldUseEnvHttpProxyForUrl(parsedUrl.toString());
       const canUseManagedProxy =
         mode === GUARDED_FETCH_MODE.STRICT && isManagedProxyActive() && hasProxyEnvConfigured();
+      const canUseMockedFetchWithoutDns =
+        isUsingMockedFetch &&
+        params.lookupFn === undefined &&
+        !canUseTrustedEnvProxy &&
+        !canUseManagedProxy &&
+        !usesTrustedExplicitProxyMode &&
+        params.pinDns !== false;
       const timeoutMs = resolveDispatcherTimeoutMs(params.timeoutMs);
 
       // Trusted env-proxy and pinDns=false can skip local DNS pinning, so keep
@@ -434,6 +442,10 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
         // policy, but the proxy does the DNS resolution for the final target.
         assertHostnameAllowedWithPolicy(parsedUrl.hostname, policyForUrl);
         dispatcher = createPolicyDispatcherWithoutPinnedDns(params.dispatcherPolicy, timeoutMs);
+      } else if (canUseMockedFetchWithoutDns) {
+        // Test-installed fetch mocks should stay hermetic. Host/IP policy still runs;
+        // real fetches continue through pinned DNS below.
+        assertHostnameAllowedWithPolicy(parsedUrl.hostname, policyForUrl);
       } else if (params.pinDns === false) {
         await resolvePinnedHostnameWithPolicy(parsedUrl.hostname, {
           lookupFn: params.lookupFn,
@@ -466,7 +478,7 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
             fetchImpl: params.fetchImpl,
             globalFetch: globalThis.fetch,
           })) ||
-        isMockedFetch(defaultFetch);
+        isUsingMockedFetch;
       // Explicit caller stubs and test-installed fetch mocks should win.
       // Otherwise, fall back to undici's fetch whenever we attach a dispatcher,
       // because the default global fetch path will not honor per-request

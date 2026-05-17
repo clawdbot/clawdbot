@@ -78,8 +78,8 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
   });
 
   it("builds Telegram payloads through the shared channel turn context", async () => {
-    const { buildChannelTurnContext } = await import("openclaw/plugin-sdk/channel-inbound");
-    const buildChannelTurnContextMock = vi.fn(buildChannelTurnContext);
+    const { buildChannelInboundEventContext } = await import("openclaw/plugin-sdk/channel-inbound");
+    const buildChannelInboundEventContextMock = vi.fn(buildChannelInboundEventContext);
 
     const ctx = await buildCtx({
       message: {
@@ -93,13 +93,13 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
         },
       },
       sessionRuntime: {
-        buildChannelTurnContext: buildChannelTurnContextMock,
+        buildChannelInboundEventContext: buildChannelInboundEventContextMock,
       },
     });
 
     expect(ctx?.ctxPayload.ReplyToBody).toBe("parent");
-    expect(buildChannelTurnContextMock).toHaveBeenCalledOnce();
-    const [turnOptions] = buildChannelTurnContextMock.mock.calls.at(0) ?? [];
+    expect(buildChannelInboundEventContextMock).toHaveBeenCalledOnce();
+    const [turnOptions] = buildChannelInboundEventContextMock.mock.calls.at(0) ?? [];
     expect(turnOptions?.channel).toBe("telegram");
     expect(turnOptions?.from).toBe("telegram:1234");
     expect(turnOptions?.message.rawBody).toBe("hello");

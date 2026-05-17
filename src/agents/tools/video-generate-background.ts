@@ -8,7 +8,7 @@ import {
 
 export type VideoGenerationTaskHandle = MediaGenerationTaskHandle;
 
-const videoGenerationTaskLifecycle = createMediaGenerationTaskLifecycle({
+export const videoGenerationTaskLifecycle = createMediaGenerationTaskLifecycle({
   toolName: "video_generate",
   taskKind: VIDEO_GENERATION_TASK_KIND,
   label: "Video generation",

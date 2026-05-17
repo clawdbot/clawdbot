@@ -22,26 +22,40 @@ export type SecretRefCredentialMatrixDocument = {
 };
 
 export function buildSecretRefCredentialMatrix(): SecretRefCredentialMatrixDocument {
-  const entries: CredentialMatrixEntry[] = getSourceSecretTargetRegistry()
-    .map((entry) => {
-      const isCanonicalFirecrawlWebFetchEntry =
-        entry.id === "plugins.entries.firecrawl.config.webFetch.apiKey";
-      const canonicalId = isCanonicalFirecrawlWebFetchEntry
-        ? "tools.web.fetch.firecrawl.apiKey"
-        : entry.id;
-      const canonicalPath = isCanonicalFirecrawlWebFetchEntry
-        ? "tools.web.fetch.firecrawl.apiKey"
-        : entry.pathPattern;
+  const entriesByKey = new Map<string, CredentialMatrixEntry>();
+  for (const entry of getSourceSecretTargetRegistry()) {
+    const isCanonicalFirecrawlWebFetchEntry =
+      entry.id === "plugins.entries.firecrawl.config.webFetch.apiKey";
+    const canonicalId = isCanonicalFirecrawlWebFetchEntry
+      ? "tools.web.fetch.firecrawl.apiKey"
+      : entry.id;
+    const canonicalPath = isCanonicalFirecrawlWebFetchEntry
+      ? "tools.web.fetch.firecrawl.apiKey"
+      : entry.pathPattern;
+    const matrixEntry = Object.assign(
+      { id: canonicalId, configFile: entry.configFile, path: canonicalPath },
+      entry.refPathPattern ? { refPath: entry.refPathPattern } : {},
+      entry.authProfileType ? { when: { type: entry.authProfileType } } : {},
+      { secretShape: entry.secretShape, optIn: true as const },
+      entry.secretShape === `sibling_ref` && entry.refPathPattern
+        ? { notes: `Compatibility exception: sibling ref field remains canonical.` }
+        : {},
+    );
+    entriesByKey.set(
+      [
+        matrixEntry.configFile,
+        matrixEntry.id,
+        matrixEntry.path,
+        matrixEntry.refPath ?? "",
+        matrixEntry.when?.type ?? "",
+      ].join("\0"),
+      matrixEntry,
+    );
+  }
 
-      return Object.assign(
-        { id: canonicalId, configFile: entry.configFile, path: canonicalPath },
-        entry.refPathPattern ? { refPath: entry.refPathPattern } : {},
-        entry.authProfileType ? { when: { type: entry.authProfileType } } : {},
-        { secretShape: entry.secretShape, optIn: true as const },
-        entry.secretShape === `sibling_ref` && entry.refPathPattern
-          ? { notes: `Compatibility exception: sibling ref field remains canonical.` }
-          : {},
-      );
+  const entries: CredentialMatrixEntry[] = [...entriesByKey.values()]
+    .map((entry) => {
+      return entry;
     })
     .toSorted((a, b) => a.id.localeCompare(b.id));
 

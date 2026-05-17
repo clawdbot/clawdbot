@@ -280,6 +280,7 @@ final class NodePairingApprovalPrompter {
             requestId: req.requestId,
             messageText: "Allow node to connect?",
             informativeText: Self.describe(req),
+            buttonTitles: PairingAlertSupport.ButtonTitles(approve: "Approve Node"),
             state: self.alertState,
             onResponse: self.handleAlertResponse)
     }
@@ -307,11 +308,11 @@ final class NodePairingApprovalPrompter {
 
         switch response {
         case .alertFirstButtonReturn:
-            // Later: leave as pending (CLI can approve/reject). Request will expire on the gateway TTL.
-            return
-        case .alertSecondButtonReturn:
             _ = await self.approve(requestId: request.requestId)
             await self.notify(resolution: .approved, request: request, via: "local")
+        case .alertSecondButtonReturn:
+            // Later: leave as pending (CLI can approve/reject). Request will expire on the gateway TTL.
+            return
         case .alertThirdButtonReturn:
             await self.reject(requestId: request.requestId)
             await self.notify(resolution: .rejected, request: request, via: "local")

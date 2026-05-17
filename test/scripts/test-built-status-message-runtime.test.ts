@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { findBuiltStatusMessageRuntimePath } from "../../scripts/test-built-status-message-runtime.mjs";
+import { expectNoReaddirSyncDuring } from "../../src/test-utils/fs-scan-assertions.js";
 
 const tempDirs: string[] = [];
 
@@ -27,14 +28,10 @@ describe("test-built-status-message-runtime", () => {
     fs.writeFileSync(path.join(distDir, "status-message.runtime-abc123.js"), "export {}\n");
     fs.writeFileSync(path.join(distDir, "other.js"), "export {}\n");
 
-    const readDir = vi.spyOn(fs, "readdirSync");
-    try {
+    expectNoReaddirSyncDuring(() => {
       expect(findBuiltStatusMessageRuntimePath(distDir)).toBe(
         path.join(distDir, "status-message.runtime-abc123.js"),
       );
-      expect(readDir).not.toHaveBeenCalled();
-    } finally {
-      readDir.mockRestore();
-    }
+    });
   });
 });

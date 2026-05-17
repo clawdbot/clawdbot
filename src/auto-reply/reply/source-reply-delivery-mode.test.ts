@@ -58,6 +58,22 @@ describe("resolveSourceReplyDeliveryMode", () => {
     ).toBe("automatic");
   });
 
+  it("keeps room events message-tool-only even when group replies are automatic", () => {
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: automaticGroupReplyConfig,
+        ctx: { ChatType: "channel", InboundEventKind: "room_event" },
+      }),
+    ).toBe("message_tool_only");
+    expect(
+      resolveSourceReplyDeliveryMode({
+        cfg: automaticGroupReplyConfig,
+        ctx: { ChatType: "group", InboundEventKind: "room_event" },
+        requested: "automatic",
+      }),
+    ).toBe("message_tool_only");
+  });
+
   it("allows message-tool-only delivery for any source chat via global config", () => {
     for (const ChatType of ["direct", "group", "channel"] as const) {
       expect(

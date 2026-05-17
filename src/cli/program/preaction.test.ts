@@ -168,6 +168,7 @@ describe("registerPreActionHooks", () => {
       .option("--json")
       .action(() => {});
     const config = program.command("config");
+    config.option("--section <section>");
     setCommandJsonMode(config.command("set"), "parse-only")
       .argument("<path>")
       .argument("<value>")
@@ -307,6 +308,26 @@ describe("registerPreActionHooks", () => {
     await runPreAction({
       parseArgv: ["configure"],
       processArgv: ["node", "openclaw", "configure"],
+    });
+
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+  });
+
+  it("lets bare config own config validation and plugin loading", async () => {
+    await runPreAction({
+      parseArgv: ["config"],
+      processArgv: ["node", "openclaw", "config"],
+    });
+
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+  });
+
+  it("lets guided config sections own config validation and plugin loading", async () => {
+    await runPreAction({
+      parseArgv: ["config"],
+      processArgv: ["node", "openclaw", "config", "--section", "models"],
     });
 
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();

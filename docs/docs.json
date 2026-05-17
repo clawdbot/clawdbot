@@ -1133,6 +1133,7 @@
                   "start/bootstrapping",
                   "concepts/experimental-features",
                   "concepts/qa-e2e-automation",
+                  "concepts/personal-agent-benchmark-pack",
                   "concepts/qa-matrix"
                 ]
               },

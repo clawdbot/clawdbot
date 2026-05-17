@@ -3,6 +3,7 @@ import { MEDIA_FFMPEG_MAX_AUDIO_DURATION_SECS, runFfmpeg } from "openclaw/plugin
 import { sanitizeForPlainText } from "openclaw/plugin-sdk/outbound-runtime";
 import { writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
+import { resolveWhatsAppDocumentFileName } from "./document-filename.js";
 import { formatError } from "./session-errors.js";
 import {
   sanitizeAssistantVisibleText,
@@ -123,8 +124,11 @@ function normalizeWhatsAppLoadedMedia(
       : (media.contentType ?? "application/octet-stream");
   const fileName =
     kind === "document"
-      ? (media.fileName ?? deriveWhatsAppDocumentFileName(mediaUrl) ?? "file")
-      : undefined;
+      ? resolveWhatsAppDocumentFileName({
+          fileName: media.fileName ?? deriveWhatsAppDocumentFileName(mediaUrl),
+          mimetype,
+        })
+      : media.fileName;
   return {
     buffer: media.buffer,
     kind,

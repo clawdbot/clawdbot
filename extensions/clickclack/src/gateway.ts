@@ -100,7 +100,7 @@ export async function startClickClackGatewayAccount(
   ctx: ChannelGatewayContext<ResolvedClickClackAccount>,
 ) {
   const configuredAccount = resolveClickClackAccount({
-    cfg: ctx.cfg as CoreConfig,
+    cfg: ctx.cfg,
     accountId: ctx.account.accountId,
   });
   if (!configuredAccount.configured) {
@@ -138,7 +138,7 @@ export async function startClickClackGatewayAccount(
         afterCursor = event.cursor || afterCursor;
         await processEvent({
           account,
-          config: ctx.cfg as CoreConfig,
+          config: ctx.cfg,
           client,
           event,
           botUserId: account.botUserId,
@@ -162,7 +162,7 @@ export async function startClickClackGatewayAccount(
           afterCursor = event.cursor || afterCursor;
           await processEvent({
             account,
-            config: ctx.cfg as CoreConfig,
+            config: ctx.cfg,
             client,
             event,
             botUserId: account.botUserId ?? "",

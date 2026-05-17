@@ -38,9 +38,7 @@ describe("wildcard guard", () => {
   const ast = parseJsonc('{"steps":[{"id":"a","command":"foo"}]}').ast;
 
   it("resolveOcPath throws OcPathError for wildcard pattern", () => {
-    expect(() => resolveOcPath(ast, parseOcPath("oc://wf/steps/*/command"))).toThrow(
-      /findOcPaths/,
-    );
+    expect(() => resolveOcPath(ast, parseOcPath("oc://wf/steps/*/command"))).toThrow(/findOcPaths/);
     try {
       resolveOcPath(ast, parseOcPath("oc://wf/**"));
       expect.fail("should have thrown");
@@ -82,7 +80,6 @@ describe("findOcPaths — non-wildcard fast-path", () => {
   });
 });
 
-
 describe("findOcPaths — JSONC kind", () => {
   const jsonc = parseJsonc(
     "{\n" +
@@ -115,7 +112,6 @@ describe("findOcPaths — JSONC kind", () => {
     }
   });
 });
-
 
 describe("findOcPaths — JSONL kind", () => {
   const jsonl = parseJsonl(
@@ -166,12 +162,23 @@ describe("findOcPaths — JSONL kind", () => {
   });
 });
 
+describe("positional primitives — $first / $last", () => {
+  it("$first picks first array element", () => {
+    const jsonc = parseJsonc('{"items":[10,20,30]}').ast;
+    const m = resolveOcPath(jsonc, parseOcPath("oc://config/items/$first"));
+    expect(m?.kind === "leaf" && m.valueText).toBe("10");
+  });
 
-describe("positional primitives — $last", () => {
   it("$last picks last array element", () => {
     const jsonc = parseJsonc('{"items":[10,20,30]}').ast;
     const m = resolveOcPath(jsonc, parseOcPath("oc://config/items/$last"));
     expect(m?.kind === "leaf" && m.valueText).toBe("30");
+  });
+
+  it("$first picks first value line on jsonl", () => {
+    const jsonl = parseJsonl('{"event":"start"}\n{"event":"step"}\n{"event":"end"}\n').ast;
+    const m = resolveOcPath(jsonl, parseOcPath("oc://session/$first/event"));
+    expect(m?.kind === "leaf" && m.valueText).toBe("start");
   });
 
   it("$last picks last value line on jsonl", () => {
@@ -180,11 +187,11 @@ describe("positional primitives — $last", () => {
     expect(m?.kind === "leaf" && m.valueText).toBe("end");
   });
 
-  it("hasWildcard returns false for $last", () => {
+  it("hasWildcard returns false for positional tokens", () => {
+    expect(hasWildcard(parseOcPath("oc://X/$first/id"))).toBe(false);
     expect(hasWildcard(parseOcPath("oc://X/$last/id"))).toBe(false);
   });
 });
-
 
 describe("quoted segments (v1.0)", () => {
   const jsonc = parseJsonc(
@@ -228,7 +235,7 @@ describe("quoted segments (v1.0)", () => {
     }
   });
 
-  it("rejects quoted segments containing `\"` or `\\` (no escape support)", () => {
+  it('rejects quoted segments containing `"` or `\\` (no escape support)', () => {
     expect(() => parseOcPath('oc://X/keys/"a\\\\b"')).toThrow(/Quoted segment cannot contain/);
   });
 
@@ -321,7 +328,6 @@ describe("value predicates — jsonc", () => {
   });
 });
 
-
 describe("ordinal addressing — md", () => {
   // Two items share slug `foo` after slugify.
   const md = parseMd("## Tools\n\n- foo: a\n- foo: b\n- bar: c\n").ast;
@@ -362,7 +368,6 @@ describe("ordinal addressing — md", () => {
     expect(items.toSorted((a, b) => (a ?? "").localeCompare(b ?? ""))).toEqual(["bar", "foo"]);
   });
 });
-
 
 describe("findOcPaths — Markdown kind", () => {
   const md = parseMd(
@@ -443,7 +448,6 @@ describe("findOcPaths — quoted segments survive expansion", () => {
   });
 });
 
-
 describe("union segments — md", () => {
   const RAW = `## Boundaries
 
@@ -470,9 +474,7 @@ describe("union segments — md", () => {
     const ast = parseMd(RAW).ast;
     const out = findOcPaths(ast, parseOcPath("oc://X.md/limits/{max-tokens,alias}/*"));
     expect(out.length).toBe(2);
-    const items = out
-      .map((m) => m.path.item)
-      .toSorted((a, b) => (a ?? "").localeCompare(b ?? ""));
+    const items = out.map((m) => m.path.item).toSorted((a, b) => (a ?? "").localeCompare(b ?? ""));
     expect(items).toEqual(["alias", "max-tokens"]);
   });
 
@@ -514,10 +516,7 @@ describe("predicate segments — md", () => {
 
   it("matches the kv pair at the field slot", () => {
     const ast = parseMd(RAW).ast;
-    const out = findOcPaths(
-      ast,
-      parseOcPath("oc://X.md/limits/max-tokens/[max-tokens=4096]"),
-    );
+    const out = findOcPaths(ast, parseOcPath("oc://X.md/limits/max-tokens/[max-tokens=4096]"));
     expect(out.length).toBe(1);
     expect(out[0]?.path.field).toBe("max-tokens");
   });

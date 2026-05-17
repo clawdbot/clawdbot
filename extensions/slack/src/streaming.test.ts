@@ -12,7 +12,7 @@ import {
 } from "./streaming.js";
 
 type AppendImpl = () => Promise<unknown>;
-type StopImpl = () => Promise<void>;
+type StopImpl = (args?: unknown) => Promise<void>;
 
 function makeSession(params: { appendImpl?: AppendImpl; stopImpl?: StopImpl }): SlackStreamSession {
   return {
@@ -92,6 +92,19 @@ describe("stopSlackStream finalize error handling", () => {
 
     expect(session.delivered).toBe(true);
     expect(session.pendingText).toBe("");
+  });
+
+  it("passes message metadata when finalizing the stream", async () => {
+    const stopImpl = vi.fn(async () => {});
+    const session = makeSession({ stopImpl });
+    const metadata = {
+      event_type: "assistant_thread_context",
+      event_payload: { channel_id: "C123", team_id: "T123" },
+    };
+
+    await stopSlackStream({ session, metadata });
+
+    expect(stopImpl).toHaveBeenCalledWith({ metadata });
   });
 
   it("throws SlackStreamNotDeliveredError with buffered text when append flush fails", async () => {

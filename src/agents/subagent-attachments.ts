@@ -97,6 +97,7 @@ function resolveAttachmentLimits(config: OpenClawConfig): AttachmentLimits {
 export async function materializeSubagentAttachments(params: {
   config: OpenClawConfig;
   targetAgentId: string;
+  workspaceDir?: string;
   attachments?: SubagentInlineAttachment[];
   mountPathHint?: string;
 }): Promise<MaterializeSubagentAttachmentsResult | null> {
@@ -121,7 +122,9 @@ export async function materializeSubagentAttachments(params: {
   }
 
   const attachmentId = crypto.randomUUID();
-  const childWorkspaceDir = resolveAgentWorkspaceDir(params.config, params.targetAgentId);
+  const childWorkspaceDir =
+    normalizeOptionalString(params.workspaceDir) ??
+    resolveAgentWorkspaceDir(params.config, params.targetAgentId);
   const absRootDir = path.join(childWorkspaceDir, ".openclaw", "attachments");
   const relDir = path.posix.join(".openclaw", "attachments", attachmentId);
   const absDir = path.join(absRootDir, attachmentId);

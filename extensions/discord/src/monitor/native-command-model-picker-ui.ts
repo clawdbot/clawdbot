@@ -256,6 +256,26 @@ export function resolveDiscordModelPickerCurrentModel(params: {
   }
 }
 
+export function resolveDiscordModelPickerCurrentRuntime(params: {
+  cfg: OpenClawConfig;
+  route: ResolvedAgentRoute;
+}): string {
+  try {
+    const storePath = resolveStorePath(params.cfg.session?.store, {
+      agentId: params.route.agentId,
+    });
+    const sessionStore = loadSessionStore(storePath, { skipCache: true });
+    const sessionRuntime = normalizeOptionalString(
+      sessionStore[params.route.sessionKey]?.agentRuntimeOverride,
+    );
+    if (sessionRuntime) {
+      return sessionRuntime;
+    }
+  } catch {}
+
+  return "auto";
+}
+
 export async function replyWithDiscordModelPickerProviders(params: {
   interaction: CommandInteraction | ButtonInteraction | StringSelectMenuInteraction;
   cfg: OpenClawConfig;
@@ -277,6 +297,10 @@ export async function replyWithDiscordModelPickerProviders(params: {
     cfg: params.cfg,
     route,
     data,
+  });
+  const currentRuntime = resolveDiscordModelPickerCurrentRuntime({
+    cfg: params.cfg,
+    route,
   });
   const quickModels = await readDiscordModelPickerRecentModels({
     scope: resolveDiscordModelPickerPreferenceScope({
@@ -301,6 +325,7 @@ export async function replyWithDiscordModelPickerProviders(params: {
     page: 1,
     providerPage: 1,
     currentModel,
+    currentRuntime,
     quickModels,
   });
   const payload = {

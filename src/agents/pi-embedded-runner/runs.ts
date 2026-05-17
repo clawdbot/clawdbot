@@ -34,6 +34,8 @@ import {
 
 export {
   getActiveEmbeddedRunCount,
+  listActiveEmbeddedRunSessionIds,
+  listActiveEmbeddedRunSessionKeys,
   type ActiveEmbeddedRunSnapshot,
   type EmbeddedPiQueueHandle,
   type EmbeddedPiQueueMessageOptions,

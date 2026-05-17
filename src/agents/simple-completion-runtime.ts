@@ -13,6 +13,7 @@ import { DEFAULT_PROVIDER } from "./defaults.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import {
   applyLocalNoAuthHeaderOverride,
+  formatMissingAuthError,
   getApiKeyForModel,
   type ResolvedProviderAuth,
 } from "./model-auth.js";
@@ -235,7 +236,7 @@ export async function prepareSimpleCompletionModel(params: {
     })
   ) {
     return {
-      error: `No API key resolved for provider "${resolved.model.provider}" (auth mode: ${auth.mode}).`,
+      error: formatMissingAuthError(auth, resolved.model.provider),
       auth,
     };
   }

@@ -1,5 +1,14 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+const taskRuntimeMocks = vi.hoisted(() => ({
+  createRunningTaskRun: vi.fn(),
+  recordTaskRunProgressByRunId: vi.fn(),
+  completeTaskRunByRunId: vi.fn(),
+  failTaskRunByRunId: vi.fn(),
+}));
+
+vi.mock("../../tasks/detached-task-runtime.js", () => taskRuntimeMocks);
+
 let imageGenerationRuntime: typeof import("../../image-generation/runtime.js");
 let imageOps: typeof import("../../media/image-ops.js");
 let splitMediaFromOutput: typeof import("../../media/parse.js").splitMediaFromOutput;
@@ -291,6 +300,10 @@ describe("createImageGenerateTool", () => {
     for (const envVar of GENERATION_PROVIDER_ENV_VARS) {
       vi.stubEnv(envVar, "");
     }
+    taskRuntimeMocks.createRunningTaskRun.mockReset();
+    taskRuntimeMocks.recordTaskRunProgressByRunId.mockReset();
+    taskRuntimeMocks.completeTaskRunByRunId.mockReset();
+    taskRuntimeMocks.failTaskRunByRunId.mockReset();
   });
 
   afterEach(() => {
@@ -656,6 +669,71 @@ describe("createImageGenerateTool", () => {
     expect(text).toContain('path="/tmp/generated-1.png"');
     expect(text).toContain('path="/tmp/generated-2.png"');
     expect(text).not.toMatch(/^MEDIA:/m);
+  });
+
+  it("starts image generation asynchronously when a session delivery context is available", async () => {
+    stubImageGenerationProviders();
+    vi.stubEnv("OPENAI_API_KEY", "openai-test");
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "openai",
+      model: "gpt-image-1",
+      attempts: [],
+      ignoredOverrides: [],
+      images: [
+        {
+          buffer: Buffer.from("png-out"),
+          mimeType: "image/png",
+          fileName: "cat.png",
+        },
+      ],
+    });
+    taskRuntimeMocks.createRunningTaskRun.mockReturnValue({
+      taskId: "task-image-123",
+    });
+    const scheduled: Array<() => Promise<void>> = [];
+    const tool = requireImageGenerateTool(
+      createImageGenerateTool({
+        config: {
+          agents: {
+            defaults: {
+              imageGenerationModel: {
+                primary: "openai/gpt-image-1",
+              },
+            },
+          },
+        },
+        agentDir: "/tmp/agent",
+        agentSessionKey: "agent:main:discord:direct:123",
+        requesterOrigin: {
+          channel: "discord",
+          to: "dm:123",
+        },
+        scheduleBackgroundWork: (work) => {
+          scheduled.push(work);
+        },
+      }),
+    );
+
+    const result = await tool.execute("call-async", {
+      prompt: "A cat wearing sunglasses",
+      model: "openai/gpt-image-1",
+    });
+
+    expect(generateImage).not.toHaveBeenCalled();
+    expect(scheduled).toHaveLength(1);
+    expect(resultText(result)).toContain("Background task started for image generation");
+    const details = resultDetails(result);
+    expect(details.async).toBe(true);
+    expect(details.status).toBe("started");
+    expect(details.taskId).toBe("task-image-123");
+    expect(taskRuntimeMocks.createRunningTaskRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        taskKind: "image_generation",
+        sourceId: "image_generate:openai",
+        requesterSessionKey: "agent:main:discord:direct:123",
+        progressSummary: "Queued image generation",
+      }),
+    );
   });
 
   it("uses configured timeoutMs for image generation and lets calls override it", async () => {

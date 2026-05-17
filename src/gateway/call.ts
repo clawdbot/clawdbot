@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadOrCreateDeviceIdentity, type DeviceIdentity } from "../infra/device-identity.js";
 import { loadGatewayTlsRuntime } from "../infra/tls/gateway.js";
 import { isLoopbackIpAddress } from "../shared/net/ip.js";
+import { redactSensitiveUrlLikeString } from "../shared/net/redact-sensitive-url.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   GATEWAY_CLIENT_MODES,
@@ -114,6 +115,55 @@ export class GatewayTransportError extends Error {
       this.timeoutMs = params.timeoutMs;
     }
   }
+}
+
+export type GatewayTransportErrorJson = {
+  ok: false;
+  error: {
+    type: "gateway_transport_error";
+    kind: GatewayTransportErrorKind;
+    message: string;
+    code?: number;
+    reason?: string;
+    timeoutMs?: number;
+  };
+  gateway: {
+    url: string;
+    urlSource: string;
+    bindDetail?: string;
+    remoteFallbackNote?: string;
+  };
+};
+
+function firstGatewayErrorLine(message: string): string {
+  return message.split("\n", 1)[0]?.trim() || message;
+}
+
+export function formatGatewayTransportErrorJson(value: unknown): GatewayTransportErrorJson | null {
+  if (!isGatewayTransportError(value)) {
+    return null;
+  }
+  return {
+    ok: false,
+    error: {
+      type: "gateway_transport_error",
+      kind: value.kind,
+      message: firstGatewayErrorLine(value.message),
+      ...(value.code !== undefined ? { code: value.code } : {}),
+      ...(value.reason !== undefined ? { reason: value.reason } : {}),
+      ...(value.timeoutMs !== undefined ? { timeoutMs: value.timeoutMs } : {}),
+    },
+    gateway: {
+      url: redactSensitiveUrlLikeString(value.connectionDetails.url),
+      urlSource: value.connectionDetails.urlSource,
+      ...(value.connectionDetails.bindDetail
+        ? { bindDetail: value.connectionDetails.bindDetail }
+        : {}),
+      ...(value.connectionDetails.remoteFallbackNote
+        ? { remoteFallbackNote: value.connectionDetails.remoteFallbackNote }
+        : {}),
+    },
+  };
 }
 
 export function isGatewayTransportError(value: unknown): value is GatewayTransportError {

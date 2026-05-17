@@ -4,6 +4,14 @@ import { createToolFactoryHarness } from "./tool-factory-test-harness.js";
 
 const createFeishuClientMock = vi.fn((account: { appId?: string } | undefined) => ({
   __appId: account?.appId,
+  wiki: {
+    spaceNode: {
+      list: vi.fn(async () => ({
+        code: 0,
+        data: { items: [] },
+      })),
+    },
+  },
 }));
 
 vi.mock("./client.js", () => ({
@@ -110,6 +118,46 @@ describe("feishu tool account routing", () => {
     await tool.execute("call", { action: "search" });
 
     expect(lastClientAppId()).toBe("app-a");
+  });
+
+  test("wiki tool rejects number-typed space IDs before Lark receives precision-corrupted values", async () => {
+    const { api, resolveTool } = createToolFactoryHarness(
+      createConfig({
+        toolsA: { wiki: true },
+      }),
+    );
+    registerFeishuWikiTools(api);
+
+    const tool = resolveTool("feishu_wiki", { agentAccountId: "a" });
+    const result = await tool.execute("call", {
+      action: "nodes",
+      space_id: 7616123456789015000,
+    });
+
+    expect(createFeishuClientMock).not.toHaveBeenCalled();
+    expect(result.details.error).toContain("space_id must be a string");
+    expect(result.details.error).toContain("precision loss");
+  });
+
+  test("wiki tool forwards quoted numeric-looking space IDs unchanged", async () => {
+    const { api, resolveTool } = createToolFactoryHarness(
+      createConfig({
+        toolsA: { wiki: true },
+      }),
+    );
+    registerFeishuWikiTools(api);
+
+    const tool = resolveTool("feishu_wiki", { agentAccountId: "a" });
+    await tool.execute("call", {
+      action: "nodes",
+      space_id: "7616123456789014828",
+    });
+
+    const client = createFeishuClientMock.mock.results[0]?.value;
+    expect(client.wiki.spaceNode.list).toHaveBeenCalledWith({
+      path: { space_id: "7616123456789014828" },
+      params: { parent_node_token: undefined },
+    });
   });
 
   test("drive tool registers when first account disables it and routes to agentAccountId", async () => {

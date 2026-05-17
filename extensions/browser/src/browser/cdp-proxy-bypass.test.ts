@@ -308,6 +308,29 @@ describe("withNoProxyForLocalhost preserves user-configured NO_PROXY", () => {
       delete process.env.no_proxy;
     }
   });
+
+  it("does not treat substring matches as complete loopback coverage", async () => {
+    const userNoProxy = "notlocalhost,127.0.0.10,[::1].example";
+    process.env.NO_PROXY = userNoProxy;
+    process.env.no_proxy = userNoProxy;
+    process.env.HTTP_PROXY = "http://proxy:8080";
+
+    try {
+      const { withNoProxyForLocalhost } = await import("./cdp-proxy-bypass.js");
+
+      await withNoProxyForLocalhost(async () => {
+        expect(process.env.NO_PROXY).toBe(`${userNoProxy},localhost,127.0.0.1,[::1]`);
+        expect(process.env.no_proxy).toBe(`${userNoProxy},localhost,127.0.0.1,[::1]`);
+      });
+
+      expect(process.env.NO_PROXY).toBe(userNoProxy);
+      expect(process.env.no_proxy).toBe(userNoProxy);
+    } finally {
+      delete process.env.HTTP_PROXY;
+      delete process.env.NO_PROXY;
+      delete process.env.no_proxy;
+    }
+  });
 });
 
 describe("withNoProxyForCdpUrl", () => {

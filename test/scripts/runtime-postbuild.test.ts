@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -15,6 +14,7 @@ import {
   writeLegacyRootRuntimeCompatAliases,
   writeStableRootRuntimeAliases,
 } from "../../scripts/runtime-postbuild.mjs";
+import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -44,44 +44,16 @@ describe("runtime postbuild static assets", () => {
   });
 
   it("discovers repo static asset metadata without scanning extension directories", () => {
-    const output = execFileSync(
-      process.execPath,
-      [
-        "--input-type=module",
-        "--eval",
-        `
-          import fs from "node:fs";
-          import { syncBuiltinESMExports } from "node:module";
-          const counts = { existsSync: 0, readdirSync: 0 };
-          const originalExistsSync = fs.existsSync;
-          const originalReaddirSync = fs.readdirSync;
-          fs.existsSync = (...args) => {
-            counts.existsSync += 1;
-            return originalExistsSync(...args);
-          };
-          fs.readdirSync = (...args) => {
-            counts.readdirSync += 1;
-            return originalReaddirSync(...args);
-          };
-          syncBuiltinESMExports();
-          const assets = await import("./scripts/lib/static-extension-assets.mjs");
-          console.log(JSON.stringify({
-            counts,
-            outputs: assets.listStaticExtensionAssetOutputs(),
-            sources: assets.listStaticExtensionAssetSources(),
-          }));
-        `,
-      ],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-      },
-    );
-    const payload = JSON.parse(output) as {
-      counts: { existsSync: number; readdirSync: number };
+    const payload = expectNoNodeFsScans<{
       outputs: string[];
       sources: string[];
-    };
+    }>(`
+      const assets = await import("./scripts/lib/static-extension-assets.mjs");
+      return {
+        outputs: assets.listStaticExtensionAssetOutputs(),
+        sources: assets.listStaticExtensionAssetSources(),
+      };
+    `);
 
     expect(payload.outputs).toEqual([
       "dist/extensions/acpx/error-format.mjs",
@@ -90,7 +62,6 @@ describe("runtime postbuild static assets", () => {
       "dist/extensions/diffs/assets/viewer-runtime.js",
     ]);
     expect(payload.sources).toContain("extensions/diffs/assets/viewer-runtime.js");
-    expect(payload.counts).toEqual({ existsSync: 0, readdirSync: 0 });
   });
 
   it("discovers static assets from plugin package metadata", async () => {

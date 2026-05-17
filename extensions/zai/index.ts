@@ -14,7 +14,7 @@ import {
   normalizeApiKeyInput,
   normalizeOptionalSecretInput,
   type SecretInput,
-  upsertAuthProfile,
+  upsertAuthProfileWithLock,
   validateApiKeyInput,
 } from "openclaw/plugin-sdk/provider-auth-api-key";
 import {
@@ -36,6 +36,16 @@ import { applyZaiConfig, applyZaiProviderConfig, ZAI_DEFAULT_MODEL_REF } from ".
 const PROVIDER_ID = "zai";
 const GLM5_TEMPLATE_MODEL_ID = "glm-4.7";
 const PROFILE_ID = "zai:default";
+type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
+
+async function upsertAuthProfileWithLockOrThrow(params: UpsertAuthProfileParams): Promise<void> {
+  const updated = await upsertAuthProfileWithLock(params);
+  if (!updated) {
+    throw new Error(
+      "Failed to update auth profile store; the auth store lock may be busy. Wait a moment and retry.",
+    );
+  }
+}
 
 function resolveGlm5ForwardCompatModel(
   ctx: ProviderResolveDynamicModelContext,
@@ -229,7 +239,7 @@ async function runZaiApiKeyAuthNonInteractive(
     if (!credential) {
       return null;
     }
-    upsertAuthProfile({
+    await upsertAuthProfileWithLockOrThrow({
       profileId: PROFILE_ID,
       credential,
       agentDir: ctx.agentDir,

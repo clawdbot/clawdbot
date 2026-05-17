@@ -53,8 +53,11 @@ jobs:
         )
       }}
     runs-on: blacksmith-8vcpu-ubuntu-2404
+    outputs:
+      authorized: ${{ steps.permission.outputs.authorized }}
     steps:
       - name: Require maintainer-level repository access
+        id: permission
         uses: actions/github-script@v8
         with:
           script: |
@@ -68,14 +71,18 @@ jobs:
             const permission = data.permission;
             core.info(`Actor ${context.actor} permission: ${permission}`);
             if (!allowed.has(permission)) {
-              core.setFailed(
+              core.notice(
                 `Workflow requires write/maintain/admin access. Actor "${context.actor}" has "${permission}".`,
               );
+              core.setOutput("authorized", "false");
+              return;
             }
+            core.setOutput("authorized", "true");
 
   resolve_request:
     name: Resolve Mantis request
     needs: authorize_actor
+    if: needs.authorize_actor.outputs.authorized == 'true'
     runs-on: blacksmith-8vcpu-ubuntu-2404
     outputs:
       baseline_ref: ${{ steps.resolve.outputs.baseline_ref }}

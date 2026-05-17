@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 import {
   listImportedBundledPluginFacadeIds,
   loadBundledPluginPublicSurfaceModuleSync,
@@ -278,21 +279,21 @@ describe("plugin-sdk facade loader", () => {
         marker: "jiti-fallback",
       })) as unknown as ReturnType<FacadeLoaderSourceTransformFactory>;
     }) as FacadeLoaderSourceTransformFactory);
-    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const restoreVersions = forceNodeRuntimeVersionsForTest();
 
-    try {
-      expect(
-        loadBundledPluginPublicSurfaceModuleSync<{ marker: string }>({
-          dirName: fixture.pluginId,
-          artifactBasename: "api.js",
-        }).marker,
-      ).toBe("windows-dist-ok");
-      expect(createJitiCalls).toHaveLength(0);
-    } finally {
-      restoreVersions();
-      platformSpy.mockRestore();
-    }
+    withMockedWindowsPlatform(() => {
+      try {
+        expect(
+          loadBundledPluginPublicSurfaceModuleSync<{ marker: string }>({
+            dirName: fixture.pluginId,
+            artifactBasename: "api.js",
+          }).marker,
+        ).toBe("windows-dist-ok");
+        expect(createJitiCalls).toHaveLength(0);
+      } finally {
+        restoreVersions();
+      }
+    });
   });
 
   it("breaks circular facade re-entry during module evaluation", () => {

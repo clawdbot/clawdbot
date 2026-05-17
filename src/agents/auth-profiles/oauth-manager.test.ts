@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { __testing as externalAuthTesting } from "./external-auth.js";
 import {
@@ -152,6 +153,106 @@ describe("OAuthManagerRefreshError", () => {
     expect(serialized).not.toContain("error-refresh");
     expect(serialized).not.toContain("store-access");
     expect(serialized).not.toContain("store-refresh");
+  });
+
+  it("redacts credential secrets from the refresh error message", () => {
+    const refreshedStore: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai-codex:default": createCredential({
+          access: "store-access",
+          refresh: "store-refresh",
+          idToken: "store-id-token",
+        }),
+      },
+    };
+    const error = new OAuthManagerRefreshError({
+      credential: createCredential({
+        access: "error-access",
+        refresh: "error-refresh",
+        idToken: "error-id-token",
+      }),
+      profileId: "openai-codex:default",
+      refreshedStore,
+      cause: new Error(
+        "refresh rejected error-access error-refresh error-id-token store-access store-refresh store-id-token",
+      ),
+    });
+
+    expect(error.message).toContain("refresh rejected");
+    expect(error.message).not.toContain("error-access");
+    expect(error.message).not.toContain("error-refresh");
+    expect(error.message).not.toContain("error-id-token");
+    expect(error.message).not.toContain("store-access");
+    expect(error.message).not.toContain("store-refresh");
+    expect(error.message).not.toContain("store-id-token");
+    expect(error.message.match(/\[redacted\]/g)?.length).toBe(6);
+    const surfacedCauseMessage = formatErrorMessage(error.cause);
+    expect(surfacedCauseMessage).not.toContain("error-access");
+    expect(surfacedCauseMessage).not.toContain("error-refresh");
+    expect(surfacedCauseMessage).not.toContain("error-id-token");
+    expect(surfacedCauseMessage).not.toContain("store-access");
+    expect(surfacedCauseMessage).not.toContain("store-refresh");
+    expect(surfacedCauseMessage).not.toContain("store-id-token");
+    expect(surfacedCauseMessage.match(/\[redacted\]/g)?.length).toBe(6);
+  });
+
+  it("redacts token-shaped credential secrets before generic masking", () => {
+    const access = "sk-oauthreviewredaction1234567890zzzz";
+    const refresh = "ya29.oauthreviewredaction1234567890yyyy";
+    const error = new OAuthManagerRefreshError({
+      credential: createCredential({ access, refresh }),
+      profileId: "openai-codex:default",
+      refreshedStore: { version: 1, profiles: {} },
+      cause: new Error(`refresh rejected ${access} ${refresh}`, {
+        cause: new Error(`nested failure ${access}`),
+      }),
+    });
+
+    const surfacedCauseMessage = formatErrorMessage(error.cause);
+    for (const message of [error.message, surfacedCauseMessage]) {
+      expect(message).not.toContain(access);
+      expect(message).not.toContain(refresh);
+      expect(message).not.toContain("sk-oau");
+      expect(message).not.toContain("zzzz");
+      expect(message).not.toContain("ya29.o");
+      expect(message).not.toContain("yyyy");
+      expect(message.match(/\[redacted\]/g)?.length).toBe(3);
+    }
+  });
+
+  it.each([undefined, Symbol("refresh-failed"), () => "refresh-failed"])(
+    "formats non-json refresh failure values without throwing",
+    (cause) => {
+      const error = new OAuthManagerRefreshError({
+        credential: createCredential({
+          access: "sk-nonjsonredaction1234567890zzzz",
+        }),
+        profileId: "openai-codex:default",
+        refreshedStore: { version: 1, profiles: {} },
+        cause,
+      });
+
+      expect(error.message).toContain("OAuth token refresh failed");
+    },
+  );
+
+  it("redacts overlapping credential secrets longest first", () => {
+    const error = new OAuthManagerRefreshError({
+      credential: createCredential({
+        access: "abc123",
+        refresh: "abc123456",
+      }),
+      profileId: "openai-codex:default",
+      refreshedStore: { version: 1, profiles: {} },
+      cause: new Error("refresh rejected abc123 abc123456"),
+    });
+
+    expect(error.message).toContain("refresh rejected");
+    expect(error.message).not.toContain("abc123");
+    expect(error.message).not.toContain("abc123456");
+    expect(error.message).not.toContain("[redacted]456");
+    expect(error.message.match(/\[redacted\]/g)?.length).toBe(2);
   });
 });
 
@@ -345,5 +446,71 @@ describe("createOAuthManager", () => {
     expect(result.credential.provider).toBe("minimax-portal");
     expect(result.credential.access).toBe("rotated-access");
     expect(result.credential.refresh).toBe("rotated-refresh");
+  });
+
+  it("redacts the external oauth credential attempted during refresh failures", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "oauth-manager-refresh-redact-"));
+    tempDirs.push(tempRoot);
+    process.env.OPENCLAW_STATE_DIR = tempRoot;
+    const agentDir = path.join(tempRoot, "agents", "sub", "agent");
+    await fs.mkdir(agentDir, { recursive: true });
+    const profileId = "minimax-portal:default";
+    const localCredential = createCredential({
+      provider: "minimax-portal",
+      access: "fresh-local-access",
+      refresh: "fresh-local-refresh",
+      expires: Date.now() + 60_000,
+    });
+    const externalCredential = createCredential({
+      provider: "minimax-portal",
+      access: "external-attempt-access",
+      refresh: "external-attempt-refresh",
+      idToken: "external-attempt-id-token",
+      expires: Date.now() - 30_000,
+    });
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [profileId]: localCredential,
+        },
+      },
+      agentDir,
+      { filterExternalAuthProfiles: false },
+    );
+
+    const manager = createOAuthManager({
+      buildApiKey: async (_provider, credential) => credential.access,
+      refreshCredential: vi.fn(async () => {
+        throw new Error(
+          "refresh rejected external-attempt-access external-attempt-refresh external-attempt-id-token",
+        );
+      }),
+      readBootstrapCredential: () => externalCredential,
+      isRefreshTokenReusedError: () => false,
+    });
+
+    try {
+      await manager.resolveOAuthAccess({
+        store: ensureAuthProfileStore(agentDir),
+        profileId,
+        credential: localCredential,
+        agentDir,
+        forceRefresh: true,
+      });
+      throw new Error("Expected refresh failure");
+    } catch (caught) {
+      if (!(caught instanceof OAuthManagerRefreshError)) {
+        throw caught;
+      }
+      expect(caught.message).toContain("refresh rejected");
+      expect(caught.message).not.toContain("external-attempt-access");
+      expect(caught.message).not.toContain("external-attempt-refresh");
+      expect(caught.message).not.toContain("external-attempt-id-token");
+      const surfacedCauseMessage = formatErrorMessage(caught.cause);
+      expect(surfacedCauseMessage).not.toContain("external-attempt-access");
+      expect(surfacedCauseMessage).not.toContain("external-attempt-refresh");
+      expect(surfacedCauseMessage).not.toContain("external-attempt-id-token");
+    }
   });
 });

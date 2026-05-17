@@ -66,7 +66,7 @@ function resolveSchedule(
   return { kind: "at", at: at.toISOString() };
 }
 
-function resolveSessionTurnDeliveryMode(deliveryMode: unknown): "none" | "announce" | undefined {
+function resolveSessionEventDeliveryMode(deliveryMode: unknown): "none" | "announce" | undefined {
   if (deliveryMode === undefined) {
     return undefined;
   }
@@ -218,7 +218,7 @@ export async function schedulePluginSessionTurn(params: {
     return undefined;
   }
   const rawDeliveryMode = (params.schedule as { deliveryMode?: unknown }).deliveryMode;
-  const deliveryMode = resolveSessionTurnDeliveryMode(rawDeliveryMode);
+  const deliveryMode = resolveSessionEventDeliveryMode(rawDeliveryMode);
   const scheduleName = normalizeOptionalString(params.schedule.name);
   if (rawDeliveryMode !== undefined && !deliveryMode) {
     log.warn(

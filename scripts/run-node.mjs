@@ -682,9 +682,87 @@ const logRunner = (message, deps) => {
     return;
   }
   const line = `[openclaw] ${message}\n`;
+  deps.runNodeProgress?.clearLine();
   deps.stderr.write(line);
+  deps.runNodeProgress?.render();
   deps.outputTee?.write(line);
 };
+
+const RUN_NODE_PROGRESS_FRAMES = ["-", "\\", "|", "/"];
+
+const shouldUseRunNodeProgress = (deps) =>
+  deps.stderr?.isTTY === true &&
+  deps.env.OPENCLAW_RUNNER_PROGRESS !== "0" &&
+  deps.env.CI !== "true" &&
+  !deps.outputTee;
+
+const createRunNodeProgress = (label, deps) => {
+  if (!shouldUseRunNodeProgress(deps)) {
+    return null;
+  }
+  const startedAt = Date.now();
+  let frameIndex = 0;
+  let active = true;
+  let visible = false;
+
+  const clearLine = () => {
+    if (!visible) {
+      return;
+    }
+    deps.stderr.write("\r\x1b[2K");
+    visible = false;
+  };
+  const render = () => {
+    if (!active) {
+      return;
+    }
+    const elapsedSeconds = Math.max(0, Math.round((Date.now() - startedAt) / 1000));
+    const frame = RUN_NODE_PROGRESS_FRAMES[frameIndex % RUN_NODE_PROGRESS_FRAMES.length];
+    frameIndex += 1;
+    deps.stderr.write(`\r[openclaw] ${frame} ${label} (${elapsedSeconds}s)`);
+    visible = true;
+  };
+  const timer = setInterval(render, 120);
+  timer.unref?.();
+  render();
+
+  return {
+    clearLine,
+    render,
+    stop() {
+      if (!active) {
+        return;
+      }
+      active = false;
+      clearInterval(timer);
+      clearLine();
+    },
+  };
+};
+
+const withRunNodeProgress = async (deps, label, callback) => {
+  const previousProgress = deps.runNodeProgress;
+  const progress = createRunNodeProgress(label, deps);
+  if (progress) {
+    deps.runNodeProgress = progress;
+  }
+  try {
+    return await callback();
+  } finally {
+    if (progress) {
+      progress.stop();
+      deps.runNodeProgress = previousProgress;
+    }
+  }
+};
+
+const writeRunnerStream = (deps, stream, chunk) => {
+  deps.runNodeProgress?.clearLine();
+  stream.write(chunk);
+  deps.runNodeProgress?.render();
+};
+
+const shouldPipeSpawnedOutput = (deps) => Boolean(deps.outputTee || deps.runNodeProgress);
 
 const sanitizeCpuProfileNamePart = (value) => {
   const normalized = String(value ?? "")
@@ -810,7 +888,7 @@ const runOpenClaw = async (deps) => {
 };
 
 const pipeSpawnedOutput = (childProcess, deps) => {
-  if (!deps.outputTee) {
+  if (!shouldPipeSpawnedOutput(deps)) {
     return;
   }
   const stderrFilter =
@@ -818,16 +896,18 @@ const pipeSpawnedOutput = (childProcess, deps) => {
       ? createSyncIoTraceStderrFilter(deps)
       : null;
   childProcess.stdout?.on("data", (chunk) => {
-    deps.stdout.write(chunk);
-    deps.outputTee.write(chunk);
+    writeRunnerStream(deps, deps.stdout, chunk);
+    deps.outputTee?.write(chunk);
   });
   childProcess.stderr?.on("data", (chunk) => {
+    deps.runNodeProgress?.clearLine();
     if (stderrFilter) {
       stderrFilter.write(chunk);
     } else {
       deps.stderr.write(chunk);
     }
-    deps.outputTee.write(chunk);
+    deps.runNodeProgress?.render();
+    deps.outputTee?.write(chunk);
   });
   childProcess.stderr?.on("end", () => {
     stderrFilter?.flush();
@@ -1180,6 +1260,7 @@ export async function runNodeMain(params = {}) {
   if (deps.args[0] === "qa") {
     deps.env.OPENCLAW_BUILD_PRIVATE_QA = "1";
     deps.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI = "1";
+    deps.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS ??= "0";
   }
   deps.outputTee = createRunNodeOutputTee(deps);
 
@@ -1252,36 +1333,45 @@ export async function runNodeMain(params = {}) {
       );
       logRunner("Building bundled plugin assets.", deps);
       const buildCmd = deps.execPath;
-      const assetBuild = deps.spawn(buildCmd, bundledPluginAssetBuildArgs, {
-        cwd: deps.cwd,
-        env: deps.env,
-        stdio: deps.outputTee ? ["inherit", "pipe", "pipe"] : "inherit",
-      });
-      pipeSpawnedOutput(assetBuild, deps);
-      const assetBuildRes = await waitForSpawnedProcess(assetBuild, deps);
-      const assetBuildInterruptedExitCode = getInterruptedSpawnExitCode(assetBuildRes);
-      if (assetBuildInterruptedExitCode !== null) {
-        return assetBuildInterruptedExitCode;
-      }
-      if (assetBuildRes.exitCode !== 0 && assetBuildRes.exitCode !== null) {
-        return assetBuildRes.exitCode;
-      }
+      const compileExitCode = await withRunNodeProgress(
+        deps,
+        "Building local CLI artifacts",
+        async () => {
+          const assetBuild = deps.spawn(buildCmd, bundledPluginAssetBuildArgs, {
+            cwd: deps.cwd,
+            env: deps.env,
+            stdio: shouldPipeSpawnedOutput(deps) ? ["inherit", "pipe", "pipe"] : "inherit",
+          });
+          pipeSpawnedOutput(assetBuild, deps);
+          const assetBuildRes = await waitForSpawnedProcess(assetBuild, deps);
+          const assetBuildInterruptedExitCode = getInterruptedSpawnExitCode(assetBuildRes);
+          if (assetBuildInterruptedExitCode !== null) {
+            return assetBuildInterruptedExitCode;
+          }
+          if (assetBuildRes.exitCode !== 0 && assetBuildRes.exitCode !== null) {
+            return assetBuildRes.exitCode;
+          }
 
-      const buildArgs = compilerArgs;
-      const build = deps.spawn(buildCmd, buildArgs, {
-        cwd: deps.cwd,
-        env: deps.env,
-        stdio: deps.outputTee ? ["inherit", "pipe", "pipe"] : "inherit",
-      });
-      pipeSpawnedOutput(build, deps);
+          const build = deps.spawn(buildCmd, compilerArgs, {
+            cwd: deps.cwd,
+            env: deps.env,
+            stdio: shouldPipeSpawnedOutput(deps) ? ["inherit", "pipe", "pipe"] : "inherit",
+          });
+          pipeSpawnedOutput(build, deps);
 
-      const buildRes = await waitForSpawnedProcess(build, deps);
-      const interruptedExitCode = getInterruptedSpawnExitCode(buildRes);
-      if (interruptedExitCode !== null) {
-        return interruptedExitCode;
-      }
-      if (buildRes.exitCode !== 0 && buildRes.exitCode !== null) {
-        return buildRes.exitCode;
+          const buildRes = await waitForSpawnedProcess(build, deps);
+          const interruptedExitCode = getInterruptedSpawnExitCode(buildRes);
+          if (interruptedExitCode !== null) {
+            return interruptedExitCode;
+          }
+          if (buildRes.exitCode !== 0 && buildRes.exitCode !== null) {
+            return buildRes.exitCode;
+          }
+          return 0;
+        },
+      );
+      if (compileExitCode !== 0) {
+        return compileExitCode;
       }
       if (!(await syncRuntimeArtifacts(deps))) {
         return 1;

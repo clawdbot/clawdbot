@@ -1,7 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import v8 from "node:v8";
 import { resolveStateDir } from "../config/paths.js";
+import type {
+  DiagnosticMemoryPressureEvent,
+  DiagnosticMemoryUsage,
+} from "../infra/diagnostic-events.js";
 import { registerFatalErrorHook } from "../infra/fatal-error-hooks.js";
 import { replaceFileAtomicSync } from "../infra/replace-file.js";
 import {
@@ -21,6 +26,66 @@ const BUNDLE_PREFIX = "openclaw-stability-";
 const BUNDLE_SUFFIX = ".json";
 const REDACTED_HOSTNAME = "<redacted-hostname>";
 const MAX_SAFE_ERROR_MESSAGE_LENGTH = 500;
+const MAX_ACTIVE_RESOURCE_TYPES = 25;
+const MAX_SESSION_FILE_RESULTS = 20;
+const MAX_SESSION_SCAN_AGENTS = 100;
+const MAX_SESSION_SCAN_FILES = 5000;
+const CGROUP_V2_MEMORY_FILES = ["current", "max", "high", "peak", "swap.current", "swap.max"];
+const CGROUP_V2_MEMORY_EVENTS = ["events", "events.local"];
+
+type DiagnosticHeapSpaceSummary = {
+  spaceName: string;
+  spaceSizeBytes: number;
+  spaceUsedBytes: number;
+  spaceAvailableBytes: number;
+  physicalSpaceSizeBytes: number;
+};
+
+type DiagnosticHeapStatisticsSummary = {
+  totalHeapSizeBytes: number;
+  totalHeapSizeExecutableBytes: number;
+  totalPhysicalSizeBytes: number;
+  totalAvailableSizeBytes: number;
+  usedHeapSizeBytes: number;
+  heapSizeLimitBytes: number;
+  mallocedMemoryBytes: number;
+  externalMemoryBytes: number;
+};
+
+type DiagnosticActiveResourceSummary = {
+  total: number;
+  byType: Record<string, number>;
+};
+
+type DiagnosticCgroupMemorySummary = {
+  version: "v2";
+  values: Record<string, number | "max">;
+  events: Record<string, number>;
+};
+
+type DiagnosticSessionFileSummary = {
+  relativePath: string;
+  sizeBytes: number;
+  mtimeMs: number;
+};
+
+export type DiagnosticMemoryPressureBundleEvidence = {
+  level: DiagnosticMemoryPressureEvent["level"];
+  reason: DiagnosticMemoryPressureEvent["reason"];
+  memory: DiagnosticMemoryUsage;
+  thresholdBytes?: number;
+  rssGrowthBytes?: number;
+  windowMs?: number;
+  heapStatistics?: DiagnosticHeapStatisticsSummary;
+  heapSpaces?: DiagnosticHeapSpaceSummary[];
+  cgroup?: DiagnosticCgroupMemorySummary;
+  activeResources?: DiagnosticActiveResourceSummary;
+  topSessionFiles?: DiagnosticSessionFileSummary[];
+};
+
+export type DiagnosticStabilityBundleEvidence = {
+  memoryPressure?: DiagnosticMemoryPressureBundleEvidence;
+};
 
 export type DiagnosticStabilityBundle = {
   version: typeof DIAGNOSTIC_STABILITY_BUNDLE_VERSION;
@@ -41,6 +106,7 @@ export type DiagnosticStabilityBundle = {
     code?: string;
     message?: string;
   };
+  evidence?: DiagnosticStabilityBundleEvidence;
   snapshot: DiagnosticStabilitySnapshot;
 };
 
@@ -58,6 +124,7 @@ export type WriteDiagnosticStabilityBundleOptions = {
   env?: NodeJS.ProcessEnv;
   stateDir?: string;
   retention?: number;
+  evidence?: DiagnosticStabilityBundleEvidence;
 };
 
 export type DiagnosticStabilityBundleLocationOptions = {
@@ -84,6 +151,14 @@ export type WriteDiagnosticStabilityBundleForFailureOptions = Omit<
   WriteDiagnosticStabilityBundleOptions,
   "error" | "includeEmpty" | "reason"
 >;
+
+export type WriteDiagnosticMemoryPressureBundleOptions = Omit<
+  WriteDiagnosticStabilityBundleOptions,
+  "reason" | "error" | "evidence" | "includeEmpty"
+> & {
+  pressure: Omit<DiagnosticMemoryPressureEvent, "seq" | "ts" | "type" | "trace">;
+  sessionStorePaths?: string[];
+};
 
 let fatalHookUnsubscribe: (() => void) | null = null;
 
@@ -192,6 +267,14 @@ function readNumber(value: unknown, label: string): number {
   return value;
 }
 
+function readOptionalPositiveInteger(value: unknown, label: string): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const parsed = readNumber(value, label);
+  return parsed >= 0 ? Math.floor(parsed) : undefined;
+}
+
 function readTimestampMs(value: unknown, label: string): number {
   const timestamp = readNumber(value, label);
   if (Number.isNaN(new Date(timestamp).getTime())) {
@@ -245,6 +328,18 @@ function assignOptionalNumber(target: object, key: string, value: unknown, label
   }
 }
 
+function assignOptionalPositiveInteger(
+  target: object,
+  key: string,
+  value: unknown,
+  label: string,
+): void {
+  const parsed = readOptionalPositiveInteger(value, label);
+  if (parsed !== undefined) {
+    (target as Record<string, unknown>)[key] = parsed;
+  }
+}
+
 function assignOptionalCodeString(
   target: object,
   key: string,
@@ -257,10 +352,7 @@ function assignOptionalCodeString(
   }
 }
 
-function readMemoryUsage(
-  value: unknown,
-  label: string,
-): NonNullable<DiagnosticStabilitySnapshot["summary"]["memory"]>["latest"] {
+function readMemoryUsage(value: unknown, label: string): DiagnosticMemoryUsage {
   const memory = readObject(value, label);
   return {
     rssBytes: readNumber(memory.rssBytes, `${label}.rssBytes`),
@@ -269,6 +361,258 @@ function readMemoryUsage(
     externalBytes: readNumber(memory.externalBytes, `${label}.externalBytes`),
     arrayBuffersBytes: readNumber(memory.arrayBuffersBytes, `${label}.arrayBuffersBytes`),
   };
+}
+
+function readHeapStatistics(value: unknown): DiagnosticHeapStatisticsSummary | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const source = readObject(value, "evidence.memoryPressure.heapStatistics");
+  const result = {} as DiagnosticHeapStatisticsSummary;
+  assignOptionalPositiveInteger(
+    result,
+    "totalHeapSizeBytes",
+    source.totalHeapSizeBytes,
+    "evidence.memoryPressure.heapStatistics.totalHeapSizeBytes",
+  );
+  assignOptionalPositiveInteger(
+    result,
+    "totalHeapSizeExecutableBytes",
+    source.totalHeapSizeExecutableBytes,
+    "evidence.memoryPressure.heapStatistics.totalHeapSizeExecutableBytes",
+  );
+  assignOptionalPositiveInteger(
+    result,
+    "totalPhysicalSizeBytes",
+    source.totalPhysicalSizeBytes,
+    "evidence.memoryPressure.heapStatistics.totalPhysicalSizeBytes",
+  );
+  assignOptionalPositiveInteger(
+    result,
+    "totalAvailableSizeBytes",
+    source.totalAvailableSizeBytes,
+    "evidence.memoryPressure.heapStatistics.totalAvailableSizeBytes",
+  );
+  assignOptionalPositiveInteger(
+    result,
+    "usedHeapSizeBytes",
+    source.usedHeapSizeBytes,
+    "evidence.memoryPressure.heapStatistics.usedHeapSizeBytes",
+  );
+  assignOptionalPositiveInteger(
+    result,
+    "heapSizeLimitBytes",
+    source.heapSizeLimitBytes,
+    "evidence.memoryPressure.heapStatistics.heapSizeLimitBytes",
+  );
+  assignOptionalPositiveInteger(
+    result,
+    "mallocedMemoryBytes",
+    source.mallocedMemoryBytes,
+    "evidence.memoryPressure.heapStatistics.mallocedMemoryBytes",
+  );
+  assignOptionalPositiveInteger(
+    result,
+    "externalMemoryBytes",
+    source.externalMemoryBytes,
+    "evidence.memoryPressure.heapStatistics.externalMemoryBytes",
+  );
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
+function readHeapSpaces(value: unknown): DiagnosticHeapSpaceSummary[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    throw new Error(
+      "Invalid stability bundle: evidence.memoryPressure.heapSpaces must be an array",
+    );
+  }
+  const spaces: DiagnosticHeapSpaceSummary[] = [];
+  for (const [index, entry] of value.entries()) {
+    const source = readObject(entry, `evidence.memoryPressure.heapSpaces[${index}]`);
+    const spaceName = readOptionalCodeString(
+      source.spaceName,
+      `evidence.memoryPressure.heapSpaces[${index}].spaceName`,
+    );
+    if (!spaceName) {
+      continue;
+    }
+    spaces.push({
+      spaceName,
+      spaceSizeBytes:
+        readOptionalPositiveInteger(
+          source.spaceSizeBytes,
+          `evidence.memoryPressure.heapSpaces[${index}].spaceSizeBytes`,
+        ) ?? 0,
+      spaceUsedBytes:
+        readOptionalPositiveInteger(
+          source.spaceUsedBytes,
+          `evidence.memoryPressure.heapSpaces[${index}].spaceUsedBytes`,
+        ) ?? 0,
+      spaceAvailableBytes:
+        readOptionalPositiveInteger(
+          source.spaceAvailableBytes,
+          `evidence.memoryPressure.heapSpaces[${index}].spaceAvailableBytes`,
+        ) ?? 0,
+      physicalSpaceSizeBytes:
+        readOptionalPositiveInteger(
+          source.physicalSpaceSizeBytes,
+          `evidence.memoryPressure.heapSpaces[${index}].physicalSpaceSizeBytes`,
+        ) ?? 0,
+    });
+  }
+  return spaces.length > 0 ? spaces : undefined;
+}
+
+function readCgroupMemorySummary(value: unknown): DiagnosticCgroupMemorySummary | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const source = readObject(value, "evidence.memoryPressure.cgroup");
+  const version = readCodeString(
+    source.version,
+    "evidence.memoryPressure.cgroup.version",
+  ) as DiagnosticCgroupMemorySummary["version"];
+  if (version !== "v2") {
+    return undefined;
+  }
+  const valuesSource = readObject(source.values, "evidence.memoryPressure.cgroup.values");
+  const values: Record<string, number | "max"> = {};
+  for (const [key, raw] of Object.entries(valuesSource)) {
+    if (!SAFE_REASON_CODE.test(key)) {
+      continue;
+    }
+    if (raw === "max") {
+      values[key] = "max";
+    } else {
+      values[key] =
+        readOptionalPositiveInteger(raw, `evidence.memoryPressure.cgroup.values.${key}`) ?? 0;
+    }
+  }
+  return {
+    version,
+    values,
+    events: readNumberMap(source.events, "evidence.memoryPressure.cgroup.events"),
+  };
+}
+
+function readActiveResources(value: unknown): DiagnosticActiveResourceSummary | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const source = readObject(value, "evidence.memoryPressure.activeResources");
+  return {
+    total:
+      readOptionalPositiveInteger(source.total, "evidence.memoryPressure.activeResources.total") ??
+      0,
+    byType: readNumberMap(source.byType, "evidence.memoryPressure.activeResources.byType"),
+  };
+}
+
+function readSessionFiles(value: unknown): DiagnosticSessionFileSummary[] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    throw new Error(
+      "Invalid stability bundle: evidence.memoryPressure.topSessionFiles must be an array",
+    );
+  }
+  const files: DiagnosticSessionFileSummary[] = [];
+  for (const [index, entry] of value.entries()) {
+    const source = readObject(entry, `evidence.memoryPressure.topSessionFiles[${index}]`);
+    const relativePath = readString(
+      source.relativePath,
+      `evidence.memoryPressure.topSessionFiles[${index}].relativePath`,
+    );
+    if (
+      path.isAbsolute(relativePath) ||
+      relativePath.includes("..") ||
+      relativePath.length > 300 ||
+      /[\r\n]/u.test(relativePath)
+    ) {
+      continue;
+    }
+    files.push({
+      relativePath: sanitizeSessionEvidencePath(relativePath),
+      sizeBytes:
+        readOptionalPositiveInteger(
+          source.sizeBytes,
+          `evidence.memoryPressure.topSessionFiles[${index}].sizeBytes`,
+        ) ?? 0,
+      mtimeMs:
+        readOptionalPositiveInteger(
+          source.mtimeMs,
+          `evidence.memoryPressure.topSessionFiles[${index}].mtimeMs`,
+        ) ?? 0,
+    });
+  }
+  return files.length > 0 ? files : undefined;
+}
+
+function readMemoryPressureEvidence(
+  value: unknown,
+): DiagnosticMemoryPressureBundleEvidence | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const pressure = readObject(value, "evidence.memoryPressure");
+  const level = readCodeString(
+    pressure.level,
+    "evidence.memoryPressure.level",
+  ) as DiagnosticMemoryPressureEvent["level"];
+  const reason = readCodeString(
+    pressure.reason,
+    "evidence.memoryPressure.reason",
+  ) as DiagnosticMemoryPressureEvent["reason"];
+  if ((level !== "warning" && level !== "critical") || !isMemoryPressureReason(reason)) {
+    return undefined;
+  }
+  const heapStatistics = readHeapStatistics(pressure.heapStatistics);
+  const heapSpaces = readHeapSpaces(pressure.heapSpaces);
+  const cgroup = readCgroupMemorySummary(pressure.cgroup);
+  const activeResources = readActiveResources(pressure.activeResources);
+  const topSessionFiles = readSessionFiles(pressure.topSessionFiles);
+  return {
+    level,
+    reason,
+    memory: readMemoryUsage(pressure.memory, "evidence.memoryPressure.memory"),
+    ...(pressure.thresholdBytes !== undefined
+      ? {
+          thresholdBytes: readNumber(
+            pressure.thresholdBytes,
+            "evidence.memoryPressure.thresholdBytes",
+          ),
+        }
+      : {}),
+    ...(pressure.rssGrowthBytes !== undefined
+      ? {
+          rssGrowthBytes: readNumber(
+            pressure.rssGrowthBytes,
+            "evidence.memoryPressure.rssGrowthBytes",
+          ),
+        }
+      : {}),
+    ...(pressure.windowMs !== undefined
+      ? { windowMs: readNumber(pressure.windowMs, "evidence.memoryPressure.windowMs") }
+      : {}),
+    ...(heapStatistics ? { heapStatistics } : {}),
+    ...(heapSpaces ? { heapSpaces } : {}),
+    ...(cgroup ? { cgroup } : {}),
+    ...(activeResources ? { activeResources } : {}),
+    ...(topSessionFiles ? { topSessionFiles } : {}),
+  };
+}
+
+function readBundleEvidence(value: unknown): DiagnosticStabilityBundleEvidence | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const source = readObject(value, "evidence");
+  const memoryPressure = readMemoryPressureEvidence(source.memoryPressure);
+  return memoryPressure ? { memoryPressure } : undefined;
 }
 
 function readNumberMap(value: unknown, label: string): Record<string, number> {
@@ -493,6 +837,7 @@ function parseDiagnosticStabilityBundle(value: unknown): DiagnosticStabilityBund
   const processInfo = readObject(bundle.process, "process");
   readObject(bundle.host, "host");
   const error = bundle.error === undefined ? undefined : readSafeErrorMetadata(bundle.error);
+  const evidence = readBundleEvidence(bundle.evidence);
   return {
     version: DIAGNOSTIC_STABILITY_BUNDLE_VERSION,
     generatedAt: readTimestampString(bundle.generatedAt, "generatedAt"),
@@ -508,8 +853,332 @@ function parseDiagnosticStabilityBundle(value: unknown): DiagnosticStabilityBund
       hostname: REDACTED_HOSTNAME,
     },
     ...(error ? { error } : {}),
+    ...(evidence ? { evidence } : {}),
     snapshot: readStabilitySnapshot(bundle.snapshot),
   };
+}
+
+function readPositiveMemoryFile(file: string): number | "max" | undefined {
+  try {
+    const raw = fs.readFileSync(file, "utf8").trim();
+    if (raw === "max") {
+      return "max";
+    }
+    const parsed = Number.parseInt(raw, 10);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readCgroupEventFile(file: string): Record<string, number> {
+  try {
+    const events: Record<string, number> = {};
+    for (const line of fs.readFileSync(file, "utf8").split(/\r?\n/u)) {
+      const [key, raw] = line.trim().split(/\s+/u);
+      if (!key || !SAFE_REASON_CODE.test(key)) {
+        continue;
+      }
+      const value = Number.parseInt(raw ?? "", 10);
+      if (Number.isFinite(value) && value >= 0) {
+        events[key] = value;
+      }
+    }
+    return events;
+  } catch {
+    return {};
+  }
+}
+
+function resolveCgroupV2MemoryDir(): string | undefined {
+  if (process.platform !== "linux") {
+    return undefined;
+  }
+  try {
+    const line = fs
+      .readFileSync("/proc/self/cgroup", "utf8")
+      .split(/\r?\n/u)
+      .find((entry) => entry.startsWith("0::"));
+    if (!line) {
+      return undefined;
+    }
+    const rawPath = line.slice("0::".length).trim();
+    const relative = rawPath.replace(/^\/+/u, "");
+    return path.join("/sys/fs/cgroup", relative);
+  } catch {
+    return undefined;
+  }
+}
+
+function collectCgroupMemorySummary(): DiagnosticCgroupMemorySummary | undefined {
+  const dir = resolveCgroupV2MemoryDir();
+  if (!dir) {
+    return undefined;
+  }
+  const values: Record<string, number | "max"> = {};
+  for (const name of CGROUP_V2_MEMORY_FILES) {
+    const value = readPositiveMemoryFile(path.join(dir, `memory.${name}`));
+    if (value !== undefined) {
+      values[name] = value;
+    }
+  }
+  const events: Record<string, number> = {};
+  for (const name of CGROUP_V2_MEMORY_EVENTS) {
+    const parsed = readCgroupEventFile(path.join(dir, `memory.${name}`));
+    for (const [key, value] of Object.entries(parsed)) {
+      events[name === "events" ? key : `${name}.${key}`] = value;
+    }
+  }
+  return Object.keys(values).length > 0 || Object.keys(events).length > 0
+    ? { version: "v2", values, events }
+    : undefined;
+}
+
+function collectHeapStatistics(): DiagnosticHeapStatisticsSummary | undefined {
+  try {
+    const stats = v8.getHeapStatistics();
+    return {
+      totalHeapSizeBytes: stats.total_heap_size,
+      totalHeapSizeExecutableBytes: stats.total_heap_size_executable,
+      totalPhysicalSizeBytes: stats.total_physical_size,
+      totalAvailableSizeBytes: stats.total_available_size,
+      usedHeapSizeBytes: stats.used_heap_size,
+      heapSizeLimitBytes: stats.heap_size_limit,
+      mallocedMemoryBytes: stats.malloced_memory,
+      externalMemoryBytes: stats.external_memory,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function collectHeapSpaces(): DiagnosticHeapSpaceSummary[] | undefined {
+  try {
+    const spaces = v8.getHeapSpaceStatistics().map((space) => ({
+      spaceName: space.space_name,
+      spaceSizeBytes: space.space_size,
+      spaceUsedBytes: space.space_used_size,
+      spaceAvailableBytes: space.space_available_size,
+      physicalSpaceSizeBytes: space.physical_space_size,
+    }));
+    return spaces.length > 0 ? spaces : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function collectActiveResources(): DiagnosticActiveResourceSummary | undefined {
+  try {
+    if (typeof process.getActiveResourcesInfo !== "function") {
+      return undefined;
+    }
+    const names = process.getActiveResourcesInfo();
+    const byType: Record<string, number> = {};
+    for (const name of names) {
+      if (!SAFE_REASON_CODE.test(name)) {
+        continue;
+      }
+      byType[name] = (byType[name] ?? 0) + 1;
+    }
+    const sorted = Object.entries(byType)
+      .toSorted((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .slice(0, MAX_ACTIVE_RESOURCE_TYPES);
+    return { total: names.length, byType: Object.fromEntries(sorted) };
+  } catch {
+    return undefined;
+  }
+}
+
+function sanitizeSessionEvidencePath(relativePath: string): string {
+  const parts = relativePath.split("/");
+  if (parts.length === 4 && parts[0] === "agents" && parts[2] === "sessions") {
+    return `agents/<agent>/sessions/${sanitizeSessionEvidenceFileName(parts[3])}`;
+  }
+  if (parts.length === 2 && parts[0] === "sessions") {
+    return `sessions/${sanitizeSessionEvidenceFileName(parts[1])}`;
+  }
+  return redactSensitiveText(relativePath, { mode: "tools" });
+}
+
+function sanitizeSessionEvidenceFileName(fileName: string): string {
+  if (fileName === "sessions.json") {
+    return "sessions.json";
+  }
+  if (fileName.endsWith(".jsonl")) {
+    return "<session>.jsonl";
+  }
+  if (fileName.endsWith(".json")) {
+    return "<session>.json";
+  }
+  return "<session>";
+}
+
+function visitDirentsBounded(
+  dir: string,
+  maxEntries: number,
+  visitor: (entry: fs.Dirent) => boolean | void,
+): void {
+  if (maxEntries <= 0) {
+    return;
+  }
+  let handle: fs.Dir | undefined;
+  try {
+    handle = fs.opendirSync(dir);
+    for (let count = 0; count < maxEntries; count += 1) {
+      const entry = handle.readSync();
+      if (!entry || visitor(entry) === false) {
+        return;
+      }
+    }
+  } catch {
+    // Best-effort diagnostic evidence only.
+  } finally {
+    try {
+      handle?.closeSync();
+    } catch {
+      // Best-effort diagnostic evidence only.
+    }
+  }
+}
+
+function pushSessionFileSummary(
+  results: DiagnosticSessionFileSummary[],
+  stateDir: string,
+  file: string,
+  relativePathOverride?: string,
+): void {
+  try {
+    const stat = fs.statSync(file);
+    if (!stat.isFile()) {
+      return;
+    }
+    const relativePath = (relativePathOverride ?? path.relative(stateDir, file)).replace(
+      /\\/gu,
+      "/",
+    );
+    if (relativePath.startsWith("../") || path.isAbsolute(relativePath)) {
+      return;
+    }
+    results.push({
+      relativePath: sanitizeSessionEvidencePath(relativePath),
+      sizeBytes: stat.size,
+      mtimeMs: stat.mtimeMs,
+    });
+  } catch {
+    // Best-effort diagnostic evidence only.
+  }
+}
+
+function scanSessionDirectory(params: {
+  results: DiagnosticSessionFileSummary[];
+  stateDir: string;
+  sessionsDir: string;
+  relativePrefix: string;
+  seenDirs: Set<string>;
+  scannedSessionEntries: { count: number };
+}): void {
+  const sessionsDir = path.resolve(params.sessionsDir);
+  if (params.seenDirs.has(sessionsDir)) {
+    return;
+  }
+  params.seenDirs.add(sessionsDir);
+  visitDirentsBounded(
+    sessionsDir,
+    MAX_SESSION_SCAN_FILES - params.scannedSessionEntries.count,
+    (sessionEntry) => {
+      params.scannedSessionEntries.count += 1;
+      if (!sessionEntry.isFile() || !/\.(?:jsonl|json)$/u.test(sessionEntry.name)) {
+        return params.scannedSessionEntries.count < MAX_SESSION_SCAN_FILES;
+      }
+      pushSessionFileSummary(
+        params.results,
+        params.stateDir,
+        path.join(sessionsDir, sessionEntry.name),
+        path.posix.join(params.relativePrefix, sessionEntry.name),
+      );
+      return params.scannedSessionEntries.count < MAX_SESSION_SCAN_FILES;
+    },
+  );
+}
+
+function collectTopSessionFiles(
+  stateDir: string,
+  sessionStorePaths: string[] = [],
+): DiagnosticSessionFileSummary[] | undefined {
+  const results: DiagnosticSessionFileSummary[] = [];
+  const seenDirs = new Set<string>();
+  const scannedSessionEntries = { count: 0 };
+  try {
+    pushSessionFileSummary(results, stateDir, path.join(stateDir, "sessions.json"));
+    const agentsDir = path.join(stateDir, "agents");
+    visitDirentsBounded(agentsDir, MAX_SESSION_SCAN_AGENTS, (agentEntry) => {
+      if (!agentEntry.isDirectory() || scannedSessionEntries.count >= MAX_SESSION_SCAN_FILES) {
+        return;
+      }
+      scanSessionDirectory({
+        results,
+        stateDir,
+        sessionsDir: path.join(agentsDir, agentEntry.name, "sessions"),
+        relativePrefix: path.posix.join("agents", agentEntry.name, "sessions"),
+        seenDirs,
+        scannedSessionEntries,
+      });
+    });
+    for (const storePath of sessionStorePaths) {
+      if (scannedSessionEntries.count >= MAX_SESSION_SCAN_FILES) {
+        break;
+      }
+      const sessionsDir = path.dirname(path.resolve(storePath));
+      scanSessionDirectory({
+        results,
+        stateDir,
+        sessionsDir,
+        relativePrefix: "sessions",
+        seenDirs,
+        scannedSessionEntries,
+      });
+    }
+  } catch {
+    // Best-effort diagnostic evidence only.
+  }
+  const top = results
+    .toSorted((a, b) => b.sizeBytes - a.sizeBytes || a.relativePath.localeCompare(b.relativePath))
+    .slice(0, MAX_SESSION_FILE_RESULTS);
+  return top.length > 0 ? top : undefined;
+}
+
+function buildMemoryPressureEvidence(
+  options: WriteDiagnosticMemoryPressureBundleOptions,
+): DiagnosticStabilityBundleEvidence {
+  const stateDir = options.stateDir ?? resolveStateDir(options.env ?? process.env);
+  const heapStatistics = collectHeapStatistics();
+  const heapSpaces = collectHeapSpaces();
+  const cgroup = collectCgroupMemorySummary();
+  const activeResources = collectActiveResources();
+  const topSessionFiles = collectTopSessionFiles(stateDir, options.sessionStorePaths);
+  return {
+    memoryPressure: {
+      level: options.pressure.level,
+      reason: options.pressure.reason,
+      memory: options.pressure.memory,
+      ...(options.pressure.thresholdBytes !== undefined
+        ? { thresholdBytes: options.pressure.thresholdBytes }
+        : {}),
+      ...(options.pressure.rssGrowthBytes !== undefined
+        ? { rssGrowthBytes: options.pressure.rssGrowthBytes }
+        : {}),
+      ...(options.pressure.windowMs !== undefined ? { windowMs: options.pressure.windowMs } : {}),
+      ...(heapStatistics ? { heapStatistics } : {}),
+      ...(heapSpaces ? { heapSpaces } : {}),
+      ...(cgroup ? { cgroup } : {}),
+      ...(activeResources ? { activeResources } : {}),
+      ...(topSessionFiles ? { topSessionFiles } : {}),
+    },
+  };
+}
+
+function isMemoryPressureReason(reason: string): reason is DiagnosticMemoryPressureEvent["reason"] {
+  return reason === "rss_threshold" || reason === "heap_threshold" || reason === "rss_growth";
 }
 
 export function listDiagnosticStabilityBundleFilesSync(
@@ -637,6 +1306,7 @@ export function writeDiagnosticStabilityBundleSync(
         hostname: REDACTED_HOSTNAME,
       },
       ...(error ? { error } : {}),
+      ...(options.evidence ? { evidence: options.evidence } : {}),
       snapshot,
     };
 
@@ -654,6 +1324,17 @@ export function writeDiagnosticStabilityBundleSync(
   } catch (error) {
     return { status: "failed", error };
   }
+}
+
+export function writeDiagnosticMemoryPressureBundleSync(
+  options: WriteDiagnosticMemoryPressureBundleOptions,
+): WriteDiagnosticStabilityBundleResult {
+  return writeDiagnosticStabilityBundleSync({
+    ...options,
+    reason: "diagnostic.memory.pressure.critical",
+    includeEmpty: true,
+    evidence: buildMemoryPressureEvidence(options),
+  });
 }
 
 export function writeDiagnosticStabilityBundleForFailureSync(

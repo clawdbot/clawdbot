@@ -511,8 +511,16 @@ describe("subagent announce formatting", () => {
     expect(msg).toContain("</prompt-data>");
     expect(msg).toContain("raw subagent reply");
     expect(msg).toContain("Stats:");
-    expect(msg).toContain("A completed subagent task is ready for user delivery.");
-    expect(msg).toContain("Convert the result above into your normal assistant voice");
+    expect(msg).toContain("A completed subagent task is ready for parent review.");
+    expect(msg).toContain(
+      "Review/verify the result above before deciding whether the original task is done.",
+    );
+    expect(msg).toContain(
+      "If additional action is required, continue the task or record a follow-up; otherwise send a truthful user-facing update.",
+    );
+    expect(msg).toContain(
+      "If the runtime marks this route as message-tool-only, send visible output with the message tool first",
+    );
     expect(msg).toContain("Keep this internal context private");
     expect(call?.params?.internalEvents?.[0]?.type).toBe("task_completion");
     expect(call?.params?.internalEvents?.[0]?.taskLabel).toBe("do thing");
@@ -530,7 +538,7 @@ describe("subagent announce formatting", () => {
 
     const call = getAgentCall() as { params?: { message?: string } };
     const msg = call?.params?.message as string;
-    expect(msg).toContain("completed successfully");
+    expect(msg).toContain("completed; ready for parent review");
   });
 
   it("rechecks timed-out waits before announcing timeout when the run finishes immediately after", async () => {
@@ -586,7 +594,9 @@ describe("subagent announce formatting", () => {
       };
     };
     expect(call?.params?.internalEvents?.[0]?.status).toBe("ok");
-    expect(call?.params?.internalEvents?.[0]?.statusLabel).toBe("completed successfully");
+    expect(call?.params?.internalEvents?.[0]?.statusLabel).toBe(
+      "completed; ready for parent review",
+    );
     expect(call?.params?.internalEvents?.[0]?.result).toContain("Worker executed successfully");
   });
 
@@ -697,7 +707,10 @@ describe("subagent announce formatting", () => {
     expect(msg).toContain("tokens 1.0k (in 12 / out 1.0k)");
     expect(msg).toContain("prompt/cache 197.0k");
     expect(msg).toContain("session_id: child-session-usage");
-    expect(msg).toContain("A completed subagent task is ready for user delivery.");
+    expect(msg).toContain("A completed subagent task is ready for parent review.");
+    expect(msg).toContain(
+      "If additional action is required, continue the task or record a follow-up; otherwise send a truthful user-facing update.",
+    );
     expect(msg).toContain(
       `Reply ONLY: ${SILENT_REPLY_TOKEN} if this exact result was already delivered to the user in this same turn.`,
     );

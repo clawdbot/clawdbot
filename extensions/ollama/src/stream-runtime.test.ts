@@ -292,6 +292,113 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
     );
   });
 
+  it("does not forward truthy configured native Ollama thinking for non-reasoning models", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const baseStreamFn = createOllamaStreamFn("http://ollama-host:11434");
+        const model = {
+          api: "ollama",
+          provider: "ollama",
+          id: "llama3.2:latest",
+          contextWindow: 8192,
+          reasoning: false,
+          params: { thinking: "medium" },
+        };
+
+        const wrapped = createConfiguredOllamaCompatStreamWrapper({
+          provider: "ollama",
+          modelId: "llama3.2:latest",
+          model,
+          streamFn: baseStreamFn,
+          thinkingLevel: "off",
+        } as never);
+        if (!wrapped) {
+          throw new Error("Expected wrapped Ollama stream function");
+        }
+
+        const stream = await Promise.resolve(
+          wrapped(
+            model as never,
+            {
+              messages: [{ role: "user", content: "hello" }],
+            } as never,
+            {} as never,
+          ),
+        );
+
+        await collectStreamEvents(stream);
+
+        const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
+        if (typeof requestInit.body !== "string") {
+          throw new Error("Expected string request body");
+        }
+        const requestBody = JSON.parse(requestInit.body) as {
+          think?: string;
+          options?: { think?: string };
+        };
+        expect(requestBody.think).toBeUndefined();
+        expect(requestBody.options?.think).toBeUndefined();
+      },
+    );
+  });
+
+  it("does not forward runtime native Ollama thinking for non-reasoning models", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const baseStreamFn = createOllamaStreamFn("http://ollama-host:11434");
+        const model = {
+          api: "ollama",
+          provider: "ollama",
+          id: "llama3.2:latest",
+          contextWindow: 8192,
+          reasoning: false,
+        };
+
+        const wrapped = createConfiguredOllamaCompatStreamWrapper({
+          provider: "ollama",
+          modelId: "llama3.2:latest",
+          model,
+          streamFn: baseStreamFn,
+          thinkingLevel: "low",
+        } as never);
+        if (!wrapped) {
+          throw new Error("Expected wrapped Ollama stream function");
+        }
+
+        const stream = await Promise.resolve(
+          wrapped(
+            model as never,
+            {
+              messages: [{ role: "user", content: "hello" }],
+            } as never,
+            {} as never,
+          ),
+        );
+
+        await collectStreamEvents(stream);
+
+        const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
+        if (typeof requestInit.body !== "string") {
+          throw new Error("Expected string request body");
+        }
+        const requestBody = JSON.parse(requestInit.body) as {
+          think?: string;
+          options?: { think?: string };
+        };
+        expect(requestBody.think).toBeUndefined();
+        expect(requestBody.options?.think).toBeUndefined();
+      },
+    );
+  });
+
   it("forwards the native think effort on native Ollama chat requests when thinking is enabled", async () => {
     await withMockNdjsonFetch(
       [

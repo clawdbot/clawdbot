@@ -7,6 +7,8 @@ import {
   resolveThreadParentSessionKey,
 } from "../sessions/session-key-utils.js";
 import {
+  buildAgentPeerSessionKey,
+  buildGroupHistoryKey,
   classifySessionKeyShape,
   isValidAgentId,
   parseAgentSessionKey,
@@ -155,6 +157,43 @@ describe("session key canonicalization", () => {
             requestKey: "agent:main:main",
           }),
         ).toBe("agent:main:main"),
+    },
+    {
+      name: "preserves Signal group ids while lowercasing structural tokens",
+      run: () => {
+        const mixedGroupId = "VWATodkf2hc8zdOS76q9Tb0+5Bi522E03qLdaQ/9ypg=";
+        expect(parseAgentSessionKey(`Agent:Main:Signal:Group:${mixedGroupId}`)).toEqual({
+          agentId: "main",
+          rest: `signal:group:${mixedGroupId}`,
+        });
+        expect(
+          buildAgentPeerSessionKey({
+            agentId: "Main",
+            channel: "Signal",
+            peerKind: "group",
+            peerId: mixedGroupId,
+          }),
+        ).toBe(`agent:main:signal:group:${mixedGroupId}`);
+        expect(
+          buildGroupHistoryKey({
+            channel: "Signal",
+            peerKind: "group",
+            peerId: mixedGroupId,
+          }),
+        ).toBe(`signal:default:group:${mixedGroupId}`);
+      },
+    },
+    {
+      name: "keeps non-Signal opaque-looking group ids lowercase",
+      run: () =>
+        expect(
+          buildAgentPeerSessionKey({
+            agentId: "Main",
+            channel: "Telegram",
+            peerKind: "group",
+            peerId: "MiXeDGroup",
+          }),
+        ).toBe("agent:main:telegram:group:mixedgroup"),
     },
   ] as const)("$name", ({ run }) => {
     expectSessionKeyCanonicalizationCase({ run });

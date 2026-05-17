@@ -225,6 +225,38 @@ describe("setup-registry runtime fallback", () => {
     expect(loadPluginMetadataSnapshotMock).not.toHaveBeenCalled();
   });
 
+  it("does not reuse workspace-scoped current metadata without a workspace context", async () => {
+    loadPluginMetadataSnapshotMock.mockReturnValue({
+      index: {
+        diagnostics: [],
+        plugins: [],
+      },
+      plugins: [],
+    });
+
+    const { __testing, resolvePluginSetupCliBackendRuntime } =
+      await import("./setup-registry.runtime.js");
+    __testing.resetRuntimeState();
+    __testing.setRuntimeModuleForTest(null);
+
+    setCurrentPluginMetadataSnapshot(
+      createCurrentSnapshot({
+        manifestHash: "alpha",
+        cliBackends: ["Codex-CLI"],
+        workspaceDir: "/workspace/a",
+      }),
+      { config: {}, env: process.env },
+    );
+
+    expect(
+      resolvePluginSetupCliBackendRuntime({ backend: "codex-cli", config: {} }),
+    ).toBeUndefined();
+    expect(loadPluginMetadataSnapshotMock).toHaveBeenCalledWith({
+      config: {},
+      env: process.env,
+    });
+  });
+
   it("preserves fail-closed setup lookup when the runtime module explicitly declines to resolve", async () => {
     loadPluginMetadataSnapshotMock.mockReturnValue({
       index: {

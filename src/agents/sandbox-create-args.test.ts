@@ -120,10 +120,18 @@ describe("buildSandboxCreateArgs", () => {
     expectFlagValues(args, "--ulimit", ["nofile=1024:2048", "nproc=128", "core=0"]);
   });
 
-  it("preserves the OpenClaw exec marker when strict env sanitization is enabled", () => {
+  it("passes explicit configured sandbox env through even when names look sensitive", () => {
     const cfg = createSandboxConfig({
       env: {
-        NODE_ENV: "test",
+        ANTHROPIC_ADMIN_KEY: "dummy-anthropic-admin-key",
+        GEMINI_API_KEY: "dummy-gemini-api-key",
+        GOOGLE_CLIENT_ID: "dummy-google-client-id",
+        GOOGLE_CLIENT_SECRET: "dummy-google-client-secret",
+        HIMALAYA_CONFIG: "dummy-himalaya-config",
+        HIMALAYA_PASSWORD: "dummy-himalaya-password",
+        OURA_CLIENT_ID: "dummy-oura-client-id",
+        OURA_CLIENT_SECRET: "dummy-oura-client-secret",
+        RESEND_API_KEY: "dummy-resend-api-key",
       },
     });
 
@@ -132,12 +140,20 @@ describe("buildSandboxCreateArgs", () => {
       cfg,
       scopeKey: "main",
       createdAtMs: 1700000000000,
-      envSanitizationOptions: {
-        strictMode: true,
-      },
     });
 
-    expectFlagValues(args, "--env", ["NODE_ENV=test", `OPENCLAW_CLI=${OPENCLAW_CLI_ENV_VALUE}`]);
+    expectFlagValues(args, "--env", [
+      "ANTHROPIC_ADMIN_KEY=dummy-anthropic-admin-key",
+      "GEMINI_API_KEY=dummy-gemini-api-key",
+      "GOOGLE_CLIENT_ID=dummy-google-client-id",
+      "GOOGLE_CLIENT_SECRET=dummy-google-client-secret",
+      "HIMALAYA_CONFIG=dummy-himalaya-config",
+      "HIMALAYA_PASSWORD=dummy-himalaya-password",
+      "OURA_CLIENT_ID=dummy-oura-client-id",
+      "OURA_CLIENT_SECRET=dummy-oura-client-secret",
+      "RESEND_API_KEY=dummy-resend-api-key",
+      `OPENCLAW_CLI=${OPENCLAW_CLI_ENV_VALUE}`,
+    ]);
   });
 
   it("emits Docker GPU passthrough as a separate argument", () => {

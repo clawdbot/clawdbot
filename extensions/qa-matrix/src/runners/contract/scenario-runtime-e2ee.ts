@@ -59,6 +59,10 @@ const MATRIX_QA_ROOM_KEY_BACKUP_VERSION_ENDPOINT = "/_matrix/client/v3/room_keys
 const MATRIX_QA_ROOM_KEY_BACKUP_FAULT_RULE_ID = "room-key-backup-version-unavailable";
 const MATRIX_QA_OWNER_SIGNATURE_UPLOAD_BLOCKED_RULE_ID = "owner-signature-upload-blocked";
 const MATRIX_QA_KEYS_SIGNATURES_UPLOAD_ENDPOINT = "/_matrix/client/v3/keys/signatures/upload";
+const MATRIX_QA_SYNC_ENDPOINT = "/_matrix/client/v3/sync";
+const MATRIX_QA_SYNC_STATE_AFTER_FAULT_RULE_ID = "sync-state-after-missing-encryption";
+const MATRIX_QA_SYNC_STATE_AFTER_KEY = "org.matrix.msc4222.state_after";
+const MATRIX_QA_SYNC_STATE_AFTER_PARAM = "org.matrix.msc4222.use_state_after";
 
 type MatrixQaE2eeBootstrapResult = Awaited<ReturnType<typeof runMatrixQaE2eeBootstrap>>;
 type MatrixQaCliVerificationStatus = {
@@ -951,6 +955,58 @@ function buildOwnerSignatureUploadBlockedFaultRule(accessToken: string): MatrixQ
   };
 }
 
+function removeMatrixQaSyncStateAfterEncryptionEvents(payload: unknown) {
+  if (!isMatrixQaPlainRecord(payload)) {
+    return 0;
+  }
+  const rooms = isMatrixQaPlainRecord(payload.rooms) ? payload.rooms : {};
+  const join = isMatrixQaPlainRecord(rooms.join) ? rooms.join : {};
+  let removed = 0;
+  for (const room of Object.values(join)) {
+    if (!isMatrixQaPlainRecord(room)) {
+      continue;
+    }
+    const stateAfter = room[MATRIX_QA_SYNC_STATE_AFTER_KEY];
+    if (!isMatrixQaPlainRecord(stateAfter) || !Array.isArray(stateAfter.events)) {
+      continue;
+    }
+    const filtered = stateAfter.events.filter((event) => {
+      if (isMatrixQaPlainRecord(event) && event.type === "m.room.encryption") {
+        removed += 1;
+        return false;
+      }
+      return true;
+    });
+    stateAfter.events = filtered;
+  }
+  return removed;
+}
+
+function buildSyncStateAfterMissingEncryptionFaultRule(
+  accessToken: string,
+): MatrixQaFaultProxyRule {
+  return {
+    id: MATRIX_QA_SYNC_STATE_AFTER_FAULT_RULE_ID,
+    match: (request) =>
+      request.method === "GET" &&
+      request.path === MATRIX_QA_SYNC_ENDPOINT &&
+      request.bearerToken === accessToken &&
+      new URLSearchParams(request.search).get(MATRIX_QA_SYNC_STATE_AFTER_PARAM) === "true",
+    mutateResponse: ({ response }) => {
+      const contentType = response.headers.get("content-type") ?? "";
+      if (!contentType.includes("json")) {
+        return response;
+      }
+      const payload = JSON.parse(response.body.toString("utf8")) as unknown;
+      removeMatrixQaSyncStateAfterEncryptionEvents(payload);
+      return {
+        ...response,
+        body: Buffer.from(JSON.stringify(payload)),
+      };
+    },
+  };
+}
+
 async function runMatrixQaFaultedE2eeBootstrap(context: MatrixQaScenarioContext): Promise<{
   faultHits: MatrixQaFaultProxyHit[];
   result: MatrixQaE2eeBootstrapResult;
@@ -1310,6 +1366,97 @@ export async function runMatrixQaE2eeBasicReplyScenario(
       ...buildMatrixReplyDetails("E2EE reply", result.reply),
     ].join("\n"),
   };
+}
+
+export async function runMatrixQaE2eeStateAfterMissingEncryptionScenario(
+  context: MatrixQaScenarioContext,
+): Promise<MatrixQaScenarioExecution> {
+  if (!context.restartGatewayAfterStateMutation) {
+    throw new Error("Matrix E2EE state_after QA scenario requires hard gateway restart support");
+  }
+  const accountId = context.sutAccountId ?? "sut";
+  const configPath = requireMatrixQaGatewayConfigPath(context);
+  const originalAccountConfig = await readMatrixQaGatewayMatrixAccount({
+    accountId,
+    configPath,
+  });
+  const proxy = await startMatrixQaFaultProxy({
+    targetBaseUrl: context.baseUrl,
+    rules: [buildSyncStateAfterMissingEncryptionFaultRule(context.sutAccessToken)],
+  });
+  let gatewayPatched = false;
+  try {
+    await context.restartGatewayAfterStateMutation(
+      async () => {
+        await patchMatrixQaGatewayMatrixAccount({
+          accountId,
+          accountPatch: {
+            homeserver: proxy.baseUrl,
+            network: {
+              dangerouslyAllowPrivateNetwork: true,
+            },
+          },
+          configPath,
+        });
+        gatewayPatched = true;
+      },
+      {
+        timeoutMs: context.timeoutMs,
+        waitAccountId: accountId,
+      },
+    );
+    const result = await runMatrixQaE2eeTopLevelScenario(context, {
+      scenarioId: "matrix-e2ee-state-after-missing-encryption",
+      tokenPrefix: "MATRIX_QA_E2EE_STATE_AFTER",
+    });
+    const stateAfterHits = proxy
+      .hits()
+      .filter((hit) => hit.ruleId === MATRIX_QA_SYNC_STATE_AFTER_FAULT_RULE_ID);
+    if (stateAfterHits.length > 0) {
+      throw new Error(
+        `Matrix E2EE gateway still sent ${MATRIX_QA_SYNC_STATE_AFTER_PARAM}=true on /sync`,
+      );
+    }
+    return {
+      artifacts: {
+        driverEventId: result.driverEventId,
+        faultProxyBaseUrl: proxy.baseUrl,
+        reply: result.reply,
+        roomKey: result.roomKey,
+        roomId: result.roomId,
+        stateAfterFaultHitCount: stateAfterHits.length,
+        stateAfterFaultRuleId: MATRIX_QA_SYNC_STATE_AFTER_FAULT_RULE_ID,
+        strippedSyncStateAfterParam: true,
+      },
+      details: [
+        `encrypted room key: ${result.roomKey}`,
+        `encrypted room id: ${result.roomId}`,
+        `driver event: ${result.driverEventId}`,
+        `fault proxy: ${proxy.baseUrl}`,
+        `state_after sync opt-in hits: ${stateAfterHits.length}`,
+        ...buildMatrixReplyDetails("E2EE state_after reply", result.reply),
+      ].join("\n"),
+    };
+  } finally {
+    if (gatewayPatched) {
+      await context
+        .restartGatewayAfterStateMutation(
+          async () => {
+            await replaceMatrixQaGatewayMatrixAccount({
+              accountConfig: originalAccountConfig,
+              accountId,
+              configPath,
+            });
+          },
+          {
+            timeoutMs: context.timeoutMs,
+            waitAccountId: accountId,
+          },
+        )
+        .catch(() => undefined);
+    }
+    await proxy.stop().catch(() => undefined);
+  }
 }
 
 export async function runMatrixQaE2eeThreadFollowUpScenario(

@@ -667,7 +667,8 @@ extension GatewayEndpointStore {
     static func dashboardURL(
         for config: GatewayConnection.Config,
         mode: AppState.ConnectionMode,
-        localBasePath: String? = nil) throws -> URL
+        localBasePath: String? = nil,
+        authToken: String? = nil) throws -> URL
     {
         guard var components = URLComponents(url: config.url, resolvingAgainstBaseURL: false) else {
             throw NSError(domain: "Dashboard", code: 1, userInfo: [
@@ -694,7 +695,8 @@ extension GatewayEndpointStore {
         }
 
         var fragmentItems: [URLQueryItem] = []
-        if let token = config.token?.trimmingCharacters(in: .whitespacesAndNewlines),
+        let tokenCandidate = authToken ?? config.token
+        if let token = tokenCandidate?.trimmingCharacters(in: .whitespacesAndNewlines),
            !token.isEmpty
         {
             fragmentItems.append(URLQueryItem(name: "token", value: token))

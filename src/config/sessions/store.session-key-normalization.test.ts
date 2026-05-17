@@ -12,6 +12,9 @@ import {
 
 const CANONICAL_KEY = "agent:main:webchat:dm:mixed-user";
 const MIXED_CASE_KEY = "Agent:Main:WebChat:DM:MiXeD-User";
+const SIGNAL_GROUP_ID = "VWATodkf2hc8zdOS76q9Tb0+5Bi522E03qLdaQ/9ypg=";
+const SIGNAL_GROUP_KEY = `agent:main:signal:group:${SIGNAL_GROUP_ID}`;
+const LEGACY_SIGNAL_GROUP_KEY = SIGNAL_GROUP_KEY.toLowerCase();
 
 function createInboundContext(): MsgContext {
   return {
@@ -22,6 +25,18 @@ function createInboundContext(): MsgContext {
     To: "webchat:agent",
     SessionKey: MIXED_CASE_KEY,
     OriginatingTo: "webchat:user-1",
+  };
+}
+
+function createSignalGroupContext(): MsgContext {
+  return {
+    Provider: "signal",
+    Surface: "signal",
+    ChatType: "group",
+    From: `signal:group:${SIGNAL_GROUP_ID}`,
+    To: `signal:group:${SIGNAL_GROUP_ID}`,
+    SessionKey: SIGNAL_GROUP_KEY,
+    OriginatingTo: `signal:group:${SIGNAL_GROUP_ID}`,
   };
 }
 
@@ -149,5 +164,55 @@ describe("session store key normalization", () => {
     expect(store[CANONICAL_KEY]?.sessionId).toBe("existing-session");
     expect(store[CANONICAL_KEY]?.updatedAt).toBe(existingUpdatedAt);
     expect(store[CANONICAL_KEY]?.origin?.provider).toBe("webchat");
+  });
+
+  it("records Signal group metadata under the mixed-case opaque group id", async () => {
+    await recordSessionMetaFromInbound({
+      storePath,
+      sessionKey: `Agent:Main:Signal:Group:${SIGNAL_GROUP_ID}`,
+      ctx: createSignalGroupContext(),
+    });
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+    expect(Object.keys(store)).toEqual([SIGNAL_GROUP_KEY]);
+    expect(store[SIGNAL_GROUP_KEY]?.groupId).toBe(SIGNAL_GROUP_ID);
+    expect(store[SIGNAL_GROUP_KEY]?.origin?.to).toBe(`signal:group:${SIGNAL_GROUP_ID}`);
+  });
+
+  it("migrates legacy lowercase Signal group keys to the mixed-case canonical key", async () => {
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          [LEGACY_SIGNAL_GROUP_KEY]: {
+            sessionId: "legacy-signal-session",
+            updatedAt: 1,
+            chatType: "group",
+            channel: "signal",
+            groupId: SIGNAL_GROUP_ID.toLowerCase(),
+            deliveryContext: {
+              channel: "signal",
+              to: `signal:group:${SIGNAL_GROUP_ID}`,
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    clearSessionStoreCacheForTest();
+
+    await recordSessionMetaFromInbound({
+      storePath,
+      sessionKey: SIGNAL_GROUP_KEY,
+      ctx: createSignalGroupContext(),
+    });
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+    expect(Object.keys(store)).toEqual([SIGNAL_GROUP_KEY]);
+    expect(store[SIGNAL_GROUP_KEY]?.sessionId).toBe("legacy-signal-session");
+    expect(store[SIGNAL_GROUP_KEY]?.groupId).toBe(SIGNAL_GROUP_ID);
+    expect(store[LEGACY_SIGNAL_GROUP_KEY]).toBeUndefined();
   });
 });

@@ -75,6 +75,13 @@ If you already manage Node yourself:
     npm install -g openclaw@latest
     openclaw onboard --install-daemon
     ```
+
+    <Note>
+    The hosted installer clears npm freshness filters such as `min-release-age`
+    for the OpenClaw package install. If you install manually with npm, your own
+    npm policy still applies.
+    </Note>
+
   </Tab>
   <Tab title="pnpm">
     ```bash

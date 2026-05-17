@@ -173,6 +173,7 @@ export type EmbeddedPiRunResult = {
     isError?: boolean;
     isReasoning?: boolean;
     audioAsVoice?: boolean;
+    trustedLocalMedia?: boolean;
     channelData?: Record<string, unknown>;
   }>;
   meta: EmbeddedPiRunMeta;

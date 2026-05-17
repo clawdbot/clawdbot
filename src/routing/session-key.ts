@@ -1,5 +1,10 @@
 import type { ChatType } from "../channels/chat-type.js";
-import { isCronRunSessionKey, parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import {
+  isCronRunSessionKey,
+  normalizeSessionPeerId,
+  normalizeSessionKeyPreservingOpaquePeerIds,
+  parseAgentSessionKey,
+} from "../sessions/session-key-utils.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { normalizeAccountId } from "./account-id.js";
 
@@ -101,10 +106,11 @@ export function toAgentStoreSessionKey(params: {
   if (parsed) {
     return `agent:${parsed.agentId}:${parsed.rest}`;
   }
+  const normalized = normalizeSessionKeyPreservingOpaquePeerIds(raw);
   if (lowered.startsWith("agent:")) {
-    return lowered;
+    return normalized;
   }
-  return `agent:${normalizeAgentId(params.agentId)}:${lowered}`;
+  return `agent:${normalizeAgentId(params.agentId)}:${normalized}`;
 }
 
 export function resolveAgentIdFromSessionKey(sessionKey: string | undefined | null): string {
@@ -208,7 +214,12 @@ export function buildAgentPeerSessionKey(params: {
     });
   }
   const channel = normalizeLowercaseStringOrEmpty(params.channel) || "unknown";
-  const peerId = normalizeLowercaseStringOrEmpty(params.peerId) || "unknown";
+  const peerId =
+    normalizeSessionPeerId({
+      channel: params.channel,
+      peerKind,
+      peerId: params.peerId,
+    }) || "unknown";
   return `agent:${normalizeAgentId(params.agentId)}:${channel}:${peerKind}:${peerId}`;
 }
 
@@ -266,7 +277,12 @@ export function buildGroupHistoryKey(params: {
 }): string {
   const channel = normalizeToken(params.channel) || "unknown";
   const accountId = normalizeAccountId(params.accountId);
-  const peerId = normalizeLowercaseStringOrEmpty(params.peerId) || "unknown";
+  const peerId =
+    normalizeSessionPeerId({
+      channel,
+      peerKind: params.peerKind,
+      peerId: params.peerId,
+    }) || "unknown";
   return `${channel}:${accountId}:${params.peerKind}:${peerId}`;
 }
 

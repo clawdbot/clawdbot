@@ -130,6 +130,10 @@ export async function applySessionsPatchToStore(params: {
         sessionFile: undefined,
         updatedAt: Math.max(existing?.updatedAt ?? 0, now),
       };
+  if (existing && !existing.sessionId) {
+    delete next.label;
+    delete next.displayName;
+  }
 
   if ("spawnedBy" in patch) {
     const raw = patch.spawnedBy;

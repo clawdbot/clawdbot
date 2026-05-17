@@ -26,6 +26,7 @@ function resolveAuthProviderCandidates(params: {
       ...listOpenAIAuthProfileProvidersForAgentRuntime({
         provider: params.provider,
         harnessRuntime: harnessPolicy.runtime,
+        config: params.config,
       }),
     ]),
   ];

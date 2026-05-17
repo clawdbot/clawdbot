@@ -67,16 +67,6 @@ export function renderGatewayServiceCleanupHints(
 
 type Marker = (typeof EXTRA_MARKERS)[number];
 
-function detectMarker(content: string): Marker | null {
-  const lower = normalizeLowercaseStringOrEmpty(content);
-  for (const marker of EXTRA_MARKERS) {
-    if (lower.includes(marker)) {
-      return marker;
-    }
-  }
-  return null;
-}
-
 function hasGatewaySubcommandArg(args: string[]): boolean {
   return args.some((arg) => {
     const normalized = normalizeLowercaseStringOrEmpty(arg);
@@ -300,7 +290,7 @@ async function scanLaunchdDir(params: {
     const marker =
       hasGatewayServiceMarker(contents) || executionMarker === "openclaw"
         ? "openclaw"
-        : executionMarker === "clawdbot" || legacyLabel || detectMarker(contents) === "clawdbot"
+        : executionMarker === "clawdbot" || legacyLabel
           ? "clawdbot"
           : null;
     if (!marker) {

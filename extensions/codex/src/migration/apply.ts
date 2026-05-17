@@ -40,7 +40,7 @@ import { buildCodexPluginAppCacheKey } from "../app-server/plugin-app-cache-key.
 import type { v2 } from "../app-server/protocol.js";
 import { requestCodexAppServerJson } from "../app-server/request.js";
 import {
-  clearSharedCodexAppServerClientAndWait,
+  clearSharedCodexAppServerClientIfCurrentAndWait,
   getSharedCodexAppServerClient,
 } from "../app-server/shared-client.js";
 import { buildCodexMigrationPlan } from "./plan.js";
@@ -84,19 +84,22 @@ export function prepareTargetCodexAppServer(
 ): CodexMigrationTargetAppServerPreparation {
   const appServer = resolveTargetCodexAppServer(ctx);
   const targets = resolveCodexMigrationTargets(ctx);
+  let warmedClient: Awaited<ReturnType<typeof getSharedCodexAppServerClient>> | undefined;
   const ready = getSharedCodexAppServerClient({
     startOptions: appServer.start,
     timeoutMs: 60_000,
     agentDir: targets.agentDir,
     config: ctx.config,
   }).then(
-    () => undefined,
+    (client) => {
+      warmedClient = client;
+    },
     () => undefined,
   );
   return {
     async dispose() {
       await ready;
-      await clearSharedCodexAppServerClientAndWait({
+      await clearSharedCodexAppServerClientIfCurrentAndWait(warmedClient, {
         exitTimeoutMs: 2_000,
         forceKillDelayMs: 250,
       });

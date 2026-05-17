@@ -480,6 +480,22 @@ describe("tui command handlers", () => {
     expect(setActivityStatus).toHaveBeenLastCalledWith("disconnected");
   });
 
+  it("rejects normal sends while a run is active", async () => {
+    const { handleCommand, sendChat, addUser, addSystem, requestRender, state } = createHarness({
+      activeChatRunId: "run-active",
+    });
+
+    await handleCommand("/context detail");
+
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addUser).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith(
+      "agent is busy — press Esc to abort before sending a new message",
+    );
+    expect(requestRender).toHaveBeenCalled();
+    expect(state.activeChatRunId).toBe("run-active");
+  });
+
   it("runs /auth through the local auth flow and refreshes session info", async () => {
     const refreshSessionInfo = vi.fn().mockResolvedValue(undefined);
     const runAuthFlow = vi.fn().mockResolvedValue({ exitCode: 0, signal: null });

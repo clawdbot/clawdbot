@@ -62,6 +62,24 @@ describe("sendMessageSlack unfurl controls", () => {
     expect("unfurl_media" in payload).toBe(false);
   });
 
+  it("passes message metadata to chat.postMessage", async () => {
+    const client = createSlackSendTestClient();
+    const metadata = {
+      event_type: "assistant_thread_context",
+      event_payload: { channel_id: "C123", team_id: "T123" },
+    };
+
+    await sendMessageSlack("channel:C123", "assistant reply", {
+      token: "xoxb-test",
+      cfg: slackConfig({ botToken: "xoxb-test" }),
+      client,
+      metadata,
+    });
+
+    const payload = requirePostMessagePayload(client);
+    expect(payload.metadata).toEqual(metadata);
+  });
+
   it("passes top-level Slack unfurl flags to chat.postMessage", async () => {
     const client = createSlackSendTestClient();
 

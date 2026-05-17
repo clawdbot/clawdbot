@@ -37,6 +37,21 @@ function listConfiguredAccountIds(cfg: OpenClawConfig): string[] {
   return [...ids];
 }
 
+function hasConfiguredDefaultAccountSource(cfg: OpenClawConfig): boolean {
+  const telegram = cfg.channels?.telegram;
+  if (!telegram) {
+    return false;
+  }
+  const botToken = telegram.botToken;
+  if (typeof botToken === "string") {
+    return botToken.trim().length > 0;
+  }
+  if (botToken && typeof botToken === "object") {
+    return true;
+  }
+  return typeof telegram.tokenFile === "string" && telegram.tokenFile.trim().length > 0;
+}
+
 function resolveBindingAccount(params: {
   binding: unknown;
   channelId: string;
@@ -114,7 +129,10 @@ function resolveListedDefaultAccountId(params: {
 export function listTelegramAccountIds(cfg: OpenClawConfig): string[] {
   return combineAccountIds({
     configuredAccountIds: listConfiguredAccountIds(cfg),
-    additionalAccountIds: listBoundAccountIds(cfg, "telegram"),
+    additionalAccountIds: [
+      ...listBoundAccountIds(cfg, "telegram"),
+      ...(hasConfiguredDefaultAccountSource(cfg) ? [DEFAULT_ACCOUNT_ID] : []),
+    ],
   });
 }
 

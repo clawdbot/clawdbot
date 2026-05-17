@@ -276,7 +276,7 @@ describe("resolveAuthProfileOrder", () => {
     expect(order).toEqual(["openai-codex:personal", "openai:backup"]);
   });
 
-  it("lets Codex auth discover oauthRef-backed OAuth profiles", async () => {
+  it("does not discover OAuth profiles without inline credential material", async () => {
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
@@ -286,11 +286,6 @@ describe("resolveAuthProfileOrder", () => {
           access: "",
           refresh: "",
           expires: Date.now() + 60_000,
-          oauthRef: {
-            source: "openclaw-credentials",
-            provider: "openai-codex",
-            id: "0123456789abcdef0123456789abcdef",
-          },
         },
       },
     };
@@ -300,7 +295,7 @@ describe("resolveAuthProfileOrder", () => {
       provider: "openai-codex",
     });
 
-    expect(order).toEqual(["openai-codex:personal"]);
+    expect(order).toEqual([]);
   });
 
   it("preserves native Codex profiles before OpenAI alias API-key order", async () => {
@@ -335,6 +330,40 @@ describe("resolveAuthProfileOrder", () => {
     });
 
     expect(order).toEqual(["openai-codex:personal", "openai:default"]);
+  });
+
+  it("keeps Codex profiles listed in the friendly OpenAI order for Codex auth", async () => {
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai-codex:personal": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "access",
+          refresh: "refresh",
+          expires: Date.now() + 60_000,
+        },
+        "openai:backup": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-platform",
+        },
+      },
+    };
+
+    const order = resolveAuthProfileOrder({
+      cfg: {
+        auth: {
+          order: {
+            openai: ["openai-codex:personal", "openai:backup"],
+          },
+        },
+      },
+      store,
+      provider: "openai-codex",
+    });
+
+    expect(order).toEqual(["openai-codex:personal", "openai:backup"]);
   });
 
   it("keeps direct OpenAI Codex auth order ahead of the friendly OpenAI alias", async () => {

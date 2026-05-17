@@ -104,6 +104,9 @@ export function registerSecurityCli(program: Command) {
       const lines: string[] = [];
       lines.push(heading("OpenClaw security audit"));
       lines.push(muted(`Summary: ${formatSummary(report.summary)}`));
+      if ((report.suppressedFindings?.length ?? 0) > 0) {
+        lines.push(muted(`Suppressed: ${report.suppressedFindings?.length ?? 0} configured`));
+      }
       lines.push(muted(`Run deeper: ${formatCliCommand("openclaw security audit --deep")}`));
       for (const diagnostic of secretDiagnostics) {
         lines.push(muted(`[secrets] ${diagnostic}`));

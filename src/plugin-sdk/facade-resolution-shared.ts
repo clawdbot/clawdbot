@@ -108,9 +108,13 @@ export function resolveRegistryPluginModuleLocationFromRecords(params: {
   for (const matchFn of tiers) {
     for (const record of params.registry.filter(matchFn)) {
       const rootDir = path.resolve(record.rootDir);
-      const builtCandidate = path.join(rootDir, artifactBasename);
-      if (fs.existsSync(builtCandidate)) {
-        return { modulePath: builtCandidate, boundaryRoot: rootDir };
+      for (const builtCandidate of [
+        path.join(rootDir, artifactBasename),
+        path.join(rootDir, "dist", artifactBasename),
+      ]) {
+        if (fs.existsSync(builtCandidate)) {
+          return { modulePath: builtCandidate, boundaryRoot: rootDir };
+        }
       }
       for (const ext of PUBLIC_SURFACE_SOURCE_EXTENSIONS) {
         const sourceCandidate = path.join(rootDir, `${sourceBaseName}${ext}`);

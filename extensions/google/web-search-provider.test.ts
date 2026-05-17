@@ -194,6 +194,68 @@ describe("google web search provider", () => {
     );
   });
 
+  it("rejects wrong-root Gemini success JSON with a stable provider error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      withFetchPreconnect(vi.fn(() => Promise.resolve(new Response(JSON.stringify([]))))),
+    );
+    const provider = createGeminiWebSearchProvider();
+    const tool = provider.createTool({
+      config: {
+        plugins: {
+          entries: {
+            google: {
+              config: {
+                webSearch: {
+                  apiKey: "AIza-plugin-test",
+                },
+              },
+            },
+          },
+        },
+      },
+      searchConfig: { provider: "gemini" },
+    });
+
+    await expect(tool?.execute({ query: "OpenClaw docs" })).rejects.toThrow(
+      "Gemini API error: malformed JSON response",
+    );
+  });
+
+  it("rejects Gemini success JSON without candidate text", async () => {
+    vi.stubGlobal(
+      "fetch",
+      withFetchPreconnect(
+        vi.fn(() =>
+          Promise.resolve(
+            new Response(JSON.stringify({ candidates: [{ content: { parts: [] } }] })),
+          ),
+        ),
+      ),
+    );
+    const provider = createGeminiWebSearchProvider();
+    const tool = provider.createTool({
+      config: {
+        plugins: {
+          entries: {
+            google: {
+              config: {
+                webSearch: {
+                  apiKey: "AIza-plugin-test",
+                },
+              },
+            },
+          },
+        },
+      },
+      searchConfig: { provider: "gemini" },
+    });
+
+    await expect(tool?.execute({ query: "OpenClaw docs" })).rejects.toThrow(
+      "Gemini API error: malformed JSON response",
+    );
+  });
+
   it("passes provider execution abort signals into the Gemini fetch", async () => {
     const mockFetch = installGeminiFetch();
     const controller = new AbortController();

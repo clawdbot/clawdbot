@@ -52,8 +52,11 @@ const createHealthSummary = (params: {
 };
 
 const callGatewayMock = vi.fn();
+const formatGatewayTransportErrorJsonMock = vi.fn();
 vi.mock("../gateway/call.js", () => ({
   callGateway: (...args: unknown[]) => callGatewayMock(...args),
+  formatGatewayTransportErrorJson: (...args: unknown[]) =>
+    formatGatewayTransportErrorJsonMock(...args),
 }));
 
 function requireFirstRuntimeLog(): string {
@@ -83,6 +86,7 @@ function requireFirstGatewayRequest(): Record<string, unknown> {
 describe("healthCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    formatGatewayTransportErrorJsonMock.mockReturnValue(null);
   });
 
   it("outputs JSON from gateway", async () => {
@@ -144,6 +148,33 @@ describe("healthCommand", () => {
     expect(gatewayRequest.method).toBe("health");
     expect(gatewayRequest.token).toBe("setup-token");
     expect(gatewayRequest.password).toBe("setup-password");
+  });
+
+  it("outputs JSON for gateway transport failures in JSON mode", async () => {
+    const error = new Error("gateway closed (1006)");
+    const payload = {
+      ok: false,
+      error: {
+        type: "gateway_transport_error",
+        kind: "closed",
+        message: "gateway closed (1006)",
+        code: 1006,
+        reason: "no close reason",
+      },
+      gateway: {
+        url: "ws://127.0.0.1:18789",
+        urlSource: "local loopback",
+        bindDetail: "Bind: loopback",
+      },
+    };
+    callGatewayMock.mockRejectedValueOnce(error);
+    formatGatewayTransportErrorJsonMock.mockReturnValueOnce(payload);
+
+    await healthCommand({ json: true, timeoutMs: 5000, config: {} }, runtime as never);
+
+    expect(formatGatewayTransportErrorJsonMock).toHaveBeenCalledWith(error);
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(JSON.parse(requireFirstRuntimeLog())).toEqual(payload);
   });
 
   it("prints degraded model-pricing health without failing the command", async () => {

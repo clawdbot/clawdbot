@@ -1,4 +1,7 @@
 export const GATEWAY_STARTUP_UNAVAILABLE_REASON = "startup-sidecars";
+export const GATEWAY_STARTUP_PENDING_CLOSE_CAUSE = "startup-sidecars-pending";
+export const GATEWAY_STARTUP_CLOSE_CODE = 1013;
+export const GATEWAY_STARTUP_CLOSE_REASON = "gateway starting";
 export const GATEWAY_STARTUP_RETRY_AFTER_MS = 500;
 const GATEWAY_STARTUP_RETRY_MIN_MS = 100;
 const GATEWAY_STARTUP_RETRY_MAX_MS = 2_000;

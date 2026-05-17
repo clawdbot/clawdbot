@@ -18,14 +18,13 @@ export function extractModelCompat(
 /** @deprecated Provider-owned model compat helper; do not use from third-party plugins. */
 export function applyModelCompatPatch<T extends { compat?: ModelCompatConfig }>(
   model: T,
-  patch: ModelCompatConfig,
+  patch: Partial<ModelCompatConfig> & Record<string, unknown>,
 ): T {
-  const nextCompat = { ...model.compat, ...patch };
+  const nextCompat = { ...model.compat, ...patch } as ModelCompatConfig;
+  const currentCompat = model.compat as (Record<string, unknown> & ModelCompatConfig) | undefined;
   if (
     model.compat &&
-    Object.entries(patch).every(
-      ([key, value]) => model.compat?.[key as keyof ModelCompatConfig] === value,
-    )
+    Object.entries(patch).every(([key, value]) => currentCompat?.[key] === value)
   ) {
     return model;
   }
@@ -64,6 +63,15 @@ export function resolveUnsupportedToolSchemaKeywords(
       .map((keyword) => keyword.trim())
       .filter(Boolean),
   );
+}
+
+export function shouldOmitEmptyArrayItems(
+  modelOrCompat: { compat?: unknown } | ModelCompatConfig | undefined,
+): boolean {
+  const compat = extractModelCompat(modelOrCompat) as
+    | (ModelCompatConfig & { omitEmptyArrayItems?: unknown })
+    | undefined;
+  return compat?.omitEmptyArrayItems === true;
 }
 
 function isOpenAiCompletionsModel(model: Model<Api>): model is Model<"openai-completions"> {

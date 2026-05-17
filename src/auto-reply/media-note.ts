@@ -1,12 +1,36 @@
+import path from "node:path";
+import { getMediaDir } from "../media/store.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { MsgContext } from "./templating.js";
+
+function stripDarwinPrivatePrefix(value: string): string {
+  return value.startsWith("/private/var/") ? value.slice("/private".length) : value;
+}
+
+function normalizeManagedInboundMediaRef(value: string): string {
+  if (!path.isAbsolute(value)) {
+    return value;
+  }
+  const mediaDir = stripDarwinPrivatePrefix(path.resolve(getMediaDir()));
+  const candidate = stripDarwinPrivatePrefix(path.resolve(value));
+  const inboundDir = path.join(mediaDir, "inbound");
+  const relativeToInbound = path.relative(inboundDir, candidate);
+  if (
+    !relativeToInbound ||
+    relativeToInbound.startsWith("..") ||
+    path.isAbsolute(relativeToInbound)
+  ) {
+    return value;
+  }
+  return `media://inbound/${path.basename(candidate)}`;
+}
 
 function sanitizeInlineMediaNoteValue(value: string | undefined): string {
   const trimmed = value?.trim();
   if (!trimmed) {
     return "";
   }
-  return trimmed
+  return normalizeManagedInboundMediaRef(trimmed)
     .replace(/[\p{Cc}\]]+/gu, " ")
     .replace(/\s+/g, " ")
     .trim();

@@ -63,7 +63,9 @@ describe("telegramMessageActions", () => {
       {},
       {
         mediaLocalRoots: [],
+        mediaReadFile: undefined,
         sessionKey: "telegram-session",
+        gatewayClientScopes: undefined,
       },
     );
   });

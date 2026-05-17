@@ -158,6 +158,7 @@ export async function buildReplyPayloads(params: {
   blockStreamingEnabled: boolean;
   blockReplyPipeline: BlockReplyPipeline | null;
   /** Payload keys sent directly (not via pipeline) during tool flush. */
+  previewStreamedText?: string;
   directlySentBlockKeys?: Set<string>;
   replyToMode: ReplyToMode;
   replyToChannel?: OriginatingChannelType;
@@ -323,8 +324,56 @@ export async function buildReplyPayloads(params: {
     : mediaFilteredPayloads;
   const isDirectlySentBlockPayload = (payload: ReplyPayload) =>
     Boolean(params.directlySentBlockKeys?.has(createBlockReplyContentKey(payload)));
+  const normalizePreviewDedupeText = (value: string | undefined): string =>
+    (value ?? "").replace(/\s+/g, " ").trim();
+  const buildPreviewDedupeTextSet = (value: string | undefined): Set<string> => {
+    const dedupeText = new Set<string>();
+    const normalizedWhole = normalizePreviewDedupeText(value);
+    if (normalizedWhole) {
+      dedupeText.add(normalizedWhole);
+    }
+    for (const block of (value ?? "").split(/\n{2,}/u)) {
+      const normalizedBlock = normalizePreviewDedupeText(block);
+      if (normalizedBlock) {
+        dedupeText.add(normalizedBlock);
+      }
+    }
+    return dedupeText;
+  };
+  const previewStreamedText = buildPreviewDedupeTextSet(params.previewStreamedText);
+  const isPreviewStreamedTextPayload = (payload: ReplyPayload): boolean => {
+    if (previewStreamedText.size === 0 || payload.isError) {
+      return false;
+    }
+    const text = normalizePreviewDedupeText(payload.text);
+    return Boolean(text && previewStreamedText.has(text));
+  };
+  const preserveUnsentMediaAfterPreviewStream = (payload: ReplyPayload): ReplyPayload | null => {
+    if (!isPreviewStreamedTextPayload(payload)) {
+      return payload;
+    }
+    const reply = resolveSendableOutboundReplyParts(payload);
+    if (!reply.hasMedia) {
+      return null;
+    }
+    return copyReplyPayloadMetadata(payload, {
+      ...payload,
+      text: undefined,
+      audioAsVoice: payload.audioAsVoice || undefined,
+    });
+  };
+  const suppressPreviewStreamedPayloads = (payloads: ReplyPayload[]): ReplyPayload[] => {
+    const unsent: ReplyPayload[] = [];
+    for (const payload of payloads) {
+      const next = preserveUnsentMediaAfterPreviewStream(payload);
+      if (next) {
+        unsent.push(next);
+      }
+    }
+    return unsent;
+  };
   const preserveUnsentMediaAfterBlockStream = (payload: ReplyPayload): ReplyPayload | null => {
-    if (payload.isError) {
+    if (payload.isError || payload.isFallbackNotice) {
       return payload;
     }
     const reply = resolveSendableOutboundReplyParts(payload);
@@ -383,7 +432,9 @@ export async function buildReplyPayloads(params: {
             }
             return unsent;
           })()
-        : dedupedPayloads;
+        : previewStreamedText.size > 0
+          ? suppressPreviewStreamedPayloads(dedupedPayloads)
+          : dedupedPayloads;
   const blockSentMediaUrls = params.blockStreamingEnabled
     ? await normalizeSentMediaUrlsForDedupe({
         sentMediaUrls: params.blockReplyPipeline?.getSentMediaUrls() ?? [],

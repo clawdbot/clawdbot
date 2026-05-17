@@ -173,6 +173,37 @@ describe("gateway sessions patch", () => {
     expect(entry.fastMode).toBe(true);
   });
 
+  test("recreates partial rows without dropping session settings", async () => {
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: {
+        updatedAt: 1,
+        sessionFile: "stale.jsonl",
+        label: "Stale Session",
+        sendPolicy: "deny",
+        modelOverride: "gpt-5.4",
+        responseUsage: "tokens",
+        parentSessionKey: "agent:main:main",
+      } as SessionEntry,
+    };
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, fastMode: true },
+      }),
+    );
+
+    expect(entry.sessionId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
+    expect(entry.sessionFile).toBeUndefined();
+    expect(entry.label).toBeUndefined();
+    expect(entry.sendPolicy).toBe("deny");
+    expect(entry.modelOverride).toBe("gpt-5.4");
+    expect(entry.responseUsage).toBe("tokens");
+    expect(entry.parentSessionKey).toBe("agent:main:main");
+    expect(entry.fastMode).toBe(true);
+  });
+
   test("clears fastMode when patch sets null", async () => {
     const store: Record<string, SessionEntry> = {
       [MAIN_SESSION_KEY]: { fastMode: true } as SessionEntry,

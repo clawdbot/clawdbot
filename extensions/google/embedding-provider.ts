@@ -242,6 +242,7 @@ async function fetchGeminiEmbeddingPayload(params: {
   client: GeminiEmbeddingClient;
   endpoint: string;
   body: unknown;
+  signal?: AbortSignal;
 }): Promise<Record<string, unknown>> {
   return await executeWithApiKeyRotation({
     provider: "google",
@@ -256,6 +257,7 @@ async function fetchGeminiEmbeddingPayload(params: {
       return await withRemoteHttpResponse({
         url: params.endpoint,
         ssrfPolicy: params.client.ssrfPolicy,
+        signal: params.signal,
         init: {
           method: "POST",
           headers,
@@ -316,7 +318,10 @@ export async function createGeminiEmbeddingProvider(
   const isV2 = isGeminiEmbedding2Model(client.model);
   const outputDimensionality = client.outputDimensionality;
 
-  const embedQuery = async (text: string): Promise<number[]> => {
+  const embedQuery = async (
+    text: string,
+    callOptions?: { signal?: AbortSignal },
+  ): Promise<number[]> => {
     if (!text.trim()) {
       return [];
     }
@@ -328,11 +333,15 @@ export async function createGeminiEmbeddingProvider(
         taskType: options.taskType ?? "RETRIEVAL_QUERY",
         outputDimensionality: isV2 ? outputDimensionality : undefined,
       }),
+      signal: callOptions?.signal,
     });
     return sanitizeAndNormalizeEmbedding(readGeminiSingleEmbedding(payload));
   };
 
-  const embedBatchInputs = async (inputs: EmbeddingInput[]): Promise<number[][]> => {
+  const embedBatchInputs = async (
+    inputs: EmbeddingInput[],
+    callOptions?: { signal?: AbortSignal },
+  ): Promise<number[][]> => {
     if (inputs.length === 0) {
       return [];
     }
@@ -349,16 +358,21 @@ export async function createGeminiEmbeddingProvider(
           }),
         ),
       },
+      signal: callOptions?.signal,
     });
     const embeddings = readGeminiBatchEmbeddings(payload, inputs.length);
     return embeddings.map((values) => sanitizeAndNormalizeEmbedding(values));
   };
 
-  const embedBatch = async (texts: string[]): Promise<number[][]> => {
+  const embedBatch = async (
+    texts: string[],
+    options?: { signal?: AbortSignal },
+  ): Promise<number[][]> => {
     return await embedBatchInputs(
       texts.map((text) => ({
         text,
       })),
+      options,
     );
   };
 

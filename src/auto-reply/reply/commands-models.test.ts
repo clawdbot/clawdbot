@@ -379,7 +379,7 @@ describe("handleModelsCommand", () => {
     expect(result?.reply?.text).not.toMatch(/^- google-gemini-cli \(/m);
   });
 
-  it("labels the default runtime choice as OpenClaw Pi", async () => {
+  it("labels the OpenAI default runtime choice as Codex", async () => {
     const data = await buildModelsProviderData({
       agents: {
         defaults: {
@@ -389,6 +389,123 @@ describe("handleModelsCommand", () => {
     } as OpenClawConfig);
 
     expect(data.runtimeChoicesByProvider?.get("openai")?.[0]).toEqual({
+      id: "codex",
+      label: "OpenAI Codex",
+      description: "Use the OpenAI Codex runtime selected by the effective harness policy.",
+    });
+    expect(data.runtimeChoicesByProvider?.get("openai")?.[1]).toEqual({
+      id: "pi",
+      label: "OpenClaw Pi Default",
+      description: "Use the built-in OpenClaw Pi runtime.",
+    });
+  });
+
+  it("keeps custom OpenAI-compatible providers on the Pi default runtime choice", async () => {
+    const data = await buildModelsProviderData({
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://openai-compatible.example.test/v1",
+            models: [],
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5" },
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(data.runtimeChoicesByProvider?.get("openai")?.[0]).toEqual({
+      id: "pi",
+      label: "OpenClaw Pi Default",
+      description: "Use the built-in OpenClaw Pi runtime.",
+    });
+  });
+
+  it("lets exact model runtime policy override provider runtime policy in picker choices", async () => {
+    const data = await buildModelsProviderData({
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            agentRuntime: { id: "pi" },
+            models: [],
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5" },
+          models: {
+            "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+          },
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(data.runtimeChoicesByProvider?.get("openai")?.[0]).toEqual({
+      id: "codex",
+      label: "OpenAI Codex",
+      description: "Use the OpenAI Codex runtime selected by the effective harness policy.",
+    });
+    expect(data.runtimeChoicesByProvider?.get("openai")?.[1]).toEqual({
+      id: "pi",
+      label: "OpenClaw Pi Default",
+      description: "Use the built-in OpenClaw Pi runtime.",
+    });
+  });
+
+  it("does not use another provider's first model override as that provider's default runtime choice", async () => {
+    modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+      { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" },
+      { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
+      { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet" },
+    ]);
+
+    const data = await buildModelsProviderData({
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5" },
+          models: {
+            "anthropic/claude-opus-4-5": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(data.runtimeChoicesByProvider?.get("anthropic")?.[0]).toEqual({
+      id: "pi",
+      label: "OpenClaw Pi Default",
+      description: "Use the built-in OpenClaw Pi runtime.",
+    });
+  });
+
+  it("honors provider wildcard runtime policy for non-default provider picker choices", async () => {
+    modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+      { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" },
+      { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
+      { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet" },
+    ]);
+
+    const data = await buildModelsProviderData({
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5" },
+          models: {
+            "anthropic/*": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(data.runtimeChoicesByProvider?.get("anthropic")?.[0]).toEqual({
+      id: "claude-cli",
+      label: "Claude CLI",
+      description: "Use the Claude CLI runtime selected by the effective harness policy.",
+    });
+    expect(data.runtimeChoicesByProvider?.get("anthropic")?.[1]).toEqual({
       id: "pi",
       label: "OpenClaw Pi Default",
       description: "Use the built-in OpenClaw Pi runtime.",

@@ -18,6 +18,7 @@
 import type { JsoncEntry, JsoncValue } from "../jsonc/ast.js";
 import type { OcPath } from "../oc-path.js";
 import {
+  POS_FIRST,
   POS_LAST,
   isPositionalSeg,
   isQuotedSeg,
@@ -128,6 +129,14 @@ export function resolveJsonlOcPath(ast: JsonlAst, path: OcPath): JsonlOcPathMatc
 }
 
 function pickLine(ast: JsonlAst, addr: string): JsonlLine | null {
+  if (addr === POS_FIRST) {
+    for (const l of ast.lines) {
+      if (l.kind === "value") {
+        return l;
+      }
+    }
+    return null;
+  }
   if (addr === POS_LAST) {
     for (let i = ast.lines.length - 1; i >= 0; i--) {
       const l = ast.lines[i];

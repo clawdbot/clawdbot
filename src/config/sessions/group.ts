@@ -1,5 +1,6 @@
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { listChannelPlugins } from "../../channels/plugins/registry.js";
+import { normalizeSessionPeerId } from "../../sessions/session-key-utils.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -149,7 +150,7 @@ export function resolveGroupSessionKey(ctx: MsgContext): GroupKeyResolution | nu
         ? parts.slice(2).join(":")
         : parts.slice(1).join(":")
       : from;
-  const finalId = normalizeLowercaseStringOrEmpty(id);
+  const finalId = normalizeSessionPeerId({ channel: provider, peerKind: kind, peerId: id });
   if (!finalId) {
     return null;
   }

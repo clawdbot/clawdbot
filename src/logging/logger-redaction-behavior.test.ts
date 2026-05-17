@@ -1,11 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
   createDiagnosticTraceContext,
   resetDiagnosticTraceContextForTest,
   runWithDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
+import { resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import { getChildLogger, getLogger, resetLogger, setLoggerOverride } from "../logging.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
 import { __test__ as loggerTest } from "./logger.js";
@@ -21,6 +22,10 @@ const originalTestFileLog = process.env.OPENCLAW_TEST_FILE_LOG;
 
 beforeAll(async () => {
   await logPathTracker.setup();
+});
+
+beforeEach(() => {
+  resetDiagnosticEventsForTest();
 });
 
 afterEach(() => {
@@ -39,6 +44,7 @@ afterEach(() => {
   } else {
     process.env.OPENCLAW_TEST_FILE_LOG = originalTestFileLog;
   }
+  resetDiagnosticEventsForTest();
   resetDiagnosticTraceContextForTest();
   resetLogger();
   setLoggerOverride(null);

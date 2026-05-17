@@ -2,6 +2,7 @@ import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { createReplyMediaPathNormalizer } from "../../auto-reply/reply/reply-media-paths.runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isPassThroughRemoteMediaSource } from "../../media/media-source-url.js";
 import { isAudioFileName } from "../../media/mime.js";
 import { resolveSendableOutboundReplyParts } from "../../plugin-sdk/reply-payload.js";
 
@@ -9,8 +10,17 @@ function isDataUrlMedia(mediaUrl: string): boolean {
   return mediaUrl.trim().toLowerCase().startsWith("data:");
 }
 
-function shouldPreserveDisplayMediaUrl(mediaUrl: string): boolean {
-  return isDataUrlMedia(mediaUrl) || isAudioFileName(mediaUrl);
+function shouldPreserveDisplayMediaUrl(payload: ReplyPayload, mediaUrl: string): boolean {
+  if (isDataUrlMedia(mediaUrl)) {
+    return true;
+  }
+  if (!isAudioFileName(mediaUrl)) {
+    return false;
+  }
+  if (isPassThroughRemoteMediaSource(mediaUrl)) {
+    return true;
+  }
+  return payload.trustedLocalMedia === true;
 }
 
 export async function normalizeWebchatReplyMediaPathsForDisplay(params: {
@@ -42,18 +52,18 @@ export async function normalizeWebchatReplyMediaPathsForDisplay(params: {
       continue;
     }
     const mediaUrls = resolveSendableOutboundReplyParts(payload).mediaUrls;
-    if (!mediaUrls.some(shouldPreserveDisplayMediaUrl)) {
+    if (!mediaUrls.some((mediaUrl) => shouldPreserveDisplayMediaUrl(payload, mediaUrl))) {
       normalized.push(await normalizeMediaPaths(payload));
       continue;
     }
-    if (!mediaUrls.some((mediaUrl) => !shouldPreserveDisplayMediaUrl(mediaUrl))) {
+    if (!mediaUrls.some((mediaUrl) => !shouldPreserveDisplayMediaUrl(payload, mediaUrl))) {
       normalized.push(payload);
       continue;
     }
     const mergedMediaUrls: string[] = [];
     let text = payload.text;
     for (const mediaUrl of mediaUrls) {
-      if (shouldPreserveDisplayMediaUrl(mediaUrl)) {
+      if (shouldPreserveDisplayMediaUrl(payload, mediaUrl)) {
         mergedMediaUrls.push(mediaUrl);
         continue;
       }

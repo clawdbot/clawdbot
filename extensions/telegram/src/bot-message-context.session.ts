@@ -1,8 +1,9 @@
-import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
-  type BuildChannelTurnContextParams,
-  type BuiltChannelTurnContext,
+  type BuildChannelInboundEventContextParams,
+  type BuiltChannelInboundEventContext,
+  classifyChannelInboundEvent,
   formatInboundEnvelope,
+  resolveUnmentionedGroupInboundPolicy,
   resolveEnvelopeFormatOptions,
   toLocationContext,
   type NormalizedLocation,
@@ -43,7 +44,7 @@ import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
 import type { TelegramReplyChainEntry } from "./message-cache.js";
 
-export type TelegramInboundContextPayload = BuiltChannelTurnContext & {
+export type TelegramInboundContextPayload = BuiltChannelInboundEventContext & {
   From: string;
   To: string;
   ChatType: string;
@@ -59,24 +60,13 @@ type TelegramMessageContextSessionRuntime =
   typeof import("./bot-message-context.session.runtime.js");
 
 const sessionRuntimeMethods = [
-  "buildChannelTurnContext",
+  "buildChannelInboundEventContext",
   "readSessionUpdatedAt",
   "recordInboundSession",
   "resolveInboundLastRouteSessionKey",
   "resolvePinnedMainDmOwnerFromAllowlist",
   "resolveStorePath",
 ] as const satisfies readonly (keyof TelegramMessageContextSessionRuntime)[];
-
-function resolveAmbientGroupTurnKind(
-  cfg: OpenClawConfig,
-  agentId: string,
-): BuildChannelTurnContextParams["message"]["inboundTurnKind"] {
-  const agentGroupChat = resolveAgentConfig(cfg, agentId)?.groupChat;
-  if (agentGroupChat && Object.hasOwn(agentGroupChat, "ambientTurns")) {
-    return agentGroupChat.ambientTurns ?? "user_request";
-  }
-  return cfg.messages?.groupChat?.ambientTurns ?? "user_request";
-}
 
 function hasCompleteSessionRuntime(
   runtime: TelegramMessageContextSessionRuntimeOverrides | undefined,
@@ -426,20 +416,23 @@ export async function buildTelegramInboundContextPayload(params: {
   const telegramTo = `telegram:${chatId}`;
   const locationContext = locationData ? toLocationContext(locationData) : undefined;
   const commandSource = options?.commandSource;
-  const ambientGroupTurnKind = resolveAmbientGroupTurnKind(cfg, route.agentId);
+  const unmentionedGroupPolicy = resolveUnmentionedGroupInboundPolicy({
+    cfg,
+    agentId: route.agentId,
+  });
   const hasAbortRequest = isAbortRequestText(rawBody, {
     botUsername: normalizeOptionalLowercaseString(primaryCtx.me?.username),
   });
-  const inboundTurnKind =
-    ambientGroupTurnKind === "room_event" &&
-    isGroup &&
-    !effectiveWasMentioned &&
-    !hasControlCommand &&
-    !hasAbortRequest &&
-    commandSource !== "native"
-      ? "room_event"
-      : "user_request";
-  const ctxPayload = sessionRuntime.buildChannelTurnContext({
+  const conversationKind = isGroup ? "group" : "direct";
+  const inboundEventKind = classifyChannelInboundEvent({
+    conversation: { kind: conversationKind },
+    unmentionedGroupPolicy,
+    wasMentioned: effectiveWasMentioned,
+    hasControlCommand,
+    hasAbortRequest,
+    commandSource,
+  });
+  const ctxPayload = sessionRuntime.buildChannelInboundEventContext({
     channel: "telegram",
     accountId: route.accountId,
     provider: "telegram",
@@ -453,12 +446,12 @@ export async function buildTelegramInboundContextPayload(params: {
       username: senderUsername || undefined,
     },
     conversation: {
-      kind: isGroup ? "group" : "direct",
+      kind: conversationKind,
       id: String(chatId),
       label: conversationLabel,
       threadId: threadSpec.id != null ? String(threadSpec.id) : undefined,
       routePeer: {
-        kind: isGroup ? "group" : "direct",
+        kind: conversationKind,
         id: String(chatId),
       },
     },
@@ -475,7 +468,7 @@ export async function buildTelegramInboundContextPayload(params: {
       messageThreadId: threadSpec.id,
     },
     message: {
-      inboundTurnKind,
+      inboundEventKind,
       body: combinedBody,
       rawBody,
       bodyForAgent: bodyText,
@@ -566,8 +559,8 @@ export async function buildTelegramInboundContextPayload(params: {
       IsForum: isForum,
       TopicName: isForum && topicName ? topicName : undefined,
     },
-  } satisfies BuildChannelTurnContextParams);
-  if (inboundTurnKind === "room_event" && historyKey) {
+  } satisfies BuildChannelInboundEventContextParams);
+  if (inboundEventKind === "room_event" && historyKey) {
     channelHistory.record({
       historyKey,
       limit: historyLimit,

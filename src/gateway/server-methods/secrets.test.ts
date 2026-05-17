@@ -26,12 +26,14 @@ async function invokeSecretsResolve(params: {
   respond: ReturnType<typeof vi.fn>;
   commandName: unknown;
   targetIds: unknown;
+  providerOverrides?: unknown;
 }) {
   await params.handlers["secrets.resolve"]({
     req: { type: "req", id: "1", method: "secrets.resolve" },
     params: {
       commandName: params.commandName,
       targetIds: params.targetIds,
+      ...(params.providerOverrides ? { providerOverrides: params.providerOverrides } : {}),
     },
     client: null,
     isWebchatConnect: () => false,
@@ -70,7 +72,11 @@ function expectWarnMessageWith(warn: ReturnType<typeof vi.fn>, text: string): vo
 describe("secrets handlers", () => {
   function createHandlers(overrides?: {
     reloadSecrets?: () => Promise<{ warningCount: number }>;
-    resolveSecrets?: (params: { commandName: string; targetIds: string[] }) => Promise<{
+    resolveSecrets?: (params: {
+      commandName: string;
+      targetIds: string[];
+      providerOverrides?: { webSearch?: string; webFetch?: string };
+    }) => Promise<{
       assignments: Array<{ path: string; pathSegments: string[]; value: unknown }>;
       diagnostics: string[];
       inactiveRefPaths: string[];
@@ -152,6 +158,36 @@ describe("secrets handlers", () => {
       diagnostics: ["note"],
       inactiveRefPaths: [TALK_TEST_PROVIDER_API_KEY_PATH],
     });
+  });
+
+  it("passes trimmed provider overrides to secrets.resolve", async () => {
+    const resolveSecrets = vi.fn().mockResolvedValue({
+      assignments: [],
+      diagnostics: [],
+      inactiveRefPaths: [],
+    });
+    const handlers = createHandlers({ resolveSecrets });
+    const respond = vi.fn();
+
+    await invokeSecretsResolve({
+      handlers,
+      respond,
+      commandName: "infer web search",
+      targetIds: ["talk.providers.*.apiKey"],
+      providerOverrides: { webSearch: " tavily ", webFetch: " " },
+    });
+
+    expect(resolveSecrets).toHaveBeenCalledWith({
+      commandName: "infer web search",
+      targetIds: ["talk.providers.*.apiKey"],
+      providerOverrides: { webSearch: "tavily" },
+    });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({
+        ok: true,
+      }),
+    );
   });
 
   it("rejects invalid secrets.resolve params", async () => {

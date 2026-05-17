@@ -1130,7 +1130,7 @@ export async function dispatchCronDelivery(
         })
       : undefined;
     const hadDescendants = activeSubagentRuns > 0 || Boolean(completedDescendantReply);
-    if (activeSubagentRuns > 0 || expectedSubagentFollowup) {
+    if (!params.deliveryBestEffort && (activeSubagentRuns > 0 || expectedSubagentFollowup)) {
       let finalReply = await subagentFollowupRuntime?.waitForDescendantSubagentSummary({
         sessionKey: subagentFollowupSessionKey,
         initialReply: initialSynthesizedText,
@@ -1160,7 +1160,7 @@ export async function dispatchCronDelivery(
       synthesizedText = completedDescendantReply;
       deliveryPayloads = [{ text: completedDescendantReply }];
     }
-    if (activeSubagentRuns > 0) {
+    if (!params.deliveryBestEffort && activeSubagentRuns > 0) {
       // Parent orchestration is still in progress; avoid announcing a partial
       // update to the main requester. Mark deliveryAttempted so the timer does
       // not fire a redundant enqueueSystemEvent fallback (double-announce bug).

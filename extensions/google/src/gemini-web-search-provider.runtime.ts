@@ -1,7 +1,7 @@
 import {
   createProviderHttpError,
   formatProviderHttpErrorMessage,
-  readProviderJsonResponse,
+  readProviderJsonObjectResponse,
 } from "openclaw/plugin-sdk/provider-http";
 import {
   buildSearchCacheKey,
@@ -59,6 +59,14 @@ type GeminiGroundingResponse = {
     status?: string;
   };
 };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function throwMalformedGeminiResponse(): never {
+  throw new Error("Gemini API error: malformed JSON response");
+}
 
 const GEMINI_FRESHNESS_DAYS: Record<GeminiFreshness, number> = {
   day: 1,
@@ -197,7 +205,10 @@ async function runGeminiSearch(params: {
         throw new Error(error.message.replace(/key=[^&\s]+/giu, "key=***"));
       }
 
-      const data = await readProviderJsonResponse<GeminiGroundingResponse>(res, "Gemini API error");
+      const data = (await readProviderJsonObjectResponse(
+        res,
+        "Gemini API error",
+      )) as GeminiGroundingResponse;
 
       if (data.error) {
         const rawMessage = data.error.message || data.error.status || "unknown";
@@ -210,18 +221,45 @@ async function runGeminiSearch(params: {
         );
       }
 
-      const candidate = data.candidates?.[0];
-      const content =
-        candidate?.content?.parts
-          ?.map((part) => part.text)
-          .filter(Boolean)
-          .join("\n") ?? "No response";
-      const rawCitations = (candidate?.groundingMetadata?.groundingChunks ?? [])
-        .filter((chunk) => chunk.web?.uri)
-        .map((chunk) => ({
-          url: chunk.web!.uri!,
-          title: chunk.web?.title || undefined,
-        }));
+      if (!Array.isArray(data.candidates)) {
+        throwMalformedGeminiResponse();
+      }
+      const candidate = data.candidates[0];
+      if (!isRecord(candidate) || !isRecord(candidate.content)) {
+        throwMalformedGeminiResponse();
+      }
+      const parts = candidate.content.parts;
+      if (!Array.isArray(parts)) {
+        throwMalformedGeminiResponse();
+      }
+      const content = parts
+        .map((part) => (isRecord(part) && typeof part.text === "string" ? part.text : undefined))
+        .filter((text): text is string => Boolean(text))
+        .join("\n");
+      if (!content) {
+        throwMalformedGeminiResponse();
+      }
+      const groundingMetadata = candidate.groundingMetadata;
+      const groundingChunks =
+        groundingMetadata === undefined
+          ? []
+          : isRecord(groundingMetadata) && Array.isArray(groundingMetadata.groundingChunks)
+            ? groundingMetadata.groundingChunks
+            : undefined;
+      if (!groundingChunks) {
+        throwMalformedGeminiResponse();
+      }
+      const rawCitations = groundingChunks.flatMap((chunk) => {
+        if (!isRecord(chunk) || !isRecord(chunk.web) || typeof chunk.web.uri !== "string") {
+          return [];
+        }
+        return [
+          {
+            url: chunk.web.uri,
+            title: typeof chunk.web.title === "string" ? chunk.web.title : undefined,
+          },
+        ];
+      });
 
       const citations: Array<{ url: string; title?: string }> = [];
       for (let index = 0; index < rawCitations.length; index += 10) {

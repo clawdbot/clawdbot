@@ -648,7 +648,7 @@ describe("buildInboundUserContextPrefix", () => {
   it("includes dynamic per-turn flags in conversation info", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "group",
-      InboundTurnKind: "room_event",
+      InboundEventKind: "room_event",
       WasMentioned: true,
       ExplicitlyMentionedBot: false,
       MentionedUserIds: [" U_OTHER ", "", "U_HELPER"],
@@ -662,7 +662,7 @@ describe("buildInboundUserContextPrefix", () => {
     } as TemplateContext);
 
     const conversationInfo = parseConversationInfoPayload(text);
-    expect(conversationInfo["turn_kind"]).toBe("room_event");
+    expect(conversationInfo["inbound_event_kind"]).toBe("room_event");
     expect(conversationInfo["is_group_chat"]).toBe(true);
     expect(conversationInfo["was_mentioned"]).toBe(true);
     expect(conversationInfo["explicitly_mentioned_bot"]).toBe(false);

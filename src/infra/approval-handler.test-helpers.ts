@@ -5,6 +5,9 @@ export type ApprovalNativeRuntimeAdapterStubParams = {
   resolveApprovalKind?: ChannelApprovalNativeRuntimeAdapter["resolveApprovalKind"];
   buildResolvedResult?: ChannelApprovalNativeRuntimeAdapter["presentation"]["buildResolvedResult"];
   unbindPending?: NonNullable<ChannelApprovalNativeRuntimeAdapter["interactions"]>["unbindPending"];
+  cancelDelivered?: NonNullable<
+    ChannelApprovalNativeRuntimeAdapter["interactions"]
+  >["cancelDelivered"];
   prepareTarget?: ChannelApprovalNativeRuntimeAdapter["transport"]["prepareTarget"];
   deliverPending?: ChannelApprovalNativeRuntimeAdapter["transport"]["deliverPending"];
   bindPending?: NonNullable<ChannelApprovalNativeRuntimeAdapter["interactions"]>["bindPending"];
@@ -36,6 +39,7 @@ export function createApprovalNativeRuntimeAdapterStubs(
     interactions: {
       bindPending: params.bindPending ?? vi.fn().mockResolvedValue({ bindingId: "bound" }),
       unbindPending: params.unbindPending,
+      cancelDelivered: params.cancelDelivered,
     },
   };
 }

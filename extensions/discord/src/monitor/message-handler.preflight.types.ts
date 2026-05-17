@@ -1,3 +1,4 @@
+import type { InboundEventKind } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import type { SessionBindingRecord } from "openclaw/plugin-sdk/conversation-runtime";
 import type { ChannelBotLoopProtectionFacts } from "openclaw/plugin-sdk/inbound-reply-dispatch";
@@ -85,9 +86,11 @@ export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields
 
   shouldRequireMention: boolean;
   hasAnyMention: boolean;
+  hasControlCommand: boolean;
   allowTextCommands: boolean;
   shouldBypassMention: boolean;
   effectiveWasMentioned: boolean;
+  inboundEventKind: InboundEventKind;
   canDetectMention: boolean;
 
   historyEntry?: HistoryEntry;

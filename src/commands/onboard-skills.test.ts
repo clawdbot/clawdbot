@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
@@ -7,6 +7,8 @@ const mocks = vi.hoisted(() => ({
   buildWorkspaceSkillStatus: vi.fn(),
   installSkill: vi.fn(),
   detectBinary: vi.fn(),
+  isContainerEnvironment: vi.fn(),
+  resolveBrewExecutable: vi.fn(),
   resolveNodeManagerOptions: vi.fn(() => [
     { value: "npm", label: "npm" },
     { value: "pnpm", label: "pnpm" },
@@ -20,6 +22,12 @@ vi.mock("../agents/skills-status.js", () => ({
 }));
 vi.mock("../agents/skills-install.js", () => ({
   installSkill: mocks.installSkill,
+}));
+vi.mock("../infra/container-environment.js", () => ({
+  isContainerEnvironment: mocks.isContainerEnvironment,
+}));
+vi.mock("../infra/brew.js", () => ({
+  resolveBrewExecutable: mocks.resolveBrewExecutable,
 }));
 vi.mock("./onboard-helpers.js", () => ({
   detectBinary: mocks.detectBinary,
@@ -78,6 +86,7 @@ function createBundledSkill(params: {
 
 function mockMissingBrewStatus(skills: Array<ReturnType<typeof createBundledSkill>>): void {
   mocks.detectBinary.mockResolvedValue(false);
+  mocks.resolveBrewExecutable.mockReturnValue(undefined);
   mocks.installSkill.mockResolvedValue({
     ok: true,
     message: "Installed",
@@ -134,6 +143,66 @@ const runtime: RuntimeEnv = {
 };
 
 describe("setupSkills", () => {
+  afterEach(() => {
+    mocks.isContainerEnvironment.mockReset();
+    mocks.resolveBrewExecutable.mockReset();
+  });
+
+  it("hides brew-only installs in Linux containers when brew is missing", async () => {
+    const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    try {
+      mockMissingBrewStatus([
+        createBundledSkill({
+          name: "video-frames",
+          description: "ffmpeg",
+          bins: ["ffmpeg"],
+          installLabel: "Install ffmpeg (brew)",
+        }),
+      ]);
+      mocks.isContainerEnvironment.mockReturnValue(true);
+
+      const { prompter, notes } = createPrompter({});
+      await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
+
+      expect(prompter.multiselect).not.toHaveBeenCalled();
+      expect(mocks.installSkill).not.toHaveBeenCalled();
+      expect(notes.find((n) => n.title === "Container skill installs")).toBeDefined();
+      expect(notes.find((n) => n.title === "Homebrew recommended")).toBeUndefined();
+    } finally {
+      Object.defineProperty(process, "platform", originalPlatformDescriptor);
+    }
+  });
+
+  it("keeps brew-only installs visible when Linuxbrew is resolved off PATH", async () => {
+    const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    try {
+      mockMissingBrewStatus([
+        createBundledSkill({
+          name: "video-frames",
+          description: "ffmpeg",
+          bins: ["ffmpeg"],
+          installLabel: "Install ffmpeg (brew)",
+        }),
+      ]);
+      mocks.isContainerEnvironment.mockReturnValue(true);
+      mocks.resolveBrewExecutable.mockReturnValue("/home/linuxbrew/.linuxbrew/bin/brew");
+
+      const { prompter, notes } = createPrompter({ multiselect: ["video-frames"] });
+      await setupSkills({} as OpenClawConfig, "/tmp/ws", runtime, prompter);
+
+      expect(prompter.multiselect).toHaveBeenCalled();
+      expect(mocks.installSkill).toHaveBeenCalledWith(
+        expect.objectContaining({ skillName: "video-frames", installId: "brew" }),
+      );
+      expect(notes.find((n) => n.title === "Container skill installs")).toBeUndefined();
+      expect(notes.find((n) => n.title === "Homebrew recommended")).toBeUndefined();
+    } finally {
+      Object.defineProperty(process, "platform", originalPlatformDescriptor);
+    }
+  });
+
   it("does not recommend Homebrew when user skips installing brew-backed deps", async () => {
     if (process.platform === "win32") {
       return;

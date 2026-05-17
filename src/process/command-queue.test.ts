@@ -161,6 +161,113 @@ describe("command queue", () => {
     expect(getQueueSize()).toBe(0);
   });
 
+  it("runs foreground work before already queued background work", async () => {
+    const { task: blocker, release } = enqueueBlockedMainTask(async () => "blocker");
+    const calls: string[] = [];
+
+    const background = enqueueCommandInLane(
+      CommandLane.Main,
+      async () => {
+        calls.push("background");
+        return "background";
+      },
+      { priority: "background" },
+    );
+    const normal = enqueueCommandInLane(CommandLane.Main, async () => {
+      calls.push("normal");
+      return "normal";
+    });
+    const foreground = enqueueCommandInLane(
+      CommandLane.Main,
+      async () => {
+        calls.push("foreground");
+        return "foreground";
+      },
+      { priority: "foreground" },
+    );
+
+    release();
+    await expect(blocker).resolves.toBe("blocker");
+    await expect(foreground).resolves.toBe("foreground");
+    await expect(normal).resolves.toBe("normal");
+    await expect(background).resolves.toBe("background");
+    expect(calls).toEqual(["foreground", "normal", "background"]);
+  });
+
+  it("preserves FIFO order within each priority", async () => {
+    const { task: blocker, release } = enqueueBlockedMainTask(async () => "blocker");
+    const calls: string[] = [];
+
+    const first = enqueueCommandInLane(
+      CommandLane.Main,
+      async () => {
+        calls.push("first");
+      },
+      { priority: "foreground" },
+    );
+    const second = enqueueCommandInLane(
+      CommandLane.Main,
+      async () => {
+        calls.push("second");
+      },
+      { priority: "foreground" },
+    );
+
+    release();
+    await blocker;
+    await Promise.all([first, second]);
+    expect(calls).toEqual(["first", "second"]);
+  });
+
+  it("reports queueAhead after priority insertion", async () => {
+    vi.useFakeTimers();
+    try {
+      const { task: blocker, release } = enqueueBlockedMainTask(async () => "blocker");
+      const calls: string[] = [];
+      let queuedAhead: number | null = null;
+
+      const background = enqueueCommandInLane(
+        CommandLane.Main,
+        async () => {
+          calls.push("background");
+          return "background";
+        },
+        { priority: "background" },
+      );
+      const foreground = enqueueCommandInLane(
+        CommandLane.Main,
+        async () => {
+          calls.push("foreground");
+          return "foreground";
+        },
+        {
+          priority: "foreground",
+          warnAfterMs: 5,
+          onWait: (_ms, ahead) => {
+            queuedAhead = ahead;
+          },
+        },
+      );
+
+      await vi.advanceTimersByTimeAsync(6);
+      release();
+      await expect(blocker).resolves.toBe("blocker");
+      await expect(foreground).resolves.toBe("foreground");
+      await expect(background).resolves.toBe("background");
+
+      expect(calls).toEqual(["foreground", "background"]);
+      expect(queuedAhead).toBe(0);
+      const waitWarning = diagnosticMocks.diag.warn.mock.calls.find(
+        ([message]) =>
+          typeof message === "string" && message.includes("lane wait exceeded: lane=main"),
+      );
+      expect(waitWarning?.[0]).toContain("queueAhead=0 activeAhead=1");
+      expect(waitWarning?.[0]).toContain("queueBehind=1");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("logs enqueue depth after push", async () => {
     const task = enqueueCommand(async () => {});
 
@@ -196,6 +303,11 @@ describe("command queue", () => {
       expect(typeof waited).toBe("number");
       expect(waited).toBeGreaterThanOrEqual(5);
       expect(queuedAhead).toBe(0);
+      const waitWarning = diagnosticMocks.diag.warn.mock.calls.find(
+        ([message]) =>
+          typeof message === "string" && message.includes("lane wait exceeded: lane=main"),
+      );
+      expect(waitWarning?.[0]).toContain("queueAhead=0 activeAhead=1");
     } finally {
       vi.useRealTimers();
     }
@@ -386,6 +498,72 @@ describe("command queue", () => {
         activeCount: 0,
         queuedCount: 0,
       });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("task timeout renews from progress timestamps", async () => {
+    const lane = `timeout-progress-lane-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 1);
+
+    vi.useFakeTimers();
+    try {
+      let progressAtMs = Date.now();
+      const blocker = createDeferred();
+      const first = enqueueCommandInLane(
+        lane,
+        async () => {
+          await blocker.promise;
+          return "first";
+        },
+        {
+          taskTimeoutMs: 25,
+          taskTimeoutProgressAtMs: () => progressAtMs,
+        },
+      );
+      let secondRan = false;
+      const second = enqueueCommandInLane(lane, async () => {
+        secondRan = true;
+        return "second";
+      });
+
+      await vi.advanceTimersByTimeAsync(20);
+      progressAtMs = Date.now();
+      await vi.advanceTimersByTimeAsync(20);
+      expect(secondRan).toBe(false);
+
+      blocker.resolve();
+      await expect(first).resolves.toBe("first");
+      await expect(second).resolves.toBe("second");
+      expect(secondRan).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("task timeout falls back when progress timestamp callback throws", async () => {
+    const lane = `timeout-progress-throw-lane-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 1);
+
+    vi.useFakeTimers();
+    try {
+      const first = enqueueCommandInLane(lane, async () => new Promise<never>(() => {}), {
+        taskTimeoutMs: 25,
+        taskTimeoutProgressAtMs: () => {
+          throw new Error("progress failed");
+        },
+      });
+      const firstRejected = expect(first).rejects.toBeInstanceOf(CommandLaneTaskTimeoutError);
+
+      await vi.advanceTimersByTimeAsync(25);
+      await firstRejected;
+
+      expect(
+        diagnosticMocks.diag.warn.mock.calls.some(([message]) =>
+          String(message).includes("lane task timeout progress callback failed"),
+        ),
+      ).toBe(true);
     } finally {
       vi.useRealTimers();
     }
@@ -596,6 +774,64 @@ describe("command queue", () => {
       await expect(waitForActiveTasks(0)).resolves.toEqual({ drained: true });
     } finally {
       // Restore original state so subsequent tests are not affected.
+      if (original !== undefined) {
+        globalStore[key] = original;
+      } else {
+        delete globalStore[key];
+      }
+      resetCommandQueueStateForTest();
+    }
+  });
+
+  it("migrates legacy queued entries missing priority and wait diagnostics", async () => {
+    const key = Symbol.for("openclaw.commandQueueState");
+    const globalStore = globalThis as Record<PropertyKey, unknown>;
+    const original = globalStore[key];
+    let queuedAhead: number | null = null;
+    const legacyTask = new Promise<string>((resolve, reject) => {
+      globalStore[key] = {
+        gatewayDraining: false,
+        lanes: new Map([
+          [
+            CommandLane.Main,
+            {
+              lane: CommandLane.Main,
+              queue: [
+                {
+                  task: async () => "done",
+                  resolve,
+                  reject,
+                  enqueuedAt: Date.now() - 10,
+                  warnAfterMs: 0,
+                  onWait: (_ms: number, ahead: number) => {
+                    queuedAhead = ahead;
+                  },
+                },
+              ],
+              activeTaskIds: new Set(),
+              maxConcurrent: 1,
+              draining: false,
+              generation: 0,
+            },
+          ],
+        ]),
+        activeTaskWaiters: new Set(),
+        nextTaskId: 1,
+        nextQueueSequence: 1,
+      };
+    });
+
+    try {
+      resetAllLanes();
+
+      await expect(legacyTask).resolves.toBe("done");
+      expect(queuedAhead).toBe(0);
+      const waitWarning = diagnosticMocks.diag.warn.mock.calls.find(
+        ([message]) =>
+          typeof message === "string" && message.includes("lane wait exceeded: lane=main"),
+      );
+      expect(waitWarning?.[0]).toContain("queueAhead=0 activeAhead=0");
+    } finally {
       if (original !== undefined) {
         globalStore[key] = original;
       } else {

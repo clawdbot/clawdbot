@@ -18,17 +18,23 @@ function stripWhatsAppTargetPrefixes(value: string): string {
   }
 }
 
-export function isWhatsAppGroupJid(value: string): boolean {
-  const candidate = stripWhatsAppTargetPrefixes(value);
+function normalizeWhatsAppGroupJid(value: string): string | null {
+  const candidate = stripWhatsAppTargetPrefixes(value)
+    .replace(/^group:/i, "")
+    .trim();
   const lower = normalizeLowercaseStringOrEmpty(candidate);
   if (!lower.endsWith("@g.us")) {
-    return false;
+    return null;
   }
   const localPart = candidate.slice(0, candidate.length - "@g.us".length);
   if (!localPart || localPart.includes("@")) {
-    return false;
+    return null;
   }
-  return /^[0-9]+(-[0-9]+)*$/.test(localPart);
+  return /^[0-9]+(-[0-9]+)*$/.test(localPart) ? `${localPart}@g.us` : null;
+}
+
+export function isWhatsAppGroupJid(value: string): boolean {
+  return normalizeWhatsAppGroupJid(value) !== null;
 }
 
 export function isWhatsAppNewsletterJid(value: string): boolean {
@@ -66,9 +72,9 @@ export function normalizeWhatsAppTarget(value: string): string | null {
   if (!candidate) {
     return null;
   }
-  if (isWhatsAppGroupJid(candidate)) {
-    const localPart = candidate.slice(0, candidate.length - "@g.us".length);
-    return `${localPart}@g.us`;
+  const groupJid = normalizeWhatsAppGroupJid(candidate);
+  if (groupJid) {
+    return groupJid;
   }
   if (isWhatsAppNewsletterJid(candidate)) {
     const match = candidate.match(WHATSAPP_NEWSLETTER_JID_RE);

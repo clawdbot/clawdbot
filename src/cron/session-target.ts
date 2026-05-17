@@ -24,6 +24,17 @@ export function resolveCronSessionTargetSessionKey(
   return assertSafeCronSessionTargetId(sessionTarget.slice(8));
 }
 
+export function resolveCronCurrentSessionTarget(params: {
+  sessionTarget?: string | null;
+  sessionKey?: string | null;
+}): string | undefined {
+  if (params.sessionTarget !== "current") {
+    return params.sessionTarget ?? undefined;
+  }
+  const sessionKey = params.sessionKey?.trim();
+  return sessionKey ? `session:${assertSafeCronSessionTargetId(sessionKey)}` : "isolated";
+}
+
 export function resolveCronDeliverySessionKey(job: {
   sessionTarget?: string | null;
   sessionKey?: string | null;

@@ -717,6 +717,39 @@ describe("subscribeEmbeddedPiSession", () => {
     });
   });
 
+  it("counts orphaned tool media emitted through block replies", async () => {
+    const onBlockReply = vi.fn();
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "run",
+      builtinToolNames: new Set(["tts"]),
+      onBlockReply,
+    });
+
+    emit({
+      type: "tool_execution_end",
+      toolName: "tts",
+      toolCallId: "tc-1",
+      isError: false,
+      result: {
+        details: {
+          media: {
+            mediaUrl: "/tmp/reply.opus",
+            audioAsVoice: true,
+          },
+        },
+      },
+    });
+    emit({ type: "agent_end" });
+    await flushBlockReplyCallbacks();
+
+    expect(onBlockReply).toHaveBeenCalledWith({
+      mediaUrls: ["/tmp/reply.opus"],
+      audioAsVoice: true,
+    });
+    expect(subscription.getPendingToolMediaReply()).toBeNull();
+    expect(subscription.getVisibleBlockReplyCount()).toBe(1);
+  });
+
   it.each(THINKING_TAG_CASES)(
     "suppresses <%s> blocks across chunk boundaries",
     async ({ open, close }) => {

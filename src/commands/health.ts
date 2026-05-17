@@ -13,7 +13,11 @@ import { withProgress } from "../cli/progress.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
+import {
+  buildGatewayConnectionDetails,
+  callGateway,
+  formatGatewayTransportErrorJson,
+} from "../gateway/call.js";
 import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
@@ -603,22 +607,35 @@ export async function healthCommand(
 ) {
   const cfg = opts.config ?? (await readBestEffortHealthConfig());
   // Always query the running gateway; do not open a direct Baileys socket here.
-  const summary = await withProgress(
-    {
-      label: "Checking gateway health…",
-      indeterminate: true,
-      enabled: opts.json !== true,
-    },
-    async () =>
-      await callGateway<HealthSummary>({
-        method: "health",
-        params: opts.verbose ? { probe: true } : undefined,
-        timeoutMs: opts.timeoutMs,
-        config: cfg,
-        token: opts.token,
-        password: opts.password,
-      }),
-  );
+  let summary: HealthSummary;
+  try {
+    summary = await withProgress(
+      {
+        label: "Checking gateway health…",
+        indeterminate: true,
+        enabled: opts.json !== true,
+      },
+      async () =>
+        await callGateway<HealthSummary>({
+          method: "health",
+          params: opts.verbose ? { probe: true } : undefined,
+          timeoutMs: opts.timeoutMs,
+          config: cfg,
+          token: opts.token,
+          password: opts.password,
+        }),
+    );
+  } catch (error) {
+    if (opts.json) {
+      const payload = formatGatewayTransportErrorJson(error);
+      if (payload) {
+        writeRuntimeJson(runtime, payload);
+        runtime.exit(1);
+        return;
+      }
+    }
+    throw error;
+  }
   // Gateway reachability defines success; channel issues are reported but not fatal here.
   const fatal = false;
 

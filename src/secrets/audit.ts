@@ -291,6 +291,7 @@ function collectAuthStoreSecrets(params: {
         refValue: entry.refValue,
         defaults: params.defaults,
       });
+      const authoredValueRef = coerceSecretRef(entry.value, params.defaults);
       if (ref) {
         params.collector.refAssignments.push({
           file: params.authStorePath,
@@ -300,6 +301,9 @@ function collectAuthStoreSecrets(params: {
           provider: entry.provider,
         });
         trackAuthProviderState(params.collector, entry.provider, entry.kind);
+      }
+      if (authoredValueRef) {
+        continue;
       }
       if (isNonEmptyString(entry.value)) {
         addFinding(params.collector, {

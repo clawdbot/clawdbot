@@ -17,9 +17,11 @@ import {
   resolveParallelFullSuiteConcurrency,
   shouldRetryVitestNoOutputTimeout,
 } from "../../scripts/test-projects.test-support.mjs";
+import { captureReaddirSyncCallsDuring } from "../../src/test-utils/fs-scan-assertions.js";
+import { toRepoPath } from "../../src/test-utils/repo-files.js";
 import { fullSuiteVitestShards } from "../vitest/vitest.test-shards.mjs";
 
-const normalizeRepoPath = (value: string) => value.replaceAll("\\", "/");
+const normalizeRepoPath = toRepoPath;
 
 type VitestTestConfig = {
   dir?: string;
@@ -1172,20 +1174,16 @@ describe("scripts/test-projects full-suite sharding", () => {
     const gatewayServerConfig = "test/vitest/vitest.gateway-server.config.ts";
     process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS = "1";
     let plans: ReturnType<typeof buildFullSuiteVitestRunPlans>;
-    const readdirSync = vi.spyOn(fs, "readdirSync");
-    const before = readdirSync.mock.calls.length;
     let gatewayTreeReads: unknown[][] = [];
     try {
-      plans = buildFullSuiteVitestRunPlans([], process.cwd());
-      gatewayTreeReads = readdirSync.mock.calls
-        .slice(before)
-        .filter(([target]) =>
-          typeof target === "string"
-            ? normalizeRepoPath(target).includes("src/gateway")
-            : false,
-        );
+      const captured = captureReaddirSyncCallsDuring(() =>
+        buildFullSuiteVitestRunPlans([], process.cwd()),
+      );
+      plans = captured.result;
+      gatewayTreeReads = captured.calls.filter(([target]) =>
+        typeof target === "string" ? normalizeRepoPath(target).includes("src/gateway") : false,
+      );
     } finally {
-      readdirSync.mockRestore();
       if (previous === undefined) {
         delete process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
       } else {

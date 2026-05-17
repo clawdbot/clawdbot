@@ -178,6 +178,21 @@ function resolveProviderModelOnlyRef(params: {
   return provider ? { provider: provider.id, model } : null;
 }
 
+function hasCapabilityProviderId(params: {
+  providerId: string | undefined;
+  providers: CapabilityProviderCandidate[];
+}): boolean {
+  const providerId = normalizeOptionalString(params.providerId);
+  if (!providerId) {
+    return false;
+  }
+  return params.providers.some(
+    (provider) =>
+      provider.id === providerId ||
+      (provider.aliases ?? []).some((alias) => normalizeOptionalString(alias) === providerId),
+  );
+}
+
 export function resolveCapabilityModelCandidates(params: {
   cfg: OpenClawConfig;
   modelConfig: AgentModelConfig | undefined;
@@ -201,6 +216,15 @@ export function resolveCapabilityModelCandidates(params: {
     }
     const parsed = params.parseModelRef(raw);
     if (!options.useProviderMetadata) {
+      return parsed;
+    }
+    if (
+      parsed &&
+      hasCapabilityProviderId({
+        providerId: parsed.provider,
+        providers: getProviders(),
+      })
+    ) {
       return parsed;
     }
     return resolveProviderModelOnlyRef({ raw: trimmed, providers: getProviders() }) ?? parsed;

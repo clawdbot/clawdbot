@@ -16,6 +16,15 @@ function hasAgentCopyOverride(credential: AuthProfileCredential): boolean | unde
   return typeof credential.copyToAgents === "boolean" ? credential.copyToAgents : undefined;
 }
 
+function hasCopyableOAuthMaterial(credential: AuthProfileCredential): boolean {
+  if (credential.type !== "oauth") {
+    return false;
+  }
+  return [credential.access, credential.refresh].some(
+    (value) => typeof value === "string" && value.trim().length > 0,
+  );
+}
+
 export function resolveAuthProfilePortability(
   credential: AuthProfileCredential,
 ): AuthProfilePortability {
@@ -24,6 +33,9 @@ export function resolveAuthProfilePortability(
     return { portable: false, reason: "credential-opted-out" };
   }
   if (credential.type === "oauth") {
+    if (!hasCopyableOAuthMaterial(credential)) {
+      return { portable: false, reason: "non-portable-oauth-refresh-token" };
+    }
     return override === true
       ? { portable: true, reason: "oauth-provider-opted-in" }
       : { portable: false, reason: "non-portable-oauth-refresh-token" };

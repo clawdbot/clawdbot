@@ -343,6 +343,82 @@ describe("runEmbeddedPiAgent", () => {
     expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
   });
 
+  it("resolves explicit OpenAI PI runs through Codex when auth order starts with Codex OAuth", async () => {
+    const sessionFile = nextSessionFile();
+    const baseConfig = createEmbeddedPiRunnerOpenAiConfig(["mock-1"]);
+    const openAIProvider = baseConfig.models?.providers?.openai;
+    if (!openAIProvider) {
+      throw new Error("expected OpenAI provider test config");
+    }
+    const cfg = {
+      ...baseConfig,
+      models: {
+        providers: {
+          openai: {
+            ...openAIProvider,
+            baseUrl: "https://api.openai.com/v1",
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          models: {
+            "openai/mock-1": {
+              agentRuntime: { id: "pi" },
+            },
+          },
+        },
+      },
+      auth: {
+        order: {
+          openai: ["openai-codex:work", "openai:backup"],
+        },
+      },
+    };
+    runEmbeddedAttemptMock.mockResolvedValueOnce(
+      makeEmbeddedRunnerAttempt({
+        assistantTexts: ["ok"],
+        lastAssistant: buildEmbeddedRunnerAssistant({
+          content: [{ type: "text", text: "ok" }],
+        }),
+      }),
+    );
+
+    await runEmbeddedPiAgent({
+      sessionId: "codex-first-pi",
+      sessionFile,
+      workspaceDir,
+      config: cfg,
+      prompt: "hello",
+      provider: "openai",
+      model: "mock-1",
+      timeoutMs: 5_000,
+      agentDir,
+      runId: nextRunId("codex-first-pi"),
+      enqueue: immediateEnqueue,
+    });
+
+    expect(resolveModelAsyncMock).toHaveBeenNthCalledWith(
+      1,
+      "openai",
+      "mock-1",
+      agentDir,
+      cfg,
+      expect.objectContaining({ skipPiDiscovery: true }),
+    );
+    expect(resolveModelAsyncMock).toHaveBeenNthCalledWith(
+      2,
+      "openai-codex",
+      "mock-1",
+      agentDir,
+      cfg,
+      expect.objectContaining({ skipPiDiscovery: true }),
+    );
+    expect(
+      (firstRunEmbeddedAttemptParams() as { model?: { provider?: string } }).model?.provider,
+    ).toBe("openai-codex");
+  });
+
   it("backfills a trimmed session key from sessionId when the embedded run omits it", async () => {
     const sessionFile = nextSessionFile();
     const cfg = createEmbeddedPiRunnerOpenAiConfig(["mock-1"]);

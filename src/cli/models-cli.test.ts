@@ -209,6 +209,22 @@ describe("models cli", () => {
     });
   });
 
+  it("maps --device-code to the provider device-code auth method", async () => {
+    await runModelsCommand([
+      "models",
+      "auth",
+      "login",
+      "--provider",
+      "openai-codex",
+      "--device-code",
+    ]);
+
+    expectCommandOptions(modelsAuthLoginCommand, {
+      provider: "openai-codex",
+      method: "device-code",
+    });
+  });
+
   it("passes list-specific --agent and --json to models auth list", async () => {
     await runModelsCommand(["models", "auth", "list", "--agent", "poe", "--json"]);
 

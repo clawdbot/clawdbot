@@ -1,11 +1,16 @@
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { classifyBundledExtensionSourcePath } from "../../../../scripts/lib/extension-source-classifier.mjs";
 import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "../../../plugin-sdk/test-helpers/public-artifacts.js";
 import { loadPluginManifestRegistry } from "../../../plugins/manifest-registry.js";
+import { expectNoReaddirSyncDuring } from "../../../test-utils/fs-scan-assertions.js";
+import {
+  listGitTrackedFiles,
+  toRepoPath,
+  toRepoRelativePath,
+} from "../../../test-utils/repo-files.js";
 
 const ROOT_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
 const REPO_ROOT = resolve(ROOT_DIR, "..");
@@ -282,15 +287,11 @@ function readSource(path: string): string {
 }
 
 function normalizePath(path: string): string {
-  return path.replaceAll("\\", "/");
+  return toRepoPath(path);
 }
 
 function repoRelativePath(path: string): string {
-  const normalizedRepoRoot = normalizePath(REPO_ROOT);
-  const normalizedPath = normalizePath(path);
-  return normalizedPath.startsWith(normalizedRepoRoot)
-    ? normalizedPath.slice(normalizedRepoRoot.length + 1)
-    : normalizedPath;
+  return toRepoRelativePath(REPO_ROOT, path);
 }
 
 function listTrackedSourceFiles(options: SourceFileCollectorOptions): string[] | null {
@@ -302,20 +303,17 @@ function listTrackedSourceFiles(options: SourceFileCollectorOptions): string[] |
     const files = trackedSourceFilesByRoot.get(relativeRoot);
     return files ? [...files] : null;
   }
-  const result = spawnSync("git", ["ls-files", "--", relativeRoot], {
-    cwd: REPO_ROOT,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  if (result.status !== 0) {
+  const trackedFiles = listGitTrackedFiles({ repoRoot: REPO_ROOT, pathspecs: relativeRoot });
+  if (!trackedFiles) {
     trackedSourceFilesByRoot.set(relativeRoot, null);
     return null;
   }
-  const files = result.stdout
-    .split("\n")
-    .map((line) => line.trim().replaceAll("\\", "/"))
+  const files = trackedFiles
     .filter((line) => {
       if (!/\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/u.test(line) || line.endsWith(".d.ts")) {
+        return false;
+      }
+      if (!fs.existsSync(resolve(REPO_ROOT, line))) {
         return false;
       }
       const parts = line.split("/");
@@ -589,8 +587,7 @@ function expectCoreSourceStaysOffPluginSpecificSdkFacades(file: string, imports:
 
 describe("channel import guardrails", () => {
   it("lists channel import guardrail sources from git without walking roots", () => {
-    const readDir = vi.spyOn(fs, "readdirSync");
-    try {
+    expectNoReaddirSyncDuring(() => {
       const extensionSources = collectExtensionSourceFiles();
       const coreSources = collectCoreSourceFiles();
       const telegramSources = collectExtensionFiles("telegram");
@@ -598,10 +595,7 @@ describe("channel import guardrails", () => {
       expect(extensionSources.length).toBeGreaterThan(0);
       expect(coreSources.length).toBeGreaterThan(0);
       expect(telegramSources.length).toBeGreaterThan(0);
-      expect(readDir).not.toHaveBeenCalled();
-    } finally {
-      readDir.mockRestore();
-    }
+    });
   });
 
   it("keeps channel helper modules off their own SDK barrels", () => {

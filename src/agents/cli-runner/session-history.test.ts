@@ -5,6 +5,8 @@ import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildCliSessionHistoryPrompt,
+  hasCliSessionTranscript,
+  loadCliSessionContextEngineMessages,
   loadCliSessionHistoryMessages,
   loadCliSessionReseedMessages,
   MAX_CLI_SESSION_HISTORY_FILE_BYTES,
@@ -80,6 +82,19 @@ function expectCompactionSummary(value: unknown, summary: string) {
   expect(message.summary).toBe(summary);
 }
 
+function expectCustomMessage(value: unknown, expected: { customType: string; content: string }) {
+  const message = requireRecord(value, "custom message");
+  expect(message.role).toBe("custom");
+  expect(message.customType).toBe(expected.customType);
+  expect(message.content).toBe(expected.content);
+}
+
+function expectBranchSummary(value: unknown, summary: string) {
+  const message = requireRecord(value, "branch summary");
+  expect(message.role).toBe("branchSummary");
+  expect(message.summary).toBe(summary);
+}
+
 describe("loadCliSessionHistoryMessages", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -116,6 +131,37 @@ describe("loadCliSessionHistoryMessages", () => {
     }
   });
 
+  it("detects canonical transcripts when callers pass stale external session paths", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
+    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-outside-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    createSessionTranscript({
+      rootDir: stateDir,
+      sessionId: "session-test",
+      messages: ["expected history"],
+    });
+    const outsideFile = createSessionTranscript({
+      rootDir: outsideDir,
+      sessionId: "session-test",
+      filePath: path.join(outsideDir, "stale.jsonl"),
+      messages: ["stale history"],
+    });
+
+    try {
+      await expect(
+        hasCliSessionTranscript({
+          sessionId: "session-test",
+          sessionFile: outsideFile,
+          sessionKey: "agent:main:main",
+          agentId: "main",
+        }),
+      ).resolves.toBe(true);
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+      fs.rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps only the newest bounded history window", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
@@ -141,6 +187,115 @@ describe("loadCliSessionHistoryMessages", () => {
         role: "user",
         content: `msg-${MAX_CLI_SESSION_HISTORY_MESSAGES + 24}`,
       });
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps complete history for context-engine snapshots", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const sessionFile = createSessionTranscript({
+      rootDir: stateDir,
+      sessionId: "session-context-engine-history",
+      messages: Array.from(
+        { length: MAX_CLI_SESSION_HISTORY_MESSAGES + 25 },
+        (_, index) => `msg-${index}`,
+      ),
+    });
+
+    try {
+      const history = await loadCliSessionContextEngineMessages({
+        sessionId: "session-context-engine-history",
+        sessionFile,
+        sessionKey: "agent:main:main",
+        agentId: "main",
+      });
+      expect(history).toHaveLength(MAX_CLI_SESSION_HISTORY_MESSAGES + 25);
+      expectMessageFields(history[0], { role: "user", content: "msg-0" });
+      expectMessageFields(history.at(-1), {
+        role: "user",
+        content: `msg-${MAX_CLI_SESSION_HISTORY_MESSAGES + 24}`,
+      });
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the latest compaction summary and complete tail for context-engine snapshots", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-state-"));
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+    const sessionFile = createSessionTranscript({
+      rootDir: stateDir,
+      sessionId: "session-context-engine-compacted",
+      messages: ["old ask"],
+    });
+    fs.appendFileSync(
+      sessionFile,
+      `${JSON.stringify({
+        type: "compaction",
+        id: "compact-1",
+        timestamp: new Date(2).toISOString(),
+        summary: "Earlier compacted context",
+      })}\n`,
+      "utf-8",
+    );
+    fs.appendFileSync(
+      sessionFile,
+      `${JSON.stringify({
+        type: "custom_message",
+        id: "custom-tail",
+        parentId: "compaction-1",
+        timestamp: new Date(3).toISOString(),
+        customType: "runtime-note",
+        content: "tail custom context",
+        display: false,
+      })}\n`,
+      "utf-8",
+    );
+    fs.appendFileSync(
+      sessionFile,
+      `${JSON.stringify({
+        type: "branch_summary",
+        id: "branch-tail",
+        parentId: "custom-tail",
+        fromId: "custom-tail",
+        timestamp: new Date(4).toISOString(),
+        summary: "tail branch context",
+      })}\n`,
+      "utf-8",
+    );
+    fs.appendFileSync(
+      sessionFile,
+      `${JSON.stringify({
+        type: "message",
+        id: "msg-tail",
+        parentId: "branch-tail",
+        timestamp: new Date(5).toISOString(),
+        message: {
+          role: "assistant",
+          content: "tail answer",
+          timestamp: 5,
+        },
+      })}\n`,
+      "utf-8",
+    );
+
+    try {
+      const history = await loadCliSessionContextEngineMessages({
+        sessionId: "session-context-engine-compacted",
+        sessionFile,
+        sessionKey: "agent:main:main",
+        agentId: "main",
+      });
+      expect(history).toHaveLength(4);
+      expectCompactionSummary(history[0], "Earlier compacted context");
+      expectCustomMessage(history[1], {
+        customType: "runtime-note",
+        content: "tail custom context",
+      });
+      expectBranchSummary(history[2], "tail branch context");
+      expectMessageFields(history[3], { role: "assistant", content: "tail answer" });
     } finally {
       fs.rmSync(stateDir, { recursive: true, force: true });
     }

@@ -91,6 +91,84 @@ describe("saveAuthProfileStore", () => {
     }
   });
 
+  it("preserves legacy oauthRef only as doctor migration metadata during saves", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-save-oauth-ref-"));
+    const authPath = resolveAuthStorePath(agentDir);
+    const oauthRef = {
+      source: "openclaw-credentials",
+      provider: "openai-codex",
+      id: "0123456789abcdef0123456789abcdef",
+    };
+    try {
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.writeFile(
+        authPath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            profiles: {
+              "openai-codex:default": {
+                type: "oauth",
+                provider: "openai-codex",
+                expires: Date.now() + 60_000,
+                oauthRef,
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+      );
+
+      const legacyRuntimeStore = {
+        version: 1,
+        profiles: {
+          "openai-codex:default": {
+            type: "oauth",
+            provider: "openai-codex",
+            expires: Date.now() + 60_000,
+          },
+        },
+      } as unknown as AuthProfileStore;
+
+      saveAuthProfileStore(legacyRuntimeStore, agentDir);
+
+      let parsed = JSON.parse(await fs.readFile(authPath, "utf8")) as {
+        profiles: Record<string, Record<string, unknown>>;
+      };
+      expect(parsed.profiles["openai-codex:default"]?.oauthRef).toEqual(oauthRef);
+      expect(ensureAuthProfileStore(agentDir).profiles["openai-codex:default"]).not.toHaveProperty(
+        "oauthRef",
+      );
+
+      saveAuthProfileStore(
+        {
+          version: 1,
+          profiles: {
+            "openai-codex:default": {
+              type: "oauth",
+              provider: "openai-codex",
+              access: "new-access-token",
+              refresh: "new-refresh-token",
+              expires: Date.now() + 60_000,
+            },
+          },
+        },
+        agentDir,
+      );
+
+      parsed = JSON.parse(await fs.readFile(authPath, "utf8")) as {
+        profiles: Record<string, Record<string, unknown>>;
+      };
+      expect(parsed.profiles["openai-codex:default"]).not.toHaveProperty("oauthRef");
+      expect(parsed.profiles["openai-codex:default"]?.access).toBe("new-access-token");
+      expect(parsed.profiles["openai-codex:default"]?.refresh).toBe("new-refresh-token");
+    } finally {
+      clearRuntimeAuthProfileStoreSnapshots();
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
   it("refreshes the runtime snapshot when a saved store rotates oauth tokens", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-save-runtime-"));
     try {

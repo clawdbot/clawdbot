@@ -277,13 +277,13 @@ describe("promptRemoteGatewayConfig", () => {
     );
   });
 
-  it("validates insecure ws:// remote URLs and allows only loopback ws:// by default", async () => {
+  it("validates insecure ws:// remote URLs and allows trusted private ws:// by default", async () => {
     const text: WizardPrompter["text"] = vi.fn(async (params) => {
       if (params.message === "Gateway WebSocket URL") {
         // ws:// to public IPs is rejected
         expect(params.validate?.("ws://203.0.113.10:18789")).toBe(INSECURE_WS_URL_MESSAGE);
-        // ws:// to private IPs remains blocked by default
-        expect(params.validate?.("ws://10.0.0.8:18789")).toBe(INSECURE_WS_URL_MESSAGE);
+        // ws:// to trusted LAN/Tailnet endpoints is accepted.
+        expect(params.validate?.("ws://10.0.0.8:18789")).toBeUndefined();
         expect(params.validate?.("ws://127.0.0.1:18789")).toBeUndefined();
         expect(params.validate?.("wss://remote.example.com:18789")).toBeUndefined();
         return "wss://remote.example.com:18789";

@@ -18,6 +18,8 @@ import {
 import { normalizeFingerprint } from "../infra/tls/fingerprint.js";
 import { rawDataToString } from "../infra/ws.js";
 import { logDebug, logError } from "../logger.js";
+import { redactToolPayloadText } from "../logging/redact.js";
+import { isSensitiveUrlQueryParamName } from "../shared/net/redact-sensitive-url.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -188,6 +190,15 @@ function readConnectChallengeTimeoutOverride(
 function isGatewayClientStoppedError(err: unknown): boolean {
   const message = err instanceof Error ? err.message : String(err);
   return message === "gateway client stopped" || message === "Error: gateway client stopped";
+}
+
+function formatGatewayClientErrorForLog(err: unknown): string {
+  const redactedUrlLikeString = String(err)
+    .replace(/\/\/([^@/?#\s]+)@/g, "//***:***@")
+    .replace(/([?&])([^=&\s]+)=([^&#\s"'<>)]*)/g, (match, prefix: string, key: string) =>
+      isSensitiveUrlQueryParamName(key) ? `${prefix}${key}=***` : match,
+    );
+  return redactToolPayloadText(redactedUrlLikeString);
 }
 
 export function resolveGatewayClientConnectChallengeTimeoutMs(
@@ -398,7 +409,7 @@ export class GatewayClient {
       this.opts.onClose?.(code, reasonText);
     });
     ws.on("error", (err) => {
-      logDebug(`gateway client error: ${String(err)}`);
+      logDebug(`gateway client error: ${formatGatewayClientErrorForLog(err)}`);
       if (!this.connectSent) {
         this.opts.onConnectError?.(err instanceof Error ? err : new Error(String(err)));
       }
@@ -655,7 +666,7 @@ export class GatewayClient {
         const startupRetryAfterMs = resolveGatewayStartupRetryAfterMs(err);
         if (startupRetryAfterMs !== null) {
           this.pendingStartupReconnectDelayMs = startupRetryAfterMs;
-          logDebug(`gateway connect failed: ${String(err)}`);
+          logDebug(`gateway connect failed: ${formatGatewayClientErrorForLog(err)}`);
           this.ws?.close(1013, "gateway starting");
           return;
         }
@@ -673,7 +684,7 @@ export class GatewayClient {
           return;
         }
         this.opts.onConnectError?.(err instanceof Error ? err : new Error(String(err)));
-        const msg = `gateway connect failed: ${String(err)}`;
+        const msg = `gateway connect failed: ${formatGatewayClientErrorForLog(err)}`;
         if (this.opts.mode === GATEWAY_CLIENT_MODES.PROBE || isGatewayClientStoppedError(err)) {
           logDebug(msg);
         } else {
@@ -941,7 +952,7 @@ export class GatewayClient {
         }
       }
     } catch (err) {
-      logDebug(`gateway client parse error: ${String(err)}`);
+      logDebug(`gateway client parse error: ${formatGatewayClientErrorForLog(err)}`);
     }
   }
 

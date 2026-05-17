@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { toRepoRelativePath } from "../test-utils/repo-files.js";
 import { resolvePluginInstallDir } from "./install.js";
 import {
   cleanupTrackedTempDirsAsync,
@@ -375,7 +376,7 @@ describe("removePluginFromConfig", () => {
       const pluginDir = path.join(tempDir, "plugins", "demo");
       await fs.mkdir(pluginDir, { recursive: true });
       const realPluginDir = await fs.realpath(pluginDir);
-      const sourcePath = `./${path.relative(process.cwd(), realPluginDir).split(path.sep).join("/")}`;
+      const sourcePath = `./${toRepoRelativePath(process.cwd(), realPluginDir)}`;
       const config = createPluginConfig({
         installs: {
           "my-plugin": createPathInstallRecord(undefined, sourcePath),

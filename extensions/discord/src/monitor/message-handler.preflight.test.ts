@@ -1209,6 +1209,50 @@ describe("preflightDiscordMessage", () => {
     expect(preflight.shouldBypassMention).toBe(true);
   });
 
+  it("keeps unmentioned abort requests as user requests when room events are enabled", async () => {
+    const channelId = "channel-room-event-abort";
+    const guildId = "guild-room-event-abort";
+    const message = createDiscordMessage({
+      id: "m-room-event-abort",
+      channelId,
+      content: "please stop",
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "Alice",
+      },
+    });
+
+    const result = await runGuildPreflight({
+      channelId,
+      guildId,
+      message,
+      discordConfig: {} as DiscordConfig,
+      cfg: {
+        ...DEFAULT_PREFLIGHT_CFG,
+        messages: {
+          groupChat: {
+            unmentionedInbound: "room_event",
+          },
+        },
+      } as import("openclaw/plugin-sdk/config-contracts").OpenClawConfig,
+      guildEntries: {
+        [guildId]: {
+          channels: {
+            [channelId]: {
+              enabled: true,
+              requireMention: false,
+            },
+          },
+        },
+      },
+    });
+
+    const preflight = expectPreflightResult(result);
+    expect(preflight.baseText).toBe("please stop");
+    expect(preflight.inboundEventKind).toBe("user_request");
+  });
+
   it("still drops Discord native command echo messages", async () => {
     const channelId = "channel-native-command-echo";
     const guildId = "guild-native-command-echo";

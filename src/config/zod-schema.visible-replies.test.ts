@@ -66,18 +66,18 @@ describe("visible reply config schema", () => {
     }
   });
 
-  it("accepts enum ambient group turn values", () => {
+  it("accepts enum unmentioned group inbound values", () => {
     const legacy = validateConfigObjectRaw({
       messages: {
         groupChat: {
-          ambientTurns: "user_request",
+          unmentionedInbound: "user_request",
         },
       },
     });
     const roomEvent = validateConfigObjectRaw({
       messages: {
         groupChat: {
-          ambientTurns: "room_event",
+          unmentionedInbound: "room_event",
         },
       },
     });
@@ -85,18 +85,18 @@ describe("visible reply config schema", () => {
     expect(legacy.ok).toBe(true);
     expect(roomEvent.ok).toBe(true);
     if (legacy.ok) {
-      expect(legacy.config.messages?.groupChat?.ambientTurns).toBe("user_request");
+      expect(legacy.config.messages?.groupChat?.unmentionedInbound).toBe("user_request");
     }
     if (roomEvent.ok) {
-      expect(roomEvent.config.messages?.groupChat?.ambientTurns).toBe("room_event");
+      expect(roomEvent.config.messages?.groupChat?.unmentionedInbound).toBe("room_event");
     }
   });
 
-  it("rejects boolean ambient group turn values", () => {
+  it("rejects boolean unmentioned group inbound values", () => {
     const result = validateConfigObjectRaw({
       messages: {
         groupChat: {
-          ambientTurns: true,
+          unmentionedInbound: true,
         },
       },
     });
@@ -104,9 +104,9 @@ describe("visible reply config schema", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) {
       const issue = result.issues.find(
-        (candidate) => candidate.path === "messages.groupChat.ambientTurns",
+        (candidate) => candidate.path === "messages.groupChat.unmentionedInbound",
       );
-      expect(issue?.path).toBe("messages.groupChat.ambientTurns");
+      expect(issue?.path).toBe("messages.groupChat.unmentionedInbound");
     }
   });
 });

@@ -195,7 +195,7 @@ export class GatewayPlugin extends Plugin {
         this.emitter.emit("error", new Error("Invalid gateway payload"));
         return;
       }
-      this.handlePayload(payload, resume);
+      this.handlePayload(payload, resume, socket);
     });
     socket.on("close", (code) => {
       if (socket !== this.ws) {
@@ -229,7 +229,11 @@ export class GatewayPlugin extends Plugin {
     });
   }
 
-  private handlePayload(payload: GatewayReceivePayload, resume: boolean): void {
+  private handlePayload(
+    payload: GatewayReceivePayload,
+    resume: boolean,
+    sourceSocket?: ws.WebSocket,
+  ): void {
     if (payload.s !== null && payload.s !== undefined) {
       this.sequence = payload.s;
     }
@@ -251,7 +255,7 @@ export class GatewayPlugin extends Plugin {
             true,
           );
         } else {
-          void this.identifyWithConcurrency().catch((error: unknown) => {
+          void this.identifyWithConcurrency(sourceSocket).catch((error: unknown) => {
             this.emitter.emit(
               "error",
               error instanceof Error ? error : new Error(String(error), { cause: error }),
@@ -332,18 +336,17 @@ export class GatewayPlugin extends Plugin {
     );
   }
 
-  private async identifyWithConcurrency(): Promise<void> {
+  private async identifyWithConcurrency(sourceSocket?: ws.WebSocket): Promise<void> {
     await sharedGatewayIdentifyLimiter.wait({
       shardId: this.shardId,
       maxConcurrency: this.gatewayInfo?.session_start_limit.max_concurrency,
     });
-    const socket = this.ws;
-    if (!socket || socket.readyState !== READY_STATE_OPEN) {
-      const error = new Error("Discord gateway socket closed before IDENTIFY could be sent");
-      this.emitter.emit("error", error);
-      if (socket) {
-        this.scheduleReconnect(false);
-      }
+    const socket = sourceSocket ?? this.ws;
+    if (!socket || socket !== this.ws) {
+      return;
+    }
+    if (socket.readyState !== READY_STATE_OPEN) {
+      this.scheduleReconnect(false);
       return;
     }
     this.identify();

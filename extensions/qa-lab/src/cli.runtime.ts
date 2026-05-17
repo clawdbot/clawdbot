@@ -3,8 +3,11 @@ import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   buildQaAgenticParityComparison,
+  buildQaRuntimeParityReport,
   renderQaAgenticParityMarkdownReport,
+  renderQaRuntimeParityMarkdownReport,
   type QaParitySuiteSummary,
+  type QaRuntimeParitySuiteSummary,
 } from "./agentic-parity-report.js";
 import { resolveQaParityPackScenarioIds } from "./agentic-parity.js";
 import { runQaCharacterEval, type QaCharacterModelOptions } from "./character-eval.js";
@@ -38,7 +41,9 @@ import {
   type QaProviderMode,
   type QaProviderModeInput,
 } from "./run-config.js";
+import type { RuntimeId } from "./runtime-parity.js";
 import { readQaScenarioPack } from "./scenario-catalog.js";
+import { resolveQaScenarioPackScenarioIds } from "./scenario-packs.js";
 import { runQaSuiteFromRuntime } from "./suite-launch.runtime.js";
 import { readQaSuiteFailedScenarioCountFromSummary } from "./suite-summary.js";
 
@@ -130,6 +135,27 @@ function parseQaPositiveIntegerOption(label: string, value: number | undefined) 
 function normalizeQaOptionalModelRef(input: string | undefined) {
   const model = input?.trim();
   return model && model.length > 0 ? model : undefined;
+}
+
+function parseQaRuntimePair(value: string | undefined): [RuntimeId, RuntimeId] | undefined {
+  if (!value?.trim()) {
+    return undefined;
+  }
+  const parts = value
+    .split(",")
+    .map((part) => part.trim().toLowerCase())
+    .filter(Boolean);
+  if (parts.length !== 2) {
+    throw new Error('--runtime-pair must use exactly two runtimes, e.g. "pi,codex".');
+  }
+  const [left, right] = parts;
+  if ((left !== "pi" && left !== "codex") || (right !== "pi" && right !== "codex")) {
+    throw new Error('--runtime-pair only supports "pi" and "codex".');
+  }
+  if (left === right) {
+    throw new Error("--runtime-pair must compare two different runtimes.");
+  }
+  return ["pi", "codex"];
 }
 
 async function readQaFailedScenarioCountFromSummary(summaryPath: string) {
@@ -471,6 +497,7 @@ export async function runQaSuiteCommand(opts: {
   thinking?: string;
   cliAuthMode?: string;
   parityPack?: string;
+  pack?: string;
   scenarioIds?: string[];
   concurrency?: number;
   allowFailures?: boolean;
@@ -480,19 +507,24 @@ export async function runQaSuiteCommand(opts: {
   memory?: string;
   disk?: string;
   preflight?: boolean;
+  runtimePair?: string;
 }) {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const transportId = normalizeQaTransportId(opts.transportId);
   const runner = (opts.runner ?? "host").trim().toLowerCase();
-  const scenarioIds = resolveQaParityPackScenarioIds({
-    parityPack: opts.parityPack,
-    scenarioIds: opts.scenarioIds,
+  const scenarioIds = resolveQaScenarioPackScenarioIds({
+    pack: opts.pack,
+    scenarioIds: resolveQaParityPackScenarioIds({
+      parityPack: opts.parityPack,
+      scenarioIds: opts.scenarioIds,
+    }),
   });
   const allowFailures = opts.allowFailures === true;
   if (runner !== "host" && runner !== "multipass") {
     throw new Error(`--runner must be one of host or multipass, got "${opts.runner}".`);
   }
   const providerMode = normalizeQaProviderMode(opts.providerMode);
+  const runtimePair = parseQaRuntimePair(opts.runtimePair);
   const claudeCliAuthMode = parseQaCliBackendAuthMode(opts.cliAuthMode);
   const primaryModel = normalizeQaOptionalModelRef(opts.primaryModel);
   const alternateModel = normalizeQaOptionalModelRef(opts.alternateModel);
@@ -527,6 +559,7 @@ export async function runQaSuiteCommand(opts: {
       ...(opts.concurrency !== undefined
         ? { concurrency: parseQaPositiveIntegerOption("--concurrency", opts.concurrency) }
         : {}),
+      ...(runtimePair ? { runtimePair } : {}),
       image: opts.image,
       cpus: parseQaPositiveIntegerOption("--cpus", opts.cpus),
       memory: opts.memory,
@@ -572,6 +605,7 @@ export async function runQaSuiteCommand(opts: {
     ...(opts.concurrency !== undefined
       ? { concurrency: parseQaPositiveIntegerOption("--concurrency", opts.concurrency) }
       : {}),
+    ...(runtimePair ? { runtimePair } : {}),
   });
   process.stdout.write(`QA suite watch: ${result.watchUrl}\n`);
   process.stdout.write(`QA suite report: ${result.reportPath}\n`);
@@ -584,11 +618,13 @@ export async function runQaSuiteCommand(opts: {
 
 export async function runQaParityReportCommand(opts: {
   repoRoot?: string;
-  candidateSummary: string;
-  baselineSummary: string;
+  candidateSummary?: string;
+  baselineSummary?: string;
   candidateLabel?: string;
   baselineLabel?: string;
   outputDir?: string;
+  runtimeAxis?: boolean;
+  summary?: string;
 }) {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const outputDir =
@@ -596,6 +632,35 @@ export async function runQaParityReportCommand(opts: {
     path.join(repoRoot, ".artifacts", "qa-e2e", `parity-${Date.now().toString(36)}`);
   await fs.mkdir(outputDir, { recursive: true });
 
+  if (opts.runtimeAxis === true) {
+    if (!opts.summary?.trim()) {
+      throw new Error("--runtime-axis requires --summary.");
+    }
+    const summaryPath = path.resolve(repoRoot, opts.summary);
+    const summary = JSON.parse(
+      await fs.readFile(summaryPath, "utf8"),
+    ) as QaRuntimeParitySuiteSummary;
+    const reportPayload = buildQaRuntimeParityReport({ summary });
+    const report = renderQaRuntimeParityMarkdownReport(reportPayload);
+    const reportPath = path.join(outputDir, "qa-runtime-parity-report.md");
+    const runtimeSummaryPath = path.join(outputDir, "qa-runtime-parity-summary.json");
+    await fs.writeFile(reportPath, report, "utf8");
+    await fs.writeFile(runtimeSummaryPath, `${JSON.stringify(reportPayload, null, 2)}\n`, "utf8");
+
+    process.stdout.write(`QA runtime parity report: ${reportPath}\n`);
+    process.stdout.write(`QA runtime parity summary: ${runtimeSummaryPath}\n`);
+    process.stdout.write(`QA runtime parity verdict: ${reportPayload.pass ? "pass" : "fail"}\n`);
+    if (!reportPayload.pass) {
+      process.exitCode = 1;
+    }
+    return;
+  }
+
+  if (!opts.candidateSummary?.trim() || !opts.baselineSummary?.trim()) {
+    throw new Error(
+      "--candidate-summary and --baseline-summary are required unless --runtime-axis is set.",
+    );
+  }
   const candidateSummaryPath = path.resolve(repoRoot, opts.candidateSummary);
   const baselineSummaryPath = path.resolve(repoRoot, opts.baselineSummary);
   const candidateSummary = JSON.parse(

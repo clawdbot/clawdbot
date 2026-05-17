@@ -198,7 +198,45 @@ function applySessionSelection(host: SettingsHost, session: string) {
 /** Set to true when the token is read from a query string (?token=) instead of a URL fragment. */
 export let warnQueryToken = false;
 
+declare global {
+  interface Window {
+    __OPENCLAW_NATIVE_CONTROL_AUTH__?: {
+      gatewayUrl?: string | null;
+      token?: string | null;
+      password?: string | null;
+    };
+  }
+}
+
+function applyNativeControlAuth(host: SettingsHost) {
+  const nativeAuth = window.__OPENCLAW_NATIVE_CONTROL_AUTH__;
+  if (!nativeAuth) {
+    return;
+  }
+  try {
+    delete window.__OPENCLAW_NATIVE_CONTROL_AUTH__;
+  } catch {
+    window.__OPENCLAW_NATIVE_CONTROL_AUTH__ = undefined;
+  }
+
+  const gatewayUrl = normalizeOptionalString(nativeAuth.gatewayUrl);
+  const token = normalizeOptionalString(nativeAuth.token);
+  const password = normalizeOptionalString(nativeAuth.password);
+  const nextSettings = {
+    ...host.settings,
+    ...(gatewayUrl ? { gatewayUrl } : {}),
+    ...(token ? { token } : {}),
+  };
+  if (gatewayUrl || (token && token !== host.settings.token)) {
+    applySettings(host, nextSettings);
+  }
+  if (password && password !== host.password) {
+    host.password = password;
+  }
+}
+
 export function applySettingsFromUrl(host: SettingsHost) {
+  applyNativeControlAuth(host);
   if (!window.location.search && !window.location.hash) {
     return;
   }
@@ -403,13 +441,16 @@ export async function refreshActiveTab(host: SettingsHost) {
           loadWikiMemoryPalace(app),
         ]);
         break;
-      case "chat":
+      case "chat": {
+        const modelAuthRefresh = loadModelAuthStatusState(app).catch(() => undefined);
         await refreshChat(host as unknown as Parameters<typeof refreshChat>[0]);
         scheduleChatScroll(
           host as unknown as Parameters<typeof scheduleChatScroll>[0],
           !host.chatHasAutoScrolled,
         );
+        void modelAuthRefresh;
         break;
+      }
       case "debug":
         await loadDebug(app);
         host.eventLog = host.eventLogBuffer;

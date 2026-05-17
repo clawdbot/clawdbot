@@ -72,7 +72,7 @@ Name lookup:
   - Optional: `--media`, `--presentation`, `--delivery`, `--pin`, `--reply-to`, `--thread-id`, `--gif-playback`, `--force-document`, `--silent`
   - Shared presentation payloads: `--presentation` sends semantic blocks (`text`, `context`, `divider`, `buttons`, `select`) that core renders through the selected channel's declared capabilities. See [Message Presentation](/plugins/message-presentation).
   - Generic delivery preferences: `--delivery` accepts delivery hints such as `{ "pin": true }`; `--pin` is shorthand for pinned delivery when the channel supports it.
-  - Telegram only: `--force-document` (send images, GIFs, and videos as documents to avoid Telegram compression)
+  - Telegram + WhatsApp: `--force-document` (send images, GIFs, and videos as documents to avoid channel compression)
   - Telegram only: `--thread-id` (forum topic id)
   - Slack only: `--thread-id` (thread timestamp; `--reply-to` uses the same field)
   - Telegram + Discord: `--silent`
@@ -302,7 +302,7 @@ openclaw message send --channel msteams \
   --presentation '{"title":"Status update","blocks":[{"type":"text","text":"Build completed"}]}'
 ```
 
-Send a Telegram image as a document to avoid compression:
+Send a Telegram or WhatsApp image as a document to avoid compression:
 
 ```bash
 openclaw message send --channel telegram --target @mychat \

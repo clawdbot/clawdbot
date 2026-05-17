@@ -449,6 +449,101 @@ describe("exportTrajectoryBundle", () => {
     ).toEqual(bundle.manifest.warnings);
   });
 
+  it("reports incomplete transcript branches while exporting the reachable suffix", async () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const outputDir = path.join(tmpDir, "bundle");
+    fs.writeFileSync(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "session",
+          version: 3,
+          id: "session-1",
+          timestamp: "2026-04-01T05:46:39.000Z",
+          cwd: tmpDir,
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "orphan-tail",
+          parentId: "missing-imported-parent",
+          timestamp: "2026-04-01T05:46:40.000Z",
+          message: assistantMessage([{ type: "text", text: "reachable tail" }]),
+        }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+
+    const bundle = await exportTrajectoryBundle({
+      outputDir,
+      sessionFile,
+      sessionId: "session-1",
+      workspaceDir: tmpDir,
+    });
+
+    expect(eventTypes(bundle.events)).toEqual(["assistant.message"]);
+    expect(bundle.manifest.warnings).toEqual([
+      {
+        source: "session",
+        code: "incomplete-session-branch",
+        count: 1,
+        rows: [2],
+        message: "Exported the reachable session branch suffix after a missing parent link.",
+      },
+    ]);
+  });
+
+  it("stops cyclic transcript branch export instead of hanging", async () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const outputDir = path.join(tmpDir, "bundle");
+    fs.writeFileSync(
+      sessionFile,
+      [
+        JSON.stringify({
+          type: "session",
+          version: 3,
+          id: "session-1",
+          timestamp: "2026-04-01T05:46:39.000Z",
+          cwd: tmpDir,
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "entry-a",
+          parentId: "entry-b",
+          timestamp: "2026-04-01T05:46:40.000Z",
+          message: userMessage("cycle a"),
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "entry-b",
+          parentId: "entry-a",
+          timestamp: "2026-04-01T05:46:41.000Z",
+          message: assistantMessage([{ type: "text", text: "cycle b" }]),
+        }),
+      ].join("\n") + "\n",
+      "utf8",
+    );
+
+    const bundle = await exportTrajectoryBundle({
+      outputDir,
+      sessionFile,
+      sessionId: "session-1",
+      workspaceDir: tmpDir,
+    });
+
+    expect(eventTypes(bundle.events)).toEqual(["user.message", "assistant.message"]);
+    expect(bundle.manifest.warnings).toEqual([
+      {
+        source: "session",
+        code: "cyclic-session-branch",
+        count: 1,
+        rows: [3],
+        message: "Stopped trajectory session branch export at a cyclic parent link.",
+      },
+    ]);
+  });
+
   it("uses the recorded runtime pointer before current environment overrides", async () => {
     const tmpDir = makeTempDir();
     const sessionFile = path.join(tmpDir, "session.jsonl");
@@ -814,6 +909,7 @@ describe("exportTrajectoryBundle", () => {
         sessionId: "session-1",
         data: {
           finalStatus: "success",
+          terminalError: "non_deliverable_terminal_turn",
           assistantTexts: ["done"],
           finalPromptText: `final prompt from ${path.join(tmpDir, "prompt.txt")}`,
           itemLifecycle: {
@@ -897,6 +993,7 @@ describe("exportTrajectoryBundle", () => {
     const tools = fs.readFileSync(path.join(outputDir, "tools.json"), "utf8");
     expect(prompts).toContain("$WORKSPACE_DIR/AGENTS.md");
     expect(artifacts).toContain("$WORKSPACE_DIR/prompt.txt");
+    expect(artifacts).toContain("non_deliverable_terminal_turn");
     expect(systemPrompt).toContain("$WORKSPACE_DIR/instructions.md");
     expect(tools).toContain("$WORKSPACE_DIR/docs");
     expect(`${prompts}\n${artifacts}\n${systemPrompt}\n${tools}`).not.toContain(tmpDir);

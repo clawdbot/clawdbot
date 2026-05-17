@@ -1,8 +1,11 @@
 import { hashTextSha256 } from "./hash.js";
 import type { SandboxBrowserConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
 
+export const SANDBOX_DOCKER_EXPLICIT_ENV_POLICY_EPOCH = "explicit-config-env-v1";
+
 type SandboxHashInput = {
   docker: SandboxDockerConfig;
+  dockerEnvPolicyEpoch?: string;
   workspaceAccess: SandboxWorkspaceAccess;
   workspaceDir: string;
   agentWorkspaceDir: string;
@@ -11,6 +14,7 @@ type SandboxHashInput = {
 
 type SandboxBrowserHashInput = {
   docker: SandboxDockerConfig;
+  dockerEnvPolicyEpoch?: string;
   browser: Pick<
     SandboxBrowserConfig,
     | "cdpPort"

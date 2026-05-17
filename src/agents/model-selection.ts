@@ -22,6 +22,7 @@ export {
   resolveThinkingDefaultWithRuntimeCatalog,
 } from "./model-thinking-default.js";
 import {
+  type ModelManifestNormalizationContext,
   type ModelRef,
   findNormalizedProviderKey,
   findNormalizedProviderValue,
@@ -52,7 +53,7 @@ import {
   type ModelRefStatus,
 } from "./model-selection-shared.js";
 
-export type { ModelAliasIndex, ModelRef, ModelRefStatus };
+export type { ModelAliasIndex, ModelManifestNormalizationContext, ModelRef, ModelRefStatus };
 
 export type ThinkLevel =
   | "off"
@@ -205,15 +206,18 @@ export function resolveAllowlistModelKey(
   raw: string,
   defaultProvider: string,
   cfg?: OpenClawConfig,
+  manifestPlugins?: ModelManifestNormalizationContext["manifestPlugins"],
 ): string | null {
-  return resolveAllowlistModelKeyFromShared({ cfg, raw, defaultProvider });
+  return resolveAllowlistModelKeyFromShared({ cfg, raw, defaultProvider, manifestPlugins });
 }
 
-export function resolveDefaultModelForAgent(params: {
-  cfg: OpenClawConfig;
-  agentId?: string;
-  allowPluginNormalization?: boolean;
-}): ModelRef {
+export function resolveDefaultModelForAgent(
+  params: {
+    cfg: OpenClawConfig;
+    agentId?: string;
+    allowPluginNormalization?: boolean;
+  } & ModelManifestNormalizationContext,
+): ModelRef {
   const agentModelOverride = params.agentId
     ? resolveAgentEffectiveModelPrimary(params.cfg, params.agentId)
     : undefined;
@@ -238,6 +242,7 @@ export function resolveDefaultModelForAgent(params: {
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
     allowPluginNormalization: params.allowPluginNormalization,
+    manifestPlugins: params.manifestPlugins,
   });
 }
 
@@ -371,13 +376,15 @@ export function resolveSubagentSpawnModelSelection(params: {
   return resolveModelThroughAliases(raw, aliasIndex);
 }
 
-export function buildAllowedModelSet(params: {
-  cfg: OpenClawConfig;
-  catalog: ModelCatalogEntry[];
-  defaultProvider: string;
-  defaultModel?: string;
-  agentId?: string;
-}): {
+export function buildAllowedModelSet(
+  params: {
+    cfg: OpenClawConfig;
+    catalog: ModelCatalogEntry[];
+    defaultProvider: string;
+    defaultModel?: string;
+    agentId?: string;
+  } & ModelManifestNormalizationContext,
+): {
   allowAny: boolean;
   allowedCatalog: ModelCatalogEntry[];
   allowedKeys: Set<string>;
@@ -391,16 +398,19 @@ export function buildAllowedModelSet(params: {
       cfg: params.cfg,
       agentId: params.agentId,
     }),
+    manifestPlugins: params.manifestPlugins,
   });
 }
 
-export function getModelRefStatus(params: {
-  cfg: OpenClawConfig;
-  catalog: ModelCatalogEntry[];
-  ref: ModelRef;
-  defaultProvider: string;
-  defaultModel?: string;
-}): ModelRefStatus {
+export function getModelRefStatus(
+  params: {
+    cfg: OpenClawConfig;
+    catalog: ModelCatalogEntry[];
+    ref: ModelRef;
+    defaultProvider: string;
+    defaultModel?: string;
+  } & ModelManifestNormalizationContext,
+): ModelRefStatus {
   return getModelRefStatusWithFallbackModels({
     cfg: params.cfg,
     catalog: params.catalog,
@@ -410,6 +420,7 @@ export function getModelRefStatus(params: {
     fallbackModels: resolveAllowedFallbacks({
       cfg: params.cfg,
     }),
+    manifestPlugins: params.manifestPlugins,
   });
 }
 
@@ -419,7 +430,7 @@ function getModelRefStatusForResolve(
     catalog: ModelCatalogEntry[];
     defaultProvider: string;
     defaultModel?: string;
-  },
+  } & ModelManifestNormalizationContext,
   ref: ModelRef,
 ): ModelRefStatus {
   return getModelRefStatus({
@@ -428,16 +439,19 @@ function getModelRefStatusForResolve(
     ref,
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
+    manifestPlugins: params.manifestPlugins,
   });
 }
 
-export function resolveAllowedModelRef(params: {
-  cfg: OpenClawConfig;
-  catalog: ModelCatalogEntry[];
-  raw: string;
-  defaultProvider: string;
-  defaultModel?: string;
-}):
+export function resolveAllowedModelRef(
+  params: {
+    cfg: OpenClawConfig;
+    catalog: ModelCatalogEntry[];
+    raw: string;
+    defaultProvider: string;
+    defaultModel?: string;
+  } & ModelManifestNormalizationContext,
+):
   | { ref: ModelRef; key: string }
   | {
       error: string;
@@ -450,12 +464,14 @@ export function resolveAllowedModelRef(params: {
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
     defaultProvider: params.defaultProvider,
+    manifestPlugins: params.manifestPlugins,
   });
 
   const openrouterCompatRef = resolveConfiguredOpenRouterCompatAlias({
     cfg: params.cfg,
     raw: trimmed,
     defaultProvider: params.defaultProvider,
+    manifestPlugins: params.manifestPlugins,
   });
   if (openrouterCompatRef) {
     const status = getModelRefStatusForResolve(params, openrouterCompatRef);
@@ -470,6 +486,7 @@ export function resolveAllowedModelRef(params: {
     raw: params.raw,
     defaultProvider: params.defaultProvider,
     aliasIndex,
+    manifestPlugins: params.manifestPlugins,
     getStatus: (ref) => getModelRefStatusForResolve(params, ref),
   });
 }

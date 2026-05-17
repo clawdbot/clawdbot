@@ -1852,6 +1852,44 @@ describe("tryDispatchAcpReply", () => {
     expect(dispatcherCall(dispatcher.sendFinalReply).text).toBe("CODEX_OK");
   });
 
+  it("marks accumulated ACP block TTS finals as trusted local media for WebChat", async () => {
+    setReadyAcpResolution();
+    ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
+    queueTtsReplies({
+      mediaUrl: "/tmp/openclaw-media/acp-tts.ogg",
+      audioAsVoice: true,
+    } as MockTtsReply);
+    mockVisibleTextTurn("WebChat ACP block reply.");
+    const cfg = createAcpTestConfig({
+      acp: {
+        enabled: true,
+        stream: {
+          deliveryMode: "live",
+          coalesceIdleMs: 0,
+          maxChunkChars: 64,
+        },
+      },
+    });
+
+    const { dispatcher } = createDispatcher();
+    const result = await runDispatch({
+      bodyForAgent: "reply",
+      cfg,
+      dispatcher,
+      ctxOverrides: {
+        Provider: "webchat",
+        Surface: "webchat",
+      },
+    });
+
+    const finalPayload = dispatcherCall(dispatcher.sendFinalReply);
+    expect(finalPayload.mediaUrl).toBe("/tmp/openclaw-media/acp-tts.ogg");
+    expect(finalPayload.audioAsVoice).toBe(true);
+    expect(finalPayload.spokenText).toBe("WebChat ACP block reply.");
+    expect(finalPayload.trustedLocalMedia).toBe(true);
+    expect(result?.queuedFinal).toBe(true);
+  });
+
   it("falls back to final text when a later telegram ACP block delivery fails", async () => {
     setReadyAcpResolution();
     ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });

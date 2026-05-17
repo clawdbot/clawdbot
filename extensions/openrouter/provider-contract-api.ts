@@ -19,6 +19,7 @@ export function createOpenrouterProvider(): ProviderPlugin {
           groupId: "openrouter",
           groupLabel: "OpenRouter",
           groupHint: "API key",
+          onboardingScopes: ["text-inference", "music-generation"],
         },
       },
     ],

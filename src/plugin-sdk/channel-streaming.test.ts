@@ -8,6 +8,7 @@ import {
   formatChannelProgressDraftText,
   getChannelStreamingConfigObject,
   isChannelProgressDraftWorkToolName,
+  isPotentialTruncatedFinal,
   mergeChannelProgressDraftLine,
   resolveChannelPreviewStreamMode,
   resolveChannelProgressDraftLabel,
@@ -21,6 +22,8 @@ import {
   resolveChannelStreamingPreviewChunk,
   resolveChannelStreamingSuppressDefaultToolProgressMessages,
   resolveChannelStreamingPreviewToolProgress,
+  resolveTranscriptBackedChannelFinalText,
+  selectLongerFinalText,
 } from "./channel-streaming.js";
 
 describe("channel-streaming", () => {
@@ -138,6 +141,47 @@ describe("channel-streaming", () => {
     expect(resolveChannelStreamingBlockEnabled({ streaming: "block", blockStreaming: false })).toBe(
       false,
     );
+  });
+
+  it("selects a longer transcript candidate for ellipsis-truncated finals", async () => {
+    const fullAnswer =
+      "Here is the complete final answer with enough stable prefix text before the ellipsis and enough continuation text after it.";
+    const truncatedFinal =
+      "Here is the complete final answer with enough stable prefix text before the ellipsis...";
+
+    expect(isPotentialTruncatedFinal(truncatedFinal)).toBe(true);
+    expect(
+      selectLongerFinalText({
+        finalText: truncatedFinal,
+        candidateTexts: ["short", fullAnswer],
+      }),
+    ).toBe(fullAnswer);
+    await expect(
+      resolveTranscriptBackedChannelFinalText({
+        finalText: truncatedFinal,
+        resolveCandidateText: async () => fullAnswer,
+      }),
+    ).resolves.toBe(fullAnswer);
+  });
+
+  it("keeps intentional ellipsis finals when candidates do not prove truncation", async () => {
+    const finalText =
+      "Here is the complete final answer with enough stable prefix text before an intentional pause...";
+    const candidateText =
+      "Here is the complete final answer with enough stable prefix text before an intentional pause... then punctuation";
+
+    expect(
+      selectLongerFinalText({
+        finalText,
+        candidateTexts: [candidateText],
+      }),
+    ).toBeUndefined();
+    await expect(
+      resolveTranscriptBackedChannelFinalText({
+        finalText,
+        resolveCandidateText: async () => candidateText,
+      }),
+    ).resolves.toBe(finalText);
   });
 
   it("suppresses standalone tool progress for active preview drafts", () => {

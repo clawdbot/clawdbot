@@ -2735,6 +2735,15 @@ describe("spawnAcpDirect", () => {
     expect(expectFailedSpawn(result, "error").error).toContain("agent dispatch failed");
     expect(relayHandle.dispose).toHaveBeenCalledTimes(1);
     expect(relayHandle.notifyStarted).not.toHaveBeenCalled();
+    expect(hoisted.cleanupFailedAcpSpawnMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runtimeCloseHandle: expect.objectContaining({
+          handle: expect.objectContaining({
+            backend: "acpx",
+          }),
+        }),
+      }),
+    );
   });
 
   it('rejects streamTo="parent" without requester session context', async () => {

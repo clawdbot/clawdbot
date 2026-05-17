@@ -5,6 +5,7 @@ import {
   modelSelectionShouldEnsureCodexPlugin,
   openAIProviderUsesCodexRuntimeByDefault,
   resolveOpenAIRuntimeProviderForPi,
+  resolveSelectedOpenAIPiRuntimeProvider,
 } from "./openai-codex-routing.js";
 
 describe("OpenAI Codex routing policy", () => {
@@ -51,7 +52,97 @@ describe("OpenAI Codex routing policy", () => {
     ).toBe("openai-codex");
   });
 
-  it("ignores session PI pins when validating OpenAI auth profiles", () => {
+  it("keeps explicit OpenAI PI Codex auth order ahead of API-key backups", () => {
+    const config = {
+      auth: {
+        order: {
+          openai: ["openai-codex:work", "openai:backup"],
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(
+      listOpenAIAuthProfileProvidersForAgentRuntime({
+        provider: "openai",
+        harnessRuntime: "pi",
+        config,
+      }),
+    ).toEqual(["openai-codex", "openai"]);
+    expect(
+      resolveSelectedOpenAIPiRuntimeProvider({
+        provider: "openai",
+        harnessRuntime: "pi",
+        config,
+      }),
+    ).toBe("openai-codex");
+    expect(
+      resolveOpenAIRuntimeProviderForPi({
+        provider: "openai",
+        harnessRuntime: "pi",
+        config,
+      }),
+    ).toBe("openai");
+  });
+
+  it("keeps explicit OpenAI PI API-key auth order ahead of Codex backups", () => {
+    const config = {
+      auth: {
+        order: {
+          openai: ["openai:backup", "openai-codex:work"],
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(
+      listOpenAIAuthProfileProvidersForAgentRuntime({
+        provider: "openai",
+        harnessRuntime: "pi",
+        config,
+      }),
+    ).toEqual(["openai", "openai-codex"]);
+    expect(
+      resolveSelectedOpenAIPiRuntimeProvider({
+        provider: "openai",
+        harnessRuntime: "pi",
+        config,
+      }),
+    ).toBe("openai");
+  });
+
+  it("does not route custom OpenAI-compatible PI configs through Codex auth order", () => {
+    const config = {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://proxy.example.test/v1",
+            models: [],
+          },
+        },
+      },
+      auth: {
+        order: {
+          openai: ["openai-codex:work", "openai:backup"],
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    expect(
+      listOpenAIAuthProfileProvidersForAgentRuntime({
+        provider: "openai",
+        harnessRuntime: "pi",
+        config,
+      }),
+    ).toEqual(["openai", "openai-codex"]);
+    expect(
+      resolveSelectedOpenAIPiRuntimeProvider({
+        provider: "openai",
+        harnessRuntime: "pi",
+        config,
+      }),
+    ).toBe("openai");
+  });
+
+  it("validates Codex harness auth through the Codex provider contract", () => {
     expect(
       listOpenAIAuthProfileProvidersForAgentRuntime({
         provider: "openai",

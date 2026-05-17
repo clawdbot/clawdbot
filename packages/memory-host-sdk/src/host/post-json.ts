@@ -6,6 +6,7 @@ export async function postJson<T>(params: {
   headers: Record<string, string>;
   ssrfPolicy?: SsrFPolicy;
   fetchImpl?: typeof fetch;
+  signal?: AbortSignal;
   body: unknown;
   errorPrefix: string;
   attachStatus?: boolean;
@@ -15,6 +16,7 @@ export async function postJson<T>(params: {
     url: params.url,
     ssrfPolicy: params.ssrfPolicy,
     fetchImpl: params.fetchImpl,
+    signal: params.signal,
     init: {
       method: "POST",
       headers: params.headers,

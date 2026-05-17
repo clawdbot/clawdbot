@@ -124,6 +124,7 @@ const CRON_AGENT_PHASE_WATCHDOG_STAGE = {
   runner_entered: "pre_execution",
   workspace: "pre_execution",
   runtime_plugins: "pre_execution",
+  before_agent_reply: "execution",
   model_resolution: "pre_execution",
   auth: "pre_execution",
   context_engine: "pre_execution",
@@ -263,8 +264,19 @@ function createCronAgentWatchdog(params: {
     if (!info) {
       return;
     }
+    const previousPhase = activeExecution?.phase;
     activeExecution = { ...activeExecution, ...info };
-    if (isCronAgentExecutionStarted(info)) {
+    const stage = info.phase ? CRON_AGENT_PHASE_WATCHDOG_STAGE[info.phase] : undefined;
+    if (
+      state === "executing" &&
+      previousPhase === "before_agent_reply" &&
+      stage === "pre_execution"
+    ) {
+      state = "waiting_for_execution";
+      startPreExecutionTimeout();
+      return;
+    }
+    if (stage === "execution" || info.firstModelCallStarted) {
       state = "executing";
       clearPreExecutionTimeout();
     }
@@ -373,13 +385,6 @@ function preExecutionTimeoutErrorMessage(execution?: CronAgentExecutionStarted):
 
 function formatCronAgentExecutionPhase(execution?: CronAgentExecutionStarted): string | undefined {
   return formatEmbeddedAgentExecutionPhase(execution?.phase);
-}
-
-function isCronAgentExecutionStarted(info: CronAgentExecutionStarted): boolean {
-  if (info.firstModelCallStarted) {
-    return true;
-  }
-  return info.phase ? CRON_AGENT_PHASE_WATCHDOG_STAGE[info.phase] === "execution" : false;
 }
 
 function resolveCronAgentPreExecutionWatchdogMs(jobTimeoutMs: number): number {

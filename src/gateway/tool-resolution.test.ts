@@ -8,7 +8,7 @@ describe("resolveGatewayScopedTools", () => {
       cfg: { tools: { profile: "minimal" } } as OpenClawConfig,
       sessionKey: "agent:main:telegram:group:-100123",
       messageProvider: "telegram",
-      inboundTurnKind: "room_event",
+      inboundEventKind: "room_event",
       surface: "loopback",
     });
 
@@ -23,7 +23,7 @@ describe("resolveGatewayScopedTools", () => {
       cfg: { tools: { profile: "minimal" } } as OpenClawConfig,
       sessionKey: "agent:main:telegram:group:-100123",
       messageProvider: "telegram",
-      inboundTurnKind: "user_request",
+      inboundEventKind: "user_request",
       surface: "loopback",
     });
 

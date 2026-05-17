@@ -3,7 +3,12 @@ import { describe, expect, it, vi } from "vitest";
 import type { WebSocketServer } from "ws";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../protocol/client-info.js";
 import { PROTOCOL_VERSION } from "../protocol/index.js";
-import { GATEWAY_STARTUP_UNAVAILABLE_REASON } from "../protocol/startup-unavailable.js";
+import {
+  GATEWAY_STARTUP_CLOSE_CODE,
+  GATEWAY_STARTUP_CLOSE_REASON,
+  GATEWAY_STARTUP_PENDING_CLOSE_CAUSE,
+  GATEWAY_STARTUP_UNAVAILABLE_REASON,
+} from "../protocol/startup-unavailable.js";
 import { attachGatewayWsConnectionHandler } from "./ws-connection.js";
 
 function createLogger() {
@@ -51,6 +56,7 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
       headers: { host: "127.0.0.1:19001" },
       socket: { localAddress: "127.0.0.1" },
     };
+    const logWsControl = createLogger();
 
     attachGatewayWsConnectionHandler({
       wss,
@@ -64,7 +70,7 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
       refreshHealthSnapshot: vi.fn(async () => ({}) as never),
       logGateway: createLogger() as never,
       logHealth: createLogger() as never,
-      logWsControl: createLogger() as never,
+      logWsControl: logWsControl as never,
       extraHandlers: {},
       broadcast: vi.fn(),
       buildRequestContext: () => createRequestContext() as never,
@@ -134,7 +140,25 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
     expect(response?.error?.retryAfterMs).toBe(500);
     expect(response?.error?.details).toEqual({ reason: GATEWAY_STARTUP_UNAVAILABLE_REASON });
     await vi.waitFor(() => {
-      expect(socket.close).toHaveBeenCalledWith(1013, "gateway starting");
+      expect(socket.close).toHaveBeenCalledWith(
+        GATEWAY_STARTUP_CLOSE_CODE,
+        GATEWAY_STARTUP_CLOSE_REASON,
+      );
     });
+    expect(logWsControl.debug).toHaveBeenCalledWith(
+      expect.stringContaining("closed before connect"),
+      expect.objectContaining({
+        cause: GATEWAY_STARTUP_PENDING_CLOSE_CAUSE,
+        handshake: "failed",
+      }),
+    );
+    expect(logWsControl.debug).toHaveBeenCalledWith(
+      expect.stringContaining(`code=${GATEWAY_STARTUP_CLOSE_CODE}`),
+      expect.anything(),
+    );
+    expect(logWsControl.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("closed before connect"),
+      expect.anything(),
+    );
   });
 });

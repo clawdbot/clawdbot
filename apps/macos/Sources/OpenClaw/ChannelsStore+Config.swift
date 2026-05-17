@@ -2,43 +2,102 @@ import Foundation
 import OpenClawProtocol
 
 extension ChannelsStore {
-    func loadConfigSchema() async {
-        guard !self.configSchemaLoading else { return }
+    func loadConfigSchema(force: Bool = false) async {
+        let sourceKey = self.currentConfigCacheSourceKey()
+        self.resetConfigSchemaCacheIfSourceChanged(sourceKey)
+        if !force, self.configSchema != nil {
+            return
+        }
+        guard !self.queueConfigSchemaReloadIfLoading(sourceKey: sourceKey, force: force) else { return }
         self.configSchemaLoading = true
-        defer { self.configSchemaLoading = false }
+        self.configSchemaLoadingSourceKey = sourceKey
+        defer {
+            self.configSchemaLoading = false
+            self.configSchemaLoadingSourceKey = nil
+        }
 
-        do {
-            let res: ConfigSchemaResponse = try await GatewayConnection.shared.requestDecoded(
-                method: .configSchema,
-                params: nil,
-                timeoutMs: 8000)
-            let schemaValue = res.schema.foundationValue
-            self.configSchema = ConfigSchemaNode(raw: schemaValue)
-            let hintValues = res.uihints.mapValues { $0.foundationValue }
-            self.configUiHints = decodeUiHints(hintValues)
-        } catch {
-            self.configStatus = error.localizedDescription
+        var requestSourceKey = sourceKey
+
+        while true {
+            self.configSchemaLoadingSourceKey = requestSourceKey
+            do {
+                let res: ConfigSchemaResponse = try await GatewayConnection.shared.requestDecoded(
+                    method: .configSchema,
+                    params: nil,
+                    timeoutMs: 8000)
+                self.applyConfigSchemaResponse(res, sourceKey: requestSourceKey)
+            } catch {
+                self.configStatus = error.localizedDescription
+            }
+
+            guard self.configSchemaReloadPending else { break }
+            self.configSchemaReloadPending = false
+            requestSourceKey = self.currentConfigCacheSourceKey()
+            self.resetConfigSchemaCacheIfSourceChanged(requestSourceKey)
         }
     }
 
-    func loadConfig() async {
-        do {
-            let snap: ConfigSnapshot = try await GatewayConnection.shared.requestDecoded(
-                method: .configGet,
-                params: nil,
-                timeoutMs: 10000)
-            self.configStatus = snap.valid == false
-                ? "Config invalid; fix it in ~/.openclaw/openclaw.json."
-                : nil
-            self.configRoot = snap.config?.mapValues { $0.foundationValue } ?? [:]
-            self.configDraft = cloneConfigValue(self.configRoot) as? [String: Any] ?? self.configRoot
-            self.configDirty = false
-            self.configLoaded = true
-
-            self.applyUIConfig(snap)
-        } catch {
-            self.configStatus = error.localizedDescription
+    func loadConfig(force: Bool = true) async {
+        let sourceKey = self.currentConfigCacheSourceKey()
+        self.resetConfigCacheIfSourceChanged(sourceKey)
+        if !force, self.configLoaded {
+            return
         }
+        guard !self.queueConfigReloadIfLoading(sourceKey: sourceKey, force: force) else { return }
+        self.configLoading = true
+        self.configLoadingSourceKey = sourceKey
+        defer {
+            self.configLoading = false
+            self.configLoadingSourceKey = nil
+        }
+
+        var requestForce = force
+        var requestSourceKey = sourceKey
+
+        while true {
+            self.configLoadingSourceKey = requestSourceKey
+            do {
+                let snap: ConfigSnapshot = try await GatewayConnection.shared.requestDecoded(
+                    method: .configGet,
+                    params: nil,
+                    timeoutMs: 10000)
+                self.applyConfigSnapshot(snap, sourceKey: requestSourceKey, force: requestForce)
+            } catch {
+                self.configStatus = error.localizedDescription
+            }
+
+            guard self.configForceReloadPending else { break }
+            self.configForceReloadPending = false
+            requestForce = true
+            requestSourceKey = self.currentConfigCacheSourceKey()
+            self.resetConfigCacheIfSourceChanged(requestSourceKey)
+        }
+    }
+
+    func applyConfigSnapshot(_ snap: ConfigSnapshot, sourceKey: String, force: Bool) {
+        guard self.configSourceKey == sourceKey else { return }
+        guard force || !self.configDirty else { return }
+
+        self.configStatus = snap.valid == false
+            ? "Config invalid; fix it in ~/.openclaw/openclaw.json."
+            : nil
+        self.configRoot = snap.config?.mapValues { $0.foundationValue } ?? [:]
+        self.configDraft = cloneConfigValue(self.configRoot) as? [String: Any] ?? self.configRoot
+        self.configDirty = false
+        self.configLoaded = true
+        self.configSourceKey = sourceKey
+
+        self.applyUIConfig(snap)
+    }
+
+    func applyConfigSchemaResponse(_ res: ConfigSchemaResponse, sourceKey: String) {
+        guard self.configSchemaSourceKey == sourceKey else { return }
+
+        let schemaValue = res.schema.foundationValue
+        self.configSchema = ConfigSchemaNode(raw: schemaValue)
+        let hintValues = res.uihints.mapValues { $0.foundationValue }
+        self.configUiHints = decodeUiHints(hintValues)
+        self.configSchemaSourceKey = sourceKey
     }
 
     private func applyUIConfig(_ snap: ConfigSnapshot) {
@@ -85,7 +144,75 @@ extension ChannelsStore {
     }
 
     func reloadConfigDraft() async {
-        await self.loadConfig()
+        await self.loadConfig(force: true)
+    }
+
+    func resetConfigSchemaCacheIfSourceChanged(_ sourceKey: String) {
+        guard let cachedSourceKey = self.configSchemaSourceKey else {
+            self.configSchemaSourceKey = sourceKey
+            return
+        }
+        guard cachedSourceKey != sourceKey else { return }
+        self.configSchema = nil
+        self.configUiHints = [:]
+        self.configSchemaSourceKey = sourceKey
+    }
+
+    func resetConfigCacheIfSourceChanged(_ sourceKey: String) {
+        guard let cachedSourceKey = self.configSourceKey else {
+            self.configSourceKey = sourceKey
+            return
+        }
+        guard cachedSourceKey != sourceKey else { return }
+        self.configRoot = [:]
+        self.configDraft = [:]
+        self.configDirty = false
+        self.configLoaded = false
+        self.configSourceKey = sourceKey
+    }
+
+    func queueConfigReloadIfLoading(sourceKey: String, force: Bool) -> Bool {
+        guard self.configLoading else { return false }
+        if force || self.configLoadingSourceKey != sourceKey {
+            self.configForceReloadPending = true
+        }
+        return true
+    }
+
+    func queueConfigSchemaReloadIfLoading(sourceKey: String, force: Bool) -> Bool {
+        guard self.configSchemaLoading else { return false }
+        if force || self.configSchemaLoadingSourceKey != sourceKey {
+            self.configSchemaReloadPending = true
+        }
+        return true
+    }
+
+    private func currentConfigCacheSourceKey() -> String {
+        let root = OpenClawConfigFile.loadDict()
+        let settings = CommandResolver.connectionSettings(configRoot: root)
+        let env = ProcessInfo.processInfo.environment
+        return [
+            "mode:\(settings.mode.rawValue)",
+            "target:\(settings.target)",
+            "identity:\(settings.identity)",
+            "project:\(settings.projectRoot)",
+            "cli:\(settings.cliPath)",
+            "port:\(GatewayEnvironment.gatewayPort())",
+            "gateway:\(Self.configFingerprint(root["gateway"]))",
+            "token:\(Self.configFingerprint(env["OPENCLAW_GATEWAY_TOKEN"]))",
+            "password:\(Self.configFingerprint(env["OPENCLAW_GATEWAY_PASSWORD"]))",
+        ].joined(separator: "|")
+    }
+
+    private static func configFingerprint(_ value: Any?) -> String {
+        guard let value else { return "nil" }
+        if JSONSerialization.isValidJSONObject(value),
+           let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])
+        {
+            return "\(data.count):\(data.hashValue)"
+        }
+        let text = String(describing: value)
+        return "\(text.count):\(text.hashValue)"
     }
 }
 

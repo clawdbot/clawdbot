@@ -9,6 +9,7 @@ const openUrlMock = vi.hoisted(() => vi.fn());
 const formatControlUiSshHintMock = vi.hoisted(() => vi.fn());
 const copyToClipboardMock = vi.hoisted(() => vi.fn());
 const resolveSecretRefValuesMock = vi.hoisted(() => vi.fn());
+const ensureGatewayReadyForOperationMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../config/config.js", () => ({
   readConfigFileSnapshot: readConfigFileSnapshotMock,
@@ -24,6 +25,10 @@ vi.mock("./onboard-helpers.js", () => ({
 
 vi.mock("../infra/clipboard.js", () => ({
   copyToClipboard: copyToClipboardMock,
+}));
+
+vi.mock("./gateway-readiness.js", () => ({
+  ensureGatewayReadyForOperation: ensureGatewayReadyForOperationMock,
 }));
 
 vi.mock("../secrets/resolve.js", () => ({
@@ -83,6 +88,12 @@ describe("dashboardCommand", () => {
     openUrlMock.mockClear();
     formatControlUiSshHintMock.mockClear();
     copyToClipboardMock.mockClear();
+    ensureGatewayReadyForOperationMock.mockReset();
+    ensureGatewayReadyForOperationMock.mockResolvedValue({
+      ready: true,
+      status: {},
+      recovered: false,
+    });
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.CUSTOM_GATEWAY_TOKEN;
   });
@@ -95,6 +106,13 @@ describe("dashboardCommand", () => {
 
     await dashboardCommand(runtime);
 
+    expect(ensureGatewayReadyForOperationMock).toHaveBeenCalledWith({
+      runtime,
+      operation: "open the dashboard",
+      yes: undefined,
+      probeUrl: "ws://127.0.0.1:18789",
+      readyWhenReachable: true,
+    });
     expect(resolveControlUiLinksMock).toHaveBeenCalledWith({
       port: 18789,
       bind: "loopback",
@@ -290,5 +308,21 @@ describe("dashboardCommand", () => {
       "Token auto-auth unavailable: gateway.auth.token SecretRef is unresolved (env:default:CUSTOM_GATEWAY_TOKEN).",
     );
     expectNoLogWith("Token auto-auth is disabled for SecretRef-managed");
+  });
+
+  it("does not copy or open when gateway readiness fails", async () => {
+    mockSnapshot("abc");
+    ensureGatewayReadyForOperationMock.mockResolvedValueOnce({
+      ready: false,
+      status: {},
+      reason: "Gateway is not running.",
+      recoverable: true,
+    });
+
+    await dashboardCommand(runtime);
+
+    expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(1);
+    expect(copyToClipboardMock).not.toHaveBeenCalled();
+    expect(openUrlMock).not.toHaveBeenCalled();
   });
 });

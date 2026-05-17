@@ -1,6 +1,9 @@
+import fs from "node:fs";
+import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { isBundledSourceOverlayPath } from "../../plugins/bundled-source-overlays.js";
 import {
   listChannelCatalogEntries,
   type PluginChannelCatalogEntry,
@@ -30,6 +33,11 @@ export type ChannelPackageStateMetadataKey = "configuredState" | "persistedAuthS
 
 const log = createSubsystemLogger("channels");
 const sourcePackageStateLoaderCache: PluginModuleLoaderCache = new Map();
+
+type ChannelPackageStateModuleLocation = {
+  modulePath: string;
+  rootDir: string;
+};
 
 function isSourceModulePath(modulePath: string): boolean {
   return /\.(?:c|m)?tsx?$/iu.test(modulePath);
@@ -64,6 +72,80 @@ function normalizeStringList(value: unknown): string[] {
 
 function hasNonEmptyEnvValue(env: NodeJS.ProcessEnv | undefined, key: string): boolean {
   return typeof env?.[key] === "string" && env[key].trim().length > 0;
+}
+
+function resolveSourceBundledPluginRoot(rootDir: string): {
+  packageRoot: string;
+  dirName: string;
+} | null {
+  const pluginRoot = path.resolve(rootDir);
+  const extensionsDir = path.dirname(pluginRoot);
+  if (path.basename(extensionsDir) !== "extensions") {
+    return null;
+  }
+  const packageRoot = path.dirname(extensionsDir);
+  if (path.basename(packageRoot) === "dist" || path.basename(packageRoot) === "dist-runtime") {
+    return null;
+  }
+  return {
+    packageRoot,
+    dirName: path.basename(pluginRoot),
+  };
+}
+
+function isBundledSourceOverlayPluginRoot(rootDir: string): boolean {
+  const pluginRoot = path.resolve(rootDir);
+  return (
+    isBundledSourceOverlayPath({ sourcePath: pluginRoot }) ||
+    (path.basename(path.dirname(pluginRoot)) === "extensions" &&
+      isBundledSourceOverlayPath({ sourcePath: path.dirname(pluginRoot) }))
+  );
+}
+
+function listBuiltBundledPackageStateModules(params: {
+  rootDir: string;
+  specifier: string;
+}): ChannelPackageStateModuleLocation[] {
+  if (isBundledSourceOverlayPluginRoot(params.rootDir)) {
+    return [];
+  }
+  const sourceRoot = resolveSourceBundledPluginRoot(params.rootDir);
+  if (!sourceRoot) {
+    return [];
+  }
+  const locations: ChannelPackageStateModuleLocation[] = [];
+  for (const rootDir of [
+    path.join(sourceRoot.packageRoot, "dist", "extensions", sourceRoot.dirName),
+    path.join(sourceRoot.packageRoot, "dist-runtime", "extensions", sourceRoot.dirName),
+  ]) {
+    const modulePath = resolveExistingPluginModulePath(rootDir, params.specifier);
+    if (fs.existsSync(modulePath) && !isSourceModulePath(modulePath)) {
+      locations.push({ modulePath, rootDir });
+    }
+  }
+  return locations;
+}
+
+function resolveChannelPackageStateModuleLocation(params: {
+  entry: PluginChannelCatalogEntry;
+  specifier: string;
+}): ChannelPackageStateModuleLocation {
+  return {
+    modulePath: resolveExistingPluginModulePath(params.entry.rootDir, params.specifier),
+    rootDir: params.entry.rootDir,
+  };
+}
+
+function listChannelPackageStateModuleLocations(params: {
+  entry: PluginChannelCatalogEntry;
+  specifier: string;
+}): ChannelPackageStateModuleLocation[] {
+  const source = resolveChannelPackageStateModuleLocation(params);
+  const built = listBuiltBundledPackageStateModules({
+    rootDir: params.entry.rootDir,
+    specifier: params.specifier,
+  }).filter((location) => location.modulePath !== source.modulePath);
+  return [...built, source];
 }
 
 function resolveChannelPackageStateMetadata(
@@ -118,23 +200,33 @@ function resolveChannelPackageStateChecker(params: {
     };
   }
 
-  try {
-    const moduleExport = loadChannelPackageStateModule({
-      modulePath: resolveExistingPluginModulePath(params.entry.rootDir, metadata.specifier!),
-      rootDir: params.entry.rootDir,
-    }) as Record<string, unknown>;
-    const checker = moduleExport[metadata.exportName!] as ChannelPackageStateChecker | undefined;
-    if (typeof checker !== "function") {
-      throw new Error(`missing ${params.metadataKey} export ${metadata.exportName}`);
+  let loadError: unknown;
+  for (const location of listChannelPackageStateModuleLocations({
+    entry: params.entry,
+    specifier: metadata.specifier!,
+  })) {
+    try {
+      const moduleExport = loadChannelPackageStateModule({
+        modulePath: location.modulePath,
+        rootDir: location.rootDir,
+      }) as Record<string, unknown>;
+      const checker = moduleExport[metadata.exportName!] as ChannelPackageStateChecker | undefined;
+      if (typeof checker !== "function") {
+        throw new Error(`missing ${params.metadataKey} export ${metadata.exportName}`);
+      }
+      return checker;
+    } catch (error) {
+      loadError = error;
     }
-    return checker;
-  } catch (error) {
-    const detail = formatErrorMessage(error);
+  }
+
+  if (loadError) {
+    const detail = formatErrorMessage(loadError);
     log.warn(
       `[channels] failed to load ${params.metadataKey} checker for ${params.entry.pluginId}: ${detail}`,
     );
-    return null;
   }
+  return null;
 }
 
 function resolvePackageStateChannelId(entry: PluginChannelCatalogEntry): string | undefined {

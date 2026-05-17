@@ -946,7 +946,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
   });
 
-  it("updates non-main DM last-route metadata on the prepared thread session", async () => {
+  it("updates non-main DM last-route metadata on the prepared direct session", async () => {
     await dispatchPreparedSlackMessage(
       createPreparedSlackMessage({
         cfg: { session: { dmScope: "per-channel-peer" } },
@@ -965,14 +965,14 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
         },
         ctxPayload: {
           MessageThreadId: "500.000",
-          SessionKey: "agent:main:slack:direct:u1:thread:500.000",
+          SessionKey: "agent:main:slack:direct:u1",
         },
       }),
     );
 
     expect(updateLastRouteMock).toHaveBeenCalledWith({
       storePath: "/tmp/openclaw-store.json",
-      sessionKey: "agent:main:slack:direct:u1:thread:500.000",
+      sessionKey: "agent:main:slack:direct:u1",
       deliveryContext: {
         channel: "slack",
         to: "user:U1",
@@ -981,7 +981,49 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       },
       ctx: {
         MessageThreadId: "500.000",
-        SessionKey: "agent:main:slack:direct:u1:thread:500.000",
+        SessionKey: "agent:main:slack:direct:u1",
+      },
+    });
+  });
+
+  it("uses DM transport thread metadata for last-route updates", async () => {
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        isDirectMessage: true,
+        message: {
+          channel: "D123",
+          user: "U1",
+          ts: "701.000",
+          thread_ts: "701.000",
+        },
+        route: {
+          agentId: "main",
+          mainSessionKey: "agent:main:main",
+          sessionKey: "agent:main:main",
+          lastRoutePolicy: "main",
+        },
+        ctxPayload: {
+          MessageThreadId: undefined,
+          ReplyToId: "701.000",
+          TransportThreadId: "701.000",
+          SessionKey: "agent:main:main",
+        },
+      }),
+    );
+
+    expect(updateLastRouteMock).toHaveBeenCalledWith({
+      storePath: "/tmp/openclaw-store.json",
+      sessionKey: "agent:main:main",
+      deliveryContext: {
+        channel: "slack",
+        to: "user:U1",
+        accountId: "default",
+        threadId: "701.000",
+      },
+      ctx: {
+        ReplyToId: "701.000",
+        TransportThreadId: "701.000",
+        SessionKey: "agent:main:main",
       },
     });
   });
@@ -1004,7 +1046,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
         },
         ctxPayload: {
           MessageThreadId: "600.000",
-          SessionKey: "agent:main:main:thread:600.000",
+          SessionKey: "agent:main:main",
         },
       }),
     );
@@ -1020,7 +1062,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       },
       ctx: {
         MessageThreadId: "600.000",
-        SessionKey: "agent:main:main:thread:600.000",
+        SessionKey: "agent:main:main",
       },
     });
   });

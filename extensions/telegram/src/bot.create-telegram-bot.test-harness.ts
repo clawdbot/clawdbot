@@ -1,5 +1,5 @@
 import { rmSync } from "node:fs";
-import { buildChannelTurnContext } from "openclaw/plugin-sdk/channel-inbound";
+import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { MockFn } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
@@ -388,7 +388,7 @@ export const telegramBotDepsForTest: TelegramBotDeps = {
   resolveInboundLastRouteSessionKey: ({ route, sessionKey }) =>
     route.lastRoutePolicy === "main" ? route.mainSessionKey : sessionKey,
   resolvePinnedMainDmOwnerFromAllowlist: () => null,
-  buildChannelTurnContext,
+  buildChannelInboundEventContext,
   readChannelAllowFromStore:
     readChannelAllowFromStore as TelegramBotDeps["readChannelAllowFromStore"],
   upsertChannelPairingRequest:

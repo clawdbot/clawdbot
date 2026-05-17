@@ -46,7 +46,11 @@ export {
   ensureAuthProfileStoreWithoutExternalProfiles,
   resolveAuthProfileOrder,
 } from "./auth-profiles.js";
-export { requireApiKey, resolveAwsSdkEnvVarName } from "./model-auth-runtime-shared.js";
+export {
+  formatMissingAuthError,
+  requireApiKey,
+  resolveAwsSdkEnvVarName,
+} from "./model-auth-runtime-shared.js";
 export type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 export type ProviderCredentialPrecedence = "profile-first" | "env-first";
 

@@ -309,8 +309,6 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
     expect(fetchInit.headers).toEqual({});
     expect(fetchInit.redirect).toBe("manual");
     expect(fetchInit.signal).toBeInstanceOf(AbortSignal);
-    if (fetchInit.dispatcher === undefined) {
-      throw new Error("expected remote browser fetch dispatcher");
-    }
+    expect(fetchInit.dispatcher).toBeUndefined();
   });
 });

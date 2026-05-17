@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { normalizeAttachments } from "../../media-understanding/attachments.normalize.js";
 import {
-  buildChannelTurnMediaPayload,
+  buildChannelInboundMediaPayload,
   toHistoryMediaEntries,
   toInboundMediaFacts,
 } from "./media.js";
 
-describe("channel turn media facts", () => {
+describe("channel inbound media facts", () => {
   it("normalizes provider media into inbound media facts", () => {
     expect(
       toInboundMediaFacts(
@@ -50,7 +50,7 @@ describe("channel turn media facts", () => {
 
   it("builds legacy media payload fields from inbound media facts", () => {
     expect(
-      buildChannelTurnMediaPayload([
+      buildChannelInboundMediaPayload([
         { path: "/tmp/image.png", contentType: "image/png", kind: "image" },
         {
           url: "https://example.test/audio.mp3",
@@ -71,7 +71,7 @@ describe("channel turn media facts", () => {
   });
 
   it("keeps legacy media arrays index-aligned for mixed path and URL media", () => {
-    const payload = buildChannelTurnMediaPayload([
+    const payload = buildChannelInboundMediaPayload([
       { path: "/tmp/image.png", contentType: "image/png", kind: "image" },
       { url: "https://example.test/remote.png", contentType: "image/png", kind: "image" },
     ]);

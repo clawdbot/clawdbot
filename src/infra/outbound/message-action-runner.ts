@@ -9,6 +9,7 @@ import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
+import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import type {
@@ -16,7 +17,6 @@ import type {
   ChannelMessageActionName,
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.public.js";
-import type { InboundTurnKind } from "../../channels/turn/kind.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   hasInteractiveReplyBlocks,
@@ -122,7 +122,7 @@ export type RunMessageActionParams = {
   sandboxRoot?: string;
   dryRun?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-  inboundTurnKind?: InboundTurnKind;
+  inboundEventKind?: InboundEventKind;
   abortSignal?: AbortSignal;
 };
 
@@ -558,7 +558,7 @@ async function runGatewayPluginMessageActionOrNull(params: {
       senderIsOwner: params.input.senderIsOwner,
       sessionKey: params.input.sessionKey,
       sessionId: params.input.sessionId,
-      inboundTurnKind: params.input.inboundTurnKind,
+      inboundEventKind: params.input.inboundEventKind,
       agentId: params.agentId,
       toolContext: params.input.toolContext,
       idempotencyKey: await resolveGatewayActionIdempotencyKey(
@@ -940,7 +940,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
       accountId: accountId ?? undefined,
       senderIsOwner: input.senderIsOwner,
       sessionId: input.sessionId,
-      inboundTurnKind: input.inboundTurnKind,
+      inboundEventKind: input.inboundEventKind,
       gateway,
       toolContext: input.toolContext,
       deps: input.deps,
@@ -1047,7 +1047,7 @@ async function handlePollAction(ctx: ResolvedActionContext): Promise<MessageActi
       senderIsOwner: input.senderIsOwner,
       sessionKey: input.sessionKey,
       sessionId: input.sessionId,
-      inboundTurnKind: input.inboundTurnKind,
+      inboundEventKind: input.inboundEventKind,
       gateway,
       toolContext: input.toolContext,
       dryRun,
@@ -1158,7 +1158,7 @@ async function handlePluginAction(ctx: ResolvedActionContext): Promise<MessageAc
     senderIsOwner: input.senderIsOwner,
     sessionKey: input.sessionKey,
     sessionId: input.sessionId,
-    inboundTurnKind: input.inboundTurnKind,
+    inboundEventKind: input.inboundEventKind,
     agentId,
     gateway,
     toolContext: input.toolContext,

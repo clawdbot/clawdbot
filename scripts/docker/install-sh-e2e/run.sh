@@ -297,6 +297,8 @@ NODE
 }
 
 RUN_AGENT_TURN_BG_PID=""
+AGENT_TURN_BILLING_DRIFT_STATUS=42
+CURRENT_AGENT_MODEL_PROVIDER=""
 
 run_agent_turn_logged() {
   local label="$1"
@@ -308,8 +310,31 @@ run_agent_turn_logged() {
   SESSION_JSONL="$(session_jsonl_path "$profile" "$session_id")"
   started_at="$(date +%s)"
   echo "==> Agent turn start: $label ($profile)"
-  run_agent_turn "$profile" "$session_id" "$prompt" "$out_json"
+  local status=0
+  run_agent_turn "$profile" "$session_id" "$prompt" "$out_json" || status="$?"
+  if [[ "$status" -ne 0 ]]; then
+    if agent_turn_outputs_include_billing_drift "$CURRENT_AGENT_MODEL_PROVIDER" "$out_json"; then
+      return "$AGENT_TURN_BILLING_DRIFT_STATUS"
+    fi
+    return "$status"
+  fi
   echo "==> Agent turn passed: $label ($profile, $(($(date +%s) - started_at))s)"
+}
+
+skip_profile_for_billing_drift() {
+  local profile="$1"
+  echo "SKIP: Anthropic billing drift during installer agent tool smoke ($profile)"
+  cleanup_profile
+  trap - EXIT
+}
+
+run_agent_turn_logged_or_skip_profile() {
+  local status=0
+  run_agent_turn_logged "$@" || status="$?"
+  if [[ "$status" -eq "$AGENT_TURN_BILLING_DRIFT_STATUS" ]]; then
+    skip_profile_for_billing_drift "$2"
+  fi
+  return "$status"
 }
 
 run_agent_turn_bg() {
@@ -334,6 +359,21 @@ wait_agent_turn_batch() {
     fi
   done
   return "$failed"
+}
+
+agent_turn_outputs_include_billing_drift() {
+  local provider="$1"
+  shift
+  if [[ "$provider" != "anthropic" ]]; then
+    return 1
+  fi
+  local output
+  for output in "$@"; do
+    if [[ -f "$output" ]] && grep -Eiq "credit balance is too low|billing has been disabled|insufficient credit|monthly limit exceeded" "$output"; then
+      return 0
+    fi
+  done
+  return 1
 }
 
 dump_profile_debug() {
@@ -536,6 +576,7 @@ run_profile() {
   local port="$2"
   local workspace="$3"
   local agent_model_provider="$4" # "openai"|"anthropic"
+  CURRENT_AGENT_MODEL_PROVIDER="$agent_model_provider"
 
   phase_mark_start "Onboard ($profile)"
 	  if [[ "$agent_model_provider" == "openai" ]]; then
@@ -708,12 +749,35 @@ run_profile() {
     turn_pids+=("$RUN_AGENT_TURN_BG_PID")
     run_agent_turn_bg "image write" "$profile" "$TURN4_SESSION_ID" "$prompt4" "$TURN4_JSON"
     turn_pids+=("$RUN_AGENT_TURN_BG_PID")
-    wait_agent_turn_batch "${turn_pids[@]}"
+    if ! wait_agent_turn_batch "${turn_pids[@]}"; then
+      if agent_turn_outputs_include_billing_drift "$agent_model_provider" "$TURN2_JSON" "$TURN3_JSON" "$TURN3B_JSON" "$TURN4_JSON"; then
+        skip_profile_for_billing_drift "$profile"
+        return 0
+      fi
+      return 1
+    fi
   else
-    run_agent_turn_logged "write proof copy" "$profile" "$TURN2_SESSION_ID" "$prompt2" "$TURN2_JSON"
-    run_agent_turn_logged "exec hostname" "$profile" "$TURN3_SESSION_ID" "$prompt3" "$TURN3_JSON"
-    run_agent_turn_logged "write hostname" "$profile" "$TURN3B_SESSION_ID" "$prompt3b" "$TURN3B_JSON"
-    run_agent_turn_logged "image write" "$profile" "$TURN4_SESSION_ID" "$prompt4" "$TURN4_JSON"
+    local turn_status=0
+    run_agent_turn_logged_or_skip_profile "write proof copy" "$profile" "$TURN2_SESSION_ID" "$prompt2" "$TURN2_JSON" || turn_status="$?"
+    if [[ "$turn_status" -ne 0 ]]; then
+      [[ "$turn_status" -eq "$AGENT_TURN_BILLING_DRIFT_STATUS" ]] && return 0
+      return "$turn_status"
+    fi
+    run_agent_turn_logged_or_skip_profile "exec hostname" "$profile" "$TURN3_SESSION_ID" "$prompt3" "$TURN3_JSON" || turn_status="$?"
+    if [[ "$turn_status" -ne 0 ]]; then
+      [[ "$turn_status" -eq "$AGENT_TURN_BILLING_DRIFT_STATUS" ]] && return 0
+      return "$turn_status"
+    fi
+    run_agent_turn_logged_or_skip_profile "write hostname" "$profile" "$TURN3B_SESSION_ID" "$prompt3b" "$TURN3B_JSON" || turn_status="$?"
+    if [[ "$turn_status" -ne 0 ]]; then
+      [[ "$turn_status" -eq "$AGENT_TURN_BILLING_DRIFT_STATUS" ]] && return 0
+      return "$turn_status"
+    fi
+    run_agent_turn_logged_or_skip_profile "image write" "$profile" "$TURN4_SESSION_ID" "$prompt4" "$TURN4_JSON" || turn_status="$?"
+    if [[ "$turn_status" -ne 0 ]]; then
+      [[ "$turn_status" -eq "$AGENT_TURN_BILLING_DRIFT_STATUS" ]] && return 0
+      return "$turn_status"
+    fi
   fi
 
   assert_agent_json_has_text "$TURN2_JSON"
@@ -725,9 +789,14 @@ run_profile() {
     exit 1
   fi
   TURN2B_SESSION_ID="${SESSION_ID_PREFIX}-read-copy"
-  run_agent_turn_logged "read proof copy" "$profile" "$TURN2B_SESSION_ID" \
+  local read_turn_status=0
+  run_agent_turn_logged_or_skip_profile "read proof copy" "$profile" "$TURN2B_SESSION_ID" \
     "Use the read tool (not exec) to read ${PROOF_COPY}. Reply with the exact contents only (no extra whitespace)." \
-    "$TURN2B_JSON"
+    "$TURN2B_JSON" || read_turn_status="$?"
+  if [[ "$read_turn_status" -ne 0 ]]; then
+    [[ "$read_turn_status" -eq "$AGENT_TURN_BILLING_DRIFT_STATUS" ]] && return 0
+    return "$read_turn_status"
+  fi
   assert_agent_json_has_text "$TURN2B_JSON"
   assert_agent_json_ok "$TURN2B_JSON" "$agent_model_provider"
   local reply2

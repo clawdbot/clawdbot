@@ -134,6 +134,7 @@ export type ImageDescriptionRequest = {
   preferredProfile?: string;
   authStore?: AuthProfileStore;
   agentDir: string;
+  workspaceDir?: string;
   cfg: OpenClawConfig;
   model: string;
   provider: string;
@@ -156,6 +157,7 @@ export type ImagesDescriptionRequest = {
   preferredProfile?: string;
   authStore?: AuthProfileStore;
   agentDir: string;
+  workspaceDir?: string;
   cfg: OpenClawConfig;
 };
 

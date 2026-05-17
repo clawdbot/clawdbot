@@ -1,9 +1,18 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
+import {
+  clearCurrentPluginMetadataSnapshot,
+  setCurrentPluginMetadataSnapshot,
+} from "../plugins/current-plugin-metadata-snapshot.js";
+import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
+import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { writeSkill, writeWorkspaceSkills } from "./skills.e2e-test-helpers.js";
 import {
   restoreMockSkillsHomeEnv,
@@ -52,6 +61,103 @@ let envSnapshot: SkillsHomeEnvSnapshot;
 let tempRoot = "";
 let workspaceCaseIndex = 0;
 
+function createWorkspacePluginRegistry(workspaceDir: string): PluginManifestRegistry {
+  const extensionsRoot = path.join(workspaceDir, ".openclaw", "extensions");
+  const plugins: PluginManifestRecord[] = [];
+  for (const id of ["open-prose", "browser"]) {
+    const rootDir = path.join(extensionsRoot, id);
+    const manifestPath = path.join(rootDir, "openclaw.plugin.json");
+    if (!fsSync.existsSync(manifestPath)) {
+      continue;
+    }
+    const manifest = JSON.parse(fsSync.readFileSync(manifestPath, "utf8")) as {
+      id?: string;
+      enabledByDefault?: boolean;
+      skills?: string[];
+      configSchema?: Record<string, unknown>;
+    };
+    plugins.push({
+      id: manifest.id ?? id,
+      origin: id === "browser" ? "bundled" : "workspace",
+      enabledByDefault: manifest.enabledByDefault,
+      channels: [],
+      providers: [],
+      cliBackends: [],
+      legacyPluginIds: [],
+      kind: [],
+      skills: manifest.skills ?? ["./skills"],
+      hooks: [],
+      rootDir,
+      source: rootDir,
+      manifestPath,
+      configSchema: manifest.configSchema,
+    });
+  }
+  return { plugins, diagnostics: [] };
+}
+
+function createWorkspacePluginMetadataSnapshot(params: {
+  workspaceDir: string;
+  config?: OpenClawConfig;
+  manifestRegistry: PluginManifestRegistry;
+}): PluginMetadataSnapshot {
+  const policyHash = resolveInstalledPluginIndexPolicyHash(params.config);
+  return {
+    policyHash,
+    workspaceDir: params.workspaceDir,
+    index: {
+      version: 1,
+      hostContractVersion: "test",
+      compatRegistryVersion: "test",
+      migrationVersion: 1,
+      policyHash,
+      generatedAtMs: 1,
+      installRecords: {},
+      plugins: [],
+      diagnostics: [],
+    },
+    registryDiagnostics: [],
+    manifestRegistry: params.manifestRegistry,
+    plugins: params.manifestRegistry.plugins,
+    diagnostics: params.manifestRegistry.diagnostics,
+    byPluginId: new Map(params.manifestRegistry.plugins.map((plugin) => [plugin.id, plugin])),
+    normalizePluginId: (pluginId) => pluginId,
+    owners: {
+      channels: new Map(),
+      channelConfigs: new Map(),
+      providers: new Map(),
+      modelCatalogProviders: new Map(),
+      cliBackends: new Map(),
+      setupProviders: new Map(),
+      commandAliases: new Map(),
+      contracts: new Map(),
+    },
+    metrics: {
+      registrySnapshotMs: 0,
+      manifestRegistryMs: 0,
+      ownerMapsMs: 0,
+      totalMs: 0,
+      indexPluginCount: 0,
+      manifestPluginCount: params.manifestRegistry.plugins.length,
+    },
+  };
+}
+
+function setWorkspacePluginMetadataSnapshot(workspaceDir: string, config?: OpenClawConfig): void {
+  const manifestRegistry = createWorkspacePluginRegistry(workspaceDir);
+  setCurrentPluginMetadataSnapshot(
+    createWorkspacePluginMetadataSnapshot({
+      workspaceDir,
+      manifestRegistry,
+      ...(config === undefined ? {} : { config }),
+    }),
+    {
+      workspaceDir,
+      ...(config === undefined ? {} : { config }),
+    },
+  );
+}
+
 function collectMatching<T>(items: readonly T[], predicate: (item: T) => boolean): T[] {
   const matches: T[] = [];
   for (const item of items) {
@@ -99,6 +205,7 @@ function loadTestWorkspaceSkillEntries(
   workspaceDir: string,
   opts?: Parameters<typeof loadWorkspaceSkillEntries>[1],
 ) {
+  setWorkspacePluginMetadataSnapshot(workspaceDir, opts?.config);
   return loadWorkspaceSkillEntries(workspaceDir, {
     managedSkillsDir: path.join(workspaceDir, ".managed"),
     bundledSkillsDir: "",
@@ -115,6 +222,7 @@ beforeAll(async () => {
 });
 
 afterEach(async () => {
+  clearCurrentPluginMetadataSnapshot();
   setLoggerOverride(null);
   loggingState.rawConsole = null;
   resetLogger();

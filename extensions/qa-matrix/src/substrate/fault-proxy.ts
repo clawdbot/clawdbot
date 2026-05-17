@@ -32,10 +32,20 @@ type MatrixQaFaultProxyResponse = {
   status: number;
 };
 
+type MatrixQaFaultProxyForwardedResponse = {
+  body: Buffer;
+  headers: Headers;
+  status: number;
+};
+
 export type MatrixQaFaultProxyRule = {
   id: string;
   match(request: MatrixQaFaultProxyRequest): boolean;
-  response(request: MatrixQaFaultProxyRequest): MatrixQaFaultProxyResponse;
+  mutateResponse?(params: {
+    request: MatrixQaFaultProxyRequest;
+    response: MatrixQaFaultProxyForwardedResponse;
+  }): MatrixQaFaultProxyForwardedResponse | Promise<MatrixQaFaultProxyForwardedResponse>;
+  response?(request: MatrixQaFaultProxyRequest): MatrixQaFaultProxyResponse;
 };
 
 export type MatrixQaFaultProxyHit = {
@@ -105,7 +115,7 @@ async function forwardMatrixQaFaultProxyRequest(params: {
   body: Buffer;
   req: IncomingMessage;
   targetUrl: URL;
-}) {
+}): Promise<MatrixQaFaultProxyForwardedResponse> {
   const method = params.req.method ?? "GET";
   const init: RequestInit = {
     headers: buildFetchHeaders(params.req.headers),
@@ -134,7 +144,7 @@ async function forwardMatrixQaFaultProxyRequest(params: {
 
 function writeForwardedResponse(
   res: ServerResponse,
-  response: Awaited<ReturnType<typeof forwardMatrixQaFaultProxyRequest>>,
+  response: MatrixQaFaultProxyForwardedResponse,
 ) {
   const headers: Record<string, string> = {};
   for (const [key, value] of response.headers) {
@@ -172,17 +182,24 @@ export async function startMatrixQaFaultProxy(params: {
           path: request.path,
           ruleId: rule.id,
         });
-        writeJsonResponse(res, rule.response(request));
-        return;
+        if (rule.response) {
+          writeJsonResponse(res, rule.response(request));
+          return;
+        }
       }
-      writeForwardedResponse(
-        res,
-        await forwardMatrixQaFaultProxyRequest({
-          body,
-          req,
-          targetUrl: requestUrl,
-        }),
-      );
+      const forwarded = await forwardMatrixQaFaultProxyRequest({
+        body,
+        req,
+        targetUrl: requestUrl,
+      });
+      const response =
+        rule?.mutateResponse !== undefined
+          ? await rule.mutateResponse({
+              request,
+              response: forwarded,
+            })
+          : forwarded;
+      writeForwardedResponse(res, response);
     } catch (error) {
       writeJsonResponse(res, {
         body: {

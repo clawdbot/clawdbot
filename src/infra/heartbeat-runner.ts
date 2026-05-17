@@ -33,7 +33,9 @@ import {
   stripHeartbeatToken,
   type HeartbeatTask,
 } from "../auto-reply/heartbeat.js";
+import { replaceGenericExternalRunFailureText } from "../auto-reply/reply/agent-runner-failure-copy.js";
 import { resolveDefaultModel } from "../auto-reply/reply/directive-handling.defaults.js";
+import { replyRunRegistry } from "../auto-reply/reply/reply-run-registry.js";
 import { resolveResponsePrefixTemplate } from "../auto-reply/reply/response-prefix-template.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
@@ -142,6 +144,7 @@ export type HeartbeatDeps = OutboundSendDeps &
     runtime?: RuntimeEnv;
     getQueueSize?: (lane?: string) => number;
     getCommandLaneSnapshots?: () => readonly CommandLaneSnapshot[];
+    isReplyRunActive?: (sessionKey: string) => boolean;
     nowMs?: () => number;
   };
 
@@ -1350,6 +1353,16 @@ export async function runHeartbeatOnce(opts: {
     return { status: "skipped", reason: preflight.skipReason };
   }
   const { entry, sessionKey, storePath, suppressOriginatingContext } = preflight.session;
+  const isReplyRunActive =
+    opts.deps?.isReplyRunActive ?? ((key: string) => replyRunRegistry.isActive(key));
+  if (isReplyRunActive(sessionKey)) {
+    emitHeartbeatEvent({
+      status: "skipped",
+      reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
+      durationMs: Date.now() - startedAt,
+    });
+    return { status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT };
+  }
 
   // Check the resolved session lane — if it is busy, skip to avoid interrupting
   // an active streaming turn.  The wake-layer retry (heartbeat-wake.ts) will
@@ -1810,6 +1823,14 @@ export async function runHeartbeatOnce(opts: {
       normalized.text = execFallbackText;
       normalized.shouldSkip = false;
     }
+    const replacement = !heartbeatToolResponse
+      ? replaceGenericExternalRunFailureText(normalized.text)
+      : { text: normalized.text, replaced: false };
+    const deliveredAgentRunFailure = replacement.replaced;
+    if (deliveredAgentRunFailure) {
+      normalized.text = replacement.text;
+      normalized.shouldSkip = false;
+    }
     const shouldSkipMain =
       normalized.shouldSkip && !normalized.hasMedia && !hasRelayableExecCompletion;
     if (shouldSkipMain && reasoningPayloads.length === 0) {
@@ -2000,15 +2021,17 @@ export async function runHeartbeatOnce(opts: {
       });
     }
 
+    const sentStatus = deliveredAgentRunFailure ? "failed" : "sent";
     emitHeartbeatEvent({
-      status: "sent",
+      status: sentStatus,
       to: delivery.to,
+      ...(deliveredAgentRunFailure ? { reason: "agent-runner-failure" } : {}),
       preview: previewText?.slice(0, 200),
       durationMs: Date.now() - startedAt,
       hasMedia: mediaUrls.length > 0,
       channel: delivery.channel,
       accountId: delivery.accountId,
-      indicatorType: visibility.useIndicator ? resolveIndicatorType("sent") : undefined,
+      indicatorType: visibility.useIndicator ? resolveIndicatorType(sentStatus) : undefined,
     });
     await updateTaskTimestamps();
     consumeInspectedSystemEvents();

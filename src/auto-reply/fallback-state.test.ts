@@ -154,4 +154,31 @@ describe("fallback-state", () => {
       }),
     ).toBeNull();
   });
+
+  it.each(["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "o3"])(
+    "does not build a fallback notice for the OpenAI Codex runtime provider alias with %s",
+    (model) => {
+      expect(
+        buildFallbackNotice({
+          selectedProvider: "openai",
+          selectedModel: model,
+          activeProvider: "openai-codex",
+          activeModel: model,
+          attempts: [],
+        }),
+      ).toBeNull();
+    },
+  );
+
+  it("still reports fallback when the OpenAI Codex runtime switches model ids", () => {
+    expect(
+      buildFallbackNotice({
+        selectedProvider: "openai",
+        selectedModel: "gpt-5.5",
+        activeProvider: "openai-codex",
+        activeModel: "gpt-5.4",
+        attempts: [],
+      }),
+    ).toContain("selected openai/gpt-5.5");
+  });
 });

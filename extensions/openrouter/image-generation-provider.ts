@@ -19,7 +19,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import { OPENROUTER_BASE_URL } from "./provider-catalog.js";
 
 const DEFAULT_MODEL = "google/gemini-3.1-flash-image-preview";
-const DEFAULT_TIMEOUT_MS = 90_000;
+const DEFAULT_TIMEOUT_MS = 180_000;
 const MAX_IMAGE_RESULTS = 4;
 const SUPPORTED_MODELS = [
   DEFAULT_MODEL,

@@ -1,7 +1,10 @@
 import { EventEmitter } from "node:events";
 import { Readable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { computeSandboxConfigHash } from "./config-hash.js";
+import {
+  computeSandboxConfigHash,
+  SANDBOX_DOCKER_EXPLICIT_ENV_POLICY_EPOCH,
+} from "./config-hash.js";
 import { collectDockerFlagValues } from "./test-args.js";
 import type { SandboxConfig } from "./types.js";
 import { SANDBOX_MOUNT_FORMAT_VERSION } from "./workspace-mounts.js";
@@ -111,6 +114,7 @@ function createSandboxConfig(
   dns: string[],
   binds?: string[],
   workspaceAccess: "rw" | "ro" | "none" = "rw",
+  env: Record<string, string> = { LANG: "C.UTF-8" },
 ): SandboxConfig {
   return {
     mode: "all",
@@ -126,7 +130,7 @@ function createSandboxConfig(
       tmpfs: ["/tmp", "/var/tmp", "/run"],
       network: "none",
       capDrop: ["ALL"],
-      env: { LANG: "C.UTF-8" },
+      env,
       dns,
       extraHosts: ["host.docker.internal:host-gateway"],
       binds: binds ?? ["/tmp/workspace:/workspace:rw"],
@@ -243,6 +247,50 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     expect(createCall.args).toContain(`openclaw.configHash=${newHash}`);
     const registryUpdate = registryMocks.updateRegistry.mock.calls.at(-1)?.[0];
     expect(registryUpdate?.containerName).toBe("oc-test-shared");
+    expect(registryUpdate?.configHash).toBe(newHash);
+  });
+
+  it("recreates shared container when previously filtered explicit env becomes allowed", async () => {
+    const workspaceDir = "/tmp/workspace";
+    const cfg = createSandboxConfig(["1.1.1.1"], undefined, "rw", {
+      LANG: "C.UTF-8",
+      GEMINI_API_KEY: "dummy-gemini",
+    });
+
+    const oldHash = computeSandboxConfigHash({
+      docker: cfg.docker,
+      workspaceAccess: cfg.workspaceAccess,
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+      mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
+    });
+    const newHash = computeSandboxConfigHash({
+      docker: cfg.docker,
+      dockerEnvPolicyEpoch: SANDBOX_DOCKER_EXPLICIT_ENV_POLICY_EPOCH,
+      workspaceAccess: cfg.workspaceAccess,
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+      mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
+    });
+    expect(newHash).not.toBe(oldHash);
+
+    spawnState.labelHash = oldHash;
+    registryMocks.readRegistryEntry.mockResolvedValue({
+      containerName: "oc-test-shared",
+      sessionKey: "shared",
+      createdAtMs: 1,
+      lastUsedAtMs: 0,
+      image: cfg.docker.image,
+      configHash: oldHash,
+    });
+
+    const createCall = await ensureSandboxCreateCallForTest({ cfg, workspaceDir });
+    expect(createCall.args).toContain(`openclaw.configHash=${newHash}`);
+    expect(collectDockerFlagValues(createCall.args, "--env")).toEqual(
+      expect.arrayContaining(["LANG=C.UTF-8", "GEMINI_API_KEY=dummy-gemini"]),
+    );
+
+    const registryUpdate = registryMocks.updateRegistry.mock.calls.at(-1)?.[0];
     expect(registryUpdate?.configHash).toBe(newHash);
   });
 

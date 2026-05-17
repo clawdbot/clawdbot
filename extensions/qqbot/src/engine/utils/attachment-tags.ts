@@ -9,7 +9,7 @@
  *   • With source: `MEDIA:{source}` (no bracketed alias)
  *   • Without source: `[{type}]` or `[{type}: {filename}]`
  *
- * Both consumers (group history / current inbound turn, and the ref-index
+ * Both consumers (group history / current inbound event, and the ref-index
  * quoted-message block) call the same function with the same vocabulary.
  * They differ only on two orthogonal dimensions:
  *

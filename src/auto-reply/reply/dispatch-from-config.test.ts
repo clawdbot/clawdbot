@@ -153,6 +153,7 @@ const ttsMocks = vi.hoisted(() => {
           ...params.payload,
           mediaUrl: "https://example.com/tts-synth.opus",
           audioAsVoice: true,
+          trustedLocalMedia: true,
         };
       }
       return params.payload;
@@ -1160,6 +1161,33 @@ describe("dispatchReplyFromConfig", () => {
     expect(routeCall?.threadId).toBe("post-root");
   });
 
+  it("uses Slack DM TransportThreadId when ReplyToId is the current message", async () => {
+    setNoAbort();
+    mocks.routeReply.mockClear();
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "webchat",
+      Surface: "webchat",
+      SessionKey: "agent:main:slack:direct:u123",
+      AccountId: "default",
+      ChatType: "direct",
+      MessageSid: "101.000",
+      ReplyToId: "101.000",
+      TransportThreadId: "101.000",
+      MessageThreadId: undefined,
+      OriginatingChannel: "slack",
+      OriginatingTo: "user:U123",
+      ExplicitDeliverRoute: true,
+    });
+
+    const replyResolver = async () => ({ text: "hi" }) satisfies ReplyPayload;
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    const routeCall = firstRouteReplyCall() as { threadId?: string | number } | undefined;
+    expect(routeCall?.threadId).toBe("101.000");
+  });
+
   it("does not resurrect a cleared route thread from origin metadata", async () => {
     setNoAbort();
     mocks.routeReply.mockClear();
@@ -1618,6 +1646,31 @@ describe("dispatchReplyFromConfig", () => {
     expect(sent.mediaUrl).toBe("https://example.com/tts-native.opus");
     expect(sent.text).toBeUndefined();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("bypasses final TTS for status notices", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      ChatType: "direct",
+    });
+    const notice = {
+      text: "Model Fallback: openai/gpt-5.5",
+      isFallbackNotice: true,
+    } satisfies ReplyPayload;
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyResolver: async () => notice,
+    });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(notice);
   });
 
   it("renders plain-text plan updates and concise approval progress when verbose is enabled", async () => {
@@ -2695,6 +2748,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(finalPayload?.mediaUrls).toStrictEqual(["/tmp/openclaw-media/normalized-tts.ogg"]);
     expect(finalPayload?.audioAsVoice).toBe(true);
     expect(finalPayload?.spokenText).toBe("Hello from block streaming.");
+    expect(finalPayload?.trustedLocalMedia).toBe(true);
   });
 
   it("closes oneshot ACP sessions after the turn completes", async () => {
@@ -4735,7 +4789,10 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     const replyResolver = vi.fn(async () => blockedReply satisfies ReplyPayload);
 
     const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({ SessionKey: "test:session" }),
+      ctx: buildTestCtx({
+        ChatType: "channel",
+        SessionKey: "test:session",
+      }),
       cfg: emptyConfig,
       dispatcher,
       replyResolver,
@@ -4800,7 +4857,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     const replyResolver = vi.fn(async () => failureNotice satisfies ReplyPayload);
     const ctx = buildTestCtx({
       ChatType: "group",
-      InboundTurnKind: "room_event",
+      InboundEventKind: "room_event",
       SessionKey: "test:session",
     });
 
@@ -4900,7 +4957,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it("defaults group/channel turns to message-tool-only source delivery", async () => {
+  it("keeps group/channel final replies private when message-tool-only events miss the message tool", async () => {
     setNoAbort();
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
@@ -4922,10 +4979,11 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
     expect(replyResolver).toHaveBeenCalledTimes(1);
     expect(result.queuedFinal).toBe(false);
+    expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it("does not auto-route same-provider group/channel final replies in message-tool-only mode", async () => {
+  it("keeps same-provider group/channel final replies private in message-tool-only mode", async () => {
     setNoAbort();
     mocks.routeReply.mockClear();
     const dispatcher = createDispatcher();
@@ -4953,6 +5011,31 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(result.queuedFinal).toBe(false);
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
     expect(mocks.routeReply).not.toHaveBeenCalled();
+  });
+
+  it("keeps ambient room-event group/channel finals private without a message tool send", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      expect(opts?.sourceReplyDeliveryMode).toBe("message_tool_only");
+      return { text: "ambient final reply" } satisfies ReplyPayload;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        ChatType: "channel",
+        InboundEventKind: "room_event",
+        SessionKey: "test:discord:channel:C1",
+      }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(result.queuedFinal).toBe(false);
+    expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
   it("keeps default direct source delivery automatic", async () => {
@@ -5098,7 +5181,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(firstFinalReplyPayload(dispatcher)?.text).toBe("requested fallback");
   });
 
-  it("keeps native command replies visible in group/channel turns", async () => {
+  it("keeps native command replies visible in group/channel events", async () => {
     setNoAbort();
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {

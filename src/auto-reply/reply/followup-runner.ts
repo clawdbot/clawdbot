@@ -1,5 +1,10 @@
 import crypto from "node:crypto";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
+import {
+  clearAutoFallbackPrimaryProbeSelection,
+  entryMatchesAutoFallbackPrimaryProbe,
+  markAutoFallbackPrimaryProbe,
+} from "../../agents/agent-scope.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
@@ -9,7 +14,7 @@ import {
   buildAgentRuntimeDeliveryPlan,
   buildAgentRuntimeOutcomePlan,
 } from "../../agents/runtime-plan/build.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
@@ -17,6 +22,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { resolveRunAfterAutoFallbackPrimaryProbeRecheck } from "./agent-runner-execution.js";
 import { runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
 import {
   resolveQueuedReplyExecutionConfig,
@@ -222,11 +228,22 @@ export function createFollowupRunner(params: {
       });
       const replySessionKey = queued.run.sessionKey ?? sessionKey;
       const runtimeConfig = resolveQueuedReplyRuntimeConfig(queued.run.config);
-      const effectiveQueued =
+      let effectiveQueued =
         runtimeConfig === queued.run.config
           ? queued
           : { ...queued, run: { ...queued.run, config: runtimeConfig } };
-      const run = effectiveQueued.run;
+      let run = effectiveQueued.run;
+      let activeSessionEntry =
+        (replySessionKey ? sessionStore?.[replySessionKey] : undefined) ??
+        (replySessionKey === sessionKey ? sessionEntry : undefined);
+      run = resolveRunAfterAutoFallbackPrimaryProbeRecheck({
+        run,
+        entry: activeSessionEntry,
+        sessionKey: replySessionKey,
+      });
+      if (run !== effectiveQueued.run) {
+        effectiveQueued = { ...effectiveQueued, run };
+      }
       replyOperation = createReplyOperation({
         sessionId: run.sessionId,
         sessionKey: replySessionKey ?? "",
@@ -251,8 +268,6 @@ export function createFollowupRunner(params: {
       let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
       let fallbackProvider = run.provider;
       let fallbackModel = run.model;
-      let activeSessionEntry =
-        (sessionKey ? sessionStore?.[sessionKey] : undefined) ?? sessionEntry;
       activeSessionEntry = await runPreflightCompactionIfNeeded({
         cfg: runtimeConfig,
         followupRun: effectiveQueued,
@@ -261,7 +276,7 @@ export function createFollowupRunner(params: {
         agentCfgContextTokens,
         sessionEntry: activeSessionEntry,
         sessionStore,
-        sessionKey,
+        sessionKey: replySessionKey,
         storePath,
         isHeartbeat: opts?.isHeartbeat === true,
         replyOperation,
@@ -269,6 +284,72 @@ export function createFollowupRunner(params: {
       let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
         activeSessionEntry?.systemPromptReport,
       );
+      const resolveRunForFallbackCandidate = (
+        provider: string,
+        model: string,
+      ): FollowupRun["run"] => {
+        const probe = run.autoFallbackPrimaryProbe;
+        const isPrimaryProbeCandidate =
+          probe && provider === probe.provider && model === probe.model;
+        if (
+          probe &&
+          provider === probe.fallbackProvider &&
+          !isPrimaryProbeCandidate &&
+          probe.fallbackAuthProfileId
+        ) {
+          const candidateRun: FollowupRun["run"] = {
+            ...run,
+            provider,
+            model,
+            authProfileId: probe.fallbackAuthProfileId,
+          };
+          if (probe.fallbackAuthProfileIdSource) {
+            candidateRun.authProfileIdSource = probe.fallbackAuthProfileIdSource;
+          } else {
+            delete candidateRun.authProfileIdSource;
+          }
+          return candidateRun;
+        }
+        return run;
+      };
+      const clearRecoveredAutoFallbackPrimaryProbe = async (paramsForClear: {
+        provider: string;
+        model: string;
+      }): Promise<void> => {
+        const probe = run.autoFallbackPrimaryProbe;
+        if (!probe) {
+          return;
+        }
+        if (paramsForClear.provider !== probe.provider || paramsForClear.model !== probe.model) {
+          return;
+        }
+        if (!replySessionKey || !sessionStore) {
+          return;
+        }
+        const entry = sessionStore[replySessionKey] ?? activeSessionEntry;
+        if (!entry || !entryMatchesAutoFallbackPrimaryProbe(entry, probe)) {
+          return;
+        }
+        clearAutoFallbackPrimaryProbeSelection(entry);
+        sessionStore[replySessionKey] = entry;
+        activeSessionEntry = entry;
+        if (!storePath) {
+          return;
+        }
+        await updateSessionStore(storePath, (store) => {
+          const persistedEntry = store[replySessionKey];
+          if (!persistedEntry) {
+            return;
+          }
+          if (!entryMatchesAutoFallbackPrimaryProbe(persistedEntry, probe)) {
+            return;
+          }
+          clearAutoFallbackPrimaryProbeSelection(persistedEntry);
+          store[replySessionKey] = persistedEntry;
+        });
+      };
+      fallbackProvider = run.provider;
+      fallbackModel = run.model;
       replyOperation.setPhase("running");
       try {
         const outcomePlan = buildAgentRuntimeOutcomePlan();
@@ -279,7 +360,17 @@ export function createFollowupRunner(params: {
           classifyResult: ({ result, provider, model }) =>
             outcomePlan.classifyRunResult({ result, provider, model }),
           run: async (provider, model, runOptions) => {
-            const authProfile = resolveRunAuthProfile(run, provider, { config: runtimeConfig });
+            const candidateRun = resolveRunForFallbackCandidate(provider, model);
+            const activeProbe = run.autoFallbackPrimaryProbe;
+            if (activeProbe && provider === activeProbe.provider && model === activeProbe.model) {
+              markAutoFallbackPrimaryProbe({
+                probe: activeProbe,
+                sessionKey: replySessionKey,
+              });
+            }
+            const authProfile = resolveRunAuthProfile(candidateRun, provider, {
+              config: runtimeConfig,
+            });
             let attemptCompactionCount = 0;
             try {
               const result = await runEmbeddedPiAgent({
@@ -314,8 +405,8 @@ export function createFollowupRunner(params: {
                 skillsSnapshot: run.skillsSnapshot,
                 prompt: queued.prompt,
                 transcriptPrompt: queued.transcriptPrompt,
-                currentTurnKind: queued.currentTurnKind,
-                currentTurnContext: queued.currentTurnContext,
+                currentInboundEventKind: queued.currentInboundEventKind,
+                currentInboundContext: queued.currentInboundContext,
                 extraSystemPrompt: run.extraSystemPrompt,
                 silentReplyPromptMode: run.silentReplyPromptMode,
                 sourceReplyDeliveryMode: run.sourceReplyDeliveryMode,
@@ -375,6 +466,10 @@ export function createFollowupRunner(params: {
         runResult = fallbackResult.result;
         fallbackProvider = fallbackResult.provider;
         fallbackModel = fallbackResult.model;
+        await clearRecoveredAutoFallbackPrimaryProbe({
+          provider: fallbackProvider,
+          model: fallbackModel,
+        });
       } catch (err) {
         const message = formatErrorMessage(err);
         replyOperation.fail("run_failed", err);
@@ -393,18 +488,19 @@ export function createFollowupRunner(params: {
           provider: providerUsed,
           model: modelUsed,
           contextTokensOverride: agentCfgContextTokens,
-          fallbackContextTokens: sessionEntry?.contextTokens ?? DEFAULT_CONTEXT_TOKENS,
+          fallbackContextTokens: activeSessionEntry?.contextTokens ?? DEFAULT_CONTEXT_TOKENS,
           allowAsyncLoad: false,
         }) ?? DEFAULT_CONTEXT_TOKENS;
 
-      if (storePath && sessionKey) {
+      if (storePath && replySessionKey) {
         await persistRunSessionUsage({
           storePath,
-          sessionKey,
+          sessionKey: replySessionKey,
           cfg: runtimeConfig,
           usage,
           lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
           promptTokens,
+          isHeartbeat: opts?.isHeartbeat === true,
           modelUsed,
           providerUsed,
           contextTokensUsed,
@@ -440,9 +536,9 @@ export function createFollowupRunner(params: {
         const previousSessionId = run.sessionId;
         const count = await incrementRunCompactionCount({
           cfg: runtimeConfig,
-          sessionEntry,
+          sessionEntry: activeSessionEntry,
           sessionStore,
-          sessionKey,
+          sessionKey: replySessionKey,
           storePath,
           amount: autoCompactionCount,
           compactionTokensAfter: runResult.meta?.agentMeta?.compactionTokensAfter,
@@ -452,7 +548,7 @@ export function createFollowupRunner(params: {
           newSessionFile: runResult.meta?.agentMeta?.sessionFile,
         });
         const refreshedSessionEntry =
-          sessionKey && sessionStore ? sessionStore[sessionKey] : undefined;
+          replySessionKey && sessionStore ? sessionStore[replySessionKey] : undefined;
         if (refreshedSessionEntry) {
           const queueKey = run.sessionKey ?? sessionKey;
           if (queueKey) {

@@ -11,6 +11,7 @@ export function registerProviderStreamForModel<TApi extends Api>(params: {
   agentDir?: string;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  allowRuntimePluginLoad?: boolean;
 }): StreamFn | undefined {
   const streamFn =
     resolveProviderStreamFn({
@@ -18,6 +19,7 @@ export function registerProviderStreamForModel<TApi extends Api>(params: {
       config: params.cfg,
       workspaceDir: params.workspaceDir,
       env: params.env,
+      allowRuntimePluginLoad: params.allowRuntimePluginLoad,
       context: {
         config: params.cfg,
         agentDir: params.agentDir,

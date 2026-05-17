@@ -866,17 +866,10 @@ describe("ensureAuthProfileStore", () => {
       const persistedProfile = persisted.profiles["openai-codex:default"];
       expect(persistedProfile?.type).toBe("oauth");
       expect(persistedProfile?.provider).toBe("openai-codex");
-      const oauthRef = persistedProfile?.oauthRef as
-        | { source?: string; provider?: string; id?: unknown }
-        | undefined;
-      expect(oauthRef?.source).toBe("openclaw-credentials");
-      expect(oauthRef?.provider).toBe("openai-codex");
-      expect(typeof oauthRef?.id).toBe("string");
-      expect(persistedProfile).not.toHaveProperty("access");
-      expect(persistedProfile).not.toHaveProperty("refresh");
+      expect(persistedProfile?.access).toBe("access-token");
+      expect(persistedProfile?.refresh).toBe("refresh-token");
+      expect(persistedProfile).not.toHaveProperty("oauthRef");
       expect(persistedProfile).not.toHaveProperty("idToken");
-      expect(JSON.stringify(persisted)).not.toContain("access-token");
-      expect(JSON.stringify(persisted)).not.toContain("refresh-token");
     } finally {
       clearRuntimeAuthProfileStoreSnapshots();
       restoreEnvValue("OPENCLAW_STATE_DIR", previousStateDir);

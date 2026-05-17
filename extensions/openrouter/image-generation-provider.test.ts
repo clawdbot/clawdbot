@@ -217,6 +217,44 @@ describe("openrouter image generation provider", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
+  it("uses a 180s default timeout when no request timeout is provided", async () => {
+    const release = vi.fn(async () => {});
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                images: [
+                  {
+                    imageUrl: {
+                      url: `data:image/png;base64,${Buffer.from("png-one").toString("base64")}`,
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+      },
+      release,
+    });
+
+    const provider = buildOpenRouterImageGenerationProvider();
+    await provider.generateImage({
+      provider: "openrouter",
+      model: "google/gemini-3.1-flash-image-preview",
+      prompt: "draw a sticker",
+      cfg: {},
+    });
+
+    expect(postJsonRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeoutMs: 180_000,
+      }),
+    );
+  });
+
   it("sends reference images as data URLs for edit-style requests", async () => {
     postJsonRequestMock.mockResolvedValue({
       response: {

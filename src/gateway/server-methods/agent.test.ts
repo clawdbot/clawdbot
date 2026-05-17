@@ -1696,6 +1696,239 @@ describe("gateway agent handler", () => {
     expect(callArgs.bashElevated).toEqual(bashElevated);
   });
 
+  it("dedupes elevated exec approval followups across nonce idempotency keys", async () => {
+    const bashElevated = {
+      enabled: true,
+      allowed: true,
+      defaultLevel: "on" as const,
+    };
+    const firstRegistration = registerExecApprovalFollowupRuntimeHandoff({
+      approvalId: "req-elevated-duplicate",
+      sessionKey: "agent:main:telegram:direct:123",
+      bashElevated,
+    });
+    const secondRegistration = registerExecApprovalFollowupRuntimeHandoff({
+      approvalId: "req-elevated-duplicate",
+      sessionKey: "agent:main:telegram:direct:123",
+      bashElevated,
+    });
+    if (!firstRegistration || !secondRegistration) {
+      throw new Error("expected runtime handoff ids");
+    }
+    mockMainSessionEntry({
+      sessionId: "existing-session-id",
+      lastChannel: "telegram",
+      lastTo: "123",
+    });
+    mocks.agentCommand.mockImplementation(() => new Promise(() => {}));
+    const context = makeContext();
+    const agentCommandCallsBefore = mocks.agentCommand.mock.calls.length;
+
+    await invokeAgent(
+      {
+        message: "exec followup",
+        sessionKey: "agent:main:telegram:direct:123",
+        channel: "telegram",
+        idempotencyKey: firstRegistration.idempotencyKey,
+        internalRuntimeHandoffId: firstRegistration.handoffId,
+      },
+      { reqId: "exec-followup-duplicate-1", client: backendGatewayClient(), context },
+    );
+    expect(mocks.agentCommand).toHaveBeenCalledTimes(agentCommandCallsBefore + 1);
+
+    const secondRespond = await invokeAgent(
+      {
+        message: "exec followup duplicate",
+        sessionKey: "agent:main:telegram:direct:123",
+        channel: "telegram",
+        idempotencyKey: secondRegistration.idempotencyKey,
+        internalRuntimeHandoffId: secondRegistration.handoffId,
+      },
+      {
+        reqId: "exec-followup-duplicate-2",
+        client: backendGatewayClient(),
+        context,
+        flushDispatch: false,
+      },
+    );
+    await flushScheduledDispatchStep();
+    await flushScheduledDispatchStep();
+
+    expect(mocks.agentCommand).toHaveBeenCalledTimes(agentCommandCallsBefore + 1);
+    expect(mockCallArg(secondRespond, 0, 3)).toEqual({ cached: true });
+  });
+
+  it("reserves exec approval followup dedupe before awaited session work", async () => {
+    const bashElevated = {
+      enabled: true,
+      allowed: true,
+      defaultLevel: "on" as const,
+    };
+    const firstRegistration = registerExecApprovalFollowupRuntimeHandoff({
+      approvalId: "req-elevated-overlap",
+      sessionKey: "agent:main:telegram:direct:123",
+      bashElevated,
+    });
+    const secondRegistration = registerExecApprovalFollowupRuntimeHandoff({
+      approvalId: "req-elevated-overlap",
+      sessionKey: "agent:main:telegram:direct:123",
+      bashElevated,
+    });
+    if (!firstRegistration || !secondRegistration) {
+      throw new Error("expected runtime handoff ids");
+    }
+    mockMainSessionEntry({
+      sessionId: "existing-session-id",
+      lastChannel: "telegram",
+      lastTo: "123",
+    });
+    let releaseFirstSessionWrite: (() => void) | undefined;
+    let sessionWriteCalls = 0;
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      sessionWriteCalls += 1;
+      if (sessionWriteCalls === 1) {
+        await new Promise<void>((resolve) => {
+          releaseFirstSessionWrite = resolve;
+        });
+      }
+      const store = {
+        "agent:main:main": buildExistingMainStoreEntry({
+          lastChannel: "telegram",
+          lastTo: "123",
+        }),
+      };
+      return await updater(store);
+    });
+    mocks.agentCommand.mockImplementation(() => new Promise(() => {}));
+    const context = makeContext();
+    const agentCommandCallsBefore = mocks.agentCommand.mock.calls.length;
+
+    const first = invokeAgent(
+      {
+        message: "exec followup",
+        sessionKey: "agent:main:telegram:direct:123",
+        channel: "telegram",
+        idempotencyKey: firstRegistration.idempotencyKey,
+        internalRuntimeHandoffId: firstRegistration.handoffId,
+      },
+      {
+        reqId: "exec-followup-overlap-1",
+        client: backendGatewayClient(),
+        context,
+        flushDispatch: false,
+      },
+    );
+    await waitForAssertion(() => expect(sessionWriteCalls).toBe(1));
+
+    const secondRespond = await invokeAgent(
+      {
+        message: "exec followup duplicate",
+        sessionKey: "agent:main:telegram:direct:123",
+        channel: "telegram",
+        idempotencyKey: secondRegistration.idempotencyKey,
+        internalRuntimeHandoffId: secondRegistration.handoffId,
+      },
+      {
+        reqId: "exec-followup-overlap-2",
+        client: backendGatewayClient(),
+        context,
+        flushDispatch: false,
+      },
+    );
+
+    expect(mocks.agentCommand).toHaveBeenCalledTimes(agentCommandCallsBefore);
+    expect(sessionWriteCalls).toBe(1);
+    expect(mockCallArg(secondRespond, 0, 1)).toMatchObject({
+      runId: firstRegistration.idempotencyKey,
+      status: "accepted",
+    });
+    expect(mockCallArg(secondRespond, 0, 3)).toEqual({ cached: true });
+
+    releaseFirstSessionWrite?.();
+    await first;
+    await flushScheduledDispatchStep();
+    await flushScheduledDispatchStep();
+
+    expect(mocks.agentCommand).toHaveBeenCalledTimes(agentCommandCallsBefore + 1);
+  });
+
+  it("clears reserved exec approval dedupe when pre-run session work fails", async () => {
+    const bashElevated = {
+      enabled: true,
+      allowed: true,
+      defaultLevel: "on" as const,
+    };
+    const firstRegistration = registerExecApprovalFollowupRuntimeHandoff({
+      approvalId: "req-elevated-pre-run-fail",
+      sessionKey: "agent:main:telegram:direct:123",
+      bashElevated,
+    });
+    const secondRegistration = registerExecApprovalFollowupRuntimeHandoff({
+      approvalId: "req-elevated-pre-run-fail",
+      sessionKey: "agent:main:telegram:direct:123",
+      bashElevated,
+    });
+    if (!firstRegistration || !secondRegistration) {
+      throw new Error("expected runtime handoff ids");
+    }
+    mockMainSessionEntry({
+      sessionId: "existing-session-id",
+      lastChannel: "telegram",
+      lastTo: "123",
+    });
+    const context = makeContext();
+    const agentCommandCallsBefore = mocks.agentCommand.mock.calls.length;
+    mocks.updateSessionStore.mockRejectedValueOnce(new Error("session write failed"));
+
+    await expect(
+      invokeAgent(
+        {
+          message: "exec followup",
+          sessionKey: "agent:main:telegram:direct:123",
+          channel: "telegram",
+          idempotencyKey: firstRegistration.idempotencyKey,
+          internalRuntimeHandoffId: firstRegistration.handoffId,
+        },
+        {
+          reqId: "exec-followup-pre-run-fail-1",
+          client: backendGatewayClient(),
+          context,
+          flushDispatch: false,
+        },
+      ),
+    ).rejects.toThrow("session write failed");
+
+    expect(context.dedupe.get(`agent:${firstRegistration.idempotencyKey}`)).toBeUndefined();
+    expect(
+      context.dedupe.get("agent:exec-approval-followup:req-elevated-pre-run-fail"),
+    ).toBeUndefined();
+    expect(mocks.agentCommand).toHaveBeenCalledTimes(agentCommandCallsBefore);
+
+    const secondRespond = await invokeAgent(
+      {
+        message: "exec followup retry",
+        sessionKey: "agent:main:telegram:direct:123",
+        channel: "telegram",
+        idempotencyKey: secondRegistration.idempotencyKey,
+        internalRuntimeHandoffId: secondRegistration.handoffId,
+      },
+      {
+        reqId: "exec-followup-pre-run-fail-2",
+        client: backendGatewayClient(),
+        context,
+        flushDispatch: false,
+      },
+    );
+
+    expect(mockCallArg(secondRespond, 0, 1)).toMatchObject({
+      runId: secondRegistration.idempotencyKey,
+      status: "accepted",
+    });
+    await flushScheduledDispatchStep();
+    await flushScheduledDispatchStep();
+    expect(mocks.agentCommand).toHaveBeenCalledTimes(agentCommandCallsBefore + 1);
+  });
+
   it("does not consume exec approval runtime handoffs from non-backend callers", async () => {
     const bashElevated = {
       enabled: true,

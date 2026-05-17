@@ -525,6 +525,50 @@ describe("normalizeToolParameters", () => {
     expect(parameters.properties?.query.type).toBe("string");
   });
 
+  it("omits empty array items when model compat requires it", () => {
+    const tool: AnyAgentTool = {
+      name: "demo",
+      label: "demo",
+      description: "demo",
+      parameters: {
+        type: "object",
+        properties: Object.fromEntries([
+          ["__proto__", { type: "array", items: {} }],
+          ["emptyItems", { type: "array" }],
+          ["typedItems", { type: "array", items: { type: "string" } }],
+          ["falseItems", { type: "array", items: false }],
+          ["nullItems", { type: "array", items: null }],
+          ["literalDefault", { type: "string", default: { type: "array", items: {} } }],
+          ["literalEnum", { type: "string", enum: [{ type: "array", items: {} }] }],
+        ]),
+      },
+      execute: vi.fn(),
+    };
+
+    const normalized = normalizeToolParameters(tool, {
+      modelCompat: { omitEmptyArrayItems: true } as never,
+    });
+
+    expect(normalized.parameters).toEqual({
+      type: "object",
+      properties: Object.fromEntries([
+        ["__proto__", { type: "array" }],
+        ["emptyItems", { type: "array" }],
+        ["typedItems", { type: "array", items: { type: "string" } }],
+        ["falseItems", { type: "array", items: false }],
+        ["nullItems", { type: "array", items: null }],
+        ["literalDefault", { type: "string", default: { type: "array", items: {} } }],
+        ["literalEnum", { type: "string", enum: [{ type: "array", items: {} }] }],
+      ]),
+    });
+    expect(
+      Object.prototype.hasOwnProperty.call(
+        (normalized.parameters as { properties?: Record<string, unknown> }).properties,
+        "__proto__",
+      ),
+    ).toBe(true);
+  });
+
   it("filters required to match properties when flattening anyOf for Gemini", () => {
     const tool = makeTool({
       type: "object",

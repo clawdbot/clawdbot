@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import { bundledDistPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { stageBundledPluginRuntime } from "../../scripts/stage-bundled-plugin-runtime.mjs";
+import { withMockedWindowsPlatform, withRestoredMocks } from "../test-utils/vitest-spies.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
@@ -547,7 +548,6 @@ describe("stageBundledPluginRuntime", () => {
         [bundledDistPluginFile("feishu", "assets/fixture.txt")]: "# Feishu Doc\n",
       });
 
-      const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       const realSymlinkSync = fs.symlinkSync.bind(fs);
       const symlinkSpy = vi.spyOn(fs, "symlinkSync").mockImplementation(((target, link, type) => {
         const linkPath = String(link);
@@ -557,7 +557,11 @@ describe("stageBundledPluginRuntime", () => {
         return realSymlinkSync(String(target), linkPath, type);
       }) as typeof fs.symlinkSync);
 
-      stageBundledPluginRuntime({ repoRoot });
+      withRestoredMocks([symlinkSpy], () => {
+        withMockedWindowsPlatform(() => {
+          stageBundledPluginRuntime({ repoRoot });
+        });
+      });
 
       const runtimeAssetPath = path.join(
         repoRoot,
@@ -569,9 +573,6 @@ describe("stageBundledPluginRuntime", () => {
       );
       expect(fs.lstatSync(runtimeAssetPath).isSymbolicLink()).toBe(false);
       expect(fs.readFileSync(runtimeAssetPath, "utf8")).toBe("# Feishu Doc\n");
-
-      symlinkSpy.mockRestore();
-      platformSpy.mockRestore();
     },
   );
 });

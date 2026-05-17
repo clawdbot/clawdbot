@@ -83,6 +83,7 @@ export type NativeHookRelayRegistration = {
 
 export type NativeHookRelayRegistrationHandle = NativeHookRelayRegistration & {
   commandForEvent: (event: NativeHookRelayEvent) => string;
+  renew: (ttlMs?: number) => void;
   unregister: () => void;
 };
 
@@ -309,7 +310,7 @@ export function registerNativeHookRelay(
   };
   relays.set(relayId, registration);
   registerNativeHookRelayBridge(registration);
-  return {
+  const handle: NativeHookRelayRegistrationHandle = {
     ...registration,
     commandForEvent: (event) =>
       buildNativeHookRelayCommand({
@@ -320,8 +321,22 @@ export function registerNativeHookRelay(
         executable: params.command?.executable,
         nodeExecutable: params.command?.nodeExecutable,
       }),
+    renew: (ttlMs) => {
+      const current = relays.get(relayId);
+      if (!current) {
+        return;
+      }
+      const expiresAtMs = Date.now() + normalizePositiveInteger(ttlMs, DEFAULT_RELAY_TTL_MS);
+      current.expiresAtMs = expiresAtMs;
+      handle.expiresAtMs = expiresAtMs;
+      const bridge = relayBridges.get(relayId);
+      if (bridge) {
+        writeNativeHookRelayBridgeRecordForRegistration(current, bridge);
+      }
+    },
     unregister: () => unregisterNativeHookRelay(relayId),
   };
+  return handle;
 }
 
 function unregisterNativeHookRelay(relayId: string): void {
@@ -529,25 +544,35 @@ function registerNativeHookRelayBridge(registration: NativeHookRelayRegistration
     if (relayBridges.get(registration.relayId) !== bridge) {
       return;
     }
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      log.debug("native hook relay bridge server address unavailable", {
-        relayId: registration.relayId,
-      });
-      return;
-    }
-    const record: NativeHookRelayBridgeRecord = {
-      version: 1,
-      relayId: registration.relayId,
-      pid: process.pid,
-      hostname: "127.0.0.1",
-      port: address.port,
-      token,
-      expiresAtMs: registration.expiresAtMs,
-    };
-    writeNativeHookRelayBridgeRecord(registryPath, record);
+    writeNativeHookRelayBridgeRecordForRegistration(registration, bridge);
   });
+  if (relayBridges.get(registration.relayId) === bridge) {
+    writeNativeHookRelayBridgeRecordForRegistration(registration, bridge);
+  }
   server.unref();
+}
+
+function writeNativeHookRelayBridgeRecordForRegistration(
+  registration: NativeHookRelayRegistration,
+  bridge: NativeHookRelayBridgeRegistration,
+): void {
+  const address = bridge.server.address();
+  if (!address || typeof address === "string") {
+    log.debug("native hook relay bridge server address unavailable", {
+      relayId: registration.relayId,
+    });
+    return;
+  }
+  const record: NativeHookRelayBridgeRecord = {
+    version: 1,
+    relayId: registration.relayId,
+    pid: process.pid,
+    hostname: "127.0.0.1",
+    port: address.port,
+    token: bridge.token,
+    expiresAtMs: registration.expiresAtMs,
+  };
+  writeNativeHookRelayBridgeRecord(bridge.registryPath, record);
 }
 
 function unregisterNativeHookRelayBridge(relayId: string): void {

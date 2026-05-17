@@ -15,6 +15,7 @@ type DoctorConfigResult = {
   sourceConfigValid?: boolean;
   sourceLastTouchedVersion?: string;
   skipPluginValidationOnWrite?: boolean;
+  preservedLegacyRootKeys?: readonly string[];
 };
 
 type DoctorHealthFlowContext = {
@@ -124,11 +125,17 @@ async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void>
     await import("../commands/doctor-auth-flat-profiles.js");
   const { maybeRepairLegacyOAuthProfileIds } =
     await import("../commands/doctor-auth-legacy-oauth.js");
+  const { maybeRepairLegacyOAuthSidecarProfiles } =
+    await import("../commands/doctor-auth-oauth-sidecar.js");
   const { noteAuthProfileHealth, noteLegacyCodexProviderOverride } =
     await import("../commands/doctor-auth.js");
   const { buildGatewayConnectionDetails } = await import("../gateway/call.js");
   const { note } = await import("../terminal/note.js");
   await maybeRepairLegacyFlatAuthProfileStores({
+    cfg: ctx.cfg,
+    prompter: ctx.prompter,
+  });
+  await maybeRepairLegacyOAuthSidecarProfiles({
     cfg: ctx.cfg,
     prompter: ctx.prompter,
   });
@@ -613,6 +620,7 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
         allowConfigSizeDrop: ctx.configResult.shouldWriteConfig === true || updateDoctorRun,
         skipPluginValidation:
           ctx.configResult.skipPluginValidationOnWrite === true || updateDoctorRun,
+        preservedLegacyRootKeys: ctx.configResult.preservedLegacyRootKeys,
       },
     });
     logConfigUpdated(ctx.runtime);
@@ -654,6 +662,7 @@ async function runFinalConfigValidationHealth(ctx: DoctorHealthFlowContext): Pro
   const { readConfigFileSnapshot } = await import("../config/config.js");
   const finalSnapshot = await readConfigFileSnapshot({
     skipPluginValidation: isUpdateDoctorRun(ctx.env ?? process.env),
+    preservedLegacyRootKeys: ctx.configResult.preservedLegacyRootKeys,
   });
   if (finalSnapshot.exists && !finalSnapshot.valid) {
     ctx.runtime.error("Invalid config:");

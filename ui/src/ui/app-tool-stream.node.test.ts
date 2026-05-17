@@ -1,6 +1,11 @@
 // @vitest-environment node
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { handleAgentEvent, type FallbackStatus, type ToolStreamEntry } from "./app-tool-stream.ts";
+import {
+  handleAgentEvent,
+  handleSessionOperationEvent,
+  type FallbackStatus,
+  type ToolStreamEntry,
+} from "./app-tool-stream.ts";
 
 type ToolStreamHost = Parameters<typeof handleAgentEvent>[0];
 type AgentEvent = NonNullable<Parameters<typeof handleAgentEvent>[1]>;
@@ -347,6 +352,113 @@ describe("app-tool-stream fallback lifecycle handling", () => {
 
     vi.advanceTimersByTime(1);
 
+    expect(host.compactionStatus).toBeNull();
+    expect(host.compactionClearTimer).toBeNull();
+
+    vi.useRealTimers();
+  });
+
+  it("shows manual session operation compaction progress while idle", () => {
+    useToolStreamFakeTimers();
+    const host = createHost({
+      sessionKey: "main",
+      hello: {
+        snapshot: {
+          sessionDefaults: {
+            defaultAgentId: "main",
+            mainKey: "main",
+            mainSessionKey: "agent:main:main",
+          },
+        },
+      },
+    });
+
+    handleSessionOperationEvent(host, {
+      operationId: "operation-1",
+      operation: "compact",
+      phase: "start",
+      sessionKey: "agent:main:main",
+      ts: TOOL_STREAM_TEST_NOW,
+    });
+
+    expect(host.compactionStatus).toEqual({
+      phase: "active",
+      runId: "operation-1",
+      startedAt: TOOL_STREAM_TEST_NOW,
+      completedAt: null,
+    });
+
+    handleSessionOperationEvent(host, {
+      operationId: "operation-1",
+      operation: "compact",
+      phase: "end",
+      sessionKey: "agent:main:main",
+      ts: TOOL_STREAM_TEST_NOW,
+      completed: true,
+    });
+
+    expect(host.compactionStatus).toEqual({
+      phase: "complete",
+      runId: "operation-1",
+      startedAt: TOOL_STREAM_TEST_NOW,
+      completedAt: TOOL_STREAM_TEST_NOW,
+    });
+
+    vi.useRealTimers();
+  });
+
+  it("ignores manual session operation compaction for other sessions", () => {
+    useToolStreamFakeTimers();
+    const host = createHost({ sessionKey: "agent:main:main" });
+
+    handleSessionOperationEvent(host, {
+      operationId: "operation-1",
+      operation: "compact",
+      phase: "start",
+      sessionKey: "agent:other:main",
+      ts: TOOL_STREAM_TEST_NOW,
+    });
+
+    expect(host.compactionStatus).toBeNull();
+    expect(host.compactionClearTimer).toBeNull();
+
+    vi.useRealTimers();
+  });
+
+  it("ignores stale manual session operation completion after a newer start", () => {
+    useToolStreamFakeTimers();
+    const host = createHost({ sessionKey: "agent:main:main" });
+
+    handleSessionOperationEvent(host, {
+      operationId: "operation-1",
+      operation: "compact",
+      phase: "start",
+      sessionKey: "agent:main:main",
+      ts: TOOL_STREAM_TEST_NOW,
+    });
+    handleSessionOperationEvent(host, {
+      operationId: "operation-2",
+      operation: "compact",
+      phase: "start",
+      sessionKey: "agent:main:main",
+      ts: TOOL_STREAM_TEST_NOW,
+    });
+    handleSessionOperationEvent(host, {
+      operationId: "operation-1",
+      operation: "compact",
+      phase: "end",
+      sessionKey: "agent:main:main",
+      ts: TOOL_STREAM_TEST_NOW,
+      completed: true,
+    });
+
+    expect(host.compactionStatus).toEqual({
+      phase: "active",
+      runId: "operation-2",
+      startedAt: TOOL_STREAM_TEST_NOW,
+      completedAt: null,
+    });
+    vi.advanceTimersByTime(5 * 60_000);
     expect(host.compactionStatus).toBeNull();
     expect(host.compactionClearTimer).toBeNull();
 

@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import type {
   QaRawSessionStoreEntry,
@@ -7,12 +9,47 @@ import type {
   QaSuiteRuntimeEnv,
 } from "./suite-runtime-types.js";
 
-async function createSession(
-  env: Pick<QaSuiteRuntimeEnv, "gateway" | "primaryModel" | "alternateModel" | "providerMode">,
-  label: string,
-  key?: string,
+type QaGatewayCallEnv = Pick<
+  QaSuiteRuntimeEnv,
+  "gateway" | "primaryModel" | "alternateModel" | "providerMode"
+>;
+
+const SESSION_STORE_LOCK_RETRY_DELAYS_MS = [1_000, 3_000, 5_000] as const;
+
+function isSessionStoreLockTimeout(error: unknown) {
+  const text = formatErrorMessage(error);
+  return (
+    text.includes("OPENCLAW_SESSION_WRITE_LOCK_TIMEOUT") ||
+    text.includes("SessionWriteLockTimeoutError") ||
+    text.includes("session file locked")
+  );
+}
+
+async function callGatewayWithSessionStoreLockRetry<T>(
+  env: QaGatewayCallEnv,
+  method: string,
+  params: Record<string, unknown>,
+  options: { timeoutMs: number },
 ) {
-  const created = (await env.gateway.call(
+  for (let attempt = 0; attempt <= SESSION_STORE_LOCK_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      return (await env.gateway.call(method, params, options)) as T;
+    } catch (error) {
+      if (
+        !isSessionStoreLockTimeout(error) ||
+        attempt === SESSION_STORE_LOCK_RETRY_DELAYS_MS.length
+      ) {
+        throw error;
+      }
+      await sleep(SESSION_STORE_LOCK_RETRY_DELAYS_MS[attempt]);
+    }
+  }
+  throw new Error(`${method} failed after session store lock retries`);
+}
+
+async function createSession(env: QaGatewayCallEnv, label: string, key?: string) {
+  const created = await callGatewayWithSessionStoreLockRetry<{ key?: string }>(
+    env,
     "sessions.create",
     {
       label,
@@ -21,7 +58,7 @@ async function createSession(
     {
       timeoutMs: liveTurnTimeoutMs(env, 60_000),
     },
-  )) as { key?: string };
+  );
   const sessionKey = created.key?.trim();
   if (!sessionKey) {
     throw new Error("sessions.create returned no key");
@@ -29,11 +66,11 @@ async function createSession(
   return sessionKey;
 }
 
-async function readEffectiveTools(
-  env: Pick<QaSuiteRuntimeEnv, "gateway" | "primaryModel" | "alternateModel" | "providerMode">,
-  sessionKey: string,
-) {
-  const payload = (await env.gateway.call(
+async function readEffectiveTools(env: QaGatewayCallEnv, sessionKey: string) {
+  const payload = await callGatewayWithSessionStoreLockRetry<{
+    groups?: Array<{ tools?: Array<{ id?: string }> }>;
+  }>(
+    env,
     "tools.effective",
     {
       sessionKey,
@@ -41,9 +78,7 @@ async function readEffectiveTools(
     {
       timeoutMs: liveTurnTimeoutMs(env, 90_000),
     },
-  )) as {
-    groups?: Array<{ tools?: Array<{ id?: string }> }>;
-  };
+  );
   const ids = new Set<string>();
   for (const group of payload.groups ?? []) {
     for (const tool of group.tools ?? []) {
@@ -55,11 +90,11 @@ async function readEffectiveTools(
   return ids;
 }
 
-async function readSkillStatus(
-  env: Pick<QaSuiteRuntimeEnv, "gateway" | "primaryModel" | "alternateModel" | "providerMode">,
-  agentId = "qa",
-) {
-  const payload = (await env.gateway.call(
+async function readSkillStatus(env: QaGatewayCallEnv, agentId = "qa") {
+  const payload = await callGatewayWithSessionStoreLockRetry<{
+    skills?: QaSkillStatusEntry[];
+  }>(
+    env,
     "skills.status",
     {
       agentId,
@@ -67,9 +102,7 @@ async function readSkillStatus(
     {
       timeoutMs: liveTurnTimeoutMs(env, 45_000),
     },
-  )) as {
-    skills?: QaSkillStatusEntry[];
-  };
+  );
   return payload.skills ?? [];
 }
 

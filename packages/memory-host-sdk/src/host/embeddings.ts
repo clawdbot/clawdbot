@@ -66,15 +66,20 @@ export async function createLocalEmbeddingProvider(
   return {
     id: "local",
     model: modelPath,
-    embedQuery: async (text) => {
+    embedQuery: async (text, options) => {
+      options?.signal?.throwIfAborted();
       const ctx = await ensureContext();
+      options?.signal?.throwIfAborted();
       const embedding = await ctx.getEmbeddingFor(text);
       return sanitizeAndNormalizeEmbedding(Array.from(embedding.vector));
     },
-    embedBatch: async (texts) => {
+    embedBatch: async (texts, options) => {
+      options?.signal?.throwIfAborted();
       const ctx = await ensureContext();
+      options?.signal?.throwIfAborted();
       const embeddings = await Promise.all(
         texts.map(async (text) => {
+          options?.signal?.throwIfAborted();
           const embedding = await ctx.getEmbeddingFor(text);
           return sanitizeAndNormalizeEmbedding(Array.from(embedding.vector));
         }),

@@ -203,8 +203,8 @@ describe("xai provider plugin", () => {
 
     const normalized = provider.normalizeResolvedModel?.({
       provider: "xai",
-      modelId: "grok-4-1-fast",
-      model: createProviderModel({ id: "grok-4-1-fast" }),
+      modelId: "grok-4.3",
+      model: createProviderModel({ id: "grok-4.3" }),
     } as never);
     expect(normalized?.thinkingLevelMap).toEqual({
       off: null,
@@ -213,6 +213,19 @@ describe("xai provider plugin", () => {
       medium: "medium",
       high: "high",
       xhigh: "high",
+    });
+    const olderReasoningModel = provider.normalizeResolvedModel?.({
+      provider: "xai",
+      modelId: "grok-4-1-fast",
+      model: createProviderModel({ id: "grok-4-1-fast" }),
+    } as never);
+    expect(olderReasoningModel?.thinkingLevelMap).toEqual({
+      off: null,
+      minimal: null,
+      low: null,
+      medium: null,
+      high: null,
+      xhigh: null,
     });
     const normalizedCompat = normalized?.compat as
       | {

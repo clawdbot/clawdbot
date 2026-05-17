@@ -189,6 +189,23 @@ describe("qa suite planning helpers", () => {
     ).toEqual(["anthropic-only"]);
   });
 
+  it("keeps explicitly requested scenarios in request order", () => {
+    const scenarios = [
+      makeQaSuiteTestScenario("first"),
+      makeQaSuiteTestScenario("second"),
+      makeQaSuiteTestScenario("third"),
+    ];
+
+    expect(
+      selectQaSuiteScenarios({
+        scenarios,
+        scenarioIds: ["third", "first"],
+        providerMode: "live-frontier",
+        primaryModel: "openai/gpt-5.5",
+      }).map((scenario) => scenario.id),
+    ).toEqual(["third", "first"]);
+  });
+
   it("collects unique scenario-declared bundled plugins in encounter order", () => {
     const scenarios = [
       makeQaSuiteTestScenario("generic", { plugins: ["active-memory", "memory-wiki"] }),

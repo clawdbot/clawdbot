@@ -101,9 +101,9 @@ export type ArtifactSummary = {
 };
 
 export type ArtifactQuery =
-  | { sessionKey: string; runId?: string; taskId?: string }
-  | { runId: string; sessionKey?: string; taskId?: string }
-  | { taskId: string; sessionKey?: string; runId?: string };
+  | { sessionKey: string; runId?: string; taskId?: string; agentId?: string }
+  | { runId: string; sessionKey?: string; taskId?: string; agentId?: string }
+  | { taskId: string; sessionKey?: string; runId?: string; agentId?: string };
 
 export type ArtifactsListResult = {
   artifacts: ArtifactSummary[];

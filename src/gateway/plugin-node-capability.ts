@@ -130,7 +130,16 @@ export function replacePluginNodeCapabilityInScopedHostUrl(
 export function normalizePluginNodeCapabilityScopedUrl(
   rawUrl: string,
 ): NormalizedPluginNodeCapabilityUrl {
-  const url = new URL(rawUrl, "http://localhost");
+  let url: URL;
+  try {
+    url = new URL(rawUrl, "http://localhost");
+  } catch {
+    return {
+      pathname: "/",
+      scopedPath: false,
+      malformedScopedPath: true,
+    };
+  }
   const prefix = `${PLUGIN_NODE_CAPABILITY_PATH_PREFIX}/`;
   let scopedPath = false;
   let malformedScopedPath = false;

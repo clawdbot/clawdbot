@@ -9,6 +9,10 @@ export function buildPayloads(overrides: Partial<BuildPayloadParams> = {}) {
     assistantTexts: [],
     toolMetas: [],
     lastAssistant: undefined,
+    currentAssistant:
+      overrides.currentAssistant === undefined
+        ? overrides.lastAssistant
+        : overrides.currentAssistant,
     isCronTrigger: false,
     sessionKey: "session:telegram",
     inlineToolResultsAllowed: false,

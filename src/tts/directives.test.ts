@@ -115,6 +115,24 @@ describe("parseTtsDirectives provider-aware routing", () => {
     expect(result.overrides.providerOverrides?.elevenlabs).toBeUndefined();
   });
 
+  it("routes to preferred provider aliases when no provider token is declared", () => {
+    const azure = makeProvider("azure-speech", 20, ({ key, value }) => {
+      if (key === "speed") {
+        return { handled: true, overrides: { speed: Number(value) } };
+      }
+      return undefined;
+    }, { aliases: ["azure"] });
+
+    const result = parseTtsDirectives("[[tts:speed=1.5]]", fullPolicy, {
+      providers: [elevenlabs, azure],
+      preferredProviderId: "azure",
+    });
+
+    expect(result.overrides.provider).toBeUndefined();
+    expect(result.overrides.providerOverrides?.["azure-speech"]).toEqual({ speed: 1.5 });
+    expect(result.overrides.providerOverrides?.elevenlabs).toBeUndefined();
+  });
+
   it("falls back to autoSelectOrder when no provider hint is available", () => {
     const result = parseTtsDirectives("[[tts:speed=1.5]]", fullPolicy, {
       providers: [elevenlabs, minimax],

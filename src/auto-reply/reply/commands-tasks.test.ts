@@ -107,6 +107,29 @@ describe("buildTasksReply", () => {
     expect(reply.text).toContain("Queued video generation");
   });
 
+  it("lists session-backed image generation tasks for the current session", async () => {
+    createRunningTaskRun({
+      runtime: "cli",
+      taskKind: "image_generation",
+      sourceId: "image_generate:openai",
+      requesterSessionKey: "agent:main:main",
+      childSessionKey: "agent:main:main",
+      runId: "tool:image_generate:tasks-visible",
+      label: "Image generation",
+      task: "blue square icon",
+      progressSummary: "Queued image generation",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+    });
+
+    const reply = await buildTasksReplyForTest();
+
+    expect(reply.text).toContain("Current session: 1 active · 1 total");
+    expect(reply.text).toContain("🟢 Image generation");
+    expect(reply.text).toContain("CLI · running");
+    expect(reply.text).toContain("Queued image generation");
+  });
+
   it("sanitizes leaked internal runtime context from visible task details", async () => {
     createRunningTaskRun({
       runtime: "acp",

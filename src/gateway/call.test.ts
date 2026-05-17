@@ -139,6 +139,7 @@ const {
   callGateway,
   callGatewayCli,
   callGatewayScoped,
+  formatGatewayTransportErrorJson,
   isGatewayTransportError,
 } = await import("./call.js");
 
@@ -695,6 +696,21 @@ describe("buildGatewayConnectionDetails", () => {
     expect(details.message).toContain("Source: cli --url");
   });
 
+  it("redacts credential-bearing target URLs from connection messages", () => {
+    setLocalLoopbackGatewayConfig(18800);
+
+    const details = buildGatewayConnectionDetails({
+      url: "wss://user:pass@example.com/ws?token=secret-token&keep=visible",
+    });
+
+    expect(details.url).toBe("wss://user:pass@example.com/ws?token=secret-token&keep=visible");
+    expect(details.message).toContain(
+      "Gateway target: wss://***:***@example.com/ws?token=***&keep=visible",
+    );
+    expect(details.message).not.toContain("user:pass");
+    expect(details.message).not.toContain("secret-token");
+  });
+
   it("emits a remote fallback note when remote url is missing", () => {
     getRuntimeConfig.mockReturnValue({
       gateway: { mode: "remote", bind: "loopback", remote: {} },
@@ -824,8 +840,29 @@ describe("buildGatewayConnectionDetails", () => {
     expect((thrown as Error).message).toContain("openclaw doctor --fix");
   });
 
-  it("allows ws:// private remote URLs only when OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1", () => {
-    process.env.OPENCLAW_ALLOW_INSECURE_PRIVATE_WS = "1";
+  it("redacts credential-bearing target URLs from insecure ws:// errors", () => {
+    getRuntimeConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        bind: "loopback",
+        remote: { url: "ws://user:pass@remote.example.com:18789/ws?token=secret-token" },
+      },
+    });
+    resolveGatewayPort.mockReturnValue(18789);
+
+    expect(() => buildGatewayConnectionDetails()).toThrow(
+      'Gateway URL "ws://***:***@remote.example.com:18789/ws?token=***" uses plaintext',
+    );
+    try {
+      buildGatewayConnectionDetails();
+    } catch (error) {
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).not.toContain("user:pass");
+      expect((error as Error).message).not.toContain("secret-token");
+    }
+  });
+
+  it("allows ws:// private remote URLs for trusted LAN and Tailnet configs", () => {
     getRuntimeConfig.mockReturnValue({
       gateway: {
         mode: "remote",
@@ -952,6 +989,34 @@ describe("callGateway error details", () => {
     expect(transportError.name).toBe("GatewayTransportError");
     expect(transportError.kind).toBe("timeout");
     expect(transportError.timeoutMs).toBe(5);
+  });
+
+  it("formats typed transport errors for CLI JSON output", async () => {
+    startMode = "close";
+    closeCode = 1006;
+    closeReason = "";
+    setLocalLoopbackGatewayConfig();
+
+    let err: unknown;
+    await callGateway({ method: "health" }).catch((caught) => {
+      err = caught;
+    });
+
+    expect(formatGatewayTransportErrorJson(err)).toEqual({
+      ok: false,
+      error: {
+        type: "gateway_transport_error",
+        kind: "closed",
+        message: "gateway closed (1006 abnormal closure (no close frame)): no close reason",
+        code: 1006,
+        reason: "no close reason",
+      },
+      gateway: {
+        url: "ws://127.0.0.1:18789",
+        urlSource: "local loopback",
+        bindDetail: "Bind: loopback",
+      },
+    });
   });
 
   it("charges event-loop readiness against the wrapper timeout", async () => {

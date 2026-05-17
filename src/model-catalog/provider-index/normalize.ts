@@ -95,8 +95,8 @@ function normalizeOnboardingScopes(
   value: unknown,
 ): OpenClawProviderIndexProviderAuthChoice["onboardingScopes"] | undefined {
   const scopes = normalizeTrimmedStringList(value).filter(
-    (scope): scope is "text-inference" | "image-generation" =>
-      scope === "text-inference" || scope === "image-generation",
+    (scope): scope is "text-inference" | "image-generation" | "music-generation" =>
+      scope === "text-inference" || scope === "image-generation" || scope === "music-generation",
   );
   return scopes.length > 0 ? [...new Set(scopes)] : undefined;
 }

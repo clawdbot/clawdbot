@@ -359,6 +359,14 @@ function writeUpgradeServiceUnavailable(socket: { write: (chunk: string) => void
   );
 }
 
+function parseGatewayRequestPath(rawUrl: string | undefined): string | undefined {
+  try {
+    return new URL(rawUrl ?? "/", "http://localhost").pathname;
+  } catch {
+    return undefined;
+  }
+}
+
 type GatewayHttpRequestStage = {
   name: string;
   run: () => Promise<boolean> | boolean;
@@ -531,7 +539,11 @@ export function createGatewayHttpServer(opts: {
     }
 
     try {
-      const requestPath = new URL(req.url ?? "/", "http://localhost").pathname;
+      const requestPath = parseGatewayRequestPath(req.url);
+      if (requestPath === undefined) {
+        sendGatewayAuthFailure(res, { ok: false, reason: "unauthorized" });
+        return;
+      }
       if (GATEWAY_PROBE_STATUS_BY_PATH.get(requestPath) === "live") {
         await handleGatewayProbeRequest(
           req,
@@ -556,7 +568,7 @@ export function createGatewayHttpServer(opts: {
       if (scopedNodeCapability.rewrittenUrl) {
         req.url = scopedNodeCapability.rewrittenUrl;
       }
-      const scopedRequestPath = new URL(req.url ?? "/", "http://localhost").pathname;
+      const scopedRequestPath = scopedNodeCapability.pathname;
       const pluginPathContext = handlePluginRequest
         ? resolvePluginRoutePathContext(scopedRequestPath)
         : null;
@@ -843,8 +855,8 @@ export function attachGatewayUpgradeHandler(opts: {
         req.url = scopedNodeCapability.rewrittenUrl;
       }
       const resolvedAuth = getResolvedAuth();
-      const url = new URL(req.url ?? "/", "http://localhost");
-      const pathContext = resolvePluginRoutePathContext(url.pathname);
+      const requestPath = scopedNodeCapability.pathname;
+      const pathContext = resolvePluginRoutePathContext(requestPath);
       const nodeCapability = resolvePluginNodeCapabilityRoute?.(pathContext);
       if (nodeCapability) {
         const { authorizePluginNodeCapabilityRequest } = await getPluginNodeCapabilityAuthModule();
@@ -874,7 +886,7 @@ export function attachGatewayUpgradeHandler(opts: {
         )(pathContext);
         if (
           enforcePluginGatewayAuth &&
-          !(await getCachedPluginGatewayAuthBypassPaths(configSnapshot)).has(url.pathname)
+          !(await getCachedPluginGatewayAuthBypassPaths(configSnapshot)).has(requestPath)
         ) {
           const { checkGatewayHttpRequestAuth } = await getHttpAuthUtilsModule();
           const authCheck = await checkGatewayHttpRequestAuth({

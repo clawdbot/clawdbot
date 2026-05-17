@@ -3,6 +3,7 @@ import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ExtensionFactory, SessionManager } from "@earendil-works/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
+import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { createAgentToolResultMiddlewareRunner } from "../harness/tool-result-middleware.js";
@@ -33,6 +34,16 @@ function recordFromUnknown(value: unknown): Record<string, unknown> {
     : {};
 }
 
+// Only checks "error" and "timeout" — the status values emitted by the
+// adapter's buildToolExecutionErrorResult. The subscribe-side classifier
+// (isErrorLikeStatus) uses a broader regex because it handles arbitrary
+// external tool results; this bridge only elevates adapter-produced statuses.
+function hasErrorToolResultStatus(result: AgentToolResult<unknown>): boolean {
+  const details = recordFromUnknown(result.details);
+  const status = normalizeOptionalLowercaseString(details.status);
+  return status === "error" || status === "timeout";
+}
+
 function buildAgentToolResultMiddlewareFactory(): ExtensionFactory {
   const runner = createAgentToolResultMiddlewareRunner({ runtime: "pi" });
   return (pi) => {
@@ -50,6 +61,7 @@ function buildAgentToolResultMiddlewareFactory(): ExtensionFactory {
         content,
         details: event.details,
       } satisfies AgentToolResult<unknown>;
+      const inputHadErrorStatus = hasErrorToolResultStatus(current);
       const result = await runner.applyToolResultMiddleware({
         threadId: event.threadId,
         turnId: event.turnId,
@@ -60,9 +72,12 @@ function buildAgentToolResultMiddlewareFactory(): ExtensionFactory {
         isError: event.isError,
         result: current,
       });
+      const isError =
+        event.isError === true || inputHadErrorStatus || hasErrorToolResultStatus(result);
       return {
         content: result.content,
         details: result.details,
+        ...(isError ? { isError: true } : {}),
       };
     });
   };

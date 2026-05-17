@@ -4,7 +4,7 @@ import {
   OPENCLAW_RUNTIME_CONTEXT_NOTICE,
   OPENCLAW_RUNTIME_EVENT_HEADER,
 } from "../../internal-runtime-context.js";
-import type { CurrentTurnPromptContext } from "./params.js";
+import type { CurrentInboundPromptContext } from "./params.js";
 export { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE };
 
 const OPENCLAW_RUNTIME_EVENT_USER_PROMPT = "Continue the OpenClaw runtime event.";
@@ -30,17 +30,17 @@ type RuntimeContextPromptParts = {
 
 type EmptyTranscriptMode = "model-prompt" | "runtime-event";
 
-export function buildCurrentTurnPromptContextPrefix(
-  context: CurrentTurnPromptContext | undefined,
+export function buildCurrentInboundPromptContextPrefix(
+  context: CurrentInboundPromptContext | undefined,
 ): string {
   return context?.text.trim() ?? "";
 }
 
-export function buildCurrentTurnPrompt(params: {
-  context: CurrentTurnPromptContext | undefined;
+export function buildCurrentInboundPrompt(params: {
+  context: CurrentInboundPromptContext | undefined;
   prompt: string;
 }): string {
-  const prefix = buildCurrentTurnPromptContextPrefix(params.context);
+  const prefix = buildCurrentInboundPromptContextPrefix(params.context);
   if (!prefix) {
     return params.prompt;
   }

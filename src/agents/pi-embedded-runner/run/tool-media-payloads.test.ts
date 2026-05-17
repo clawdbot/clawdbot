@@ -70,4 +70,52 @@ describe("mergeAttemptToolMediaPayloads", () => {
       deliverDespiteSourceReplySuppression: true,
     });
   });
+
+  it("preserves trusted local media provenance when merging tool media", () => {
+    expect(
+      mergeAttemptToolMediaPayloads({
+        payloads: [{ text: "done" }],
+        toolMediaUrls: ["/tmp/reply.opus"],
+        toolAudioAsVoice: true,
+        toolTrustedLocalMedia: true,
+      }),
+    ).toEqual([
+      {
+        text: "done",
+        mediaUrls: ["/tmp/reply.opus"],
+        mediaUrl: "/tmp/reply.opus",
+        audioAsVoice: true,
+        trustedLocalMedia: true,
+      },
+    ]);
+  });
+
+  it("does not attach tool media to message-tool-only source reply mirrors", () => {
+    const sourceReply = setReplyPayloadMetadata(
+      { text: "sent through message tool" },
+      {
+        deliverDespiteSourceReplySuppression: true,
+        sourceReplyTranscriptMirror: {
+          sessionKey: "agent:main",
+          text: "sent through message tool",
+        },
+      },
+    );
+
+    const [mergedReply] =
+      mergeAttemptToolMediaPayloads({
+        payloads: [sourceReply],
+        toolMediaUrls: ["/tmp/generated.png"],
+        sourceReplyDeliveryMode: "message_tool_only",
+      }) ?? [];
+
+    expect(mergedReply).toEqual({ text: "sent through message tool" });
+    expect(getReplyPayloadMetadata(mergedReply ?? {})).toMatchObject({
+      deliverDespiteSourceReplySuppression: true,
+      sourceReplyTranscriptMirror: {
+        sessionKey: "agent:main",
+        text: "sent through message tool",
+      },
+    });
+  });
 });

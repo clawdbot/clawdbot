@@ -468,8 +468,10 @@ export async function startGatewaySidecars(params: {
         params.logChannels.error(`channel startup failed: ${String(err)}`);
       }
     } else {
-      params.logChannels.info(
-        "skipping channel start (OPENCLAW_SKIP_CHANNELS=1 or OPENCLAW_SKIP_PROVIDERS=1)",
+      await measureStartup(params.startupTrace, "sidecars.channel-skip", () =>
+        params.logChannels.info(
+          "skipping channel start (OPENCLAW_SKIP_CHANNELS=1 or OPENCLAW_SKIP_PROVIDERS=1)",
+        ),
       );
     }
   });
@@ -508,21 +510,29 @@ export async function startGatewaySidecars(params: {
 
   if (params.cfg.acp?.enabled) {
     void (async () => {
-      await waitForAcpRuntimeBackendReady({ backendId: params.cfg.acp?.backend });
-      const [{ getAcpSessionManager }, { ACP_SESSION_IDENTITY_RENDERER_VERSION }] =
-        await Promise.all([
-          import("../acp/control-plane/manager.js"),
-          import("../acp/runtime/session-identifiers.js"),
-        ]);
-      const result = await getAcpSessionManager().reconcilePendingSessionIdentities({
-        cfg: params.cfg,
-      });
-      if (result.checked === 0) {
-        return;
-      }
-      params.log.warn(
-        `acp startup identity reconcile (renderer=${ACP_SESSION_IDENTITY_RENDERER_VERSION}): checked=${result.checked} resolved=${result.resolved} failed=${result.failed}`,
+      const ready = await measureStartup(params.startupTrace, "sidecars.acp.runtime-ready", () =>
+        waitForAcpRuntimeBackendReady({ backendId: params.cfg.acp?.backend }),
       );
+      params.startupTrace?.detail("sidecars.acp.runtime-ready", [
+        ["readyCount", ready ? 1 : 0],
+        ["backend", params.cfg.acp?.backend ?? "default"],
+      ]);
+      await measureStartup(params.startupTrace, "sidecars.acp.identity-reconcile", async () => {
+        const [{ getAcpSessionManager }, { ACP_SESSION_IDENTITY_RENDERER_VERSION }] =
+          await Promise.all([
+            import("../acp/control-plane/manager.js"),
+            import("../acp/runtime/session-identifiers.js"),
+          ]);
+        const result = await getAcpSessionManager().reconcilePendingSessionIdentities({
+          cfg: params.cfg,
+        });
+        if (result.checked === 0) {
+          return;
+        }
+        params.log.warn(
+          `acp startup identity reconcile (renderer=${ACP_SESSION_IDENTITY_RENDERER_VERSION}): checked=${result.checked} resolved=${result.resolved} failed=${result.failed}`,
+        );
+      });
     })().catch((err) => {
       params.log.warn(`acp startup identity reconcile failed: ${String(err)}`);
     });
@@ -612,7 +622,7 @@ export async function startGatewaySidecars(params: {
     run: async () => {
       const { scheduleRestartAbortedMainSessionRecovery } =
         await import("../agents/main-session-restart-recovery.js");
-      scheduleRestartAbortedMainSessionRecovery();
+      scheduleRestartAbortedMainSessionRecovery({ cfg: params.cfg });
     },
   });
 
@@ -785,6 +795,13 @@ export async function startGatewayPostAttachRuntime(
       params.loadStartupPlugins!(),
     );
     pluginRegistry = loaded.pluginRegistry;
+    params.startupTrace?.detail("plugins.runtime-post-bind", [
+      [
+        "loadedPluginCount",
+        pluginRegistry.plugins.filter((plugin) => plugin.status === "loaded").length,
+      ],
+      ["gatewayMethodCount", loaded.gatewayMethods.length],
+    ]);
     await params.onStartupPluginsLoaded?.(loaded);
   }
 
@@ -871,6 +888,13 @@ export async function startGatewayPostAttachRuntime(
         params.onPluginServices?.(result.pluginServices);
         params.onPostReadySidecars?.(result.postReadySidecars);
         params.onSidecarsReady?.();
+        params.startupTrace?.detail("sidecars.ready", [
+          [
+            "loadedPluginCount",
+            pluginRegistry.plugins.filter((plugin) => plugin.status === "loaded").length,
+          ],
+          ["postReadySidecarCount", result.postReadySidecars.length],
+        ]);
         params.startupTrace?.mark("sidecars.ready");
         params.log.info("gateway ready");
         return { ...result, pluginRegistry };

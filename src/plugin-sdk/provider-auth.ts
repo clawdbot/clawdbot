@@ -122,6 +122,7 @@ export function buildCopilotIdeHeaders(
   } = {},
 ): Record<string, string> {
   return {
+    "Accept-Encoding": "identity",
     "Editor-Version": COPILOT_EDITOR_VERSION,
     "Editor-Plugin-Version": COPILOT_EDITOR_PLUGIN_VERSION,
     "User-Agent": COPILOT_USER_AGENT,

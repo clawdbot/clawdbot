@@ -7,21 +7,21 @@ import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.j
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { ContextVisibilityMode } from "../../config/types.base.js";
 import { shouldIncludeSupplementalContext } from "../../security/context-visibility.js";
-import { buildChannelTurnMediaPayload } from "./media.js";
 import type {
   AccessFacts,
   CommandFacts,
   ConversationFacts,
   InboundMediaFacts,
-  InboundTurnKind,
   MessageFacts,
   ReplyPlanFacts,
   RouteFacts,
   SenderFacts,
   SupplementalContextFacts,
-} from "./types.js";
+} from "../turn/types.js";
+import type { InboundEventKind } from "./kind.js";
+import { buildChannelInboundMediaPayload } from "./media.js";
 
-export type BuildChannelTurnContextParams = {
+export type BuildChannelInboundEventContextParams = {
   channel: string;
   accountId?: string;
   provider?: string;
@@ -44,7 +44,7 @@ export type BuildChannelTurnContextParams = {
   extra?: Record<string, unknown>;
 };
 
-export type BuiltChannelTurnContext = FinalizedMsgContext & {
+export type BuiltChannelInboundEventContext = FinalizedMsgContext & {
   Body: string;
   BodyForAgent: string;
   BodyForCommands: string;
@@ -55,7 +55,7 @@ export type BuiltChannelTurnContext = FinalizedMsgContext & {
   RawBody: string;
   SessionKey: string;
   To: string;
-  InboundTurnKind: InboundTurnKind;
+  InboundEventKind: InboundEventKind;
 };
 
 function keepSupplementalContext(params: {
@@ -76,7 +76,7 @@ function keepSupplementalContext(params: {
   });
 }
 
-export function filterChannelTurnSupplementalContext(params: {
+export function filterChannelInboundSupplementalContext(params: {
   supplemental?: SupplementalContextFacts;
   contextVisibility?: ContextVisibilityMode;
 }): SupplementalContextFacts | undefined {
@@ -121,7 +121,7 @@ function resolveAccessFactsCommandAuthorized(access: AccessFacts | undefined): b
     : commands?.authorizers?.some((entry) => entry.allowed);
 }
 
-function resolveChannelTurnCommandContext(params: {
+function resolveChannelCommandContext(params: {
   command?: CommandFacts;
   commandTurn?: CommandTurnContext;
   message: MessageFacts;
@@ -145,17 +145,17 @@ function resolveChannelTurnCommandContext(params: {
   });
 }
 
-export function buildChannelTurnContext(
-  params: BuildChannelTurnContextParams,
-): BuiltChannelTurnContext {
+export function buildChannelInboundEventContext(
+  params: BuildChannelInboundEventContextParams,
+): BuiltChannelInboundEventContext {
   const media = params.media ?? [];
-  const mediaPayload = buildChannelTurnMediaPayload(media);
-  const supplemental = filterChannelTurnSupplementalContext({
+  const mediaPayload = buildChannelInboundMediaPayload(media);
+  const supplemental = filterChannelInboundSupplementalContext({
     supplemental: params.supplemental,
     contextVisibility: params.contextVisibility,
   });
   const body = params.message.body ?? params.message.rawBody;
-  const commandTurn = resolveChannelTurnCommandContext({
+  const commandTurn = resolveChannelCommandContext({
     command: params.command,
     commandTurn: params.commandTurn,
     message: params.message,
@@ -164,7 +164,7 @@ export function buildChannelTurnContext(
 
   return finalizeInboundContext({
     Body: body,
-    InboundTurnKind: params.message.inboundTurnKind ?? "user_request",
+    InboundEventKind: params.message.inboundEventKind ?? "user_request",
     BodyForAgent: params.message.bodyForAgent ?? params.message.rawBody,
     InboundHistory: params.message.inboundHistory,
     RawBody: params.message.rawBody,

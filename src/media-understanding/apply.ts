@@ -523,10 +523,12 @@ export async function applyMediaUnderstanding(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
   agentDir?: string;
+  workspaceDir?: string;
   providers?: Record<string, MediaUnderstandingProvider>;
   activeModel?: ActiveMediaModel;
 }): Promise<ApplyMediaUnderstandingResult> {
   const { ctx, cfg } = params;
+  const mediaWorkspaceDir = ctx.MediaWorkspaceDir ?? params.workspaceDir;
   const commandCandidates = [ctx.CommandBody, ctx.RawBody, ctx.Body];
   const originalUserText =
     commandCandidates
@@ -536,9 +538,13 @@ export async function applyMediaUnderstanding(params: {
   const attachments = normalizeMediaAttachments(ctx);
   const providerRegistry = buildProviderRegistry(params.providers, cfg);
   const cache = createMediaAttachmentCache(attachments, {
-    localPathRoots: resolveMediaAttachmentLocalRoots({ cfg, ctx }),
+    localPathRoots: resolveMediaAttachmentLocalRoots({
+      cfg,
+      ctx,
+      workspaceDir: params.workspaceDir,
+    }),
     ssrfPolicy: cfg.tools?.web?.fetch?.ssrfPolicy,
-    workspaceDir: ctx.MediaWorkspaceDir,
+    workspaceDir: mediaWorkspaceDir,
   });
 
   try {
@@ -551,6 +557,7 @@ export async function applyMediaUnderstanding(params: {
         attachments: cache,
         media: attachments,
         agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
         providerRegistry,
         config,
         activeModel: params.activeModel,

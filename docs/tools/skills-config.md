@@ -175,6 +175,8 @@ Use one of:
 - `agents.defaults.sandbox.docker.env` for the Docker backend (or per-agent `agents.list[].sandbox.docker.env`).
 - Bake the env into your custom sandbox image or remote sandbox environment.
 
+For Docker sandboxes, configured `sandbox.docker.env` values become explicit container environment variables. Users with Docker daemon access can inspect them through Docker metadata, so use a mounted secret file, custom image, or another delivery path when that exposure is not acceptable.
+
 ## Related
 
 <CardGroup cols={2}>

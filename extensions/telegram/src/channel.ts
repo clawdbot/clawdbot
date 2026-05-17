@@ -40,6 +40,11 @@ import { resolveTelegramAutoThreadId } from "./action-threading.js";
 import { lookupTelegramChatId } from "./api-fetch.js";
 import { telegramApprovalCapability } from "./approval-native.js";
 import * as auditModule from "./audit.js";
+import {
+  deleteCachedTelegramBotInfo,
+  readCachedTelegramBotInfo,
+  writeCachedTelegramBotInfo,
+} from "./bot-info-cache.js";
 import type { TelegramBotInfo } from "./bot-info.js";
 import { buildTelegramGroupPeerId } from "./bot/helpers.js";
 import { telegramMessageActions as telegramMessageActionsImpl } from "./channel-actions.js";
@@ -65,7 +70,10 @@ import { resolveTelegramReactionLevel } from "./reaction-level.js";
 import { resolveTelegramStartupProbeTimeoutMs } from "./request-timeouts.js";
 import { getTelegramRuntime } from "./runtime.js";
 import { telegramSecurityAdapter } from "./security.js";
-import { resolveTelegramSessionConversation } from "./session-conversation.js";
+import {
+  resolveTelegramSessionConversation,
+  resolveTelegramSessionTarget,
+} from "./session-conversation.js";
 import { telegramSetupAdapter } from "./setup-core.js";
 import { telegramSetupWizard } from "./setup-surface.js";
 import {
@@ -107,6 +115,48 @@ function resolveTelegramProbe() {
   return (
     getOptionalTelegramRuntime()?.channel?.telegram?.probeTelegram ?? probeModule.probeTelegram
   );
+}
+
+async function readStartupBotInfoCache(params: {
+  accountId: string;
+  token: string;
+  log?: { debug?: (message: string) => void };
+}): Promise<TelegramBotInfo | undefined> {
+  try {
+    const cached = await readCachedTelegramBotInfo({
+      accountId: params.accountId,
+      botToken: params.token,
+    });
+    return cached?.botInfo;
+  } catch (err) {
+    if (getTelegramRuntime().logging.shouldLogVerbose()) {
+      params.log?.debug?.(`[${params.accountId}] bot info cache read failed: ${String(err)}`);
+    }
+    return undefined;
+  }
+}
+
+async function writeStartupBotInfoCache(params: {
+  accountId: string;
+  token: string;
+  botInfo: TelegramBotInfo;
+  log?: { debug?: (message: string) => void };
+}): Promise<void> {
+  try {
+    await writeCachedTelegramBotInfo({
+      accountId: params.accountId,
+      botToken: params.token,
+      botInfo: params.botInfo,
+    });
+  } catch (err) {
+    if (getTelegramRuntime().logging.shouldLogVerbose()) {
+      params.log?.debug?.(`[${params.accountId}] bot info cache write failed: ${String(err)}`);
+    }
+  }
+}
+
+async function deleteStartupBotInfoCache(accountId: string): Promise<void> {
+  await deleteCachedTelegramBotInfo({ accountId }).catch(() => undefined);
 }
 
 function resolveTelegramAuditCollector() {
@@ -702,6 +752,7 @@ export const telegramPlugin = createChatChannelPlugin({
         resolveTelegramDeliveryTarget({ conversationId, parentConversationId }),
       resolveSessionConversation: ({ kind, rawId }) =>
         resolveTelegramSessionConversation({ kind, rawId }),
+      resolveSessionTarget: ({ kind, id }) => resolveTelegramSessionTarget({ kind, id }),
       parseExplicitTarget: ({ raw }) => parseTelegramExplicitTarget(raw),
       inferTargetChatType: ({ to }) => parseTelegramExplicitTarget(to).chatType,
       preserveHeartbeatThreadIdForGroupRoute: true,
@@ -741,12 +792,18 @@ export const telegramPlugin = createChatChannelPlugin({
         const nextToken = resolveTelegramAccount({ cfg: nextCfg, accountId }).token.trim();
         if (previousToken !== nextToken) {
           const { deleteTelegramUpdateOffset } = await loadTelegramUpdateOffsetRuntime();
-          await deleteTelegramUpdateOffset({ accountId });
+          await Promise.all([
+            deleteTelegramUpdateOffset({ accountId }),
+            deleteStartupBotInfoCache(accountId),
+          ]);
         }
       },
       onAccountRemoved: async ({ accountId }) => {
         const { deleteTelegramUpdateOffset } = await loadTelegramUpdateOffsetRuntime();
-        await deleteTelegramUpdateOffset({ accountId });
+        await Promise.all([
+          deleteTelegramUpdateOffset({ accountId }),
+          deleteStartupBotInfoCache(accountId),
+        ]);
       },
     },
     heartbeat: {
@@ -897,34 +954,53 @@ export const telegramPlugin = createChatChannelPlugin({
         let telegramBotLabel = "";
         let unauthorizedTokenReason: string | null = null;
         let botInfo: TelegramBotInfo | undefined;
-        try {
-          const probe = await withTelegramStartupProbeSlot(ctx.abortSignal, () =>
-            resolveTelegramProbe()(
-              token,
-              resolveTelegramStartupProbeTimeoutMs(account.config.timeoutSeconds),
-              {
+        const cachedBotInfo = await readStartupBotInfoCache({
+          accountId: account.accountId,
+          token,
+          log: ctx.log,
+        });
+        if (cachedBotInfo) {
+          botInfo = cachedBotInfo;
+          telegramBotLabel = ` (@${cachedBotInfo.username})`;
+        } else {
+          try {
+            const probe = await withTelegramStartupProbeSlot(ctx.abortSignal, () =>
+              resolveTelegramProbe()(
+                token,
+                resolveTelegramStartupProbeTimeoutMs(account.config.timeoutSeconds),
+                {
+                  accountId: account.accountId,
+                  proxyUrl: account.config.proxy,
+                  network: account.config.network,
+                  apiRoot: account.config.apiRoot,
+                  includeWebhookInfo: false,
+                },
+              ),
+            );
+            const username = probe.ok ? probe.bot?.username?.trim() : null;
+            if (username) {
+              telegramBotLabel = ` (@${username})`;
+            }
+            botInfo = probe.ok ? probe.botInfo : undefined;
+            if (probe.ok && probe.botInfo) {
+              await writeStartupBotInfoCache({
                 accountId: account.accountId,
-                proxyUrl: account.config.proxy,
-                network: account.config.network,
-                apiRoot: account.config.apiRoot,
-                includeWebhookInfo: false,
-              },
-            ),
-          );
-          const username = probe.ok ? probe.bot?.username?.trim() : null;
-          if (username) {
-            telegramBotLabel = ` (@${username})`;
-          }
-          botInfo = probe.ok ? probe.botInfo : undefined;
-          if (!probe.ok && probe.status === 401) {
-            unauthorizedTokenReason = formatTelegramUnauthorizedTokenError(account);
-          }
-        } catch (err) {
-          if (ctx.abortSignal.aborted) {
-            return;
-          }
-          if (getTelegramRuntime().logging.shouldLogVerbose()) {
-            ctx.log?.debug?.(`[${account.accountId}] bot probe failed: ${String(err)}`);
+                token,
+                botInfo: probe.botInfo,
+                log: ctx.log,
+              });
+            }
+            if (!probe.ok && probe.status === 401) {
+              await deleteStartupBotInfoCache(account.accountId);
+              unauthorizedTokenReason = formatTelegramUnauthorizedTokenError(account);
+            }
+          } catch (err) {
+            if (ctx.abortSignal.aborted) {
+              return;
+            }
+            if (getTelegramRuntime().logging.shouldLogVerbose()) {
+              ctx.log?.debug?.(`[${account.accountId}] bot probe failed: ${String(err)}`);
+            }
           }
         }
         if (unauthorizedTokenReason) {
@@ -1019,6 +1095,9 @@ export const telegramPlugin = createChatChannelPlugin({
             nextConfig: nextCfg,
             afterWrite: { mode: "auto" },
           });
+        }
+        if (cleared || loggedOut) {
+          await deleteStartupBotInfoCache(accountId);
         }
         return { cleared, envToken: Boolean(envToken), loggedOut };
       },

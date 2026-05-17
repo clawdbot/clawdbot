@@ -5,8 +5,10 @@ import {
 
 export type CapturedDiagnosticLogRecord = Extract<DiagnosticEventPayload, { type: "log.record" }>;
 
-export function flushDiagnosticLogRecords(): Promise<void> {
-  return new Promise<void>((resolve) => setImmediate(resolve));
+export async function flushDiagnosticLogRecords(): Promise<void> {
+  for (let index = 0; index < 3; index += 1) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
 }
 
 export function createDiagnosticLogRecordCapture() {

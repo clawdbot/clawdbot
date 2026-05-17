@@ -32,6 +32,23 @@ const musicGenerationRuntimeMocks = vi.hoisted(() => ({
 }));
 
 const musicGenerateBackgroundMocks = vi.hoisted(() => ({
+  musicGenerationTaskLifecycle: {
+    createTaskRun: (
+      params: Parameters<typeof musicGenerateBackground.createMusicGenerationTaskRun>[0],
+    ) => musicGenerateBackgroundMocks.createMusicGenerationTaskRun(params),
+    recordTaskProgress: (
+      params: Parameters<typeof musicGenerateBackground.recordMusicGenerationTaskProgress>[0],
+    ) => musicGenerateBackgroundMocks.recordMusicGenerationTaskProgress(params),
+    completeTaskRun: (
+      params: Parameters<typeof musicGenerateBackground.completeMusicGenerationTaskRun>[0],
+    ) => musicGenerateBackgroundMocks.completeMusicGenerationTaskRun(params),
+    failTaskRun: (
+      params: Parameters<typeof musicGenerateBackground.failMusicGenerationTaskRun>[0],
+    ) => musicGenerateBackgroundMocks.failMusicGenerationTaskRun(params),
+    wakeTaskCompletion: (
+      params: Parameters<typeof musicGenerateBackground.wakeMusicGenerationTaskCompletion>[0],
+    ) => musicGenerateBackgroundMocks.wakeMusicGenerationTaskCompletion(params),
+  },
   completeMusicGenerationTaskRun: vi.fn((params) => {
     if (!params.handle) {
       return;
@@ -362,6 +379,8 @@ describe("createMusicGenerateTool", () => {
     expect(details.count).toBe(1);
     expect(details.instrumental).toBe(true);
     expect(details.lyrics).toEqual(["wake the city up"]);
+    expect(details.timeoutMs).toBe(300_000);
+    expect(generateMusicOptions().timeoutMs).toBe(300_000);
     expect((details.media as { mediaUrls?: unknown }).mediaUrls).toEqual([
       "/tmp/generated-night-drive.mp3",
     ]);
@@ -404,7 +423,10 @@ describe("createMusicGenerateTool", () => {
       config: asConfig({
         agents: {
           defaults: {
-            musicGenerationModel: { primary: "google/lyria-3-clip-preview" },
+            musicGenerationModel: {
+              primary: "google/lyria-3-clip-preview",
+              timeoutMs: 1000,
+            },
           },
         },
       }),
@@ -415,25 +437,24 @@ describe("createMusicGenerateTool", () => {
 
     const result = await tool.execute("call-1", {
       prompt: "night-drive synthwave",
-      timeoutMs: 1000,
     });
     const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
 
     expect(generateSpy).toHaveBeenCalledTimes(1);
     expect(generateMusicOptions().autoProviderFallback).toBe(false);
-    expect(generateMusicOptions().timeoutMs).toBe(10_000);
-    expect(text).toContain("Timeout normalized: requested 1000ms; used 10000ms.");
+    expect(generateMusicOptions().timeoutMs).toBe(120_000);
+    expect(text).toContain("Timeout normalized: requested 1000ms; used 120000ms.");
     const details = detailsOf(result);
-    expect(details.timeoutMs).toBe(10_000);
+    expect(details.timeoutMs).toBe(120_000);
     expect(details.requestedTimeoutMs).toBe(1000);
     expect(details.timeoutNormalization).toEqual({
       requested: 1000,
-      applied: 10_000,
-      minimum: 10_000,
+      applied: 120_000,
+      minimum: 120_000,
     });
   });
 
-  it("uses configured timeoutMs for music generation and lets calls override it", async () => {
+  it("uses configured timeoutMs for music generation and ignores call-provided timeoutMs", async () => {
     vi.spyOn(musicGenerationRuntime, "generateMusic").mockResolvedValue({
       provider: "google",
       model: "lyria-3-clip-preview",
@@ -475,13 +496,13 @@ describe("createMusicGenerateTool", () => {
     });
     const overrideResult = await tool.execute("call-timeout-override", {
       prompt: "night-drive synthwave",
-      timeoutMs: 12_345,
+      timeoutMs: 240_000,
     });
 
     expect(generateMusicOptions(0).timeoutMs).toBe(180_000);
-    expect(generateMusicOptions(1).timeoutMs).toBe(12_345);
+    expect(generateMusicOptions(1).timeoutMs).toBe(180_000);
     expect(detailsOf(defaultResult).timeoutMs).toBe(180_000);
-    expect(detailsOf(overrideResult).timeoutMs).toBe(12_345);
+    expect(detailsOf(overrideResult).timeoutMs).toBe(180_000);
   });
 
   it("starts background generation and wakes the session with MEDIA lines", async () => {
@@ -526,7 +547,10 @@ describe("createMusicGenerateTool", () => {
       config: asConfig({
         agents: {
           defaults: {
-            musicGenerationModel: { primary: "google/lyria-3-clip-preview" },
+            musicGenerationModel: {
+              primary: "google/lyria-3-clip-preview",
+              timeoutMs: 1000,
+            },
           },
         },
       }),
@@ -546,31 +570,30 @@ describe("createMusicGenerateTool", () => {
     const result = await tool.execute("call-1", {
       prompt: "night-drive synthwave",
       instrumental: true,
-      timeoutMs: 1000,
     });
     const text = (result.content?.[0] as { text: string } | undefined)?.text ?? "";
 
     expect(text).toContain("Background task started for music generation (task-123).");
     expect(text).toContain("Do not call music_generate again for this request.");
-    expect(text).toContain("Timeout normalized: requested 1000ms; used 10000ms.");
+    expect(text).toContain("Timeout normalized: requested 1000ms; used 120000ms.");
     const details = detailsOf(result);
     expect(details.async).toBe(true);
     expect(details.status).toBe("started");
     expect((details.task as { taskId?: unknown }).taskId).toBe("task-123");
     expect(details.instrumental).toBe(true);
-    expect(details.timeoutMs).toBe(10_000);
+    expect(details.timeoutMs).toBe(120_000);
     expect(details.requestedTimeoutMs).toBe(1000);
     expect(details.timeoutNormalization).toEqual({
       requested: 1000,
-      applied: 10_000,
-      minimum: 10_000,
+      applied: 120_000,
+      minimum: 120_000,
     });
     if (!scheduledWork) {
       throw new Error("expected scheduled music generation work");
     }
     await scheduledWork();
     expect(generateMusicOptions().autoProviderFallback).toBe(false);
-    expect(generateMusicOptions().timeoutMs).toBe(10_000);
+    expect(generateMusicOptions().timeoutMs).toBe(120_000);
     const progress = taskProgressCall();
     expect(String(progress.runId)).toMatch(/^tool:music_generate:/);
     expect(progress.progressSummary).toBe("Generating music");

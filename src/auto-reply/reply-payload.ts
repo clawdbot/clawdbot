@@ -44,6 +44,8 @@ export type ReplyPayload = {
    *  Should be excluded from TTS transcript accumulation so compaction
    *  status lines are not synthesised into the spoken assistant reply. */
   isCompactionNotice?: boolean;
+  /** Marks this payload as a model-fallback transition/recovery notice. */
+  isFallbackNotice?: boolean;
   /** Channel-specific payload data (per-channel envelope). */
   channelData?: Record<string, unknown>;
 };

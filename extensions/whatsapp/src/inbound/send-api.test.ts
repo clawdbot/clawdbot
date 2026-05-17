@@ -111,15 +111,87 @@ describe("createWebSendApi", () => {
     });
   });
 
-  it("falls back to default document filename when fileName is absent", async () => {
+  it("falls back to a MIME-aware document filename when fileName is absent", async () => {
     const payload = Buffer.from("pdf");
     await api.sendMessage("+1555", "doc", payload, "application/pdf");
     expectFirstSendJid("1555@s.whatsapp.net");
     expectSendContentFields(0, {
       document: payload,
-      fileName: "file",
+      fileName: "file.pdf",
       caption: "doc",
       mimetype: "application/pdf",
+    });
+  });
+
+  it("uses MIME mappings for text document filename fallbacks", async () => {
+    const payload = Buffer.from("a,b\n1,2\n");
+    await api.sendMessage("+1555", "doc", payload, "text/csv");
+
+    expectSendContentFields(0, {
+      document: payload,
+      fileName: "file.csv",
+      caption: "doc",
+      mimetype: "text/csv",
+    });
+  });
+
+  it("keeps the plain default document filename when MIME has no extension mapping", async () => {
+    const payload = Buffer.from("unknown");
+    await api.sendMessage("+1555", "doc", payload, "application/x-custom");
+
+    expectSendContentFields(0, {
+      document: payload,
+      fileName: "file",
+      caption: "doc",
+      mimetype: "application/x-custom",
+    });
+  });
+
+  it("sends visual media as document when sendOptions.asDocument is true", async () => {
+    const payload = Buffer.from("img");
+    await api.sendMessage("+1555", "promo", payload, "image/png", {
+      asDocument: true,
+      fileName: "promo.png",
+    });
+    expect(sendMessage).toHaveBeenCalledWith(
+      "1555@s.whatsapp.net",
+      expect.objectContaining({
+        document: payload,
+        fileName: "promo.png",
+        caption: "promo",
+        mimetype: "image/png",
+      }),
+    );
+  });
+
+  it("uses MIME-aware filename fallback for forced visual documents", async () => {
+    const payload = Buffer.from("img");
+    await api.sendMessage("+1555", "promo", payload, "image/png", {
+      asDocument: true,
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      "1555@s.whatsapp.net",
+      expect.objectContaining({
+        document: payload,
+        fileName: "file.png",
+        caption: "promo",
+        mimetype: "image/png",
+      }),
+    );
+  });
+
+  it("does not force audio media onto the document branch", async () => {
+    const payload = Buffer.from("aud");
+    await api.sendMessage("+1555", "voice", payload, "audio/ogg", {
+      asDocument: true,
+      fileName: "voice.ogg",
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith("1555@s.whatsapp.net", {
+      audio: payload,
+      ptt: true,
+      mimetype: "audio/ogg",
     });
   });
 
@@ -196,6 +268,39 @@ describe("createWebSendApi", () => {
       caption: "cap @15551234567",
       mimetype: "image/jpeg",
       mentions: ["15551234567@s.whatsapp.net"],
+    });
+  });
+
+  it("uses resolved mention caption text for forced-document media", async () => {
+    api = createWebSendApi({
+      sock: { sendMessage, sendPresenceUpdate },
+      defaultAccountId: "main",
+      resolveOutboundMentions: ({ jid, text }) =>
+        resolveWhatsAppOutboundMentions({
+          chatJid: jid,
+          text,
+          participants: [
+            {
+              id: "277038292303944:4@lid",
+              phoneNumber: "5511976136970@s.whatsapp.net",
+            },
+          ],
+        }),
+    });
+    const payload = Buffer.from("img");
+
+    await api.sendMessage("120363000000000000@g.us", "cap @+5511976136970", payload, "image/jpeg", {
+      asDocument: true,
+      fileName: "promo.jpg",
+    });
+
+    expectFirstSendJid("120363000000000000@g.us");
+    expectSendContentFields(0, {
+      document: payload,
+      fileName: "promo.jpg",
+      caption: "cap @277038292303944",
+      mimetype: "image/jpeg",
+      mentions: ["277038292303944@lid"],
     });
   });
 

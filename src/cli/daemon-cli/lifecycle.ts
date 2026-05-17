@@ -208,6 +208,7 @@ async function restartGatewayWithoutServiceManager(
   }
   writeGatewayRestartIntentSync({
     targetPid: pids[0],
+    reason: "gateway.restart",
     ...(restartIntent ? { intent: restartIntent } : {}),
   });
   signalVerifiedGatewayPidSync(pids[0], "SIGUSR1");

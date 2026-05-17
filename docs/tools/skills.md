@@ -328,6 +328,10 @@ metadata:
 
   </Accordion>
   <Accordion title="Per-installer details">
+    - **Homebrew installs:** OpenClaw does not auto-install Homebrew or translate
+      brew formulas into system package manager commands. In Linux containers
+      without `brew`, onboarding hides brew-only dependency installers; use a
+      custom image or install the dependency manually before enabling that skill.
     - **Go installs:** if `go` is missing and `brew` is available, the gateway installs Go via Homebrew first and sets `GOBIN` to Homebrew's `bin` when possible.
     - **Download installs:** `url` (required), `archive` (`tar.gz` | `tar.bz2` | `zip`), `extract` (default: auto when archive detected), `stripComponents`, `targetDir` (default: `~/.openclaw/tools/<skillKey>`).
 

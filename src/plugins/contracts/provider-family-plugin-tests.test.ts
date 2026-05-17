@@ -1,8 +1,9 @@
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import { basename, dirname, relative, resolve, sep } from "node:path";
+import { basename, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
+import { listGitTrackedFiles, toRepoRelativePath } from "../../test-utils/repo-files.js";
 import { loadPluginManifestRegistry } from "../manifest-registry.js";
 
 type SharedFamilyHookKind = "replay" | "stream" | "tool-compat";
@@ -47,7 +48,7 @@ const EXPECTED_SENTINEL_SHARED_FAMILY_ASSIGNMENTS: Record<string, ExpectedShared
 };
 
 function toRepoRelative(path: string): string {
-  return relative(REPO_ROOT, path).split(sep).join("/");
+  return toRepoRelativePath(REPO_ROOT, path);
 }
 
 function shouldSkipScannedPath(relativePath: string): boolean {
@@ -59,19 +60,14 @@ function listGitFiles(dir: string): string[] | null {
   if (!relativeDir || relativeDir.startsWith("..")) {
     return null;
   }
-  const result = spawnSync("git", ["ls-files", "--", relativeDir], {
-    cwd: REPO_ROOT,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  if (result.status !== 0) {
+  const files = listGitTrackedFiles({ repoRoot: REPO_ROOT, pathspecs: relativeDir });
+  if (!files) {
     return null;
   }
-  return result.stdout
-    .split("\n")
-    .map((line) => line.trim().replaceAll("\\", "/"))
-    .filter((line) => line.length > 0 && !shouldSkipScannedPath(line))
+  return files
+    .filter((line) => !shouldSkipScannedPath(line))
     .map((line) => resolve(REPO_ROOT, line))
+    .filter((filePath) => fs.existsSync(filePath))
     .toSorted();
 }
 
@@ -217,16 +213,12 @@ function collectSharedFamilyAssignments(): Map<string, ExpectedSharedFamilyContr
 describe("provider family plugin-boundary inventory", () => {
   it("lists bundled plugin files from git without walking plugin roots", () => {
     const bundledRoots = listBundledPluginRoots();
-    const readDir = vi.spyOn(fs, "readdirSync");
-    try {
+    expectNoReaddirSyncDuring(() => {
       const files = bundledRoots.flatMap((plugin) => listFiles(plugin.rootDir));
 
       expect(files.length).toBeGreaterThan(0);
       expect(files.some((file) => toRepoRelative(file).startsWith("extensions/"))).toBe(true);
-      expect(readDir).not.toHaveBeenCalled();
-    } finally {
-      readDir.mockRestore();
-    }
+    });
   });
 
   it("keeps shared-family provider hooks covered by at least one plugin-boundary test", () => {

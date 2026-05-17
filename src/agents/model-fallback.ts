@@ -34,7 +34,11 @@ import {
   type ModelFallbackStepFields,
 } from "./model-fallback-observation.js";
 import type { FallbackAttempt, ModelCandidate } from "./model-fallback.types.js";
-import { modelKey, normalizeModelRef } from "./model-selection-normalize.js";
+import {
+  type ModelManifestNormalizationContext,
+  modelKey,
+  normalizeModelRef,
+} from "./model-selection-normalize.js";
 import {
   buildConfiguredAllowlistKeys,
   buildModelAliasIndex,
@@ -475,18 +479,22 @@ function resolveFallbackSoonestCooldownExpiry(params: {
   return soonest;
 }
 
-function resolveImageFallbackCandidates(params: {
-  cfg: OpenClawConfig | undefined;
-  defaultProvider: string;
-  modelOverride?: string;
-}): ModelCandidate[] {
+function resolveImageFallbackCandidates(
+  params: {
+    cfg: OpenClawConfig | undefined;
+    defaultProvider: string;
+    modelOverride?: string;
+  } & ModelManifestNormalizationContext,
+): ModelCandidate[] {
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg ?? {},
     defaultProvider: params.defaultProvider,
+    manifestPlugins: params.manifestPlugins,
   });
   const allowlist = buildConfiguredAllowlistKeys({
     cfg: params.cfg,
     defaultProvider: params.defaultProvider,
+    manifestPlugins: params.manifestPlugins,
   });
   const { candidates, addExplicitCandidate, addAllowlistedCandidate } =
     createModelCandidateCollector(allowlist);
@@ -496,6 +504,7 @@ function resolveImageFallbackCandidates(params: {
       raw,
       defaultProvider: params.defaultProvider,
       aliasIndex,
+      manifestPlugins: params.manifestPlugins,
     });
     if (!resolved) {
       return;
@@ -553,43 +562,52 @@ export const __testing = {
   resolveSessionSuspensionReason,
 } as const;
 
-function resolveFallbackCandidates(params: {
-  cfg: OpenClawConfig | undefined;
-  provider: string;
-  model: string;
-  /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
-  fallbacksOverride?: string[];
-}): ModelCandidate[] {
+function resolveFallbackCandidates(
+  params: {
+    cfg: OpenClawConfig | undefined;
+    provider: string;
+    model: string;
+    /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
+    fallbacksOverride?: string[];
+  } & ModelManifestNormalizationContext,
+): ModelCandidate[] {
   const primary = params.cfg
     ? resolveConfiguredModelRef({
         cfg: params.cfg,
         defaultProvider: DEFAULT_PROVIDER,
         defaultModel: DEFAULT_MODEL,
+        manifestPlugins: params.manifestPlugins,
       })
     : null;
   const defaultProvider = primary?.provider ?? DEFAULT_PROVIDER;
   const defaultModel = primary?.model ?? DEFAULT_MODEL;
   const providerRaw = normalizeOptionalString(params.provider) || defaultProvider;
   const modelRaw = normalizeOptionalString(params.model) || defaultModel;
-  const normalizedPrimary = normalizeModelRef(providerRaw, modelRaw);
+  const normalizedPrimary = normalizeModelRef(providerRaw, modelRaw, {
+    manifestPlugins: params.manifestPlugins,
+  });
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg ?? {},
     defaultProvider,
+    manifestPlugins: params.manifestPlugins,
   });
   const allowlist = buildConfiguredAllowlistKeys({
     cfg: params.cfg,
     defaultProvider,
+    manifestPlugins: params.manifestPlugins,
   });
   const { candidates, addExplicitCandidate } = createModelCandidateCollector(allowlist);
   const resolvedModelAlias = resolveModelRefFromString({
     raw: modelRaw,
     defaultProvider: providerRaw,
     aliasIndex,
+    manifestPlugins: params.manifestPlugins,
   });
   const resolvedProviderModelAlias = resolveModelRefFromString({
     raw: `${providerRaw}/${modelRaw}`,
     defaultProvider,
     aliasIndex,
+    manifestPlugins: params.manifestPlugins,
   });
   const resolvedBareModelAlias =
     resolvedModelAlias?.alias &&
@@ -601,7 +619,9 @@ function resolveFallbackCandidates(params: {
     (resolvedProviderModelAlias?.alias ? resolvedProviderModelAlias.ref : null) ??
     resolvedBareModelAlias ??
     normalizedPrimary;
-  const effectivePrimary = normalizeModelRef(resolvedPrimary.provider, resolvedPrimary.model);
+  const effectivePrimary = normalizeModelRef(resolvedPrimary.provider, resolvedPrimary.model, {
+    manifestPlugins: params.manifestPlugins,
+  });
 
   addExplicitCandidate(effectivePrimary);
 
@@ -615,6 +635,7 @@ function resolveFallbackCandidates(params: {
       raw,
       defaultProvider,
       aliasIndex,
+      manifestPlugins: params.manifestPlugins,
     });
     if (!resolved) {
       continue;
@@ -814,26 +835,29 @@ function resolveCooldownDecision(params: {
   };
 }
 
-export async function runWithModelFallback<T>(params: {
-  cfg: OpenClawConfig | undefined;
-  provider: string;
-  model: string;
-  runId?: string;
-  sessionId?: string;
-  lane?: string;
-  agentDir?: string;
-  /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
-  fallbacksOverride?: string[];
-  run: ModelFallbackRunFn<T>;
-  onError?: ModelFallbackErrorHandler;
-  onFallbackStep?: ModelFallbackStepHandler;
-  classifyResult?: ModelFallbackResultClassifier<T>;
-}): Promise<ModelFallbackRunResult<T>> {
+export async function runWithModelFallback<T>(
+  params: {
+    cfg: OpenClawConfig | undefined;
+    provider: string;
+    model: string;
+    runId?: string;
+    sessionId?: string;
+    lane?: string;
+    agentDir?: string;
+    /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
+    fallbacksOverride?: string[];
+    run: ModelFallbackRunFn<T>;
+    onError?: ModelFallbackErrorHandler;
+    onFallbackStep?: ModelFallbackStepHandler;
+    classifyResult?: ModelFallbackResultClassifier<T>;
+  } & ModelManifestNormalizationContext,
+): Promise<ModelFallbackRunResult<T>> {
   const candidates = resolveFallbackCandidates({
     cfg: params.cfg,
     provider: params.provider,
     model: params.model,
     fallbacksOverride: params.fallbacksOverride,
+    manifestPlugins: params.manifestPlugins,
   });
   const authRuntime =
     params.cfg && hasAnyAuthProfileStoreSource(params.agentDir)

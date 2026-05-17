@@ -1535,7 +1535,70 @@ describe("gateway startup reconciliation", () => {
     }
   });
 
-  it("does not reschedule startup cron retry from stale enabled config after runtime config disables dreaming", async () => {
+  it("retries disabled startup cleanup until cron is available", async () => {
+    vi.useFakeTimers();
+    clearInternalHooks();
+    const logger = createLogger();
+    const managedJob: CronJobLike = {
+      id: "job-managed",
+      name: constants.MANAGED_DREAMING_CRON_NAME,
+      description: `${constants.MANAGED_DREAMING_CRON_TAG} test`,
+      enabled: true,
+      schedule: { kind: "cron", expr: "0 3 * * *" },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: constants.DREAMING_SYSTEM_EVENT_TEXT },
+      createdAtMs: 10,
+    };
+    const harness = createCronHarness([managedJob]);
+    const onMock = vi.fn();
+    const api: DreamingPluginApiTestDouble = {
+      config: {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: false,
+                  frequency: "15 4 * * *",
+                  timezone: "UTC",
+                },
+              },
+            },
+          },
+        },
+      },
+      pluginConfig: {},
+      logger,
+      runtime: {},
+      on: onMock,
+    };
+
+    try {
+      registerShortTermPromotionDreamingForTest(api);
+      let cronAvailable = false;
+      await triggerGatewayStart(onMock, {
+        config: api.config,
+        getCron: () => (cronAvailable ? harness.cron : undefined),
+      });
+
+      await vi.advanceTimersByTimeAsync(constants.STARTUP_CRON_RETRY_DELAY_MS);
+      expect(harness.removeCalls).toHaveLength(0);
+
+      cronAvailable = true;
+      await vi.advanceTimersByTimeAsync(constants.STARTUP_CRON_RETRY_DELAY_MS);
+
+      expect(harness.removeCalls).toEqual(["job-managed"]);
+      expect(harness.jobs).toHaveLength(0);
+      expect(harness.addCalls).toHaveLength(0);
+      expectLogContains(logger.info, "removed 1 managed dreaming cron job");
+    } finally {
+      vi.useRealTimers();
+      clearInternalHooks();
+    }
+  });
+
+  it("does not recreate startup cron from stale enabled config after runtime config disables dreaming", async () => {
     vi.useFakeTimers();
     clearInternalHooks();
     const logger = createLogger();

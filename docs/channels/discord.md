@@ -250,9 +250,9 @@ Once DMs are working, you can set up your Discord server as a full workspace whe
   <Step title="Allow responses without @mention">
     By default, your agent only responds in guild channels when @mentioned. For a private server, you probably want it to respond to every message.
 
-    In guild channels, normal assistant final replies stay private by default. Visible Discord output must be sent explicitly with the `message` tool, so the agent can lurk by default and only post when it decides a channel reply is useful.
+    In guild channels, visible Discord output should use the `message` tool by default, so the agent can lurk and only post when it decides a channel reply is useful. For normal requests, OpenClaw falls back to the assistant's final text when the model misses the tool; ambient room events stay quiet unless the tool sends.
 
-    This means the selected model must reliably call tools. If Discord shows typing and the logs show token usage but no posted message, check the session log for assistant text with `didSendViaMessagingTool: false`. That means the model produced a private final answer instead of calling `message(action=send)`. Switch to a stronger tool-calling model, or use the config below to restore legacy automatic final replies.
+    This means the selected model should reliably call tools. If Discord shows typing and the logs show token usage but no posted message, check whether the turn was configured as an ambient room event or use the config below to restore legacy automatic final replies.
 
     <Tabs>
       <Tab title="Ask your agent">
@@ -653,7 +653,7 @@ Default slash command settings:
     Note: `off` disables implicit reply threading. Explicit `[[reply_to_*]]` tags are still honored.
     `first` always attaches the implicit native reply reference to the first outbound Discord message for the turn.
     `batched` only attaches Discord's implicit native reply reference when the
-    inbound turn was a debounced batch of multiple messages. This is useful
+    inbound event was a debounced batch of multiple messages. This is useful
     when you want native replies mainly for ambiguous bursty chats, not every
     single-message turn.
 

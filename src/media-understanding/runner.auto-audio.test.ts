@@ -105,6 +105,47 @@ describe("runCapability auto audio entries", () => {
     expect(result.decision.outcome).toBe("success");
   });
 
+  it("passes workspaceDir to auto-selected audio provider execution auth", async () => {
+    const modelAuth = await import("../agents/model-auth.js");
+    const resolveApiKeyForProvider = vi.mocked(modelAuth.resolveApiKeyForProvider);
+    resolveApiKeyForProvider.mockClear();
+
+    await withAudioFixture("openclaw-auto-audio-workspace-auth", async ({ ctx, media, cache }) => {
+      const result = await runCapability({
+        capability: "audio",
+        cfg: {
+          models: {
+            providers: {
+              openai: {
+                models: [],
+              },
+            },
+          },
+        } as unknown as OpenClawConfig,
+        ctx,
+        attachments: cache,
+        media,
+        providerRegistry: createOpenAiAudioProvider(async (req) => ({
+          text: `workspace ${req.apiKey}`,
+          model: req.model ?? "unknown",
+        })),
+        agentDir: "/tmp/openclaw-agent",
+        workspaceDir: "/tmp/openclaw-workspace",
+      });
+
+      expect(result.decision.outcome).toBe("success");
+      expect(requireCapabilityOutput(result, 0).text).toBe("workspace test-key");
+    });
+
+    expect(resolveApiKeyForProvider).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        agentDir: "/tmp/openclaw-agent",
+        workspaceDir: "/tmp/openclaw-workspace",
+      }),
+    );
+  });
+
   it("uses the provider audio default instead of the active Codex chat model", async () => {
     let runResult: Awaited<ReturnType<typeof runCapability>> | undefined;
     let seenModel: string | undefined;

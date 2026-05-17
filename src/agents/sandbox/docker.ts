@@ -4,8 +4,11 @@ import {
   materializeWindowsSpawnProgram,
   resolveWindowsSpawnProgram,
 } from "../../plugin-sdk/windows-spawn.js";
-import { sanitizeEnvVars } from "./sanitize-env-vars.js";
-import type { EnvSanitizationOptions } from "./sanitize-env-vars.js";
+import {
+  sanitizeEnvVars,
+  sanitizeExplicitSandboxEnvVars,
+  type EnvSanitizationOptions,
+} from "./sanitize-env-vars.js";
 
 type ExecDockerRawOptions = {
   allowFailure?: boolean;
@@ -165,7 +168,10 @@ export function execDockerRaw(
 import { formatCliCommand } from "../../cli/command-format.js";
 import { markOpenClawExecEnv } from "../../infra/openclaw-exec-env.js";
 import { defaultRuntime } from "../../runtime.js";
-import { computeSandboxConfigHash } from "./config-hash.js";
+import {
+  computeSandboxConfigHash,
+  SANDBOX_DOCKER_EXPLICIT_ENV_POLICY_EPOCH,
+} from "./config-hash.js";
 import { DEFAULT_SANDBOX_IMAGE } from "./constants.js";
 import { readRegistryEntry, updateRegistry } from "./registry.js";
 import { resolveSandboxAgentId, resolveSandboxScopeKey, slugifySessionKey } from "./shared.js";
@@ -178,6 +184,31 @@ const log = createSubsystemLogger("docker");
 const HOT_CONTAINER_WINDOW_MS = 5 * 60 * 1000;
 
 export type ExecDockerOptions = ExecDockerRawOptions;
+
+function envRecordsEqual(left: Record<string, string>, right: Record<string, string>): boolean {
+  const leftEntries = Object.entries(left).toSorted(([leftKey], [rightKey]) =>
+    leftKey.localeCompare(rightKey),
+  );
+  const rightEntries = Object.entries(right).toSorted(([leftKey], [rightKey]) =>
+    leftKey.localeCompare(rightKey),
+  );
+  if (leftEntries.length !== rightEntries.length) {
+    return false;
+  }
+  return leftEntries.every(([key, value], index) => {
+    const rightEntry = rightEntries[index];
+    return rightEntry?.[0] === key && rightEntry[1] === value;
+  });
+}
+
+export function resolveDockerEnvPolicyEpoch(env: Record<string, string | undefined> | undefined) {
+  const explicitEnv = env ?? {};
+  const previousAllowed = sanitizeEnvVars(explicitEnv).allowed;
+  const currentAllowed = sanitizeExplicitSandboxEnvVars(explicitEnv).allowed;
+  return envRecordsEqual(previousAllowed, currentAllowed)
+    ? undefined
+    : SANDBOX_DOCKER_EXPLICIT_ENV_POLICY_EPOCH;
+}
 
 export async function execDocker(args: string[], opts?: ExecDockerOptions) {
   const result = await execDockerRaw(args, opts);
@@ -382,6 +413,11 @@ export function buildSandboxCreateArgs(params: {
   allowSourcesOutsideAllowedRoots?: boolean;
   allowReservedContainerTargets?: boolean;
   allowContainerNamespaceJoin?: boolean;
+  /**
+   * @deprecated Docker container creation now treats cfg.env as explicit sandbox
+   * configuration and ignores host-env name filters. This field is kept so SDK
+   * callers with existing object literals do not hit excess-property failures.
+   */
   envSanitizationOptions?: EnvSanitizationOptions;
 }) {
   // Runtime security validation: blocks dangerous bind mounts, network modes, and profiles.
@@ -425,12 +461,16 @@ export function buildSandboxCreateArgs(params: {
   if (params.cfg.user) {
     args.push("--user", params.cfg.user);
   }
-  const envSanitization = sanitizeEnvVars(params.cfg.env ?? {}, params.envSanitizationOptions);
+  const envSanitization = sanitizeExplicitSandboxEnvVars(params.cfg.env ?? {});
   if (envSanitization.blocked.length > 0) {
-    log.warn(`Blocked sensitive environment variables: ${envSanitization.blocked.join(", ")}`);
+    log.warn(
+      `Blocked invalid configured sandbox environment variables: ${envSanitization.blocked.join(", ")}`,
+    );
   }
   if (envSanitization.warnings.length > 0) {
-    log.warn(`Suspicious environment variables: ${envSanitization.warnings.join(", ")}`);
+    log.warn(
+      `Suspicious configured sandbox environment variables: ${envSanitization.warnings.join(", ")}`,
+    );
   }
   for (const [key, value] of Object.entries(markOpenClawExecEnv(envSanitization.allowed))) {
     args.push("--env", `${key}=${value}`);
@@ -562,6 +602,7 @@ export async function ensureSandboxContainer(params: {
   const containerName = name.slice(0, 63);
   const expectedHash = computeSandboxConfigHash({
     docker: params.cfg.docker,
+    dockerEnvPolicyEpoch: resolveDockerEnvPolicyEpoch(params.cfg.docker.env),
     workspaceAccess: params.cfg.workspaceAccess,
     workspaceDir: params.workspaceDir,
     agentWorkspaceDir: params.agentWorkspaceDir,

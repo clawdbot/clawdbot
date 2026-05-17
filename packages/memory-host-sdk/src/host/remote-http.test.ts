@@ -43,4 +43,18 @@ describe("package withRemoteHttpResponse", () => {
     expect(deps.calls).toHaveLength(1);
     expect(deps.calls[0]).not.toHaveProperty("mode");
   });
+
+  it("passes abort signals to the guarded fetch", async () => {
+    const deps = makeFetchDeps();
+    const controller = new AbortController();
+
+    await withRemoteHttpResponse({
+      url: "https://memory.example/v1/embeddings",
+      signal: controller.signal,
+      onResponse: async () => undefined,
+      ...deps,
+    });
+
+    expect(deps.calls[0]).toHaveProperty("signal", controller.signal);
+  });
 });

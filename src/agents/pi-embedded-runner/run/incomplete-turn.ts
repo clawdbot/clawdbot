@@ -621,7 +621,8 @@ function shouldApplyNonVisibleTurnRetryGuard(params: {
   }
   if (
     normalizeLowercaseStringOrEmpty(params.modelApi ?? "") === "openai-completions" ||
-    normalizeLowercaseStringOrEmpty(params.modelApi ?? "") === "anthropic-messages"
+    normalizeLowercaseStringOrEmpty(params.modelApi ?? "") === "anthropic-messages" ||
+    normalizeLowercaseStringOrEmpty(params.modelApi ?? "") === "bedrock-converse-stream"
   ) {
     return true;
   }

@@ -28,6 +28,7 @@ import { createEmbeddedPiSessionEventHandler } from "./pi-embedded-subscribe.han
 import {
   consumePendingAssistantReplyDirectivesIntoReply,
   consumePendingToolMediaIntoReply,
+  hasAssistantVisibleReply,
   readPendingToolMediaReply,
 } from "./pi-embedded-subscribe.handlers.messages.js";
 import {
@@ -186,6 +187,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     pendingToolMediaUrls: initialPendingToolMediaUrls,
     pendingToolAudioAsVoice: false,
     pendingToolTrustedLocalMedia: false,
+    visibleBlockReplyCount: 0,
     pendingAssistantReplyDirectives: undefined,
     deterministicApprovalPromptPending: false,
     deterministicApprovalPromptSent: false,
@@ -217,9 +219,9 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   const emitBlockReplySafely = (
     payload: Parameters<NonNullable<SubscribeEmbeddedPiSessionParams["onBlockReply"]>>[0],
     options?: { assistantMessageIndex?: number },
-  ) => {
+  ): boolean => {
     if (!params.onBlockReply) {
-      return;
+      return false;
     }
     try {
       const taggedPayload =
@@ -230,7 +232,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
           : payload;
       const maybeTask = params.onBlockReply(taggedPayload);
       if (!isPromiseLike<void>(maybeTask)) {
-        return;
+        return true;
       }
       const task = Promise.resolve(maybeTask).catch((err) => {
         log.warn(`block reply callback failed: ${String(err)}`);
@@ -239,8 +241,10 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       void task.finally(() => {
         pendingBlockReplyTasks.delete(task);
       });
+      return true;
     } catch (err) {
       log.warn(`block reply callback failed: ${String(err)}`);
+      return false;
     }
   };
   const emitBlockReply = (
@@ -252,7 +256,10 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       options?.consumePendingToolMedia === false
         ? withAssistantDirectives
         : consumePendingToolMediaIntoReply(state, withAssistantDirectives);
-    emitBlockReplySafely(withToolMedia, options);
+    const emitted = emitBlockReplySafely(withToolMedia, options);
+    if (emitted && !withToolMedia.isReasoning && hasAssistantVisibleReply(withToolMedia)) {
+      state.visibleBlockReplyCount += 1;
+    }
   };
 
   const resetAssistantMessageState = (nextAssistantTextBaseline: number) => {
@@ -925,7 +932,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
         messagingToolSentMediaUrls,
         messagingToolSentTargets,
       }) ||
-      state.successfulCronAdds > 0;
+      state.successfulCronAdds > 0 ||
+      state.visibleBlockReplyCount > 0;
     assistantTexts.length = 0;
     toolMetas.length = 0;
     toolMetaById.clear();
@@ -941,9 +949,12 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     pendingMessagingTexts.clear();
     pendingMessagingTargets.clear();
     state.successfulCronAdds = 0;
+    state.heartbeatToolResponse = undefined;
     state.pendingMessagingMediaUrls.clear();
     state.pendingToolMediaUrls = [];
     state.pendingToolAudioAsVoice = false;
+    state.pendingToolTrustedLocalMedia = false;
+    state.visibleBlockReplyCount = 0;
     state.pendingAssistantReplyDirectives = undefined;
     state.deterministicApprovalPromptPending = false;
     state.deterministicApprovalPromptSent = false;
@@ -1101,6 +1112,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     getHeartbeatToolResponse: () =>
       state.heartbeatToolResponse ? { ...state.heartbeatToolResponse } : undefined,
     getPendingToolMediaReply: () => readPendingToolMediaReply(state),
+    getVisibleBlockReplyCount: () => state.visibleBlockReplyCount,
     getSuccessfulCronAdds: () => state.successfulCronAdds,
     getReplayState: () => ({ ...state.replayState }),
     // Returns true if any messaging tool successfully sent a message.

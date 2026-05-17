@@ -8,6 +8,7 @@ const DEFAULT_SAFE_BIN_TRUSTED_DIRS = ["/bin", "/usr/bin"];
 type TrustedSafeBinDirsParams = {
   baseDirs?: readonly string[];
   extraDirs?: readonly string[];
+  safeBins?: readonly string[];
 };
 
 type TrustedSafeBinPathParams = {
@@ -93,41 +94,110 @@ function resolveTrustedSafeBinDirs(entries: readonly string[], forComparison = t
   return Array.from(new Set(resolved)).toSorted();
 }
 
-function buildTrustedSafeBinCacheKey(entries: readonly string[]): string {
-  return resolveTrustedSafeBinDirs(normalizeTrustedSafeBinDirs(entries)).join("\u0001");
+function hasPathSelector(value: string): boolean {
+  return value.includes("/") || value.includes("\\");
+}
+
+function isExecutableSafeBinFile(value: string): boolean {
+  try {
+    const stats = fs.statSync(value);
+    if (!stats.isFile()) {
+      return false;
+    }
+    if (process.platform === "win32") {
+      return true;
+    }
+    fs.accessSync(value, fs.constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function resolveTrustedSafeBinTargetDirs(
+  entries: readonly string[],
+  safeBins: readonly string[],
+  forComparison = true,
+): string[] {
+  const dirs: string[] = [];
+  const bins = Array.from(
+    new Set(
+      safeBins.map((entry) => entry.trim()).filter((entry) => entry && !hasPathSelector(entry)),
+    ),
+  ).toSorted();
+  if (bins.length === 0) {
+    return dirs;
+  }
+  for (const entry of normalizeTrustedSafeBinDirs(entries)) {
+    const dir = path.resolve(entry);
+    for (const bin of bins) {
+      const candidate = path.join(dir, bin);
+      if (!isExecutableSafeBinFile(candidate)) {
+        continue;
+      }
+      try {
+        const targetDir = path.dirname(fs.realpathSync(candidate));
+        const normalized = normalizeTrustedDir(targetDir, forComparison);
+        if (normalized) {
+          dirs.push(normalized);
+        }
+      } catch {
+        // Missing binaries are resolved normally at command time.
+      }
+    }
+  }
+  return Array.from(new Set(dirs)).toSorted();
+}
+
+function buildTrustedSafeBinCacheKey(
+  entries: readonly string[],
+  safeBins: readonly string[],
+  targetDirs: readonly string[],
+): string {
+  const dirsKey = resolveTrustedSafeBinDirs(normalizeTrustedSafeBinDirs(entries)).join("\u0001");
+  const binsKey = Array.from(new Set(safeBins.map((entry) => entry.trim()).filter(Boolean)))
+    .toSorted()
+    .join("\u0001");
+  const targetDirsKey = targetDirs.join("\u0001");
+  return `${dirsKey}\u0002${binsKey}\u0002${targetDirsKey}`;
 }
 
 export function buildTrustedSafeBinDirs(params: TrustedSafeBinDirsParams = {}): Set<string> {
   const baseDirs = params.baseDirs ?? DEFAULT_SAFE_BIN_TRUSTED_DIRS;
   const extraDirs = params.extraDirs ?? [];
+  const safeBins = params.safeBins ?? [];
   // Trust is explicit only. Do not derive from PATH, which is user/environment controlled.
-  return new Set(
-    resolveTrustedSafeBinDirs([
-      ...normalizeTrustedSafeBinDirs(baseDirs),
-      ...normalizeTrustedSafeBinDirs(extraDirs),
-    ]),
-  );
+  const entries = [
+    ...normalizeTrustedSafeBinDirs(baseDirs),
+    ...normalizeTrustedSafeBinDirs(extraDirs),
+  ];
+  const targetDirs = resolveTrustedSafeBinTargetDirs(entries, safeBins);
+  return new Set([...resolveTrustedSafeBinDirs(entries), ...targetDirs]);
 }
 
 export function getTrustedSafeBinDirs(
   params: {
     baseDirs?: readonly string[];
     extraDirs?: readonly string[];
+    safeBins?: readonly string[];
     refresh?: boolean;
   } = {},
 ): Set<string> {
   const baseDirs = params.baseDirs ?? DEFAULT_SAFE_BIN_TRUSTED_DIRS;
   const extraDirs = params.extraDirs ?? [];
-  const key = buildTrustedSafeBinCacheKey([...baseDirs, ...extraDirs]);
+  const safeBins = params.safeBins ?? [];
+  const entries = [
+    ...normalizeTrustedSafeBinDirs(baseDirs),
+    ...normalizeTrustedSafeBinDirs(extraDirs),
+  ];
+  const targetDirs = resolveTrustedSafeBinTargetDirs(entries, safeBins);
+  const key = buildTrustedSafeBinCacheKey(entries, safeBins, targetDirs);
 
   if (!params.refresh && trustedSafeBinCache?.key === key) {
     return trustedSafeBinCache.dirs;
   }
 
-  const dirs = buildTrustedSafeBinDirs({
-    baseDirs,
-    extraDirs,
-  });
+  const dirs = new Set([...resolveTrustedSafeBinDirs(entries), ...targetDirs]);
   trustedSafeBinCache = { key, dirs };
   return dirs;
 }

@@ -137,7 +137,7 @@ focused channel/runtime subpaths, `config-contracts`, `string-coerce-runtime`,
     | `plugin-sdk/telegram-account` | Deprecated Telegram account-resolution compatibility facade for tracked owner compatibility; new plugins should use injected runtime helpers or generic channel SDK subpaths |
     | `plugin-sdk/zalouser` | Deprecated Zalo Personal compatibility facade for published Lark/Zalo packages that still import sender command authorization; new plugins should use `plugin-sdk/command-auth` |
     | `plugin-sdk/interactive-runtime` | Semantic message presentation, delivery, and legacy interactive reply helpers. See [Message Presentation](/plugins/message-presentation) |
-    | `plugin-sdk/channel-inbound` | Compatibility barrel for inbound debounce, mention matching, mention-policy helpers, and envelope helpers |
+    | `plugin-sdk/channel-inbound` | Shared inbound helpers for event classification, context building, debounce, mention matching, mention-policy, and envelope formatting |
     | `plugin-sdk/channel-inbound-debounce` | Narrow inbound debounce helpers |
     | `plugin-sdk/channel-mention-gating` | Narrow mention-policy, mention marker, and mention text helpers without the broader inbound runtime surface |
     | `plugin-sdk/channel-envelope` | Narrow inbound envelope formatting helpers |

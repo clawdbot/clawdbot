@@ -283,6 +283,7 @@ async function runImagePrompt(params: {
   modelOverride?: string;
   prompt: string;
   images: Array<{ buffer: Buffer; mimeType: string }>;
+  workspaceDir?: string;
 }): Promise<{
   text: string;
   provider: string;
@@ -326,6 +327,7 @@ async function runImagePrompt(params: {
           timeoutMs,
           cfg: providerCfg,
           agentDir: params.agentDir,
+          ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
         });
         return { text: described.text, provider, model: described.model ?? modelId };
       }
@@ -344,6 +346,7 @@ async function runImagePrompt(params: {
           timeoutMs,
           cfg: providerCfg,
           agentDir: params.agentDir,
+          ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
         });
         return { text: described.text, provider, model: described.model ?? modelId };
       }
@@ -361,6 +364,7 @@ async function runImagePrompt(params: {
           timeoutMs,
           cfg: providerCfg,
           agentDir: params.agentDir,
+          ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
         });
         parts.push(`Image ${index + 1}:\n${described.text.trim()}`);
       }
@@ -658,6 +662,7 @@ export function createImageTool(options?: {
         modelOverride,
         prompt: promptRaw,
         images: loadedImages.map((img) => ({ buffer: img.buffer, mimeType: img.mimeType })),
+        workspaceDir: options?.workspaceDir,
       });
 
       const imageDetails =

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
+import { estimateStringChars, estimateTokensFromChars } from "../utils/cjk-chars.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
 import { clearSessionTranscriptIndexCache } from "./session-transcript-index.fs.js";
 import {
@@ -1810,6 +1811,44 @@ describe("readLatestSessionUsageFromTranscript", () => {
     } finally {
       readFileSpy.mockRestore();
     }
+  });
+
+  test("estimates transcript context when local model usage telemetry is missing", () => {
+    const sessionId = "usage-local-missing-telemetry";
+    const userText = "local prompt ".repeat(200);
+    const assistantText = "local response ".repeat(120);
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "user", content: userText } },
+      {
+        message: {
+          role: "assistant",
+          provider: "openai-completions",
+          model: "local-llama",
+          content: [{ type: "text", text: assistantText }],
+        },
+      },
+    ]);
+
+    const expectedTotalTokens = estimateTokensFromChars(
+      estimateStringChars(userText) + estimateStringChars(assistantText),
+    );
+
+    expectUsageFields(readLatestSessionUsageFromTranscript(sessionId, storePath), {
+      modelProvider: "openai-completions",
+      model: "local-llama",
+      totalTokens: expectedTotalTokens,
+      totalTokensFresh: true,
+    });
+    expectUsageFields(
+      readRecentSessionUsageFromTranscript(sessionId, storePath, undefined, undefined, 64 * 1024),
+      {
+        modelProvider: "openai-completions",
+        model: "local-llama",
+        totalTokens: expectedTotalTokens,
+        totalTokensFresh: true,
+      },
+    );
   });
 
   test("returns null when the transcript has no assistant usage snapshot", () => {

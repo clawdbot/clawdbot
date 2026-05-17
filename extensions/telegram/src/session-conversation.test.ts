@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { resolveTelegramSessionConversation } from "./session-conversation.js";
+import {
+  resolveTelegramSessionConversation,
+  resolveTelegramSessionTarget,
+} from "./session-conversation.js";
 
 describe("resolveTelegramSessionConversation", () => {
   it("owns topic session parsing and parent fallback candidates", () => {
@@ -31,5 +34,17 @@ describe("resolveTelegramSessionConversation", () => {
         rawId: "-1001",
       }),
     ).toBeNull();
+  });
+});
+
+describe("resolveTelegramSessionTarget", () => {
+  it("normalizes group session ids to numeric chat ids", () => {
+    expect(resolveTelegramSessionTarget({ kind: "group", id: "-1001" })).toBe("-1001");
+  });
+
+  it("normalizes channel session ids to lookup targets", () => {
+    expect(resolveTelegramSessionTarget({ kind: "channel", id: "@OpenClawTeam" })).toBe(
+      "@OpenClawTeam",
+    );
   });
 });

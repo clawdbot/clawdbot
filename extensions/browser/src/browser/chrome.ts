@@ -7,6 +7,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { ensurePortAvailable } from "../infra/ports.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { redactToolPayloadText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { CONFIG_DIR } from "../utils.js";
 import { hasChromeProxyControlArg, omitChromeProxyEnv } from "./browser-proxy-mode.js";
@@ -543,6 +544,7 @@ export async function launchOpenClawChrome(
           .catch((err) => `CDP diagnostic failed: ${safeChromeCdpErrorMessage(err)}.`);
         const stderrOutput =
           normalizeOptionalString(Buffer.concat(stderrChunks).toString("utf8")) ?? "";
+        const redactedStderrOutput = redactToolPayloadText(stderrOutput);
         if (
           allowSingletonRecovery &&
           CHROME_SINGLETON_IN_USE_PATTERN.test(stderrOutput) &&
@@ -554,8 +556,8 @@ export async function launchOpenClawChrome(
           await terminateChromeForRetry(proc, userDataDir);
           return await launchOnceAndWait(false);
         }
-        const stderrHint = stderrOutput
-          ? `\nChrome stderr:\n${stderrOutput.slice(0, CHROME_STDERR_HINT_MAX_CHARS)}`
+        const stderrHint = redactedStderrOutput
+          ? `\nChrome stderr:\n${redactedStderrOutput.slice(0, CHROME_STDERR_HINT_MAX_CHARS)}`
           : "";
         const launchHints = chromeLaunchHints({ stderrOutput, resolved, profile, launchOptions });
         try {

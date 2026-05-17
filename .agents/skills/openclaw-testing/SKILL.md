@@ -24,8 +24,11 @@ Prove the touched surface first. Do not reflexively run the whole suite.
    - normal source checkout, one failing file: `pnpm test <path-or-filter> -- --reporter=verbose`
    - Codex worktree or linked/sparse checkout, one/few explicit files: `node scripts/run-vitest.mjs <path-or-filter>`
    - Codex worktree or linked/sparse checkout, changed gates or anything broad:
-     `node scripts/crabbox-wrapper.mjs run ... --shell -- "pnpm check:changed"`
-     and let `.crabbox.yaml` choose the provider
+     use the Crabbox wrapper with the provider that matches the proof surface.
+     For maintainer heavy `pnpm` gates, that is usually delegated Blacksmith
+     Testbox through Crabbox, e.g. `node scripts/crabbox-wrapper.mjs run
+     --provider blacksmith-testbox ... -- pnpm check:changed`. For direct AWS
+     Crabbox proof, omit `--provider` and let `.crabbox.yaml` choose AWS.
    - workflow-only: `git diff --check`, workflow syntax/lint (`actionlint` when available)
    - docs-only: `pnpm docs:list`, docs formatter/lint only if docs tooling changed or requested
 2. Reproduce narrowly before fixing.
@@ -46,13 +49,18 @@ Prove the touched surface first. Do not reflexively run the whole suite.
   `node scripts/run-vitest.mjs` for tiny local proof, `node
 scripts/crabbox-wrapper.mjs` for Testbox, and `git commit --no-verify` only
   after the relevant remote or node-wrapper proof is already clean.
-- For remote proof, use Crabbox first and omit `--provider` unless a specific
-  provider is being tested. The repo Crabbox config routes normal broad proof to
-  brokered AWS. Blacksmith Testbox is explicit opt-in; if it queues, fails
-  capacity, or cannot allocate, retry once through the default Crabbox route or
-  report the Testbox blocker. Reuse only an id/slug created in this operator
-  session; `blacksmith testbox list` is diagnostics only, not a shared work
-  queue.
+- For remote proof, use the Crabbox wrapper first, but name the actual backend.
+  Direct AWS Crabbox uses `provider=aws` and `cbx_...` ids. Delegated
+  Blacksmith Testbox through Crabbox uses `provider=blacksmith-testbox`,
+  `syncDelegated=true`, and `tbx_...` ids. Both satisfy "remote proof" when the
+  requested proof surface allows either.
+- Do not infer "no Testbox is running" from plain `blacksmith testbox list`.
+  Use `blacksmith testbox list --all` or `blacksmith testbox status <tbx_id>`
+  before reporting cloud state.
+- Reuse only an id/slug created in this operator session unless explicitly
+  coordinating with another lane. If Testbox queues, fails capacity, or cannot
+  allocate, report the blocker or switch to direct AWS Crabbox only when that
+  still proves the requested surface.
 
 ## Local Test Shortcuts
 

@@ -1,7 +1,10 @@
 import type { TSchema } from "typebox";
 import type { ModelCompatConfig } from "../config/types.models.js";
 import { stripUnsupportedSchemaKeywords } from "../plugin-sdk/provider-tools.js";
-import { resolveUnsupportedToolSchemaKeywords } from "../plugins/provider-model-compat.js";
+import {
+  resolveUnsupportedToolSchemaKeywords,
+  shouldOmitEmptyArrayItems,
+} from "../plugins/provider-model-compat.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { cleanSchemaForGemini } from "./schema/clean-for-gemini.js";
 
@@ -224,6 +227,88 @@ function normalizeArraySchemasMissingItems(schema: unknown): unknown {
   return changed ? nextSchema : schema;
 }
 
+function schemaAllowsArrayType(schema: Record<string, unknown>): boolean {
+  const type = schema.type;
+  return type === "array" || (Array.isArray(type) && type.includes("array"));
+}
+
+const ARRAY_ITEMS_SCHEMA_OBJECT_KEYS = new Set([
+  "additionalProperties",
+  "contains",
+  "else",
+  "if",
+  "items",
+  "not",
+  "propertyNames",
+  "then",
+]);
+
+const ARRAY_ITEMS_SCHEMA_ARRAY_KEYS = new Set(["allOf", "anyOf", "oneOf", "prefixItems"]);
+
+const ARRAY_ITEMS_SCHEMA_MAP_KEYS = new Set([
+  "$defs",
+  "definitions",
+  "dependentSchemas",
+  "patternProperties",
+  "properties",
+]);
+
+function stripEmptyArrayItemsFromArraySchemas(schema: unknown): unknown {
+  if (Array.isArray(schema)) {
+    let changed = false;
+    const entries = schema.map((entry) => {
+      const next = stripEmptyArrayItemsFromArraySchemas(entry);
+      changed ||= next !== entry;
+      return next;
+    });
+    return changed ? entries : schema;
+  }
+  if (!isSchemaRecord(schema)) {
+    return schema;
+  }
+
+  let changed = false;
+  const entries = Object.entries(schema).flatMap(([key, value]) => {
+    if (
+      key === "items" &&
+      schemaAllowsArrayType(schema) &&
+      isSchemaRecord(value) &&
+      isTrulyEmptySchema(value)
+    ) {
+      changed = true;
+      return [];
+    }
+
+    if (ARRAY_ITEMS_SCHEMA_OBJECT_KEYS.has(key)) {
+      const next = stripEmptyArrayItemsFromArraySchemas(value);
+      changed ||= next !== value;
+      return [[key, next] as const];
+    }
+
+    if (ARRAY_ITEMS_SCHEMA_ARRAY_KEYS.has(key) && Array.isArray(value)) {
+      const next = stripEmptyArrayItemsFromArraySchemas(value);
+      changed ||= next !== value;
+      return [[key, next] as const];
+    }
+
+    if (ARRAY_ITEMS_SCHEMA_MAP_KEYS.has(key) && isSchemaRecord(value)) {
+      let mapChanged = false;
+      const next = Object.fromEntries(
+        Object.entries(value).map(([entryKey, entryValue]) => {
+          const entryNext = stripEmptyArrayItemsFromArraySchemas(entryValue);
+          mapChanged ||= entryNext !== entryValue;
+          return [entryKey, entryNext] as const;
+        }),
+      );
+      changed ||= mapChanged;
+      return [[key, mapChanged ? next : value] as const];
+    }
+
+    return [[key, value] as const];
+  });
+  return changed ? Object.fromEntries(entries) : schema;
+}
+
 export function normalizeToolParameterSchema(
   schema: unknown,
   options?: { modelProvider?: string; modelId?: string; modelCompat?: ModelCompatConfig },
@@ -247,16 +332,23 @@ export function normalizeToolParameterSchema(
     normalizedProvider.includes("google") || normalizedProvider.includes("gemini");
   const isAnthropicProvider = normalizedProvider.includes("anthropic");
   const unsupportedToolSchemaKeywords = resolveUnsupportedToolSchemaKeywords(options?.modelCompat);
+  const omitEmptyArrayItems = shouldOmitEmptyArrayItems(options?.modelCompat);
 
   function applyProviderCleaning(s: unknown): TSchema {
     const normalizedSchema = normalizeArraySchemasMissingItems(s);
+    const arrayItemsCompatibleSchema = omitEmptyArrayItems
+      ? stripEmptyArrayItemsFromArraySchemas(normalizedSchema)
+      : normalizedSchema;
     if (isGeminiProvider && !isAnthropicProvider) {
-      return cleanSchemaForGemini(normalizedSchema);
+      return cleanSchemaForGemini(arrayItemsCompatibleSchema);
     }
     if (unsupportedToolSchemaKeywords.size > 0) {
-      return stripUnsupportedSchemaKeywords(normalizedSchema, unsupportedToolSchemaKeywords) as TSchema;
+      return stripUnsupportedSchemaKeywords(
+        arrayItemsCompatibleSchema,
+        unsupportedToolSchemaKeywords,
+      ) as TSchema;
     }
-    return normalizedSchema as TSchema;
+    return arrayItemsCompatibleSchema as TSchema;
   }
 
   const conditionalKey = getTopLevelConditionalKey(schemaRecord);

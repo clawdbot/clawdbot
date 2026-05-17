@@ -7,6 +7,7 @@ actor RemoteTunnelManager {
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "remote-tunnel")
     private var controlTunnel: RemotePortTunnel?
+    private var createInFlight: (token: UUID, task: Task<RemotePortTunnel, Error>)?
     private var restartInFlight = false
     private var lastRestartAt: Date?
     private let restartBackoffSeconds: TimeInterval = 2.0
@@ -31,18 +32,6 @@ actor RemoteTunnelManager {
             tunnel.terminate()
             self.controlTunnel = nil
         }
-        // If a previous OpenClaw run already has an SSH listener on the expected port (common after restarts),
-        // reuse it instead of spawning new ssh processes that immediately fail with "Address already in use".
-        let desiredPort = UInt16(GatewayEnvironment.gatewayPort())
-        if let desc = await PortGuardian.shared.describe(port: Int(desiredPort)),
-           self.isSshProcess(desc)
-        {
-            self.logger.info(
-                "reusing existing SSH tunnel listener " +
-                    "localPort=\(desiredPort, privacy: .public) " +
-                    "pid=\(desc.pid, privacy: .public)")
-            return desiredPort
-        }
         return nil
     }
 
@@ -63,30 +52,57 @@ actor RemoteTunnelManager {
                 "identitySet=\(identitySet, privacy: .public)")
 
         if let local = await self.controlTunnelPortIfRunning() { return local }
+        if let create = self.createInFlight {
+            self.logger.info("control tunnel create in flight; joining")
+            let tunnel = try await create.task.value
+            return try await self.installCreatedTunnel(
+                tunnel,
+                token: create.token,
+                fallbackPort: UInt16(GatewayEnvironment.gatewayPort()))
+        }
         await self.waitForRestartBackoffIfNeeded()
 
         let desiredPort = UInt16(GatewayEnvironment.gatewayPort())
-        let tunnel = try await RemotePortTunnel.create(
-            remotePort: GatewayEnvironment.gatewayPort(),
-            preferredLocalPort: desiredPort,
-            allowRandomLocalPort: false)
+        let token = UUID()
+        let task = Task {
+            try await RemotePortTunnel.create(
+                remotePort: GatewayEnvironment.gatewayPort(),
+                preferredLocalPort: desiredPort,
+                allowRandomLocalPort: true)
+        }
+        self.createInFlight = (token: token, task: task)
+        let tunnel: RemotePortTunnel
+        do {
+            tunnel = try await task.value
+        } catch {
+            if self.createInFlight?.token == token {
+                self.createInFlight = nil
+            }
+            throw error
+        }
+        return try await self.installCreatedTunnel(tunnel, token: token, fallbackPort: desiredPort)
+    }
+
+    private func installCreatedTunnel(
+        _ tunnel: RemotePortTunnel,
+        token: UUID,
+        fallbackPort: UInt16) async throws -> UInt16
+    {
+        if self.createInFlight?.token == token {
+            self.createInFlight = nil
+        }
         self.controlTunnel = tunnel
         self.endRestart()
-        let resolvedPort = tunnel.localPort ?? desiredPort
+        let resolvedPort = tunnel.localPort ?? fallbackPort
         self.logger.info("ssh tunnel ready localPort=\(resolvedPort, privacy: .public)")
-        return tunnel.localPort ?? desiredPort
+        return resolvedPort
     }
 
     func stopAll() {
+        self.createInFlight?.task.cancel()
+        self.createInFlight = nil
         self.controlTunnel?.terminate()
         self.controlTunnel = nil
-    }
-
-    private func isSshProcess(_ desc: PortGuardian.Descriptor) -> Bool {
-        let cmd = desc.command.lowercased()
-        if cmd.contains("ssh") { return true }
-        if let path = desc.executablePath?.lowercased(), path.contains("/ssh") { return true }
-        return false
     }
 
     private func beginRestart() async {

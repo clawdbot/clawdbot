@@ -11,7 +11,9 @@ import {
   manifestPluginSetupProviderEnvVars,
   manifestProviderBaseUrlGuardPasses,
 } from "../../plugins/manifest-tool-availability.js";
+import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { getActivePluginRegistryWorkspaceDirFromState } from "../../plugins/runtime-state.js";
 import { listProfilesForProvider } from "../auth-profiles/profile-list.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 
@@ -66,9 +68,10 @@ export function getCurrentCapabilityMetadataSnapshot(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
 }): PluginMetadataSnapshot | undefined {
+  const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
   return getCurrentPluginMetadataSnapshot({
     config: params.config,
-    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    ...(workspaceDir ? { workspaceDir } : {}),
   });
 }
 
@@ -77,17 +80,24 @@ export function loadCapabilityMetadataSnapshot(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): Pick<PluginMetadataSnapshot, "index" | "plugins"> {
-  return (
-    getCurrentPluginMetadataSnapshot({
-      config: params.config,
-      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-    }) ??
-    loadManifestContractSnapshot({
-      config: params.config,
-      env: params.env,
-      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-    })
-  );
+  const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
+  const current = getCurrentPluginMetadataSnapshot({
+    config: params.config,
+    ...(workspaceDir ? { workspaceDir } : {}),
+  });
+  if (current) {
+    return current;
+  }
+  return workspaceDir
+    ? loadManifestContractSnapshot({
+        config: params.config,
+        env: params.env,
+        workspaceDir,
+      })
+    : loadPluginMetadataSnapshot({
+        config: params.config ?? {},
+        env: params.env ?? process.env,
+      });
 }
 
 export function hasSnapshotCapabilityAvailability(params: {

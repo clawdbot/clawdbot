@@ -145,6 +145,8 @@ function buildPreparedContext(params?: {
       env: {},
     },
     reusableCliSession: params?.cliSessionId ? { sessionId: params.cliSessionId } : {},
+    hadSessionFile: false,
+    contextEngineConfig: {},
     modelId: "gpt-5.4",
     normalizedModel: "gpt-5.4",
     contextWindowInfo: {

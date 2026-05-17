@@ -399,6 +399,7 @@ export async function repairSessionFileIfNeeded(params: {
 
   const cleaned = `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`;
   const backupPath = `${sessionFile}.bak-${process.pid}-${Date.now()}`;
+  let retainedBackupPath: string | undefined;
   try {
     const stat = await fs.stat(sessionFile).catch(() => null);
     await fs.writeFile(backupPath, content, "utf-8");
@@ -410,6 +411,14 @@ export async function repairSessionFileIfNeeded(params: {
       content: cleaned,
       preserveExistingMode: true,
       tempPrefix: `${path.basename(sessionFile)}.repair`,
+    });
+    await fs.unlink(backupPath).catch((cleanupErr: unknown) => {
+      retainedBackupPath = backupPath;
+      params.debug?.(
+        `session file repair backup cleanup failed: ${cleanupErr instanceof Error ? cleanupErr.message : "unknown error"} (${path.basename(
+          backupPath,
+        )})`,
+      );
     });
   } catch (err) {
     return {
@@ -438,6 +447,6 @@ export async function repairSessionFileIfNeeded(params: {
     droppedBlankUserMessages,
     rewrittenUserMessages,
     insertedToolResults,
-    backupPath,
+    ...(retainedBackupPath ? { backupPath: retainedBackupPath } : {}),
   };
 }

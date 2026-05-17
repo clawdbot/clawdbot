@@ -44,6 +44,7 @@ export const pluginRegistrationContractCases = {
     pluginId: "fal",
     providerIds: ["fal"],
     imageGenerationProviderIds: ["fal"],
+    musicGenerationProviderIds: ["fal"],
   },
   firecrawl: {
     pluginId: "firecrawl",
@@ -115,6 +116,7 @@ export const pluginRegistrationContractCases = {
     providerIds: ["openrouter"],
     mediaUnderstandingProviderIds: ["openrouter"],
     imageGenerationProviderIds: ["openrouter"],
+    musicGenerationProviderIds: ["openrouter"],
     videoGenerationProviderIds: ["openrouter"],
     requireDescribeImages: true,
     requireGenerateImage: true,

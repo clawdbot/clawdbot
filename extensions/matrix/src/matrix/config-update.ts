@@ -102,9 +102,11 @@ function cloneMatrixRoomMap(rooms: MatrixConfig["groups"]): MatrixConfig["groups
   if (!rooms) {
     return rooms;
   }
-  return Object.fromEntries(
-    Object.entries(rooms).map(([roomId, roomCfg]) => [roomId, roomCfg ? { ...roomCfg } : roomCfg]),
-  );
+  const clonedRoomEntries: Array<[string, NonNullable<MatrixConfig["groups"]>[string]]> = [];
+  for (const [roomId, roomCfg] of Object.entries(rooms)) {
+    clonedRoomEntries.push([roomId, roomCfg ? { ...roomCfg } : roomCfg]);
+  }
+  return Object.fromEntries(clonedRoomEntries);
 }
 
 function applyNullableArrayField(

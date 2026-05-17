@@ -1,8 +1,9 @@
-import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
+import { listGitTrackedFiles } from "../../test-utils/repo-files.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
@@ -83,19 +84,9 @@ function isScannableTsFile(relativePath: string): boolean {
 }
 
 function listGitTsFiles(relativeDir: string): string[] | null {
-  const result = spawnSync("git", ["ls-files", "--", relativeDir], {
-    cwd: repoRoot,
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
-  if (result.status !== 0) {
-    return null;
-  }
-  return result.stdout
-    .split("\n")
-    .map((line) => line.trim().replaceAll("\\", "/"))
-    .filter((line) => line.length > 0 && isScannableTsFile(line))
-    .toSorted();
+  return (
+    listGitTrackedFiles({ repoRoot, pathspecs: relativeDir })?.filter(isScannableTsFile) ?? null
+  );
 }
 
 function listTsFiles(relativeDir: string): string[] {
@@ -135,17 +126,13 @@ function collectReplyHistoryBindings(source: string): Set<string> {
 
 describe("message turn migration guardrails", () => {
   it("lists plugin TypeScript files from git without walking extension roots", () => {
-    const readDir = vi.spyOn(fs, "readdirSync");
-    try {
+    expectNoReaddirSyncDuring(() => {
       const files = listTsFiles("extensions");
 
       expect(files.length).toBeGreaterThan(0);
       expect(files.every((file) => file.startsWith("extensions/"))).toBe(true);
       expect(files.some((file) => file.endsWith(".d.ts"))).toBe(false);
-      expect(readDir).not.toHaveBeenCalled();
-    } finally {
-      readDir.mockRestore();
-    }
+    });
   });
 
   it("keeps migrated message paths off low-level reply-history helpers", () => {

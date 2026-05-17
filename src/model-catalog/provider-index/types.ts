@@ -29,7 +29,7 @@ export type OpenClawProviderIndexProviderAuthChoice = {
   cliFlag?: string;
   cliOption?: string;
   cliDescription?: string;
-  onboardingScopes?: readonly ("text-inference" | "image-generation")[];
+  onboardingScopes?: readonly ("text-inference" | "image-generation" | "music-generation")[];
 };
 
 export type OpenClawProviderIndexProvider = {

@@ -63,9 +63,10 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
     kind: "hot",
     actions: ["restart-health-monitor"],
   },
-  // Stuck-session thresholds are read by the diagnostics heartbeat loop.
+  // Diagnostics heartbeat reads these from current runtime config.
   { prefix: "diagnostics.stuckSessionWarnMs", kind: "none" },
   { prefix: "diagnostics.stuckSessionAbortMs", kind: "none" },
+  { prefix: "diagnostics.memoryPressureSnapshot", kind: "hot" },
   { prefix: "hooks.gmail", kind: "hot", actions: ["restart-gmail-watcher"] },
   { prefix: "hooks", kind: "hot", actions: ["reload-hooks"] },
   {

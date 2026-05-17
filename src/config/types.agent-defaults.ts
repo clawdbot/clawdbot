@@ -273,8 +273,8 @@ export type AgentDefaultsConfig = {
   /**
    * Agent-visible bootstrap truncation warning mode:
    * - off: do not inject warning text
-   * - once: inject once per unique truncation signature (default)
-   * - always: inject on every run with truncation
+   * - once: inject once per unique truncation signature
+   * - always: inject on every run with truncation (default)
    */
   bootstrapPromptTruncationWarning?: "off" | "once" | "always";
   /** Optional IANA timezone for the user (used in system prompt; defaults to host timezone). */

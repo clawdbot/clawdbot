@@ -109,6 +109,7 @@ describe("skills-install fallback edge cases", () => {
     skillsInstallTesting.setDepsForTest({
       hasBinary: (bin: string) => hasBinaryMock(bin),
       resolveBrewExecutable: () => undefined,
+      isContainerEnvironment: () => false,
     });
   });
 
@@ -181,6 +182,40 @@ describe("skills-install fallback edge cases", () => {
 
     // Verify NO curl command was attempted (no auto-install)
     expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+  });
+
+  it("returns container-specific guidance when brew is missing in a Linux container", async () => {
+    const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    skillsInstallTesting.setDepsForTest({
+      hasBinary: (bin: string) => hasBinaryMock(bin),
+      resolveBrewExecutable: () => undefined,
+      isContainerEnvironment: () => true,
+    });
+    mockAvailableBinaries([]);
+    try {
+      skillsMocks.loadWorkspaceSkillEntries.mockReturnValueOnce([
+        makeSkillEntry(workspaceDir, "brew-tool-container", {
+          kind: "brew",
+          formula: "openai-whisper",
+        }),
+      ]);
+
+      const result = await installSkill({
+        workspaceDir,
+        skillName: "brew-tool-container",
+        installId: "deps",
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.message).toContain("Linux container");
+      expect(result.message).toContain("Build a custom image");
+      expect(result.message).toContain("openai-whisper");
+      expect(result.message).not.toContain("https://brew.sh");
+      expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+    } finally {
+      Object.defineProperty(process, "platform", originalPlatformDescriptor);
+    }
   });
 
   it("does not use HOMEBREW_PREFIX as a brew bin fallback for go installs", async () => {

@@ -47,10 +47,9 @@ openclaw onboard --mode remote --remote-url wss://gateway-host:18789
 `--modern` starts the Crestodian conversational onboarding preview. Without
 `--modern`, `openclaw onboard` keeps the classic onboarding flow.
 
-For plaintext private-network `ws://` targets (trusted networks only), set
+Plaintext `ws://` is accepted for loopback, private IP literals, `.local`, and
+Tailnet `*.ts.net` gateway URLs. For other trusted private-DNS names, set
 `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` in the onboarding process environment.
-There is no `openclaw.json` equivalent for this client-side transport
-break-glass.
 
 ## Locale
 

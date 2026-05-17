@@ -9,7 +9,12 @@ import {
 } from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
 import type { PluginBundleFormat } from "./manifest-types.js";
-import { DEFAULT_PLUGIN_ENTRY_CANDIDATES, PLUGIN_MANIFEST_FILENAME } from "./manifest.js";
+import type { PluginManifestActivation } from "./manifest.js";
+import {
+  DEFAULT_PLUGIN_ENTRY_CANDIDATES,
+  normalizeManifestActivation,
+  PLUGIN_MANIFEST_FILENAME,
+} from "./manifest.js";
 
 export const CODEX_BUNDLE_MANIFEST_RELATIVE_PATH = ".codex-plugin/plugin.json";
 export const CLAUDE_BUNDLE_MANIFEST_RELATIVE_PATH = ".claude-plugin/plugin.json";
@@ -25,6 +30,7 @@ export type BundlePluginManifest = {
   // Only include hook roots that OpenClaw can execute via HOOK.md + handler files.
   hooks: string[];
   bundleFormat: PluginBundleFormat;
+  activation?: PluginManifestActivation;
   capabilities: string[];
 };
 
@@ -373,6 +379,7 @@ export function loadBundleManifest(params: {
         settingsFiles: [],
         hooks,
         bundleFormat: "codex",
+        activation: normalizeManifestActivation(raw.activation),
         capabilities: buildCodexCapabilities(raw, params.rootDir),
       },
       manifestPath: loaded.manifestPath,
@@ -391,6 +398,7 @@ export function loadBundleManifest(params: {
         settingsFiles: [],
         hooks: [],
         bundleFormat: "cursor",
+        activation: normalizeManifestActivation(raw.activation),
         capabilities: buildCursorCapabilities(raw, params.rootDir),
       },
       manifestPath: loaded.manifestPath,
@@ -408,6 +416,7 @@ export function loadBundleManifest(params: {
       settingsFiles: resolveClaudeSettingsFiles(raw, params.rootDir),
       hooks: resolveClaudeHookPaths(raw, params.rootDir),
       bundleFormat: "claude",
+      activation: normalizeManifestActivation(raw.activation),
       capabilities: buildClaudeCapabilities(raw, params.rootDir),
     },
     manifestPath: loaded.manifestPath,

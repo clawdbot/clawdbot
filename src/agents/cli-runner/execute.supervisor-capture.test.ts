@@ -44,6 +44,8 @@ function buildPreparedCliRunContext(params: {
       env: {},
     },
     reusableCliSession: {},
+    hadSessionFile: false,
+    contextEngineConfig: {},
     modelId: "model",
     normalizedModel: "model",
     systemPrompt: "system",

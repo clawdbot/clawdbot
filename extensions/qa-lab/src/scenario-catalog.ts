@@ -224,6 +224,13 @@ export type QaBootstrapScenarioCatalog = {
   scenarios: QaSeedScenarioWithSource[];
 };
 
+export {
+  QA_PERSONAL_AGENT_SCENARIO_IDS,
+  QA_SCENARIO_PACKS,
+  resolveQaScenarioPackScenarioIds,
+  type QaScenarioPackDefinition,
+} from "./scenario-packs.js";
+
 const QA_SCENARIO_PACK_INDEX_PATH = "qa/scenarios/index.md";
 const QA_SCENARIO_LEGACY_OVERVIEW_PATH = "qa/scenarios.md";
 const QA_SCENARIO_DIR_PATH = "qa/scenarios";

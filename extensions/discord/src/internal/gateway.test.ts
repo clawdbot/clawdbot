@@ -180,13 +180,58 @@ describe("GatewayPlugin", () => {
     }
 
     await vi.advanceTimersByTimeAsync(5_000);
-    expect(errorSpy).toHaveBeenCalledWith(
-      new Error("Discord gateway socket closed before IDENTIFY could be sent"),
-    );
+    expect(errorSpy).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(2_000);
 
     expect(gateway.connectCalls).toEqual([false, false]);
     expect(gateway.sockets).toHaveLength(2);
+  });
+
+  it("does not identify a replacement socket from a stale HELLO", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    await sharedGatewayIdentifyLimiter.wait({ shardId: 0, maxConcurrency: 1 });
+    const gateway = new TestGatewayPlugin({
+      autoInteractions: false,
+      url: "wss://gateway.example.test",
+    });
+
+    gateway.connect(false);
+    const originalSocket = gateway.sockets[0];
+    originalSocket?.emit("open");
+    originalSocket?.emit(
+      "message",
+      JSON.stringify({
+        op: GatewayOpcodes.Hello,
+        d: { heartbeat_interval: 45_000 },
+        s: null,
+      }),
+    );
+    originalSocket?.emit("close", 1006);
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(gateway.connectCalls).toEqual([false, true]);
+    const replacementSocket = gateway.sockets[1];
+    replacementSocket?.emit("open");
+
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(replacementSocket?.send).not.toHaveBeenCalledWith(
+      expect.stringContaining(`"op":${GatewayOpcodes.Identify}`),
+    );
+
+    replacementSocket?.emit(
+      "message",
+      JSON.stringify({
+        op: GatewayOpcodes.Hello,
+        d: { heartbeat_interval: 45_000 },
+        s: null,
+      }),
+    );
+
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(replacementSocket?.send).toHaveBeenCalledWith(
+      expect.stringContaining(`"op":${GatewayOpcodes.Identify}`),
+    );
   });
 
   it("preserves MESSAGE_CREATE author payloads for inbound dispatch", async () => {

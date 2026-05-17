@@ -420,6 +420,8 @@ export async function incrementCompactionCount(params: {
     updates.outputTokens = undefined;
     updates.cacheRead = undefined;
     updates.cacheWrite = undefined;
+  } else if (incrementBy > 0) {
+    updates.totalTokensFresh = false;
   }
   sessionStore[sessionKey] = {
     ...entry,

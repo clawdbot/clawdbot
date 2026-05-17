@@ -10,7 +10,6 @@ import type {
   TelegramIngressWorkerMessage,
   TelegramIngressWorkerOptions,
 } from "./telegram-ingress-worker.js";
-import { writeTelegramUpdateOffset } from "./update-offset-store.js";
 
 const options = workerData as TelegramIngressWorkerOptions;
 const pollLimit = 100;
@@ -131,11 +130,6 @@ async function main(): Promise<void> {
           });
           if (lastUpdateId === null || updateId > lastUpdateId) {
             lastUpdateId = updateId;
-            await writeTelegramUpdateOffset({
-              accountId: options.accountId,
-              botToken: options.token,
-              updateId,
-            });
           }
           post({ type: "spooled", updateId, queued: result.length });
         }

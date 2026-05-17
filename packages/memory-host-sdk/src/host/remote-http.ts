@@ -13,6 +13,7 @@ export const buildRemoteBaseUrlPolicy: (baseUrl: string) => SsrFPolicy | undefin
 export async function withRemoteHttpResponse<T>(params: {
   url: string;
   init?: RequestInit;
+  signal?: AbortSignal;
   ssrfPolicy?: SsrFPolicy;
   fetchImpl?: typeof fetch;
   fetchWithSsrFGuardImpl?: typeof fetchWithSsrFGuard;
@@ -26,6 +27,7 @@ export async function withRemoteHttpResponse<T>(params: {
     url: params.url,
     fetchImpl: params.fetchImpl,
     init: params.init,
+    signal: params.signal,
     policy: params.ssrfPolicy,
     auditContext: params.auditContext ?? "memory-remote",
     ...(shouldUseEnvProxy(params.url) ? { mode: MEMORY_REMOTE_TRUSTED_ENV_PROXY_MODE } : {}),

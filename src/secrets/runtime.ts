@@ -499,6 +499,12 @@ export function getActiveSecretsRuntimeSnapshot(): PreparedSecretsRuntimeSnapsho
   return snapshot;
 }
 
+export function getActiveSecretsRuntimeEnv(): NodeJS.ProcessEnv {
+  return {
+    ...(activeRefreshContext?.env ?? process.env),
+  } as NodeJS.ProcessEnv;
+}
+
 export function getActiveRuntimeWebToolsMetadata(): RuntimeWebToolsMetadata | null {
   return getActiveRuntimeWebToolsMetadataFromState();
 }

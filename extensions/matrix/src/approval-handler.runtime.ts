@@ -581,5 +581,15 @@ export const matrixApprovalNativeRuntime = createChannelApprovalNativeRuntimeAda
       }
       unregisterMatrixApprovalReactionTarget(target);
     },
+    cancelDelivered: (params) => {
+      const target = normalizeReactionTargetRef({
+        roomId: params.entry.roomId,
+        eventId: params.entry.reactionEventId,
+      });
+      if (!target) {
+        return;
+      }
+      unregisterMatrixApprovalReactionTarget(target);
+    },
   },
 });

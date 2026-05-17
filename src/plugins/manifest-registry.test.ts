@@ -2402,6 +2402,7 @@ describe("loadPluginManifestRegistry", () => {
           manifestRelativePath: ".claude-plugin/plugin.json",
           manifest: {
             name: "Claude Sample",
+            activation: { onStartup: false },
             skills: ["skill-packs/starter"],
             commands: "commands-pack",
           },
@@ -2413,6 +2414,7 @@ describe("loadPluginManifestRegistry", () => {
         bundleFormat: "claude",
         skills: ["skill-packs/starter", "commands-pack"],
         settingsFiles: ["settings.json"],
+        activation: { onStartup: false },
       },
       expectedCapabilities: ["skills", "commands", "settings"],
     },

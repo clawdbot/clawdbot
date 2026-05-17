@@ -77,6 +77,7 @@ type ConfigSetOperation = {
   value: unknown;
   mutation?: "set" | "merge" | "replace" | "delete";
   schemaValidated?: boolean;
+  touchesAllSecretRefs?: boolean;
   touchedSecretTargetPath?: string;
   touchedProviderAlias?: string;
   assignedRef?: SecretRef;
@@ -88,6 +89,11 @@ type ConfigPatchOptions = {
   allowExec?: boolean | undefined;
   json?: boolean | undefined;
   replacePath?: string[] | undefined;
+};
+type ConfigUnsetOptions = {
+  dryRun?: boolean | undefined;
+  allowExec?: boolean | undefined;
+  json?: boolean | undefined;
 };
 type ConfigMutationOptions = {
   dryRun?: boolean | undefined;
@@ -1029,6 +1035,20 @@ function parseProviderAliasFromTargetPath(path: PathSegment[]): string | null {
   return null;
 }
 
+function touchesSecretProviderCollection(path: PathSegment[]): boolean {
+  return (
+    (path.length === 1 && path[0] === "secrets") ||
+    (path.length === 2 && path[0] === "secrets" && path[1] === "providers")
+  );
+}
+
+function touchesSecretDefaults(path: PathSegment[]): boolean {
+  return (
+    (path.length === 1 && path[0] === "secrets") ||
+    (path.length === 2 && path[0] === "secrets" && path[1] === "defaults")
+  );
+}
+
 function buildValueAssignmentOperation(params: {
   requestedPath: PathSegment[];
   value: unknown;
@@ -1150,6 +1170,22 @@ function buildDeleteOperation(path: PathSegment[]): ConfigSetOperation {
     setPath: path,
     value: undefined,
     mutation: "delete",
+  };
+}
+
+function buildUnsetOperation(path: PathSegment[]): ConfigSetOperation {
+  const resolved = resolveConfigSecretTargetByPath(path);
+  const providerAlias = parseProviderAliasFromTargetPath(path);
+  const touchesAllSecretRefs = touchesSecretProviderCollection(path) || touchesSecretDefaults(path);
+  return {
+    inputMode: "unset",
+    requestedPath: path,
+    setPath: path,
+    value: undefined,
+    mutation: "delete",
+    ...(touchesAllSecretRefs ? { touchesAllSecretRefs: true } : {}),
+    ...(resolved ? { touchedSecretTargetPath: toDotPath(resolved.pathSegments) } : {}),
+    ...(providerAlias ? { touchedProviderAlias: providerAlias } : {}),
   };
 }
 
@@ -1357,6 +1393,7 @@ function collectDryRunRefs(params: {
   const refsByKey = new Map<string, SecretRef>();
   const targetPaths = new Set<string>();
   const providerAliases = new Set<string>();
+  let includeAllDiscoveredRefs = false;
 
   for (const operation of params.operations) {
     if (operation.assignedRef) {
@@ -1371,9 +1408,10 @@ function collectDryRunRefs(params: {
     if (operation.touchedProviderAlias) {
       providerAliases.add(operation.touchedProviderAlias);
     }
+    includeAllDiscoveredRefs ||= operation.touchesAllSecretRefs === true;
   }
 
-  if (targetPaths.size === 0 && providerAliases.size === 0) {
+  if (!includeAllDiscoveredRefs && targetPaths.size === 0 && providerAliases.size === 0) {
     return [...refsByKey.values()];
   }
 
@@ -1387,7 +1425,7 @@ function collectDryRunRefs(params: {
     if (!ref) {
       continue;
     }
-    if (targetPaths.has(target.path) || providerAliases.has(ref.provider)) {
+    if (includeAllDiscoveredRefs || targetPaths.has(target.path) || providerAliases.has(ref.provider)) {
       refsByKey.set(secretRefKey(ref), ref);
     }
   }
@@ -1624,9 +1662,13 @@ function formatDryRunFailureMessage(params: {
   skippedExecRefs: number;
 }): string {
   const { errors, skippedExecRefs } = params;
+  const missingPathErrors = errors.filter((error) => error.kind === "missing-path");
   const schemaErrors = errors.filter((error) => error.kind === "schema");
   const resolveErrors = errors.filter((error) => error.kind === "resolvability");
   const lines: string[] = [];
+  if (missingPathErrors.length > 0) {
+    lines.push(...missingPathErrors.map((error) => error.message));
+  }
   if (schemaErrors.length > 0) {
     lines.push("Dry run failed: config schema validation failed.");
     lines.push(...schemaErrors.map((error) => `- ${error.message}`));
@@ -1716,11 +1758,14 @@ async function runConfigOperations(params: {
   if (options.dryRun) {
     const hasJsonMode = operations.some((operation) => operation.inputMode === "json");
     const hasBuilderMode = operations.some((operation) => operation.inputMode === "builder");
+    const hasUnsetMode = operations.some((operation) => operation.inputMode === "unset");
     const requiresFullSchemaValidation = operations.some(
-      (operation) => operation.inputMode === "json" && operation.schemaValidated !== true,
+      (operation) =>
+        operation.inputMode === "unset" ||
+        (operation.inputMode === "json" && operation.schemaValidated !== true),
     );
     const refs =
-      hasJsonMode || hasBuilderMode
+      hasJsonMode || hasBuilderMode || hasUnsetMode
         ? collectDryRunRefs({
             config: nextConfig,
             operations,
@@ -1746,7 +1791,7 @@ async function runConfigOperations(params: {
         }),
       );
     }
-    if (hasJsonMode || hasBuilderMode) {
+    if (hasJsonMode || hasBuilderMode || hasUnsetMode) {
       errors.push(
         ...collectDryRunStaticErrorsForSkippedExecRefs({
           refs: selectedDryRunRefs.skippedExecRefs,
@@ -1768,9 +1813,10 @@ async function runConfigOperations(params: {
       inputModes: [...new Set(operations.map((operation) => operation.inputMode))],
       checks: {
         schema: requiresFullSchemaValidation || policyIssueLines.length > 0,
-        resolvability: hasJsonMode || hasBuilderMode,
+        resolvability: hasJsonMode || hasBuilderMode || hasUnsetMode,
         resolvabilityComplete:
-          (hasJsonMode || hasBuilderMode) && selectedDryRunRefs.skippedExecRefs.length === 0,
+          (hasJsonMode || hasBuilderMode || hasUnsetMode) &&
+          selectedDryRunRefs.skippedExecRefs.length === 0,
       },
       refsChecked: selectedDryRunRefs.refsToResolve.length,
       skippedExecRefs: selectedDryRunRefs.skippedExecRefs.length,
@@ -1986,9 +2032,20 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
   }
 }
 
-export async function runConfigUnset(opts: { path: string; runtime?: RuntimeEnv }) {
+export async function runConfigUnset(opts: {
+  path: string;
+  cliOptions?: ConfigUnsetOptions;
+  runtime?: RuntimeEnv;
+}) {
   const runtime = opts.runtime ?? defaultRuntime;
+  const cliOptions = opts.cliOptions ?? {};
   try {
+    if (cliOptions.allowExec && !cliOptions.dryRun) {
+      throw new Error("--allow-exec can only be used with --dry-run.");
+    }
+    if (cliOptions.json && !cliOptions.dryRun) {
+      throw new Error("--json can only be used with --dry-run.");
+    }
     const parsedPath = parseRequiredPath(opts.path);
     const autoManagedUnsetTargets = findAutoManagedMetaUnsetTargets(parsedPath);
     if (autoManagedUnsetTargets.length > 0) {
@@ -2001,12 +2058,42 @@ export async function runConfigUnset(opts: { path: string; runtime?: RuntimeEnv 
     const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
     const unsetResult = unsetAtPath(next, parsedPath);
     if (!unsetResult.removed) {
+      if (cliOptions.dryRun && cliOptions.json) {
+        throw new ConfigSetDryRunValidationError({
+          ok: false,
+          operations: 1,
+          configPath: shortenHomePath(snapshot.path),
+          inputModes: ["unset"],
+          checks: {
+            schema: false,
+            resolvability: false,
+            resolvabilityComplete: false,
+          },
+          refsChecked: 0,
+          skippedExecRefs: 0,
+          errors: [
+            {
+              kind: "missing-path",
+              message: `Config path not found: ${opts.path}. Nothing was changed.`,
+            },
+          ],
+        });
+      }
       runtime.error(
         danger(
           `Config path not found: ${opts.path}. Nothing was changed. Run ${formatCliCommand("openclaw config get <path>")} first if you are unsure of the path.`,
         ),
       );
       runtime.exit(1);
+      return;
+    }
+    if (cliOptions.dryRun) {
+      await runConfigOperations({
+        runtime,
+        operations: [buildUnsetOperation(parsedPath)],
+        options: cliOptions,
+        successMode: "set",
+      });
       return;
     }
     await replaceConfigFile({
@@ -2018,8 +2105,7 @@ export async function runConfigUnset(opts: { path: string; runtime?: RuntimeEnv 
     });
     runtime.log(info(`Removed ${opts.path}. Restart the gateway to apply.`));
   } catch (err) {
-    runtime.error(danger(String(err)));
-    runtime.exit(1);
+    handleConfigMutationError({ err, runtime, options: cliOptions });
   }
 }
 
@@ -2258,8 +2344,11 @@ export function registerConfigCli(program: Command) {
     .command("unset")
     .description("Remove a config value by dot path")
     .argument("<path>", "Config path (dot or bracket notation)")
-    .action(async (path: string) => {
-      await runConfigUnset({ path });
+    .option("--dry-run", "validate the removal without writing the config file")
+    .option("--allow-exec", "allow exec SecretRef providers during --dry-run")
+    .option("--json", "print dry-run result as JSON")
+    .action(async (path: string, options: ConfigUnsetOptions) => {
+      await runConfigUnset({ path, cliOptions: options });
     });
 
   cmd

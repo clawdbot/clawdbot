@@ -334,6 +334,7 @@ function createChatHeaderState(
     applySettings(next: AppViewState["settings"]) {
       state.settings = next;
     },
+    setTab: vi.fn(),
     loadAssistantIdentity: vi.fn(),
     resetToolStream: vi.fn(),
     resetChatScroll: vi.fn(),
@@ -560,24 +561,30 @@ describe("chat voice controls", () => {
     });
 
     const model = container.querySelector<HTMLInputElement>(
-      '.agent-chat__talk-options input[placeholder="gpt-realtime-2"]',
+      '.agent-chat__talk-options-primary input[placeholder="Auto"]',
     );
     const voice = container.querySelector<HTMLSelectElement>(
-      ".agent-chat__talk-options label:nth-of-type(4) select",
+      ".agent-chat__talk-options-primary label:nth-of-type(1) select",
+    );
+    const sensitivity = container.querySelector<HTMLSelectElement>(
+      ".agent-chat__talk-options-primary label:nth-of-type(3) select",
     );
     const voiceOptions = Array.from(
       container.querySelectorAll<HTMLOptionElement>(
-        ".agent-chat__talk-options label:nth-of-type(4) option",
+        ".agent-chat__talk-options-primary label:nth-of-type(1) option",
       ),
     ).map((option) => option.value);
     const reasoningOptions = Array.from(
       container.querySelectorAll<HTMLOptionElement>(
-        ".agent-chat__talk-options label:nth-of-type(5) option",
+        ".agent-chat__talk-options-advanced label:nth-of-type(3) option",
       ),
     ).map((option) => option.value);
 
     if (voice === null) {
       throw new Error("expected Talk voice select");
+    }
+    if (sensitivity === null) {
+      throw new Error("expected Talk sensitivity select");
     }
     expect(voiceOptions).toEqual([
       "",
@@ -592,14 +599,58 @@ describe("chat voice controls", () => {
       "marin",
       "cedar",
     ]);
+    expect(sensitivity.value).toBe("__custom");
+    expect(Array.from(sensitivity.options).map((option) => option.value)).toEqual([
+      "",
+      "0.65",
+      "0.5",
+      "0.35",
+      "__custom",
+    ]);
     expect(reasoningOptions).toEqual(["", "minimal", "low", "medium", "high"]);
+    expect(container.textContent).toContain("Sensitivity");
+    expect(container.textContent).toContain("Advanced");
+    expect(container.textContent).toContain("Pause before send");
+    expect(container.textContent).not.toContain("Silence ms");
+    expect(container.textContent).not.toContain("Prefix ms");
     if (model === null) {
       throw new Error("expected Talk model input");
     }
     model.value = "gpt-realtime-mini";
     model.dispatchEvent(new Event("input", { bubbles: true }));
+    sensitivity.value = "0.35";
+    sensitivity.dispatchEvent(new Event("change", { bubbles: true }));
+    sensitivity.value = "";
+    sensitivity.dispatchEvent(new Event("change", { bubbles: true }));
 
     expect(onRealtimeTalkOptionsChange).toHaveBeenCalledWith({ model: "gpt-realtime-mini" });
+    expect(onRealtimeTalkOptionsChange).toHaveBeenCalledWith({ vadThreshold: "0.35" });
+    expect(onRealtimeTalkOptionsChange).toHaveBeenCalledWith({ vadThreshold: "" });
+
+    const defaultContainer = renderChatView({
+      realtimeTalkOptionsOpen: true,
+      realtimeTalkOptions: {
+        provider: "",
+        model: "",
+        voice: "",
+        transport: "",
+        vadThreshold: "",
+        silenceDurationMs: "",
+        prefixPaddingMs: "",
+        reasoningEffort: "",
+      },
+      onRealtimeTalkOptionsChange,
+    });
+    const defaultSensitivity = defaultContainer.querySelector<HTMLSelectElement>(
+      ".agent-chat__talk-options-primary label:nth-of-type(3) select",
+    );
+    expect(defaultSensitivity?.value).toBe("");
+    expect(Array.from(defaultSensitivity?.options ?? []).map((option) => option.value)).toEqual([
+      "",
+      "0.65",
+      "0.5",
+      "0.35",
+    ]);
   });
 
   it("renders composer and Talk labels from the active locale", async () => {
@@ -983,7 +1034,7 @@ describe("chat session controls", () => {
     await i18n.setLocale("en");
   });
 
-  it("filters chat sessions by agent and switches to that agent's recent session", () => {
+  it("filters chat sessions by agent and switches to that agent's latest eligible session", () => {
     const { state } = createChatHeaderState();
     const onSwitchSession = vi.fn();
     state.sessionKey = "agent:alpha:main";
@@ -999,13 +1050,25 @@ describe("chat session controls", () => {
     state.sessionsResult = {
       ts: 0,
       path: "",
-      count: 4,
+      count: 6,
       defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
       sessions: [
         { key: "agent:alpha:main", kind: "direct", updatedAt: 4 },
         { key: "agent:alpha:dashboard:alpha-recent", kind: "direct", updatedAt: 3 },
+        {
+          key: "agent:alpha:subagent:worker",
+          kind: "direct",
+          updatedAt: 5,
+          spawnedBy: "agent:alpha:main",
+        },
         { key: "agent:beta:dashboard:beta-recent", kind: "direct", updatedAt: 2 },
         { key: "agent:beta:main", kind: "direct", updatedAt: 1 },
+        {
+          key: "agent:beta:subagent:worker",
+          kind: "direct",
+          updatedAt: 6,
+          spawnedBy: "agent:beta:main",
+        },
       ],
     };
 
@@ -1044,6 +1107,38 @@ describe("chat session controls", () => {
       t("chat.selectors.model"),
       t("chat.selectors.thinkingLevel"),
     ]);
+  });
+
+  it("shows provider quota in the chat header when usage data is loaded", () => {
+    const { state } = createChatHeaderState();
+    state.modelAuthStatusResult = {
+      ts: Date.now(),
+      providers: [
+        {
+          provider: "openai-codex",
+          displayName: "Codex",
+          status: "ok",
+          profiles: [{ profileId: "codex", type: "oauth", status: "ok" }],
+          usage: {
+            windows: [
+              { label: "3h", usedPercent: 18 },
+              { label: "Week", usedPercent: 72 },
+            ],
+          },
+        },
+      ],
+    };
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const quota = container.querySelector<HTMLAnchorElement>('[data-chat-provider-usage="true"]');
+    expect(quota?.textContent?.replace(/\s+/g, " ").trim()).toBe("Usage 28%");
+    expect(quota?.getAttribute("href")).toBe("/usage");
+    expect(quota?.getAttribute("title")).toContain("Codex · Week");
+
+    quota?.dispatchEvent(new MouseEvent("click", { bubbles: true, button: 0, cancelable: true }));
+
+    expect(state.setTab).toHaveBeenCalledWith("usage");
   });
 
   it("falls back to the selected agent's main session when no sessions exist yet", () => {
