@@ -173,6 +173,7 @@ function runVitestJsonReport(params) {
     "--reporter=json",
     "--outputFile",
     params.reportPath,
+    ...params.forwardedArgs,
     ...params.vitestArgs,
   ];
   const startedAt = process.hrtime.bigint();
@@ -200,6 +201,7 @@ function runVitestJsonReport(params) {
   return {
     config: params.config,
     elapsedMs,
+    label: params.label,
     logPath: params.logPath,
     maxRssBytes: params.rss ? parseMaxRssBytes(output) : null,
     reportPath: params.reportPath,
@@ -231,20 +233,50 @@ export function resolveReportArtifactDirs(outputPath) {
   };
 }
 
-function resolveConfigs(args) {
+function withUniqueLabels(plans) {
+  const totals = new Map();
+  for (const plan of plans) {
+    totals.set(plan.label, (totals.get(plan.label) ?? 0) + 1);
+  }
+  const seen = new Map();
+  return plans.map((plan) => {
+    const total = totals.get(plan.label) ?? 0;
+    if (total <= 1) {
+      return plan;
+    }
+    const index = (seen.get(plan.label) ?? 0) + 1;
+    seen.set(plan.label, index);
+    return {
+      ...plan,
+      label: `${plan.label}-${index}`,
+    };
+  });
+}
+
+export function resolveRunPlans(args) {
   if (args.reports.length > 0) {
     return [];
   }
   if (args.fullSuite) {
-    return buildFullSuiteVitestRunPlans([], process.cwd()).map((plan) => plan.config);
+    return withUniqueLabels(
+      buildFullSuiteVitestRunPlans([], process.cwd()).map((plan) => ({
+        config: plan.config,
+        forwardedArgs: plan.forwardedArgs ?? [],
+        label: normalizeConfigLabel(plan.config),
+      })),
+    );
   }
-  return args.configs.length > 0 ? args.configs : ["test/vitest/vitest.unit.config.ts"];
+  const configs = args.configs.length > 0 ? args.configs : ["test/vitest/vitest.unit.config.ts"];
+  return configs.map((config) => ({
+    config,
+    forwardedArgs: [],
+    label: normalizeConfigLabel(config),
+  }));
 }
 
 function printRunLine(run) {
-  const label = normalizeConfigLabel(run.config);
   console.log(
-    `[test-group-report] ${label} status=${run.status} wall=${formatMs(run.elapsedMs)} rss=${formatBytesAsMb(run.maxRssBytes)} report=${run.reportPath}`,
+    `[test-group-report] ${run.label} status=${run.status} wall=${formatMs(run.elapsedMs)} rss=${formatBytesAsMb(run.maxRssBytes)} report=${run.reportPath}`,
   );
 }
 
@@ -280,7 +312,7 @@ async function main() {
 
   const { reportDir, logDir } = resolveReportArtifactDirs(output);
   const runEntries = [];
-  const configs = resolveConfigs(args);
+  const runPlans = resolveRunPlans(args);
   let failed = false;
   let exitCode = 0;
 
@@ -291,10 +323,12 @@ async function main() {
     });
   }
 
-  for (const config of configs) {
-    const slug = sanitizePathSegment(normalizeConfigLabel(config));
+  for (const plan of runPlans) {
+    const slug = sanitizePathSegment(plan.label);
     const run = runVitestJsonReport({
-      config,
+      config: plan.config,
+      forwardedArgs: plan.forwardedArgs,
+      label: plan.label,
       logPath: path.join(logDir, `${slug}.log`),
       reportPath: path.join(reportDir, `${slug}.json`),
       rss: args.rss,
@@ -321,7 +355,7 @@ async function main() {
         break;
       }
     }
-    runEntries.push({ config, reportPath: run.reportPath, run });
+    runEntries.push({ config: plan.label, reportPath: run.reportPath, run });
   }
 
   if (exitCode !== 0) {

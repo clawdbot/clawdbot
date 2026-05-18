@@ -288,11 +288,12 @@ Send a Telegram Mini App button through generic presentation:
 
 ```
 openclaw message send --channel telegram --target 123456789 --message "Open app:" \
-  --presentation '{"blocks":[{"type":"buttons","buttons":[{"label":"Launch","web_app":{"url":"https://example.com/app"}}]}]}'
+  --presentation '{"blocks":[{"type":"buttons","buttons":[{"label":"Launch","webApp":{"url":"https://example.com/app"}}]}]}'
 ```
 
-Telegram `web_app` buttons are supported only in private chats between a user
-and the bot.
+Telegram web app buttons are supported only in private chats between a user and
+the bot. Older JSON payloads using `web_app` still parse, but `webApp` is the
+canonical presentation field.
 
 Send a Teams card through generic presentation:
 

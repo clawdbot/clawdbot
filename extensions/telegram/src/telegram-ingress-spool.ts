@@ -21,6 +21,11 @@ type TelegramSpooledUpdatePayload = {
   receivedAt: number;
   update: unknown;
   claim?: TelegramSpooledUpdateClaimOwner;
+  failure?: {
+    reason: string;
+    message: string;
+    failedAt: number;
+  };
 };
 
 export type TelegramSpooledUpdate = {
@@ -71,6 +76,10 @@ function processingFileName(updateId: number): string {
   return `${spoolFileName(updateId)}.processing`;
 }
 
+function failedFileName(updateId: number): string {
+  return `${spoolFileName(updateId)}.failed`;
+}
+
 function isProcessingFileName(fileName: string): boolean {
   return fileName.endsWith(".json.processing");
 }
@@ -81,6 +90,10 @@ function pendingFileNameFromProcessing(fileName: string): string {
 
 function processingPath(spoolDir: string, updateId: number): string {
   return path.join(spoolDir, processingFileName(updateId));
+}
+
+function failedPath(spoolDir: string, updateId: number): string {
+  return path.join(spoolDir, failedFileName(updateId));
 }
 
 async function pathExists(filePath: string): Promise<boolean> {
@@ -181,7 +194,8 @@ export async function writeTelegramSpooledUpdate(params: {
   await fs.mkdir(params.spoolDir, { recursive: true });
   const targetPath = path.join(params.spoolDir, spoolFileName(updateId));
   const claimedPath = processingPath(params.spoolDir, updateId);
-  if (await pathExists(claimedPath)) {
+  const tombstonePath = failedPath(params.spoolDir, updateId);
+  if ((await pathExists(claimedPath)) || (await pathExists(tombstonePath))) {
     return updateId;
   }
   const tempPath = path.join(params.spoolDir, `${spoolFileName(updateId)}.${randomUUID()}.tmp`);
@@ -192,7 +206,7 @@ export async function writeTelegramSpooledUpdate(params: {
     update: params.update,
   };
   await fs.writeFile(tempPath, `${JSON.stringify(payload)}\n`, { mode: 0o600 });
-  if (await pathExists(claimedPath)) {
+  if ((await pathExists(claimedPath)) || (await pathExists(tombstonePath))) {
     await unlinkIfPresent(tempPath);
     return updateId;
   }
@@ -213,7 +227,10 @@ export async function listTelegramSpooledUpdates(params: {
     }
     throw err;
   }
-  const files = entries.filter((entry) => entry.endsWith(".json")).toSorted();
+  const entrySet = new Set(entries);
+  const files = entries
+    .filter((entry) => entry.endsWith(".json") && !entrySet.has(`${entry}.failed`))
+    .toSorted();
   const limitedFiles =
     params.limit === "all" ? files : files.slice(0, Math.max(1, params.limit ?? 100));
   const updates: TelegramSpooledUpdate[] = [];
@@ -292,6 +309,49 @@ export async function releaseTelegramSpooledUpdateClaim(
   }
 }
 
+export async function failTelegramSpooledUpdateClaim(params: {
+  update: ClaimedTelegramSpooledUpdate;
+  reason: string;
+  message: string;
+  now?: number;
+}): Promise<boolean> {
+  const tombstonePath = failedPath(path.dirname(params.update.path), params.update.updateId);
+  const tempPath = path.join(
+    path.dirname(params.update.path),
+    `${failedFileName(params.update.updateId)}.${randomUUID()}.tmp`,
+  );
+  try {
+    const { value } = await readJsonFileWithFallback<unknown>(params.update.path, null);
+    const parsed = parseSpooledUpdate(value, params.update.path);
+    if (!parsed) {
+      return false;
+    }
+    const payload: TelegramSpooledUpdatePayload = {
+      version: SPOOL_VERSION,
+      updateId: parsed.updateId,
+      receivedAt: parsed.receivedAt,
+      update: parsed.update,
+      ...(parsed.claim ? { claim: parsed.claim } : {}),
+      failure: {
+        reason: params.reason,
+        message: params.message,
+        failedAt: params.now ?? Date.now(),
+      },
+    };
+    await fs.writeFile(tempPath, `${JSON.stringify(payload)}\n`, { mode: 0o600 });
+    await fs.rename(tempPath, tombstonePath);
+    await unlinkIfPresent(params.update.path);
+    await unlinkIfPresent(params.update.pendingPath);
+    return true;
+  } catch (err) {
+    await unlinkIfPresent(tempPath);
+    if ((err as { code?: string }).code === "ENOENT") {
+      return false;
+    }
+    throw err;
+  }
+}
+
 export async function listTelegramSpooledUpdateClaims(params: {
   spoolDir: string;
 }): Promise<ClaimedTelegramSpooledUpdate[]> {
@@ -305,7 +365,11 @@ export async function listTelegramSpooledUpdateClaims(params: {
     throw err;
   }
   const claims: ClaimedTelegramSpooledUpdate[] = [];
+  const entrySet = new Set(entries);
   for (const file of entries.filter(isProcessingFileName).toSorted()) {
+    if (entrySet.has(`${pendingFileNameFromProcessing(file)}.failed`)) {
+      continue;
+    }
     const filePath = path.join(params.spoolDir, file);
     const { value } = await readJsonFileWithFallback<unknown>(filePath, null);
     const parsed = parseSpooledUpdate(value, filePath);
@@ -340,8 +404,15 @@ export async function recoverStaleTelegramSpooledUpdateClaims(params: {
   );
   const now = params.now ?? Date.now();
   let recovered = 0;
+  const entrySet = new Set(entries);
   for (const entry of entries.filter(isProcessingFileName).toSorted()) {
     const claimedPath = path.join(params.spoolDir, entry);
+    const pendingPath = path.join(params.spoolDir, pendingFileNameFromProcessing(entry));
+    if (entrySet.has(`${pendingFileNameFromProcessing(entry)}.failed`)) {
+      await unlinkIfPresent(claimedPath);
+      await unlinkIfPresent(pendingPath);
+      continue;
+    }
     let stat;
     try {
       stat = await fs.stat(claimedPath);
@@ -354,7 +425,6 @@ export async function recoverStaleTelegramSpooledUpdateClaims(params: {
     if (now - stat.mtimeMs < staleMs) {
       continue;
     }
-    const pendingPath = path.join(params.spoolDir, pendingFileNameFromProcessing(entry));
     if (params.shouldRecover) {
       const { value } = await readJsonFileWithFallback<unknown>(claimedPath, null);
       const parsed = parseSpooledUpdate(value, claimedPath);

@@ -4,6 +4,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
+import { isRecord } from "../utils.js";
 import {
   clearPluginCommands,
   clearPluginCommandsForPlugin,
@@ -165,6 +166,9 @@ export function validatePluginCommandDefinition(
   if (nameError) {
     return nameError;
   }
+  if (command.nativeNames !== undefined && !isRecord(command.nativeNames)) {
+    return "Command nativeNames must be an object";
+  }
   for (const [label, alias] of Object.entries(command.nativeNames ?? {})) {
     if (typeof alias !== "string") {
       continue;
@@ -174,6 +178,9 @@ export function validatePluginCommandDefinition(
       return `Native command alias "${label}" invalid: ${aliasError}`;
     }
   }
+  if (command.nativeProgressMessages !== undefined && !isRecord(command.nativeProgressMessages)) {
+    return "Command nativeProgressMessages must be an object";
+  }
   for (const [label, message] of Object.entries(command.nativeProgressMessages ?? {})) {
     if (typeof message !== "string") {
       return `Native progress message "${label}" must be a string`;
@@ -181,6 +188,12 @@ export function validatePluginCommandDefinition(
     if (!message.trim()) {
       return `Native progress message "${label}" cannot be empty`;
     }
+  }
+  if (
+    command.descriptionLocalizations !== undefined &&
+    !isRecord(command.descriptionLocalizations)
+  ) {
+    return "Command descriptionLocalizations must be an object";
   }
   for (const [locale, description] of Object.entries(command.descriptionLocalizations ?? {})) {
     if (typeof description !== "string") {

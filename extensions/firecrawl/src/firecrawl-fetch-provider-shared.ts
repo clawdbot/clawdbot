@@ -44,6 +44,19 @@ export const FIRECRAWL_WEB_FETCH_PROVIDER_SHARED = {
   getConfiguredCredentialValue: (config) =>
     (config?.plugins?.entries?.firecrawl?.config as { webFetch?: { apiKey?: unknown } } | undefined)
       ?.webFetch?.apiKey,
+  getConfiguredCredentialFallback: (config) => {
+    const apiKey = (
+      config?.plugins?.entries?.firecrawl?.config as
+        | { webSearch?: { apiKey?: unknown } }
+        | undefined
+    )?.webSearch?.apiKey;
+    return apiKey === undefined
+      ? undefined
+      : {
+          path: "plugins.entries.firecrawl.config.webSearch.apiKey",
+          value: apiKey,
+        };
+  },
   setConfiguredCredentialValue: (configTarget, value) => {
     const plugins = ensureRecord(configTarget as unknown as Record<string, unknown>, "plugins");
     const entries = ensureRecord(plugins, "entries");

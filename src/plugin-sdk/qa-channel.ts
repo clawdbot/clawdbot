@@ -12,6 +12,7 @@ import type {
   QaBusSearchMessagesInput,
   QaBusStateSnapshot,
   QaBusThread,
+  QaBusToolCall,
 } from "./qa-channel-protocol.js";
 
 export type * from "./qa-channel-protocol.js";
@@ -84,6 +85,7 @@ type FacadeModule = {
     threadId?: string;
     replyToId?: string;
     attachments?: QaBusAttachment[];
+    toolCalls?: QaBusToolCall[];
   }) => Promise<{ message: QaBusMessage }>;
   setQaChannelRuntime: (runtime: unknown) => void;
 };

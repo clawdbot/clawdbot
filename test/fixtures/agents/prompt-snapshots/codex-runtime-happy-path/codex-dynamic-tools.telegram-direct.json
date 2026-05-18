@@ -1,7 +1,7 @@
 [
   {
     "deferLoading": true,
-    "description": "Discover and control paired nodes (status/describe/pairing/notify/camera/photos/screen/location/notifications/invoke). For file retrieval, use the dedicated file_fetch tool.",
+    "description": "Discover/control paired nodes: status, describe, pairing, notify, camera/photos/screen/location/notifications/invoke. Use file_fetch for files.",
     "inputSchema": {
       "properties": {
         "action": {
@@ -137,7 +137,7 @@
   },
   {
     "deferLoading": true,
-    "description": "Manage Gateway cron jobs (status/list/get/add/update/remove/run/runs) and send wake events. Use this for reminders, \"check back later\" requests, delayed follow-ups, and recurring tasks. Do not emulate scheduling with exec sleep or process polling.\n\nMain-session cron jobs enqueue system events for heartbeat handling. Isolated cron jobs create background task runs that appear in `openclaw tasks`.\n\nACTIONS:\n- status: Check cron scheduler status\n- list: List jobs (use includeDisabled:true to include disabled; agentId filters by agent, auto-filled from session)\n- get: Get one job by id (requires jobId)\n- add: Create job (requires job object, see schema below)\n- update: Modify job (requires jobId + patch object)\n- remove: Delete job (requires jobId)\n- run: Trigger job immediately (requires jobId)\n- runs: Get job run history (requires jobId)\n- wake: Send wake event (requires text, optional mode)\n\nJOB SCHEMA (for add action):\n{\n  \"name\": \"string (optional)\",\n  \"schedule\": { ... },      // Required: when to run\n  \"payload\": { ... },       // Required: what to execute\n  \"delivery\": { ... },      // Optional: announce summary (isolated/current/session:xxx only) or webhook POST\n  \"sessionTarget\": \"main\" | \"isolated\" | \"current\" | \"session:<custom-id>\",  // Optional, defaults based on context\n  \"enabled\": true | false   // Optional, default true\n}\n\nSESSION TARGET OPTIONS:\n- \"main\": Run in the main session (requires payload.kind=\"systemEvent\")\n- \"isolated\": Run in an ephemeral isolated session (requires payload.kind=\"agentTurn\")\n- \"current\": Bind to the current session where the cron is created (resolved at creation time)\n- \"session:<custom-id>\": Run in a persistent named session (e.g., \"session:project-alpha-daily\")\n\nDEFAULT BEHAVIOR (unchanged for backward compatibility):\n- payload.kind=\"systemEvent\" → defaults to \"main\"\n- payload.kind=\"agentTurn\" → defaults to \"isolated\"\nTo use current session binding, explicitly set sessionTarget=\"current\".\n\nSCHEDULE TYPES (schedule.kind):\n- \"at\": One-shot at absolute time\n  { \"kind\": \"at\", \"at\": \"<ISO-8601 timestamp>\" }\n- \"every\": Recurring interval\n  { \"kind\": \"every\", \"everyMs\": <interval-ms>, \"anchorMs\": <optional-start-ms> }\n- \"cron\": Cron expression evaluated in the supplied timezone, or the Gateway host local timezone when tz is omitted\n  { \"kind\": \"cron\", \"expr\": \"<cron-expression>\", \"tz\": \"<optional-IANA-timezone>\" }\n  Write expr in the selected timezone's local wall-clock time; do not convert the requested local time to UTC first.\n  If tz is omitted, do not assume UTC; the Gateway host local timezone is used.\n  Example: \"Remind me every day at 6pm Shanghai time\" -> { \"kind\": \"cron\", \"expr\": \"0 18 * * *\", \"tz\": \"Asia/Shanghai\" }\n\nFor schedule.kind=\"at\", ISO timestamps without an explicit timezone are treated as UTC.\n\nPAYLOAD TYPES (payload.kind):\n- \"systemEvent\": Injects text as system event into session\n  { \"kind\": \"systemEvent\", \"text\": \"<message>\" }\n- \"agentTurn\": Runs agent with message (isolated sessions only)\n  { \"kind\": \"agentTurn\", \"message\": \"<prompt>\", \"model\": \"<optional>\", \"thinking\": \"<optional>\", \"timeoutSeconds\": <optional, 0 means no timeout> }\n\nDELIVERY (top-level):\n  { \"mode\": \"none|announce|webhook\", \"channel\": \"<optional>\", \"to\": \"<optional>\", \"threadId\": \"<optional>\", \"bestEffort\": <optional-bool> }\n  - Default for isolated agentTurn jobs (when delivery omitted): \"announce\"\n  - announce: send to chat channel (optional channel/to target)\n  - threadId: chat thread/topic id for channels that support threaded delivery\n  - webhook: send finished-run event as HTTP POST to delivery.to (URL required)\n  - If the task needs to send to a specific chat/recipient, set announce delivery.channel/to; do not call messaging tools inside the run.\n\nCRITICAL CONSTRAINTS:\n- sessionTarget=\"main\" REQUIRES payload.kind=\"systemEvent\"\n- sessionTarget=\"isolated\" | \"current\" | \"session:xxx\" REQUIRES payload.kind=\"agentTurn\"\n- For webhook callbacks, use delivery.mode=\"webhook\" with delivery.to set to a URL.\nDefault: prefer isolated agentTurn jobs unless the user explicitly wants current-session binding.\n\nRESTRICTED CRON RUNS:\n- Some isolated cron runs receive a narrow cron grant for self-cleanup. In that mode, read-only status and list are for self-introspection only, get/runs are allowed for the current job only, and mutation actions remain limited to removing the current cron job.\n\nWAKE MODES (for wake action):\n- \"next-heartbeat\" (default): Wake on next heartbeat\n- \"now\": Wake immediately\n\nUse jobId as the canonical identifier; id is accepted for compatibility. Use contextMessages (0-10) to add previous messages as context to the job text.",
+    "description": "Manage Gateway cron jobs and wake events: reminders, check-back-later, delayed follow-ups, recurring work. Do not emulate scheduling with exec sleep/process polling.\n\nMain cron => system events for heartbeat. Isolated cron => background task in `openclaw tasks`.\n\nACTIONS:\n- status: scheduler status\n- list: jobs; includeDisabled true includes disabled; agentId filter auto-filled from session\n- get: one job; needs jobId\n- add: create job; needs job object\n- update: patch job; needs jobId + patch\n- remove: delete job; needs jobId\n- run: trigger now; needs jobId\n- runs: run history; needs jobId\n- wake: send wake event; needs text, optional mode\n\nJOB SCHEMA (for add action):\n{\n  \"name\": \"string\",\n  \"schedule\": { ... },      // required\n  \"payload\": { ... },       // required\n  \"delivery\": { ... },      // optional announce for isolated/current/session, webhook for any target\n  \"sessionTarget\": \"main\" | \"isolated\" | \"current\" | \"session:<id>\",\n  \"enabled\": true | false   // default true\n}\n\nSESSION TARGET OPTIONS:\n- \"main\": main session; requires payload.kind=\"systemEvent\"\n- \"isolated\": ephemeral isolated session; requires payload.kind=\"agentTurn\"\n- \"current\": bind current session at creation\n- \"session:<id>\": persistent named session\n\nDEFAULTS:\n- payload.kind=\"systemEvent\" → defaults to \"main\"\n- payload.kind=\"agentTurn\" → defaults to \"isolated\"\nCurrent binding needs sessionTarget=\"current\".\n\nSCHEDULE TYPES (schedule.kind):\n- \"at\": one-shot absolute time\n  { \"kind\": \"at\", \"at\": \"<ISO-8601 timestamp>\" }\n- \"every\": recurring interval\n  { \"kind\": \"every\", \"everyMs\": <ms>, \"anchorMs\": <optional-ms> }\n- \"cron\": expr in supplied timezone, or Gateway host local timezone when tz omitted\n  { \"kind\": \"cron\", \"expr\": \"<cron-expression>\", \"tz\": \"<optional-IANA-timezone>\" }\n  Write expr in local wall-clock time; do not convert the requested local time to UTC first.\n  tz omitted => Gateway host local timezone, not UTC.\n  Example 6pm Shanghai daily: { \"kind\": \"cron\", \"expr\": \"0 18 * * *\", \"tz\": \"Asia/Shanghai\" }\n\nFor \"at\", ISO timestamps without timezone are UTC.\n\nPAYLOAD TYPES (payload.kind):\n- \"systemEvent\": inject text as system event\n  { \"kind\": \"systemEvent\", \"text\": \"<message>\" }\n- \"agentTurn\": run agent with prompt; isolated/current/session only\n  { \"kind\": \"agentTurn\", \"message\": \"<prompt>\", \"model\": \"<optional>\", \"thinking\": \"<optional>\", \"timeoutSeconds\": <optional, 0=no timeout> }\n\nDELIVERY (top-level):\n  { \"mode\": \"none|announce|webhook\", \"channel\": \"<optional>\", \"to\": \"<optional>\", \"threadId\": \"<optional>\", \"bestEffort\": <optional-bool> }\n  - isolated agentTurn default when omitted: \"announce\"\n  - announce: send to chat channel; isolated/current/session only; optional channel/to\n  - threadId: chat thread/topic id\n  - webhook: POST finished-run event to delivery.to URL\n  - Specific chat/recipient: set announce delivery.channel/to; do not call messaging tools inside run.\n\nCRITICAL CONSTRAINTS:\n- sessionTarget=\"main\" REQUIRES payload.kind=\"systemEvent\"\n- sessionTarget=\"isolated\" | \"current\" | \"session:xxx\" REQUIRES payload.kind=\"agentTurn\"\n- Webhook: delivery.mode=\"webhook\" and delivery.to URL.\nDefault: prefer isolated agentTurn jobs unless the user explicitly wants current-session binding.\n\nRESTRICTED CRON RUNS:\n- Some isolated cron runs get narrow self-cleanup grant: status/list self-only, get/runs current job only, mutation only remove current job.\n\nWAKE MODES (for wake action):\n- \"next-heartbeat\" default: wake next heartbeat\n- \"now\": wake immediately\n\nUse jobId canonical; id accepted compat. contextMessages (0-10) adds previous messages as job context.",
     "inputSchema": {
       "additionalProperties": true,
       "properties": {
@@ -146,7 +146,7 @@
           "type": "string"
         },
         "agentId": {
-          "description": "Filter by agent id (list action)",
+          "description": "List filter: agent id",
           "type": "string"
         },
         "contextMessages": {
@@ -174,14 +174,14 @@
               "type": "string"
             },
             "deleteAfterRun": {
-              "description": "Delete after first execution",
+              "description": "Delete after first run",
               "type": "boolean"
             },
             "delivery": {
               "additionalProperties": true,
               "properties": {
                 "accountId": {
-                  "description": "Account target for delivery",
+                  "description": "Delivery account",
                   "type": "string"
                 },
                 "bestEffort": {
@@ -224,7 +224,7 @@
                       "type": "number"
                     }
                   ],
-                  "description": "Thread/topic id for channels that support threaded delivery"
+                  "description": "Thread/topic id"
                 },
                 "to": {
                   "description": "Delivery target",
@@ -234,7 +234,7 @@
               "type": "object"
             },
             "description": {
-              "description": "Human-readable description",
+              "description": "Human description",
               "type": "string"
             },
             "enabled": {
@@ -242,13 +242,13 @@
             },
             "failureAlert": {
               "additionalProperties": true,
-              "description": "Failure alert config object, or the boolean value false to disable alerts for this job",
+              "description": "Failure alert object; false disables alerts",
               "properties": {
                 "accountId": {
                   "type": "string"
                 },
                 "after": {
-                  "description": "Failures before alerting",
+                  "description": "Failures before alert",
                   "type": "number"
                 },
                 "channel": {
@@ -256,11 +256,11 @@
                   "type": "string"
                 },
                 "cooldownMs": {
-                  "description": "Cooldown between alerts in ms",
+                  "description": "Alert cooldown ms",
                   "type": "number"
                 },
                 "includeSkipped": {
-                  "description": "Count consecutive skipped runs toward alerting",
+                  "description": "Skipped runs count toward alert",
                   "type": "boolean"
                 },
                 "mode": {
@@ -285,14 +285,14 @@
                   "type": "boolean"
                 },
                 "fallbacks": {
-                  "description": "Fallback model ids",
+                  "description": "Fallback models",
                   "items": {
                     "type": "string"
                   },
                   "type": "array"
                 },
                 "kind": {
-                  "description": "Payload type",
+                  "description": "Payload kind",
                   "enum": ["systemEvent", "agentTurn"],
                   "type": "string"
                 },
@@ -300,7 +300,7 @@
                   "type": "boolean"
                 },
                 "message": {
-                  "description": "Agent prompt (kind=agentTurn)",
+                  "description": "agentTurn prompt",
                   "type": "string"
                 },
                 "model": {
@@ -308,18 +308,18 @@
                   "type": "string"
                 },
                 "text": {
-                  "description": "Message text (kind=systemEvent)",
+                  "description": "systemEvent text",
                   "type": "string"
                 },
                 "thinking": {
-                  "description": "Thinking level override",
+                  "description": "Thinking override",
                   "type": "string"
                 },
                 "timeoutSeconds": {
                   "type": "number"
                 },
                 "toolsAllow": {
-                  "description": "Allowed tool ids",
+                  "description": "Allowed tools",
                   "items": {
                     "type": "string"
                   },
@@ -332,32 +332,32 @@
               "additionalProperties": true,
               "properties": {
                 "anchorMs": {
-                  "description": "Optional start anchor in milliseconds (kind=every)",
+                  "description": "Start anchor ms (kind=every)",
                   "type": "number"
                 },
                 "at": {
-                  "description": "ISO-8601 timestamp (kind=at)",
+                  "description": "ISO-8601 time (kind=at)",
                   "type": "string"
                 },
                 "everyMs": {
-                  "description": "Interval in milliseconds (kind=every)",
+                  "description": "Interval ms (kind=every)",
                   "type": "number"
                 },
                 "expr": {
-                  "description": "Cron expression (kind=cron) written in the supplied tz's local wall-clock time, or the Gateway host local timezone when tz is omitted; do not convert the requested local time to UTC first. Example: 6pm Shanghai daily is \"0 18 * * *\" with tz \"Asia/Shanghai\".",
+                  "description": "Cron expr in tz wall-clock time; do not convert to UTC. Omitted tz => Gateway host local timezone. Example 6pm Shanghai daily: expr \"0 18 * * *\", tz \"Asia/Shanghai\".",
                   "type": "string"
                 },
                 "kind": {
-                  "description": "Schedule type",
+                  "description": "Schedule kind",
                   "enum": ["at", "every", "cron"],
                   "type": "string"
                 },
                 "staggerMs": {
-                  "description": "Random jitter in ms (kind=cron)",
+                  "description": "Jitter ms (kind=cron)",
                   "type": "number"
                 },
                 "tz": {
-                  "description": "IANA timezone for interpreting cron wall-clock fields (kind=cron), e.g. \"Asia/Shanghai\"; if omitted, cron uses the Gateway host local timezone.",
+                  "description": "IANA timezone for cron wall-clock fields, e.g. \"Asia/Shanghai\"; omitted => Gateway host local timezone.",
                   "type": "string"
                 }
               },
@@ -368,11 +368,11 @@
               "type": "string"
             },
             "sessionTarget": {
-              "description": "Session target: \"main\", \"isolated\", \"current\", or \"session:<id>\"",
+              "description": "main | isolated | current | session:<id>",
               "type": "string"
             },
             "wakeMode": {
-              "description": "When to wake the session",
+              "description": "Wake timing",
               "enum": ["now", "next-heartbeat"],
               "type": "string"
             }
@@ -400,7 +400,7 @@
               "additionalProperties": true,
               "properties": {
                 "accountId": {
-                  "description": "Account target for delivery",
+                  "description": "Delivery account",
                   "type": "string"
                 },
                 "bestEffort": {
@@ -443,7 +443,7 @@
                       "type": "number"
                     }
                   ],
-                  "description": "Thread/topic id for channels that support threaded delivery"
+                  "description": "Thread/topic id"
                 },
                 "to": {
                   "description": "Delivery target",
@@ -460,13 +460,13 @@
             },
             "failureAlert": {
               "additionalProperties": true,
-              "description": "Failure alert config object, or the boolean value false to disable alerts for this job",
+              "description": "Failure alert object; false disables alerts",
               "properties": {
                 "accountId": {
                   "type": "string"
                 },
                 "after": {
-                  "description": "Failures before alerting",
+                  "description": "Failures before alert",
                   "type": "number"
                 },
                 "channel": {
@@ -474,11 +474,11 @@
                   "type": "string"
                 },
                 "cooldownMs": {
-                  "description": "Cooldown between alerts in ms",
+                  "description": "Alert cooldown ms",
                   "type": "number"
                 },
                 "includeSkipped": {
-                  "description": "Count consecutive skipped runs toward alerting",
+                  "description": "Skipped runs count toward alert",
                   "type": "boolean"
                 },
                 "mode": {
@@ -503,14 +503,14 @@
                   "type": "boolean"
                 },
                 "fallbacks": {
-                  "description": "Fallback model ids",
+                  "description": "Fallback models",
                   "items": {
                     "type": "string"
                   },
                   "type": "array"
                 },
                 "kind": {
-                  "description": "Payload type",
+                  "description": "Payload kind",
                   "enum": ["systemEvent", "agentTurn"],
                   "type": "string"
                 },
@@ -518,7 +518,7 @@
                   "type": "boolean"
                 },
                 "message": {
-                  "description": "Agent prompt (kind=agentTurn)",
+                  "description": "agentTurn prompt",
                   "type": "string"
                 },
                 "model": {
@@ -526,11 +526,11 @@
                   "type": "string"
                 },
                 "text": {
-                  "description": "Message text (kind=systemEvent)",
+                  "description": "systemEvent text",
                   "type": "string"
                 },
                 "thinking": {
-                  "description": "Thinking level override",
+                  "description": "Thinking override",
                   "type": "string"
                 },
                 "timeoutSeconds": {
@@ -550,32 +550,32 @@
               "additionalProperties": true,
               "properties": {
                 "anchorMs": {
-                  "description": "Optional start anchor in milliseconds (kind=every)",
+                  "description": "Start anchor ms (kind=every)",
                   "type": "number"
                 },
                 "at": {
-                  "description": "ISO-8601 timestamp (kind=at)",
+                  "description": "ISO-8601 time (kind=at)",
                   "type": "string"
                 },
                 "everyMs": {
-                  "description": "Interval in milliseconds (kind=every)",
+                  "description": "Interval ms (kind=every)",
                   "type": "number"
                 },
                 "expr": {
-                  "description": "Cron expression (kind=cron) written in the supplied tz's local wall-clock time, or the Gateway host local timezone when tz is omitted; do not convert the requested local time to UTC first. Example: 6pm Shanghai daily is \"0 18 * * *\" with tz \"Asia/Shanghai\".",
+                  "description": "Cron expr in tz wall-clock time; do not convert to UTC. Omitted tz => Gateway host local timezone. Example 6pm Shanghai daily: expr \"0 18 * * *\", tz \"Asia/Shanghai\".",
                   "type": "string"
                 },
                 "kind": {
-                  "description": "Schedule type",
+                  "description": "Schedule kind",
                   "enum": ["at", "every", "cron"],
                   "type": "string"
                 },
                 "staggerMs": {
-                  "description": "Random jitter in ms (kind=cron)",
+                  "description": "Jitter ms (kind=cron)",
                   "type": "number"
                 },
                 "tz": {
-                  "description": "IANA timezone for interpreting cron wall-clock fields (kind=cron), e.g. \"Asia/Shanghai\"; if omitted, cron uses the Gateway host local timezone.",
+                  "description": "IANA timezone for cron wall-clock fields, e.g. \"Asia/Shanghai\"; omitted => Gateway host local timezone.",
                   "type": "string"
                 }
               },
@@ -614,7 +614,7 @@
     "namespace": "openclaw"
   },
   {
-    "description": "Send, delete, and manage messages via channel plugins. Supports actions: send.",
+    "description": "Send/delete/manage channel messages. Supports actions: send.",
     "inputSchema": {
       "properties": {
         "accountId": {
@@ -625,14 +625,14 @@
           "type": "string"
         },
         "asDocument": {
-          "description": "Send image/GIF/video as document to avoid channel compression. Alias for forceDocument.",
+          "description": "Alias for forceDocument.",
           "type": "boolean"
         },
         "asVoice": {
           "type": "boolean"
         },
         "attachments": {
-          "description": "Structured media attachments to send with the message. Each item needs media/mediaUrl/path/filePath/fileUrl/url.",
+          "description": "Structured attachments; each needs media/mediaUrl/path/filePath/fileUrl/url.",
           "items": {
             "properties": {
               "filePath": {
@@ -672,7 +672,7 @@
           "type": "boolean"
         },
         "buffer": {
-          "description": "Base64 payload for attachments (optionally a data: URL).",
+          "description": "Base64 attachment payload; data URL ok.",
           "type": "string"
         },
         "caption": {
@@ -688,11 +688,11 @@
           "type": "boolean"
         },
         "effect": {
-          "description": "Alias for effectId (e.g., invisible-ink, balloons).",
+          "description": "Alias for effectId.",
           "type": "string"
         },
         "effectId": {
-          "description": "Message effect name/id for sendWithEffect (e.g., invisible ink).",
+          "description": "Effect id/name for sendWithEffect.",
           "type": "string"
         },
         "filename": {
@@ -702,7 +702,7 @@
           "type": "string"
         },
         "forceDocument": {
-          "description": "Send image/GIF/video as document to avoid channel compression.",
+          "description": "Send image/GIF/video as document; avoids compression.",
           "type": "boolean"
         },
         "gatewayToken": {
@@ -715,7 +715,7 @@
           "type": "boolean"
         },
         "media": {
-          "description": "Media URL or local path. data: URLs are not supported here, use buffer.",
+          "description": "Media URL/path. data: use buffer.",
           "type": "string"
         },
         "message": {
@@ -728,7 +728,7 @@
           "type": "string"
         },
         "quoteText": {
-          "description": "Quote text for Telegram reply_parameters",
+          "description": "Telegram reply quote text.",
           "type": "string"
         },
         "replyTo": {
@@ -762,19 +762,19 @@
   },
   {
     "deferLoading": true,
-    "description": "Use only for explicit audio intent (audio, voice, speech, TTS) or active TTS config. Never use for ordinary text replies. Audio is delivered automatically from the tool result. After a successful call, follow the current conversation's reply instructions and avoid sending a duplicate text/audio response.",
+    "description": "Use only for explicit audio intent (voice/speech/TTS) or active TTS config. Never use for ordinary text replies. Audio auto-delivered from tool result; after success follow reply instructions, no duplicate text/audio.",
     "inputSchema": {
       "properties": {
         "channel": {
-          "description": "Optional channel id to pick output format.",
+          "description": "Channel id; output-format hint.",
           "type": "string"
         },
         "text": {
-          "description": "Text to convert to speech.",
+          "description": "Text to speak.",
           "type": "string"
         },
         "timeoutMs": {
-          "description": "Optional provider request timeout in milliseconds.",
+          "description": "Provider timeout ms.",
           "minimum": 1,
           "type": "number"
         }
@@ -787,7 +787,7 @@
   },
   {
     "deferLoading": true,
-    "description": "Restart, inspect a specific config schema path, apply config, or update the gateway in-place (SIGUSR1). Use config.schema.lookup with a targeted dot path before config edits. Use config.patch for safe partial config updates (merges with existing). Use config.apply only when replacing entire config. Config writes hot-reload when possible and restart when required. Always pass a human-readable completion message via the `note` parameter so the system can deliver it to the user after restart. If restarting during a user task and you still owe the user a reply, pass a specific one-shot `continuationMessage` for what to verify or report after boot; do not write restart sentinel files directly.",
+    "description": "Gateway restart/config/update. Before config edits, use config.schema.lookup with targeted dot path. Prefer config.patch for partial merge; config.apply only full replace. Writes hot-reload or restart as needed. Always pass human `note` for post-restart delivery. If still owe the user a reply, pass one-shot `continuationMessage`; do not write restart sentinel files directly.",
     "inputSchema": {
       "properties": {
         "action": {
@@ -846,7 +846,7 @@
   },
   {
     "deferLoading": true,
-    "description": "List OpenClaw agent ids you can target with `sessions_spawn` when `runtime=\"subagent\"` (based on subagent allowlists).",
+    "description": "List agent ids allowed for `sessions_spawn runtime=\"subagent\"`.",
     "inputSchema": {
       "properties": {},
       "type": "object"
@@ -856,7 +856,7 @@
   },
   {
     "deferLoading": true,
-    "description": "List visible sessions with optional filters for kind, label, agentId, search, recent activity, derived titles, and last-message previews. Use this to discover a target session before calling sessions_history or sessions_send.",
+    "description": "List visible sessions; filter by kind, label, agentId, search, activity. Use before sessions_history or sessions_send target selection.",
     "inputSchema": {
       "properties": {
         "activeMinutes": {
@@ -904,7 +904,7 @@
   },
   {
     "deferLoading": true,
-    "description": "Fetch sanitized message history for a visible session. Supports limits and optional tool messages; use this to inspect another session before replying, debugging, or resuming work.",
+    "description": "Fetch sanitized history for visible session. Use before replying, debugging, resuming; supports limits/tool messages.",
     "inputSchema": {
       "properties": {
         "includeTools": {
@@ -926,7 +926,7 @@
   },
   {
     "deferLoading": true,
-    "description": "Send a message into another visible session by sessionKey or label, or to a configured agent by agentId. Thread-scoped chat sessions are rejected; target the parent channel session for inter-agent coordination. Missing configured agent main sessions are created before send; waits for the target run and returns the updated assistant reply when available.",
+    "description": "Send message to visible session by sessionKey/label, or configured agent by agentId. Thread-scoped chats rejected; target parent channel session. Creates missing configured-agent main session; waits for reply when available.",
     "inputSchema": {
       "properties": {
         "agentId": {
@@ -958,7 +958,7 @@
   },
   {
     "deferLoading": true,
-    "description": "Spawn a clean isolated session by default with the native subagent runtime. `mode=\"run\"` is one-shot background work. Subagents inherit the parent workspace directory automatically. Native subagents receive the delegated task in their first visible `[Subagent Task]` message. For native subagents only, set `context=\"fork\"` when the child needs the current transcript context; otherwise omit it or use `context=\"isolated\"`. Use this when the work should happen in a fresh child session instead of the current one.",
+    "description": "Spawn clean child session; default `runtime=\"subagent\"`. `mode=\"run\"` one-shot background work. Subagents inherit parent workspace. Native subagents get task in first visible `[Subagent Task]` message. Native only: `context=\"fork\"` only when child needs current transcript; else omit or `isolated`. Use for fresh child-session work.",
     "inputSchema": {
       "properties": {
         "agentId": {
@@ -1000,7 +1000,7 @@
           "type": "string"
         },
         "context": {
-          "description": "Native subagent context mode. Omit or use \"isolated\" for a clean child session; use \"fork\" only when the child needs the requester transcript context.",
+          "description": "Native context. Omit/\"isolated\" for clean child; \"fork\" only when child needs requester transcript.",
           "enum": ["isolated", "fork"],
           "type": "string"
         },
@@ -1011,7 +1011,7 @@
           "type": "string"
         },
         "lightContext": {
-          "description": "When true, spawned subagent runs use lightweight bootstrap context. Only applies to runtime='subagent'.",
+          "description": "Light bootstrap context; runtime=\"subagent\" only.",
           "type": "boolean"
         },
         "mode": {
@@ -1037,7 +1037,7 @@
           "type": "string"
         },
         "taskName": {
-          "description": "Stable optional alias for later subagents targeting. Use lowercase letters, digits, and underscores, starting with a letter.",
+          "description": "Stable alias for later targeting; lowercase letters/digits/underscores, starts letter.",
           "type": "string"
         },
         "thinking": {
@@ -1055,7 +1055,7 @@
     "namespace": "openclaw"
   },
   {
-    "description": "End your current turn. Use after spawning subagents to receive their results as the next message.",
+    "description": "End current turn. Use after spawning subagents; results arrive as next message.",
     "inputSchema": {
       "properties": {
         "message": {
@@ -1068,7 +1068,7 @@
   },
   {
     "deferLoading": true,
-    "description": "On-demand list, kill, or steer spawned sub-agents for this requester session. If sessions_yield is available, use it to wait for completion events; do not poll this tool in wait loops.",
+    "description": "List/kill/steer spawned subagents for requester session. If sessions_yield exists, use it for completion; do not poll wait loops.",
     "inputSchema": {
       "properties": {
         "action": {
@@ -1093,7 +1093,7 @@
   },
   {
     "deferLoading": true,
-    "description": "Show a /status-equivalent session status card for the current or another visible session, including usage, time, cost when available, and linked background task context. Use `sessionKey=\"current\"` for the current session; do not use UI/client labels such as `openclaw-tui` as session keys. Optional `model` sets a per-session model override; `model=default` resets overrides. Use this for questions like what model is active or how a session is configured.",
+    "description": "Show /status-like card for current/visible session: model, usage, time, cost, tasks. Use `sessionKey=\"current\"` for current session; UI labels like `openclaw-tui` are not keys. `model` sets session override; `model=default` resets. Use for active model/session config questions.",
     "inputSchema": {
       "properties": {
         "model": {
@@ -1110,63 +1110,63 @@
   },
   {
     "deferLoading": true,
-    "description": "Search the web. Returns provider-normalized results for current information lookup.",
+    "description": "Search web for current info; returns normalized provider results.",
     "inputSchema": {
       "properties": {
         "count": {
-          "description": "Number of results to return.",
+          "description": "Result count.",
           "maximum": 10,
           "minimum": 1,
           "type": "number"
         },
         "country": {
-          "description": "2-letter country code for region-specific results.",
+          "description": "2-letter country code.",
           "type": "string"
         },
         "date_after": {
-          "description": "Only results published after this date (YYYY-MM-DD).",
+          "description": "Published after YYYY-MM-DD.",
           "type": "string"
         },
         "date_before": {
-          "description": "Only results published before this date (YYYY-MM-DD).",
+          "description": "Published before YYYY-MM-DD.",
           "type": "string"
         },
         "domain_filter": {
-          "description": "Perplexity native Search API domain filter.",
+          "description": "Perplexity domain filter.",
           "items": {
             "type": "string"
           },
           "type": "array"
         },
         "freshness": {
-          "description": "Filter by time: day, week, month, or year.",
+          "description": "Time filter: day/week/month/year.",
           "type": "string"
         },
         "language": {
-          "description": "ISO 639-1 language code for results.",
+          "description": "ISO 639-1 language.",
           "type": "string"
         },
         "max_tokens": {
-          "description": "Perplexity native Search API total content budget.",
+          "description": "Perplexity total token budget.",
           "maximum": 1000000,
           "minimum": 1,
           "type": "number"
         },
         "max_tokens_per_page": {
-          "description": "Perplexity native Search API max tokens extracted per page.",
+          "description": "Perplexity tokens per page.",
           "minimum": 1,
           "type": "number"
         },
         "query": {
-          "description": "Search query string.",
+          "description": "Search query.",
           "type": "string"
         },
         "search_lang": {
-          "description": "Brave search result language code.",
+          "description": "Brave result language.",
           "type": "string"
         },
         "ui_lang": {
-          "description": "Brave UI locale code in language-region format.",
+          "description": "Brave UI locale.",
           "type": "string"
         }
       },
@@ -1178,22 +1178,22 @@
   },
   {
     "deferLoading": true,
-    "description": "Fetch and extract readable content from a URL (HTML → markdown/text). Use for lightweight page access without browser automation.",
+    "description": "Fetch URL and extract readable markdown/text. Lightweight page access; no browser automation.",
     "inputSchema": {
       "properties": {
         "extractMode": {
           "default": "markdown",
-          "description": "Extraction mode (\"markdown\" or \"text\").",
+          "description": "Extract as markdown/text.",
           "enum": ["markdown", "text"],
           "type": "string"
         },
         "maxChars": {
-          "description": "Maximum characters to return (truncates when exceeded).",
+          "description": "Max chars returned; truncates.",
           "minimum": 100,
           "type": "number"
         },
         "url": {
-          "description": "HTTP or HTTPS URL to fetch.",
+          "description": "HTTP(S) URL.",
           "type": "string"
         }
       },

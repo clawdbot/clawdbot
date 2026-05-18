@@ -96,7 +96,9 @@ function isUnambiguousNpmPrefixGlobalRoot(globalRoot: string | null): boolean {
 function resolveStagedNpmTargetLayout(
   installTarget: ResolvedGlobalInstallTarget,
 ): NpmGlobalPrefixLayout | null {
-  const targetLayout = resolveNpmGlobalPrefixLayoutFromGlobalRoot(installTarget.globalRoot);
+  const targetLayout = resolveNpmGlobalPrefixLayoutFromGlobalRoot(installTarget.globalRoot, {
+    allowDirectNodeModulesRoot: installTarget.directNodeModulesRoot === true,
+  });
   if (!targetLayout) {
     return null;
   }
@@ -150,7 +152,9 @@ async function prepareStagedNpmInstall(
   } catch (err) {
     const targetLayout =
       installTarget.manager === "npm"
-        ? resolveNpmGlobalPrefixLayoutFromGlobalRoot(installTarget.globalRoot)
+        ? resolveNpmGlobalPrefixLayoutFromGlobalRoot(installTarget.globalRoot, {
+            allowDirectNodeModulesRoot: installTarget.directNodeModulesRoot === true,
+          })
         : null;
     return {
       stagedInstall: null,
@@ -264,7 +268,9 @@ async function swapStagedNpmInstall(params: {
   packageName: string;
 }): Promise<PackageUpdateStepResult> {
   const startedAt = Date.now();
-  const targetLayout = resolveNpmGlobalPrefixLayoutFromGlobalRoot(params.installTarget.globalRoot);
+  const targetLayout = resolveNpmGlobalPrefixLayoutFromGlobalRoot(params.installTarget.globalRoot, {
+    allowDirectNodeModulesRoot: params.installTarget.directNodeModulesRoot === true,
+  });
   const targetPackageRoot = params.installTarget.packageRoot;
   if (!targetLayout || !targetPackageRoot) {
     return {
@@ -297,11 +303,13 @@ async function swapStagedNpmInstall(params: {
       to: targetPackageRoot,
     });
     movedStaged = true;
-    await replaceNpmBinShims({
-      stageLayout: params.stage.layout,
-      targetLayout,
-      packageName: params.packageName,
-    });
+    if (params.installTarget.directNodeModulesRoot !== true) {
+      await replaceNpmBinShims({
+        stageLayout: params.stage.layout,
+        targetLayout,
+        packageName: params.packageName,
+      });
+    }
     if (movedExisting) {
       await removePathBestEffort(backupRoot);
     }

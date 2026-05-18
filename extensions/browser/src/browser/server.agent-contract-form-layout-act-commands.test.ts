@@ -437,9 +437,16 @@ describe("browser control server", () => {
 
     const dialog = await postJson(`${base}/hooks/dialog`, {
       accept: true,
+      dialogId: "d1",
       timeoutMs: 5678,
     });
     expectOkResult(dialog);
+    expectBrowserCallFields(pwMocks.armDialogViaPlaywright, {
+      targetId: "abcd1234",
+      accept: true,
+      dialogId: "d1",
+      timeoutMs: 5678,
+    });
 
     const waitDownload = await postJson(`${base}/wait/download`, {
       path: "report.pdf",

@@ -106,6 +106,7 @@ describe("startGatewayDiscovery", () => {
       machineDisplayName: "Lab Mac",
       port: 18789,
       gatewayTls: { enabled: true, fingerprintSha256: "abc123" },
+      gatewayDirectReachable: true,
       canvasPort: 18789,
       wideAreaDiscoveryEnabled: false,
       tailscaleMode: "serve",
@@ -119,6 +120,7 @@ describe("startGatewayDiscovery", () => {
       gatewayPort: 18789,
       gatewayTlsEnabled: true,
       gatewayTlsFingerprintSha256: "abc123",
+      gatewayDirectReachable: true,
       canvasPort: 18789,
       sshPort: 2222,
       tailnetDns: "gateway.tailnet.example.ts.net",
@@ -219,6 +221,7 @@ describe("startGatewayDiscovery", () => {
       machineDisplayName: "Lab Mac",
       port: 18789,
       gatewayTls: { enabled: false },
+      gatewayDirectReachable: true,
       wideAreaDiscoveryEnabled: true,
       wideAreaDiscoveryDomain: "openclaw.internal.",
       tailscaleMode: "serve",
@@ -232,6 +235,7 @@ describe("startGatewayDiscovery", () => {
     const zoneParams = latestZoneParams();
     expect(zoneParams.domain).toBe("openclaw.internal.");
     expect(zoneParams.gatewayPort).toBe(18789);
+    expect(zoneParams.gatewayDirectReachable).toBe(true);
     expect(zoneParams.displayName).toBe("Lab Mac (OpenClaw)");
     expect(zoneParams.tailnetIPv4).toBe("100.64.0.10");
     expect(zoneParams.tailnetDns).toBe("gateway.tailnet.example.ts.net");

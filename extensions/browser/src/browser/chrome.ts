@@ -33,6 +33,7 @@ import {
 } from "./cdp.helpers.js";
 import { normalizeCdpWsUrl } from "./cdp.js";
 import {
+  type ChromeCdpDiagnostic,
   diagnoseChromeCdp,
   formatChromeCdpDiagnostic,
   type ChromeVersion,
@@ -72,6 +73,12 @@ const CHROME_SINGLETON_LOCK_PATHS = [
 ] as const;
 const CHROME_SINGLETON_IN_USE_PATTERN = /profile appears to be in use by another chromium process/i;
 const CHROME_MISSING_DISPLAY_PATTERN = /missing x server|\$DISPLAY/i;
+const CHROME_HTTP_DISCOVERY_FAILURE_CODES = new Set([
+  "ssrf_blocked",
+  "http_unreachable",
+  "http_status_failed",
+  "invalid_json",
+]);
 
 export type { BrowserExecutable } from "./chrome.executables.js";
 export {
@@ -98,6 +105,16 @@ function exists(filePath: string) {
   } catch {
     return false;
   }
+}
+
+function diagnosticShowsChromeHttpDiscovery(diagnostic: ChromeCdpDiagnostic | null): boolean {
+  if (!diagnostic) {
+    return false;
+  }
+  if (diagnostic.ok) {
+    return true;
+  }
+  return !CHROME_HTTP_DISCOVERY_FAILURE_CODES.has(diagnostic.code);
 }
 
 function processExists(pid: number): boolean {
@@ -531,43 +548,65 @@ export async function launchOpenClawChrome(
     try {
       const readyDeadline =
         Date.now() + (resolved.localLaunchTimeoutMs ?? CHROME_LAUNCH_READY_WINDOW_MS);
+      let launchHttpReachable = false;
+      // Full CDP WebSocket readiness is handled by the caller's
+      // waitForCdpReadyAfterLaunch() budget; launch only owns process discovery.
       while (Date.now() < readyDeadline) {
         if (await isChromeReachable(profile.cdpUrl)) {
+          launchHttpReachable = true;
           break;
         }
         await new Promise((r) => setTimeout(r, CHROME_LAUNCH_READY_POLL_MS));
       }
 
-      if (!(await isChromeReachable(profile.cdpUrl))) {
-        const diagnosticText = await diagnoseChromeCdp(profile.cdpUrl)
-          .then(formatChromeCdpDiagnostic)
-          .catch((err) => `CDP diagnostic failed: ${safeChromeCdpErrorMessage(err)}.`);
-        const stderrOutput =
-          normalizeOptionalString(Buffer.concat(stderrChunks).toString("utf8")) ?? "";
-        const redactedStderrOutput = redactToolPayloadText(stderrOutput);
-        if (
-          allowSingletonRecovery &&
-          CHROME_SINGLETON_IN_USE_PATTERN.test(stderrOutput) &&
-          clearStaleChromeSingletonLocks(userDataDir)
-        ) {
-          log.warn(
-            `Removed stale Chromium Singleton* locks for profile "${profile.name}" and retrying launch.`,
-          );
-          await terminateChromeForRetry(proc, userDataDir);
-          return await launchOnceAndWait(false);
-        }
-        const stderrHint = redactedStderrOutput
-          ? `\nChrome stderr:\n${redactedStderrOutput.slice(0, CHROME_STDERR_HINT_MAX_CHARS)}`
-          : "";
-        const launchHints = chromeLaunchHints({ stderrOutput, resolved, profile, launchOptions });
+      if (!launchHttpReachable) {
+        let finalDiagnostic: ChromeCdpDiagnostic | null = null;
+        let diagnosticErrorText: string | null = null;
         try {
-          proc.kill("SIGKILL");
-        } catch {
-          // ignore
+          finalDiagnostic = await diagnoseChromeCdp(
+            profile.cdpUrl,
+            CHROME_REACHABILITY_TIMEOUT_MS,
+            CHROME_WS_READY_TIMEOUT_MS,
+          );
+        } catch (err) {
+          diagnosticErrorText = `CDP diagnostic failed: ${safeChromeCdpErrorMessage(err)}.`;
         }
-        throw new Error(
-          `Failed to start Chrome CDP on port ${profile.cdpPort} for profile "${profile.name}". ${diagnosticText}${launchHints}${stderrHint}`,
-        );
+        if (diagnosticShowsChromeHttpDiscovery(finalDiagnostic)) {
+          launchHttpReachable = true;
+        }
+        const diagnosticText = finalDiagnostic
+          ? formatChromeCdpDiagnostic(finalDiagnostic)
+          : (diagnosticErrorText ?? "CDP diagnostic failed.");
+        if (launchHttpReachable) {
+          log.debug(diagnosticText);
+        } else {
+          const stderrOutput =
+            normalizeOptionalString(Buffer.concat(stderrChunks).toString("utf8")) ?? "";
+          const redactedStderrOutput = redactToolPayloadText(stderrOutput);
+          if (
+            allowSingletonRecovery &&
+            CHROME_SINGLETON_IN_USE_PATTERN.test(stderrOutput) &&
+            clearStaleChromeSingletonLocks(userDataDir)
+          ) {
+            log.warn(
+              `Removed stale Chromium Singleton* locks for profile "${profile.name}" and retrying launch.`,
+            );
+            await terminateChromeForRetry(proc, userDataDir);
+            return await launchOnceAndWait(false);
+          }
+          const stderrHint = redactedStderrOutput
+            ? `\nChrome stderr:\n${redactedStderrOutput.slice(0, CHROME_STDERR_HINT_MAX_CHARS)}`
+            : "";
+          const launchHints = chromeLaunchHints({ stderrOutput, resolved, profile, launchOptions });
+          try {
+            proc.kill("SIGKILL");
+          } catch {
+            // ignore
+          }
+          throw new Error(
+            `Failed to start Chrome CDP on port ${profile.cdpPort} for profile "${profile.name}". ${diagnosticText}${launchHints}${stderrHint}`,
+          );
+        }
       }
 
       const pid = proc.pid ?? -1;

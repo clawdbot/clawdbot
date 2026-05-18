@@ -318,6 +318,43 @@ describe("createBlockReplyDeliveryHandler", () => {
     });
   });
 
+  it("suppresses generated media-failure warning text for silent block replies", async () => {
+    const blockReplyPipeline = {
+      enqueue: vi.fn(),
+    } as unknown as BlockReplyPipelineLike;
+    const absPath = path.join("/tmp/home", "openclaw", "survived.png");
+
+    const handler = createBlockReplyDeliveryHandler({
+      onBlockReply: vi.fn(async () => {}),
+      normalizeStreamingText: (payload) => ({ text: payload.text, skip: false }),
+      applyReplyToMode: (payload) => payload,
+      normalizeMediaPaths: async (payload) => ({
+        ...payload,
+        text: "⚠️ Media failed.",
+        mediaUrl: absPath,
+        mediaUrls: [absPath],
+      }),
+      typingSignals: {
+        signalTextDelta: vi.fn(async () => {}),
+      } as unknown as TypingSignaler,
+      blockStreamingEnabled: true,
+      blockReplyPipeline,
+      directlySentBlockKeys: new Set(),
+    });
+
+    await handler({ text: "NO_REPLY\nMEDIA: ./missing.png\nMEDIA: ./survived.png" });
+
+    expect(blockReplyPipeline.enqueue).toHaveBeenCalledWith({
+      text: undefined,
+      mediaUrl: absPath,
+      mediaUrls: [absPath],
+      replyToId: undefined,
+      replyToCurrent: undefined,
+      replyToTag: false,
+      audioAsVoice: false,
+    });
+  });
+
   it("preserves reply payload metadata across block-reply normalization", async () => {
     const enqueue = vi.fn();
     const blockReplyPipeline = {

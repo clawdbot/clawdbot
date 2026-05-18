@@ -1,5 +1,5 @@
 import {
-  buildApprovalInteractiveReply,
+  buildApprovalPresentation,
   type ExecApprovalReplyDecision,
 } from "../infra/exec-approval-reply.js";
 import {
@@ -14,6 +14,7 @@ import type { ReplyPayload } from "./reply-payload.js";
 
 const DEFAULT_ALLOWED_DECISIONS = ["allow-once", "allow-always", "deny"] as const;
 
+/** Build a pending approval reply payload using the portable presentation API. */
 export function buildApprovalPendingReplyPayload(params: {
   approvalKind?: "exec" | "plugin";
   approvalId: string;
@@ -27,7 +28,7 @@ export function buildApprovalPendingReplyPayload(params: {
   const allowedDecisions = params.allowedDecisions ?? DEFAULT_ALLOWED_DECISIONS;
   return {
     text: params.text,
-    interactive: buildApprovalInteractiveReply({
+    presentation: buildApprovalPresentation({
       approvalId: params.approvalId,
       allowedDecisions,
     }),
@@ -46,6 +47,7 @@ export function buildApprovalPendingReplyPayload(params: {
   };
 }
 
+/** Build a resolved approval reply payload with approval metadata but no controls. */
 export function buildApprovalResolvedReplyPayload(params: {
   approvalId: string;
   approvalSlug: string;

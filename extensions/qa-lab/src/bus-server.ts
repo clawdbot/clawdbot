@@ -5,7 +5,7 @@ import {
   readRequestBodyWithLimit,
   requestBodyErrorToText,
 } from "openclaw/plugin-sdk/webhook-ingress";
-import { normalizeAccountId } from "./bus-queries.js";
+import { normalizeAccountId, resolveQaBusPollStartCursor } from "./bus-queries.js";
 import type { QaBusState } from "./bus-state.js";
 import type {
   QaBusCreateThreadInput,
@@ -153,14 +153,18 @@ export async function handleQaBusRequest(params: {
         const timeoutMs = Math.max(0, Math.min(input.timeoutMs ?? 0, 30_000));
         const accountId = normalizeAccountId(input.accountId);
         const initial = params.state.poll(input);
+        const effectiveStartCursor = resolveQaBusPollStartCursor({
+          currentCursor: initial.cursor,
+          requestedCursor: input.cursor,
+        });
         if (initial.events.length > 0 || timeoutMs === 0) {
           writeJson(params.res, 200, initial);
           return true;
         }
         try {
-          await params.state.waitForCursorAdvance(input.cursor ?? 0, timeoutMs, (snapshot) => {
+          await params.state.waitForCursorAdvance(effectiveStartCursor, timeoutMs, (snapshot) => {
             return snapshot.events.some(
-              (event) => event.accountId === accountId && event.cursor > (input.cursor ?? 0),
+              (event) => event.accountId === accountId && event.cursor > effectiveStartCursor,
             );
           });
         } catch {

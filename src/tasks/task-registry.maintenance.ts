@@ -33,6 +33,10 @@ import {
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import {
+  CODEX_NATIVE_SUBAGENT_STALE_ERROR,
+  isChildlessCodexNativeSubagentTask,
+} from "./codex-native-subagent-task.js";
+import {
   getDetachedTaskLifecycleRuntime,
   tryRecoverTaskBeforeMarkLost,
 } from "./detached-task-runtime.js";
@@ -59,6 +63,7 @@ import type { TaskRecord, TaskRegistrySummary, TaskStatus } from "./task-registr
 
 const log = createSubsystemLogger("tasks/task-registry-maintenance");
 const TASK_RECONCILE_GRACE_MS = 5 * 60_000;
+const CHILDLESS_CODEX_NATIVE_RECONCILE_GRACE_MS = 30 * 60_000;
 const TASK_RETENTION_MS = 7 * 24 * 60 * 60_000;
 const TASK_SWEEP_INTERVAL_MS = 60_000;
 
@@ -290,7 +295,10 @@ function isTerminalTask(task: TaskRecord): boolean {
 
 function hasLostGraceExpired(task: TaskRecord, now: number): boolean {
   const referenceAt = task.lastEventAt ?? task.startedAt ?? task.createdAt;
-  return now - referenceAt >= TASK_RECONCILE_GRACE_MS;
+  const graceMs = isChildlessCodexNativeSubagentTask(task)
+    ? CHILDLESS_CODEX_NATIVE_RECONCILE_GRACE_MS
+    : TASK_RECONCILE_GRACE_MS;
+  return now - referenceAt >= graceMs;
 }
 
 function parseCronExecutionId(task: TaskRecord): CronExecutionId | undefined {
@@ -462,7 +470,7 @@ function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupConte
 
   const childSessionKey = task.childSessionKey?.trim();
   if (!childSessionKey) {
-    return true;
+    return !isChildlessCodexNativeSubagentTask(task);
   }
   if (task.runtime === "acp") {
     const acpEntry = taskRegistryMaintenanceRuntime.readAcpSessionEntry({
@@ -491,6 +499,9 @@ function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupConte
 }
 
 function resolveTaskLostError(task: TaskRecord, context?: BackingSessionLookupContext): string {
+  if (isChildlessCodexNativeSubagentTask(task)) {
+    return CODEX_NATIVE_SUBAGENT_STALE_ERROR;
+  }
   if (task.runtime === "subagent") {
     const entry = findTaskSessionEntry(task, context);
     if (entry && isSubagentRecoveryWedgedEntry(entry)) {

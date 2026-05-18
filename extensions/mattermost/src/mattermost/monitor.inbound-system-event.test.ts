@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { monitorMattermostProvider } from "./monitor.js";
 import type { OpenClawConfig, RuntimeEnv } from "./runtime-api.js";
 
 class FakeWebSocket {
@@ -138,7 +139,16 @@ vi.mock("./runtime-api.js", async () => {
   };
 });
 
-function createRuntimeCore(cfg: OpenClawConfig) {
+function createRuntimeCore(
+  cfg: OpenClawConfig,
+  routeOverride?: {
+    accountId?: string;
+    agentId?: string;
+    lastRoutePolicy?: "main" | "session";
+    mainSessionKey?: string;
+    sessionKey?: string;
+  },
+) {
   const runPrepared = vi.fn(
     async (turn: {
       storePath: string;
@@ -268,10 +278,11 @@ function createRuntimeCore(cfg: OpenClawConfig) {
       },
       routing: {
         resolveAgentRoute: () => ({
-          accountId: "default",
-          agentId: "main",
-          mainSessionKey: "mattermost:default:channel:chan-1",
-          sessionKey: "mattermost:default:channel:chan-1",
+          accountId: routeOverride?.accountId ?? "default",
+          agentId: routeOverride?.agentId ?? "main",
+          lastRoutePolicy: routeOverride?.lastRoutePolicy ?? "main",
+          mainSessionKey: routeOverride?.mainSessionKey ?? "mattermost:default:channel:chan-1",
+          sessionKey: routeOverride?.sessionKey ?? "mattermost:default:channel:chan-1",
         }),
       },
       session: {
@@ -375,7 +386,6 @@ describe("mattermost inbound user posts", () => {
     const socket = new FakeWebSocket();
     const abortController = new AbortController();
     mockState.abortController = abortController;
-    const { monitorMattermostProvider } = await import("./monitor.js");
 
     const monitor = monitorMattermostProvider({
       config: testConfig,
@@ -448,8 +458,6 @@ describe("mattermost inbound user posts", () => {
       team_id: "team-1",
       type: "D",
     });
-    const { monitorMattermostProvider } = await import("./monitor.js");
-
     const monitor = monitorMattermostProvider({
       config: directConfig,
       runtime: testRuntime(),
@@ -498,5 +506,83 @@ describe("mattermost inbound user posts", () => {
     expect(recordCall?.createIfMissing).toBeUndefined();
     expect(recordCall?.groupResolution).toBeUndefined();
     expect(recordCall?.onRecordError).toBeInstanceOf(Function);
+  });
+
+  it("keeps per-channel direct-message route updates on the isolated session", async () => {
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+    const directConfig: OpenClawConfig = {
+      session: { dmScope: "per-channel-peer" },
+      channels: {
+        mattermost: {
+          enabled: true,
+          baseUrl: "https://mattermost.example.com",
+          botToken: "bot-token",
+          chatmode: "onmessage",
+          dmPolicy: "allowlist",
+          groupPolicy: "open",
+          allowFrom: ["user-1"],
+        },
+      },
+    };
+    const runtimeCore = createRuntimeCore(directConfig, {
+      lastRoutePolicy: "session",
+      mainSessionKey: "agent:main:main",
+      sessionKey: "agent:main:mattermost:direct:user-1",
+    });
+    mockState.runtimeCore = runtimeCore;
+    mockState.resolveChannelInfo.mockResolvedValue({
+      id: "dm-1",
+      name: "",
+      display_name: "",
+      team_id: "team-1",
+      type: "D",
+    });
+    const { monitorMattermostProvider } = await import("./monitor.js");
+
+    const monitor = monitorMattermostProvider({
+      config: directConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+
+    await socket.emitMessage({
+      event: "posted",
+      data: {
+        channel_id: "dm-1",
+        sender_name: "alice",
+        post: JSON.stringify({
+          id: "post-dm-2",
+          channel_id: "dm-1",
+          user_id: "user-1",
+          message: "isolated direct hello",
+          create_at: 1_714_000_000_000,
+        }),
+      },
+      broadcast: {
+        channel_id: "dm-1",
+        user_id: "user-1",
+      },
+    });
+    socket.emitClose(1000);
+    await monitor;
+
+    expect(runtimeCore.channel.session.recordInboundSession).toHaveBeenCalledTimes(1);
+    const [recordCall] = runtimeCore.channel.session.recordInboundSession.mock.calls.at(0) ?? [];
+    expect(recordCall?.sessionKey).toBe("agent:main:mattermost:direct:user-1");
+    const updateLastRoute = recordCall?.updateLastRoute;
+    expect(updateLastRoute?.sessionKey).toBe("agent:main:mattermost:direct:user-1");
+    expect(updateLastRoute?.sessionKey).not.toBe("agent:main:main");
+    expect(updateLastRoute?.channel).toBe("mattermost");
+    expect(updateLastRoute?.to).toBe("user:user-1");
+    expect(updateLastRoute?.accountId).toBe("default");
+    expect(updateLastRoute?.mainDmOwnerPin).toBeUndefined();
   });
 });

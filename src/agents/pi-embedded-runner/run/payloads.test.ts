@@ -116,6 +116,38 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     );
   });
 
+  it("uses the final assistant answer when one streamed text contains progress and final text", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Need inspect.\n\nDone."],
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          {
+            type: "text",
+            text: "Need inspect.",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_commentary",
+              phase: "commentary",
+            }),
+          },
+          {
+            type: "text",
+            text: "Done.",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_final",
+              phase: "final_answer",
+            }),
+          },
+        ],
+      } as AssistantMessage,
+    });
+
+    expectSinglePayloadText(payloads, "Done.");
+  });
+
   it("keeps a current one-chunk reply when only a stale transcript assistant is available", () => {
     const payloads = buildPayloads({
       assistantTexts: ["Current room event reply."],
@@ -328,6 +360,23 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expectSingleToolErrorPayload(payloads, {
       title: "Bash",
       absentDetail: "command failed",
+    });
+  });
+
+  it("surfaces declined Codex native command errors for aborted empty turns", () => {
+    const payloads = buildPayloads({
+      assistantTexts: [],
+      lastToolError: {
+        toolName: "bash",
+        error: "codex native tool blocked",
+        mutatingAction: true,
+      },
+      runAborted: true,
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Bash",
+      absentDetail: "codex native tool blocked",
     });
   });
 

@@ -41,21 +41,31 @@ enum GatewayDiscoveryHelpers {
     static func directUrl(for gateway: GatewayDiscoveryModel.DiscoveredGateway) -> String? {
         self.directGatewayUrl(
             serviceHost: gateway.serviceHost,
-            servicePort: gateway.servicePort)
+            servicePort: gateway.servicePort,
+            gatewayTls: gateway.gatewayTls)
     }
 
     static func directGatewayUrl(
         serviceHost: String?,
-        servicePort: Int?) -> String?
+        servicePort: Int?,
+        gatewayTls: Bool = false) -> String?
     {
         // Security: do not route using unauthenticated TXT hints (tailnetDns/lanHost/gatewayPort).
         // Prefer the resolved service endpoint (SRV + A/AAAA).
         guard let endpoint = self.serviceEndpoint(serviceHost: serviceHost, servicePort: servicePort) else {
             return nil
         }
-        // Security: for non-loopback hosts, force TLS to avoid plaintext credential/session leakage.
-        let scheme = self.isLoopbackHost(endpoint.host) ? "ws" : "wss"
-        let portSuffix = endpoint.port == 443 ? "" : ":\(endpoint.port)"
+        let scheme: String
+        if gatewayTls {
+            scheme = "wss"
+        } else if self.isLoopbackHost(endpoint.host)
+            || GatewayRemoteConfig.isTrustedPlaintextRemoteHost(endpoint.host)
+        {
+            scheme = "ws"
+        } else {
+            return nil
+        }
+        let portSuffix = scheme == "wss" && endpoint.port == 443 ? "" : ":\(endpoint.port)"
         return "\(scheme)://\(endpoint.host)\(portSuffix)"
     }
 

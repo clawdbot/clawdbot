@@ -970,11 +970,6 @@ function collectConfigModelRefs(cfg: OpenClawConfig, env?: NodeJS.ProcessEnv): C
     path: "hooks.gmail.model",
     value: cfg.hooks?.gmail?.model,
   });
-  collectModelConfigSlot({
-    hits,
-    path: "tools.subagents.model",
-    value: cfg.tools?.subagents?.model,
-  });
   collectStringModelSlot({
     hits,
     path: "messages.tts.summaryModel",
@@ -2307,13 +2302,6 @@ function rewriteConfigModelRefsWithCompactionPolicy(params: {
     container: asMutableRecord(nextConfig.hooks?.gmail),
     key: "model",
     path: "hooks.gmail.model",
-  });
-  rewriteModelConfigSlotIfCanonicalCodexRuntime({
-    cfg: nextConfig,
-    hits,
-    container: asMutableRecord(nextConfig.tools?.subagents),
-    key: "model",
-    path: "tools.subagents.model",
   });
   rewriteStringModelSlotIfCanonicalCodexRuntime({
     cfg: nextConfig,

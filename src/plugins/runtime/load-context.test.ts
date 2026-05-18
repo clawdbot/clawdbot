@@ -20,6 +20,7 @@ const metadataSnapshot = {
   workspaceDir: "/resolved-workspace",
 };
 const loadPluginMetadataSnapshotMock = vi.fn(() => metadataSnapshot);
+const getCurrentPluginMetadataSnapshotMock = vi.fn(() => undefined);
 const setCurrentPluginMetadataSnapshotMock = vi.fn();
 
 let resolvePluginRuntimeLoadContext: typeof import("./load-context.js").resolvePluginRuntimeLoadContext;
@@ -46,6 +47,7 @@ vi.mock("../plugin-metadata-snapshot.js", () => ({
 }));
 
 vi.mock("../current-plugin-metadata-snapshot.js", () => ({
+  getCurrentPluginMetadataSnapshot: getCurrentPluginMetadataSnapshotMock,
   setCurrentPluginMetadataSnapshot: setCurrentPluginMetadataSnapshotMock,
 }));
 
@@ -58,7 +60,10 @@ describe("resolvePluginRuntimeLoadContext", () => {
       await import("./load-context.js"));
     loadConfigMock.mockReset();
     applyPluginAutoEnableMock.mockReset();
+    getCurrentPluginMetadataSnapshotMock.mockReset();
+    getCurrentPluginMetadataSnapshotMock.mockReturnValue(undefined);
     loadPluginMetadataSnapshotMock.mockClear();
+    getCurrentPluginMetadataSnapshotMock.mockClear();
     setCurrentPluginMetadataSnapshotMock.mockClear();
     resolveAgentWorkspaceDirMock.mockClear();
     resolveDefaultAgentIdMock.mockClear();

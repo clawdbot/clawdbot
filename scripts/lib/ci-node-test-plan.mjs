@@ -247,6 +247,34 @@ function createGatewayServerSplitShards() {
     .filter((shard) => shard.includePatterns.length > 0);
 }
 
+function resolveCronShardName(file) {
+  const name = relative("src/cron", file).replaceAll("\\", "/");
+  if (name.startsWith("isolated-agent")) {
+    return "core-runtime-cron-isolated-agent";
+  }
+  if (name.startsWith("service")) {
+    return "core-runtime-cron-service";
+  }
+  return "core-runtime-cron-core";
+}
+
+function createCronSplitShards() {
+  const groups = new Map();
+  for (const file of listTestFiles("src/cron")) {
+    const shardName = resolveCronShardName(file);
+    groups.set(shardName, [...(groups.get(shardName) ?? []), file]);
+  }
+
+  return ["core-runtime-cron-core", "core-runtime-cron-isolated-agent", "core-runtime-cron-service"]
+    .map((shardName) => ({
+      configs: ["test/vitest/vitest.cron.config.ts"],
+      includePatterns: groups.get(shardName) ?? [],
+      requiresDist: false,
+      shardName,
+    }))
+    .filter((shard) => shard.includePatterns.length > 0);
+}
+
 const SPLIT_NODE_SHARDS = new Map([
   [
     "core-unit-fast",
@@ -321,13 +349,13 @@ const SPLIT_NODE_SHARDS = new Map([
         shardName: "core-runtime-shared",
         configs: [
           "test/vitest/vitest.acp.config.ts",
-          "test/vitest/vitest.cron.config.ts",
           "test/vitest/vitest.shared-core.config.ts",
           "test/vitest/vitest.tasks.config.ts",
           "test/vitest/vitest.utils.config.ts",
         ],
         requiresDist: false,
       },
+      ...createCronSplitShards(),
     ],
   ],
   [

@@ -14,6 +14,8 @@ const getPageForTargetId = vi.fn(async () => {
 const ensurePageState = vi.fn(() => {});
 const assertPageNavigationCompletedSafely = vi.fn(async () => {});
 const forceDisconnectPlaywrightForTarget = vi.fn(async () => {});
+const isBrowserObservedDialogBlockedError = vi.fn(() => false);
+const markObservedDialogsHandledRemotelyForPage = vi.fn(() => ({}));
 const refLocator = vi.fn(() => {
   throw new Error("test: refLocator should not be called");
 });
@@ -27,6 +29,8 @@ vi.mock("./pw-session.js", () => ({
   ensurePageState,
   forceDisconnectPlaywrightForTarget,
   getPageForTargetId,
+  isBrowserObservedDialogBlockedError,
+  markObservedDialogsHandledRemotelyForPage,
   refLocator,
   restoreRoleRefsForTarget,
 }));

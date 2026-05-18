@@ -1,3 +1,4 @@
+import { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
 import {
   channelIngressRoutes,
   createChannelIngressResolver,
@@ -322,7 +323,6 @@ export async function handleIrcInbound(params: {
       access.ingress.decisiveGateId === "command" &&
       access.commandAccess.shouldBlockControlCommand
     ) {
-      const { logInboundDrop } = await import("openclaw/plugin-sdk/channel-inbound");
       logInboundDrop({
         log: (line) => runtime.log?.(line),
         channel: CHANNEL_ID,

@@ -53,9 +53,14 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
 let TelegramPollingSession: typeof import("./polling-session.js").TelegramPollingSession;
 let claimTelegramSpooledUpdate: typeof import("./telegram-ingress-spool.js").claimTelegramSpooledUpdate;
 let isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess: typeof import("./telegram-ingress-spool.js").isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess;
+let listTelegramSpooledUpdateClaims: typeof import("./telegram-ingress-spool.js").listTelegramSpooledUpdateClaims;
 let listTelegramSpooledUpdates: typeof import("./telegram-ingress-spool.js").listTelegramSpooledUpdates;
 let recoverStaleTelegramSpooledUpdateClaims: typeof import("./telegram-ingress-spool.js").recoverStaleTelegramSpooledUpdateClaims;
 let writeTelegramSpooledUpdate: typeof import("./telegram-ingress-spool.js").writeTelegramSpooledUpdate;
+let beginTelegramReplyFence: typeof import("./telegram-reply-fence.js").beginTelegramReplyFence;
+let buildTelegramReplyFenceLaneKey: typeof import("./telegram-reply-fence.js").buildTelegramReplyFenceLaneKey;
+let endTelegramReplyFence: typeof import("./telegram-reply-fence.js").endTelegramReplyFence;
+let resetTelegramReplyFenceForTests: typeof import("./telegram-reply-fence.js").resetTelegramReplyFenceForTests;
 
 type TelegramApiMiddleware = (
   prev: (...args: unknown[]) => Promise<unknown>,
@@ -78,6 +83,11 @@ type WorkerPollSuccessListener = (message: {
   type: "poll-success";
   offset: null;
   count: number;
+  finishedAt: number;
+}) => void;
+type WorkerPollErrorListener = (message: {
+  type: "poll-error";
+  message: string;
   finishedAt: number;
 }) => void;
 type AsyncVoidFn = () => Promise<void>;
@@ -336,6 +346,33 @@ function topicUpdate(updateId: number, threadId: number, text: string): TestTele
   };
 }
 
+async function waitForAbortSignal(signal: AbortSignal): Promise<void> {
+  if (signal.aborted) {
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    signal.addEventListener("abort", () => resolve(), { once: true });
+  });
+}
+
+async function waitForTestReplyFenceAbort(params: { key: string; laneKey: string }): Promise<void> {
+  const controller = new AbortController();
+  beginTelegramReplyFence({
+    key: params.key,
+    laneKey: buildTelegramReplyFenceLaneKey({
+      accountId: "default",
+      sequentialKey: params.laneKey,
+    }),
+    supersede: false,
+    abortController: controller,
+  });
+  try {
+    await waitForAbortSignal(controller.signal);
+  } finally {
+    endTelegramReplyFence(params.key, controller);
+  }
+}
+
 async function writeSpooledTestUpdates(
   spoolDir: string,
   updates: readonly TestTelegramUpdate[],
@@ -347,6 +384,19 @@ async function writeSpooledTestUpdates(
 
 async function pendingUpdateIds(spoolDir: string, limit: number | "all" = 100): Promise<number[]> {
   return (await listTelegramSpooledUpdates({ spoolDir, limit })).map((update) => update.updateId);
+}
+
+async function failedUpdateIds(spoolDir: string): Promise<number[]> {
+  const entries = await fs.readdir(spoolDir).catch((err) => {
+    if ((err as { code?: string }).code === "ENOENT") {
+      return [];
+    }
+    throw err;
+  });
+  return entries
+    .filter((entry) => entry.endsWith(".json.failed"))
+    .map((entry) => Number(entry.slice(0, 16)))
+    .toSorted((a, b) => a - b);
 }
 
 async function withTempSpool<T>(fn: (spoolDir: string) => Promise<T>): Promise<T> {
@@ -385,6 +435,7 @@ function startIsolatedIngressSession(params: {
   drainIntervalMs?: number;
   log?: (message: string) => void;
   stop?: () => Promise<void>;
+  spooledUpdateHandlerTimeoutMs?: number;
 }) {
   const worker = createIdleIngressWorker();
   const bot = {
@@ -405,6 +456,9 @@ function startIsolatedIngressSession(params: {
       spoolDir: params.spoolDir,
       createWorker: worker.createWorker,
       drainIntervalMs: params.drainIntervalMs ?? 10,
+      ...(params.spooledUpdateHandlerTimeoutMs !== undefined
+        ? { spooledUpdateHandlerTimeoutMs: params.spooledUpdateHandlerTimeoutMs }
+        : {}),
     },
   });
   return {
@@ -421,10 +475,17 @@ describe("TelegramPollingSession", () => {
     ({
       claimTelegramSpooledUpdate,
       isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess,
+      listTelegramSpooledUpdateClaims,
       listTelegramSpooledUpdates,
       recoverStaleTelegramSpooledUpdateClaims,
       writeTelegramSpooledUpdate,
     } = await import("./telegram-ingress-spool.js"));
+    ({
+      beginTelegramReplyFence,
+      buildTelegramReplyFenceLaneKey,
+      endTelegramReplyFence,
+      resetTelegramReplyFenceForTests,
+    } = await import("./telegram-reply-fence.js"));
   });
 
   beforeEach(() => {
@@ -434,6 +495,7 @@ describe("TelegramPollingSession", () => {
     computeBackoffMock.mockReset().mockReturnValue(0);
     sleepWithAbortMock.mockReset().mockResolvedValue(undefined);
     drainPendingDeliveriesMock.mockReset().mockResolvedValue(undefined);
+    resetTelegramReplyFenceForTests();
   });
 
   it("uses backoff helpers for recoverable polling retries", async () => {
@@ -1480,6 +1542,192 @@ describe("TelegramPollingSession", () => {
     }
   });
 
+  it("restarts isolated ingress when the worker task rejects before shutdown", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const abort = new AbortController();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
+    const log = vi.fn();
+    const setStatus = vi.fn();
+    createTelegramBotMock.mockImplementation(() => ({
+      api: {
+        deleteWebhook: vi.fn(async () => true),
+        config: { use: vi.fn() },
+      },
+      init: vi.fn(async () => undefined),
+      handleUpdate: vi.fn(async () => undefined),
+      stop: vi.fn(async () => undefined),
+    }));
+
+    let workerTaskCalls = 0;
+    const createWorker = vi.fn(() => {
+      let stopWorker: (() => void) | undefined;
+      const workerDone = new Promise<void>((resolve) => {
+        stopWorker = resolve;
+      });
+      return {
+        onMessage: vi.fn(() => () => undefined),
+        stop: vi.fn(async () => {
+          stopWorker?.();
+        }),
+        task: vi.fn(async () => {
+          workerTaskCalls += 1;
+          if (workerTaskCalls === 1) {
+            throw new Error("worker crashed");
+          }
+          await workerDone;
+        }),
+      };
+    });
+
+    try {
+      const session = createPollingSession({
+        abortSignal: abort.signal,
+        log,
+        setStatus,
+        isolatedIngress: {
+          enabled: true,
+          spoolDir: tempDir,
+          createWorker,
+          drainIntervalMs: 100,
+        },
+      });
+
+      const runPromise = session.runUntilAbort();
+      await vi.waitFor(() => expect(createWorker).toHaveBeenCalledTimes(2));
+      expectLogIncludes(log, "isolated polling ingress failed: worker crashed");
+      expect(
+        statusPatches(setStatus).some(
+          (patch) => patch.connected === false && patch.lastError === "worker crashed",
+        ),
+      ).toBe(true);
+
+      abort.abort();
+      await vi.advanceTimersByTimeAsync(20_000);
+      await runPromise;
+    } finally {
+      vi.useRealTimers();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("treats isolated ingress worker rejection after abort as clean shutdown", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const abort = new AbortController();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
+    const log = vi.fn();
+    createTelegramBotMock.mockImplementation(() => ({
+      api: {
+        deleteWebhook: vi.fn(async () => true),
+        config: { use: vi.fn() },
+      },
+      init: vi.fn(async () => undefined),
+      handleUpdate: vi.fn(async () => undefined),
+      stop: vi.fn(async () => undefined),
+    }));
+
+    let rejectWorker: ((err: Error) => void) | undefined;
+    const workerDone = new Promise<void>((_resolve, reject) => {
+      rejectWorker = reject;
+    });
+    const createWorker = vi.fn(() => ({
+      onMessage: vi.fn(() => () => undefined),
+      stop: vi.fn(async () => {
+        rejectWorker?.(new Error("worker exited with code 1"));
+      }),
+      task: vi.fn(async () => {
+        await workerDone;
+      }),
+    }));
+
+    try {
+      const session = createPollingSession({
+        abortSignal: abort.signal,
+        log,
+        isolatedIngress: {
+          enabled: true,
+          spoolDir: tempDir,
+          createWorker,
+          drainIntervalMs: 100,
+        },
+      });
+
+      const runPromise = session.runUntilAbort();
+      await vi.waitFor(() => expect(createWorker).toHaveBeenCalledTimes(1));
+      abort.abort();
+      await vi.advanceTimersByTimeAsync(20_000);
+      await runPromise;
+
+      expect(createWorker).toHaveBeenCalledTimes(1);
+      expectLogExcludes(log, "isolated polling ingress failed");
+    } finally {
+      vi.useRealTimers();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("propagates fatal isolated ingress polling errors", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const abort = new AbortController();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
+    const log = vi.fn();
+    const setStatus = vi.fn();
+    isRecoverableTelegramNetworkErrorMock.mockReturnValue(false);
+    createTelegramBotMock.mockImplementation(() => ({
+      api: {
+        deleteWebhook: vi.fn(async () => true),
+        config: { use: vi.fn() },
+      },
+      init: vi.fn(async () => undefined),
+      handleUpdate: vi.fn(async () => undefined),
+      stop: vi.fn(async () => undefined),
+    }));
+
+    let listener: WorkerPollErrorListener | undefined;
+    const createWorker = vi.fn(() => ({
+      onMessage: vi.fn((next: WorkerPollErrorListener) => {
+        listener = next;
+        return () => undefined;
+      }),
+      stop: vi.fn(async () => undefined),
+      task: vi.fn(async () => {
+        listener?.({
+          type: "poll-error",
+          message: "Unauthorized",
+          finishedAt: Date.now(),
+        });
+        throw new Error("Telegram ingress worker exited with code 1");
+      }),
+    }));
+
+    try {
+      const session = createPollingSession({
+        abortSignal: abort.signal,
+        log,
+        setStatus,
+        isolatedIngress: {
+          enabled: true,
+          spoolDir: tempDir,
+          createWorker,
+          drainIntervalMs: 100,
+        },
+      });
+
+      await expect(session.runUntilAbort()).rejects.toThrow("Unauthorized");
+
+      expect(createWorker).toHaveBeenCalledTimes(1);
+      expectLogExcludes(log, "isolated polling ingress failed");
+      expect(
+        statusPatches(setStatus).some(
+          (patch) => patch.connected === false && patch.lastError === "Unauthorized",
+        ),
+      ).toBe(true);
+    } finally {
+      abort.abort();
+      vi.useRealTimers();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("keeps active spooled lanes blocked across account restarts", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const firstAbort = new AbortController();
@@ -1575,7 +1823,365 @@ describe("TelegramPollingSession", () => {
     }
   });
 
-  it("marks isolated ingress unhealthy when a spooled backlog wedges while polling stays live", async () => {
+  it("fails a timed-out spooled handler and restarts before draining later same-lane updates", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const abort = new AbortController();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
+    const log = vi.fn();
+    const setStatus = vi.fn();
+    const events: string[] = [];
+    const firstBot = {
+      api: {
+        deleteWebhook: vi.fn(async () => true),
+        config: { use: vi.fn() },
+      },
+      init: vi.fn(async () => undefined),
+      handleUpdate: vi.fn(async (update: { update_id?: number }) => {
+        events.push(`first:${update.update_id}`);
+        await waitForTestReplyFenceAbort({
+          key: "test-session:topic-10",
+          laneKey: "telegram:-100:topic:10",
+        });
+      }),
+      stop: vi.fn(async () => undefined),
+    };
+    const secondBot = {
+      api: {
+        deleteWebhook: vi.fn(async () => true),
+        config: { use: vi.fn() },
+      },
+      init: vi.fn(async () => undefined),
+      handleUpdate: vi.fn(async (update: { update_id?: number }) => {
+        events.push(`second:${update.update_id}`);
+        abort.abort();
+      }),
+      stop: vi.fn(async () => undefined),
+    };
+    createTelegramBotMock.mockReturnValueOnce(firstBot).mockReturnValueOnce(secondBot);
+    await writeSpooledTestUpdates(tempDir, [
+      topicUpdate(42, 10, "wedged topic 10 turn"),
+      topicUpdate(43, 10, "later topic 10 turn"),
+    ]);
+
+    const worker = createIdleIngressWorker();
+    const session = createPollingSession({
+      abortSignal: abort.signal,
+      log,
+      isolatedIngress: {
+        enabled: true,
+        spoolDir: tempDir,
+        createWorker: worker.createWorker,
+        drainIntervalMs: 10,
+        spooledUpdateHandlerTimeoutMs: 100,
+        spooledUpdateHandlerAbortGraceMs: 100,
+      },
+    });
+
+    try {
+      const runPromise = session.runUntilAbort();
+      await vi.waitFor(() => expect(events).toEqual(["first:42"]));
+
+      await vi.advanceTimersByTimeAsync(150);
+      await vi.waitFor(() => expect(worker.createWorker).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => expect(events).toEqual(["first:42", "second:43"]));
+      await runPromise;
+
+      expect(createTelegramBotMock).toHaveBeenCalledTimes(2);
+      expect(firstBot.stop).toHaveBeenCalledTimes(1);
+      expect(secondBot.stop).toHaveBeenCalledTimes(1);
+      expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
+      expect(await failedUpdateIds(tempDir)).toEqual([42]);
+      expectLogIncludes(log, "spool handler timed out behind update 42");
+    } finally {
+      abort.abort();
+      worker.stop();
+      vi.useRealTimers();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a timed-out lane guarded until the old handler stops", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const abort = new AbortController();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
+    const log = vi.fn();
+    const events: string[] = [];
+    let releaseFirstTurn: (() => void) | undefined;
+    const firstTurnDone = new Promise<void>((resolve) => {
+      releaseFirstTurn = resolve;
+    });
+    createTelegramBotMock.mockReturnValueOnce({
+      api: {
+        deleteWebhook: vi.fn(async () => true),
+        config: { use: vi.fn() },
+      },
+      init: vi.fn(async () => undefined),
+      handleUpdate: vi.fn(async (update: { update_id?: number }) => {
+        events.push(`first:${update.update_id}`);
+        await firstTurnDone;
+      }),
+      stop: vi.fn(async () => undefined),
+    });
+    await writeSpooledTestUpdates(tempDir, [
+      topicUpdate(42, 10, "wedged topic 10 turn"),
+      topicUpdate(43, 10, "later topic 10 turn"),
+    ]);
+
+    const worker = createIdleIngressWorker();
+    const session = createPollingSession({
+      abortSignal: abort.signal,
+      log,
+      isolatedIngress: {
+        enabled: true,
+        spoolDir: tempDir,
+        createWorker: worker.createWorker,
+        drainIntervalMs: 10,
+        spooledUpdateHandlerTimeoutMs: 100,
+        spooledUpdateHandlerAbortGraceMs: 100,
+      },
+    });
+
+    try {
+      const runPromise = session.runUntilAbort();
+      await vi.waitFor(() => expect(events).toEqual(["first:42"]));
+
+      await vi.advanceTimersByTimeAsync(250);
+      await vi.waitFor(() => expectLogIncludes(log, "did not stop within 100ms"));
+      await vi.advanceTimersByTimeAsync(500);
+
+      expect(worker.createWorker).toHaveBeenCalledTimes(1);
+      expect(events).toEqual(["first:42"]);
+      expect(await failedUpdateIds(tempDir)).toEqual([42]);
+      expect(await pendingUpdateIds(tempDir, "all")).toEqual([43]);
+
+      releaseFirstTurn?.();
+      abort.abort();
+      await vi.advanceTimersByTimeAsync(20_000);
+      await runPromise;
+    } finally {
+      releaseFirstTurn?.();
+      abort.abort();
+      worker.stop();
+      vi.useRealTimers();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not drain more updates on the old bot while a timeout restart is pending", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const abort = new AbortController();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
+    const events: string[] = [];
+    const firstBot = {
+      api: {
+        deleteWebhook: vi.fn(async () => true),
+        config: { use: vi.fn() },
+      },
+      init: vi.fn(async () => undefined),
+      handleUpdate: vi.fn(async (update: { update_id?: number }) => {
+        events.push(`first:${update.update_id}`);
+        await waitForTestReplyFenceAbort({
+          key: "test-session:topic-10",
+          laneKey: "telegram:-100:topic:10",
+        });
+      }),
+      stop: vi.fn(async () => undefined),
+    };
+    const secondBot = {
+      api: {
+        deleteWebhook: vi.fn(async () => true),
+        config: { use: vi.fn() },
+      },
+      init: vi.fn(async () => undefined),
+      handleUpdate: vi.fn(async (update: { update_id?: number }) => {
+        events.push(`second:${update.update_id}`);
+        abort.abort();
+      }),
+      stop: vi.fn(async () => undefined),
+    };
+    createTelegramBotMock.mockReturnValueOnce(firstBot).mockReturnValueOnce(secondBot);
+    await writeSpooledTestUpdates(tempDir, [
+      topicUpdate(42, 10, "wedged topic 10 turn"),
+      topicUpdate(43, 10, "later topic 10 turn"),
+    ]);
+
+    let releaseFirstWorker: (() => void) | undefined;
+    const firstWorkerDone = new Promise<void>((resolve) => {
+      releaseFirstWorker = resolve;
+    });
+    let releaseSecondWorker: (() => void) | undefined;
+    const secondWorkerDone = new Promise<void>((resolve) => {
+      releaseSecondWorker = resolve;
+    });
+    const firstWorkerStop = vi.fn(async () => undefined);
+    let workerIndex = 0;
+    const createWorker = vi.fn(() => {
+      workerIndex += 1;
+      if (workerIndex === 1) {
+        return {
+          onMessage: vi.fn(() => () => undefined),
+          stop: firstWorkerStop,
+          task: vi.fn(async () => {
+            await firstWorkerDone;
+          }),
+        };
+      }
+      return {
+        onMessage: vi.fn(() => () => undefined),
+        stop: vi.fn(async () => {
+          releaseSecondWorker?.();
+        }),
+        task: vi.fn(async () => {
+          await secondWorkerDone;
+        }),
+      };
+    });
+
+    try {
+      const session = createPollingSession({
+        abortSignal: abort.signal,
+        isolatedIngress: {
+          enabled: true,
+          spoolDir: tempDir,
+          createWorker,
+          drainIntervalMs: 10,
+          spooledUpdateHandlerTimeoutMs: 100,
+          spooledUpdateHandlerAbortGraceMs: 100,
+        },
+      });
+
+      const runPromise = session.runUntilAbort();
+      await vi.waitFor(() => expect(events).toEqual(["first:42"]));
+      await vi.advanceTimersByTimeAsync(150);
+      await vi.waitFor(() => expect(firstWorkerStop).toHaveBeenCalledTimes(1));
+
+      await vi.advanceTimersByTimeAsync(500);
+      expect(events).toEqual(["first:42"]);
+      expect(await pendingUpdateIds(tempDir, "all")).toEqual([43]);
+
+      releaseFirstWorker?.();
+      await vi.waitFor(() => expect(createWorker).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => expect(events).toEqual(["first:42", "second:43"]));
+      await runPromise;
+    } finally {
+      abort.abort();
+      releaseFirstWorker?.();
+      releaseSecondWorker?.();
+      vi.useRealTimers();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a timed-out lane guarded when its failed tombstone cannot be written", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const abort = new AbortController();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
+    const log = vi.fn();
+    const setStatus = vi.fn();
+    const events: string[] = [];
+    let releaseRegularTurn: (() => void) | undefined;
+    const regularTurnDone = new Promise<void>((resolve) => {
+      releaseRegularTurn = resolve;
+    });
+    const originalWriteFile = fs.writeFile.bind(fs);
+    const writeFileSpy = vi
+      .spyOn(fs, "writeFile")
+      .mockImplementation(async (...args: Parameters<typeof fs.writeFile>) => {
+        if (typeof args[0] === "string" && args[0].includes(".json.failed.")) {
+          throw new Error("disk full");
+        }
+        return await originalWriteFile(...args);
+      });
+    createTelegramBotMock.mockReturnValueOnce({
+      api: {
+        deleteWebhook: vi.fn(async () => true),
+        config: { use: vi.fn() },
+      },
+      init: vi.fn(async () => undefined),
+      handleUpdate: vi.fn(async (update: { update_id?: number }) => {
+        events.push(`handled:${update.update_id}`);
+        await regularTurnDone;
+      }),
+      stop: vi.fn(async () => undefined),
+    });
+    await writeSpooledTestUpdates(tempDir, [
+      topicUpdate(42, 10, "wedged topic 10 turn"),
+      topicUpdate(43, 10, "later topic 10 turn"),
+    ]);
+    const workerListeners: WorkerPollSuccessListener[] = [];
+    let stopWorker: (() => void) | undefined;
+    const workerDone = new Promise<void>((resolve) => {
+      stopWorker = resolve;
+    });
+    const createWorker = vi.fn(() => ({
+      onMessage: vi.fn((listener: WorkerPollSuccessListener) => {
+        workerListeners.push(listener);
+        return () => undefined;
+      }),
+      stop: vi.fn(async () => {
+        stopWorker?.();
+      }),
+      task: vi.fn(async () => {
+        await workerDone;
+      }),
+    }));
+
+    try {
+      const session = createPollingSession({
+        abortSignal: abort.signal,
+        log,
+        setStatus,
+        isolatedIngress: {
+          enabled: true,
+          spoolDir: tempDir,
+          createWorker,
+          drainIntervalMs: 10,
+          spooledUpdateHandlerTimeoutMs: 100,
+        },
+      });
+
+      const runPromise = session.runUntilAbort();
+      await vi.waitFor(() => expect(events).toEqual(["handled:42"]));
+      await vi.advanceTimersByTimeAsync(150);
+      await vi.waitFor(() => expectLogIncludes(log, "could not be marked failed: disk full"));
+
+      await vi.advanceTimersByTimeAsync(500);
+      expect(createWorker).toHaveBeenCalledTimes(1);
+      expect(events).toEqual(["handled:42"]);
+      expect(await failedUpdateIds(tempDir)).toEqual([]);
+      expect(await pendingUpdateIds(tempDir, "all")).toEqual([43]);
+      expect(
+        (await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).map(
+          (claim) => claim.updateId,
+        ),
+      ).toEqual([42]);
+      workerListeners[0]?.({
+        type: "poll-success",
+        offset: null,
+        count: 0,
+        finishedAt: Date.now(),
+      });
+      expect(statusPatches(setStatus).at(-1)?.connected).toBe(false);
+      expect(String(statusPatches(setStatus).at(-1)?.lastError)).toContain(
+        "isolated polling spool handler timed out",
+      );
+
+      releaseRegularTurn?.();
+      abort.abort();
+      stopWorker?.();
+      await vi.advanceTimersByTimeAsync(20_000);
+      await runPromise;
+    } finally {
+      writeFileSpy.mockRestore();
+      releaseRegularTurn?.();
+      abort.abort();
+      stopWorker?.();
+      vi.useRealTimers();
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("marks isolated ingress unhealthy when a spooled backlog handler times out", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const abort = new AbortController();
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-telegram-spool-"));
@@ -1586,7 +2192,13 @@ describe("TelegramPollingSession", () => {
       releaseRegularTurn = resolve;
     });
     const handleUpdate = vi.fn(async () => {
-      await regularTurnDone;
+      await Promise.race([
+        regularTurnDone,
+        waitForTestReplyFenceAbort({
+          key: "test-status-session:dm",
+          laneKey: "telegram:123",
+        }),
+      ]);
     });
     createTelegramBotMock.mockImplementation(() => ({
       api: {
@@ -1637,6 +2249,7 @@ describe("TelegramPollingSession", () => {
           spoolDir: tempDir,
           createWorker,
           drainIntervalMs: 100,
+          spooledUpdateHandlerAbortGraceMs: 100,
         },
       });
 
@@ -1654,41 +2267,18 @@ describe("TelegramPollingSession", () => {
 
       await vi.waitFor(() =>
         expect(log).toHaveBeenCalledWith(
-          expect.stringContaining("isolated polling spool backlog stalled"),
+          expect.stringContaining("isolated polling spool handler timed out"),
         ),
       );
       expect(
         statusPatches(setStatus).some(
           (patch) =>
             patch.connected === false &&
-            String(patch.lastError).includes("isolated polling spool backlog stalled"),
+            String(patch.lastError).includes("isolated polling spool handler timed out"),
         ),
       ).toBe(true);
-      workerListeners[0]?.({
-        type: "poll-success",
-        offset: null,
-        count: 0,
-        finishedAt: Date.now(),
-      });
-      expect(statusPatches(setStatus).at(-1)?.connected).toBe(false);
-
-      releaseRegularTurn?.();
-      await vi.advanceTimersByTimeAsync(1_000);
-      await vi.waitFor(async () =>
-        expect(
-          (await listTelegramSpooledUpdates({ spoolDir: tempDir })).map(
-            (update) => update.updateId,
-          ),
-        ).toEqual([]),
-      );
-      workerListeners[0]?.({
-        type: "poll-success",
-        offset: null,
-        count: 0,
-        finishedAt: Date.now(),
-      });
-      await vi.waitFor(() => expect(statusPatches(setStatus).at(-1)?.connected).toBe(true));
-      expect(createWorker).toHaveBeenCalledTimes(1);
+      await vi.waitFor(async () => expect(await failedUpdateIds(tempDir)).toEqual([42]));
+      expect(createWorker).toHaveBeenCalledTimes(2);
 
       abort.abort();
       await vi.advanceTimersByTimeAsync(20_000);

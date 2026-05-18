@@ -36,6 +36,8 @@ describe("qa scenario packs", () => {
       "personal-memory-preference-recall",
       "personal-redaction-no-secret-leak",
       "personal-tool-safety-followthrough",
+      "personal-approval-denial-stop",
+      "personal-task-followthrough-status",
     ]);
 
     for (const scenarioId of personalPack?.scenarioIds ?? []) {
@@ -74,6 +76,11 @@ describe("qa scenario packs", () => {
     const toolSafetyFlow = JSON.stringify(
       readQaScenarioById("personal-tool-safety-followthrough").execution.flow,
     );
+    const approvalDenialFlow = JSON.stringify(
+      readQaScenarioById("personal-approval-denial-stop").execution.flow,
+    );
+    const taskFollowthroughScenario = readQaScenarioById("personal-task-followthrough-status");
+    const taskFollowthroughFlow = JSON.stringify(taskFollowthroughScenario.execution.flow);
     const memoryScenario = readQaScenarioById("personal-memory-preference-recall");
     const memoryFlow = JSON.stringify(memoryScenario.execution.flow);
 
@@ -85,6 +92,19 @@ describe("qa scenario packs", () => {
     expect(toolSafetyFlow).toContain("preActionOutbound");
     expect(toolSafetyFlow).toContain("request.plannedToolName");
     expect(toolSafetyFlow).toContain("plannedToolName === 'read'");
+
+    expect(approvalDenialFlow).toContain("config.denialPromptSnippet");
+    expect(approvalDenialFlow).toContain("request.plannedToolName");
+    expect(approvalDenialFlow).toContain("config.deniedReadMarker");
+    expect(approvalDenialFlow).toContain("beforeDenialOutboundCursor");
+
+    expect(taskFollowthroughScenario.execution.config?.prompt).toContain(
+      "Personal task followthrough check",
+    );
+    expect(taskFollowthroughFlow).toContain("personal-task-status.txt");
+    expect(taskFollowthroughFlow).toContain("plannedToolName === 'write'");
+    expect(taskFollowthroughFlow).toContain("readIndices[1] < firstWrite");
+    expect(taskFollowthroughScenario.successCriteria.join("\n").toLowerCase()).toContain("blocked");
 
     expect(memoryFlow).toContain("config.rememberPrompt");
     expect(memoryFlow).toContain("config.recallPrompt");

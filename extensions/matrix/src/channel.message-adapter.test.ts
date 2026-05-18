@@ -3,7 +3,7 @@ import {
   verifyChannelMessageLiveCapabilityAdapterProofs,
   verifyChannelMessageLiveFinalizerProofs,
 } from "openclaw/plugin-sdk/channel-message";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 
 const mocks = vi.hoisted(() => ({
@@ -45,6 +45,21 @@ function lastMatrixSendOptions() {
 }
 
 describe("matrix channel message adapter", () => {
+  beforeAll(async () => {
+    mocks.sendMessageMatrix.mockResolvedValue({ messageId: "$warmup", roomId: "!room:example" });
+    const sendText = matrixPlugin.message?.send?.text;
+    if (!sendText) {
+      throw new Error("Expected Matrix message adapter text sender");
+    }
+    await sendText({
+      cfg,
+      to: "room:!room:example",
+      text: "warmup",
+      accountId: "default",
+    });
+    mocks.sendMessageMatrix.mockReset();
+  });
+
   beforeEach(() => {
     mocks.sendMessageMatrix.mockReset();
     mocks.sendMessageMatrix.mockResolvedValue({ messageId: "$event-1", roomId: "!room:example" });

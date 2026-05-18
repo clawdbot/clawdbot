@@ -1,7 +1,9 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   appendJsonl,
@@ -23,6 +25,8 @@ const CREDENTIAL_SCRIPT_PATH = path.resolve(
   TEST_DIR,
   "../../scripts/e2e/npm-telegram-rtt-credentials.mjs",
 );
+const CONFIG_SCRIPT_PATH = path.resolve(TEST_DIR, "../../scripts/e2e/npm-telegram-rtt-config.mjs");
+const execFileAsync = promisify(execFile);
 const tempDirs: string[] = [];
 
 afterEach(async () => {
@@ -154,6 +158,26 @@ describe("RTT harness", () => {
     expect(script).toContain('response.ok\n        ? { status: "ok" }');
     expect(script).toContain("leaseTtlMs: acquired.leaseTtlMs ?? config.leaseTtlMs");
     expect(script).toContain("leaseTtlMs: leaseTtlMsFromLease(config, lease)");
+  });
+
+  it("generates final-only Telegram RTT delivery config for release packages", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-rtt-config-test-"));
+    tempDirs.push(tempDir);
+    const configPath = path.join(tempDir, "config.json");
+
+    await execFileAsync(process.execPath, [
+      CONFIG_SCRIPT_PATH,
+      configPath,
+      "12345",
+      "-100123",
+      "111:driver-token",
+      "222:sut-token",
+      "2026.5.16-beta.6",
+    ]);
+
+    const config = JSON.parse(await fs.readFile(configPath, "utf8"));
+    expect(config.channels.telegram.streaming).toEqual({ mode: "off" });
+    expect(config.messages.groupChat.visibleReplies).toBe("automatic");
   });
 
   it("extracts RTT values from Telegram QA summaries", async () => {

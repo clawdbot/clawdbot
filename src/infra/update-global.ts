@@ -34,6 +34,7 @@ type ResolvedGlobalInstallCommand = {
 export type ResolvedGlobalInstallTarget = ResolvedGlobalInstallCommand & {
   globalRoot: string | null;
   packageRoot: string | null;
+  directNodeModulesRoot?: boolean;
 };
 
 const PRIMARY_PACKAGE_NAME = "openclaw";
@@ -419,6 +420,7 @@ function inferNpmPrefixFromPackageRoot(pkgRoot?: string | null): string | null {
 
 export function resolveNpmGlobalPrefixLayoutFromGlobalRoot(
   globalRoot?: string | null,
+  options: { allowDirectNodeModulesRoot?: boolean } = {},
 ): NpmGlobalPrefixLayout | null {
   const trimmed = globalRoot?.trim();
   if (!trimmed) {
@@ -442,6 +444,13 @@ export function resolveNpmGlobalPrefixLayoutFromGlobalRoot(
       prefix: parentDir,
       globalRoot: normalized,
       binDir: parentDir,
+    };
+  }
+  if (options.allowDirectNodeModulesRoot) {
+    return {
+      prefix: parentDir,
+      globalRoot: normalized,
+      binDir: path.join(normalized, ".bin"),
     };
   }
   return null;
@@ -481,6 +490,26 @@ function inferGlobalRootFromPackageRoot(pkgRoot?: string | null): string | null 
   const normalized = path.resolve(trimmed);
   const globalRoot = path.dirname(normalized);
   return path.basename(globalRoot) === "node_modules" ? globalRoot : null;
+}
+
+function isDirectNpmNodeModulesRoot(globalRoot: string | null): boolean {
+  return (
+    globalRoot !== null &&
+    resolveNpmGlobalPrefixLayoutFromGlobalRoot(globalRoot) === null &&
+    resolveNpmGlobalPrefixLayoutFromGlobalRoot(globalRoot, {
+      allowDirectNodeModulesRoot: true,
+    }) !== null
+  );
+}
+
+function inferBunGlobalRootFromPackageRoot(pkgRoot?: string | null): string | null {
+  const directGlobalRoot = inferGlobalRootFromPackageRoot(pkgRoot);
+  if (!directGlobalRoot) {
+    return null;
+  }
+  return path.resolve(directGlobalRoot) === path.resolve(resolveBunGlobalRoot())
+    ? directGlobalRoot
+    : null;
 }
 
 function inferPnpmGlobalRootFromPackageRoot(pkgRoot?: string | null): string | null {
@@ -565,6 +594,17 @@ function normalizeGlobalInstallCommand(
     : managerOrCommand;
 }
 
+function resolveInstallCommandForManager(
+  managerOrCommand: GlobalInstallManager | ResolvedGlobalInstallCommand,
+  manager: GlobalInstallManager,
+  pkgRoot?: string | null,
+): ResolvedGlobalInstallCommand {
+  const normalized = normalizeGlobalInstallCommand(managerOrCommand, pkgRoot);
+  return normalized.manager === manager
+    ? normalized
+    : resolveGlobalInstallCommand(manager, pkgRoot);
+}
+
 export async function resolveGlobalRoot(
   managerOrCommand: GlobalInstallManager | ResolvedGlobalInstallCommand,
   runCommand: CommandRunner,
@@ -602,23 +642,47 @@ export async function resolveGlobalInstallTarget(params: {
   runCommand: CommandRunner;
   timeoutMs: number;
   pkgRoot?: string | null;
+  honorPackageRoot?: boolean;
 }): Promise<ResolvedGlobalInstallTarget> {
-  const command = normalizeGlobalInstallCommand(params.manager, params.pkgRoot);
+  const honoredPackageRootGlobalRoot = params.honorPackageRoot
+    ? inferGlobalRootFromPackageRoot(params.pkgRoot)
+    : null;
+  const pnpmPackageRootGlobalRoot = (await isPnpmGlobalPackageRoot(params.pkgRoot))
+    ? inferPnpmGlobalRootFromPackageRoot(params.pkgRoot)
+    : null;
+  const bunPackageRootGlobalRoot = inferBunGlobalRootFromPackageRoot(params.pkgRoot);
+  const honoredDirectNpmRoot =
+    pnpmPackageRootGlobalRoot === null &&
+    bunPackageRootGlobalRoot === null &&
+    isDirectNpmNodeModulesRoot(honoredPackageRootGlobalRoot);
+  const command = bunPackageRootGlobalRoot
+    ? resolveInstallCommandForManager(params.manager, "bun", params.pkgRoot)
+    : pnpmPackageRootGlobalRoot
+      ? resolveInstallCommandForManager(params.manager, "pnpm", params.pkgRoot)
+      : honoredDirectNpmRoot
+        ? resolveInstallCommandForManager(params.manager, "npm", params.pkgRoot)
+        : normalizeGlobalInstallCommand(params.manager, params.pkgRoot);
   const globalRoot = await resolveGlobalRoot(
     command,
     params.runCommand,
     params.timeoutMs,
     params.pkgRoot,
   );
-  const pkgRootGlobalRoot =
-    command.manager === "pnpm" && (await isPnpmGlobalPackageRoot(params.pkgRoot))
-      ? inferPnpmGlobalRootFromPackageRoot(params.pkgRoot)
-      : null;
-  const targetGlobalRoot = pkgRootGlobalRoot ?? globalRoot;
+  const pkgRootGlobalRoot = command.manager === "pnpm" ? pnpmPackageRootGlobalRoot : null;
+  const targetGlobalRoot =
+    (command.manager === "bun" ? bunPackageRootGlobalRoot : null) ??
+    pkgRootGlobalRoot ??
+    (command.manager === "npm" ? honoredPackageRootGlobalRoot : null) ??
+    globalRoot;
   return {
     ...command,
     globalRoot: targetGlobalRoot,
     packageRoot: targetGlobalRoot ? path.join(targetGlobalRoot, PRIMARY_PACKAGE_NAME) : null,
+    ...(honoredPackageRootGlobalRoot &&
+    targetGlobalRoot === honoredPackageRootGlobalRoot &&
+    honoredDirectNpmRoot
+      ? { directNodeModulesRoot: true }
+      : {}),
   };
 }
 

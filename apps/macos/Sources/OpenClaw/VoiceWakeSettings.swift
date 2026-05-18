@@ -43,77 +43,142 @@ struct VoiceWakeSettings: View {
         MicRefreshSupport.voiceWakeBinding(for: self.state)
     }
 
+    private var voiceSummaryPanel: some View {
+        let enabled = voiceWakeSupported && self.state.swabbleEnabled
+        let pushToTalk = voiceWakeSupported && self.state.voicePushToTalkEnabled
+
+        return HStack(alignment: .center, spacing: 14) {
+            ZStack {
+                Circle()
+                    .fill((enabled || pushToTalk ? Color.green : Color.secondary).opacity(0.18))
+                Image(systemName: enabled ? "waveform.badge.mic" : "mic.slash")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(enabled || pushToTalk ? .green : .secondary)
+            }
+            .frame(width: 46, height: 46)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(enabled ? "Voice Wake active" : pushToTalk ? "Push-to-talk active" : "Voice controls idle")
+                    .font(.headline)
+                Text(self.voiceSummarySubtitle)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 18)
+
+            if let meterError {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                    .help(meterError)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(.white.opacity(0.06))
+        }
+    }
+
+    private var voiceSummarySubtitle: String {
+        if !voiceWakeSupported {
+            return "Voice Wake requires macOS 26 or newer."
+        }
+        if self.state.swabbleEnabled {
+            return "Listening for \(self.sanitizedTriggers().prefix(2).joined(separator: ", "))."
+        }
+        if self.state.voicePushToTalkEnabled {
+            return "Hold Right Option to speak without a wake phrase."
+        }
+        return "Enable Voice Wake or push-to-talk to start voice commands."
+    }
+
+    private var unsupportedVoiceWakePanel: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.yellow)
+            Text("Voice Wake requires macOS 26 or newer.")
+                .font(.callout.weight(.medium))
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(.yellow.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
     var body: some View {
         ScrollView(.vertical) {
-            VStack(alignment: .leading, spacing: 14) {
-                SettingsToggleRow(
-                    title: "Enable Voice Wake",
-                    subtitle: "Listen for a wake phrase (e.g. \"Claude\") before running voice commands. "
-                        + "Voice recognition runs fully on-device.",
-                    binding: self.voiceWakeBinding)
-                    .disabled(!voiceWakeSupported)
+            VStack(alignment: .leading, spacing: 20) {
+                SettingsPageHeader(
+                    title: "Voice & Talk",
+                    subtitle: "Wake phrases, push-to-talk, microphone input, and Talk Mode feedback.")
 
-                SettingsToggleRow(
-                    title: "Trigger Talk Mode",
-                    subtitle: """
-                    When a wake phrase is detected, activate Talk Mode for a full voice \
-                    conversation (STT, LLM response, TTS playback) instead of sending a \
-                    text message to the chat.
-                    """,
-                    binding: self.$state.voiceWakeTriggersTalkMode)
-                    .disabled(!self.state.swabbleEnabled)
+                self.voiceSummaryPanel
 
-                SettingsToggleRow(
-                    title: "Hold Right Option to talk",
-                    subtitle: """
-                    Push-to-talk mode that starts listening while you hold the key
-                    and shows the preview overlay.
-                    """,
-                    binding: self.$state.voicePushToTalkEnabled)
-                    .disabled(!voiceWakeSupported)
+                SettingsCardGroup("Activation") {
+                    SettingsCardToggleRow(
+                        title: "Enable Voice Wake",
+                        subtitle: "Listen for a wake phrase before running voice commands. Recognition runs fully on-device.",
+                        binding: self.voiceWakeBinding)
+                        .disabled(!voiceWakeSupported)
 
-                if self.state.voicePushToTalkEnabled, self.state.talkEnabled {
-                    Text("Push-to-Talk is paused while Talk Mode is active. It resumes when Talk Mode is turned off.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .padding(.leading, 20)
+                    SettingsCardToggleRow(
+                        title: "Trigger Talk Mode",
+                        subtitle: "Start a full voice conversation when a wake phrase is detected.",
+                        binding: self.$state.voiceWakeTriggersTalkMode)
+                        .disabled(!self.state.swabbleEnabled)
+
+                    SettingsCardToggleRow(
+                        title: "Hold Right Option to talk",
+                        subtitle: "Start listening while you hold the key and show the preview overlay.",
+                        binding: self.$state.voicePushToTalkEnabled)
+                        .disabled(!voiceWakeSupported)
+
+                    if self.state.voicePushToTalkEnabled, self.state.talkEnabled {
+                        SettingsCardRow(
+                            title: "Push-to-talk paused",
+                            subtitle: "Push-to-Talk resumes when Talk Mode is turned off.")
+                        {
+                            Image(systemName: "pause.circle.fill")
+                                .foregroundStyle(.orange)
+                        }
+                    }
+
+                    SettingsCardToggleRow(
+                        title: "Play phase-transition sounds",
+                        subtitle: "Play short sounds when Talk Mode switches between listening, thinking, and speaking.",
+                        binding: self.$state.talkPhaseSoundsEnabled)
+                        .disabled(!voiceWakeSupported)
+
+                    SettingsCardToggleRow(
+                        title: "Right Option stops speech",
+                        subtitle: "Tap Right Option to interrupt speech and return to listening.",
+                        binding: self.$state.talkShiftToStopEnabled,
+                        showsDivider: false)
+                        .disabled(!voiceWakeSupported)
                 }
-
-                SettingsToggleRow(
-                    title: "Play phase-transition sounds",
-                    subtitle: """
-                    Play short system sounds when Talk Mode switches between
-                    listening, thinking, and speaking.
-                    """,
-                    binding: self.$state.talkPhaseSoundsEnabled)
-                    .disabled(!voiceWakeSupported)
-
-                SettingsToggleRow(
-                    title: "Press Right Option to stop speech",
-                    subtitle: """
-                    Tap the right Option key to interrupt the assistant while it is
-                    speaking and return to listening.
-                    """,
-                    binding: self.$state.talkShiftToStopEnabled)
-                    .disabled(!voiceWakeSupported)
 
                 if !voiceWakeSupported {
-                    Label("Voice Wake requires macOS 26 or newer.", systemImage: "exclamationmark.triangle.fill")
-                        .font(.callout)
-                        .foregroundStyle(.yellow)
-                        .padding(8)
-                        .background(Color.secondary.opacity(0.15))
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                    self.unsupportedVoiceWakePanel
                 }
 
-                self.localePicker
-                self.micPicker
-                self.levelMeter
+                SettingsCardGroup("Recognition") {
+                    self.localePicker
+                    self.micPicker
+                    self.levelMeter
+                }
 
-                VoiceWakeTestCard(
-                    testState: self.$testState,
-                    isTesting: self.$isTesting,
-                    onToggle: self.toggleTest)
+                SettingsCardGroup("Test") {
+                    VoiceWakeTestCard(
+                        testState: self.$testState,
+                        isTesting: self.$isTesting,
+                        onToggle: self.toggleTest)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 12)
+                }
 
                 self.chimeSection
 
@@ -121,8 +186,9 @@ struct VoiceWakeSettings: View {
 
                 Spacer(minLength: 8)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 12)
+            .frame(maxWidth: 760, alignment: .leading)
+            .padding(.trailing, SettingsLayout.scrollbarGutter)
+            .padding(.vertical, 4)
         }
         .task {
             guard !self.isPreview else { return }
@@ -186,9 +252,9 @@ struct VoiceWakeSettings: View {
     }
 
     private var triggerTable: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        SettingsCardGroup("Trigger Words") {
             HStack {
-                Text("Trigger words")
+                Text("Wake phrases")
                     .font(.callout.weight(.semibold))
                 Spacer()
                 Button {
@@ -204,6 +270,8 @@ struct VoiceWakeSettings: View {
                     self.syncTriggerEntriesToState()
                 }
             }
+            .padding(.horizontal, 14)
+            .padding(.top, 12)
 
             VStack(spacing: 0) {
                 ForEach(self.$triggerEntries) { $entry in
@@ -236,6 +304,7 @@ struct VoiceWakeSettings: View {
             .overlay(
                 RoundedRectangle(cornerRadius: 6)
                     .stroke(Color.secondary.opacity(0.25), lineWidth: 1))
+            .padding(.horizontal, 14)
 
             Text(
                 "OpenClaw reacts when any trigger appears in a transcription. "
@@ -243,26 +312,22 @@ struct VoiceWakeSettings: View {
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, 14)
+                .padding(.bottom, 12)
         }
     }
 
     private var chimeSection: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Text("Sounds")
-                    .font(.callout.weight(.semibold))
-                Spacer()
-            }
-
+        SettingsCardGroup("Sounds") {
             self.chimeRow(
                 title: "Trigger sound",
                 selection: self.$state.voiceWakeTriggerChime)
 
             self.chimeRow(
                 title: "Send sound",
-                selection: self.$state.voiceWakeSendChime)
+                selection: self.$state.voiceWakeSendChime,
+                showsDivider: false)
         }
-        .padding(.top, 4)
     }
 
     private func addWord() {
@@ -339,12 +404,12 @@ struct VoiceWakeSettings: View {
         }
     }
 
-    private func chimeRow(title: String, selection: Binding<VoiceWakeChime>) -> some View {
-        HStack(alignment: .center, spacing: 10) {
-            Text(title)
-                .font(.callout.weight(.semibold))
-                .frame(width: self.fieldLabelWidth, alignment: .leading)
-
+    private func chimeRow(
+        title: String,
+        selection: Binding<VoiceWakeChime>,
+        showsDivider: Bool = true) -> some View
+    {
+        SettingsCardRow(title: title, showsDivider: showsDivider) {
             Menu {
                 Button("No Sound") { self.selectChime(.none, binding: selection) }
                 Divider()
@@ -366,7 +431,7 @@ struct VoiceWakeSettings: View {
                         .foregroundStyle(.secondary)
                 }
                 .padding(6)
-                .frame(minWidth: self.controlWidth, maxWidth: .infinity, alignment: .leading)
+                .frame(width: self.controlWidth, alignment: .leading)
                 .background(Color(nsColor: .windowBackgroundColor))
                 .overlay(
                     RoundedRectangle(cornerRadius: 6)
@@ -421,11 +486,8 @@ struct VoiceWakeSettings: View {
     }
 
     private var micPicker: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Text("Microphone")
-                    .font(.callout.weight(.semibold))
-                    .frame(width: self.fieldLabelWidth, alignment: .leading)
+        VStack(alignment: .leading, spacing: 0) {
+            SettingsCardRow(title: "Microphone") {
                 Picker("Microphone", selection: self.$state.voiceWakeMicID) {
                     Text("System default").tag("")
                     if self.isSelectedMicUnavailable {
@@ -440,26 +502,28 @@ struct VoiceWakeSettings: View {
                 .frame(width: self.controlWidth)
             }
             if self.isSelectedMicUnavailable {
-                HStack(spacing: 10) {
-                    Color.clear.frame(width: self.fieldLabelWidth, height: 1)
-                    Text("Disconnected (using System default)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
+                Text("Disconnected (using System default)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 10)
             }
             if self.loadingMics {
-                ProgressView().controlSize(.small)
+                ProgressView()
+                    .controlSize(.small)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 10)
             }
         }
     }
 
     private var localePicker: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .firstTextBaseline, spacing: 10) {
-                Text("Recognition language")
-                    .font(.callout.weight(.semibold))
-                    .frame(width: self.fieldLabelWidth, alignment: .leading)
+        VStack(alignment: .leading, spacing: 0) {
+            SettingsCardRow(
+                title: "Recognition language",
+                subtitle: "Languages are tried in order. Models may need a first-use download on macOS 26.")
+            {
                 Picker("Language", selection: self.$state.voiceWakeLocaleID) {
                     let current = Locale(identifier: Locale.current.identifier)
                     Text("\(self.friendlyName(for: current)) (System)").tag(Locale.current.identifier)
@@ -519,7 +583,8 @@ struct VoiceWakeSettings: View {
                     }
                     .disabled(self.availableLocales.isEmpty)
                 }
-                .padding(.top, 4)
+                .padding(.horizontal, 14)
+                .padding(.bottom, 10)
             } else {
                 Button {
                     if let first = availableLocales.first {
@@ -530,12 +595,9 @@ struct VoiceWakeSettings: View {
                 }
                 .buttonStyle(.link)
                 .disabled(self.availableLocales.isEmpty)
-                .padding(.top, 4)
+                .padding(.horizontal, 14)
+                .padding(.bottom, 10)
             }
-
-            Text("Languages are tried in order. Models may need a first-use download on macOS 26.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
     }
 
@@ -615,11 +677,8 @@ struct VoiceWakeSettings: View {
     }
 
     private var levelMeter: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .center, spacing: 10) {
-                Text("Live level")
-                    .font(.callout.weight(.semibold))
-                    .frame(width: self.fieldLabelWidth, alignment: .leading)
+        VStack(alignment: .leading, spacing: 0) {
+            SettingsCardRow(title: "Live level", showsDivider: false) {
                 MicLevelBar(level: self.meterLevel)
                     .frame(width: self.controlWidth, alignment: .leading)
                 Text(self.levelLabel)
@@ -631,6 +690,8 @@ struct VoiceWakeSettings: View {
                 Text(meterError)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 10)
             }
         }
     }

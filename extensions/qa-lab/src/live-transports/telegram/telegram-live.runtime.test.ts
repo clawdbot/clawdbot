@@ -199,6 +199,7 @@ describe("telegram live qa runtime", () => {
     });
 
     expect(next.agents?.defaults?.skipBootstrap).toBe(true);
+    expect(next.agents?.defaults?.models?.["openai/gpt-5.5"]?.agentRuntime).toEqual({ id: "pi" });
     expect(next.plugins?.allow).toContain("telegram");
     expect(next.plugins?.entries?.telegram).toEqual({ enabled: true });
     expect(next.messages?.groupChat?.visibleReplies).toBe("automatic");
@@ -399,6 +400,9 @@ describe("telegram live qa runtime", () => {
     ).steps[0];
     expect(otherBotStep?.expectReply).toBe(false);
     expect(otherBotStep?.input).toBe("/status@OpenClawQaOtherBot");
+    const contextStep = requireScenario(scenarios, "telegram-context-command").buildRun("sut_bot")
+      .steps[0];
+    expect(contextStep?.matchText).toBe("/context list");
     const statusToolStep = requireScenario(
       scenarios,
       "telegram-current-session-status-tool",
@@ -418,7 +422,7 @@ describe("telegram live qa runtime", () => {
     ).steps[0];
     expect(replyChainStep?.expectedJoinedSutTextIncludes).toEqual(["QA-TELEGRAM-REPLY-CHAIN-OK"]);
     expect(replyChainStep?.expectedSutMessageCount).toBe(1);
-    expect(replyChainStep?.replyToLatestSutMessage).toBe(true);
+    expect(replyChainStep?.replyToLatestSutMessage).toBeUndefined();
     const streamSingleStep = requireScenario(
       scenarios,
       "telegram-stream-final-single-message",
@@ -427,7 +431,7 @@ describe("telegram live qa runtime", () => {
       "QA-TELEGRAM-STREAM-SINGLE-OK",
     ]);
     expect(streamSingleStep?.expectedSutMessageCount).toBe(1);
-    expect(streamSingleStep?.replyToLatestSutMessage).toBe(true);
+    expect(streamSingleStep?.replyToLatestSutMessage).toBeUndefined();
     const longReusesStep = requireScenario(
       scenarios,
       "telegram-long-final-reuses-preview",
@@ -479,8 +483,6 @@ describe("telegram live qa runtime", () => {
         "telegram-other-bot-command-gating",
         "telegram-context-command",
         "telegram-mentioned-message-reply",
-        "telegram-reply-chain-exact-marker",
-        "telegram-stream-final-single-message",
         "telegram-long-final-reuses-preview",
         "telegram-mention-gating",
       ],
@@ -496,8 +498,11 @@ describe("telegram live qa runtime", () => {
       false,
     );
     const streamSingle = requireScenario(catalog, "telegram-stream-final-single-message");
-    expect(streamSingle.defaultEnabled).toBe(true);
+    expect(streamSingle.defaultEnabled).toBe(false);
     expect(streamSingle.regressionRefs).toEqual(["openclaw/openclaw#39905"]);
+    expect(requireScenario(catalog, "telegram-reply-chain-exact-marker").defaultEnabled).toBe(
+      false,
+    );
   });
 
   it("tracks Telegram live coverage against the shared transport contract", () => {
@@ -702,7 +707,7 @@ describe("telegram live qa runtime", () => {
         sutBotId: 88,
         message: {
           updateId: 1,
-          messageId: 10,
+          messageId: 56,
           chatId: -100123,
           senderId: 88,
           senderIsBot: true,
@@ -716,6 +721,27 @@ describe("telegram live qa runtime", () => {
         matchText: "TELEGRAM_QA_NOMENTION_TOKEN",
       }),
     ).toBe(true);
+    expect(
+      __testing.matchesTelegramScenarioReply({
+        groupId: "-100123",
+        sentMessageId: 55,
+        sutBotId: 88,
+        message: {
+          updateId: 5,
+          messageId: 54,
+          chatId: -100123,
+          senderId: 88,
+          senderIsBot: true,
+          senderUsername: "sut_bot",
+          text: "reply with TELEGRAM_QA_NOMENTION_TOKEN",
+          replyToMessageId: undefined,
+          timestamp: 1_700_000_005_000,
+          inlineButtons: [],
+          mediaKinds: [],
+        },
+        matchText: "TELEGRAM_QA_NOMENTION_TOKEN",
+      }),
+    ).toBe(false);
     expect(
       __testing.matchesTelegramScenarioReply({
         groupId: "-100123",

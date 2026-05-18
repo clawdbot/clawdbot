@@ -32,6 +32,7 @@ export const QA_PROVIDER_SECRET_ENV_VARS = Object.freeze([
   "AWS_SECRET_ACCESS_KEY",
   "AWS_SESSION_TOKEN",
   "ANTHROPIC_API_KEYS",
+  "CODEX_API_KEY",
   "GEMINI_API_KEY",
   "GEMINI_API_KEYS",
   "GOOGLE_API_KEY",
@@ -46,6 +47,9 @@ export const QA_PROVIDER_SECRET_ENV_VARS = Object.freeze([
   "OPENCLAW_QA_CONVEX_SECRET_MAINTAINER",
   "VOYAGE_API_KEY",
 ]);
+export const QA_PROVIDER_SECRET_ENV_KEY_PATTERNS = Object.freeze([
+  /^OPENCLAW_LIVE_[A-Z0-9_]+_KEYS?$/u,
+]);
 
 const QA_MOCK_BLOCKED_ENV_VARS = Object.freeze([
   ...QA_PROVIDER_SECRET_ENV_VARS,
@@ -56,6 +60,7 @@ const QA_MOCK_BLOCKED_ENV_VARS = Object.freeze([
 
 const QA_MOCK_BLOCKED_ENV_KEY_PATTERNS = Object.freeze([
   /^DISCORD_/i,
+  ...QA_PROVIDER_SECRET_ENV_KEY_PATTERNS,
   /^TELEGRAM_/i,
   /^SLACK_/i,
   /^MATRIX_/i,
@@ -79,6 +84,7 @@ const QA_LIVE_ALLOWED_ENV_VARS = Object.freeze([
 const QA_LIVE_ALLOWED_ENV_PATTERNS = Object.freeze([
   /^[A-Z0-9_]+_API_KEYS$/u,
   /^[A-Z0-9_]+_API_KEY_[0-9]+$/u,
+  /^OPENCLAW_LIVE_[A-Z0-9_]+_KEY$/u,
   /^OPENCLAW_LIVE_[A-Z0-9_]+_KEYS$/u,
 ]);
 

@@ -13,6 +13,7 @@ import { CommandLaneTaskTimeoutError } from "../process/command-queue.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { FailoverError } from "./failover-error.js";
+import { MissingAgentHarnessError } from "./harness/errors.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import {
   FallbackSummaryError,
@@ -554,6 +555,201 @@ describe("runWithModelFallback", () => {
     expect(result.attempts).toHaveLength(1);
     expect(result.attempts[0].error).toBe("bad request");
     expect(result.attempts[0].reason).toBe("unknown");
+  });
+
+  it("fails closed when a strict plugin harness is missing", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.5",
+            fallbacks: ["anthropic/claude-sonnet-4-6"],
+          },
+        },
+      },
+    });
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(new MissingAgentHarnessError("codex"))
+      .mockResolvedValueOnce("wrong fallback");
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-5.5",
+        run,
+      }),
+    ).rejects.toThrow('Requested agent harness "codex" is not registered.');
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed before auth cooldown skips when a strict plugin harness is missing", async () => {
+    const cfg = makeCfg({
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            agentRuntime: { id: "codex" },
+            models: [],
+          },
+        },
+      },
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.5",
+            fallbacks: ["anthropic/claude-sonnet-4-6"],
+          },
+        },
+      },
+    });
+    const tempDir = await makeAuthTempDir();
+    setAuthRuntimeStore(tempDir, {
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        "openai:default": { type: "api_key", provider: "openai", key: "test-key" },
+        "anthropic:default": { type: "api_key", provider: "anthropic", key: "test-key" },
+      },
+      usageStats: {
+        "openai:default": {
+          cooldownUntil: Date.now() + 60_000,
+          cooldownReason: "rate_limit",
+          failureCounts: { rate_limit: 1 },
+        },
+      },
+    });
+    const run = vi.fn().mockResolvedValueOnce("wrong fallback");
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-5.5",
+        agentDir: tempDir,
+        run,
+      }),
+    ).rejects.toThrow('Requested agent harness "codex" is not registered.');
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("uses agent runtime context before auth cooldown skips", async () => {
+    const cfg = makeCfg({
+      agents: {
+        list: [
+          { id: "main", default: true },
+          {
+            id: "worker",
+            models: {
+              "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+            },
+          },
+        ],
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.5",
+            fallbacks: ["anthropic/claude-sonnet-4-6"],
+          },
+        },
+      },
+    });
+    const tempDir = await makeAuthTempDir();
+    setAuthRuntimeStore(tempDir, {
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        "openai:default": { type: "api_key", provider: "openai", key: "test-key" },
+        "anthropic:default": { type: "api_key", provider: "anthropic", key: "test-key" },
+      },
+      usageStats: {
+        "openai:default": {
+          cooldownUntil: Date.now() + 60_000,
+          cooldownReason: "rate_limit",
+          failureCounts: { rate_limit: 1 },
+        },
+      },
+    });
+    const run = vi.fn().mockResolvedValueOnce("wrong fallback");
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-5.5",
+        agentDir: tempDir,
+        agentId: "worker",
+        run,
+      }),
+    ).rejects.toThrow('Requested agent harness "codex" is not registered.');
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("uses session runtime overrides before auth cooldown skips", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.5",
+            fallbacks: ["anthropic/claude-sonnet-4-6"],
+          },
+        },
+      },
+    });
+    const tempDir = await makeAuthTempDir();
+    setAuthRuntimeStore(tempDir, {
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        "openai:default": { type: "api_key", provider: "openai", key: "test-key" },
+        "anthropic:default": { type: "api_key", provider: "anthropic", key: "test-key" },
+      },
+      usageStats: {
+        "openai:default": {
+          cooldownUntil: Date.now() + 60_000,
+          cooldownReason: "rate_limit",
+          failureCounts: { rate_limit: 1 },
+        },
+      },
+    });
+    const run = vi.fn().mockResolvedValueOnce("wrong fallback");
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-5.5",
+        agentDir: tempDir,
+        resolveAgentHarnessRuntimeOverride: (provider) =>
+          provider === "openai" ? "codex" : undefined,
+        run,
+      }),
+    ).rejects.toThrow('Requested agent harness "codex" is not registered.');
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("lets configured CLI runtimes reach the run callback", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/*": { agentRuntime: { id: "claude-cli" } },
+          },
+          model: {
+            primary: "anthropic/claude-sonnet-4-6",
+          },
+        },
+      },
+    });
+    const run = vi.fn().mockResolvedValueOnce("cli ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      run,
+    });
+
+    expect(result.result).toBe("cli ok");
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run.mock.calls[0]).toEqual(["anthropic", "claude-sonnet-4-6"]);
   });
 
   it("does not treat command-lane watchdog timeouts as model fallback failures", async () => {
@@ -1278,8 +1474,7 @@ describe("runWithModelFallback", () => {
   });
 
   it("warns when falling back due to model_not_found", async () => {
-    setLoggerOverride({ level: "silent", consoleLevel: "warn" });
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const warnLogs = createWarnLogCapture("openclaw-model-fallback-test");
     try {
       const cfg = makeCfg();
       const run = vi
@@ -1295,13 +1490,13 @@ describe("runWithModelFallback", () => {
       });
 
       expect(result.result).toBe("ok");
-      expect(warnSpy).toHaveBeenCalledWith(
-        '[model-fallback] Model "openai/gpt-6" not found. Fell back to "anthropic/claude-haiku-3-5".',
-      );
+      expect(
+        await warnLogs.findText(
+          'Model "openai/gpt-6" not found. Fell back to "anthropic/claude-haiku-3-5".',
+        ),
+      ).toBeDefined();
     } finally {
-      warnSpy.mockRestore();
-      setLoggerOverride(null);
-      resetLogger();
+      warnLogs.cleanup();
     }
   });
 

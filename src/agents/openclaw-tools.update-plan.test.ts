@@ -123,6 +123,24 @@ describe("openclaw-tools update_plan gating", () => {
     expect(toolNames(denied)).not.toContain("message");
   });
 
+  it("keeps subagent spawn available for trusted embedded gateway-bound runs", () => {
+    setEmbeddedMode(true);
+    const defaultTools = createOpenClawTools({
+      config: {} as OpenClawConfig,
+      disablePluginTools: true,
+    });
+    const gatewayBoundTools = createOpenClawTools({
+      config: {} as OpenClawConfig,
+      disablePluginTools: true,
+      allowGatewaySubagentBinding: true,
+    });
+
+    expect(toolNames(defaultTools)).not.toContain("sessions_spawn");
+    expect(toolNames(defaultTools)).not.toContain("sessions_send");
+    expect(toolNames(gatewayBoundTools)).toContain("sessions_spawn");
+    expect(toolNames(gatewayBoundTools)).not.toContain("sessions_send");
+  });
+
   it("registers update_plan when explicitly enabled", () => {
     const config = {
       tools: {
@@ -133,7 +151,7 @@ describe("openclaw-tools update_plan gating", () => {
     } as OpenClawConfig;
 
     expectUpdatePlanEnabled({ config }, true);
-    expect(createUpdatePlanTool().displaySummary).toBe("Track a short structured work plan.");
+    expect(createUpdatePlanTool().displaySummary).toBe("Track short work plan.");
   });
 
   it("registers update_plan when the runtime allowlist explicitly requests it", () => {

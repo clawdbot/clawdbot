@@ -5,6 +5,7 @@ import {
 
 export function createFirecrawlWebSearchProvider(): WebSearchProviderPlugin {
   const credentialPath = "plugins.entries.firecrawl.config.webSearch.apiKey";
+  const fetchCredentialPath = "plugins.entries.firecrawl.config.webFetch.apiKey";
 
   return {
     id: "firecrawl",
@@ -24,6 +25,19 @@ export function createFirecrawlWebSearchProvider(): WebSearchProviderPlugin {
       configuredCredential: { pluginId: "firecrawl" },
       selectionPluginId: "firecrawl",
     }),
+    getConfiguredCredentialFallback: (config) => {
+      const apiKey = (
+        config?.plugins?.entries?.firecrawl?.config as
+          | { webFetch?: { apiKey?: unknown } }
+          | undefined
+      )?.webFetch?.apiKey;
+      return apiKey === undefined
+        ? undefined
+        : {
+            path: fetchCredentialPath,
+            value: apiKey,
+          };
+    },
     createTool: () => null,
   };
 }

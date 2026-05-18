@@ -1,6 +1,6 @@
 ---
 name: weather
-description: "Get current weather, rain, temperature, and forecasts for locations or travel planning."
+description: "Current weather and forecasts with wttr.in via curl for locations, rain, temperature, travel planning."
 homepage: https://wttr.in/:help
 metadata:
   {
@@ -22,108 +22,43 @@ metadata:
   }
 ---
 
-# Weather Skill
+# Weather
 
-Get current weather conditions and forecasts.
-
-## When to Use
-
-✅ **USE this skill when:**
-
-- "What's the weather?"
-- "Will it rain today/tomorrow?"
-- "Temperature in [city]"
-- "Weather forecast for the week"
-- Travel planning weather checks
-
-## When NOT to Use
-
-❌ **DON'T use this skill when:**
-
-- Historical weather data → use weather archives/APIs
-- Climate analysis or trends → use specialized data sources
-- Hyper-local microclimate data → use local sensors
-- Severe weather alerts → check official NWS sources
-- Aviation/marine weather → use specialized services (METAR, etc.)
-
-## Location
-
-Always include a city, region, or airport code in weather queries.
+Use for current weather, rain/temperature checks, forecasts, and travel planning. Need a city, region, airport code, or coordinates.
 
 ## Commands
 
-### Current Weather
-
 ```bash
-# One-line summary
 curl "wttr.in/London?format=3"
-
-# Detailed current conditions
 curl "wttr.in/London?0"
-
-# Specific city
+curl "wttr.in/London"
+curl "wttr.in/London?format=v2"
+curl "wttr.in/London?1"
 curl "wttr.in/New+York?format=3"
 ```
 
-### Forecasts
+Useful formats:
+
+- `%l`: location
+- `%c`: condition icon
+- `%t`: temperature
+- `%f`: feels like
+- `%w`: wind
+- `%h`: humidity
+- `%p`: precipitation
 
 ```bash
-# 3-day forecast
-curl "wttr.in/London"
-
-# Week forecast
-curl "wttr.in/London?format=v2"
-
-# Specific day (0=today, 1=tomorrow, 2=day after)
-curl "wttr.in/London?1"
+curl "wttr.in/London?format=%l:+%c+%t,+feels+%f,+rain+%p,+wind+%w"
 ```
 
-### Format Options
+JSON:
 
 ```bash
-# One-liner
-curl "wttr.in/London?format=%l:+%c+%t+%w"
-
-# JSON output
 curl "wttr.in/London?format=j1"
-
-# PNG image
-curl "wttr.in/London.png"
-```
-
-### Format Codes
-
-- `%c` — Weather condition emoji
-- `%t` — Temperature
-- `%f` — "Feels like"
-- `%w` — Wind
-- `%h` — Humidity
-- `%p` — Precipitation
-- `%l` — Location
-
-## Quick Responses
-
-**"What's the weather?"**
-
-```bash
-curl -s "wttr.in/London?format=%l:+%c+%t+(feels+like+%f),+%w+wind,+%h+humidity"
-```
-
-**"Will it rain?"**
-
-```bash
-curl -s "wttr.in/London?format=%l:+%c+%p"
-```
-
-**"Weekend forecast"**
-
-```bash
-curl "wttr.in/London?format=v2"
 ```
 
 ## Notes
 
-- No API key needed (uses wttr.in)
-- Rate limited; don't spam requests
-- Works for most global cities
-- Supports airport codes: `curl wttr.in/ORD`
+- For severe alerts, aviation, marine, or official decisions, use official local weather services.
+- For historical climate/weather, use an archive/API, not wttr.in.
+- For hyper-local microclimates, prefer local sensors.

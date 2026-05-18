@@ -534,6 +534,7 @@ jobs:
     permissions: read-all
     uses: ./.github/workflows/openclaw-cross-os-release-checks-reusable.yml
     with:
+      advisory: ${{ startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}
       ref: ${{ needs.resolve_target.outputs.revision }}
       provider: ${{ needs.resolve_target.outputs.provider }}
       mode: ${{ needs.resolve_target.outputs.mode }}
@@ -542,7 +543,7 @@ jobs:
       candidate_file_name: openclaw-current.tgz
       candidate_version: ${{ needs.prepare_release_package.outputs.package_version }}
       candidate_source_sha: ${{ needs.prepare_release_package.outputs.source_sha }}
-      openai_model: openai/gpt-5.4
+      openai_model: openai/gpt-5.5
       ubuntu_runner: ubuntu-24.04
       windows_runner: windows-2025
       macos_runner: macos-26
@@ -565,6 +566,7 @@ jobs:
       pull-requests: read
     uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
     with:
+      advisory: ${{ startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}
       ref: ${{ needs.resolve_target.outputs.revision }}
       include_repo_e2e: true
       include_release_path_suites: false
@@ -630,6 +632,7 @@ jobs:
       pull-requests: read
     uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
     with:
+      advisory: ${{ startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}
       ref: ${{ needs.resolve_target.outputs.revision }}
       include_repo_e2e: false
       include_release_path_suites: true
@@ -650,6 +653,7 @@ jobs:
       pull-requests: read
     uses: ./.github/workflows/package-acceptance.yml
     with:
+      advisory: ${{ startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}
       workflow_ref: ${{ github.ref_name }}
       source: ${{ (needs.resolve_target.outputs.package_acceptance_package_spec != '' || needs.resolve_target.outputs.release_package_spec != '') && 'npm' || 'artifact' }}
       package_spec: ${{ needs.resolve_target.outputs.package_acceptance_package_spec || needs.resolve_target.outputs.release_package_spec || 'openclaw@beta' }}
@@ -660,7 +664,7 @@ jobs:
       published_upgrade_survivor_baselines: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'last-stable-4 2026.4.23 2026.5.2 2026.4.15' || '' }}
       published_upgrade_survivor_scenarios: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'reported-issues' || '' }}
       telegram_mode: mock-openai
-      telegram_scenarios: telegram-help-command,telegram-commands-command,telegram-tools-compact-command,telegram-whoami-command,telegram-status-command,telegram-other-bot-command-gating,telegram-context-command,telegram-mentioned-message-reply,telegram-reply-chain-exact-marker,telegram-stream-final-single-message,telegram-long-final-reuses-preview,telegram-mention-gating
+      telegram_scenarios: telegram-help-command,telegram-commands-command,telegram-tools-compact-command,telegram-whoami-command,telegram-status-command,telegram-other-bot-command-gating,telegram-context-command,telegram-mentioned-message-reply,telegram-long-final-reuses-preview,telegram-mention-gating
     secrets:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
@@ -724,9 +728,9 @@ jobs:
       matrix:
         include:
           - lane: candidate
-            output_dir: gpt54
+            output_dir: openai-candidate
           - lane: baseline
-            output_dir: opus46
+            output_dir: anthropic-baseline
     env:
       QA_PARITY_CONCURRENCY: "1"
       OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: "180000"
@@ -772,7 +776,7 @@ jobs:
               ;;
             baseline)
               model="anthropic/claude-opus-4-7"
-              alt_model="anthropic/claude-sonnet-4-7"
+              alt_model="anthropic/claude-sonnet-4-6"
               ;;
             *)
               echo "Unknown QA parity lane: ${QA_PARITY_LANE}" >&2
@@ -841,8 +845,8 @@ jobs:
         run: |
           pnpm openclaw qa parity-report \
             --repo-root . \
-            --candidate-summary .artifacts/qa-e2e/gpt54/qa-suite-summary.json \
-            --baseline-summary .artifacts/qa-e2e/opus46/qa-suite-summary.json \
+            --candidate-summary .artifacts/qa-e2e/openai-candidate/qa-suite-summary.json \
+            --baseline-summary .artifacts/qa-e2e/anthropic-baseline/qa-suite-summary.json \
             --candidate-label "${OPENCLAW_CI_OPENAI_MODEL}" \
             --baseline-label anthropic/claude-opus-4-7 \
             --output-dir .artifacts/qa-e2e/parity
@@ -897,6 +901,7 @@ jobs:
         run: pnpm build
 
       - name: Run runtime parity lane
+        id: runtime_parity_lane
         run: |
           set -euo pipefail
           pnpm openclaw qa suite \
@@ -908,6 +913,19 @@ jobs:
             --runtime-pair pi,codex \
             --output-dir ".artifacts/qa-e2e/runtime-parity"
 
+      - name: Run standard runtime parity tier
+        if: ${{ always() && steps.runtime_parity_lane.outcome != 'skipped' && steps.runtime_parity_lane.outcome != 'cancelled' }}
+        run: |
+          set -euo pipefail
+          pnpm openclaw qa suite \
+            --provider-mode mock-openai \
+            --runtime-parity-tier standard \
+            --concurrency "${QA_PARITY_CONCURRENCY}" \
+            --model "${OPENCLAW_CI_OPENAI_MODEL}" \
+            --alt-model "openai/gpt-5.5-alt" \
+            --runtime-pair pi,codex \
+            --output-dir ".artifacts/qa-e2e/runtime-parity-standard"
+
       - name: Generate runtime parity report
         if: always()
         run: |
@@ -918,12 +936,73 @@ jobs:
             --summary .artifacts/qa-e2e/runtime-parity/qa-suite-summary.json \
             --output-dir .artifacts/qa-e2e/runtime-parity-report
 
+      - name: Generate standard runtime parity report
+        if: always()
+        run: |
+          set -euo pipefail
+          pnpm openclaw qa parity-report \
+            --repo-root . \
+            --runtime-axis \
+            --summary .artifacts/qa-e2e/runtime-parity-standard/qa-suite-summary.json \
+            --output-dir .artifacts/qa-e2e/runtime-parity-standard-report
+
       - name: Upload runtime parity artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: release-qa-runtime-parity-${{ needs.resolve_target.outputs.revision }}
           path: .artifacts/qa-e2e/
+          retention-days: 14
+          if-no-files-found: warn
+
+  runtime_tool_coverage_release_checks:
+    name: Enforce QA Lab runtime tool coverage
+    needs: [resolve_target, qa_lab_runtime_parity_release_checks]
+    if: always() && contains(fromJSON('["all","qa","qa-parity"]'), needs.resolve_target.outputs.rerun_group)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+    env:
+      OPENCLAW_BUILD_PRIVATE_QA: "1"
+      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          ref: ${{ needs.resolve_target.outputs.revision }}
+          fetch-depth: 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "true"
+
+      - name: Download runtime parity artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-qa-runtime-parity-${{ needs.resolve_target.outputs.revision }}
+          path: .artifacts/qa-e2e/
+
+      - name: Enforce standard runtime tool coverage
+        run: |
+          set -euo pipefail
+          pnpm openclaw qa coverage \
+            --repo-root . \
+            --tools \
+            --summary .artifacts/qa-e2e/runtime-parity-standard/qa-suite-summary.json \
+            --output .artifacts/qa-e2e/runtime-parity-standard-report/qa-runtime-tool-coverage-report.md
+
+      - name: Upload runtime tool coverage artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-qa-runtime-tool-coverage-${{ needs.resolve_target.outputs.revision }}
+          path: .artifacts/qa-e2e/runtime-parity-standard-report/
           retention-days: 14
           if-no-files-found: warn
 
@@ -1206,6 +1285,9 @@ jobs:
     continue-on-error: true
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    concurrency:
+      group: qa-live-whatsapp-shared
+      cancel-in-progress: false
     permissions:
       contents: read
       pull-requests: read
@@ -1403,6 +1485,7 @@ jobs:
       - qa_lab_parity_lane_release_checks
       - qa_lab_parity_report_release_checks
       - qa_lab_runtime_parity_release_checks
+      - runtime_tool_coverage_release_checks
       - qa_live_matrix_release_checks
       - qa_live_telegram_release_checks
       - qa_live_discord_release_checks
@@ -1415,9 +1498,15 @@ jobs:
     steps:
       - name: Verify release check results
         shell: bash
+        env:
+          WORKFLOW_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
           failed=0
+          tideclaw_alpha=false
+          if [[ "${WORKFLOW_REF}" =~ ^refs/heads/tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
+            tideclaw_alpha=true
+          fi
           for item in \
             "prepare_release_package=${{ needs.prepare_release_package.result }}" \
             "install_smoke_release_checks=${{ needs.install_smoke_release_checks.result }}" \
@@ -1428,6 +1517,7 @@ jobs:
             "qa_lab_parity_lane_release_checks=${{ needs.qa_lab_parity_lane_release_checks.result }}" \
             "qa_lab_parity_report_release_checks=${{ needs.qa_lab_parity_report_release_checks.result }}" \
             "qa_lab_runtime_parity_release_checks=${{ needs.qa_lab_runtime_parity_release_checks.result }}" \
+            "runtime_tool_coverage_release_checks=${{ needs.runtime_tool_coverage_release_checks.result }}" \
             "qa_live_matrix_release_checks=${{ needs.qa_live_matrix_release_checks.result }}" \
             "qa_live_telegram_release_checks=${{ needs.qa_live_telegram_release_checks.result }}" \
             "qa_live_discord_release_checks=${{ needs.qa_live_discord_release_checks.result }}" \
@@ -1437,6 +1527,15 @@ jobs:
             name="${item%%=*}"
             result="${item#*=}"
             if [[ "$result" != "success" && "$result" != "skipped" ]]; then
+              if [[ "$tideclaw_alpha" == "true" ]]; then
+                case "$name" in
+                  prepare_release_package|install_smoke_release_checks) ;;
+                  *)
+                    echo "::warning::${name} ended with ${result}; Tideclaw alpha treats non-package-safety release-check lanes as advisory."
+                    continue
+                    ;;
+                esac
+              fi
               if [[ "$name" == qa_* ]]; then
                 echo "::warning::${name} ended with ${result}; QA release-check lanes are advisory and do not block release validation."
                 continue

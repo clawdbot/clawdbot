@@ -37,16 +37,28 @@ export function buildCodexNativeHookRelayConfig(params: {
   relay: NativeHookRelayRegistrationHandle;
   events?: readonly NativeHookRelayEvent[];
   hookTimeoutSec?: number;
+  clearOmittedEvents?: boolean;
 }): JsonObject {
   const events = params.events?.length ? params.events : CODEX_NATIVE_HOOK_RELAY_EVENTS;
+  const selectedEvents = new Set<NativeHookRelayEvent>(events);
   const config: JsonObject = {
     "features.hooks": true,
   };
   const hookState: JsonObject = {};
-  for (const event of events) {
+  for (const event of CODEX_NATIVE_HOOK_RELAY_EVENTS) {
     const codexEvent = CODEX_HOOK_EVENT_BY_NATIVE_EVENT[event];
-    if (!params.relay.shouldRelayEvent(event)) {
-      config[`hooks.${codexEvent}`] = [] satisfies JsonValue;
+    const selected = selectedEvents.has(event);
+    if (!selected || !params.relay.shouldRelayEvent(event)) {
+      if (selected || params.clearOmittedEvents) {
+        config[`hooks.${codexEvent}`] = [] satisfies JsonValue;
+      }
+      if (params.clearOmittedEvents) {
+        for (const sourcePath of CODEX_SESSION_FLAGS_HOOK_SOURCE_PATHS) {
+          hookState[`${sourcePath}:${CODEX_HOOK_KEY_LABEL_BY_NATIVE_EVENT[event]}:0:0`] = {
+            enabled: false,
+          } satisfies JsonValue;
+        }
+      }
       continue;
     }
     const command = params.relay.commandForEvent(event);

@@ -40,8 +40,18 @@ on:
         description: Optional comma-separated Telegram scenario ids
         required: false
         type: string
+      advisory:
+        description: Treat package Telegram failures as advisory for the caller
+        required: false
+        default: false
+        type: boolean
   workflow_call:
     inputs:
+      advisory:
+        description: Treat package Telegram failures as advisory for the caller
+        required: false
+        default: false
+        type: boolean
       package_spec:
         description: Published OpenClaw package spec to test when no artifact is supplied
         required: true
@@ -100,6 +110,7 @@ jobs:
   run_package_telegram_e2e:
     name: Run package Telegram E2E
     runs-on: blacksmith-32vcpu-ubuntu-2404
+    continue-on-error: ${{ inputs.advisory }}
     timeout-minutes: 60
     environment: qa-live-shared
     permissions:

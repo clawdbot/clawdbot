@@ -35,6 +35,14 @@ function appendPathSegment(path: string, segment: string): string {
   return /^\d+$/.test(segment) ? `${path}[${segment}]` : `${path}.${segment}`;
 }
 
+function parseCanonicalArrayIndex(segment: string, length: number): number | null {
+  if (!/^(0|[1-9]\d*)$/.test(segment)) {
+    return null;
+  }
+  const index = Number(segment);
+  return Number.isSafeInteger(index) && index >= 0 && index < length ? index : null;
+}
+
 export function collectPluginConfigContractMatches(params: {
   root: unknown;
   pathPattern: string;
@@ -69,8 +77,8 @@ export function collectPluginConfigContractMatches(params: {
         continue;
       }
       if (Array.isArray(state.value)) {
-        const index = Number.parseInt(segment, 10);
-        if (Number.isInteger(index) && index >= 0 && index < state.value.length) {
+        const index = parseCanonicalArrayIndex(segment, state.value.length);
+        if (index !== null) {
           nextStates.push({
             segments: [...state.segments, segment],
             value: state.value[index],

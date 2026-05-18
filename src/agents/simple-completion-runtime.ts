@@ -198,14 +198,21 @@ export async function prepareSimpleCompletionModel(params: {
   allowMissingApiKeyModes?: ReadonlyArray<AllowedMissingApiKeyMode>;
   allowBundledStaticCatalogFallback?: boolean;
   skipPiDiscovery?: boolean;
+  modelResolver?: typeof resolveModelAsync;
 }): Promise<PreparedSimpleCompletionModel> {
   const resolved = params.skipPiDiscovery
-    ? await resolveModelAsync(params.provider, params.modelId, params.agentDir, params.cfg, {
-        ...(params.allowBundledStaticCatalogFallback !== undefined
-          ? { allowBundledStaticCatalogFallback: params.allowBundledStaticCatalogFallback }
-          : {}),
-        skipPiDiscovery: true,
-      })
+    ? await (params.modelResolver ?? resolveModelAsync)(
+        params.provider,
+        params.modelId,
+        params.agentDir,
+        params.cfg,
+        {
+          ...(params.allowBundledStaticCatalogFallback !== undefined
+            ? { allowBundledStaticCatalogFallback: params.allowBundledStaticCatalogFallback }
+            : {}),
+          skipPiDiscovery: true,
+        },
+      )
     : resolveModel(params.provider, params.modelId, params.agentDir, params.cfg);
   if (!resolved.model) {
     return {
@@ -282,6 +289,7 @@ export async function prepareSimpleCompletionModelForAgent(params: {
   allowMissingApiKeyModes?: ReadonlyArray<AllowedMissingApiKeyMode>;
   allowBundledStaticCatalogFallback?: boolean;
   skipPiDiscovery?: boolean;
+  modelResolver?: typeof resolveModelAsync;
 }): Promise<PreparedSimpleCompletionModelForAgent> {
   const selection = resolveSimpleCompletionSelectionForAgent({
     cfg: params.cfg,
@@ -305,6 +313,7 @@ export async function prepareSimpleCompletionModelForAgent(params: {
       ? { allowBundledStaticCatalogFallback: params.allowBundledStaticCatalogFallback }
       : {}),
     skipPiDiscovery: params.skipPiDiscovery,
+    modelResolver: params.modelResolver,
   });
   if ("error" in prepared) {
     return {

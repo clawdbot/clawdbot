@@ -162,7 +162,7 @@ const presentationMessageSchema = Type.Object(
   },
   {
     description:
-      "Shared presentation payload for rich text, buttons, selects, and context. Core degrades unsupported blocks to text.",
+      "Rich message payload: text/buttons/selects/context. Unsupported blocks degrade to text.",
   },
 );
 
@@ -171,21 +171,19 @@ function buildSendSchema(options: { includePresentation: boolean; includeDeliver
     message: Type.Optional(Type.String()),
     effectId: Type.Optional(
       Type.String({
-        description: "Message effect name/id for sendWithEffect (e.g., invisible ink).",
+        description: "Effect id/name for sendWithEffect.",
       }),
     ),
-    effect: Type.Optional(
-      Type.String({ description: "Alias for effectId (e.g., invisible-ink, balloons)." }),
-    ),
+    effect: Type.Optional(Type.String({ description: "Alias for effectId." })),
     media: Type.Optional(
       Type.String({
-        description: "Media URL or local path. data: URLs are not supported here, use buffer.",
+        description: "Media URL/path. data: use buffer.",
       }),
     ),
     filename: Type.Optional(Type.String()),
     buffer: Type.Optional(
       Type.String({
-        description: "Base64 payload for attachments (optionally a data: URL).",
+        description: "Base64 attachment payload; data URL ok.",
       }),
     ),
     contentType: Type.Optional(Type.String()),
@@ -208,7 +206,7 @@ function buildSendSchema(options: { includePresentation: boolean; includeDeliver
         }),
         {
           description:
-            "Structured media attachments to send with the message. Each item needs media/mediaUrl/path/filePath/fileUrl/url.",
+            "Structured attachments; each needs media/mediaUrl/path/filePath/fileUrl/url.",
         },
       ),
     ),
@@ -216,20 +214,17 @@ function buildSendSchema(options: { includePresentation: boolean; includeDeliver
     threadId: Type.Optional(Type.String()),
     asVoice: Type.Optional(Type.Boolean()),
     silent: Type.Optional(Type.Boolean()),
-    quoteText: Type.Optional(
-      Type.String({ description: "Quote text for Telegram reply_parameters" }),
-    ),
+    quoteText: Type.Optional(Type.String({ description: "Telegram reply quote text." })),
     bestEffort: Type.Optional(Type.Boolean()),
     gifPlayback: Type.Optional(Type.Boolean()),
     forceDocument: Type.Optional(
       Type.Boolean({
-        description: "Send image/GIF/video as document to avoid channel compression.",
+        description: "Send image/GIF/video as document; avoids compression.",
       }),
     ),
     asDocument: Type.Optional(
       Type.Boolean({
-        description:
-          "Send image/GIF/video as document to avoid channel compression. Alias for forceDocument.",
+        description: "Alias for forceDocument.",
       }),
     ),
   };
@@ -252,8 +247,7 @@ function buildSendSchema(options: { includePresentation: boolean; includeDeliver
           ),
         },
         {
-          description:
-            "Shared delivery preferences. pin requests that the sent message be pinned when the channel supports it.",
+          description: "Delivery prefs. pin requests pin when channel supports it.",
         },
       ),
     );
@@ -266,14 +260,13 @@ function buildReactionSchema() {
     messageId: Type.Optional(
       Type.String({
         description:
-          "Target message id for read, reaction, edit, delete, pin, or unpin. If omitted for reaction-like actions, defaults to the current inbound message id when available.",
+          "Target message id for read/react/edit/delete/pin/unpin. Reaction-like defaults current inbound id when available.",
       }),
     ),
     message_id: Type.Optional(
       Type.String({
         // Intentional duplicate alias for tool-schema discoverability in LLMs.
-        description:
-          "snake_case alias of messageId. If omitted for reaction-like actions, defaults to the current inbound message id when available.",
+        description: "snake_case alias of messageId; same defaults.",
       }),
     ),
     emoji: Type.Optional(Type.String()),
@@ -281,7 +274,7 @@ function buildReactionSchema() {
     trackToolCalls: Type.Optional(
       Type.Boolean({
         description:
-          "When true for a reaction to the current inbound message, use that reacted message as the status-reaction target for subsequent tool progress when the channel supports it.",
+          "For current-message reaction, make reacted message the tool-progress reaction target.",
       }),
     ),
     track_tool_calls: Type.Optional(
@@ -313,28 +306,25 @@ function buildPollSchema() {
     pollId: Type.Optional(Type.String()),
     pollOptionId: Type.Optional(
       Type.String({
-        description: "Poll answer id to vote for. Use when the channel exposes stable answer ids.",
+        description: "Poll answer id.",
       }),
     ),
     pollOptionIds: Type.Optional(
       Type.Array(
         Type.String({
-          description:
-            "Poll answer ids to vote for in a multiselect poll. Use when the channel exposes stable answer ids.",
+          description: "Poll answer ids for multiselect.",
         }),
       ),
     ),
     pollOptionIndex: Type.Optional(
       Type.Number({
-        description:
-          "1-based poll option number to vote for, matching the rendered numbered poll choices.",
+        description: "1-based poll option number.",
       }),
     ),
     pollOptionIndexes: Type.Optional(
       Type.Array(
         Type.Number({
-          description:
-            "1-based poll option numbers to vote for in a multiselect poll, matching the rendered numbered poll choices.",
+          description: "1-based poll option numbers for multiselect.",
         }),
       ),
     ),
@@ -361,15 +351,9 @@ function buildPollSchema() {
 
 function buildChannelTargetSchema() {
   return {
-    channelId: Type.Optional(
-      Type.String({ description: "Channel id filter (search/thread list/event create)." }),
-    ),
-    chatId: Type.Optional(
-      Type.String({ description: "Chat id for chat-scoped metadata actions." }),
-    ),
-    channelIds: Type.Optional(
-      Type.Array(Type.String({ description: "Channel id filter (repeatable)." })),
-    ),
+    channelId: Type.Optional(Type.String({ description: "Channel id filter." })),
+    chatId: Type.Optional(Type.String({ description: "Chat id for chat metadata." })),
+    channelIds: Type.Optional(Type.Array(Type.String({ description: "Channel id filter." }))),
     memberId: Type.Optional(Type.String()),
     memberIdType: Type.Optional(Type.String()),
     guildId: Type.Optional(Type.String()),
@@ -416,9 +400,7 @@ function buildEventSchema() {
     endTime: Type.Optional(Type.String()),
     desc: Type.Optional(Type.String()),
     location: Type.Optional(Type.String()),
-    image: Type.Optional(
-      Type.String({ description: "Cover image URL or local file path for the event." }),
-    ),
+    image: Type.Optional(Type.String({ description: "Event cover image URL/path." })),
     durationMin: Type.Optional(Type.Number()),
     until: Type.Optional(Type.String()),
   };
@@ -448,19 +430,17 @@ function buildPresenceSchema() {
     ),
     activityName: Type.Optional(
       Type.String({
-        description: "Activity name shown in sidebar (e.g. 'with fire'). Ignored for custom type.",
+        description: "Activity name shown in sidebar; ignored for custom.",
       }),
     ),
     activityUrl: Type.Optional(
       Type.String({
-        description:
-          "Streaming URL (Twitch or YouTube). Only used with streaming type; may not render for bots.",
+        description: "Streaming URL; streaming type only.",
       }),
     ),
     activityState: Type.Optional(
       Type.String({
-        description:
-          "State text. For custom type this is the status text; for others it shows in the flyout.",
+        description: "State text; custom type uses as status text.",
       }),
     ),
     status: Type.Optional(
@@ -474,8 +454,7 @@ function buildChannelManagementSchema() {
     name: Type.Optional(Type.String()),
     channelType: Type.Optional(
       Type.Number({
-        description:
-          "Numeric channel type (e.g. Discord channel type). Renamed from `type` to avoid JSON Schema keyword collisions that break some OpenAI-compatible providers (notably NVIDIA NIM).",
+        description: "Numeric channel type, e.g. Discord. Avoids JSON Schema `type` collision.",
       }),
     ),
     parentId: Type.Optional(Type.String()),
@@ -486,7 +465,7 @@ function buildChannelManagementSchema() {
     categoryId: Type.Optional(Type.String()),
     clearParent: Type.Optional(
       Type.Boolean({
-        description: "Clear the parent/category when supported by the provider.",
+        description: "Clear parent/category when supported.",
       }),
     ),
   };
@@ -810,7 +789,7 @@ function buildMessageToolDescription(options?: {
   requesterSenderId?: string;
   senderIsOwner?: boolean;
 }): string {
-  const baseDescription = "Send, delete, and manage messages via channel plugins.";
+  const baseDescription = "Send/delete/manage channel messages.";
   const resolvedOptions = options ?? {};
   const messageToolDiscoveryParams = resolvedOptions.config
     ? {
@@ -862,8 +841,8 @@ function appendMessageToolVisibleReplyHint(
   }
   const targetGuidance = requireExplicitTarget
     ? "Include target when sending."
-    : "The target defaults to the current source conversation, so omit target unless sending elsewhere.";
-  return `${description} For this turn, use action="send" with message for visible replies to the current source conversation. ${targetGuidance} Normal final answers stay private.`;
+    : "target defaults to the current source conversation; omit unless sending elsewhere.";
+  return `${description} This turn: use action="send" with message for visible replies to the current source conversation. ${targetGuidance} Normal final answers stay private.`;
 }
 
 function appendMessageToolReadHint(

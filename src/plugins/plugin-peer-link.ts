@@ -211,7 +211,21 @@ async function linkOpenClawPeerDependency(params: {
   }
 
   try {
-    await fs.rm(linkPath, { recursive: true, force: true });
+    const existing = await fs.lstat(linkPath).catch((err: NodeJS.ErrnoException) => {
+      if (err.code === "ENOENT") {
+        return null;
+      }
+      throw err;
+    });
+    if (existing) {
+      if (!existing.isSymbolicLink()) {
+        params.logger.warn?.(
+          `Skipping openclaw peerDependency link because ${linkPath} already exists and is not a symlink.`,
+        );
+        return "skipped";
+      }
+      await fs.unlink(linkPath);
+    }
     await fs.symlink(params.hostRoot, linkPath, "junction");
     params.logger.info?.(`Linked peerDependency "${params.peerName}" -> ${params.hostRoot}`);
     return "linked";

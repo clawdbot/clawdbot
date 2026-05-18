@@ -20,6 +20,7 @@ import {
   resolveLocalAuthSpawnOptions,
   resolveTuiCtrlCAction,
   resolveTuiSessionKey,
+  scheduleProcessExitAfterTuiReturn,
   stopTuiSafely,
 } from "./tui.js";
 
@@ -411,6 +412,26 @@ describe("TUI shutdown safety", () => {
 
     deferredFinish.setFinish(finish);
     expect(finish).toHaveBeenCalledTimes(1);
+  });
+
+  it("schedules a process-exit guard after standalone TUI return", () => {
+    let callback: (() => void) | undefined;
+    const unref = vi.fn();
+    const setTimeoutFn = vi.fn((fn: () => void, ms: number) => {
+      callback = fn;
+      expect(ms).toBe(2000);
+      return { unref };
+    });
+    const exit = vi.fn();
+    const writeStderr = vi.fn();
+
+    scheduleProcessExitAfterTuiReturn({ setTimeoutFn, exit, writeStderr });
+
+    expect(setTimeoutFn).toHaveBeenCalledOnce();
+    expect(unref).toHaveBeenCalledOnce();
+    callback?.();
+    expect(writeStderr).toHaveBeenCalledWith("openclaw tui forcing process exit after return\n");
+    expect(exit).toHaveBeenCalledWith(0);
   });
 });
 

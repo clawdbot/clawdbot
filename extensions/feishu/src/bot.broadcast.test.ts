@@ -284,6 +284,43 @@ describe("broadcast dispatch", () => {
     const sessionKeys = finalizeInboundContextCalls.map((call) => call.SessionKey);
     expect(sessionKeys).toContain("agent:susan:feishu:group:oc-broadcast-group");
     expect(sessionKeys).toContain("agent:main:feishu:group:oc-broadcast-group");
+    const recordCalls = (
+      runtimeStub.channel.session.recordInboundSession as unknown as {
+        mock: {
+          calls: Array<
+            [
+              {
+                updateLastRoute?: {
+                  sessionKey?: unknown;
+                  channel?: unknown;
+                  to?: unknown;
+                };
+              },
+            ]
+          >;
+        };
+      }
+    ).mock.calls;
+    expect(
+      recordCalls
+        .map(([call]) => ({
+          sessionKey: call.updateLastRoute?.["sessionKey"],
+          channel: call.updateLastRoute?.["channel"],
+          to: call.updateLastRoute?.["to"],
+        }))
+        .toSorted((left, right) => String(left.sessionKey).localeCompare(String(right.sessionKey))),
+    ).toEqual([
+      {
+        sessionKey: "agent:main:feishu:group:oc-broadcast-group",
+        channel: "feishu",
+        to: "chat:oc-broadcast-group",
+      },
+      {
+        sessionKey: "agent:susan:feishu:group:oc-broadcast-group",
+        channel: "feishu",
+        to: "chat:oc-broadcast-group",
+      },
+    ]);
     expect(mockGetChatInfo).toHaveBeenCalledTimes(1);
     expect(
       finalizeInboundContextCalls

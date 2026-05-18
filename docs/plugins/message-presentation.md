@@ -57,7 +57,10 @@ type MessagePresentationButton = {
   value?: string;
   url?: string;
   webApp?: { url: string };
+  /** @deprecated Use webApp. Accepted for legacy JSON payloads only. */
   web_app?: { url: string };
+  priority?: number;
+  disabled?: boolean;
   style?: "primary" | "secondary" | "success" | "danger";
 };
 
@@ -82,11 +85,19 @@ Button semantics:
 - `value` is an application action value routed back through the channel's
   existing interaction path when the channel supports clickable controls.
 - `url` is a link button. It can exist without `value`.
-- `webApp` and `web_app` describe a channel-native web app button. Telegram
-  renders this as `web_app` and only supports it in private chats.
+- `webApp` describes a channel-native web app button. Telegram renders this
+  as `web_app` and only supports it in private chats. `web_app` is still
+  accepted in loose JSON payloads for compatibility, but TypeScript producers
+  should use `webApp`.
 - `label` is required and is also used in text fallback.
 - `style` is advisory. Renderers should map unsupported styles to a safe
   default, not fail the send.
+- `priority` is optional. When a channel advertises action limits and controls
+  must be dropped, core keeps higher-priority buttons first and preserves
+  original order among equal priority buttons. When all controls fit, authored
+  order is preserved.
+- `disabled` is optional. Channels must opt in with `supportsDisabled`; otherwise
+  core degrades the disabled control to non-interactive fallback text.
 
 Select semantics:
 
@@ -205,6 +216,27 @@ const adapter: ChannelOutboundAdapter = {
     selects: true,
     context: true,
     divider: true,
+    limits: {
+      actions: {
+        maxActions: 25,
+        maxActionsPerRow: 5,
+        maxRows: 5,
+        maxLabelLength: 80,
+        maxValueBytes: 100,
+        supportsStyles: true,
+        supportsDisabled: false,
+      },
+      selects: {
+        maxOptions: 25,
+        maxLabelLength: 100,
+        maxValueBytes: 100,
+      },
+      text: {
+        maxLength: 2000,
+        encoding: "characters",
+        markdownDialect: "discord-markdown",
+      },
+    },
   },
   deliveryCapabilities: {
     pin: true,
@@ -218,10 +250,49 @@ const adapter: ChannelOutboundAdapter = {
 };
 ```
 
-Capability fields are intentionally simple booleans. They describe what the
-renderer can make interactive, not every native platform limit. Renderers still
-own platform-specific limits such as maximum button count, block count, and
-card size.
+Capability booleans describe what the renderer can make interactive. Optional
+`limits` describe the generic envelope core can adapt before calling the
+renderer:
+
+```ts
+type ChannelPresentationCapabilities = {
+  supported?: boolean;
+  buttons?: boolean;
+  selects?: boolean;
+  context?: boolean;
+  divider?: boolean;
+  limits?: {
+    actions?: {
+      maxActions?: number;
+      maxActionsPerRow?: number;
+      maxRows?: number;
+      maxLabelLength?: number;
+      maxValueBytes?: number;
+      supportsStyles?: boolean;
+      supportsDisabled?: boolean;
+      supportsLayoutHints?: boolean;
+    };
+    selects?: {
+      maxOptions?: number;
+      maxLabelLength?: number;
+      maxValueBytes?: number;
+    };
+    text?: {
+      maxLength?: number;
+      encoding?: "characters" | "utf8-bytes" | "utf16-units";
+      markdownDialect?: "plain" | "markdown" | "html" | "slack-mrkdwn" | "discord-markdown";
+      supportsEdit?: boolean;
+    };
+  };
+};
+```
+
+Core applies generic limits to semantic controls before rendering. Renderers
+still own final provider-specific validation and clipping for native block
+count, card size, URL limits, and provider quirks that cannot be expressed in
+the generic contract. If limits remove every control from a block, core keeps
+the labels as non-interactive context text so the delivered message still has a
+visible fallback.
 
 ## Core render flow
 
@@ -230,10 +301,12 @@ When a `ReplyPayload` or message action includes `presentation`, core:
 1. Normalizes the presentation payload.
 2. Resolves the target channel's outbound adapter.
 3. Reads `presentationCapabilities`.
-4. Calls `renderPresentation` when the adapter can render the payload.
-5. Falls back to conservative text when the adapter is absent or cannot render.
-6. Sends the resulting payload through the normal channel delivery path.
-7. Applies delivery metadata such as `delivery.pin` after the first successful
+4. Applies generic capability limits such as action count, label length, and
+   select option count when the adapter advertises them.
+5. Calls `renderPresentation` when the adapter can render the payload.
+6. Falls back to conservative text when the adapter is absent or cannot render.
+7. Sends the resulting payload through the normal channel delivery path.
+8. Applies delivery metadata such as `delivery.pin` after the first successful
    sent message.
 
 Core owns fallback behavior so producers can stay channel-agnostic. Channel
@@ -303,22 +376,48 @@ code:
 
 ```ts
 import {
+  adaptMessagePresentationForChannel,
+  applyPresentationActionLimits,
   interactiveReplyToPresentation,
   normalizeMessagePresentation,
+  presentationPageSize,
   presentationToInteractiveControlsReply,
   presentationToInteractiveReply,
   renderMessagePresentationFallbackText,
 } from "openclaw/plugin-sdk/interactive-runtime";
 ```
 
-New code should accept or produce `MessagePresentation` directly.
+New code should accept or produce `MessagePresentation` directly. Existing
+`interactive` payloads are a deprecated subset of `presentation`; runtime
+support remains for older producers.
 
-`presentationToInteractiveReply(...)` preserves visible presentation text by
-mapping the title, text, context, buttons, and selects into the older
-`InteractiveReply` shape. Component renderers that already draw title, text,
-context, and divider blocks natively should use
-`presentationToInteractiveControlsReply(...)` instead, then append only the
-button and select controls.
+The legacy `InteractiveReply*` types and conversion helpers are marked
+`@deprecated` in the SDK:
+
+- `InteractiveReply`, `InteractiveReplyBlock`, `InteractiveReplyButton`,
+  `InteractiveReplyOption`, `InteractiveReplySelectBlock`, and
+  `InteractiveReplyTextBlock`
+- `normalizeInteractiveReply(...)`
+- `hasInteractiveReplyBlocks(...)`
+- `interactiveReplyToPresentation(...)`
+- `presentationToInteractiveReply(...)`
+- `presentationToInteractiveControlsReply(...)`
+- `resolveInteractiveTextFallback(...)`
+- `reduceInteractiveReply(...)`
+
+`presentationToInteractiveReply(...)` and
+`presentationToInteractiveControlsReply(...)` remain available as renderer
+bridges for legacy channel implementations. New producer code should not call
+them; send `presentation` and let core/channel adaptation handle rendering.
+
+Approval helpers also have presentation-first replacements:
+
+- use `buildApprovalPresentationFromActionDescriptors(...)` instead of
+  `buildApprovalInteractiveReplyFromActionDescriptors(...)`
+- use `buildApprovalPresentation(...)` instead of
+  `buildApprovalInteractiveReply(...)`
+- use `buildExecApprovalPresentation(...)` instead of
+  `buildExecApprovalInteractiveReply(...)`
 
 `renderMessagePresentationFallbackText(...)` returns an empty string for
 presentation blocks that have no text fallback, such as a divider-only
@@ -351,7 +450,9 @@ messages where the provider supports those operations.
 - Implement `renderPresentation` in runtime code, not control-plane plugin
   setup code.
 - Keep native UI libraries out of hot setup/catalog paths.
-- Preserve platform limits in the renderer and tests.
+- Declare generic capability limits on `presentationCapabilities.limits` when
+  they are known.
+- Preserve final platform limits in the renderer and tests.
 - Add fallback tests for unsupported buttons, selects, URL buttons, title/text
   duplication, and mixed `message` plus `presentation` sends.
 - Add delivery pin support through `deliveryCapabilities.pin` and

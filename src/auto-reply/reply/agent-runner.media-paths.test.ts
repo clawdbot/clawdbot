@@ -1,3 +1,5 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EmbeddedPiQueueMessageOutcome } from "../../agents/pi-embedded-runner/runs.js";
@@ -137,6 +139,8 @@ function makeRunReplyAgentParams(
 }
 
 describe("runReplyAgent media path normalization", () => {
+  const cleanupPaths: string[] = [];
+
   beforeAll(async () => {
     ({ runReplyAgent } = await import("./agent-runner.js"));
   });
@@ -187,6 +191,8 @@ describe("runReplyAgent media path normalization", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    const paths = cleanupPaths.splice(0);
+    return Promise.all(paths.map((entry) => rm(entry, { recursive: true, force: true })));
   });
 
   it("normalizes final MEDIA replies against the run workspace", async () => {
@@ -371,5 +377,171 @@ describe("runReplyAgent media path normalization", () => {
     // runAgentTurnWithFallback receives the context from the caller and never
     // creates its own.
     expect(createReplyMediaContextRuntimeMock).not.toHaveBeenCalled();
+  });
+
+  it("passes current inbound media paths as native PI images", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-native-pi-media-"));
+    cleanupPaths.push(tmpDir);
+    const imagePath = path.join(tmpDir, "photo.png");
+    await writeFile(
+      imagePath,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+    runEmbeddedPiAgentMock.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          sessionId: "session",
+          provider: "ollama",
+          model: "gemma4:latest",
+        },
+      },
+    });
+
+    await runReplyAgent(
+      makeRunReplyAgentParams({
+        provider: "telegram",
+        prompt: "describe this image",
+        sessionCtx: {
+          Provider: "telegram",
+          Surface: "telegram",
+          To: "chat-1",
+          OriginatingTo: "chat-1",
+          AccountId: "default",
+          MessageSid: "msg-1",
+          MediaPaths: [imagePath],
+          MediaTypes: ["image/png"],
+          MediaWorkspaceDir: tmpDir,
+        } as unknown as TemplateContext,
+      }),
+    );
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
+    const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as
+      | {
+          images?: Array<{ type?: string; data?: string; mimeType?: string }>;
+          imageOrder?: string[];
+        }
+      | undefined;
+    expect(call?.images).toEqual([
+      {
+        type: "image",
+        data: expect.any(String),
+        mimeType: "image/png",
+      },
+    ]);
+    expect(call?.images?.[0]?.data).toHaveLength(92);
+    expect(call?.imageOrder).toEqual(["inline"]);
+  });
+
+  it("does not pass recent history images as unlabeled native PI images", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-native-pi-history-"));
+    cleanupPaths.push(tmpDir);
+    const imagePath = path.join(tmpDir, "recent.png");
+    await writeFile(
+      imagePath,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+    runEmbeddedPiAgentMock.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          sessionId: "session",
+          provider: "ollama",
+          model: "gemma4:latest",
+        },
+      },
+    });
+
+    await runReplyAgent(
+      makeRunReplyAgentParams({
+        provider: "telegram",
+        prompt: "what did we discuss?",
+        sessionCtx: {
+          Provider: "telegram",
+          Surface: "telegram",
+          To: "chat-1",
+          OriginatingTo: "chat-1",
+          AccountId: "default",
+          MessageSid: "msg-1",
+          Timestamp: 1_700_000_000_000,
+          InboundHistory: [
+            {
+              sender: "alice",
+              body: "<media:image>",
+              timestamp: 1_700_000_000_000,
+              media: [{ path: imagePath, contentType: "image/png", kind: "image" }],
+            },
+          ],
+        } as unknown as TemplateContext,
+      }),
+    );
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
+    const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as
+      | {
+          images?: Array<{ type?: string; data?: string; mimeType?: string }>;
+          imageOrder?: string[];
+        }
+      | undefined;
+    expect(call?.images).toBeUndefined();
+    expect(call?.imageOrder).toBeUndefined();
+  });
+
+  it("falls back to prompt refs instead of forwarding partial current media", async () => {
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-native-pi-partial-"));
+    cleanupPaths.push(tmpDir);
+    const imagePath = path.join(tmpDir, "present.png");
+    await writeFile(
+      imagePath,
+      Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    );
+    runEmbeddedPiAgentMock.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          sessionId: "session",
+          provider: "ollama",
+          model: "gemma4:latest",
+        },
+      },
+    });
+
+    await runReplyAgent(
+      makeRunReplyAgentParams({
+        provider: "telegram",
+        prompt: "compare these images",
+        sessionCtx: {
+          Provider: "telegram",
+          Surface: "telegram",
+          To: "chat-1",
+          OriginatingTo: "chat-1",
+          AccountId: "default",
+          MessageSid: "msg-1",
+          MediaPaths: [path.join(tmpDir, "missing.png"), imagePath],
+          MediaTypes: ["image/png", "image/png"],
+          MediaWorkspaceDir: tmpDir,
+        } as unknown as TemplateContext,
+      }),
+    );
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
+    const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as
+      | {
+          images?: Array<{ type?: string; data?: string; mimeType?: string }>;
+          imageOrder?: string[];
+        }
+      | undefined;
+    expect(call?.images).toBeUndefined();
+    expect(call?.imageOrder).toBeUndefined();
   });
 });

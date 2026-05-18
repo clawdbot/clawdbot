@@ -258,7 +258,26 @@ describe("config plugin validation", () => {
     expect(res.ok).toBe(false);
     if (!res.ok) {
       expectPathMessage(res.issues, "plugins.slots.memory", "plugin not found: missing-slot");
-      expect(res.warnings).toEqual([
+      expect(res.warnings).toEqual(
+        expect.arrayContaining([
+          {
+            path: "plugins.entries.missing-plugin",
+            message:
+              "plugin not found: missing-plugin (stale config entry ignored; remove it from plugins config)",
+          },
+          {
+            path: "plugins.allow",
+            message:
+              "plugin not found: missing-allow (stale config entry ignored; remove it from plugins config)",
+          },
+          {
+            path: "plugins.deny",
+            message:
+              "plugin not found: missing-deny (stale config entry ignored; remove it from plugins config)",
+          },
+        ]),
+      );
+      expect(res.warnings.filter((warning) => warning.path.startsWith("plugins."))).toEqual([
         {
           path: "plugins.entries.missing-plugin",
           message:
@@ -558,6 +577,83 @@ describe("config plugin validation", () => {
     expect(
       res.warnings.some((warning) => warning.message.includes("plugin not found: blocked-plugin")),
     ).toBe(false);
+  });
+
+  it("warns for broken discovered plugins that are not referenced by config", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "pi" }] },
+        plugins: {
+          allow: ["telegram"],
+        },
+      },
+      {
+        env: suiteEnv(),
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [],
+            diagnostics: [
+              {
+                level: "error",
+                pluginId: "broken-local",
+                source: path.join(suiteHome, "extensions", "broken-local", "openclaw.plugin.json"),
+                message: "plugin manifest entry does not exist: dist/index.js",
+              },
+            ],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expectPathMessage(
+      res.warnings,
+      "plugins",
+      "plugin broken-local: plugin manifest entry does not exist: dist/index.js",
+    );
+    expectNoPath(res.warnings, "plugins.entries.broken-local");
+  });
+
+  it("keeps broken discovered plugins fatal when config references them", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "pi" }] },
+        plugins: {
+          entries: {
+            "broken-local": { enabled: true },
+          },
+        },
+      },
+      {
+        env: suiteEnv(),
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [],
+            diagnostics: [
+              {
+                level: "error",
+                pluginId: "broken-local",
+                source: path.join(suiteHome, "extensions", "broken-local", "openclaw.plugin.json"),
+                message: "plugin manifest entry does not exist: dist/index.js",
+              },
+            ],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(false);
+    if (res.ok) {
+      return;
+    }
+    expectPathMessage(
+      res.issues,
+      "plugins.entries.broken-local",
+      "plugin broken-local: plugin manifest entry does not exist: dist/index.js",
+    );
   });
 
   it("does not source-match blocked diagnostics that already name a different plugin id", () => {

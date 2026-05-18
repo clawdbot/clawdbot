@@ -1,6 +1,7 @@
 import { assertOkOrThrowProviderError, postJsonRequest } from "openclaw/plugin-sdk/provider-http";
 import { trimToUndefined } from "openclaw/plugin-sdk/speech";
 import { XAI_BASE_URL } from "./api.js";
+import { xaiUserAgentHeaderFor } from "./src/xai-user-agent.js";
 export { XAI_BASE_URL };
 
 export const XAI_TTS_VOICES = ["eve", "ara", "rex", "sal", "leo", "una"] as const;
@@ -18,7 +19,7 @@ export function normalizeXaiTtsBaseUrl(baseUrl?: string): string {
 export function isValidXaiTtsVoice(voice: string, baseUrl?: string): voice is XaiTtsVoice {
   const normalizedBase = normalizeXaiTtsBaseUrl(baseUrl ?? process.env.XAI_BASE_URL);
   const host = normalizedBase.includes("://") ? new URL(normalizedBase).hostname : normalizedBase;
-  const isNative = host === "api.x.ai" || host === "api.grok.x.ai";
+  const isNative = host === "api.x.ai";
   if (!isNative) {
     return true;
   }
@@ -65,11 +66,13 @@ export async function xaiTTS(params: {
     throw new Error(`Invalid voice: ${voiceId}`);
   }
 
+  const ttsBaseUrl = normalizeXaiTtsBaseUrl(baseUrl);
   const { response, release } = await postJsonRequest({
-    url: `${normalizeXaiTtsBaseUrl(baseUrl)}/tts`,
+    url: `${ttsBaseUrl}/tts`,
     headers: new Headers({
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
+      ...xaiUserAgentHeaderFor(ttsBaseUrl),
     }),
     body: {
       text,

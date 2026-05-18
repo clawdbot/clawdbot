@@ -107,6 +107,10 @@ methods:
 
 ### Tools and commands
 
+Use [`defineToolPlugin`](/plugins/tool-plugins) for simple tool-only plugins
+with fixed tool names. Use `api.registerTool(...)` directly for mixed plugins
+or fully dynamic tool registration.
+
 | Method                          | What it registers                             |
 | ------------------------------- | --------------------------------------------- |
 | `api.registerTool(tool, opts?)` | Agent tool (required or `{ optional: true }`) |

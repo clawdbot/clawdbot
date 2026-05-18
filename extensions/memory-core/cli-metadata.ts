@@ -7,7 +7,7 @@ export default definePluginEntry({
   register(api) {
     api.registerCli(
       async ({ program }) => {
-        const { registerMemoryCli } = await import("./src/cli.js");
+        const { registerMemoryCli } = await import("./cli.js");
         registerMemoryCli(program);
       },
       {

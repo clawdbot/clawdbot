@@ -51,7 +51,7 @@ struct AppStateRemoteConfigTests {
                 remoteTokenDirty: false))
 
         #expect(remote["url"] as? String == "ws://127.0.0.1:18789")
-        #expect((remote["transport"] as? String) == nil)
+        #expect(remote["transport"] as? String == "ssh")
         #expect(remote["sshTarget"] as? String == "alice@gateway.example")
     }
 
@@ -158,6 +158,29 @@ struct AppStateRemoteConfigTests {
 
             let state = AppState(preview: true)
             #expect(state.remoteTarget == "alice@gateway.example")
+        }
+    }
+
+    @Test
+    func `app state init preserves legacy SSH tunnel config until transport is explicit`() async {
+        let configPath = TestIsolation.tempConfigPath()
+        await TestIsolation.withIsolatedState(
+            env: ["OPENCLAW_CONFIG_PATH": configPath],
+            defaults: [remoteTargetKey: nil])
+        {
+            OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "mode": "remote",
+                    "remote": [
+                        "url": "ws://127.0.0.1:18789",
+                        "sshTarget": "steipete@192.168.0.202",
+                    ],
+                ],
+            ])
+
+            let state = AppState(preview: true)
+            #expect(state.remoteTransport == .ssh)
+            #expect(state.remoteUrl == "ws://127.0.0.1:18789")
         }
     }
 

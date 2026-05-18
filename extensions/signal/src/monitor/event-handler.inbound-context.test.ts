@@ -13,6 +13,7 @@ const {
   sendReadReceiptMock,
   dispatchInboundMessageMock,
   enqueueSystemEventMock,
+  recordInboundSessionMock,
   capture,
 } = vi.hoisted(() => {
   const captureState: { ctx?: MsgContext } = {};
@@ -20,6 +21,7 @@ const {
     sendTypingMock: vi.fn(),
     sendReadReceiptMock: vi.fn(),
     enqueueSystemEventMock: vi.fn(),
+    recordInboundSessionMock: vi.fn(),
     dispatchInboundMessageMock: vi.fn(
       async (params: {
         ctx: MsgContext;
@@ -58,6 +60,7 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
   );
   return {
     ...actual,
+    recordInboundSession: recordInboundSessionMock,
     readChannelAllowFromStore: vi.fn().mockResolvedValue([]),
     upsertChannelPairingRequest: vi.fn(),
   };
@@ -86,6 +89,7 @@ describe("signal createSignalEventHandler inbound context", () => {
     sendTypingMock.mockReset().mockResolvedValue(true);
     sendReadReceiptMock.mockReset().mockResolvedValue(true);
     enqueueSystemEventMock.mockReset();
+    recordInboundSessionMock.mockReset().mockResolvedValue(undefined);
     dispatchInboundMessageMock.mockClear();
   });
 
@@ -139,6 +143,51 @@ describe("signal createSignalEventHandler inbound context", () => {
     expect(context.ChatType).toBe("direct");
     expect(context.To).toBe("+15550002222");
     expect(context.OriginatingTo).toBe("+15550002222");
+  });
+
+  it("keeps per-channel-peer direct-message last-route writes on the isolated session", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          session: { dmScope: "per-channel-peer" },
+          messages: { inbound: { debounceMs: 0 } },
+          channels: { signal: { dmPolicy: "open", allowFrom: ["*"] } },
+        } as any,
+        historyLimit: 0,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        sourceNumber: "+15550002222",
+        sourceName: "Bob",
+        timestamp: 1700000000001,
+        dataMessage: {
+          message: "hello",
+          attachments: [],
+        },
+      }),
+    );
+
+    const context = requireCapturedContext();
+    expect(context.SessionKey).toBe("agent:main:signal:direct:+15550002222");
+    const recordParams = recordInboundSessionMock.mock.calls.at(-1)?.[0] as
+      | {
+          sessionKey?: string;
+          updateLastRoute?: {
+            channel?: string;
+            mainDmOwnerPin?: unknown;
+            sessionKey?: string;
+            to?: string;
+          };
+        }
+      | undefined;
+    expect(recordParams?.sessionKey).toBe(context.SessionKey);
+    expect(recordParams?.updateLastRoute?.sessionKey).toBe(context.SessionKey);
+    expect(recordParams?.updateLastRoute?.sessionKey).not.toBe("agent:main:main");
+    expect(recordParams?.updateLastRoute?.channel).toBe("signal");
+    expect(recordParams?.updateLastRoute?.to).toBe("+15550002222");
+    expect(recordParams?.updateLastRoute?.mainDmOwnerPin).toBeUndefined();
   });
 
   it("keeps direct chat text in BodyForAgent while Body remains the legacy envelope", async () => {

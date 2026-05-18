@@ -16,13 +16,11 @@ function formatPlanHeader(plan: MigrationPlan, heading: string): string[] {
     lines.push(`Target: ${plan.target}`);
   }
   const visible = plan.items.filter((item) => !HIDDEN_KINDS.has(item.kind));
-  const visibleConflicts = visible.filter((item) => item.status === "conflict").length;
-  const visibleSensitive = visible.filter((item) => item.sensitive === true).length;
   lines.push(
     [
       formatCount(visible.length, "item"),
-      formatCount(visibleConflicts, "conflict"),
-      formatCount(visibleSensitive, "sensitive item"),
+      formatCount(plan.summary.conflicts, "conflict"),
+      formatCount(plan.summary.sensitive, "sensitive item"),
     ].join(", "),
   );
   return lines;

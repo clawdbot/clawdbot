@@ -18,11 +18,13 @@ installProviderHttpMockCleanup();
 function requirePostJsonCall(index = 0): {
   url?: string;
   body?: Record<string, unknown>;
+  headers?: Headers;
 } {
   const params = (postJsonRequestMock.mock.calls as unknown as Array<[unknown]>)[index]?.[0] as
     | {
         url?: string;
         body?: Record<string, unknown>;
+        headers?: Headers;
       }
     | undefined;
   if (!params) {
@@ -144,17 +146,61 @@ describe("xai video generation provider", () => {
     ).rejects.toThrow("xAI video generation response malformed");
   });
 
-  it("rejects unknown xAI poll statuses without waiting for timeout", async () => {
+  it("treats unknown xAI poll statuses as continue-polling and returns when terminal", async () => {
     postJsonRequestMock.mockResolvedValue({
       response: {
-        json: async () => ({ request_id: "req_bad_status" }),
+        json: async () => ({ request_id: "req_unknown_then_done" }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce({
+        json: async () => ({
+          request_id: "req_unknown_then_done",
+          status: "almost_done",
+        }),
+      })
+      .mockResolvedValueOnce({
+        json: async () => ({
+          request_id: "req_unknown_then_done",
+          status: "submitted",
+        }),
+      })
+      .mockResolvedValueOnce({
+        json: async () => ({
+          request_id: "req_unknown_then_done",
+          status: "done",
+          video: { url: "https://cdn.x.ai/eventual.mp4" },
+        }),
+      })
+      .mockResolvedValueOnce({
+        headers: new Headers({ "content-type": "video/mp4" }),
+        arrayBuffer: async () => Buffer.from("mp4"),
+      });
+
+    const provider = buildXaiVideoGenerationProvider();
+    const result = await provider.generateVideo({
+      provider: "xai",
+      model: "grok-imagine-video",
+      prompt: "unknown then done",
+      cfg: {},
+    });
+
+    expect(result.metadata?.requestId).toBe("req_unknown_then_done");
+    expect(result.metadata?.status).toBe("done");
+  });
+
+  it("treats `cancelled` as a terminal failure", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({ request_id: "req_cancelled" }),
       },
       release: vi.fn(async () => {}),
     });
     fetchWithTimeoutMock.mockResolvedValueOnce({
       json: async () => ({
-        request_id: "req_bad_status",
-        status: "almost_done",
+        request_id: "req_cancelled",
+        status: "cancelled",
       }),
     });
 
@@ -163,10 +209,10 @@ describe("xai video generation provider", () => {
       provider.generateVideo({
         provider: "xai",
         model: "grok-imagine-video",
-        prompt: "bad status",
+        prompt: "cancelled",
         cfg: {},
       }),
-    ).rejects.toThrow("xAI video generation response malformed");
+    ).rejects.toThrow("xAI video generation cancelled");
   });
 
   it("rejects completed xAI poll responses without output URLs as malformed", async () => {

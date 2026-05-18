@@ -15,7 +15,7 @@ import {
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
-import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import { resolveAgentRoute, resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeAllowFrom } from "./bot-access.js";
@@ -377,6 +377,10 @@ async function finalizeLineInboundContext(params: {
         normalizeEntry: (entry) => normalizeAllowFrom([entry]).entries[0],
       })
     : null;
+  const inboundLastRouteSessionKey = resolveInboundLastRouteSessionKey({
+    route: params.route,
+    sessionKey: params.route.sessionKey,
+  });
   if (shouldLogVerbose()) {
     const preview = body.slice(0, 200).replace(/\n/g, "\\n");
     const mediaInfo =
@@ -397,12 +401,14 @@ async function finalizeLineInboundContext(params: {
       record: {
         updateLastRoute: !params.source.isGroup
           ? {
-              sessionKey: params.route.mainSessionKey,
+              sessionKey: inboundLastRouteSessionKey,
               channel: "line",
               to: params.source.userId ?? params.source.peerId,
               accountId: params.route.accountId,
               mainDmOwnerPin:
-                pinnedMainDmOwner && params.source.userId
+                inboundLastRouteSessionKey === params.route.mainSessionKey &&
+                pinnedMainDmOwner &&
+                params.source.userId
                   ? {
                       ownerRecipient: pinnedMainDmOwner,
                       senderRecipient: params.source.userId,

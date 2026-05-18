@@ -1,10 +1,12 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { GoogleGenAI, Modality } from "@google/genai";
 import { chromium, type Browser } from "playwright";
 import { createServer, type ViteDevServer } from "vite";
 import { buildOpenAIRealtimeVoiceProvider } from "../../extensions/openai/realtime-voice-provider.ts";
+import { previewForDevToolLog, redactJsonValueForDevToolLog } from "../lib/dev-tooling-safety.ts";
 
 const OPENAI_REALTIME_MODEL =
   process.env.OPENCLAW_REALTIME_OPENAI_MODEL?.trim() || "gpt-realtime-2";
@@ -28,16 +30,19 @@ function getEnv(name: string): string | undefined {
 }
 
 function shortError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return previewForDevToolLog(error instanceof Error ? error.message : String(error), 800);
 }
 
 async function readBoundedText(response: Response): Promise<string> {
   const text = await response.text();
-  return text.length > 600 ? `${text.slice(0, 600)}...` : text;
+  return previewForDevToolLog(text, 600);
 }
 
 function printResult(result: SmokeResult): void {
-  console.log(`${result.name}: ${result.ok ? "ok" : "failed"}`, result.details ?? {});
+  console.log(
+    `${result.name}: ${result.ok ? "ok" : "failed"}`,
+    redactJsonValueForDevToolLog(result.details ?? {}),
+  );
 }
 
 function compareStrings(left: string | undefined, right: string | undefined): number {
@@ -335,6 +340,9 @@ async function smokeGatewayRelayBrowser(browser: Browser): Promise<SmokeResult> 
   const dir = await mkdtemp(path.join(tmpdir(), "openclaw-realtime-talk-"));
   try {
     const repoRoot = process.cwd().replaceAll("\\", "/");
+    const relayModulePath = JSON.stringify(
+      `/@fs/${repoRoot}/ui/src/ui/chat/realtime-talk-gateway-relay.ts`,
+    );
     await writeFile(
       path.join(dir, "index.html"),
       '<!doctype html><meta charset="utf-8"><script type="module" src="/main.ts"></script>',
@@ -342,7 +350,7 @@ async function smokeGatewayRelayBrowser(browser: Browser): Promise<SmokeResult> 
     await writeFile(
       path.join(dir, "main.ts"),
       `
-import { GatewayRelayRealtimeTalkTransport } from "/@fs/${repoRoot}/ui/src/ui/chat/realtime-talk-gateway-relay.ts";
+const { GatewayRelayRealtimeTalkTransport } = await import(${relayModulePath});
 
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const listeners = new Set();
@@ -436,11 +444,11 @@ try {
   await delay(400);
   transport.stop();
   await delay(100);
-  window.__relaySmokeResult = { requests, statuses, transcripts };
-  window.__relaySmokeDone = true;
+  window.relaySmokeResult = { requests, statuses, transcripts };
+  window.relaySmokeDone = true;
 } catch (error) {
-  window.__relaySmokeResult = { error: error instanceof Error ? error.message : String(error), requests, statuses, transcripts };
-  window.__relaySmokeDone = true;
+  window.relaySmokeResult = { error: error instanceof Error ? error.message : String(error), requests, statuses, transcripts };
+  window.relaySmokeDone = true;
 }
 `,
     );
@@ -459,10 +467,16 @@ try {
     await context.grantPermissions(["microphone"], { origin: url });
     const page = await context.newPage();
     await page.goto(url);
-    await page.waitForFunction(() => globalThis.__relaySmokeDone === true, undefined, {
-      timeout: 15_000,
-    });
-    const result = (await page.evaluate(() => globalThis.__relaySmokeResult)) as {
+    await page.waitForFunction(
+      () => (globalThis as Record<string, unknown>).relaySmokeDone === true,
+      undefined,
+      {
+        timeout: 15_000,
+      },
+    );
+    const result = (await page.evaluate(
+      () => (globalThis as Record<string, unknown>).relaySmokeResult,
+    )) as {
       error?: string;
       requests?: Array<{ method?: string }>;
       statuses?: Array<{ status?: string }>;
@@ -558,4 +572,9 @@ async function main(): Promise<void> {
   }
 }
 
-await main();
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  await main().catch((error) => {
+    console.error(shortError(error));
+    process.exitCode = 1;
+  });
+}

@@ -4,6 +4,8 @@ export const UPDATE_IN_PROGRESS_ENV = "OPENCLAW_UPDATE_IN_PROGRESS";
 export const UPDATE_POST_CORE_CONVERGENCE_ENV = "OPENCLAW_UPDATE_POST_CORE_CONVERGENCE";
 export const UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV =
   "OPENCLAW_UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR";
+export const UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV =
+  "OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE";
 
 /**
  * True iff the caller is the doctor pass that runs WHILE the core package
@@ -37,15 +39,31 @@ export function isUpdatePackageSwapInProgress(env: NodeJS.ProcessEnv): boolean {
 
 /**
  * True iff configured plugin install repair should be deferred because the
- * updater guarantees a later post-core convergence pass. Older updaters only
- * set `OPENCLAW_UPDATE_IN_PROGRESS`; when they run a newer doctor from the
- * swapped package, repair must proceed there or externalized plugins stay
- * missing until the operator manually runs doctor.
+ * updater guarantees a later post-core convergence pass. Shipped writable
+ * parents predate the explicit defer marker but still resume after the
+ * candidate doctor exits, so the candidate pass must not install payloads
+ * that the parent will immediately repair again from stale in-memory records.
  */
 export function shouldDeferConfiguredPluginInstallRepair(env: NodeJS.ProcessEnv): boolean {
   return (
     isUpdatePackageSwapInProgress(env) &&
-    isTruthyEnvValue(env[UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV])
+    (isTruthyEnvValue(env[UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV]) ||
+      isTruthyEnvValue(env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]))
+  );
+}
+
+/**
+ * True iff a new doctor is running inside a shipped parent that can persist
+ * doctor config repairs. Config writes must stay old-parent-readable because
+ * that parent resumes after the candidate doctor exits. Modern parents also
+ * set the explicit deferral marker, so they should keep current metadata
+ * writes while still deferring payload repair.
+ */
+export function isLegacyParentWritableUpdateDoctorPass(env: NodeJS.ProcessEnv): boolean {
+  return (
+    isUpdatePackageSwapInProgress(env) &&
+    isTruthyEnvValue(env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]) &&
+    !isTruthyEnvValue(env[UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV])
   );
 }
 

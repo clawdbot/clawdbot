@@ -82,6 +82,15 @@ function isSchemaRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+function setOwnSchemaProperty(target: Record<string, unknown>, key: string, value: unknown): void {
+  Object.defineProperty(target, key, {
+    value,
+    enumerable: true,
+    configurable: true,
+    writable: true,
+  });
+}
+
 function hasTopLevelArrayKeyword(
   schemaRecord: Record<string, unknown>,
   key: TopLevelConditionalKey,
@@ -453,7 +462,11 @@ function inlineLocalSchemaRefsWithDefs(
     if (key === "$defs" || key === "definitions") {
       continue;
     }
-    result[key] = inlineLocalSchemaRefsWithDefs(value, nextDefs, refStack, state);
+    setOwnSchemaProperty(
+      result,
+      key,
+      inlineLocalSchemaRefsWithDefs(value, nextDefs, refStack, state),
+    );
   }
   if (state.unresolvedLocalRefs) {
     if ("$defs" in obj) {

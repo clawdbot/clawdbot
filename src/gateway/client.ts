@@ -650,7 +650,7 @@ export class GatewayClient {
         ) {
           const deviceId = this.opts.deviceIdentity.deviceId;
           try {
-            clearDeviceAuthToken({ deviceId, role });
+            clearDeviceAuthToken({ deviceId, role, env: this.opts.env });
             logDebug(`cleared stale device-auth token for device ${deviceId}`);
           } catch (clearErr) {
             logDebug(

@@ -278,6 +278,16 @@ describe("discord live qa runtime", () => {
     ).toBe(false);
   });
 
+  it("computes Discord RTT from trigger and reply timestamps", () => {
+    expect(
+      __testing.computeDiscordRttMs(
+        "2026-04-22T11:59:59.125Z",
+        "2026-04-22T12:00:00.875Z",
+      ),
+    ).toBe(1750);
+    expect(__testing.computeDiscordRttMs("bad", "2026-04-22T12:00:00.875Z")).toBeUndefined();
+  });
+
   it("includes the Discord live scenarios", () => {
     expect(__testing.findScenario().map((scenario) => scenario.id)).toEqual([
       "discord-canary",
@@ -689,6 +699,41 @@ describe("discord live qa runtime", () => {
         triggerMessageId: "423456789012345678",
         triggerTimestamp: "2026-04-22T11:59:59.000Z",
         replyToMessageId: undefined,
+        timestamp: "2026-04-22T12:00:00.000Z",
+      },
+    ]);
+  });
+
+  it("preserves observed message timing when metadata is redacted", () => {
+    expect(
+      __testing.buildObservedMessagesArtifact({
+        includeContent: false,
+        redactMetadata: true,
+        observedMessages: [
+          {
+            messageId: "523456789012345678",
+            channelId: "223456789012345678",
+            guildId: "123456789012345678",
+            senderId: "323456789012345678",
+            senderIsBot: true,
+            senderUsername: "sut",
+            scenarioId: "canary",
+            scenarioTitle: "Canary",
+            matchedScenario: true,
+            text: "secret text",
+            triggerMessageId: "423456789012345678",
+            triggerTimestamp: "2026-04-22T11:59:59.000Z",
+            timestamp: "2026-04-22T12:00:00.000Z",
+          },
+        ],
+      }),
+    ).toEqual([
+      {
+        senderIsBot: true,
+        scenarioId: "canary",
+        scenarioTitle: "Canary",
+        matchedScenario: true,
+        triggerTimestamp: "2026-04-22T11:59:59.000Z",
         timestamp: "2026-04-22T12:00:00.000Z",
       },
     ]);

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { safePathSegmentHashed } from "../infra/install-safe-path.js";
@@ -2171,7 +2172,18 @@ describe("installPluginFromArchive", () => {
         path.join(blockedDir, "package.json"),
         JSON.stringify({ name: "plain-crypto-js" }),
       );
-      fs.chmodSync(blockedDir, 0o000);
+      const originalReaddir = fsPromises.readdir.bind(fsPromises);
+      const readdirSpy = vi.spyOn(fsPromises, "readdir").mockImplementation((async (
+        target: Parameters<typeof fsPromises.readdir>[0],
+        options?: Parameters<typeof fsPromises.readdir>[1],
+      ) => {
+        if (path.resolve(String(target)) === blockedDir) {
+          throw new Error("EACCES: permission denied, scandir 'vendor/sealed'");
+        }
+        return options === undefined
+          ? await originalReaddir(target)
+          : await originalReaddir(target, options as never);
+      }) as typeof fsPromises.readdir);
 
       try {
         const { result } = await installFromDirWithWarnings({ pluginDir, extensionsDir });
@@ -2183,7 +2195,7 @@ describe("installPluginFromArchive", () => {
           expect(result.error).toContain("vendor/sealed");
         }
       } finally {
-        fs.chmodSync(blockedDir, 0o755);
+        readdirSpy.mockRestore();
       }
     },
   );

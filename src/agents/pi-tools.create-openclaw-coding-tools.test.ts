@@ -1,12 +1,17 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   findUnsupportedSchemaKeywords,
   GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS,
 } from "../plugin-sdk/provider-tools.js";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../plugins/hook-runner-global.js";
+import { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
@@ -146,6 +151,10 @@ function expectListIncludes(
 describe("createOpenClawCodingTools", () => {
   const testConfig: OpenClawConfig = {};
 
+  afterEach(() => {
+    resetGlobalHookRunner();
+  });
+
   it("exposes gateway config and restart actions to owner sessions", () => {
     const tools = createOpenClawCodingTools({ config: testConfig, senderIsOwner: true });
     const gateway = requireTool(tools, "gateway");
@@ -176,6 +185,27 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("tool_search")).toBe(false);
     expect(names.has("tool_describe")).toBe(false);
     expect(names.has("tool_call")).toBe(false);
+  });
+
+  it("passes explicit hook channel ids to wrapped tool hooks", async () => {
+    const beforeToolCall = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-hook-channel-"));
+    await fs.writeFile(path.join(tmpDir, "note.txt"), "hello");
+    const tools = createOpenClawCodingTools({
+      workspaceDir: tmpDir,
+      currentChannelId: "telegram:-100123",
+      hookChannelId: "-100123",
+    });
+    const readTool = requireTool(tools, "read");
+    await requireToolExecute(readTool)("tool-hook-channel", { path: "note.txt" });
+
+    expect(beforeToolCall).toHaveBeenCalledTimes(1);
+    expect(beforeToolCall.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({ channelId: "-100123" }),
+    );
   });
 
   it("adds PI Tool Search control tools when explicitly requested", () => {

@@ -1,8 +1,9 @@
 import "./isolated-agent.mocks.js";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { BASE_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginProviderRegistration } from "../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -38,13 +39,45 @@ function installThinkingTestProviders() {
   setActivePluginRegistry(registry);
 }
 
+function mockDeterministicModelCatalog() {
+  vi.mocked(loadModelCatalog).mockResolvedValue([
+    {
+      id: "gpt-4.1-mini",
+      name: "GPT-4.1 Mini",
+      provider: "openai",
+    },
+    {
+      id: "claude-opus-4-6",
+      name: "Claude Opus 4.5",
+      provider: "anthropic",
+    },
+  ]);
+}
+
+const OPENAI_PI_RUNTIME_CONFIG: Partial<OpenClawConfig> = {
+  models: {
+    providers: {
+      openai: {
+        baseUrl: "https://api.openai.com/v1",
+        agentRuntime: { id: "pi" },
+        models: [],
+      },
+    },
+  },
+};
+
 describe("runCronIsolatedAgentTurn model overrides", () => {
   beforeEach(() => {
+    vi.useRealTimers();
     resetPluginRuntimeStateForTest();
     installThinkingTestProviders();
     vi.spyOn(isolatedAgentRunRuntime, "resolveThinkingDefault").mockReturnValue("off");
     vi.mocked(runEmbeddedPiAgent).mockClear();
     vi.mocked(loadModelCatalog).mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("treats blank model overrides as unset", async () => {
@@ -58,24 +91,12 @@ describe("runCronIsolatedAgentTurn model overrides", () => {
     });
   });
 
-  it("applies model overrides with correct precedence", async () => {
+  it("applies direct cron model overrides", async () => {
     await withTempHome(async (home) => {
-      const deterministicCatalog = [
-        {
-          id: "gpt-4.1-mini",
-          name: "GPT-4.1 Mini",
-          provider: "openai",
-        },
-        {
-          id: "claude-opus-4-6",
-          name: "Claude Opus 4.5",
-          provider: "anthropic",
-        },
-      ];
-      vi.mocked(loadModelCatalog).mockResolvedValue(deterministicCatalog);
-
-      let res = (
+      mockDeterministicModelCatalog();
+      const res = (
         await runCronTurn(home, {
+          cfgOverrides: OPENAI_PI_RUNTIME_CONFIG,
           jobPayload: {
             kind: "agentTurn",
             message: DEFAULT_MESSAGE,
@@ -89,16 +110,34 @@ describe("runCronIsolatedAgentTurn model overrides", () => {
         model: "gpt-4.1-mini",
       });
       directModel.assert();
+    });
+  });
 
-      res = (await runTurnWithStoredModelOverride(home, DEFAULT_AGENT_TURN_PAYLOAD)).res;
+  it("uses stored model overrides when cron payload omits a model", async () => {
+    await withTempHome(async (home) => {
+      mockDeterministicModelCatalog();
+      const res = (
+        await runTurnWithStoredModelOverride(
+          home,
+          DEFAULT_AGENT_TURN_PAYLOAD,
+          "gpt-4.1-mini",
+          "openai",
+          OPENAI_PI_RUNTIME_CONFIG,
+        )
+      ).res;
       expect(res.status).toBe("ok");
       const storedOverride = expectEmbeddedProviderModel({
         provider: "openai",
         model: "gpt-4.1-mini",
       });
       storedOverride.assert();
+    });
+  });
 
-      res = (
+  it("lets explicit cron model override stored session overrides", async () => {
+    await withTempHome(async (home) => {
+      mockDeterministicModelCatalog();
+      const res = (
         await runTurnWithStoredModelOverride(home, {
           kind: "agentTurn",
           message: DEFAULT_MESSAGE,

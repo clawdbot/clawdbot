@@ -7,13 +7,11 @@ import type { AnyAgentTool } from "./common.js";
 import { ToolInputError, readNumberParam, readStringParam } from "./common.js";
 
 const TtsToolSchema = Type.Object({
-  text: Type.String({ description: "Text to convert to speech." }),
-  channel: Type.Optional(
-    Type.String({ description: "Optional channel id to pick output format." }),
-  ),
+  text: Type.String({ description: "Text to speak." }),
+  channel: Type.Optional(Type.String({ description: "Channel id; output-format hint." })),
   timeoutMs: Type.Optional(
     Type.Number({
-      description: "Optional provider request timeout in milliseconds.",
+      description: "Provider timeout ms.",
       minimum: 1,
     }),
   ),
@@ -62,10 +60,9 @@ export function createTtsTool(opts?: {
   return {
     label: "TTS",
     name: "tts",
-    displaySummary: "Convert text to speech and return audio.",
+    displaySummary: "Text to speech audio.",
     description:
-      "Use only for explicit audio intent (audio, voice, speech, TTS) or active TTS config. Never use for ordinary text replies. " +
-      "Audio is delivered automatically from the tool result. After a successful call, follow the current conversation's reply instructions and avoid sending a duplicate text/audio response.",
+      "Use only for explicit audio intent (voice/speech/TTS) or active TTS config. Never use for ordinary text replies. Audio auto-delivered from tool result; after success follow reply instructions, no duplicate text/audio.",
     parameters: TtsToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;

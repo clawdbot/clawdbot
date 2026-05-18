@@ -1,4 +1,5 @@
 import {
+  buildAgentHookContextChannelFields,
   embeddedAgentLog,
   formatErrorMessage,
   resolveAgentDir,
@@ -6,19 +7,31 @@ import {
   resolveModelAuthMode,
   resolveSandboxContext,
   resolveSessionAgentIds,
+  registerNativeHookRelay,
   supportsModelTools,
   type AnyAgentTool,
   type AgentHarnessSideQuestionParams,
   type AgentHarnessSideQuestionResult,
   type EmbeddedRunAttemptParams,
+  type NativeHookRelayEvent,
+  type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import { refreshCodexAppServerAuthTokens } from "./auth-bridge.js";
 import { isCodexAppServerApprovalRequest, type CodexAppServerClient } from "./client.js";
 import { readCodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./config.js";
-import { filterCodexDynamicTools } from "./dynamic-tool-profile.js";
+import {
+  filterCodexDynamicTools,
+  resolveCodexDynamicToolsLoading,
+} from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge, type CodexDynamicToolBridge } from "./dynamic-tools.js";
 import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
+import {
+  buildCodexNativeHookRelayConfig,
+  buildCodexNativeHookRelayDisabledConfig,
+  CODEX_NATIVE_HOOK_RELAY_EVENTS,
+} from "./native-hook-relay.js";
+import { mergeCodexThreadConfigs } from "./plugin-thread-config.js";
 import {
   assertCodexThreadForkResponse,
   assertCodexTurnStartResponse,
@@ -50,6 +63,11 @@ const CODEX_SIDE_DYNAMIC_TOOL_TIMEOUT_MS = 30_000;
 const CODEX_SIDE_DYNAMIC_TOOL_MAX_TIMEOUT_MS = 600_000;
 const CODEX_SIDE_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS = 60_000;
 const SIDE_QUESTION_COMPLETION_TIMEOUT_MS = 600_000;
+const CODEX_SIDE_NATIVE_HOOK_RELAY_MIN_TTL_MS = 30 * 60_000;
+const CODEX_SIDE_NATIVE_HOOK_RELAY_TTL_GRACE_MS = 5 * 60_000;
+const CODEX_SIDE_NATIVE_HOOK_RELAY_STARTUP_REQUEST_COUNT = 3;
+const CODEX_SIDE_NATIVE_HOOK_RELAY_EVENTS_WITH_APP_SERVER_APPROVALS =
+  CODEX_NATIVE_HOOK_RELAY_EVENTS.filter((event) => event !== "permission_request");
 const SIDE_BOUNDARY_PROMPT = `Side conversation boundary.
 
 Everything before this boundary is inherited history from the parent thread. It is reference context only. It is not your current task.
@@ -77,7 +95,16 @@ Do not modify files, source, git state, permissions, configuration, workspace st
 
 export async function runCodexAppServerSideQuestion(
   params: AgentHarnessSideQuestionParams,
-  options: { pluginConfig?: unknown } = {},
+  options: {
+    pluginConfig?: unknown;
+    nativeHookRelay?: {
+      enabled?: boolean;
+      events?: readonly NativeHookRelayEvent[];
+      ttlMs?: number;
+      gatewayTimeoutMs?: number;
+      hookTimeoutSec?: number;
+    };
+  } = {},
 ): Promise<AgentHarnessSideQuestionResult> {
   const binding = await readCodexAppServerBinding(params.sessionFile, {
     agentDir: params.agentDir,
@@ -114,6 +141,7 @@ export async function runCodexAppServerSideQuestion(
   let childThreadId: string | undefined;
   let turnId: string | undefined;
   let removeRequestHandler: (() => void) | undefined;
+  let nativeHookRelay: NativeHookRelayRegistrationHandle | undefined;
 
   try {
     const cwd = binding.cwd || params.workspaceDir || process.cwd();
@@ -163,6 +191,7 @@ export async function runCodexAppServerSideQuestion(
           paramsForRun: sideRunParams,
           threadId: childThreadId,
           turnId,
+          nativeHookRelay,
           signal: runAbortController.signal,
         });
       }
@@ -188,6 +217,46 @@ export async function runCodexAppServerSideQuestion(
     const approvalPolicy = binding.approvalPolicy ?? appServer.approvalPolicy;
     const sandbox = binding.sandbox ?? appServer.sandbox;
     const serviceTier = binding.serviceTier ?? appServer.serviceTier;
+    const nativeHookRelayEvents = resolveCodexSideNativeHookRelayEvents({
+      configuredEvents: options.nativeHookRelay?.events,
+      approvalPolicy,
+    });
+    nativeHookRelay = options.nativeHookRelay
+      ? registerCodexSideNativeHookRelay({
+          options: options.nativeHookRelay,
+          events: nativeHookRelayEvents,
+          agentId: sessionAgentId,
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          config: params.cfg,
+          runId: sideRunParams.runId,
+          channelId: buildAgentHookContextChannelFields({
+            sessionKey: params.sessionKey,
+            messageChannel: params.messageChannel,
+            messageProvider: params.messageProvider,
+            currentChannelId: params.currentChannelId,
+          }).channelId,
+          requestTimeoutMs: appServer.requestTimeoutMs,
+          completionTimeoutMs: Math.max(
+            appServer.turnCompletionIdleTimeoutMs,
+            SIDE_QUESTION_COMPLETION_TIMEOUT_MS,
+          ),
+          signal: runAbortController.signal,
+        })
+      : undefined;
+    const nativeHookRelayConfig = nativeHookRelay
+      ? buildCodexNativeHookRelayConfig({
+          relay: nativeHookRelay,
+          events: nativeHookRelayEvents,
+          hookTimeoutSec: options.nativeHookRelay?.hookTimeoutSec,
+          clearOmittedEvents: true,
+        })
+      : options.nativeHookRelay?.enabled === false
+        ? buildCodexNativeHookRelayDisabledConfig()
+        : undefined;
+    const runtimeThreadConfig = buildCodexRuntimeThreadConfig(undefined);
+    const threadConfig =
+      mergeCodexThreadConfigs(nativeHookRelayConfig, runtimeThreadConfig) ?? runtimeThreadConfig;
     const modelProvider = resolveCodexAppServerModelProvider({
       provider: params.provider,
       authProfileId,
@@ -206,7 +275,7 @@ export async function runCodexAppServerSideQuestion(
           approvalsReviewer: appServer.approvalsReviewer,
           sandbox,
           ...(serviceTier ? { serviceTier } : {}),
-          config: buildCodexRuntimeThreadConfig(undefined),
+          config: threadConfig,
           developerInstructions: SIDE_DEVELOPER_INSTRUCTIONS,
           ephemeral: true,
           threadSource: "user",
@@ -264,19 +333,91 @@ export async function runCodexAppServerSideQuestion(
     }
     return { text: trimmed };
   } finally {
-    params.opts?.abortSignal?.removeEventListener("abort", abortFromUpstream);
-    if (!runAbortController.signal.aborted) {
-      runAbortController.abort("codex_side_question_finished");
+    try {
+      params.opts?.abortSignal?.removeEventListener("abort", abortFromUpstream);
+      if (!runAbortController.signal.aborted) {
+        runAbortController.abort("codex_side_question_finished");
+      }
+      removeNotificationHandler();
+      removeRequestHandler?.();
+      await cleanupCodexSideThread(client, {
+        threadId: childThreadId,
+        turnId,
+        interrupt: !collector.completed,
+        timeoutMs: appServer.requestTimeoutMs,
+      });
+    } finally {
+      nativeHookRelay?.unregister();
     }
-    removeNotificationHandler();
-    removeRequestHandler?.();
-    await cleanupCodexSideThread(client, {
-      threadId: childThreadId,
-      turnId,
-      interrupt: !collector.completed,
-      timeoutMs: appServer.requestTimeoutMs,
-    });
   }
+}
+
+function resolveCodexSideNativeHookRelayEvents(params: {
+  configuredEvents?: readonly NativeHookRelayEvent[];
+  approvalPolicy: ReturnType<typeof resolveCodexAppServerRuntimeOptions>["approvalPolicy"];
+}): readonly NativeHookRelayEvent[] {
+  if (params.configuredEvents?.length) {
+    return params.configuredEvents;
+  }
+  return params.approvalPolicy === "never"
+    ? CODEX_NATIVE_HOOK_RELAY_EVENTS
+    : CODEX_SIDE_NATIVE_HOOK_RELAY_EVENTS_WITH_APP_SERVER_APPROVALS;
+}
+
+function registerCodexSideNativeHookRelay(params: {
+  options: {
+    enabled?: boolean;
+    ttlMs?: number;
+    gatewayTimeoutMs?: number;
+  };
+  events: readonly NativeHookRelayEvent[];
+  agentId: string | undefined;
+  sessionId: string;
+  sessionKey: string | undefined;
+  config: EmbeddedRunAttemptParams["config"];
+  runId: string;
+  channelId?: string;
+  requestTimeoutMs: number;
+  completionTimeoutMs: number;
+  signal: AbortSignal;
+}): NativeHookRelayRegistrationHandle | undefined {
+  if (params.options.enabled === false) {
+    return undefined;
+  }
+  return registerNativeHookRelay({
+    provider: "codex",
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    sessionId: params.sessionId,
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    ...(params.config ? { config: params.config } : {}),
+    runId: params.runId,
+    ...(params.channelId ? { channelId: params.channelId } : {}),
+    allowedEvents: params.events,
+    ttlMs: resolveCodexSideNativeHookRelayTtlMs({
+      explicitTtlMs: params.options.ttlMs,
+      requestTimeoutMs: params.requestTimeoutMs,
+      completionTimeoutMs: params.completionTimeoutMs,
+    }),
+    signal: params.signal,
+    command: {
+      timeoutMs: params.options.gatewayTimeoutMs,
+    },
+  });
+}
+
+function resolveCodexSideNativeHookRelayTtlMs(params: {
+  explicitTtlMs: number | undefined;
+  requestTimeoutMs: number;
+  completionTimeoutMs: number;
+}): number {
+  if (params.explicitTtlMs !== undefined) {
+    return params.explicitTtlMs;
+  }
+  const relayBudgetMs =
+    params.requestTimeoutMs * CODEX_SIDE_NATIVE_HOOK_RELAY_STARTUP_REQUEST_COUNT +
+    params.completionTimeoutMs +
+    CODEX_SIDE_NATIVE_HOOK_RELAY_TTL_GRACE_MS;
+  return Math.max(CODEX_SIDE_NATIVE_HOOK_RELAY_MIN_TTL_MS, Math.floor(relayBudgetMs));
 }
 
 function buildSideRunAttemptParams(
@@ -294,6 +435,9 @@ function buildSideRunAttemptParams(
     sessionFile: params.sessionFile,
     sessionKey: params.sessionKey,
     agentId: params.agentId,
+    ...(params.messageChannel ? { messageChannel: params.messageChannel } : {}),
+    ...(params.messageProvider ? { messageProvider: params.messageProvider } : {}),
+    ...(params.currentChannelId ? { currentChannelId: params.currentChannelId } : {}),
     workspaceDir: options.cwd,
     authProfileId: options.authProfileId,
     authProfileIdSource: params.authProfileIdSource,
@@ -365,6 +509,16 @@ async function createCodexSideToolBridge(input: {
       modelAuthMode: resolveModelAuthMode(runtimeModel.provider, input.params.cfg, undefined, {
         workspaceDir: input.cwd,
       }),
+      ...(input.params.messageProvider || input.params.messageChannel
+        ? { messageProvider: input.params.messageProvider ?? input.params.messageChannel }
+        : {}),
+      ...(input.params.currentChannelId ? { currentChannelId: input.params.currentChannelId } : {}),
+      hookChannelId: buildAgentHookContextChannelFields({
+        sessionKey: input.params.sessionKey,
+        messageChannel: input.params.messageChannel,
+        messageProvider: input.params.messageProvider,
+        currentChannelId: input.params.currentChannelId,
+      }).channelId,
       sandbox,
       modelHasVision: runtimeModel.input?.includes("image") ?? false,
       requireExplicitMessageTarget: true,
@@ -375,16 +529,23 @@ async function createCodexSideToolBridge(input: {
       hasInboundImages: false,
     });
   }
+  const hookChannelFields = buildAgentHookContextChannelFields({
+    sessionKey: input.params.sessionKey,
+    messageChannel: input.params.messageChannel,
+    messageProvider: input.params.messageProvider,
+    currentChannelId: input.params.currentChannelId,
+  });
   return createCodexDynamicToolBridge({
     tools,
     signal: input.signal,
-    loading: input.pluginConfig.codexDynamicToolsLoading ?? "searchable",
+    loading: resolveCodexDynamicToolsLoading(input.pluginConfig),
     hookContext: {
       agentId: input.sessionAgentId,
       config: input.params.cfg,
       sessionId: input.params.sessionId,
       sessionKey: input.params.sessionKey,
       runId: input.params.opts?.runId ?? `codex-btw:${input.params.sessionId}`,
+      ...hookChannelFields,
     },
   });
 }

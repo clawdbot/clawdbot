@@ -3,9 +3,11 @@ import path from "node:path";
 import { resolveCliName } from "../cli/cli-name.js";
 import {
   completionCacheExists,
+  formatCompletionReloadCommand,
   installCompletion,
   isCompletionInstalled,
   resolveCompletionCachePath,
+  resolveCompletionProfilePath,
   resolveShellFromEnv,
   usesSlowDynamicCompletion,
 } from "../cli/completion-runtime.js";
@@ -17,6 +19,21 @@ import type { DoctorPrompter } from "./doctor-prompter.js";
 type CompletionShell = "zsh" | "bash" | "fish" | "powershell";
 
 const COMPLETION_CACHE_WRITE_TIMEOUT_MS = 30_000;
+
+function resolveCompletionReloadPath(shell: CompletionShell): string {
+  if (shell === "powershell") {
+    return resolveCompletionProfilePath("powershell");
+  }
+  return `~/.${shell === "zsh" ? "zshrc" : shell === "bash" ? "bashrc" : "config/fish/config.fish"}`;
+}
+
+function formatCompletionReloadNote(
+  shell: CompletionShell,
+  action: "installed" | "upgraded",
+): string {
+  const profilePath = resolveCompletionReloadPath(shell);
+  return `Shell completion ${action}. Restart your shell or run: ${formatCompletionReloadCommand(shell, profilePath)}`;
+}
 
 /** Generate the completion cache by spawning the CLI. */
 async function generateCompletionCache(): Promise<boolean> {
@@ -107,10 +124,7 @@ export async function doctorShellCompletion(
 
     // Upgrade profile to use cached file
     await installCompletion(status.shell, true, cliName);
-    note(
-      `Shell completion upgraded. Restart your shell or run: source ~/.${status.shell === "zsh" ? "zshrc" : status.shell === "bash" ? "bashrc" : "config/fish/config.fish"}`,
-      "Shell completion",
-    );
+    note(formatCompletionReloadNote(status.shell, "upgraded"), "Shell completion");
     return;
   }
 
@@ -157,10 +171,7 @@ export async function doctorShellCompletion(
 
       // Then install to profile
       await installCompletion(status.shell, true, cliName);
-      note(
-        `Shell completion installed. Restart your shell or run: source ~/.${status.shell === "zsh" ? "zshrc" : status.shell === "bash" ? "bashrc" : "config/fish/config.fish"}`,
-        "Shell completion",
-      );
+      note(formatCompletionReloadNote(status.shell, "installed"), "Shell completion");
     }
   }
 }

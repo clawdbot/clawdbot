@@ -145,6 +145,8 @@ EOF
 source ~/.bashrc
 ```
 
+`OPENCLAW_NO_RESPAWN=1` keeps routine Gateway restarts in-process, which avoids extra process handoffs and keeps PID tracking simple on small hosts.
+
 **Reduce memory usage** -- For headless setups, free GPU memory and disable unused services:
 
 ```bash

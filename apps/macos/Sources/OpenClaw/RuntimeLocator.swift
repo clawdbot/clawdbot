@@ -54,7 +54,7 @@ enum RuntimeResolutionError: Error {
 
 enum RuntimeLocator {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "runtime")
-    private static let minNode = RuntimeVersion(major: 22, minor: 16, patch: 0)
+    private static let minNode = RuntimeVersion(major: 22, minor: 19, patch: 0)
 
     static func resolve(
         searchPaths: [String] = CommandResolver.preferredPaths()) -> Result<RuntimeResolution, RuntimeResolutionError>
@@ -91,7 +91,7 @@ enum RuntimeLocator {
         switch error {
         case let .notFound(searchPaths):
             [
-                "openclaw needs Node >=22.16.0 but found no runtime.",
+                "openclaw needs Node >=22.19.0 but found no runtime.",
                 "PATH searched: \(searchPaths.joined(separator: ":"))",
                 "Install Node: https://nodejs.org/en/download",
             ].joined(separator: "\n")
@@ -105,7 +105,7 @@ enum RuntimeLocator {
             [
                 "Could not parse \(kind.rawValue) version output \"\(raw)\" from \(path).",
                 "PATH searched: \(searchPaths.joined(separator: ":"))",
-                "Try reinstalling or pinning a supported version (Node >=22.16.0).",
+                "Try reinstalling or pinning a supported version (Node >=22.19.0).",
             ].joined(separator: "\n")
         }
     }

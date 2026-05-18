@@ -3,7 +3,7 @@ import {
   resolveAgentModelPrimaryValue,
   resolveAgentModelTimeoutMsValue,
 } from "../../config/model-input.js";
-import type { AgentModelConfig } from "../../config/types.agents-shared.js";
+import type { AgentToolModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   externalCliDiscoveryForProviderAuth,
@@ -60,7 +60,7 @@ export function hasAuthForProvider(params: {
   return listProfilesForProvider(store, params.provider).length > 0;
 }
 
-export function coerceToolModelConfig(model?: AgentModelConfig): ToolModelConfig {
+export function coerceToolModelConfig(model?: AgentToolModelConfig): ToolModelConfig {
   const primary = resolveAgentModelPrimaryValue(model);
   const fallbacks = resolveAgentModelFallbackValues(model);
   const timeoutMs = resolveAgentModelTimeoutMsValue(model);

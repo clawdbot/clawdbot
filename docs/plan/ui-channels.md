@@ -90,6 +90,9 @@ type MessagePresentationOption = {
 - `interactive` select block maps to `presentation.blocks[].type = "select"`.
 
 The external agent and CLI schemas now use `presentation`; `interactive` remains an internal legacy parser/rendering helper for existing reply producers.
+The public producer-facing API treats `interactive` as deprecated. Runtime
+support remains so existing approval helpers and older plugins continue to
+work while new code emits `presentation`.
 
 ## Delivery metadata
 
@@ -128,6 +131,29 @@ type ChannelPresentationCapabilities = {
   context?: boolean;
   divider?: boolean;
   tones?: MessagePresentationTone[];
+  limits?: {
+    actions?: {
+      maxActions?: number;
+      maxActionsPerRow?: number;
+      maxRows?: number;
+      maxLabelLength?: number;
+      maxValueBytes?: number;
+      supportsStyles?: boolean;
+      supportsDisabled?: boolean;
+      supportsLayoutHints?: boolean;
+    };
+    selects?: {
+      maxOptions?: number;
+      maxLabelLength?: number;
+      maxValueBytes?: number;
+    };
+    text?: {
+      maxLength?: number;
+      encoding?: "characters" | "utf8-bytes" | "utf16-units";
+      markdownDialect?: "plain" | "markdown" | "html" | "slack-mrkdwn" | "discord-markdown";
+      supportsEdit?: boolean;
+    };
+  };
 };
 
 type ChannelDeliveryCapabilities = {
@@ -160,7 +186,8 @@ Core behavior:
 
 - Resolve target channel and runtime adapter.
 - Ask for presentation capabilities.
-- Degrade unsupported blocks before rendering.
+- Degrade unsupported blocks and apply generic capability limits before
+  rendering.
 - Call `renderPresentation`.
 - If no renderer exists, convert presentation to text fallback.
 - After successful send, call `pinDeliveredMessage` when `delivery.pin` is requested and supported.

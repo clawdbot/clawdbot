@@ -203,6 +203,20 @@ describe("cli session history", () => {
     });
   });
 
+  it("rejects path-like Claude CLI session ids", async () => {
+    await withClaudeProjectsDir(async ({ homeDir }) => {
+      expect(
+        resolveClaudeCliSessionFilePath({ cliSessionId: "../outside", homeDir }),
+      ).toBeUndefined();
+      expect(
+        resolveClaudeCliSessionFilePath({ cliSessionId: "nested/session", homeDir }),
+      ).toBeUndefined();
+      expect(
+        resolveClaudeCliSessionFilePath({ cliSessionId: "nested\\session", homeDir }),
+      ).toBeUndefined();
+    });
+  });
+
   it("deduplicates imported messages against similar local transcript entries", () => {
     const localMessages = [
       {

@@ -5,9 +5,13 @@ import { createCodexAppServerAgentHarness } from "./harness.js";
 import plugin from "./index.js";
 
 const runCodexAppServerAttemptMock = vi.hoisted(() => vi.fn());
+const runCodexAppServerSideQuestionMock = vi.hoisted(() => vi.fn());
 
 vi.mock("./src/app-server/run-attempt.js", () => ({
   runCodexAppServerAttempt: runCodexAppServerAttemptMock,
+}));
+vi.mock("./src/app-server/side-question.js", () => ({
+  runCodexAppServerSideQuestion: runCodexAppServerSideQuestionMock,
 }));
 
 function mockCall(mock: { mock: { calls: unknown[][] } }, index = 0) {
@@ -139,6 +143,26 @@ describe("codex plugin", () => {
 
     expect(runCodexAppServerAttemptMock).toHaveBeenCalledWith(
       { prompt: "hello" },
+      {
+        pluginConfig: { appServer: {} },
+        nativeHookRelay: { enabled: true },
+      },
+    );
+  });
+
+  it("enables the native hook relay for public Codex side questions", async () => {
+    const harness = createCodexAppServerAgentHarness({ pluginConfig: { appServer: {} } });
+    const runSideQuestion = harness.runSideQuestion;
+    const result = { text: "ok" };
+    runCodexAppServerSideQuestionMock.mockResolvedValueOnce(result);
+
+    if (!runSideQuestion) {
+      throw new Error("Expected Codex harness to expose side questions");
+    }
+    await expect(runSideQuestion({ question: "btw" } as never)).resolves.toBe(result);
+
+    expect(runCodexAppServerSideQuestionMock).toHaveBeenCalledWith(
+      { question: "btw" },
       {
         pluginConfig: { appServer: {} },
         nativeHookRelay: { enabled: true },

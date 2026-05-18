@@ -51,16 +51,16 @@ const DEFAULT_FETCH_USER_AGENT =
 const FETCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
 
 const WebFetchSchema = Type.Object({
-  url: Type.String({ description: "HTTP or HTTPS URL to fetch." }),
+  url: Type.String({ description: "HTTP(S) URL." }),
   extractMode: Type.Optional(
     stringEnum(EXTRACT_MODES, {
-      description: 'Extraction mode ("markdown" or "text").',
+      description: "Extract as markdown/text.",
       default: "markdown",
     }),
   ),
   maxChars: Type.Optional(
     Type.Number({
-      description: "Maximum characters to return (truncates when exceeded).",
+      description: "Max chars returned; truncates.",
       minimum: 100,
     }),
   ),
@@ -628,7 +628,7 @@ export function createWebFetchTool(options?: {
     label: "Web Fetch",
     name: "web_fetch",
     description:
-      "Fetch and extract readable content from a URL (HTML → markdown/text). Use for lightweight page access without browser automation.",
+      "Fetch URL and extract readable markdown/text. Lightweight page access; no browser automation.",
     parameters: WebFetchSchema,
     execute: async (_toolCallId, args) => {
       const { config, preferRuntimeProviders, runtimeWebFetch } = resolveWebFetchToolRuntimeContext(

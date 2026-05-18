@@ -1,4 +1,9 @@
-export { reduceInteractiveReply } from "../channels/plugins/outbound/interactive.js";
+export {
+  adaptMessagePresentationForChannel,
+  applyPresentationActionLimits,
+  presentationPageSize,
+  reduceInteractiveReply,
+} from "../channels/plugins/outbound/interactive.js";
 export type {
   InteractiveButtonStyle,
   InteractiveReply,

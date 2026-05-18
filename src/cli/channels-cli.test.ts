@@ -1,6 +1,7 @@
 import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginPackageChannel } from "../plugins/manifest.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { registerChannelsCli } from "./channels-cli.js";
 
 const listBundledPackageChannelMetadataMock = vi.hoisted(() =>
@@ -19,13 +20,10 @@ function getChannelAddOptionFlags(program: Command): string[] {
 
 describe("registerChannelsCli", () => {
   const originalArgv = [...process.argv];
-  const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
 
   afterEach(() => {
     process.argv = [...originalArgv];
-    if (originalPlatform) {
-      Object.defineProperty(process, "platform", originalPlatform);
-    }
+    vi.restoreAllMocks();
     vi.clearAllMocks();
   });
 
@@ -78,7 +76,7 @@ describe("registerChannelsCli", () => {
         cliAddOptions: [{ flags: "--homeserver <url>", description: "Matrix homeserver URL" }],
       },
     ]);
-    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    mockProcessPlatform("win32");
     process.argv = [
       "C:\\Program Files\\nodejs\\node.exe",
       "C:\\repo\\openclaw.js",

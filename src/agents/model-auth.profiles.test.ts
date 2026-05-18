@@ -1325,4 +1325,20 @@ describe("getApiKeyForModel", () => {
     expect(resolved?.apiKey).toBe("gcp-vertex-credentials");
     expect(resolved?.source).toBe("gcloud adc");
   });
+
+  it("resolveEnvApiKey skips plugin setup fallback when precomputed maps are authoritative", () => {
+    const resolved = resolveEnvApiKey(
+      "anthropic-vertex",
+      {
+        ANTHROPIC_VERTEX_USE_GCP_METADATA: "true",
+      } as NodeJS.ProcessEnv,
+      {
+        candidateMap: {},
+        authEvidenceMap: {},
+        skipSetupProviderFallback: true,
+      },
+    );
+
+    expect(resolved).toBeNull();
+  });
 });

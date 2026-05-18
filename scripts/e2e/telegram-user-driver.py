@@ -611,6 +611,33 @@ def command_confirm_qr(args):
     )
 
 
+def command_terminate_session(args):
+    config, bot_config = load_config()
+    driver = UserDriver(config, bot_config)
+    driver.authorize(argparse.Namespace(timeout_ms=args.timeout_ms))
+    driver.client.request({"@type": "terminateSession", "session_id": int(args.session_id)}, timeout=30)
+    print_result({"ok": True, "sessionId": args.session_id}, args.json, getattr(args, "output", ""))
+
+
+def command_terminate_desktop_sessions(args):
+    config, bot_config = load_config()
+    driver = UserDriver(config, bot_config)
+    driver.authorize(argparse.Namespace(timeout_ms=args.timeout_ms))
+    result = driver.client.request({"@type": "getActiveSessions"}, timeout=30)
+    terminated = []
+    for session in result.get("sessions", []):
+        if session.get("is_current"):
+            continue
+        if session.get("application_name") != "Telegram Desktop":
+            continue
+        session_id = session.get("id")
+        if session_id is None:
+            continue
+        driver.client.request({"@type": "terminateSession", "session_id": int(session_id)}, timeout=30)
+        terminated.append({"id": session_id, "applicationName": session.get("application_name")})
+    print_result({"ok": True, "terminated": terminated}, args.json, getattr(args, "output", ""))
+
+
 def public_user(user):
     return {
         "id": user.get("id"),
@@ -783,6 +810,15 @@ def main():
     add_common(confirm_qr)
     confirm_qr.add_argument("--link", required=True)
     confirm_qr.set_defaults(func=command_confirm_qr)
+
+    terminate_session = sub.add_parser("terminate-session")
+    add_common(terminate_session)
+    terminate_session.add_argument("--session-id", required=True)
+    terminate_session.set_defaults(func=command_terminate_session)
+
+    terminate_desktop_sessions = sub.add_parser("terminate-desktop-sessions")
+    add_common(terminate_desktop_sessions)
+    terminate_desktop_sessions.set_defaults(func=command_terminate_desktop_sessions)
 
     send = sub.add_parser("send")
     add_common(send)

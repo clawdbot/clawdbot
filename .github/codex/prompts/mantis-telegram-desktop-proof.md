@@ -16,8 +16,11 @@ Hard limits:
 - Do not finish with tiny, cropped-wrong, off-bottom, or sidebar-heavy GIFs.
 - Do not invent a generic proof. The proof must match the PR behavior.
 - Do not force GIFs for internal-only, workflow-only, test-only, docs-only, or
-  otherwise non-visual PRs. A no-visual-proof manifest is a successful outcome
-  when GIFs would be misleading.
+  otherwise non-visual PRs. A no-visual-proof manifest is a successful workflow
+  outcome when GIFs would be misleading, but it is not proof that the PR passed.
+- Keep public-facing manifest summaries short and user-domain. Do not mention
+  harness internals, mock-provider limits, secret/trust boundaries, local paths,
+  transcript seeding, or workflow implementation details in the summary.
 
 Inputs are provided as environment variables:
 
@@ -42,9 +45,10 @@ Required workflow:
    before/after. If it does not, write
    `${MANTIS_OUTPUT_DIR}/mantis-evidence.json` with `comparison.pass: true`, no
    artifacts, and a summary that starts with
-   `Mantis did not generate before/after GIFs because`. Include the concrete
-   reason in the summary. Use this manifest shape and do not create worktrees
-   or start Crabbox for this case:
+   `Mantis did not generate before/after GIFs because`. Include a short
+   public reason, such as `the PR changes internal session bookkeeping rather
+than Telegram-visible behavior`. Use this manifest shape and do not create
+   worktrees or start Crabbox for this case:
 
    ```json
    {
@@ -72,6 +76,14 @@ Required workflow:
      "artifacts": []
    }
    ```
+
+   If the PR appears visual but proof is blocked by Telegram Desktop session
+   state, authorization, credentials, Crabbox, or another capture-infrastructure
+   issue, do not describe it as a no-visual PR. Write a manifest with
+   `comparison.pass: false`, skipped lanes, no artifacts, and a summary that
+   starts with `Mantis could not capture Telegram Desktop proof because`. The
+   publisher will keep that out of PR comments so the failure stays in the
+   workflow logs and artifacts.
 
 4. Decide what Telegram message, mock model response, command, callback, button,
    media, or sequence best proves the PR. Use `MANTIS_INSTRUCTIONS` as extra
@@ -134,4 +146,6 @@ Expected final state:
   `Main` and `This PR`.
 - No-visual-proof manifests contain no artifacts and have `comparison.pass:
 true`.
+- Capture-infrastructure failure manifests contain no artifacts and have
+  `comparison.pass: false`.
 - The worktree can be dirty only under `.artifacts/`.

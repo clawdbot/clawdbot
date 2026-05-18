@@ -21,6 +21,9 @@ const GEMINI_RESOURCE_EXHAUSTED_MESSAGE =
   "RESOURCE_EXHAUSTED: Resource has been exhausted (e.g. check quota).";
 // OpenRouter 402 billing example: https://openrouter.ai/docs/api-reference/errors
 const OPENROUTER_CREDITS_MESSAGE = "Payment Required: insufficient credits";
+// Issue-backed Moonshot/Kimi exhausted-balance shape surfaced under HTTP 429 (#43447).
+const MOONSHOT_INSUFFICIENT_BALANCE_429_PAYLOAD =
+  '{"error":{"type":"rate_limit_reached","message":"Insufficient account balance. Please recharge your Moonshot account."}}';
 const OPENROUTER_MODEL_NOT_FOUND_PAYLOAD =
   '{"error":{"message":"Healer Alpha was a stealth model revealed on March 18th as an early testing version of MiMo-V2-Omni. Find it here: https://openrouter.ai/xiaomi/mimo-v2-omni","code":404},"user_id":"user_33GTyP8uDSYYbaeBO48AGHXyuMC"}';
 const TOGETHER_MONTHLY_SPEND_CAP_MESSAGE =
@@ -291,6 +294,46 @@ describe("failover-error", () => {
         message: GROQ_SERVICE_UNAVAILABLE_MESSAGE,
       }),
     ).toBe("overloaded");
+  });
+
+  it("lets Moonshot/Kimi billing-shaped 429 payloads win over generic rate limit status", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "moonshot",
+        status: 429,
+        message: MOONSHOT_INSUFFICIENT_BALANCE_429_PAYLOAD,
+      }),
+    ).toBe("billing");
+    expect(
+      resolveFailoverReasonFromError(
+        {
+          status: 429,
+          message: MOONSHOT_INSUFFICIENT_BALANCE_429_PAYLOAD,
+        },
+        "kimi-claw",
+      ),
+    ).toBe("billing");
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "moonshot",
+        status: 429,
+        message: OPENAI_RATE_LIMIT_MESSAGE,
+      }),
+    ).toBe("rate_limit");
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "openai",
+        status: 429,
+        message: MOONSHOT_INSUFFICIENT_BALANCE_429_PAYLOAD,
+      }),
+    ).toBe("rate_limit");
+    expect(
+      classifyFailoverSignal({
+        provider: "moonshot",
+        status: 429,
+        message: MOONSHOT_INSUFFICIENT_BALANCE_429_PAYLOAD,
+      }),
+    ).toEqual({ kind: "reason", reason: "billing" });
   });
 
   it("classifies OpenRouter no-endpoints 404s as model_not_found", () => {

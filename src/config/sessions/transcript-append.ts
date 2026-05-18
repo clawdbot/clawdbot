@@ -5,7 +5,7 @@ import { StringDecoder } from "node:string_decoder";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import {
   acquireSessionWriteLock,
-  resolveSessionWriteLockAcquireTimeoutMs,
+  resolveSessionWriteLockOptions,
 } from "../../agents/session-write-lock.js";
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -264,7 +264,7 @@ async function appendSessionTranscriptMessageLocked<TMessage>(
 ): Promise<{ messageId: string; message: TMessage }> {
   const lock = await acquireSessionWriteLock({
     sessionFile: params.transcriptPath,
-    timeoutMs: resolveSessionWriteLockAcquireTimeoutMs(params.config),
+    ...resolveSessionWriteLockOptions(params.config),
     allowReentrant: true,
   });
   try {

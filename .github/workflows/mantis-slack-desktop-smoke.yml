@@ -281,8 +281,8 @@ jobs:
             --credential-role ci \
             --provider-mode live-frontier \
             --hydrate-mode "$HYDRATE_MODE" \
-            --model openai/gpt-5.4 \
-            --alt-model openai/gpt-5.4 \
+            --model openai/gpt-5.5 \
+            --alt-model openai/gpt-5.5 \
             --fast \
             --scenario "$SCENARIO_ID" \
             "${keep_args[@]}" \

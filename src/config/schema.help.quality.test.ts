@@ -708,10 +708,18 @@ describe("config help copy quality", () => {
     expect(/raw|unnormalized/i.test(rawKeyPrefix)).toBe(true);
   });
 
-  it("documents session write-lock acquire timeout defaults", () => {
+  it("documents session write-lock policy defaults", () => {
     const acquireTimeout = FIELD_HELP["session.writeLock.acquireTimeoutMs"];
     expect(acquireTimeout.includes("60000")).toBe(true);
     expect(/transcript|lock/i.test(acquireTimeout)).toBe(true);
+
+    const stale = FIELD_HELP["session.writeLock.staleMs"];
+    expect(stale.includes("1800000")).toBe(true);
+    expect(stale.includes("OPENCLAW_SESSION_WRITE_LOCK_STALE_MS")).toBe(true);
+
+    const maxHold = FIELD_HELP["session.writeLock.maxHoldMs"];
+    expect(maxHold.includes("300000")).toBe(true);
+    expect(maxHold.includes("OPENCLAW_SESSION_WRITE_LOCK_MAX_HOLD_MS")).toBe(true);
   });
 
   it("documents session maintenance duration/size examples and deprecations", () => {

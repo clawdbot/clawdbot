@@ -103,4 +103,27 @@ describe("plugin peer links", () => {
       expect(warnings.join("\n")).toContain("is not a real directory");
     },
   );
+
+  it("does not delete an existing real openclaw package directory", async () => {
+    const root = makeTempDir();
+    const packageDir = path.join(root, "peer-plugin");
+    const existingOpenClawDir = path.join(packageDir, "node_modules", "openclaw");
+    fs.mkdirSync(existingOpenClawDir, { recursive: true });
+    fs.writeFileSync(path.join(existingOpenClawDir, "package.json"), '{"name":"openclaw"}', "utf8");
+
+    const warnings: string[] = [];
+    const result = await linkOpenClawPeerDependencies({
+      installedDir: packageDir,
+      peerDependencies: {
+        openclaw: ">=2026.0.0",
+      },
+      logger: {
+        warn: (message) => warnings.push(message),
+      },
+    });
+
+    expect(result).toEqual({ repaired: 0, skipped: 1 });
+    expect(fs.existsSync(path.join(existingOpenClawDir, "package.json"))).toBe(true);
+    expect(warnings.join("\n")).toContain("already exists and is not a symlink");
+  });
 });

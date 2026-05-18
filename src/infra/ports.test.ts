@@ -1,6 +1,7 @@
 import net from "node:net";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../terminal/ansi.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 
 const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn());
 
@@ -15,13 +16,9 @@ let handlePortError: typeof import("./ports.js").handlePortError;
 let PortInUseError: typeof import("./ports.js").PortInUseError;
 
 const describeUnix = process.platform === "win32" ? describe.skip : describe;
-const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 
 function setPlatform(platform: NodeJS.Platform): void {
-  Object.defineProperty(process, "platform", {
-    value: platform,
-    configurable: true,
-  });
+  mockProcessPlatform(platform);
 }
 
 async function listenServer(
@@ -63,9 +60,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  if (originalPlatformDescriptor) {
-    Object.defineProperty(process, "platform", originalPlatformDescriptor);
-  }
+  vi.restoreAllMocks();
 });
 
 describe("ports helpers", () => {

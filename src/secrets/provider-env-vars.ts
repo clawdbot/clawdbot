@@ -33,6 +33,7 @@ export type ProviderEnvVarLookupParams = {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   includeUntrustedWorkspacePlugins?: boolean;
+  metadataSnapshot?: PluginMetadataSnapshot;
 };
 
 export type ProviderAuthEvidence = {
@@ -123,6 +124,9 @@ function appendUniqueAuthEvidence(
 function resolveProviderMetadataSnapshot(
   params?: ProviderEnvVarLookupParams,
 ): PluginMetadataSnapshot {
+  if (params?.metadataSnapshot) {
+    return params.metadataSnapshot;
+  }
   const config = params?.config ?? {};
   const env = params?.env ?? process.env;
   const current = getCurrentPluginMetadataSnapshot({

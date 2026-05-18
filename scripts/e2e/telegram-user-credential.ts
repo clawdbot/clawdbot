@@ -3,10 +3,7 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmod, copyFile, mkdir, readFile, rm, unlink, writeFile } from "node:fs/promises";
-import {
-  TELEGRAM_USER_QA_CREDENTIAL_KIND,
-  parseTelegramUserQaCredentialPayload,
-} from "../../extensions/qa-lab/runtime-api.js";
+import { normalizeCredentialPayloadForKind } from "../qa/convex-credential-broker/convex/payload-validation.js";
 
 type JsonObject = Record<string, unknown>;
 
@@ -15,6 +12,7 @@ const DEFAULT_BOT_CREDENTIALS_FILE =
   "~/.codex/skills/custom/telegram-e2e-bot-to-bot/credentials.local.json";
 const DEFAULT_CONVEX_ENV_FILE = "~/.codex/skills/custom/telegram-e2e-bot-to-bot/convex.local.env";
 const CHUNKED_PAYLOAD_MARKER = "__openclawQaCredentialPayloadChunksV1";
+const TELEGRAM_USER_QA_CREDENTIAL_KIND = "telegram-user";
 
 function usage(): never {
   throw new Error(
@@ -154,6 +152,10 @@ function optionalPositiveInteger(value: string | undefined, fallback: number) {
     throw new Error(`Expected positive integer, got ${value}.`);
   }
   return parsed;
+}
+
+function parseTelegramUserQaCredentialPayload(payload: Record<string, unknown>): JsonObject {
+  return normalizeCredentialPayloadForKind(TELEGRAM_USER_QA_CREDENTIAL_KIND, payload);
 }
 
 async function fileSha256(path: string) {
@@ -342,7 +344,7 @@ async function hydratePayloadFromLease(params: {
   if (serialized.length !== marker.byteLength) {
     throw new Error("Chunked payload length mismatch.");
   }
-  return parseTelegramUserQaCredentialPayload(JSON.parse(serialized)) as JsonObject;
+  return parseTelegramUserQaCredentialPayload(JSON.parse(serialized));
 }
 
 async function createTelegramUserPayload(opts: Map<string, string>) {

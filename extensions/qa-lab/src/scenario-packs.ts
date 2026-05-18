@@ -11,6 +11,8 @@ export const QA_PERSONAL_AGENT_SCENARIO_IDS = [
   "personal-memory-preference-recall",
   "personal-redaction-no-secret-leak",
   "personal-tool-safety-followthrough",
+  "personal-approval-denial-stop",
+  "personal-task-followthrough-status",
 ] as const;
 
 export const QA_SCENARIO_PACKS = [
@@ -18,7 +20,7 @@ export const QA_SCENARIO_PACKS = [
     id: "personal-agent",
     title: "Personal Agent Benchmark Pack",
     description:
-      "Local-only personal assistant workflow scenarios for reminders, channel replies, memory recall, redaction, and safe tool followthrough.",
+      "Local-only personal assistant workflow scenarios for reminders, channel replies, memory recall, redaction, safe tool followthrough, approval denial, and task status honesty.",
     scenarioIds: QA_PERSONAL_AGENT_SCENARIO_IDS,
   },
 ] as const satisfies readonly QaScenarioPackDefinition[];

@@ -40,7 +40,7 @@ import { msTeamsApprovalAuth } from "./approval-auth.js";
 import { MSTeamsChannelConfigSchema } from "./config-schema.js";
 import { collectMSTeamsMutableAllowlistWarnings } from "./doctor.js";
 import { resolveMSTeamsGroupToolPolicy } from "./policy.js";
-import { buildMSTeamsPresentationCard } from "./presentation.js";
+import { buildMSTeamsPresentationCard, MSTEAMS_PRESENTATION_CAPABILITIES } from "./presentation.js";
 import type { ProbeMSTeamsResult } from "./probe.js";
 import {
   normalizeMSTeamsMessagingTarget,
@@ -418,11 +418,15 @@ const msteamsChannelOutbound: ChannelOutboundAdapter = {
     durableFinal: {
       text: true,
       media: true,
+      payload: true,
       messageSendingHooks: true,
     },
   },
+  presentationCapabilities: MSTEAMS_PRESENTATION_CAPABILITIES,
   ...createRuntimeOutboundDelegates({
     getRuntime: loadMSTeamsChannelRuntime,
+    renderPresentation: { resolve: (runtime) => runtime.msteamsOutbound.renderPresentation },
+    sendPayload: { resolve: (runtime) => runtime.msteamsOutbound.sendPayload },
     sendText: { resolve: (runtime) => runtime.msteamsOutbound.sendText },
     sendMedia: { resolve: (runtime) => runtime.msteamsOutbound.sendMedia },
     sendPoll: { resolve: (runtime) => runtime.msteamsOutbound.sendPoll },

@@ -1386,7 +1386,7 @@ describe("message tool schema scoping", () => {
     expect(getActionEnum(properties)).toContain("read");
     expectStringSchema(properties.messageId, {
       description:
-        "Target message id for read, reaction, edit, delete, pin, or unpin. If omitted for reaction-like actions, defaults to the current inbound message id when available.",
+        "Target message id for read/react/edit/delete/pin/unpin. Reaction-like defaults current inbound id when available.",
     });
   });
 });

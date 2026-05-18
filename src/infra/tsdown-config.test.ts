@@ -5,6 +5,7 @@ import tsdownConfig from "../../tsdown.config.ts";
 
 type TsdownConfigEntry = {
   deps?: {
+    alwaysBundle?: string[] | ((id: string) => boolean);
     neverBundle?: string[] | ((id: string) => boolean);
   };
   entry?: Record<string, string> | string[];
@@ -224,6 +225,21 @@ describe("tsdown config", () => {
     }
     const externalize = external;
     expect(externalize("qrcode-terminal/lib/main.js", undefined, false)).toBe(true);
+  });
+
+  it("always bundles plugin SDK package-local runtime dependencies", () => {
+    const unifiedGraph = requireUnifiedDistGraph();
+    const alwaysBundle = unifiedGraph.deps?.alwaysBundle;
+
+    if (typeof alwaysBundle !== "function") {
+      throw new Error("expected unified graph alwaysBundle predicate");
+    }
+
+    expect(alwaysBundle("@openclaw/fs-safe")).toBe(true);
+    expect(alwaysBundle("@openclaw/fs-safe/path")).toBe(true);
+    expect(alwaysBundle("zod")).toBe(true);
+    expect(alwaysBundle("zod/v4/core")).toBe(true);
+    expect(alwaysBundle("not-a-runtime-dependency")).toBe(false);
   });
 
   it("suppresses unresolved imports from extension source", () => {

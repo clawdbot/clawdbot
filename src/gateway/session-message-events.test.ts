@@ -389,6 +389,58 @@ describe("session.message websocket events", () => {
     });
   });
 
+  test("does not broadcast hidden runtime-context custom messages as live chat messages", async () => {
+    const storePath = await createSessionStoreFile();
+    await writeSessionStore({
+      entries: {
+        "hidden-runtime": {
+          sessionId: "sess-hidden-runtime",
+          updatedAt: Date.now(),
+        },
+      },
+      storePath,
+    });
+
+    await withOperatorSessionSubscriber(async (ws) => {
+      const changedEventPromise = waitForSessionsChangedMessagePhase(
+        ws,
+        "agent:main:hidden-runtime",
+      );
+      await expectNoMessageWithin({
+        watch: (timeoutMs) =>
+          onceMessage(
+            ws,
+            (message) =>
+              message.type === "event" &&
+              message.event === "session.message" &&
+              (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
+                "agent:main:hidden-runtime",
+            timeoutMs,
+          ),
+        action: () => {
+          emitSessionTranscriptUpdate({
+            sessionFile: path.join(path.dirname(storePath), "sess-hidden-runtime.jsonl"),
+            sessionKey: "agent:main:hidden-runtime",
+            messageId: "runtime-context-1",
+            messageSeq: 1,
+            message: {
+              role: "custom",
+              customType: "openclaw.runtime-context",
+              content: "secret runtime context",
+              display: false,
+            },
+          });
+        },
+      });
+
+      const changedEvent = await changedEventPromise;
+      expectRecordFields(changedEvent.payload, {
+        sessionKey: "agent:main:hidden-runtime",
+        phase: "message",
+      });
+    });
+  });
+
   test("includes live usage metadata on session.message and sessions.changed transcript events", async () => {
     const storePath = await createSessionStoreFile();
     await writeSessionStore({

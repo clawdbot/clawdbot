@@ -37,7 +37,6 @@ function renderCompose(params: {
   bindUiDist: boolean;
   gatewayPort: number;
   qaLabPort: number;
-  gatewayToken: string;
   includeQaLabUi: boolean;
 }) {
   const imageBlock = renderImageBlock(params);
@@ -74,8 +73,10 @@ ${
     ? `  qa-lab:
 ${imageBlock}    pull_policy: never
     ports:
-      - "${params.qaLabPort}:${QA_LAB_INTERNAL_PORT}"
-${params.bindUiDist ? `    volumes:\n      - ${qaLabUiMount}:${QA_LAB_UI_OVERLAY_DIR}:ro\n` : ""}    healthcheck:
+      - "127.0.0.1:${params.qaLabPort}:${QA_LAB_INTERNAL_PORT}"
+    volumes:
+      - ./state:/opt/openclaw-scaffold:ro
+${params.bindUiDist ? `      - ${qaLabUiMount}:${QA_LAB_UI_OVERLAY_DIR}:ro\n` : ""}    healthcheck:
       test:
         - CMD
         - node
@@ -91,29 +92,9 @@ ${params.bindUiDist ? `    volumes:\n      - ${qaLabUiMount}:${QA_LAB_UI_OVERLAY
       OPENCLAW_SKIP_CANVAS_HOST: "1"
       OPENCLAW_PROFILE: ""
     command:
-      - node
-      - dist/index.js
-      - qa
-      - ui
-      - --host
-      - "0.0.0.0"
-      - --port
-      - "${QA_LAB_INTERNAL_PORT}"
-      - --advertise-host
-      - "127.0.0.1"
-      - --advertise-port
-      - "${params.qaLabPort}"
-      - --control-ui-url
-      - "http://127.0.0.1:${params.gatewayPort}/"
-      - --control-ui-proxy-target
-      - "http://openclaw-qa-gateway:18789/"
-      - --control-ui-token
-      - "${params.gatewayToken}"
-${params.bindUiDist ? `      - --ui-dist-dir\n      - "${QA_LAB_UI_OVERLAY_DIR}"\n` : ""}      - --auto-kickoff-target
-      - direct
-      - --send-kickoff-on-start
-      - --embedded-gateway
-      - disabled
+      - sh
+      - -lc
+      - OPENCLAW_QA_CONTROL_UI_PROXY_TOKEN="$(node -e 'const fs=require("node:fs");const cfg=JSON.parse(fs.readFileSync("/opt/openclaw-scaffold/openclaw.json","utf8"));process.stdout.write(cfg.gateway?.auth?.token ?? "")')" exec node dist/index.js qa ui --host 0.0.0.0 --port ${QA_LAB_INTERNAL_PORT} --advertise-host 127.0.0.1 --advertise-port ${params.qaLabPort} --control-ui-url http://127.0.0.1:${params.gatewayPort}/ --control-ui-proxy-target http://openclaw-qa-gateway:18789/${params.bindUiDist ? ` --ui-dist-dir ${QA_LAB_UI_OVERLAY_DIR}` : ""} --auto-kickoff-target direct --send-kickoff-on-start --embedded-gateway disabled
     depends_on:
       qa-mock-openai:
         condition: service_healthy
@@ -124,7 +105,7 @@ ${imageBlock}    pull_policy: never
     extra_hosts:
       - "host.docker.internal:host-gateway"
     ports:
-      - "${params.gatewayPort}:18789"
+      - "127.0.0.1:${params.gatewayPort}:18789"
     environment:
       OPENCLAW_CONFIG_PATH: /tmp/openclaw/openclaw.json
       OPENCLAW_STATE_DIR: /tmp/openclaw/state
@@ -288,7 +269,6 @@ export async function writeQaDockerHarnessFiles(params: {
         bindUiDist,
         gatewayPort,
         qaLabPort,
-        gatewayToken,
         includeQaLabUi,
       }),
       "utf8",

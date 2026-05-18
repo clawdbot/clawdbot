@@ -629,7 +629,7 @@ describe("cron model formatting and precedence edge cases", () => {
       );
     });
 
-    it("falls through metadata-only subagents.model to the agent model", async () => {
+    it("falls through fallback-only subagents.model to the agent model", async () => {
       await expectSelectedModel(
         {
           cfg: {
@@ -642,7 +642,7 @@ describe("cron model formatting and precedence edge cases", () => {
           },
           agentConfigOverride: {
             model: { primary: "anthropic/claude-opus-4-6" },
-            subagents: { model: { timeoutMs: 1_000 } },
+            subagents: { model: { fallbacks: [] } },
           },
         },
         { provider: "anthropic", model: "claude-opus-4-6" },

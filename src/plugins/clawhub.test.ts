@@ -750,6 +750,7 @@ describe("installPluginFromClawHub", () => {
     expect(failure.error).toBe(
       'ClawHub artifact download for "demo@2026.3.22" is not available yet (ClawHub /api/v1/packages/demo/versions/2026.3.22/artifact/download failed (404): Not Found). Use "npm:demo@2026.3.22" for launch installs while ClawHub artifact routing is being rolled out.',
     );
+    expect(failure.code).toBe(CLAWHUB_INSTALL_ERROR_CODE.ARTIFACT_DOWNLOAD_UNAVAILABLE);
     expect(archiveDownloadCall().artifact).toBe("clawpack");
     expect(installPluginFromArchiveMock).not.toHaveBeenCalled();
   });

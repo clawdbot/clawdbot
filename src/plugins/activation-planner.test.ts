@@ -126,6 +126,24 @@ describe("activation planner", () => {
     ).toEqual(["demo-channel"]);
   });
 
+  it("does not activate manifest-triggered plugins that are disabled in config", () => {
+    expect(
+      resolveManifestActivationPluginIds({
+        config: {
+          plugins: {
+            entries: {
+              "memory-core": { enabled: false },
+            },
+          },
+        },
+        trigger: {
+          kind: "command",
+          command: "memory",
+        },
+      }),
+    ).toEqual([]);
+  });
+
   it("keeps ids-only provider, agent harness, channel, and route planning stable", () => {
     expect(
       resolveManifestActivationPluginIds({

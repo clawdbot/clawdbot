@@ -192,4 +192,20 @@ describe("WhatsApp QA live runtime", () => {
       },
     ]);
   });
+
+  it("classifies WhatsApp driver connection closures as retryable", () => {
+    expect(__testing.isTransientWhatsAppQaDriverError(new Error("Connection Closed"))).toBe(true);
+    expect(
+      __testing.isTransientWhatsAppQaDriverError(new Error("status 440: session conflict")),
+    ).toBe(true);
+    expect(__testing.isTransientWhatsAppQaDriverError(new Error("Stream Errored (conflict)"))).toBe(
+      true,
+    );
+    expect(
+      __testing.isTransientWhatsAppQaDriverError(
+        new Error("timed out waiting for WhatsApp QA driver message"),
+      ),
+    ).toBe(true);
+    expect(__testing.isTransientWhatsAppQaDriverError(new Error("timed out waiting"))).toBe(false);
+  });
 });

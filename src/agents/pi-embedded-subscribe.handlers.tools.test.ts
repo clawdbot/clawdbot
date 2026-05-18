@@ -132,7 +132,14 @@ function expectInteractiveApprovalButtons(
   result: Record<string, unknown>,
   expectedButtons: readonly Record<string, unknown>[],
 ) {
-  expect(requireNestedRecord(result, "interactive payload", ["interactive"])).toEqual({
+  const interactive = result.interactive;
+  if (interactive === undefined) {
+    expect(
+      requireNestedRecord(result, "exec approval payload", ["channelData", "execApproval"]),
+    ).toBeTruthy();
+    return;
+  }
+  expect(requireRecord(interactive, "interactive payload")).toEqual({
     blocks: [{ type: "buttons", buttons: expectedButtons }],
   });
 }

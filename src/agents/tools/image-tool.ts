@@ -498,10 +498,10 @@ export function createImageTool(options?: {
   // If model has native vision, images in the prompt are auto-injected
   // so this tool is only needed when image wasn't provided in the prompt
   const description = options?.modelHasVision
-    ? "Analyze one or more images with a vision model. Use image for a single path/URL, or images for multiple (up to 20). Only use this tool when images were NOT already provided in the user's message. Images mentioned in the prompt are automatically visible to you."
+    ? "Analyze images with vision model. Use image for one path/URL, images for max 20. Only use this tool when images were NOT already provided; prompt images already visible."
     : explicitImageModelConfig
-      ? "Analyze one or more images with the configured image model (agents.defaults.imageModel). Use image for a single path/URL, or images for multiple (up to 20). Provide a prompt describing what to analyze."
-      : "Analyze one or more images with an available vision model. Use image for a single path/URL, or images for multiple (up to 20). Provide a prompt describing what to analyze.";
+      ? "Analyze images with configured image model. Use image for one path/URL, images for max 20. Prompt says what to inspect."
+      : "Analyze images with available vision model. Use image for one path/URL, images for max 20. Prompt says what to inspect.";
 
   return {
     label: "Image",
@@ -509,10 +509,10 @@ export function createImageTool(options?: {
     description,
     parameters: Type.Object({
       prompt: Type.Optional(Type.String()),
-      image: Type.Optional(Type.String({ description: "Single image path or URL." })),
+      image: Type.Optional(Type.String({ description: "One image path/URL." })),
       images: Type.Optional(
         Type.Array(Type.String(), {
-          description: "Multiple image paths or URLs (up to maxImages, default 20).",
+          description: "Image paths/URLs; maxImages default 20.",
         }),
       ),
       model: Type.Optional(Type.String()),

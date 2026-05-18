@@ -35,6 +35,7 @@ let mockedNativeStreaming = false;
 let mockedBlockStreamingEnabled: boolean | undefined = false;
 let mockedSlackStreamingMode: "off" | "partial" | "block" | "progress" = "partial";
 let mockedSlackDraftMode: "replace" | "status_final" | "append" = "append";
+let mockedPinnedMainDmOwner: string | undefined;
 let capturedReplyOptions:
   | {
       disableBlockStreaming?: boolean;
@@ -586,7 +587,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/security-runtime", () => ({
-  resolvePinnedMainDmOwnerFromAllowlist: () => undefined,
+  resolvePinnedMainDmOwnerFromAllowlist: () => mockedPinnedMainDmOwner,
 }));
 
 vi.mock("openclaw/plugin-sdk/string-coerce-runtime", () => ({
@@ -788,6 +789,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     mockedBlockStreamingEnabled = false;
     mockedSlackStreamingMode = "partial";
     mockedSlackDraftMode = "append";
+    mockedPinnedMainDmOwner = undefined;
     capturedReplyOptions = undefined;
     capturedStatusReactionOptions = undefined;
     capturedTyping = undefined;
@@ -982,6 +984,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   });
 
   it("updates non-main DM last-route metadata on the prepared direct session", async () => {
+    mockedPinnedMainDmOwner = "U2";
     await dispatchPreparedSlackMessage(
       createPreparedSlackMessage({
         cfg: { session: { dmScope: "per-channel-peer" } },

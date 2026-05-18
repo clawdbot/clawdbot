@@ -461,6 +461,7 @@ describe("prepareSimpleCompletionModel", () => {
       provider: "ollama",
       modelId: "llama3.2:latest",
       skipPiDiscovery: true,
+      modelResolver: hoisted.resolveModelAsyncMock,
     });
 
     expect(result).not.toHaveProperty("error");
@@ -494,6 +495,7 @@ describe("prepareSimpleCompletionModel", () => {
       modelId: "mistral-medium-3-5",
       allowBundledStaticCatalogFallback: true,
       skipPiDiscovery: true,
+      modelResolver: hoisted.resolveModelAsyncMock,
     });
 
     expect(result).not.toHaveProperty("error");
@@ -522,7 +524,7 @@ describe("prepareSimpleCompletionModelForAgent", () => {
         },
       },
     } as OpenClawConfig;
-    hoisted.resolveModelMock.mockReturnValueOnce({
+    hoisted.resolveModelAsyncMock.mockResolvedValueOnce({
       model: {
         provider: "openai-codex",
         id: "gpt-5.4-mini",
@@ -536,17 +538,22 @@ describe("prepareSimpleCompletionModelForAgent", () => {
     const result = await prepareSimpleCompletionModelForAgent({
       cfg,
       agentId: "main",
+      skipPiDiscovery: true,
+      modelResolver: hoisted.resolveModelAsyncMock,
     });
 
     expectPreparedModelResult(result);
     expect(result.selection.provider).toBe("openai");
     expect(result.selection.modelId).toBe("gpt-5.4-mini");
     expect(result.selection.runtimeProvider).toBe("openai-codex");
-    expect(hoisted.resolveModelMock).toHaveBeenCalledWith(
+    expect(hoisted.resolveModelAsyncMock).toHaveBeenCalledWith(
       "openai-codex",
       "gpt-5.4-mini",
       expect.any(String),
       cfg,
+      {
+        skipPiDiscovery: true,
+      },
     );
     expect(
       (callArg(hoisted.getApiKeyForModelMock) as { model?: { provider?: string } }).model?.provider,

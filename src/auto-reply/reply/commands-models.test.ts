@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -97,6 +97,15 @@ const textSurfaceModelsTestPlugins = (["discord", "whatsapp"] as const).map((id)
   plugin: createChannelTestPluginBase({ id }),
   source: "test",
 }));
+
+beforeAll(async () => {
+  modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+    { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
+  ]);
+  await buildModelsProviderData({
+    agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
+  } as OpenClawConfig);
+});
 
 beforeEach(() => {
   modelCatalogMocks.loadModelCatalog.mockReset();
@@ -274,7 +283,42 @@ describe("handleModelsCommand", () => {
     expect(result?.reply?.text).not.toMatch(/^- codex-cli \(/m);
   });
 
-  it("sources CLI runtime provider model lists from the catalog, not user agents.defaults.models", async () => {
+  it("sources CLI runtime provider model lists from the catalog", async () => {
+    modelCatalogMocks.loadModelCatalog.mockResolvedValue([
+      { provider: "claude-cli", id: "claude-opus-4-7", name: "Claude Opus 4.7" },
+      { provider: "claude-cli", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
+      { provider: "claude-cli", id: "claude-opus-4-6", name: "Claude Opus 4.6" },
+      { provider: "claude-cli", id: "claude-opus-4-5", name: "Claude Opus 4.5" },
+      { provider: "claude-cli", id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5" },
+      { provider: "claude-cli", id: "claude-haiku-4-5", name: "Claude Haiku 4.5" },
+    ]);
+    modelProviderAuthMocks.authenticatedProviders = new Set(["claude-cli"]);
+
+    const data = await buildModelsProviderData({
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-7" },
+          // User only declared 2 of claude-cli's 6 supported models.
+          // For claude-cli this narrowing must be ignored.
+          models: {
+            "claude-cli/claude-opus-4-6": {},
+            "claude-cli/claude-sonnet-4-6": {},
+          },
+        },
+      },
+    } as OpenClawConfig);
+
+    expect([...(data.byProvider.get("claude-cli") ?? [])].toSorted()).toEqual([
+      "claude-haiku-4-5",
+      "claude-opus-4-5",
+      "claude-opus-4-6",
+      "claude-opus-4-7",
+      "claude-sonnet-4-5",
+      "claude-sonnet-4-6",
+    ]);
+  });
+
+  it("keeps non-CLI configured provider model lists scoped to user config", async () => {
     modelCatalogMocks.loadModelCatalog.mockResolvedValue([
       { provider: "claude-cli", id: "claude-opus-4-7", name: "Claude Opus 4.7" },
       { provider: "claude-cli", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
@@ -283,57 +327,23 @@ describe("handleModelsCommand", () => {
       { provider: "claude-cli", id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5" },
       { provider: "claude-cli", id: "claude-haiku-4-5", name: "Claude Haiku 4.5" },
       { provider: "anthropic", id: "claude-opus-4-7", name: "Claude Opus 4.7" },
-      // A non-CLI configured provider — its narrowing IS respected.
       { provider: "minimax", id: "abab-7", name: "Abab 7" },
       { provider: "minimax", id: "abab-6.5", name: "Abab 6.5" },
     ]);
     modelProviderAuthMocks.authenticatedProviders = new Set(["anthropic", "claude-cli", "minimax"]);
 
-    const result = await handleModelsCommand(
-      buildParams("/models claude-cli", {
-        agents: {
-          defaults: {
-            model: { primary: "anthropic/claude-opus-4-7" },
-            // User only declared 2 of claude-cli's 6 supported models, plus 1
-            // of minimax's 2. For claude-cli this narrowing must be ignored;
-            // for minimax it must still gate.
-            models: {
-              "claude-cli/claude-opus-4-6": {},
-              "claude-cli/claude-sonnet-4-6": {},
-              "minimax/abab-7": {},
-            },
+    const minimaxData = await buildModelsProviderData({
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-7" },
+          models: {
+            "claude-cli/claude-opus-4-6": {},
+            "minimax/abab-7": {},
           },
         },
-      }),
-      true,
-    );
-
-    expect(result?.reply?.text).toContain("- claude-cli/claude-opus-4-7");
-    expect(result?.reply?.text).toContain("- claude-cli/claude-sonnet-4-6");
-    expect(result?.reply?.text).toContain("- claude-cli/claude-opus-4-6");
-    expect(result?.reply?.text).toContain("- claude-cli/claude-opus-4-5");
-    expect(result?.reply?.text).toContain("- claude-cli/claude-sonnet-4-5");
-    expect(result?.reply?.text).toContain("- claude-cli/claude-haiku-4-5");
-    expect(result?.reply?.text).toContain("of 6");
-
-    // For non-CLI configured providers (e.g. Minimax / LM Studio / custom
-    // OpenAI-compatible endpoints), user config is still the source of truth.
-    const minimaxResult = await handleModelsCommand(
-      buildParams("/models minimax", {
-        agents: {
-          defaults: {
-            model: { primary: "anthropic/claude-opus-4-7" },
-            models: {
-              "claude-cli/claude-opus-4-6": {},
-              "minimax/abab-7": {},
-            },
-          },
-        },
-      }),
-      true,
-    );
-    expect(minimaxResult?.reply?.text).toContain("- minimax/abab-7");
-    expect(minimaxResult?.reply?.text).not.toContain("- minimax/abab-6.5");
+      },
+    } as OpenClawConfig);
+    expect([...(minimaxData.byProvider.get("minimax") ?? [])]).toEqual(["abab-7"]);
   });
 
   it("does not synthesize claude-cli models when the catalog has no claude-cli entries", async () => {
@@ -607,22 +617,13 @@ describe("handleModelsCommand", () => {
       },
     } satisfies Partial<OpenClawConfig>;
 
-    const defaultProviderResult = await handleModelsCommand(
-      buildParams("/models openai-codex", cfg),
-      true,
-    );
-    const deepseekResult = await handleModelsCommand(buildParams("/models deepseek", cfg), true);
+    const data = await buildModelsProviderData(cfg as OpenClawConfig);
 
-    expect(defaultProviderResult?.reply?.text).toContain(
-      "Models (openai-codex) — showing 1-1 of 1 (page 1/1)",
-    );
-    expect(defaultProviderResult?.reply?.text).toContain("- openai-codex/gpt-5.4");
-    expect(defaultProviderResult?.reply?.text).not.toContain("openai-codex/deepseek-v4");
-    expect(deepseekResult?.reply?.text).toContain(
-      "Models (deepseek) — showing 1-2 of 2 (page 1/1)",
-    );
-    expect(deepseekResult?.reply?.text).toContain("- deepseek/deepseek-v4-flash");
-    expect(deepseekResult?.reply?.text).toContain("- deepseek/deepseek-v4-pro");
+    expect([...(data.byProvider.get("openai-codex") ?? [])]).toEqual(["gpt-5.4"]);
+    expect([...(data.byProvider.get("deepseek") ?? [])].toSorted()).toEqual([
+      "deepseek-v4-flash",
+      "deepseek-v4-pro",
+    ]);
   });
 
   it("keeps /models list <provider> as an alias", async () => {

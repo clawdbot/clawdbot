@@ -97,7 +97,11 @@ OpenClaw no longer creates automatic `sessions.json.bak.*` rotation backups duri
 Transcript mutations use a session write lock on the transcript file. Lock acquisition waits up to
 `session.writeLock.acquireTimeoutMs` before surfacing a busy-session error; the default is `60000`
 ms. Raise this only when legitimate prep, cleanup, compaction, or transcript mirror work contends
-longer on slow machines. Stale-lock detection and maximum hold warnings remain separate policies.
+longer on slow machines. `session.writeLock.staleMs` controls when an existing lock can be
+reclaimed as stale; the default is `1800000` ms. `session.writeLock.maxHoldMs` controls the
+in-process watchdog release threshold; the default is `300000` ms. Emergency env overrides are
+`OPENCLAW_SESSION_WRITE_LOCK_ACQUIRE_TIMEOUT_MS`, `OPENCLAW_SESSION_WRITE_LOCK_STALE_MS`, and
+`OPENCLAW_SESSION_WRITE_LOCK_MAX_HOLD_MS`.
 
 Enforcement order for disk budget cleanup (`mode: "enforce"`):
 

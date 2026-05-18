@@ -526,6 +526,14 @@ function readConfiguredFetchProviderCredential(params: {
   return configuredValue ?? params.provider.getCredentialValue(params.fetch);
 }
 
+function readConfiguredFetchProviderCredentialFallback(params: {
+  provider: PluginWebFetchProviderEntry;
+  config: OpenClawConfig;
+  fetch: Record<string, unknown> | undefined;
+}): { path: string; value: unknown } | undefined {
+  return params.provider.getConfiguredCredentialFallback?.(params.config);
+}
+
 function inactivePathsForFetchProvider(provider: PluginWebFetchProviderEntry): string[] {
   if (provider.requiresCredential === false) {
     return [];
@@ -783,6 +791,12 @@ export async function resolveRuntimeWebTools(params: {
           config,
           fetch: toolConfig,
         }),
+      readConfiguredCredentialFallback: ({ provider, config, toolConfig }) =>
+        readConfiguredFetchProviderCredentialFallback({
+          provider,
+          config,
+          fetch: toolConfig,
+        }),
     });
 
     await resolveRuntimeWebProviderSelection({
@@ -803,6 +817,12 @@ export async function resolveRuntimeWebTools(params: {
       autoDetectSelectedCode: "WEB_FETCH_AUTODETECT_SELECTED",
       readConfiguredCredential: ({ provider, config, toolConfig }) =>
         readConfiguredFetchProviderCredential({
+          provider,
+          config,
+          fetch: toolConfig,
+        }),
+      readConfiguredCredentialFallback: ({ provider, config, toolConfig }) =>
+        readConfiguredFetchProviderCredentialFallback({
           provider,
           config,
           fetch: toolConfig,

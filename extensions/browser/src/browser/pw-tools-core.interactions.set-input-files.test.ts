@@ -11,6 +11,8 @@ const getPageForTargetId = vi.fn(async () => {
 });
 const ensurePageState = vi.fn(() => ({}));
 const restoreRoleRefsForTarget = vi.fn(() => {});
+const isBrowserObservedDialogBlockedError = vi.fn(() => false);
+const markObservedDialogsHandledRemotelyForPage = vi.fn(() => ({}));
 const refLocator = vi.fn(() => {
   if (!locator) {
     throw new Error("test: locator not set");
@@ -27,6 +29,8 @@ vi.mock("./pw-session.js", () => {
     ensurePageState,
     forceDisconnectPlaywrightForTarget,
     getPageForTargetId,
+    isBrowserObservedDialogBlockedError,
+    markObservedDialogsHandledRemotelyForPage,
     refLocator,
     restoreRoleRefsForTarget,
   };

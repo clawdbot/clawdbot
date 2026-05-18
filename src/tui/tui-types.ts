@@ -9,6 +9,11 @@ export type TuiOptions = {
   timeoutMs?: number;
   historyLimit?: number;
   message?: string;
+  /**
+   * Internal CLI guard: after the standalone TUI returns, force the child
+   * process out if imported runtime handles keep the event loop alive.
+   */
+  forceProcessExitOnReturn?: boolean;
 };
 
 export type TuiExitReason = "exit" | "return-to-crestodian";

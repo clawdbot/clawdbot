@@ -157,6 +157,18 @@ describe("channel-health-monitor", () => {
     vi.useRealTimers();
   });
 
+  it("removes abort listener when stopped manually", () => {
+    const signal = new AbortController().signal;
+    const addEventListener = vi.spyOn(signal, "addEventListener");
+    const removeEventListener = vi.spyOn(signal, "removeEventListener");
+    const monitor = startDefaultMonitor(createMockChannelManager(), { abortSignal: signal });
+
+    monitor.stop();
+
+    expect(addEventListener).toHaveBeenCalledWith("abort", expect.any(Function), { once: true });
+    expect(removeEventListener).toHaveBeenCalledWith("abort", addEventListener.mock.calls[0]?.[1]);
+  });
+
   it("does not run before the grace period", async () => {
     const manager = createMockChannelManager();
     const monitor = startDefaultMonitor(manager, { startupGraceMs: 60_000 });

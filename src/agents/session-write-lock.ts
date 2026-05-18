@@ -36,8 +36,8 @@ type CleanupSignal = (typeof CLEANUP_SIGNALS)[number];
 const CLEANUP_STATE_KEY = Symbol.for("openclaw.sessionWriteLockCleanupState");
 const WATCHDOG_STATE_KEY = Symbol.for("openclaw.sessionWriteLockWatchdogState");
 
-const DEFAULT_STALE_MS = 30 * 60 * 1000;
-const DEFAULT_MAX_HOLD_MS = 5 * 60 * 1000;
+export const DEFAULT_SESSION_WRITE_LOCK_STALE_MS = 30 * 60 * 1000;
+export const DEFAULT_SESSION_WRITE_LOCK_MAX_HOLD_MS = 5 * 60 * 1000;
 export const DEFAULT_SESSION_WRITE_LOCK_ACQUIRE_TIMEOUT_MS = 60_000;
 const DEFAULT_WATCHDOG_INTERVAL_MS = 60_000;
 const DEFAULT_TIMEOUT_GRACE_MS = 2 * 60 * 1000;
@@ -74,18 +74,113 @@ export type SessionWriteLockAcquireTimeoutConfig = {
   session?: {
     writeLock?: {
       acquireTimeoutMs?: number;
+      staleMs?: number;
+      maxHoldMs?: number;
     };
   };
 };
 
+type SessionWriteLockMsKey = "acquireTimeoutMs" | "staleMs" | "maxHoldMs";
+
+const SESSION_WRITE_LOCK_ENV: Record<SessionWriteLockMsKey, string> = {
+  acquireTimeoutMs: "OPENCLAW_SESSION_WRITE_LOCK_ACQUIRE_TIMEOUT_MS",
+  staleMs: "OPENCLAW_SESSION_WRITE_LOCK_STALE_MS",
+  maxHoldMs: "OPENCLAW_SESSION_WRITE_LOCK_MAX_HOLD_MS",
+};
+
+function readPositiveMsEnv(
+  env: NodeJS.ProcessEnv,
+  key: string,
+  opts: { allowInfinity?: boolean } = {},
+): number | undefined {
+  const raw = env[key]?.trim();
+  if (!raw) {
+    return undefined;
+  }
+  const value = Number(raw);
+  return parsePositiveMs(value, opts);
+}
+
+function parsePositiveMs(
+  value: number | undefined,
+  opts: { allowInfinity?: boolean } = {},
+): number | undefined {
+  if (typeof value !== "number" || Number.isNaN(value) || value <= 0) {
+    return undefined;
+  }
+  if (value === Number.POSITIVE_INFINITY) {
+    return opts.allowInfinity ? value : undefined;
+  }
+  if (!Number.isFinite(value)) {
+    return undefined;
+  }
+  return value;
+}
+
+function resolveSessionWriteLockMs(params: {
+  config?: SessionWriteLockAcquireTimeoutConfig;
+  env?: NodeJS.ProcessEnv;
+  key: SessionWriteLockMsKey;
+  fallback: number;
+  allowInfinity?: boolean;
+}): number {
+  const opts = { allowInfinity: params.allowInfinity };
+  return (
+    readPositiveMsEnv(params.env ?? process.env, SESSION_WRITE_LOCK_ENV[params.key], opts) ??
+    parsePositiveMs(params.config?.session?.writeLock?.[params.key], opts) ??
+    params.fallback
+  );
+}
+
 export function resolveSessionWriteLockAcquireTimeoutMs(
   config?: SessionWriteLockAcquireTimeoutConfig,
+  env?: NodeJS.ProcessEnv,
 ): number {
-  return resolvePositiveMs(
-    config?.session?.writeLock?.acquireTimeoutMs,
-    DEFAULT_SESSION_WRITE_LOCK_ACQUIRE_TIMEOUT_MS,
-    { allowInfinity: true },
-  );
+  return resolveSessionWriteLockMs({
+    config,
+    env,
+    key: "acquireTimeoutMs",
+    fallback: DEFAULT_SESSION_WRITE_LOCK_ACQUIRE_TIMEOUT_MS,
+    allowInfinity: true,
+  });
+}
+
+export function resolveSessionWriteLockStaleMs(
+  config?: SessionWriteLockAcquireTimeoutConfig,
+  env?: NodeJS.ProcessEnv,
+): number {
+  return resolveSessionWriteLockMs({
+    config,
+    env,
+    key: "staleMs",
+    fallback: DEFAULT_SESSION_WRITE_LOCK_STALE_MS,
+  });
+}
+
+export function resolveSessionWriteLockMaxHoldMs(
+  config?: SessionWriteLockAcquireTimeoutConfig,
+  params: { env?: NodeJS.ProcessEnv; fallback?: number } = {},
+): number {
+  return resolveSessionWriteLockMs({
+    config,
+    env: params.env,
+    key: "maxHoldMs",
+    fallback: params.fallback ?? DEFAULT_SESSION_WRITE_LOCK_MAX_HOLD_MS,
+  });
+}
+
+export function resolveSessionWriteLockOptions(
+  config?: SessionWriteLockAcquireTimeoutConfig,
+  params: { env?: NodeJS.ProcessEnv; maxHoldMsFallback?: number } = {},
+): { timeoutMs: number; staleMs: number; maxHoldMs: number } {
+  return {
+    timeoutMs: resolveSessionWriteLockAcquireTimeoutMs(config, params.env),
+    staleMs: resolveSessionWriteLockStaleMs(config, params.env),
+    maxHoldMs: resolveSessionWriteLockMaxHoldMs(config, {
+      env: params.env,
+      fallback: params.maxHoldMsFallback,
+    }),
+  };
 }
 
 function resolveCleanupState(): CleanupState {
@@ -137,7 +232,7 @@ export function resolveSessionLockMaxHoldFromTimeout(params: {
   graceMs?: number;
   minMs?: number;
 }): number {
-  const minMs = resolvePositiveMs(params.minMs, DEFAULT_MAX_HOLD_MS);
+  const minMs = resolvePositiveMs(params.minMs, DEFAULT_SESSION_WRITE_LOCK_MAX_HOLD_MS);
   const timeoutMs = resolvePositiveMs(params.timeoutMs, minMs, { allowInfinity: true });
   if (timeoutMs === Number.POSITIVE_INFINITY) {
     return MAX_LOCK_HOLD_MS;
@@ -159,7 +254,9 @@ async function runLockWatchdogCheck(nowMs = Date.now()): Promise<number> {
   let released = 0;
   for (const held of SESSION_LOCKS.heldEntries()) {
     const maxHoldMs =
-      typeof held.metadata.maxHoldMs === "number" ? held.metadata.maxHoldMs : DEFAULT_MAX_HOLD_MS;
+      typeof held.metadata.maxHoldMs === "number"
+        ? held.metadata.maxHoldMs
+        : DEFAULT_SESSION_WRITE_LOCK_MAX_HOLD_MS;
     const heldForMs = nowMs - held.acquiredAt;
     if (heldForMs <= maxHoldMs) {
       continue;
@@ -547,6 +644,8 @@ function inspectLockPayloadForSession(params: {
 
 export async function cleanStaleLockFiles(params: {
   sessionsDir: string;
+  config?: SessionWriteLockAcquireTimeoutConfig;
+  env?: NodeJS.ProcessEnv;
   staleMs?: number;
   removeStale?: boolean;
   nowMs?: number;
@@ -557,7 +656,10 @@ export async function cleanStaleLockFiles(params: {
   };
 }): Promise<{ locks: SessionLockInspection[]; cleaned: SessionLockInspection[] }> {
   const sessionsDir = path.resolve(params.sessionsDir);
-  const staleMs = resolvePositiveMs(params.staleMs, DEFAULT_STALE_MS);
+  const staleMs = resolvePositiveMs(
+    params.staleMs,
+    resolveSessionWriteLockStaleMs(params.config, params.env),
+  );
   const removeStale = params.removeStale !== false;
   const nowMs = params.nowMs ?? Date.now();
   const ownerProcessArgsReader = params.readOwnerProcessArgs ?? readProcessArgsSync;
@@ -622,11 +724,12 @@ export async function acquireSessionWriteLock(params: {
 }> {
   registerCleanupHandlers();
   const allowReentrant = params.allowReentrant ?? false;
-  const timeoutMs = resolvePositiveMs(params.timeoutMs, resolveSessionWriteLockAcquireTimeoutMs(), {
+  const defaultOptions = resolveSessionWriteLockOptions();
+  const timeoutMs = resolvePositiveMs(params.timeoutMs, defaultOptions.timeoutMs, {
     allowInfinity: true,
   });
-  const staleMs = resolvePositiveMs(params.staleMs, DEFAULT_STALE_MS);
-  const maxHoldMs = resolvePositiveMs(params.maxHoldMs, DEFAULT_MAX_HOLD_MS);
+  const staleMs = resolvePositiveMs(params.staleMs, defaultOptions.staleMs);
+  const maxHoldMs = resolvePositiveMs(params.maxHoldMs, defaultOptions.maxHoldMs);
   const sessionFile = path.resolve(params.sessionFile);
   const sessionDir = path.dirname(sessionFile);
   const normalizedSessionFile = await resolveNormalizedSessionFile(sessionFile);

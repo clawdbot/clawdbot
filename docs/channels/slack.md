@@ -1199,6 +1199,9 @@ Slash sessions use isolated keys like `agent:<agentId>:slack:slash:<userId>` and
 ## Interactive replies
 
 Slack can render agent-authored interactive reply controls, but this feature is disabled by default.
+For new agent, CLI, and plugin output, prefer the shared
+`presentation` buttons or select blocks. They use the same Slack interaction
+path while also degrading on other channels.
 
 Enable it globally:
 
@@ -1232,16 +1235,30 @@ Or enable it for one Slack account only:
 }
 ```
 
-When enabled, agents can emit Slack-only reply directives:
+When enabled, agents can still emit deprecated Slack-only reply directives:
 
 - `[[slack_buttons: Approve:approve, Reject:reject]]`
 - `[[slack_select: Choose a target | Canary:canary, Production:production]]`
 
-These directives compile into Slack Block Kit and route clicks or selections back through the existing Slack interaction event path.
+These directives compile into Slack Block Kit and route clicks or selections
+back through the existing Slack interaction event path. Keep them for old
+prompts and Slack-specific escape hatches; use shared presentation for new
+portable controls.
+
+The directive compiler APIs are also deprecated for new producer code:
+
+- `compileSlackInteractiveReplies(...)`
+- `parseSlackOptionsLine(...)`
+- `isSlackInteractiveRepliesEnabled(...)`
+- `buildSlackInteractiveBlocks(...)`
+
+Use `presentation` payloads and `buildSlackPresentationBlocks(...)` for new
+Slack-rendered controls.
 
 Notes:
 
-- This is Slack-specific UI. Other channels do not translate Slack Block Kit directives into their own button systems.
+- This is Slack-specific legacy UI. Other channels do not translate Slack Block
+  Kit directives into their own button systems.
 - The interactive callback values are OpenClaw-generated opaque tokens, not raw agent-authored values.
 - If generated interactive blocks would exceed Slack Block Kit limits, OpenClaw falls back to the original text reply instead of sending an invalid blocks payload.
 
@@ -1364,7 +1381,7 @@ Primary reference: [Configuration reference - Slack](/gateway/config-channels#sl
     - channel allowlist (`channels.slack.channels`) — **keys must be channel IDs** (`C12345678`), not names (`#channel-name`). Name-based keys silently fail under `groupPolicy: "allowlist"` because channel routing is ID-first by default. To find an ID: right-click the channel in Slack → **Copy link** — the `C...` value at the end of the URL is the channel ID.
     - `requireMention`
     - per-channel `users` allowlist
-    - `messages.groupChat.visibleReplies`: if it is `"message_tool"` and logs show assistant text with no `message(action=send)` call, the model missed the visible message-tool path. Final text stays private in this mode; inspect the gateway verbose log for suppressed payload metadata, or set it to `"automatic"` if you want every normal assistant final reply posted through the legacy path.
+    - `messages.groupChat.visibleReplies`: normal group/channel requests default to `"automatic"`. If you opted into `"message_tool"` and logs show assistant text with no `message(action=send)` call, the model missed the visible message-tool path. Final text stays private in this mode; inspect the gateway verbose log for suppressed payload metadata, or set it to `"automatic"` if you want every normal assistant final reply posted through the legacy path.
     - `messages.groupChat.unmentionedInbound`: if it is `"room_event"`, unmentioned allowed channel chatter is ambient context and stays silent unless the agent calls the `message` tool. See [Ambient room events](/channels/ambient-room-events).
 
 ```json5

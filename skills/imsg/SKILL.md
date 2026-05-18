@@ -1,6 +1,6 @@
 ---
 name: imsg
-description: iMessage/SMS CLI for listing chats, history, and sending messages via Messages.app.
+description: "iMessage/SMS CLI for listing chats, history, and sending messages via Messages.app."
 homepage: https://imsg.to
 metadata:
   {
@@ -29,7 +29,7 @@ Use `imsg` to read and send iMessage/SMS via macOS Messages.app.
 
 ## When to Use
 
-✅ **USE this skill when:**
+Use when:
 
 - User explicitly asks to send iMessage or SMS
 - Reading iMessage conversation history
@@ -38,16 +38,16 @@ Use `imsg` to read and send iMessage/SMS via macOS Messages.app.
 
 ## When NOT to Use
 
-❌ **DON'T use this skill when:**
+Do not use when:
 
-- Telegram messages → use `message` tool with `channel:telegram`
-- Signal messages → use Signal channel if configured
-- WhatsApp messages → use WhatsApp channel if configured
-- Discord messages → use `message` tool with `channel:discord`
-- Slack messages → use `slack` skill
-- Group chat management (adding/removing members) → not supported
-- Bulk/mass messaging → always confirm with user first
-- Replying in current conversation → just reply normally (OpenClaw routes automatically)
+- Telegram messages -> use `message` tool with `channel:telegram`
+- Signal messages -> use Signal channel if configured
+- WhatsApp messages -> use WhatsApp channel if configured
+- Discord messages -> use `message` tool with `channel:discord`
+- Slack messages -> use `slack` skill
+- Group chat management (adding/removing members) -> not supported
+- Bulk/mass messaging -> always confirm with user first
+- Replying in current conversation -> just reply normally (OpenClaw routes automatically)
 
 ## Requirements
 
@@ -95,16 +95,16 @@ imsg send --to "+14155551212" --text "Hi" --service sms
 
 ## Service Options
 
-- `--service imessage` — Force iMessage (requires recipient has iMessage)
-- `--service sms` — Force SMS (green bubble)
-- `--service auto` — Let Messages.app decide (default)
+- `--service imessage` - Force iMessage (requires recipient has iMessage)
+- `--service sms` - Force SMS (green bubble)
+- `--service auto` - Let Messages.app decide (default)
 
 ## Safety Rules
 
 1. **Always confirm recipient and message content** before sending
 2. **Never send to unknown numbers** without explicit user approval
-3. **Be careful with attachments** — confirm file path exists
-4. **Rate limit yourself** — don't spam
+3. **Be careful with attachments** - confirm file path exists
+4. **Rate limit yourself** - don't spam
 
 ## Example Workflow
 

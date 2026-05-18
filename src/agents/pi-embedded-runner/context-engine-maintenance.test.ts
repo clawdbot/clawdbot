@@ -182,6 +182,50 @@ describe("buildContextEngineMaintenanceRuntimeContext", () => {
     expect(rewriteTranscriptEntriesInSessionFileMock).not.toHaveBeenCalled();
   });
 
+  it("wraps active session manager rewrites in the supplied lock", async () => {
+    const events: string[] = [];
+    const sessionManager = { appendMessage: vi.fn() } as unknown as Parameters<
+      typeof buildContextEngineMaintenanceRuntimeContext
+    >[0]["sessionManager"];
+    rewriteTranscriptEntriesInSessionManagerMock.mockImplementationOnce((_params?: unknown) => {
+      events.push("rewrite");
+      return {
+        changed: true,
+        bytesFreed: 77,
+        rewrittenEntries: 1,
+      };
+    });
+    const runtimeContext = buildContextEngineMaintenanceRuntimeContext({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile: "/tmp/session.jsonl",
+      sessionManager,
+      withSessionManagerRewriteLock: async (operation) => {
+        events.push("lock-start");
+        try {
+          return await operation();
+        } finally {
+          events.push("lock-end");
+        }
+      },
+    });
+
+    await runtimeContext.rewriteTranscriptEntries?.({
+      replacements: [
+        { entryId: "entry-1", message: { role: "user", content: "hi", timestamp: 1 } },
+      ],
+    });
+
+    expect(events).toEqual(["lock-start", "rewrite", "lock-end"]);
+    expect(rewriteTranscriptEntriesInSessionManagerMock).toHaveBeenCalledWith({
+      sessionManager,
+      replacements: [
+        { entryId: "entry-1", message: { role: "user", content: "hi", timestamp: 1 } },
+      ],
+    });
+    expect(rewriteTranscriptEntriesInSessionFileMock).not.toHaveBeenCalled();
+  });
+
   it("defers file rewrites onto the session lane when requested", async () => {
     vi.useFakeTimers();
     try {
@@ -417,6 +461,69 @@ describe("runContextEngineMaintenance", () => {
         ],
       },
     });
+  });
+
+  it("locks foreground maintenance rewrites that use the active session manager", async () => {
+    const events: string[] = [];
+    const maintain = vi.fn(async (params?: unknown) => {
+      events.push("maintain-start");
+      await (
+        params as { runtimeContext?: ContextEngineRuntimeContext } | undefined
+      )?.runtimeContext?.rewriteTranscriptEntries?.({
+        replacements: [
+          { entryId: "entry-1", message: { role: "user", content: "hi", timestamp: 1 } },
+        ],
+      });
+      events.push("maintain-end");
+      return {
+        changed: false,
+        bytesFreed: 0,
+        rewrittenEntries: 0,
+      };
+    });
+    const sessionManager = { appendMessage: vi.fn() } as unknown as Parameters<
+      typeof buildContextEngineMaintenanceRuntimeContext
+    >[0]["sessionManager"];
+    rewriteTranscriptEntriesInSessionManagerMock.mockImplementationOnce((_params?: unknown) => {
+      events.push("rewrite");
+      return {
+        changed: true,
+        bytesFreed: 77,
+        rewrittenEntries: 1,
+      };
+    });
+
+    await runContextEngineMaintenance({
+      contextEngine: {
+        info: { id: "test", name: "Test Engine" },
+        ingest: async () => ({ ingested: true }),
+        assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
+        compact: async () => ({ ok: true, compacted: false }),
+        maintain,
+      },
+      sessionId: "session-foreground-manager-rewrite",
+      sessionKey: "agent:main:session-foreground-manager-rewrite",
+      sessionFile: "/tmp/session-foreground-manager-rewrite.jsonl",
+      reason: "turn",
+      sessionManager,
+      withSessionManagerRewriteLock: async (operation) => {
+        events.push("lock-start");
+        try {
+          return await operation();
+        } finally {
+          events.push("lock-end");
+        }
+      },
+    });
+
+    expect(events).toEqual(["maintain-start", "lock-start", "rewrite", "lock-end", "maintain-end"]);
+    expect(rewriteTranscriptEntriesInSessionManagerMock).toHaveBeenCalledWith({
+      sessionManager,
+      replacements: [
+        { entryId: "entry-1", message: { role: "user", content: "hi", timestamp: 1 } },
+      ],
+    });
+    expect(rewriteTranscriptEntriesInSessionFileMock).not.toHaveBeenCalled();
   });
 
   it("defers turn maintenance to a hidden background task when enabled", async () => {

@@ -71,6 +71,7 @@ describe("agent-runner-utils", () => {
     expect(hoisted.resolveEffectiveModelFallbacksMock).toHaveBeenCalledWith({
       cfg: run.config,
       agentId: run.agentId,
+      sessionKey: run.sessionKey,
       hasSessionModelOverride: true,
       modelOverrideSource: "user",
       hasAutoFallbackProvenance: false,
@@ -80,6 +81,8 @@ describe("agent-runner-utils", () => {
       provider: run.provider,
       model: run.model,
       agentDir: run.agentDir,
+      agentId: run.agentId,
+      sessionKey: run.sessionKey,
       fallbacksOverride: ["fallback-model"],
     });
   });
@@ -96,6 +99,7 @@ describe("agent-runner-utils", () => {
     expect(hoisted.resolveEffectiveModelFallbacksMock).toHaveBeenCalledWith({
       cfg: run.config,
       agentId: run.agentId,
+      sessionKey: run.sessionKey,
       hasSessionModelOverride: true,
       modelOverrideSource: undefined,
       hasAutoFallbackProvenance: true,
@@ -134,6 +138,7 @@ describe("agent-runner-utils", () => {
     expect(hoisted.resolveEffectiveModelFallbacksMock).toHaveBeenCalledWith({
       cfg: run.config,
       agentId: undefined,
+      sessionKey: run.sessionKey,
       hasSessionModelOverride: false,
       modelOverrideSource: undefined,
       hasAutoFallbackProvenance: false,
@@ -200,6 +205,7 @@ describe("agent-runner-utils", () => {
     expect(hoisted.resolveEffectiveModelFallbacksMock).toHaveBeenCalledWith({
       cfg: run.config,
       agentId: run.agentId,
+      sessionKey: run.sessionKey,
       hasSessionModelOverride: true,
       modelOverrideSource: undefined,
       hasAutoFallbackProvenance: true,

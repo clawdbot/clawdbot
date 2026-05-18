@@ -90,7 +90,7 @@ source ~/.bashrc
 ```
 
 - `NODE_COMPILE_CACHE` improves repeated command startup times.
-- `OPENCLAW_NO_RESPAWN=1` avoids extra startup overhead from a self-respawn path.
+- `OPENCLAW_NO_RESPAWN=1` keeps routine Gateway restarts in-process, which avoids extra process handoffs and keeps PID tracking simple on small hosts.
 - First command run warms the cache; subsequent runs are faster.
 - For Raspberry Pi specifics, see [Raspberry Pi](/install/raspberry-pi).
 

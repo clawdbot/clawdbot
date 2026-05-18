@@ -8,7 +8,7 @@ describe("qa live timeout policy", () => {
         {
           providerMode: "mock-openai",
           primaryModel: "anthropic/claude-sonnet-4-6",
-          alternateModel: "anthropic/claude-opus-4-6",
+          alternateModel: "anthropic/claude-opus-4-7",
         },
         30_000,
       ),
@@ -47,7 +47,7 @@ describe("qa live timeout policy", () => {
         {
           providerMode: "live-frontier",
           primaryModel: "anthropic/claude-sonnet-4-6",
-          alternateModel: "anthropic/claude-opus-4-6",
+          alternateModel: "anthropic/claude-opus-4-7",
         },
         30_000,
       ),
@@ -60,10 +60,10 @@ describe("qa live timeout policy", () => {
         {
           providerMode: "live-frontier",
           primaryModel: "anthropic/claude-sonnet-4-6",
-          alternateModel: "anthropic/claude-opus-4-6",
+          alternateModel: "anthropic/claude-opus-4-7",
         },
         30_000,
-        "anthropic/claude-opus-4-6",
+        "anthropic/claude-opus-4-7",
       ),
     ).toBe(240_000);
   });

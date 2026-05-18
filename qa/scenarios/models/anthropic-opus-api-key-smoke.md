@@ -12,7 +12,7 @@ coverage:
 objective: Verify the regular Anthropic Opus lane can complete a quick chat turn using API-key auth.
 successCriteria:
   - A live-frontier run fails fast unless the selected primary provider is anthropic.
-  - The selected primary model is Anthropic Opus 4.6.
+  - The selected primary model is Anthropic Opus 4.7.
   - The QA gateway worker has an Anthropic API key available through environment auth.
   - The agent replies through the regular Anthropic provider.
 docsRefs:
@@ -24,10 +24,10 @@ codeRefs:
   - extensions/qa-lab/src/suite.ts
 execution:
   kind: flow
-  summary: Run with `pnpm openclaw qa suite --provider-mode live-frontier --model anthropic/claude-opus-4-6 --alt-model anthropic/claude-opus-4-6 --scenario anthropic-opus-api-key-smoke`.
+  summary: Run with `pnpm openclaw qa suite --provider-mode live-frontier --model anthropic/claude-opus-4-7 --alt-model anthropic/claude-opus-4-7 --scenario anthropic-opus-api-key-smoke`.
   config:
     requiredProvider: anthropic
-    requiredModel: claude-opus-4-6
+    requiredModel: claude-opus-4-7
     chatPrompt: "Anthropic Opus API key smoke. Reply exactly: ANTHROPIC-OPUS-API-KEY-OK"
     chatExpected: ANTHROPIC-OPUS-API-KEY-OK
 ```

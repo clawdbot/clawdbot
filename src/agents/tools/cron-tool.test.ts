@@ -70,9 +70,7 @@ describe("cron tool", () => {
     expect(tool.description).toContain("local wall-clock time");
     expect(tool.description).toContain("do not convert the requested local time to UTC first");
     expect(tool.description).toContain("Gateway host local timezone");
-    expect(tool.description).toContain(
-      'For schedule.kind="at", ISO timestamps without an explicit timezone are treated as UTC.',
-    );
+    expect(tool.description).toContain('For "at", ISO timestamps without timezone are UTC.');
     expect(tool.description).toContain('"expr": "0 18 * * *"');
     expect(tool.description).toContain('"tz": "Asia/Shanghai"');
   });
@@ -435,10 +433,10 @@ describe("cron tool", () => {
   it("documents deferred follow-up guidance in the tool description", () => {
     const tool = createTestCronTool();
     expect(tool.description).toContain(
-      'Use this for reminders, "check back later" requests, delayed follow-ups, and recurring tasks.',
+      "reminders, check-back-later, delayed follow-ups, recurring work",
     );
     expect(tool.description).toContain(
-      "Do not emulate scheduling with exec sleep or process polling.",
+      "Do not emulate scheduling with exec sleep/process polling.",
     );
   });
 

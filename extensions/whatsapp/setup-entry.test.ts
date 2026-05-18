@@ -1,4 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import * as legacySessionSurfaceApi from "./legacy-session-surface-api.js";
+import * as legacyStateMigrationsApi from "./legacy-state-migrations-api.js";
+import setupEntry from "./setup-entry.js";
+import * as setupPluginApi from "./setup-plugin-api.js";
 
 vi.mock("baileys", () => {
   throw new Error("setup plugin load must not load Baileys");
@@ -8,19 +12,38 @@ vi.mock("./src/setup-finalize.js", () => {
   throw new Error("setup status load must not load finalize");
 });
 
-describe("whatsapp setup entry", () => {
-  it("loads the setup plugin without installing or importing runtime dependencies", async () => {
-    const { default: setupEntry } = await import("./setup-entry.js");
+const setupEntryLoadOptions = {
+  createLoaderForTest: (() => (specifier: string) => {
+    if (/[\\/]setup-plugin-api\.[jt]s$/u.test(specifier)) {
+      return setupPluginApi;
+    }
+    if (/[\\/]legacy-state-migrations-api\.[jt]s$/u.test(specifier)) {
+      return legacyStateMigrationsApi;
+    }
+    if (/[\\/]legacy-session-surface-api\.[jt]s$/u.test(specifier)) {
+      return legacySessionSurfaceApi;
+    }
+    throw new Error(`unexpected setup entry module load: ${specifier}`);
+  }) as never,
+};
 
+describe("whatsapp setup entry", () => {
+  it("loads setup entry metadata without importing runtime dependencies", () => {
     expect(setupEntry.kind).toBe("bundled-channel-setup-entry");
     expect(setupEntry.features).toEqual({
       legacySessionSurfaces: true,
       legacyStateMigrations: true,
     });
+  });
 
-    const whatsappSetupPlugin = setupEntry.loadSetupPlugin();
+  it("loads the setup plugin without installing runtime dependencies", () => {
+    const whatsappSetupPlugin = setupEntry.loadSetupPlugin(setupEntryLoadOptions);
     expect(whatsappSetupPlugin.id).toBe("whatsapp");
-    const detectLegacyStateMigrations = setupEntry.loadLegacyStateMigrationDetector?.();
+  });
+
+  it("loads legacy setup helpers without importing runtime dependencies", () => {
+    const detectLegacyStateMigrations =
+      setupEntry.loadLegacyStateMigrationDetector?.(setupEntryLoadOptions);
     if (!detectLegacyStateMigrations) {
       throw new Error("expected WhatsApp legacy state migration detector");
     }
@@ -32,7 +55,7 @@ describe("whatsapp setup entry", () => {
         stateDir: "/tmp/openclaw-state",
       }),
     ).toStrictEqual([]);
-    const legacySessionSurface = setupEntry.loadLegacySessionSurface?.();
+    const legacySessionSurface = setupEntry.loadLegacySessionSurface?.(setupEntryLoadOptions);
     if (!legacySessionSurface) {
       throw new Error("expected WhatsApp legacy session surface");
     }

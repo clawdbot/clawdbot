@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { waitForLocalOAuthCallback } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { applyXaiConfig, XAI_DEFAULT_MODEL_REF } from "./onboard.js";
+import { xaiUserAgent } from "./src/xai-user-agent.js";
 
 const PROVIDER_ID = "xai";
 export const XAI_OAUTH_METHOD_ID = "oauth";
@@ -22,6 +23,9 @@ export const XAI_OAUTH_CALLBACK_HOST = "127.0.0.1";
 export const XAI_OAUTH_CALLBACK_PORT = 56121;
 export const XAI_OAUTH_CALLBACK_PATH = "/callback";
 export const XAI_OAUTH_REDIRECT_URI = `http://${XAI_OAUTH_CALLBACK_HOST}:${XAI_OAUTH_CALLBACK_PORT}${XAI_OAUTH_CALLBACK_PATH}`;
+// Hosts whose CORS preflight against the loopback redirect URI should be
+// echoed; everything else gets a 204 with no `Access-Control-Allow-*`.
+export const XAI_OAUTH_CALLBACK_CORS_ORIGIN_ALLOWLIST = ["auth.x.ai", "accounts.x.ai"] as const;
 
 const XAI_OAUTH_TIMEOUT_MS = 5 * 60 * 1000;
 const XAI_OAUTH_FETCH_TIMEOUT_MS = 30 * 1000;
@@ -98,6 +102,10 @@ export async function fetchXaiOAuthDiscovery(
   options: XaiOAuthFetchOptions = {},
 ): Promise<XaiOAuthDiscovery> {
   const response = await getFetchImpl(options.fetchImpl)(XAI_OAUTH_DISCOVERY_URL, {
+    headers: {
+      Accept: "application/json",
+      "User-Agent": xaiUserAgent(),
+    },
     signal: AbortSignal.timeout(XAI_OAUTH_FETCH_TIMEOUT_MS),
   });
   const json = readStringRecord(await readJsonResponse(response, "xAI OAuth discovery"));
@@ -150,23 +158,51 @@ function normalizeExpires(value: unknown, now: () => number): number | undefined
   return now() + seconds * 1000;
 }
 
-function parseXaiOAuthTokenResponse(value: unknown, now: () => number): XaiOAuthTokenResponse {
+function parseXaiOAuthTokenResponse(
+  value: unknown,
+  now: () => number,
+  options: { requireRefreshToken?: boolean } = {},
+): XaiOAuthTokenResponse {
   const json = readStringRecord(value);
   const accessToken = json.access_token;
   if (typeof accessToken !== "string" || accessToken.trim().length === 0) {
     throw new Error("xAI OAuth token response is missing access_token");
   }
-  const expires = normalizeExpires(json.expires_in, now);
+  const refreshToken =
+    typeof json.refresh_token === "string" && json.refresh_token.trim().length > 0
+      ? json.refresh_token
+      : undefined;
+  if (options.requireRefreshToken && !refreshToken) {
+    throw new Error(
+      "xAI OAuth token response is missing refresh_token. Re-run the login; if the issue persists, the OAuth client is not configured to issue refresh tokens (commonly because the offline_access scope was rejected).",
+    );
+  }
+  const idToken =
+    typeof json.id_token === "string" && json.id_token.trim().length > 0
+      ? json.id_token
+      : undefined;
+  // RFC 6749 expires_in preferred; access-token JWT exp is the only legitimate
+  // fallback for an access-token expiry — id_token exp reflects the OIDC
+  // session, not the access token, and may extend it past actual expiry.
+  const expires = normalizeExpires(json.expires_in, now) ?? deriveExpiresFromJwt(accessToken);
   return {
     accessToken,
-    ...(typeof json.refresh_token === "string" && json.refresh_token.trim().length > 0
-      ? { refreshToken: json.refresh_token }
-      : {}),
-    ...(typeof json.id_token === "string" && json.id_token.trim().length > 0
-      ? { idToken: json.id_token }
-      : {}),
+    ...(refreshToken ? { refreshToken } : {}),
+    ...(idToken ? { idToken } : {}),
     ...(expires ? { expires } : {}),
   };
+}
+
+function deriveExpiresFromJwt(token: string | undefined): number | undefined {
+  if (!token) {
+    return undefined;
+  }
+  const payload = decodeJwtPayload(token);
+  const exp = payload.exp;
+  if (typeof exp !== "number" || !Number.isFinite(exp) || exp <= 0) {
+    return undefined;
+  }
+  return exp * 1000;
 }
 
 async function exchangeXaiOAuthToken(
@@ -174,6 +210,7 @@ async function exchangeXaiOAuthToken(
     tokenEndpoint: string;
     body: Record<string, string>;
     context: string;
+    requireRefreshToken?: boolean;
   } & XaiOAuthFetchOptions,
 ): Promise<XaiOAuthTokenResponse> {
   const response = await getFetchImpl(params.fetchImpl)(
@@ -183,6 +220,7 @@ async function exchangeXaiOAuthToken(
       headers: {
         "Content-Type": "application/x-www-form-urlencoded",
         Accept: "application/json",
+        "User-Agent": xaiUserAgent(),
       },
       body: toFormUrlEncoded(params.body),
       signal: AbortSignal.timeout(XAI_OAUTH_FETCH_TIMEOUT_MS),
@@ -191,6 +229,7 @@ async function exchangeXaiOAuthToken(
   return parseXaiOAuthTokenResponse(
     await readJsonResponse(response, params.context),
     params.now ?? Date.now,
+    { requireRefreshToken: params.requireRefreshToken },
   );
 }
 
@@ -261,6 +300,7 @@ export async function loginXaiOAuth(ctx: ProviderAuthContext): Promise<ProviderA
       hostname: XAI_OAUTH_CALLBACK_HOST,
       successTitle: "xAI OAuth complete",
       onProgress: (message) => progress.update(message),
+      corsOriginAllowlist: XAI_OAUTH_CALLBACK_CORS_ORIGIN_ALLOWLIST,
     });
     void callbackPromise.catch(() => undefined);
     await noteXaiOAuthUrl(ctx, authorizeUrl);
@@ -271,6 +311,7 @@ export async function loginXaiOAuth(ctx: ProviderAuthContext): Promise<ProviderA
     const tokens = await exchangeXaiOAuthToken({
       tokenEndpoint: discovery.tokenEndpoint,
       context: "xAI OAuth token exchange",
+      requireRefreshToken: true,
       body: {
         grant_type: "authorization_code",
         code: callback.code,
@@ -297,7 +338,10 @@ export async function loginXaiOAuth(ctx: ProviderAuthContext): Promise<ProviderA
         ...(tokens.idToken ? { idToken: tokens.idToken } : {}),
         ...(identity.accountId ? { accountId: identity.accountId } : {}),
       },
-      notes: ["xAI OAuth uses your SuperGrok subscription; xAI API keys still work."],
+      notes: [
+        "xAI OAuth uses your xAI account entitlement; xAI API keys still work.",
+        "xAI may label the consent app as Grok Build because OpenClaw uses xAI's shared OAuth client.",
+      ],
     });
   } catch (err) {
     progress.stop("xAI OAuth failed");
@@ -346,16 +390,16 @@ export async function refreshXaiOAuthCredential(
 export function createXaiOAuthAuthMethod(): ProviderAuthMethod {
   return {
     id: XAI_OAUTH_METHOD_ID,
-    label: "xAI Grok OAuth",
-    hint: "SuperGrok subscription",
+    label: "xAI OAuth",
+    hint: "Browser sign-in for eligible xAI accounts",
     kind: "oauth",
     wizard: {
       choiceId: XAI_OAUTH_CHOICE_ID,
-      choiceLabel: "xAI Grok OAuth",
-      choiceHint: "SuperGrok subscription",
+      choiceLabel: "xAI OAuth",
+      choiceHint: "Browser sign-in for eligible xAI accounts",
       groupId: PROVIDER_ID,
       groupLabel: "xAI (Grok)",
-      groupHint: "API key or SuperGrok OAuth",
+      groupHint: "API key or browser OAuth",
       methodId: XAI_OAUTH_METHOD_ID,
     },
     run: async (ctx) => loginXaiOAuth(ctx),

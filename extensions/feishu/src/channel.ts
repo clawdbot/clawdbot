@@ -1387,6 +1387,19 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
         selects: false,
         context: true,
         divider: true,
+        limits: {
+          actions: {
+            maxActions: 20,
+            maxActionsPerRow: 5,
+            maxLabelLength: 40,
+            maxValueBytes: 1024,
+          },
+          text: {
+            maxLength: 4000,
+            encoding: "characters",
+            markdownDialect: "markdown",
+          },
+        },
       },
       renderPresentation: async (ctx) => {
         const runtime = await loadFeishuChannelRuntime();

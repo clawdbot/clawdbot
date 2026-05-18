@@ -252,7 +252,7 @@ Telegram Web login state is not required for normal Mantis automation.
 
 `Mantis Telegram Desktop Proof` is the agentic native Telegram Desktop
 before/after wrapper. A maintainer can trigger it from a PR comment with
-`@Mantis telegram desktop proof`, from the Actions UI with freeform
+`@openclaw-mantis telegram desktop proof`, from the Actions UI with freeform
 instructions, or through the generic `Mantis Scenario` dispatcher. The workflow
 hands the PR, baseline ref, candidate ref, and maintainer instructions to Codex.
 The agent reads the PR, decides what Telegram-visible behavior proves the
@@ -351,7 +351,7 @@ region, and public URL values directly. The reusable publisher requires:
 You can also trigger the status-reactions run directly from a PR comment:
 
 ```text
-@Mantis discord status reactions
+@openclaw-mantis discord status reactions
 ```
 
 The comment trigger is intentionally narrow. It only runs on pull request
@@ -361,15 +361,15 @@ and the current PR head SHA as the candidate. Maintainers can override either
 ref:
 
 ```text
-@Mantis discord status reactions baseline=origin/main candidate=HEAD
+@openclaw-mantis discord status reactions baseline=origin/main candidate=HEAD
 ```
 
 Telegram live QA can also be triggered from a PR comment:
 
 ```text
-@Mantis telegram
-@Mantis telegram scenario=telegram-status-command
-@Mantis telegram scenarios=telegram-status-command,telegram-mentioned-message-reply
+@openclaw-mantis telegram
+@openclaw-mantis telegram scenario=telegram-status-command
+@openclaw-mantis telegram scenarios=telegram-status-command,telegram-mentioned-message-reply
 ```
 
 By default it uses the current PR head SHA as the candidate and runs

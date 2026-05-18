@@ -58,7 +58,10 @@ describe("startGmailWatcher", () => {
     mocks.spawn.mockImplementation(() => {
       const child = new EventEmitter();
       return Object.assign(child, {
-        kill: vi.fn(),
+        kill: vi.fn(() => {
+          queueMicrotask(() => child.emit("exit", null, "SIGTERM"));
+          return true;
+        }),
         killed: false,
       });
     });
@@ -76,12 +79,16 @@ describe("startGmailWatcher", () => {
         .mockImplementationOnce(async () => await oldWatchStart.promise)
         .mockResolvedValue({ code: 0, stdout: "", stderr: "" });
       mocks.spawn.mockImplementation(() => {
-        const child = Object.assign(new EventEmitter(), {
-          kill: vi.fn(),
+        const child = new EventEmitter();
+        const mockedChild = Object.assign(child, {
+          kill: vi.fn(() => {
+            queueMicrotask(() => child.emit("exit", null, "SIGTERM"));
+            return true;
+          }),
           killed: false,
         });
-        spawnedChildren.push(child);
-        return child;
+        spawnedChildren.push(mockedChild);
+        return mockedChild;
       });
 
       const staleStart = startGmailWatcher(createGmailConfig(), {
@@ -113,8 +120,8 @@ describe("startGmailWatcher", () => {
   });
 
   it("aborts watch start and does not spawn gog serve when cancelled in flight", async () => {
-    let cancelled = false;
     let watchStartSignal: AbortSignal | undefined;
+    const controller = new AbortController();
     mocks.runCommandWithTimeout.mockImplementation(
       async (_args, options: { signal?: AbortSignal }) =>
         await new Promise<{ code: number; stdout: string; stderr: string }>((resolve) => {
@@ -128,17 +135,13 @@ describe("startGmailWatcher", () => {
     );
 
     const startPromise = startGmailWatcher(createGmailConfig(), {
-      isCancelled: () => cancelled,
+      signal: controller.signal,
     });
 
-    await vi.waitFor(() => {
-      expect(watchStartSignal).toBeDefined();
-    });
-    cancelled = true;
-
-    await vi.waitFor(() => {
-      expect(watchStartSignal?.aborted).toBe(true);
-    });
+    await Promise.resolve();
+    expect(watchStartSignal).toBeDefined();
+    controller.abort();
+    expect(watchStartSignal?.aborted).toBe(true);
 
     await expect(startPromise).resolves.toEqual({
       started: false,

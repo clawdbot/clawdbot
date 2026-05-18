@@ -4,7 +4,7 @@ import path from "node:path";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
-import { writeCodexAppServerBinding } from "./session-binding.js";
+import { readCodexAppServerBinding, writeCodexAppServerBinding } from "./session-binding.js";
 import { startOrResumeThread } from "./thread-lifecycle.js";
 
 function threadStartResult(threadId = "thread-1"): Record<string, unknown> {
@@ -208,6 +208,41 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     expect(startParams?.config?.mcp_servers).toBeUndefined();
   });
 
+  it("omits user MCP servers when runtime policy disables native tool surfaces", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const request = vi.fn(async (method: string, _params: unknown) => {
+      if (method === "thread/start") {
+        return threadStartResult();
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params: createParams(sessionFile, workspaceDir, {
+        mcp: {
+          servers: {
+            notes: {
+              transport: "stdio",
+              command: "node",
+              args: ["/opt/notes-mcp/dist/index.js"],
+            },
+          },
+        },
+      } as unknown as EmbeddedRunAttemptParams["config"]),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createAppServerOptions(),
+      nativeCodeModeEnabled: false,
+      userMcpServersEnabled: false,
+    });
+
+    const startCall = request.mock.calls.find(([method]) => method === "thread/start");
+    const startParams = startCall?.[1] as { config?: { mcp_servers?: Record<string, unknown> } };
+    expect(startParams?.config?.mcp_servers).toBeUndefined();
+  });
+
   it("starts a new thread when an existing binding lacks the matching user MCP fingerprint", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -253,6 +288,103 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     expect(startParams.config!.mcp_servers).toMatchObject({
       notes: { command: "node", args: ["/opt/notes-mcp/dist/index.js"] },
     });
+  });
+
+  it("does not resume an existing native thread when runtime policy disables native tools", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-native",
+      cwd: workspaceDir,
+      model: "gpt-5.4-codex",
+      modelProvider: "openai",
+    });
+    const request = vi.fn(async (method: string, _params: unknown) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-restricted");
+      }
+      if (method === "thread/resume") {
+        return threadResumeResult("thread-native");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params: createParams(sessionFile, workspaceDir),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createAppServerOptions(),
+      nativeCodeModeEnabled: false,
+      userMcpServersEnabled: false,
+    });
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start"]);
+    const startParams = request.mock.calls[0]?.[1] as {
+      environments?: unknown[];
+      config?: {
+        "features.code_mode"?: boolean;
+        "features.code_mode_only"?: boolean;
+        mcp_servers?: Record<string, unknown>;
+      };
+    };
+    expect(startParams?.environments).toEqual([]);
+    expect(startParams?.config?.["features.code_mode"]).toBe(false);
+    expect(startParams?.config?.["features.code_mode_only"]).toBe(false);
+    expect(startParams?.config?.mcp_servers).toBeUndefined();
+    const preservedBinding = await readCodexAppServerBinding(sessionFile);
+    expect(preservedBinding?.threadId).toBe("thread-native");
+  });
+
+  it("starts a new thread without user MCP servers when runtime policy disables them", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const config = {
+      mcp: {
+        servers: {
+          notes: {
+            transport: "stdio",
+            command: "node",
+            args: ["/opt/notes-mcp/dist/index.js"],
+          },
+        },
+      },
+    } as unknown as EmbeddedRunAttemptParams["config"];
+    const request = vi.fn(async (method: string, _params: unknown) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-started");
+      }
+      if (method === "thread/resume") {
+        return threadResumeResult("thread-existing");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params: createParams(sessionFile, workspaceDir, config),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createAppServerOptions(),
+    });
+
+    request.mockClear();
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params: createParams(sessionFile, workspaceDir, config),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createAppServerOptions(),
+      nativeCodeModeEnabled: false,
+      userMcpServersEnabled: false,
+    });
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start"]);
+    const startParams = request.mock.calls[0]?.[1] as {
+      config?: { mcp_servers?: Record<string, unknown> };
+    };
+    expect(startParams?.config?.mcp_servers).toBeUndefined();
   });
 
   it("resends user MCP config when resuming a thread with the matching fingerprint", async () => {

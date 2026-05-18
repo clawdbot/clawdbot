@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import {
   evaluateRuntimeEligibility,
   evaluateRuntimeRequires,
@@ -11,15 +12,11 @@ import {
   resolveRuntimePlatform,
 } from "./config-eval.js";
 
-const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 const originalPath = process.env.PATH;
 const originalPathExt = process.env.PATHEXT;
 
 function setPlatform(platform: NodeJS.Platform): void {
-  Object.defineProperty(process, "platform", {
-    value: platform,
-    configurable: true,
-  });
+  mockProcessPlatform(platform);
 }
 
 afterEach(() => {
@@ -29,9 +26,6 @@ afterEach(() => {
     delete process.env.PATHEXT;
   } else {
     process.env.PATHEXT = originalPathExt;
-  }
-  if (originalPlatformDescriptor) {
-    Object.defineProperty(process, "platform", originalPlatformDescriptor);
   }
 });
 

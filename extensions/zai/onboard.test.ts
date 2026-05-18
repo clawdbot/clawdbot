@@ -1,15 +1,24 @@
 import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onboard";
 import { expectProviderOnboardPreservesPrimary } from "openclaw/plugin-sdk/provider-test-contracts";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { ZAI_CODING_CN_BASE_URL, ZAI_GLOBAL_BASE_URL } from "./model-definitions.js";
 import { applyZaiConfig, applyZaiProviderConfig } from "./onboard.js";
 
 describe("zai onboard", () => {
+  let defaultCfg: ReturnType<typeof applyZaiConfig>;
+  let cnFlashCfg: ReturnType<typeof applyZaiConfig>;
+  let cnFlashxCfg: ReturnType<typeof applyZaiConfig>;
+
+  beforeAll(() => {
+    defaultCfg = applyZaiConfig({});
+    cnFlashCfg = applyZaiConfig({}, { endpoint: "coding-cn", modelId: "glm-4.7-flash" });
+    cnFlashxCfg = applyZaiConfig({}, { endpoint: "coding-cn", modelId: "glm-4.7-flashx" });
+  });
+
   it("adds zai provider with correct settings", () => {
-    const cfg = applyZaiConfig({});
-    expect(cfg.models?.providers?.zai?.baseUrl).toBe(ZAI_GLOBAL_BASE_URL);
-    expect(cfg.models?.providers?.zai?.api).toBe("openai-completions");
-    const ids = cfg.models?.providers?.zai?.models?.map((m) => m.id);
+    expect(defaultCfg.models?.providers?.zai?.baseUrl).toBe(ZAI_GLOBAL_BASE_URL);
+    expect(defaultCfg.models?.providers?.zai?.api).toBe("openai-completions");
+    const ids = defaultCfg.models?.providers?.zai?.models?.map((m) => m.id);
     expect(ids).toEqual([
       "glm-5.1",
       "glm-5",
@@ -28,8 +37,10 @@ describe("zai onboard", () => {
   });
 
   it("supports CN endpoint for supported coding models", () => {
-    for (const modelId of ["glm-4.7-flash", "glm-4.7-flashx"] as const) {
-      const cfg = applyZaiConfig({}, { endpoint: "coding-cn", modelId });
+    for (const [modelId, cfg] of [
+      ["glm-4.7-flash", cnFlashCfg],
+      ["glm-4.7-flashx", cnFlashxCfg],
+    ] as const) {
       expect(cfg.models?.providers?.zai?.baseUrl).toBe(ZAI_CODING_CN_BASE_URL);
       expect(resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)).toBe(`zai/${modelId}`);
     }

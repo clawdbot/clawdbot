@@ -246,6 +246,7 @@ async function expectGatewayRequestError(
 function createClientWithIdentity(
   deviceId: string,
   onClose: (code: number, reason: string) => void,
+  overrides: Partial<ConstructorParameters<typeof GatewayClient>[0]> = {},
 ) {
   const identity: DeviceIdentity = {
     deviceId,
@@ -256,6 +257,7 @@ function createClientWithIdentity(
     url: "ws://127.0.0.1:18789",
     deviceIdentity: identity,
     onClose,
+    ...overrides,
   });
 }
 
@@ -662,7 +664,8 @@ describe("GatewayClient close handling", () => {
 
   it("clears stale token on device token mismatch close", () => {
     const onClose = vi.fn();
-    const client = createClientWithIdentity("dev-1", onClose);
+    const env = { OPENCLAW_HOME: "/tmp/custom-openclaw-home" };
+    const client = createClientWithIdentity("dev-1", onClose, { env });
 
     client.start();
     getLatestWs().emitClose(
@@ -670,7 +673,11 @@ describe("GatewayClient close handling", () => {
       "unauthorized: DEVICE token mismatch (rotate/reissue device token)",
     );
 
-    expect(clearDeviceAuthTokenMock).toHaveBeenCalledWith({ deviceId: "dev-1", role: "operator" });
+    expect(clearDeviceAuthTokenMock).toHaveBeenCalledWith({
+      deviceId: "dev-1",
+      role: "operator",
+      env,
+    });
     expect(logDebugMock).toHaveBeenCalledWith("cleared stale device-auth token for device dev-1");
     expect(onClose).toHaveBeenCalledWith(
       1008,
@@ -1493,7 +1500,7 @@ describe("GatewayClient connect auth payload", () => {
     });
     const clearTokenParams = expectRecordFields(
       firstMockArg(clearDeviceAuthTokenMock, "clear device token params"),
-      { role: "operator" },
+      { role: "operator", env: undefined },
       "clear device token params",
     );
     expect(clearTokenParams.deviceId).toBeTypeOf("string");
@@ -1502,6 +1509,38 @@ describe("GatewayClient connect auth payload", () => {
       reason: "connect failed",
       detailCode: "AUTH_DEVICE_TOKEN_MISMATCH",
     });
+  });
+
+  it("clears stale stored device tokens from the configured environment store", async () => {
+    loadDeviceAuthTokenMock.mockReturnValue({
+      token: "stored-device-token",
+      scopes: ["operator.read"],
+    });
+    const env = { OPENCLAW_HOME: "/tmp/custom-openclaw-home" };
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      env,
+    });
+
+    const { ws: ws1, connect: firstConnect } = startClientAndConnect({ client });
+    expect(firstConnect.params?.auth?.token).toBe("stored-device-token");
+    await expectNoReconnectAfterConnectFailure({
+      client,
+      firstWs: ws1,
+      connectId: firstConnect.id,
+      failureDetails: { code: "AUTH_DEVICE_TOKEN_MISMATCH" },
+    });
+
+    expect(
+      expectRecordFields(
+        firstMockArg(clearDeviceAuthTokenMock, "clear device token params"),
+        {
+          role: "operator",
+          env,
+        },
+        "clear device token params",
+      ),
+    ).toHaveProperty("deviceId");
   });
 
   it("does not clear stored device tokens or reconnect on AUTH_SCOPE_MISMATCH", async () => {

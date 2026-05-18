@@ -30,8 +30,8 @@ on:
         required: false
         default: false
         type: boolean
-      live_gpt54:
-        description: Run the live OpenAI GPT 5.4 agent-turn lane
+      live_openai_candidate:
+        description: Run the live OpenAI GPT 5.5 agent-turn lane
         required: false
         default: false
         type: boolean
@@ -57,7 +57,7 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   OCM_VERSION: v0.2.15
   KOVA_REPOSITORY: openclaw/Kova
-  PERFORMANCE_MODEL_ID: gpt-5.4
+  PERFORMANCE_MODEL_ID: gpt-5.5
 
 jobs:
   kova:
@@ -82,8 +82,8 @@ jobs:
             deep_profile: "true"
             live: "false"
             include_filters: "scenario:fresh-install scenario:gateway-performance scenario:agent-cold-warm-message"
-          - lane: live-gpt54
-            title: Kova live OpenAI GPT 5.4 agent turn
+          - lane: live-openai-candidate
+            title: Kova live OpenAI GPT 5.5 agent turn
             auth: live
             repeat: "1"
             deep_profile: "false"
@@ -119,9 +119,9 @@ jobs:
             run_lane=false
             reason="deep_profile input is false"
           fi
-          if [[ "$LANE_ID" == "live-gpt54" && "${{ github.event_name }}" != "schedule" && "${{ inputs.live_gpt54 || 'false' }}" != "true" ]]; then
+          if [[ "$LANE_ID" == "live-openai-candidate" && "${{ github.event_name }}" != "schedule" && "${{ inputs.live_openai_candidate || 'false' }}" != "true" ]]; then
             run_lane=false
-            reason="live_gpt54 input is false"
+            reason="live_openai_candidate input is false"
           fi
           echo "run=$run_lane" >> "$GITHUB_OUTPUT"
           if [[ "$run_lane" != "true" ]]; then
@@ -200,7 +200,7 @@ jobs:
           chmod 0755 "$HOME/.local/bin/kova"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      - name: Pin Kova OpenAI model to GPT 5.4
+      - name: Pin Kova OpenAI model to GPT 5.5
         if: steps.lane.outputs.run == 'true'
         shell: bash
         run: |
@@ -244,7 +244,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -z "${OPENAI_API_KEY:-}" ]]; then
-            echo "OPENAI_API_KEY is not configured; live GPT 5.4 lane will be skipped." >> "$GITHUB_STEP_SUMMARY"
+            echo "OPENAI_API_KEY is not configured; live GPT 5.5 lane will be skipped." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           kova setup --ci --json

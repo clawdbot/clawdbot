@@ -1,6 +1,6 @@
 import { mimeTypeFromFilePath } from "../../media/mime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import type { FinalizedMsgContext } from "../templating.js";
+import type { MsgContext } from "../templating.js";
 import type { HistoryEntry, HistoryMediaEntry } from "./history.types.js";
 
 export const RECENT_HISTORY_IMAGE_TTL_MS = 30 * 60_000;
@@ -44,12 +44,12 @@ function resolveTimestamp(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function resolveHistoryEntries(ctx: FinalizedMsgContext): HistoryEntry[] {
+function resolveHistoryEntries(ctx: MsgContext): HistoryEntry[] {
   return Array.isArray(ctx.InboundHistory) ? ctx.InboundHistory : [];
 }
 
 export function resolveRecentInboundHistoryImages(params: {
-  ctx: FinalizedMsgContext;
+  ctx: MsgContext;
   nowMs?: number;
   ttlMs?: number;
   limit?: number;

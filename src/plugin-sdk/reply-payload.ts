@@ -20,6 +20,9 @@ export type OutboundReplyPayload = {
   mediaUrls?: string[];
   mediaUrl?: string;
   presentation?: InternalReplyPayload["presentation"];
+  /**
+   * @deprecated Use presentation. Runtime support remains for legacy producers.
+   */
   interactive?: InternalReplyPayload["interactive"];
   channelData?: InternalReplyPayload["channelData"];
   sensitiveMedia?: boolean;

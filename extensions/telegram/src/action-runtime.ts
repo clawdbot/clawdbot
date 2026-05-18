@@ -13,7 +13,6 @@ import {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   normalizeMessagePresentation,
-  presentationToInteractiveReply,
   renderMessagePresentationFallbackText,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
@@ -138,7 +137,8 @@ function resolveTelegramButtonsFromParams(
   presentation = normalizeMessagePresentation(params.presentation),
 ) {
   return resolveTelegramInlineButtons({
-    interactive: presentation ? presentationToInteractiveReply(presentation) : params.interactive,
+    presentation,
+    interactive: params.interactive,
   });
 }
 

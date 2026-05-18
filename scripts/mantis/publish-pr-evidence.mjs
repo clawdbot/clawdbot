@@ -308,6 +308,47 @@ function laneLine(label, lane) {
   return pieces.join("");
 }
 
+function hasVisibleProofArtifacts(manifest) {
+  return manifest.artifacts.some((artifact) =>
+    ["desktopScreenshot", "fullVideo", "motionClip", "motionPreview", "timeline"].includes(
+      artifact.kind,
+    ),
+  );
+}
+
+function isSkippedNoVisualProof(manifest) {
+  const comparison = manifest.comparison ?? {};
+  return (
+    !hasVisibleProofArtifacts(manifest) &&
+    comparison.baseline?.status === "skipped" &&
+    comparison.candidate?.status === "skipped"
+  );
+}
+
+function publicSummary(manifest) {
+  if (isSkippedNoVisualProof(manifest)) {
+    return "Mantis did not generate before/after GIFs because this PR does not have a clean Telegram-visible before/after proof in the standard Mantis run.";
+  }
+  return manifest.summary ?? "Mantis captured QA evidence for this scenario.";
+}
+
+function overallStatus(manifest) {
+  if (isSkippedNoVisualProof(manifest)) {
+    return "skipped";
+  }
+  const pass = manifest.comparison?.pass;
+  return typeof pass === "boolean" ? String(pass) : "";
+}
+
+export function shouldPublishPrComment(manifest) {
+  if (!isSkippedNoVisualProof(manifest)) {
+    return true;
+  }
+  return !/(authorization[- ]?error|credential infrastructure|logged[- ]out|login screen|welcome screen|bad telegram session)/iu.test(
+    manifest.summary ?? "",
+  );
+}
+
 export function renderEvidenceComment({
   artifactUrl: actionsArtifactUrl,
   manifest,
@@ -333,7 +374,7 @@ export function renderEvidenceComment({
     marker,
     `## ${manifest.title}`,
     "",
-    `Summary: ${manifest.summary ?? "Mantis captured QA evidence for this scenario."}`,
+    `Summary: ${publicSummary(manifest)}`,
     "",
     `- Scenario: \`${manifest.scenario}\``,
   ];
@@ -354,8 +395,9 @@ export function renderEvidenceComment({
   if (candidateLine) {
     lines.push(candidateLine);
   }
-  if (typeof comparison.pass === "boolean") {
-    lines.push(`- Overall: \`${comparison.pass}\``);
+  const overall = overallStatus(manifest);
+  if (overall) {
+    lines.push(`- Overall: \`${overall}\``);
   }
   lines.push("");
 
@@ -551,6 +593,10 @@ export async function publishEvidence(rawArgs = process.argv.slice(2)) {
     runUrl: args.run_url,
     treeUrl: published.treeUrl,
   });
+  if (!shouldPublishPrComment(manifest)) {
+    console.log("Skipped Mantis QA evidence PR comment because the run did not capture proof.");
+    return;
+  }
   upsertPrComment({
     body,
     marker: args.marker,

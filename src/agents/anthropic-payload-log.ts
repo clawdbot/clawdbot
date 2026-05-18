@@ -53,16 +53,18 @@ function getWriter(filePath: string): PayloadLogWriter {
 
 function formatError(error: unknown): string | undefined {
   if (error instanceof Error) {
-    return error.message;
+    const redacted = sanitizeDiagnosticPayload(error.message);
+    return typeof redacted === "string" ? redacted : error.message;
   }
   if (typeof error === "string") {
-    return error;
+    const redacted = sanitizeDiagnosticPayload(error);
+    return typeof redacted === "string" ? redacted : error;
   }
   if (typeof error === "number" || typeof error === "boolean" || typeof error === "bigint") {
     return String(error);
   }
   if (error && typeof error === "object") {
-    return safeJsonStringify(error) ?? "unknown error";
+    return safeJsonStringify(sanitizeDiagnosticPayload(error)) ?? "unknown error";
   }
   return undefined;
 }
@@ -173,7 +175,7 @@ export function createAnthropicPayloadLogger(params: {
       ...base,
       ts: new Date().toISOString(),
       stage: "usage",
-      usage,
+      usage: sanitizeDiagnosticPayload(usage) as Record<string, unknown>,
       error: errorMessage,
     });
     log.info("anthropic usage", {

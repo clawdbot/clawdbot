@@ -1,6 +1,2 @@
 export { resolveDeliveryTarget } from "./delivery-target.js";
-export {
-  dispatchCronDelivery,
-  matchesMessagingToolDeliveryTarget,
-  resolveCronDeliveryBestEffort,
-} from "./delivery-dispatch.js";
+export { dispatchCronDelivery, resolveCronDeliveryBestEffort } from "./delivery-dispatch.js";

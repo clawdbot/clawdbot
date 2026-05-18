@@ -23,6 +23,29 @@ describe("buildMSTeamsPresentationCard", () => {
       actions: [{ type: "Action.Submit", title: "Open", data: { value: "open", label: "Open" } }],
     });
   });
+
+  it("renders web app button links as open-url actions", () => {
+    expect(
+      buildMSTeamsPresentationCard({
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                { label: "Open app", webApp: { url: "https://example.com/app" } },
+                { label: "Legacy app", web_app: { url: "https://example.com/legacy" } },
+              ],
+            },
+          ],
+        },
+      }),
+    ).toMatchObject({
+      actions: [
+        { type: "Action.OpenUrl", title: "Open app", url: "https://example.com/app" },
+        { type: "Action.OpenUrl", title: "Legacy app", url: "https://example.com/legacy" },
+      ],
+    });
+  });
 });
 
 describe("buildWelcomeCard", () => {

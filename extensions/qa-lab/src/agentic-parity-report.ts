@@ -2,12 +2,8 @@ import {
   QA_AGENTIC_PARITY_SCENARIO_TITLES,
   QA_AGENTIC_PARITY_TOOL_BACKED_SCENARIO_TITLES,
 } from "./agentic-parity.js";
-import type {
-  RuntimeId,
-  RuntimeParityCell,
-  RuntimeParityDrift,
-  RuntimeParityResult,
-} from "./runtime-parity.js";
+import type { RuntimeId, RuntimeParityDrift, RuntimeParityResult } from "./runtime-parity.js";
+import { isRuntimeParityResultPass, runtimeParityCellStatus } from "./runtime-parity.js";
 
 type QaParityReportStep = {
   name: string;
@@ -251,6 +247,23 @@ function buildRuntimeParityDriftCounts(): Record<RuntimeParityDrift, number> {
   };
 }
 
+function isLiveProviderMode(providerMode: string | undefined) {
+  return providerMode?.startsWith("live-") === true;
+}
+
+function describeLiveUsageFailure(scenarioName: string, scenario: QaRuntimeParityScenarioReport) {
+  const missing = [
+    scenario.piTokens > 0 ? undefined : `${scenario.piStatus === "pass" ? "pi" : "pi failed"}=0`,
+    scenario.codexTokens > 0
+      ? undefined
+      : `${scenario.codexStatus === "pass" ? "codex" : "codex failed"}=0`,
+  ].filter((entry): entry is string => !!entry);
+  if (missing.length === 0) {
+    return undefined;
+  }
+  return `${scenarioName} missing live assistant-message usage (${missing.join(", ")}).`;
+}
+
 function normalizeRuntimePair(
   pair: [RuntimeId, RuntimeId] | null | undefined,
 ): [RuntimeId, RuntimeId] {
@@ -258,13 +271,6 @@ function normalizeRuntimePair(
     return pair;
   }
   return ["pi", "codex"];
-}
-
-function runtimeCellStatus(cell: RuntimeParityCell | undefined): "pass" | "fail" | "missing" {
-  if (!cell) {
-    return "missing";
-  }
-  return cell.runtimeErrorClass || cell.transportErrorClass ? "fail" : "pass";
 }
 
 function requiredCoverageStatus(
@@ -558,7 +564,7 @@ export function renderQaAgenticParityMarkdownReport(comparison: QaAgenticParityC
   // Title is parametrized from the candidate / baseline labels so reports
   // for any candidate/baseline pair (not only gpt-5.5 vs opus 4.6) render
   // with an accurate header. The default CLI labels are still
-  // openai/gpt-5.5 vs anthropic/claude-opus-4-6, but the helper works for
+  // openai/gpt-5.5 vs anthropic/claude-opus-4-7, but the helper works for
   // any parity comparison a caller configures.
   const lines = [
     `# OpenClaw Agentic Parity Report — ${comparison.candidateLabel} vs ${comparison.baselineLabel}`,
@@ -615,9 +621,11 @@ export function buildQaRuntimeParityReport(params: {
   comparedAt?: string;
 }): QaRuntimeParityReport {
   const runtimePair = normalizeRuntimePair(params.summary.run?.runtimePair);
+  const providerMode = params.summary.run?.providerMode;
+  const requiresLiveUsage = isLiveProviderMode(providerMode);
   const driftCounts = buildRuntimeParityDriftCounts();
   const failures: string[] = [];
-  const scenarios = params.summary.scenarios.map((scenario) => {
+  const scenarios: QaRuntimeParityScenarioReport[] = params.summary.scenarios.map((scenario) => {
     const parity = scenario.runtimeParity;
     if (!parity) {
       failures.push(`Missing runtime parity capture for ${scenario.name}.`);
@@ -637,17 +645,12 @@ export function buildQaRuntimeParityReport(params: {
     driftCounts[parity.drift] += 1;
     const piCell = parity.cells.pi;
     const codexCell = parity.cells.codex;
-    const piStatus = runtimeCellStatus(piCell);
-    const codexStatus = runtimeCellStatus(codexCell);
-    const status = scenario.status === "pass" ? "pass" : "fail";
-    if (status === "fail") {
-      failures.push(
-        `${scenario.name} drift=${parity.drift}${parity.driftDetails ? ` (${parity.driftDetails})` : ""}.`,
-      );
-    }
-    return {
+    const piStatus = runtimeParityCellStatus(piCell);
+    const codexStatus = runtimeParityCellStatus(codexCell);
+    const parityStatus = isRuntimeParityResultPass(parity) ? "pass" : "fail";
+    const reportScenario = {
       name: scenario.name,
-      status,
+      status: parityStatus,
       drift: parity.drift,
       driftDetails: parity.driftDetails,
       piStatus,
@@ -657,20 +660,29 @@ export function buildQaRuntimeParityReport(params: {
       piToolCalls: piCell.toolCalls.length,
       codexToolCalls: codexCell.toolCalls.length,
     } satisfies QaRuntimeParityScenarioReport;
+    if (parityStatus === "fail") {
+      failures.push(
+        `${scenario.name} drift=${parity.drift}${parity.driftDetails ? ` (${parity.driftDetails})` : ""}.`,
+      );
+    }
+    const usageFailure = requiresLiveUsage
+      ? describeLiveUsageFailure(scenario.name, reportScenario)
+      : undefined;
+    if (usageFailure) {
+      failures.push(usageFailure);
+      return { ...reportScenario, status: "fail" };
+    }
+    return reportScenario;
   });
 
   const totalScenarios = params.summary.counts?.total ?? scenarios.length;
-  const passedScenarios =
-    params.summary.counts?.passed ??
-    scenarios.filter((scenario) => scenario.status === "pass").length;
-  const failedScenarios =
-    params.summary.counts?.failed ??
-    scenarios.filter((scenario) => scenario.status === "fail").length;
+  const passedScenarios = scenarios.filter((scenario) => scenario.status === "pass").length;
+  const failedScenarios = scenarios.filter((scenario) => scenario.status === "fail").length;
 
   return {
     runtimePair,
     comparedAt: params.comparedAt ?? new Date().toISOString(),
-    providerMode: params.summary.run?.providerMode,
+    providerMode,
     primaryModel: params.summary.run?.primaryModel,
     totalScenarios,
     passedScenarios,
@@ -680,7 +692,7 @@ export function buildQaRuntimeParityReport(params: {
     pass: failures.length === 0 && failedScenarios === 0,
     failures,
     notes: [
-      "Runtime parity treats none and text-only drift as pass; all structural, tool-shape, and failure-mode drift classes fail the lane.",
+      "Runtime parity fails runtime, transport, and failure-mode drift; structural and tool-shape drift is recorded as advisory when both runtimes complete.",
       "Token totals here are assistant-message usage captured from the normalized transcript, not provider transport payloads.",
     ],
   };

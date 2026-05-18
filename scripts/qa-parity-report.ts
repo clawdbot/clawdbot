@@ -7,6 +7,9 @@ type Options = {
   candidateSummary?: string;
   outputDir?: string;
   repoRoot?: string;
+  runtimeAxis?: boolean;
+  summary?: string;
+  tokenEfficiency?: boolean;
 };
 
 function takeValue(args: string[], index: number, flag: string): string {
@@ -31,6 +34,9 @@ Options:
   --baseline-summary <path>   Baseline qa-suite-summary.json path
   --candidate-label <label>   Candidate display label
   --baseline-label <label>    Baseline display label
+  --runtime-axis              Interpret --summary as a runtime-pair summary
+  --summary <path>            Runtime-axis qa-suite-summary.json path
+  --token-efficiency          Also write the runtime token-efficiency report
   --repo-root <path>          Repository root to target
   --output-dir <path>         Artifact directory for the parity report
   -h, --help                  Display help
@@ -60,6 +66,16 @@ Options:
         opts.repoRoot = takeValue(args, index, arg);
         index += 1;
         break;
+      case "--runtime-axis":
+        opts.runtimeAxis = true;
+        break;
+      case "--summary":
+        opts.summary = takeValue(args, index, arg);
+        index += 1;
+        break;
+      case "--token-efficiency":
+        opts.tokenEfficiency = true;
+        break;
       default:
         throw new Error(`Unknown qa parity-report option: ${arg}`);
     }
@@ -68,18 +84,27 @@ Options:
 }
 
 const opts = parseArgs(process.argv.slice(2));
-if (!opts.candidateSummary) {
-  throw new Error("--candidate-summary is required.");
-}
-if (!opts.baselineSummary) {
-  throw new Error("--baseline-summary is required.");
+if (opts.runtimeAxis) {
+  if (!opts.summary) {
+    throw new Error("--summary is required when --runtime-axis is set.");
+  }
+} else {
+  if (!opts.candidateSummary) {
+    throw new Error("--candidate-summary is required.");
+  }
+  if (!opts.baselineSummary) {
+    throw new Error("--baseline-summary is required.");
+  }
 }
 
 await runQaParityReportCommand({
-  baselineSummary: opts.baselineSummary,
-  candidateSummary: opts.candidateSummary,
+  ...(opts.baselineSummary ? { baselineSummary: opts.baselineSummary } : {}),
+  ...(opts.candidateSummary ? { candidateSummary: opts.candidateSummary } : {}),
   ...(opts.baselineLabel ? { baselineLabel: opts.baselineLabel } : {}),
   ...(opts.candidateLabel ? { candidateLabel: opts.candidateLabel } : {}),
   ...(opts.outputDir ? { outputDir: opts.outputDir } : {}),
   ...(opts.repoRoot ? { repoRoot: opts.repoRoot } : {}),
+  ...(opts.runtimeAxis ? { runtimeAxis: opts.runtimeAxis } : {}),
+  ...(opts.summary ? { summary: opts.summary } : {}),
+  ...(opts.tokenEfficiency ? { tokenEfficiency: opts.tokenEfficiency } : {}),
 });

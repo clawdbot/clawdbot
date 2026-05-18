@@ -2,10 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveOAuthDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { __testing as externalAuthTesting } from "./external-auth.js";
+import { legacyOAuthSidecarTestUtils } from "./legacy-oauth-sidecar.js";
 import {
   createOAuthManager,
   isSafeToAdoptBootstrapOAuthIdentity,
@@ -13,6 +15,7 @@ import {
   isSafeToOverwriteStoredOAuthIdentity,
   OAuthManagerRefreshError,
 } from "./oauth-manager.js";
+import { resolveAuthStorePath } from "./paths.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
@@ -33,7 +36,13 @@ function createCredential(overrides: Partial<OAuthCredential> = {}): OAuthCreden
 }
 
 const tempDirs: string[] = [];
-const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_AGENT_DIR", "PI_CODING_AGENT_DIR"]);
+const envSnapshot = captureEnv([
+  "OPENCLAW_STATE_DIR",
+  "OPENCLAW_AGENT_DIR",
+  "PI_CODING_AGENT_DIR",
+  "OPENCLAW_OAUTH_DIR",
+  "OPENCLAW_AUTH_PROFILE_SECRET_KEY",
+]);
 
 beforeEach(() => {
   externalAuthTesting.setResolveExternalAuthProfilesForTest(() => []);
@@ -446,6 +455,104 @@ describe("createOAuthManager", () => {
     expect(result.credential.provider).toBe("minimax-portal");
     expect(result.credential.access).toBe("rotated-access");
     expect(result.credential.refresh).toBe("rotated-refresh");
+  });
+
+  it("refreshes legacy oauthRef sidecar credentials and writes rotated tokens inline", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "oauth-manager-legacy-ref-"));
+    tempDirs.push(tempRoot);
+    process.env.OPENCLAW_STATE_DIR = tempRoot;
+    process.env.OPENCLAW_OAUTH_DIR = path.join(tempRoot, "credentials");
+    process.env.OPENCLAW_AUTH_PROFILE_SECRET_KEY = "legacy-seed";
+    const agentDir = path.join(tempRoot, "agents", "main", "agent");
+    const profileId = "openai-codex:default";
+    const ref = {
+      source: "openclaw-credentials" as const,
+      provider: "openai-codex" as const,
+      id: "0123456789abcdef0123456789abcdef",
+    };
+    await fs.mkdir(agentDir, { recursive: true });
+    await fs.writeFile(
+      resolveAuthStorePath(agentDir),
+      `${JSON.stringify(
+        {
+          version: 1,
+          profiles: {
+            [profileId]: {
+              type: "oauth",
+              provider: "openai-codex",
+              expires: Date.now() - 60_000,
+              oauthRef: ref,
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    const sidecarPath = path.join(resolveOAuthDir(), "auth-profiles", `${ref.id}.json`);
+    await fs.mkdir(path.dirname(sidecarPath), { recursive: true });
+    await fs.writeFile(
+      sidecarPath,
+      `${JSON.stringify(
+        {
+          version: 1,
+          profileId,
+          provider: "openai-codex",
+          encrypted: legacyOAuthSidecarTestUtils.encryptLegacyOAuthMaterial({
+            ref,
+            profileId,
+            provider: "openai-codex",
+            seed: "legacy-seed",
+            material: {
+              access: "legacy-access",
+              refresh: "legacy-refresh",
+            },
+          }),
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    const store = ensureAuthProfileStore(agentDir);
+    const credential = store.profiles[profileId];
+    expect(credential?.type).toBe("oauth");
+    expect(credential).toMatchObject({
+      access: "legacy-access",
+      refresh: "legacy-refresh",
+    });
+    const refreshCredential = vi.fn(async (input: OAuthCredential) => {
+      expect(input.refresh).toBe("legacy-refresh");
+      return {
+        access: "rotated-access",
+        refresh: "rotated-refresh",
+        expires: Date.now() + 60_000,
+      };
+    });
+    const manager = createOAuthManager({
+      buildApiKey: async (_provider, value) => value.access,
+      refreshCredential,
+      readBootstrapCredential: () => null,
+      isRefreshTokenReusedError: () => false,
+    });
+
+    const result = await manager.resolveOAuthAccess({
+      store,
+      profileId,
+      credential: credential as OAuthCredential,
+      agentDir,
+    });
+
+    expect(refreshCredential).toHaveBeenCalledTimes(1);
+    expect(result?.apiKey).toBe("rotated-access");
+    const parsed = JSON.parse(await fs.readFile(resolveAuthStorePath(agentDir), "utf8")) as {
+      profiles: Record<string, Record<string, unknown>>;
+    };
+    expect(parsed.profiles[profileId]).not.toHaveProperty("oauthRef");
+    expect(parsed.profiles[profileId]).toMatchObject({
+      access: "rotated-access",
+      refresh: "rotated-refresh",
+    });
   });
 
   it("redacts the external oauth credential attempted during refresh failures", async () => {

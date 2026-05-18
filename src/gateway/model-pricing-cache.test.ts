@@ -118,6 +118,7 @@ describe("model-pricing-cache", () => {
           imageModel: { primary: "google/gemini-3-pro" },
           compaction: { model: "opus" },
           heartbeat: { model: "xai/grok-4" },
+          subagents: { model: { primary: "anthropic/claude-haiku-4-5" } },
           models: {
             "openai/gpt-5.4": { alias: "gpt" },
             "anthropic/claude-opus-4-6": { alias: "opus" },
@@ -144,7 +145,6 @@ describe("model-pricing-cache", () => {
         mappings: [{ model: "zai/glm-5" }],
       },
       tools: {
-        subagents: { model: { primary: "anthropic/claude-haiku-4-5" } },
         media: {
           models: [{ provider: "google", model: "gemini-2.5-pro" }],
           image: {
@@ -614,6 +614,7 @@ describe("model-pricing-cache", () => {
       agents: {
         defaults: {
           model: { primary: "anthropic/claude-opus-4-6" },
+          subagents: { model: { primary: "zai/glm-openrouter-test" } },
         },
         list: [
           {
@@ -621,9 +622,6 @@ describe("model-pricing-cache", () => {
             model: { primary: "openrouter/anthropic/claude-sonnet-4-6" },
           },
         ],
-      },
-      tools: {
-        subagents: { model: { primary: "zai/glm-openrouter-test" } },
       },
     } as unknown as OpenClawConfig;
 

@@ -176,8 +176,7 @@ send_reset_config_only() {
 send_channels_flow() {
   # Configure channels via configure wizard. Use the remove-config branch for
   # a stable no-op smoke path when the config starts empty.
-  wait_for_log "Where will the Gateway run?" 120
-  send $'\r' 0.6
+  # Section-scoped configure flows skip gateway run-mode selection.
   wait_for_log "Channel setup" 120
   send $'\e[B\r' 0.8
   # Keep stdin open until wizard exits.
@@ -185,9 +184,8 @@ send_channels_flow() {
 }
 
 send_skills_flow() {
-  # configure --section skills still runs the configure wizard.
-  wait_for_log "Where will the Gateway run?" 120
-  send $'\r' 0.6
+  # configure --section skills still runs the configure wizard, without the
+  # gateway run-mode prompt used by the full wizard.
   wait_for_log "Configure skills now?" 120
   send $'n\r' 0.8
   send "" 2.0

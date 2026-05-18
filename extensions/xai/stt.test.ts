@@ -14,16 +14,16 @@ const { postTranscriptionRequestMock } = vi.hoisted(() => ({
   ),
 }));
 
-function requireFirstPostTranscriptionCall(): {
+function requireLastPostTranscriptionCall(): {
   url?: string;
   timeoutMs?: number;
   auditContext?: string;
   headers: Headers;
   body: BodyInit;
 } {
-  const params = (
-    postTranscriptionRequestMock.mock.calls as unknown as Array<[unknown]>
-  )[0]?.[0] as
+  const params = (postTranscriptionRequestMock.mock.calls as unknown as Array<[unknown]>).at(
+    -1,
+  )?.[0] as
     | {
         url?: string;
         timeoutMs?: number;
@@ -65,7 +65,7 @@ describe("xai stt", () => {
     });
 
     expect(result).toEqual({ text: "hello from audio", model: XAI_DEFAULT_STT_MODEL });
-    const call = requireFirstPostTranscriptionCall();
+    const call = requireLastPostTranscriptionCall();
     expect(call.url).toBe("https://api.x.ai/v1/stt");
     expect(call.timeoutMs).toBe(10_000);
     expect(call.auditContext).toBe("xai stt");
@@ -84,5 +84,23 @@ describe("xai stt", () => {
     expect(provider.capabilities).toEqual(["audio"]);
     expect(provider.defaultModels).toEqual({ audio: XAI_DEFAULT_STT_MODEL });
     expect(provider.autoPriority).toEqual({ audio: 25 });
+  });
+
+  it("trusts the core-resolved apiKey on transcribeAudio (no plugin-side OAuth fallback)", async () => {
+    const provider = buildXaiMediaUnderstandingProvider();
+    if (!provider.transcribeAudio) {
+      throw new Error("xAI media-understanding provider should register transcribeAudio");
+    }
+    await provider.transcribeAudio({
+      buffer: Buffer.from("audio-bytes"),
+      fileName: "sample.wav",
+      mime: "audio/wav",
+      apiKey: "core-resolved-bearer",
+      baseUrl: "https://api.x.ai/v1/",
+      model: XAI_DEFAULT_STT_MODEL,
+      timeoutMs: 10_000,
+    });
+    const call = requireLastPostTranscriptionCall();
+    expect(call.headers.get("authorization")).toBe("Bearer core-resolved-bearer");
   });
 });

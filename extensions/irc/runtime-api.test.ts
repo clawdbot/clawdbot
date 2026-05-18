@@ -1,9 +1,11 @@
 import { runDirectImportSmoke } from "openclaw/plugin-sdk/plugin-test-contracts";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 describe("irc bundled api seams", () => {
-  it("loads narrow public api modules in direct smoke", async () => {
-    const stdout = await runDirectImportSmoke(
+  let directSmokeStdout = "";
+
+  beforeAll(async () => {
+    directSmokeStdout = await runDirectImportSmoke(
       `const channel = await import("./extensions/irc/channel-plugin-api.ts");
 const runtime = await import("./extensions/irc/runtime-api.ts");
 process.stdout.write(JSON.stringify({
@@ -11,9 +13,11 @@ process.stdout.write(JSON.stringify({
   runtime: { keys: Object.keys(runtime).sort(), type: typeof runtime.setIrcRuntime },
 }));`,
     );
+  }, 45_000);
 
-    expect(stdout).toBe(
+  it("loads narrow public api modules in direct smoke", () => {
+    expect(directSmokeStdout).toBe(
       '{"channel":{"keys":["ircPlugin"],"id":"irc"},"runtime":{"keys":["setIrcRuntime"],"type":"function"}}',
     );
-  }, 45_000);
+  });
 });

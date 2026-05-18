@@ -8,7 +8,7 @@ minimumReleaseAge: 2880
 
 minimumReleaseAgeExclude:
   - "@openclaw/fs-safe@0.2.4"
-  - "@openclaw/proxyline@0.3.0"
+  - "@openclaw/proxyline@0.3.3"
   - "acpx"
   - "tokenjuice"
   - "@agentclientprotocol/sdk"
@@ -23,6 +23,10 @@ minimumReleaseAgeExclude:
   - "@cloudflare/workers-types"
   - "@hono/node-server"
   - "@mariozechner/*"
+  - "@earendil-works/pi-agent-core"
+  - "@earendil-works/pi-ai"
+  - "@earendil-works/pi-coding-agent"
+  - "@earendil-works/pi-tui"
   - "@openai/codex"
   - "@openai/codex-*"
   - "@smithy/shared-ini-file-loader@4.5.1"

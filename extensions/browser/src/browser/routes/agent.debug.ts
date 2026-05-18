@@ -97,6 +97,31 @@ export function registerBrowserAgentDebugRoutes(
     }),
   );
 
+  app.get(
+    "/dialogs",
+    asyncBrowserRoute(async (req, res) => {
+      const targetId = resolveTargetIdFromQuery(req.query);
+
+      await withPlaywrightRouteContext({
+        req,
+        res,
+        ctx,
+        targetId,
+        feature: "dialog state",
+        enforceCurrentUrlAllowed: true,
+        run: async ({ cdpUrl, tab, pw, resolveTabUrl }) => {
+          const browserState = await pw.getObservedBrowserStateViaPlaywright({
+            cdpUrl,
+            targetId: tab.targetId,
+            ssrfPolicy: ctx.state().resolved.ssrfPolicy,
+          });
+          const url = await resolveTabUrl(tab.url);
+          res.json({ ok: true, targetId: tab.targetId, ...(url ? { url } : {}), browserState });
+        },
+      });
+    }),
+  );
+
   app.post(
     "/trace/start",
     asyncBrowserRoute(async (req, res) => {

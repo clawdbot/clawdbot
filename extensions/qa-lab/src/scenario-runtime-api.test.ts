@@ -69,6 +69,7 @@ function createDeps(overrides?: Partial<QaScenarioRuntimeDeps>): QaScenarioRunti
     runAgentPrompt: fn,
     ensureImageGenerationConfigured: fn,
     handleQaAction: fn,
+    runRuntimeToolFixture: fn,
     extractQaToolPayload: fn,
     formatMemoryDreamingDay: fn,
     resolveSessionTranscriptsDirForAgent: fn,

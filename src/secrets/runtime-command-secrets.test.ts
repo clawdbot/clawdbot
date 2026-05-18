@@ -1,418 +1,136 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveCommandSecretsFromActiveRuntimeSnapshot } from "./runtime-command-secrets.js";
-import { activateSecretsRuntimeSnapshot } from "./runtime.js";
-import { asConfig, setupSecretsRuntimeSnapshotTestHooks } from "./runtime.test-support.ts";
+import {
+  activateSecretsRuntimeSnapshot,
+  clearSecretsRuntimeSnapshot,
+  prepareSecretsRuntimeSnapshot,
+} from "./runtime.js";
 
-const { prepareSecretsRuntimeSnapshot } = setupSecretsRuntimeSnapshotTestHooks();
+describe("runtime command secrets", () => {
+  const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+  const previousTrustBundledPluginsDir = process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
 
-describe("resolveCommandSecretsFromActiveRuntimeSnapshot", () => {
-  it("reruns web secret resolution for provider overrides", async () => {
-    const googlePath = "plugins.entries.google.config.webSearch.apiKey";
-    const bravePath = "plugins.entries.brave.config.webSearch.apiKey";
-    const config = asConfig({
-      tools: { web: { search: { provider: "gemini", enabled: true } } },
-      plugins: {
-        entries: {
-          google: {
-            config: {
-              webSearch: {
-                apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY" },
-              },
-            },
-          },
-          brave: {
-            config: {
-              webSearch: {
-                apiKey: { source: "env", provider: "default", id: "BRAVE_API_KEY" },
-              },
-            },
-          },
-        },
-      },
-    });
-    const env = {
-      ...process.env,
-      OPENCLAW_BUNDLED_PLUGINS_DIR: "extensions",
-      OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-      GEMINI_API_KEY: "gemini-live",
-      BRAVE_API_KEY: "brave-live",
-    };
-
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config,
-      env,
-      includeAuthStoreRefs: false,
-    });
-    const googleConfig = snapshot.config.plugins?.entries?.google?.config as
-      | { webSearch?: { apiKey?: unknown } }
-      | undefined;
-    const braveConfig = snapshot.config.plugins?.entries?.brave?.config as
-      | { webSearch?: { apiKey?: unknown } }
-      | undefined;
-    expect(googleConfig?.webSearch?.apiKey).toBe("gemini-live");
-    expect(braveConfig?.webSearch?.apiKey).toEqual({
-      source: "env",
-      provider: "default",
-      id: "BRAVE_API_KEY",
-    });
-
-    activateSecretsRuntimeSnapshot(snapshot);
-    const result = await resolveCommandSecretsFromActiveRuntimeSnapshot({
-      commandName: "infer web search",
-      targetIds: new Set([googlePath, bravePath]),
-      providerOverrides: { webSearch: "brave" },
-    });
-
-    expect(result.assignments).toEqual([
-      {
-        path: bravePath,
-        pathSegments: bravePath.split("."),
-        value: "brave-live",
-      },
-    ]);
-    expect(result.inactiveRefPaths).toContain(googlePath);
+  afterEach(() => {
+    clearSecretsRuntimeSnapshot();
+    if (previousBundledPluginsDir === undefined) {
+      delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    } else {
+      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = previousBundledPluginsDir;
+    }
+    if (previousTrustBundledPluginsDir === undefined) {
+      delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
+    } else {
+      process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = previousTrustBundledPluginsDir;
+    }
   });
 
-  it("returns legacy web fetch assignments for provider overrides", async () => {
-    const legacyPath = "tools.web.fetch.firecrawl.apiKey";
-    const config = asConfig({
+  it("returns forced fallback assignments from the active gateway snapshot", async () => {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "extensions";
+    process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
+    const config = {
       tools: {
         web: {
-          fetch: {
-            provider: "browser",
-            firecrawl: {
-              apiKey: { source: "env", provider: "default", id: "FIRECRAWL_API_KEY" },
+          search: { enabled: false, provider: "brave" },
+          fetch: { provider: "firecrawl" },
+        },
+      },
+      plugins: {
+        entries: {
+          firecrawl: {
+            enabled: true,
+            config: {
+              webSearch: {
+                apiKey: {
+                  source: "env",
+                  provider: "default",
+                  id: "FIRECRAWL_API_KEY",
+                },
+              },
             },
           },
         },
       },
-    });
-    const env = {
-      ...process.env,
-      OPENCLAW_BUNDLED_PLUGINS_DIR: "extensions",
-      OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-      FIRECRAWL_API_KEY: "firecrawl-live",
-    };
-
+    } as OpenClawConfig;
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config,
-      env,
-      includeAuthStoreRefs: false,
+      env: {
+        FIRECRAWL_API_KEY: "gateway-only-firecrawl-key",
+        HOME: process.env.HOME,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: "extensions",
+        OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+      },
     });
-    const fetchConfig = snapshot.config.tools?.web?.fetch as
-      | { firecrawl?: { apiKey?: unknown } }
-      | undefined;
-    expect(fetchConfig?.firecrawl?.apiKey).toEqual({
-      source: "env",
-      provider: "default",
-      id: "FIRECRAWL_API_KEY",
-    });
-
     activateSecretsRuntimeSnapshot(snapshot);
-    const result = await resolveCommandSecretsFromActiveRuntimeSnapshot({
+
+    const resolved = await resolveCommandSecretsFromActiveRuntimeSnapshot({
       commandName: "infer web fetch",
-      targetIds: new Set([legacyPath]),
-      providerOverrides: { webFetch: "firecrawl" },
+      targetIds: new Set(["plugins.entries.firecrawl.config.webSearch.apiKey"]),
+      forcedActivePaths: new Set(["plugins.entries.firecrawl.config.webSearch.apiKey"]),
     });
 
-    expect(result.assignments).toEqual([
+    expect(resolved.assignments).toMatchObject([
       {
-        path: legacyPath,
-        pathSegments: legacyPath.split("."),
-        value: "firecrawl-live",
+        path: "plugins.entries.firecrawl.config.webSearch.apiKey",
+        value: "gateway-only-firecrawl-key",
       },
     ]);
+    expect(resolved.diagnostics).toEqual([]);
+    expect(resolved.inactiveRefPaths).toEqual([]);
   });
 
-  it("returns legacy web fetch assignments for the configured provider", async () => {
-    const legacyPath = "tools.web.fetch.firecrawl.apiKey";
-    const config = asConfig({
+  it("re-resolves forced command-selected web provider paths with gateway env", async () => {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "extensions";
+    process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
+    const firecrawlPath = "plugins.entries.firecrawl.config.webSearch.apiKey";
+    const config = {
       tools: {
         web: {
-          fetch: {
-            provider: "firecrawl",
-            firecrawl: {
-              apiKey: { source: "env", provider: "default", id: "FIRECRAWL_API_KEY" },
-            },
-          },
-        },
-      },
-    });
-    const env = {
-      ...process.env,
-      OPENCLAW_BUNDLED_PLUGINS_DIR: "extensions",
-      OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-      FIRECRAWL_API_KEY: "firecrawl-live",
-    };
-
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config,
-      env,
-      includeAuthStoreRefs: false,
-    });
-
-    activateSecretsRuntimeSnapshot(snapshot);
-    const result = await resolveCommandSecretsFromActiveRuntimeSnapshot({
-      commandName: "infer web fetch",
-      targetIds: new Set([legacyPath]),
-    });
-
-    expect(result.assignments).toEqual([
-      {
-        path: legacyPath,
-        pathSegments: legacyPath.split("."),
-        value: "firecrawl-live",
-      },
-    ]);
-  });
-
-  it("keeps legacy shared web search refs inactive for plugin-scoped provider overrides", async () => {
-    const sharedPath = "tools.web.search.apiKey";
-    const googlePath = "plugins.entries.google.config.webSearch.apiKey";
-    const config = asConfig({
-      tools: {
-        web: {
-          search: {
-            provider: "brave",
-            apiKey: { source: "env", provider: "default", id: "BRAVE_API_KEY" },
-          },
+          search: { enabled: true, provider: "exa" },
         },
       },
       plugins: {
         entries: {
-          google: {
+          firecrawl: {
+            enabled: false,
             config: {
               webSearch: {
-                apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY" },
+                apiKey: {
+                  source: "env",
+                  provider: "default",
+                  id: "FIRECRAWL_API_KEY",
+                },
               },
             },
           },
         },
       },
-    });
-    const env = {
-      ...process.env,
-      OPENCLAW_BUNDLED_PLUGINS_DIR: "extensions",
-      OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-      BRAVE_API_KEY: "brave-live",
-      GEMINI_API_KEY: "gemini-live",
-    };
-
+    } as OpenClawConfig;
     const snapshot = await prepareSecretsRuntimeSnapshot({
       config,
-      env,
-      includeAuthStoreRefs: false,
+      env: {
+        FIRECRAWL_API_KEY: "gateway-selected-firecrawl-key",
+        HOME: process.env.HOME,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: "extensions",
+        OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
+      },
     });
-    const resolvedSearchConfig = snapshot.config.tools?.web?.search as { apiKey?: unknown };
-    resolvedSearchConfig.apiKey = "brave-live";
-
     activateSecretsRuntimeSnapshot(snapshot);
-    const result = await resolveCommandSecretsFromActiveRuntimeSnapshot({
+
+    const resolved = await resolveCommandSecretsFromActiveRuntimeSnapshot({
       commandName: "infer web search",
-      targetIds: new Set([sharedPath, googlePath]),
-      providerOverrides: { webSearch: "gemini" },
+      targetIds: new Set([firecrawlPath]),
+      allowedPaths: new Set([firecrawlPath]),
+      forcedActivePaths: new Set([firecrawlPath]),
     });
 
-    expect(result.assignments).toEqual([
+    expect(resolved.assignments).toMatchObject([
       {
-        path: googlePath,
-        pathSegments: googlePath.split("."),
-        value: "gemini-live",
+        path: firecrawlPath,
+        value: "gateway-selected-firecrawl-key",
       },
     ]);
-    expect(result.inactiveRefPaths).toContain(sharedPath);
-  });
-
-  it("keeps provider override refs inactive when the web search surface is disabled", async () => {
-    const googlePath = "plugins.entries.google.config.webSearch.apiKey";
-    const config = asConfig({
-      tools: { web: { search: { enabled: false, provider: "brave" } } },
-      plugins: {
-        entries: {
-          google: {
-            config: {
-              webSearch: {
-                apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY" },
-              },
-            },
-          },
-        },
-      },
-    });
-    const env = {
-      ...process.env,
-      OPENCLAW_BUNDLED_PLUGINS_DIR: "extensions",
-      OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-      GEMINI_API_KEY: "gemini-live",
-    };
-
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config,
-      env,
-      includeAuthStoreRefs: false,
-    });
-
-    activateSecretsRuntimeSnapshot(snapshot);
-    const result = await resolveCommandSecretsFromActiveRuntimeSnapshot({
-      commandName: "infer web search",
-      targetIds: new Set([googlePath]),
-      providerOverrides: { webSearch: "gemini" },
-    });
-
-    expect(result.assignments).toEqual([]);
-    expect(result.inactiveRefPaths).toContain(googlePath);
-  });
-
-  it("returns legacy shared web search assignments for providers that read the shared key", async () => {
-    const sharedPath = "tools.web.search.apiKey";
-    const config = asConfig({
-      tools: {
-        web: {
-          search: {
-            provider: "gemini",
-            apiKey: { source: "env", provider: "default", id: "BRAVE_API_KEY" },
-          },
-        },
-      },
-      plugins: {
-        entries: {
-          google: {
-            config: {
-              webSearch: {
-                apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY" },
-              },
-            },
-          },
-        },
-      },
-    });
-    const env = {
-      ...process.env,
-      OPENCLAW_BUNDLED_PLUGINS_DIR: "extensions",
-      OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-      BRAVE_API_KEY: "brave-live",
-      GEMINI_API_KEY: "gemini-live",
-    };
-
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config,
-      env,
-      includeAuthStoreRefs: false,
-    });
-
-    activateSecretsRuntimeSnapshot(snapshot);
-    const result = await resolveCommandSecretsFromActiveRuntimeSnapshot({
-      commandName: "infer web search",
-      targetIds: new Set([sharedPath]),
-      providerOverrides: { webSearch: "brave" },
-    });
-
-    expect(result.assignments).toEqual([
-      {
-        path: sharedPath,
-        pathSegments: sharedPath.split("."),
-        value: "brave-live",
-      },
-    ]);
-  });
-
-  it("returns shared web search assignments for selected top-level credential providers", async () => {
-    const sharedPath = "tools.web.search.apiKey";
-    const config = asConfig({
-      tools: {
-        web: {
-          search: {
-            provider: "gemini",
-            apiKey: { source: "env", provider: "default", id: "MINIMAX_API_KEY" },
-          },
-        },
-      },
-    });
-    const env = {
-      ...process.env,
-      OPENCLAW_BUNDLED_PLUGINS_DIR: "extensions",
-      OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-      MINIMAX_API_KEY: "minimax-live",
-    };
-
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config,
-      env,
-      includeAuthStoreRefs: false,
-    });
-
-    activateSecretsRuntimeSnapshot(snapshot);
-    const result = await resolveCommandSecretsFromActiveRuntimeSnapshot({
-      commandName: "infer web search",
-      targetIds: new Set([sharedPath]),
-      providerOverrides: { webSearch: "minimax" },
-    });
-
-    expect(result.assignments).toEqual([
-      {
-        path: sharedPath,
-        pathSegments: sharedPath.split("."),
-        value: "minimax-live",
-      },
-    ]);
-  });
-
-  it("preserves non-web snapshot assignments when provider overrides are present", async () => {
-    const talkPath = "talk.providers.default.apiKey";
-    const googlePath = "plugins.entries.google.config.webSearch.apiKey";
-    const config = asConfig({
-      talk: {
-        providers: {
-          default: {
-            apiKey: { source: "env", provider: "default", id: "TALK_API_KEY" },
-          },
-        },
-      },
-      plugins: {
-        entries: {
-          google: {
-            config: {
-              webSearch: {
-                apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY" },
-              },
-            },
-          },
-        },
-      },
-    });
-    const env = {
-      ...process.env,
-      OPENCLAW_BUNDLED_PLUGINS_DIR: "extensions",
-      OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-      TALK_API_KEY: "talk-live",
-      GEMINI_API_KEY: "gemini-live",
-    };
-
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config,
-      env,
-      includeAuthStoreRefs: false,
-    });
-    expect(snapshot.config.talk?.providers?.default?.apiKey).toBe("talk-live");
-
-    activateSecretsRuntimeSnapshot(snapshot);
-    const result = await resolveCommandSecretsFromActiveRuntimeSnapshot({
-      commandName: "infer web search",
-      targetIds: new Set(["talk.providers.*.apiKey", googlePath]),
-      providerOverrides: { webSearch: "gemini" },
-    });
-
-    expect(result.assignments).toEqual([
-      {
-        path: talkPath,
-        pathSegments: talkPath.split("."),
-        value: "talk-live",
-      },
-      {
-        path: googlePath,
-        pathSegments: googlePath.split("."),
-        value: "gemini-live",
-      },
-    ]);
+    expect(resolved.diagnostics).toEqual([]);
+    expect(resolved.inactiveRefPaths).toEqual([]);
   });
 });

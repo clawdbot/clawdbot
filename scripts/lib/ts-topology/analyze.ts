@@ -206,9 +206,15 @@ function collectReferenceEvents(
       if (!clause?.namedBindings) {
         continue;
       }
+      if (clause.isTypeOnly) {
+        continue;
+      }
 
       if (ts.isNamedImports(clause.namedBindings)) {
         for (const element of clause.namedBindings.elements) {
+          if (element.isTypeOnly) {
+            continue;
+          }
           const importedName = element.propertyName?.text ?? element.name.text;
           const record = recordMap.get(importedName);
           if (!record) {

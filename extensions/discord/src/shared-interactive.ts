@@ -1,11 +1,9 @@
-import {
-  presentationToInteractiveControlsReply,
-  reduceInteractiveReply,
-} from "openclaw/plugin-sdk/interactive-runtime";
+import { reduceInteractiveReply } from "openclaw/plugin-sdk/interactive-runtime";
 import type {
   InteractiveButtonStyle,
   InteractiveReply,
   MessagePresentation,
+  MessagePresentationButton,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import type {
   DiscordComponentButtonSpec,
@@ -21,6 +19,9 @@ function resolveDiscordInteractiveButtonStyle(
 
 const DISCORD_INTERACTIVE_BUTTON_ROW_SIZE = 5;
 
+/**
+ * @deprecated Use buildDiscordPresentationComponents with MessagePresentation.
+ */
 export function buildDiscordInteractiveComponents(
   interactive?: InteractiveReply,
 ): DiscordComponentMessageSpec | undefined {
@@ -110,11 +111,51 @@ export function buildDiscordPresentationComponents(
       continue;
     }
   }
-  const interactiveSpec = buildDiscordInteractiveComponents(
-    presentationToInteractiveControlsReply(presentation),
-  );
-  if (interactiveSpec?.blocks?.length) {
-    spec.blocks?.push(...interactiveSpec.blocks);
+  for (const block of presentation.blocks) {
+    if (block.type === "buttons") {
+      appendDiscordPresentationButtonBlocks(spec, block.buttons);
+      continue;
+    }
+    if (block.type === "select" && block.options.length > 0) {
+      spec.blocks?.push({
+        type: "actions",
+        select: {
+          type: "string",
+          placeholder: block.placeholder,
+          options: block.options.map((option) => ({
+            label: option.label,
+            value: option.value,
+          })),
+        },
+      });
+    }
   }
   return spec.blocks?.length ? spec : undefined;
+}
+
+function appendDiscordPresentationButtonBlocks(
+  spec: DiscordComponentMessageSpec,
+  buttons: readonly MessagePresentationButton[],
+) {
+  if (buttons.length === 0) {
+    return;
+  }
+  for (let index = 0; index < buttons.length; index += DISCORD_INTERACTIVE_BUTTON_ROW_SIZE) {
+    spec.blocks?.push({
+      type: "actions",
+      buttons: buttons.slice(index, index + DISCORD_INTERACTIVE_BUTTON_ROW_SIZE).map((button) => {
+        const component: DiscordComponentButtonSpec = {
+          label: button.label,
+          style: button.url ? "link" : resolveDiscordInteractiveButtonStyle(button.style),
+        };
+        if (button.value) {
+          component.callbackData = button.value;
+        }
+        if (button.url) {
+          component.url = button.url;
+        }
+        return component;
+      }),
+    });
+  }
 }

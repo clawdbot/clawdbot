@@ -30,7 +30,7 @@ function writeGatewayRunChunk(root: string, source = ""): void {
     "dist/run-gateway.js",
     [
       'import "./string-coerce.js";',
-      "const GATEWAY_RUN_VALUE_KEYS = [];",
+      "const GATEWAY_AUTH_MODES = [];",
       "function addGatewayRunCommand(cmd) { return cmd; }",
       source,
     ].join("\n"),

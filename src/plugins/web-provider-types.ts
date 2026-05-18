@@ -49,6 +49,11 @@ export type WebSearchProviderConfiguredCredentialFallback = {
   value: unknown;
 };
 
+export type WebFetchProviderConfiguredCredentialFallback = {
+  path: string;
+  value: unknown;
+};
+
 export type WebSearchRuntimeMetadataContext = {
   config?: OpenClawConfig;
   searchConfig?: Record<string, unknown>;
@@ -133,6 +138,9 @@ export type WebFetchProviderPlugin = {
   setCredentialValue: (fetchConfigTarget: Record<string, unknown>, value: unknown) => void;
   getConfiguredCredentialValue?: (config?: OpenClawConfig) => unknown;
   setConfiguredCredentialValue?: (configTarget: OpenClawConfig, value: unknown) => void;
+  getConfiguredCredentialFallback?: (
+    config?: OpenClawConfig,
+  ) => WebFetchProviderConfiguredCredentialFallback | undefined;
   applySelectionConfig?: (config: OpenClawConfig) => OpenClawConfig;
   resolveRuntimeMetadata?: (
     ctx: WebFetchRuntimeMetadataContext,

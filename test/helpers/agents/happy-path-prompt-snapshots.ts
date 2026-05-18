@@ -22,11 +22,12 @@ import type {
 import { normalizeAgentRuntimeTools } from "../../../src/plugin-sdk/agent-harness-runtime.js";
 import { createOpenClawCodingTools } from "../../../src/plugin-sdk/agent-harness.js";
 import { loadBundledPluginTestApiSync } from "../../../src/test-utils/bundled-plugin-public-surface.js";
+import {
+  CODEX_MODEL_PROMPT_FIXTURE_DIR,
+  CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR,
+} from "./prompt-snapshot-paths.js";
 
-export const CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR =
-  "test/fixtures/agents/prompt-snapshots/codex-runtime-happy-path";
-export const CODEX_MODEL_PROMPT_FIXTURE_DIR =
-  "test/fixtures/agents/prompt-snapshots/codex-model-catalog";
+export { CODEX_MODEL_PROMPT_FIXTURE_DIR, CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR };
 
 const WORKSPACE_DIR = "/tmp/openclaw-happy-path/workspace";
 const AGENT_DIR = "/tmp/openclaw-happy-path/agent";
@@ -348,6 +349,13 @@ function createDynamicTools(params: {
     forceHeartbeatTool: params.trigger === "heartbeat",
     trigger: params.trigger,
     config: dynamicToolsConfig,
+    toolConstructionPlan: {
+      includeBaseCodingTools: false,
+      includeShellTools: false,
+      includeChannelTools: false,
+      includeOpenClawTools: true,
+      includePluginTools: false,
+    },
   });
   const normalized = normalizeAgentRuntimeTools({
     tools,

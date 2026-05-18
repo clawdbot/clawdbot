@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { bundledPluginFile, bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   detectChangedExtensionIds,
   listAvailableExtensionIds,
@@ -64,6 +64,20 @@ function expectPositiveIntegerMetric(value: number) {
 }
 
 describe("scripts/test-extension.mjs", () => {
+  let balancedExtensionShards: ReturnType<typeof createExtensionTestShards>;
+  let balancedExpectedExtensionIds: string[];
+
+  beforeAll(() => {
+    balancedExtensionShards = createExtensionTestShards({
+      cwd: process.cwd(),
+      shardCount: DEFAULT_EXTENSION_TEST_SHARD_COUNT,
+    });
+    balancedExpectedExtensionIds = listAvailableExtensionIds().filter(
+      (extensionId) =>
+        resolveExtensionTestPlan({ cwd: process.cwd(), targetArg: extensionId }).hasTests,
+    );
+  });
+
   it("resolves split channel extensions onto their own vitest configs", () => {
     const plan = resolveExtensionTestPlan({ targetArg: "slack", cwd: process.cwd() });
 
@@ -470,10 +484,7 @@ describe("scripts/test-extension.mjs", () => {
   });
 
   it("balances extension test shards by estimated CI cost", () => {
-    const shards = createExtensionTestShards({
-      cwd: process.cwd(),
-      shardCount: DEFAULT_EXTENSION_TEST_SHARD_COUNT,
-    });
+    const shards = balancedExtensionShards;
 
     expect(shards).toHaveLength(DEFAULT_EXTENSION_TEST_SHARD_COUNT);
     expect(shards.map((shard) => shard.checkName)).toEqual(
@@ -482,15 +493,11 @@ describe("scripts/test-extension.mjs", () => {
 
     const assigned = shards.flatMap((shard) => shard.extensionIds);
     const uniqueAssigned = [...new Set(assigned)];
-    const expected = listAvailableExtensionIds().filter(
-      (extensionId) =>
-        resolveExtensionTestPlan({ cwd: process.cwd(), targetArg: extensionId }).hasTests,
-    );
 
     expect(uniqueAssigned.toSorted((left, right) => left.localeCompare(right))).toEqual(
-      expected.toSorted((left, right) => left.localeCompare(right)),
+      balancedExpectedExtensionIds.toSorted((left, right) => left.localeCompare(right)),
     );
-    expect(assigned).toHaveLength(expected.length);
+    expect(assigned).toHaveLength(balancedExpectedExtensionIds.length);
 
     const totals = shards.map((shard) => shard.estimatedCost);
     expect(Math.max(...totals) - Math.min(...totals)).toBeLessThanOrEqual(1);

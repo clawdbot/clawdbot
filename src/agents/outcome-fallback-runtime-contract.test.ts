@@ -3,7 +3,7 @@ import {
   createContractRunResult,
   OUTCOME_FALLBACK_RUNTIME_CONTRACT,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runWithModelFallback } from "./model-fallback.js";
 import { classifyEmbeddedPiRunResultForModelFallback } from "./pi-embedded-runner/result-fallback-classifier.js";
@@ -13,6 +13,16 @@ vi.mock("./auth-profiles/source-check.js", () => ({
 }));
 
 describe("Outcome/fallback runtime contract - Pi fallback classifier", () => {
+  beforeAll(async () => {
+    await runWithModelFallback({
+      cfg: {} as OpenClawConfig,
+      provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider,
+      model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
+      run: vi.fn().mockResolvedValue(createContractRunResult({ meta: { durationMs: 1 } })),
+      skipAuthProfileRuntime: true,
+    });
+  });
+
   const fallbackClassificationCases = [
     ["empty", "empty_result"],
     ["reasoning-only", "reasoning_only_result"],
@@ -64,6 +74,7 @@ describe("Outcome/fallback runtime contract - Pi fallback classifier", () => {
           model,
           result,
         }),
+      skipAuthProfileRuntime: true,
     });
 
     expect(result.result).toBe(fallback);
@@ -178,6 +189,7 @@ describe("Outcome/fallback runtime contract - Pi fallback classifier", () => {
           hasDirectlySentBlockReply: contractCase.hasDirectlySentBlockReply,
           hasBlockReplyPipelineOutput: contractCase.hasBlockReplyPipelineOutput,
         }),
+      skipAuthProfileRuntime: true,
     });
 
     expect(result.result).toBe(contractCase.result);

@@ -1,6 +1,6 @@
 ---
 name: taskflow-inbox-triage
-description: Example TaskFlow pattern for inbox triage, intent routing, waiting on replies, and later summaries.
+description: "Example TaskFlow pattern for inbox triage, intent routing, waiting on replies, and later summaries."
 metadata: { "openclaw": { "emoji": "📥" } }
 ---
 
@@ -12,9 +12,9 @@ This is a concrete example of how to think about TaskFlow without turning the co
 
 Triage inbox items with one owner flow:
 
-- business → post to Slack and wait for reply
-- personal → notify the owner now
-- everything else → keep for end-of-day summary
+- business -> post to Slack and wait for reply
+- personal -> notify the owner now
+- everything else -> keep for end-of-day summary
 
 ## Pattern
 

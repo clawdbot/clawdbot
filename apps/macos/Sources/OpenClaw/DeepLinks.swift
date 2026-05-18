@@ -184,7 +184,7 @@ final class DeepLinkHandler {
         do {
             try await DashboardManager.shared.show()
         } catch {
-            self.presentAlert(title: "Dashboard unavailable", message: error.localizedDescription)
+            DashboardManager.shared.showFailure(error)
         }
     }
 

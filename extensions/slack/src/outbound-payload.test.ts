@@ -1,7 +1,7 @@
 import { installChannelOutboundPayloadContractSuite } from "openclaw/plugin-sdk/channel-contract-testing";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { describe, expect, it } from "vitest";
-import { createSlackOutboundPayloadHarness } from "../test-api.js";
+import { createSlackOutboundPayloadHarness, slackOutbound } from "../test-api.js";
 
 function createHarness(params: {
   payload: ReplyPayload;
@@ -62,6 +62,32 @@ describe("slackOutbound sendPayload", () => {
     expect(sendOptions(call).blocks).toEqual([{ type: "divider" }]);
     expect(result.channel).toBe("slack");
     expect(result.messageId).toBe("sl-1");
+  });
+
+  it("keeps the portable fallback when presentation renders no Slack blocks", async () => {
+    const payload: ReplyPayload = {
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [{ label: "Launch", webApp: { url: "https://example.com/app" } }],
+          },
+        ],
+      },
+    };
+
+    const rendered = await slackOutbound.renderPresentation?.({
+      payload,
+      presentation: payload.presentation!,
+      ctx: {
+        cfg: {},
+        to: "C12345",
+        text: "",
+        payload,
+      },
+    });
+
+    expect(rendered).toBeNull();
   });
 
   it("sends media before a separate interactive blocks message", async () => {

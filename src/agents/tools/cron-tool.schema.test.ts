@@ -78,8 +78,8 @@ describe("CronToolSchema", () => {
     const jobStagger = propertyAt(schemaRecord, "job.schedule.staggerMs");
     const patchStagger = propertyAt(schemaRecord, "patch.schedule.staggerMs");
 
-    expect(jobStagger?.description).toBe("Random jitter in ms (kind=cron)");
-    expect(patchStagger?.description).toBe("Random jitter in ms (kind=cron)");
+    expect(jobStagger?.description).toBe("Jitter ms (kind=cron)");
+    expect(patchStagger?.description).toBe("Jitter ms (kind=cron)");
   });
 
   it("describes cron expressions as local wall-clock time in the supplied timezone", () => {

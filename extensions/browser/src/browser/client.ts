@@ -44,6 +44,8 @@ export type SnapshotResult =
       targetId: string;
       url: string;
       nodes: SnapshotAriaNode[];
+      blockedByDialog?: boolean;
+      browserState?: unknown;
     }
   | {
       ok: true;
@@ -64,6 +66,8 @@ export type SnapshotResult =
       labelsSkipped?: number;
       imagePath?: string;
       imageType?: "png" | "jpeg";
+      blockedByDialog?: boolean;
+      browserState?: unknown;
     };
 
 export async function browserStatus(

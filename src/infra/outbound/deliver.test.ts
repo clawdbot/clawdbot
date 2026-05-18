@@ -1681,6 +1681,87 @@ describe("deliverOutboundPayloads", () => {
     });
   });
 
+  it("adapts presentation buttons to channel limits before rendering", async () => {
+    const renderPresentation = vi.fn(({ payload }) => ({
+      ...payload,
+      channelData: { rendered: true },
+    }));
+    const sendPayload = vi.fn().mockResolvedValue({
+      channel: "matrix" as const,
+      messageId: "adapted",
+      roomId: "!room",
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              presentationCapabilities: {
+                supported: true,
+                buttons: true,
+                limits: {
+                  actions: {
+                    maxActions: 1,
+                    maxLabelLength: 4,
+                    maxValueBytes: 8,
+                    supportsStyles: false,
+                  },
+                },
+              },
+              renderPresentation,
+              sendText: vi.fn(),
+              sendMedia: vi.fn(),
+              sendPayload,
+            },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "matrix",
+      to: "!room",
+      payloads: [
+        {
+          presentation: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [
+                  { label: "Reject", value: "reject", priority: 1, style: "danger" },
+                  { label: "Approve", value: "approve", priority: 10, style: "success" },
+                  { label: "Too long", value: "x".repeat(12), priority: 20 },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    const renderArg = requireMockCallArg(renderPresentation, "renderPresentation") as {
+      presentation?: unknown;
+    };
+    expect(renderArg.presentation).toEqual({
+      tone: undefined,
+      blocks: [
+        {
+          type: "buttons",
+          buttons: [{ label: "Appr", value: "approve", priority: 10, style: undefined }],
+        },
+        {
+          type: "context",
+          text: "Actions:\n- Reje\n- Too",
+        },
+      ],
+    });
+  });
+
   it("runs adapter after-delivery hooks with the payload delivery results", async () => {
     const afterDeliverPayload = vi.fn();
     setActivePluginRegistry(

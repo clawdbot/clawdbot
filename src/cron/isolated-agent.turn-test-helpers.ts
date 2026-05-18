@@ -145,14 +145,17 @@ export async function runTurnWithStoredModelOverride(
   home: string,
   jobPayload: CronJob["payload"],
   modelOverride = "gpt-4.1-mini",
+  providerOverride = "openai",
+  cfgOverrides?: Parameters<typeof makeCfg>[2],
 ) {
   return runCronTurn(home, {
+    cfgOverrides,
     jobPayload,
     storeEntries: {
       "agent:main:cron:job-1": {
         sessionId: "existing-cron-session",
         updatedAt: Date.now(),
-        providerOverride: "openai",
+        providerOverride,
         modelOverride,
       },
     },

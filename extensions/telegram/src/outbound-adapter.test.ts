@@ -1,4 +1,5 @@
 import { verifyDurableFinalCapabilityProofs } from "openclaw/plugin-sdk/channel-message";
+import { adaptMessagePresentationForChannel } from "openclaw/plugin-sdk/interactive-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMessageTelegramMock = vi.fn();
@@ -213,6 +214,135 @@ describe("telegramOutbound", () => {
     expect(options.buttons).toEqual([
       [{ text: "Launch", web_app: { url: "https://example.com/app" } }],
     ]);
+  });
+
+  it("preserves explicit Telegram buttons when rendering presentation payloads", async () => {
+    const rendered = await telegramOutbound.renderPresentation?.({
+      payload: {
+        text: "Use native buttons:",
+        channelData: {
+          telegram: {
+            buttons: [[{ text: "Native", callback_data: "native" }]],
+          },
+        },
+      },
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [{ label: "Generic", value: "generic" }],
+          },
+        ],
+      },
+      ctx: {} as never,
+    });
+
+    expect((rendered?.channelData?.telegram as { buttons?: unknown })?.buttons).toEqual([
+      [{ text: "Native", callback_data: "native" }],
+    ]);
+  });
+
+  it("preserves legacy interactive buttons when rendering mixed presentation payloads", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({
+      messageId: "tg-mixed-buttons",
+      chatId: "12345",
+    });
+    const rendered = await telegramOutbound.renderPresentation?.({
+      payload: {
+        text: "Choose:",
+        interactive: {
+          blocks: [{ type: "buttons", buttons: [{ label: "Legacy", value: "legacy" }] }],
+        },
+      },
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [{ label: "Generic", value: "generic" }],
+          },
+        ],
+      },
+      ctx: {} as never,
+    });
+    if (!rendered) {
+      throw new Error("expected rendered Telegram presentation");
+    }
+
+    expect((rendered.channelData?.telegram as { buttons?: unknown } | undefined)?.buttons).toBe(
+      undefined,
+    );
+
+    await telegramOutbound.sendPayload!({
+      cfg: {} as never,
+      to: "12345",
+      text: "",
+      payload: rendered,
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    const options = callOptionsAt(sendMessageTelegramMock, 0, "12345", "Choose:\n\n- Generic");
+    expect(options.buttons).toEqual([[{ text: "Legacy", callback_data: "legacy" }]]);
+  });
+
+  it("lets allow-always approval callbacks reach Telegram's callback rewrite", async () => {
+    sendMessageTelegramMock.mockResolvedValueOnce({
+      messageId: "tg-approval",
+      chatId: "12345",
+    });
+    const approvalId = "plugin:123e4567-e89b-12d3-a456-426614174000";
+    const presentation = adaptMessagePresentationForChannel({
+      presentation: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [
+              {
+                label: "Allow Always",
+                value: `/approve ${approvalId} allow-always`,
+              },
+            ],
+          },
+        ],
+      },
+      capabilities: telegramOutbound.presentationCapabilities,
+    });
+
+    const rendered = await telegramOutbound.renderPresentation?.({
+      payload: { text: "Approve?" },
+      presentation,
+      ctx: {} as never,
+    });
+    if (!rendered) {
+      throw new Error("expected rendered Telegram approval presentation");
+    }
+
+    await telegramOutbound.sendPayload!({
+      cfg: {} as never,
+      to: "12345",
+      text: "",
+      payload: rendered,
+      deps: { sendTelegram: sendMessageTelegramMock },
+    });
+
+    const options = callOptionsAt(
+      sendMessageTelegramMock,
+      0,
+      "12345",
+      "Approve?\n\n- Allow Always",
+    );
+    expect(options.buttons).toEqual([
+      [{ text: "Allow Always", callback_data: `/approve ${approvalId} always` }],
+    ]);
+  });
+
+  it("leaves long presentation text for Telegram chunking", () => {
+    const text = "👍".repeat(5000);
+    const presentation = adaptMessagePresentationForChannel({
+      presentation: { blocks: [{ type: "text", text }] },
+      capabilities: telegramOutbound.presentationCapabilities,
+    });
+
+    expect(presentation.blocks).toEqual([{ type: "text", text }]);
   });
 
   it("forwards silent delivery options to Telegram sends", async () => {

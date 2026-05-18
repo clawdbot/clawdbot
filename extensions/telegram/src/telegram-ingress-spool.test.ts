@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   claimTelegramSpooledUpdate,
   deleteTelegramSpooledUpdate,
+  failTelegramSpooledUpdateClaim,
   isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess,
   listTelegramSpooledUpdateClaims,
   listTelegramSpooledUpdates,
@@ -109,6 +110,71 @@ describe("Telegram ingress spool", () => {
       const updates = await listTelegramSpooledUpdates({ spoolDir });
       expect(updates.map((entry) => entry.updateId)).toEqual([30]);
       expect(updates[0]?.path.endsWith(".json")).toBe(true);
+    });
+  });
+
+  it("marks timed out claims failed without requeueing them", async () => {
+    await withTempSpool(async (spoolDir) => {
+      await writeTelegramSpooledUpdate({
+        spoolDir,
+        update: { update_id: 32, message: { text: "poison" } },
+      });
+      const update = (await listTelegramSpooledUpdates({ spoolDir }))[0];
+      if (!update) {
+        throw new Error("Expected a spooled update");
+      }
+      const claimed = await claimTelegramSpooledUpdate(update);
+      if (!claimed) {
+        throw new Error("Expected a claimed update");
+      }
+
+      await expect(
+        failTelegramSpooledUpdateClaim({
+          update: claimed,
+          reason: "handler-timeout",
+          message: "timed out",
+          now: 123,
+        }),
+      ).resolves.toBe(true);
+
+      expect(await listTelegramSpooledUpdates({ spoolDir })).toEqual([]);
+      expect(await listTelegramSpooledUpdateClaims({ spoolDir })).toEqual([]);
+      const entries = await fs.readdir(spoolDir);
+      expect(entries).toEqual(["0000000000000032.json.failed"]);
+      const failed = JSON.parse(
+        await fs.readFile(path.join(spoolDir, "0000000000000032.json.failed"), "utf8"),
+      ) as { failure?: { reason?: string; message?: string; failedAt?: number } };
+      expect(failed.failure).toEqual({
+        reason: "handler-timeout",
+        message: "timed out",
+        failedAt: 123,
+      });
+
+      await writeTelegramSpooledUpdate({
+        spoolDir,
+        update: { update_id: 32, message: { text: "redelivered poison" } },
+      });
+      expect(await listTelegramSpooledUpdates({ spoolDir })).toEqual([]);
+      expect(await fs.readdir(spoolDir)).toEqual(["0000000000000032.json.failed"]);
+
+      const leakedProcessingPath = path.join(spoolDir, "0000000000000032.json.processing");
+      await fs.writeFile(
+        leakedProcessingPath,
+        `${JSON.stringify({
+          version: 1,
+          updateId: 32,
+          receivedAt: 100,
+          update: { update_id: 32, message: { text: "crashed poison claim" } },
+        })}\n`,
+        { mode: 0o600 },
+      );
+      const staleTime = new Date(Date.now() - TELEGRAM_SPOOLED_UPDATE_PROCESSING_STALE_MS - 1);
+      await fs.utimes(leakedProcessingPath, staleTime, staleTime);
+
+      await expect(recoverStaleTelegramSpooledUpdateClaims({ spoolDir })).resolves.toBe(0);
+      expect(await listTelegramSpooledUpdates({ spoolDir })).toEqual([]);
+      expect(await listTelegramSpooledUpdateClaims({ spoolDir })).toEqual([]);
+      expect(await fs.readdir(spoolDir)).toEqual(["0000000000000032.json.failed"]);
     });
   });
 

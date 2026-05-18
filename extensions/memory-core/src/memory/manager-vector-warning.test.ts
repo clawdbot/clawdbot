@@ -30,6 +30,23 @@ describe("memory vector degradation warnings", () => {
     );
   });
 
+  it("blames embedding readiness when sqlite-vec loaded but no dimensions resolved", () => {
+    const warn = vi.fn();
+
+    const shown = logMemoryVectorDegradedWrite({
+      vectorEnabled: true,
+      vectorReady: false,
+      chunkCount: 3,
+      warningShown: false,
+      warn,
+    });
+
+    expect(shown).toBe(true);
+    expect(warn).toHaveBeenCalledWith(
+      "chunks_vec not updated — semantic vector embeddings unavailable — no vector dimensions resolved. Vector recall degraded. Further duplicate warnings suppressed.",
+    );
+  });
+
   it("skips the warning when vector writes are available", () => {
     const warn = vi.fn();
 

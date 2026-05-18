@@ -11,6 +11,7 @@ export type EmbeddedPiQueueHandle = {
   queueMessage: (text: string, options?: EmbeddedPiQueueMessageOptions) => Promise<void>;
   isStreaming: () => boolean;
   isCompacting: () => boolean;
+  supportsTranscriptCommitWait?: boolean;
   cancel?: (reason?: "user_abort" | "restart" | "superseded") => void;
   abort: () => void;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
@@ -19,6 +20,8 @@ export type EmbeddedPiQueueHandle = {
 export type EmbeddedPiQueueMessageOptions = {
   steeringMode?: "all";
   debounceMs?: number;
+  deliveryTimeoutMs?: number;
+  waitForTranscriptCommit?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
 };
 

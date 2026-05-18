@@ -519,22 +519,22 @@ function resetRunOutcomeMocks(): void {
       synthesizedText,
       deliveryRequested,
       skipHeartbeatDelivery,
-      skipMessagingToolDelivery,
+      sourceDeliveryOutcome,
       resolvedDelivery,
     }) => ({
       result: undefined,
       delivered: Boolean(
-        skipMessagingToolDelivery ||
+        sourceDeliveryOutcome?.verifiedMessageToolDelivery ||
         (deliveryRequested &&
           !skipHeartbeatDelivery &&
-          !skipMessagingToolDelivery &&
+          !sourceDeliveryOutcome?.satisfiesSourceDelivery &&
           resolvedDelivery.ok),
       ),
       deliveryAttempted: Boolean(
-        skipMessagingToolDelivery ||
+        sourceDeliveryOutcome?.verifiedMessageToolDelivery ||
         (deliveryRequested &&
           !skipHeartbeatDelivery &&
-          !skipMessagingToolDelivery &&
+          !sourceDeliveryOutcome?.satisfiesSourceDelivery &&
           resolvedDelivery.ok),
       ),
       summary,

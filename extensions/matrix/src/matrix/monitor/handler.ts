@@ -30,6 +30,7 @@ import {
   getReplyPayloadTtsSupplement,
 } from "openclaw/plugin-sdk/reply-payload";
 import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
+import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import {
   loadSessionStore,
@@ -2052,6 +2053,11 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           })()
         : null;
 
+      const inboundLastRouteSessionKey = resolveInboundLastRouteSessionKey({
+        route: _route,
+        sessionKey: _route.sessionKey,
+      });
+
       const turnResult = await core.channel.turn.run({
         channel: "matrix",
         accountId: _route.accountId,
@@ -2075,27 +2081,28 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             record: {
               updateLastRoute: isDirectMessage
                 ? {
-                    sessionKey: _route.mainSessionKey,
+                    sessionKey: inboundLastRouteSessionKey,
                     channel: "matrix",
                     to: `room:${roomId}`,
                     accountId: _route.accountId,
-                    mainDmOwnerPin: pinnedMainDmOwner
-                      ? {
-                          ownerRecipient: pinnedMainDmOwner,
-                          senderRecipient: normalizeMatrixUserId(senderId),
-                          onSkip: ({
-                            ownerRecipient,
-                            senderRecipient,
-                          }: {
-                            ownerRecipient: string;
-                            senderRecipient: string;
-                          }) => {
-                            logVerboseMessage(
-                              `matrix: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
-                            );
-                          },
-                        }
-                      : undefined,
+                    mainDmOwnerPin:
+                      inboundLastRouteSessionKey === _route.mainSessionKey && pinnedMainDmOwner
+                        ? {
+                            ownerRecipient: pinnedMainDmOwner,
+                            senderRecipient: normalizeMatrixUserId(senderId),
+                            onSkip: ({
+                              ownerRecipient,
+                              senderRecipient,
+                            }: {
+                              ownerRecipient: string;
+                              senderRecipient: string;
+                            }) => {
+                              logVerboseMessage(
+                                `matrix: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
+                              );
+                            },
+                          }
+                        : undefined,
                   }
                 : undefined,
               onRecordError: (err) => {

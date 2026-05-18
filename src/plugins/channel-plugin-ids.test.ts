@@ -453,6 +453,9 @@ function useManifestRegistryFixture(
 ) {
   const index = createInstalledPluginIndexFixture(registry);
   loadPluginManifestRegistry.mockReset().mockReturnValue(registry);
+  loadPluginManifestRegistryForPluginRegistry
+    .mockReset()
+    .mockImplementation(() => loadPluginManifestRegistry());
   loadPluginRegistrySnapshot.mockReset().mockReturnValue(index);
   return { registry, index };
 }

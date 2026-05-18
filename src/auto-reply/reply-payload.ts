@@ -60,6 +60,18 @@ export type ReplyPayloadTtsSupplement = {
   visibleTextAlreadyDelivered?: boolean;
 };
 
+export const REPLY_MEDIA_FAILURE_WARNING = "⚠️ Media failed.";
+
+export function appendReplyMediaFailureWarning(text: string | undefined): string {
+  if (!text?.trim()) {
+    return REPLY_MEDIA_FAILURE_WARNING;
+  }
+  if (text.includes(REPLY_MEDIA_FAILURE_WARNING)) {
+    return text;
+  }
+  return `${text}\n${REPLY_MEDIA_FAILURE_WARNING}`;
+}
+
 function normalizeTtsSupplementSpokenText(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value : undefined;
 }

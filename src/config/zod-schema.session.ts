@@ -59,6 +59,8 @@ export const SessionSchema = z
     writeLock: z
       .object({
         acquireTimeoutMs: z.number().int().positive().optional(),
+        staleMs: z.number().int().positive().optional(),
+        maxHoldMs: z.number().int().positive().optional(),
       })
       .strict()
       .optional(),

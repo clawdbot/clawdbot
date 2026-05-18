@@ -111,6 +111,7 @@ export async function dispatchDiscordComponentEvent(params: {
   const sessionKey = params.routeOverrides?.sessionKey ?? route.sessionKey;
   const agentId = params.routeOverrides?.agentId ?? route.agentId;
   const accountId = params.routeOverrides?.accountId ?? route.accountId;
+  const inboundLastRouteSessionKey = sessionKey;
   const fromLabel = buildDiscordComponentConversationLabel({
     interactionCtx,
     interaction,
@@ -286,23 +287,24 @@ export async function dispatchDiscordComponentEvent(params: {
         record: {
           updateLastRoute: interactionCtx.isDirectMessage
             ? {
-                sessionKey: route.mainSessionKey,
+                sessionKey: inboundLastRouteSessionKey,
                 channel: "discord",
                 to:
                   resolveDiscordComponentOriginatingTo(interactionCtx) ??
                   `user:${interactionCtx.userId}`,
                 accountId,
-                mainDmOwnerPin: pinnedMainDmOwner
-                  ? {
-                      ownerRecipient: pinnedMainDmOwner,
-                      senderRecipient: interactionCtx.userId,
-                      onSkip: ({ ownerRecipient, senderRecipient }) => {
-                        logVerbose(
-                          `discord: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
-                        );
-                      },
-                    }
-                  : undefined,
+                mainDmOwnerPin:
+                  inboundLastRouteSessionKey === route.mainSessionKey && pinnedMainDmOwner
+                    ? {
+                        ownerRecipient: pinnedMainDmOwner,
+                        senderRecipient: interactionCtx.userId,
+                        onSkip: ({ ownerRecipient, senderRecipient }) => {
+                          logVerbose(
+                            `discord: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
+                          );
+                        },
+                      }
+                    : undefined,
               }
             : undefined,
           onRecordError: (err) => {
@@ -310,7 +312,7 @@ export async function dispatchDiscordComponentEvent(params: {
           },
         },
         delivery: {
-          deliver: async (payload) => {
+          deliver: async (payload, info) => {
             const replyToId = replyReference.use();
             await deliverDiscordReply({
               cfg: ctx.cfg,
@@ -331,6 +333,7 @@ export async function dispatchDiscordComponentEvent(params: {
               tableMode,
               chunkMode: resolveChunkMode(ctx.cfg, "discord", accountId),
               mediaLocalRoots,
+              kind: info.kind,
             });
             replyReference.markSent();
           },

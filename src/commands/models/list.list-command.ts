@@ -1,6 +1,7 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { parseModelRef } from "../../agents/model-selection.js";
+import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
@@ -86,7 +87,17 @@ export async function modelsListCommand(
   const authStore = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
   const workspaceDir =
     resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)) ?? resolveDefaultAgentWorkspaceDir();
-  const authIndex = createModelListAuthIndex({ cfg, authStore, workspaceDir });
+  const metadataSnapshot = loadManifestMetadataSnapshot({
+    config: cfg,
+    workspaceDir,
+    env: process.env,
+  });
+  const authIndex = createModelListAuthIndex({
+    cfg,
+    authStore,
+    workspaceDir,
+    metadataSnapshot,
+  });
 
   let modelRegistry: ModelRegistry | undefined;
   let registryModels: Model<Api>[] = [];
@@ -103,6 +114,7 @@ export async function modelsListCommand(
         enableCascade: enableSourcePlanCascade,
         providerFilter,
         cfg,
+        metadataSnapshot,
       })
     : undefined;
   const shouldLoadRegistry = sourcePlan?.requiresInitialRegistry ?? false;
@@ -153,6 +165,7 @@ export async function modelsListCommand(
       local: opts.local,
     },
     skipRuntimeModelSuppression,
+    metadataSnapshot,
   });
   const rows: ModelRow[] = [];
 

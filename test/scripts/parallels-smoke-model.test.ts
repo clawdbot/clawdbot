@@ -345,7 +345,7 @@ console.log(JSON.stringify(result));
         expect(script, scriptPath).toContain("tools.profile");
       }
       expect(script, scriptPath).toContain("--thinking");
-      expect(script, scriptPath).toContain("minimal");
+      expect(script, scriptPath).toContain("off");
       expect(script, scriptPath).toContain("finalAssistant(Raw|Visible)Text");
     }
     expect(readFileSync(TS_PATHS.macos, "utf8")).toContain("modelProviderConfigBatchJson");
@@ -363,7 +363,7 @@ console.log(JSON.stringify(result));
     expect(npmUpdateScripts).toContain("posixAgentWorkspaceScript");
     expect(npmUpdateScripts).toContain("windowsAgentWorkspaceScript");
     expect(npmUpdateScripts).toContain("tools.profile");
-    expect(npmUpdateScripts).toContain("--thinking minimal");
+    expect(npmUpdateScripts).toContain("--thinking off");
     expect(npmUpdateScripts).toContain("finalAssistant(Raw|Visible)Text");
     expect(npmUpdateScripts).toContain("posixAssertAgentOkScript");
     expect(npmUpdateScripts).toContain("windowsAgentTurnConfigPatchScript");

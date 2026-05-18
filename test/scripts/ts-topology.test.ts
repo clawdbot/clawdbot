@@ -79,7 +79,7 @@ describe("ts-topology", () => {
     });
   });
 
-  it("counts renamed imports, namespace imports, type-only imports, and test-only consumers", () => {
+  it("counts renamed imports, namespace imports, and test-only consumers without runtime-counting type-only imports", () => {
     const aliasedThing = requireRecordByExport("aliasedThing");
     const sharedType = requireRecordByExport("SharedType");
     const testOnlyThing = requireRecordByExport("testOnlyThing");
@@ -97,15 +97,15 @@ describe("ts-topology", () => {
       internalRefCount: 0,
       isTypeOnlyCandidate: true,
       kind: "type",
-      moveBackToOwnerScore: 0,
-      productionConsumers: ["extensions/alpha/src/use.ts", "extensions/beta/src/use.ts"],
-      productionExtensions: ["alpha", "beta"],
-      productionImportCount: 2,
-      productionOwners: ["extension:alpha", "extension:beta"],
+      moveBackToOwnerScore: 20,
+      productionConsumers: [],
+      productionExtensions: [],
+      productionImportCount: 0,
+      productionOwners: [],
       productionPackages: [],
-      productionRefCount: 2,
+      productionRefCount: 0,
       publicSpecifiers: ["fixture-sdk"],
-      sharednessScore: 75,
+      sharednessScore: 15,
       testConsumers: [],
       testImportCount: 0,
       testRefCount: 0,
@@ -144,16 +144,19 @@ describe("ts-topology", () => {
     expect(singleOwnerEnvelope.records.map((record) => record.exportNames[0])).not.toContain(
       "sharedThing",
     );
-    expect(unusedEnvelope.records.map((record) => record.exportNames[0])).toEqual(["unusedThing"]);
+    expect(unusedEnvelope.records.map((record) => record.exportNames[0])).toEqual([
+      "SharedType",
+      "unusedThing",
+    ]);
   });
 
   it("renders stable text summaries for the public-surface report", () => {
     expect(renderTextReport({ ...publicSurfaceEnvelope, limit: 3 }, 3)).toMatchInlineSnapshot(`
       "Scope: custom
       Public exports analyzed: 6
-      Production-used exports: 4
+      Production-used exports: 3
       Single-owner shared exports: 2
-      Unused public exports: 1
+      Unused public exports: 2
       
       Top 2 candidate-to-move exports:
       - fixture-sdk:aliasedThing -> src/lib/shared.ts:9 (prodRefs=1, owners=extension:alpha, sharedness=35, move=85)
@@ -187,11 +190,23 @@ describe("ts-topology", () => {
 
     expect(renderTextReport(deriveReportEnvelope("consumer-topology"), 2)).toMatchInlineSnapshot(`
       "Scope: custom
-      Records with consumers: 5
+      Records with consumers: 4
       
       Top 2 consumer-topology records:
       - fixture-sdk:sharedThing prod=3 test=0 internal=0
-      - fixture-sdk:SharedType prod=2 test=0 internal=0"
+      - fixture-sdk:aliasedThing prod=1 test=0 internal=0"
     `);
+  });
+
+  it("throws a clear error for invalid text report names", () => {
+    expect(() =>
+      renderTextReport(
+        {
+          ...publicSurfaceEnvelope,
+          report: "missing-report" as typeof publicSurfaceEnvelope.report,
+        },
+        2,
+      ),
+    ).toThrow("Unsupported topology report: missing-report");
   });
 });

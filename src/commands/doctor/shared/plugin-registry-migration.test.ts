@@ -41,7 +41,7 @@ function createCandidate(
   rootDir: string,
   id = "demo",
   origin: PluginCandidate["origin"] = "global",
-  options: { enabledByDefault?: boolean } = {},
+  options: { enabledByDefault?: boolean; manifest?: Record<string, unknown> } = {},
 ): PluginCandidate {
   fs.writeFileSync(
     path.join(rootDir, "index.ts"),
@@ -56,6 +56,7 @@ function createCandidate(
       ...(options.enabledByDefault ? { enabledByDefault: true } : {}),
       configSchema: { type: "object" },
       providers: [id],
+      ...options.manifest,
     }),
     "utf8",
   );
@@ -244,6 +245,45 @@ describe("plugin registry install migration", () => {
 
     const persisted = await readPersistedInstalledPluginIndex({ stateDir });
     expect(persisted?.plugins.map((plugin) => plugin.pluginId)).toEqual(["openai"]);
+  });
+
+  it("keeps bundled memory command plugins discoverable for first-run CLI registration", async () => {
+    const stateDir = makeTempDir();
+    const memoryDir = path.join(stateDir, "plugins", "memory-core");
+    const unusedBundledDir = path.join(stateDir, "plugins", "unused-bundled");
+    fs.mkdirSync(memoryDir, { recursive: true });
+    fs.mkdirSync(unusedBundledDir, { recursive: true });
+
+    const result = await migratePluginRegistryForInstall({
+      stateDir,
+      candidates: [
+        createCandidate(memoryDir, "memory-core", "bundled", {
+          manifest: {
+            kind: "memory",
+            providers: [],
+            contracts: { tools: ["memory_search"] },
+            commandAliases: [
+              {
+                name: "dreaming",
+                kind: "runtime-slash",
+                cliCommand: "memory",
+              },
+            ],
+          },
+        }),
+        createCandidate(unusedBundledDir, "unused-bundled", "bundled"),
+      ],
+      readConfig: async () => ({}),
+      env: hermeticEnv(),
+    });
+    expectRecordFields(requireRecord(result, "migration result"), {
+      status: "migrated",
+    });
+    const current = requireMigratedIndex(result);
+    expect(requirePlugin(current, "memory-core").startup.memory).toBe(true);
+
+    const persisted = await readPersistedInstalledPluginIndex({ stateDir });
+    expect(persisted?.plugins.map((plugin) => plugin.pluginId)).toEqual(["memory-core"]);
   });
 
   it("supports dry-run preflight without reading config or writing the registry", async () => {

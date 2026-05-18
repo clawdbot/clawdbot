@@ -93,6 +93,87 @@ describe("legacy silent reply config migrate", () => {
   });
 });
 
+describe("legacy agent model timeout migrate", () => {
+  it("removes ignored timeoutMs from agent and subagent model selection config", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.5",
+            fallbacks: ["anthropic/claude-sonnet-4-6"],
+            timeoutMs: 30_000,
+          },
+          subagents: {
+            model: {
+              primary: "openai/gpt-5.4",
+              timeoutMs: 10_000,
+            },
+          },
+          imageGenerationModel: {
+            primary: "openrouter/openai/gpt-5.4-image-2",
+            timeoutMs: 180_000,
+          },
+          pdfModel: {
+            primary: "openai/gpt-5.5",
+            timeoutMs: 45_000,
+          },
+        },
+        list: [
+          {
+            id: "worker",
+            model: {
+              primary: "openai/gpt-5.4",
+              timeoutMs: 20_000,
+            },
+            subagents: {
+              model: {
+                primary: "openai/gpt-5.4-mini",
+                timeoutMs: 5_000,
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    const root = res.config as Record<string, unknown> | null;
+    const agents = root?.agents as Record<string, unknown>;
+    const defaults = agents.defaults as Record<string, unknown>;
+    const defaultSubagents = defaults.subagents as Record<string, unknown>;
+    const list = agents.list as Array<Record<string, unknown>>;
+    const firstAgent = list[0];
+    const firstSubagents = firstAgent.subagents as Record<string, unknown>;
+
+    expect(defaults.model).toEqual({
+      primary: "openai/gpt-5.5",
+      fallbacks: ["anthropic/claude-sonnet-4-6"],
+    });
+    expect(defaultSubagents.model).toEqual({
+      primary: "openai/gpt-5.4",
+    });
+    expect(defaults.imageGenerationModel).toEqual({
+      primary: "openrouter/openai/gpt-5.4-image-2",
+      timeoutMs: 180_000,
+    });
+    expect(defaults.pdfModel).toEqual({
+      primary: "openai/gpt-5.5",
+      timeoutMs: 45_000,
+    });
+    expect(firstAgent.model).toEqual({
+      primary: "openai/gpt-5.4",
+    });
+    expect(firstSubagents.model).toEqual({
+      primary: "openai/gpt-5.4-mini",
+    });
+    expect(res.changes).toStrictEqual([
+      "Removed agents.defaults.model.timeoutMs; agent model config only selects models.",
+      "Removed agents.defaults.subagents.model.timeoutMs; agent model config only selects models.",
+      "Removed agents.list.0.model.timeoutMs; agent model config only selects models.",
+      "Removed agents.list.0.subagents.model.timeoutMs; agent model config only selects models.",
+    ]);
+  });
+});
+
 describe("legacy session maintenance migrate", () => {
   it("removes deprecated session.maintenance.rotateBytes", () => {
     const res = migrateLegacyConfigForTest({
@@ -944,5 +1025,35 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
       "http://localhost:18789",
       "http://127.0.0.1:18789",
     ]);
+  });
+
+  it("seeds allowedOrigins for non-loopback host aliases before normalizing bind", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: {
+        bind: "0.0.0.0",
+        auth: { mode: "token", token: "tok" },
+      },
+    });
+    expect(res.config?.gateway?.bind).toBe("lan");
+    expect(res.config?.gateway?.controlUi?.allowedOrigins).toEqual([
+      "http://localhost:18789",
+      "http://127.0.0.1:18789",
+    ]);
+    expect(res.changes).toStrictEqual([
+      'Seeded gateway.controlUi.allowedOrigins ["http://localhost:18789","http://127.0.0.1:18789"] for bind=lan. Required since v2026.2.26. Add other machine origins to gateway.controlUi.allowedOrigins if needed.',
+      'Normalized gateway.bind "0.0.0.0" → "lan".',
+    ]);
+  });
+
+  it("does not seed allowedOrigins for loopback host aliases", () => {
+    const res = migrateLegacyConfigForTest({
+      gateway: {
+        bind: "localhost",
+        auth: { mode: "token", token: "tok" },
+      },
+    });
+    expect(res.config?.gateway?.bind).toBe("loopback");
+    expect(res.config?.gateway?.controlUi).toBeUndefined();
+    expect(res.changes).toStrictEqual(['Normalized gateway.bind "localhost" → "loopback".']);
   });
 });

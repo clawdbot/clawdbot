@@ -1116,6 +1116,7 @@ async function agentCommandInternal(
         const effectiveFallbacksOverride = resolveEffectiveModelFallbacks({
           cfg,
           agentId: sessionAgentId,
+          sessionKey,
           hasSessionModelOverride:
             hasExplicitRunOverride || Boolean(storedProviderOverride || storedModelOverride),
           modelOverrideSource: hasExplicitRunOverride ? "user" : storedModelOverrideSource,
@@ -1133,6 +1134,19 @@ async function agentCommandInternal(
           ...modelManifestContext,
           runId,
           agentDir,
+          agentId: sessionAgentId,
+          sessionKey: sessionKey ?? sessionId,
+          prepareAgentHarnessRuntime: async ({ provider, model, agentHarnessRuntimeOverride }) => {
+            await ensureSelectedAgentHarnessPlugin({
+              config: cfg,
+              provider,
+              modelId: model,
+              agentId: sessionAgentId,
+              sessionKey,
+              agentHarnessRuntimeOverride,
+              workspaceDir,
+            });
+          },
           fallbacksOverride: effectiveFallbacksOverride,
           onFallbackStep: (step) => {
             fallbackTrajectoryRecorder?.recordEvent("model.fallback_step", step);

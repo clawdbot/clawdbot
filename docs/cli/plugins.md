@@ -1,7 +1,8 @@
 ---
-summary: "CLI reference for `openclaw plugins` (list, install, marketplace, uninstall, enable/disable, doctor)"
+summary: "CLI reference for `openclaw plugins` (init, build, validate, list, install, marketplace, uninstall, enable/disable, doctor)"
 read_when:
   - You want to install or manage Gateway plugins or compatible bundles
+  - You want to scaffold or validate a simple tool plugin
   - You want to debug plugin load failures
 title: "Plugins"
 sidebarTitle: "Plugins"
@@ -53,6 +54,11 @@ openclaw plugins update <id-or-npm-spec>
 openclaw plugins update --all
 openclaw plugins marketplace list <marketplace>
 openclaw plugins marketplace list <marketplace> --json
+openclaw plugins init <id>
+openclaw plugins init <id> --directory ./my-plugin --name "My Plugin"
+openclaw plugins build --entry ./dist/index.js
+openclaw plugins build --entry ./dist/index.js --check
+openclaw plugins validate --entry ./dist/index.js
 ```
 
 For slow install, inspect, uninstall, or registry-refresh investigation, run the
@@ -70,6 +76,28 @@ Native OpenClaw plugins must ship `openclaw.plugin.json` with an inline JSON Sch
 
 `plugins list` shows `Format: openclaw` or `Format: bundle`. Verbose list/info output also shows the bundle subtype (`codex`, `claude`, or `cursor`) plus detected bundle capabilities.
 </Note>
+
+### Author
+
+```bash
+openclaw plugins init stock-quotes --name "Stock Quotes"
+cd stock-quotes
+npm run plugin:build
+npm run plugin:validate
+```
+
+`plugins init` creates a minimal TypeScript tool plugin that uses
+`defineToolPlugin`. `plugins build` imports that entry, reads its static tool
+metadata, writes `openclaw.plugin.json`, and keeps `package.json`
+`openclaw.extensions` aligned. `plugins validate` checks that the generated
+manifest, package metadata, and current entry export still agree. See
+[Tool Plugins](/plugins/tool-plugins) for the full authoring workflow.
+
+The scaffold writes TypeScript source but generates metadata from the built
+`./dist/index.js` entry so the workflow also works with the published CLI. Use
+`--entry <path>` when the entry is not the default package entry. Use
+`plugins build --check` in CI to fail when generated metadata is stale without
+rewriting files.
 
 ### Install
 

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  buildTelegramInboundOriginTarget,
   buildTelegramRoutingTarget,
   buildTelegramThreadParams,
   buildTypingThreadParams,
@@ -175,6 +176,37 @@ describe("buildTelegramRoutingTarget", () => {
     },
   ])("$name", ({ chatId, thread, expected }) => {
     expect(buildTelegramRoutingTarget(chatId, thread)).toBe(expected);
+  });
+});
+
+describe("buildTelegramInboundOriginTarget", () => {
+  it.each([
+    {
+      name: "keeps DM topic thread ids out of the origin target",
+      chatId: 42,
+      thread: { id: 77, scope: "dm" as const },
+      expected: "telegram:42",
+    },
+    {
+      name: "keeps regular groups chat-scoped",
+      chatId: -100123,
+      thread: { scope: "none" as const },
+      expected: "telegram:-100123",
+    },
+    {
+      name: "keeps General forum topic chat-scoped",
+      chatId: -100123,
+      thread: { id: 1, scope: "forum" as const },
+      expected: "telegram:-100123",
+    },
+    {
+      name: "includes real forum topic ids",
+      chatId: -100123,
+      thread: { id: 42, scope: "forum" as const },
+      expected: "telegram:-100123:topic:42",
+    },
+  ])("$name", ({ chatId, thread, expected }) => {
+    expect(buildTelegramInboundOriginTarget(chatId, thread)).toBe(expected);
   });
 });
 

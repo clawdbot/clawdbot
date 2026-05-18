@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   captureRuntimeParityCell,
+  isRuntimeParityResultPass,
   runRuntimeParityScenario,
   type RuntimeId,
   type RuntimeParityCell,
@@ -179,6 +180,7 @@ describe("runtime parity", () => {
     });
 
     expect(result.drift).toBe("tool-call-shape");
+    expect(isRuntimeParityResultPass(result)).toBe(true);
   });
 
   it("classifies tool result shape drift", async () => {
@@ -220,6 +222,7 @@ describe("runtime parity", () => {
     });
 
     expect(result.drift).toBe("failure-mode");
+    expect(isRuntimeParityResultPass(result)).toBe(false);
   });
 
   it("surfaces tool-call-shape when one runtime fails because the tool path drifted", async () => {
@@ -235,6 +238,7 @@ describe("runtime parity", () => {
     });
 
     expect(result.drift).toBe("tool-call-shape");
+    expect(isRuntimeParityResultPass(result)).toBe(false);
   });
 
   it("surfaces tool-result-shape when a downstream timeout follows divergent tool output", async () => {

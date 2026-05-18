@@ -39,7 +39,7 @@ const feishuIngressIdentity = defineStableChannelIngressIdentity({
   resolveEntryId: ({ entryIndex }) => `feishu-entry-${entryIndex + 1}`,
 });
 
-function normalizeFeishuAllowEntry(raw: string): string {
+export function normalizeFeishuAllowEntry(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) {
     return "";

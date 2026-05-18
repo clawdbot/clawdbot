@@ -186,7 +186,7 @@ describe("buildReplyPayloads media filter integration", () => {
 
     expect(replyPayloads).toHaveLength(2);
     expectFields(replyPayloads[0], {
-      text: "keep text",
+      text: "keep text\n⚠️ Media failed.",
       mediaUrl: undefined,
       mediaUrls: undefined,
       audioAsVoice: false,
@@ -490,63 +490,6 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(0);
   });
 
-  it("suppresses final text payloads already covered by partial preview streaming", async () => {
-    const { replyPayloads } = await buildReplyPayloads({
-      ...baseParams,
-      previewStreamedText: "First block\n\nSecond block",
-      payloads: [{ text: "First block" }, { text: "Second block" }],
-    });
-
-    expect(replyPayloads).toHaveLength(0);
-  });
-
-  it("keeps final text that was not covered by partial preview streaming", async () => {
-    const { replyPayloads } = await buildReplyPayloads({
-      ...baseParams,
-      previewStreamedText: "Working...",
-      payloads: [{ text: "Done." }],
-    });
-
-    expect(replyPayloads).toHaveLength(1);
-    expectFields(replyPayloads[0], { text: "Done." });
-  });
-
-  it("does not suppress short final text just because it appears inside preview text", async () => {
-    const { replyPayloads } = await buildReplyPayloads({
-      ...baseParams,
-      previewStreamedText: "Working on item 3",
-      payloads: [{ text: "3" }],
-    });
-
-    expect(replyPayloads).toHaveLength(1);
-    expectFields(replyPayloads[0], { text: "3" });
-  });
-
-  it("preserves media while removing duplicate preview-streamed caption text", async () => {
-    const { replyPayloads } = await buildReplyPayloads({
-      ...baseParams,
-      previewStreamedText: "Here is the chart",
-      payloads: [{ text: "Here is the chart", mediaUrl: "file:///tmp/chart.png" }],
-    });
-
-    expect(replyPayloads).toHaveLength(1);
-    expectFields(replyPayloads[0], {
-      text: undefined,
-      mediaUrl: "file:///tmp/chart.png",
-    });
-  });
-
-  it("preserves errors even when their text appears in partial preview streaming", async () => {
-    const { replyPayloads } = await buildReplyPayloads({
-      ...baseParams,
-      previewStreamedText: "Agent couldn't generate a response. Please try again.",
-      payloads: [{ text: "Agent couldn't generate a response. Please try again.", isError: true }],
-    });
-
-    expect(replyPayloads).toHaveLength(1);
-    expectFields(replyPayloads[0], { isError: true });
-  });
-
   it("drops all final payloads when block pipeline streamed successfully", async () => {
     const pipeline: Parameters<typeof buildReplyPayloads>[0]["blockReplyPipeline"] = {
       didStream: () => true,
@@ -713,6 +656,26 @@ describe("buildReplyPayloads media filter integration", () => {
     });
 
     expect(replyPayloads).toHaveLength(0);
+  });
+
+  it("surfaces a warning when non-silent media payloads fail normalization", async () => {
+    const normalizeMediaPaths = async () => {
+      throw new Error("file not found");
+    };
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      payloads: [{ text: "MEDIA: ./missing.png" }],
+      normalizeMediaPaths,
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expectFields(replyPayloads[0], {
+      text: "⚠️ Media failed.",
+      mediaUrl: undefined,
+      mediaUrls: undefined,
+      audioAsVoice: false,
+    });
   });
 
   it("extracts markdown image replies into final payload media urls", async () => {

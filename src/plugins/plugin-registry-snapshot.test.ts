@@ -2,8 +2,18 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  clearCurrentPluginMetadataSnapshot,
+  setCurrentPluginMetadataSnapshot,
+} from "./current-plugin-metadata-snapshot.js";
+import type { PluginCandidate } from "./discovery.js";
 import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
-import { loadInstalledPluginIndex, type InstalledPluginIndex } from "./installed-plugin-index.js";
+import {
+  loadInstalledPluginIndex,
+  resolveInstalledPluginIndexPolicyHash,
+  type InstalledPluginIndex,
+} from "./installed-plugin-index.js";
+import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry-snapshot.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
@@ -12,6 +22,7 @@ const tempDirs: string[] = [];
 
 afterEach(() => {
   vi.restoreAllMocks();
+  clearCurrentPluginMetadataSnapshot();
   cleanupTrackedTempDirs(tempDirs);
 });
 
@@ -51,6 +62,28 @@ function writePackagePlugin(rootDir: string) {
     JSON.stringify({ name: "demo", version: "1.0.0" }),
     "utf8",
   );
+}
+
+function createCandidate(rootDir: string, pluginId = "demo"): PluginCandidate {
+  fs.mkdirSync(rootDir, { recursive: true });
+  fs.writeFileSync(path.join(rootDir, "index.ts"), "export default { register() {} };\n", "utf8");
+  fs.writeFileSync(
+    path.join(rootDir, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: pluginId,
+      name: pluginId,
+      description: pluginId,
+      configSchema: { type: "object" },
+      providers: [pluginId],
+    }),
+    "utf8",
+  );
+  return {
+    idHint: pluginId,
+    source: path.join(rootDir, "index.ts"),
+    rootDir,
+    origin: "global",
+  };
 }
 
 function replaceFilePreservingSizeAndMtime(filePath: string, contents: string) {
@@ -117,6 +150,192 @@ function requirePluginRecord(
 }
 
 describe("loadPluginRegistrySnapshotWithMetadata", () => {
+  it("reuses a compatible current metadata snapshot", () => {
+    const env = createHermeticEnv(makeTempDir());
+    const config = {};
+    const workspaceDir = path.join(makeTempDir(), "workspace");
+    const policyHash = resolveInstalledPluginIndexPolicyHash(config);
+    const index: InstalledPluginIndex = {
+      version: 1,
+      hostContractVersion: "test",
+      compatRegistryVersion: "test",
+      migrationVersion: 1,
+      policyHash,
+      generatedAtMs: 0,
+      installRecords: {},
+      plugins: [],
+      diagnostics: [],
+    };
+    const snapshot: PluginMetadataSnapshot = {
+      policyHash,
+      configFingerprint: "",
+      workspaceDir,
+      index,
+      registryDiagnostics: [],
+      manifestRegistry: { plugins: [], diagnostics: [] },
+      plugins: [],
+      diagnostics: [],
+      byPluginId: new Map(),
+      normalizePluginId: (pluginId: string) => pluginId,
+      owners: {
+        channels: new Map(),
+        channelConfigs: new Map(),
+        providers: new Map(),
+        modelCatalogProviders: new Map(),
+        cliBackends: new Map(),
+        setupProviders: new Map(),
+        commandAliases: new Map(),
+        contracts: new Map(),
+      },
+      metrics: {
+        registrySnapshotMs: 0,
+        manifestRegistryMs: 0,
+        ownerMapsMs: 0,
+        totalMs: 0,
+        indexPluginCount: 0,
+        manifestPluginCount: 0,
+      },
+    };
+    setCurrentPluginMetadataSnapshot(snapshot, { config, env, workspaceDir });
+
+    const result = loadPluginRegistrySnapshotWithMetadata({ config, env, workspaceDir });
+
+    expect(result).toEqual({
+      snapshot: index,
+      source: "provided",
+      diagnostics: [],
+    });
+  });
+
+  it("does not treat diagnostic current metadata as provided registry input", () => {
+    const env = {
+      ...createHermeticEnv(makeTempDir()),
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+    };
+    const config = {};
+    const workspaceDir = path.join(makeTempDir(), "workspace");
+    const policyHash = resolveInstalledPluginIndexPolicyHash(config);
+    const index: InstalledPluginIndex = {
+      version: 1,
+      hostContractVersion: "test",
+      compatRegistryVersion: "test",
+      migrationVersion: 1,
+      policyHash,
+      generatedAtMs: 0,
+      installRecords: {},
+      plugins: [],
+      diagnostics: [],
+    };
+    setCurrentPluginMetadataSnapshot(
+      {
+        policyHash,
+        configFingerprint: "",
+        workspaceDir,
+        index,
+        registryDiagnostics: [
+          {
+            level: "info",
+            code: "persisted-registry-missing",
+            message: "missing",
+          },
+        ],
+        manifestRegistry: { plugins: [], diagnostics: [] },
+        plugins: [],
+        diagnostics: [],
+        byPluginId: new Map(),
+        normalizePluginId: (pluginId: string) => pluginId,
+        owners: {
+          channels: new Map(),
+          channelConfigs: new Map(),
+          providers: new Map(),
+          modelCatalogProviders: new Map(),
+          cliBackends: new Map(),
+          setupProviders: new Map(),
+          commandAliases: new Map(),
+          contracts: new Map(),
+        },
+        metrics: {
+          registrySnapshotMs: 0,
+          manifestRegistryMs: 0,
+          ownerMapsMs: 0,
+          totalMs: 0,
+          indexPluginCount: 0,
+          manifestPluginCount: 0,
+        },
+      },
+      { config, env, workspaceDir },
+    );
+
+    const result = loadPluginRegistrySnapshotWithMetadata({ config, env, workspaceDir });
+
+    expect(result.source).not.toBe("provided");
+  });
+
+  it("does not reuse current metadata when explicit derivation inputs are supplied", () => {
+    const tempRoot = makeTempDir();
+    const env = {
+      ...createHermeticEnv(tempRoot),
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+    };
+    const config = {};
+    const workspaceDir = path.join(tempRoot, "workspace");
+    const policyHash = resolveInstalledPluginIndexPolicyHash(config);
+    const currentIndex: InstalledPluginIndex = {
+      version: 1,
+      hostContractVersion: "test",
+      compatRegistryVersion: "test",
+      migrationVersion: 1,
+      policyHash,
+      generatedAtMs: 0,
+      installRecords: {},
+      plugins: [],
+      diagnostics: [],
+    };
+    setCurrentPluginMetadataSnapshot(
+      {
+        policyHash,
+        configFingerprint: "",
+        workspaceDir,
+        index: currentIndex,
+        registryDiagnostics: [],
+        manifestRegistry: { plugins: [], diagnostics: [] },
+        plugins: [],
+        diagnostics: [],
+        byPluginId: new Map(),
+        normalizePluginId: (pluginId: string) => pluginId,
+        owners: {
+          channels: new Map(),
+          channelConfigs: new Map(),
+          providers: new Map(),
+          modelCatalogProviders: new Map(),
+          cliBackends: new Map(),
+          setupProviders: new Map(),
+          commandAliases: new Map(),
+          contracts: new Map(),
+        },
+        metrics: {
+          registrySnapshotMs: 0,
+          manifestRegistryMs: 0,
+          ownerMapsMs: 0,
+          totalMs: 0,
+          indexPluginCount: 0,
+          manifestPluginCount: 0,
+        },
+      },
+      { config, env, workspaceDir },
+    );
+
+    const result = loadPluginRegistrySnapshotWithMetadata({
+      config,
+      env,
+      workspaceDir,
+      candidates: [createCandidate(path.join(tempRoot, "candidate"), "explicit")],
+    });
+
+    expect(result.source).toBe("derived");
+    expect(result.snapshot.plugins.map((plugin) => plugin.pluginId)).toEqual(["explicit"]);
+  });
+
   it("recovers managed npm plugins missing from a stale persisted registry", () => {
     const tempRoot = makeTempDir();
     const stateDir = path.join(tempRoot, "state");

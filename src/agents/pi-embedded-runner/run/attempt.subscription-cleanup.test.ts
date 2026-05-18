@@ -115,4 +115,25 @@ describe("cleanupEmbeddedAttemptResources", () => {
 
     expect(release).toHaveBeenCalledTimes(1);
   });
+
+  it("can skip stale session-manager flushing after session takeover", async () => {
+    const flushPendingToolResultsAfterIdle = vi.fn(async () => {});
+    const dispose = vi.fn();
+    const release = vi.fn(async () => {});
+
+    await cleanupEmbeddedAttemptResources({
+      flushPendingToolResultsAfterIdle,
+      session: {
+        agent: {},
+        dispose,
+      },
+      sessionManager: {},
+      sessionLock: { release },
+      skipSessionFlush: true,
+    });
+
+    expect(flushPendingToolResultsAfterIdle).not.toHaveBeenCalled();
+    expect(dispose).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
 });

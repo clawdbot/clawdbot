@@ -1379,6 +1379,8 @@ export async function prepareSlackMessage(params: {
     logVerbose(`slack inbound: channel=${message.channel} from=${slackFrom} preview="${preview}"`);
   }
 
+  const updateLastRouteSessionKey = resolveInboundLastRouteSessionKey({ route, sessionKey });
+
   return {
     ctx,
     account,
@@ -1392,13 +1394,15 @@ export async function prepareSlackMessage(params: {
       record: {
         updateLastRoute: isDirectMessage
           ? {
-              sessionKey: resolveInboundLastRouteSessionKey({ route, sessionKey }),
+              sessionKey: updateLastRouteSessionKey,
               channel: "slack",
               to: `user:${message.user}`,
               accountId: route.accountId,
               threadId: effectiveMessageThreadId,
               mainDmOwnerPin:
-                pinnedMainDmOwner && message.user
+                updateLastRouteSessionKey === route.mainSessionKey &&
+                pinnedMainDmOwner &&
+                message.user
                   ? {
                       ownerRecipient: pinnedMainDmOwner,
                       senderRecipient: normalizeLowercaseStringOrEmpty(message.user),

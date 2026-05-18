@@ -1027,7 +1027,7 @@ describe("anthropic transport stream", () => {
     ]);
   });
 
-  it("backfills empty reasoning_content for compatible Anthropic tool-use replays", async () => {
+  it("backfills empty reasoning_content thinking blocks for compatible Anthropic tool-use replays", async () => {
     await runTransportStream(
       makeAnthropicTransportModel({
         id: "mimo-v2.6-pro",
@@ -1066,13 +1066,69 @@ describe("anthropic transport stream", () => {
       latestAnthropicRequest().payload.messages,
       (record) => record.role === "assistant",
     );
-    expect(assistantMessage.reasoning_content).toBe("");
+    expect(assistantMessage).not.toHaveProperty("reasoning_content");
     expect(assistantMessage.content).toEqual([
+      {
+        type: "thinking",
+        thinking: "",
+        signature: "reasoning_content",
+      },
       { type: "tool_use", id: "call_1", name: "lookup", input: {} },
     ]);
   });
 
-  it("backfills empty reasoning_content for compatible Anthropic text replays", async () => {
+  it("backfills MiMo v2-flash tool-use replay when OpenClaw thinking is off", async () => {
+    await runTransportStream(
+      makeAnthropicTransportModel({
+        id: "mimo-v2-flash",
+        name: "MiMo V2 Flash",
+        provider: "xiaomi",
+        baseUrl: "https://api.xiaomimimo.com/anthropic",
+        reasoning: false,
+      }),
+      {
+        messages: [
+          { role: "user", content: "look this up" },
+          {
+            role: "assistant",
+            provider: "xiaomi",
+            api: "anthropic-messages",
+            model: "mimo-v2-flash",
+            stopReason: "toolUse",
+            timestamp: 0,
+            content: [{ type: "toolCall", id: "call_1", name: "lookup", arguments: {} }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            content: [{ type: "text", text: "found" }],
+            isError: false,
+          },
+          { role: "user", content: "continue" },
+        ],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-xiaomi-test",
+      } as AnthropicStreamOptions,
+    );
+
+    const assistantMessage = findRecord(
+      latestAnthropicRequest().payload.messages,
+      (record) => record.role === "assistant",
+    );
+    expect(latestAnthropicRequest().payload).not.toHaveProperty("thinking");
+    expect(assistantMessage).not.toHaveProperty("reasoning_content");
+    expect(assistantMessage.content).toEqual([
+      {
+        type: "thinking",
+        thinking: "",
+        signature: "reasoning_content",
+      },
+      { type: "tool_use", id: "call_1", name: "lookup", input: {} },
+    ]);
+  });
+
+  it("backfills empty reasoning_content thinking blocks for compatible Anthropic text replays", async () => {
     await runTransportStream(
       makeAnthropicTransportModel({
         id: "mimo-v2.6-pro",
@@ -1105,8 +1161,15 @@ describe("anthropic transport stream", () => {
       latestAnthropicRequest().payload.messages,
       (record) => record.role === "assistant",
     );
-    expect(assistantMessage.reasoning_content).toBe("");
-    expect(assistantMessage.content).toEqual([{ type: "text", text: "Hello!" }]);
+    expect(assistantMessage).not.toHaveProperty("reasoning_content");
+    expect(assistantMessage.content).toEqual([
+      {
+        type: "thinking",
+        thinking: "",
+        signature: "reasoning_content",
+      },
+      { type: "text", text: "Hello!" },
+    ]);
   });
 
   it("does not backfill reasoning_content for generic Anthropic-compatible tool-use replays", async () => {
@@ -1154,7 +1217,7 @@ describe("anthropic transport stream", () => {
     ]);
   });
 
-  it("does not replay reasoning_content when compatible Anthropic thinking is disabled", async () => {
+  it("replays observed reasoning_content for compatible Anthropic routes when thinking is disabled", async () => {
     await runTransportStream(
       makeAnthropicTransportModel({
         id: "mimo-v2.6-pro",
@@ -1194,8 +1257,15 @@ describe("anthropic transport stream", () => {
       (record) => record.role === "assistant",
     );
     expect(latestAnthropicRequest().payload.thinking).toEqual({ type: "disabled" });
-    expect(assistantMessage).not.toHaveProperty("reasoning_content");
-    expect(assistantMessage.content).toEqual([{ type: "text", text: "Hello!" }]);
+    expect(assistantMessage.reasoning_content).toBe("Need to answer politely.");
+    expect(assistantMessage.content).toEqual([
+      {
+        type: "thinking",
+        thinking: "Need to answer politely.",
+        signature: "reasoning_content",
+      },
+      { type: "text", text: "Hello!" },
+    ]);
   });
 
   it("does not replay synthetic reasoning_content to native Anthropic models", async () => {

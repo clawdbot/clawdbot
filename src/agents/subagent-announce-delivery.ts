@@ -363,6 +363,23 @@ export async function resolveSubagentCompletionOrigin(params: {
     channel && conversationId ? { channel, accountId, conversationId } : undefined;
 
   const router = createBoundDeliveryRouter();
+  const requesterRoute = router.resolveDestination({
+    eventKind: "task_completion",
+    targetSessionKey: params.requesterSessionKey,
+    requester: requesterConversation,
+    failClosed: true,
+  });
+  if (requesterRoute.mode === "bound" && requesterRoute.binding) {
+    return mergeDeliveryContext(
+      resolveBoundConversationOrigin({
+        bindingConversation: requesterRoute.binding.conversation,
+        requesterConversation,
+        requesterOrigin,
+      }),
+      requesterOrigin,
+    );
+  }
+
   const childRoute = router.resolveDestination({
     eventKind: "task_completion",
     targetSessionKey: params.childSessionKey,
@@ -373,23 +390,6 @@ export async function resolveSubagentCompletionOrigin(params: {
     return mergeDeliveryContext(
       resolveBoundConversationOrigin({
         bindingConversation: childRoute.binding.conversation,
-        requesterConversation,
-        requesterOrigin,
-      }),
-      requesterOrigin,
-    );
-  }
-
-  const route = router.resolveDestination({
-    eventKind: "task_completion",
-    targetSessionKey: params.requesterSessionKey,
-    requester: requesterConversation,
-    failClosed: true,
-  });
-  if (route.mode === "bound" && route.binding) {
-    return mergeDeliveryContext(
-      resolveBoundConversationOrigin({
-        bindingConversation: route.binding.conversation,
         requesterConversation,
         requesterOrigin,
       }),
@@ -449,18 +449,21 @@ export function loadSessionEntryByKey(sessionKey: string) {
 }
 
 async function maybeSteerSubagentAnnounce(params: {
+  deliveryTimeoutMs?: number;
   requesterSessionKey: string;
   steerMessage: string;
   signal?: AbortSignal;
-}): Promise<"steered" | "none" | "dropped"> {
+}): Promise<
+  { status: "steered"; deliveredAt?: number; enqueuedAt?: number } | { status: "none" | "dropped" }
+> {
   if (params.signal?.aborted) {
-    return "none";
+    return { status: "none" };
   }
   const { cfg, entry } = loadRequesterSessionEntry(params.requesterSessionKey);
   const canonicalKey = resolveRequesterStoreKey(cfg, params.requesterSessionKey);
-  const { sessionId, isActive } = resolveRequesterSessionActivity(canonicalKey);
+  const { sessionId } = resolveRequesterSessionActivity(canonicalKey);
   if (!sessionId) {
-    return "none";
+    return { status: "none" };
   }
 
   const queueSettings = resolveQueueSettings({
@@ -471,15 +474,36 @@ async function maybeSteerSubagentAnnounce(params: {
 
   // Subagent announcements are internal handoffs into an active requester turn.
   // Queue modes such as followup/collect apply to user prompts, not this path.
-  const queueOutcome = await resolveQueueEmbeddedPiMessageOutcome(sessionId, params.steerMessage, {
+  const queueOptions: EmbeddedPiQueueMessageOptions = {
+    deliveryTimeoutMs: params.deliveryTimeoutMs,
     steeringMode: "all",
     ...(queueSettings.debounceMs !== undefined ? { debounceMs: queueSettings.debounceMs } : {}),
-  });
+    waitForTranscriptCommit: true,
+  };
+  let queueOutcome = await resolveQueueEmbeddedPiMessageOutcome(
+    sessionId,
+    params.steerMessage,
+    queueOptions,
+  );
+  if (!queueOutcome.queued && queueOutcome.reason === "transcript_commit_wait_unsupported") {
+    const bestEffortQueueOptions = { ...queueOptions };
+    delete bestEffortQueueOptions.waitForTranscriptCommit;
+    queueOutcome = await resolveQueueEmbeddedPiMessageOutcome(
+      sessionId,
+      params.steerMessage,
+      bestEffortQueueOptions,
+    );
+  }
   if (queueOutcome.queued) {
-    return "steered";
+    return {
+      status: "steered",
+      deliveredAt: queueOutcome.deliveredAtMs,
+      enqueuedAt: queueOutcome.enqueuedAtMs,
+    };
   }
 
-  return isActive ? "dropped" : "none";
+  const currentActivity = resolveRequesterSessionActivity(canonicalKey);
+  return { status: currentActivity.isActive ? "dropped" : "none" };
 }
 
 function hasVisibleGatewayAgentPayload(response: unknown): boolean {
@@ -667,6 +691,7 @@ async function sendSubagentAnnounceDirectly(params: {
         requesterActivity.sessionId,
         params.triggerMessage,
         {
+          deliveryTimeoutMs: announceTimeoutMs,
           steeringMode: "all",
           ...(completionSourceReplyDeliveryMode
             ? { sourceReplyDeliveryMode: completionSourceReplyDeliveryMode }
@@ -674,11 +699,14 @@ async function sendSubagentAnnounceDirectly(params: {
           ...(requesterQueueSettings.debounceMs !== undefined
             ? { debounceMs: requesterQueueSettings.debounceMs }
             : {}),
+          waitForTranscriptCommit: true,
         },
       );
       if (wakeOutcome.queued) {
         return {
           delivered: true,
+          deliveredAt: wakeOutcome.deliveredAtMs,
+          enqueuedAt: wakeOutcome.enqueuedAtMs,
           path: "steered",
         };
       }
@@ -844,6 +872,9 @@ export async function deliverSubagentAnnouncement(params: {
     signal: params.signal,
     steer: async () =>
       await maybeSteerSubagentAnnounce({
+        deliveryTimeoutMs: resolveSubagentAnnounceTimeoutMs(
+          subagentAnnounceDeliveryDeps.getRuntimeConfig(),
+        ),
         requesterSessionKey: params.requesterSessionKey,
         steerMessage: params.steerMessage,
         signal: params.signal,

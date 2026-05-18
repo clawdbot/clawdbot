@@ -6,6 +6,7 @@ import {
 import type { NormalizedModelCatalogRow } from "../../model-catalog/index.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginManifestRegistry } from "../../plugins/manifest-registry.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import {
   getPluginRecord,
   isPluginEnabled,
@@ -93,15 +94,18 @@ function loadManifestCatalogRowsForList(params: {
   providerFilter?: string;
   env?: NodeJS.ProcessEnv;
   mode?: ManifestCatalogRowsForListMode;
+  metadataSnapshot?: PluginMetadataSnapshot;
 }): readonly NormalizedModelCatalogRow[] {
   const providerFilter = params.providerFilter
     ? normalizeModelCatalogProviderId(params.providerFilter)
     : undefined;
   const mode = params.mode ?? "static-authoritative";
-  const snapshot = loadManifestMetadataSnapshot({
-    config: params.cfg,
-    env: params.env ?? process.env,
-  });
+  const snapshot =
+    params.metadataSnapshot ??
+    loadManifestMetadataSnapshot({
+      config: params.cfg,
+      env: params.env ?? process.env,
+    });
   const index = snapshot.index;
   if (!providerFilter) {
     return loadManifestCatalogRowsForPluginIds({
@@ -147,6 +151,7 @@ export function loadStaticManifestCatalogRowsForList(params: {
   cfg: OpenClawConfig;
   providerFilter?: string;
   env?: NodeJS.ProcessEnv;
+  metadataSnapshot?: PluginMetadataSnapshot;
 }): readonly NormalizedModelCatalogRow[] {
   return loadManifestCatalogRowsForList({
     ...params,
@@ -158,6 +163,7 @@ export function loadSupplementalManifestCatalogRowsForList(params: {
   cfg: OpenClawConfig;
   providerFilter?: string;
   env?: NodeJS.ProcessEnv;
+  metadataSnapshot?: PluginMetadataSnapshot;
 }): readonly NormalizedModelCatalogRow[] {
   return loadManifestCatalogRowsForList({
     ...params,

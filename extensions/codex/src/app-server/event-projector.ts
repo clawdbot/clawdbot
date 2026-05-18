@@ -94,6 +94,24 @@ const CODEX_PROMPT_TOTAL_INPUT_KEYS = [
 
 const MAX_TOOL_OUTPUT_DELTA_MESSAGES_PER_ITEM = 20;
 const TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS = 12_000;
+const TRANSCRIPT_PROGRESS_SUPPRESSED_TOOL_NAMES = new Set([
+  "message",
+  "messages",
+  "reply",
+  "send",
+  "reaction",
+  "react",
+  "typing",
+]);
+
+export function shouldEmitTranscriptToolProgress(toolName: unknown, args?: unknown): boolean {
+  const normalized = typeof toolName === "string" ? toolName.trim().toLowerCase() : "";
+  return Boolean(
+    normalized &&
+    !TRANSCRIPT_PROGRESS_SUPPRESSED_TOOL_NAMES.has(normalized) &&
+    !isActivityLogCommandProgress(normalized, args),
+  );
+}
 
 type ToolTranscriptCallInput = {
   id: string;
@@ -122,14 +140,19 @@ export class CodexAppServerEventProjector {
   private readonly toolResultSummaryItemIds = new Set<string>();
   private readonly toolResultOutputItemIds = new Set<string>();
   private readonly toolResultOutputStreamedItemIds = new Set<string>();
+  private readonly transcriptToolProgressSuppressedIds = new Set<string>();
+  private readonly toolTranscriptArgumentsById = new Map<string, unknown>();
   private readonly toolResultOutputDeltaState = new Map<
     string,
     { chars: number; messages: number; truncated: boolean }
   >();
+  private readonly toolResultOutputTextByItem = new Map<string, string>();
   private readonly toolMetas = new Map<string, { toolName: string; meta?: string }>();
   private readonly toolTranscriptMessages: AgentMessage[] = [];
   private readonly toolTranscriptCallIds = new Set<string>();
   private readonly toolTranscriptResultIds = new Set<string>();
+  private readonly transcriptToolProgressCallIds = new Set<string>();
+  private lastNativeToolError: EmbeddedRunAttemptResult["lastToolError"];
   private readonly nativeGeneratedMediaUrls = new Set<string>();
   private readonly diagnosticToolStartedAtByItem = new Map<string, number>();
   private readonly afterToolCallObservedItemIds = new Set<string>();
@@ -316,6 +339,7 @@ export class CodexAppServerEventProjector {
       assistantTexts,
       toolMetas: [...this.toolMetas.values()],
       lastAssistant,
+      ...(this.lastNativeToolError ? { lastToolError: this.lastNativeToolError } : {}),
       didSendViaMessagingTool: toolTelemetry.didSendViaMessagingTool,
       messagingToolSentTexts: toolTelemetry.messagingToolSentTexts,
       messagingToolSentMediaUrls: toolTelemetry.messagingToolSentMediaUrls,
@@ -685,7 +709,17 @@ export class CodexAppServerEventProjector {
   private handleOutputDelta(params: JsonObject, toolName: string): void {
     const itemId = readString(params, "itemId");
     const delta = readString(params, "delta");
-    if (!itemId || !delta || !this.shouldEmitToolOutput()) {
+    if (!itemId || !delta) {
+      return;
+    }
+    appendToolOutputDeltaText(this.toolResultOutputTextByItem, itemId, delta);
+    if (!this.shouldEmitToolOutput()) {
+      return;
+    }
+    if (
+      this.transcriptToolProgressSuppressedIds.has(itemId) ||
+      !shouldEmitTranscriptToolProgress(toolName, this.toolTranscriptArgumentsById.get(itemId))
+    ) {
       return;
     }
     const state = this.toolResultOutputDeltaState.get(itemId) ?? {
@@ -873,11 +907,20 @@ export class CodexAppServerEventProjector {
     if (!name) {
       return;
     }
-    const meta = itemMeta(item, this.toolProgressDetailMode());
-    const args = params.phase === "start" ? itemToolArgs(item) : undefined;
     const status = params.phase === "result" ? itemStatus(item) : "running";
+    const args = itemToolArgs(item);
+    const meta = itemMeta(item, this.toolProgressDetailMode());
     this.recordToolTrajectoryEvent({ phase: params.phase, item, name, args, status });
     this.emitDiagnosticToolExecutionEvent({ phase: params.phase, item, name, status });
+    if (params.phase === "result") {
+      this.recordNativeToolError({ item, name, meta, status });
+    }
+    if (!shouldEmitTranscriptToolProgress(name, args)) {
+      if (params.phase === "result") {
+        this.emitAfterToolCallObservation(item);
+      }
+      return;
+    }
     this.emitAgentEvent({
       stream: "tool",
       data: {
@@ -886,7 +929,7 @@ export class CodexAppServerEventProjector {
         itemId: item.id,
         toolCallId: item.id,
         ...(meta ? { meta } : {}),
-        ...(args ? { args } : {}),
+        ...(params.phase === "start" && args ? { args } : {}),
         ...(params.phase === "result"
           ? {
               status,
@@ -899,6 +942,41 @@ export class CodexAppServerEventProjector {
     if (params.phase === "result") {
       this.emitAfterToolCallObservation(item);
     }
+  }
+
+  private recordNativeToolError(params: {
+    item: CodexThreadItem;
+    name: string;
+    meta?: string;
+    status: ReturnType<typeof itemStatus>;
+  }): void {
+    if (!isNonSuccessItemStatus(params.status)) {
+      if (!this.lastNativeToolError) {
+        return;
+      }
+      if (!this.lastNativeToolError.mutatingAction) {
+        this.lastNativeToolError = undefined;
+        return;
+      }
+      const actionFingerprint = nativeToolActionFingerprint(params.item);
+      if (
+        this.lastNativeToolError.actionFingerprint &&
+        actionFingerprint &&
+        this.lastNativeToolError.actionFingerprint === actionFingerprint
+      ) {
+        this.lastNativeToolError = undefined;
+      }
+      return;
+    }
+    const error = itemToolError(params.item, params.status, this.toolResultOutputTextByItem);
+    const actionFingerprint = nativeToolActionFingerprint(params.item);
+    this.lastNativeToolError = {
+      toolName: params.name,
+      ...(params.meta ? { meta: params.meta } : {}),
+      ...(error ? { error } : {}),
+      ...(isMutatingNativeToolItem(params.item) ? { mutatingAction: true } : {}),
+      ...(actionFingerprint ? { actionFingerprint } : {}),
+    };
   }
 
   private recordToolTrajectoryEvent(params: {
@@ -920,7 +998,7 @@ export class CodexAppServerEventProjector {
       return;
     }
     const toolResult = itemToolResult(params.item).result;
-    const output = itemOutputText(params.item);
+    const output = itemOutputText(params.item, this.toolResultOutputTextByItem);
     this.options.trajectoryRecorder?.recordEvent("tool.result", {
       threadId: this.threadId,
       turnId: this.turnId,
@@ -996,7 +1074,7 @@ export class CodexAppServerEventProjector {
     }
     this.afterToolCallObservedItemIds.add(item.id);
     const result = itemToolResult(item).result;
-    const error = itemToolError(item, status);
+    const error = itemToolError(item, status, this.toolResultOutputTextByItem);
     const startedAt =
       typeof item.durationMs === "number" ? Date.now() - Math.max(0, item.durationMs) : undefined;
     const hookParams = {
@@ -1041,6 +1119,9 @@ export class CodexAppServerEventProjector {
     if (!toolName) {
       return;
     }
+    if (!shouldEmitTranscriptToolProgress(toolName, itemToolArgs(item))) {
+      return;
+    }
     this.toolResultSummaryItemIds.add(itemId);
     const meta = itemMeta(item, this.toolProgressDetailMode());
     this.emitToolResultMessage({
@@ -1061,8 +1142,11 @@ export class CodexAppServerEventProjector {
       return;
     }
     const toolName = itemName(item);
-    const output = itemOutputText(item);
+    const output = itemOutputText(item, this.toolResultOutputTextByItem);
     if (!toolName || !output) {
+      return;
+    }
+    if (!shouldEmitTranscriptToolProgress(toolName, itemToolArgs(item))) {
       return;
     }
     this.emitToolResultMessage({
@@ -1151,7 +1235,7 @@ export class CodexAppServerEventProjector {
     this.recordToolTranscriptResult({
       id: item.id,
       name,
-      text: itemTranscriptResultText(item),
+      text: itemTranscriptResultText(item, this.toolResultOutputTextByItem),
       isError: isNonSuccessItemStatus(itemStatus(item)),
     });
   }
@@ -1161,6 +1245,13 @@ export class CodexAppServerEventProjector {
       return;
     }
     this.toolTranscriptCallIds.add(params.id);
+    this.toolTranscriptArgumentsById.set(params.id, params.arguments);
+    if (!shouldEmitTranscriptToolProgress(params.name, params.arguments)) {
+      this.transcriptToolProgressSuppressedIds.add(params.id);
+    } else {
+      this.transcriptToolProgressSuppressedIds.delete(params.id);
+    }
+    this.emitTranscriptToolCallProgress(params);
     this.toolTranscriptMessages.push(
       attachCodexMirrorIdentity(
         this.createToolCallMessage(params),
@@ -1174,12 +1265,73 @@ export class CodexAppServerEventProjector {
       return;
     }
     this.toolTranscriptResultIds.add(params.id);
+    this.emitTranscriptToolResultProgress(params);
     this.toolTranscriptMessages.push(
       attachCodexMirrorIdentity(
         this.createToolResultMessage(params),
         `${this.turnId}:tool:${params.id}:result`,
       ),
     );
+  }
+
+  private emitTranscriptToolCallProgress(params: ToolTranscriptCallInput): void {
+    if (!shouldEmitTranscriptToolProgress(params.name, params.arguments)) {
+      return;
+    }
+    this.transcriptToolProgressCallIds.add(params.id);
+    const args = normalizeToolTranscriptArguments(params.arguments);
+    const meta = inferToolMetaFromArgs(params.name, args, {
+      detailMode: this.toolProgressDetailMode(),
+    });
+    if (
+      !this.params.onToolResult ||
+      !this.shouldEmitToolResult() ||
+      this.toolResultSummaryItemIds.has(params.id) ||
+      this.toolResultOutputStreamedItemIds.has(params.id)
+    ) {
+      return;
+    }
+    this.toolResultSummaryItemIds.add(params.id);
+    this.emitToolResultMessage({
+      itemId: params.id,
+      text: formatToolSummary(params.name, meta),
+    });
+  }
+
+  private emitTranscriptToolResultProgress(params: ToolTranscriptResultInput): void {
+    if (
+      this.transcriptToolProgressSuppressedIds.has(params.id) ||
+      !shouldEmitTranscriptToolProgress(
+        params.name,
+        this.toolTranscriptArgumentsById.get(params.id),
+      )
+    ) {
+      return;
+    }
+    if (!this.transcriptToolProgressCallIds.has(params.id)) {
+      this.emitTranscriptToolCallProgress({
+        id: params.id,
+        name: params.name,
+        arguments: {},
+      });
+    }
+    if (
+      !this.params.onToolResult ||
+      !this.shouldEmitToolOutput() ||
+      this.toolResultOutputItemIds.has(params.id) ||
+      this.toolResultOutputStreamedItemIds.has(params.id)
+    ) {
+      return;
+    }
+    const text = params.text?.trim();
+    if (!text) {
+      return;
+    }
+    this.emitToolResultMessage({
+      itemId: params.id,
+      text: formatToolOutput(params.name, undefined, text),
+      finalOutput: true,
+    });
   }
 
   private formatCodexErrorMessage(params: JsonObject): string | undefined {
@@ -1597,6 +1749,27 @@ function shouldSynthesizeToolProgressForItem(item: CodexThreadItem): boolean {
   }
 }
 
+function isMutatingNativeToolItem(item: CodexThreadItem): boolean {
+  return item.type === "commandExecution" || item.type === "fileChange";
+}
+
+function nativeToolActionFingerprint(item: CodexThreadItem): string | undefined {
+  if (item.type === "commandExecution" && typeof item.command === "string") {
+    return JSON.stringify({
+      type: item.type,
+      command: item.command,
+      cwd: typeof item.cwd === "string" ? item.cwd : "",
+    });
+  }
+  if (item.type === "fileChange") {
+    return JSON.stringify({
+      type: item.type,
+      changes: itemFileChanges(item),
+    });
+  }
+  return undefined;
+}
+
 function isNativePostToolUseRelayItem(item: CodexThreadItem): boolean {
   switch (item.type) {
     case "commandExecution":
@@ -1682,6 +1855,7 @@ function itemFileChanges(item: CodexThreadItem): Array<{ path: string; kind: str
 function itemToolError(
   item: CodexThreadItem,
   status: ReturnType<typeof itemStatus>,
+  outputTextByItem?: ReadonlyMap<string, string>,
 ): string | undefined {
   if (status === "blocked") {
     return "codex native tool blocked";
@@ -1689,7 +1863,7 @@ function itemToolError(
   if (status !== "failed") {
     return undefined;
   }
-  return itemOutputText(item) ?? "codex native tool failed";
+  return itemOutputText(item, outputTextByItem) ?? "codex native tool failed";
 }
 
 function itemMeta(
@@ -1716,9 +1890,12 @@ function itemMeta(
   return undefined;
 }
 
-function itemOutputText(item: CodexThreadItem): string | undefined {
+function itemOutputText(
+  item: CodexThreadItem,
+  outputTextByItem?: ReadonlyMap<string, string>,
+): string | undefined {
   if (item.type === "commandExecution") {
-    return item.aggregatedOutput?.trim() || undefined;
+    return item.aggregatedOutput?.trim() || outputTextByItem?.get(item.id)?.trim() || undefined;
   }
   if (item.type === "dynamicToolCall") {
     return collectDynamicToolContentText(item.contentItems).trim() || undefined;
@@ -1732,8 +1909,11 @@ function itemOutputText(item: CodexThreadItem): string | undefined {
   return undefined;
 }
 
-function itemTranscriptResultText(item: CodexThreadItem): string | undefined {
-  const output = itemOutputText(item);
+function itemTranscriptResultText(
+  item: CodexThreadItem,
+  outputTextByItem?: ReadonlyMap<string, string>,
+): string | undefined {
+  const output = itemOutputText(item, outputTextByItem);
   if (output) {
     return output;
   }
@@ -1741,11 +1921,50 @@ function itemTranscriptResultText(item: CodexThreadItem): string | undefined {
   return result ? stringifyJsonValue(result) : itemStatus(item);
 }
 
+function appendToolOutputDeltaText(
+  outputTextByItem: Map<string, string>,
+  itemId: string,
+  delta: string,
+): void {
+  const current = outputTextByItem.get(itemId) ?? "";
+  if (current.length >= TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS) {
+    return;
+  }
+  const remaining = TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS - current.length;
+  const next = current + (delta.length > remaining ? delta.slice(0, remaining) : delta);
+  outputTextByItem.set(itemId, next);
+}
+
 function normalizeToolTranscriptArguments(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return {};
   }
   return value as Record<string, unknown>;
+}
+
+function isActivityLogCommandProgress(toolName: string, args: unknown): boolean {
+  if (toolName !== "bash" && toolName !== "exec" && toolName !== "shell") {
+    return false;
+  }
+  const command = readToolCommandText(args);
+  return Boolean(command && command.includes("log_activity.sh"));
+}
+
+function readToolCommandText(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  for (const key of ["command", "cmd", "shellCommand", "script"]) {
+    const text = record[key];
+    if (typeof text === "string" && text) {
+      return text;
+    }
+  }
+  return undefined;
 }
 
 function collectDynamicToolContentText(contentItems: CodexThreadItem["contentItems"]): string {

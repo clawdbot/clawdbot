@@ -24,6 +24,7 @@ type EnvApiKeyLookupOptions = {
   aliasMap?: Readonly<Record<string, string>>;
   candidateMap?: Readonly<Record<string, readonly string[]>>;
   authEvidenceMap?: Readonly<Record<string, readonly ProviderAuthEvidence[]>>;
+  skipSetupProviderFallback?: boolean;
 };
 
 function expandAuthEvidencePath(rawPath: string, env: NodeJS.ProcessEnv): string | undefined {
@@ -141,6 +142,9 @@ export function resolveEnvApiKey(
   }
 
   if (Array.isArray(candidates)) {
+    return null;
+  }
+  if (options.skipSetupProviderFallback === true) {
     return null;
   }
 

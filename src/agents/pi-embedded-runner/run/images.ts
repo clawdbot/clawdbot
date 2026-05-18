@@ -149,6 +149,61 @@ export function mergePromptAttachmentImages(params: {
   return promptImages;
 }
 
+function createRefCountMap(refs: DetectedImageRef[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const ref of refs) {
+    const key = `${ref.type}\0${normalizeRefForDedupe(ref.resolved)}`;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return counts;
+}
+
+function consumeRefCount(counts: Map<string, number>, ref: DetectedImageRef): boolean {
+  const key = `${ref.type}\0${normalizeRefForDedupe(ref.resolved)}`;
+  const count = counts.get(key) ?? 0;
+  if (count <= 0) {
+    return false;
+  }
+  if (count === 1) {
+    counts.delete(key);
+  } else {
+    counts.set(key, count - 1);
+  }
+  return true;
+}
+
+function extractLeadingAttachmentPrompt(prompt: string): string {
+  const lines = prompt.split(/\r?\n/);
+  const attachmentLines: string[] = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      break;
+    }
+    if (/^\[media attached:\s*\d+\s+files?\]$/i.test(trimmed)) {
+      attachmentLines.push(trimmed);
+      continue;
+    }
+    if (/^\[media attached(?:\s+\d+\/\d+)?:\s*[^\]]+\]$/i.test(trimmed)) {
+      attachmentLines.push(trimmed);
+      continue;
+    }
+    break;
+  }
+  return attachmentLines.join("\n");
+}
+
+function extractLeadingInlineAttachmentRefs(prompt: string, count: number): DetectedImageRef[] {
+  if (count <= 0) {
+    return [];
+  }
+  const attachmentPrompt = extractLeadingAttachmentPrompt(prompt);
+  if (!attachmentPrompt) {
+    return [];
+  }
+  return detectImageReferences(attachmentPrompt).slice(0, count);
+}
+
 function extractTrailingAttachmentMediaUris(prompt: string, count: number): string[] {
   if (count <= 0) {
     return [];
@@ -179,23 +234,31 @@ export function splitPromptAndAttachmentRefs(params: {
   prompt: string;
   refs: DetectedImageRef[];
   imageOrder?: PromptImageOrderEntry[];
+  existingImageCount?: number;
 }): {
   promptRefs: DetectedImageRef[];
   attachmentRefs: DetectedImageRef[];
 } {
+  const existingImageCount = params.existingImageCount ?? 0;
+  const inlineOrderCount = params.imageOrder?.filter((entry) => entry === "inline").length;
+  const inlineAttachmentRefCount = Math.min(
+    existingImageCount,
+    inlineOrderCount ?? existingImageCount,
+  );
+  const inlineAttachmentRefs = createRefCountMap(
+    extractLeadingInlineAttachmentRefs(params.prompt, inlineAttachmentRefCount),
+  );
   const offloadedCount = params.imageOrder?.filter((entry) => entry === "offloaded").length ?? 0;
-  if (offloadedCount === 0) {
-    return { promptRefs: params.refs, attachmentRefs: [] };
-  }
-
-  const attachmentUris = new Set(extractTrailingAttachmentMediaUris(params.prompt, offloadedCount));
-  if (attachmentUris.size === 0) {
-    return { promptRefs: params.refs, attachmentRefs: [] };
-  }
+  const attachmentUris = new Set(
+    offloadedCount > 0 ? extractTrailingAttachmentMediaUris(params.prompt, offloadedCount) : [],
+  );
 
   const promptRefs: DetectedImageRef[] = [];
   const attachmentRefs: DetectedImageRef[] = [];
   for (const ref of params.refs) {
+    if (consumeRefCount(inlineAttachmentRefs, ref)) {
+      continue;
+    }
     if (ref.type === "media-uri" && attachmentUris.has(ref.resolved)) {
       attachmentRefs.push(ref);
       continue;
@@ -496,6 +559,7 @@ export async function detectAndLoadPromptImages(params: {
     prompt: params.prompt,
     refs: allRefs,
     imageOrder: params.imageOrder,
+    existingImageCount: params.existingImages?.length,
   });
   const promptRefImages: ImageContent[] = [];
   const offloadedImages: Array<ImageContent | null> = [];

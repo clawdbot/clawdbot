@@ -3,11 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
 import { resolveModelAgentRuntimeMetadata } from "../../agents/agent-runtime-metadata.js";
-import {
-  listAgentIds,
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
-} from "../../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   abortEmbeddedPiRun,
   isEmbeddedPiRunActive,
@@ -23,6 +19,7 @@ import {
   resolveMainSessionKey,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
+  listConfiguredSessionStoreAgentIds,
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
@@ -130,14 +127,27 @@ function filterSessionStoreToConfiguredAgents(
   cfg: OpenClawConfig,
   store: Record<string, SessionEntry>,
 ): Record<string, SessionEntry> {
-  const configuredAgentIds = new Set(listAgentIds(cfg).map((agentId) => normalizeAgentId(agentId)));
+  const configuredAgentIds = new Set(listConfiguredSessionStoreAgentIds(cfg));
+  const isConfiguredSessionKey = (key: string | undefined) => {
+    const normalizedKey = normalizeOptionalString(key);
+    if (!normalizedKey) {
+      return false;
+    }
+    const canonicalKey = resolveSessionStoreKey({ cfg, sessionKey: normalizedKey });
+    const agentId = resolveSessionStoreAgentId(cfg, canonicalKey);
+    return configuredAgentIds.has(normalizeAgentId(agentId));
+  };
   return Object.fromEntries(
-    Object.entries(store).filter(([key]) => {
+    Object.entries(store).filter(([key, entry]) => {
       if (key === "global" || key === "unknown") {
         return true;
       }
-      const parsed = parseAgentSessionKey(key);
-      return parsed ? configuredAgentIds.has(normalizeAgentId(parsed.agentId)) : false;
+      if (isConfiguredSessionKey(key)) {
+        return true;
+      }
+      return (
+        isConfiguredSessionKey(entry?.spawnedBy) || isConfiguredSessionKey(entry?.parentSessionKey)
+      );
     }),
   );
 }
@@ -889,7 +899,6 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           () =>
             loadCombinedSessionStoreForGateway(cfg, {
               agentId: p.agentId,
-              configuredAgentsOnly,
             }),
           {
             config: cfg,

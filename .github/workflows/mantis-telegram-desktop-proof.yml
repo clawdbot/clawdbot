@@ -3,6 +3,8 @@ name: Mantis Telegram Desktop Proof
 on:
   issue_comment:
     types: [created]
+  pull_request_target: # zizmor: ignore[dangerous-triggers] maintainer-owned Mantis label trigger; trusted base workflow validates refs before checkout/use
+    types: [labeled]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -23,6 +25,14 @@ on:
           - hetzner
       crabbox_lease_id:
         description: Optional existing Crabbox desktop lease id or slug to reuse
+        required: false
+        type: string
+      publish_artifact_name:
+        description: Optional existing proof artifact name to publish without recapturing
+        required: false
+        type: string
+      publish_run_id:
+        description: Workflow run id that owns publish_artifact_name; required with publish_artifact_name
         required: false
         type: string
 
@@ -48,6 +58,11 @@ jobs:
       ${{
         github.event_name == 'workflow_dispatch' ||
         (
+          github.event_name == 'pull_request_target' &&
+          github.event.action == 'labeled' &&
+          github.event.label.name == 'mantis: telegram-visible-proof'
+        ) ||
+        (
           github.event_name == 'issue_comment' &&
           github.event.issue.pull_request &&
           contains(github.event.issue.labels.*.name, 'mantis: telegram-visible-proof') &&
@@ -66,6 +81,12 @@ jobs:
         uses: actions/github-script@v8
         with:
           script: |
+            if (context.eventName === "pull_request_target") {
+              core.info(`Accepted Mantis label trigger from ${context.actor}.`);
+              core.setOutput("authorized", "true");
+              return;
+            }
+
             const allowed = new Set(["admin", "maintain", "write"]);
             const { owner, repo } = context.repo;
             const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
@@ -95,8 +116,11 @@ jobs:
       crabbox_provider: ${{ steps.resolve.outputs.crabbox_provider }}
       instructions: ${{ steps.resolve.outputs.instructions }}
       lease_id: ${{ steps.resolve.outputs.lease_id }}
+      publish_artifact_name: ${{ steps.resolve.outputs.publish_artifact_name }}
+      publish_run_id: ${{ steps.resolve.outputs.publish_run_id }}
       pr_number: ${{ steps.resolve.outputs.pr_number }}
       request_source: ${{ steps.resolve.outputs.request_source }}
+      should_run: ${{ steps.resolve.outputs.should_run }}
     steps:
       - name: Resolve refs and target PR
         id: resolve
@@ -112,10 +136,47 @@ jobs:
 
             const inputs = context.payload.inputs ?? {};
             const prNumber =
-              eventName === "workflow_dispatch" ? inputs.pr_number : String(context.payload.issue?.number ?? "");
+              eventName === "workflow_dispatch"
+                ? inputs.pr_number
+                : eventName === "pull_request_target"
+                  ? String(context.payload.pull_request?.number ?? "")
+                  : String(context.payload.issue?.number ?? "");
             if (!prNumber) {
               core.setFailed("Mantis Telegram desktop proof requires a pull request.");
               return;
+            }
+
+            const body =
+              eventName === "workflow_dispatch"
+                ? inputs.instructions || ""
+                : eventName === "issue_comment"
+                  ? context.payload.comment?.body || ""
+                  : "";
+            if (eventName === "issue_comment") {
+              const normalized = body.toLowerCase();
+              const requestedDesktopProof =
+                (normalized.includes("@openclaw-mantis") || normalized.includes("/openclaw-mantis")) &&
+                (normalized.includes("desktop proof") ||
+                  normalized.includes("desktop-proof") ||
+                  normalized.includes("telegram desktop") ||
+                  normalized.includes("native telegram") ||
+                  normalized.includes("visible proof") ||
+                  normalized.includes("visible-proof") ||
+                  normalized.includes("telegram-visible-proof"));
+              if (!requestedDesktopProof) {
+                core.notice("Comment mentioned Mantis but did not request Telegram desktop proof.");
+                setOutput("should_run", "false");
+                setOutput("baseline_ref", "");
+                setOutput("candidate_ref", "");
+                setOutput("pr_number", "");
+                setOutput("instructions", "");
+                setOutput("crabbox_provider", "");
+                setOutput("lease_id", "");
+                setOutput("publish_artifact_name", "");
+                setOutput("publish_run_id", "");
+                setOutput("request_source", "unsupported_issue_comment");
+                return;
+              }
             }
 
             const { owner, repo } = context.repo;
@@ -124,19 +185,21 @@ jobs:
               repo,
               pull_number: Number(prNumber),
             });
-            const body = eventName === "workflow_dispatch" ? inputs.instructions || "" : context.payload.comment?.body || "";
             const provider = inputs.crabbox_provider || "aws";
             if (!["aws", "hetzner"].includes(provider)) {
               core.setFailed(`Unsupported Crabbox provider for Mantis Telegram desktop proof: ${provider}`);
               return;
             }
 
+            setOutput("should_run", "true");
             setOutput("baseline_ref", pr.base.sha);
             setOutput("candidate_ref", pr.head.sha);
             setOutput("pr_number", String(pr.number));
             setOutput("instructions", body);
             setOutput("crabbox_provider", provider);
             setOutput("lease_id", inputs.crabbox_lease_id || "");
+            setOutput("publish_artifact_name", inputs.publish_artifact_name || "");
+            setOutput("publish_run_id", inputs.publish_run_id || "");
             setOutput("request_source", eventName);
 
             if (eventName === "issue_comment") {
@@ -151,6 +214,7 @@ jobs:
   validate_refs:
     name: Validate selected refs
     needs: resolve_request
+    if: needs.resolve_request.outputs.should_run == 'true' && needs.resolve_request.outputs.publish_artifact_name == ''
     runs-on: ubuntu-24.04
     outputs:
       baseline_revision: ${{ steps.validate.outputs.baseline_revision }}
@@ -229,6 +293,7 @@ jobs:
   run_telegram_desktop_proof:
     name: Run agentic native Telegram proof
     needs: [resolve_request, validate_refs]
+    if: needs.resolve_request.outputs.should_run == 'true' && needs.resolve_request.outputs.publish_artifact_name == ''
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 360
     environment: qa-live-shared
@@ -393,6 +458,7 @@ jobs:
           codex-home: /tmp/mantis-codex-home-${{ github.run_id }}
           safety-strategy: unprivileged-user
           codex-user: codex
+          allow-bot-users: clawsweeper[bot]
 
       - name: Inspect Mantis evidence manifest
         id: inspect
@@ -473,3 +539,133 @@ jobs:
         run: |
           echo "Mantis Telegram desktop proof failed: comparison=${COMPARISON_STATUS:-unset}." >&2
           exit 1
+
+  publish_existing_telegram_desktop_proof:
+    name: Publish existing native Telegram proof
+    needs: resolve_request
+    if: needs.resolve_request.outputs.should_run == 'true' && needs.resolve_request.outputs.publish_artifact_name != ''
+    runs-on: ubuntu-24.04
+    environment: qa-live-shared
+    steps:
+      - name: Checkout harness ref
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "true"
+
+      - name: Download existing proof artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLISH_ARTIFACT_NAME: ${{ needs.resolve_request.outputs.publish_artifact_name }}
+          PUBLISH_RUN_ID: ${{ needs.resolve_request.outputs.publish_run_id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${PUBLISH_RUN_ID:-}" ]]; then
+            echo "publish_run_id is required when publish_artifact_name is set." >&2
+            exit 1
+          fi
+          run_id="$PUBLISH_RUN_ID"
+          gh run download "$run_id" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "$PUBLISH_ARTIFACT_NAME" \
+            --dir "$MANTIS_OUTPUT_DIR"
+
+          artifacts_json="$(
+            gh api \
+              -H "Accept: application/vnd.github+json" \
+              "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts"
+          )"
+          artifact_id="$(jq -r --arg name "$PUBLISH_ARTIFACT_NAME" '.artifacts[] | select(.name == $name) | .id' <<<"$artifacts_json" | head -n 1)"
+          if [[ -z "$artifact_id" || "$artifact_id" == "null" ]]; then
+            echo "Could not resolve artifact id for '${PUBLISH_ARTIFACT_NAME}' in run ${run_id}." >&2
+            exit 1
+          fi
+          echo "PUBLISH_RUN_ID=${run_id}" >> "$GITHUB_ENV"
+          echo "PUBLISH_ARTIFACT_URL=https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts/${artifact_id}" >> "$GITHUB_ENV"
+
+      - name: Create Mantis GitHub App token
+        id: mantis_app_token
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.MANTIS_GITHUB_APP_ID }}
+          private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-issues: write
+          permission-pull-requests: write
+
+      - name: Comment PR with inline QA evidence
+        env:
+          GH_TOKEN: ${{ steps.mantis_app_token.outputs.token }}
+          MANTIS_ARTIFACT_R2_ACCESS_KEY_ID: ${{ secrets.MANTIS_ARTIFACT_R2_ACCESS_KEY_ID }}
+          MANTIS_ARTIFACT_R2_BUCKET: openclaw-crabbox-artifacts
+          MANTIS_ARTIFACT_R2_ENDPOINT: ${{ vars.MANTIS_ARTIFACT_R2_ENDPOINT }}
+          MANTIS_ARTIFACT_R2_PUBLIC_BASE_URL: https://artifacts.openclaw.ai
+          MANTIS_ARTIFACT_R2_REGION: auto
+          MANTIS_ARTIFACT_R2_SECRET_ACCESS_KEY: ${{ secrets.MANTIS_ARTIFACT_R2_SECRET_ACCESS_KEY }}
+          REQUEST_SOURCE: ${{ needs.resolve_request.outputs.request_source }}
+          TARGET_PR: ${{ needs.resolve_request.outputs.pr_number }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$MANTIS_OUTPUT_DIR"
+          if [[ ! -f "$root/mantis-evidence.json" ]]; then
+            echo "Downloaded artifact does not contain ${root}/mantis-evidence.json." >&2
+            exit 1
+          fi
+          node scripts/mantis/publish-pr-evidence.mjs \
+            --manifest "$root/mantis-evidence.json" \
+            --target-pr "$TARGET_PR" \
+            --artifact-root "mantis/telegram-desktop/pr-${TARGET_PR}/published-${PUBLISH_RUN_ID}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --marker "<!-- mantis-telegram-desktop-proof -->" \
+            --artifact-url "$PUBLISH_ARTIFACT_URL" \
+            --run-url "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${PUBLISH_RUN_ID}" \
+            --request-source "$REQUEST_SOURCE"
+
+  clear_issue_comment_reaction:
+    name: Clear Mantis command reaction
+    needs: [resolve_request, validate_refs, run_telegram_desktop_proof]
+    if: ${{ always() && github.event_name == 'issue_comment' && needs.resolve_request.outputs.request_source == 'issue_comment' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+    steps:
+      - name: Remove workflow eyes reaction
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const commentId = context.payload.comment?.id;
+            if (!commentId) {
+              core.info("No issue comment id found; skipping reaction cleanup.");
+              return;
+            }
+
+            const reactions = await github.paginate(github.rest.reactions.listForIssueComment, {
+              owner,
+              repo,
+              comment_id: commentId,
+              per_page: 100,
+            });
+            const eyes = reactions.filter(
+              (reaction) => reaction.content === "eyes" && reaction.user?.login === "github-actions[bot]",
+            );
+            for (const reaction of eyes) {
+              await github.rest.reactions.deleteForIssueComment({
+                owner,
+                repo,
+                comment_id: commentId,
+                reaction_id: reaction.id,
+              });
+              core.info(`Removed eyes reaction ${reaction.id} from comment ${commentId}.`);
+            }
+            if (eyes.length === 0) {
+              core.info(`No workflow eyes reaction found on comment ${commentId}.`);
+            }

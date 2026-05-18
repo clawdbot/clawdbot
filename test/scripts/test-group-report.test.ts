@@ -10,6 +10,7 @@ import {
 import {
   parseTestGroupReportArgs,
   resolveReportArtifactDirs,
+  resolveRunPlans,
 } from "../../scripts/test-group-report.mjs";
 
 describe("scripts/test-group-report grouping", () => {
@@ -162,6 +163,58 @@ describe("scripts/test-group-report comparison", () => {
       "Top group regressions",
     );
   });
+
+  it("keeps sharded run labels distinct in comparisons", () => {
+    const comparison = buildGroupedTestComparison({
+      before: {
+        groupBy: "area",
+        totals: { durationMs: 0, fileCount: 0, testCount: 0 },
+        groups: [],
+        configs: [],
+        topFiles: [],
+        runs: [
+          {
+            config: "test/vitest/vitest.gateway-server.config.ts",
+            label: "gateway-server-1",
+            elapsedMs: 100,
+            status: 0,
+          },
+          {
+            config: "test/vitest/vitest.gateway-server.config.ts",
+            label: "gateway-server-2",
+            elapsedMs: 200,
+            status: 0,
+          },
+        ],
+      },
+      after: {
+        groupBy: "area",
+        totals: { durationMs: 0, fileCount: 0, testCount: 0 },
+        groups: [],
+        configs: [],
+        topFiles: [],
+        runs: [
+          {
+            config: "test/vitest/vitest.gateway-server.config.ts",
+            label: "gateway-server-1",
+            elapsedMs: 110,
+            status: 0,
+          },
+          {
+            config: "test/vitest/vitest.gateway-server.config.ts",
+            label: "gateway-server-2",
+            elapsedMs: 220,
+            status: 0,
+          },
+        ],
+      },
+    });
+
+    expect(comparison.runs.map((run) => run.key).toSorted()).toEqual([
+      "gateway-server-1",
+      "gateway-server-2",
+    ]);
+  });
 });
 
 describe("scripts/test-group-report arg parsing", () => {
@@ -217,6 +270,34 @@ describe("scripts/test-group-report arg parsing", () => {
       topFiles: 3,
       vitestArgs: [],
     });
+  });
+});
+
+describe("scripts/test-group-report run plans", () => {
+  it("preserves full-suite shard file args and unique report labels", () => {
+    const previousParallel = process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
+    process.env.OPENCLAW_TEST_PROJECTS_PARALLEL = "6";
+    try {
+      const plans = resolveRunPlans(parseTestGroupReportArgs(["--full-suite"]));
+      const gatewayServerPlans = plans.filter(
+        (plan) => plan.config === "test/vitest/vitest.gateway-server.config.ts",
+      );
+
+      expect(gatewayServerPlans.length).toBeGreaterThan(1);
+      expect(new Set(gatewayServerPlans.map((plan) => plan.label)).size).toBe(
+        gatewayServerPlans.length,
+      );
+      expect(gatewayServerPlans.every((plan) => plan.forwardedArgs.length > 0)).toBe(true);
+      expect(gatewayServerPlans.flatMap((plan) => plan.forwardedArgs)).toContain(
+        "src/gateway/server.node-pairing-authz.test.ts",
+      );
+    } finally {
+      if (previousParallel === undefined) {
+        delete process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
+      } else {
+        process.env.OPENCLAW_TEST_PROJECTS_PARALLEL = previousParallel;
+      }
+    }
   });
 });
 

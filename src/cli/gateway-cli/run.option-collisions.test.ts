@@ -199,11 +199,11 @@ vi.mock("./run-loop.js", () => ({
 }));
 
 describe("gateway run option collisions", () => {
-  let addGatewayRunCommand: typeof import("./run.js").addGatewayRunCommand;
+  let addGatewayRunCommand: typeof import("./run-command.js").addGatewayRunCommand;
   let sharedProgram: Command;
 
   beforeAll(async () => {
-    ({ addGatewayRunCommand } = await import("./run.js"));
+    ({ addGatewayRunCommand } = await import("./run-command.js"));
     sharedProgram = new Command();
     sharedProgram.exitOverride();
     const gateway = addGatewayRunCommand(sharedProgram.command("gateway"));

@@ -147,6 +147,21 @@ export function createSubagentRegistryLifecycleController(params: {
       : `delivery path ${delivery.path} did not complete`;
   };
 
+  const recordAnnounceDeliveryResult = (
+    entry: SubagentRunRecord,
+    delivery: SubagentAnnounceDeliveryResult,
+  ) => {
+    if (typeof delivery.enqueuedAt === "number") {
+      entry.completionEnqueuedAt ??= delivery.enqueuedAt;
+    }
+    if (delivery.delivered) {
+      const deliveredAt =
+        typeof delivery.deliveredAt === "number" ? delivery.deliveredAt : Date.now();
+      entry.completionDeliveredAt = deliveredAt;
+      entry.lastAnnounceDropReason = undefined;
+    }
+  };
+
   const safeSetSubagentTaskDeliveryStatus = (args: {
     runId: string;
     childSessionKey: string;
@@ -588,7 +603,9 @@ export function createSubagentRegistryLifecycleController(params: {
     }
     if (didAnnounce) {
       if (!options?.skipAnnounce) {
-        entry.completionAnnouncedAt = Date.now();
+        const deliveredAt = entry.completionDeliveredAt ?? Date.now();
+        entry.completionDeliveredAt = deliveredAt;
+        entry.completionAnnouncedAt = deliveredAt;
         params.persist();
       }
       clearPendingFinalDelivery(entry);
@@ -602,6 +619,7 @@ export function createSubagentRegistryLifecycleController(params: {
         });
       }
       entry.lastAnnounceDeliveryError = undefined;
+      entry.lastAnnounceDropReason = undefined;
       entry.wakeOnDescendantSettle = undefined;
       entry.fallbackFrozenResultText = undefined;
       entry.fallbackFrozenResultCapturedAt = undefined;
@@ -792,6 +810,7 @@ export function createSubagentRegistryLifecycleController(params: {
         expectsCompletionMessage: pendingPayload.expectsCompletionMessage,
         wakeOnDescendantSettle: pendingPayload.wakeOnDescendantSettle === true,
         onDeliveryResult: (delivery) => {
+          recordAnnounceDeliveryResult(entry, delivery);
           if (delivery.delivered) {
             if (entry.lastAnnounceDeliveryError !== undefined) {
               entry.lastAnnounceDeliveryError = undefined;
@@ -799,6 +818,9 @@ export function createSubagentRegistryLifecycleController(params: {
             }
             latestDeliveryError = undefined;
             return;
+          }
+          if (delivery.path === "none") {
+            entry.lastAnnounceDropReason = "sink_unavailable";
           }
           latestDeliveryError = formatAnnounceDeliveryError(delivery);
           if (entry.lastAnnounceDeliveryError !== latestDeliveryError) {

@@ -26,6 +26,7 @@ export async function startGatewayDiscovery(params: {
   machineDisplayName: string;
   port: number;
   gatewayTls?: { enabled: boolean; fingerprintSha256?: string };
+  gatewayDirectReachable?: boolean;
   canvasPort?: number;
   wideAreaDiscoveryEnabled: boolean;
   wideAreaDiscoveryDomain?: string | null;
@@ -69,6 +70,7 @@ export async function startGatewayDiscovery(params: {
           gatewayPort: params.port,
           gatewayTlsEnabled: params.gatewayTls?.enabled ?? false,
           gatewayTlsFingerprintSha256: params.gatewayTls?.fingerprintSha256,
+          gatewayDirectReachable: params.gatewayDirectReachable === true,
           canvasPort: params.canvasPort,
           sshPort,
           tailnetDns,
@@ -167,6 +169,7 @@ export async function startGatewayDiscovery(params: {
           tailnetIPv6: tailnetIPv6 ?? undefined,
           gatewayTlsEnabled: params.gatewayTls?.enabled ?? false,
           gatewayTlsFingerprintSha256: params.gatewayTls?.fingerprintSha256,
+          gatewayDirectReachable: params.gatewayDirectReachable === true,
           tailnetDns,
           sshPort,
           cliPath,

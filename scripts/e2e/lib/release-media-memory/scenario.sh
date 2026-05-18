@@ -38,13 +38,22 @@ dump_debug_logs() {
   openclaw_e2e_dump_logs \
     /tmp/openclaw-release-media-memory-install.log \
     /tmp/openclaw-release-media-memory-onboard.log \
+    /tmp/openclaw-release-media-memory-env.log \
+    /tmp/openclaw-release-media-memory-config.json \
+    /tmp/openclaw-release-media-memory-package-files.log \
+    /tmp/openclaw-release-media-memory-plugins.json \
+    /tmp/openclaw-release-media-memory-plugins.stderr.log \
     /tmp/openclaw-release-media-memory-openai.log \
     "$MOCK_REQUEST_LOG" \
     /tmp/openclaw-release-media-memory-describe.json \
+    /tmp/openclaw-release-media-memory-describe.stderr.log \
     /tmp/openclaw-release-media-memory-generate.json \
+    /tmp/openclaw-release-media-memory-generate.stderr.log \
     /tmp/openclaw-release-media-memory-index.log \
     /tmp/openclaw-release-media-memory-search-before.json \
+    /tmp/openclaw-release-media-memory-search-before.stderr.log \
     /tmp/openclaw-release-media-memory-search-after.json \
+    /tmp/openclaw-release-media-memory-search-after.stderr.log \
     /tmp/openclaw-release-media-memory-gateway-1.log \
     /tmp/openclaw-release-media-memory-gateway-2.log
 }
@@ -65,6 +74,17 @@ openclaw_e2e_install_package /tmp/openclaw-release-media-memory-install.log
 command -v openclaw >/dev/null
 package_root="$(openclaw_e2e_package_root)"
 entry="$(openclaw_e2e_package_entrypoint "$package_root")"
+{
+  printf 'openclaw=%s\n' "$(command -v openclaw)"
+  printf 'package_root=%s\n' "$package_root"
+  printf 'entry=%s\n' "$entry"
+  printf 'HOME=%s\n' "$HOME"
+  printf 'OPENCLAW_HOME=%s\n' "$OPENCLAW_HOME"
+  printf 'OPENCLAW_STATE_DIR=%s\n' "$OPENCLAW_STATE_DIR"
+  printf 'OPENCLAW_CONFIG_PATH=%s\n' "$OPENCLAW_CONFIG_PATH"
+} >/tmp/openclaw-release-media-memory-env.log
+find "$package_root/dist/extensions/memory-core" -maxdepth 2 -type f -printf '%P\n' \
+  | sort >/tmp/openclaw-release-media-memory-package-files.log
 
 mock_pid="$(openclaw_e2e_start_mock_openai "$MOCK_PORT" /tmp/openclaw-release-media-memory-openai.log)"
 openclaw_e2e_wait_mock_openai "$MOCK_PORT"
@@ -82,6 +102,9 @@ openclaw onboard \
   --skip-channels \
   --skip-skills \
   --skip-health >/tmp/openclaw-release-media-memory-onboard.log 2>&1
+cp "$OPENCLAW_CONFIG_PATH" /tmp/openclaw-release-media-memory-config.json
+openclaw plugins list --json >/tmp/openclaw-release-media-memory-plugins.json \
+  2>/tmp/openclaw-release-media-memory-plugins.stderr.log || true
 node scripts/e2e/lib/release-scenarios/assertions.mjs configure-mock-openai "$MOCK_PORT"
 
 mkdir -p "$OPENCLAW_STATE_DIR/workspace/memory" /tmp/openclaw-release-media-memory
@@ -91,14 +114,14 @@ openclaw infer image describe \
   --file /tmp/openclaw-release-media-memory/input.png \
   --model openai/gpt-5.5 \
   --prompt "Describe this image and return marker $SUCCESS_MARKER" \
-  --json >/tmp/openclaw-release-media-memory-describe.json 2>&1
+  --json >/tmp/openclaw-release-media-memory-describe.json 2>/tmp/openclaw-release-media-memory-describe.stderr.log
 node scripts/e2e/lib/release-scenarios/assertions.mjs assert-image-describe /tmp/openclaw-release-media-memory-describe.json "$MOCK_REQUEST_LOG"
 
 openclaw infer image generate \
   --model openai/gpt-image-1 \
   --prompt "Generate a tiny test image for $SUCCESS_MARKER" \
   --output /tmp/openclaw-release-media-memory/generated.png \
-  --json >/tmp/openclaw-release-media-memory-generate.json 2>&1
+  --json >/tmp/openclaw-release-media-memory-generate.json 2>/tmp/openclaw-release-media-memory-generate.stderr.log
 node scripts/e2e/lib/release-scenarios/assertions.mjs assert-image-generate /tmp/openclaw-release-media-memory-generate.json "$MOCK_REQUEST_LOG"
 
 cat >"$OPENCLAW_STATE_DIR/workspace/MEMORY.md" <<EOF
@@ -108,13 +131,13 @@ cat >"$OPENCLAW_STATE_DIR/workspace/MEMORY.md" <<EOF
 EOF
 
 openclaw memory index --force >/tmp/openclaw-release-media-memory-index.log 2>&1 || true
-openclaw memory search "$MEMORY_MARKER" --json >/tmp/openclaw-release-media-memory-search-before.json 2>&1
+openclaw memory search "$MEMORY_MARKER" --json >/tmp/openclaw-release-media-memory-search-before.json 2>/tmp/openclaw-release-media-memory-search-before.stderr.log
 node scripts/e2e/lib/release-scenarios/assertions.mjs assert-memory-search /tmp/openclaw-release-media-memory-search-before.json "$MEMORY_MARKER"
 
 start_gateway /tmp/openclaw-release-media-memory-gateway-1.log
 stop_gateway
 start_gateway /tmp/openclaw-release-media-memory-gateway-2.log
-openclaw memory search "$MEMORY_MARKER" --json >/tmp/openclaw-release-media-memory-search-after.json 2>&1
+openclaw memory search "$MEMORY_MARKER" --json >/tmp/openclaw-release-media-memory-search-after.json 2>/tmp/openclaw-release-media-memory-search-after.stderr.log
 node scripts/e2e/lib/release-scenarios/assertions.mjs assert-memory-search /tmp/openclaw-release-media-memory-search-after.json "$MEMORY_MARKER"
 stop_gateway
 

@@ -30,10 +30,7 @@ import { isCliProvider } from "../model-selection.js";
 import { resolveOpenAIRuntimeProviderForPi } from "../openai-codex-routing.js";
 import { runEmbeddedPiAgent, type EmbeddedPiRunResult } from "../pi-embedded.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
-import {
-  acquireSessionWriteLock,
-  resolveSessionWriteLockAcquireTimeoutMs,
-} from "../session-write-lock.js";
+import { acquireSessionWriteLock, resolveSessionWriteLockOptions } from "../session-write-lock.js";
 import { buildWorkspaceSkillSnapshot } from "../skills.js";
 import { buildUsageWithNoCost } from "../stream-message-shared.js";
 import {
@@ -228,7 +225,7 @@ async function persistTextTurnTranscript(
   });
   const lock = await acquireSessionWriteLock({
     sessionFile,
-    timeoutMs: resolveSessionWriteLockAcquireTimeoutMs(params.config),
+    ...resolveSessionWriteLockOptions(params.config),
     allowReentrant: true,
   });
   try {

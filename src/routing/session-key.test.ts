@@ -80,6 +80,8 @@ describe("deriveSessionChatTypeFromKey", () => {
     { key: "agent:main:discord:direct:user1", expected: "direct" },
     { key: "agent:main:telegram:group:g1", expected: "group" },
     { key: "agent:main:discord:channel:c1", expected: "channel" },
+    { key: "agent:main:discord:guild-123:channel-456", expected: "channel" },
+    { key: "agent:main:whatsapp:123@g.us", expected: "group" },
     { key: "agent:main:telegram:dm:123456", expected: "direct" },
     { key: "telegram:dm:123456", expected: "direct" },
     { key: "agent:main:main", expected: "unknown" },

@@ -3,6 +3,7 @@ import {
   compareOpenClawReleaseVersions,
   formatPrereleaseResolutionError,
   isExactSemverVersion,
+  isOpenClawOrgNpmSpec,
   isOpenClawStableCorrectionVersion,
   isPrereleaseSemverVersion,
   isPrereleaseResolutionAllowed,
@@ -102,6 +103,17 @@ describe("npm registry spec parsing helpers", () => {
     },
   ])("parses %s", ({ spec, expected }) => {
     expect(parseRegistryNpmSpec(spec)).toEqual(expected);
+  });
+
+  it.each([
+    { spec: "@openclaw/voice-call", expected: true },
+    { spec: "@openclaw/voice-call@1.2.3", expected: true },
+    { spec: "@other/voice-call", expected: false },
+    { spec: "voice-call", expected: false },
+    { spec: "npm:@openclaw/voice-call", expected: false },
+    { spec: undefined, expected: false },
+  ])("detects OpenClaw-org npm specs for %s", ({ spec, expected }) => {
+    expect(isOpenClawOrgNpmSpec(spec)).toBe(expected);
   });
 
   it.each([

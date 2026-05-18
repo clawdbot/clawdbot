@@ -1,67 +1,42 @@
 ---
 name: slack
-description: Use the Slack tool to react, pin/unpin, send, edit, delete messages, or fetch Slack member info.
+description: "Slack tool actions: send/read/edit/delete messages, react, pin/unpin, list pins/reactions/emoji, member info."
 metadata: { "openclaw": { "emoji": "💬", "requires": { "config": ["channels.slack"] } } }
 ---
 
-# Slack Actions
+# Slack
 
-## Overview
+Use the `slack` tool. Reuse `channelId` and Slack timestamp message IDs from context when present.
 
-Use `slack` to react, manage pins, send/edit/delete messages, and fetch member info. The tool uses the bot token configured for OpenClaw.
+## Inputs
 
-## Inputs to collect
-
-- `channelId` and `messageId` (Slack message timestamp, e.g. `1712023032.1234`).
-- For reactions, an `emoji` (Unicode or `:name:`).
-- For message sends, a `to` target (`channel:<id>` or `user:<id>`) and `content`.
-
-Message context lines include `slack message id` and `channel` fields you can reuse directly.
+- `channelId`: Slack channel ID.
+- `messageId`: Slack timestamp, e.g. `1712023032.1234`.
+- `to`: `channel:<id>` or `user:<id>` for sends.
+- `emoji`: Unicode or `:name:` for reactions.
 
 ## Actions
 
-### Action groups
+```json
+{ "action": "sendMessage", "to": "channel:C123", "content": "Hello" }
+```
 
-| Action group | Default | Notes                  |
-| ------------ | ------- | ---------------------- |
-| reactions    | enabled | React + list reactions |
-| messages     | enabled | Read/send/edit/delete  |
-| pins         | enabled | Pin/unpin/list         |
-| memberInfo   | enabled | Member info            |
-| emojiList    | enabled | Custom emoji list      |
-
-### React to a message
+```json
+{ "action": "readMessages", "channelId": "C123", "limit": 20 }
+```
 
 ```json
 {
   "action": "react",
   "channelId": "C123",
   "messageId": "1712023032.1234",
-  "emoji": "✅"
+  "emoji": ":white_check_mark:"
 }
 ```
-
-### List reactions
 
 ```json
-{
-  "action": "reactions",
-  "channelId": "C123",
-  "messageId": "1712023032.1234"
-}
+{ "action": "reactions", "channelId": "C123", "messageId": "1712023032.1234" }
 ```
-
-### Send a message
-
-```json
-{
-  "action": "sendMessage",
-  "to": "channel:C123",
-  "content": "Hello from OpenClaw"
-}
-```
-
-### Edit a message
 
 ```json
 {
@@ -72,73 +47,32 @@ Message context lines include `slack message id` and `channel` fields you can re
 }
 ```
 
-### Delete a message
-
 ```json
-{
-  "action": "deleteMessage",
-  "channelId": "C123",
-  "messageId": "1712023032.1234"
-}
+{ "action": "deleteMessage", "channelId": "C123", "messageId": "1712023032.1234" }
 ```
 
-### Read recent messages
-
 ```json
-{
-  "action": "readMessages",
-  "channelId": "C123",
-  "limit": 20
-}
+{ "action": "pinMessage", "channelId": "C123", "messageId": "1712023032.1234" }
 ```
 
-### Pin a message
-
 ```json
-{
-  "action": "pinMessage",
-  "channelId": "C123",
-  "messageId": "1712023032.1234"
-}
+{ "action": "unpinMessage", "channelId": "C123", "messageId": "1712023032.1234" }
 ```
 
-### Unpin a message
-
 ```json
-{
-  "action": "unpinMessage",
-  "channelId": "C123",
-  "messageId": "1712023032.1234"
-}
+{ "action": "listPins", "channelId": "C123" }
 ```
 
-### List pinned items
-
 ```json
-{
-  "action": "listPins",
-  "channelId": "C123"
-}
+{ "action": "memberInfo", "userId": "U123" }
 ```
 
-### Member info
-
 ```json
-{
-  "action": "memberInfo",
-  "userId": "U123"
-}
+{ "action": "emojiList" }
 ```
 
-### Emoji list
+## Safety
 
-```json
-{
-  "action": "emojiList"
-}
-```
-
-## Ideas to try
-
-- React with ✅ to mark completed tasks.
-- Pin key decisions or weekly status updates.
+- Confirm destructive deletes when context is unclear.
+- Keep outbound messages short; avoid Markdown tables.
+- Prefer thread/message IDs over fuzzy channel names.

@@ -60,7 +60,8 @@ extension ChannelsSettings {
                 self.emptyDetail
             }
         }
-        .frame(minWidth: 460, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .layoutPriority(1)
     }
 
     private var emptyDetail: some View {
@@ -135,7 +136,7 @@ extension ChannelsSettings {
                 self.statusBadge(
                     self.channelSummary(channel),
                     color: self.channelTint(channel))
-                Spacer()
+                Spacer(minLength: 12)
                 self.channelHeaderActions(channel)
             }
 

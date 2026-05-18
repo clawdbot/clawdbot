@@ -1,4 +1,4 @@
-import fs from "node:fs/promises";
+import * as fs from "node:fs/promises";
 import path from "node:path";
 import {
   createPluginRegistryFixture,
@@ -11,7 +11,9 @@ import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js"
 import { FILE_TYPE_SNIFF_MAX_BYTES } from "../../media/mime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
+  attachmentProbeFs,
   resolveAttachmentDelivery,
+  resolveSessionAttachmentThreadId,
   sendPluginSessionAttachment,
 } from "../host-hook-attachments.js";
 import { clearPluginLoaderCache } from "../loader.js";
@@ -307,30 +309,28 @@ describe("plugin session attachments", () => {
     });
   });
 
-  it("prefers the thread encoded in a threaded session key over stale stored routes", async () => {
-    await withSessionStore(async ({ storePath, filePath }) => {
-      const baseKey = "agent:main:telegram:group:12345";
-      const threadKey = `${baseKey}:thread:99`;
-      await writeSessionEntry(
-        storePath,
-        {
-          deliveryContext: {
-            channel: "telegram",
-            to: "group:12345",
-            threadId: 42,
-          },
-        },
-        threadKey,
-      );
-      mockSuccessfulAttachmentDelivery();
-
-      const result = await sendBundledSessionAttachment({
-        sessionKey: threadKey,
-        files: [{ path: filePath }],
-      });
-      expectTelegramAttachmentResult(result, 1);
-      expect(requireFirstSendMessageParams().threadId).toBe("99");
-    });
+  it("prefers the thread encoded in a threaded session key over stale stored routes", () => {
+    expect(
+      resolveSessionAttachmentThreadId({
+        deliveryThreadId: 42,
+        fallbackThreadId: "99",
+      }),
+    ).toBe("99");
+    expect(
+      resolveSessionAttachmentThreadId({
+        deliveryThreadId: 42,
+        explicitThreadId: 7,
+        fallbackThreadId: "99",
+      }),
+    ).toBe(7);
+    expect(
+      resolveSessionAttachmentThreadId({
+        deliveryThreadId: 42,
+        explicitThreadId: 7,
+        fallbackThreadId: "99",
+        hintThreadTs: "1700000000.000100",
+      }),
+    ).toBe("1700000000.000100");
   });
 
   it("reports attachment delivery as failed when no delivery result is returned", async () => {
@@ -453,8 +453,15 @@ describe("plugin session attachments", () => {
     await withSessionStore(async ({ storePath, stateDir }) => {
       const unreadablePath = path.join(stateDir, "unreadable.pdf");
       await fs.writeFile(unreadablePath, "%PDF-1.7\n", "utf8");
-      await fs.chmod(unreadablePath, 0o000);
       await writeSessionEntry(storePath);
+      const originalOpen = attachmentProbeFs.open.bind(attachmentProbeFs);
+      const openSpy = vi.spyOn(attachmentProbeFs, "open").mockImplementation((async (...args) => {
+        const [target] = args;
+        if (path.resolve(String(target)) === unreadablePath) {
+          throw new Error("EACCES: permission denied, open 'unreadable.pdf'");
+        }
+        return await originalOpen(...args);
+      }) as typeof fs.open);
 
       try {
         const result = await sendBundledSessionAttachment({
@@ -468,7 +475,7 @@ describe("plugin session attachments", () => {
         }
         expect(result.error).toContain(`attachment file MIME read failed for ${unreadablePath}`);
       } finally {
-        await fs.chmod(unreadablePath, 0o600).catch(() => undefined);
+        openSpy.mockRestore();
       }
       expect(workflowMocks.sendMessage).not.toHaveBeenCalled();
     });

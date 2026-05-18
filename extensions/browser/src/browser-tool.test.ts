@@ -1230,6 +1230,35 @@ describe("browser tool external content wrapping", () => {
     expect(details.nodeCount).toBe(1);
   });
 
+  it("preserves pending dialog state in ai snapshot results", async () => {
+    browserClientMocks.browserSnapshot.mockResolvedValueOnce({
+      ok: true,
+      format: "ai",
+      targetId: "t1",
+      url: "https://example.com",
+      snapshot: "",
+      blockedByDialog: true,
+      browserState: {
+        dialogs: {
+          pending: [{ id: "d1", type: "confirm", message: "Continue?" }],
+          recent: [],
+        },
+      },
+    });
+
+    const tool = createBrowserTool();
+    const result = await tool.execute?.("call-1", { action: "snapshot", snapshotFormat: "ai" });
+    const text = firstResultText(result);
+    expect(text).toContain('"blockedByDialog": true');
+    expect(text).toContain('"id": "d1"');
+    const details = externalContentDetails(result, "snapshot") as {
+      blockedByDialog?: unknown;
+      browserState?: { dialogs?: { pending?: Array<{ id?: string }> } };
+    };
+    expect(details.blockedByDialog).toBe(true);
+    expect(details.browserState?.dialogs?.pending?.[0]?.id).toBe("d1");
+  });
+
   it("wraps tabs output as external content", async () => {
     browserClientMocks.browserTabs.mockResolvedValueOnce([
       {

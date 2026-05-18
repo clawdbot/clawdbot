@@ -21,7 +21,7 @@ vi.mock("../../secrets/runtime-web-tools-state.js", () => ({
   getActiveRuntimeWebToolsMetadata: mocks.getActiveRuntimeWebToolsMetadata,
 }));
 
-vi.mock("../../secrets/runtime.js", () => ({
+vi.mock("../../secrets/runtime-state.js", () => ({
   getActiveSecretsRuntimeSnapshot: mocks.getActiveSecretsRuntimeSnapshot,
 }));
 

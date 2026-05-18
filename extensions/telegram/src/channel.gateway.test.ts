@@ -473,19 +473,21 @@ describe("telegramPlugin gateway startup", () => {
   it("abandons a queued startup probe when the account aborts", async () => {
     installTelegramRuntime();
     const releaseProbe: Array<() => void> = [];
-    probeTelegram.mockImplementation(
-      async () =>
-        await new Promise((resolve) => {
-          releaseProbe.push(() =>
-            resolve({
-              ok: true,
-              status: null,
-              error: null,
-              elapsedMs: 12,
-            }),
-          );
-        }),
-    );
+    let startedProbes = 0;
+    probeTelegram.mockImplementation(async () => {
+      startedProbes += 1;
+      if (startedProbes <= 2) {
+        await new Promise<void>((resolve) => {
+          releaseProbe.push(resolve);
+        });
+      }
+      return {
+        ok: true,
+        status: null,
+        error: null,
+        elapsedMs: 12,
+      };
+    });
     monitorTelegramProvider.mockResolvedValue(undefined);
 
     const first = startTelegramAccount("alpha");
@@ -498,12 +500,11 @@ describe("telegramPlugin gateway startup", () => {
       "expected startup probe slots to fill",
     );
     abortQueued.abort();
-    await expect(queued.task).resolves.toBeUndefined();
 
     for (const release of releaseProbe.splice(0)) {
       release();
     }
-    await Promise.all([first.task, second.task]);
+    await Promise.all([first.task, second.task, queued.task]);
     expect(probeTelegram).toHaveBeenCalledTimes(2);
     expect(monitorTelegramProvider).toHaveBeenCalledTimes(2);
   });

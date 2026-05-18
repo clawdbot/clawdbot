@@ -17,6 +17,7 @@ import {
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { getCliSessionBinding } from "../../agents/cli-session.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
+import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { runWithModelFallback, isFallbackSummaryError } from "../../agents/model-fallback.js";
@@ -94,6 +95,7 @@ import {
   resolveModelFallbackOptions,
 } from "./agent-runner-utils.js";
 import { type BlockReplyPipeline } from "./block-reply-pipeline.js";
+import { resolveCurrentTurnImages } from "./current-turn-images.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import {
   classifyProviderRequestError,
@@ -1175,6 +1177,12 @@ export async function runAgentTurnWithFallback(params: {
       requesterSenderUsername: params.followupRun.run.senderUsername,
       requesterSenderE164: params.followupRun.run.senderE164,
     });
+  const currentTurnImages = await resolveCurrentTurnImages({
+    ctx: params.sessionCtx,
+    cfg: runtimeConfig,
+    images: params.followupRun.images ?? params.opts?.images,
+    imageOrder: params.followupRun.imageOrder ?? params.opts?.imageOrder,
+  });
   let didNotifyAgentRunStart = false;
   const notifyAgentRunStart = () => {
     if (didNotifyAgentRunStart) {
@@ -1523,6 +1531,22 @@ export async function runAgentTurnWithFallback(params: {
         runId,
         sessionId: params.followupRun.run.sessionId,
         lane: runLane,
+        resolveAgentHarnessRuntimeOverride: (provider) =>
+          resolveSessionRuntimeOverrideForProvider({
+            provider,
+            entry: params.getActiveSessionEntry(),
+          }),
+        prepareAgentHarnessRuntime: async ({ provider, model, agentHarnessRuntimeOverride }) => {
+          await ensureSelectedAgentHarnessPlugin({
+            config: runtimeConfig,
+            provider,
+            modelId: model,
+            agentId: params.followupRun.run.agentId,
+            sessionKey: params.followupRun.run.runtimePolicySessionKey ?? params.sessionKey,
+            agentHarnessRuntimeOverride,
+            workspaceDir: params.followupRun.run.workspaceDir,
+          });
+        },
         onFallbackStep: (step) => {
           emitModelFallbackStepLifecycle({
             runId,
@@ -1671,8 +1695,8 @@ export async function runAgentTurnWithFallback(params: {
                   bootstrapPromptWarningSignaturesSeen[
                     bootstrapPromptWarningSignaturesSeen.length - 1
                   ],
-                images: params.opts?.images,
-                imageOrder: params.opts?.imageOrder,
+                images: currentTurnImages.images,
+                imageOrder: currentTurnImages.imageOrder,
                 skillsSnapshot: params.followupRun.run.skillsSnapshot,
                 messageChannel: params.followupRun.originatingChannel ?? undefined,
                 messageProvider: hookMessageProvider,
@@ -1790,8 +1814,8 @@ export async function runAgentTurnWithFallback(params: {
                 forceHeartbeatTool: params.opts?.forceHeartbeatTool,
                 bootstrapContextMode: params.opts?.bootstrapContextMode,
                 bootstrapContextRunKind: params.opts?.isHeartbeat ? "heartbeat" : "default",
-                images: params.opts?.images,
-                imageOrder: params.opts?.imageOrder,
+                images: currentTurnImages.images,
+                imageOrder: currentTurnImages.imageOrder,
                 abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
                 replyOperation: params.replyOperation,
                 blockReplyBreak: params.resolvedBlockStreamingBreak,

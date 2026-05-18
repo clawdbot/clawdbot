@@ -60,8 +60,12 @@ describe("cli program (smoke)", () => {
 
   it("runs tui with explicit timeout override", async () => {
     await runProgram(["tui", "--timeout-ms", "45000"]);
-    const options = firstMockArg(runTui) as { timeoutMs?: number };
+    const options = firstMockArg(runTui) as {
+      timeoutMs?: number;
+      forceProcessExitOnReturn?: boolean;
+    };
     expect(options?.timeoutMs).toBe(45000);
+    expect(options?.forceProcessExitOnReturn).toBe(true);
   });
 
   it("runs crestodian one-shot requests", async () => {

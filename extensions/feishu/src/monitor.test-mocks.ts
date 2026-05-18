@@ -34,6 +34,7 @@ export function createFeishuRuntimeMockModule(): {
           createInboundDebouncer: () => ({
             enqueue: async () => {},
             flushKey: async () => {},
+            cancelKey: () => false,
           }),
         },
         text: {

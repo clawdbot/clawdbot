@@ -220,6 +220,155 @@ describe("skills-remote", () => {
     }
   });
 
+  it("skips remote bin probes when the node connectivity preflight fails", async () => {
+    await resetSkillsRefreshForTest();
+    const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-remote-skills-"));
+    const nodeId = `node-${randomUUID()}`;
+    const bin = `bin-${randomUUID()}`;
+    try {
+      fs.mkdirSync(path.join(workspaceDir, "remote-skill"), { recursive: true });
+      fs.writeFileSync(
+        path.join(workspaceDir, "remote-skill", "SKILL.md"),
+        [
+          "---",
+          "name: remote-skill",
+          "description: Needs a remote bin",
+          `metadata: { "openclaw": { "os": ["darwin"], "requires": { "bins": ["${bin}"] } } }`,
+          "---",
+          "# Remote Skill",
+          "",
+        ].join("\n"),
+      );
+      const cfg = {
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+          },
+        },
+      } satisfies OpenClawConfig;
+      const invokeCalls: string[] = [];
+      setSkillsRemoteRegistry({
+        listConnected: () => [],
+        get: () => undefined,
+        checkConnectivity: async () => ({
+          ok: false,
+          error: { code: "TIMEOUT", message: "node connectivity probe timed out" },
+        }),
+        invoke: async (params: { command: string }) => {
+          invokeCalls.push(params.command);
+          return {
+            ok: true,
+            payloadJSON: JSON.stringify({ bins: [bin] }),
+          };
+        },
+      } as unknown as NodeRegistry);
+      recordRemoteNodeInfo({
+        nodeId,
+        displayName: "Remote Mac",
+        platform: "darwin",
+        commands: ["system.run", "system.which"],
+      });
+      recordRemoteNodeBins(nodeId, [bin]);
+      const before = getSkillsSnapshotVersion(workspaceDir);
+
+      await refreshRemoteNodeBins({
+        nodeId,
+        platform: "darwin",
+        commands: ["system.run", "system.which"],
+        cfg,
+        timeoutMs: 10,
+      });
+
+      expect(invokeCalls).toEqual([]);
+      expect(getRemoteSkillEligibility()?.hasBin(bin) ?? false).toBe(false);
+      expect(getSkillsSnapshotVersion(workspaceDir)).toBeGreaterThan(before);
+    } finally {
+      removeRemoteNodeInfo(nodeId);
+      fs.rmSync(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("retries the bin probe when the node reconnects during preflight", async () => {
+    await resetSkillsRefreshForTest();
+    const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-remote-skills-"));
+    const nodeId = `node-${randomUUID()}`;
+    const bin = `bin-${randomUUID()}`;
+    try {
+      fs.mkdirSync(path.join(workspaceDir, "remote-skill"), { recursive: true });
+      fs.writeFileSync(
+        path.join(workspaceDir, "remote-skill", "SKILL.md"),
+        [
+          "---",
+          "name: remote-skill",
+          "description: Needs a remote bin",
+          `metadata: { "openclaw": { "os": ["darwin"], "requires": { "bins": ["${bin}"] } } }`,
+          "---",
+          "# Remote Skill",
+          "",
+        ].join("\n"),
+      );
+      const cfg = {
+        agents: {
+          defaults: {
+            workspace: workspaceDir,
+          },
+        },
+      } satisfies OpenClawConfig;
+      let connId = "conn-old";
+      const connectivityCalls: string[] = [];
+      const invokeCalls: string[] = [];
+      setSkillsRemoteRegistry({
+        listConnected: () => [],
+        get: () =>
+          ({
+            nodeId,
+            connId,
+            platform: "darwin",
+            commands: ["system.run", "system.which"],
+          }) as unknown as ReturnType<NodeRegistry["get"]>,
+        checkConnectivity: async () => {
+          connectivityCalls.push(connId);
+          if (connectivityCalls.length === 1) {
+            connId = "conn-new";
+            return {
+              ok: false,
+              error: { code: "TIMEOUT", message: "node connectivity probe timed out" },
+            };
+          }
+          return { ok: true };
+        },
+        invoke: async (params: { command: string }) => {
+          invokeCalls.push(params.command);
+          return {
+            ok: true,
+            payloadJSON: JSON.stringify({ bins: [bin] }),
+          };
+        },
+      } as unknown as NodeRegistry);
+      recordRemoteNodeInfo({
+        nodeId,
+        displayName: "Remote Mac",
+        platform: "darwin",
+        commands: ["system.run", "system.which"],
+      });
+
+      await refreshRemoteNodeBins({
+        nodeId,
+        platform: "darwin",
+        commands: ["system.run", "system.which"],
+        cfg,
+        timeoutMs: 10,
+      });
+
+      expect(connectivityCalls).toEqual(["conn-old", "conn-new"]);
+      expect(invokeCalls).toEqual(["system.which"]);
+      expect(getRemoteSkillEligibility()?.hasBin(bin)).toBe(true);
+    } finally {
+      removeRemoteNodeInfo(nodeId);
+      fs.rmSync(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   it("coalesces overlapping bin probes for the same node", async () => {
     const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-remote-skills-"));
     const nodeId = `node-${randomUUID()}`;

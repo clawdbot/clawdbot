@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CallGatewayOptions } from "../gateway/call.js";
+import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
   SUBAGENT_ENDED_REASON_ERROR,
@@ -301,6 +302,46 @@ describe("subagent registry lifecycle hardening", () => {
     expect(browserCleanupArg.onWarn).toBeTypeOf("function");
     expectFields(firstCallArg(runSubagentAnnounceFlow), {
       childSessionKey: entry.childSessionKey,
+    });
+  });
+
+  it("records completion announcement timestamps from transcript delivery", async () => {
+    const persist = vi.fn();
+    const entry = createRunEntry({
+      expectsCompletionMessage: true,
+    });
+    const delivery: SubagentAnnounceDeliveryResult = {
+      delivered: true,
+      path: "steered",
+      enqueuedAt: 4_100,
+      deliveredAt: 12_300,
+    };
+    const runSubagentAnnounceFlow: LifecycleControllerParams["runSubagentAnnounceFlow"] = vi.fn(
+      async (announceParams) => {
+        announceParams.onDeliveryResult?.(delivery);
+        return true;
+      },
+    );
+
+    const controller = createLifecycleController({ entry, persist, runSubagentAnnounceFlow });
+
+    await expect(
+      controller.completeSubagentRun({
+        runId: entry.runId,
+        endedAt: 4_000,
+        outcome: { status: "ok" },
+        reason: SUBAGENT_ENDED_REASON_COMPLETE,
+        triggerCleanup: true,
+      }),
+    ).resolves.toBeUndefined();
+
+    await vi.waitFor(() => expect(entry.completionAnnouncedAt).toBe(12_300));
+    expect(entry.completionEnqueuedAt).toBe(4_100);
+    expect(entry.completionDeliveredAt).toBe(12_300);
+    expect(entry.lastAnnounceDropReason).toBeUndefined();
+    expectFields(firstCallArg(taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId), {
+      runId: entry.runId,
+      deliveryStatus: "delivered",
     });
   });
 

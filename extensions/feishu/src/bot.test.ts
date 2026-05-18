@@ -206,6 +206,15 @@ function createFeishuBotRuntime(overrides: DeepPartial<PluginRuntime> = {}): Plu
             kind: "message",
             canStartAgentTurn: true,
           });
+          await turn.recordInboundSession({
+            storePath: turn.storePath,
+            sessionKey: turn.ctxPayload.SessionKey ?? turn.routeSessionKey,
+            ctx: turn.ctxPayload,
+            groupResolution: turn.record?.groupResolution,
+            createIfMissing: turn.record?.createIfMissing,
+            updateLastRoute: turn.record?.updateLastRoute,
+            onRecordError: turn.record?.onRecordError ?? (() => undefined),
+          });
           return {
             dispatchResult: await turn.runDispatch(),
           };
@@ -245,6 +254,14 @@ function mockCallArg<T>(
     throw new Error(`Expected mock call at index ${callIndex}`);
   }
   return call[argIndex] as T;
+}
+
+function lastMockCallArg<T>(
+  mock: { mock: { calls: unknown[][] } },
+  argIndex = 0,
+  _type?: (value: unknown) => value is T,
+): T | undefined {
+  return mock.mock.calls.at(-1)?.[argIndex] as T | undefined;
 }
 
 type FeishuRoutePeer = { id: string; kind: "direct" | "group" };
@@ -554,6 +571,324 @@ describe("handleFeishuMessage ACP routing", () => {
     expect(conversationRef.channel).toBe("feishu");
     expect(conversationRef.conversationId).toBe("oc_group_chat:topic:om_topic_root");
     expect(mockTouchBinding).toHaveBeenCalledWith("default:oc_group_chat:topic:om_topic_root");
+  });
+
+  it("records Feishu DM last-route updates on the resolved session", async () => {
+    const runtime = createFeishuBotRuntime();
+    const recordInboundSession = vi.fn(async () => undefined);
+    runtime.channel.session.recordInboundSession = recordInboundSession;
+    mockResolveAgentRoute.mockReturnValue({
+      agentId: "main",
+      channel: "feishu",
+      accountId: "default",
+      sessionKey: "agent:main:main",
+      mainSessionKey: "agent:main:main",
+      lastRoutePolicy: "main",
+      matchedBy: "default",
+    });
+    setFeishuRuntime(runtime);
+
+    await dispatchMessage({
+      cfg: {
+        session: { mainKey: "main", scope: "per-sender" },
+        channels: { feishu: { enabled: true, allowFrom: ["ou_sender_1"], dmPolicy: "open" } },
+      },
+      event: {
+        sender: { sender_id: { open_id: "ou_sender_1" } },
+        message: {
+          message_id: "msg-dm-last-route",
+          chat_id: "oc_dm",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "hello" }),
+        },
+      },
+    });
+
+    const recordParams = lastMockCallArg<{
+      sessionKey?: string;
+      updateLastRoute?: {
+        accountId?: string;
+        channel?: string;
+        sessionKey?: string;
+        to?: string;
+      };
+    }>(recordInboundSession);
+    expect(recordParams?.sessionKey).toBe("agent:main:main");
+    expect(recordParams?.updateLastRoute).toMatchObject({
+      sessionKey: "agent:main:main",
+      channel: "feishu",
+      to: "user:ou_sender_1",
+      accountId: "default",
+    });
+  });
+
+  it("pins shared Feishu DM last-route updates to the configured owner", async () => {
+    const runtime = createFeishuBotRuntime();
+    const recordInboundSession = vi.fn(async () => undefined);
+    runtime.channel.session.recordInboundSession = recordInboundSession;
+    runtime.channel.pairing.readAllowFromStore = vi.fn().mockResolvedValue(["ou_sender_2"]);
+    mockResolveAgentRoute.mockReturnValue({
+      agentId: "main",
+      channel: "feishu",
+      accountId: "default",
+      sessionKey: "agent:main:main",
+      mainSessionKey: "agent:main:main",
+      lastRoutePolicy: "main",
+      matchedBy: "default",
+    });
+    setFeishuRuntime(runtime);
+
+    await dispatchMessage({
+      cfg: {
+        session: { mainKey: "main", scope: "per-sender" },
+        channels: { feishu: { enabled: true, allowFrom: ["ou_owner"], dmPolicy: "pairing" } },
+      },
+      event: {
+        sender: { sender_id: { open_id: "ou_sender_2" } },
+        message: {
+          message_id: "msg-dm-last-route-secondary",
+          chat_id: "oc_dm",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "hello" }),
+        },
+      },
+    });
+
+    const recordParams = lastMockCallArg<{
+      updateLastRoute?: {
+        mainDmOwnerPin?: {
+          ownerRecipient?: string;
+          senderRecipient?: string;
+          onSkip?: unknown;
+        };
+      };
+    }>(recordInboundSession);
+    expect(recordParams?.updateLastRoute?.mainDmOwnerPin).toMatchObject({
+      ownerRecipient: "user:ou_owner",
+      senderRecipient: "user:ou_sender_2",
+    });
+    expect(typeof recordParams?.updateLastRoute?.mainDmOwnerPin?.onSkip).toBe("function");
+  });
+
+  it("matches Feishu DM owner pins against user_id allowlist entries", async () => {
+    const runtime = createFeishuBotRuntime();
+    const recordInboundSession = vi.fn(async () => undefined);
+    runtime.channel.session.recordInboundSession = recordInboundSession;
+    mockResolveAgentRoute.mockReturnValue({
+      agentId: "main",
+      channel: "feishu",
+      accountId: "default",
+      sessionKey: "agent:main:main",
+      mainSessionKey: "agent:main:main",
+      lastRoutePolicy: "main",
+      matchedBy: "default",
+    });
+    setFeishuRuntime(runtime);
+
+    await dispatchMessage({
+      cfg: {
+        session: { mainKey: "main", scope: "per-sender" },
+        channels: { feishu: { enabled: true, allowFrom: ["user_123"], dmPolicy: "allowlist" } },
+      },
+      event: {
+        sender: { sender_id: { open_id: "ou_owner", user_id: "user_123" } },
+        message: {
+          message_id: "msg-dm-last-route-user-id-owner",
+          chat_id: "oc_dm",
+          chat_type: "p2p",
+          message_type: "text",
+          content: JSON.stringify({ text: "hello" }),
+        },
+      },
+    });
+
+    const recordParams = lastMockCallArg<{
+      updateLastRoute?: {
+        mainDmOwnerPin?: {
+          ownerRecipient?: string;
+          senderRecipient?: string;
+        };
+      };
+    }>(recordInboundSession);
+    expect(recordParams?.updateLastRoute?.mainDmOwnerPin).toMatchObject({
+      ownerRecipient: "user:user_123",
+      senderRecipient: "user:user_123",
+    });
+  });
+
+  it("records Feishu group last-route updates on the resolved session", async () => {
+    const runtime = createFeishuBotRuntime();
+    const recordInboundSession = vi.fn(async () => undefined);
+    runtime.channel.session.recordInboundSession = recordInboundSession;
+    mockResolveAgentRoute.mockReturnValue({
+      agentId: "agent-B",
+      channel: "feishu",
+      accountId: "default",
+      sessionKey: "agent:agent-B:feishu:group:oc_group_chat",
+      mainSessionKey: "agent:agent-B:main",
+      lastRoutePolicy: "session",
+      matchedBy: "default",
+    });
+    setFeishuRuntime(runtime);
+
+    await dispatchMessage({
+      cfg: {
+        session: { mainKey: "main", scope: "per-sender" },
+        channels: {
+          feishu: {
+            enabled: true,
+            allowFrom: ["ou_sender_1"],
+            groups: {
+              oc_group_chat: {
+                allow: true,
+                requireMention: false,
+              },
+            },
+          },
+        },
+      },
+      event: {
+        sender: { sender_id: { open_id: "ou_sender_1" } },
+        message: {
+          message_id: "msg-group-last-route",
+          chat_id: "oc_group_chat",
+          chat_type: "group",
+          message_type: "text",
+          content: JSON.stringify({ text: "hello group" }),
+        },
+      },
+    });
+
+    const recordParams = lastMockCallArg<{
+      sessionKey?: string;
+      updateLastRoute?: {
+        accountId?: string;
+        channel?: string;
+        sessionKey?: string;
+        to?: string;
+      };
+    }>(recordInboundSession);
+    expect(recordParams?.sessionKey).toBe("agent:agent-B:feishu:group:oc_group_chat");
+    expect(recordParams?.updateLastRoute).toMatchObject({
+      sessionKey: "agent:agent-B:feishu:group:oc_group_chat",
+      channel: "feishu",
+      to: "chat:oc_group_chat",
+      accountId: "default",
+    });
+  });
+
+  it("records configured Feishu thread replies with the dispatcher fallback target", async () => {
+    const runtime = createFeishuBotRuntime();
+    const recordInboundSession = vi.fn(async () => undefined);
+    runtime.channel.session.recordInboundSession = recordInboundSession;
+    mockResolveAgentRoute.mockReturnValue({
+      agentId: "agent-B",
+      channel: "feishu",
+      accountId: "default",
+      sessionKey: "agent:agent-B:feishu:group:oc_group_chat",
+      mainSessionKey: "agent:agent-B:main",
+      lastRoutePolicy: "session",
+      matchedBy: "default",
+    });
+    setFeishuRuntime(runtime);
+
+    await dispatchMessage({
+      cfg: {
+        session: { mainKey: "main", scope: "per-sender" },
+        channels: {
+          feishu: {
+            enabled: true,
+            allowFrom: ["ou_sender_1"],
+            groups: {
+              oc_group_chat: {
+                allow: true,
+                requireMention: false,
+                replyInThread: "enabled",
+              },
+            },
+          },
+        },
+      },
+      event: {
+        sender: { sender_id: { open_id: "ou_sender_1" } },
+        message: {
+          message_id: "msg-group-thread-fallback",
+          chat_id: "oc_group_chat",
+          chat_type: "group",
+          message_type: "text",
+          content: JSON.stringify({ text: "start a thread" }),
+        },
+      },
+    });
+
+    const recordParams = lastMockCallArg<{
+      updateLastRoute?: {
+        threadId?: string;
+        to?: string;
+      };
+    }>(recordInboundSession);
+    expect(recordParams?.updateLastRoute).toMatchObject({
+      to: "chat:oc_group_chat",
+      threadId: "msg-group-thread-fallback",
+    });
+  });
+
+  it("records auto-threaded Feishu group replies with the dispatcher target", async () => {
+    const runtime = createFeishuBotRuntime();
+    const recordInboundSession = vi.fn(async () => undefined);
+    runtime.channel.session.recordInboundSession = recordInboundSession;
+    mockResolveAgentRoute.mockReturnValue({
+      agentId: "agent-B",
+      channel: "feishu",
+      accountId: "default",
+      sessionKey: "agent:agent-B:feishu:group:oc_group_chat",
+      mainSessionKey: "agent:agent-B:main",
+      lastRoutePolicy: "session",
+      matchedBy: "default",
+    });
+    setFeishuRuntime(runtime);
+
+    await dispatchMessage({
+      cfg: {
+        session: { mainKey: "main", scope: "per-sender" },
+        channels: {
+          feishu: {
+            enabled: true,
+            allowFrom: ["ou_sender_1"],
+            groups: {
+              oc_group_chat: {
+                allow: true,
+                requireMention: false,
+              },
+            },
+          },
+        },
+      },
+      event: {
+        sender: { sender_id: { open_id: "ou_sender_1" } },
+        message: {
+          message_id: "msg-group-auto-thread",
+          chat_id: "oc_group_chat",
+          chat_type: "group",
+          message_type: "text",
+          root_id: "om_thread_root",
+          content: JSON.stringify({ text: "continue the thread" }),
+        },
+      },
+    });
+
+    const recordParams = lastMockCallArg<{
+      updateLastRoute?: {
+        threadId?: string;
+        to?: string;
+      };
+    }>(recordInboundSession);
+    expect(recordParams?.updateLastRoute).toMatchObject({
+      to: "chat:oc_group_chat",
+      threadId: "msg-group-auto-thread",
+    });
   });
 
   it("passes reasoning preview permission from session state into the dispatcher", async () => {

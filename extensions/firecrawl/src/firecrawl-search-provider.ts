@@ -4,6 +4,7 @@ import {
 } from "openclaw/plugin-sdk/provider-web-search-contract";
 
 const FIRECRAWL_CREDENTIAL_PATH = "plugins.entries.firecrawl.config.webSearch.apiKey";
+const FIRECRAWL_FETCH_CREDENTIAL_PATH = "plugins.entries.firecrawl.config.webFetch.apiKey";
 
 type FirecrawlClientModule = typeof import("./firecrawl-client.js");
 
@@ -12,6 +13,20 @@ let firecrawlClientModulePromise: Promise<FirecrawlClientModule> | undefined;
 function loadFirecrawlClientModule(): Promise<FirecrawlClientModule> {
   firecrawlClientModulePromise ??= import("./firecrawl-client.js");
   return firecrawlClientModulePromise;
+}
+
+function getConfiguredFetchCredentialFallback(config?: {
+  plugins?: { entries?: { firecrawl?: { config?: unknown } } };
+}) {
+  const apiKey = (
+    config?.plugins?.entries?.firecrawl?.config as { webFetch?: { apiKey?: unknown } } | undefined
+  )?.webFetch?.apiKey;
+  return apiKey === undefined
+    ? undefined
+    : {
+        path: FIRECRAWL_FETCH_CREDENTIAL_PATH,
+        value: apiKey,
+      };
 }
 
 const GenericFirecrawlSearchSchema = {
@@ -47,6 +62,7 @@ export function createFirecrawlWebSearchProvider(): WebSearchProviderPlugin {
       configuredCredential: { pluginId: "firecrawl" },
       selectionPluginId: "firecrawl",
     }),
+    getConfiguredCredentialFallback: getConfiguredFetchCredentialFallback,
     createTool: (ctx) => ({
       description:
         "Search the web using Firecrawl. Returns structured results with snippets from Firecrawl Search. Use firecrawl_search for Firecrawl-specific knobs like sources or categories.",

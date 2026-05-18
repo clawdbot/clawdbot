@@ -37,4 +37,18 @@ struct DashboardWindowSmokeTests {
         let url = try #require(URL(string: "http://[fd12:3456:789a::1]:18789/control/"))
         #expect(DashboardWindowController.originString(for: url) == "http://[fd12:3456:789a::1]:18789")
     }
+
+    @Test func `dashboard failure state opens in dashboard window`() throws {
+        let url = try #require(URL(string: "http://127.0.0.1:18789/control/"))
+        let controller = DashboardWindowController(
+            url: url,
+            auth: DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil))
+        controller.showFailure(
+            title: "Dashboard unavailable",
+            message: "Remote control tunnel failed",
+            detail: "Reset the remote tunnel and try again.")
+        #expect(controller.window?.isVisible == true)
+        #expect(controller.window?.styleMask.contains(.closable) == true)
+        controller.closeDashboard()
+    }
 }

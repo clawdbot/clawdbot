@@ -4,6 +4,7 @@ import {
   normalizePluginsConfigWithResolver,
   type NormalizedPluginsConfig,
 } from "./config-normalization-shared.js";
+import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { isInstalledPluginEnabled } from "./installed-plugin-index.js";
 import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
 import type {
@@ -265,9 +266,63 @@ function filterContributionOwnerIds(params: {
   return sortUnique(params.owners.filter((owner) => enabledPluginIds.has(owner)));
 }
 
+function canReuseCurrentManifestRegistry(params: LoadPluginRegistryManifestParams): boolean {
+  return (
+    params.bundledChannelConfigCollector === undefined &&
+    params.index === undefined &&
+    params.preferPersisted !== false &&
+    params.stateDir === undefined &&
+    params.filePath === undefined &&
+    params.pluginIndexFilePath === undefined &&
+    params.installRecords === undefined &&
+    params.candidates === undefined &&
+    params.diagnostics === undefined
+  );
+}
+
+function loadCurrentManifestRegistryForPluginRegistry(
+  params: LoadPluginRegistryManifestParams,
+): PluginManifestRegistry | undefined {
+  if (!canReuseCurrentManifestRegistry(params)) {
+    return undefined;
+  }
+  const env = params.env ?? process.env;
+  const current = getCurrentPluginMetadataSnapshot({
+    config: params.config,
+    env,
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    ...(params.workspaceDir === undefined ? { allowWorkspaceScopedSnapshot: true } : {}),
+  });
+  if (!current || current.registryDiagnostics.length > 0) {
+    return undefined;
+  }
+  const pluginIdSet = params.pluginIds === undefined ? undefined : new Set(params.pluginIds);
+  const enabledPluginIds = new Set(
+    current.index.plugins
+      .filter((plugin) => params.includeDisabled || plugin.enabled)
+      .map((plugin) => plugin.pluginId),
+  );
+  return {
+    plugins: current.manifestRegistry.plugins.filter(
+      (plugin) =>
+        (!pluginIdSet || pluginIdSet.has(plugin.id)) &&
+        (params.includeDisabled || enabledPluginIds.has(plugin.id)),
+    ),
+    diagnostics: pluginIdSet
+      ? current.manifestRegistry.diagnostics.filter(
+          (diagnostic) => !diagnostic.pluginId || pluginIdSet.has(diagnostic.pluginId),
+        )
+      : current.manifestRegistry.diagnostics,
+  };
+}
+
 export function loadPluginManifestRegistryForPluginRegistry(
   params: LoadPluginRegistryManifestParams = {},
 ): PluginManifestRegistry {
+  const current = loadCurrentManifestRegistryForPluginRegistry(params);
+  if (current) {
+    return current;
+  }
   const index = loadPluginRegistrySnapshot(params);
   return loadPluginManifestRegistryForInstalledIndex({
     index,

@@ -33,6 +33,20 @@ type SlackQaRuntimeEnv = {
   sutAppToken: string;
 };
 
+type SlackChannelStatus = {
+  connected?: boolean;
+  lastConnectedAt?: number;
+  lastDisconnect?: unknown;
+  lastError?: string;
+  restartPending?: boolean;
+  running?: boolean;
+};
+
+const SLACK_QA_READY_TIMEOUT_MS = 45_000;
+const SLACK_QA_READY_STABILITY_MS = 3_000;
+const SLACK_QA_GATEWAY_STOP_SETTLE_MS = 3_000;
+const SLACK_QA_RETRYABLE_SCENARIO_ATTEMPTS = 2;
+
 type SlackQaScenarioId =
   | "slack-allowlist-block"
   | "slack-canary"
@@ -702,7 +716,9 @@ async function waitForSlackNoReply(params: {
         ts: message.ts,
         userId: message.user,
       });
-      throw new Error("unexpected Slack SUT reply observed");
+      if (matchedScenario) {
+        throw new Error("unexpected Slack SUT reply observed");
+      }
     }
     await new Promise((resolve) => setTimeout(resolve, 1_000));
   }
@@ -711,19 +727,10 @@ async function waitForSlackNoReply(params: {
 async function waitForSlackChannelRunning(
   gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
   accountId: string,
-) {
+): Promise<SlackChannelStatus> {
   const startedAt = Date.now();
-  let lastStatus:
-    | {
-        connected?: boolean;
-        lastConnectedAt?: number;
-        lastDisconnect?: unknown;
-        lastError?: string;
-        restartPending?: boolean;
-        running?: boolean;
-      }
-    | undefined;
-  while (Date.now() - startedAt < 45_000) {
+  let lastStatus: SlackChannelStatus | undefined;
+  while (Date.now() - startedAt < SLACK_QA_READY_TIMEOUT_MS) {
     try {
       const payload = (await gateway.call(
         "channels.status",
@@ -756,7 +763,10 @@ async function waitForSlackChannelRunning(
           }
         : undefined;
       if (match?.running && match.connected === true && match.restartPending !== true) {
-        return;
+        if (!lastStatus) {
+          throw new Error(`slack account "${accountId}" status disappeared after readiness check`);
+        }
+        return lastStatus;
       }
     } catch {
       // retry
@@ -767,6 +777,34 @@ async function waitForSlackChannelRunning(
     `slack account "${accountId}" did not become ready` +
       (lastStatus ? `; last status: ${JSON.stringify(lastStatus)}` : ""),
   );
+}
+
+async function waitForSlackChannelStable(
+  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
+  accountId: string,
+) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < SLACK_QA_READY_TIMEOUT_MS) {
+    const status = await waitForSlackChannelRunning(gateway, accountId);
+    const connectedAt =
+      typeof status.lastConnectedAt === "number" && status.lastConnectedAt > 0
+        ? status.lastConnectedAt
+        : Date.now();
+    const connectedForMs = Date.now() - connectedAt;
+    if (connectedForMs >= SLACK_QA_READY_STABILITY_MS) {
+      return;
+    }
+    await new Promise((resolve) =>
+      setTimeout(resolve, Math.max(500, SLACK_QA_READY_STABILITY_MS - connectedForMs)),
+    );
+  }
+  throw new Error(
+    `slack account "${accountId}" did not remain ready for ${SLACK_QA_READY_STABILITY_MS}ms`,
+  );
+}
+
+function isRetryableSlackQaScenarioError(error: unknown) {
+  return /timed out after \d+ms waiting for Slack message/iu.test(formatErrorMessage(error));
 }
 
 function toObservedSlackArtifacts(params: {
@@ -897,136 +935,163 @@ export async function runSlackQaLive(params: {
       timeout: SLACK_QA_WEB_API_TIMEOUT_MS,
     });
     for (const scenario of scenarios) {
-      let gatewayHarness: Awaited<ReturnType<typeof startQaLiveLaneGateway>> | undefined;
-      try {
-        assertLeaseHealthy();
-        gatewayHarness = await startQaLiveLaneGateway({
-          repoRoot,
-          transport: {
-            requiredPluginIds: [],
-            createGatewayConfig: () => ({}),
-          },
-          transportBaseUrl: "http://127.0.0.1:0",
-          providerMode,
-          primaryModel,
-          alternateModel,
-          fastMode: params.fastMode,
-          controlUiEnabled: false,
-          mutateConfig: (cfg) =>
-            buildSlackQaConfig(cfg, {
-              channelId: activeRuntimeEnv.channelId,
-              driverBotUserId: driverIdentity.userId,
-              overrides: scenario.configOverrides,
-              sutAccountId,
-              sutAppToken: activeRuntimeEnv.sutAppToken,
-              sutBotToken: activeRuntimeEnv.sutBotToken,
-            }),
-        });
-        const activeGatewayHarness = gatewayHarness;
-        await waitForSlackChannelRunning(activeGatewayHarness.gateway, sutAccountId);
-        const scenarioRun = scenario.buildRun(sutIdentity.userId);
-        const baseScenarioContext = {
-          channelId: activeRuntimeEnv.channelId,
-          driverClient,
-          gateway: activeGatewayHarness.gateway,
-          postSlackMessage: async (message: { text: string; threadTs?: string }) =>
-            await sendSlackChannelMessage({
-              channelId: activeRuntimeEnv.channelId,
-              client: driverClient,
-              text: message.text,
-              threadTs: message.threadTs,
-            }),
-          sutIdentity,
-          sutReadClient,
-          waitForReady: async () =>
-            await waitForSlackChannelRunning(activeGatewayHarness.gateway, sutAccountId),
-        };
-        const beforeRunResult = await scenarioRun.beforeRun?.(baseScenarioContext);
-        const beforeRunDetails =
-          typeof beforeRunResult === "string" ? beforeRunResult : beforeRunResult?.details;
-        const requestStartedAt = new Date();
-        const sent = await sendSlackChannelMessage({
-          channelId: activeRuntimeEnv.channelId,
-          client: driverClient,
-          text: scenarioRun.input,
-          threadTs:
-            typeof beforeRunResult === "object" ? beforeRunResult?.inputThreadTs : undefined,
-        });
-        const requestThreadTs =
-          (typeof beforeRunResult === "object" ? beforeRunResult?.inputThreadTs : undefined) ??
-          sent.ts;
-        if (scenarioRun.expectReply) {
-          const reply = await waitForSlackScenarioReply({
+      let scenarioAttempt = 1;
+      while (true) {
+        let gatewayHarness: Awaited<ReturnType<typeof startQaLiveLaneGateway>> | undefined;
+        try {
+          assertLeaseHealthy();
+          gatewayHarness = await startQaLiveLaneGateway({
+            repoRoot,
+            transport: {
+              requiredPluginIds: [],
+              createGatewayConfig: () => ({}),
+            },
+            transportBaseUrl: "http://127.0.0.1:0",
+            providerMode,
+            primaryModel,
+            alternateModel,
+            fastMode: params.fastMode,
+            controlUiEnabled: false,
+            mutateConfig: (cfg) =>
+              buildSlackQaConfig(cfg, {
+                channelId: activeRuntimeEnv.channelId,
+                driverBotUserId: driverIdentity.userId,
+                overrides: scenario.configOverrides,
+                sutAccountId,
+                sutAppToken: activeRuntimeEnv.sutAppToken,
+                sutBotToken: activeRuntimeEnv.sutBotToken,
+              }),
+          });
+          const activeGatewayHarness = gatewayHarness;
+          await waitForSlackChannelStable(activeGatewayHarness.gateway, sutAccountId);
+          const scenarioRun = scenario.buildRun(sutIdentity.userId);
+          const baseScenarioContext = {
             channelId: activeRuntimeEnv.channelId,
-            client: sutReadClient,
-            matchText: scenarioRun.matchText,
-            observedMessages,
-            observationScenarioId: scenario.id,
-            observationScenarioTitle: scenario.title,
-            sentTs: sent.ts,
-            threadTs: requestThreadTs,
+            driverClient,
+            gateway: activeGatewayHarness.gateway,
+            postSlackMessage: async (message: { text: string; threadTs?: string }) =>
+              await sendSlackChannelMessage({
+                channelId: activeRuntimeEnv.channelId,
+                client: driverClient,
+                text: message.text,
+                threadTs: message.threadTs,
+              }),
             sutIdentity,
-            timeoutMs: scenario.timeoutMs,
-          });
-          scenarioRun.verify?.(reply.message, { requestThreadTs, sentTs: sent.ts });
-          const responseObservedAt = new Date(reply.observedAt);
-          const rttMs = responseObservedAt.getTime() - requestStartedAt.getTime();
-          const afterReplyDetails = await scenarioRun.afterReply?.(reply.message, {
-            ...baseScenarioContext,
-            sentTs: sent.ts,
-          });
-          scenarioResults.push({
-            id: scenario.id,
-            title: scenario.title,
-            status: "pass",
-            details: [`reply matched in ${rttMs}ms`, beforeRunDetails, afterReplyDetails]
-              .filter(Boolean)
-              .join("; "),
-            rttMs,
-            requestStartedAt: requestStartedAt.toISOString(),
-            responseObservedAt: responseObservedAt.toISOString(),
-          });
-        } else {
-          await waitForSlackNoReply({
+            sutReadClient,
+            waitForReady: async () =>
+              await waitForSlackChannelStable(activeGatewayHarness.gateway, sutAccountId),
+          };
+          const beforeRunResult = await scenarioRun.beforeRun?.(baseScenarioContext);
+          const beforeRunDetails =
+            typeof beforeRunResult === "string" ? beforeRunResult : beforeRunResult?.details;
+          const requestStartedAt = new Date();
+          const sent = await sendSlackChannelMessage({
             channelId: activeRuntimeEnv.channelId,
-            client: sutReadClient,
-            matchText: scenarioRun.matchText,
-            observedMessages,
-            observationScenarioId: scenario.id,
-            observationScenarioTitle: scenario.title,
-            sentTs: sent.ts,
-            sutIdentity,
-            timeoutMs: scenario.timeoutMs,
+            client: driverClient,
+            text: scenarioRun.input,
+            threadTs:
+              typeof beforeRunResult === "object" ? beforeRunResult?.inputThreadTs : undefined,
           });
-          scenarioResults.push({
-            id: scenario.id,
-            title: scenario.title,
-            status: "pass",
-            details: "no reply",
-          });
-        }
-      } catch (error) {
-        scenarioResults.push({
-          id: scenario.id,
-          title: scenario.title,
-          status: "fail",
-          details: formatErrorMessage(error),
-        });
-        preservedGatewayDebugArtifacts = true;
-        if (gatewayHarness) {
-          await gatewayHarness
-            .stop({ keepTemp: true, preserveToDir: gatewayDebugDirPath })
-            .catch((stopError) => {
-              appendLiveLaneIssue(cleanupIssues, "gateway debug preservation failed", stopError);
+          const requestThreadTs =
+            (typeof beforeRunResult === "object" ? beforeRunResult?.inputThreadTs : undefined) ??
+            sent.ts;
+          if (scenarioRun.expectReply) {
+            const reply = await waitForSlackScenarioReply({
+              channelId: activeRuntimeEnv.channelId,
+              client: sutReadClient,
+              matchText: scenarioRun.matchText,
+              observedMessages,
+              observationScenarioId: scenario.id,
+              observationScenarioTitle: scenario.title,
+              sentTs: sent.ts,
+              threadTs: requestThreadTs,
+              sutIdentity,
+              timeoutMs: scenario.timeoutMs,
             });
-        }
-        break;
-      } finally {
-        if (!preservedGatewayDebugArtifacts && gatewayHarness) {
-          await gatewayHarness.stop().catch((error) => {
-            appendLiveLaneIssue(cleanupIssues, "gateway stop failed", error);
+            scenarioRun.verify?.(reply.message, { requestThreadTs, sentTs: sent.ts });
+            const responseObservedAt = new Date(reply.observedAt);
+            const rttMs = responseObservedAt.getTime() - requestStartedAt.getTime();
+            const afterReplyDetails = await scenarioRun.afterReply?.(reply.message, {
+              ...baseScenarioContext,
+              sentTs: sent.ts,
+            });
+            scenarioResults.push({
+              id: scenario.id,
+              title: scenario.title,
+              status: "pass",
+              details: [
+                `reply matched in ${rttMs}ms`,
+                beforeRunDetails,
+                afterReplyDetails,
+                scenarioAttempt > 1 ? `retried ${scenarioAttempt - 1}x` : undefined,
+              ]
+                .filter(Boolean)
+                .join("; "),
+              rttMs,
+              requestStartedAt: requestStartedAt.toISOString(),
+              responseObservedAt: responseObservedAt.toISOString(),
+            });
+          } else {
+            await waitForSlackNoReply({
+              channelId: activeRuntimeEnv.channelId,
+              client: sutReadClient,
+              matchText: scenarioRun.matchText,
+              observedMessages,
+              observationScenarioId: scenario.id,
+              observationScenarioTitle: scenario.title,
+              sentTs: sent.ts,
+              sutIdentity,
+              timeoutMs: scenario.timeoutMs,
+            });
+            scenarioResults.push({
+              id: scenario.id,
+              title: scenario.title,
+              status: "pass",
+              details:
+                scenarioAttempt > 1 ? `no reply; retried ${scenarioAttempt - 1}x` : "no reply",
+            });
+          }
+          break;
+        } catch (error) {
+          if (
+            scenarioAttempt < SLACK_QA_RETRYABLE_SCENARIO_ATTEMPTS &&
+            isRetryableSlackQaScenarioError(error)
+          ) {
+            scenarioAttempt += 1;
+            continue;
+          }
+          scenarioResults.push({
+            id: scenario.id,
+            title: scenario.title,
+            status: "fail",
+            details:
+              scenarioAttempt > 1
+                ? `${formatErrorMessage(error)}; retried ${scenarioAttempt - 1}x`
+                : formatErrorMessage(error),
           });
+          preservedGatewayDebugArtifacts = true;
+          if (gatewayHarness) {
+            await gatewayHarness
+              .stop({ keepTemp: true, preserveToDir: gatewayDebugDirPath })
+              .catch((stopError) => {
+                appendLiveLaneIssue(cleanupIssues, "gateway debug preservation failed", stopError);
+              });
+          }
+          break;
+        } finally {
+          if (!preservedGatewayDebugArtifacts && gatewayHarness) {
+            await gatewayHarness.stop().catch((error) => {
+              appendLiveLaneIssue(cleanupIssues, "gateway stop failed", error);
+            });
+            await new Promise((resolve) => setTimeout(resolve, SLACK_QA_GATEWAY_STOP_SETTLE_MS));
+          }
         }
+        if (scenarioResults.at(-1)?.id === scenario.id) {
+          break;
+        }
+      }
+      if (scenarioResults.at(-1)?.status === "fail") {
+        break;
       }
     }
   } catch (error) {

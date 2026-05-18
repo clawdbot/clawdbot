@@ -86,12 +86,14 @@ function Check-Node {
     try {
         $nodeVersion = (node -v 2>$null)
         if ($nodeVersion) {
-            $version = [int]($nodeVersion -replace 'v(\d+)\..*', '$1')
-            if ($version -ge 22) {
+            $versionMatch = [regex]::Match($nodeVersion, '^v(?<major>\d+)\.(?<minor>\d+)\.')
+            $major = if ($versionMatch.Success) { [int]$versionMatch.Groups["major"].Value } else { 0 }
+            $minor = if ($versionMatch.Success) { [int]$versionMatch.Groups["minor"].Value } else { 0 }
+            if (($major -gt 22) -or (($major -eq 22) -and ($minor -ge 19))) {
                 Write-Host "[OK] Node.js $nodeVersion found" -ForegroundColor Green
                 return $true
             } else {
-                Write-Host "[!] Node.js $nodeVersion found, but v22+ required" -ForegroundColor Yellow
+                Write-Host "[!] Node.js $nodeVersion found, but v22.19+ required" -ForegroundColor Yellow
                 return $false
             }
         }

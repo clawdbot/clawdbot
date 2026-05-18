@@ -39,9 +39,9 @@ export function createHeartbeatResponseTool(): AnyAgentTool {
   return {
     label: "Heartbeat",
     name: HEARTBEAT_RESPONSE_TOOL_NAME,
-    displaySummary: "Record a heartbeat outcome and whether it should notify the user.",
+    displaySummary: "Record heartbeat outcome/notify choice.",
     description:
-      "Record the result of a heartbeat run. Use notify=false when nothing should be sent visibly. Use notify=true with notificationText when the user should receive a concise heartbeat alert.",
+      "Record heartbeat result. `notify=false` no visible send. `notify=true` needs concise notificationText.",
     parameters: HeartbeatResponseToolSchema,
     execute: async (_toolCallId, args) => {
       if (!isRecord(args)) {

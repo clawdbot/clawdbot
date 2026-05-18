@@ -424,9 +424,40 @@ const GROUP_VISIBLE_REPLY_PROMPT_TEST_TARGETS = [
   "src/agents/system-prompt.test.ts",
   ...GROUP_VISIBLE_REPLY_TEST_TARGETS,
 ];
+const CHANNEL_CONTRACT_REGISTRY_BACKED_TARGETS = [
+  "directory",
+  "plugin",
+  "surfaces-only",
+  "threading",
+].flatMap((suite) =>
+  "abcdefgh"
+    .split("")
+    .map(
+      (shard) =>
+        `src/channels/plugins/contracts/${suite}.registry-backed-shard-${shard}.contract.test.ts`,
+    ),
+);
+const TEST_HELPER_NORMALIZE_TEXT_TARGETS = [
+  "src/auto-reply/reply/commands-status.test.ts",
+  "src/auto-reply/status.test.ts",
+  "src/tui/components/chat-log.test.ts",
+];
 const SOURCE_TEST_TARGETS = new Map([
   ...PRECISE_SOURCE_TEST_TARGETS,
   ["src/test-utils/openclaw-test-state.ts", ["src/test-utils/openclaw-test-state.test.ts"]],
+  [
+    "src/channels/plugins/contracts/test-helpers/manifest.ts",
+    [
+      ...CHANNEL_CONTRACT_REGISTRY_BACKED_TARGETS,
+      "src/channels/plugins/contracts/registry.contract.test.ts",
+      "src/channels/plugins/contracts/session-binding.registry-backed.contract.test.ts",
+    ],
+  ],
+  [
+    "src/channels/plugins/contracts/test-helpers/registry-backed-contract-shards.ts",
+    CHANNEL_CONTRACT_REGISTRY_BACKED_TARGETS,
+  ],
+  ["test/helpers/normalize-text.ts", TEST_HELPER_NORMALIZE_TEXT_TARGETS],
   [
     "src/plugin-sdk/test-helpers/directory-ids.ts",
     [
@@ -452,6 +483,19 @@ const SOURCE_TEST_TARGETS = new Map([
   ["extensions/google-meet/src/cli.ts", ["extensions/google-meet/src/cli.test.ts"]],
   ["extensions/google-meet/src/create.ts", ["extensions/google-meet/index.test.ts"]],
   ["extensions/google-meet/src/oauth.ts", ["extensions/google-meet/src/oauth.test.ts"]],
+  [
+    "extensions/discord/src/monitor/message-handler.ts",
+    [
+      "extensions/discord/src/channel-actions.contract.test.ts",
+      "extensions/discord/src/channel.message-adapter.test.ts",
+      "extensions/discord/src/channel.test.ts",
+      "extensions/discord/src/durable-delivery.test.ts",
+      "extensions/discord/src/monitor/message-handler.bot-self-filter.test.ts",
+      "extensions/discord/src/monitor/message-handler.queue.test.ts",
+      "extensions/discord/src/monitor/provider.skill-dedupe.test.ts",
+      "extensions/discord/src/monitor/provider.test.ts",
+    ],
+  ],
   ["src/commands/doctor-memory-search.ts", ["src/commands/doctor-memory-search.test.ts"]],
   [
     "src/commitments/model-selection.runtime.ts",

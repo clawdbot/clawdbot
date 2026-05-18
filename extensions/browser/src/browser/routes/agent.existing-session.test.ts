@@ -74,6 +74,7 @@ vi.mock("../../media/store.js", () => ({
 vi.mock("./agent.shared.js", () => createExistingSessionAgentSharedModule());
 
 const { registerBrowserAgentActRoutes } = await import("./agent.act.js");
+const { registerBrowserAgentActHookRoutes } = await import("./agent.act.hooks.js");
 const { registerBrowserAgentSnapshotRoutes } = await import("./agent.snapshot.js");
 
 function getSnapshotGetHandler(ssrfPolicy?: unknown) {
@@ -102,6 +103,16 @@ function getActPostHandler() {
     state: () => ({ resolved: { evaluateEnabled: true } }),
   } as never);
   const handler = postHandlers.get("/act");
+  expect(handler).toBeTypeOf("function");
+  return handler;
+}
+
+function getDialogHookPostHandler() {
+  const { app, postHandlers } = createBrowserRouteApp();
+  registerBrowserAgentActHookRoutes(app, {
+    state: () => ({ resolved: {} }),
+  } as never);
+  const handler = postHandlers.get("/hooks/dialog");
   expect(handler).toBeTypeOf("function");
   return handler;
 }
@@ -284,6 +295,24 @@ describe("existing-session browser routes", () => {
     const body = requireRecord(response.body, "response body");
     expect(String(body.error)).toContain("type does not support timeoutMs");
     expect(chromeMcpMocks.fillChromeMcpElement).not.toHaveBeenCalled();
+  });
+
+  it("fails closed for existing-session dialogId responses", async () => {
+    const handler = getDialogHookPostHandler();
+    const response = createBrowserRouteResponse();
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { accept: true, dialogId: "d1" },
+      },
+      response.res,
+    );
+
+    expect(response.statusCode).toBe(501);
+    const body = requireRecord(response.body, "response body");
+    expect(String(body.error)).toContain("dialogId");
+    expect(chromeMcpMocks.evaluateChromeMcpScript).not.toHaveBeenCalled();
   });
 
   it("supports glob URL waits for existing-session profiles", async () => {

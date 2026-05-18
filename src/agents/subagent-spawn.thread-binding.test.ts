@@ -19,12 +19,18 @@ const hoisted = vi.hoisted(() => ({
 }));
 
 function firstRegisteredSubagentRun(): {
+  controllerSessionKey?: string;
+  requesterSessionKey?: string;
+  requesterDisplayKey?: string;
   requesterOrigin?: { channel?: string; accountId?: string; to?: string };
   expectsCompletionMessage?: boolean;
   spawnMode?: string;
 } {
   const call = hoisted.registerSubagentRunMock.mock.calls[0]?.[0] as
     | {
+        controllerSessionKey?: string;
+        requesterSessionKey?: string;
+        requesterDisplayKey?: string;
         requesterOrigin?: { channel?: string; accountId?: string; to?: string };
         expectsCompletionMessage?: boolean;
         spawnMode?: string;
@@ -185,6 +191,45 @@ describe("spawnSubagentDirect thread binding delivery", () => {
     expect(registeredRun?.requesterOrigin?.to).toBe(`room:${boundRoom}`);
     expect(registeredRun?.expectsCompletionMessage).toBe(false);
     expect(registeredRun?.spawnMode).toBe("session");
+  });
+
+  it("uses controller ownership for thread binding while completion routes to owner", async () => {
+    let hookRequesterSessionKey: string | undefined;
+    hoisted.hookRunner.hasHooks.mockImplementation(
+      (hookName?: string) => hookName === "subagent_spawning",
+    );
+    hoisted.hookRunner.runSubagentSpawning.mockImplementation(
+      async (_event: unknown, ctx?: { requesterSessionKey?: string }) => {
+        hookRequesterSessionKey = ctx?.requesterSessionKey;
+        return {
+          status: "ok",
+          threadBindingReady: true,
+        };
+      },
+    );
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "reply with a marker",
+        thread: true,
+        mode: "session",
+        context: "isolated",
+      },
+      {
+        agentSessionKey: "agent:main:telegram:default:direct:456",
+        completionOwnerKey: "agent:main:main",
+        agentChannel: "telegram",
+        agentAccountId: "default",
+        agentTo: "telegram:direct:456",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(hookRequesterSessionKey).toBe("agent:main:telegram:default:direct:456");
+    const registeredRun = firstRegisteredSubagentRun();
+    expect(registeredRun.controllerSessionKey).toBe("agent:main:telegram:default:direct:456");
+    expect(registeredRun.requesterSessionKey).toBe("agent:main:main");
+    expect(registeredRun.requesterDisplayKey).toBe("agent:main:main");
   });
 
   it("keeps completion announcements when only a generic binding is available", async () => {

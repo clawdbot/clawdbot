@@ -1,6 +1,7 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
 import { loadPluginManifestRegistryForInstalledIndex } from "./manifest-registry-installed.js";
 import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry.js";
+import type { PluginRegistrySnapshot } from "./plugin-registry.js";
 import { getPluginRegistryState } from "./runtime-state.js";
 
 function uniqueProviderRefs(values: readonly string[]): string[] {
@@ -18,8 +19,16 @@ function uniqueProviderRefs(values: readonly string[]): string[] {
   return next;
 }
 
-function resolveManifestSyntheticAuthProviderRefs(): string[] {
-  const result = loadPluginRegistrySnapshotWithMetadata({});
+function resolveManifestSyntheticAuthProviderRefs(
+  params: {
+    index?: PluginRegistrySnapshot;
+    registryDiagnostics?: readonly unknown[];
+  } = {},
+): string[] {
+  if (params.index && (params.registryDiagnostics?.length ?? 0) > 0) {
+    return [];
+  }
+  const result = loadPluginRegistrySnapshotWithMetadata({ index: params.index });
   if (result.source !== "persisted" && result.source !== "provided") {
     return [];
   }
@@ -28,8 +37,16 @@ function resolveManifestSyntheticAuthProviderRefs(): string[] {
   );
 }
 
-function resolveManifestExternalAuthProviderRefs(): string[] {
-  const result = loadPluginRegistrySnapshotWithMetadata({});
+function resolveManifestExternalAuthProviderRefs(
+  params: {
+    index?: PluginRegistrySnapshot;
+    registryDiagnostics?: readonly unknown[];
+  } = {},
+): string[] {
+  if (params.index && (params.registryDiagnostics?.length ?? 0) > 0) {
+    return [];
+  }
+  const result = loadPluginRegistrySnapshotWithMetadata({ index: params.index });
   if (result.source !== "persisted" && result.source !== "provided") {
     return [];
   }
@@ -41,7 +58,12 @@ function resolveManifestExternalAuthProviderRefs(): string[] {
   );
 }
 
-export function resolveRuntimeSyntheticAuthProviderRefs(): string[] {
+export function resolveRuntimeSyntheticAuthProviderRefs(
+  params: {
+    index?: PluginRegistrySnapshot;
+    registryDiagnostics?: readonly unknown[];
+  } = {},
+): string[] {
   const registry = getPluginRegistryState()?.activeRegistry;
   if (registry) {
     return uniqueProviderRefs([
@@ -61,10 +83,18 @@ export function resolveRuntimeSyntheticAuthProviderRefs(): string[] {
         .map((entry) => entry.backend.id),
     ]);
   }
-  return resolveManifestSyntheticAuthProviderRefs();
+  return resolveManifestSyntheticAuthProviderRefs({
+    index: params.index,
+    registryDiagnostics: params.registryDiagnostics,
+  });
 }
 
-export function resolveRuntimeExternalAuthProviderRefs(): string[] {
+export function resolveRuntimeExternalAuthProviderRefs(
+  params: {
+    index?: PluginRegistrySnapshot;
+    registryDiagnostics?: readonly unknown[];
+  } = {},
+): string[] {
   const registry = getPluginRegistryState()?.activeRegistry;
   if (registry) {
     return uniqueProviderRefs([
@@ -89,5 +119,8 @@ export function resolveRuntimeExternalAuthProviderRefs(): string[] {
         .map((entry) => entry.backend.id),
     ]);
   }
-  return resolveManifestExternalAuthProviderRefs();
+  return resolveManifestExternalAuthProviderRefs({
+    index: params.index,
+    registryDiagnostics: params.registryDiagnostics,
+  });
 }

@@ -403,6 +403,23 @@ describe("createReplyMediaPathNormalizer", () => {
     expectNoMedia(result);
   });
 
+  it("keeps surviving media and appends a warning when some reply media is dropped", async () => {
+    resolveOutboundAttachmentFromUrl.mockRejectedValueOnce(new Error("file not found"));
+    const normalize = createReplyMediaPathNormalizer({
+      cfg: {},
+      sessionKey: "session-key",
+      workspaceDir: "/tmp/agent-workspace",
+    });
+
+    const result = await normalize({
+      text: "Here is the surviving attachment",
+      mediaUrls: ["./out/missing.png", "https://example.com/ok.png"],
+    });
+
+    expect(result.text).toBe("Here is the surviving attachment\n⚠️ Media failed.");
+    expectMedia(result, "https://example.com/ok.png", ["https://example.com/ok.png"]);
+  });
+
   it("returns a warning-only text reply when media-only output is dropped upstream", async () => {
     resolveOutboundAttachmentFromUrl.mockRejectedValueOnce(new Error("file not found"));
     const normalize = createReplyMediaPathNormalizer({

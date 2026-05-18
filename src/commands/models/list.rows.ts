@@ -9,6 +9,7 @@ import { normalizeProviderId } from "../../agents/provider-id.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { NormalizedModelCatalogRow } from "../../model-catalog/index.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { ModelListAuthIndex } from "./list.auth-index.js";
 import type { ListRowModel } from "./list.model-row.js";
@@ -35,6 +36,7 @@ export type RowBuilderContext = {
   discoveredKeys: Set<string>;
   filter: RowFilter;
   skipRuntimeModelSuppression?: boolean;
+  metadataSnapshot?: PluginMetadataSnapshot;
 };
 
 const modelCatalogModuleLoader = createLazyImportLoader<ModelCatalogModule>(
@@ -323,7 +325,11 @@ export async function appendAuthenticatedCatalogRows(params: {
   seenKeys: Set<string>;
 }): Promise<void> {
   const { loadModelCatalog } = await loadModelCatalogModule();
-  const catalog = await loadModelCatalog({ config: params.context.cfg, readOnly: true });
+  const catalog = await loadModelCatalog({
+    config: params.context.cfg,
+    readOnly: true,
+    metadataSnapshot: params.context.metadataSnapshot,
+  });
   for (const entry of catalog) {
     if (!params.context.authIndex.hasProviderAuth(entry.provider)) {
       continue;
@@ -387,7 +393,11 @@ export async function appendCatalogSupplementRows(params: {
     loadModelCatalogModule(),
     loadModelResolverModule(),
   ]);
-  const catalog = await loadModelCatalog({ config: params.context.cfg, readOnly: true });
+  const catalog = await loadModelCatalog({
+    config: params.context.cfg,
+    readOnly: true,
+    metadataSnapshot: params.context.metadataSnapshot,
+  });
   for (const entry of catalog) {
     if (
       params.context.filter.provider &&
@@ -442,6 +452,7 @@ export async function appendProviderCatalogRows(params: {
     agentDir: params.context.agentDir,
     providerFilter: params.context.filter.provider,
     staticOnly: params.staticOnly,
+    metadataSnapshot: params.context.metadataSnapshot,
   })) {
     const key = modelKey(model.provider, model.id);
     if (

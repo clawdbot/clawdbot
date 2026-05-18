@@ -4,6 +4,7 @@ import {
   fetchXaiOAuthDiscovery,
   isTrustedXaiOAuthEndpoint,
   refreshXaiOAuthCredential,
+  XAI_OAUTH_CALLBACK_CORS_ORIGIN_ALLOWLIST,
   XAI_OAUTH_CALLBACK_PORT,
   XAI_OAUTH_CLIENT_ID,
   XAI_OAUTH_REDIRECT_URI,
@@ -25,6 +26,10 @@ describe("xAI OAuth", () => {
     expect(isTrustedXaiOAuthEndpoint("http://auth.x.ai/oauth2/token")).toBe(false);
     expect(isTrustedXaiOAuthEndpoint("https://x.ai.evil.test/oauth2/token")).toBe(false);
     expect(isTrustedXaiOAuthEndpoint("not a url")).toBe(false);
+  });
+
+  it("exposes the loopback CORS origin allowlist that loginXaiOAuth threads to the SDK helper", () => {
+    expect([...XAI_OAUTH_CALLBACK_CORS_ORIGIN_ALLOWLIST]).toEqual(["auth.x.ai", "accounts.x.ai"]);
   });
 
   it("builds the xAI authorize URL for OpenClaw", () => {
@@ -52,6 +57,7 @@ describe("xAI OAuth", () => {
   });
 
   it("validates discovered endpoints before using them", async () => {
+    vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
     const fetchImpl = vi.fn(async () =>
       jsonResponse({
         authorization_endpoint: "https://auth.x.ai/oauth2/authorize",
@@ -63,6 +69,13 @@ describe("xAI OAuth", () => {
       authorizationEndpoint: "https://auth.x.ai/oauth2/authorize",
       tokenEndpoint: "https://auth.x.ai/oauth2/token",
     });
+
+    const discoveryInit = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls.at(
+      0,
+    )?.[1] as RequestInit | undefined;
+    const discoveryHeaders = new Headers(discoveryInit?.headers ?? {});
+    expect(discoveryHeaders.get("user-agent")).toBe("openclaw/2026.3.22");
+    vi.unstubAllEnvs();
 
     const poisonedFetch = vi.fn(async () =>
       jsonResponse({
@@ -77,6 +90,7 @@ describe("xAI OAuth", () => {
   });
 
   it("refreshes with the cached token endpoint and preserves refresh fallback", async () => {
+    vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       expect(init?.method).toBe("POST");
       expect(typeof init?.body).toBe("string");
@@ -84,6 +98,8 @@ describe("xAI OAuth", () => {
       expect(body).toContain("grant_type=refresh_token");
       expect(body).toContain(`client_id=${encodeURIComponent(XAI_OAUTH_CLIENT_ID)}`);
       expect(body).toContain("refresh_token=refresh-1");
+      const headers = new Headers(init?.headers ?? {});
+      expect(headers.get("user-agent")).toBe("openclaw/2026.3.22");
       return jsonResponse({
         access_token: "access-2",
         expires_in: 120,
@@ -106,5 +122,6 @@ describe("xAI OAuth", () => {
     expect(refreshed.access).toBe("access-2");
     expect(refreshed.refresh).toBe("refresh-1");
     expect(refreshed.expires).toBe(121_000);
+    vi.unstubAllEnvs();
   });
 });

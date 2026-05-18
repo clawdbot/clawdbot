@@ -100,17 +100,17 @@ const modelCatalogMocks = getSharedMocks("openclaw.trigger-handling.model-catalo
   loadModelCatalog: vi.fn().mockResolvedValue([
     {
       provider: "anthropic",
-      id: "claude-opus-4-6",
-      name: "Claude Opus 4.5",
+      id: "claude-opus-4-7",
+      name: "Claude Opus 4.7",
       contextWindow: 200000,
     },
     {
       provider: "openrouter",
-      id: "anthropic/claude-opus-4-6",
-      name: "Claude Opus 4.5 (OpenRouter)",
+      id: "anthropic/claude-opus-4-7",
+      name: "Claude Opus 4.7 (OpenRouter)",
       contextWindow: 200000,
     },
-    { provider: "openai", id: "gpt-5.4-mini", name: "GPT-5.4 mini" },
+    { provider: "openai", id: "gpt-5.5-mini", name: "GPT-5.5 mini" },
     { provider: "openai", id: "gpt-5.5", name: "GPT-5.5" },
     { provider: "openai-codex", id: "gpt-5.5", name: "GPT-5.5 (Codex)" },
     { provider: "minimax", id: "MiniMax-M2.7", name: "MiniMax M2.7" },
@@ -284,7 +284,7 @@ export function makeCfg(home: string): OpenClawConfig {
   return withFastReplyConfig({
     agents: {
       defaults: {
-        model: { primary: "anthropic/claude-opus-4-6" },
+        model: { primary: "anthropic/claude-opus-4-7" },
         workspace: join(home, "openclaw"),
         // Test harness: avoid 1s coalescer idle sleeps that dominate trigger suites.
         blockStreamingCoalesce: { idleMs: 1 },

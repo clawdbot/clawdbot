@@ -1,3 +1,5 @@
+import { accessSync, constants } from "node:fs";
+import path from "node:path";
 import { performance } from "node:perf_hooks";
 import {
   detectChangedLanesForPaths,
@@ -39,6 +41,35 @@ function isTruthyEnvFlag(value) {
     .trim()
     .toLowerCase();
   return normalized !== "" && normalized !== "0" && normalized !== "false" && normalized !== "no";
+}
+
+function executableExistsOnPath(command, env = process.env) {
+  const pathValue = env.PATH ?? env.Path ?? "";
+  const pathExts =
+    process.platform === "win32" ? (env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";") : [""];
+  for (const searchPath of pathValue.split(path.delimiter)) {
+    if (!searchPath) {
+      continue;
+    }
+    for (const ext of pathExts) {
+      try {
+        accessSync(path.join(searchPath, `${command}${ext}`), constants.X_OK);
+        return true;
+      } catch {
+        continue;
+      }
+    }
+  }
+  return false;
+}
+
+export function shouldSkipAppLintForMissingSwiftlint(options = {}) {
+  const env = options.env ?? process.env;
+  const platform = options.platform ?? process.platform;
+  const swiftlintAvailable = options.swiftlintAvailable ?? executableExistsOnPath("swiftlint", env);
+  return (
+    isTruthyEnvFlag(env.OPENCLAW_TESTBOX_REMOTE_RUN) && platform !== "darwin" && !swiftlintAvailable
+  );
 }
 
 export function shouldDelegateChangedCheckToCrabbox(argv = [], env = process.env) {
@@ -198,7 +229,17 @@ export function createChangedCheckPlan(result, options = {}) {
   if (lanes.tooling || lanes.liveDockerTooling) {
     addLint("lint scripts", ["lint:scripts"]);
   }
-  if (lanes.apps) {
+  if (lanes.apps && shouldSkipAppLintForMissingSwiftlint({ ...options, env: baseEnv })) {
+    addCommand(
+      "lint apps (swiftlint unavailable in Testbox)",
+      "node",
+      [
+        "-e",
+        "console.error('[check:changed] Swift app lint skipped: swiftlint is unavailable in this Linux Testbox; macOS CI owns SwiftLint coverage.')",
+      ],
+      baseEnv,
+    );
+  } else if (lanes.apps) {
     addLint("lint apps", ["lint:apps"]);
   }
 

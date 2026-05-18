@@ -1,22 +1,27 @@
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
 const PROOF_SCRIPT = "scripts/e2e/telegram-user-crabbox-proof.ts";
+const CREDENTIAL_SCRIPT = "scripts/e2e/telegram-user-credential.ts";
 const USER_DRIVER = "scripts/e2e/telegram-user-driver.py";
+const QA_LAB_RUNTIME_API = "extensions/qa-lab/runtime-api.ts";
 const PACKAGE_JSON = "package.json";
 const WORKFLOW = ".github/workflows/mantis-telegram-desktop-proof.yml";
 const LIVE_WORKFLOW = ".github/workflows/mantis-telegram-live.yml";
 const PROMPT = ".github/codex/prompts/mantis-telegram-desktop-proof.md";
+const DOCS = ["docs/help/testing.md", "docs/concepts/qa-e2e-automation.md"];
 
 type WorkflowStep = {
   env?: Record<string, string>;
   name?: string;
   run?: string;
   uses?: string;
+  with?: Record<string, string>;
 };
 
 type WorkflowJob = {
+  if?: string;
   steps?: WorkflowStep[];
 };
 
@@ -24,6 +29,20 @@ type Workflow = {
   concurrency?: unknown;
   env?: Record<string, string>;
   jobs?: Record<string, WorkflowJob>;
+  on?: {
+    pull_request_target?: {
+      types?: string[];
+    };
+    workflow_dispatch?: {
+      inputs?: Record<
+        string,
+        {
+          required?: boolean;
+          type?: string;
+        }
+      >;
+    };
+  };
   permissions?: Record<string, string>;
 };
 
@@ -60,6 +79,13 @@ function jobStep(workflowFile: string, jobName: string, stepName: string): Workf
   return step;
 }
 
+function filesUnder(root: string): string[] {
+  return readdirSync(root).flatMap((name) => {
+    const file = `${root}/${name}`;
+    return statSync(file).isDirectory() ? filesUnder(file) : [file];
+  });
+}
+
 describe("Mantis Telegram Desktop proof workflow", () => {
   it("runs with the repository pnpm major", () => {
     const workflow = parse(readFileSync(WORKFLOW, "utf8")) as Workflow;
@@ -94,12 +120,57 @@ describe("Mantis Telegram Desktop proof workflow", () => {
 
   it("uses the OpenClaw Mantis mention as the comment trigger", () => {
     const workflow = readFileSync(WORKFLOW, "utf8");
+    const liveWorkflow = readFileSync(LIVE_WORKFLOW, "utf8");
     expect(workflow).toContain("@openclaw-mantis");
     expect(workflow).toContain("/openclaw-mantis");
     expect(workflow).toContain("mantis: telegram-visible-proof");
+    expect(workflow).toContain('setOutput("should_run", "false")');
+    expect(workflow).toContain('normalized.includes("telegram desktop")');
+    expect(liveWorkflow).toContain('normalized.includes("telegram desktop")');
+    expect(liveWorkflow).toContain("!requestedDesktopProof");
     expect(workflow).not.toContain("@Mantis");
     expect(workflow).not.toContain("@mantis");
     expect(workflow).not.toContain('"/mantis"');
+  });
+
+  it("runs when ClawSweeper applies the Telegram proof label", () => {
+    const workflow = parse(readFileSync(WORKFLOW, "utf8")) as Workflow;
+    const workflowText = readFileSync(WORKFLOW, "utf8");
+
+    expect(workflow.on?.pull_request_target?.types).toContain("labeled");
+    expect(workflowText).toContain("github.event.label.name == 'mantis: telegram-visible-proof'");
+    expect(workflowText).toContain('eventName === "pull_request_target"');
+    expect(workflowText).toContain("context.payload.pull_request?.number");
+    expect(workflowText).toContain("Accepted Mantis label trigger");
+    expect(workflowText).toContain("allow-bot-users: clawsweeper[bot]");
+  });
+
+  it("can publish an existing proof artifact without recapturing", () => {
+    const workflow = parse(readFileSync(WORKFLOW, "utf8")) as Workflow;
+    const workflowText = readFileSync(WORKFLOW, "utf8");
+    const publishJob = workflow.jobs?.publish_existing_telegram_desktop_proof;
+    const captureJob = workflow.jobs?.run_telegram_desktop_proof;
+    const validateJob = workflow.jobs?.validate_refs;
+
+    expect(workflow.on?.workflow_dispatch?.inputs?.publish_artifact_name?.required).toBe(false);
+    expect(workflow.on?.workflow_dispatch?.inputs?.publish_run_id?.required).toBe(false);
+    expect(captureJob?.if).toBe(
+      "needs.resolve_request.outputs.should_run == 'true' && needs.resolve_request.outputs.publish_artifact_name == ''",
+    );
+    expect(validateJob?.if).toBe(
+      "needs.resolve_request.outputs.should_run == 'true' && needs.resolve_request.outputs.publish_artifact_name == ''",
+    );
+    expect(publishJob?.if).toBe(
+      "needs.resolve_request.outputs.should_run == 'true' && needs.resolve_request.outputs.publish_artifact_name != ''",
+    );
+    expect(workflowText).toContain("publish_run_id is required when publish_artifact_name is set.");
+    expect(workflowText).toContain('gh run download "$run_id"');
+    expect(workflowText).toContain(
+      '--artifact-root "mantis/telegram-desktop/pr-${TARGET_PR}/published-',
+    );
+    expect(workflowText).toContain(
+      "PUBLISH_ARTIFACT_URL=https://github.com/${GITHUB_REPOSITORY}/actions/runs/",
+    );
   });
 
   it("uses the repo-owned Telegram user driver by default", () => {
@@ -108,6 +179,48 @@ describe("Mantis Telegram Desktop proof workflow", () => {
       'const DEFAULT_USER_DRIVER = "scripts/e2e/telegram-user-driver.py";',
     );
     expect(readFileSync(USER_DRIVER, "utf8")).toContain("/usr/local/lib/libtdjson.so");
+  });
+
+  it("keeps Telegram Desktop proof credentials out of the generic qa-lab API", () => {
+    const packageJson = JSON.parse(readFileSync(PACKAGE_JSON, "utf8")) as {
+      scripts?: Record<string, string>;
+    };
+    const workflowFiles = filesUnder(".github/workflows").filter((file) => file.endsWith(".yml"));
+    const telegramUserWorkflows = workflowFiles.filter((file) =>
+      readFileSync(file, "utf8").includes("telegram-user"),
+    );
+
+    expect(readFileSync(QA_LAB_RUNTIME_API, "utf8")).not.toContain("telegram-user");
+    expect(packageJson.scripts).not.toHaveProperty("qa:telegram-user:crabbox");
+    expect(telegramUserWorkflows).toEqual([WORKFLOW]);
+    for (const doc of DOCS) {
+      expect(readFileSync(doc, "utf8")).not.toContain("pnpm qa:telegram-user:crabbox");
+    }
+    expect(readFileSync(PROOF_SCRIPT, "utf8")).not.toContain("pnpm qa:telegram-user:crabbox");
+    expect(readFileSync(CREDENTIAL_SCRIPT, "utf8")).toContain(
+      'const TELEGRAM_USER_QA_CREDENTIAL_KIND = "telegram-user";',
+    );
+    expect(readFileSync(CREDENTIAL_SCRIPT, "utf8")).toContain(
+      "../qa/convex-credential-broker/convex/payload-validation.js",
+    );
+  });
+
+  it("authorizes Telegram Desktop from the leased TDLib user session", () => {
+    const proofScript = readFileSync(PROOF_SCRIPT, "utf8");
+    const userDriver = readFileSync(USER_DRIVER, "utf8");
+
+    expect(proofScript).toContain("zbar-tools");
+    expect(proofScript).toContain("isTransientSshFailure");
+    expect(proofScript).toContain('rm -rf "$root/desktop/tdata"');
+    expect(proofScript).toContain("terminate-desktop-sessions");
+    expect(proofScript).toContain('confirm-qr --link "$link"');
+    expect(proofScript).toContain("Telegram Desktop QR login code was not found.");
+    expect(proofScript).toContain("terminateRemoteDesktopSession");
+    expect(userDriver).toContain('"@type": "confirmQrCodeAuthentication"');
+    expect(userDriver).toContain('"@type": "getActiveSessions"');
+    expect(userDriver).toContain('"@type": "terminateSession"');
+    expect(userDriver).toContain('sub.add_parser("terminate-session")');
+    expect(userDriver).toContain('sub.add_parser("terminate-desktop-sessions")');
   });
 
   it("installs local proof tools before the Codex agent runs", () => {

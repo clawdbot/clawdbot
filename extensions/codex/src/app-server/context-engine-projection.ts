@@ -47,7 +47,7 @@ export function projectContextEngineAssemblyForCodex(params: {
         CONTEXT_SAFETY_NOTE,
         "",
         CONTEXT_OPEN,
-        truncateText(renderedContext, maxRenderedContextChars),
+        truncateOlderContext(renderedContext, maxRenderedContextChars),
         CONTEXT_CLOSE,
         "",
         REQUEST_HEADER,
@@ -380,4 +380,24 @@ function truncateText(text: string, maxChars: number): string {
   return text.length > maxChars
     ? `${text.slice(0, maxChars)}\n[truncated ${text.length - maxChars} chars]`
     : text;
+}
+
+function truncateOlderContext(text: string, maxChars: number): string {
+  if (text.length <= maxChars) {
+    return text;
+  }
+  if (maxChars <= 0) {
+    return "";
+  }
+
+  const buildMarker = (omittedChars: number): string =>
+    `[truncated ${omittedChars} chars from older context]\n`;
+  let marker = buildMarker(text.length - maxChars);
+  let tailChars = Math.max(0, maxChars - marker.length);
+  marker = buildMarker(text.length - tailChars);
+  if (marker.length >= maxChars) {
+    return marker.slice(0, maxChars);
+  }
+  tailChars = maxChars - marker.length;
+  return `${marker}${text.slice(text.length - tailChars).trimStart()}`;
 }

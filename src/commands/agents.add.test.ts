@@ -3,8 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
+import { legacyOAuthSidecarTestUtils } from "../agents/auth-profiles/legacy-oauth-sidecar.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { resolveOAuthDir } from "../config/paths.js";
 import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
@@ -253,10 +255,20 @@ describe("agents add command", () => {
 
   it("skips legacy sidecar-backed Codex OAuth profiles when seeding a new agent store", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agents-add-oauth-ref-skip-"));
+    const previousOAuthDir = process.env.OPENCLAW_OAUTH_DIR;
+    const previousSecretKey = process.env.OPENCLAW_AUTH_PROFILE_SECRET_KEY;
+    process.env.OPENCLAW_OAUTH_DIR = path.join(root, "credentials");
+    process.env.OPENCLAW_AUTH_PROFILE_SECRET_KEY = "legacy-seed";
     try {
       const sourceAgentDir = path.join(root, "main", "agent");
       const destAgentDir = path.join(root, "work", "agent");
       const destAuthPath = path.join(destAgentDir, "auth-profiles.json");
+      const profileId = "openai-codex:default";
+      const ref = {
+        source: "openclaw-credentials" as const,
+        provider: "openai-codex" as const,
+        id: "0123456789abcdef0123456789abcdef",
+      };
       await fs.mkdir(sourceAgentDir, { recursive: true });
       await fs.writeFile(
         path.join(sourceAgentDir, "auth-profiles.json"),
@@ -264,18 +276,39 @@ describe("agents add command", () => {
           {
             version: AUTH_STORE_VERSION,
             profiles: {
-              "openai-codex:default": {
+              [profileId]: {
                 type: "oauth",
                 provider: "openai-codex",
                 copyToAgents: true,
                 expires: Date.now() + 60_000,
-                oauthRef: {
-                  source: "openclaw-credentials",
-                  provider: "openai-codex",
-                  id: "0123456789abcdef0123456789abcdef",
-                },
+                oauthRef: ref,
               },
             },
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+      const sidecarPath = path.join(resolveOAuthDir(), "auth-profiles", `${ref.id}.json`);
+      await fs.mkdir(path.dirname(sidecarPath), { recursive: true });
+      await fs.writeFile(
+        sidecarPath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            profileId,
+            provider: "openai-codex",
+            encrypted: legacyOAuthSidecarTestUtils.encryptLegacyOAuthMaterial({
+              ref,
+              profileId,
+              provider: "openai-codex",
+              seed: "legacy-seed",
+              material: {
+                access: "legacy-sidecar-access-token",
+                refresh: "legacy-sidecar-refresh-token",
+              },
+            }),
           },
           null,
           2,
@@ -291,6 +324,16 @@ describe("agents add command", () => {
       expect(result).toEqual({ copied: 0, skipped: 1 });
       await expect(fs.stat(destAuthPath)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
+      if (previousOAuthDir === undefined) {
+        delete process.env.OPENCLAW_OAUTH_DIR;
+      } else {
+        process.env.OPENCLAW_OAUTH_DIR = previousOAuthDir;
+      }
+      if (previousSecretKey === undefined) {
+        delete process.env.OPENCLAW_AUTH_PROFILE_SECRET_KEY;
+      } else {
+        process.env.OPENCLAW_AUTH_PROFILE_SECRET_KEY = previousSecretKey;
+      }
       await fs.rm(root, { recursive: true, force: true });
     }
   });

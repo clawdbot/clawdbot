@@ -22,6 +22,7 @@ export type GatewayBonjourAdvertiseOpts = {
   sshPort?: number;
   gatewayTlsEnabled?: boolean;
   gatewayTlsFingerprintSha256?: string;
+  gatewayDirectReachable?: boolean;
   canvasPort?: number;
   tailnetDns?: string;
   cliPath?: string;
@@ -450,6 +451,9 @@ export async function startGatewayBonjourAdvertiser(
       if (opts.gatewayTlsFingerprintSha256) {
         txtBase.gatewayTlsSha256 = opts.gatewayTlsFingerprintSha256;
       }
+    }
+    if (opts.gatewayDirectReachable) {
+      txtBase.gatewayDirectReachable = "1";
     }
     if (typeof opts.canvasPort === "number" && opts.canvasPort > 0) {
       txtBase.canvasPort = String(opts.canvasPort);

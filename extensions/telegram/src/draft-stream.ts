@@ -10,19 +10,6 @@ import { normalizeTelegramReplyToMessageId } from "./outbound-params.js";
 
 const TELEGRAM_STREAM_MAX_CHARS = 4096;
 const DEFAULT_THROTTLE_MS = 1000;
-const THREAD_NOT_FOUND_RE = /400:\s*Bad Request:\s*message thread not found/i;
-
-type TelegramSendMessageParams = Parameters<Bot["api"]["sendMessage"]>[2];
-
-function hasNumericMessageThreadId(
-  params: TelegramSendMessageParams | undefined,
-): params is TelegramSendMessageParams & { message_thread_id: number } {
-  return (
-    typeof params === "object" &&
-    params !== null &&
-    typeof (params as { message_thread_id?: unknown }).message_thread_id === "number"
-  );
-}
 
 export type TelegramDraftStream = {
   update: (text: string) => void;
@@ -109,7 +96,6 @@ export function createTelegramDraftStream(params: {
   const minInitialChars = params.minInitialChars;
   const chatId = params.chatId;
   const threadParams = buildTelegramThreadParams(params.thread);
-  const allowThreadlessRetry = params.thread?.scope !== "dm";
   const replyToMessageId = normalizeTelegramReplyToMessageId(params.replyToMessageId);
   const replyParams =
     replyToMessageId != null
@@ -136,10 +122,9 @@ export function createTelegramDraftStream(params: {
     renderedParseMode: "HTML" | undefined;
     sendGeneration: number;
   };
-  const sendRenderedMessageWithThreadFallback = async (sendArgs: {
+  const sendRenderedMessage = async (sendArgs: {
     renderedText: string;
     renderedParseMode: "HTML" | undefined;
-    fallbackWarnMessage: string;
   }) => {
     const sendParams = sendArgs.renderedParseMode
       ? {
@@ -147,28 +132,7 @@ export function createTelegramDraftStream(params: {
           parse_mode: sendArgs.renderedParseMode,
         }
       : replyParams;
-    const usedThreadParams = hasNumericMessageThreadId(sendParams);
-    try {
-      return {
-        sent: await params.api.sendMessage(chatId, sendArgs.renderedText, sendParams),
-        usedThreadParams,
-      };
-    } catch (err) {
-      if (!allowThreadlessRetry || !usedThreadParams || !THREAD_NOT_FOUND_RE.test(String(err))) {
-        throw err;
-      }
-      const threadlessParams: TelegramSendMessageParams = { ...sendParams };
-      delete threadlessParams.message_thread_id;
-      params.warn?.(sendArgs.fallbackWarnMessage);
-      return {
-        sent: await params.api.sendMessage(
-          chatId,
-          sendArgs.renderedText,
-          Object.keys(threadlessParams).length > 0 ? threadlessParams : undefined,
-        ),
-        usedThreadParams: false,
-      };
-    }
+    return await params.api.sendMessage(chatId, sendArgs.renderedText, sendParams);
   };
   const sendMessageTransportPreview = async ({
     renderedText,
@@ -187,14 +151,12 @@ export function createTelegramDraftStream(params: {
       return true;
     }
     messageSendAttempted = true;
-    let sent: Awaited<ReturnType<typeof sendRenderedMessageWithThreadFallback>>["sent"];
+    let sent: Awaited<ReturnType<typeof sendRenderedMessage>>;
     try {
-      ({ sent } = await sendRenderedMessageWithThreadFallback({
+      sent = await sendRenderedMessage({
         renderedText,
         renderedParseMode,
-        fallbackWarnMessage:
-          "telegram stream preview send failed with message_thread_id, retrying without thread",
-      }));
+      });
     } catch (err) {
       if (isSafeToRetrySendError(err) || isTelegramClientRejection(err)) {
         messageSendAttempted = false;

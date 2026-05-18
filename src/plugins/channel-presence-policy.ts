@@ -475,6 +475,10 @@ function resolveScopedChannelOwnerPluginIds(params: {
         workspaceDir: params.workspaceDir,
         env: params.env,
         manifestRecords: records,
+        allowRestrictiveAllowlistBypass: hasExplicitChannelConfig({
+          config: trustConfig,
+          channelId,
+        }),
       });
     }),
   );

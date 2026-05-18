@@ -279,6 +279,17 @@ export function resolveClaudeCliSessionFilePath(params: {
   cliSessionId: string;
   homeDir?: string;
 }): string | undefined {
+  const sessionId = params.cliSessionId.trim();
+  if (
+    !sessionId ||
+    sessionId === "." ||
+    sessionId === ".." ||
+    path.isAbsolute(sessionId) ||
+    sessionId.includes("/") ||
+    sessionId.includes("\\")
+  ) {
+    return undefined;
+  }
   const projectsDir = resolveClaudeProjectsDir(params.homeDir);
   let projectEntries: fs.Dirent[];
   try {
@@ -291,7 +302,12 @@ export function resolveClaudeCliSessionFilePath(params: {
     if (!entry.isDirectory()) {
       continue;
     }
-    const candidate = path.join(projectsDir, entry.name, `${params.cliSessionId}.jsonl`);
+    const projectDir = path.join(projectsDir, entry.name);
+    const candidate = path.resolve(projectDir, `${sessionId}.jsonl`);
+    const resolvedProjectDir = path.resolve(projectDir);
+    if (!candidate.startsWith(`${resolvedProjectDir}${path.sep}`)) {
+      continue;
+    }
     if (fs.existsSync(candidate)) {
       return candidate;
     }

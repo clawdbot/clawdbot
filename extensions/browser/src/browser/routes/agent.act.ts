@@ -654,6 +654,12 @@ export function registerBrowserAgentActRoutes(
             ssrfPolicy,
             signal: req.signal,
           });
+          if (result.blockedByDialog) {
+            return await jsonOk({
+              blockedByDialog: true,
+              browserState: result.browserState,
+            });
+          }
           switch (action.kind) {
             case "batch":
               return await jsonOk(

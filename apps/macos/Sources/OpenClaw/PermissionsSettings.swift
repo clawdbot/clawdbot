@@ -10,61 +10,109 @@ struct PermissionsSettings: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 20) {
                 SettingsPageHeader(
                     title: "Permissions",
                     subtitle: "macOS access for notifications, capture, voice, and device context.")
 
-                SettingsSection("System Access") {
+                self.permissionSummaryPanel
+
+                SettingsCardGroup("System Access") {
                     PermissionStatusList(status: self.status, refresh: self.refresh)
-                        .padding(.horizontal, 2)
                 }
 
-                SettingsSection("Location") {
+                SettingsCardGroup("Location") {
                     LocationAccessSettings()
                 }
 
-                SettingsSection("Setup") {
-                    Button("Restart onboarding") { self.showOnboarding() }
-                        .buttonStyle(.bordered)
-                    Text("Use this if macOS prompts were skipped or permissions need a fresh walkthrough.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                SettingsCardGroup("Setup") {
+                    SettingsCardRow(
+                        title: "Onboarding walkthrough",
+                        subtitle: "Use this if macOS prompts were skipped or permissions need a fresh walkthrough.",
+                        showsDivider: false)
+                    {
+                        Button("Restart onboarding") { self.showOnboarding() }
+                            .buttonStyle(.bordered)
+                    }
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: 760, alignment: .leading)
             .padding(.trailing, SettingsLayout.scrollbarGutter)
             .padding(.vertical, 4)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
+
+    private var permissionSummaryPanel: some View {
+        let granted = self.status.values.filter(\.self).count
+        let total = Capability.allCases.count
+        let complete = granted == total
+
+        return HStack(alignment: .center, spacing: 14) {
+            ZStack {
+                Circle()
+                    .fill((complete ? Color.green : Color.orange).opacity(0.18))
+                Image(systemName: complete ? "checkmark.shield.fill" : "shield.lefthalf.filled")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(complete ? .green : .orange)
+            }
+            .frame(width: 46, height: 46)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(complete ? "All access granted" : "\(granted) of \(total) permissions granted")
+                    .font(.headline)
+                Text("OpenClaw only asks for macOS capabilities when a feature needs them.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 18)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(.white.opacity(0.06))
+        }
+    }
 }
 
 private struct LocationAccessSettings: View {
+    private static let controlWidth: CGFloat = 180
+
     @AppStorage(locationModeKey) private var locationModeRaw: String = OpenClawLocationMode.off.rawValue
     @AppStorage(locationPreciseKey) private var locationPreciseEnabled: Bool = true
     @State private var lastLocationModeRaw: String = OpenClawLocationMode.off.rawValue
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Location Access")
-                .font(.body)
-
-            Picker("", selection: self.$locationModeRaw) {
-                Text("Off").tag(OpenClawLocationMode.off.rawValue)
-                Text("While Using").tag(OpenClawLocationMode.whileUsing.rawValue)
-                Text("Always").tag(OpenClawLocationMode.always.rawValue)
+        VStack(spacing: 0) {
+            SettingsCardRow(
+                title: "Location access",
+                subtitle: "Allow agents to use device location when a tool asks for it.")
+            {
+                Picker("Location Access", selection: self.$locationModeRaw) {
+                    Text("Off").tag(OpenClawLocationMode.off.rawValue)
+                    Text("While Using").tag(OpenClawLocationMode.whileUsing.rawValue)
+                    Text("Always").tag(OpenClawLocationMode.always.rawValue)
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .frame(width: Self.controlWidth, alignment: .trailing)
             }
-            .labelsHidden()
-            .pickerStyle(.menu)
 
-            Toggle("Precise Location", isOn: self.$locationPreciseEnabled)
-                .disabled(self.locationMode == .off)
-
-            Text("Always may require System Settings to approve background location.")
-                .font(.footnote)
-                .foregroundStyle(.tertiary)
-                .fixedSize(horizontal: false, vertical: true)
+            SettingsCardRow(
+                title: "Precise location",
+                subtitle: "Always may require System Settings to approve background location.",
+                showsDivider: false)
+            {
+                Toggle("Precise Location", isOn: self.$locationPreciseEnabled)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .frame(width: Self.controlWidth, alignment: .trailing)
+                    .disabled(self.locationMode == .off)
+            }
         }
         .onAppear {
             self.lastLocationModeRaw = self.locationModeRaw
@@ -112,26 +160,33 @@ struct PermissionStatusList: View {
     @State private var pendingCapability: Capability?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            ForEach(Capability.allCases, id: \.self) { cap in
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(Capability.allCases.enumerated()), id: \.element) { index, cap in
                 PermissionRow(
                     capability: cap,
                     status: self.status[cap] ?? false,
-                    isPending: self.pendingCapability == cap)
+                    isPending: self.pendingCapability == cap,
+                    showsDivider: index != Capability.allCases.count - 1)
                 {
                     Task { await self.handle(cap) }
                 }
             }
-            Button {
-                Task { await self.refresh() }
-            } label: {
-                Label("Refresh", systemImage: "arrow.clockwise")
+
+            SettingsCardRow(
+                title: "Refresh status",
+                subtitle: "Recheck macOS after approving access in System Settings.",
+                showsDivider: false)
+            {
+                Button {
+                    Task { await self.refresh() }
+                } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .font(.footnote)
+                .help("Refresh status")
             }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .font(.footnote)
-            .padding(.top, 2)
-            .help("Refresh status")
         }
     }
 
@@ -162,6 +217,7 @@ struct PermissionRow: View {
     let status: Bool
     let isPending: Bool
     let compact: Bool
+    let showsDivider: Bool
     let action: () -> Void
 
     init(
@@ -169,69 +225,80 @@ struct PermissionRow: View {
         status: Bool,
         isPending: Bool = false,
         compact: Bool = false,
+        showsDivider: Bool = false,
         action: @escaping () -> Void)
     {
         self.capability = capability
         self.status = status
         self.isPending = isPending
         self.compact = compact
+        self.showsDivider = showsDivider
         self.action = action
     }
 
     var body: some View {
-        HStack(spacing: self.compact ? 10 : 12) {
-            ZStack {
-                Circle().fill(self.status ? Color.green.opacity(0.2) : Color.gray.opacity(0.15))
-                    .frame(width: self.iconSize, height: self.iconSize)
-                Image(systemName: self.icon)
-                    .foregroundStyle(self.status ? Color.green : Color.secondary)
-            }
-            VStack(alignment: .leading, spacing: 2) {
-                Text(self.title).font(.body.weight(.semibold))
-                Text(self.subtitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+        VStack(spacing: 0) {
+            HStack(spacing: self.compact ? 10 : 12) {
+                ZStack {
+                    Circle().fill(self.status ? Color.green.opacity(0.2) : Color.gray.opacity(0.15))
+                        .frame(width: self.iconSize, height: self.iconSize)
+                    Image(systemName: self.icon)
+                        .foregroundStyle(self.status ? Color.green : Color.secondary)
+                }
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(self.title).font(.body.weight(.semibold))
+                    Text(self.subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .layoutPriority(1)
+                VStack(alignment: .trailing, spacing: 4) {
+                    if self.status {
+                        Label("Granted", systemImage: "checkmark.circle.fill")
+                            .labelStyle(.iconOnly)
+                            .foregroundStyle(.green)
+                            .font(.title3)
+                            .help("Granted")
+                    } else if self.isPending {
+                        ProgressView()
+                            .controlSize(.small)
+                            .frame(width: 78)
+                    } else {
+                        Button("Grant") { self.action() }
+                            .buttonStyle(.bordered)
+                            .controlSize(self.compact ? .small : .regular)
+                            .frame(minWidth: self.compact ? 68 : 78, alignment: .trailing)
+                    }
+
+                    if self.status {
+                        Text("Granted")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.green)
+                    } else if self.isPending {
+                        Text("Checking…")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("Request access")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(minWidth: self.compact ? 86 : 104, alignment: .trailing)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .layoutPriority(1)
-            VStack(alignment: .trailing, spacing: 4) {
-                if self.status {
-                    Label("Granted", systemImage: "checkmark.circle.fill")
-                        .labelStyle(.iconOnly)
-                        .foregroundStyle(.green)
-                        .font(.title3)
-                        .help("Granted")
-                } else if self.isPending {
-                    ProgressView()
-                        .controlSize(.small)
-                        .frame(width: 78)
-                } else {
-                    Button("Grant") { self.action() }
-                        .buttonStyle(.bordered)
-                        .controlSize(self.compact ? .small : .regular)
-                        .frame(minWidth: self.compact ? 68 : 78, alignment: .trailing)
-                }
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, self.compact ? 0 : 14)
+            .padding(.vertical, self.compact ? 4 : 11)
 
-                if self.status {
-                    Text("Granted")
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(.green)
-                } else if self.isPending {
-                    Text("Checking…")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } else {
-                    Text("Request access")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+            if self.showsDivider {
+                Divider()
+                    .padding(.leading, self.compact ? 0 : 14)
+                    .padding(.trailing, self.compact ? 0 : 14)
             }
-            .frame(minWidth: self.compact ? 86 : 104, alignment: .trailing)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .fixedSize(horizontal: false, vertical: true)
-        .padding(.vertical, self.compact ? 4 : 6)
     }
 
     private var iconSize: CGFloat {

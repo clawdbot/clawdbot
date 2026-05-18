@@ -382,6 +382,14 @@ describe("config schema", () => {
     });
   });
 
+  it("keeps top-level subagent tools schema limited to tool policy", () => {
+    expect(
+      ToolsSchema.safeParse({
+        subagents: { model: { primary: "openai/gpt-5.5" } },
+      }).success,
+    ).toBe(false);
+  });
+
   it("accepts exec command highlighting config in global and agent scopes", () => {
     const tools = ToolsSchema.parse({
       exec: {

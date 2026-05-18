@@ -33,6 +33,9 @@ export type AgentHarnessSideQuestionParams = {
   sessionFile: string;
   agentId?: string;
   workspaceDir?: string;
+  messageChannel?: string;
+  messageProvider?: string;
+  currentChannelId?: string;
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
 };

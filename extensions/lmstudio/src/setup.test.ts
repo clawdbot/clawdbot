@@ -11,6 +11,8 @@ import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
+  LMSTUDIO_DEFAULT_INFERENCE_BASE_URL,
+  LMSTUDIO_DOCKER_HOST_INFERENCE_BASE_URL,
   LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
 } from "./defaults.js";
 import {
@@ -702,11 +704,17 @@ describe("lmstudio setup", () => {
     const ctx = buildNonInteractiveContext({
       customModelId: "missing-model",
     });
+    const dockerSetup = ["1", "true", "yes", "on"].includes(
+      process.env.OPENCLAW_DOCKER_SETUP?.trim().toLowerCase() ?? "",
+    );
+    const expectedBaseUrl = dockerSetup
+      ? LMSTUDIO_DOCKER_HOST_INFERENCE_BASE_URL
+      : LMSTUDIO_DEFAULT_INFERENCE_BASE_URL;
 
     await expect(configureLmstudioNonInteractive(ctx)).resolves.toBeNull();
 
     expect(ctx.runtime.error).toHaveBeenCalledWith(
-      "LM Studio model missing-model was not found at http://localhost:1234/v1.\nAvailable models: qwen3-8b-instruct",
+      `LM Studio model missing-model was not found at ${expectedBaseUrl}.\nAvailable models: qwen3-8b-instruct`,
     );
     expect(ctx.runtime.exit).toHaveBeenCalledWith(1);
     expect(configureSelfHostedNonInteractiveMock).not.toHaveBeenCalled();

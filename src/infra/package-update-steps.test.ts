@@ -138,6 +138,61 @@ describe("runGlobalPackageUpdateSteps", () => {
     });
   });
 
+  it("swaps staged npm updates into an explicitly selected direct node_modules root", async () => {
+    await withTempDir({ prefix: "openclaw-package-update-direct-root-" }, async (base) => {
+      const managedRoot = path.join(base, ".openclaw", "npm", "node_modules");
+      const packageRoot = path.join(managedRoot, "openclaw");
+      await writePackageRoot(packageRoot, "1.0.0");
+
+      const runStep = vi.fn(async ({ name, argv, cwd }): Promise<PackageUpdateStepResult> => {
+        if (name !== "global update") {
+          throw new Error(`unexpected step ${name}`);
+        }
+        const prefixIndex = argv.indexOf("--prefix");
+        expect(prefixIndex).toBeGreaterThan(0);
+        const stagePrefix = argv[prefixIndex + 1];
+        if (!stagePrefix) {
+          throw new Error("missing staged prefix");
+        }
+        expect(path.dirname(stagePrefix)).toBe(managedRoot);
+        await writePackageRoot(path.join(stagePrefix, "lib", "node_modules", "openclaw"), "2.0.0");
+        await fs.mkdir(path.join(stagePrefix, "bin"), { recursive: true });
+        await fs.symlink(
+          "../lib/node_modules/openclaw/dist/index.js",
+          path.join(stagePrefix, "bin", "openclaw"),
+        );
+        return {
+          name,
+          command: argv.join(" "),
+          cwd: cwd ?? process.cwd(),
+          durationMs: 1,
+          exitCode: 0,
+        };
+      });
+
+      const result = await runGlobalPackageUpdateSteps({
+        installTarget: {
+          ...createNpmTarget(managedRoot),
+          directNodeModulesRoot: true,
+        },
+        installSpec: "openclaw@2.0.0",
+        packageName: "openclaw",
+        packageRoot,
+        runCommand: createRootRunner(path.join(base, "shell", "lib", "node_modules")),
+        runStep,
+        timeoutMs: 1000,
+      });
+
+      expect(result.failedStep).toBeNull();
+      expect(result.verifiedPackageRoot).toBe(packageRoot);
+      expect(result.afterVersion).toBe("2.0.0");
+      await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(
+        '"version":"2.0.0"',
+      );
+      await expectPathMissing(path.join(managedRoot, ".bin", "openclaw"));
+    });
+  });
+
   it("accepts v-prefixed exact npm specs when verifying staged installs", async () => {
     await withTempDir({ prefix: "openclaw-package-update-v-prefix-" }, async (base) => {
       const prefix = path.join(base, "prefix");

@@ -1,70 +1,40 @@
-import {
-  listAgentIds,
-  resolveAgentDir,
-  resolveAgentWorkspaceDir,
-  resolveDefaultAgentDir,
-  resolveDefaultAgentId,
-} from "../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   loadAuthProfileStoreForSecretsRuntime,
   loadAuthProfileStoreWithoutExternalProfiles,
-  replaceRuntimeAuthProfileStoreSnapshots,
 } from "../agents/auth-profiles.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshotRefreshHandler,
-  setRuntimeConfigSnapshot,
-  type OpenClawConfig,
-} from "../config/config.js";
-import { coerceSecretRef } from "../config/types.secrets.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { resolveUserPath } from "../utils.js";
-import { type SecretResolverWarning } from "./runtime-shared.js";
 import {
-  clearActiveRuntimeWebToolsMetadata,
-  getActiveRuntimeWebToolsMetadata as getActiveRuntimeWebToolsMetadataFromState,
-  setActiveRuntimeWebToolsMetadata,
-} from "./runtime-web-tools-state.js";
-import type { RuntimeWebToolsMetadata } from "./runtime-web-tools.js";
+  canUseSecretsRuntimeFastPath,
+  collectCandidateAgentDirs,
+  createEmptyRuntimeWebToolsMetadata,
+  mergeSecretsRuntimeEnv,
+  resolveRefreshAgentDirs,
+} from "./runtime-fast-path.js";
+import {
+  activateSecretsRuntimeSnapshotState,
+  clearSecretsRuntimeSnapshot as clearSecretsRuntimeSnapshotState,
+  getActiveSecretsRuntimeEnv as getActiveSecretsRuntimeEnvState,
+  getActiveSecretsRuntimeRefreshContext,
+  getActiveSecretsRuntimeSnapshot as getActiveSecretsRuntimeSnapshotState,
+  getPreparedSecretsRuntimeSnapshotRefreshContext,
+  registerSecretsRuntimeStateClearHook,
+  setPreparedSecretsRuntimeSnapshotRefreshContext,
+  type PreparedSecretsRuntimeSnapshot,
+  type SecretsRuntimeRefreshContext,
+} from "./runtime-state.js";
+import { getActiveRuntimeWebToolsMetadata as getActiveRuntimeWebToolsMetadataFromState } from "./runtime-web-tools-state.js";
+import type { RuntimeWebToolsMetadata } from "./runtime-web-tools.types.js";
 
 export type { SecretResolverWarning } from "./runtime-shared.js";
+export type { PreparedSecretsRuntimeSnapshot } from "./runtime-state.js";
 
-export type PreparedSecretsRuntimeSnapshot = {
-  sourceConfig: OpenClawConfig;
-  config: OpenClawConfig;
-  authStores: Array<{ agentDir: string; store: AuthProfileStore }>;
-  warnings: SecretResolverWarning[];
-  webTools: RuntimeWebToolsMetadata;
-};
+registerSecretsRuntimeStateClearHook(clearRuntimeAuthProfileStoreSnapshots);
 
-type SecretsRuntimeRefreshContext = {
-  env: Record<string, string | undefined>;
-  explicitAgentDirs: string[] | null;
-  loadAuthStore: (agentDir?: string) => AuthProfileStore;
-  loadablePluginOrigins: ReadonlyMap<string, PluginOrigin>;
-};
-
-const RUNTIME_PATH_ENV_KEYS = [
-  "HOME",
-  "USERPROFILE",
-  "HOMEDRIVE",
-  "HOMEPATH",
-  "OPENCLAW_HOME",
-  "OPENCLAW_STATE_DIR",
-  "OPENCLAW_CONFIG_PATH",
-  "OPENCLAW_AGENT_DIR",
-  "PI_CODING_AGENT_DIR",
-  "OPENCLAW_TEST_FAST",
-] as const;
-
-let activeSnapshot: PreparedSecretsRuntimeSnapshot | null = null;
-let activeRefreshContext: SecretsRuntimeRefreshContext | null = null;
-const preparedSnapshotRefreshContext = new WeakMap<
-  PreparedSecretsRuntimeSnapshot,
-  SecretsRuntimeRefreshContext
->();
 let runtimeManifestPromise: Promise<typeof import("./runtime-manifest.runtime.js")> | null = null;
 let runtimePreparePromise: Promise<typeof import("./runtime-prepare.runtime.js")> | null = null;
 
@@ -76,60 +46,6 @@ function loadRuntimeManifestHelpers() {
 function loadRuntimePrepareHelpers() {
   runtimePreparePromise ??= import("./runtime-prepare.runtime.js");
   return runtimePreparePromise;
-}
-
-function cloneSnapshot(snapshot: PreparedSecretsRuntimeSnapshot): PreparedSecretsRuntimeSnapshot {
-  return {
-    sourceConfig: structuredClone(snapshot.sourceConfig),
-    config: structuredClone(snapshot.config),
-    authStores: snapshot.authStores.map((entry) => ({
-      agentDir: entry.agentDir,
-      store: structuredClone(entry.store),
-    })),
-    warnings: snapshot.warnings.map((warning) => ({ ...warning })),
-    webTools: structuredClone(snapshot.webTools),
-  };
-}
-
-function cloneRefreshContext(context: SecretsRuntimeRefreshContext): SecretsRuntimeRefreshContext {
-  return {
-    env: { ...context.env },
-    explicitAgentDirs: context.explicitAgentDirs ? [...context.explicitAgentDirs] : null,
-    loadAuthStore: context.loadAuthStore,
-    loadablePluginOrigins: new Map(context.loadablePluginOrigins),
-  };
-}
-
-function clearActiveSecretsRuntimeState(): void {
-  activeSnapshot = null;
-  activeRefreshContext = null;
-  clearActiveRuntimeWebToolsMetadata();
-  setRuntimeConfigSnapshotRefreshHandler(null);
-  clearRuntimeConfigSnapshot();
-  clearRuntimeAuthProfileStoreSnapshots();
-}
-
-function collectCandidateAgentDirs(
-  config: OpenClawConfig,
-  env: NodeJS.ProcessEnv = process.env,
-): string[] {
-  const dirs = new Set<string>();
-  dirs.add(resolveUserPath(resolveDefaultAgentDir(config, env), env));
-  for (const agentId of listAgentIds(config)) {
-    dirs.add(resolveUserPath(resolveAgentDir(config, agentId, env), env));
-  }
-  return [...dirs];
-}
-
-function resolveRefreshAgentDirs(
-  config: OpenClawConfig,
-  context: SecretsRuntimeRefreshContext,
-): string[] {
-  const configDerived = collectCandidateAgentDirs(config, context.env);
-  if (!context.explicitAgentDirs || context.explicitAgentDirs.length === 0) {
-    return configDerived;
-  }
-  return [...new Set([...context.explicitAgentDirs, ...configDerived])];
 }
 
 async function resolveLoadablePluginOrigins(params: {
@@ -150,22 +66,6 @@ async function resolveLoadablePluginOrigins(params: {
   return listPluginOriginsFromMetadataSnapshot(snapshot);
 }
 
-function mergeSecretsRuntimeEnv(
-  env: NodeJS.ProcessEnv | Record<string, string | undefined> | undefined,
-): Record<string, string | undefined> {
-  const merged = { ...(env ?? process.env) } as Record<string, string | undefined>;
-  for (const key of RUNTIME_PATH_ENV_KEYS) {
-    if (merged[key] !== undefined) {
-      continue;
-    }
-    const processValue = process.env[key];
-    if (processValue !== undefined) {
-      merged[key] = processValue;
-    }
-  }
-  return merged;
-}
-
 function hasConfiguredPluginEntries(config: OpenClawConfig): boolean {
   const entries = config.plugins?.entries;
   return (
@@ -184,142 +84,6 @@ function hasConfiguredChannelEntries(config: OpenClawConfig): boolean {
     !Array.isArray(channels) &&
     Object.keys(channels).some((channelId) => channelId !== "defaults")
   );
-}
-
-function createEmptyRuntimeWebToolsMetadata(): RuntimeWebToolsMetadata {
-  return {
-    search: {
-      providerSource: "none",
-      diagnostics: [],
-    },
-    fetch: {
-      providerSource: "none",
-      diagnostics: [],
-    },
-    diagnostics: [],
-  };
-}
-
-const WEB_FETCH_CREDENTIAL_FIELD_NAMES = new Set(["apikey", "key", "token", "secret", "password"]);
-
-function hasCredentialBearingWebFetchValue(
-  value: unknown,
-  defaults: Parameters<typeof coerceSecretRef>[1],
-  seen = new WeakSet<object>(),
-): boolean {
-  if (coerceSecretRef(value, defaults)) {
-    return true;
-  }
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  if (seen.has(value)) {
-    return false;
-  }
-  seen.add(value);
-  if (Array.isArray(value)) {
-    return value.some((entry) => hasCredentialBearingWebFetchValue(entry, defaults, seen));
-  }
-  return Object.entries(value as Record<string, unknown>).some(([rawKey, entry]) => {
-    const key = rawKey.toLowerCase();
-    if (WEB_FETCH_CREDENTIAL_FIELD_NAMES.has(key) && entry != null && entry !== "") {
-      return true;
-    }
-    return hasCredentialBearingWebFetchValue(entry, defaults, seen);
-  });
-}
-
-function hasActiveRuntimeWebFetchProviderSurface(
-  fetch: unknown,
-  defaults: Parameters<typeof coerceSecretRef>[1],
-): boolean {
-  if (!fetch || typeof fetch !== "object" || Array.isArray(fetch)) {
-    return false;
-  }
-  const fetchConfig = fetch as Record<string, unknown>;
-  if (fetchConfig.enabled === false) {
-    return false;
-  }
-  if (typeof fetchConfig.provider === "string" && fetchConfig.provider.trim()) {
-    return true;
-  }
-  return hasCredentialBearingWebFetchValue(fetchConfig, defaults);
-}
-
-function hasRuntimeWebToolConfigSurface(config: OpenClawConfig): boolean {
-  const web = config.tools?.web;
-  const defaults = config.secrets?.defaults;
-  const fetchExplicitlyDisabled =
-    web &&
-    typeof web === "object" &&
-    !Array.isArray(web) &&
-    typeof (web as Record<string, unknown>).fetch === "object" &&
-    (web as { fetch?: { enabled?: unknown } }).fetch?.enabled === false;
-  if (web && typeof web === "object" && !Array.isArray(web)) {
-    const webRecord = web as Record<string, unknown>;
-    if ("search" in webRecord || "x_search" in webRecord) {
-      return true;
-    }
-    if (
-      "fetch" in webRecord &&
-      hasActiveRuntimeWebFetchProviderSurface(webRecord.fetch, defaults)
-    ) {
-      return true;
-    }
-  }
-  const entries = config.plugins?.entries;
-  if (!entries || typeof entries !== "object" || Array.isArray(entries)) {
-    return false;
-  }
-  return Object.values(entries).some((entry) => {
-    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
-      return false;
-    }
-    const pluginConfig = (entry as { config?: unknown }).config;
-    return (
-      !!pluginConfig &&
-      typeof pluginConfig === "object" &&
-      !Array.isArray(pluginConfig) &&
-      ("webSearch" in pluginConfig || (!fetchExplicitlyDisabled && "webFetch" in pluginConfig))
-    );
-  });
-}
-
-function hasSecretRefCandidate(
-  value: unknown,
-  defaults: Parameters<typeof coerceSecretRef>[1],
-  seen = new WeakSet<object>(),
-): boolean {
-  if (coerceSecretRef(value, defaults)) {
-    return true;
-  }
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  if (seen.has(value)) {
-    return false;
-  }
-  seen.add(value);
-  if (Array.isArray(value)) {
-    return value.some((entry) => hasSecretRefCandidate(entry, defaults, seen));
-  }
-  return Object.values(value as Record<string, unknown>).some((entry) =>
-    hasSecretRefCandidate(entry, defaults, seen),
-  );
-}
-
-function canUseSecretsRuntimeFastPath(params: {
-  sourceConfig: OpenClawConfig;
-  authStores: Array<{ agentDir: string; store: AuthProfileStore }>;
-}): boolean {
-  if (hasRuntimeWebToolConfigSurface(params.sourceConfig)) {
-    return false;
-  }
-  const defaults = params.sourceConfig.secrets?.defaults;
-  if (hasSecretRefCandidate(params.sourceConfig, defaults)) {
-    return false;
-  }
-  return !params.authStores.some((entry) => hasSecretRefCandidate(entry.store, defaults));
 }
 
 export async function prepareSecretsRuntimeSnapshot(params: {
@@ -356,7 +120,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
       warnings: [],
       webTools: createEmptyRuntimeWebToolsMetadata(),
     };
-    preparedSnapshotRefreshContext.set(snapshot, {
+    setPreparedSecretsRuntimeSnapshotRefreshContext(snapshot, {
       env: runtimeEnv,
       explicitAgentDirs: params.agentDirs?.length ? [...candidateDirs] : null,
       loadAuthStore: fastPathLoadAuthStore,
@@ -430,7 +194,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
       context,
     }),
   };
-  preparedSnapshotRefreshContext.set(snapshot, {
+  setPreparedSecretsRuntimeSnapshotRefreshContext(snapshot, {
     env: runtimeEnv,
     explicitAgentDirs: params.agentDirs?.length ? [...candidateDirs] : null,
     loadAuthStore: params.loadAuthStore ?? loadAuthProfileStoreForSecretsRuntime,
@@ -440,40 +204,43 @@ export async function prepareSecretsRuntimeSnapshot(params: {
 }
 
 export function activateSecretsRuntimeSnapshot(snapshot: PreparedSecretsRuntimeSnapshot): void {
-  const next = cloneSnapshot(snapshot);
   const refreshContext =
-    preparedSnapshotRefreshContext.get(snapshot) ??
-    activeRefreshContext ??
+    getPreparedSecretsRuntimeSnapshotRefreshContext(snapshot) ??
+    getActiveSecretsRuntimeRefreshContext() ??
     ({
       env: { ...process.env } as Record<string, string | undefined>,
       explicitAgentDirs: null,
       loadAuthStore: loadAuthProfileStoreForSecretsRuntime,
       loadablePluginOrigins: new Map<string, PluginOrigin>(),
     } satisfies SecretsRuntimeRefreshContext);
-  setRuntimeConfigSnapshot(next.config, next.sourceConfig);
-  replaceRuntimeAuthProfileStoreSnapshots(next.authStores);
-  activeSnapshot = next;
-  activeRefreshContext = cloneRefreshContext(refreshContext);
-  setActiveRuntimeWebToolsMetadata(next.webTools);
-  setRuntimeConfigSnapshotRefreshHandler({
-    refresh: async ({ sourceConfig }) => {
-      if (!activeSnapshot || !activeRefreshContext) {
-        return false;
-      }
-      const refreshed = await prepareSecretsRuntimeSnapshot({
-        config: sourceConfig,
-        env: activeRefreshContext.env,
-        agentDirs: resolveRefreshAgentDirs(sourceConfig, activeRefreshContext),
-        loadAuthStore: activeRefreshContext.loadAuthStore,
-        loadablePluginOrigins: activeRefreshContext.loadablePluginOrigins,
-      });
-      activateSecretsRuntimeSnapshot(refreshed);
-      return true;
+  activateSecretsRuntimeSnapshotState({
+    snapshot,
+    refreshContext,
+    refreshHandler: {
+      refresh: async ({ sourceConfig }) => {
+        const activeRefreshContext = getActiveSecretsRuntimeRefreshContext();
+        if (!getActiveSecretsRuntimeSnapshotState() || !activeRefreshContext) {
+          return false;
+        }
+        const refreshed = await prepareSecretsRuntimeSnapshot({
+          config: sourceConfig,
+          env: activeRefreshContext.env,
+          agentDirs: resolveRefreshAgentDirs(sourceConfig, activeRefreshContext),
+          loadablePluginOrigins: activeRefreshContext.loadablePluginOrigins,
+          ...(activeRefreshContext.loadAuthStore
+            ? { loadAuthStore: activeRefreshContext.loadAuthStore }
+            : {}),
+        });
+        activateSecretsRuntimeSnapshot(refreshed);
+        return true;
+      },
     },
   });
 }
 
 export async function refreshActiveSecretsRuntimeSnapshot(): Promise<boolean> {
+  const activeSnapshot = getActiveSecretsRuntimeSnapshotState();
+  const activeRefreshContext = getActiveSecretsRuntimeRefreshContext();
   if (!activeSnapshot || !activeRefreshContext) {
     return false;
   }
@@ -481,28 +248,21 @@ export async function refreshActiveSecretsRuntimeSnapshot(): Promise<boolean> {
     config: activeSnapshot.sourceConfig,
     env: activeRefreshContext.env,
     agentDirs: resolveRefreshAgentDirs(activeSnapshot.sourceConfig, activeRefreshContext),
-    loadAuthStore: activeRefreshContext.loadAuthStore,
     loadablePluginOrigins: activeRefreshContext.loadablePluginOrigins,
+    ...(activeRefreshContext.loadAuthStore
+      ? { loadAuthStore: activeRefreshContext.loadAuthStore }
+      : {}),
   });
   activateSecretsRuntimeSnapshot(refreshed);
   return true;
 }
 
 export function getActiveSecretsRuntimeSnapshot(): PreparedSecretsRuntimeSnapshot | null {
-  if (!activeSnapshot) {
-    return null;
-  }
-  const snapshot = cloneSnapshot(activeSnapshot);
-  if (activeRefreshContext) {
-    preparedSnapshotRefreshContext.set(snapshot, cloneRefreshContext(activeRefreshContext));
-  }
-  return snapshot;
+  return getActiveSecretsRuntimeSnapshotState();
 }
 
 export function getActiveSecretsRuntimeEnv(): NodeJS.ProcessEnv {
-  return {
-    ...(activeRefreshContext?.env ?? process.env),
-  } as NodeJS.ProcessEnv;
+  return getActiveSecretsRuntimeEnvState();
 }
 
 export function getActiveRuntimeWebToolsMetadata(): RuntimeWebToolsMetadata | null {
@@ -510,5 +270,5 @@ export function getActiveRuntimeWebToolsMetadata(): RuntimeWebToolsMetadata | nu
 }
 
 export function clearSecretsRuntimeSnapshot(): void {
-  clearActiveSecretsRuntimeState();
+  clearSecretsRuntimeSnapshotState();
 }

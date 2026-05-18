@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { captureEnv } from "../test-utils/env.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import type { GatewayService } from "./service.js";
 import {
   describeGatewayServiceRestart,
@@ -14,24 +15,12 @@ import {
 } from "./service.js";
 import { createMockGatewayService } from "./service.test-helpers.js";
 
-const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
-
-function setPlatform(value: NodeJS.Platform | "aix") {
-  if (!originalPlatformDescriptor) {
-    throw new Error("missing process.platform descriptor");
-  }
-  Object.defineProperty(process, "platform", {
-    configurable: true,
-    enumerable: originalPlatformDescriptor.enumerable ?? false,
-    value,
-  });
+function setPlatform(value: NodeJS.Platform) {
+  mockProcessPlatform(value);
 }
 
 afterEach(() => {
-  if (!originalPlatformDescriptor) {
-    return;
-  }
-  Object.defineProperty(process, "platform", originalPlatformDescriptor);
+  vi.restoreAllMocks();
 });
 
 function createService(overrides: Partial<GatewayService> = {}): GatewayService {

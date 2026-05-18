@@ -867,6 +867,7 @@ export function createBrowserTool(opts?: {
         case "dialog": {
           const accept = Boolean(params.accept);
           const promptText = readStringValue(params.promptText);
+          const dialogId = readStringValue(params.dialogId);
           const { targetId, timeoutMs } = readOptionalTargetAndTimeout(params);
           if (proxyRequest) {
             const result = await proxyRequest({
@@ -876,6 +877,7 @@ export function createBrowserTool(opts?: {
               body: {
                 accept,
                 promptText,
+                dialogId,
                 targetId,
                 timeoutMs,
               },
@@ -885,6 +887,7 @@ export function createBrowserTool(opts?: {
           const result = await browserToolDeps.browserArmDialog(baseUrl, {
             accept,
             promptText,
+            dialogId,
             targetId,
             timeoutMs,
             profile,

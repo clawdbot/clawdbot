@@ -59,6 +59,23 @@ export type RuntimeParityScenarioExecution = {
   cell: RuntimeParityCell;
 };
 
+export function runtimeParityCellStatus(
+  cell: RuntimeParityCell | undefined,
+): "pass" | "fail" | "missing" {
+  if (!cell) {
+    return "missing";
+  }
+  return cell.runtimeErrorClass || cell.transportErrorClass ? "fail" : "pass";
+}
+
+export function isRuntimeParityResultPass(result: RuntimeParityResult) {
+  return (
+    result.drift !== "failure-mode" &&
+    runtimeParityCellStatus(result.cells.pi) === "pass" &&
+    runtimeParityCellStatus(result.cells.codex) === "pass"
+  );
+}
+
 type QaGatewayLike = {
   logs?: () => string;
   tempRoot: string;

@@ -9,6 +9,8 @@ struct WideAreaGatewayBeacon: Equatable {
     var lanHost: String?
     var tailnetDns: String?
     var gatewayPort: Int?
+    var gatewayTls: Bool
+    var gatewayDirectReachable: Bool
     var sshPort: Int?
     var cliPath: String?
 }
@@ -83,6 +85,8 @@ enum WideAreaGatewayDiscovery {
                 lanHost: txt["lanHost"],
                 tailnetDns: txt["tailnetDns"],
                 gatewayPort: parseInt(txt["gatewayPort"]),
+                gatewayTls: parseBool(txt["gatewayTls"]),
+                gatewayDirectReachable: parseBool(txt["gatewayDirectReachable"]),
                 sshPort: parseInt(txt["sshPort"]),
                 cliPath: txt["cliPath"])
             beacons.append(beacon)
@@ -244,6 +248,12 @@ enum WideAreaGatewayDiscovery {
         guard let value else { return nil }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return Int(trimmed)
+    }
+
+    private static func parseBool(_ value: String?) -> Bool {
+        guard let value else { return false }
+        let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalized == "1" || normalized == "true" || normalized == "yes"
     }
 
     private static func isTailnetIPv4(_ value: String) -> Bool {

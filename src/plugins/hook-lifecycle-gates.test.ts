@@ -341,6 +341,82 @@ describe("before_agent_run invalid ask outcome", () => {
   });
 });
 
+describe("before_agent_start hook default timeout (#48534)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("fails open with a warning when a handler exceeds the default 15s budget", async () => {
+    vi.useFakeTimers();
+    const errors: string[] = [];
+    const logger = {
+      debug: () => {},
+      info: () => {},
+      warn: () => {},
+      error: (msg: string) => {
+        errors.push(msg);
+      },
+    };
+    const registry = makeRegistry([
+      {
+        pluginId: "hanging-plugin",
+        hookName: "before_agent_start",
+        handler: () => new Promise<never>(() => {}),
+        source: "test",
+      },
+    ]);
+    const runner = createHookRunner(registry, { logger });
+    const resultPromise = runner.runBeforeAgentStart({ prompt: "hello" }, ctx);
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    const result = await resultPromise;
+
+    // Fail-open: a hung handler must not block the run, and the runner
+    // returns undefined so the embedded setup path proceeds without hook
+    // modifications. The hook-runner logs the timeout for operator triage.
+    expect(result).toBeUndefined();
+    expect(errors).toContain(
+      "[hooks] before_agent_start handler from hanging-plugin failed: timed out after 15000ms",
+    );
+  });
+
+  it("does not block when one handler hangs and a second is registered", async () => {
+    vi.useFakeTimers();
+    const errors: string[] = [];
+    const logger = {
+      debug: () => {},
+      info: () => {},
+      warn: () => {},
+      error: (msg: string) => {
+        errors.push(msg);
+      },
+    };
+    const registry = makeRegistry([
+      {
+        pluginId: "hanging-plugin",
+        hookName: "before_agent_start",
+        priority: 100,
+        handler: () => new Promise<never>(() => {}),
+        source: "test",
+      },
+      {
+        pluginId: "fast-plugin",
+        hookName: "before_agent_start",
+        priority: 50,
+        handler: async () => ({ modelOverride: "fallback-model" }),
+        source: "test",
+      },
+    ]);
+    const runner = createHookRunner(registry, { logger });
+    const resultPromise = runner.runBeforeAgentStart({ prompt: "hello" }, ctx);
+    await vi.advanceTimersByTimeAsync(15_000);
+    const result = await resultPromise;
+
+    expect(result?.modelOverride).toBe("fallback-model");
+    expect(errors.some((msg) => msg.includes("hanging-plugin"))).toBe(true);
+  });
+});
+
 describe("before_tool_call channelId forwarding", () => {
   it("passes channelId through to before_tool_call handlers", async () => {
     let receivedCtx: unknown;

@@ -96,6 +96,26 @@ function expectFields(actual: Record<string, unknown>, expected: Record<string, 
   }
 }
 
+function trackSessionWriteLocks(): string[] {
+  const events: string[] = [];
+  hoisted.acquireSessionWriteLockMock.mockImplementation(async () => {
+    const lockId = hoisted.acquireSessionWriteLockMock.mock.calls.length;
+    events.push(`acquire-${lockId}`);
+    return {
+      release: async () => {
+        events.push(`release-${lockId}`);
+      },
+    };
+  });
+  return events;
+}
+
+function expectInitialLockReleasedBeforePostTurnWrite(events: string[]) {
+  expect(events.indexOf("release-1")).toBeGreaterThan(events.indexOf("acquire-1"));
+  expect(events.indexOf("acquire-2")).toBeGreaterThan(events.indexOf("release-1"));
+  expect(events.indexOf("release-2")).toBeGreaterThan(events.indexOf("acquire-2"));
+}
+
 function createTestContextEngine(params: Partial<AttemptContextEngine>): AttemptContextEngine {
   return {
     info: {
@@ -773,6 +793,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   });
 
   it("skips blank visible prompts with replay history before provider submission", async () => {
+    const lockEvents = trackSessionWriteLocks();
     const sessionPrompt = vi.fn(async () => {
       throw new Error("blank prompt should not be submitted");
     });
@@ -809,6 +830,35 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       "prompt skipped event",
     );
     expect(requireRecord(skipped.data, "prompt skipped data").reason).toBe("blank_user_prompt");
+    expectInitialLockReleasedBeforePostTurnWrite(lockEvents);
+  });
+
+  it("releases the initial session lock before before_agent_run block finalizers", async () => {
+    const lockEvents = trackSessionWriteLocks();
+    const sessionPrompt = vi.fn(async () => {
+      throw new Error("blocked prompt should not be submitted");
+    });
+    const runBeforeAgentRun = vi.fn(async () => ({
+      pluginId: "test-policy",
+      decision: { outcome: "block", reason: "Blocked by test policy." },
+    }));
+    hoisted.getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn((name: string) => name === "before_agent_run"),
+      runBeforeAgentRun,
+    });
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      sessionPrompt,
+    });
+
+    expect(runBeforeAgentRun).toHaveBeenCalledTimes(1);
+    expect(sessionPrompt).not.toHaveBeenCalled();
+    expect(result.finalPromptText).toBeUndefined();
+    expect(result.promptErrorSource).toBe("hook:before_agent_run");
+    expectInitialLockReleasedBeforePostTurnWrite(lockEvents);
   });
 
   it("uses assembled context as the default precheck authority", async () => {
@@ -846,6 +896,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   });
 
   it("honors context engines that opt into preassembly overflow authority", async () => {
+    const lockEvents = trackSessionWriteLocks();
     let sawPrompt = false;
     const hugeHistory = "large raw history ".repeat(2_000);
 
@@ -878,6 +929,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(result.promptErrorSource).toBe("precheck");
     expect(result.preflightRecovery?.route).toBe("compact_only");
     expect(hoisted.preemptiveCompactionCalls.at(-1)).toHaveProperty("unwindowedMessages");
+    expectInitialLockReleasedBeforePostTurnWrite(lockEvents);
   });
 
   it("snapshots pre-assembly messages before assemble even when the engine windows in place", async () => {

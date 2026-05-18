@@ -6,6 +6,7 @@ import {
   loadEvidenceManifest,
   publishArtifactFiles,
   renderEvidenceComment,
+  shouldPublishPrComment,
 } from "../../scripts/mantis/publish-pr-evidence.mjs";
 
 const tempDirs: string[] = [];
@@ -276,11 +277,56 @@ describe("scripts/mantis/publish-pr-evidence", () => {
       "mantis-evidence.json",
     ]);
     expect(body).toContain(
-      "Summary: Mantis did not generate before/after GIFs because this PR changes CI wiring only.",
+      "Summary: Mantis did not generate before/after GIFs because this PR does not have a clean Telegram-visible before/after proof in the standard Mantis run.",
     );
-    expect(body).toContain("- Overall: `true`");
+    expect(body).toContain("- Overall: `skipped`");
     expect(body).not.toContain("<table");
     expect(body).not.toContain("<img ");
+  });
+
+  it("does not publish PR comments for Telegram capture infrastructure failures", () => {
+    const dir = mkdtempSync(path.join(tmpdir(), "mantis-evidence-test-"));
+    tempDirs.push(dir);
+    const manifestPath = path.join(dir, "mantis-evidence.json");
+    writeFileSync(
+      manifestPath,
+      JSON.stringify({
+        artifacts: [],
+        comparison: {
+          baseline: {
+            expected: "no acceptable native Telegram Desktop visual artifact",
+            status: "skipped",
+          },
+          candidate: {
+            expected: "no acceptable native Telegram Desktop visual artifact",
+            status: "skipped",
+          },
+          pass: false,
+        },
+        id: "telegram-desktop-proof",
+        scenario: "telegram-desktop-proof",
+        schemaVersion: 1,
+        summary:
+          "Mantis could not capture Telegram Desktop proof because native Telegram Desktop opened to the logged-out welcome screen.",
+        title: "Mantis Telegram Desktop Proof",
+      }),
+    );
+
+    const manifest = loadEvidenceManifest(manifestPath);
+    const body = renderEvidenceComment({
+      manifest,
+      marker: "<!-- mantis-telegram-desktop-proof -->",
+      rawBase: "https://artifacts.openclaw.ai/mantis/telegram-desktop/pr-1/run-1",
+      requestSource: "pull_request_target",
+      runUrl: "https://github.com/openclaw/openclaw/actions/runs/1",
+      treeUrl: "https://artifacts.openclaw.ai/mantis/telegram-desktop/pr-1/run-1/index.json",
+    });
+
+    expect(body).toContain(
+      "Summary: Mantis did not generate before/after GIFs because this PR does not have a clean Telegram-visible before/after proof in the standard Mantis run.",
+    );
+    expect(body).toContain("- Overall: `skipped`");
+    expect(shouldPublishPrComment(manifest)).toBe(false);
   });
 
   it("rejects artifact paths that escape the manifest directory", () => {

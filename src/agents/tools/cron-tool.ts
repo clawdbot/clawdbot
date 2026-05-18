@@ -139,15 +139,15 @@ function nullableStringArraySchema(description: string) {
 function cronPayloadObjectSchema(params: { toolsAllow: TSchema }) {
   return Type.Object(
     {
-      kind: optionalStringEnum(CRON_PAYLOAD_KINDS, { description: "Payload type" }),
-      text: Type.Optional(Type.String({ description: "Message text (kind=systemEvent)" })),
-      message: Type.Optional(Type.String({ description: "Agent prompt (kind=agentTurn)" })),
+      kind: optionalStringEnum(CRON_PAYLOAD_KINDS, { description: "Payload kind" }),
+      text: Type.Optional(Type.String({ description: "systemEvent text" })),
+      message: Type.Optional(Type.String({ description: "agentTurn prompt" })),
       model: Type.Optional(Type.String({ description: "Model override" })),
-      thinking: Type.Optional(Type.String({ description: "Thinking level override" })),
+      thinking: Type.Optional(Type.String({ description: "Thinking override" })),
       timeoutSeconds: Type.Optional(Type.Number()),
       lightContext: Type.Optional(Type.Boolean()),
       allowUnsafeExternalContent: Type.Optional(Type.Boolean()),
-      fallbacks: Type.Optional(Type.Array(Type.String(), { description: "Fallback model ids" })),
+      fallbacks: Type.Optional(Type.Array(Type.String(), { description: "Fallback models" })),
       toolsAllow: params.toolsAllow,
     },
     { additionalProperties: true },
@@ -157,25 +157,23 @@ function cronPayloadObjectSchema(params: { toolsAllow: TSchema }) {
 const CronScheduleSchema = Type.Optional(
   Type.Object(
     {
-      kind: optionalStringEnum(CRON_SCHEDULE_KINDS, { description: "Schedule type" }),
-      at: Type.Optional(Type.String({ description: "ISO-8601 timestamp (kind=at)" })),
-      everyMs: Type.Optional(Type.Number({ description: "Interval in milliseconds (kind=every)" })),
-      anchorMs: Type.Optional(
-        Type.Number({ description: "Optional start anchor in milliseconds (kind=every)" }),
-      ),
+      kind: optionalStringEnum(CRON_SCHEDULE_KINDS, { description: "Schedule kind" }),
+      at: Type.Optional(Type.String({ description: "ISO-8601 time (kind=at)" })),
+      everyMs: Type.Optional(Type.Number({ description: "Interval ms (kind=every)" })),
+      anchorMs: Type.Optional(Type.Number({ description: "Start anchor ms (kind=every)" })),
       expr: Type.Optional(
         Type.String({
           description:
-            'Cron expression (kind=cron) written in the supplied tz\'s local wall-clock time, or the Gateway host local timezone when tz is omitted; do not convert the requested local time to UTC first. Example: 6pm Shanghai daily is "0 18 * * *" with tz "Asia/Shanghai".',
+            'Cron expr in tz wall-clock time; do not convert to UTC. Omitted tz => Gateway host local timezone. Example 6pm Shanghai daily: expr "0 18 * * *", tz "Asia/Shanghai".',
         }),
       ),
       tz: Type.Optional(
         Type.String({
           description:
-            'IANA timezone for interpreting cron wall-clock fields (kind=cron), e.g. "Asia/Shanghai"; if omitted, cron uses the Gateway host local timezone.',
+            'IANA timezone for cron wall-clock fields, e.g. "Asia/Shanghai"; omitted => Gateway host local timezone.',
         }),
       ),
-      staggerMs: Type.Optional(Type.Number({ description: "Random jitter in ms (kind=cron)" })),
+      staggerMs: Type.Optional(Type.Number({ description: "Jitter ms (kind=cron)" })),
     },
     { additionalProperties: true },
   ),
@@ -183,7 +181,7 @@ const CronScheduleSchema = Type.Optional(
 
 const CronPayloadSchema = Type.Optional(
   cronPayloadObjectSchema({
-    toolsAllow: Type.Optional(Type.Array(Type.String(), { description: "Allowed tool ids" })),
+    toolsAllow: Type.Optional(Type.Array(Type.String(), { description: "Allowed tools" })),
   }),
 );
 
@@ -195,11 +193,11 @@ const CronDeliverySchema = Type.Optional(
       to: Type.Optional(Type.String({ description: "Delivery target" })),
       threadId: Type.Optional(
         Type.Union([Type.String(), Type.Number()], {
-          description: "Thread/topic id for channels that support threaded delivery",
+          description: "Thread/topic id",
         }),
       ),
       bestEffort: Type.Optional(Type.Boolean()),
-      accountId: Type.Optional(Type.String({ description: "Account target for delivery" })),
+      accountId: Type.Optional(Type.String({ description: "Delivery account" })),
       failureDestination: Type.Optional(
         Type.Object(
           {
@@ -225,19 +223,18 @@ const CronFailureAlertSchema = Type.Optional(
   Type.Unsafe<Record<string, unknown> | false>({
     type: "object",
     properties: {
-      after: Type.Optional(Type.Number({ description: "Failures before alerting" })),
+      after: Type.Optional(Type.Number({ description: "Failures before alert" })),
       channel: Type.Optional(Type.String({ description: "Alert channel" })),
       to: Type.Optional(Type.String({ description: "Alert target" })),
-      cooldownMs: Type.Optional(Type.Number({ description: "Cooldown between alerts in ms" })),
+      cooldownMs: Type.Optional(Type.Number({ description: "Alert cooldown ms" })),
       includeSkipped: Type.Optional(
-        Type.Boolean({ description: "Count consecutive skipped runs toward alerting" }),
+        Type.Boolean({ description: "Skipped runs count toward alert" }),
       ),
       mode: optionalStringEnum(["announce", "webhook"] as const),
       accountId: Type.Optional(Type.String()),
     },
     additionalProperties: true,
-    description:
-      "Failure alert config object, or the boolean value false to disable alerts for this job",
+    description: "Failure alert object; false disables alerts",
   }),
 );
 
@@ -248,16 +245,16 @@ const CronJobObjectSchema = Type.Optional(
       schedule: CronScheduleSchema,
       sessionTarget: Type.Optional(
         Type.String({
-          description: 'Session target: "main", "isolated", "current", or "session:<id>"',
+          description: "main | isolated | current | session:<id>",
         }),
       ),
-      wakeMode: optionalStringEnum(CRON_WAKE_MODES, { description: "When to wake the session" }),
+      wakeMode: optionalStringEnum(CRON_WAKE_MODES, { description: "Wake timing" }),
       payload: CronPayloadSchema,
       delivery: CronDeliverySchema,
       agentId: nullableStringSchema("Agent id, or null to keep it unset"),
-      description: Type.Optional(Type.String({ description: "Human-readable description" })),
+      description: Type.Optional(Type.String({ description: "Human description" })),
       enabled: Type.Optional(Type.Boolean()),
-      deleteAfterRun: Type.Optional(Type.Boolean({ description: "Delete after first execution" })),
+      deleteAfterRun: Type.Optional(Type.Boolean({ description: "Delete after first run" })),
       sessionKey: nullableStringSchema("Explicit session key, or null to clear it"),
       failureAlert: CronFailureAlertSchema,
     },
@@ -307,7 +304,7 @@ export const CronToolSchema = Type.Object(
     contextMessages: Type.Optional(
       Type.Number({ minimum: 0, maximum: REMINDER_CONTEXT_MESSAGES_MAX }),
     ),
-    agentId: Type.Optional(Type.String({ description: "Filter by agent id (list action)" })),
+    agentId: Type.Optional(Type.String({ description: "List filter: agent id" })),
   },
   { additionalProperties: true },
 );
@@ -497,83 +494,83 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
     name: "cron",
     ownerOnly: isOpenClawOwnerOnlyCoreToolName("cron"),
     displaySummary: CRON_TOOL_DISPLAY_SUMMARY,
-    description: `Manage Gateway cron jobs (status/list/get/add/update/remove/run/runs) and send wake events. Use this for reminders, "check back later" requests, delayed follow-ups, and recurring tasks. Do not emulate scheduling with exec sleep or process polling.
+    description: `Manage Gateway cron jobs and wake events: reminders, check-back-later, delayed follow-ups, recurring work. Do not emulate scheduling with exec sleep/process polling.
 
-Main-session cron jobs enqueue system events for heartbeat handling. Isolated cron jobs create background task runs that appear in \`openclaw tasks\`.
+Main cron => system events for heartbeat. Isolated cron => background task in \`openclaw tasks\`.
 
 ACTIONS:
-- status: Check cron scheduler status
-- list: List jobs (use includeDisabled:true to include disabled; agentId filters by agent, auto-filled from session)
-- get: Get one job by id (requires jobId)
-- add: Create job (requires job object, see schema below)
-- update: Modify job (requires jobId + patch object)
-- remove: Delete job (requires jobId)
-- run: Trigger job immediately (requires jobId)
-- runs: Get job run history (requires jobId)
-- wake: Send wake event (requires text, optional mode)
+- status: scheduler status
+- list: jobs; includeDisabled true includes disabled; agentId filter auto-filled from session
+- get: one job; needs jobId
+- add: create job; needs job object
+- update: patch job; needs jobId + patch
+- remove: delete job; needs jobId
+- run: trigger now; needs jobId
+- runs: run history; needs jobId
+- wake: send wake event; needs text, optional mode
 
 JOB SCHEMA (for add action):
 {
-  "name": "string (optional)",
-  "schedule": { ... },      // Required: when to run
-  "payload": { ... },       // Required: what to execute
-  "delivery": { ... },      // Optional: announce summary (isolated/current/session:xxx only) or webhook POST
-  "sessionTarget": "main" | "isolated" | "current" | "session:<custom-id>",  // Optional, defaults based on context
-  "enabled": true | false   // Optional, default true
+  "name": "string",
+  "schedule": { ... },      // required
+  "payload": { ... },       // required
+  "delivery": { ... },      // optional announce for isolated/current/session, webhook for any target
+  "sessionTarget": "main" | "isolated" | "current" | "session:<id>",
+  "enabled": true | false   // default true
 }
 
 SESSION TARGET OPTIONS:
-- "main": Run in the main session (requires payload.kind="systemEvent")
-- "isolated": Run in an ephemeral isolated session (requires payload.kind="agentTurn")
-- "current": Bind to the current session where the cron is created (resolved at creation time)
-- "session:<custom-id>": Run in a persistent named session (e.g., "session:project-alpha-daily")
+- "main": main session; requires payload.kind="systemEvent"
+- "isolated": ephemeral isolated session; requires payload.kind="agentTurn"
+- "current": bind current session at creation
+- "session:<id>": persistent named session
 
-DEFAULT BEHAVIOR (unchanged for backward compatibility):
+DEFAULTS:
 - payload.kind="systemEvent" → defaults to "main"
 - payload.kind="agentTurn" → defaults to "isolated"
-To use current session binding, explicitly set sessionTarget="current".
+Current binding needs sessionTarget="current".
 
 SCHEDULE TYPES (schedule.kind):
-- "at": One-shot at absolute time
+- "at": one-shot absolute time
   { "kind": "at", "at": "<ISO-8601 timestamp>" }
-- "every": Recurring interval
-  { "kind": "every", "everyMs": <interval-ms>, "anchorMs": <optional-start-ms> }
-- "cron": Cron expression evaluated in the supplied timezone, or the Gateway host local timezone when tz is omitted
+- "every": recurring interval
+  { "kind": "every", "everyMs": <ms>, "anchorMs": <optional-ms> }
+- "cron": expr in supplied timezone, or Gateway host local timezone when tz omitted
   { "kind": "cron", "expr": "<cron-expression>", "tz": "<optional-IANA-timezone>" }
-  Write expr in the selected timezone's local wall-clock time; do not convert the requested local time to UTC first.
-  If tz is omitted, do not assume UTC; the Gateway host local timezone is used.
-  Example: "Remind me every day at 6pm Shanghai time" -> { "kind": "cron", "expr": "0 18 * * *", "tz": "Asia/Shanghai" }
+  Write expr in local wall-clock time; do not convert the requested local time to UTC first.
+  tz omitted => Gateway host local timezone, not UTC.
+  Example 6pm Shanghai daily: { "kind": "cron", "expr": "0 18 * * *", "tz": "Asia/Shanghai" }
 
-For schedule.kind="at", ISO timestamps without an explicit timezone are treated as UTC.
+For "at", ISO timestamps without timezone are UTC.
 
 PAYLOAD TYPES (payload.kind):
-- "systemEvent": Injects text as system event into session
+- "systemEvent": inject text as system event
   { "kind": "systemEvent", "text": "<message>" }
-- "agentTurn": Runs agent with message (isolated sessions only)
-  { "kind": "agentTurn", "message": "<prompt>", "model": "<optional>", "thinking": "<optional>", "timeoutSeconds": <optional, 0 means no timeout> }
+- "agentTurn": run agent with prompt; isolated/current/session only
+  { "kind": "agentTurn", "message": "<prompt>", "model": "<optional>", "thinking": "<optional>", "timeoutSeconds": <optional, 0=no timeout> }
 
 DELIVERY (top-level):
   { "mode": "none|announce|webhook", "channel": "<optional>", "to": "<optional>", "threadId": "<optional>", "bestEffort": <optional-bool> }
-  - Default for isolated agentTurn jobs (when delivery omitted): "announce"
-  - announce: send to chat channel (optional channel/to target)
-  - threadId: chat thread/topic id for channels that support threaded delivery
-  - webhook: send finished-run event as HTTP POST to delivery.to (URL required)
-  - If the task needs to send to a specific chat/recipient, set announce delivery.channel/to; do not call messaging tools inside the run.
+  - isolated agentTurn default when omitted: "announce"
+  - announce: send to chat channel; isolated/current/session only; optional channel/to
+  - threadId: chat thread/topic id
+  - webhook: POST finished-run event to delivery.to URL
+  - Specific chat/recipient: set announce delivery.channel/to; do not call messaging tools inside run.
 
 CRITICAL CONSTRAINTS:
 - sessionTarget="main" REQUIRES payload.kind="systemEvent"
 - sessionTarget="isolated" | "current" | "session:xxx" REQUIRES payload.kind="agentTurn"
-- For webhook callbacks, use delivery.mode="webhook" with delivery.to set to a URL.
+- Webhook: delivery.mode="webhook" and delivery.to URL.
 Default: prefer isolated agentTurn jobs unless the user explicitly wants current-session binding.
 
 RESTRICTED CRON RUNS:
-- Some isolated cron runs receive a narrow cron grant for self-cleanup. In that mode, read-only status and list are for self-introspection only, get/runs are allowed for the current job only, and mutation actions remain limited to removing the current cron job.
+- Some isolated cron runs get narrow self-cleanup grant: status/list self-only, get/runs current job only, mutation only remove current job.
 
 WAKE MODES (for wake action):
-- "next-heartbeat" (default): Wake on next heartbeat
-- "now": Wake immediately
+- "next-heartbeat" default: wake next heartbeat
+- "now": wake immediately
 
-Use jobId as the canonical identifier; id is accepted for compatibility. Use contextMessages (0-10) to add previous messages as context to the job text.`,
+Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous messages as job context.`,
     parameters: CronToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;

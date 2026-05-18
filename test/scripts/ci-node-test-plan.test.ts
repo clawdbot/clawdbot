@@ -218,7 +218,6 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
       {
         configs: [
           "test/vitest/vitest.acp.config.ts",
-          "test/vitest/vitest.cron.config.ts",
           "test/vitest/vitest.shared-core.config.ts",
           "test/vitest/vitest.tasks.config.ts",
           "test/vitest/vitest.utils.config.ts",
@@ -227,7 +226,42 @@ describe("scripts/lib/ci-node-test-plan.mjs", () => {
         runner: undefined,
         shardName: "core-runtime-shared",
       },
+      {
+        configs: ["test/vitest/vitest.cron.config.ts"],
+        requiresDist: false,
+        runner: undefined,
+        shardName: "core-runtime-cron-core",
+      },
+      {
+        configs: ["test/vitest/vitest.cron.config.ts"],
+        requiresDist: false,
+        runner: undefined,
+        shardName: "core-runtime-cron-isolated-agent",
+      },
+      {
+        configs: ["test/vitest/vitest.cron.config.ts"],
+        requiresDist: false,
+        runner: undefined,
+        shardName: "core-runtime-cron-service",
+      },
     ]);
+  });
+
+  it("covers every cron test exactly once across core runtime cron shards", () => {
+    const cronShards = createNodeTestShards().filter((shard) =>
+      shard.shardName.startsWith("core-runtime-cron-"),
+    );
+    const actual = cronShards
+      .flatMap((shard) => shard.includePatterns ?? [])
+      .toSorted((a, b) => a.localeCompare(b));
+
+    expect(cronShards.map((shard) => shard.shardName)).toEqual([
+      "core-runtime-cron-core",
+      "core-runtime-cron-isolated-agent",
+      "core-runtime-cron-service",
+    ]);
+    expect(actual).toEqual(listTestFiles("src/cron"));
+    expect(new Set(actual).size).toBe(actual.length);
   });
 
   it("splits the agentic lane into control-plane, command, agent, gateway, SDK, and plugin shards", () => {

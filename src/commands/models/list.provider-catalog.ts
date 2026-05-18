@@ -9,6 +9,7 @@ import type { ModelProviderConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import {
   loadPluginRegistrySnapshotWithMetadata,
   resolvePluginContributionOwners,
@@ -75,10 +76,12 @@ function resolveInstalledIndexPluginIdsForProviderFilter(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   providerFilter: string;
+  registryIndex?: PluginRegistrySnapshot;
 }): string[] | undefined {
   const snapshot = loadPluginRegistrySnapshotWithMetadata({
     config: params.cfg,
     env: params.env,
+    index: params.registryIndex,
   });
   if (snapshot.source !== "persisted" && snapshot.source !== "provided") {
     return undefined;
@@ -106,6 +109,8 @@ export async function resolveProviderCatalogPluginIdsForFilter(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   providerFilter: string;
+  registryIndex?: PluginRegistrySnapshot;
+  metadataSnapshot?: PluginMetadataSnapshot;
 }): Promise<string[] | undefined> {
   const providerFilter = normalizeProviderId(params.providerFilter);
   if (!providerFilter) {
@@ -115,6 +120,7 @@ export async function resolveProviderCatalogPluginIdsForFilter(params: {
     cfg: params.cfg,
     env: params.env,
     providerFilter,
+    registryIndex: params.metadataSnapshot?.index ?? params.registryIndex,
   });
   if (installedIndexPluginIds) {
     return installedIndexPluginIds;
@@ -123,6 +129,7 @@ export async function resolveProviderCatalogPluginIdsForFilter(params: {
     provider: providerFilter,
     config: params.cfg,
     env: params.env,
+    manifestRegistry: params.metadataSnapshot?.manifestRegistry,
   });
   if (manifestPluginIds) {
     return manifestPluginIds;
@@ -140,6 +147,8 @@ export async function hasProviderStaticCatalogForFilter(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   providerFilter: string;
+  registryIndex?: PluginRegistrySnapshot;
+  metadataSnapshot?: PluginMetadataSnapshot;
 }): Promise<boolean> {
   const env = params.env ?? process.env;
   const providerFilter = normalizeProviderId(params.providerFilter);
@@ -149,6 +158,7 @@ export async function hasProviderStaticCatalogForFilter(params: {
   const pluginIds = await resolveProviderCatalogPluginIdsForFilter({
     ...params,
     env,
+    registryIndex: params.metadataSnapshot?.index ?? params.registryIndex,
   });
   if (!pluginIds || pluginIds.length === 0) {
     return false;
@@ -156,6 +166,7 @@ export async function hasProviderStaticCatalogForFilter(params: {
   const bundledPluginIds = resolveBundledProviderCompatPluginIds({
     config: params.cfg,
     env,
+    manifestRegistry: params.metadataSnapshot?.manifestRegistry,
   });
   const bundledPluginIdSet = new Set(bundledPluginIds);
   const scopedPluginIds = pluginIds.filter((pluginId) => bundledPluginIdSet.has(pluginId));
@@ -169,6 +180,7 @@ export async function hasProviderStaticCatalogForFilter(params: {
     includeUntrustedWorkspacePlugins: false,
     requireCompleteDiscoveryEntryCoverage: true,
     discoveryEntriesOnly: true,
+    pluginMetadataSnapshot: params.metadataSnapshot,
   });
   return providers.some(
     (provider) =>
@@ -205,6 +217,8 @@ export async function loadProviderCatalogModelsForList(params: {
   env?: NodeJS.ProcessEnv;
   providerFilter?: string;
   staticOnly?: boolean;
+  registryIndex?: PluginRegistrySnapshot;
+  metadataSnapshot?: PluginMetadataSnapshot;
 }): Promise<Model<Api>[]> {
   const env = params.env ?? process.env;
   const providerFilter = params.providerFilter ? normalizeProviderId(params.providerFilter) : "";
@@ -213,6 +227,8 @@ export async function loadProviderCatalogModelsForList(params: {
         cfg: params.cfg,
         env,
         providerFilter,
+        registryIndex: params.metadataSnapshot?.index ?? params.registryIndex,
+        metadataSnapshot: params.metadataSnapshot,
       })
     : undefined;
   if (providerFilter && !onlyPluginIds) {
@@ -222,6 +238,7 @@ export async function loadProviderCatalogModelsForList(params: {
   const bundledPluginIds = resolveBundledProviderCompatPluginIds({
     config: params.cfg,
     env,
+    manifestRegistry: params.metadataSnapshot?.manifestRegistry,
   });
   const bundledPluginIdSet = new Set(bundledPluginIds);
   const scopedPluginIds = onlyPluginIds
@@ -239,6 +256,7 @@ export async function loadProviderCatalogModelsForList(params: {
       includeUntrustedWorkspacePlugins: false,
       requireCompleteDiscoveryEntryCoverage: params.staticOnly === true,
       discoveryEntriesOnly: params.staticOnly === true,
+      pluginMetadataSnapshot: params.metadataSnapshot,
     })
   ).filter(
     (provider) =>

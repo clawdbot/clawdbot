@@ -116,6 +116,7 @@ vi.mock("../../../plugins/clawhub.js", () => ({
   CLAWHUB_INSTALL_ERROR_CODE: {
     PACKAGE_NOT_FOUND: "package_not_found",
     VERSION_NOT_FOUND: "version_not_found",
+    ARTIFACT_DOWNLOAD_UNAVAILABLE: "artifact_download_unavailable",
   },
   installPluginFromClawHub: mocks.installPluginFromClawHub,
 }));
@@ -377,6 +378,40 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       'Installed missing configured plugin "matrix" from @openclaw/plugin-matrix@1.2.3.',
     ]);
     expect(result.warnings).toStrictEqual([]);
+  });
+
+  it("does not fall back from ClawHub to non-OpenClaw npm packages", async () => {
+    mocks.installPluginFromClawHub.mockResolvedValueOnce({
+      ok: false,
+      code: "artifact_download_unavailable",
+      error: "ClawHub artifact download is not available yet.",
+    });
+    mocks.listChannelPluginCatalogEntries.mockReturnValue([
+      {
+        id: "matrix",
+        pluginId: "matrix",
+        meta: { label: "Matrix" },
+        install: {
+          clawhubSpec: "clawhub:@openclaw/plugin-matrix@stable",
+          npmSpec: "@someone-else/plugin-matrix@1.2.3",
+        },
+      },
+    ]);
+
+    const { repairMissingPluginInstallsForIds } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingPluginInstallsForIds({
+      cfg: {},
+      pluginIds: [],
+      channelIds: ["matrix"],
+      env: {},
+    });
+
+    expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
+    expect(result.changes).toStrictEqual([]);
+    expect(result.warnings).toEqual([
+      'Failed to install missing configured plugin "matrix" from clawhub:@openclaw/plugin-matrix@stable: ClawHub artifact download is not available yet.',
+    ]);
   });
 
   it("honors npm-first catalog metadata for missing OpenClaw channel plugins", async () => {
@@ -977,6 +1012,130 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       warnings: [],
       records,
     });
+  });
+
+  it("updates an existing npm target when stale baseline records miss an installed package", async () => {
+    const npmRoot = makeTempDir();
+    const packageDir = path.join(npmRoot, "node_modules", "@openclaw", "discord");
+    fs.mkdirSync(packageDir, { recursive: true });
+    mocks.resolveDefaultPluginNpmDir.mockReturnValue(npmRoot);
+    mocks.listChannelPluginCatalogEntries.mockReturnValue([
+      {
+        id: "discord",
+        pluginId: "discord",
+        meta: { label: "Discord" },
+        install: {
+          npmSpec: "@openclaw/discord",
+        },
+      },
+    ]);
+    mocks.installPluginFromNpmSpec.mockResolvedValue({
+      ok: true,
+      pluginId: "discord",
+      targetDir: packageDir,
+      version: "1.2.3",
+      npmResolution: {
+        name: "@openclaw/discord",
+        version: "1.2.3",
+        resolvedSpec: "@openclaw/discord@1.2.3",
+        integrity: "sha512-discord",
+        resolvedAt: "2026-05-01T00:00:00.000Z",
+      },
+    });
+
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingConfiguredPluginInstalls({
+      cfg: {
+        plugins: {
+          entries: {
+            discord: { enabled: true },
+          },
+        },
+        channels: {
+          discord: { enabled: true },
+        },
+      },
+      env: {
+        OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
+      },
+    });
+
+    expect(mocks.installPluginFromClawHub).not.toHaveBeenCalled();
+    expectRecordFields(mockCallArg(mocks.installPluginFromNpmSpec), {
+      spec: "@openclaw/discord",
+      expectedPluginId: "discord",
+      npmDir: npmRoot,
+      mode: "update",
+    });
+    expect(result.changes).toEqual([
+      'Installed missing configured plugin "discord" from @openclaw/discord.',
+    ]);
+    expect(result.warnings).toEqual([]);
+    expect(result.records.discord?.installPath).toBe(packageDir);
+  });
+
+  it("retries npm repair as an update when the install target appears stale", async () => {
+    const npmRoot = makeTempDir();
+    const packageDir = path.join(npmRoot, "node_modules", "@openclaw", "discord");
+    mocks.resolveDefaultPluginNpmDir.mockReturnValue(npmRoot);
+    mocks.listChannelPluginCatalogEntries.mockReturnValue([
+      {
+        id: "discord",
+        pluginId: "discord",
+        meta: { label: "Discord" },
+        install: {
+          npmSpec: "@openclaw/discord",
+        },
+      },
+    ]);
+    mocks.installPluginFromNpmSpec
+      .mockResolvedValueOnce({
+        ok: false,
+        error: `plugin already exists: ${packageDir} (delete it first)`,
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        pluginId: "discord",
+        targetDir: packageDir,
+        version: "1.2.3",
+        npmResolution: {
+          name: "@openclaw/discord",
+          version: "1.2.3",
+          resolvedSpec: "@openclaw/discord@1.2.3",
+          integrity: "sha512-discord",
+          resolvedAt: "2026-05-01T00:00:00.000Z",
+        },
+      });
+
+    const { repairMissingConfiguredPluginInstalls } =
+      await import("./missing-configured-plugin-install.js");
+    const result = await repairMissingConfiguredPluginInstalls({
+      cfg: {
+        plugins: {
+          entries: {
+            discord: { enabled: true },
+          },
+        },
+      },
+      env: {
+        OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
+      },
+    });
+
+    expect(mocks.installPluginFromNpmSpec).toHaveBeenCalledTimes(2);
+    expectRecordFields(mockCallArg(mocks.installPluginFromNpmSpec, 0), {
+      spec: "@openclaw/discord",
+      npmDir: npmRoot,
+      mode: "install",
+    });
+    expectRecordFields(mockCallArg(mocks.installPluginFromNpmSpec, 1), {
+      spec: "@openclaw/discord",
+      npmDir: npmRoot,
+      mode: "update",
+    });
+    expect(result.warnings).toEqual([]);
+    expect(result.records.discord?.installPath).toBe(packageDir);
   });
 
   it("repairs missing external payload during post-core convergence even with OPENCLAW_UPDATE_IN_PROGRESS=1", async () => {

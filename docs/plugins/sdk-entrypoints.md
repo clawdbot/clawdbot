@@ -1,14 +1,14 @@
 ---
-summary: "Reference for definePluginEntry, defineChannelPluginEntry, and defineSetupPluginEntry"
+summary: "Reference for defineToolPlugin, definePluginEntry, defineChannelPluginEntry, and defineSetupPluginEntry"
 title: "Plugin entry points"
 sidebarTitle: "Entry Points"
 read_when:
-  - You need the exact type signature of definePluginEntry or defineChannelPluginEntry
+  - You need the exact type signature of defineToolPlugin, definePluginEntry, or defineChannelPluginEntry
   - You want to understand registration mode (full vs setup vs CLI metadata)
   - You are looking up entry point options
 ---
 
-Every plugin exports a default entry object. The SDK provides three helpers for
+Every plugin exports a default entry object. The SDK provides helpers for
 creating them.
 
 For installed plugins, `package.json` should point runtime loading at built
@@ -40,16 +40,62 @@ and inferred built JavaScript peers do not make an escaping `extensions` or
 `setupEntry` source path valid.
 
 <Tip>
-  **Looking for a walkthrough?** See [Channel Plugins](/plugins/sdk-channel-plugins)
-  or [Provider Plugins](/plugins/sdk-provider-plugins) for step-by-step guides.
+  **Looking for a walkthrough?** See [Tool Plugins](/plugins/tool-plugins),
+  [Channel Plugins](/plugins/sdk-channel-plugins), or
+  [Provider Plugins](/plugins/sdk-provider-plugins) for step-by-step guides.
 </Tip>
+
+## `defineToolPlugin`
+
+**Import:** `openclaw/plugin-sdk/tool-plugin`
+
+For simple plugins that only add agent tools. `defineToolPlugin` keeps the
+authoring source small, infers config and tool parameter types from TypeBox
+schemas, wraps plain return values in the OpenClaw tool-result format, and
+exposes static metadata that `openclaw plugins build` writes into the plugin
+manifest.
+
+```typescript
+import { Type } from "typebox";
+import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
+
+export default defineToolPlugin({
+  id: "stock-quotes",
+  name: "Stock Quotes",
+  description: "Fetch stock quotes.",
+  configSchema: Type.Object({
+    apiKey: Type.Optional(Type.String({ description: "API key." })),
+  }),
+  tools: (tool) => [
+    tool({
+      name: "quote",
+      label: "Quote",
+      description: "Fetch a quote.",
+      parameters: Type.Object({
+        symbol: Type.String({ description: "Ticker symbol." }),
+      }),
+      execute: async ({ symbol }, config) => ({ symbol, hasKey: Boolean(config.apiKey) }),
+    }),
+  ],
+});
+```
+
+- `configSchema` is optional. When omitted, OpenClaw uses a strict empty object
+  schema and the generated manifest still includes `configSchema`.
+- `execute` returns a plain string or JSON-serializable value. The helper wraps
+  it as a text tool result with `details`.
+- Tool names are static. `openclaw plugins build` derives `contracts.tools`
+  from the declared tools, so authors do not duplicate names by hand.
+- Runtime loading stays strict. Installed plugins still need
+  `openclaw.plugin.json` and `package.json` `openclaw.extensions`; OpenClaw does
+  not execute plugin code to infer missing manifest data.
 
 ## `definePluginEntry`
 
 **Import:** `openclaw/plugin-sdk/plugin-entry`
 
-For provider plugins, tool plugins, hook plugins, and anything that is **not**
-a messaging channel.
+For provider plugins, advanced tool plugins, hook plugins, and anything that is
+**not** a messaging channel.
 
 ```typescript
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";

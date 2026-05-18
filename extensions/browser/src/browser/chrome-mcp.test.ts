@@ -288,6 +288,61 @@ describe("chrome MCP page parsing", () => {
     expect(message).not.toContain(secretToken);
   });
 
+  it("redacts home-relative user data dirs from attach failures", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-chrome-mcp-test-"));
+    const homeDir = os.homedir();
+    const userDataDir = path.join(
+      homeDir,
+      "Library",
+      "Application Support",
+      "Google",
+      "Chrome",
+      "Profile 1",
+    );
+    const attachFailureDetail = `attach failed for ${userDataDir}`;
+    const fakeMcpCommand = path.join(tempDir, "fake-mcp.mjs");
+    await fs.writeFile(
+      fakeMcpCommand,
+      `#!/usr/bin/env node
+      let input = "";
+      process.stdin.on("data", (chunk) => {
+        input += chunk;
+        const match = input.match(/"id"\\s*:\\s*(\\d+)/);
+        if (!match) return;
+        const body = JSON.stringify({
+          jsonrpc: "2.0",
+          id: Number(match[1]),
+          error: { code: -32000, message: ${JSON.stringify(attachFailureDetail)} },
+        });
+        process.stdout.write(body + "\\n");
+      });
+    `,
+    );
+    await fs.chmod(fakeMcpCommand, 0o755);
+
+    let message = "";
+    try {
+      await ensureChromeMcpAvailable(
+        "home-profile",
+        {
+          userDataDir,
+          mcpCommand: fakeMcpCommand,
+        },
+        { ephemeral: true },
+      );
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+
+    expect(message).toContain("Chrome MCP existing-session attach failed");
+    expect(message).toContain("~/Library/Application Support/Google/Chrome/Profile 1");
+    expect(message).toContain("attach failed for ~/Library/Application Support/Google/Chrome/Profile 1");
+    expect(message).not.toContain(homeDir);
+    expect(message).not.toContain(userDataDir);
+  });
+
   it("parses new_page text responses and returns the created tab", async () => {
     const factory: ChromeMcpSessionFactory = async () => createFakeSession();
     setChromeMcpSessionFactoryForTest(factory);
@@ -792,6 +847,40 @@ describe("chrome MCP page parsing", () => {
     await vi.advanceTimersByTimeAsync(50);
 
     await expectation;
+    expect(closeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("redacts home-relative profile labels from availability timeout diagnostics", async () => {
+    vi.useFakeTimers();
+    const closeMock = vi.fn().mockResolvedValue(undefined);
+    const factory: ChromeMcpSessionFactory = async () =>
+      ({
+        client: {
+          callTool: vi.fn(),
+          listTools: vi.fn(),
+          close: closeMock,
+          connect: vi.fn(),
+        },
+        transport: {
+          pid: 123,
+        },
+        ready: new Promise<void>(() => {}),
+      }) as unknown as ChromeMcpSession;
+    setChromeMcpSessionFactoryForTest(factory);
+
+    const homeDir = os.homedir();
+    const profileName = path.join(homeDir, "Library", "Application Support", "Google", "Chrome");
+    const promise = ensureChromeMcpAvailable(profileName, undefined, {
+      ephemeral: true,
+      timeoutMs: 50,
+    });
+    void promise.catch(() => {});
+
+    await vi.advanceTimersByTimeAsync(50);
+
+    await expect(promise).rejects.toThrow(/timed out after 50ms/i);
+    await expect(promise).rejects.toThrow("~/Library/Application Support/Google/Chrome");
+    await expect(promise).rejects.not.toThrow(homeDir);
     expect(closeMock).toHaveBeenCalledTimes(1);
   });
 

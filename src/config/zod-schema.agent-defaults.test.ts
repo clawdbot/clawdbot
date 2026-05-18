@@ -96,6 +96,48 @@ describe("agent defaults schema", () => {
     );
   });
 
+  it("keeps subagent model config to model selection only", () => {
+    const defaults = AgentDefaultsSchema.parse({
+      subagents: {
+        model: {
+          primary: "openai/gpt-5.5",
+          fallbacks: ["anthropic/claude-sonnet-4-6"],
+        },
+      },
+    });
+    const agent = AgentEntrySchema.parse({
+      id: "worker",
+      subagents: {
+        model: {
+          primary: "openai/gpt-5.5",
+          fallbacks: ["anthropic/claude-sonnet-4-6"],
+        },
+      },
+    });
+
+    expect(defaults?.subagents?.model).toEqual({
+      primary: "openai/gpt-5.5",
+      fallbacks: ["anthropic/claude-sonnet-4-6"],
+    });
+    expect(agent.subagents?.model).toEqual({
+      primary: "openai/gpt-5.5",
+      fallbacks: ["anthropic/claude-sonnet-4-6"],
+    });
+    expectSchemaFailurePath(
+      AgentDefaultsSchema.safeParse({
+        subagents: { model: { primary: "openai/gpt-5.5", timeoutMs: 30_000 } },
+      }),
+      "subagents.model",
+    );
+    expectSchemaFailurePath(
+      AgentEntrySchema.safeParse({
+        id: "worker",
+        subagents: { model: { primary: "openai/gpt-5.5", timeoutMs: 30_000 } },
+      }),
+      "subagents.model",
+    );
+  });
+
   it("accepts mediaGenerationAutoProviderFallback", () => {
     expectSchemaSuccess(
       AgentDefaultsSchema.safeParse({

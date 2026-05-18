@@ -246,6 +246,42 @@ describe("gateway tool defaults", () => {
     expect(call.scopes).toEqual(["operator.admin"]);
   });
 
+  it("marks local approval request calls as approval runtime calls", async () => {
+    mocks.callGateway.mockResolvedValueOnce({ id: "approval-id" });
+
+    await callGatewayTool("exec.approval.request", {}, { command: "printf hi" });
+
+    const call = capturedGatewayCall();
+    expect(call.method).toBe("exec.approval.request");
+    expect(call.scopes).toEqual(["operator.approvals"]);
+    expect(call.approvalRuntimeToken).toEqual(expect.any(String));
+  });
+
+  it("marks local approval wait calls as approval runtime calls", async () => {
+    mocks.callGateway.mockResolvedValueOnce({ decision: "allow-once" });
+
+    await callGatewayTool("exec.approval.waitDecision", {}, { id: "approval-id" });
+
+    const call = capturedGatewayCall();
+    expect(call.method).toBe("exec.approval.waitDecision");
+    expect(call.scopes).toEqual(["operator.approvals"]);
+    expect(call.approvalRuntimeToken).toEqual(expect.any(String));
+  });
+
+  it("does not send the local approval runtime token to gatewayUrl overrides", async () => {
+    mocks.callGateway.mockResolvedValueOnce({ decision: "allow-once" });
+
+    await callGatewayTool(
+      "exec.approval.waitDecision",
+      { gatewayUrl: "ws://127.0.0.1:18789", gatewayToken: "t" },
+      { id: "approval-id" },
+    );
+
+    const call = capturedGatewayCall();
+    expect(call.url).toBe("ws://127.0.0.1:18789");
+    expect(call).not.toHaveProperty("approvalRuntimeToken");
+  });
+
   it("default-denies unknown methods by sending no scopes", async () => {
     mocks.callGateway.mockResolvedValueOnce({ ok: true });
     await callGatewayTool("nonexistent.method", {}, {});

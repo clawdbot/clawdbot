@@ -23,6 +23,7 @@ import { resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-runtime";
 import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
 import { createReplyDispatcherWithTyping } from "openclaw/plugin-sdk/reply-runtime";
 import { settleReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
+import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, logVerbose, shouldLogVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
 import {
@@ -675,6 +676,10 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         runtime.error?.(danger(`imessage ${info.kind} reply failed: ${String(err)}`));
       },
     });
+    const inboundLastRouteSessionKey = resolveInboundLastRouteSessionKey({
+      route: decision.route,
+      sessionKey: decision.route.sessionKey,
+    });
 
     await runInboundReplyTurn({
       channel: "imessage",
@@ -700,12 +705,14 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             updateLastRoute:
               !decision.isGroup && updateTarget
                 ? {
-                    sessionKey: decision.route.mainSessionKey,
+                    sessionKey: inboundLastRouteSessionKey,
                     channel: "imessage",
                     to: updateTarget,
                     accountId: decision.route.accountId,
                     mainDmOwnerPin:
-                      pinnedMainDmOwner && decision.senderNormalized
+                      inboundLastRouteSessionKey === decision.route.mainSessionKey &&
+                      pinnedMainDmOwner &&
+                      decision.senderNormalized
                         ? {
                             ownerRecipient: pinnedMainDmOwner,
                             senderRecipient: decision.senderNormalized,

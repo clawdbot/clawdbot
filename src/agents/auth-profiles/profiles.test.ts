@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { resolveOAuthDir } from "../../config/paths.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
 import { resolveAuthStorePath } from "./paths.js";
 import { promoteAuthProfileInOrder, upsertAuthProfileWithLock } from "./profiles.js";
@@ -55,7 +56,9 @@ describe("promoteAuthProfileInOrder", () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-profile-upsert-"));
     const agentDir = path.join(stateDir, "agents", "main", "agent");
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const previousOAuthDir = process.env.OPENCLAW_OAUTH_DIR;
     process.env.OPENCLAW_STATE_DIR = stateDir;
+    delete process.env.OPENCLAW_OAUTH_DIR;
     try {
       fs.mkdirSync(agentDir, { recursive: true });
 
@@ -94,6 +97,11 @@ describe("promoteAuthProfileInOrder", () => {
         delete process.env.OPENCLAW_STATE_DIR;
       } else {
         process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      if (previousOAuthDir === undefined) {
+        delete process.env.OPENCLAW_OAUTH_DIR;
+      } else {
+        process.env.OPENCLAW_OAUTH_DIR = previousOAuthDir;
       }
       fs.rmSync(stateDir, { recursive: true, force: true });
     }
@@ -145,6 +153,7 @@ describe("promoteAuthProfileInOrder", () => {
         chatgptPlanType: "plus",
       });
       expect(credential).not.toHaveProperty("oauthRef");
+      expect(fs.existsSync(path.join(resolveOAuthDir(), "auth-profiles"))).toBe(false);
 
       clearRuntimeAuthProfileStoreSnapshots();
       expectOAuthCredentialFields(

@@ -1193,6 +1193,7 @@ export async function runReplyAgent(params: {
     storePath,
     defaultModel,
     agentCfgContextTokens,
+    toolProgressDetail,
   });
 
   if (activeRunQueueAction === "drop") {
@@ -1277,20 +1278,6 @@ export async function runReplyAgent(params: {
       : null;
 
   const replySessionKey = sessionKey ?? followupRun.run.sessionKey;
-  let latestPreviewStreamedText: string | undefined;
-  const effectiveOpts = opts?.onPartialReply
-    ? {
-        ...opts,
-        onPartialReply: async (
-          payload: Parameters<NonNullable<GetReplyOptions["onPartialReply"]>>[0],
-        ) => {
-          if (typeof payload.text === "string" && payload.text.trim()) {
-            latestPreviewStreamedText = payload.text;
-          }
-          await opts.onPartialReply?.(payload);
-        },
-      }
-    : opts;
   let replyOperation: ReplyOperation;
   try {
     replyOperation =
@@ -1415,6 +1402,7 @@ export async function runReplyAgent(params: {
       storePath,
       defaultModel,
       agentCfgContextTokens,
+      toolProgressDetail,
     });
 
     let responseUsageLine: string | undefined;
@@ -1473,7 +1461,7 @@ export async function runReplyAgent(params: {
         sessionCtx,
         replyThreading: replyThreadingOverride ?? sessionCtx.ReplyThreading,
         replyOperation,
-        opts: effectiveOpts,
+        opts,
         typingSignals,
         blockReplyPipeline,
         blockStreamingEnabled,
@@ -1751,7 +1739,6 @@ export async function runReplyAgent(params: {
       silentExpected: followupRun.run.silentExpected,
       blockStreamingEnabled,
       blockReplyPipeline,
-      previewStreamedText: latestPreviewStreamedText,
       directlySentBlockKeys,
       replyToMode,
       replyToChannel,

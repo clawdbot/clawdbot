@@ -36,6 +36,7 @@ export function resolveModelFallbackOptions(
     resolveEffectiveModelFallbacks({
       cfg: config,
       agentId: run.agentId,
+      sessionKey: run.sessionKey,
       hasSessionModelOverride: run.hasSessionModelOverride === true,
       modelOverrideSource: run.modelOverrideSource,
       hasAutoFallbackProvenance: run.hasAutoFallbackProvenance === true,
@@ -45,6 +46,8 @@ export function resolveModelFallbackOptions(
     provider: run.provider,
     model: run.model,
     agentDir: run.agentDir,
+    agentId: run.agentId,
+    sessionKey: run.runtimePolicySessionKey ?? run.sessionKey,
     fallbacksOverride,
   };
 }
@@ -64,6 +67,7 @@ export function buildEmbeddedRunBaseParams(params: {
     resolveEffectiveModelFallbacks({
       cfg: config,
       agentId: params.run.agentId,
+      sessionKey: params.run.sessionKey,
       hasSessionModelOverride: params.run.hasSessionModelOverride === true,
       modelOverrideSource: params.run.modelOverrideSource,
       hasAutoFallbackProvenance: params.run.hasAutoFallbackProvenance === true,

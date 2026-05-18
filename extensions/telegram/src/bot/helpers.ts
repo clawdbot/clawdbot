@@ -340,6 +340,20 @@ export function buildTelegramRoutingTarget(
 }
 
 /**
+ * Build the canonical Telegram inbound origin used by queued follow-up routing.
+ * DM thread ids remain metadata-only; real forum topics must be in-band.
+ */
+export function buildTelegramInboundOriginTarget(
+  chatId: number | string,
+  thread?: TelegramThreadSpec | null,
+): string {
+  if (thread?.scope !== "forum") {
+    return `telegram:${chatId}`;
+  }
+  return buildTelegramRoutingTarget(chatId, thread);
+}
+
+/**
  * Build thread params for typing indicators (sendChatAction).
  * Empirically, General topic (id=1) needs message_thread_id for typing to appear.
  */

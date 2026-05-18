@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
+import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
 
 type GatewayBenchCase = {
   config: Record<string, unknown>;
@@ -194,15 +195,34 @@ function parseRepeatableFlag(flag: string): string[] {
   return values;
 }
 
-function parsePositiveInt(raw: string | undefined, fallback: number): number {
-  if (!raw) {
-    return fallback;
+function parsePositiveInt(raw: string | undefined, fallback: number, label: string): number {
+  return parseStrictIntegerOption({ fallback, label, min: 1, raw });
+}
+
+function parseNonNegativeInt(raw: string | undefined, fallback: number, label: string): number {
+  return parseStrictIntegerOption({ fallback, label, min: 0, raw });
+}
+
+function resolveEntry(raw: string | undefined): string {
+  const entry = raw?.trim() || DEFAULT_ENTRY;
+  if (entry.includes("\0")) {
+    throw new Error("--entry must not contain NUL bytes");
   }
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed) || parsed < 0) {
-    return fallback;
+  if (entry.startsWith("-")) {
+    throw new Error(`--entry must be a file path, not a Node option: ${JSON.stringify(entry)}`);
   }
-  return parsed;
+  return entry;
+}
+
+function resolveOutputPath(raw: string | undefined): string | undefined {
+  const output = raw?.trim();
+  if (!output) {
+    return undefined;
+  }
+  if (output.includes("\0")) {
+    throw new Error("--output must not contain NUL bytes");
+  }
+  return output;
 }
 
 function resolveCases(caseIds: string[]): GatewayBenchCase[] {
@@ -223,12 +243,12 @@ function parseOptions(): CliOptions {
   return {
     cases: resolveCases(parseRepeatableFlag("--case")),
     cpuProfDir: parseFlagValue("--cpu-prof-dir"),
-    entry: parseFlagValue("--entry") ?? DEFAULT_ENTRY,
+    entry: resolveEntry(parseFlagValue("--entry")),
     json: hasFlag("--json"),
-    output: parseFlagValue("--output"),
-    runs: parsePositiveInt(parseFlagValue("--runs"), DEFAULT_RUNS),
-    timeoutMs: parsePositiveInt(parseFlagValue("--timeout-ms"), DEFAULT_TIMEOUT_MS),
-    warmup: parsePositiveInt(parseFlagValue("--warmup"), DEFAULT_WARMUP),
+    output: resolveOutputPath(parseFlagValue("--output")),
+    runs: parsePositiveInt(parseFlagValue("--runs"), DEFAULT_RUNS, "--runs"),
+    timeoutMs: parsePositiveInt(parseFlagValue("--timeout-ms"), DEFAULT_TIMEOUT_MS, "--timeout-ms"),
+    warmup: parseNonNegativeInt(parseFlagValue("--warmup"), DEFAULT_WARMUP, "--warmup"),
   };
 }
 
@@ -601,7 +621,6 @@ function sanitizedEnv(
     OPENCLAW_CONFIG_PATH: configPath,
     OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
     OPENCLAW_HOME: root,
-    OPENCLAW_LOCAL_CHECK: "0",
     OPENCLAW_NO_RESPAWN: "1",
     OPENCLAW_STATE_DIR: path.join(root, "state"),
     OPENCLAW_TEST_DISABLE_UPDATE_CHECK: "1",
@@ -1021,6 +1040,10 @@ export const __testing = {
   classifyGatewayReadyLog,
   classifyProbeErrorKind,
   collectStartupTrace,
+  parseNonNegativeInt,
+  parsePositiveInt,
+  resolveEntry,
+  sanitizedEnv,
   summarizeCase,
   waitForProbe,
   writeConfig,

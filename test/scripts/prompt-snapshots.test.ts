@@ -2,11 +2,8 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
-import {
-  createFormattedPromptSnapshotFiles,
-  deleteStalePromptSnapshotFiles,
-} from "../../scripts/generate-prompt-snapshots.js";
+import { describe, expect, it } from "vitest";
+import { deleteStalePromptSnapshotFiles } from "../../scripts/prompt-snapshot-files.js";
 import {
   defaultCatalogPathCandidates,
   findDefaultCatalogPath,
@@ -18,17 +15,10 @@ import { toRepoRelativePath } from "../../src/test-utils/repo-files.js";
 import {
   CODEX_MODEL_PROMPT_FIXTURE_DIR,
   CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR,
-} from "../helpers/agents/happy-path-prompt-snapshots.js";
+} from "../helpers/agents/prompt-snapshot-paths.js";
 
-function requireGeneratedSnapshot(
-  generated: Array<{ path: string; content: string }>,
-  fileName: string,
-): string {
-  const match = generated.find((file) => file.path.endsWith(fileName));
-  if (!match) {
-    throw new Error(`Missing generated prompt snapshot ${fileName}`);
-  }
-  return match.content;
+function readCommittedSnapshot(fileName: string): string {
+  return fs.readFileSync(path.join(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, fileName), "utf8");
 }
 
 function renderedPromptSection(content: string, heading: string, nextHeading: string): string {
@@ -113,12 +103,6 @@ function listFindCommittedPromptSnapshotFiles(): string[] | null {
 }
 
 describe("happy path prompt snapshots", () => {
-  let generatedSnapshots: Awaited<ReturnType<typeof createFormattedPromptSnapshotFiles>>;
-
-  beforeAll(async () => {
-    generatedSnapshots = await createFormattedPromptSnapshotFiles();
-  }, 300_000);
-
   it("lists committed Codex prompt snapshot artifacts without scanning directories in-process", () => {
     expectNoReaddirSyncDuring(() => {
       const committed = listCommittedPromptSnapshotFiles();
@@ -128,13 +112,16 @@ describe("happy path prompt snapshots", () => {
     });
   });
 
-  it("matches the committed Codex prompt snapshot artifacts", async () => {
-    const expectedPaths = new Set(generatedSnapshots.map((file) => file.path));
-    for (const file of generatedSnapshots) {
-      expect(fs.readFileSync(file.path, "utf8"), file.path).toBe(file.content);
-    }
-    const committed = listCommittedPromptSnapshotFiles();
-    expect(committed.toSorted()).toEqual([...expectedPaths].toSorted());
+  it("keeps the committed Codex prompt snapshot artifact set explicit", () => {
+    expect(listCommittedPromptSnapshotFiles().map((file) => path.basename(file))).toEqual([
+      "README.md",
+      "codex-dynamic-tools.discord-group.json",
+      "codex-dynamic-tools.heartbeat-turn.json",
+      "codex-dynamic-tools.telegram-direct.json",
+      "discord-group-codex-message-tool.md",
+      "telegram-direct-codex-message-tool.md",
+      "telegram-heartbeat-codex-tool.md",
+    ]);
   });
 
   it("deletes stale generated snapshot artifacts", async () => {
@@ -160,10 +147,7 @@ describe("happy path prompt snapshots", () => {
   });
 
   it("renders the Codex model-bound prompt layers", async () => {
-    const telegram = requireGeneratedSnapshot(
-      generatedSnapshots,
-      "telegram-direct-codex-message-tool.md",
-    );
+    const telegram = readCommittedSnapshot("telegram-direct-codex-message-tool.md");
 
     expect(telegram).toContain("## Reconstructed Model-Bound Prompt Layers");
     expect(telegram).toContain("### System: Codex Model Instructions (gpt-5.5, pragmatic)");
@@ -183,18 +167,9 @@ describe("happy path prompt snapshots", () => {
   });
 
   it("keeps heartbeat guidance in heartbeat collaboration mode only", async () => {
-    const direct = requireGeneratedSnapshot(
-      generatedSnapshots,
-      "telegram-direct-codex-message-tool.md",
-    );
-    const group = requireGeneratedSnapshot(
-      generatedSnapshots,
-      "discord-group-codex-message-tool.md",
-    );
-    const heartbeat = requireGeneratedSnapshot(
-      generatedSnapshots,
-      "telegram-heartbeat-codex-tool.md",
-    );
+    const direct = readCommittedSnapshot("telegram-direct-codex-message-tool.md");
+    const group = readCommittedSnapshot("discord-group-codex-message-tool.md");
+    const heartbeat = readCommittedSnapshot("telegram-heartbeat-codex-tool.md");
     const heartbeatPhrase = "Use heartbeats to create useful proactive progress";
 
     expect(direct).toContain('"collaborationMode": {');

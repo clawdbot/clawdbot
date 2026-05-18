@@ -622,7 +622,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
-  it("suppresses final text blocks already delivered through partial preview streaming", async () => {
+  it("keeps final text blocks after partial preview streaming", async () => {
     const onPartialReply = vi.fn();
     state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
       await params.onPartialReply?.({ text: "First block\n\nSecond block" });
@@ -640,7 +640,10 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const result = await run();
 
     expect(onPartialReply).toHaveBeenCalledWith({ text: "First block\n\nSecond block" });
-    expect(result).toBeUndefined();
+    expect(result).toEqual([
+      expect.objectContaining({ text: "First block" }),
+      expect.objectContaining({ text: "Second block" }),
+    ]);
   });
 
   it("suppresses narrated silent-turn partials, block replies, and final payloads", async () => {

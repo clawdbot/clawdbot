@@ -366,6 +366,19 @@ describe("discord component interactions", () => {
     expect(lastDispatchCtx?.To).toBe("channel:dm-channel");
     expect(getLastRecordedCtx()?.OriginatingTo).toBe("user:123456789");
     expect(getLastRecordedCtx()?.To).toBe("channel:dm-channel");
+    const recordParams = mockCallArg(recordInboundSessionMock, -1, "recordInboundSession") as {
+      updateLastRoute?: {
+        channel?: string;
+        mainDmOwnerPin?: unknown;
+        sessionKey?: string;
+        to?: string;
+      };
+    };
+    expect(recordParams.updateLastRoute?.sessionKey).toBe("session-1");
+    expect(recordParams.updateLastRoute?.sessionKey).not.toBe("agent:agent-1:main");
+    expect(recordParams.updateLastRoute?.channel).toBe("discord");
+    expect(recordParams.updateLastRoute?.to).toBe("user:123456789");
+    expect(recordParams.updateLastRoute?.mainDmOwnerPin).toBeUndefined();
   });
 
   it("uses raw callbackData for built-in fallback when no plugin handler matches", async () => {

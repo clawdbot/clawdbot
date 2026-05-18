@@ -86,6 +86,24 @@ describe("firecrawl tools", () => {
 
     expect(provider.id).toBe("firecrawl");
     expect(provider.credentialPath).toBe("plugins.entries.firecrawl.config.webSearch.apiKey");
+    expect(
+      provider.getConfiguredCredentialFallback?.({
+        plugins: {
+          entries: {
+            firecrawl: {
+              config: {
+                webFetch: {
+                  apiKey: { source: "env", provider: "default", id: "FIRECRAWL_API_KEY" },
+                },
+              },
+            },
+          },
+        },
+      } as never),
+    ).toEqual({
+      path: "plugins.entries.firecrawl.config.webFetch.apiKey",
+      value: { source: "env", provider: "default", id: "FIRECRAWL_API_KEY" },
+    });
     const pluginEntry = applied.plugins?.entries?.firecrawl;
     if (!pluginEntry) {
       throw new Error("expected Firecrawl plugin entry");

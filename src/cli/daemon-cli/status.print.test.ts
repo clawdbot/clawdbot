@@ -437,4 +437,35 @@ describe("printDaemonStatus", () => {
     expectMockLineContains(runtime.error, "Config warnings:");
     expectMockLineContains(runtime.error, "without channelConfigs metadata");
   });
+
+  it("prints extra gateway-like services as warnings instead of errors", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: { status: "running", pid: 8000 },
+        },
+        rpc: {
+          ok: true,
+          url: "ws://127.0.0.1:18789",
+          server: { version: "2026.5.12" },
+        },
+        port: {
+          port: 18789,
+          status: "busy",
+          listeners: [],
+          hints: [],
+        },
+        extraServices: [{ label: "ai.openclaw.gateway.rescue", scope: "user", detail: "loaded" }],
+      },
+      { json: false },
+    );
+
+    expectMockLineContains(runtime.log, "Other gateway-like services detected");
+    expectMockLineContains(runtime.log, "ai.openclaw.gateway.rescue");
+    expect(runtime.error).not.toHaveBeenCalled();
+  });
 });

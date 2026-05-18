@@ -130,6 +130,7 @@ function createCurrentSnapshot(params: {
     ),
     workspaceDir: params.workspaceDir,
     index,
+    registryDiagnostics: [],
     plugins: [
       {
         id: "normalizer",

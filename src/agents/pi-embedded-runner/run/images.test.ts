@@ -422,6 +422,49 @@ describe("detectAndLoadPromptImages", () => {
     expect(result.detectedRefs).toHaveLength(0);
   });
 
+  it("skips generated media-note refs already supplied inline", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-native-image-dedupe-"));
+    const imagePath = path.join(stateDir, "photo.png");
+    const pngB64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+    await fs.writeFile(imagePath, Buffer.from(pngB64, "base64"));
+
+    try {
+      const result = await detectAndLoadPromptImages({
+        prompt: "[media attached: ./photo.png (image/png)]\ndescribe it",
+        workspaceDir: stateDir,
+        model: { input: ["text", "image"] },
+        existingImages: [{ type: "image", data: pngB64, mimeType: "image/png" }],
+        imageOrder: ["inline"],
+        workspaceOnly: true,
+      });
+
+      expect(result.detectedRefs).toHaveLength(1);
+      expect(result.loadedCount).toBe(0);
+      expect(result.skippedCount).toBe(0);
+      expect(result.images).toEqual([{ type: "image", data: pngB64, mimeType: "image/png" }]);
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps distinct inline attachments with identical bytes", async () => {
+    const pngB64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+    const image = { type: "image" as const, data: pngB64, mimeType: "image/png" };
+
+    const result = await detectAndLoadPromptImages({
+      prompt: "compare these attachments",
+      workspaceDir: "/tmp",
+      model: { input: ["text", "image"] },
+      existingImages: [image, image],
+      imageOrder: ["inline", "inline"],
+      workspaceOnly: true,
+    });
+
+    expect(result.images).toEqual([image, image]);
+  });
+
   it("preserves attachment order when offloaded refs and inline images are mixed", () => {
     const merged = mergePromptAttachmentImages({
       imageOrder: ["offloaded", "inline"],

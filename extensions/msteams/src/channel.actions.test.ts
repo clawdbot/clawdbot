@@ -549,6 +549,59 @@ describe("msteamsPlugin message actions", () => {
     });
   });
 
+  it("downgrades select blocks when sending presentation cards", async () => {
+    await expectSuccessfulAction({
+      mockFn: sendAdaptiveCardMSTeamsMock,
+      mockResult: {
+        messageId: "msg-card-select-1",
+        conversationId: "conv-card-select-1",
+      },
+      action: "send",
+      actionParams: {
+        to: targetChannelId,
+        presentation: {
+          blocks: [
+            {
+              type: "select",
+              placeholder: "Pick a lane",
+              options: [
+                { label: "Canary", value: "canary" },
+                { label: "Stable", value: "stable" },
+              ],
+            },
+          ],
+        },
+      },
+      runtimeParams: {
+        to: targetChannelId,
+        card: {
+          type: "AdaptiveCard",
+          version: "1.4",
+          body: [
+            {
+              type: "TextBlock",
+              text: "Pick a lane:\n- Canary\n- Stable",
+              wrap: true,
+              isSubtle: true,
+              size: "Small",
+            },
+          ],
+        },
+      },
+      details: {
+        ok: true,
+        channel: "msteams",
+        messageId: "msg-card-select-1",
+      },
+      contentDetails: {
+        ok: true,
+        channel: "msteams",
+        messageId: "msg-card-select-1",
+        conversationId: "conv-card-select-1",
+      },
+    });
+  });
+
   it("reports the allowed reaction types when emoji is missing", async () => {
     await expectActionParamError(
       "react",

@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import Testing
 @testable import OpenClaw
@@ -80,6 +81,60 @@ struct SettingsViewSmokeTests {
         _ = view.body
     }
 
+    @Test func `cron settings renders in hosting view`() {
+        let store = CronJobsStore(isPreview: true)
+        store.schedulerEnabled = false
+        store.jobs = [
+            CronJob(
+                id: "job-1",
+                agentId: "ops",
+                name: "Morning Check-in",
+                description: "Summary job",
+                enabled: true,
+                deleteAfterRun: nil,
+                createdAtMs: 1_700_000_000_000,
+                updatedAtMs: 1_700_000_100_000,
+                schedule: .cron(expr: "0 8 * * *", tz: "UTC"),
+                sessionTarget: .isolated,
+                wakeMode: .nextHeartbeat,
+                payload: .agentTurn(
+                    message: "Summarize",
+                    thinking: "low",
+                    timeoutSeconds: 120,
+                    deliver: nil,
+                    channel: nil,
+                    to: nil,
+                    bestEffortDeliver: nil),
+                delivery: CronDelivery(mode: .announce, channel: "whatsapp", to: "+15551234567", bestEffort: true),
+                state: CronJobState(
+                    nextRunAtMs: 1_700_000_200_000,
+                    runningAtMs: nil,
+                    lastRunAtMs: 1_700_000_050_000,
+                    lastStatus: "ok",
+                    lastError: nil,
+                    lastDurationMs: 1200)),
+        ]
+        store.selectedJobId = "job-1"
+        store.runEntries = [
+            CronRunLogEntry(
+                ts: 1_700_000_050_000,
+                jobId: "job-1",
+                action: "finished",
+                status: "ok",
+                error: nil,
+                summary: "done",
+                runAtMs: 1_700_000_050_000,
+                durationMs: 1200,
+                nextRunAtMs: 1_700_000_200_000),
+        ]
+
+        let view = CronSettings(store: store, channelsStore: ChannelsStore(isPreview: true))
+        let hosting = NSHostingView(rootView: view)
+        hosting.frame = NSRect(x: 0, y: 0, width: 900, height: 700)
+        hosting.layoutSubtreeIfNeeded()
+        _ = hosting.fittingSize
+    }
+
     @Test func `cron settings exercises private views`() {
         CronSettings.exerciseForTesting()
     }
@@ -160,6 +215,11 @@ struct SettingsViewSmokeTests {
 
     @Test func `skills settings builds body`() {
         let view = SkillsSettings(state: .preview)
+        _ = view.body
+    }
+
+    @Test func `exec approvals settings builds body`() {
+        let view = ExecApprovalsSettings()
         _ = view.body
     }
 }

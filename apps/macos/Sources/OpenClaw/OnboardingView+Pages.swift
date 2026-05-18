@@ -679,7 +679,7 @@ extension OnboardingView {
                 } else if !self.cliInstalled, self.cliInstallLocation == nil {
                     Text(
                         """
-                        Installs a user-space Node 22+ runtime and the CLI (no Homebrew).
+                        Installs a user-space Node 22.19+ runtime and the CLI (no Homebrew).
                         Rerun anytime to reinstall or update.
                         """)
                         .font(.footnote)

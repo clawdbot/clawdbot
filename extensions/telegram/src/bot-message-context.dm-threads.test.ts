@@ -274,6 +274,7 @@ describe("buildTelegramMessageContext group sessions without forum", () => {
     // Session key SHOULD include :topic:99 for forums
     expect(ctx?.ctxPayload?.SessionKey).toBe("agent:main:telegram:group:-1001234567890:topic:99");
     expect(ctx?.ctxPayload?.MessageThreadId).toBe(99);
+    expect(ctx?.ctxPayload?.OriginatingTo).toBe("telegram:-1001234567890:topic:99");
   });
 
   it("surfaces topic name from reply_to_message forum metadata", async () => {

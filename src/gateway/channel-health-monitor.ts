@@ -189,6 +189,7 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
       clearInterval(timer);
       timer = null;
     }
+    abortSignal?.removeEventListener("abort", stop);
   }
 
   if (abortSignal?.aborted) {

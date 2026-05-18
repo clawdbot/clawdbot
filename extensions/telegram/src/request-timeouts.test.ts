@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  resolveTelegramLongPollTimeoutSeconds,
   resolveTelegramRequestTimeoutMs,
   resolveTelegramStartupProbeTimeoutMs,
 } from "./request-timeouts.js";
@@ -40,6 +41,20 @@ describe("resolveTelegramRequestTimeoutMs", () => {
   it("does not assign hard timeouts to unrelated Telegram methods", () => {
     expect(resolveTelegramRequestTimeoutMs("answercallbackquery")).toBeUndefined();
     expect(resolveTelegramRequestTimeoutMs(null)).toBeUndefined();
+  });
+});
+
+describe("resolveTelegramLongPollTimeoutSeconds", () => {
+  it("uses Telegram's default long-poll duration when no client timeout is configured", () => {
+    expect(resolveTelegramLongPollTimeoutSeconds(undefined)).toBe(30);
+  });
+
+  it("keeps isolated long polling below the getUpdates request abort guard", () => {
+    expect(resolveTelegramLongPollTimeoutSeconds(90)).toBe(40);
+  });
+
+  it("honors lower configured long-poll durations", () => {
+    expect(resolveTelegramLongPollTimeoutSeconds(10)).toBe(10);
   });
 });
 

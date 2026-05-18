@@ -274,7 +274,7 @@ describe("runQaCharacterEval", () => {
       { model: "openai/gpt-5.5", rank: 1, score: 8, summary: "ok" },
       { model: "openai/gpt-5.2", rank: 2, score: 7.5, summary: "ok" },
       { model: "openai/gpt-5", rank: 3, score: 7.2, summary: "ok" },
-      { model: "anthropic/claude-opus-4-6", rank: 4, score: 7, summary: "ok" },
+      { model: "anthropic/claude-opus-4-7", rank: 4, score: 7, summary: "ok" },
       { model: "anthropic/claude-sonnet-4-6", rank: 5, score: 6.8, summary: "ok" },
       { model: "zai/glm-5.1", rank: 6, score: 6.3, summary: "ok" },
       { model: "moonshot/kimi-k2.5", rank: 7, score: 6.2, summary: "ok" },
@@ -294,7 +294,7 @@ describe("runQaCharacterEval", () => {
       "openai/gpt-5.5",
       "openai/gpt-5.2",
       "openai/gpt-5",
-      "anthropic/claude-opus-4-6",
+      "anthropic/claude-opus-4-7",
       "anthropic/claude-sonnet-4-6",
       "zai/glm-5.1",
       "moonshot/kimi-k2.5",
@@ -323,7 +323,7 @@ describe("runQaCharacterEval", () => {
     expect(runJudge).toHaveBeenCalledTimes(2);
     expect(runJudge.mock.calls.map(([params]) => params.judgeModel)).toEqual([
       "openai/gpt-5.5",
-      "anthropic/claude-opus-4-6",
+      "anthropic/claude-opus-4-7",
     ]);
     expect(runJudge.mock.calls.map(([params]) => params.judgeThinkingDefault)).toEqual([
       "xhigh",
@@ -577,11 +577,11 @@ describe("runQaCharacterEval", () => {
       candidateModelOptions: {
         "openai/gpt-5.5": { thinkingDefault: "xhigh", fastMode: false },
       },
-      judgeModels: ["openai/gpt-5.5", "anthropic/claude-opus-4-6"],
+      judgeModels: ["openai/gpt-5.5", "anthropic/claude-opus-4-7"],
       judgeThinkingDefault: "medium",
       judgeModelOptions: {
         "openai/gpt-5.5": { thinkingDefault: "xhigh", fastMode: true },
-        "anthropic/claude-opus-4-6": { thinkingDefault: "high" },
+        "anthropic/claude-opus-4-7": { thinkingDefault: "high" },
       },
       runSuite,
       runJudge,

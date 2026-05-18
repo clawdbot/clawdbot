@@ -45,6 +45,7 @@ function configuredProvider() {
 
 const runValueOptions = new Set([
   "allow-env",
+  "artifact-glob",
   "azure-location",
   "azure-os-disk",
   "azure-resource-group",
@@ -86,6 +87,7 @@ const runValueOptions = new Set([
   "islo-vcpus",
   "islo-workdir",
   "junit",
+  "label",
   "market",
   "modal-app",
   "modal-image",
@@ -101,6 +103,7 @@ const runValueOptions = new Set([
   "network",
   "preflight-tools",
   "profile",
+  "proof-template",
   "provider",
   "proxmox-api-url",
   "proxmox-bridge",
@@ -111,6 +114,7 @@ const runValueOptions = new Set([
   "proxmox-user",
   "proxmox-work-root",
   "script",
+  "scenario",
   "semaphore-host",
   "semaphore-idle-timeout",
   "semaphore-machine",
@@ -122,6 +126,7 @@ const runValueOptions = new Set([
   "static-port",
   "static-user",
   "static-work-root",
+  "stop-after",
   "tailscale-auth-key-env",
   "tailscale-exit-node",
   "tailscale-hostname-template",
@@ -141,8 +146,36 @@ const runValueOptions = new Set([
   "tensorlake-workdir",
   "ttl",
   "type",
+  "emit-proof",
+  "preset",
+  "preset-var",
   "windows-mode",
 ]);
+
+let runValueOptionsFromHelp;
+
+function parseRunValueOptionsFromHelp(text) {
+  const names = new Set();
+  for (const line of text.split(/\r?\n/u)) {
+    const match = line.match(
+      /^\s+-{1,2}([a-z0-9][a-z0-9-]*)\s+(?:string|duration|int|float|value)\b/u,
+    );
+    if (match) {
+      names.add(match[1]);
+    }
+  }
+  return names;
+}
+
+function currentRunValueOptions() {
+  if (!runValueOptionsFromHelp) {
+    runValueOptionsFromHelp = new Set([
+      ...runValueOptions,
+      ...parseRunValueOptionsFromHelp(help.text),
+    ]);
+  }
+  return runValueOptionsFromHelp;
+}
 
 function runOptionName(arg) {
   return arg.replace(/^-+/u, "").split("=", 1)[0];
@@ -160,7 +193,7 @@ function runCommandBounds(commandArgs) {
     if (!arg.startsWith("-")) {
       return { start: index, optionEnd: index };
     }
-    if (!arg.includes("=") && runValueOptions.has(runOptionName(arg))) {
+    if (!arg.includes("=") && currentRunValueOptions().has(runOptionName(arg))) {
       index += 1;
     }
   }

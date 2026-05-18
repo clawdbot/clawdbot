@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_UPLOAD_DIR } from "./paths.js";
 import {
+  getPwToolsCoreSessionMocks,
   installPwToolsCoreTestHooks,
   setPwToolsCoreCurrentPage,
 } from "./pw-tools-core.test-harness.js";
@@ -74,38 +75,42 @@ describe("pw-tools-core", () => {
     }
   });
   it("arms the next dialog and accepts/dismisses (default timeout)", async () => {
-    const accept = vi.fn(async () => {});
-    const dismiss = vi.fn(async () => {});
-    const dialog = { accept, dismiss };
-    const waitForEvent = vi.fn(async () => dialog);
-    setPwToolsCoreCurrentPage({
-      waitForEvent,
-    });
+    const sessionMocks = getPwToolsCoreSessionMocks();
+    const page = {};
+    setPwToolsCoreCurrentPage(page);
 
     await mod.armDialogViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
       accept: true,
       promptText: "x",
     });
-    await Promise.resolve();
 
-    expect(waitForEvent).toHaveBeenCalledWith("dialog", { timeout: 120_000 });
-    expect(accept).toHaveBeenCalledWith("x");
-    expect(dismiss).not.toHaveBeenCalled();
+    expect(sessionMocks.respondToObservedDialogOnPage).toHaveBeenCalledWith({
+      page,
+      accept: true,
+      promptText: "x",
+      closedBy: "agent",
+    });
+    expect(sessionMocks.armObservedDialogResponseOnPage).toHaveBeenCalledWith({
+      page,
+      accept: true,
+      promptText: "x",
+      timeoutMs: 120_000,
+    });
 
-    accept.mockClear();
-    dismiss.mockClear();
-    waitForEvent.mockClear();
+    sessionMocks.respondToObservedDialogOnPage.mockClear();
+    sessionMocks.armObservedDialogResponseOnPage.mockClear();
 
     await mod.armDialogViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
       accept: false,
     });
-    await Promise.resolve();
 
-    expect(waitForEvent).toHaveBeenCalledWith("dialog", { timeout: 120_000 });
-    expect(dismiss).toHaveBeenCalled();
-    expect(accept).not.toHaveBeenCalled();
+    expect(sessionMocks.armObservedDialogResponseOnPage).toHaveBeenCalledWith({
+      page,
+      accept: false,
+      timeoutMs: 120_000,
+    });
   });
   it("waits for selector, url, load state, and function", async () => {
     const waitForSelector = vi.fn(async () => {});

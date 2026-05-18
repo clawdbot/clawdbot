@@ -21,6 +21,7 @@ const runWithModelFallbackMock = vi.fn();
 const runEmbeddedPiAgentMock = vi.fn();
 const refreshQueuedFollowupSessionMock = vi.fn();
 const incrementCompactionCountMock = vi.fn();
+const ensureSelectedAgentHarnessPluginMock = vi.fn();
 
 function registerMemoryFlushPlanResolverForTest(resolver: MemoryFlushPlanResolver): void {
   registerMemoryCapability("memory-core", { flushPlanResolver: resolver });
@@ -44,7 +45,15 @@ type RefreshQueuedFollowupSessionParams = {
 type ModelFallbackParams = {
   provider?: string;
   model?: string;
+  agentId?: string;
+  sessionKey?: string;
   fallbacksOverride?: unknown[];
+  resolveAgentHarnessRuntimeOverride?: (provider: string, model: string) => string | undefined;
+  prepareAgentHarnessRuntime?: (params: {
+    provider: string;
+    model: string;
+    agentHarnessRuntimeOverride?: string;
+  }) => Promise<void> | void;
 };
 
 type EmbeddedPiAgentParams = {
@@ -132,6 +141,7 @@ describe("runMemoryFlushIfNeeded", () => {
     });
     runEmbeddedPiAgentMock.mockReset().mockResolvedValue({ payloads: [], meta: {} });
     refreshQueuedFollowupSessionMock.mockReset();
+    ensureSelectedAgentHarnessPluginMock.mockReset().mockResolvedValue(undefined);
     incrementCompactionCountMock.mockReset().mockImplementation(async (params) => {
       const sessionKey = String(params.sessionKey ?? "");
       if (!sessionKey || !params.sessionStore?.[sessionKey]) {
@@ -166,6 +176,7 @@ describe("runMemoryFlushIfNeeded", () => {
       runEmbeddedPiAgent: runEmbeddedPiAgentMock as never,
       refreshQueuedFollowupSession: refreshQueuedFollowupSessionMock as never,
       incrementCompactionCount: incrementCompactionCountMock as never,
+      ensureSelectedAgentHarnessPlugin: ensureSelectedAgentHarnessPluginMock as never,
       registerAgentRunContext: vi.fn() as never,
       randomUUID: () => "00000000-0000-0000-0000-000000000001",
       now: () => 1_700_000_000_000,
@@ -499,6 +510,69 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(agentCall.authProfileIdSource).toBeUndefined();
   });
 
+  it("loads the selected harness before memory-flush fallback preflight", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          compaction: {
+            memoryFlush: {},
+          },
+        },
+      },
+    };
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 80_000,
+      compactionCount: 1,
+      agentRuntimeOverride: "codex",
+    };
+    const runtimePolicySessionKey = "agent:main:telegram:default:direct:12345";
+
+    await runMemoryFlushIfNeeded({
+      cfg,
+      followupRun: createTestFollowupRun({
+        agentId: "main",
+        sessionKey: "main",
+        runtimePolicySessionKey,
+        workspaceDir: "/workspace",
+        provider: "openai",
+        model: "gpt-5.4",
+      }),
+      sessionCtx: { Provider: "telegram" } as unknown as TemplateContext,
+      defaultModel: "openai/gpt-5.4",
+      agentCfgContextTokens: 100_000,
+      resolvedVerboseLevel: "off",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      runtimePolicySessionKey,
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    const fallbackCall = requireModelFallbackCall();
+    expect(fallbackCall.agentId).toBe("main");
+    expect(fallbackCall.sessionKey).toBe(runtimePolicySessionKey);
+    expect(fallbackCall.resolveAgentHarnessRuntimeOverride?.("openai", "gpt-5.4")).toBe("codex");
+
+    await fallbackCall.prepareAgentHarnessRuntime?.({
+      provider: "openai",
+      model: "gpt-5.4",
+      agentHarnessRuntimeOverride: "codex",
+    });
+
+    expect(ensureSelectedAgentHarnessPluginMock).toHaveBeenCalledWith({
+      config: cfg,
+      provider: "openai",
+      modelId: "gpt-5.4",
+      agentId: "main",
+      sessionKey: runtimePolicySessionKey,
+      agentHarnessRuntimeOverride: "codex",
+      workspaceDir: "/workspace",
+    });
+  });
+
   it("skips memory flush for CLI providers", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
@@ -732,6 +806,99 @@ describe("runMemoryFlushIfNeeded", () => {
 
     const compactCall = requireCompactEmbeddedPiSessionCall();
     expect(compactCall.currentTokenCount).toBeGreaterThanOrEqual(100_000);
+  });
+
+  it("uses the persisted Codex runtime context window for OpenAI preflight compaction", async () => {
+    registerMemoryFlushPlanResolverForTest(() => ({
+      softThresholdTokens: 4_000,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      reserveTokensFloor: 0,
+      prompt: "Pre-compaction memory flush.\nNO_REPLY",
+      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+      relativePath: "memory/2023-11-14.md",
+    }));
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 347_000,
+      totalTokensFresh: false,
+      agentHarnessId: "codex",
+    };
+
+    await runPreflightCompactionIfNeeded({
+      cfg: {
+        models: {
+          providers: {
+            openai: { models: [{ id: "gpt-5.5", contextWindow: 1_000_000 }] },
+            "openai-codex": { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
+          },
+        },
+        agents: { defaults: { compaction: { memoryFlush: {} } } },
+      } as never,
+      followupRun: createTestFollowupRun({
+        provider: "openai",
+        model: "gpt-5.5",
+        sessionId: "session",
+        sessionKey: "main",
+      }),
+      defaultModel: "gpt-5.5",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(compactEmbeddedPiSessionMock).toHaveBeenCalledTimes(1);
+    const compactCall = requireCompactEmbeddedPiSessionCall();
+    expect(compactCall.currentTokenCount).toBe(347_000);
+  });
+
+  it("keeps the OpenAI API context window for persisted PI runtime overrides", async () => {
+    registerMemoryFlushPlanResolverForTest(() => ({
+      softThresholdTokens: 4_000,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      reserveTokensFloor: 0,
+      prompt: "Pre-compaction memory flush.\nNO_REPLY",
+      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+      relativePath: "memory/2023-11-14.md",
+    }));
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 347_000,
+      totalTokensFresh: false,
+      agentRuntimeOverride: "pi",
+    };
+
+    const entry = await runPreflightCompactionIfNeeded({
+      cfg: {
+        models: {
+          providers: {
+            openai: { models: [{ id: "gpt-5.5", contextWindow: 1_000_000 }] },
+            "openai-codex": { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
+          },
+        },
+        agents: { defaults: { compaction: { memoryFlush: {} } } },
+      } as never,
+      followupRun: createTestFollowupRun({
+        provider: "openai",
+        model: "gpt-5.5",
+        sessionId: "session",
+        sessionKey: "main",
+      }),
+      defaultModel: "gpt-5.5",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(entry).toBe(sessionEntry);
+    expect(compactEmbeddedPiSessionMock).not.toHaveBeenCalled();
   });
 
   it("uses the active run sessionFile when the session entry has no transcript path", async () => {

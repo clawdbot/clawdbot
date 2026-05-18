@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createGlobalCommandRunner } from "./shared.js";
+import { defaultRuntime } from "../../runtime.js";
+import { createGlobalCommandRunner, parseTimeoutMsOrExit } from "./shared.js";
 
 const runCommandWithTimeout = vi.hoisted(() => vi.fn());
 
@@ -47,5 +48,42 @@ describe("createGlobalCommandRunner", () => {
       stderr: "err",
       code: 17,
     });
+  });
+
+  it("requires timeout values to be complete positive integer seconds", () => {
+    const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
+    const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
+
+    try {
+      expect(parseTimeoutMsOrExit("1.5")).toBeNull();
+      expect(parseTimeoutMsOrExit("10abc")).toBeNull();
+      expect(parseTimeoutMsOrExit("0")).toBeNull();
+      expect(parseTimeoutMsOrExit("-1")).toBeNull();
+      expect(parseTimeoutMsOrExit("   ")).toBeNull();
+
+      expect(error).toHaveBeenCalledTimes(5);
+      expect(error).toHaveBeenCalledWith("--timeout must be a positive integer (seconds)");
+      expect(exit).toHaveBeenCalledTimes(5);
+      expect(exit).toHaveBeenCalledWith(1);
+    } finally {
+      error.mockRestore();
+      exit.mockRestore();
+    }
+  });
+
+  it("parses complete positive integer timeout values as milliseconds", () => {
+    const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
+    const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
+
+    try {
+      expect(parseTimeoutMsOrExit(" 10 ")).toBe(10_000);
+      expect(parseTimeoutMsOrExit("001")).toBe(1_000);
+      expect(parseTimeoutMsOrExit()).toBeUndefined();
+      expect(error).not.toHaveBeenCalled();
+      expect(exit).not.toHaveBeenCalled();
+    } finally {
+      error.mockRestore();
+      exit.mockRestore();
+    }
   });
 });

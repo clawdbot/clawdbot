@@ -12,6 +12,10 @@ export function persistSubagentRunsToDisk(runs: Map<string, SubagentRunRecord>) 
   }
 }
 
+export function persistSubagentRunsToDiskOrThrow(runs: Map<string, SubagentRunRecord>) {
+  saveSubagentRegistryToDisk(runs);
+}
+
 export function restoreSubagentRunsFromDisk(params: {
   runs: Map<string, SubagentRunRecord>;
   mergeOnly?: boolean;

@@ -3,7 +3,7 @@ summary: "Local qa-channel scenarios for privacy-preserving personal assistant w
 read_when:
   - Running local personal agent reliability checks
   - Extending the repo-backed QA scenario catalog
-  - Verifying reminder, reply, memory, redaction, and safe tool followthrough behavior
+  - Verifying reminder, reply, memory, redaction, safe tool followthrough, and task status behavior
 title: "Personal agent benchmark pack"
 ---
 
@@ -21,6 +21,8 @@ The first pack is intentionally narrow:
 - fake preference recall from the temporary QA workspace memory files
 - fake secret no-echo checks
 - safe read-backed tool followthrough after a short approval-style turn
+- approval denial stop behavior for a sensitive local read request
+- proof-backed task status reporting that keeps pending, blocked, and done separate
 
 ## Scenarios
 
@@ -62,8 +64,6 @@ Add new cases under `qa/scenarios/personal/`, then add the scenario id to
 
 Good follow-up candidates:
 
-- approval denial correctness
-- multi-step task ledger assertions
 - redacted trajectory export checks
 - local-only plugin workflow checks
 

@@ -1585,9 +1585,8 @@ describe("model-selection", () => {
       expect(result).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
     });
 
-    it("should fall back to the configured default provider and warn if provider is missing for non-alias", () => {
-      setLoggerOverride({ level: "silent", consoleLevel: "warn" });
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    it("should fall back to the configured default provider and warn if provider is missing for non-alias", async () => {
+      const warnLogs = createWarnLogCapture("openclaw-model-selection-test");
       try {
         const cfg: Partial<OpenClawConfig> = {
           agents: {
@@ -1604,13 +1603,13 @@ describe("model-selection", () => {
         });
 
         expect(result).toEqual({ provider: "google", model: "claude-3-5-sonnet" });
-        expect(warnSpy).toHaveBeenCalledWith(
-          '[model-selection] Model "claude-3-5-sonnet" specified without provider. Falling back to "google/claude-3-5-sonnet". Please use "google/claude-3-5-sonnet" in your config.',
-        );
+        expect(
+          await warnLogs.findText(
+            'Model "claude-3-5-sonnet" specified without provider. Falling back to "google/claude-3-5-sonnet". Please use "google/claude-3-5-sonnet" in your config.',
+          ),
+        ).toBeDefined();
       } finally {
-        warnSpy.mockRestore();
-        setLoggerOverride(null);
-        resetLogger();
+        warnLogs.cleanup();
       }
     });
 
@@ -1868,9 +1867,8 @@ describe("model-selection", () => {
       expect(result).toEqual({ provider: "openai", model: "gpt-5.4" });
     });
 
-    it("should warn when specified model cannot be resolved and falls back to default", () => {
-      setLoggerOverride({ level: "silent", consoleLevel: "warn" });
-      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    it("should warn when specified model cannot be resolved and falls back to default", async () => {
+      const warnLogs = createWarnLogCapture("openclaw-model-selection-test");
       try {
         const cfg: Partial<OpenClawConfig> = {
           agents: {
@@ -1887,13 +1885,13 @@ describe("model-selection", () => {
         });
 
         expect(result).toEqual({ provider: "openai", model: "gpt-5.4" });
-        expect(warnSpy).toHaveBeenCalledWith(
-          '[model-selection] Model "openai/" could not be resolved. Falling back to default "openai/gpt-5.4".',
-        );
+        expect(
+          await warnLogs.findText(
+            'Model "openai/" could not be resolved. Falling back to default "openai/gpt-5.4".',
+          ),
+        ).toBeDefined();
       } finally {
-        warnSpy.mockRestore();
-        setLoggerOverride(null);
-        resetLogger();
+        warnLogs.cleanup();
       }
     });
 

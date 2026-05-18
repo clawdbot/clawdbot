@@ -53,8 +53,11 @@ vi.mock("../../config/runtime-schema.js", () => ({
 }));
 
 vi.mock("../../secrets/runtime.js", () => ({
-  getActiveSecretsRuntimeSnapshot: () => null,
   prepareSecretsRuntimeSnapshot: prepareSecretsRuntimeSnapshotMock,
+}));
+
+vi.mock("../../secrets/runtime-state.js", () => ({
+  getActiveSecretsRuntimeSnapshot: () => null,
 }));
 
 vi.mock("../../infra/restart.js", () => ({

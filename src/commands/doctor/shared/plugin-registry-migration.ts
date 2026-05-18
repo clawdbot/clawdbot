@@ -255,6 +255,12 @@ function listMigrationRelevantPluginRecords(params: {
     if (plugin.enabledByDefault && (manifest?.providers.length ?? 0) > 0) {
       return true;
     }
+    if (plugin.startup.memory) {
+      return true;
+    }
+    if ((manifest?.commandAliases ?? []).some((alias) => alias.cliCommand)) {
+      return true;
+    }
     if (installedPluginIds.has(plugin.pluginId) || referencedPluginIds.has(plugin.pluginId)) {
       return true;
     }

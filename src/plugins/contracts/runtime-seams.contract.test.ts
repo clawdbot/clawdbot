@@ -8,6 +8,15 @@ import {
 } from "../../config/runtime-snapshot.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import { TEST_UNDICI_RUNTIME_DEPS_KEY } from "../../infra/net/undici-runtime.js";
+import * as activationCheck from "../../plugin-sdk/facade-activation-check.runtime.js";
+import * as facadeRuntime from "../../plugin-sdk/facade-runtime.js";
+
+vi.mock("../../config/plugin-auto-enable.js", () => ({
+  applyPluginAutoEnable: ({ config }: { config?: unknown }) => ({
+    config: config ?? {},
+    autoEnabledReasons: {},
+  }),
+}));
 
 const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
@@ -66,9 +75,8 @@ function createInstalledRuntimePluginDir(
 
 afterEach(() => {
   clearRuntimeConfigSnapshot();
+  facadeRuntime.resetFacadeRuntimeStateForTest();
   vi.restoreAllMocks();
-  vi.resetModules();
-  vi.doUnmock("../../config/plugin-auto-enable.js");
   Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
   if (originalBundledPluginsDir === undefined) {
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
@@ -93,7 +101,10 @@ afterEach(() => {
 describe("shared runtime seam contracts", () => {
   it("allows activated runtime facades when the resolved plugin root matches an installed-style manifest record", async () => {
     const pluginId = "line-contract-fixture";
-    const { bundledDir, stateDir } = createInstalledRuntimePluginDir(pluginId, "line-ok");
+    const { bundledDir, stateDir, pluginRoot } = createInstalledRuntimePluginDir(
+      pluginId,
+      "line-ok",
+    );
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
     process.env.OPENCLAW_STATE_DIR = stateDir;
     setRuntimeConfigSnapshot({
@@ -105,27 +116,25 @@ describe("shared runtime seam contracts", () => {
         },
       },
     });
-    vi.resetModules();
-    vi.doMock("../../config/plugin-auto-enable.js", () => ({
-      applyPluginAutoEnable: ({ config }: { config?: unknown }) => ({
-        config: config ?? {},
-        autoEnabledReasons: {},
-      }),
-    }));
-
-    const facadeRuntime = await import("../../plugin-sdk/facade-runtime.js");
     facadeRuntime.resetFacadeRuntimeStateForTest();
 
+    const location = {
+      modulePath: path.join(pluginRoot, "runtime-api.js"),
+      boundaryRoot: pluginRoot,
+    };
     expect(
-      facadeRuntime.canLoadActivatedBundledPluginPublicSurface({
+      activationCheck.resolveBundledPluginPublicSurfaceAccess({
         dirName: pluginId,
         artifactBasename: "runtime-api.js",
-      }),
+        location,
+        sourceExtensionsRoot: bundledDir,
+        resolutionKey: `test:${pluginId}`,
+      }).allowed,
     ).toBe(true);
     expect(
-      facadeRuntime.loadActivatedBundledPluginPublicSurfaceModuleSync<{ marker: string }>({
-        dirName: pluginId,
-        artifactBasename: "runtime-api.js",
+      facadeRuntime.__testing.loadFacadeModuleAtLocationSync<{ marker: string }>({
+        location,
+        trackedPluginId: pluginId,
       }).marker,
     ).toBe("line-ok");
     expect(facadeRuntime.listImportedBundledPluginFacadeIds()).toEqual([pluginId]);

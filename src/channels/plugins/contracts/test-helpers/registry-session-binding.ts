@@ -26,6 +26,7 @@ type SessionBindingContractEntry = {
   bindAndResolve: () => Promise<SessionBindingRecord>;
   unbindAndVerify: (binding: SessionBindingRecord) => Promise<void>;
   cleanup: () => Promise<void> | void;
+  preload?: () => Promise<void> | void;
   beforeEach?: () => Promise<void> | void;
 };
 const contractApiPromises = new Map<string, Promise<Record<string, unknown>>>();
@@ -243,6 +244,9 @@ const sessionBindingContractEntries: Record<
   Omit<SessionBindingContractEntry, "id">
 > = {
   discord: {
+    preload: async () => {
+      await getContractApi<DiscordContractApi>("discord");
+    },
     beforeEach: prepareDiscordSessionBindingContract,
     expectedCapabilities: {
       adapterAvailable: true,
@@ -304,6 +308,9 @@ const sessionBindingContractEntries: Record<
     },
   },
   feishu: {
+    preload: async () => {
+      await getContractApi<FeishuContractApi>("feishu");
+    },
     beforeEach: prepareFeishuSessionBindingContract,
     expectedCapabilities: {
       adapterAvailable: true,
@@ -365,6 +372,9 @@ const sessionBindingContractEntries: Record<
     },
   },
   imessage: {
+    preload: async () => {
+      await getContractApi<IMessageContractApi>("imessage");
+    },
     beforeEach: prepareIMessageSessionBindingContract,
     expectedCapabilities: {
       adapterAvailable: true,
@@ -428,6 +438,9 @@ const sessionBindingContractEntries: Record<
     },
   },
   matrix: {
+    preload: async () => {
+      await getContractApi<MatrixContractApi>("matrix");
+    },
     beforeEach: prepareMatrixSessionBindingContract,
     expectedCapabilities: {
       adapterAvailable: true,
@@ -479,6 +492,9 @@ const sessionBindingContractEntries: Record<
     },
   },
   telegram: {
+    preload: async () => {
+      await getContractApi<TelegramContractApi>("telegram");
+    },
     beforeEach: prepareTelegramSessionBindingContract,
     expectedCapabilities: {
       adapterAvailable: true,

@@ -10,9 +10,7 @@ struct ExecApprovalsSettings: View {
                     title: "Exec Approvals",
                     subtitle: "Control how agent shell commands are approved on this Mac.")
 
-                SettingsSection("Policy") {
-                    SystemRunSettingsView()
-                }
+                SystemRunSettingsView()
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, 4)
@@ -26,22 +24,8 @@ struct SystemRunSettingsView: View {
     @State private var newPattern: String = ""
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .center, spacing: 12) {
-                Text("Exec approvals")
-                    .font(.body)
-                Spacer(minLength: 0)
-                Picker("Agent", selection: Binding(
-                    get: { self.model.selectedAgentId },
-                    set: { self.model.selectAgent($0) }))
-                {
-                    ForEach(self.model.agentPickerIds, id: \.self) { id in
-                        Text(self.model.label(for: id)).tag(id)
-                    }
-                }
-                .pickerStyle(.menu)
-                .frame(width: 180, alignment: .trailing)
-            }
+        VStack(alignment: .leading, spacing: 18) {
+            self.summaryPanel
 
             Picker("", selection: self.$tab) {
                 ForEach(ExecApprovalsSettingsTab.allCases) { tab in
@@ -49,7 +33,7 @@ struct SystemRunSettingsView: View {
                 }
             }
             .pickerStyle(.segmented)
-            .frame(width: 320)
+            .frame(width: 280)
 
             if self.tab == .policy {
                 self.policyView
@@ -63,80 +47,176 @@ struct SystemRunSettingsView: View {
         }
     }
 
+    private var summaryPanel: some View {
+        HStack(alignment: .center, spacing: 18) {
+            ZStack {
+                Circle()
+                    .fill(self.model.security.tint.opacity(0.22))
+                Image(systemName: self.model.security.systemImage)
+                    .font(.system(size: 24, weight: .semibold))
+                    .foregroundStyle(self.model.security.tint)
+            }
+            .frame(width: 58, height: 58)
+
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Text(self.model.security.summaryTitle)
+                        .font(.headline)
+                    StatusPill(
+                        text: self.model.isDefaultsScope ? "defaults" : self.model.selectedAgentId,
+                        tint: .secondary)
+                }
+                Text(self.model.security.summarySubtitle)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 18)
+
+            VStack(alignment: .trailing, spacing: 6) {
+                Text("Scope")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                Picker("Scope", selection: Binding(
+                    get: { self.model.selectedAgentId },
+                    set: { self.model.selectAgent($0) }))
+                {
+                    ForEach(self.model.agentPickerIds, id: \.self) { id in
+                        Text(self.model.label(for: id)).tag(id)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .frame(width: 190, alignment: .trailing)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.quaternary.opacity(0.34), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(.white.opacity(0.06))
+        }
+    }
+
     private var policyView: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Picker("", selection: Binding(
-                get: { self.model.security },
-                set: { self.model.setSecurity($0) }))
-            {
-                ForEach(ExecSecurity.allCases) { security in
-                    Text(security.title).tag(security)
+        VStack(alignment: .leading, spacing: 16) {
+            SettingsCardGroup("Policy") {
+                SettingsCardRow(
+                    title: "Command access",
+                    subtitle: self.model.security.policyDescription)
+                {
+                    Picker("Command access", selection: Binding(
+                        get: { self.model.security },
+                        set: { self.model.setSecurity($0) }))
+                    {
+                        ForEach(ExecSecurity.allCases) { security in
+                            Text(security.title).tag(security)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(width: 170)
                 }
-            }
-            .labelsHidden()
-            .pickerStyle(.menu)
 
-            Picker("", selection: Binding(
-                get: { self.model.ask },
-                set: { self.model.setAsk($0) }))
-            {
-                ForEach(ExecAsk.allCases) { ask in
-                    Text(ask.title).tag(ask)
+                SettingsCardRow(
+                    title: "Prompt behavior",
+                    subtitle: self.model.ask.policyDescription)
+                {
+                    Picker("Prompt behavior", selection: Binding(
+                        get: { self.model.ask },
+                        set: { self.model.setAsk($0) }))
+                    {
+                        ForEach(ExecAsk.allCases) { ask in
+                            Text(ask.title).tag(ask)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(width: 210)
                 }
-            }
-            .labelsHidden()
-            .pickerStyle(.menu)
 
-            Picker("", selection: Binding(
-                get: { self.model.askFallback },
-                set: { self.model.setAskFallback($0) }))
-            {
-                ForEach(ExecSecurity.allCases) { mode in
-                    Text("Fallback: \(mode.title)").tag(mode)
+                SettingsCardRow(
+                    title: "Fallback when unreachable",
+                    subtitle: "Used when the companion UI cannot display an approval prompt.",
+                    showsDivider: false)
+                {
+                    Picker("Fallback", selection: Binding(
+                        get: { self.model.askFallback },
+                        set: { self.model.setAskFallback($0) }))
+                    {
+                        ForEach(ExecSecurity.allCases) { mode in
+                            Text(mode.title).tag(mode)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.menu)
+                    .frame(width: 170)
                 }
             }
-            .labelsHidden()
-            .pickerStyle(.menu)
 
             Text(self.scopeMessage)
                 .font(.footnote)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
 
     private var allowlistView: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Toggle("Auto-allow skill CLIs", isOn: Binding(
-                get: { self.model.autoAllowSkills },
-                set: { self.model.setAutoAllowSkills($0) }))
+        VStack(alignment: .leading, spacing: 16) {
+            SettingsCardGroup("Automatic Trust") {
+                SettingsCardToggleRow(
+                    title: "Auto-allow skill CLIs",
+                    subtitle: "Let bundled skill command-line tools run without prompting.",
+                    binding: Binding(
+                        get: { self.model.autoAllowSkills },
+                        set: { self.model.setAutoAllowSkills($0) }),
+                    showsDivider: self.model.autoAllowSkills && !self.model.skillBins.isEmpty)
 
-            if self.model.autoAllowSkills, !self.model.skillBins.isEmpty {
-                Text("Skill CLIs: \(self.model.skillBins.joined(separator: ", "))")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                if self.model.autoAllowSkills, !self.model.skillBins.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Trusted skill binaries")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                        LazyVGrid(
+                            columns: [GridItem(.adaptive(minimum: 78), spacing: 6, alignment: .leading)],
+                            alignment: .leading,
+                            spacing: 6)
+                        {
+                            ForEach(self.model.skillBins, id: \.self) { bin in
+                                StatusPill(text: bin, tint: .secondary)
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 11)
+                }
             }
 
             if self.model.isDefaultsScope {
-                Text("Allowlists are per-agent. Select an agent to edit its allowlist.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                self.defaultsAllowlistEmptyState
             } else {
-                HStack(spacing: 8) {
-                    TextField("Add command name or path glob", text: self.$newPattern)
-                        .textFieldStyle(.roundedBorder)
-                    Button("Add") {
-                        if self.model.addEntry(self.newPattern) == nil {
-                            self.newPattern = ""
+                SettingsCardGroup("Add Command") {
+                    SettingsCardRow(
+                        title: "Pattern",
+                        subtitle: "Bare names match PATH commands. Use a path glob for a specific binary.",
+                        showsDivider: false)
+                    {
+                        HStack(spacing: 8) {
+                            TextField("rg or /opt/homebrew/bin/*", text: self.$newPattern)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 260)
+                                .onSubmit { self.addPatternIfValid() }
+                            Button("Add") {
+                                self.addPatternIfValid()
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(!self.model.isValidPattern(self.newPattern))
                         }
                     }
-                    .buttonStyle(.bordered)
-                    .disabled(!self.model.isValidPattern(self.newPattern))
                 }
 
-                Text("Bare names match PATH-resolved commands. Use a path glob for a specific binary.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
                 if let validationMessage = self.model.allowlistValidationMessage {
                     Text(validationMessage)
                         .font(.footnote)
@@ -144,21 +224,64 @@ struct SystemRunSettingsView: View {
                 }
 
                 if self.model.entries.isEmpty {
-                    Text("No allowlisted commands yet.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                    self.emptyAllowlistState
                 } else {
-                    VStack(alignment: .leading, spacing: 8) {
+                    SettingsCardGroup("Allowed Commands") {
                         ForEach(self.model.entries, id: \.id) { entry in
                             ExecAllowlistRow(
                                 entry: Binding(
                                     get: { self.model.entry(for: entry.id) ?? entry },
                                     set: { self.model.updateEntry($0, id: entry.id) }),
+                                showsDivider: entry.id != self.model.entries.last?.id,
                                 onRemove: { self.model.removeEntry(id: entry.id) })
                         }
                     }
                 }
             }
+        }
+    }
+
+    private var defaultsAllowlistEmptyState: some View {
+        Label {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Allowlists are per-agent")
+                    .font(.callout.weight(.semibold))
+                Text("Select an agent scope above to add trusted commands.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        } icon: {
+            Image(systemName: "person.crop.circle.badge.exclamationmark")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.quaternary.opacity(0.26), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    private var emptyAllowlistState: some View {
+        Label {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("No trusted commands yet")
+                    .font(.callout.weight(.semibold))
+                Text("Commands that miss the allowlist follow the prompt and fallback policy above.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        } icon: {
+            Image(systemName: "terminal")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.quaternary.opacity(0.26), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    private func addPatternIfValid() {
+        if self.model.addEntry(self.newPattern) == nil {
+            self.newPattern = ""
         }
     }
 
@@ -190,6 +313,7 @@ private enum ExecApprovalsSettingsTab: String, CaseIterable, Identifiable {
 
 struct ExecAllowlistRow: View {
     @Binding var entry: ExecAllowlistEntry
+    var showsDivider = true
     let onRemove: () -> Void
     @State private var draftPattern: String = ""
 
@@ -232,6 +356,14 @@ struct ExecAllowlistRow: View {
                     .foregroundStyle(.secondary)
             }
         }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+        .overlay(alignment: .bottom) {
+            if self.showsDivider {
+                Divider()
+                    .padding(.leading, 14)
+            }
+        }
         .onAppear {
             self.draftPattern = self.entry.pattern
         }
@@ -244,6 +376,58 @@ struct ExecAllowlistRow: View {
                 self.draftPattern = newValue
                 self.entry.pattern = newValue
             })
+    }
+}
+
+extension ExecSecurity {
+    fileprivate var tint: Color {
+        switch self {
+        case .deny: .red
+        case .allowlist: .orange
+        case .full: .green
+        }
+    }
+
+    fileprivate var systemImage: String {
+        switch self {
+        case .deny: "hand.raised.fill"
+        case .allowlist: "checklist.checked"
+        case .full: "bolt.shield.fill"
+        }
+    }
+
+    fileprivate var summaryTitle: String {
+        switch self {
+        case .deny: "Shell commands blocked"
+        case .allowlist: "Trusted commands can run"
+        case .full: "Shell commands allowed"
+        }
+    }
+
+    fileprivate var summarySubtitle: String {
+        switch self {
+        case .deny: "system.run requests are denied unless the policy changes."
+        case .allowlist: "Known commands can run; new commands use the prompt policy."
+        case .full: "Agents can run shell commands on this Mac without allowlist checks."
+        }
+    }
+
+    fileprivate var policyDescription: String {
+        switch self {
+        case .deny: "Block agent shell commands on this Mac."
+        case .allowlist: "Allow trusted command patterns and handle misses with prompts."
+        case .full: "Allow shell commands without checking the allowlist."
+        }
+    }
+}
+
+extension ExecAsk {
+    fileprivate var policyDescription: String {
+        switch self {
+        case .off: "Never show approval prompts."
+        case .onMiss: "Ask only when a command is not trusted yet."
+        case .always: "Ask before every shell command."
+        }
     }
 }
 

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { MAX_VIDEO_BYTES } from "../../media/constants.js";
 import * as mediaStore from "../../media/store.js";
@@ -186,6 +186,15 @@ function resetVideoGenerateMocks() {
 }
 
 describe("createVideoGenerateTool", () => {
+  let emptyConfigTool: ReturnType<typeof createVideoGenerateTool>;
+
+  beforeAll(() => {
+    resetVideoGenerateMocks();
+    emptyConfigTool = createVideoGenerateTool({ config: asConfig({}) });
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
+
   beforeEach(() => {
     resetVideoGenerateMocks();
     for (const envVar of GENERATION_PROVIDER_ENV_VARS) {
@@ -200,7 +209,7 @@ describe("createVideoGenerateTool", () => {
   it("returns null when no video-generation config or auth-backed provider is available", () => {
     vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([]);
 
-    expect(createVideoGenerateTool({ config: asConfig({}) })).toBeNull();
+    expect(emptyConfigTool).toBeNull();
   });
 
   it("registers when video-generation config is present", () => {

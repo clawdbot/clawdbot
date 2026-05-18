@@ -38,7 +38,7 @@ struct MenuHeaderCard<Content: View>: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.leading)
-                    .lineLimit(3)
+                    .lineLimit(5)
                     .truncationMode(.tail)
                     .fixedSize(horizontal: false, vertical: true)
             }

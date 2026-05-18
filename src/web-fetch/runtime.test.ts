@@ -177,6 +177,80 @@ describe("web fetch runtime", () => {
     expect(requireResolvedWebFetch(resolved).provider.id).toBe("firecrawl");
   });
 
+  it("auto-detects providers from configured fallback credentials", () => {
+    const provider = createFirecrawlProvider({
+      getConfiguredCredentialFallback: (config) => {
+        const pluginConfig = config?.plugins?.entries?.firecrawl?.config as
+          | { webSearch?: { apiKey?: unknown } }
+          | undefined;
+        return pluginConfig?.webSearch?.apiKey === undefined
+          ? undefined
+          : {
+              path: "plugins.entries.firecrawl.config.webSearch.apiKey",
+              value: pluginConfig.webSearch.apiKey,
+            };
+      },
+    });
+    resolvePluginWebFetchProvidersMock.mockReturnValue([provider]);
+
+    const resolved = resolveWebFetchDefinition({
+      config: {
+        plugins: {
+          entries: {
+            firecrawl: {
+              config: {
+                webSearch: {
+                  apiKey: "shared-firecrawl-key",
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(requireResolvedWebFetch(resolved).provider.id).toBe("firecrawl");
+  });
+
+  it("auto-detects fallback credentials when the primary fetch key is blank", () => {
+    const provider = createFirecrawlProvider({
+      getConfiguredCredentialValue: getFirecrawlApiKey,
+      getConfiguredCredentialFallback: (config) => {
+        const pluginConfig = config?.plugins?.entries?.firecrawl?.config as
+          | { webSearch?: { apiKey?: unknown } }
+          | undefined;
+        return pluginConfig?.webSearch?.apiKey === undefined
+          ? undefined
+          : {
+              path: "plugins.entries.firecrawl.config.webSearch.apiKey",
+              value: pluginConfig.webSearch.apiKey,
+            };
+      },
+    });
+    resolvePluginWebFetchProvidersMock.mockReturnValue([provider]);
+
+    const resolved = resolveWebFetchDefinition({
+      config: {
+        plugins: {
+          entries: {
+            firecrawl: {
+              config: {
+                webFetch: {
+                  apiKey: "",
+                },
+                webSearch: {
+                  apiKey: "shared-firecrawl-key",
+                },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(requireResolvedWebFetch(resolved).provider.id).toBe("firecrawl");
+  });
+
   it("falls back to auto-detect when the configured provider is invalid", () => {
     const provider = createFirecrawlProvider({
       getConfiguredCredentialValue: () => "firecrawl-key",

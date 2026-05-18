@@ -23,7 +23,7 @@
   "providerEndpoints": [
     {
       "endpointClass": "xai-native",
-      "hosts": ["api.x.ai", "api.grok.x.ai"]
+      "hosts": ["api.x.ai"]
     }
   ],
   "providerRequest": {
@@ -45,7 +45,7 @@
       "choiceLabel": "xAI API key",
       "groupId": "xai",
       "groupLabel": "xAI (Grok)",
-      "groupHint": "API key or SuperGrok OAuth",
+      "groupHint": "API key or browser OAuth",
       "onboardingFeatured": true,
       "optionKey": "xaiApiKey",
       "cliFlag": "--xai-api-key",
@@ -56,11 +56,11 @@
       "provider": "xai",
       "method": "oauth",
       "choiceId": "xai-oauth",
-      "choiceLabel": "xAI Grok OAuth",
-      "choiceHint": "SuperGrok subscription",
+      "choiceLabel": "xAI OAuth",
+      "choiceHint": "Browser sign-in for eligible xAI accounts",
       "groupId": "xai",
       "groupLabel": "xAI (Grok)",
-      "groupHint": "API key or SuperGrok OAuth",
+      "groupHint": "API key or browser OAuth",
       "onboardingFeatured": true
     }
   ],

@@ -119,6 +119,7 @@ export function registerBrowserAgentActHookRoutes(
       const accept = toBoolean(body.accept);
       const promptText = toStringOrEmpty(body.promptText) || undefined;
       const timeoutMs = toNumber(body.timeoutMs);
+      const dialogId = toStringOrEmpty(body.dialogId) || undefined;
       if (accept === undefined) {
         return jsonError(res, 400, "accept is required");
       }
@@ -130,6 +131,9 @@ export function registerBrowserAgentActHookRoutes(
         targetId,
         run: async ({ profileCtx, cdpUrl, tab }) => {
           if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
+            if (dialogId) {
+              return jsonError(res, 501, EXISTING_SESSION_LIMITS.hooks.dialogId);
+            }
             if (timeoutMs) {
               return jsonError(res, 501, EXISTING_SESSION_LIMITS.hooks.dialogTimeout);
             }
@@ -186,6 +190,7 @@ export function registerBrowserAgentActHookRoutes(
           await pw.armDialogViaPlaywright({
             cdpUrl,
             targetId: tab.targetId,
+            dialogId,
             accept,
             promptText,
             timeoutMs: timeoutMs ?? undefined,

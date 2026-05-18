@@ -12,6 +12,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { pathToFileURL } from "node:url";
 import { resolveDefaultAgentDir } from "../src/agents/agent-scope.js";
 import { ensureAuthProfileStore, type AuthProfileCredential } from "../src/agents/auth-profiles.js";
 import { normalizeProviderId } from "../src/agents/model-selection.js";
@@ -19,6 +20,11 @@ import { validateAnthropicSetupToken } from "../src/commands/auth-token.js";
 import { callGateway } from "../src/gateway/call.js";
 import { extractPayloadText } from "../src/gateway/test-helpers.agent-results.js";
 import { getFreePortBlockWithPermissionFallback } from "../src/test-utils/ports.js";
+import {
+  parseBooleanEnv,
+  parseStrictIntegerOption,
+  redactForDevToolLog,
+} from "./lib/dev-tooling-safety.ts";
 
 const TRANSPORT = process.env.OPENCLAW_PROMPT_TRANSPORT?.trim() === "direct" ? "direct" : "gateway";
 const GATEWAY_PROMPT_MODE =
@@ -26,20 +32,34 @@ const GATEWAY_PROMPT_MODE =
 const PROMPT_TEXT = process.env.OPENCLAW_PROMPT_TEXT?.trim() ?? "";
 const PROMPT_LIST_JSON = process.env.OPENCLAW_PROMPT_LIST_JSON?.trim() ?? "";
 const USER_PROMPT = process.env.OPENCLAW_USER_PROMPT?.trim() || "is clawd here?";
-const ENABLE_CAPTURE = process.env.OPENCLAW_PROMPT_CAPTURE === "1";
-const INCLUDE_RAW = process.env.OPENCLAW_PROMPT_INCLUDE_RAW === "1";
+const ENABLE_CAPTURE = parseBooleanEnv({
+  fallback: false,
+  name: "OPENCLAW_PROMPT_CAPTURE",
+  raw: process.env.OPENCLAW_PROMPT_CAPTURE,
+});
+const INCLUDE_RAW = parseBooleanEnv({
+  fallback: false,
+  name: "OPENCLAW_PROMPT_INCLUDE_RAW",
+  raw: process.env.OPENCLAW_PROMPT_INCLUDE_RAW,
+});
 const CLAUDE_BIN = process.env.CLAUDE_BIN?.trim() || "claude";
 const NODE_BIN = process.env.OPENCLAW_NODE_BIN?.trim() || process.execPath;
-const TIMEOUT_MS = Number(process.env.OPENCLAW_PROMPT_TIMEOUT_MS ?? "45000");
-const GATEWAY_TIMEOUT_MS = Number(process.env.OPENCLAW_PROMPT_GATEWAY_TIMEOUT_MS ?? "120000");
+const TIMEOUT_MS = parseStrictIntegerOption({
+  fallback: 45_000,
+  label: "OPENCLAW_PROMPT_TIMEOUT_MS",
+  min: 1,
+  raw: process.env.OPENCLAW_PROMPT_TIMEOUT_MS,
+});
+const GATEWAY_TIMEOUT_MS = parseStrictIntegerOption({
+  fallback: 120_000,
+  label: "OPENCLAW_PROMPT_GATEWAY_TIMEOUT_MS",
+  min: 1,
+  raw: process.env.OPENCLAW_PROMPT_GATEWAY_TIMEOUT_MS,
+});
 const SETUP_TOKEN_RAW = process.env.OPENCLAW_LIVE_SETUP_TOKEN?.trim() ?? "";
 const SETUP_TOKEN_VALUE = process.env.OPENCLAW_LIVE_SETUP_TOKEN_VALUE?.trim() ?? "";
 const SETUP_TOKEN_PROFILE = process.env.OPENCLAW_LIVE_SETUP_TOKEN_PROFILE?.trim() ?? "";
 const DIRECT_CLAUDE_ARGS = ["-p", "--append-system-prompt"];
-
-if (!PROMPT_TEXT && !PROMPT_LIST_JSON) {
-  throw new Error("missing OPENCLAW_PROMPT_TEXT or OPENCLAW_PROMPT_LIST_JSON");
-}
 
 type CaptureSummary = {
   url?: string;
@@ -123,6 +143,22 @@ function summarizeCapture(
     userPreview: capture.userText ? summarizeText(capture.userText) : undefined,
     rawBody: INCLUDE_RAW ? capture.rawBody : undefined,
   };
+}
+
+function resolveAnthropicUpstreamUrl(
+  requestUrl: string | undefined,
+  upstreamBaseUrl: string,
+): string {
+  const raw = requestUrl || "/";
+  if (!raw.startsWith("/") || raw.startsWith("//")) {
+    throw new Error(`refusing non-origin proxy request URL: ${JSON.stringify(raw)}`);
+  }
+  const upstream = new URL(upstreamBaseUrl);
+  if (upstream.protocol !== "https:" || upstream.hostname !== "api.anthropic.com") {
+    throw new Error(`refusing unexpected Anthropic upstream origin: ${upstream.origin}`);
+  }
+  const requestPath = new URL(raw, "http://127.0.0.1");
+  return new URL(`${requestPath.pathname}${requestPath.search}`, upstream).toString();
 }
 
 function matchesExtraUsage400(...parts: Array<string | undefined>): boolean {
@@ -283,7 +319,7 @@ async function startAnthropicProxy(params: { port: number; upstreamBaseUrl: stri
       const rawBody = requestBody.toString("utf8");
       lastCapture = extractProxyCapture(rawBody, req);
 
-      const upstreamUrl = new URL(req.url ?? "/", params.upstreamBaseUrl).toString();
+      const upstreamUrl = resolveAnthropicUpstreamUrl(req.url, params.upstreamBaseUrl);
       const headers = new Headers();
       for (const [key, value] of Object.entries(req.headers)) {
         if (value === undefined) {
@@ -327,7 +363,7 @@ async function startAnthropicProxy(params: { port: number; upstreamBaseUrl: stri
       res.end();
     } catch (error) {
       res.writeHead(502, { "content-type": "text/plain; charset=utf-8" });
-      res.end(`proxy error: ${String(error)}`);
+      res.end(redactForDevToolLog(`proxy error: ${String(error)}`));
     }
   });
   server.on("connection", (socket) => {
@@ -405,8 +441,8 @@ async function runDirectPrompt(prompt: string): Promise<PromptResult> {
     transport: "direct",
     exitCode: exit.code,
     signal: exit.signal,
-    stdout: joinedStdout.trim() || undefined,
-    stderr: joinedStderr.trim() || undefined,
+    stdout: redactForDevToolLog(joinedStdout.trim()) || undefined,
+    stderr: redactForDevToolLog(joinedStderr.trim()) || undefined,
     matchedExtraUsage400: matchesExtraUsage400(joinedStdout, joinedStderr),
     capture: summarizeCapture(proxy?.getLastCapture(), prompt),
     tmpDir,
@@ -485,7 +521,7 @@ async function waitForGatewayReady(url: string, token: string): Promise<void> {
 
 async function readLogTail(logPath: string): Promise<string> {
   const raw = await fs.readFile(logPath, "utf8").catch(() => "");
-  return raw.split(/\r?\n/).slice(-40).join("\n").trim();
+  return redactForDevToolLog(raw.split(/\r?\n/).slice(-40).join("\n").trim());
 }
 
 async function runGatewayPrompt(prompt: string): Promise<PromptResult> {
@@ -601,7 +637,7 @@ async function runGatewayPrompt(prompt: string): Promise<PromptResult> {
         ok: false,
         transport: "gateway",
         promptMode: GATEWAY_PROMPT_MODE,
-        error: `missing runId: ${JSON.stringify(agentRes)}`,
+        error: redactForDevToolLog(`missing runId: ${JSON.stringify(agentRes)}`),
         matchedExtraUsage400: false,
         capture: summarizeCapture(proxy?.getLastCapture(), prompt),
         tmpDir,
@@ -626,7 +662,10 @@ async function runGatewayPrompt(prompt: string): Promise<PromptResult> {
       promptMode: GATEWAY_PROMPT_MODE,
       status: waitRes.status,
       text: text || undefined,
-      error: waitRes.status === "ok" ? undefined : waitRes.error || logTail || "agent.wait failed",
+      error:
+        waitRes.status === "ok"
+          ? undefined
+          : redactForDevToolLog(waitRes.error || logTail || "agent.wait failed"),
       matchedExtraUsage400: matched400,
       capture: summarizeCapture(proxy?.getLastCapture(), prompt),
       tmpDir,
@@ -638,6 +677,9 @@ async function runGatewayPrompt(prompt: string): Promise<PromptResult> {
 }
 
 async function main() {
+  if (!PROMPT_TEXT && !PROMPT_LIST_JSON) {
+    throw new Error("missing OPENCLAW_PROMPT_TEXT or OPENCLAW_PROMPT_LIST_JSON");
+  }
   const prompts = PROMPT_LIST_JSON ? (JSON.parse(PROMPT_LIST_JSON) as string[]) : [PROMPT_TEXT];
   const results: PromptResult[] = [];
   for (const prompt of prompts) {
@@ -659,4 +701,16 @@ async function main() {
   );
 }
 
-await main();
+export const testing = {
+  matchesExtraUsage400,
+  resolveAnthropicUpstreamUrl,
+  summarizeCapture,
+  summarizeText,
+};
+
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  await main().catch((error) => {
+    console.error(redactForDevToolLog(error instanceof Error ? error.message : String(error)));
+    process.exitCode = 1;
+  });
+}

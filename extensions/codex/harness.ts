@@ -45,7 +45,10 @@ export function createCodexAppServerAgentHarness(options?: {
     },
     runSideQuestion: async (params) => {
       const { runCodexAppServerSideQuestion } = await import("./src/app-server/side-question.js");
-      return runCodexAppServerSideQuestion(params, { pluginConfig: options?.pluginConfig });
+      return runCodexAppServerSideQuestion(params, {
+        pluginConfig: options?.pluginConfig,
+        nativeHookRelay: { enabled: true },
+      });
     },
     compact: async (params) => {
       const { maybeCompactCodexAppServerSession } = await import("./src/app-server/compact.js");

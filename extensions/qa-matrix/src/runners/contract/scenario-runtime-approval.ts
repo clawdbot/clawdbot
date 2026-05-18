@@ -172,6 +172,7 @@ async function waitForObservedApprovalEvent(params: {
   context: MatrixQaScenarioContext;
   expectedApprovalId: string;
   expectedKind: MatrixQaApprovalKind;
+  excludedRoomIds?: string[];
   roomIds: string[];
   timeoutMs: number;
 }) {
@@ -183,16 +184,31 @@ async function waitForObservedApprovalEvent(params: {
   if (!primaryRoomId) {
     throw new Error("Matrix approval wait requires at least one candidate room");
   }
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < params.timeoutMs) {
-    const observedMatch = params.context.observedEvents.find((event) =>
+  const excludedRoomIds = new Set(params.excludedRoomIds ?? []);
+  const isExpectedObservedApproval = (event: MatrixQaObservedEvent) => {
+    if (excludedRoomIds.has(event.roomId)) {
+      return false;
+    }
+    if (
       roomIds.some((roomId) =>
         isExpectedApprovalEvent(event, {
           ...params,
           roomId,
         }),
-      ),
+      )
+    ) {
+      return true;
+    }
+    return (
+      event.sender === params.context.sutUserId &&
+      event.type === "m.room.message" &&
+      event.approval?.kind === params.expectedKind &&
+      event.approval.id === params.expectedApprovalId
     );
+  };
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < params.timeoutMs) {
+    const observedMatch = params.context.observedEvents.find(isExpectedObservedApproval);
     if (observedMatch) {
       assertApprovalMetadata({
         event: observedMatch,
@@ -209,13 +225,7 @@ async function waitForObservedApprovalEvent(params: {
     }
     await client.waitForOptionalRoomEvent({
       observedEvents: params.context.observedEvents,
-      predicate: (event) =>
-        roomIds.some((roomId) =>
-          isExpectedApprovalEvent(event, {
-            ...params,
-            roomId,
-          }),
-        ),
+      predicate: isExpectedObservedApproval,
       roomId: primaryRoomId,
       timeoutMs: Math.min(1_000, remainingMs),
     });
@@ -674,6 +684,7 @@ export async function runApprovalChannelTargetBothScenario(context: MatrixQaScen
   });
   const dmApproval = await waitForObservedApprovalEvent({
     context,
+    excludedRoomIds: [context.roomId],
     expectedApprovalId: approvalId,
     expectedKind: "exec",
     roomIds: dmRoomIds,

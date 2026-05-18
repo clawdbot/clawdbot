@@ -8,6 +8,7 @@ import {
 } from "../plugins/plugin-config-trust.js";
 import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { normalizeProviderId } from "./provider-id.js";
 
@@ -16,6 +17,7 @@ export type ProviderAuthAliasLookupParams = {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   includeUntrustedWorkspacePlugins?: boolean;
+  metadataSnapshot?: PluginMetadataSnapshot;
 };
 
 type ProviderAuthAliasCandidate = {
@@ -110,18 +112,23 @@ export function resolveProviderAuthAliasMap(
   params?: ProviderAuthAliasLookupParams,
 ): Record<string, string> {
   const env = params?.env ?? process.env;
-  const cacheKey = buildProviderAuthAliasMapCacheKey(params, env);
-  let envCache = providerAuthAliasMapCache.get(env);
-  if (!envCache) {
-    envCache = new Map<string, Record<string, string>>();
-    providerAuthAliasMapCache.set(env, envCache);
-  }
-  const cached = envCache.get(cacheKey);
-  if (cached) {
-    return cached;
-  }
   const config = params?.config ?? {};
+  let cacheKey: string | undefined;
+  let envCache: Map<string, Record<string, string>> | undefined;
+  if (!params?.metadataSnapshot) {
+    cacheKey = buildProviderAuthAliasMapCacheKey(params, env);
+    envCache = providerAuthAliasMapCache.get(env);
+    if (!envCache) {
+      envCache = new Map<string, Record<string, string>>();
+      providerAuthAliasMapCache.set(env, envCache);
+    }
+    const cached = envCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+  }
   const snapshot =
+    params?.metadataSnapshot ??
     getCurrentPluginMetadataSnapshot({
       config,
       ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
@@ -175,7 +182,9 @@ export function resolveProviderAuthAliasMap(
   for (const [alias, candidate] of preferredAliases) {
     aliases[alias] = candidate.target;
   }
-  envCache.set(cacheKey, aliases);
+  if (envCache && cacheKey) {
+    envCache.set(cacheKey, aliases);
+  }
   return aliases;
 }
 

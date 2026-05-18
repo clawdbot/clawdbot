@@ -4,7 +4,7 @@ import {
   acquireSessionWriteLock,
   appendSessionTranscriptMessage,
   emitSessionTranscriptUpdate,
-  resolveSessionWriteLockAcquireTimeoutMs,
+  resolveSessionWriteLockOptions,
   runAgentHarnessBeforeMessageWriteHook,
   type AgentMessage,
   type EmbeddedRunAttemptParams,
@@ -128,7 +128,7 @@ export async function mirrorCodexAppServerTranscript(params: {
 
   const lock = await acquireSessionWriteLock({
     sessionFile: params.sessionFile,
-    timeoutMs: resolveSessionWriteLockAcquireTimeoutMs(params.config),
+    ...resolveSessionWriteLockOptions(params.config),
   });
   try {
     const existingIdempotencyKeys = await readTranscriptIdempotencyKeys(params.sessionFile);

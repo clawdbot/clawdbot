@@ -167,6 +167,291 @@ describe("createAgentToolResultMiddlewareRunner", () => {
     });
   });
 
+  it("sanitizes incoming details before failing closed on uncoercible content", async () => {
+    const details: Record<string, unknown> = {
+      ok: true,
+      callback: () => 1,
+    };
+    details.self = details;
+    let observedDetails: unknown;
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
+      (event) => {
+        observedDetails = event.result.details;
+        return undefined;
+      },
+    ]);
+
+    const result = await runner.applyToolResultMiddleware({
+      toolCallId: "call-1",
+      toolName: "message",
+      args: {},
+      result: {
+        content: [{ type: "unknown", payload: "raw" } as never],
+        details,
+      },
+    });
+
+    expect(result.details).toEqual({ status: "error", middlewareError: true });
+    expect(observedDetails).toEqual({ ok: true });
+  });
+
+  it("coerces incoming nested toolResult content before middleware validation", async () => {
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [() => undefined]);
+
+    const result = await runner.applyToolResultMiddleware({
+      toolCallId: "call-1",
+      toolName: "message",
+      args: {},
+      result: {
+        content: [
+          {
+            type: "toolResult",
+            toolUseId: "call-1",
+            content: [
+              { type: "text", text: "sent message id msg_123" },
+              { type: "text", text: "status delivered" },
+            ],
+          } as never,
+        ],
+        details: { status: "sent", messageId: "msg_123" },
+      },
+    });
+
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: "sent message id msg_123\nstatus delivered",
+      },
+    ]);
+    expect(result.details).toEqual({ status: "sent", messageId: "msg_123" });
+  });
+
+  it("coerces nested tool_result blocks returned by middleware", async () => {
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
+      () => ({
+        result: {
+          content: [
+            {
+              type: "tool_result",
+              content: {
+                message: "message delivered",
+                id: "msg_456",
+              },
+            } as never,
+          ],
+          details: { status: "sent" },
+        },
+      }),
+    ]);
+
+    const result = await runner.applyToolResultMiddleware({
+      toolCallId: "call-1",
+      toolName: "message",
+      args: {},
+      result: { content: [{ type: "text", text: "raw" }], details: {} },
+    });
+
+    expect(result.content).toEqual([{ type: "text", text: "message delivered" }]);
+    expect(result.details).toEqual({ status: "sent" });
+  });
+
+  it("does not coerce tool/function call blocks as middleware results", async () => {
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [
+      () => ({
+        result: {
+          content: [
+            {
+              type: "function",
+              name: "send_message",
+              arguments: { text: "raw" },
+            } as never,
+          ],
+          details: {},
+        },
+      }),
+    ]);
+
+    const result = await runner.applyToolResultMiddleware({
+      toolCallId: "call-1",
+      toolName: "message",
+      args: {},
+      result: { content: [{ type: "text", text: "raw" }], details: {} },
+    });
+
+    expect(result.details).toEqual({ status: "error", middlewareError: true });
+  });
+
+  it("bounds nested toolResult content before flattening", async () => {
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [() => undefined]);
+
+    const result = await runner.applyToolResultMiddleware({
+      toolCallId: "call-1",
+      toolName: "message",
+      args: {},
+      result: {
+        content: [
+          {
+            type: "toolResult",
+            toolUseId: "call-1",
+            content: [
+              ...Array.from({ length: 200 }, () => ({
+                type: "text",
+                text: "x".repeat(600),
+              })),
+              { type: "text", text: "late chunk" },
+            ],
+          } as never,
+        ],
+        details: {},
+      },
+    });
+
+    const content = result.content[0];
+    if (content?.type !== "text") {
+      throw new Error("expected flattened text content");
+    }
+    expect(content.text.length).toBeLessThanOrEqual(100_000);
+    expect(content.text).not.toContain("late chunk");
+  });
+
+  it("preserves nested image toolResult content without stringifying data", async () => {
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [() => undefined]);
+
+    const result = await runner.applyToolResultMiddleware({
+      toolCallId: "call-1",
+      toolName: "vision",
+      args: {},
+      result: {
+        content: [
+          {
+            type: "toolResult",
+            toolUseId: "call-1",
+            content: [{ type: "image", mimeType: "image/png", data: "base64-image" }],
+          } as never,
+        ],
+        details: {},
+      },
+    });
+
+    expect(result.content).toEqual([
+      { type: "image", mimeType: "image/png", data: "base64-image" },
+    ]);
+  });
+
+  it("preserves mixed nested text and image toolResult content", async () => {
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [() => undefined]);
+
+    const result = await runner.applyToolResultMiddleware({
+      toolCallId: "call-1",
+      toolName: "screenshot",
+      args: {},
+      result: {
+        content: [
+          {
+            type: "toolResult",
+            toolUseId: "call-1",
+            content: [
+              { type: "text", text: "captured screenshot" },
+              { type: "image", mimeType: "image/png", data: "base64-image" },
+            ],
+          } as never,
+        ],
+        details: {},
+      },
+    });
+
+    expect(result.content).toEqual([
+      { type: "text", text: "captured screenshot" },
+      { type: "image", mimeType: "image/png", data: "base64-image" },
+    ]);
+  });
+
+  it("preserves images from deeper nested toolResult content", async () => {
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [() => undefined]);
+
+    const result = await runner.applyToolResultMiddleware({
+      toolCallId: "call-1",
+      toolName: "screenshot",
+      args: {},
+      result: {
+        content: [
+          {
+            type: "toolResult",
+            toolUseId: "call-1",
+            content: [
+              {
+                type: "tool_result",
+                content: [
+                  { type: "text", text: "captured screenshot" },
+                  { type: "image", mimeType: "image/png", data: "base64-image" },
+                ],
+              },
+            ],
+          } as never,
+        ],
+        details: {},
+      },
+    });
+
+    expect(result.content).toEqual([
+      { type: "text", text: "captured screenshot" },
+      { type: "image", mimeType: "image/png", data: "base64-image" },
+    ]);
+  });
+
+  it("preserves interleaved nested text and image order", async () => {
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [() => undefined]);
+
+    const result = await runner.applyToolResultMiddleware({
+      toolCallId: "call-1",
+      toolName: "screenshot",
+      args: {},
+      result: {
+        content: [
+          {
+            type: "toolResult",
+            toolUseId: "call-1",
+            content: [
+              { type: "text", text: "first caption" },
+              { type: "image", mimeType: "image/png", data: "image-one" },
+              { type: "text", text: "second caption" },
+              { type: "image", mimeType: "image/png", data: "image-two" },
+            ],
+          } as never,
+        ],
+        details: {},
+      },
+    });
+
+    expect(result.content).toEqual([
+      { type: "text", text: "first caption" },
+      { type: "image", mimeType: "image/png", data: "image-one" },
+      { type: "text", text: "second caption" },
+      { type: "image", mimeType: "image/png", data: "image-two" },
+    ]);
+  });
+
+  it("fails closed instead of recursing forever on cyclic nested content", async () => {
+    const nested: Record<string, unknown> = {
+      type: "toolResult",
+      content: [],
+    };
+    nested.content = [nested];
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [() => undefined]);
+
+    const result = await runner.applyToolResultMiddleware({
+      toolCallId: "call-1",
+      toolName: "message",
+      args: {},
+      result: {
+        content: [nested as never],
+        details: {},
+      },
+    });
+
+    expect(result.details).toEqual({ status: "error", middlewareError: true });
+  });
+
   it("sanitizes incoming function/symbol/bigint values in details", async () => {
     const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" }, [() => undefined]);
 

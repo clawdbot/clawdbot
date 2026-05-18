@@ -318,6 +318,20 @@ describe("update global helpers", () => {
           globalRoot: brewRoot,
           packageRoot: pkgRoot,
         });
+        await expect(
+          resolveGlobalInstallTarget({
+            manager: "npm",
+            runCommand,
+            timeoutMs: 1000,
+            pkgRoot,
+            honorPackageRoot: true,
+          }),
+        ).resolves.toEqual({
+          manager: "npm",
+          command: brewNpm,
+          globalRoot: brewRoot,
+          packageRoot: pkgRoot,
+        });
         expect(globalInstallArgs("npm", "openclaw@latest", pkgRoot)).toEqual([
           brewNpm,
           "i",
@@ -365,6 +379,97 @@ describe("update global helpers", () => {
         "--loglevel=error",
         "--min-release-age=0",
       ]);
+    });
+  });
+
+  it("honors an explicitly selected direct npm node_modules package root", async () => {
+    await withTempDir({ prefix: "openclaw-update-managed-service-root-" }, async (base) => {
+      const managedNpmRoot = path.join(base, ".openclaw", "npm", "node_modules");
+      const pkgRoot = path.join(managedNpmRoot, "openclaw");
+      const pathNpmRoot = path.join(base, "shell", "lib", "node_modules");
+      const otherPnpmRoot = path.join(base, "pnpm", "global", "5", "node_modules");
+      const customNpm = path.join(base, "bin", "npm");
+      await fs.mkdir(pkgRoot, { recursive: true });
+      await fs.mkdir(path.join(otherPnpmRoot, "openclaw"), { recursive: true });
+
+      const runCommand: CommandRunner = async (argv) => {
+        if (argv[0] === "npm" || argv[0] === customNpm) {
+          return { stdout: `${pathNpmRoot}\n`, stderr: "", code: 0 };
+        }
+        if (argv[0] === "pnpm") {
+          return { stdout: `${otherPnpmRoot}\n`, stderr: "", code: 0 };
+        }
+        throw new Error(`unexpected command: ${argv.join(" ")}`);
+      };
+
+      await expect(
+        resolveGlobalInstallTarget({
+          manager: "pnpm",
+          runCommand,
+          timeoutMs: 1000,
+          pkgRoot,
+          honorPackageRoot: true,
+        }),
+      ).resolves.toEqual({
+        manager: "npm",
+        command: "npm",
+        globalRoot: managedNpmRoot,
+        packageRoot: pkgRoot,
+        directNodeModulesRoot: true,
+      });
+      await expect(
+        resolveGlobalInstallTarget({
+          manager: { manager: "npm", command: customNpm },
+          runCommand,
+          timeoutMs: 1000,
+          pkgRoot,
+          honorPackageRoot: true,
+        }),
+      ).resolves.toEqual({
+        manager: "npm",
+        command: customNpm,
+        globalRoot: managedNpmRoot,
+        packageRoot: pkgRoot,
+        directNodeModulesRoot: true,
+      });
+
+      expect(
+        resolveNpmGlobalPrefixLayoutFromGlobalRoot(managedNpmRoot, {
+          allowDirectNodeModulesRoot: true,
+        }),
+      ).toEqual({
+        prefix: path.dirname(managedNpmRoot),
+        globalRoot: managedNpmRoot,
+        binDir: path.join(managedNpmRoot, ".bin"),
+      });
+    });
+  });
+
+  it("preserves bun ownership for direct node_modules package roots", async () => {
+    await withTempDir({ prefix: "openclaw-update-managed-bun-root-" }, async (base) => {
+      envSnapshot = captureEnv(["BUN_INSTALL"]);
+      process.env.BUN_INSTALL = path.join(base, ".bun");
+      const bunRoot = path.join(process.env.BUN_INSTALL, "install", "global", "node_modules");
+      const pkgRoot = path.join(bunRoot, "openclaw");
+      const pathNpmRoot = path.join(base, "shell", "lib", "node_modules");
+      await fs.mkdir(pkgRoot, { recursive: true });
+
+      const runCommand = createNpmRootRunner({ defaultNpmRoot: pathNpmRoot });
+
+      await expect(
+        resolveGlobalInstallTarget({
+          manager: "bun",
+          runCommand,
+          timeoutMs: 1000,
+          pkgRoot,
+          honorPackageRoot: true,
+        }),
+      ).resolves.toEqual({
+        manager: "bun",
+        command: "bun",
+        globalRoot: bunRoot,
+        packageRoot: pkgRoot,
+      });
     });
   });
 
@@ -436,14 +541,15 @@ describe("update global helpers", () => {
       );
       await expect(
         resolveGlobalInstallTarget({
-          manager: "pnpm",
+          manager: { manager: "pnpm", command: "/custom/bin/pnpm" },
           runCommand,
           timeoutMs: 1000,
           pkgRoot,
+          honorPackageRoot: true,
         }),
       ).resolves.toEqual({
         manager: "pnpm",
-        command: "pnpm",
+        command: "/custom/bin/pnpm",
         globalRoot: customGlobalRoot,
         packageRoot: pkgRoot,
       });

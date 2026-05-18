@@ -54,8 +54,24 @@ type NodeInvokeResult = {
   error?: { code?: string; message?: string } | null;
 };
 
+type NodeConnectivityResult =
+  | { ok: true }
+  | { ok: false; error: { code: string; message: string } };
+
+type PingableSocket = {
+  readyState?: number;
+  ping?: (data?: Buffer, mask?: boolean, cb?: (err?: Error) => void) => void;
+  once?: (event: "pong" | "close" | "error", listener: (...args: unknown[]) => void) => unknown;
+  off?: (event: "pong" | "close" | "error", listener: (...args: unknown[]) => void) => unknown;
+  removeListener?: (
+    event: "pong" | "close" | "error",
+    listener: (...args: unknown[]) => void,
+  ) => unknown;
+};
+
 const SERIALIZED_EVENT_PAYLOAD = Symbol("openclaw.serializedEventPayload");
 const AUTHORIZED_SYSTEM_RUN_EVENT_GRACE_MS = 5 * 60 * 1000;
+const WEBSOCKET_OPEN_READY_STATE = 1;
 
 export type SerializedEventPayload = {
   readonly json: string;
@@ -226,6 +242,93 @@ export class NodeRegistry {
 
   get(nodeId: string): NodeSession | undefined {
     return this.nodesById.get(nodeId);
+  }
+
+  async checkConnectivity(nodeId: string, timeoutMs = 2_000): Promise<NodeConnectivityResult> {
+    const node = this.nodesById.get(nodeId);
+    if (!node) {
+      return {
+        ok: false,
+        error: { code: "NOT_CONNECTED", message: "node not connected" },
+      };
+    }
+    const socket = node.client.socket as PingableSocket;
+    if (socket.readyState !== WEBSOCKET_OPEN_READY_STATE) {
+      return {
+        ok: false,
+        error: { code: "NOT_CONNECTED", message: "node socket not open" },
+      };
+    }
+    if (typeof socket.ping !== "function" || typeof socket.once !== "function") {
+      return { ok: true };
+    }
+
+    const timeout = Math.max(1, Math.trunc(timeoutMs));
+    return await new Promise<NodeConnectivityResult>((resolve) => {
+      let settled = false;
+      const cleanup = () => {
+        socket.off?.("pong", onPong);
+        socket.off?.("close", onClose);
+        socket.off?.("error", onError);
+        socket.removeListener?.("pong", onPong);
+        socket.removeListener?.("close", onClose);
+        socket.removeListener?.("error", onError);
+      };
+      const finish = (result: NodeConnectivityResult) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        cleanup();
+        resolve(result);
+      };
+      const onPong = () => finish({ ok: true });
+      const onClose = () =>
+        finish({
+          ok: false,
+          error: { code: "NOT_CONNECTED", message: "node socket closed during connectivity probe" },
+        });
+      const onError = (err: unknown) =>
+        finish({
+          ok: false,
+          error: {
+            code: "UNAVAILABLE",
+            message:
+              err instanceof Error ? err.message : "node socket error during connectivity probe",
+          },
+        });
+      const timer = setTimeout(
+        () =>
+          finish({
+            ok: false,
+            error: { code: "TIMEOUT", message: "node connectivity probe timed out" },
+          }),
+        timeout,
+      );
+
+      socket.once?.("pong", onPong);
+      socket.once?.("close", onClose);
+      socket.once?.("error", onError);
+      try {
+        socket.ping?.(undefined, false, (err?: Error) => {
+          if (err) {
+            finish({
+              ok: false,
+              error: { code: "UNAVAILABLE", message: err.message },
+            });
+          }
+        });
+      } catch (err) {
+        finish({
+          ok: false,
+          error: {
+            code: "UNAVAILABLE",
+            message: err instanceof Error ? err.message : "node ping failed",
+          },
+        });
+      }
+    });
   }
 
   updateCommands(nodeId: string, commands: readonly string[]): NodeSession | null {

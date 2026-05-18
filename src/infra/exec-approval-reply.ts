@@ -1,5 +1,10 @@
 import type { ReplyPayload } from "../auto-reply/types.js";
-import type { InteractiveReply, InteractiveReplyButton } from "../interactive/payload.js";
+import type {
+  InteractiveReply,
+  InteractiveReplyButton,
+  MessagePresentation,
+  MessagePresentationButton,
+} from "../interactive/payload.js";
 import { formatHumanList } from "../shared/human-list.js";
 import {
   normalizeOptionalLowercaseString,
@@ -35,7 +40,7 @@ export type ExecApprovalReplyMetadata = {
 export type ExecApprovalActionDescriptor = {
   decision: ExecApprovalReplyDecision;
   label: string;
-  style: NonNullable<InteractiveReplyButton["style"]>;
+  style: NonNullable<MessagePresentationButton["style"]>;
   command: string;
 };
 
@@ -162,6 +167,55 @@ function buildApprovalInteractiveButtons(
   }));
 }
 
+function buildApprovalPresentationButtons(
+  descriptors: readonly ExecApprovalActionDescriptor[],
+): MessagePresentationButton[] {
+  return descriptors.map((descriptor) => ({
+    label: descriptor.label,
+    value: descriptor.command,
+    style: descriptor.style,
+  }));
+}
+
+/** Build the portable approval button presentation for already-resolved actions. */
+export function buildApprovalPresentationFromActionDescriptors(
+  actions: readonly ExecApprovalActionDescriptor[],
+): MessagePresentation | undefined {
+  const buttons = buildApprovalPresentationButtons(actions);
+  return buttons.length > 0 ? { blocks: [{ type: "buttons", buttons }] } : undefined;
+}
+
+/** Build the portable approval presentation for an approval id and decision allowlist. */
+export function buildApprovalPresentation(params: {
+  approvalId: string;
+  ask?: string | null;
+  allowedDecisions?: readonly ExecApprovalReplyDecision[];
+}): MessagePresentation | undefined {
+  return buildApprovalPresentationFromActionDescriptors(
+    buildExecApprovalActionDescriptors({
+      approvalCommandId: params.approvalId,
+      ask: params.ask,
+      allowedDecisions: params.allowedDecisions,
+    }),
+  );
+}
+
+/** Build the portable exec-approval presentation for command callback buttons. */
+export function buildExecApprovalPresentation(params: {
+  approvalCommandId: string;
+  ask?: string | null;
+  allowedDecisions?: readonly ExecApprovalReplyDecision[];
+}): MessagePresentation | undefined {
+  return buildApprovalPresentation({
+    approvalId: params.approvalCommandId,
+    ask: params.ask,
+    allowedDecisions: params.allowedDecisions,
+  });
+}
+
+/**
+ * @deprecated Use buildApprovalPresentationFromActionDescriptors.
+ */
 export function buildApprovalInteractiveReplyFromActionDescriptors(
   actions: readonly ExecApprovalActionDescriptor[],
 ): InteractiveReply | undefined {
@@ -169,6 +223,9 @@ export function buildApprovalInteractiveReplyFromActionDescriptors(
   return buttons.length > 0 ? { blocks: [{ type: "buttons", buttons }] } : undefined;
 }
 
+/**
+ * @deprecated Use buildApprovalPresentation.
+ */
 export function buildApprovalInteractiveReply(params: {
   approvalId: string;
   ask?: string | null;
@@ -183,6 +240,9 @@ export function buildApprovalInteractiveReply(params: {
   );
 }
 
+/**
+ * @deprecated Use buildExecApprovalPresentation.
+ */
 export function buildExecApprovalInteractiveReply(params: {
   approvalCommandId: string;
   ask?: string | null;
@@ -335,7 +395,7 @@ export function buildExecApprovalPendingReplyPayload(
 
   return {
     text: lines.join("\n\n"),
-    interactive: buildApprovalInteractiveReply({
+    presentation: buildApprovalPresentation({
       approvalId: params.approvalId,
       allowedDecisions,
     }),

@@ -131,6 +131,33 @@ describe("message hook mappers", () => {
     expect(canonical.messageId).toBe("override-msg");
   });
 
+  it("uses OriginatingTo as the canonical conversation when To is flat", () => {
+    const canonical = deriveInboundMessageHookContext(
+      makeInboundCtx({
+        To: "demo-chat:chat:456",
+        OriginatingTo: "demo-chat:chat:456:topic:42",
+        MessageThreadId: 42,
+      }),
+    );
+
+    expect(canonical.to).toBe("demo-chat:chat:456");
+    expect(canonical.conversationId).toBe("demo-chat:chat:456:topic:42");
+    expect(canonical.originatingTo).toBe("demo-chat:chat:456:topic:42");
+
+    const pluginContext = toPluginMessageContext(canonical);
+    expect(pluginContext.conversationId).toBe("demo-chat:chat:456:topic:42");
+
+    const receivedEvent = toPluginMessageReceivedEvent(canonical);
+    expect(receivedEvent.metadata?.to).toBe("demo-chat:chat:456");
+    expect(receivedEvent.metadata?.originatingTo).toBe("demo-chat:chat:456:topic:42");
+    expect(receivedEvent.metadata?.threadId).toBe(42);
+
+    const internalReceived = toInternalMessageReceivedContext(canonical);
+    expect(internalReceived.conversationId).toBe("demo-chat:chat:456:topic:42");
+    expect(internalReceived.metadata?.to).toBe("demo-chat:chat:456");
+    expect(internalReceived.metadata?.threadId).toBe(42);
+  });
+
   it("preserves multi-attachment arrays for inbound claim metadata", () => {
     const canonical = deriveInboundMessageHookContext(
       makeInboundCtx({

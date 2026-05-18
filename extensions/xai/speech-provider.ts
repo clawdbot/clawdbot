@@ -1,3 +1,8 @@
+import {
+  isProviderAuthProfileConfigured,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/provider-auth";
+import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import {
   asFiniteNumber,
@@ -201,15 +206,13 @@ export function buildXaiSpeechProvider(): SpeechProviderPlugin {
       ...(asFiniteNumber(params.speed) == null ? {} : { speed: asFiniteNumber(params.speed) }),
     }),
     listVoices: async () => XAI_TTS_VOICES.map((voice) => ({ id: voice, name: voice })),
-    isConfigured: ({ providerConfig }) =>
-      Boolean(readXaiProviderConfig(providerConfig).apiKey || process.env.XAI_API_KEY),
+    isConfigured: ({ providerConfig, cfg }) =>
+      Boolean(readXaiProviderConfig(providerConfig).apiKey || process.env.XAI_API_KEY) ||
+      isProviderAuthProfileConfigured({ provider: "xai", cfg }),
     synthesize: async (req) => {
       const config = readXaiProviderConfig(req.providerConfig);
       const overrides = readXaiOverrides(req.providerOverrides);
-      const apiKey = config.apiKey || process.env.XAI_API_KEY;
-      if (!apiKey) {
-        throw new Error("xAI API key missing");
-      }
+      const apiKey = await resolveXaiAudioApiKey(config.apiKey, req.cfg);
       const responseFormat = resolveSpeechResponseFormat(req.target, config.responseFormat);
       const audioBuffer = await xaiTTS({
         text: req.text,
@@ -231,10 +234,7 @@ export function buildXaiSpeechProvider(): SpeechProviderPlugin {
     synthesizeTelephony: async (req) => {
       const config = readXaiProviderConfig(req.providerConfig);
       const overrides = readXaiOverrides(req.providerOverrides);
-      const apiKey = config.apiKey || process.env.XAI_API_KEY;
-      if (!apiKey) {
-        throw new Error("xAI API key missing");
-      }
+      const apiKey = await resolveXaiAudioApiKey(config.apiKey, req.cfg);
       const outputFormat = "pcm" as const;
       const sampleRate = 24000;
       const audioBuffer = await xaiTTS({
@@ -250,4 +250,26 @@ export function buildXaiSpeechProvider(): SpeechProviderPlugin {
       return { audioBuffer, outputFormat, sampleRate };
     },
   };
+}
+
+// Resolve an xAI bearer for `/v1/tts`:
+// 1. Configured `messages.tts.providers.xai.apiKey` (or talk equivalent)
+// 2. `XAI_API_KEY` env var
+// 3. xAI OAuth auth profile (cfg-scoped)
+async function resolveXaiAudioApiKey(
+  configApiKey: string | undefined,
+  cfg: OpenClawConfig,
+): Promise<string> {
+  const direct = trimToUndefined(configApiKey) ?? trimToUndefined(process.env.XAI_API_KEY);
+  if (direct) {
+    return direct;
+  }
+  const auth = await resolveApiKeyForProvider({ provider: "xai", cfg });
+  const oauthKey = trimToUndefined(auth?.apiKey);
+  if (oauthKey) {
+    return oauthKey;
+  }
+  throw new Error(
+    "xAI credentials missing for TTS. Sign in with `openclaw onboard --auth-choice xai-oauth`, or run `openclaw onboard --auth-choice xai-api-key`, or set XAI_API_KEY.",
+  );
 }

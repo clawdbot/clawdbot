@@ -39,6 +39,7 @@ const callPluginToolsMcp = vi.hoisted(() => vi.fn());
 const runAgentPrompt = vi.hoisted(() => vi.fn());
 const ensureImageGenerationConfigured = vi.hoisted(() => vi.fn());
 const handleQaAction = vi.hoisted(() => vi.fn());
+const runRuntimeToolFixture = vi.hoisted(() => vi.fn());
 const extractQaToolPayload = vi.hoisted(() => vi.fn());
 const browserRequest = vi.hoisted(() => vi.fn());
 const waitForBrowserReady = vi.hoisted(() => vi.fn());
@@ -136,6 +137,10 @@ vi.mock("./discovery-eval.js", () => ({
 
 vi.mock("./extract-tool-payload.js", () => ({
   extractQaToolPayload,
+}));
+
+vi.mock("./runtime-tool-fixture.js", () => ({
+  runRuntimeToolFixture,
 }));
 
 vi.mock("./model-switch-eval.js", () => ({
@@ -249,6 +254,10 @@ describe("qa suite runtime flow", () => {
         findManagedDreamingCronJob: typeof findManagedDreamingCronJob;
         forceMemoryIndex: typeof forceMemoryIndex;
         runAgentPrompt: typeof runAgentPrompt;
+        runRuntimeToolFixture: (
+          envArg: typeof env,
+          configArg: Record<string, unknown>,
+        ) => Promise<unknown>;
         qaChannelPlugin: typeof qaChannelPlugin;
         webOpenPage: (params: { url: string }) => Promise<unknown>;
       };
@@ -269,6 +278,18 @@ describe("qa suite runtime flow", () => {
     expect(call.deps.findManagedDreamingCronJob).toBe(findManagedDreamingCronJob);
     expect(call.deps.forceMemoryIndex).toBe(forceMemoryIndex);
     expect(call.deps.runAgentPrompt).toBe(runAgentPrompt);
+    await call.deps.runRuntimeToolFixture(env, { toolName: "read" });
+    expect(runRuntimeToolFixture).toHaveBeenCalledWith(
+      env,
+      { toolName: "read" },
+      {
+        createSession,
+        readEffectiveTools,
+        runAgentPrompt,
+        fetchJson,
+        ensureImageGenerationConfigured,
+      },
+    );
     expect(call.deps.qaChannelPlugin).toBe(qaChannelPlugin);
     expect(call.constants).toEqual({
       imageUnderstandingPngBase64: "small",

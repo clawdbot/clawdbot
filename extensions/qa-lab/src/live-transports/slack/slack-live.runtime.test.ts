@@ -66,7 +66,7 @@ describe("Slack live QA runtime helpers", () => {
     ]);
   });
 
-  it("fails mention-gating when the SUT replies without the marker", async () => {
+  it("ignores delayed unrelated SUT replies during mention-gating", async () => {
     const observedMessages: Array<unknown> = [];
     await expect(
       __testing.waitForSlackNoReply({
@@ -90,9 +90,9 @@ describe("Slack live QA runtime helpers", () => {
         observationScenarioTitle: "Slack unmentioned bot message does not trigger",
         sentTs: "1.000000",
         sutIdentity: { userId: "U999999999" },
-        timeoutMs: 1_000,
+        timeoutMs: 10,
       }),
-    ).rejects.toThrow("unexpected Slack SUT reply observed");
+    ).resolves.toBeUndefined();
     const typedObservedMessages = observedMessages as Array<{
       matchedScenario?: boolean;
       text?: string;
@@ -104,6 +104,34 @@ describe("Slack live QA runtime helpers", () => {
     expect(typedObservedMessages[0]?.text).toBe("I should not have replied");
     expect(typedObservedMessages[0]?.ts).toBe("2.000000");
     expect(typedObservedMessages[0]?.userId).toBe("U999999999");
+  });
+
+  it("fails mention-gating when the SUT replies with the marker", async () => {
+    await expect(
+      __testing.waitForSlackNoReply({
+        channelId: "C123456789",
+        client: {
+          conversations: {
+            history: async () => ({
+              messages: [
+                {
+                  text: "SLACK_QA_NOMENTION_MARKER",
+                  ts: "2.000000",
+                  user: "U999999999",
+                },
+              ],
+            }),
+          },
+        } as never,
+        matchText: "SLACK_QA_NOMENTION_MARKER",
+        observedMessages: [],
+        observationScenarioId: "slack-mention-gating",
+        observationScenarioTitle: "Slack unmentioned bot message does not trigger",
+        sentTs: "1.000000",
+        sutIdentity: { userId: "U999999999" },
+        timeoutMs: 1_000,
+      }),
+    ).rejects.toThrow("unexpected Slack SUT reply observed");
   });
 
   it("writes artifacts when Convex credential acquisition fails", async () => {

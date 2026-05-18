@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 
 // Copilot's OpenAI-compatible `/responses` endpoint can emit replay item IDs
 // that encode upstream connection state. Those IDs are rejected after the
-// connection changes, so normalize them at the provider boundary before send.
+// connection changes, so sanitize them at the provider boundary before send.
 
 function looksLikeConnectionBoundId(id: string): boolean {
   if (id.length < 24) {
@@ -25,21 +25,36 @@ function deriveReplacementId(type: string | undefined, originalId: string): stri
 
 type InputItem = Record<string, unknown> & { id?: unknown; type?: unknown };
 
-export function rewriteCopilotConnectionBoundResponseIds(input: unknown): boolean {
+function isInputItem(value: unknown): value is InputItem {
+  return !!value && typeof value === "object";
+}
+
+function isValidReasoningReplayId(id: unknown): id is string {
+  return typeof id === "string" && id.length > 0 && id.length <= 64;
+}
+
+export function sanitizeCopilotReplayResponseIds(input: unknown): boolean {
   if (!Array.isArray(input)) {
     return false;
   }
   let rewrote = false;
-  for (const item of input as InputItem[]) {
-    const id = item.id;
-    if (typeof id !== "string" || id.length === 0) {
+  for (let index = input.length - 1; index >= 0; index -= 1) {
+    const item = input[index];
+    if (!isInputItem(item)) {
       continue;
     }
+    const id = item.id;
     // Reasoning items always reference server-side encrypted state bound to the
-    // original item ID. Rewriting the ID — even when encrypted_content is absent
-    // or null — breaks Copilot's server-side lookup and causes a 400 validation
-    // failure regardless of whether the client included encrypted_content.
+    // original item ID. Rewriting or stripping that ID can turn replay into an
+    // invalid or ambiguous server-state lookup, so drop unsafe reasoning items.
     if (item.type === "reasoning") {
+      if (!isValidReasoningReplayId(id)) {
+        input.splice(index, 1);
+        rewrote = true;
+      }
+      continue;
+    }
+    if (typeof id !== "string" || id.length === 0) {
       continue;
     }
     if (looksLikeConnectionBoundId(id)) {
@@ -50,9 +65,17 @@ export function rewriteCopilotConnectionBoundResponseIds(input: unknown): boolea
   return rewrote;
 }
 
-export function rewriteCopilotResponsePayloadConnectionBoundIds(payload: unknown): boolean {
+export function rewriteCopilotConnectionBoundResponseIds(input: unknown): boolean {
+  return sanitizeCopilotReplayResponseIds(input);
+}
+
+export function sanitizeCopilotReplayResponsePayloadIds(payload: unknown): boolean {
   if (!payload || typeof payload !== "object") {
     return false;
   }
-  return rewriteCopilotConnectionBoundResponseIds((payload as { input?: unknown }).input);
+  return sanitizeCopilotReplayResponseIds((payload as { input?: unknown }).input);
+}
+
+export function rewriteCopilotResponsePayloadConnectionBoundIds(payload: unknown): boolean {
+  return sanitizeCopilotReplayResponsePayloadIds(payload);
 }

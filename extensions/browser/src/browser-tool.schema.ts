@@ -118,6 +118,7 @@ export const BrowserToolSchema = Type.Object({
   paths: Type.Optional(Type.Array(Type.String())),
   inputRef: Type.Optional(Type.String()),
   timeoutMs: Type.Optional(Type.Number()),
+  dialogId: Type.Optional(Type.String()),
   accept: Type.Optional(Type.Boolean()),
   promptText: Type.Optional(Type.String()),
   // Legacy flattened act params (preferred: request={...})

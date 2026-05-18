@@ -64,4 +64,34 @@ describe("createAnthropicPayloadLogger", () => {
     expect(source.sha256).toBe(crypto.createHash("sha256").update("QUJDRA==").digest("hex"));
     expect(event.payloadDigest).toMatch(/^[a-f0-9]{64}$/u);
   });
+
+  it("sanitizes usage and error fields before writing logs", () => {
+    const lines: string[] = [];
+    const logger = createAnthropicPayloadLogger({
+      env: { OPENCLAW_ANTHROPIC_PAYLOAD_LOG: "1" },
+      writer: {
+        filePath: "memory",
+        write: (line) => lines.push(line),
+        flush: async () => undefined,
+      },
+    });
+
+    logger?.recordUsage(
+      [
+        {
+          role: "assistant",
+          content: "",
+          usage: {
+            input: 1,
+            authorization: "Bearer sk-secret", // pragma: allowlist secret
+          },
+        } as never,
+      ],
+      new Error("failed with Bearer sk-secret"), // pragma: allowlist secret
+    );
+
+    const event = JSON.parse(lines[0]?.trim() ?? "{}") as Record<string, unknown>;
+    expect(event.error).toBe("failed with Bearer <redacted>");
+    expect(event.usage).toEqual({ input: 1 });
+  });
 });

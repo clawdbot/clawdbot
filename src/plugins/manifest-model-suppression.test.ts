@@ -235,4 +235,45 @@ describe("manifest model suppression", () => {
       }),
     ).toBeUndefined();
   });
+
+  it("does not apply provider api conditional suppressions when a configured provider omits api", () => {
+    mocks.loadPluginMetadataSnapshot.mockReturnValue(
+      createMetadataSnapshot([
+        {
+          id: "qwen",
+          providers: ["modelstudio"],
+          modelCatalog: {
+            suppressions: [
+              {
+                provider: "modelstudio",
+                model: "qwen3.6-plus",
+                when: {
+                  baseUrlHosts: ["coding-intl.dashscope.aliyuncs.com"],
+                  providerConfigApiIn: ["qwen", "modelstudio"],
+                },
+              },
+            ],
+          },
+        },
+      ]),
+    );
+
+    expect(
+      resolveManifestBuiltInModelSuppression({
+        provider: "modelstudio",
+        id: "qwen3.6-plus",
+        config: {
+          models: {
+            providers: {
+              modelstudio: {
+                baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
+                models: [],
+              },
+            },
+          },
+        },
+        env: process.env,
+      }),
+    ).toBeUndefined();
+  });
 });

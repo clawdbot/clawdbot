@@ -258,7 +258,7 @@ describe("exec approval reply helpers", () => {
         sessionKey: undefined,
       },
     });
-    expect(payload.interactive).toEqual({
+    expect(payload.presentation).toEqual({
       blocks: [
         {
           type: "buttons",
@@ -282,6 +282,7 @@ describe("exec approval reply helpers", () => {
         },
       ],
     });
+    expect(payload.interactive).toBeUndefined();
     expect(payload.text).toContain("Heads up.");
     expect(payload.text).toContain("```txt\n/approve slug-1 allow-once\n```");
     expect(payload.text).toContain("```sh\necho ok\n```");
@@ -324,7 +325,7 @@ describe("exec approval reply helpers", () => {
     expect(payload.text).toContain(
       "The effective approval policy requires approval every time, so Allow Always is unavailable.",
     );
-    expect(payload.interactive).toEqual({
+    expect(payload.presentation).toEqual({
       blocks: [
         {
           type: "buttons",
@@ -343,6 +344,7 @@ describe("exec approval reply helpers", () => {
         },
       ],
     });
+    expect(payload.interactive).toBeUndefined();
   });
 
   it("stores agent and session metadata for downstream suppression checks", () => {

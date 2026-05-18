@@ -124,7 +124,7 @@ describe("runQaDockerUp", () => {
       ]);
       const compose = await readFile(path.join(outputDir, "docker-compose.qa.yml"), "utf8");
       expect(compose).toContain(":/opt/openclaw-qa-lab-ui:ro");
-      expect(compose).toContain("      - --ui-dist-dir");
+      expect(compose).toContain("--ui-dist-dir /opt/openclaw-qa-lab-ui");
     } finally {
       await rm(outputDir, { recursive: true, force: true });
     }

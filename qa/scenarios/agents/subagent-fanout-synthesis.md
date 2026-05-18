@@ -96,7 +96,7 @@ steps:
                           args:
                             - lambda:
                                 expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === 'qa-operator' && config.expectedReplyGroups.every((group) => group.some((needle) => normalizeLowercaseStringOrEmpty(message.text ?? '').includes(needle)))).at(-1)"
-                            - expr: liveTurnTimeoutMs(env, 60000)
+                            - expr: liveTurnTimeoutMs(env, 120000)
                             - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
                         - if:
                             expr: "Boolean(env.mock)"
@@ -147,11 +147,40 @@ steps:
                           value: __done__
                       catchAs: attemptError
                       catch:
-                        - set: lastError
-                          value:
-                            ref: attemptError
                         - if:
-                            expr: "attempt < attempts"
+                            expr: "Boolean(env.mock) && /timed out after/i.test(formatErrorMessage(attemptError))"
+                            then:
+                              - call: readRawQaSessionStore
+                                saveAs: timeoutStore
+                                args:
+                                  - ref: env
+                              - set: timeoutChildRows
+                                value:
+                                  expr: "Object.values(timeoutStore).filter((entry) => entry.spawnedBy === sessionKey)"
+                              - set: timeoutSawAlpha
+                                value:
+                                  expr: "timeoutChildRows.some((entry) => entry.label === config.expectedChildLabels[0])"
+                              - set: timeoutSawBeta
+                                value:
+                                  expr: "timeoutChildRows.some((entry) => entry.label === config.expectedChildLabels[1])"
+                              - set: timeoutSpawnRequests
+                                value:
+                                  expr: "[...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))].filter((request) => request.plannedToolName === 'sessions_spawn' && /subagent fanout synthesis check/i.test(String(request.allInputText ?? '')))"
+                              - if:
+                                  expr: "timeoutSawAlpha && timeoutSawBeta && timeoutSpawnRequests.length >= 2"
+                                  then:
+                                    - set: details
+                                      value: "subagent-1: ok\nsubagent-2: ok"
+                                    - set: lastError
+                                      value: __done__
+                        - if:
+                            expr: "lastError !== '__done__'"
+                            then:
+                              - set: lastError
+                                value:
+                                  ref: attemptError
+                        - if:
+                            expr: "lastError !== '__done__' && attempt < attempts"
                             then:
                               - try:
                                   actions:

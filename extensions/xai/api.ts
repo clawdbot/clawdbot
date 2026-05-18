@@ -31,7 +31,7 @@ export { applyXaiRuntimeModelCompat } from "./runtime-model-compat.js";
 export { applyXaiModelCompat, HTML_ENTITY_TOOL_CALL_ARGUMENTS_ENCODING, XAI_TOOL_SCHEMA_PROFILE };
 export { resolveXaiModelCompatPatch };
 
-const XAI_NATIVE_ENDPOINT_HOSTS = new Set(["api.x.ai", "api.grok.x.ai"]);
+const XAI_NATIVE_ENDPOINT_HOSTS = new Set(["api.x.ai"]);
 
 function resolveHostname(value: string): string | undefined {
   try {

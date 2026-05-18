@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
 import {
   approveDevicePairing,
@@ -186,15 +186,25 @@ async function issueMixedRolePairingScopedDevice(
 }
 
 describe("gateway device.token.rotate/revoke ownership guard (IDOR)", () => {
+  let ownershipGuardServer: Awaited<ReturnType<typeof startServer>>;
+
+  beforeAll(async () => {
+    ownershipGuardServer = await startServer("secret");
+  });
+
+  afterAll(async () => {
+    await ownershipGuardServer.server.close();
+    ownershipGuardServer.envSnapshot.restore();
+  });
+
   test("rejects a device-token caller rotating or revoking another device's token", async () => {
-    const started = await startServer("secret");
     const deviceA = await issuePairingScopedTokenForAdminApprovedDevice("idor-device-a");
     const deviceB = await issuePairingScopedTokenForAdminApprovedDevice("idor-device-b");
 
     let pairingWs: WebSocket | undefined;
     try {
       pairingWs = await connectPairingScopedOperator({
-        port: started.port,
+        port: ownershipGuardServer.port,
         identityPath: deviceA.identityPath,
         deviceToken: deviceA.pairingToken,
       });
@@ -221,8 +231,6 @@ describe("gateway device.token.rotate/revoke ownership guard (IDOR)", () => {
       expect(pairedBAfterRevoke?.tokens?.operator?.revokedAtMs).toBeUndefined();
     } finally {
       pairingWs?.close();
-      await started.server.close();
-      started.envSnapshot.restore();
     }
   });
 

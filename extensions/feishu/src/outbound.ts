@@ -514,6 +514,19 @@ export const feishuOutbound: ChannelOutboundAdapter = {
     selects: false,
     context: true,
     divider: true,
+    limits: {
+      actions: {
+        maxActions: 20,
+        maxActionsPerRow: 5,
+        maxLabelLength: 40,
+        maxValueBytes: 1024,
+      },
+      text: {
+        maxLength: 4000,
+        encoding: "characters",
+        markdownDialect: "markdown",
+      },
+    },
   },
   renderPresentation: renderFeishuPresentationPayload,
   sendPayload: async (ctx) => {

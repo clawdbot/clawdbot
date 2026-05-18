@@ -33,7 +33,11 @@ function isProductionCodeFile(relativePath: string): boolean {
 }
 
 function listGitCodeFiles(root: string): string[] | null {
-  return listGitTrackedFiles({ repoRoot, pathspecs: root })?.filter(isProductionCodeFile) ?? null;
+  return (
+    listGitTrackedFiles({ repoRoot, pathspecs: root })
+      ?.filter(isProductionCodeFile)
+      .filter((relativePath) => fs.existsSync(path.join(repoRoot, relativePath))) ?? null
+  );
 }
 
 function walkCodeFiles(dir: string, files: string[] = []): string[] {

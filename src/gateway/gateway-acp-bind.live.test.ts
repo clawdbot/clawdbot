@@ -975,20 +975,37 @@ describeLive("gateway live (ACP bind)", () => {
             sessionKey: spawnedSessionKey,
           });
           lastCronProbeName = cronProbe.name;
-          await sendChatAndWait({
-            client,
-            sessionKey: originalSessionKey,
-            idempotencyKey: `idem-cron-${attempt}-${randomUUID()}`,
-            message: buildLiveCronProbeMessage({
-              agent: liveAgent,
-              argsJson: cronProbe.argsJson,
-              attempt,
-              exactReply: cronProbe.name,
-            }),
-            originatingChannel: "slack",
-            originatingTo: conversationId,
-            originatingAccountId: accountId,
-          });
+          try {
+            await sendChatAndWait({
+              client,
+              sessionKey: originalSessionKey,
+              idempotencyKey: `idem-cron-${attempt}-${randomUUID()}`,
+              message: buildLiveCronProbeMessage({
+                agent: liveAgent,
+                argsJson: cronProbe.argsJson,
+                attempt,
+                exactReply: cronProbe.name,
+              }),
+              originatingChannel: "slack",
+              originatingTo: conversationId,
+              originatingAccountId: accountId,
+            });
+          } catch (error) {
+            lastCronMismatch = error instanceof Error ? error.message : String(error);
+            logLiveStep(
+              `cron mcp turn failed after attempt ${String(attempt + 1)}: ${lastCronMismatch}`,
+            );
+            if (!requireCronMcpProbe) {
+              logLiveStep(
+                `cron mcp turn ${lastCronProbeName} failed; continuing after bind/image verification`,
+              );
+              break;
+            }
+            if (attempt === ACP_CRON_MCP_PROBE_MAX_ATTEMPTS - 1) {
+              throw error;
+            }
+            continue;
+          }
           logLiveStep(`cron mcp turn completed (attempt ${String(attempt + 1)})`);
 
           let cronHistory: Awaited<ReturnType<typeof waitForAssistantText>> | null = null;

@@ -5,6 +5,7 @@ import type { PluginCandidate } from "./discovery.js";
 import { buildInstalledPluginIndexRecords } from "./installed-plugin-index-record-builder.js";
 import {
   loadInstalledPluginIndexInstallRecordsSync,
+  readPersistedInstalledPluginIndexInstallRecordsSync,
   writePersistedInstalledPluginIndexInstallRecords,
 } from "./installed-plugin-index-records.js";
 import {
@@ -199,6 +200,23 @@ function createRichPluginFixture(params: { id?: string; packageVersion?: string 
 }
 
 describe("installed plugin index", () => {
+  it("drops blocked install record keys while reading persisted index records", () => {
+    const root = makeTempDir();
+    const filePath = path.join(root, "installed-plugin-index.json");
+    fs.writeFileSync(
+      filePath,
+      '{"installRecords":{"safe":{"source":"npm","spec":"safe"},"constructor":{"source":"npm","spec":"poison"},"prototype":{"source":"npm","spec":"poison"},"__proto__":{"source":"npm","spec":"poison"}}}',
+      "utf-8",
+    );
+
+    const records = readPersistedInstalledPluginIndexInstallRecordsSync({ filePath });
+
+    expect(records?.safe).toEqual({ source: "npm", spec: "safe" });
+    expect(Object.prototype.hasOwnProperty.call(records ?? {}, "constructor")).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(records ?? {}, "prototype")).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(records ?? {}, "__proto__")).toBe(false);
+  });
+
   it("builds a runtime-free installed plugin snapshot from manifest and package metadata", () => {
     const fixture = createRichPluginFixture();
 

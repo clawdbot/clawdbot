@@ -5,13 +5,11 @@ let currentRefLocator: Record<string, unknown> | null = null;
 let pageState: {
   console: unknown[];
   armIdUpload: number;
-  armIdDialog: number;
   armIdDownload: number;
   downloadWaiterDepth: number;
 } = {
   console: [],
   armIdUpload: 0,
-  armIdDialog: 0,
   armIdDownload: 0,
   downloadWaiterDepth: 0,
 };
@@ -42,6 +40,15 @@ const sessionMocks = vi.hoisted(() => ({
     return err.name === "SsrFBlockedError" || err.name === "InvalidBrowserNavigationUrlError";
   }),
   restoreRoleRefsForTarget: vi.fn(() => {}),
+  respondToObservedDialogOnPage: vi.fn(async () => {
+    throw new Error("No dialog is pending.");
+  }),
+  armObservedDialogResponseOnPage: vi.fn(() => {}),
+  createObservedDialogAbortSignalForPage: vi.fn((opts?: { parentSignal?: AbortSignal }) => ({
+    signal: opts?.parentSignal ?? new AbortController().signal,
+    cleanup: vi.fn(() => {}),
+  })),
+  isBrowserObservedDialogBlockedError: vi.fn(() => false),
   storeRoleRefsForTarget: vi.fn(() => {}),
   refLocator: vi.fn(() => {
     if (!currentRefLocator) {
@@ -89,7 +96,6 @@ export function installPwToolsCoreTestHooks() {
     pageState = {
       console: [],
       armIdUpload: 0,
-      armIdDialog: 0,
       armIdDownload: 0,
       downloadWaiterDepth: 0,
     };

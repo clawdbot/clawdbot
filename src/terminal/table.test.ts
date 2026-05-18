@@ -1,16 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { visibleWidth } from "./ansi.js";
 import { resolveNoteColumns, wrapNoteMessage } from "./note.js";
 import { renderTable } from "./table.js";
 
 describe("renderTable", () => {
-  const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
-
   afterEach(() => {
     vi.unstubAllEnvs();
-    if (originalPlatformDescriptor) {
-      Object.defineProperty(process, "platform", originalPlatformDescriptor);
-    }
+    vi.restoreAllMocks();
   });
 
   it("prefers shrinking flex columns to avoid wrapping non-flex labels", () => {
@@ -215,7 +212,7 @@ describe("renderTable", () => {
   });
 
   it("falls back to ASCII borders on legacy Windows consoles", () => {
-    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    mockProcessPlatform("win32");
     vi.stubEnv("WT_SESSION", "");
     vi.stubEnv("TERM_PROGRAM", "");
     vi.stubEnv("TERM", "vt100");
@@ -233,7 +230,7 @@ describe("renderTable", () => {
   });
 
   it("keeps unicode borders on modern Windows terminals", () => {
-    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    mockProcessPlatform("win32");
     vi.stubEnv("WT_SESSION", "1");
     vi.stubEnv("TERM", "");
     vi.stubEnv("TERM_PROGRAM", "");

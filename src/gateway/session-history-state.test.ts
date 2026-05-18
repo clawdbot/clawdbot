@@ -310,6 +310,34 @@ describe("SessionHistorySseState", () => {
     ]);
   });
 
+  test("drops hidden runtime-context custom messages from projected history", () => {
+    const snapshot = buildSessionHistorySnapshot({
+      rawMessages: [
+        {
+          role: "custom",
+          customType: "openclaw.runtime-context",
+          content: "secret runtime context",
+          display: false,
+          __openclaw: { seq: 1 },
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "visible answer" }],
+          __openclaw: { seq: 2 },
+        },
+      ],
+    });
+
+    expect(snapshot.history.messages).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "visible answer" }],
+        __openclaw: { seq: 2 },
+      },
+    ]);
+    expect(snapshot.rawTranscriptSeq).toBe(2);
+  });
+
   test("drops subagent announce inter-session user messages from projected history", () => {
     const snapshot = buildSessionHistorySnapshot({
       rawMessages: [
@@ -412,6 +440,16 @@ describe("SessionHistorySseState", () => {
         message: {
           role: "assistant",
           content: [{ type: "text", text: "HEARTBEAT_OK" }],
+        },
+      }),
+    ).toBeNull();
+    expect(
+      state.appendInlineMessage({
+        message: {
+          role: "custom",
+          customType: "openclaw.runtime-context",
+          content: "secret runtime context",
+          display: false,
         },
       }),
     ).toBeNull();

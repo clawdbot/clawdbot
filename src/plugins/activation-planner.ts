@@ -1,6 +1,8 @@
 import { normalizeProviderId } from "../agents/provider-id.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { normalizePluginsConfig } from "./config-state.js";
+import { passesManifestOwnerBasePolicy } from "./manifest-owner-policy.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import type { PluginManifestActivationCapability } from "./manifest.js";
@@ -57,12 +59,14 @@ type ResolveManifestActivationPlanParams = {
   origin?: PluginOrigin;
   onlyPluginIds?: readonly string[];
   manifestRecords?: readonly PluginManifestRecord[];
+  allowRestrictiveAllowlistBypass?: boolean;
 };
 
 export function resolveManifestActivationPlan(
   params: ResolveManifestActivationPlanParams,
 ): PluginActivationPlan {
   const onlyPluginIdSet = createPluginIdScopeSet(normalizePluginIdScope(params.onlyPluginIds));
+  const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
   const registry = params.manifestRecords
     ? { plugins: params.manifestRecords, diagnostics: [] }
     : loadPluginManifestRegistryForPluginRegistry({
@@ -77,6 +81,15 @@ export function resolveManifestActivationPlan(
         return [];
       }
       if (onlyPluginIdSet && !onlyPluginIdSet.has(plugin.id)) {
+        return [];
+      }
+      if (
+        !passesManifestOwnerBasePolicy({
+          plugin,
+          normalizedConfig,
+          allowRestrictiveAllowlistBypass: params.allowRestrictiveAllowlistBypass,
+        })
+      ) {
         return [];
       }
       const reasons = listManifestActivationTriggerReasons(plugin, params.trigger);

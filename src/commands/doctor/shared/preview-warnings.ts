@@ -221,7 +221,7 @@ function resolveSourceReplyMessageToolAvailability(params: {
 
 function sourceReplyRuntimeMayAllowMessageTool(cfg: OpenClawConfig): boolean {
   const groupPolicy = resolveGroupVisibleReplyProvenance(cfg);
-  if (hasChannels(cfg) && groupPolicy.value === "message_tool") {
+  if (groupPolicy.value === "message_tool") {
     return true;
   }
   if (cfg.messages?.visibleReplies === "message_tool") {
@@ -284,7 +284,7 @@ function resolveGroupVisibleReplyProvenance(cfg: OpenClawConfig): {
   return {
     path: "messages.groupChat.visibleReplies",
     provenance: "default",
-    value: "message_tool",
+    value: "automatic",
   };
 }
 
@@ -299,23 +299,15 @@ export function collectVisibleReplyToolPolicyWarnings(cfg: OpenClawConfig): stri
   const groupPolicy = resolveGroupVisibleReplyProvenance(cfg);
   const warnings: string[] = [];
   if (groupPolicy.value === "message_tool") {
-    if (groupPolicy.provenance === "default" && !hasChannels(cfg)) {
-      return warnings;
-    }
     const targets = collectMessageToolUnavailableTargets(cfg, { sourceReplyRuntimeGrant: true });
     if (targets.length === 0) {
       return warnings;
     }
-    const targetSummary = formatTargets(targets);
-    if (groupPolicy.provenance === "default") {
-      warnings.push(
-        `- messages.groupChat.visibleReplies defaults to "message_tool", but the message tool is unavailable for ${targetSummary}; OpenClaw falls back to automatic group/channel replies to avoid silent responses. Enable the message tool or set messages.groupChat.visibleReplies explicitly.`,
-      );
-    } else {
-      warnings.push(
-        `- ${groupPolicy.path} is set to "message_tool", but the message tool is unavailable for ${targetSummary}; OpenClaw falls back to automatic visible replies, so normal replies may post to the source chat. Enable the message tool or set ${groupPolicy.path} to "automatic".`,
-      );
-    }
+    warnings.push(
+      `- ${groupPolicy.path} is set to "message_tool", but the message tool is unavailable for ${formatTargets(
+        targets,
+      )}; OpenClaw falls back to automatic visible replies, so normal replies may post to the source chat. Enable the message tool or set ${groupPolicy.path} to "automatic".`,
+    );
   }
 
   const globalVisibleReplies = cfg.messages?.visibleReplies;

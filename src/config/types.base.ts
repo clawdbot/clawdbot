@@ -219,6 +219,10 @@ export type SessionConfig = {
 export type SessionWriteLockConfig = {
   /** How long to wait while acquiring a session transcript write lock. Default: 60000. */
   acquireTimeoutMs?: number;
+  /** When an existing lock can be treated as stale and reclaimed. Default: 1800000. */
+  staleMs?: number;
+  /** Maximum in-process hold time before the watchdog releases the lock. Default: 300000. */
+  maxHoldMs?: number;
 };
 
 export type SessionMaintenanceMode = "enforce" | "warn";

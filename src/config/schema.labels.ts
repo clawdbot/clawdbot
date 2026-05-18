@@ -791,6 +791,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "session.sendPolicy.rules[].match.rawKeyPrefix": "Session Send Rule Raw Key Prefix",
   "session.writeLock": "Session Write Lock",
   "session.writeLock.acquireTimeoutMs": "Session Write Lock Acquire Timeout",
+  "session.writeLock.staleMs": "Session Write Lock Stale Timeout",
+  "session.writeLock.maxHoldMs": "Session Write Lock Max Hold",
   "session.agentToAgent": "Session Agent-to-Agent",
   "session.agentToAgent.maxPingPongTurns": "Agent-to-Agent Ping-Pong Turns",
   "session.threadBindings": "Session Thread Bindings",

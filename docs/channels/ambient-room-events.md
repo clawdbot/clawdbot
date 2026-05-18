@@ -176,9 +176,9 @@ The agent-specific `agents.list[].groupChat.unmentionedInbound` value overrides 
 
 ## Visible reply modes
 
-`messages.groupChat.visibleReplies: "message_tool"` is the recommended group and channel default. It lets the agent decide when to speak by calling the message tool. If the model returns final text without calling the tool, OpenClaw keeps that final text private and logs suppressed delivery metadata.
+`messages.groupChat.visibleReplies` defaults to `"automatic"` for normal group/channel user requests. Keep that default when you want final assistant text to post visibly without requiring an explicit message-tool call.
 
-Use `messages.groupChat.visibleReplies: "automatic"` only when you want legacy behavior where normal group requests post final assistant text automatically.
+For ambient always-on rooms, `messages.groupChat.visibleReplies: "message_tool"` is still recommended, especially with latest-generation, tool-reliable models such as GPT 5.5. It lets the agent decide when to speak by calling the message tool. If the model returns final text without calling the tool, OpenClaw keeps that final text private and logs suppressed delivery metadata.
 
 Room events stay strict even when other group requests use automatic replies. Unmentioned ambient room events still require `message(action=send)` for visible output.
 
@@ -198,7 +198,7 @@ If the room shows typing or token usage but no visible message:
 2. Confirm `requireMention: false` is set at the room level you expect.
 3. Check whether `messages.groupChat.unmentionedInbound` or the agent override is `"room_event"`.
 4. Inspect logs for suppressed final payload metadata or `didSendViaMessagingTool: false`.
-5. Use a model/runtime that reliably calls tools, or set `messages.groupChat.visibleReplies: "automatic"` for legacy final replies on normal group requests.
+5. For normal group requests, keep or restore `messages.groupChat.visibleReplies: "automatic"` if you want final replies posted automatically. For ambient rooms using `message_tool`, use a model/runtime that reliably calls tools.
 
 If Telegram ambient rooms do not trigger at all, check BotFather privacy mode and verify the Gateway is receiving normal group messages.
 

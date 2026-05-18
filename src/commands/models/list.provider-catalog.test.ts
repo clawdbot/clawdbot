@@ -243,6 +243,37 @@ describe("loadProviderCatalogModelsForList", () => {
     expect(discoveryRequest?.discoveryEntriesOnly).toBe(true);
   });
 
+  it("reuses a command metadata snapshot for provider catalog planning", async () => {
+    const metadataSnapshot = {
+      index: {
+        plugins: [{ pluginId: "moonshot", enabled: true, origin: "bundled" }],
+      },
+      manifestRegistry: {
+        plugins: [],
+        diagnostics: [],
+      },
+    };
+
+    await loadProviderCatalogModelsForList({
+      ...baseParams,
+      providerFilter: "moonshot",
+      staticOnly: true,
+      metadataSnapshot: metadataSnapshot as unknown as Parameters<
+        typeof loadProviderCatalogModelsForList
+      >[0]["metadataSnapshot"],
+    });
+
+    expect(providerDiscoveryMocks.loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledWith(
+      expect.objectContaining({ index: metadataSnapshot.index }),
+    );
+    expect(providerDiscoveryMocks.resolveBundledProviderCompatPluginIds).toHaveBeenCalledWith(
+      expect.objectContaining({ manifestRegistry: metadataSnapshot.manifestRegistry }),
+    );
+    expect(providerDiscoveryMocks.resolveRuntimePluginDiscoveryProviders).toHaveBeenCalledWith(
+      expect.objectContaining({ pluginMetadataSnapshot: metadataSnapshot }),
+    );
+  });
+
   it("uses bundled runtime provider catalogs for provider-filtered self-hosted rows", async () => {
     providerDiscoveryMocks.resolveProviderOwners.mockImplementation(
       ({ providerId }: { providerId: string }) => (providerId === "vllm" ? ["vllm"] : []),
@@ -295,6 +326,30 @@ describe("loadProviderCatalogModelsForList", () => {
     expect(providerDiscoveryMocks.loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledWith({
       config: baseParams.cfg,
       env: baseParams.env,
+    });
+    expect(providerDiscoveryMocks.resolveOwningPluginIdsForProvider).not.toHaveBeenCalled();
+  });
+
+  it("uses a supplied registry index for provider ownership", async () => {
+    const registryIndex = {
+      plugins: [{ pluginId: "moonshot", enabled: true, origin: "bundled" }],
+    };
+
+    await expect(
+      resolveProviderCatalogPluginIdsForFilter({
+        cfg: baseParams.cfg,
+        env: baseParams.env,
+        providerFilter: "moonshot",
+        registryIndex: registryIndex as unknown as Parameters<
+          typeof resolveProviderCatalogPluginIdsForFilter
+        >[0]["registryIndex"],
+      }),
+    ).resolves.toEqual(["moonshot"]);
+
+    expect(providerDiscoveryMocks.loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledWith({
+      config: baseParams.cfg,
+      env: baseParams.env,
+      index: registryIndex,
     });
     expect(providerDiscoveryMocks.resolveOwningPluginIdsForProvider).not.toHaveBeenCalled();
   });

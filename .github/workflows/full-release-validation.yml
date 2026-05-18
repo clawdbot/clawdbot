@@ -638,6 +638,7 @@ jobs:
     name: Run package Telegram E2E
     needs: [resolve_target, prepare_release_package]
     if: ${{ always() && contains(fromJSON('["all","npm-telegram"]'), inputs.rerun_group) && (inputs.npm_telegram_package_spec != '' || inputs.release_package_spec != '' || (inputs.rerun_group == 'all' && inputs.release_profile == 'full')) }}
+    continue-on-error: ${{ startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}
     runs-on: ubuntu-24.04
     timeout-minutes: ${{ inputs.release_profile == 'full' && 120 || 60 }}
     outputs:
@@ -955,6 +956,8 @@ jobs:
 
           if [[ "$NPM_TELEGRAM_RESULT" == "skipped" && -z "${NPM_TELEGRAM_RUN_ID// }" ]]; then
             check_child "npm_telegram" "" 0 || failed=1
+          elif [[ "$CHILD_WORKFLOW_REF" =~ ^tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
+            check_child "npm_telegram" "$NPM_TELEGRAM_RUN_ID" 0 || echo "::warning::npm_telegram is advisory for Tideclaw alpha validation."
           else
             check_child "npm_telegram" "$NPM_TELEGRAM_RUN_ID" 1 || failed=1
           fi

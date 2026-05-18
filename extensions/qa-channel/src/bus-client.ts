@@ -8,6 +8,7 @@ import type {
   QaBusSearchMessagesInput,
   QaBusStateSnapshot,
   QaBusThread,
+  QaBusToolCall,
 } from "./protocol.js";
 
 export type {
@@ -28,6 +29,7 @@ export type {
   QaBusSearchMessagesInput,
   QaBusStateSnapshot,
   QaBusThread,
+  QaBusToolCall,
   QaBusWaitForInput,
 } from "./protocol.js";
 
@@ -202,6 +204,7 @@ export async function sendQaBusMessage(params: {
   threadId?: string;
   replyToId?: string;
   attachments?: import("./protocol.js").QaBusAttachment[];
+  toolCalls?: QaBusToolCall[];
 }) {
   return await postJson<{ message: QaBusMessage }>(params.baseUrl, "/v1/outbound/message", params);
 }

@@ -45,6 +45,26 @@ describe("gateway startup benchmark script", () => {
     expect(result.stderr).toBe("");
   });
 
+  it("rejects ambiguous benchmark CLI values before spawning Node", () => {
+    expect(__testing.parsePositiveInt("5", 1, "--runs")).toBe(5);
+    expect(__testing.parseNonNegativeInt("0", 1, "--warmup")).toBe(0);
+    expect(() => __testing.parsePositiveInt("2abc", 1, "--runs")).toThrow(
+      /--runs must be an integer/u,
+    );
+    expect(() => __testing.resolveEntry("--inspect")).toThrow(/must be a file path/u);
+  });
+
+  it("does not disable local-check policy in the child gateway environment", () => {
+    const env = __testing.sanitizedEnv("/tmp/openclaw-bench", "/tmp/openclaw-bench/config.json", {
+      config: {},
+      id: "default",
+      name: "gateway default",
+    });
+
+    expect(env.OPENCLAW_LOCAL_CHECK).toBeUndefined();
+    expect(env.OPENCLAW_GATEWAY_STARTUP_TRACE).toBe("1");
+  });
+
   it("classifies HTTP listen and gateway ready logs separately", () => {
     expect(
       __testing.classifyGatewayReadyLog("[gateway] http server listening (0 plugins, 0.8s)"),

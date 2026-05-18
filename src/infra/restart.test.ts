@@ -1,5 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureFullEnv } from "../test-utils/env.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 
 const spawnSyncMock = vi.hoisted(() => vi.fn());
 const resolveLsofCommandSyncMock = vi.hoisted(() => vi.fn());
@@ -29,7 +30,6 @@ let triggerOpenClawRestart: typeof import("./restart.js").triggerOpenClawRestart
 
 let currentTimeMs = 0;
 const envSnapshot = captureFullEnv();
-const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
 
 beforeAll(async () => {
   ({ __testing, cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } =
@@ -55,20 +55,11 @@ afterEach(() => {
   envSnapshot.restore();
   __testing.setSleepSyncOverride(null);
   __testing.setDateNowOverride(null);
-  if (originalPlatformDescriptor) {
-    Object.defineProperty(process, "platform", originalPlatformDescriptor);
-  }
   vi.restoreAllMocks();
 });
 
 function setPlatform(platform: NodeJS.Platform): void {
-  if (!originalPlatformDescriptor) {
-    return;
-  }
-  Object.defineProperty(process, "platform", {
-    ...originalPlatformDescriptor,
-    value: platform,
-  });
+  mockProcessPlatform(platform);
 }
 
 function requireFirstSpawnSyncCall(): [unknown, unknown, unknown] {

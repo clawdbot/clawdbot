@@ -303,18 +303,21 @@ export async function runThreadIsolationScenario(context: MatrixQaScenarioContex
 export async function runSubagentThreadSpawnScenario(context: MatrixQaScenarioContext) {
   const { client, startSince } = await primeMatrixQaDriverScenarioClient(context);
   const childToken = buildMatrixQaToken("MATRIX_QA_SUBAGENT_CHILD");
+  const spawnArgs = {
+    task: `Finish with exactly ${childToken}.`,
+    label: "matrix-thread-subagent",
+    thread: true,
+    mode: "session",
+    runTimeoutSeconds: 120,
+  };
   const triggerBody = [
-    `${context.sutUserId} Call sessions_spawn now for this QA check.`,
-    `Use task="Finish with exactly ${childToken}."`,
-    "Use label=matrix-thread-subagent thread=true mode=session runTimeoutSeconds=60.",
-    "Do not send the child token from this parent session.",
+    `${context.sutUserId} Run this exact OpenClaw Matrix thread-spawn QA check. Use tool calls, not prose.`,
+    `Step 1: call sessions_spawn with exactly this JSON input: ${JSON.stringify(spawnArgs)}.`,
+    'Step 2: after spawn returns status="accepted", wait for the child session reply in the spawned Matrix thread.',
+    "Do not omit thread=true; the child must bind to this Matrix thread.",
+    `Do not write ${childToken} in the parent response.`,
   ].join(" ");
-  const driverEventId = await client.sendTextMessage({
-    body: triggerBody,
-    mentionUserIds: [context.sutUserId],
-    roomId: context.roomId,
-  });
-  const intro = await client.waitForRoomEvent({
+  const introPromise = client.waitForRoomEvent({
     observedEvents: context.observedEvents,
     predicate: (event) => {
       failIfMatrixSubagentThreadHookError(event);
@@ -331,6 +334,12 @@ export async function runSubagentThreadSpawnScenario(context: MatrixQaScenarioCo
     since: startSince,
     timeoutMs: context.timeoutMs,
   });
+  const driverEventId = await client.sendTextMessage({
+    body: triggerBody,
+    mentionUserIds: [context.sutUserId],
+    roomId: context.roomId,
+  });
+  const intro = await introPromise;
   const completion = await client.waitForRoomEvent({
     observedEvents: context.observedEvents,
     predicate: (event) => {
@@ -561,7 +570,7 @@ export async function runAllowlistHotReloadScenario(context: MatrixQaScenarioCon
 export async function runQuietStreamingPreviewScenario(context: MatrixQaScenarioContext) {
   return runMatrixStreamingPreviewScenario(context, {
     expectedPreviewKind: "notice",
-    finalText: `MATRIX_QA_QUIET_STREAM_${randomUUID().slice(0, 8).toUpperCase()} preview complete`,
+    finalText: buildMatrixStreamingPreviewFinalText("MATRIX_QA_QUIET_STREAM"),
     label: "quiet streaming",
     triggerBodyBuilder: buildMatrixQuietStreamingPrompt,
   });
@@ -570,10 +579,20 @@ export async function runQuietStreamingPreviewScenario(context: MatrixQaScenario
 export async function runPartialStreamingPreviewScenario(context: MatrixQaScenarioContext) {
   return runMatrixStreamingPreviewScenario(context, {
     expectedPreviewKind: "message",
-    finalText: `MATRIX_QA_PARTIAL_STREAM_${randomUUID().slice(0, 8).toUpperCase()} preview complete`,
+    finalText: buildMatrixStreamingPreviewFinalText("MATRIX_QA_PARTIAL_STREAM"),
     label: "partial streaming",
     triggerBodyBuilder: buildMatrixPartialStreamingPrompt,
   });
+}
+
+function buildMatrixStreamingPreviewFinalText(prefix: string) {
+  const token = `${prefix}_${randomUUID().slice(0, 8).toUpperCase()}`;
+  return [
+    `${token} preview complete.`,
+    `${token} alpha segment confirms the draft stream started before final delivery.`,
+    `${token} beta segment keeps the exact final answer long enough for preview updates.`,
+    `${token} omega segment marks the finalized Matrix QA reply.`,
+  ].join(" ");
 }
 
 async function runMatrixStreamingPreviewScenario(
@@ -597,12 +616,38 @@ async function runMatrixStreamingPreviewScenario(
     predicate: (event) =>
       event.roomId === context.roomId &&
       event.sender === context.sutUserId &&
-      event.kind === params.expectedPreviewKind &&
-      event.relatesTo === undefined,
+      event.relatesTo === undefined &&
+      (event.kind === params.expectedPreviewKind ||
+        (isMatrixQaMessageLikeKind(event.kind) &&
+          doesMatrixQaReplyBodyMatchToken(event, params.finalText))),
     roomId: context.roomId,
     since: startSince,
     timeoutMs: context.timeoutMs,
   });
+  if (doesMatrixQaReplyBodyMatchToken(preview.event, params.finalText)) {
+    advanceMatrixQaActorCursor({
+      actorId: "driver",
+      syncState: context.syncState,
+      nextSince: preview.since,
+      startSince,
+    });
+    const finalReply = buildMatrixReplyArtifact(preview.event, params.finalText);
+    return {
+      artifacts: {
+        driverEventId,
+        previewEventId: undefined,
+        reply: finalReply,
+        token: params.finalText,
+        triggerBody,
+      },
+      details: [
+        `driver event: ${driverEventId}`,
+        `scenario: ${params.label}`,
+        "preview event: <none>; final delivered without draft replacement",
+        ...buildMatrixReplyDetails("final reply", finalReply),
+      ].join("\n"),
+    } satisfies MatrixQaScenarioExecution;
+  }
   const finalized = await client.waitForRoomEvent({
     observedEvents: context.observedEvents,
     predicate: (event) =>

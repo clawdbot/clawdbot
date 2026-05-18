@@ -15,7 +15,13 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function cloneInstallRecords(
   records: Record<string, PluginInstallRecord> | undefined,
 ): Record<string, PluginInstallRecord> {
-  return structuredClone(records ?? {});
+  return readRecordMap(records) ?? {};
+}
+
+const BLOCKED_RECORD_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+
+function isSafeRecordKey(key: string): boolean {
+  return !BLOCKED_RECORD_KEYS.has(key);
 }
 
 function readRecordMap(value: unknown): Record<string, PluginInstallRecord> | null {
@@ -26,6 +32,9 @@ function readRecordMap(value: unknown): Record<string, PluginInstallRecord> | nu
   for (const [pluginId, record] of Object.entries(value).toSorted(([left], [right]) =>
     left.localeCompare(right),
   )) {
+    if (!isSafeRecordKey(pluginId)) {
+      continue;
+    }
     if (isRecord(record) && typeof record.source === "string") {
       records[pluginId] = structuredClone(record) as PluginInstallRecord;
     }
@@ -46,6 +55,9 @@ function readStringRecord(value: unknown): Record<string, string> {
   for (const [key, raw] of Object.entries(value).toSorted(([left], [right]) =>
     left.localeCompare(right),
   )) {
+    if (!isSafeRecordKey(key)) {
+      continue;
+    }
     if (typeof raw === "string" && raw.trim()) {
       record[key] = raw.trim();
     }
@@ -149,6 +161,9 @@ function extractPluginInstallRecordsFromPersistedInstalledPluginIndex(
   const records: Record<string, PluginInstallRecord> = {};
   for (const entry of index.plugins) {
     if (!isRecord(entry) || typeof entry.pluginId !== "string" || !isRecord(entry.installRecord)) {
+      continue;
+    }
+    if (!isSafeRecordKey(entry.pluginId)) {
       continue;
     }
     records[entry.pluginId] = structuredClone(entry.installRecord) as PluginInstallRecord;

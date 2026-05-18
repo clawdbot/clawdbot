@@ -1034,6 +1034,11 @@ details.usage-filter-select summary::-webkit-details-marker,
   transform: translateY(-1px);
 }
 
+.daily-bar-wrapper:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  outline-offset: 3px;
+}
+
 .daily-bar--stacked {
   display: flex;
   flex-direction: column;
@@ -1077,6 +1082,17 @@ details.usage-filter-select summary::-webkit-details-marker,
 .daily-bar-wrapper:hover .daily-bar-tooltip {
   opacity: 1;
   transform: translate(-50%, 0);
+}
+
+.daily-bar-tooltip--floating {
+  position: fixed;
+  left: 0;
+  top: 0;
+  bottom: auto;
+  transform: none;
+  max-width: min(220px, calc(100vw - 16px));
+  opacity: 1;
+  z-index: 1000;
 }
 
 .cost-breakdown-bar {

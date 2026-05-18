@@ -65,8 +65,30 @@ async function waitForConfigRestartSettle(
   restartDelayMs = 1_000,
   timeoutMs = 60_000,
 ) {
-  await sleep(restartDelayMs + 750);
-  await waitForGatewayHealthy(env, timeoutMs);
+  const startedAt = Date.now();
+  const deadline = startedAt + timeoutMs;
+  const readyAfterMs = restartDelayMs + 750;
+  let lastHealthError: unknown = null;
+
+  while (Date.now() < deadline) {
+    try {
+      await waitForGatewayHealthy(env, Math.max(1, Math.min(1_000, deadline - Date.now())));
+      if (Date.now() - startedAt >= readyAfterMs) {
+        const remainingMs = Math.max(1, deadline - Date.now());
+        await waitForTransportReady(env, remainingMs);
+        return;
+      }
+    } catch (error) {
+      lastHealthError = error;
+    }
+    await sleep(Math.min(250, Math.max(1, deadline - Date.now())));
+  }
+
+  throw new Error(
+    `timed out after ${timeoutMs}ms waiting for config restart readiness${
+      lastHealthError ? `: ${formatErrorMessage(lastHealthError)}` : ""
+    }`,
+  );
 }
 
 function formatGatewayPrimaryErrorText(error: unknown) {

@@ -28,6 +28,7 @@ export const EXISTING_SESSION_LIMITS = {
       "existing-session file uploads do not support element selectors; use ref/inputRef.",
     uploadSingleFile: "existing-session file uploads currently support one file at a time.",
     uploadRefRequired: "existing-session file uploads require ref or inputRef.",
+    dialogId: "existing-session dialog handling does not support dialogId.",
     dialogTimeout: "existing-session dialog handling does not support timeoutMs.",
   },
   download: {

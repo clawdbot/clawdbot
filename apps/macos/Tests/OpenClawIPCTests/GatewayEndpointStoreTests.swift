@@ -315,6 +315,54 @@ struct GatewayEndpointStoreTests {
         #expect(url?.absoluteString == "ws://100.123.224.76:18789")
     }
 
+    @Test func `missing transport infers direct from private remote URL`() {
+        let root: [String: Any] = [
+            "gateway": [
+                "remote": [
+                    "url": "ws://192.168.0.202:18789",
+                ],
+            ],
+        ]
+
+        let resolution = GatewayRemoteConfig.resolveTransportResolution(root: root)
+        #expect(resolution.transport == .direct)
+        #expect(resolution.source == .inferredRemoteURL)
+        #expect(resolution.directURL?.absoluteString == "ws://192.168.0.202:18789")
+    }
+
+    @Test func `legacy loopback URL keeps SSH even with trusted SSH target`() {
+        let root: [String: Any] = [
+            "gateway": [
+                "remote": [
+                    "url": "ws://127.0.0.1:18789",
+                    "sshTarget": "steipete@192.168.0.202",
+                ],
+            ],
+        ]
+
+        let resolution = GatewayRemoteConfig.resolveTransportResolution(root: root)
+        #expect(resolution.transport == .ssh)
+        #expect(resolution.source == .legacySSH)
+        #expect(resolution.directURL == nil)
+    }
+
+    @Test func `explicit ssh keeps legacy tunnel even when target is direct capable`() {
+        let root: [String: Any] = [
+            "gateway": [
+                "remote": [
+                    "transport": "ssh",
+                    "url": "ws://127.0.0.1:18789",
+                    "sshTarget": "steipete@192.168.0.202",
+                ],
+            ],
+        ]
+
+        let resolution = GatewayRemoteConfig.resolveTransportResolution(root: root)
+        #expect(resolution.transport == .ssh)
+        #expect(resolution.source == .explicit)
+        #expect(resolution.directURL == nil)
+    }
+
     @Test func `normalize gateway url rejects public host ws`() {
         let url = GatewayRemoteConfig.normalizeGatewayUrl("ws://gateway.example:18789")
         #expect(url == nil)

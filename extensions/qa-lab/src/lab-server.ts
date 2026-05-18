@@ -125,6 +125,44 @@ function createBootstrapDefaults(autoKickoffTarget?: string): QaLabBootstrapDefa
   };
 }
 
+const CONTROL_UI_CREDENTIAL_QUERY_KEYS = new Set([
+  "access_token",
+  "auth",
+  "devicetoken",
+  "password",
+  "refresh_token",
+  "token",
+]);
+
+function stripSensitiveQueryParams(rawUrl: string): string {
+  try {
+    const url = new URL(rawUrl);
+    for (const key of Array.from(url.searchParams.keys())) {
+      if (CONTROL_UI_CREDENTIAL_QUERY_KEYS.has(key.toLowerCase())) {
+        url.searchParams.delete(key);
+      }
+    }
+    return url.toString();
+  } catch {
+    return rawUrl
+      .replace(
+        /([?&])(?:access_token|auth|deviceToken|password|refresh_token|token)=[^&#\s]*&?/gi,
+        (match: string, separator: string) => (match.endsWith("&") ? separator : ""),
+      )
+      .replace(/[?&]$/, "")
+      .replace("?&", "?");
+  }
+}
+
+function sanitizeControlUiPublicUrl(url: string | null): string | null {
+  if (!url) {
+    return null;
+  }
+  const fragmentIndex = url.indexOf("#");
+  const withoutFragment = fragmentIndex === -1 ? url : url.slice(0, fragmentIndex);
+  return stripSensitiveQueryParams(withoutFragment);
+}
+
 function createQaLabConfig(baseUrl: string): OpenClawConfig {
   return createQaChannelGatewayConfig({ baseUrl });
 }
@@ -193,8 +231,8 @@ export async function startQaLabServer(
   let controlUiProxyTarget = params?.controlUiProxyTarget?.trim()
     ? new URL(params.controlUiProxyTarget)
     : null;
-  let controlUiUrl = params?.controlUiUrl?.trim() || null;
-  let controlUiToken = params?.controlUiToken?.trim() || null;
+  let controlUiProxyToken = params?.controlUiProxyToken?.trim() || null;
+  let controlUiUrl = sanitizeControlUiPublicUrl(params?.controlUiUrl?.trim() || null);
   let gateway:
     | {
         cfg: OpenClawConfig;
@@ -289,6 +327,7 @@ export async function startQaLabServer(
           target: controlUiProxyTarget,
           pathname: url.pathname,
           search: url.search,
+          authorizationToken: controlUiProxyToken,
         });
         return;
       }
@@ -298,15 +337,12 @@ export async function startQaLabServer(
         const resolvedControlUiUrl = controlUiProxyTarget
           ? `${publicBaseUrl}/control-ui/`
           : controlUiUrl;
-        const controlUiEmbeddedUrl =
-          resolvedControlUiUrl && controlUiToken
-            ? `${resolvedControlUiUrl.replace(/\/?$/, "/")}#token=${encodeURIComponent(controlUiToken)}`
-            : resolvedControlUiUrl;
+        const safeControlUiUrl = sanitizeControlUiPublicUrl(resolvedControlUiUrl);
         writeJson(res, 200, {
           baseUrl: publicBaseUrl,
           latestReport,
-          controlUiUrl: resolvedControlUiUrl,
-          controlUiEmbeddedUrl,
+          controlUiUrl: safeControlUiUrl,
+          controlUiEmbeddedUrl: safeControlUiUrl,
           kickoffTask: scenarioCatalog.kickoffTask,
           scenarios: scenarioCatalog.scenarios,
           defaults: bootstrapDefaults,
@@ -625,6 +661,7 @@ export async function startQaLabServer(
       socket,
       head,
       target: controlUiProxyTarget,
+      authorizationToken: controlUiProxyToken,
     });
   });
 
@@ -634,11 +671,11 @@ export async function startQaLabServer(
     state,
     setControlUi(next: {
       controlUiUrl?: string | null;
-      controlUiToken?: string | null;
+      controlUiProxyToken?: string | null;
       controlUiProxyTarget?: string | null;
     }) {
-      controlUiUrl = next.controlUiUrl?.trim() || null;
-      controlUiToken = next.controlUiToken?.trim() || null;
+      controlUiUrl = sanitizeControlUiPublicUrl(next.controlUiUrl?.trim() || null);
+      controlUiProxyToken = next.controlUiProxyToken?.trim() || null;
       controlUiProxyTarget = next.controlUiProxyTarget?.trim()
         ? new URL(next.controlUiProxyTarget)
         : null;

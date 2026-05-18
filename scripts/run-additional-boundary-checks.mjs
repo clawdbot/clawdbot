@@ -92,12 +92,38 @@ export function parseShardSpec(value) {
   return { count, index: index - 1, label: `${index}/${count}` };
 }
 
+export function parseShardSelection(value) {
+  if (!value) {
+    return null;
+  }
+  return String(value)
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => {
+      const shard = parseShardSpec(part);
+      if (!shard) {
+        throw new Error(`Invalid shard spec '${value}'`);
+      }
+      return shard;
+    });
+}
+
 export function selectChecksForShard(checks, shardSpec) {
-  const shard = typeof shardSpec === "string" ? parseShardSpec(shardSpec) : shardSpec;
-  if (!shard) {
+  const shards =
+    typeof shardSpec === "string"
+      ? parseShardSelection(shardSpec)
+      : Array.isArray(shardSpec)
+        ? shardSpec
+        : shardSpec
+          ? [shardSpec]
+          : null;
+  if (!shards || shards.length === 0) {
     return checks;
   }
-  return checks.filter((_check, index) => index % shard.count === shard.index);
+  return checks.filter((_check, index) =>
+    shards.some((shard) => index % shard.count === shard.index),
+  );
 }
 
 export function formatCommand({ command, args }) {
@@ -239,11 +265,11 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     process.env.OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY ??
       process.env.OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY,
   );
-  const shard = parseShardSpec(resolveCliShardSpec(process.argv.slice(2), process.env));
-  const checks = selectChecksForShard(BOUNDARY_CHECKS, shard);
-  if (shard) {
+  const shards = parseShardSelection(resolveCliShardSpec(process.argv.slice(2), process.env));
+  const checks = selectChecksForShard(BOUNDARY_CHECKS, shards);
+  if (shards) {
     process.stdout.write(
-      `Running ${checks.length}/${BOUNDARY_CHECKS.length} additional boundary checks (shard ${shard.label})\n`,
+      `Running ${checks.length}/${BOUNDARY_CHECKS.length} additional boundary checks (shard ${shards.map((shard) => shard.label).join(",")})\n`,
     );
   }
   const failures = await runChecks(checks, { concurrency });

@@ -4,7 +4,10 @@ import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging.js";
 import { resolvePluginActivationSourceConfig } from "../activation-source-config.js";
-import { setCurrentPluginMetadataSnapshot } from "../current-plugin-metadata-snapshot.js";
+import {
+  getCurrentPluginMetadataSnapshot,
+  setCurrentPluginMetadataSnapshot,
+} from "../current-plugin-metadata-snapshot.js";
 import type { PluginLoadOptions } from "../loader.js";
 import type { PluginManifestRegistry } from "../manifest-registry.js";
 import { loadPluginMetadataSnapshot } from "../plugin-metadata-snapshot.js";
@@ -61,11 +64,16 @@ export function resolvePluginRuntimeLoadContext(
     options?.workspaceDir ?? resolveAgentWorkspaceDir(rawConfig, resolveDefaultAgentId(rawConfig));
   const metadataSnapshot = options?.manifestRegistry
     ? undefined
-    : loadPluginMetadataSnapshot({
+    : (getCurrentPluginMetadataSnapshot({
         config: rawConfig,
         env,
         workspaceDir: rawWorkspaceDir,
-      });
+      }) ??
+      loadPluginMetadataSnapshot({
+        config: rawConfig,
+        env,
+        workspaceDir: rawWorkspaceDir,
+      }));
   const manifestRegistry = options?.manifestRegistry ?? metadataSnapshot?.manifestRegistry;
   const activationSourceConfig = resolvePluginActivationSourceConfig({
     config: rawConfig,

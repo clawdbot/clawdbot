@@ -51,6 +51,7 @@ let lastClientOptions: {
   clientName?: string;
   clientDisplayName?: string;
   mode?: string;
+  approvalRuntimeToken?: string;
   scopes?: string[];
   deviceIdentity?: unknown;
   onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
@@ -87,6 +88,7 @@ vi.mock("./client.js", () => ({
       clientName?: string;
       clientDisplayName?: string;
       mode?: string;
+      approvalRuntimeToken?: string;
       scopes?: string[];
       onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
       onClose?: (code: number, reason: string) => void;
@@ -626,6 +628,18 @@ describe("callGateway url resolution", () => {
     await callGateway({ method: "sessions.delete" });
 
     expect(lastClientOptions?.clientDisplayName).toBe("gateway:sessions.delete");
+  });
+
+  it("passes approval runtime tokens to backend gateway clients", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    await callGateway({
+      method: "exec.approval.waitDecision",
+      scopes: ["operator.approvals"],
+      approvalRuntimeToken: "runtime-token",
+    });
+
+    expect(lastClientOptions?.approvalRuntimeToken).toBe("runtime-token");
   });
 
   it("does not synthesize display names for CLI calls", async () => {

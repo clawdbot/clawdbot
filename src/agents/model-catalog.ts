@@ -10,6 +10,7 @@ import {
   loadManifestMetadataSnapshot,
 } from "../plugins/manifest-contract-eligibility.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { augmentModelCatalogWithProviderPlugins } from "../plugins/provider-runtime.runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import {
@@ -131,13 +132,16 @@ export function loadManifestModelCatalog(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   fallbackToMetadataScan?: boolean;
+  metadataSnapshot?: PluginMetadataSnapshot;
 }): ModelCatalogEntry[] {
-  const snapshot = getCurrentPluginMetadataSnapshot({
-    config: params.config,
-    env: params.env,
-    ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
-    ...(params.workspaceDir === undefined ? { allowWorkspaceScopedSnapshot: true } : {}),
-  });
+  const snapshot =
+    params.metadataSnapshot ??
+    getCurrentPluginMetadataSnapshot({
+      config: params.config,
+      env: params.env,
+      ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+      ...(params.workspaceDir === undefined ? { allowWorkspaceScopedSnapshot: true } : {}),
+    });
   const resolvedSnapshot =
     snapshot ??
     (params.fallbackToMetadataScan === false
@@ -256,6 +260,7 @@ function normalizePersistedModelCatalogEntry(
 
 async function loadReadOnlyPersistedModelCatalog(params?: {
   config?: OpenClawConfig;
+  metadataSnapshot?: PluginMetadataSnapshot;
 }): Promise<ModelCatalogEntry[]> {
   const cfg = params?.config ?? getRuntimeConfig();
   const agentDir = resolveDefaultAgentDir(cfg);
@@ -266,10 +271,12 @@ async function loadReadOnlyPersistedModelCatalog(params?: {
   const shouldSuppressBuiltInModel = buildShouldSuppressBuiltInModel({ config: cfg });
   let manifestPlugins: ProviderModelIdNormalizationOptions["manifestPlugins"];
   const getManifestPlugins = () => {
-    manifestPlugins ??= loadManifestMetadataSnapshot({
-      config: cfg,
-      env: process.env,
-    }).plugins;
+    manifestPlugins ??=
+      params?.metadataSnapshot?.plugins ??
+      loadManifestMetadataSnapshot({
+        config: cfg,
+        env: process.env,
+      }).plugins;
     return manifestPlugins;
   };
   const providers =
@@ -327,7 +334,10 @@ function hasConfiguredProviderRowsNeedingManifestLookup(cfg: OpenClawConfig): bo
   );
 }
 
-function loadReadOnlyStaticModelCatalog(params?: { config?: OpenClawConfig }): ModelCatalogEntry[] {
+function loadReadOnlyStaticModelCatalog(params?: {
+  config?: OpenClawConfig;
+  metadataSnapshot?: PluginMetadataSnapshot;
+}): ModelCatalogEntry[] {
   const cfg = params?.config ?? getRuntimeConfig();
   const models: ModelCatalogEntry[] = [];
   try {
@@ -337,6 +347,7 @@ function loadReadOnlyStaticModelCatalog(params?: { config?: OpenClawConfig }): M
         config: cfg,
         env: process.env,
         fallbackToMetadataScan: false,
+        metadataSnapshot: params?.metadataSnapshot,
       }),
     );
   } catch (error) {
@@ -347,10 +358,11 @@ function loadReadOnlyStaticModelCatalog(params?: { config?: OpenClawConfig }): M
   }
 
   const configuredManifestPlugins = hasConfiguredProviderRowsNeedingManifestLookup(cfg)
-    ? loadPluginMetadataSnapshot({
+    ? (params?.metadataSnapshot?.plugins ??
+      loadPluginMetadataSnapshot({
         config: cfg,
         env: process.env,
-      }).plugins
+      }).plugins)
     : [];
   const configuredModels = buildConfiguredModelCatalog({
     cfg,
@@ -366,6 +378,7 @@ export async function loadModelCatalog(params?: {
   config?: OpenClawConfig;
   useCache?: boolean;
   readOnly?: boolean;
+  metadataSnapshot?: PluginMetadataSnapshot;
 }): Promise<ModelCatalogEntry[]> {
   const readOnly = params?.readOnly === true;
   if (readOnly) {
@@ -380,7 +393,8 @@ export async function loadModelCatalog(params?: {
   if (!readOnly && params?.useCache === false) {
     modelCatalogPromise = null;
   }
-  if (!readOnly && modelCatalogPromise) {
+  const useSharedCache = !readOnly && !params?.metadataSnapshot;
+  if (useSharedCache && modelCatalogPromise) {
     return modelCatalogPromise;
   }
 
@@ -400,10 +414,12 @@ export async function loadModelCatalog(params?: {
       const cfg = params?.config ?? getRuntimeConfig();
       let manifestPlugins: ProviderModelIdNormalizationOptions["manifestPlugins"];
       const getManifestPlugins = () => {
-        manifestPlugins ??= loadManifestMetadataSnapshot({
-          config: cfg,
-          env: process.env,
-        }).plugins;
+        manifestPlugins ??=
+          params?.metadataSnapshot?.plugins ??
+          loadManifestMetadataSnapshot({
+            config: cfg,
+            env: process.env,
+          }).plugins;
         return manifestPlugins;
       };
       if (!readOnly) {
@@ -511,7 +527,7 @@ export async function loadModelCatalog(params?: {
 
       if (models.length === 0) {
         // If we found nothing, don't cache this result so we can try again.
-        if (!readOnly) {
+        if (useSharedCache) {
           modelCatalogPromise = null;
         }
       }
@@ -525,7 +541,7 @@ export async function loadModelCatalog(params?: {
         log.warn(`Failed to load model catalog: ${String(error)}`);
       }
       // Don't poison the cache on transient dependency/filesystem issues.
-      if (!readOnly) {
+      if (useSharedCache) {
         modelCatalogPromise = null;
       }
       if (models.length > 0) {
@@ -535,7 +551,7 @@ export async function loadModelCatalog(params?: {
     }
   };
 
-  if (readOnly) {
+  if (readOnly || params?.metadataSnapshot) {
     return loadCatalog();
   }
 

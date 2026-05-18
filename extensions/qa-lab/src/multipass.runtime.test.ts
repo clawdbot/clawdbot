@@ -174,6 +174,8 @@ describe("qa multipass runtime", () => {
 
   it("forwards live key list and numbered key env shapes", () => {
     vi.stubEnv("OPENCLAW_LIVE_ANTHROPIC_KEYS", "anthropic-a anthropic-b");
+    vi.stubEnv("OPENCLAW_LIVE_CODEX_API_KEY", "codex-live");
+    vi.stubEnv("CODEX_API_KEY", "codex-direct");
     vi.stubEnv("OPENAI_API_KEY_1", "openai-one");
     vi.stubEnv("GEMINI_API_KEY_2", "gemini-two");
     const plan = createQaMultipassPlan({
@@ -184,6 +186,8 @@ describe("qa multipass runtime", () => {
     });
 
     expect(plan.forwardedEnv.OPENCLAW_LIVE_ANTHROPIC_KEYS).toBe("anthropic-a anthropic-b");
+    expect(plan.forwardedEnv.OPENCLAW_LIVE_CODEX_API_KEY).toBe("codex-live");
+    expect(plan.forwardedEnv.CODEX_API_KEY).toBe("codex-direct");
     expect(plan.forwardedEnv.OPENAI_API_KEY_1).toBe("openai-one");
     expect(plan.forwardedEnv.GEMINI_API_KEY_2).toBe("gemini-two");
   });

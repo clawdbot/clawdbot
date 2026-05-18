@@ -7,6 +7,7 @@ struct SkillsSettings: View {
     @State private var model = SkillsSettingsModel()
     @State private var envEditor: EnvEditorState?
     @State private var filter: SkillsFilter = .all
+    @State private var didScheduleInitialRefresh = false
 
     init(state: AppState = AppStateStore.shared, model: SkillsSettingsModel = SkillsSettingsModel()) {
         self.state = state
@@ -14,13 +15,28 @@ struct SkillsSettings: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            self.header
-            self.statusBanner
-            self.skillsList
-            Spacer(minLength: 0)
+        ScrollView(.vertical) {
+            VStack(alignment: .leading, spacing: 20) {
+                SettingsPageHeader(
+                    title: "Skills",
+                    subtitle: "Optional capabilities that become available when their requirements are met.")
+
+                self.skillsSummaryPanel
+                self.controlsCard
+                self.statusBanner
+                self.skillsList
+                Spacer(minLength: 8)
+            }
+            .frame(maxWidth: 860, alignment: .leading)
+            .padding(.trailing, SettingsLayout.scrollbarGutter)
+            .padding(.vertical, 4)
         }
-        .task { await self.model.refresh() }
+        .task {
+            guard !self.didScheduleInitialRefresh else { return }
+            self.didScheduleInitialRefresh = true
+            await Task.yield()
+            await self.model.refreshIfNeeded()
+        }
         .sheet(item: self.$envEditor) { editor in
             EnvEditorView(editor: editor) { value in
                 Task {
@@ -34,28 +50,68 @@ struct SkillsSettings: View {
         }
     }
 
-    private var header: some View {
-        HStack {
+    private var skillsSummaryPanel: some View {
+        let total = self.model.skills.count
+        let ready = self.model.skills.count(where: { !$0.disabled && $0.eligible })
+        let needsSetup = self.model.skills.count(where: { !$0.disabled && !$0.eligible })
+
+        return HStack(alignment: .center, spacing: 14) {
+            ZStack {
+                Circle()
+                    .fill(Color.accentColor.opacity(0.18))
+                Image(systemName: "sparkles")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+            }
+            .frame(width: 46, height: 46)
+
             VStack(alignment: .leading, spacing: 4) {
-                Text("Skills")
+                Text(total == 0 ? "Loading skills" : "\(ready) ready · \(needsSetup) need setup")
                     .font(.headline)
-                Text("Skills are enabled when requirements are met (binaries, env, config).")
+                Text("Enable ready skills, or install missing tools on the Gateway or this Mac.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            Spacer()
-            if self.model.isLoading {
-                ProgressView()
-            } else {
+
+            Spacer(minLength: 18)
+
+            if total > 0 {
+                Text("\(total)")
+                    .font(.title3.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(.white.opacity(0.06))
+        }
+    }
+
+    private var controlsCard: some View {
+        SettingsCardGroup("Controls") {
+            SettingsCardRow(
+                title: "Skill catalog",
+                subtitle: "Refresh after changing binaries, environment variables, or skill config.",
+                showsDivider: false)
+            {
+                if self.model.isLoading {
+                    ProgressView()
+                        .controlSize(.small)
+                }
                 Button {
-                    Task { await self.model.refresh() }
+                    Task { await self.model.refresh(force: true) }
                 } label: {
                     Label("Refresh", systemImage: "arrow.clockwise")
                 }
                 .buttonStyle(.bordered)
                 .help("Refresh")
+
+                self.headerFilter
             }
-            self.headerFilter
         }
     }
 
@@ -75,37 +131,52 @@ struct SkillsSettings: View {
     @ViewBuilder
     private var skillsList: some View {
         if self.model.skills.isEmpty {
-            Text("No skills reported yet.")
-                .foregroundStyle(.secondary)
-        } else {
-            List {
-                ForEach(self.filteredSkills) { skill in
-                    SkillRow(
-                        skill: skill,
-                        isBusy: self.model.isBusy(skill: skill),
-                        connectionMode: self.state.connectionMode,
-                        onToggleEnabled: { enabled in
-                            Task { await self.model.setEnabled(skillKey: skill.skillKey, enabled: enabled) }
-                        },
-                        onInstall: { option, target in
-                            Task { await self.model.install(skill: skill, option: option, target: target) }
-                        },
-                        onSetEnv: { envKey, isPrimary in
-                            self.envEditor = EnvEditorState(
-                                skillKey: skill.skillKey,
-                                skillName: skill.name,
-                                envKey: envKey,
-                                isPrimary: isPrimary,
-                                homepage: skill.homepage)
-                        })
-                }
-                if !self.model.skills.isEmpty, self.filteredSkills.isEmpty {
-                    Text("No skills match this filter.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
+            SettingsCardGroup("Skills") {
+                SettingsCardRow(
+                    title: self.model.isLoading ? "Loading…" : "No skills reported yet",
+                    subtitle: self.model.isLoading ? "Reading the Gateway skill catalog." : nil,
+                    showsDivider: false)
+                {
+                    if self.model.isLoading {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
                 }
             }
-            .listStyle(.inset)
+        } else {
+            SettingsCardGroup("Skills") {
+                LazyVStack(spacing: 0) {
+                    ForEach(Array(self.filteredSkills.enumerated()), id: \.element.id) { index, skill in
+                        SkillRow(
+                            skill: skill,
+                            isBusy: self.model.isBusy(skill: skill),
+                            connectionMode: self.state.connectionMode,
+                            showsDivider: index != self.filteredSkills.count - 1,
+                            onToggleEnabled: { enabled in
+                                Task { await self.model.setEnabled(skillKey: skill.skillKey, enabled: enabled) }
+                            },
+                            onInstall: { option, target in
+                                Task { await self.model.install(skill: skill, option: option, target: target) }
+                            },
+                            onSetEnv: { envKey, isPrimary in
+                                self.envEditor = EnvEditorState(
+                                    skillKey: skill.skillKey,
+                                    skillName: skill.name,
+                                    envKey: envKey,
+                                    isPrimary: isPrimary,
+                                    homepage: skill.homepage)
+                            })
+                    }
+                    if !self.model.skills.isEmpty, self.filteredSkills.isEmpty {
+                        SettingsCardRow(
+                            title: "No skills match this filter.",
+                            showsDivider: false)
+                        {
+                            EmptyView()
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -118,7 +189,7 @@ struct SkillsSettings: View {
         }
         .labelsHidden()
         .pickerStyle(.menu)
-        .frame(width: 160, alignment: .trailing)
+        .frame(width: 150, alignment: .trailing)
     }
 
     private var filteredSkills: [SkillStatus] {
@@ -170,9 +241,11 @@ private struct SkillRow: View {
     let skill: SkillStatus
     let isBusy: Bool
     let connectionMode: AppState.ConnectionMode
+    let showsDivider: Bool
     let onToggleEnabled: (Bool) -> Void
     let onInstall: (SkillInstallOption, InstallTarget) -> Void
     let onSetEnv: (String, Bool) -> Void
+    @State private var isExpanded = false
 
     private var missingBins: [String] {
         self.skill.missing.bins
@@ -187,41 +260,89 @@ private struct SkillRow: View {
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            Text(self.skill.emoji ?? "✨")
-                .font(.title2)
+        VStack(spacing: 0) {
+            HStack(alignment: .top, spacing: 12) {
+                Text(self.skill.emoji ?? "✨")
+                    .font(.title3)
+                    .frame(width: 28)
 
-            VStack(alignment: .leading, spacing: 6) {
-                Text(self.skill.name)
-                    .font(.headline)
-                Text(self.skill.description)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                self.metaRow
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 8) {
+                        Text(self.skill.name)
+                            .font(.headline)
+                            .lineLimit(1)
+                        SkillTag(text: self.statusLabel, color: self.statusColor)
+                        SkillTag(text: self.sourceLabel)
+                        if let url = self.homepageUrl {
+                            Link(destination: url) {
+                                Label("Website", systemImage: "link")
+                                    .labelStyle(.iconOnly)
+                                    .font(.caption)
+                            }
+                            .buttonStyle(.link)
+                        }
+                        Spacer(minLength: 0)
+                    }
 
-                if self.skill.disabled {
-                    Text("Disabled in config")
-                        .font(.caption)
+                    Text(self.skill.description)
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
-                } else if !self.requirementsMet, self.shouldShowMissingSummary {
-                    self.missingSummary
+                        .lineLimit(self.isExpanded ? 5 : 2)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if self.shouldShowMissingSummary {
+                        self.compactMissingSummary
+                    }
+
+                    if self.hasDetails {
+                        DisclosureGroup(isExpanded: self.$isExpanded) {
+                            VStack(alignment: .leading, spacing: 8) {
+                                if self.shouldShowMissingSummary {
+                                    self.missingSummary
+                                }
+                                if !self.skill.configChecks.isEmpty {
+                                    self.configChecksView
+                                }
+                                if !self.missingEnv.isEmpty {
+                                    self.envActionRow
+                                }
+                            }
+                            .padding(.top, 6)
+                        } label: {
+                            Text("Details")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 }
 
-                if !self.skill.configChecks.isEmpty {
-                    self.configChecksView
-                }
+                Spacer(minLength: 0)
 
-                if !self.missingEnv.isEmpty {
-                    self.envActionRow
-                }
+                self.trailingActions
             }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
 
-            Spacer(minLength: 0)
-
-            self.trailingActions
+            if self.showsDivider {
+                Divider()
+                    .padding(.leading, 54)
+                    .padding(.trailing, 14)
+            }
         }
-        .padding(.vertical, 6)
+    }
+
+    private var statusLabel: String {
+        if self.skill.disabled {
+            return "Disabled"
+        }
+        return self.requirementsMet && self.skill.eligible ? "Ready" : "Needs setup"
+    }
+
+    private var statusColor: Color {
+        if self.skill.disabled {
+            return .secondary
+        }
+        return self.requirementsMet && self.skill.eligible ? .green : .orange
     }
 
     private var sourceLabel: String {
@@ -241,18 +362,35 @@ private struct SkillRow: View {
         }
     }
 
-    private var metaRow: some View {
-        HStack(spacing: 10) {
-            SkillTag(text: self.sourceLabel)
-            if let url = self.homepageUrl {
-                Link(destination: url) {
-                    Label("Website", systemImage: "link")
-                        .font(.caption2.weight(.semibold))
-                }
-                .buttonStyle(.link)
-            }
-            Spacer(minLength: 0)
+    private var hasDetails: Bool {
+        self.shouldShowMissingSummary || !self.skill.configChecks.isEmpty || !self.missingEnv.isEmpty
+    }
+
+    private var compactMissingSummary: some View {
+        HStack(spacing: 6) {
+            Image(systemName: self.skill.disabled ? "pause.circle" : "exclamationmark.triangle")
+                .foregroundStyle(self.statusColor)
+            Text(self.compactMissingText)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
         }
+    }
+
+    private var compactMissingText: String {
+        if self.skill.disabled {
+            return "Disabled in config"
+        }
+        if !self.missingBins.isEmpty {
+            return "Missing \(self.missingBins.prefix(2).joined(separator: ", "))"
+        }
+        if !self.missingEnv.isEmpty {
+            return "Needs \(self.missingEnv.prefix(2).joined(separator: ", "))"
+        }
+        if !self.missingConfig.isEmpty {
+            return "Needs config"
+        }
+        return "Needs setup"
     }
 
     private var homepageUrl: URL? {
@@ -419,14 +557,15 @@ private struct SkillRow: View {
 
 private struct SkillTag: View {
     let text: String
+    var color: Color = .secondary
 
     var body: some View {
         Text(self.text)
             .font(.caption2.weight(.semibold))
-            .foregroundStyle(.secondary)
+            .foregroundStyle(self.color)
             .padding(.horizontal, 8)
             .padding(.vertical, 2)
-            .background(Color.secondary.opacity(0.12))
+            .background(self.color.opacity(0.12))
             .clipShape(Capsule())
     }
 }
@@ -511,19 +650,29 @@ final class SkillsSettingsModel {
     var isLoading = false
     var error: String?
     var statusMessage: String?
+    private var hasLoaded = false
     private var busySkills: Set<String> = []
 
     func isBusy(skill: SkillStatus) -> Bool {
         self.busySkills.contains(skill.skillKey)
     }
 
-    func refresh() async {
+    func refreshIfNeeded() async {
+        guard !self.hasLoaded else { return }
+        await self.refresh()
+    }
+
+    func refresh(force: Bool = false) async {
         guard !self.isLoading else { return }
+        if self.hasLoaded, !force {
+            return
+        }
         self.isLoading = true
         self.error = nil
         do {
             let report = try await GatewayConnection.shared.skillsStatus()
             self.skills = report.skills.sorted { $0.name < $1.name }
+            self.hasLoaded = true
         } catch {
             self.error = error.localizedDescription
         }
@@ -545,7 +694,7 @@ final class SkillsSettingsModel {
             } catch {
                 self.statusMessage = error.localizedDescription
             }
-            await self.refresh()
+            await self.refresh(force: true)
         }
     }
 
@@ -559,7 +708,7 @@ final class SkillsSettingsModel {
             } catch {
                 self.statusMessage = error.localizedDescription
             }
-            await self.refresh()
+            await self.refresh(force: true)
         }
     }
 
@@ -580,7 +729,7 @@ final class SkillsSettingsModel {
             } catch {
                 self.statusMessage = error.localizedDescription
             }
-            await self.refresh()
+            await self.refresh(force: true)
         }
     }
 
@@ -627,6 +776,7 @@ extension SkillsSettings {
             skill: skill,
             isBusy: false,
             connectionMode: .remote,
+            showsDivider: false,
             onToggleEnabled: { _ in },
             onInstall: { _, _ in },
             onSetEnv: { _, _ in })

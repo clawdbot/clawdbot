@@ -12,6 +12,7 @@ import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.GatewayTlsProbeFailure
 import ai.openclaw.app.gateway.GatewayTlsProbeResult
+import ai.openclaw.app.gateway.normalizeGatewayTlsFingerprint
 import ai.openclaw.app.gateway.probeGatewayTlsFingerprint
 import ai.openclaw.app.node.A2UIHandler
 import ai.openclaw.app.node.CalendarHandler
@@ -248,6 +249,7 @@ class NodeRuntime(
     val endpoint: GatewayEndpoint,
     val fingerprintSha256: String,
     val auth: GatewayConnectAuth,
+    val previousFingerprintSha256: String? = null,
   )
 
   private val _isConnected = MutableStateFlow(false)
@@ -260,6 +262,7 @@ class NodeRuntime(
 
   private val _pendingGatewayTrust = MutableStateFlow<GatewayTrustPrompt?>(null)
   val pendingGatewayTrust: StateFlow<GatewayTrustPrompt?> = _pendingGatewayTrust.asStateFlow()
+  private val connectAttemptSeq = AtomicLong(0)
 
   private fun resolveNodeMainSessionKey(agentId: String? = gatewayDefaultAgentId): String {
     val deviceId = identityStore.loadOrCreate().deviceId
@@ -1112,23 +1115,58 @@ class NodeRuntime(
     endpoint: GatewayEndpoint,
     auth: GatewayConnectAuth,
   ) {
+    val connectAttemptId = connectAttemptSeq.incrementAndGet()
+    _pendingGatewayTrust.value = null
     val tls = connectionManager.resolveTlsParams(endpoint)
-    if (tls?.required == true && tls.expectedFingerprint.isNullOrBlank()) {
-      // First-time TLS: capture fingerprint, ask user to verify out-of-band, then store and connect.
+    if (tls?.required == true) {
+      val expectedFingerprint =
+        tls.expectedFingerprint
+          ?.let(::normalizeGatewayTlsFingerprint)
+          ?.takeIf { it.isNotBlank() }
       _statusText.value = "Verify gateway TLS fingerprint…"
       scope.launch {
         val tlsProbe = tlsFingerprintProbe(endpoint.host, endpoint.port)
+        if (!isCurrentConnectAttempt(connectAttemptId)) return@launch
         val fp =
           tlsProbe.fingerprintSha256 ?: run {
-            _statusText.value = gatewayTlsProbeFailureMessage(tlsProbe.failure)
+            if (expectedFingerprint == null) {
+              _statusText.value = gatewayTlsProbeFailureMessage(tlsProbe.failure)
+            } else {
+              connectAfterTlsCheck(endpoint = endpoint, auth = auth, connectAttemptId = connectAttemptId)
+            }
             return@launch
           }
-        _pendingGatewayTrust.value =
-          GatewayTrustPrompt(endpoint = endpoint, fingerprintSha256 = fp, auth = auth)
+        val observedFingerprint =
+          normalizeGatewayTlsFingerprint(fp)
+            .takeIf { it.isNotBlank() }
+            ?: fp
+        val previousFingerprint = expectedFingerprint?.takeUnless { it == observedFingerprint }
+        if (expectedFingerprint == null || previousFingerprint != null) {
+          _pendingGatewayTrust.value =
+            GatewayTrustPrompt(
+              endpoint = endpoint,
+              fingerprintSha256 = observedFingerprint,
+              auth = auth,
+              previousFingerprintSha256 = previousFingerprint,
+            )
+          return@launch
+        }
+        connectAfterTlsCheck(endpoint = endpoint, auth = auth, connectAttemptId = connectAttemptId)
       }
       return
     }
 
+    connectAfterTlsCheck(endpoint = endpoint, auth = auth, connectAttemptId = connectAttemptId)
+  }
+
+  private fun isCurrentConnectAttempt(connectAttemptId: Long): Boolean = connectAttemptSeq.get() == connectAttemptId
+
+  private fun connectAfterTlsCheck(
+    endpoint: GatewayEndpoint,
+    auth: GatewayConnectAuth,
+    connectAttemptId: Long,
+  ) {
+    if (!isCurrentConnectAttempt(connectAttemptId)) return
     connectedEndpoint = endpoint
     operatorStatusText = "Connecting…"
     nodeStatusText = "Connecting…"
@@ -1221,6 +1259,7 @@ class NodeRuntime(
   }
 
   fun disconnect() {
+    connectAttemptSeq.incrementAndGet()
     stopActiveVoiceSession()
     connectedEndpoint = null
     activeGatewayAuth = null

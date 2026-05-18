@@ -1,4 +1,7 @@
 import {
+  CODEX_NATIVE_SUBAGENT_RUN_ID_PREFIX,
+  CODEX_NATIVE_SUBAGENT_RUNTIME,
+  CODEX_NATIVE_SUBAGENT_TASK_KIND,
   createRunningTaskRun,
   finalizeTaskRunByRunId,
   recordTaskRunProgressByRunId,
@@ -15,9 +18,6 @@ import type {
   JsonValue,
 } from "./protocol.js";
 import { isJsonObject } from "./protocol.js";
-
-const CODEX_NATIVE_SUBAGENT_RUNTIME = "subagent";
-const CODEX_NATIVE_SUBAGENT_TASK_KIND = "codex-native";
 
 export type TaskLifecycleRuntime = {
   createRunningTaskRun: typeof createRunningTaskRun;
@@ -291,7 +291,7 @@ export class CodexNativeSubagentTaskMirror {
 }
 
 export function codexNativeSubagentRunId(threadId: string): string {
-  return `codex-thread:${threadId.trim()}`;
+  return `${CODEX_NATIVE_SUBAGENT_RUN_ID_PREFIX}${threadId.trim()}`;
 }
 
 export function readSubagentThreadSpawnSource(

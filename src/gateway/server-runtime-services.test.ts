@@ -286,6 +286,7 @@ describe("server-runtime-services", () => {
     const applyMaintenance = vi.fn();
     const cron = { start: vi.fn(async () => undefined) };
     const recordPostReadyMemory = vi.fn();
+    const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");
 
     scheduleGatewayPostReadyMaintenance(
       createPostReadyMaintenanceScheduleParams({
@@ -305,14 +306,18 @@ describe("server-runtime-services", () => {
     if (!resolveMaintenance) {
       throw new Error("Expected gateway maintenance resolver to be initialized");
     }
-    resolveMaintenance(createMaintenanceHandles());
+    const maintenance = createMaintenanceHandles();
+    resolveMaintenance(maintenance);
     await Promise.resolve();
     await Promise.resolve();
 
     expect(applyMaintenance).not.toHaveBeenCalled();
     expect(cron.start).not.toHaveBeenCalled();
     expect(recordPostReadyMemory).not.toHaveBeenCalled();
-    expect(vi.getTimerCount()).toBe(0);
+    expect(clearIntervalSpy).toHaveBeenCalledWith(maintenance.tickInterval);
+    expect(clearIntervalSpy).toHaveBeenCalledWith(maintenance.healthInterval);
+    expect(clearIntervalSpy).toHaveBeenCalledWith(maintenance.dedupeCleanup);
+    expect(clearIntervalSpy).toHaveBeenCalledWith(maintenance.mediaCleanup);
   });
 
   it("keeps scheduled services disabled for minimal test gateways", () => {

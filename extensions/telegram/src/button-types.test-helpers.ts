@@ -81,5 +81,28 @@ export function describeTelegramInteractiveButtonBehavior(): void {
         ],
       ]);
     });
+
+    it("prefers legacy interactive buttons over generic presentation buttons", () => {
+      expect(
+        resolveTelegramInlineButtons({
+          presentation: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [{ label: "Generic", value: "generic" }],
+              },
+            ],
+          },
+          interactive: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [{ label: "Legacy", value: "legacy" }],
+              },
+            ],
+          },
+        }),
+      ).toEqual([[{ text: "Legacy", callback_data: "legacy", style: undefined }]]);
+    });
   });
 }

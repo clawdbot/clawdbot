@@ -93,8 +93,18 @@ on:
         required: false
         default: ""
         type: string
+      advisory:
+        description: Treat acceptance failures as advisory for the caller
+        required: false
+        default: false
+        type: boolean
   workflow_call:
     inputs:
+      advisory:
+        description: Treat acceptance failures as advisory for the caller
+        required: false
+        default: false
+        type: boolean
       workflow_ref:
         description: Trusted repo ref for workflow scripts and Docker E2E harness
         required: false
@@ -509,6 +519,7 @@ jobs:
     needs: resolve_package
     uses: ./.github/workflows/openclaw-live-and-e2e-checks-reusable.yml
     with:
+      advisory: ${{ inputs.advisory }}
       ref: ${{ needs.resolve_package.outputs.package_source_sha || inputs.workflow_ref }}
       include_repo_e2e: false
       include_release_path_suites: ${{ needs.resolve_package.outputs.include_release_path_suites == 'true' }}
@@ -573,6 +584,7 @@ jobs:
     if: needs.resolve_package.outputs.telegram_enabled == 'true'
     uses: ./.github/workflows/npm-telegram-beta-e2e.yml
     with:
+      advisory: ${{ inputs.advisory }}
       package_spec: ${{ inputs.package_spec }}
       package_artifact_name: ${{ needs.resolve_package.outputs.package_artifact_name }}
       package_label: openclaw@${{ needs.resolve_package.outputs.package_version }}
@@ -599,6 +611,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          advisory="${{ inputs.advisory }}"
           failed=0
           for item in \
             "resolve_package=${RESOLVE_RESULT}" \
@@ -608,6 +621,10 @@ jobs:
             name="${item%%=*}"
             result="${item#*=}"
             if [[ "$result" != "success" && "$result" != "skipped" ]]; then
+              if [[ "$advisory" == "true" && "$name" != "resolve_package" ]]; then
+                echo "::warning::${name} ended with ${result}; package acceptance is advisory for this caller."
+                continue
+              fi
               echo "::error::${name} ended with ${result}"
               failed=1
             fi

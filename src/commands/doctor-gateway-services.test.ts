@@ -376,7 +376,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
     });
     mocks.buildGatewayInstallPlan.mockImplementation(async ({ warn }) => {
       warn?.(
-        "System Node 20.20.2 at /usr/bin/node is below the required Node 22.16+. Using /home/orin/.nvm/versions/node/v22.22.2/bin/node for the daemon.",
+        "System Node 20.20.2 at /usr/bin/node is below the required Node 22.19+. Using /home/orin/.nvm/versions/node/v22.22.2/bin/node for the daemon.",
         "Gateway runtime",
       );
       return {

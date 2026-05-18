@@ -1,6 +1,9 @@
 import fs from "node:fs";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "./constants.js";
+import { BROWSER_NAVIGATION_BLOCKED_MESSAGE } from "./errors.js";
+import { ACT_ERROR_CODES } from "./routes/agent.act.errors.js";
+import { isActKind } from "./routes/agent.act.shared.js";
 import {
   installAgentContractHooks,
   postJson,
@@ -17,6 +20,8 @@ import {
   setBrowserControlServerEvaluateEnabled,
   setBrowserControlServerProfiles,
   setBrowserControlServerReachable,
+  setBrowserControlServerSsrFPolicy,
+  setBrowserControlServerTabUrl,
   startBrowserControlServerFromConfig,
 } from "./server.control-server.test-harness.js";
 import { getBrowserTestFetch } from "./test-support/fetch.js";
@@ -83,15 +88,18 @@ describe("browser control server", () => {
 
   const slowTimeoutMs = 60_000;
 
+  beforeAll(async () => {
+    await resetBrowserControlServerTestContext();
+    await startBrowserControlServerFromConfig();
+    await cleanupBrowserControlServerTestContext();
+  }, slowTimeoutMs);
+
   it(
     "returns ACT_KIND_REQUIRED when kind is missing",
-    async () => {
-      const base = await startServerAndBase();
-      const response = await postActAndReadError(base, {});
-
-      expect(response.status).toBe(400);
-      expect(response.body.code).toBe("ACT_KIND_REQUIRED");
-      expect(response.body.error).toContain("kind is required");
+    () => {
+      expect(isActKind(undefined)).toBe(false);
+      expect(isActKind("")).toBe(false);
+      expect(ACT_ERROR_CODES.kindRequired).toBe("ACT_KIND_REQUIRED");
     },
     slowTimeoutMs,
   );
@@ -224,6 +232,46 @@ describe("browser control server", () => {
   );
 
   it(
+    "returns blocked dialog state for action-triggered modals",
+    async () => {
+      const base = await startServerAndBase();
+      pwMocks.executeActViaPlaywright.mockResolvedValueOnce({
+        blockedByDialog: true,
+        browserState: {
+          dialogs: {
+            pending: [
+              {
+                id: "d1",
+                type: "confirm",
+                message: "Continue?",
+                openedAt: "2026-05-17T12:00:00.000Z",
+              },
+            ],
+            recent: [],
+          },
+        },
+      });
+
+      const response = await postJson<{
+        ok: boolean;
+        blockedByDialog?: boolean;
+        browserState?: { dialogs?: { pending?: Array<{ id?: string; message?: string }> } };
+      }>(`${base}/act`, {
+        kind: "click",
+        ref: "5",
+      });
+
+      expect(response.ok).toBe(true);
+      expect(response.blockedByDialog).toBe(true);
+      expect(response.browserState?.dialogs?.pending?.[0]).toMatchObject({
+        id: "d1",
+        message: "Continue?",
+      });
+    },
+    slowTimeoutMs,
+  );
+
+  it(
     "returns ACT_SELECTOR_UNSUPPORTED for selector on unsupported action kinds",
     async () => {
       const base = await startServerAndBase();
@@ -336,6 +384,67 @@ describe("browser control server", () => {
         maxDepth: undefined,
       },
     });
+  });
+
+  it("agent contract: snapshot surfaces pending dialog state without reading the blocked page", async () => {
+    const base = await startServerAndBase();
+    const realFetch = getBrowserTestFetch();
+    pwMocks.getObservedBrowserStateViaPlaywright.mockResolvedValueOnce({
+      dialogs: {
+        pending: [
+          {
+            id: "d1",
+            type: "confirm",
+            message: "Continue?",
+            openedAt: "2026-05-17T12:00:00.000Z",
+          },
+        ],
+        recent: [],
+      },
+    });
+
+    const snap = (await realFetch(`${base}/snapshot?format=ai`).then((r) => r.json())) as {
+      ok: boolean;
+      blockedByDialog?: boolean;
+      browserState?: { dialogs?: { pending?: Array<{ id?: string; message?: string }> } };
+      snapshot?: string;
+    };
+
+    expect(snap.ok).toBe(true);
+    expect(snap.blockedByDialog).toBe(true);
+    expect(snap.snapshot).toBe("");
+    expect(snap.browserState?.dialogs?.pending?.[0]).toMatchObject({
+      id: "d1",
+      message: "Continue?",
+    });
+    expect(pwMocks.snapshotAiViaPlaywright).not.toHaveBeenCalled();
+  });
+
+  it("agent contract: snapshot blocks pending dialog state on disallowed current tab URLs", async () => {
+    setBrowserControlServerSsrFPolicy({ allowPrivateNetwork: false });
+    setBrowserControlServerTabUrl("http://127.0.0.1:8080/admin");
+    const base = await startServerAndBase();
+    const realFetch = getBrowserTestFetch();
+    pwMocks.getObservedBrowserStateViaPlaywright.mockResolvedValueOnce({
+      dialogs: {
+        pending: [
+          {
+            id: "d1",
+            type: "alert",
+            message: "blocked secret",
+            openedAt: "2026-05-17T12:00:00.000Z",
+          },
+        ],
+        recent: [],
+      },
+    });
+
+    const res = await realFetch(`${base}/snapshot?format=ai`);
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error?: unknown };
+    expect(body.error).toBe(BROWSER_NAVIGATION_BLOCKED_MESSAGE);
+    expect(pwMocks.getObservedBrowserStateViaPlaywright).not.toHaveBeenCalled();
+    expect(pwMocks.snapshotAiViaPlaywright).not.toHaveBeenCalled();
   });
 
   it("agent contract: doctor deep runs a live snapshot probe", async () => {

@@ -101,7 +101,6 @@ describe("Hermes migration model planning", () => {
         model: {
           primary: "anthropic/claude-sonnet-4.6",
           fallbacks: ["openai/gpt-5.4"],
-          timeoutMs: 120_000,
         },
       }),
     );

@@ -1,7 +1,11 @@
 import os from "node:os";
 import path from "node:path";
 import { resolveCliName } from "../cli/cli-name.js";
-import { installCompletion } from "../cli/completion-runtime.js";
+import {
+  formatCompletionReloadCommand,
+  installCompletion,
+  resolveCompletionProfilePath,
+} from "../cli/completion-runtime.js";
 import type { ShellCompletionStatus } from "../commands/doctor-completion.js";
 import {
   checkShellCompletionStatus,
@@ -31,13 +35,14 @@ async function resolveProfileHint(shell: ShellCompletionStatus["shell"]): Promis
   if (shell === "fish") {
     return "~/.config/fish/config.fish";
   }
-  // Best-effort. PowerShell profile path varies; restart hint is still correct.
-  return "$PROFILE";
+  return resolveCompletionProfilePath("powershell");
 }
 
 function formatReloadHint(shell: ShellCompletionStatus["shell"], profileHint: string): string {
   if (shell === "powershell") {
-    return t("wizard.completion.reloadPowerShell");
+    return t("wizard.completion.reloadPowerShell", {
+      command: formatCompletionReloadCommand("powershell", profileHint),
+    });
   }
   return t("wizard.completion.reloadShell", { profile: profileHint });
 }

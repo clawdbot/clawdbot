@@ -5,6 +5,18 @@ import Darwin
 #endif
 
 enum GatewayRemoteConfig {
+    enum TransportSource: Equatable {
+        case explicit
+        case inferredRemoteURL
+        case legacySSH
+    }
+
+    struct TransportResolution: Equatable {
+        let transport: AppState.RemoteTransport
+        let source: TransportSource
+        let directURL: URL?
+    }
+
     enum TokenValue: Equatable {
         case missing
         case plaintext(String)
@@ -28,14 +40,49 @@ enum GatewayRemoteConfig {
     }
 
     static func resolveTransport(root: [String: Any]) -> AppState.RemoteTransport {
+        self.resolveTransportResolution(root: root).transport
+    }
+
+    static func resolveTransportResolution(root: [String: Any]) -> TransportResolution {
+        let explicit = self.resolveExplicitTransport(root: root)
+        switch explicit {
+        case .direct:
+            return TransportResolution(
+                transport: .direct,
+                source: .explicit,
+                directURL: self.resolveGatewayUrl(root: root))
+        case .ssh:
+            return TransportResolution(transport: .ssh, source: .explicit, directURL: nil)
+        case nil:
+            break
+        }
+
+        if let url = self.resolveGatewayUrl(root: root),
+           let host = url.host,
+           !LoopbackHost.isLoopbackHost(host)
+        {
+            return TransportResolution(transport: .direct, source: .inferredRemoteURL, directURL: url)
+        }
+
+        return TransportResolution(transport: .ssh, source: .legacySSH, directURL: nil)
+    }
+
+    private static func resolveExplicitTransport(root: [String: Any]) -> AppState.RemoteTransport? {
         guard let gateway = root["gateway"] as? [String: Any],
               let remote = gateway["remote"] as? [String: Any],
               let raw = remote["transport"] as? String
         else {
-            return .ssh
+            return nil
         }
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return trimmed == AppState.RemoteTransport.direct.rawValue ? .direct : .ssh
+        switch trimmed {
+        case AppState.RemoteTransport.direct.rawValue:
+            return .direct
+        case AppState.RemoteTransport.ssh.rawValue:
+            return .ssh
+        default:
+            return .ssh
+        }
     }
 
     static func resolveUrlString(root: [String: Any]) -> String? {

@@ -1,9 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
 
 describe("legacy config migrate validation", () => {
-  it("returns valid migrated config for legacy group chat routing drift", () => {
-    const res = migrateLegacyConfig({
+  let groupChatRoutingResult: ReturnType<typeof migrateLegacyConfig>;
+  let partialValidationResult: ReturnType<typeof migrateLegacyConfig>;
+  let agentModelTimeoutResult: ReturnType<typeof migrateLegacyConfig>;
+
+  beforeAll(() => {
+    groupChatRoutingResult = migrateLegacyConfig({
       routing: {
         allowFrom: ["+15550001111"],
         groupChat: {
@@ -17,7 +21,50 @@ describe("legacy config migrate validation", () => {
         telegram: {},
       },
     });
+    partialValidationResult = migrateLegacyConfig({
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5" },
+          llm: { idleTimeoutSeconds: 120 },
+        },
+      },
+      plugins: {
+        entries: {
+          brave: {
+            enabled: true,
+            config: { webSearch: { mode: "definitely-invalid" } },
+          },
+        },
+      },
+      tools: { web: { search: { provider: "brave" } } },
+    });
+    agentModelTimeoutResult = migrateLegacyConfig({
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5", timeoutMs: 30_000 },
+          subagents: {
+            model: { primary: "openai/gpt-5.4", timeoutMs: 10_000 },
+          },
+          imageGenerationModel: {
+            primary: "openrouter/openai/gpt-5.4-image-2",
+            timeoutMs: 180_000,
+          },
+        },
+        list: [
+          {
+            id: "worker",
+            model: { primary: "openai/gpt-5.4", timeoutMs: 20_000 },
+            subagents: {
+              model: { primary: "openai/gpt-5.4-mini", timeoutMs: 5_000 },
+            },
+          },
+        ],
+      },
+    });
+  });
 
+  it("returns valid migrated config for legacy group chat routing drift", () => {
+    const res = groupChatRoutingResult;
     expect(res.partiallyValid).toBeUndefined();
     const migratedConfig = res.config as Record<string, unknown> | null;
     expect(migratedConfig?.routing).toBeUndefined();
@@ -42,23 +89,7 @@ describe("legacy config migrate validation", () => {
   });
 
   it("returns migrated config when unrelated plugin validation issues remain (#76798)", () => {
-    const res = migrateLegacyConfig({
-      agents: {
-        defaults: {
-          model: { primary: "openai/gpt-5.5" },
-          llm: { idleTimeoutSeconds: 120 },
-        },
-      },
-      plugins: {
-        entries: {
-          brave: {
-            enabled: true,
-            config: { webSearch: { mode: "definitely-invalid" } },
-          },
-        },
-      },
-      tools: { web: { search: { provider: "brave" } } },
-    });
+    const res = partialValidationResult;
 
     expect(res.partiallyValid).toBe(true);
     expect(res.changes).toStrictEqual([
@@ -69,5 +100,29 @@ describe("legacy config migrate validation", () => {
       model: { primary: "openai/gpt-5.5" },
     });
     expect(res.config?.tools?.web?.search?.provider).toBe("brave");
+  });
+
+  it("returns valid config after removing ignored agent model timeouts", () => {
+    const res = agentModelTimeoutResult;
+
+    expect(res.partiallyValid).toBeUndefined();
+    expect(res.changes).toStrictEqual([
+      "Removed agents.defaults.model.timeoutMs; agent model config only selects models.",
+      "Removed agents.defaults.subagents.model.timeoutMs; agent model config only selects models.",
+      "Removed agents.list.0.model.timeoutMs; agent model config only selects models.",
+      "Removed agents.list.0.subagents.model.timeoutMs; agent model config only selects models.",
+    ]);
+    expect(res.config?.agents?.defaults?.model).toEqual({ primary: "openai/gpt-5.5" });
+    expect(res.config?.agents?.defaults?.subagents?.model).toEqual({
+      primary: "openai/gpt-5.4",
+    });
+    expect(res.config?.agents?.defaults?.imageGenerationModel).toEqual({
+      primary: "openrouter/openai/gpt-5.4-image-2",
+      timeoutMs: 180_000,
+    });
+    expect(res.config?.agents?.list?.[0]?.model).toEqual({ primary: "openai/gpt-5.4" });
+    expect(res.config?.agents?.list?.[0]?.subagents?.model).toEqual({
+      primary: "openai/gpt-5.4-mini",
+    });
   });
 });

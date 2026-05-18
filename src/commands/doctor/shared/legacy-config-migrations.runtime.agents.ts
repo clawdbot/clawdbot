@@ -95,6 +95,27 @@ const LEGACY_AGENT_LLM_TIMEOUT_RULES: LegacyConfigRule[] = [
   },
 ];
 
+const IGNORED_AGENT_MODEL_TIMEOUT_RULES: LegacyConfigRule[] = [
+  {
+    path: ["agents", "defaults", "model"],
+    message:
+      'agents.defaults.model.timeoutMs is ignored; agent model config only selects primary/fallback models. Run "openclaw doctor --fix" to remove it.',
+    match: (value) => hasOwnTimeoutMs(value),
+  },
+  {
+    path: ["agents", "defaults", "subagents", "model"],
+    message:
+      'agents.defaults.subagents.model.timeoutMs is ignored; subagent model config only selects primary/fallback models. Run "openclaw doctor --fix" to remove it.',
+    match: (value) => hasOwnTimeoutMs(value),
+  },
+  {
+    path: ["agents", "list"],
+    message:
+      'agents.list[].model.timeoutMs and agents.list[].subagents.model.timeoutMs are ignored; agent model config only selects primary/fallback models. Run "openclaw doctor --fix" to remove them.',
+    match: (value) => hasAgentListModelTimeout(value),
+  },
+];
+
 const SILENT_REPLY_LEGACY_RULES: LegacyConfigRule[] = [
   {
     path: ["agents", "defaults", "silentReplyRewrite"],
@@ -205,6 +226,24 @@ function hasAgentListRuntimePolicy(value: unknown): boolean {
   return value.some((agent) => getRecord(getRecord(agent)?.agentRuntime) !== null);
 }
 
+function hasOwnTimeoutMs(value: unknown): boolean {
+  const record = getRecord(value);
+  return Boolean(record && Object.prototype.hasOwnProperty.call(record, "timeoutMs"));
+}
+
+function hasAgentListModelTimeout(value: unknown): boolean {
+  if (!Array.isArray(value)) {
+    return false;
+  }
+  return value.some((agent) => {
+    const agentRecord = getRecord(agent);
+    return (
+      hasOwnTimeoutMs(agentRecord?.model) ||
+      hasOwnTimeoutMs(getRecord(agentRecord?.subagents)?.model)
+    );
+  });
+}
+
 function migrateLegacySandboxPerSession(
   sandbox: Record<string, unknown>,
   pathLabel: string,
@@ -239,6 +278,19 @@ function removeLegacyAgentRuntimePolicy(
     delete container.agentRuntime;
     changes.push(`Removed ${pathLabel}.agentRuntime; runtime is now provider/model scoped.`);
   }
+}
+
+function removeIgnoredAgentModelTimeout(
+  model: unknown,
+  pathLabel: string,
+  changes: string[],
+): void {
+  const modelRecord = getRecord(model);
+  if (!modelRecord || !Object.prototype.hasOwnProperty.call(modelRecord, "timeoutMs")) {
+    return;
+  }
+  delete modelRecord.timeoutMs;
+  changes.push(`Removed ${pathLabel}.timeoutMs; agent model config only selects models.`);
 }
 
 function hasOwnRecordProperty(value: unknown, key: string): boolean {
@@ -328,6 +380,39 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[
       changes.push(
         "Removed agents.defaults.llm; model idle timeout now follows models.providers.<id>.timeoutSeconds within the agent/run timeout ceiling.",
       );
+    },
+  }),
+  defineLegacyConfigMigration({
+    id: "agents.model.timeoutMs-ignored",
+    describe: "Remove ignored timeoutMs keys from agent model selection config",
+    legacyRules: IGNORED_AGENT_MODEL_TIMEOUT_RULES,
+    apply: (raw, changes) => {
+      const agents = getRecord(raw.agents);
+      const defaults = getRecord(agents?.defaults);
+      if (defaults) {
+        removeIgnoredAgentModelTimeout(defaults.model, "agents.defaults.model", changes);
+        removeIgnoredAgentModelTimeout(
+          getRecord(defaults.subagents)?.model,
+          "agents.defaults.subagents.model",
+          changes,
+        );
+      }
+
+      if (!Array.isArray(agents?.list)) {
+        return;
+      }
+      for (const [index, agent] of agents.list.entries()) {
+        const agentRecord = getRecord(agent);
+        if (!agentRecord) {
+          continue;
+        }
+        removeIgnoredAgentModelTimeout(agentRecord.model, `agents.list.${index}.model`, changes);
+        removeIgnoredAgentModelTimeout(
+          getRecord(agentRecord.subagents)?.model,
+          `agents.list.${index}.subagents.model`,
+          changes,
+        );
+      }
     },
   }),
   defineLegacyConfigMigration({

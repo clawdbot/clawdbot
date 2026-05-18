@@ -1,5 +1,8 @@
 export {
   buildApprovalInteractiveReplyFromActionDescriptors,
+  buildApprovalPresentation,
+  buildApprovalPresentationFromActionDescriptors,
+  buildExecApprovalPresentation,
   buildExecApprovalActionDescriptors,
   buildExecApprovalPendingReplyPayload,
   getExecApprovalApproverDmNoticeText,

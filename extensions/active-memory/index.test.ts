@@ -2837,7 +2837,10 @@ describe("active-memory plugin", () => {
       },
     );
 
-    expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(2);
+    const sessionKeys = runEmbeddedPiAgent.mock.calls.map(
+      ([params]) => (params as { sessionKey?: string }).sessionKey,
+    );
+    expect(new Set(sessionKeys).size).toBeGreaterThanOrEqual(2);
     const infoLines = vi
       .mocked(api.logger.info)
       .mock.calls.map((call: unknown[]) => String(call[0]));

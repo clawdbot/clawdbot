@@ -23,8 +23,9 @@ struct SessionsSettings: View {
             self.content
             Spacer()
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .padding(.leading, 18)
+        .padding(.trailing, SettingsLayout.scrollbarGutter)
         .task {
             guard !self.hasLoaded else { return }
             guard !self.isPreview else { return }
@@ -34,16 +35,16 @@ struct SessionsSettings: View {
     }
 
     private var header: some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .top, spacing: 16) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Sessions")
-                    .font(.headline)
+                    .font(.title3.weight(.semibold))
                 Text("Peek at the stored conversation buckets the CLI reuses for context and rate limits.")
-                    .font(.footnote)
+                    .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Spacer()
+            Spacer(minLength: 16)
             SettingsRefreshButton(isLoading: self.loading) {
                 Task { await self.refresh() }
             }
@@ -58,21 +59,30 @@ struct SessionsSettings: View {
                     .foregroundStyle(.secondary)
                     .padding(.top, 6)
             } else {
-                List(self.rows) { row in
-                    self.sessionRow(row)
+                ScrollView(.vertical) {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(self.rows.enumerated()), id: \.element.id) { index, row in
+                            self.sessionRow(row)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 8)
+
+                            if index != self.rows.count - 1 {
+                                Divider()
+                                    .padding(.leading, 8)
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .listStyle(.inset)
                 .overlay(alignment: .topLeading) {
                     if let errorMessage {
                         Text(errorMessage)
                             .font(.footnote)
                             .foregroundStyle(.red)
-                            .padding(.leading, 4)
+                            .padding(.leading, 8)
                             .padding(.top, 4)
                     }
                 }
-                // The view already applies horizontal padding; keep the list aligned with the text above.
-                .padding(.horizontal, -12)
             }
         }
     }
@@ -136,7 +146,7 @@ struct SessionsSettings: View {
                 }
             }
         }
-        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func label(icon: String, text: String) -> some View {

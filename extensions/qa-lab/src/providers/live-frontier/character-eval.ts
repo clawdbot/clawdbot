@@ -9,7 +9,7 @@ export const QA_FRONTIER_CHARACTER_EVAL_MODELS = Object.freeze([
   "openai/gpt-5.5",
   "openai/gpt-5.2",
   "openai/gpt-5",
-  "anthropic/claude-opus-4-6",
+  "anthropic/claude-opus-4-7",
   "anthropic/claude-sonnet-4-6",
   "zai/glm-5.1",
   "moonshot/kimi-k2.5",
@@ -25,12 +25,12 @@ export const QA_FRONTIER_CHARACTER_THINKING_BY_MODEL: Readonly<Record<string, Qa
 
 export const QA_FRONTIER_CHARACTER_JUDGE_MODELS = Object.freeze([
   "openai/gpt-5.5",
-  "anthropic/claude-opus-4-6",
+  "anthropic/claude-opus-4-7",
 ]);
 
 export const QA_FRONTIER_CHARACTER_JUDGE_MODEL_OPTIONS: Readonly<
   Record<string, QaFrontierCharacterModelOptions>
 > = Object.freeze({
   "openai/gpt-5.5": { thinkingDefault: "xhigh", fastMode: true },
-  "anthropic/claude-opus-4-6": { thinkingDefault: "high" },
+  "anthropic/claude-opus-4-7": { thinkingDefault: "high" },
 });

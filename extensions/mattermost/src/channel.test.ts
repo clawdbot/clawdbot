@@ -38,6 +38,12 @@ type MattermostSendText = NonNullable<NonNullable<typeof mattermostPlugin.outbou
 type MattermostSendTextParams = Parameters<MattermostSendText>[0];
 type MattermostSendMedia = NonNullable<NonNullable<typeof mattermostPlugin.outbound>["sendMedia"]>;
 type MattermostSendMediaParams = Parameters<MattermostSendMedia>[0];
+type MattermostRenderPresentation = NonNullable<
+  NonNullable<typeof mattermostPlugin.outbound>["renderPresentation"]
+>;
+type MattermostSendPayload = NonNullable<
+  NonNullable<typeof mattermostPlugin.outbound>["sendPayload"]
+>;
 
 function getDescribedActions(cfg: OpenClawConfig, accountId?: string): string[] {
   return [...(mattermostPlugin.actions?.describeMessageTool?.({ cfg, accountId })?.actions ?? [])];
@@ -89,6 +95,22 @@ function requireMattermostChunker() {
     throw new Error("mattermost outbound.chunker missing");
   }
   return chunker;
+}
+
+function requireMattermostRenderPresentation(): MattermostRenderPresentation {
+  const renderPresentation = mattermostPlugin.outbound?.renderPresentation;
+  if (!renderPresentation) {
+    throw new Error("mattermost outbound.renderPresentation missing");
+  }
+  return renderPresentation;
+}
+
+function requireMattermostSendPayload(): MattermostSendPayload {
+  const sendPayload = mattermostPlugin.outbound?.sendPayload;
+  if (!sendPayload) {
+    throw new Error("mattermost outbound.sendPayload missing");
+  }
+  return sendPayload;
 }
 
 function createMattermostActionContext(
@@ -427,6 +449,41 @@ describe("mattermostPlugin", () => {
       expect(options.replyToId).toBe("post-root");
     });
 
+    it("maps presentation buttons without using legacy interactive conversion", async () => {
+      const cfg = createMattermostTestConfig();
+
+      await mattermostPlugin.actions?.handleAction?.(
+        createMattermostActionContext({
+          action: "send",
+          params: {
+            to: "channel:CHAN1",
+            message: "Deploy finished",
+            presentation: {
+              blocks: [
+                {
+                  type: "buttons",
+                  buttons: [
+                    { label: "Open", value: "open", style: "primary" },
+                    { label: "Docs", url: "https://example.com/docs" },
+                  ],
+                },
+              ],
+            },
+          },
+          cfg,
+          accountId: "default",
+        }),
+      );
+
+      const options = expectSingleMattermostSend(
+        "channel:CHAN1",
+        "Deploy finished\n\n- Open\n- Docs: https://example.com/docs",
+      );
+      expect(options.buttons).toStrictEqual([
+        [{ text: "Open", callback_data: "open", style: "primary" }],
+      ]);
+    });
+
     it("falls back to trimmed replyTo when replyToId is blank", async () => {
       const cfg = createMattermostTestConfig();
 
@@ -451,6 +508,86 @@ describe("mattermostPlugin", () => {
   });
 
   describe("outbound", () => {
+    it("renders presentation buttons for normal reply payload delivery", async () => {
+      const renderPresentation = requireMattermostRenderPresentation();
+      const sendPayload = requireMattermostSendPayload();
+      const cfg = createMattermostTestConfig();
+      const presentation = {
+        blocks: [
+          { type: "text" as const, text: "Deploy finished" },
+          {
+            type: "buttons" as const,
+            buttons: [
+              { label: "Open", value: "open", style: "primary" as const },
+              { label: "Docs", url: "https://example.com/docs" },
+            ],
+          },
+        ],
+      };
+      const rendered = await renderPresentation({
+        payload: { presentation },
+        presentation,
+        ctx: {
+          cfg,
+          to: "channel:CHAN1",
+          text: "",
+          payload: { presentation },
+        },
+      });
+
+      expect(rendered).toMatchObject({
+        text: "Deploy finished\n\n- Open\n- Docs: https://example.com/docs",
+        channelData: {
+          mattermost: {
+            presentationButtons: [[{ text: "Open", callback_data: "open", style: "primary" }]],
+          },
+        },
+      });
+
+      await sendPayload({
+        cfg,
+        to: "channel:CHAN1",
+        text: "",
+        payload: rendered!,
+      });
+
+      const options = expectSingleMattermostSend(
+        "channel:CHAN1",
+        "Deploy finished\n\n- Open\n- Docs: https://example.com/docs",
+      );
+      expect(options.buttons).toStrictEqual([
+        [{ text: "Open", callback_data: "open", style: "primary" }],
+      ]);
+    });
+
+    it("keeps multi-media presentation payloads on the text/media fallback path", async () => {
+      const renderPresentation = requireMattermostRenderPresentation();
+      const presentation = {
+        blocks: [
+          {
+            type: "buttons" as const,
+            buttons: [{ label: "Open", value: "open" }],
+          },
+        ],
+      };
+
+      expect(
+        await renderPresentation({
+          payload: {
+            presentation,
+            mediaUrls: ["https://example.com/1.png", "https://example.com/2.png"],
+          },
+          presentation,
+          ctx: {
+            cfg: createMattermostTestConfig(),
+            to: "channel:CHAN1",
+            text: "",
+            payload: { presentation },
+          },
+        }),
+      ).toBeNull();
+    });
+
     it("chunks outbound text without requiring Mattermost runtime initialization", () => {
       const chunker = requireMattermostChunker();
 

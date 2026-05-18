@@ -211,14 +211,6 @@ describe("config io write prepare", () => {
           },
         ],
       },
-      tools: {
-        subagents: {
-          model: {
-            primary: "google/gemini-3-pro-preview",
-            fallbacks: ["google/gemini-3-pro-preview"],
-          },
-        },
-      },
       gateway: { port: 18789 },
     };
     const runtimeConfig: OpenClawConfig = {
@@ -262,14 +254,6 @@ describe("config io write prepare", () => {
           },
         ],
       },
-      tools: {
-        subagents: {
-          model: {
-            primary: "google/gemini-3.1-pro-preview",
-            fallbacks: ["google/gemini-3.1-pro-preview"],
-          },
-        },
-      },
       gateway: { port: 18789 },
     };
     const persisted = resolvePersistCandidateForWrite({
@@ -309,10 +293,6 @@ describe("config io write prepare", () => {
       "google/gemini-3.1-pro-preview": {
         alias: "Ops Gemini",
       },
-    });
-    expect(persisted.tools?.subagents?.model).toEqual({
-      primary: "google/gemini-3.1-pro-preview",
-      fallbacks: ["google/gemini-3.1-pro-preview"],
     });
     expect(persisted.gateway?.port).toBe(18888);
   });

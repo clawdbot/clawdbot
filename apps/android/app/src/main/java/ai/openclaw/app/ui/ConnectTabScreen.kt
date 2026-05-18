@@ -100,8 +100,14 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
       containerColor = mobileCardSurface,
       title = { Text("Trust this gateway?", style = mobileHeadline, color = mobileText) },
       text = {
+        val message =
+          if (prompt.previousFingerprintSha256.isNullOrBlank()) {
+            "First-time TLS connection.\n\nVerify this SHA-256 fingerprint before trusting:\n${prompt.fingerprintSha256}"
+          } else {
+            "The gateway TLS certificate changed. Only continue if you expected this.\n\nOld SHA-256 fingerprint:\n${prompt.previousFingerprintSha256}\n\nNew SHA-256 fingerprint:\n${prompt.fingerprintSha256}"
+          }
         Text(
-          "First-time TLS connection.\n\nVerify this SHA-256 fingerprint before trusting:\n${prompt.fingerprintSha256}",
+          message,
           style = mobileCallout,
           color = mobileText,
         )

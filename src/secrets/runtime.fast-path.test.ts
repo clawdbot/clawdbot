@@ -1,6 +1,12 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
+import { AUTH_PROFILE_FILENAME } from "../agents/auth-profiles/path-constants.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
+import { resolveOAuthPath } from "../config/paths.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { clearSecretsRuntimeSnapshot } from "./runtime.js";
@@ -46,6 +52,23 @@ function requireGatewayAuth(
     throw new Error("expected gateway auth config");
   }
   return auth;
+}
+
+function writeAuthProfileStore(agentDir: string): void {
+  mkdirSync(agentDir, { recursive: true });
+  writeFileSync(
+    path.join(agentDir, AUTH_PROFILE_FILENAME),
+    `${JSON.stringify({
+      version: 1,
+      profiles: {
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-test",
+        },
+      },
+    })}\n`,
+  );
 }
 
 describe("secrets runtime fast path", () => {
@@ -178,5 +201,141 @@ describe("secrets runtime fast path", () => {
     });
 
     expect(resolveRuntimeWebToolsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    {
+      name: "oauth credentials file",
+      setup: (env: NodeJS.ProcessEnv, _mainAgentDir: string, _agentDir: string) => {
+        const credentialsPath = resolveOAuthPath(env);
+        mkdirSync(path.dirname(credentialsPath), { recursive: true });
+        writeFileSync(
+          credentialsPath,
+          `${JSON.stringify({
+            "openai-codex": {
+              access: "access-token",
+              refresh: "refresh-token",
+              expires: Date.now() + 60_000,
+            },
+          })}\n`,
+        );
+      },
+    },
+    {
+      name: "inherited main auth store",
+      setup: (_env: NodeJS.ProcessEnv, mainAgentDir: string, _agentDir: string) => {
+        writeAuthProfileStore(mainAgentDir);
+      },
+    },
+  ])("skips the startup-only fast path when $name exists", async ({ setup }) => {
+    const { prepareSecretsRuntimeFastPathSnapshot } = await import("./runtime-fast-path.js");
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-runtime-fast-path-"));
+    const env: NodeJS.ProcessEnv = {
+      HOME: root,
+      OPENCLAW_STATE_DIR: root,
+    };
+    const mainAgentDir = resolveDefaultAgentDir({}, env);
+    const agentDir = path.join(root, "custom-agent");
+    mkdirSync(agentDir, { recursive: true });
+    setup(env, mainAgentDir, agentDir);
+
+    try {
+      const snapshot = prepareSecretsRuntimeFastPathSnapshot({
+        config: asConfig({
+          agents: {
+            list: [{ id: "default", agentDir }],
+          },
+        }),
+        env,
+      });
+
+      expect(snapshot).toBeNull();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refreshes startup-only fast-path snapshots from persisted auth stores after startup", async () => {
+    const { prepareSecretsRuntimeFastPathSnapshot } = await import("./runtime-fast-path.js");
+    const { activateSecretsRuntimeSnapshotState, getActiveSecretsRuntimeSnapshot } =
+      await import("./runtime-state.js");
+    const { refreshActiveSecretsRuntimeSnapshot } = await import("./runtime.js");
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-runtime-fast-path-refresh-"));
+    const env: NodeJS.ProcessEnv = {
+      HOME: root,
+      OPENCLAW_STATE_DIR: root,
+    };
+    const agentDir = path.join(root, "custom-agent");
+    mkdirSync(agentDir, { recursive: true });
+
+    try {
+      const fastPath = prepareSecretsRuntimeFastPathSnapshot({
+        config: asConfig({
+          agents: {
+            list: [{ id: "default", agentDir }],
+          },
+        }),
+        env,
+      });
+
+      expect(fastPath).not.toBeNull();
+      activateSecretsRuntimeSnapshotState({
+        snapshot: fastPath!.snapshot,
+        refreshContext: fastPath!.refreshContext,
+        refreshHandler: null,
+      });
+      writeAuthProfileStore(agentDir);
+
+      await expect(refreshActiveSecretsRuntimeSnapshot()).resolves.toBe(true);
+      const active = getActiveSecretsRuntimeSnapshot();
+      expect(active?.authStores[0]?.agentDir).toBe(agentDir);
+      expect(active?.authStores[0]?.store.profiles["openai:default"]).toMatchObject({
+        type: "api_key",
+        provider: "openai",
+        key: "sk-test",
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("pins empty auth stores on startup-only fast-path snapshots until refresh", async () => {
+    const { ensureAuthProfileStoreWithoutExternalProfiles } =
+      await import("../agents/auth-profiles/store.js");
+    const { prepareSecretsRuntimeFastPathSnapshot } = await import("./runtime-fast-path.js");
+    const { activateSecretsRuntimeSnapshotState } = await import("./runtime-state.js");
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-runtime-fast-path-empty-store-"));
+    const env: NodeJS.ProcessEnv = {
+      HOME: root,
+      OPENCLAW_STATE_DIR: root,
+    };
+    const agentDir = path.join(root, "custom-agent");
+    mkdirSync(agentDir, { recursive: true });
+
+    try {
+      const fastPath = prepareSecretsRuntimeFastPathSnapshot({
+        config: asConfig({
+          agents: {
+            list: [{ id: "default", agentDir }],
+          },
+        }),
+        env,
+      });
+
+      expect(fastPath).not.toBeNull();
+      expect(fastPath!.snapshot.authStores).toEqual([{ agentDir, store: emptyAuthStore() }]);
+      activateSecretsRuntimeSnapshotState({
+        snapshot: fastPath!.snapshot,
+        refreshContext: fastPath!.refreshContext,
+        refreshHandler: null,
+      });
+      writeAuthProfileStore(agentDir);
+
+      expect(
+        ensureAuthProfileStoreWithoutExternalProfiles(agentDir).profiles["openai:default"],
+      ).toBeUndefined();
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

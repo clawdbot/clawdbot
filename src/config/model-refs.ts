@@ -96,10 +96,6 @@ export function collectConfiguredModelRefs(
     }
   }
   pushModelRef("hooks.gmail.model", isRecord(hooks.gmail) ? hooks.gmail.model : undefined);
-  collectModelConfig(
-    "tools.subagents.model",
-    isRecord(root.tools) && isRecord(root.tools.subagents) ? root.tools.subagents.model : undefined,
-  );
   pushModelRef(
     "messages.tts.summaryModel",
     isRecord(root.messages) && isRecord(root.messages.tts)

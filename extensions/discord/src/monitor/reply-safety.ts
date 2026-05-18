@@ -71,12 +71,16 @@ export function sanitizeDiscordFrontChannelText(text: string): string {
 
 export function sanitizeDiscordFrontChannelReplyPayloads(
   payloads: readonly ReplyPayload[],
+  options: { kind?: "tool" | "block" | "final" } = {},
 ): ReplyPayload[] {
+  const preserveVerboseToolProgress = options.kind === "tool";
   const safePayloads: ReplyPayload[] = [];
   for (const payload of payloads) {
     const safeText =
       typeof payload.text === "string"
-        ? sanitizeDiscordFrontChannelText(payload.text)
+        ? preserveVerboseToolProgress
+          ? collapseExcessBlankLines(sanitizeAssistantVisibleText(payload.text)).trim()
+          : sanitizeDiscordFrontChannelText(payload.text)
         : payload.text;
     const nextPayload =
       safeText === payload.text

@@ -69,7 +69,7 @@ async function flushPendingDelivery(): Promise<void> {
 }
 
 type DeliveryArgs = {
-  payloads?: Array<{ text?: string; interactive?: unknown }>;
+  payloads?: Array<{ text?: string; presentation?: unknown; interactive?: unknown }>;
 };
 
 function deliveryArgs(deliver: ReturnType<typeof vi.fn>): DeliveryArgs | undefined {
@@ -137,7 +137,7 @@ describe("plugin approval forwarding", () => {
       expect(text).toContain("Sensitive tool call");
       expect(text).toContain("plugin-req-1");
       expect(text).toContain("/approve");
-      expect(payload?.interactive).toEqual({
+      expect(payload?.presentation).toEqual({
         blocks: [
           {
             type: "buttons",
@@ -161,6 +161,7 @@ describe("plugin approval forwarding", () => {
           },
         ],
       });
+      expect(payload?.interactive).toBeUndefined();
     });
 
     it("renders only request-scoped plugin approval decisions", async () => {
@@ -179,7 +180,7 @@ describe("plugin approval forwarding", () => {
       const payload = firstDeliveredPayload(deliver);
       expect(payload?.text).toContain("Reply with: /approve <id> allow-once|deny");
       expect(payload?.text).not.toContain("allow-always");
-      expect(payload?.interactive).toEqual({
+      expect(payload?.presentation).toEqual({
         blocks: [
           {
             type: "buttons",
@@ -198,6 +199,7 @@ describe("plugin approval forwarding", () => {
           },
         ],
       });
+      expect(payload?.interactive).toBeUndefined();
     });
 
     it("includes severity icon for critical", async () => {

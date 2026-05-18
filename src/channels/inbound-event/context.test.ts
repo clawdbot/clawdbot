@@ -228,6 +228,31 @@ describe("buildChannelInboundEventContext", () => {
     expect(ctx.InboundEventKind).toBe("room_event");
   });
 
+  it("preserves thread-addressable origins alongside flat reply targets", () => {
+    const ctx = buildChannelInboundEventContext(
+      createBaseContextParams({
+        conversation: {
+          kind: "group",
+          id: "room-1",
+          threadId: "topic-42",
+          routePeer: {
+            kind: "group",
+            id: "room-1",
+          },
+        },
+        reply: {
+          to: "test:room:room-1",
+          originatingTo: "test:room:room-1:topic:topic-42",
+          messageThreadId: "topic-42",
+        },
+      }),
+    );
+
+    expect(ctx.To).toBe("test:room:room-1");
+    expect(ctx.OriginatingTo).toBe("test:room:room-1:topic:topic-42");
+    expect(ctx.MessageThreadId).toBe("topic-42");
+  });
+
   it("keeps legacy command authorization fallback for authorizer arrays", () => {
     const ctx = buildChannelInboundEventContext(
       createBaseContextParams({

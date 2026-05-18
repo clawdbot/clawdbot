@@ -54,6 +54,7 @@ export function registerTuiCli(program: Command) {
           message: opts.message as string | undefined,
           timeoutMs,
           historyLimit: Number.isNaN(historyLimit) ? undefined : historyLimit,
+          forceProcessExitOnReturn: true,
         });
       } catch (err) {
         defaultRuntime.error(String(err));

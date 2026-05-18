@@ -13,6 +13,7 @@ import {
   getReplyPayloadTtsSupplement,
   isReasoningReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
+import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
@@ -1763,6 +1764,11 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             },
           });
 
+        const inboundLastRouteSessionKey = resolveInboundLastRouteSessionKey({
+          route,
+          sessionKey: route.sessionKey,
+        });
+
         let dispatchSettledBeforeStart = false;
         try {
           await core.channel.turn.run({
@@ -1789,27 +1795,28 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                   updateLastRoute:
                     kind === "direct"
                       ? {
-                          sessionKey: route.mainSessionKey,
+                          sessionKey: inboundLastRouteSessionKey,
                           channel: "mattermost",
                           to,
                           accountId: route.accountId,
-                          mainDmOwnerPin: pinnedMainDmOwner
-                            ? {
-                                ownerRecipient: pinnedMainDmOwner,
-                                senderRecipient: normalizeMattermostAllowEntry(senderId),
-                                onSkip: ({
-                                  ownerRecipient,
-                                  senderRecipient,
-                                }: {
-                                  ownerRecipient: string;
-                                  senderRecipient: string;
-                                }) => {
-                                  logVerboseMessage(
-                                    `mattermost: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
-                                  );
-                                },
-                              }
-                            : undefined,
+                          mainDmOwnerPin:
+                            inboundLastRouteSessionKey === route.mainSessionKey && pinnedMainDmOwner
+                              ? {
+                                  ownerRecipient: pinnedMainDmOwner,
+                                  senderRecipient: normalizeMattermostAllowEntry(senderId),
+                                  onSkip: ({
+                                    ownerRecipient,
+                                    senderRecipient,
+                                  }: {
+                                    ownerRecipient: string;
+                                    senderRecipient: string;
+                                  }) => {
+                                    logVerboseMessage(
+                                      `mattermost: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
+                                    );
+                                  },
+                                }
+                              : undefined,
                         }
                       : undefined,
                   onRecordError: (err) => {

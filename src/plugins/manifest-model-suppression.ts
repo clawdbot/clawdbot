@@ -93,9 +93,12 @@ function manifestSuppressionMatchesConditions(params: {
     provider: params.provider,
     config: params.config,
   });
-  if (when.providerConfigApiIn?.length && configuredProvider?.api) {
+  if (when.providerConfigApiIn?.length) {
     const allowedApis = new Set(when.providerConfigApiIn.map(normalizeLowercaseStringOrEmpty));
-    if (!allowedApis.has(configuredProvider.api)) {
+    const effectiveApi = configuredProvider
+      ? normalizeLowercaseStringOrEmpty(configuredProvider.api)
+      : params.provider;
+    if (!effectiveApi || !allowedApis.has(effectiveApi)) {
       return false;
     }
   }

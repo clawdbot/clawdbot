@@ -16,7 +16,7 @@ describe("gateway log sentinels", () => {
         "[plugins] plugin must declare contracts.tools for: runtime_tool",
         "2026-05-13T00:00:04Z codex app-server attempt timed out after 180000ms",
         "2026-05-13T00:00:05Z codex_app_server progress stalled for run abc123",
-        "2026-05-13T00:00:06Z cron payload model openai/gpt-5.4 is not in model allowlist",
+        "2026-05-13T00:00:06Z cron payload model openai/gpt-5.5 is not in model allowlist",
         "2026-05-13T00:00:07Z OpenAI quota exceeded for live-frontier request",
       ].join("\n"),
     );

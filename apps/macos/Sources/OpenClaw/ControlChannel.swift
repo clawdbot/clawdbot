@@ -265,9 +265,10 @@ final class ControlChannel {
 
     private static func isLikelyLocalNetworkPermissionBlock() -> Bool {
         let root = OpenClawConfigFile.loadDict()
+        let resolution = GatewayRemoteConfig.resolveTransportResolution(root: root)
         guard ConnectionModeResolver.resolve(root: root).mode == .remote,
-              GatewayRemoteConfig.resolveTransport(root: root) == .direct,
-              let url = GatewayRemoteConfig.resolveGatewayUrl(root: root),
+              resolution.transport == .direct,
+              let url = resolution.directURL,
               url.scheme?.lowercased() == "ws",
               let host = url.host,
               GatewayRemoteConfig.isTrustedPlaintextRemoteHost(host),

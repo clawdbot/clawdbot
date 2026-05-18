@@ -1,6 +1,6 @@
 ---
 name: clawhub
-description: Search, install, update, sync, or publish agent skills with the ClawHub CLI and registry.
+description: "Search, install, update, sync, or publish agent skills with the ClawHub CLI and registry."
 metadata:
   {
     "openclaw":

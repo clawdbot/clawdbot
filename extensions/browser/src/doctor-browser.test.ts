@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { noteChromeMcpBrowserReadiness } from "./doctor-browser.js";
+import {
+  maybeArchiveLegacyClawdBrowserProfileResidue,
+  noteChromeMcpBrowserReadiness,
+} from "./doctor-browser.js";
 
 function requireFirstNoteText(noteFn: ReturnType<typeof vi.fn>): string {
   const [call] = noteFn.mock.calls;
@@ -90,6 +93,63 @@ describe("browser doctor readiness", () => {
       ].join("\n"),
       "Browser",
     );
+  });
+
+  it("warns about legacy clawd managed browser profile residue", async () => {
+    const noteFn = vi.fn();
+    const configDir = "/tmp/openclaw-home";
+
+    await noteChromeMcpBrowserReadiness(
+      {
+        browser: {
+          profiles: {
+            openclaw: { color: "#FF4500" },
+          },
+        },
+      },
+      {
+        noteFn,
+        platform: "linux",
+        env: { DISPLAY: ":99" },
+        getUid: () => 1000,
+        configDir,
+        pathExists: (targetPath) => targetPath.endsWith("/browser/clawd/user-data"),
+        resolveManagedExecutable: () => ({ kind: "chrome", path: "/usr/bin/google-chrome" }),
+      },
+    );
+
+    expect(noteFn).toHaveBeenCalledTimes(1);
+    const note = requireFirstNoteText(noteFn);
+    expect(note).toContain("Legacy managed browser profile residue");
+    expect(note).toContain("/tmp/openclaw-home/browser/clawd");
+    expect(note).toContain("/tmp/openclaw-home/browser/openclaw/user-data");
+    expect(note).toContain("openclaw doctor --fix");
+  });
+
+  it("does not warn when clawd is still configured as a browser profile", async () => {
+    const noteFn = vi.fn();
+
+    await noteChromeMcpBrowserReadiness(
+      {
+        browser: {
+          profiles: {
+            clawd: { color: "#FF4500" },
+            openclaw: { color: "#00AA00" },
+          },
+        },
+      },
+      {
+        noteFn,
+        platform: "linux",
+        env: { DISPLAY: ":99" },
+        getUid: () => 1000,
+        configDir: "/tmp/openclaw-home",
+        pathExists: () => true,
+        resolveManagedExecutable: () => ({ kind: "chrome", path: "/usr/bin/google-chrome" }),
+      },
+    );
+
+    expect(noteFn).not.toHaveBeenCalled();
   });
 
   it("warns when Chrome MCP is configured but Chrome is missing", async () => {
@@ -193,5 +253,56 @@ describe("browser doctor readiness", () => {
     const note = requireFirstNoteText(noteFn);
     expect(note).toContain("explicit Chromium user data directory");
     expect(note).toContain("brave://inspect/#remote-debugging");
+  });
+});
+
+describe("legacy clawd browser profile cleanup", () => {
+  it("archives stale clawd residue with the safe trash mover", async () => {
+    const movePathToTrash = vi.fn(async () => "/tmp/openclaw-home/browser/.trash/clawd");
+
+    const result = await maybeArchiveLegacyClawdBrowserProfileResidue(
+      {
+        browser: {
+          profiles: {
+            openclaw: { color: "#FF4500" },
+          },
+        },
+      },
+      {
+        configDir: "/tmp/openclaw-home",
+        pathExists: (targetPath) => targetPath.endsWith("/browser/clawd/user-data"),
+        movePathToTrash,
+      },
+    );
+
+    expect(movePathToTrash).toHaveBeenCalledWith("/tmp/openclaw-home/browser/clawd");
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes.join("\n")).toContain(
+      "Archived legacy clawd managed browser profile residue.",
+    );
+    expect(result.changes.join("\n")).toContain("/tmp/openclaw-home/browser/openclaw/user-data");
+  });
+
+  it("does not archive a configured clawd browser profile", async () => {
+    const movePathToTrash = vi.fn(async () => "/tmp/unused");
+
+    const result = await maybeArchiveLegacyClawdBrowserProfileResidue(
+      {
+        browser: {
+          defaultProfile: "clawd",
+          profiles: {
+            clawd: { color: "#FF4500" },
+          },
+        },
+      },
+      {
+        configDir: "/tmp/openclaw-home",
+        pathExists: () => true,
+        movePathToTrash,
+      },
+    );
+
+    expect(movePathToTrash).not.toHaveBeenCalled();
+    expect(result).toStrictEqual({ changes: [], warnings: [] });
   });
 });

@@ -251,6 +251,9 @@ function compareFiles(beforeFiles = [], afterFiles = []) {
 }
 
 function runKey(run) {
+  if (typeof run.label === "string" && run.label.trim().length > 0) {
+    return normalizeConfigLabel(run.label);
+  }
   return normalizeConfigLabel(run.config);
 }
 

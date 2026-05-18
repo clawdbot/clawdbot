@@ -301,6 +301,16 @@ enum OpenClawConfigFile {
         }
     }
 
+    static func setRemoteGatewayTransport(_ value: String) {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        self.updateGatewayDict { gateway in
+            var remote = gateway["remote"] as? [String: Any] ?? [:]
+            remote["transport"] = trimmed
+            gateway["remote"] = remote
+        }
+    }
+
     static func clearRemoteGatewayUrl() {
         self.updateGatewayDict { gateway in
             guard var remote = gateway["remote"] as? [String: Any] else { return }

@@ -30,6 +30,7 @@ describe("startGatewayEarlyRuntime", () => {
       cfgAtStart: {} as never,
       port: 18_789,
       gatewayTls: { enabled: false },
+      gatewayDirectReachable: false,
       tailscaleMode: "off" as never,
       log: {
         info: () => {},
@@ -83,6 +84,7 @@ describe("startGatewayEarlyRuntime", () => {
         cfgAtStart: { discovery: { mdns: { mode: "full" } } } as never,
         port: 19_001,
         gatewayTls: { enabled: true, fingerprintSha256: "abc123" },
+        gatewayDirectReachable: true,
         tailscaleMode: "serve" as never,
         logDiscovery: {
           info: () => {},
@@ -101,6 +103,7 @@ describe("startGatewayEarlyRuntime", () => {
     expect(discoveryParams.machineDisplayName).toBe("Test Machine");
     expect(discoveryParams.port).toBe(19_001);
     expect(discoveryParams.gatewayTls).toEqual({ enabled: true, fingerprintSha256: "abc123" });
+    expect(discoveryParams.gatewayDirectReachable).toBe(true);
     expect(discoveryParams.tailscaleMode).toBe("serve");
     expect(discoveryParams.mdnsMode).toBe("full");
     expect(discoveryParams.gatewayDiscoveryServices).toEqual([service]);

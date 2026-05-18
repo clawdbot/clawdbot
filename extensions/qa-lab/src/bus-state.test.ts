@@ -170,4 +170,45 @@ describe("qa-bus state", () => {
     });
     expect(byAltText.map((message) => message.id)).toContain(outbound.id);
   });
+
+  it("preserves sanitized tool-call traces on bus messages", () => {
+    const state = createQaBusState();
+
+    const outbound = state.addOutboundMessage({
+      to: "dm:alice",
+      text: "used a tool",
+      toolCalls: [
+        {
+          name: "exec",
+          arguments: {
+            command: "pwd",
+            apiToken: "secret-token",
+          },
+        },
+      ],
+    });
+
+    const readback = state.readMessage({ messageId: outbound.id });
+    expect(readback.toolCalls).toEqual([
+      {
+        name: "exec",
+        arguments: {
+          command: "[redacted]",
+          apiToken: "[redacted]",
+        },
+      },
+    ]);
+    expect(state.searchMessages({ query: "exec" }).map((message) => message.id)).toContain(
+      outbound.id,
+    );
+
+    const readbackArguments = readback.toolCalls?.[0]?.arguments;
+    if (!readbackArguments) {
+      throw new Error("expected tool-call arguments");
+    }
+    readbackArguments.command = "mutated";
+    expect(state.readMessage({ messageId: outbound.id }).toolCalls?.[0]?.arguments?.command).toBe(
+      "[redacted]",
+    );
+  });
 });

@@ -185,13 +185,68 @@ export function recordGatewayRestartTraceDetail(name: string, metrics: RestartTr
 export function collectGatewayProcessMemoryUsageMb(): ReadonlyArray<readonly [string, number]> {
   const usage = process.memoryUsage();
   const toMb = (bytes: number) => bytes / 1024 / 1024;
-  return [
+  const metrics: Array<readonly [string, number]> = [
     ["rssMb", toMb(usage.rss)],
     ["heapTotalMb", toMb(usage.heapTotal)],
     ["heapUsedMb", toMb(usage.heapUsed)],
     ["externalMb", toMb(usage.external)],
     ["arrayBuffersMb", toMb(usage.arrayBuffers)],
   ];
+  const resources = collectGatewayProcessResourceCounts();
+  if (resources) {
+    metrics.push(...resources);
+  }
+  return metrics;
+}
+
+function collectGatewayProcessResourceCounts(): ReadonlyArray<readonly [string, number]> | null {
+  const processWithResourceAccess = process as NodeJS.Process & {
+    _getActiveHandles?: () => unknown[];
+    _getActiveRequests?: () => unknown[];
+    getActiveResourcesInfo?: () => string[];
+  };
+  const activeHandles = processWithResourceAccess._getActiveHandles?.();
+  const activeRequests = processWithResourceAccess._getActiveRequests?.();
+  const activeResources = processWithResourceAccess.getActiveResourcesInfo?.();
+  const metrics: Array<readonly [string, number]> = [
+    ["processSigintListenersCount", process.listenerCount("SIGINT")],
+    ["processSigtermListenersCount", process.listenerCount("SIGTERM")],
+    ["processSigusr1ListenersCount", process.listenerCount("SIGUSR1")],
+  ];
+  if (activeHandles) {
+    metrics.push(["activeHandlesCount", activeHandles.length]);
+  }
+  if (activeRequests) {
+    metrics.push(["activeRequestsCount", activeRequests.length]);
+  }
+  const activeTimersCount = activeResources
+    ? countActiveTimersFromResourceInfo(activeResources)
+    : activeHandles
+      ? countActiveTimersFromHandles(activeHandles)
+      : undefined;
+  if (activeTimersCount !== undefined) {
+    metrics.push(["activeTimersCount", activeTimersCount]);
+  }
+  return metrics.length > 0 ? metrics : null;
+}
+
+function countActiveTimersFromResourceInfo(activeResources: readonly string[]): number {
+  return activeResources.filter((resource) => resource === "Timeout" || resource === "Timer")
+    .length;
+}
+
+function countActiveTimersFromHandles(activeHandles: readonly unknown[]): number {
+  let count = 0;
+  for (const handle of activeHandles) {
+    if (typeof handle !== "object" || handle === null) {
+      continue;
+    }
+    const constructorName = (handle as { constructor?: { name?: string } }).constructor?.name;
+    if (constructorName === "Timeout" || constructorName === "Timer") {
+      count += 1;
+    }
+  }
+  return count;
 }
 
 function normalizeRestartTraceHandoff(value: unknown): GatewayRestartTraceHandoff | null {

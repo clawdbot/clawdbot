@@ -81,6 +81,27 @@ describe("formatMigrationPreview", () => {
     expect(output).not.toContain("codex-plugins-root");
   });
 
+  it("counts hidden config conflicts in the preview header", () => {
+    const output = formatMigrationPreview({
+      ...plan([skillItem(1), { ...configItem(), status: "conflict", sensitive: true }]),
+      summary: {
+        total: 2,
+        planned: 1,
+        migrated: 0,
+        skipped: 0,
+        conflicts: 1,
+        errors: 0,
+        sensitive: 1,
+      },
+    })
+      .map(stripAnsi)
+      .join("\n");
+
+    expect(output).toContain("1 item, 1 conflict, 1 sensitive item");
+    expect(output).not.toContain("Config:");
+    expect(output).not.toContain("codex-plugins-root");
+  });
+
   it("renders migration warnings with a warning glyph", () => {
     const output = formatMigrationPreview({
       ...plan([skillItem(1)]),

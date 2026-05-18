@@ -66,7 +66,7 @@ function resolveContractFileWeight(file) {
 }
 
 export function createPluginContractTestShards() {
-  const suffixes = ["a", "b", "c", "d"];
+  const suffixes = ["a", "b"];
   const groups = Object.fromEntries(
     suffixes.map((suffix) => [`checks-fast-contracts-plugins-${suffix}`, []]),
   );

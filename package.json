@@ -132,6 +132,10 @@
       "types": "./dist/plugin-sdk/runtime.d.ts",
       "default": "./dist/plugin-sdk/runtime.js"
     },
+    "./plugin-sdk/health": {
+      "types": "./dist/plugin-sdk/health.d.ts",
+      "default": "./dist/plugin-sdk/health.js"
+    },
     "./plugin-sdk/runtime-doctor": {
       "types": "./dist/plugin-sdk/runtime-doctor.d.ts",
       "default": "./dist/plugin-sdk/runtime-doctor.js"
@@ -1300,6 +1304,10 @@
       "types": "./dist/plugin-sdk/text-utility-runtime.d.ts",
       "default": "./dist/plugin-sdk/text-utility-runtime.js"
     },
+    "./plugin-sdk/tool-plugin": {
+      "types": "./dist/plugin-sdk/tool-plugin.d.ts",
+      "default": "./dist/plugin-sdk/tool-plugin.js"
+    },
     "./plugin-sdk/tool-payload": {
       "types": "./dist/plugin-sdk/tool-payload.d.ts",
       "default": "./dist/plugin-sdk/tool-payload.js"
@@ -1551,7 +1559,6 @@
     "qa:lab:up:fast": "node --import tsx scripts/qa-lab-up.ts --use-prebuilt-image --bind-ui-dist --skip-ui-build",
     "qa:lab:watch": "vite build --watch --config extensions/qa-lab/web/vite.config.ts",
     "qa:otel:smoke": "node --import tsx scripts/qa-otel-smoke.ts",
-    "qa:telegram-user:crabbox": "node --import tsx scripts/e2e/telegram-user-crabbox-proof.ts",
     "release-metadata:check": "node scripts/check-release-metadata-only.mjs",
     "release:beta": "node scripts/release-candidate-checklist.mjs",
     "release:beta-smoke": "node --import tsx scripts/release-beta-smoke.ts",
@@ -1716,6 +1723,7 @@
     "test:startup:bench:smoke": "node --import tsx scripts/bench-cli-startup.ts --preset real --case gatewayStatusJson --runs 1 --warmup 0 --output .artifacts/cli-startup-bench-smoke.json",
     "test:startup:bench:update": "node scripts/test-update-cli-startup-bench.mjs",
     "test:startup:gateway": "node --import tsx scripts/bench-gateway-startup.ts",
+    "test:restart:gateway": "node --import tsx scripts/bench-gateway-restart.ts",
     "test:startup:memory": "node scripts/check-cli-startup-memory.mjs",
     "test:ui": "pnpm ui:i18n:check && pnpm lint:ui:no-raw-window-open && pnpm --dir ui test",
     "test:unit": "pnpm test:unit:fast && node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts",
@@ -1755,11 +1763,11 @@
     "@agentclientprotocol/sdk": "0.21.1",
     "@clack/core": "1.3.1",
     "@clack/prompts": "1.4.0",
-    "@earendil-works/pi-agent-core": "0.74.1",
-    "@earendil-works/pi-ai": "0.74.1",
-    "@earendil-works/pi-coding-agent": "0.74.1",
-    "@earendil-works/pi-tui": "0.74.1",
-    "@google/genai": "2.2.0",
+    "@earendil-works/pi-agent-core": "0.75.1",
+    "@earendil-works/pi-ai": "0.75.1",
+    "@earendil-works/pi-coding-agent": "0.75.1",
+    "@earendil-works/pi-tui": "0.75.1",
+    "@google/genai": "2.3.0",
     "@grammyjs/runner": "2.0.3",
     "@grammyjs/transformer-throttler": "1.2.1",
     "@homebridge/ciao": "1.3.8",
@@ -1767,7 +1775,7 @@
     "@modelcontextprotocol/sdk": "1.29.0",
     "@mozilla/readability": "0.6.0",
     "@openclaw/fs-safe": "0.2.4",
-    "@openclaw/proxyline": "0.3.2",
+    "@openclaw/proxyline": "0.3.3",
     "ajv": "8.20.0",
     "chalk": "5.6.2",
     "chokidar": "5.0.0",
@@ -1781,11 +1789,11 @@
     "jiti": "2.7.0",
     "json5": "2.2.3",
     "jszip": "3.10.1",
-    "kysely": "0.29.0",
+    "kysely": "0.29.1",
     "linkedom": "0.18.12",
     "markdown-it": "14.1.1",
     "node-edge-tts": "1.2.10",
-    "openai": "6.37.0",
+    "openai": "6.38.0",
     "pdfjs-dist": "5.7.284",
     "playwright-core": "1.60.0",
     "qrcode": "1.5.4",
@@ -1794,8 +1802,8 @@
     "tokenjuice": "0.7.1",
     "tree-sitter-bash": "0.25.1",
     "tslog": "4.10.2",
-    "typescript": "6.0.3",
     "typebox": "1.1.38",
+    "typescript": "6.0.3",
     "undici": "8.3.0",
     "web-push": "3.6.7",
     "web-tree-sitter": "0.26.8",
@@ -1806,7 +1814,7 @@
   "devDependencies": {
     "@a2ui/lit": "0.10.0",
     "@copilotkit/aimock": "1.24.1",
-    "@grammyjs/types": "3.27.2",
+    "@grammyjs/types": "3.27.3",
     "@lit-labs/signals": "0.3.0",
     "@lit/context": "1.1.6",
     "@mdx-js/mdx": "3.1.1",
@@ -1814,13 +1822,13 @@
     "@types/markdown-it": "14.1.2",
     "@types/node": "25.8.0",
     "@types/ws": "8.18.1",
-    "@typescript/native-preview": "7.0.0-dev.20260514.1",
+    "@typescript/native-preview": "7.0.0-dev.20260517.1",
     "@vitest/coverage-v8": "4.1.6",
-    "jscpd": "4.2.0",
+    "jscpd": "4.2.2",
     "jsdom": "29.1.1",
     "lit": "3.3.3",
-    "oxfmt": "0.49.0",
-    "oxlint": "1.64.0",
+    "oxfmt": "0.50.0",
+    "oxlint": "1.65.0",
     "oxlint-tsgolint": "0.22.1",
     "signal-utils": "0.21.1",
     "tsdown": "0.22.0",
@@ -1840,7 +1848,7 @@
     "uuid": "14.0.0"
   },
   "engines": {
-    "node": ">=22.16.0"
+    "node": ">=22.19.0"
   },
   "packageManager": "pnpm@11.1.0+sha512.0c44e842e5686b2c061a81adda8b2258bd8818e9704b2cf2c63d56b931a7b2e910092e085027003b96ca3911ab56a07f6df5abaed2be9925034cdd686a535b14"
 }

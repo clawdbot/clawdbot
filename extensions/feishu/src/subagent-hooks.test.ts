@@ -54,7 +54,15 @@ describe("feishu subagent hook handlers", () => {
       {},
     );
 
-    expect(result).toEqual({ status: "ok", threadBindingReady: true });
+    expect(result).toEqual({
+      status: "ok",
+      threadBindingReady: true,
+      deliveryOrigin: {
+        channel: "feishu",
+        accountId: "work",
+        to: "user:ou_sender_1",
+      },
+    });
 
     const deliveryTargetHandler = getRequiredHookHandler(handlers, "subagent_delivery_target");
     await expect(
@@ -141,7 +149,16 @@ describe("feishu subagent hook handlers", () => {
       {},
     );
 
-    expect(result).toEqual({ status: "ok", threadBindingReady: true });
+    expect(result).toEqual({
+      status: "ok",
+      threadBindingReady: true,
+      deliveryOrigin: {
+        channel: "feishu",
+        accountId: "work",
+        to: "chat:oc_group_chat",
+        threadId: "om_topic_root",
+      },
+    });
     await expect(
       deliveryHandler(
         {
@@ -204,7 +221,16 @@ describe("feishu subagent hook handlers", () => {
       },
     );
 
-    expect(reboundResult).toEqual({ status: "ok", threadBindingReady: true });
+    expect(reboundResult).toEqual({
+      status: "ok",
+      threadBindingReady: true,
+      deliveryOrigin: {
+        channel: "feishu",
+        accountId: "work",
+        to: "chat:oc_group_chat",
+        threadId: "om_topic_root",
+      },
+    });
     const childBindings = manager.listBySessionKey("agent:main:subagent:sender-child");
     expect(childBindings).toHaveLength(1);
     expect(childBindings[0]?.conversationId).toBe(

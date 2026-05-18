@@ -640,6 +640,7 @@ export async function processDiscordMessage(
                   sessionKey: ctxPayload.SessionKey,
                   threadBindings,
                   mediaLocalRoots,
+                  kind: info.kind,
                 });
                 return true;
               },
@@ -678,6 +679,7 @@ export async function processDiscordMessage(
                 sessionKey: ctxPayload.SessionKey,
                 threadBindings,
                 mediaLocalRoots,
+                kind: info.kind,
               });
               return true;
             },
@@ -716,6 +718,7 @@ export async function processDiscordMessage(
           sessionKey: ctxPayload.SessionKey,
           threadBindings,
           mediaLocalRoots,
+          kind: info.kind,
         });
         replyReference.markSent();
         if (isFinal) {
@@ -805,9 +808,10 @@ export async function processDiscordMessage(
                 (typeof resolvedBlockStreamingEnabled === "boolean"
                   ? !resolvedBlockStreamingEnabled
                   : undefined)),
-            onPartialReply: draftPreview.draftStream
-              ? (payload) => draftPreview.updateFromPartial(payload.text)
-              : undefined,
+            onPartialReply:
+              draftPreview.draftStream && !draftPreview.isProgressMode
+                ? (payload) => draftPreview.updateFromPartial(payload.text)
+                : undefined,
             onAssistantMessageStart: draftPreview.draftStream
               ? () => draftPreview.handleAssistantMessageBoundary()
               : undefined,

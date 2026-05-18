@@ -96,7 +96,7 @@ function buildTelegramExecApprovalPendingPayloadForTest(params: {
 }): ReplyPayload {
   return {
     text: `Telegram exec approval ${params.request.id}`,
-    interactive: {
+    presentation: {
       blocks: [
         {
           type: "buttons",
@@ -512,7 +512,7 @@ describe("exec approval forwarder", () => {
     expect(deliver).not.toHaveBeenCalled();
   });
 
-  it("attaches shared interactive approval buttons in forwarded fallback payloads", async () => {
+  it("attaches shared presentation approval buttons in forwarded fallback payloads", async () => {
     vi.useFakeTimers();
     const { deliver, forwarder } = createForwarder({
       cfg: makeTargetsCfg([{ channel: "telegram", to: "123" }]),
@@ -535,7 +535,7 @@ describe("exec approval forwarder", () => {
     expect(delivery.to).toBe("123");
     const payload = requireFirstPayload(deliver);
     expect(payload.channelData?.execApproval).toEqual({ approvalId: "req-1" });
-    expect(payload.interactive).toEqual({
+    expect(payload.presentation).toEqual({
       blocks: [
         {
           type: "buttons",
@@ -559,6 +559,7 @@ describe("exec approval forwarder", () => {
         },
       ],
     });
+    expect(payload.interactive).toBeUndefined();
   });
 
   it("stores exec metadata on generic forwarded fallback payloads", async () => {

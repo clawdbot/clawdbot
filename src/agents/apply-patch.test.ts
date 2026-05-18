@@ -131,6 +131,57 @@ describe("applyPatch", () => {
     expect(result.summary.modified).toEqual(["dest.txt"]);
   });
 
+  it("updates in place when move target resolves to the source file", async () => {
+    const memory = createMemoryPatchSandbox({
+      "source.txt": "foo\nbar\n",
+    });
+    const patch = `*** Begin Patch
+*** Update File: source.txt
+*** Move to: ./source.txt
+@@
+ foo
+-bar
++baz
+*** End Patch`;
+
+    const result = await applyPatch(patch, memory.options);
+
+    expect(memory.files.get("/sandbox/source.txt")).toBe("foo\nbaz\n");
+    expect(result.summary.modified).toEqual(["source.txt"]);
+  });
+
+  it("applies context-only insertions at the requested context", async () => {
+    const memory = createMemoryPatchSandbox({
+      "source.txt": "alpha\nanchor\nomega\n",
+    });
+    const patch = `*** Begin Patch
+*** Update File: source.txt
+@@ anchor
++inserted
+*** End Patch`;
+
+    await applyPatch(patch, memory.options);
+
+    expect(memory.files.get("/sandbox/source.txt")).toBe("alpha\nanchor\ninserted\nomega\n");
+  });
+
+  it("keeps later insertion contexts in original file coordinates", async () => {
+    const memory = createMemoryPatchSandbox({
+      "source.txt": "a\nb\nc\n",
+    });
+    const patch = `*** Begin Patch
+*** Update File: source.txt
+@@ a
++after-a
+@@ b
++after-b
+*** End Patch`;
+
+    await applyPatch(patch, memory.options);
+
+    expect(memory.files.get("/sandbox/source.txt")).toBe("a\nafter-a\nb\nafter-b\nc\n");
+  });
+
   it("supports end-of-file inserts", async () => {
     const memory = createMemoryPatchSandbox({
       "end.txt": "line1\n",

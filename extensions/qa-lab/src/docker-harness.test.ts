@@ -46,19 +46,19 @@ describe("qa docker harness", () => {
     const compose = await readFile(path.join(outputDir, "docker-compose.qa.yml"), "utf8");
     expect(compose).toContain("image: openclaw:qa-local-prebaked");
     expect(compose).toContain("qa-mock-openai:");
-    expect(compose).toContain("18889:18789");
-    expect(compose).toContain('      - "43124:43123"');
+    expect(compose).toContain('      - "127.0.0.1:18889:18789"');
+    expect(compose).toContain('      - "127.0.0.1:43124:43123"');
     expect(compose).toContain(":/opt/openclaw-qa-lab-ui:ro");
     expect(compose).toContain("      - sh");
     expect(compose).toContain("      - -lc");
     expect(compose).toContain(
       '        - fetch("http://127.0.0.1:18789/healthz").then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))',
     );
-    expect(compose).toContain("      - --control-ui-proxy-target");
-    expect(compose).toContain('      - "http://openclaw-qa-gateway:18789/"');
-    expect(compose).toContain("      - --send-kickoff-on-start");
-    expect(compose).toContain("      - --ui-dist-dir");
-    expect(compose).toContain('      - "/opt/openclaw-qa-lab-ui"');
+    expect(compose).toContain("--control-ui-proxy-target http://openclaw-qa-gateway:18789/");
+    expect(compose).not.toContain("--control-ui-token");
+    expect(compose).not.toContain("qa-token");
+    expect(compose).toContain("--send-kickoff-on-start");
+    expect(compose).toContain("--ui-dist-dir /opt/openclaw-qa-lab-ui");
     expect(compose).toContain(":/opt/openclaw-repo:ro");
     expect(compose).toContain("./state:/opt/openclaw-scaffold:ro");
     expect(compose).toContain(

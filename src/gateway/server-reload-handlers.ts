@@ -11,6 +11,7 @@ import { isRestartEnabled } from "../config/commands.flags.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import {
@@ -21,10 +22,10 @@ import {
 } from "../infra/restart.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
 import {
-  activateSecretsRuntimeSnapshot,
   clearSecretsRuntimeSnapshot,
   getActiveSecretsRuntimeSnapshot,
-} from "../secrets/runtime.js";
+  type PreparedSecretsRuntimeSnapshot,
+} from "../secrets/runtime-state.js";
 import {
   getInspectableActiveTaskRestartBlockers,
   type ActiveTaskRestartBlocker,
@@ -58,6 +59,13 @@ type GatewayHotReloadState = {
   cronState: GatewayCronState;
   channelHealthMonitor: ChannelHealthMonitor | null;
 };
+
+async function activateSecretsRuntimeSnapshot(
+  snapshot: PreparedSecretsRuntimeSnapshot,
+): Promise<void> {
+  const runtime = await import("../secrets/runtime.js");
+  runtime.activateSecretsRuntimeSnapshot(snapshot);
+}
 
 type GatewayReloadLog = {
   info: (msg: string) => void;
@@ -101,13 +109,30 @@ async function disposeMcpRuntimesWithTimeout(params: {
   }
 }
 
+async function collectChannelOperationFailures(params: {
+  channels: Iterable<ChannelKind>;
+  run: (channel: ChannelKind) => Promise<void>;
+  onFailure: (channel: ChannelKind, err: unknown) => void;
+}): Promise<ChannelKind[]> {
+  const failures: ChannelKind[] = [];
+  for (const channel of params.channels) {
+    try {
+      await params.run(channel);
+    } catch (err) {
+      failures.push(channel);
+      params.onFailure(channel, err);
+    }
+  }
+  return failures;
+}
+
 type GatewayReloadHandlerParams = {
   deps: CliDeps;
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
   getState: () => GatewayHotReloadState;
   setState: (state: GatewayHotReloadState) => void;
-  startChannel: (name: ChannelKind) => Promise<void>;
-  stopChannel: (name: ChannelKind) => Promise<void>;
+  startChannel: GatewayChannelManager["startChannel"];
+  stopChannel: GatewayChannelManager["stopChannel"];
   stopPostReadySidecars?: () => void;
   reloadPlugins: (params: {
     nextConfig: OpenClawConfig;
@@ -322,13 +347,49 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           return;
         }
         await waitForActiveWorkBeforeChannelReload(channelsToRestart, nextConfig);
-        for (const channel of channelsToRestart) {
-          if (channelsStoppedBeforePluginReload.has(channel)) {
-            continue;
-          }
-          params.logChannels.info(`stopping ${channel} channel before plugin reload`);
-          await params.stopChannel(channel);
-          channelsStoppedBeforePluginReload.add(channel);
+        const stoppedChannels: ChannelKind[] = [];
+        const stopFailures = await collectChannelOperationFailures({
+          channels: channelsToRestart,
+          run: async (channel) => {
+            if (channelsStoppedBeforePluginReload.has(channel)) {
+              return;
+            }
+            params.logChannels.info(`stopping ${channel} channel before plugin reload`);
+            stoppedChannels.push(channel);
+            await params.stopChannel(channel, undefined, { manual: false });
+            channelsStoppedBeforePluginReload.add(channel);
+          },
+          onFailure: (channel, err) => {
+            params.logChannels.error(
+              `failed to stop ${channel} channel before plugin reload: ${formatErrorMessage(err)}`,
+            );
+          },
+        });
+        if (stopFailures.length > 0) {
+          const rollbackFailures = await collectChannelOperationFailures({
+            channels: stoppedChannels,
+            run: async (channel) => {
+              params.logChannels.info(
+                `restarting ${channel} channel after failed plugin reload pre-stop`,
+              );
+              await params.startChannel(channel);
+              channelsStoppedBeforePluginReload.delete(channel);
+            },
+            onFailure: (channel, err) => {
+              params.logChannels.error(
+                `failed to restart ${channel} channel after failed plugin reload pre-stop: ${formatErrorMessage(
+                  err,
+                )}`,
+              );
+            },
+          });
+          const rollbackSuffix =
+            rollbackFailures.length > 0
+              ? `; rollback restart failed for: ${rollbackFailures.join(", ")}`
+              : "";
+          throw new Error(
+            `failed to stop channels before plugin reload: ${stopFailures.join(", ")}${rollbackSuffix}`,
+          );
         }
       };
       const pluginReloadResult = await params.reloadPlugins({
@@ -418,12 +479,23 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           }
           params.logChannels.info(`restarting ${name} channel`);
           if (!channelsStoppedBeforePluginReload.has(name)) {
-            await params.stopChannel(name);
+            await params.stopChannel(name, undefined, { manual: false });
           }
           await params.startChannel(name);
         };
-        for (const channel of channelsToRestart) {
-          await restartChannel(channel);
+        const restartFailures = await collectChannelOperationFailures({
+          channels: channelsToRestart,
+          run: restartChannel,
+          onFailure: (channel, err) => {
+            params.logChannels.error(
+              `failed to restart ${channel} channel during hot reload: ${formatErrorMessage(err)}`,
+            );
+          },
+        });
+        if (restartFailures.length > 0) {
+          throw new Error(
+            `failed to restart channels during hot reload: ${restartFailures.join(", ")}`,
+          );
         }
       }
     }
@@ -605,7 +677,7 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
         await applyHotReload(plan, prepared.config);
       } catch (err) {
         if (previousSnapshot) {
-          activateSecretsRuntimeSnapshot(previousSnapshot);
+          await activateSecretsRuntimeSnapshot(previousSnapshot);
         } else {
           clearSecretsRuntimeSnapshot();
         }
@@ -638,7 +710,7 @@ export function startManagedGatewayConfigReloader(params: ManagedGatewayConfigRe
         const restartQueued = requestGatewayRestart(plan, nextConfig);
         if (!restartQueued) {
           if (previousSharedGatewaySessionGeneration !== nextSharedGatewaySessionGeneration) {
-            activateSecretsRuntimeSnapshot(prepared);
+            await activateSecretsRuntimeSnapshot(prepared);
             setCurrentSharedGatewaySessionGeneration(
               params.sharedGatewaySessionGenerationState,
               nextSharedGatewaySessionGeneration,

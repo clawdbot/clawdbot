@@ -4,6 +4,8 @@ type Options = {
   json?: boolean;
   output?: string;
   repoRoot?: string;
+  summary?: string;
+  tools?: boolean;
 };
 
 function takeValue(args: string[], index: number, flag: string): string {
@@ -27,6 +29,8 @@ Options:
   --json                Print machine-readable JSON
   --output <path>       Write the report to a file
   --repo-root <path>    Repository root to target
+  --summary <path>      Runtime qa-suite-summary.json to overlay on --tools coverage
+  --tools               Print runtime tool fixture coverage instead of scenario coverage
   -h, --help            Display help
 `);
         process.exit(0);
@@ -41,6 +45,13 @@ Options:
         opts.repoRoot = takeValue(args, index, arg);
         index += 1;
         break;
+      case "--summary":
+        opts.summary = takeValue(args, index, arg);
+        index += 1;
+        break;
+      case "--tools":
+        opts.tools = true;
+        break;
       default:
         throw new Error(`Unknown qa coverage option: ${arg}`);
     }
@@ -53,4 +64,6 @@ await runQaCoverageReportCommand({
   ...(opts.json ? { json: true } : {}),
   ...(opts.output ? { output: opts.output } : {}),
   ...(opts.repoRoot ? { repoRoot: opts.repoRoot } : {}),
+  ...(opts.summary ? { summary: opts.summary } : {}),
+  ...(opts.tools ? { tools: true } : {}),
 });

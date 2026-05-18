@@ -172,11 +172,12 @@ export async function deliverDiscordReply(params: {
   sessionKey?: string;
   threadBindings?: DiscordThreadBindingLookup;
   mediaLocalRoots?: readonly string[];
+  kind: "tool" | "block" | "final";
 }) {
   void params.runtime;
 
   const delivery = resolveDiscordDeliveryOptions(params);
-  const payloads = sanitizeDiscordFrontChannelReplyPayloads(params.replies);
+  const payloads = sanitizeDiscordFrontChannelReplyPayloads(params.replies, { kind: params.kind });
   if (payloads.length === 0) {
     return;
   }

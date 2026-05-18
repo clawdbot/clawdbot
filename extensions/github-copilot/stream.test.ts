@@ -118,14 +118,21 @@ describe("wrapCopilotAnthropicStream", () => {
     expect(baseStreamFn.mock.calls).toEqual([[model, context, options]]);
   });
 
-  it("adds Copilot headers, preserves reasoning IDs, and rewrites message IDs before payload send", () => {
+  it("adds Copilot headers, sanitizes reasoning replay, and rewrites message IDs before payload send", () => {
     const reasoningId = Buffer.from(`reasoning-${"x".repeat(24)}`).toString("base64");
+    const overlongReasoningId = `5PX6gLHXT5wE+Y2tPmUV4gn+${"B".repeat(384)}`;
     const messageId = Buffer.from(`message-${"y".repeat(24)}`).toString("base64");
     const payloads: Array<{ input: Array<Record<string, unknown>> }> = [];
     const baseStreamFn = vi.fn((_model, _context, options) => {
       const payload = {
         input: [
-          { id: reasoningId, type: "reasoning" },
+          { id: reasoningId, type: "reasoning", encrypted_content: "valid-encrypted-payload" },
+          {
+            id: overlongReasoningId,
+            type: "reasoning",
+            encrypted_content: "invalid-encrypted-payload",
+            summary: [],
+          },
           { id: messageId, type: "message" },
         ],
       };
@@ -174,6 +181,7 @@ describe("wrapCopilotAnthropicStream", () => {
       onPayload: options.onPayload,
     });
     expect(payloads[0]?.input[0]?.id).toBe(reasoningId);
+    expect(payloads[0]?.input.map((item) => item.type)).toEqual(["reasoning", "message"]);
     expect(payloads[0]?.input[1]?.id).toMatch(/^msg_[a-f0-9]{16}$/);
   });
 

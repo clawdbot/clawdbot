@@ -106,7 +106,8 @@ extension ConfigSettings {
                 self.schemaUnavailableDetail
             }
         }
-        .frame(minWidth: 460, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .layoutPriority(1)
     }
 
     private var emptyDetail: some View {

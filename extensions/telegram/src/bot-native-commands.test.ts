@@ -543,6 +543,37 @@ describe("registerTelegramNativeCommands", () => {
     expect(replyAt(firstDeliverRepliesParams()).mediaUrl).toBe("/tmp/render.png");
   });
 
+  it("falls back to a normal reply when a progress result has presentation controls", async () => {
+    const presentation = {
+      blocks: [
+        {
+          kind: "actions",
+          buttons: [{ label: "Approve", action: { type: "command", value: "/approve yes" } }],
+        },
+      ],
+    };
+    const { handler, sendMessage, deleteMessage } = registerPlugCommand({
+      args: "now",
+      command: {
+        nativeProgressMessages: { telegram: "Working on it..." },
+      },
+      result: {
+        text: "Approval required",
+        presentation,
+      },
+    });
+
+    await handler(createPrivateCommandContext({ match: "now" }));
+
+    expect(sendMessage).toHaveBeenCalledWith(100, "Working on it...", undefined);
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(deleteMessage).toHaveBeenCalledWith(100, 999);
+    expect(replyAt(firstDeliverRepliesParams())).toMatchObject({
+      text: "Approval required",
+      presentation,
+    });
+  });
+
   it("cleans up the progress placeholder before falling back after an edit failure", async () => {
     const { handler, sendMessage, deleteMessage } = registerPlugCommand({
       args: "now",

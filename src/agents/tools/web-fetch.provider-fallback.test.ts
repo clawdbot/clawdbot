@@ -14,7 +14,7 @@ const runtimeState = vi.hoisted(() => ({
 vi.mock("../../web-fetch/runtime.js", () => ({
   resolveWebFetchDefinition: resolveWebFetchDefinitionMock,
 }));
-vi.mock("../../secrets/runtime.js", () => ({
+vi.mock("../../secrets/runtime-state.js", () => ({
   getActiveSecretsRuntimeSnapshot: () => runtimeState.activeSecretsRuntimeSnapshot,
 }));
 vi.mock("../../secrets/runtime-web-tools-state.js", () => ({

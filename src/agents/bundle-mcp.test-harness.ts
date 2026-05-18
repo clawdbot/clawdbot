@@ -172,12 +172,17 @@ const transport = new StdioClientTransport({
 });
 const client = new Client({ name: "fake-claude", version: "1.0.0" });
 await client.connect(transport);
-const tools = await client.listTools();
-if (!tools.tools.some((tool) => tool.name === "bundle_probe")) {
-  throw new Error("bundle_probe tool not exposed");
-}
-const result = await client.callTool({ name: "bundle_probe", arguments: {} });
-await transport.close();
+const result = await (async () => {
+  try {
+    const tools = await client.listTools();
+    if (!tools.tools.some((tool) => tool.name === "bundle_probe")) {
+      throw new Error("bundle_probe tool not exposed");
+    }
+    return await client.callTool({ name: "bundle_probe", arguments: {} });
+  } finally {
+    await transport.close();
+  }
+})();
 
 const text = Array.isArray(result.content)
   ? result.content

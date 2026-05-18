@@ -334,6 +334,17 @@ describe("tui command handlers", () => {
     });
   });
 
+  it("handles /exit without sending through the gateway", async () => {
+    const { handleCommand, requestExit, sendChat, addUser, addSystem } = createHarness();
+
+    await handleCommand("/exit");
+
+    expect(requestExit).toHaveBeenCalledTimes(1);
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addUser).not.toHaveBeenCalled();
+    expect(addSystem).not.toHaveBeenCalled();
+  });
+
   it("leaves a Crestodian breadcrumb after switching agents", async () => {
     const { handleCommand, addSystem, setSession, state } = createHarness();
 

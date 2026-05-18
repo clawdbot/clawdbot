@@ -36,6 +36,7 @@ export {
   type QaBusSearchMessagesInput,
   type QaBusStateSnapshot,
   type QaBusThread,
+  type QaBusToolCall,
   type QaBusWaitForInput,
   reactToQaBusMessage,
   readQaBusMessage,

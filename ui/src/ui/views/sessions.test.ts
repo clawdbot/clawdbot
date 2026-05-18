@@ -272,7 +272,7 @@ describe("sessions view", () => {
       Array.from(thinking?.options ?? [])
         .find((option) => option.value === "max")
         ?.textContent?.trim(),
-    ).toBe("Override: maximum");
+    ).toBe("Maximum");
 
     thinking!.value = "max";
     thinking!.dispatchEvent(new Event("change", { bubbles: true }));
@@ -303,12 +303,12 @@ describe("sessions view", () => {
 
     const thinking = container.querySelector("tbody select") as HTMLSelectElement | null;
     expect(thinking?.value).toBe("");
-    expect(thinking?.options[0]?.textContent?.trim()).toBe("Inherited: adaptive");
+    expect(thinking?.options[0]?.textContent?.trim()).toBe("Inherited: Adaptive");
     expect(
       Array.from(thinking?.options ?? [])
         .find((option) => option.value === "adaptive")
         ?.textContent?.trim(),
-    ).toBe("Override: adaptive");
+    ).toBe("Adaptive");
   });
 
   it("labels inherited thinking from list defaults when lightweight rows omit row defaults", async () => {
@@ -340,9 +340,9 @@ describe("sessions view", () => {
 
     const thinking = container.querySelector("tbody select") as HTMLSelectElement | null;
     expect(thinking?.value).toBe("");
-    expect(thinking?.options[0]?.textContent?.trim()).toBe("Inherited: high");
+    expect(thinking?.options[0]?.textContent?.trim()).toBe("Inherited: High");
     expect(Array.from(thinking?.options ?? []).map((option) => option.textContent?.trim())).toEqual(
-      ["Inherited: high", "Off", "Override: high"],
+      ["Inherited: High", "Off", "High"],
     );
   });
 
@@ -372,7 +372,7 @@ describe("sessions view", () => {
       Array.from(thinking?.options ?? [])
         .find((option) => option.value === "low")
         ?.textContent?.trim(),
-    ).toBe("Override: on");
+    ).toBe("On");
 
     thinking!.value = "low";
     thinking!.dispatchEvent(new Event("change", { bubbles: true }));

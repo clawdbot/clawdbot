@@ -7,7 +7,10 @@ import { fileURLToPath } from "node:url";
 
 const DEFAULT_ENTRYPOINTS = ["dist/entry.js", "dist/cli/run-main.js"];
 const DEFAULT_GATEWAY_RUN_CHUNK_MAX_BYTES = 70 * 1024;
-const GATEWAY_RUN_CHUNK_MARKERS = ["const GATEWAY_RUN_VALUE_KEYS", "function addGatewayRunCommand"];
+const GATEWAY_RUN_CHUNK_MARKER_SETS = [
+  ["const GATEWAY_AUTH_MODES", "function addGatewayRunCommand"],
+  ["const GATEWAY_RUN_VALUE_KEYS", "function addGatewayRunCommand"],
+];
 const GATEWAY_RUN_FORBIDDEN_STATIC_IMPORTS = [
   "control-ui-assets",
   "diagnostic-stability-bundle",
@@ -164,7 +167,11 @@ export function collectGatewayRunChunkBudgetErrors(params = {}) {
     } catch {
       continue;
     }
-    if (GATEWAY_RUN_CHUNK_MARKERS.every((marker) => source.includes(marker))) {
+    if (
+      GATEWAY_RUN_CHUNK_MARKER_SETS.some((markers) =>
+        markers.every((marker) => source.includes(marker)),
+      )
+    ) {
       chunks.push({ filePath, source });
     }
   }

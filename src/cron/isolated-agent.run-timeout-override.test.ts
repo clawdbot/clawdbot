@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearAllBootstrapSnapshots } from "../agents/bootstrap-cache.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetAgentRunContextForTest } from "../infra/agent-events.js";
 import { createCliDeps, mockAgentPayloads } from "./isolated-agent.delivery.test-helpers.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
@@ -17,6 +18,25 @@ function lastEmbeddedCall(): { runTimeoutOverrideMs?: number; timeoutMs?: number
   const calls = vi.mocked(runEmbeddedPiAgent).mock.calls;
   expect(calls.length).toBeGreaterThan(0);
   return calls.at(-1)?.[0] as { runTimeoutOverrideMs?: number; timeoutMs?: number };
+}
+
+function makeTimeoutTestCfg(
+  home: string,
+  storePath: string,
+  timeoutSeconds: number,
+): OpenClawConfig {
+  return makeCfg(home, storePath, {
+    agents: { defaults: { timeoutSeconds } },
+    models: {
+      providers: {
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          agentRuntime: { id: "pi" },
+          models: [],
+        },
+      },
+    },
+  });
 }
 
 const envSnapshot = {
@@ -77,9 +97,7 @@ describe("runCronIsolatedAgentTurn — explicit per-run timeout signal", () => {
       });
       mockAgentPayloads([{ text: "ok" }]);
 
-      const cfg = makeCfg(home, storePath, {
-        agents: { defaults: { timeoutSeconds: 300 } },
-      });
+      const cfg = makeTimeoutTestCfg(home, storePath, 300);
 
       await runCronIsolatedAgentTurn({
         cfg,
@@ -109,9 +127,7 @@ describe("runCronIsolatedAgentTurn — explicit per-run timeout signal", () => {
       });
       mockAgentPayloads([{ text: "ok" }]);
 
-      const cfg = makeCfg(home, storePath, {
-        agents: { defaults: { timeoutSeconds: 300 } },
-      });
+      const cfg = makeTimeoutTestCfg(home, storePath, 300);
 
       await runCronIsolatedAgentTurn({
         cfg,
@@ -141,9 +157,7 @@ describe("runCronIsolatedAgentTurn — explicit per-run timeout signal", () => {
       });
       mockAgentPayloads([{ text: "ok" }]);
 
-      const cfg = makeCfg(home, storePath, {
-        agents: { defaults: { timeoutSeconds: 300 } },
-      });
+      const cfg = makeTimeoutTestCfg(home, storePath, 300);
 
       await runCronIsolatedAgentTurn({
         cfg,

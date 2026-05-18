@@ -66,6 +66,8 @@ function createQueueOutcomeMock(
           sessionId,
           target: "embedded_run",
           gatewayHealth: "live",
+          enqueuedAtMs: 4_100,
+          deliveredAtMs: 4_200,
         }
       : {
           queued: false,
@@ -434,6 +436,112 @@ describe("resolveSubagentCompletionOrigin", () => {
       to: "channel:parent-main",
     });
   });
+
+  it("prefers requester binding when child and requester share the same channel and accountId", async () => {
+    registerSessionBindingAdapter({
+      channel: "telegram",
+      accountId: "bot-1",
+      listBySession: (targetSessionKey: string) => {
+        if (targetSessionKey === "agent:main:telegram:default:direct:123") {
+          return [
+            {
+              bindingId: "telegram:bot-1:child-dm",
+              targetSessionKey,
+              targetKind: "subagent",
+              conversation: {
+                channel: "telegram",
+                accountId: "bot-1",
+                conversationId: "direct:123",
+              },
+              status: "active",
+              boundAt: 1,
+            },
+          ];
+        }
+        if (targetSessionKey === "agent:main:main") {
+          return [
+            {
+              bindingId: "telegram:bot-1:parent-main",
+              targetSessionKey,
+              targetKind: "session",
+              conversation: {
+                channel: "telegram",
+                accountId: "bot-1",
+                conversationId: "direct:789",
+              },
+              status: "active",
+              boundAt: 1,
+            },
+          ];
+        }
+        return [];
+      },
+      resolveByConversation: () => null,
+    });
+
+    const origin = await resolveSubagentCompletionOrigin({
+      childSessionKey: "agent:main:telegram:default:direct:123",
+      requesterSessionKey: "agent:main:main",
+      requesterOrigin: {
+        channel: "telegram",
+        accountId: "bot-1",
+        to: "telegram:direct:789",
+      },
+      spawnMode: "run",
+      expectsCompletionMessage: true,
+    });
+
+    expect(origin).toEqual({
+      channel: "telegram",
+      accountId: "bot-1",
+      to: "telegram:direct:789",
+    });
+  });
+
+  it("falls back to child binding when requester has no binding", async () => {
+    registerSessionBindingAdapter({
+      channel: "telegram",
+      accountId: "bot-1",
+      listBySession: (targetSessionKey: string) => {
+        if (targetSessionKey === "agent:main:telegram:default:direct:123") {
+          return [
+            {
+              bindingId: "telegram:bot-1:child-dm",
+              targetSessionKey,
+              targetKind: "subagent",
+              conversation: {
+                channel: "telegram",
+                accountId: "bot-1",
+                conversationId: "direct:123",
+              },
+              status: "active",
+              boundAt: 1,
+            },
+          ];
+        }
+        return [];
+      },
+      resolveByConversation: () => null,
+    });
+
+    const origin = await resolveSubagentCompletionOrigin({
+      childSessionKey: "agent:main:telegram:default:direct:123",
+      requesterSessionKey: "agent:main:main",
+      requesterOrigin: {
+        channel: "telegram",
+        accountId: "bot-1",
+        to: "telegram:direct:123",
+      },
+      spawnMode: "run",
+      expectsCompletionMessage: true,
+    });
+
+    expect(origin).toEqual({
+      channel: "telegram",
+      accountId: "bot-1",
+      to: "telegram:direct:123",
+    });
+  });
 });
 
 describe("deliverSubagentAnnouncement active requester steering", () => {
@@ -546,6 +654,56 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
     },
   );
 
+  it("preserves best-effort steering for active runtimes without transcript wait support", async () => {
+    const queueEmbeddedPiMessageWithOutcome = vi
+      .fn<QueueEmbeddedPiMessageWithOutcome>()
+      .mockImplementationOnce((sessionId: string) => ({
+        queued: false,
+        sessionId,
+        reason: "transcript_commit_wait_unsupported",
+        gatewayHealth: "live",
+      }))
+      .mockImplementationOnce((sessionId: string) => ({
+        queued: true,
+        sessionId,
+        target: "embedded_run",
+        gatewayHealth: "live",
+        enqueuedAtMs: 4_100,
+      }));
+    const callGateway = await deliverSteeredAnnouncement({
+      queueEmbeddedPiMessageWithOutcome,
+      requesterOrigin: {
+        channel: "slack",
+        to: "channel:C123",
+        accountId: "acct-1",
+      },
+    });
+
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenCalledTimes(2);
+    expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenNthCalledWith(
+      1,
+      "paperclip-session",
+      "child done",
+      {
+        steeringMode: "all",
+        debounceMs: 0,
+        waitForTranscriptCommit: true,
+        deliveryTimeoutMs: 120_000,
+      },
+    );
+    expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenNthCalledWith(
+      2,
+      "paperclip-session",
+      "child done",
+      {
+        steeringMode: "all",
+        debounceMs: 0,
+        deliveryTimeoutMs: 120_000,
+      },
+    );
+  });
+
   it("does not report delivery when active requester steering is rejected", async () => {
     const queueEmbeddedPiMessageWithOutcome = vi.fn(async (sessionId: string) => ({
       queued: false as const,
@@ -590,6 +748,60 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
     });
     expect(callGateway).not.toHaveBeenCalled();
   });
+
+  it("falls through to direct delivery when requester ends during awaited steering failure", async () => {
+    const queueEmbeddedPiMessageWithOutcome = vi.fn(async (sessionId: string) => ({
+      queued: false as const,
+      sessionId,
+      reason: "runtime_rejected" as const,
+      gatewayHealth: "live" as const,
+      errorMessage: "active session ended before queued steering message was committed",
+    }));
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "child completion output" }],
+      },
+    });
+    let activityChecks = 0;
+    __testing.setDepsForTest({
+      callGateway,
+      getRequesterSessionActivity: () => ({
+        sessionId: "paperclip-session",
+        isActive: activityChecks++ === 0,
+      }),
+      queueEmbeddedPiMessageWithOutcome,
+      getRuntimeConfig: () =>
+        ({
+          messages: {
+            queue: {
+              mode: "steer",
+              debounceMs: 0,
+            },
+          },
+        }) as never,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:eng:paperclip:issue:123",
+      targetRequesterSessionKey: "agent:eng:paperclip:issue:123",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterOrigin: slackThreadOrigin,
+      requesterIsSubagent: false,
+      expectsCompletionMessage: false,
+      directIdempotencyKey: "announce-recheck-after-steer-failure",
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+      phases: [
+        { phase: "steer-primary", delivered: false, path: "none", error: undefined },
+        { phase: "direct-primary", delivered: true, path: "direct", error: undefined },
+      ],
+    });
+    expect(callGateway).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("deliverSubagentAnnouncement completion delivery", () => {
@@ -608,6 +820,8 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expectRecordFields(result, {
       delivered: true,
       path: "steered",
+      enqueuedAt: 4_100,
+      deliveredAt: 4_200,
     });
     expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenCalledWith(
       "requester-session-1",
@@ -615,6 +829,8 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       {
         steeringMode: "all",
         debounceMs: 500,
+        waitForTranscriptCommit: true,
+        deliveryTimeoutMs: 120_000,
       },
     );
     expect(callGateway).not.toHaveBeenCalled();
@@ -1131,6 +1347,8 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       {
         steeringMode: "all",
         debounceMs: 500,
+        waitForTranscriptCommit: true,
+        deliveryTimeoutMs: 120_000,
       },
     );
     expect(callGateway).toHaveBeenCalledTimes(1);

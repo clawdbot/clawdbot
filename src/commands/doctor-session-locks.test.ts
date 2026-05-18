@@ -104,6 +104,30 @@ describe("noteSessionLockHealth", () => {
     await expect(fs.access(freshLock)).resolves.toBeUndefined();
   });
 
+  it("uses configured stale threshold when repairing lock files", async () => {
+    const sessionsDir = state.sessionsDir();
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const configuredStaleLock = path.join(sessionsDir, "configured-stale.jsonl.lock");
+    await fs.writeFile(
+      configuredStaleLock,
+      JSON.stringify({ pid: process.pid, createdAt: new Date(Date.now() - 45_000).toISOString() }),
+      "utf8",
+    );
+
+    await noteSessionLockHealth({
+      shouldRepair: true,
+      config: { session: { writeLock: { staleMs: 30_000 } } },
+      readOwnerProcessArgs: () => ["node", "/opt/openclaw/openclaw.mjs", "doctor"],
+    });
+
+    expect(note).toHaveBeenCalledTimes(1);
+    const [message] = firstNoteCall();
+    expect(message).toContain("stale=yes (too-old)");
+    expect(message).toContain("[removed]");
+    await expectPathMissing(configuredStaleLock);
+  });
+
   it("removes fresh live locks when the owner is not an OpenClaw process", async () => {
     const sessionsDir = state.sessionsDir();
     await fs.mkdir(sessionsDir, { recursive: true });

@@ -461,6 +461,11 @@ export async function loadCompactHooksHarness(): Promise<{
     acquireSessionWriteLock: vi.fn(async () => ({ release: vi.fn(async () => {}) })),
     resolveSessionLockMaxHoldFromTimeout: vi.fn(() => 0),
     resolveSessionWriteLockAcquireTimeoutMs: vi.fn(() => 60_000),
+    resolveSessionWriteLockOptions: vi.fn(() => ({
+      timeoutMs: 60_000,
+      staleMs: 1_800_000,
+      maxHoldMs: 300_000,
+    })),
   }));
 
   vi.doMock("../../context-engine/init.js", () => ({

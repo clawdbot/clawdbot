@@ -1047,9 +1047,9 @@ describe("run-node script", () => {
           "qa",
           "parity-report",
           "--candidate-summary",
-          ".artifacts/qa-e2e/gpt54/qa-suite-summary.json",
+          ".artifacts/qa-e2e/openai-candidate/qa-suite-summary.json",
           "--baseline-summary",
-          ".artifacts/qa-e2e/opus46/qa-suite-summary.json",
+          ".artifacts/qa-e2e/anthropic-baseline/qa-suite-summary.json",
         ],
         env: {
           ...process.env,
@@ -1068,9 +1068,9 @@ describe("run-node script", () => {
           "tsx",
           path.join(tmp, "scripts", "qa-parity-report.ts"),
           "--candidate-summary",
-          ".artifacts/qa-e2e/gpt54/qa-suite-summary.json",
+          ".artifacts/qa-e2e/openai-candidate/qa-suite-summary.json",
           "--baseline-summary",
-          ".artifacts/qa-e2e/opus46/qa-suite-summary.json",
+          ".artifacts/qa-e2e/anthropic-baseline/qa-suite-summary.json",
         ],
       ]);
     });
@@ -1093,7 +1093,14 @@ describe("run-node script", () => {
 
       const exitCode = await runNodeMain({
         cwd: tmp,
-        args: ["qa", "coverage", "--json"],
+        args: [
+          "qa",
+          "coverage",
+          "--json",
+          "--tools",
+          "--summary",
+          ".artifacts/qa-e2e/runtime-parity-standard/qa-suite-summary.json",
+        ],
         env: {
           ...process.env,
           OPENCLAW_RUNNER_LOG: "0",
@@ -1111,6 +1118,9 @@ describe("run-node script", () => {
           "tsx",
           path.join(tmp, "scripts", "qa-coverage-report.ts"),
           "--json",
+          "--tools",
+          "--summary",
+          ".artifacts/qa-e2e/runtime-parity-standard/qa-suite-summary.json",
         ],
       ]);
     });

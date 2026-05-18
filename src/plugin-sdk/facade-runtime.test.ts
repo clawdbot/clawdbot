@@ -155,6 +155,9 @@ describe("plugin-sdk facade runtime", () => {
   it("does not fall back to package source surfaces when bundled plugins are disabled", () => {
     process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    __testing.setFacadeActivationCheckRuntimeForTest({
+      resolveRegistryPluginModuleLocation: () => null,
+    } as never);
 
     expect(
       __testing.resolveFacadeModuleLocation({

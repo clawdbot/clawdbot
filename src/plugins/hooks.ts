@@ -192,6 +192,13 @@ const DEFAULT_VOID_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, numbe
 };
 const DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, number>> = {
   before_agent_run: 15_000,
+  // Defensive default for the legacy compatibility hook (#48534). With
+  // before_agent_start unbudgeted, an unresponsive handler (e.g. a memory
+  // plugin waiting on a hung subprocess) blocked the entire agent pipeline
+  // because both the embedded setup and prompt-build paths await this hook.
+  // The runner is fail-open for this hook name, so a timed-out handler is
+  // logged and the run proceeds without its modifications.
+  before_agent_start: 15_000,
   before_prompt_build: 15_000,
 };
 

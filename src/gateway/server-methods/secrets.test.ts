@@ -26,14 +26,18 @@ async function invokeSecretsResolve(params: {
   respond: ReturnType<typeof vi.fn>;
   commandName: unknown;
   targetIds: unknown;
-  providerOverrides?: unknown;
+  allowedPaths?: unknown;
+  forcedActivePaths?: unknown;
 }) {
   await params.handlers["secrets.resolve"]({
     req: { type: "req", id: "1", method: "secrets.resolve" },
     params: {
       commandName: params.commandName,
       targetIds: params.targetIds,
-      ...(params.providerOverrides ? { providerOverrides: params.providerOverrides } : {}),
+      ...(params.allowedPaths !== undefined ? { allowedPaths: params.allowedPaths } : {}),
+      ...(params.forcedActivePaths !== undefined
+        ? { forcedActivePaths: params.forcedActivePaths }
+        : {}),
     },
     client: null,
     isWebchatConnect: () => false,
@@ -75,7 +79,8 @@ describe("secrets handlers", () => {
     resolveSecrets?: (params: {
       commandName: string;
       targetIds: string[];
-      providerOverrides?: { webSearch?: string; webFetch?: string };
+      allowedPaths?: string[];
+      forcedActivePaths?: string[];
     }) => Promise<{
       assignments: Array<{ path: string; pathSegments: string[]; value: unknown }>;
       diagnostics: string[];
@@ -141,10 +146,14 @@ describe("secrets handlers", () => {
       respond,
       commandName: "memory status",
       targetIds: ["talk.providers.*.apiKey"],
+      allowedPaths: [TALK_TEST_PROVIDER_API_KEY_PATH],
+      forcedActivePaths: [TALK_TEST_PROVIDER_API_KEY_PATH],
     });
     expect(resolveSecrets).toHaveBeenCalledWith({
       commandName: "memory status",
       targetIds: ["talk.providers.*.apiKey"],
+      allowedPaths: [TALK_TEST_PROVIDER_API_KEY_PATH],
+      forcedActivePaths: [TALK_TEST_PROVIDER_API_KEY_PATH],
     });
     expect(respond).toHaveBeenCalledWith(true, {
       ok: true,
@@ -158,36 +167,6 @@ describe("secrets handlers", () => {
       diagnostics: ["note"],
       inactiveRefPaths: [TALK_TEST_PROVIDER_API_KEY_PATH],
     });
-  });
-
-  it("passes trimmed provider overrides to secrets.resolve", async () => {
-    const resolveSecrets = vi.fn().mockResolvedValue({
-      assignments: [],
-      diagnostics: [],
-      inactiveRefPaths: [],
-    });
-    const handlers = createHandlers({ resolveSecrets });
-    const respond = vi.fn();
-
-    await invokeSecretsResolve({
-      handlers,
-      respond,
-      commandName: "infer web search",
-      targetIds: ["talk.providers.*.apiKey"],
-      providerOverrides: { webSearch: " tavily ", webFetch: " " },
-    });
-
-    expect(resolveSecrets).toHaveBeenCalledWith({
-      commandName: "infer web search",
-      targetIds: ["talk.providers.*.apiKey"],
-      providerOverrides: { webSearch: "tavily" },
-    });
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        ok: true,
-      }),
-    );
   });
 
   it("rejects invalid secrets.resolve params", async () => {

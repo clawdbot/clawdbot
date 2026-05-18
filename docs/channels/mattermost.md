@@ -319,6 +319,8 @@ Config:
 
 Send messages with clickable buttons. When a user clicks a button, the agent receives the selection and can respond.
 
+Normal agent replies can also include semantic `presentation` payloads. OpenClaw renders value buttons as Mattermost interactive buttons, keeps URL buttons visible in the message text, and downgrades select menus to readable text.
+
 Enable buttons by adding `inlineButtons` to the channel capabilities:
 
 ```json5

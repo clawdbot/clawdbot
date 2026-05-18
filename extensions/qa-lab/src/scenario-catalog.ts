@@ -93,7 +93,8 @@ const qaScenarioGatewayRuntimeSchema = z.object({
   forwardHostHome: z.boolean().optional(),
 });
 
-const qaRuntimeParityTierSchema = z.enum(["standard", "optional", "live-only", "soak"]);
+export const QA_RUNTIME_PARITY_TIERS = ["standard", "optional", "live-only", "soak"] as const;
+const qaRuntimeParityTierSchema = z.enum(QA_RUNTIME_PARITY_TIERS);
 
 const qaFlowCallActionSchema = z.object({
   call: z.string().trim().min(1),

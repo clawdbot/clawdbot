@@ -3,7 +3,7 @@ import fs, { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it, test } from "vitest";
 import { isScannable, scanDirectoryWithSummary } from "../security/skill-scanner.js";
 import { expectNoReaddirSyncDuring } from "../test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, toRepoPath, toRepoRelativePath } from "../test-utils/repo-files.js";
@@ -22,8 +22,6 @@ type PublishablePluginPackage = {
 };
 
 const execFileAsync = promisify(execFile);
-const PACKAGE_SCAN_CONCURRENCY = 12;
-
 const REQUIRED_REVIEWED_PUBLISHABLE_CRITICAL_FINDINGS = new Set([
   "@openclaw/acpx:dangerous-exec:src/codex-auth-bridge.ts",
   "@openclaw/acpx:dangerous-exec:src/runtime-internals/mcp-proxy.mjs",
@@ -44,14 +42,6 @@ const OPTIONAL_REVIEWED_PUBLISHABLE_DIST_CRITICAL_FINDINGS = new Set([
   "@openclaw/slack:dynamic-code-execution:dist/outbound-payload.test-harness-<hash>.js",
   "@openclaw/voice-call:dangerous-exec:dist/runtime-entry-<hash>.js",
 ]);
-
-const tempDirs: string[] = [];
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
 
 function parseNpmPackFiles(raw: string, packageName: string): string[] {
   const parsed = JSON.parse(raw) as unknown;
@@ -116,7 +106,6 @@ function stageScannerRelevantPackedFiles(
   packedFiles: readonly string[],
 ): string {
   const stageDir = mkdtempSync(join(tmpdir(), "openclaw-plugin-npm-scan-"));
-  tempDirs.push(stageDir);
 
   for (const packedPath of packedFiles) {
     if (!isScannerWalkedPackedPath(packedPath)) {
@@ -212,27 +201,6 @@ function collectPublishablePluginPackages(): PublishablePluginPackage[] {
     .toSorted((left, right) => left.packageName.localeCompare(right.packageName));
 }
 
-async function mapWithConcurrency<T, U>(
-  items: readonly T[],
-  concurrency: number,
-  fn: (item: T) => Promise<U>,
-): Promise<U[]> {
-  const results: U[] = [];
-  results.length = items.length;
-  let nextIndex = 0;
-  const workerCount = Math.min(concurrency, items.length);
-  await Promise.all(
-    Array.from({ length: workerCount }, async () => {
-      while (nextIndex < items.length) {
-        const index = nextIndex;
-        nextIndex += 1;
-        results[index] = await fn(items[index]);
-      }
-    }),
-  );
-  return results;
-}
-
 async function scanPublishablePluginPackage(plugin: PublishablePluginPackage): Promise<{
   reviewedCriticalFindings: string[];
   expectedReviewedCriticalFindings: string[];
@@ -251,10 +219,15 @@ async function scanPublishablePluginPackage(plugin: PublishablePluginPackage): P
     }
   }
   const stageDir = stageScannerRelevantPackedFiles(plugin.packageDir, packedFiles);
-  const summary = await scanDirectoryWithSummary(stageDir, {
-    excludeTestFiles: true,
-    maxFiles: 10_000,
-  });
+  let summary: Awaited<ReturnType<typeof scanDirectoryWithSummary>>;
+  try {
+    summary = await scanDirectoryWithSummary(stageDir, {
+      excludeTestFiles: true,
+      maxFiles: 10_000,
+    });
+  } finally {
+    rmSync(stageDir, { recursive: true, force: true });
+  }
 
   for (const finding of summary.findings) {
     if (finding.severity !== "critical") {
@@ -280,6 +253,23 @@ async function scanPublishablePluginPackage(plugin: PublishablePluginPackage): P
 }
 
 describe("publishable plugin npm package install security scan", () => {
+  const publishablePluginPackages = collectPublishablePluginPackages();
+
+  it("covers every package with required reviewed critical findings", () => {
+    const publishablePackageNames = new Set(
+      publishablePluginPackages.map((plugin) => plugin.packageName),
+    );
+    const missingPackages = [
+      ...new Set(
+        [...REQUIRED_REVIEWED_PUBLISHABLE_CRITICAL_FINDINGS].map((key) =>
+          key.slice(0, key.indexOf(":")),
+        ),
+      ),
+    ].filter((packageName) => !publishablePackageNames.has(packageName));
+
+    expect(missingPackages.toSorted()).toStrictEqual([]);
+  });
+
   it("lists publishable plugin packages without scanning extension directories in-process", () => {
     expectNoReaddirSyncDuring(() => {
       const packages = collectPublishablePluginPackages();
@@ -291,31 +281,23 @@ describe("publishable plugin npm package install security scan", () => {
     });
   });
 
-  it("keeps npm-published plugin files clear of unexpected critical hits", async () => {
-    const unexpectedCriticalFindings: string[] = [];
-    const reviewedCriticalFindings = new Set<string>();
-    const expectedReviewedCriticalFindings = new Set(
-      REQUIRED_REVIEWED_PUBLISHABLE_CRITICAL_FINDINGS,
-    );
-
-    const packageResults = await mapWithConcurrency(
-      collectPublishablePluginPackages(),
-      PACKAGE_SCAN_CONCURRENCY,
-      scanPublishablePluginPackage,
-    );
-    for (const result of packageResults) {
+  test.each(publishablePluginPackages)(
+    "keeps $packageName files clear of unexpected critical hits",
+    async (plugin) => {
+      const result = await scanPublishablePluginPackage(plugin);
+      const expectedReviewedCriticalFindings = new Set(
+        [...REQUIRED_REVIEWED_PUBLISHABLE_CRITICAL_FINDINGS].filter((key) =>
+          key.startsWith(`${plugin.packageName}:`),
+        ),
+      );
       for (const key of result.expectedReviewedCriticalFindings) {
         expectedReviewedCriticalFindings.add(key);
       }
-      for (const key of result.reviewedCriticalFindings) {
-        reviewedCriticalFindings.add(key);
-      }
-      unexpectedCriticalFindings.push(...result.unexpectedCriticalFindings);
-    }
 
-    expect(unexpectedCriticalFindings.toSorted()).toStrictEqual([]);
-    expect([...reviewedCriticalFindings].toSorted()).toEqual(
-      [...expectedReviewedCriticalFindings].toSorted(),
-    );
-  });
+      expect(result.unexpectedCriticalFindings.toSorted()).toStrictEqual([]);
+      expect(result.reviewedCriticalFindings.toSorted()).toEqual(
+        [...expectedReviewedCriticalFindings].toSorted(),
+      );
+    },
+  );
 });

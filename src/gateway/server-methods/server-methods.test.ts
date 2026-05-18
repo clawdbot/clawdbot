@@ -589,6 +589,13 @@ describe("projectRecentChatDisplayMessages", () => {
         { role: "assistant", content: "older answer", timestamp: 2 },
         { role: "assistant", content: "NO_REPLY", timestamp: 3 },
         { role: "assistant", content: "ANNOUNCE_SKIP", timestamp: 4 },
+        {
+          role: "custom",
+          customType: "openclaw.runtime-context",
+          content: "hidden runtime context",
+          display: false,
+          timestamp: 5,
+        },
       ],
       { maxMessages: 1 },
     );

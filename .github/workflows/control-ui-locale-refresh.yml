@@ -138,7 +138,7 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENCLAW_DOCS_I18N_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OPENCLAW_CONTROL_UI_I18N_PROVIDER: ${{ secrets.ANTHROPIC_API_KEY != '' && 'anthropic' || 'openai' }}
-          OPENCLAW_CONTROL_UI_I18N_MODEL: ${{ secrets.ANTHROPIC_API_KEY != '' && 'claude-opus-4-6' || vars.OPENCLAW_CI_OPENAI_MODEL_BARE }}
+          OPENCLAW_CONTROL_UI_I18N_MODEL: ${{ secrets.ANTHROPIC_API_KEY != '' && 'claude-opus-4-7' || vars.OPENCLAW_CI_OPENAI_MODEL_BARE }}
           OPENCLAW_CONTROL_UI_I18N_THINKING: low
           OPENCLAW_CONTROL_UI_I18N_AUTH_OPTIONAL: "1"
           LOCALE: ${{ matrix.locale }}

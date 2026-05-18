@@ -259,6 +259,26 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(agentParams.cleanupBundleMcpOnRunEnd).toBe(true);
   });
 
+  it("keeps controller ownership separate from completion ownership", async () => {
+    await spawnSubagentDirect(
+      {
+        task: "background work",
+      },
+      {
+        agentSessionKey: "agent:main:telegram:default:direct:456",
+        completionOwnerKey: "agent:main:main",
+        agentChannel: "telegram",
+        agentAccountId: "default",
+        agentTo: "telegram:direct:456",
+      },
+    );
+
+    const registerInput = firstRegisteredSubagentRun();
+    expect(registerInput.controllerSessionKey).toBe("agent:main:telegram:default:direct:456");
+    expect(registerInput.requesterSessionKey).toBe("agent:main:main");
+    expect(registerInput.requesterDisplayKey).toBe("agent:main:main");
+  });
+
   it("omits requesterOrigin threadId when no requester thread is provided", async () => {
     hoisted.callGatewayMock.mockImplementation(async (request: { method?: string }) => {
       if (request.method === "agent") {

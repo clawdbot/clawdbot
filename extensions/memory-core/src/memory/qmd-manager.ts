@@ -1952,21 +1952,22 @@ export class QmdMemoryManager implements MemorySearchManager {
     query: string,
     searchCommand?: string,
   ): Array<{ type: string; query: string }> {
+    const semanticQuery = normalizeQmdSemanticQuery(query);
     switch (searchCommand) {
       case "search":
         // BM25 keyword search only
         return [{ type: "lex", query }];
       case "vsearch":
         // Vector search only
-        return [{ type: "vec", query }];
+        return [{ type: "vec", query: semanticQuery }];
       case "query":
       case undefined:
       default:
         // Full hybrid: lex + vec + hyde (query expansion)
         return [
           { type: "lex", query },
-          { type: "vec", query },
-          { type: "hyde", query },
+          { type: "vec", query: semanticQuery },
+          { type: "hyde", query: semanticQuery },
         ];
     }
   }
@@ -3148,4 +3149,8 @@ function resolveQmdManagerRuntimeConfig(
     syncSettings: resolveMemorySearchSyncConfig(cfg, agentId),
     contextLimits: resolveAgentContextLimits(cfg, agentId),
   };
+}
+
+function normalizeQmdSemanticQuery(query: string): string {
+  return query.replace(/(\w)-(?=\w)/g, "$1 ");
 }

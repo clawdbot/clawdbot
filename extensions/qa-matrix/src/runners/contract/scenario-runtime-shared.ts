@@ -118,9 +118,9 @@ export function buildMatrixBlockStreamingPrompt(
   secondText: string,
 ) {
   return [
-    `${sutUserId} Block streaming QA check: reply with exactly this two-line body and no extra text:`,
-    firstText,
-    secondText,
+    `${sutUserId} Block streaming QA check: first reply with only this exact marker: \`${firstText}\`.`,
+    "Then use the read tool exactly once on `QA_KICKOFF_TASK.md`.",
+    `After that read completes, reply with only this exact marker: \`${secondText}\`.`,
   ].join("\n");
 }
 

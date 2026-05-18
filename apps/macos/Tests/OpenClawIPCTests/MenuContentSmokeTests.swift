@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import Testing
 @testable import OpenClaw
@@ -37,5 +38,16 @@ struct MenuContentSmokeTests {
         state.heartbeatsEnabled = true
         let view = MenuContent(state: state, updater: nil)
         _ = view.body
+    }
+
+    @Test func `dock menu exposes primary shortcuts`() throws {
+        let delegate = AppDelegate()
+        let menu = try #require(delegate.applicationDockMenu(NSApplication.shared))
+        let titles = menu.items.map(\.title)
+
+        #expect(titles.contains("Open Dashboard"))
+        #expect(titles.contains("Open Chat"))
+        #expect(titles.contains("Open Canvas") || titles.contains("Close Canvas"))
+        #expect(titles.contains("Settings…"))
     }
 }

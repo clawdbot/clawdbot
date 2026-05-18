@@ -53,7 +53,10 @@ fun buildGatewayTlsConfig(
   onStore: ((String) -> Unit)? = null,
 ): GatewayTlsConfig? {
   if (params == null) return null
-  val expected = params.expectedFingerprint?.let(::normalizeFingerprint)
+  val expected =
+    params.expectedFingerprint
+      ?.let(::normalizeGatewayTlsFingerprint)
+      ?.takeIf { it.isNotBlank() }
   val defaultTrust = defaultTrustManager()
 
   @SuppressLint("CustomX509TrustManager")
@@ -200,7 +203,7 @@ private fun sha256Hex(data: ByteArray): String {
   return out.toString()
 }
 
-private fun normalizeFingerprint(raw: String): String {
+fun normalizeGatewayTlsFingerprint(raw: String): String {
   val stripped =
     raw
       .trim()

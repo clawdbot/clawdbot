@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 
 vi.mock("../../agents/fast-mode.js", () => ({
@@ -57,6 +57,20 @@ async function buildKiraStatusReply(cfg: OpenClawConfig) {
 }
 
 describe("buildStatusReply", () => {
+  beforeAll(async () => {
+    await buildKiraStatusReply({
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.4",
+        },
+      },
+      channels: {
+        whatsapp: { allowFrom: ["*"] },
+      },
+    } as OpenClawConfig);
+  });
+
   it("shows per-agent thinkingDefault in the status card", async () => {
     const cfg = {
       session: { mainKey: "main", scope: "per-sender" },

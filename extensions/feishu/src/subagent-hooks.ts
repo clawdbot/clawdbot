@@ -270,7 +270,16 @@ type FeishuSubagentEndedEvent = {
 };
 
 type FeishuSubagentSpawningResult =
-  | { status: "ok"; threadBindingReady?: boolean }
+  | {
+      status: "ok";
+      threadBindingReady?: boolean;
+      deliveryOrigin?: {
+        channel: "feishu";
+        accountId?: string;
+        to?: string;
+        threadId?: string | number;
+      };
+    }
   | { status: "error"; error: string }
   | undefined;
 
@@ -347,6 +356,13 @@ export async function handleFeishuSubagentSpawning(
     return {
       status: "ok" as const,
       threadBindingReady: true,
+      deliveryOrigin: resolveFeishuDeliveryOrigin({
+        conversationId: binding.conversationId,
+        parentConversationId: binding.parentConversationId,
+        accountId: binding.accountId,
+        deliveryTo: binding.deliveryTo,
+        deliveryThreadId: binding.deliveryThreadId,
+      }),
     };
   } catch (err) {
     return {

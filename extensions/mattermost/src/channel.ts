@@ -8,17 +8,19 @@ import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/cha
 import { createLoggedPairingApprovalNotifier } from "openclaw/plugin-sdk/channel-pairing";
 import { createRestrictSendersChannelSecurity } from "openclaw/plugin-sdk/channel-policy";
 import {
+  attachChannelToResult,
   createAttachedChannelResultAdapter,
   type ChannelOutboundAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
 import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import {
+  type MessagePresentation,
   normalizeMessagePresentation,
-  presentationToInteractiveReply,
   renderMessagePresentationFallbackText,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { resolvePayloadMediaUrls, sendTextMediaPayload } from "openclaw/plugin-sdk/reply-payload";
 import { isPrivateNetworkOptInEnabled } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   createComputedAccountStatusAdapter,
@@ -58,6 +60,49 @@ import { mattermostSetupWizard } from "./setup-surface.js";
 import type { MattermostConfig } from "./types.js";
 
 const loadMattermostChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
+
+function buildMattermostPresentationButtons(presentation: MessagePresentation) {
+  return presentation.blocks
+    .filter((block) => block.type === "buttons")
+    .map((block) =>
+      block.buttons.flatMap((button) =>
+        button.value
+          ? [
+              {
+                text: button.label,
+                callback_data: button.value,
+                style: button.style,
+              },
+            ]
+          : [],
+      ),
+    );
+}
+
+const MATTERMOST_PRESENTATION_CAPABILITIES = {
+  supported: true,
+  buttons: true,
+  selects: false,
+  context: true,
+  divider: false,
+  limits: {
+    text: {
+      markdownDialect: "markdown",
+    },
+  },
+} satisfies ChannelOutboundAdapter["presentationCapabilities"];
+
+function hasMattermostPresentationButtons(presentation: MessagePresentation): boolean {
+  return buildMattermostPresentationButtons(presentation).some((row) => row.length > 0);
+}
+
+function readMattermostPresentationButtons(payload: {
+  channelData?: Record<string, unknown>;
+}): Array<unknown> | undefined {
+  const buttons = (payload.channelData?.mattermost as { presentationButtons?: unknown } | undefined)
+    ?.presentationButtons;
+  return Array.isArray(buttons) ? buttons : undefined;
+}
 
 type MattermostDirectoryListParams = Parameters<
   NonNullable<NonNullable<ChannelPlugin["directory"]>["listGroups"]>
@@ -236,23 +281,7 @@ const mattermostMessageActions: ChannelMessageActionAdapter = {
       cfg,
       accountId: resolvedAccountId,
       replyToId,
-      buttons: presentation
-        ? presentationToInteractiveReply(presentation)
-            ?.blocks.filter((block) => block.type === "buttons")
-            .map((block) =>
-              block.buttons.flatMap((button) =>
-                button.value
-                  ? [
-                      {
-                        text: button.label,
-                        callback_data: button.value,
-                        style: button.style,
-                      },
-                    ]
-                  : [],
-              ),
-            )
-        : undefined,
+      buttons: presentation ? buildMattermostPresentationButtons(presentation) : undefined,
       attachmentText: typeof params.attachmentText === "string" ? params.attachmentText : undefined,
       mediaUrl,
     });
@@ -306,10 +335,56 @@ const mattermostOutbound: ChannelOutboundAdapter = {
     durableFinal: {
       text: true,
       media: true,
+      payload: true,
       replyTo: true,
       thread: true,
       messageSendingHooks: true,
     },
+  },
+  presentationCapabilities: MATTERMOST_PRESENTATION_CAPABILITIES,
+  renderPresentation: ({ payload, presentation }) => {
+    if (payload.mediaUrls && payload.mediaUrls.length > 1) {
+      return null;
+    }
+    const buttons = buildMattermostPresentationButtons(presentation);
+    if (!hasMattermostPresentationButtons(presentation)) {
+      return null;
+    }
+    return {
+      ...payload,
+      text: renderMessagePresentationFallbackText({ text: payload.text, presentation }),
+      channelData: {
+        ...payload.channelData,
+        mattermost: {
+          ...(payload.channelData?.mattermost as Record<string, unknown> | undefined),
+          presentationButtons: buttons,
+        },
+      },
+    };
+  },
+  sendPayload: async (ctx) => {
+    const buttons = readMattermostPresentationButtons(ctx.payload);
+    if (buttons?.length) {
+      const mediaUrl = resolvePayloadMediaUrls({
+        ...ctx.payload,
+        mediaUrl: ctx.payload.mediaUrl ?? ctx.mediaUrl,
+      })
+        .map((url) => url.trim())
+        .find(Boolean);
+      const result = await (
+        await loadMattermostChannelRuntime()
+      ).sendMessageMattermost(ctx.to, ctx.payload.text ?? ctx.text, {
+        cfg: ctx.cfg,
+        accountId: ctx.accountId ?? undefined,
+        mediaUrl,
+        mediaLocalRoots: ctx.mediaLocalRoots,
+        mediaReadFile: ctx.mediaReadFile,
+        replyToId: ctx.replyToId ?? (ctx.threadId != null ? String(ctx.threadId) : undefined),
+        buttons,
+      });
+      return attachChannelToResult("mattermost", result);
+    }
+    return await sendTextMediaPayload({ channel: "mattermost", ctx, adapter: mattermostOutbound });
   },
   resolveTarget: ({ to }) => {
     const trimmed = to?.trim();

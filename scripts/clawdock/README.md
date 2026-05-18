@@ -182,7 +182,7 @@ See `.env.example` for all supported keys.
 
 The `Dockerfile` supports two optional build args:
 
-- `OPENCLAW_DOCKER_APT_PACKAGES` — extra apt packages to install (e.g. `ffmpeg`)
+- `OPENCLAW_IMAGE_APT_PACKAGES` — extra apt packages to install (e.g. `ffmpeg`); also accepts legacy `OPENCLAW_DOCKER_APT_PACKAGES`
 - `OPENCLAW_INSTALL_BROWSER=1` — pre-install Chromium for browser automation (adds ~300MB, but skips the 60-90s Playwright install on each container start)
 
 ### How It Works in Docker

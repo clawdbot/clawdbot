@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 
 const { spawnMock } = vi.hoisted(() => ({
   spawnMock: vi.fn(),
@@ -28,18 +29,6 @@ function expectTaskkillCall(index: number, args: string[]) {
   ]);
 }
 
-async function withPlatform<T>(platform: NodeJS.Platform, run: () => Promise<T> | T): Promise<T> {
-  const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
-  Object.defineProperty(process, "platform", { value: platform, configurable: true });
-  try {
-    return await run();
-  } finally {
-    if (originalPlatform) {
-      Object.defineProperty(process, "platform", originalPlatform);
-    }
-  }
-}
-
 describe("killProcessTree", () => {
   let killSpy: ReturnType<typeof vi.spyOn>;
 
@@ -67,7 +56,7 @@ describe("killProcessTree", () => {
       return true;
     }) as typeof process.kill);
 
-    await withPlatform("win32", async () => {
+    await withMockedPlatform("win32", async () => {
       killProcessTree(4242, { graceMs: 25 });
 
       expect(spawnMock).toHaveBeenCalledTimes(1);
@@ -86,7 +75,7 @@ describe("killProcessTree", () => {
       return true;
     }) as typeof process.kill);
 
-    await withPlatform("win32", async () => {
+    await withMockedPlatform("win32", async () => {
       killProcessTree(5252, { graceMs: 10 });
 
       await vi.advanceTimersByTimeAsync(10);
@@ -108,7 +97,7 @@ describe("killProcessTree", () => {
       return true;
     }) as typeof process.kill);
 
-    await withPlatform("linux", async () => {
+    await withMockedPlatform("linux", async () => {
       killProcessTree(3333, { graceMs: 10 });
 
       await vi.advanceTimersByTimeAsync(10);
@@ -127,7 +116,7 @@ describe("killProcessTree", () => {
       return true;
     }) as typeof process.kill);
 
-    await withPlatform("linux", async () => {
+    await withMockedPlatform("linux", async () => {
       killProcessTree(4444, { graceMs: 5 });
 
       await vi.advanceTimersByTimeAsync(5);
@@ -145,7 +134,7 @@ describe("killProcessTree", () => {
       return true;
     }) as typeof process.kill);
 
-    await withPlatform("linux", async () => {
+    await withMockedPlatform("linux", async () => {
       killProcessTree(5555, { graceMs: 10, detached: false });
       await vi.advanceTimersByTimeAsync(10);
 
@@ -169,7 +158,7 @@ describe("killProcessTree", () => {
       return true;
     }) as typeof process.kill);
 
-    await withPlatform("linux", async () => {
+    await withMockedPlatform("linux", async () => {
       killProcessTree(6666, { graceMs: 10 });
       await vi.advanceTimersByTimeAsync(10);
 

@@ -87,11 +87,10 @@ const MIN_MUSIC_GENERATION_TIMEOUT_MS = 120_000;
 const MusicGenerateToolSchema = Type.Object({
   action: Type.Optional(
     Type.String({
-      description:
-        'Optional action: "generate" (default), "status" to inspect the active session task, or "list" to inspect available providers/models.',
+      description: '"generate" default, "status" active task, "list" providers/models.',
     }),
   ),
-  prompt: Type.Optional(Type.String({ description: "Music generation prompt." })),
+  prompt: Type.Optional(Type.String({ description: "Music prompt: style, genre, mood, purpose." })),
   lyrics: Type.Optional(
     Type.String({
       description:
@@ -100,39 +99,38 @@ const MusicGenerateToolSchema = Type.Object({
   ),
   instrumental: Type.Optional(
     Type.Boolean({
-      description: "Optional toggle for instrumental-only output when the provider supports it.",
+      description: "Instrumental-only toggle.",
     }),
   ),
   image: Type.Optional(
     Type.String({
-      description: "Optional single reference image path or URL.",
+      description: "Reference image path/URL.",
     }),
   ),
   images: Type.Optional(
     Type.Array(Type.String(), {
-      description: `Optional reference images (up to ${MAX_INPUT_IMAGES}).`,
+      description: `Reference images; max ${MAX_INPUT_IMAGES}.`,
     }),
   ),
   model: Type.Optional(
     Type.String({
-      description: "Optional provider/model override, e.g. google/lyria-3-pro-preview.",
+      description: "Provider/model override, e.g. google/lyria-3-pro-preview.",
     }),
   ),
   durationSeconds: Type.Optional(
     Type.Number({
-      description: "Optional target duration in seconds when the provider supports duration hints.",
+      description: "Target seconds; provider may clamp.",
       minimum: 1,
     }),
   ),
   format: Type.Optional(
     Type.String({
-      description: 'Optional output format hint: "mp3" or "wav" when the provider supports it.',
+      description: "Output format: mp3, wav.",
     }),
   ),
   filename: Type.Optional(
     Type.String({
-      description:
-        "Optional output filename hint. OpenClaw preserves the basename and saves under its managed media directory.",
+      description: "Output filename hint; basename preserved in managed media dir.",
     }),
   ),
 });
@@ -601,7 +599,7 @@ export function createMusicGenerateTool(options?: {
     name: "music_generate",
     displaySummary: "Generate music",
     description:
-      'Create actual audio/music tracks from song, jingle, beat, loop, soundtrack, anthem, or instrumental requests. If the user asks to make/generate/create a song or music, call music_generate; do not just write lyrics unless they ask for lyrics/text only. Put style, genre, mood, tempo, instruments, and purpose in prompt. Use lyrics only for exact sung words. In session-backed chats, generation runs as a background task; do not call music_generate again for the same request, wait for the completion event, then send the generated attachments through the message tool. Use action="status" to inspect the active task.',
+      'Create audio/music for song, jingle, beat, loop, soundtrack, anthem, instrumental requests. If user asks make/generate/create song/music, call music_generate; do not just write lyrics unless lyrics/text only. Prompt gets style/genre/mood/tempo/instruments/purpose. lyrics only exact sung words. Session chats: background task; do not call again for same request; wait completion, send attachments via message tool. "status" checks active task.',
     parameters: MusicGenerateToolSchema,
     execute: async (_toolCallId, rawArgs) => {
       const args = rawArgs as Record<string, unknown>;

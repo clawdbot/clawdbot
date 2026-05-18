@@ -1,4 +1,9 @@
 import {
+  isProviderAuthProfileConfigured,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/provider-auth";
+import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
+import {
   createRealtimeTranscriptionWebSocketSession,
   type RealtimeTranscriptionProviderConfig,
   type RealtimeTranscriptionProviderPlugin,
@@ -9,6 +14,7 @@ import {
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { XAI_BASE_URL } from "./model-definitions.js";
+import { xaiUserAgentHeaderFor } from "./src/xai-user-agent.js";
 
 type XaiRealtimeTranscriptionEncoding = "pcm" | "mulaw" | "alaw";
 
@@ -24,6 +30,8 @@ type XaiRealtimeTranscriptionProviderConfig = {
 
 type XaiRealtimeTranscriptionSessionConfig = RealtimeTranscriptionSessionCreateRequest & {
   apiKey: string;
+  // Late-bound bearer; called per (re)connect.
+  resolveApiKey?: () => Promise<string>;
   baseUrl: string;
   sampleRate: number;
   encoding: XaiRealtimeTranscriptionEncoding;
@@ -219,7 +227,13 @@ function createXaiRealtimeTranscriptionSession(
     providerId: "xai",
     callbacks: config,
     url: () => toXaiRealtimeWsUrl(config),
-    headers: { Authorization: `Bearer ${config.apiKey}` },
+    headers: async () => {
+      const apiKey = config.resolveApiKey ? await config.resolveApiKey() : config.apiKey;
+      return {
+        Authorization: `Bearer ${apiKey}`,
+        ...xaiUserAgentHeaderFor(config.baseUrl),
+      };
+    },
     connectTimeoutMs: XAI_REALTIME_STT_CONNECT_TIMEOUT_MS,
     closeTimeoutMs: XAI_REALTIME_STT_CLOSE_TIMEOUT_MS,
     maxReconnectAttempts: XAI_REALTIME_STT_MAX_RECONNECT_ATTEMPTS,
@@ -245,17 +259,18 @@ export function buildXaiRealtimeTranscriptionProvider(): RealtimeTranscriptionPr
     aliases: ["xai-realtime", "grok-stt-streaming"],
     autoSelectOrder: 25,
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
-    isConfigured: ({ providerConfig }) =>
-      Boolean(normalizeProviderConfig(providerConfig).apiKey || process.env.XAI_API_KEY),
+    isConfigured: ({ providerConfig, cfg }) =>
+      Boolean(normalizeProviderConfig(providerConfig).apiKey || process.env.XAI_API_KEY) ||
+      isProviderAuthProfileConfigured({ provider: "xai", cfg }),
     createSession: (req) => {
       const config = normalizeProviderConfig(req.providerConfig);
-      const apiKey = config.apiKey || process.env.XAI_API_KEY;
-      if (!apiKey) {
-        throw new Error("xAI API key missing");
-      }
+      // createSession must stay sync per RealtimeTranscriptionProviderPlugin; bearer is resolved lazily in headers().
+      const seedApiKey =
+        normalizeOptionalString(config.apiKey) ?? normalizeOptionalString(process.env.XAI_API_KEY);
       return createXaiRealtimeTranscriptionSession({
         ...req,
-        apiKey,
+        apiKey: seedApiKey ?? "",
+        resolveApiKey: () => resolveXaiRealtimeApiKey(config.apiKey, req.cfg),
         baseUrl: normalizeXaiRealtimeBaseUrl(config.baseUrl),
         sampleRate: config.sampleRate ?? XAI_REALTIME_STT_DEFAULT_SAMPLE_RATE,
         encoding: config.encoding ?? XAI_REALTIME_STT_DEFAULT_ENCODING,
@@ -265,4 +280,27 @@ export function buildXaiRealtimeTranscriptionProvider(): RealtimeTranscriptionPr
       });
     },
   };
+}
+
+// Resolve an xAI bearer for the realtime `/stt` WebSocket:
+// 1. Configured `plugins.entries.voice-call.config.streaming.providers.xai.apiKey`
+// 2. `XAI_API_KEY` env var
+// 3. xAI OAuth auth profile (cfg-scoped)
+async function resolveXaiRealtimeApiKey(
+  configApiKey: string | undefined,
+  cfg: OpenClawConfig | undefined,
+): Promise<string> {
+  const direct =
+    normalizeOptionalString(configApiKey) ?? normalizeOptionalString(process.env.XAI_API_KEY);
+  if (direct) {
+    return direct;
+  }
+  const auth = await resolveApiKeyForProvider({ provider: "xai", cfg });
+  const oauthKey = normalizeOptionalString(auth?.apiKey);
+  if (oauthKey) {
+    return oauthKey;
+  }
+  throw new Error(
+    "xAI credentials missing for realtime STT. Sign in with `openclaw onboard --auth-choice xai-oauth`, or run `openclaw onboard --auth-choice xai-api-key`, or set XAI_API_KEY.",
+  );
 }

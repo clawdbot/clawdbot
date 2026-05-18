@@ -24,6 +24,36 @@ gitcrawl search openclaw/openclaw --query "<scope or title keywords>" --mode hyb
 gitcrawl cluster-detail openclaw/openclaw --id <cluster-id> --member-limit 20 --body-chars 280 --json
 ```
 
+## Claim specific review targets
+
+When a maintainer asks Codex to review, triage, fix, or land a specific OpenClaw issue/PR, check assignment before deep work.
+
+- Identify the requesting maintainer's GitHub login. In this environment, default Peter to `steipete`; if another maintainer is clearly the requester, use that maintainer's bare login.
+- Read current assignees with live `gh issue view` / `gh pr view`; `gitcrawl` is not enough for assignment state.
+- If unassigned, assign the requester before deep review. This is allowed for specific requested targets; do not auto-assign broad discovery candidates or shortlists.
+- If assigned to someone else, say so clearly before analysis and include assignment age:
+  - fresh: assigned within 6h; treat as actively owned unless user explicitly asks to continue or reassign
+  - stale: assigned 6h+ ago; treat as ownership hint, not a hard block; continue only with that caveat
+- If assigned to requester plus others, mention co-assignees and continue.
+- If assignment event time is unavailable, say `assigned, time unknown`; treat as assigned, not stale.
+- Never remove or replace assignees unless explicitly asked.
+
+Assignment time proof:
+
+```bash
+gh api "repos/openclaw/openclaw/issues/<number>/timeline" --paginate \
+  -H "Accept: application/vnd.github+json" \
+  --jq '[.[] | select(.event=="assigned") | {assignee:.assignee.login, assigner:.assigner.login, actor:.actor.login, created_at}]'
+```
+
+Use the newest `assigned` event for each current assignee. Issue timeline events expose `created_at`; GitHub GraphQL `AssignedEvent.createdAt` is also valid when REST pagination is awkward.
+
+Claim command for issues or PRs:
+
+```bash
+gh api -X POST "repos/openclaw/openclaw/issues/<number>/assignees" -f 'assignees[]=<login>' >/dev/null
+```
+
 ## Surface opener identity
 
 - For every reviewed, triaged, closed, or landed issue/PR, show the opener's human name when available, GitHub login, and account age.
@@ -217,6 +247,7 @@ gh search issues --repo openclaw/openclaw --match title,body --limit 50 \
   not correctness findings.
 - If bot review conversations exist on your PR, address them and resolve them yourself once fixed.
 - Leave a review conversation unresolved only when reviewer or maintainer judgment is still needed.
+- Before landing any PR with non-trivial code changes, run `$autoreview` until no accepted/actionable findings remain, unless equivalent manual review already covered it, the change is trivial/docs-only, or the user opts out.
 - When landing or merging any PR, follow the global `/landpr` process.
 - Use `scripts/committer "<msg>" <file...>` for scoped commits instead of manual `git add` and `git commit`.
 - Keep commit messages concise and action-oriented.

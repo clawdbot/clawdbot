@@ -113,94 +113,88 @@ const log = createSubsystemLogger("agents/tools/image-generate");
 const ImageGenerateToolSchema = Type.Object({
   action: Type.Optional(
     Type.String({
-      description:
-        'Optional action: "generate" (default), "status" to inspect the active session task, or "list" to inspect available providers/models.',
+      description: '"generate" default, "status" active task, "list" providers/models.',
     }),
   ),
-  prompt: Type.Optional(Type.String({ description: "Image generation prompt." })),
+  prompt: Type.Optional(Type.String({ description: "Image prompt." })),
   image: Type.Optional(
     Type.String({
-      description: "Optional reference image path or URL for edit mode.",
+      description: "Reference image path/URL for edit.",
     }),
   ),
   images: Type.Optional(
     Type.Array(Type.String(), {
-      description: `Optional reference images for edit mode (up to ${MAX_INPUT_IMAGES}).`,
+      description: `Reference images for edit; max ${MAX_INPUT_IMAGES}.`,
     }),
   ),
   model: Type.Optional(
     Type.String({
       description:
-        "Optional provider/model override, e.g. openai/gpt-image-2; use openai/gpt-image-1.5 for transparent OpenAI backgrounds.",
+        "Provider/model override, e.g. openai/gpt-image-2; transparent OpenAI: openai/gpt-image-1.5.",
     }),
   ),
   filename: Type.Optional(
     Type.String({
-      description:
-        "Optional output filename hint. OpenClaw preserves the basename and saves under its managed media directory.",
+      description: "Output filename hint; basename preserved in managed media dir.",
     }),
   ),
   size: Type.Optional(
     Type.String({
-      description:
-        "Optional size hint like 1024x1024, 1536x1024, 1024x1536, 2048x2048, or 3840x2160.",
+      description: "Size hint: 1024x1024, 1536x1024, 1024x1536, 2048x2048, 3840x2160.",
     }),
   ),
   aspectRatio: Type.Optional(
     Type.String({
-      description:
-        "Optional aspect ratio hint: 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, or 21:9.",
+      description: "Aspect ratio: 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9.",
     }),
   ),
   resolution: Type.Optional(
     Type.String({
-      description:
-        "Optional resolution hint: 1K, 2K, or 4K. Useful for Google edit/generation flows.",
+      description: "Resolution: 1K, 2K, 4K; useful for Google.",
     }),
   ),
   quality: optionalStringEnum(SUPPORTED_QUALITIES, {
-    description: "Optional quality hint: low, medium, high, or auto when the provider supports it.",
+    description: "Quality: low, medium, high, auto.",
   }),
   outputFormat: optionalStringEnum(SUPPORTED_OUTPUT_FORMATS, {
-    description: "Optional output format hint: png, jpeg, or webp when the provider supports it.",
+    description: "Output format: png, jpeg, webp.",
   }),
   background: optionalStringEnum(SUPPORTED_BACKGROUNDS, {
-    description:
-      "Optional background hint: transparent, opaque, or auto when the provider supports it. For transparent output use outputFormat png or webp.",
+    description: "Background: transparent, opaque, auto. Transparent needs png/webp output.",
   }),
   openai: Type.Optional(
     Type.Object({
       background: optionalStringEnum(SUPPORTED_BACKGROUNDS, {
         description:
-          "OpenAI-only background hint: transparent, opaque, or auto. For transparent output use outputFormat png or webp; OpenClaw routes the default OpenAI image model to gpt-image-1.5 for this mode.",
+          "OpenAI background: transparent, opaque, auto. Transparent needs png/webp; default model routes to gpt-image-1.5.",
       }),
       moderation: optionalStringEnum(SUPPORTED_OPENAI_MODERATIONS, {
-        description: "OpenAI-only moderation hint: low or auto.",
+        description: "OpenAI moderation: low, auto.",
       }),
       outputCompression: Type.Optional(
         Type.Number({
-          description: "OpenAI-only compression level for jpeg/webp outputFormat, 0-100.",
+          description: "OpenAI jpeg/webp compression 0-100.",
           minimum: 0,
           maximum: 100,
         }),
       ),
       user: Type.Optional(
         Type.String({
-          description: "OpenAI-only stable end-user identifier for abuse monitoring.",
+          description: "OpenAI stable end-user id.",
         }),
       ),
     }),
   ),
   count: Type.Optional(
     Type.Number({
-      description: `Optional number of images to request (1-${MAX_COUNT}).`,
+      description: `Image count 1-${MAX_COUNT}.`,
       minimum: 1,
       maximum: MAX_COUNT,
     }),
   ),
   timeoutMs: Type.Optional(
     Type.Number({
-      description: "Optional provider request timeout in milliseconds.",
+      description: "Provider timeout ms.",
       minimum: 1,
     }),
   ),
@@ -797,7 +791,7 @@ export function createImageGenerateTool(options?: {
     label: "Image Generation",
     name: "image_generate",
     description:
-      'Generate new images or edit reference images with the configured or inferred image-generation model. In session-backed chats, generation runs as a background task; do not call image_generate again for the same request, wait for the completion event, then send the generated attachments through the message tool. For transparent backgrounds, use outputFormat="png" or "webp" and background="transparent"; OpenAI also accepts openai.background and OpenClaw routes the default OpenAI image model to gpt-image-1.5 for that mode. Set agents.defaults.imageGenerationModel.primary to pick a provider/model. Providers declare their own auth/readiness; use action="list" to inspect registered providers, models, readiness, and auth hints; use action="status" to inspect the active task.',
+      'Create/edit images. Session chats: background task; do not call image_generate again for same request; wait completion, then send attachments via message tool. Transparent: outputFormat="png" or "webp" + background="transparent"; OpenAI also supports openai.background and routes default model to gpt-image-1.5. Use action="list" for providers/models/readiness/auth, "status" for active task.',
     parameters: ImageGenerateToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;

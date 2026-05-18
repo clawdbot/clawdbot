@@ -103,6 +103,40 @@ function getErrorCode(err: unknown): string | undefined {
   return undefined;
 }
 
+function getNumericHttpStatus(err: unknown): number | undefined {
+  if (!err || typeof err !== "object") {
+    return undefined;
+  }
+  const candidate = err as { error_code?: unknown; status?: unknown; statusCode?: unknown };
+  for (const value of [candidate.error_code, candidate.status, candidate.statusCode]) {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (/^\d+$/.test(trimmed)) {
+        return Number.parseInt(trimmed, 10);
+      }
+    }
+  }
+  return undefined;
+}
+
+export function isTelegramMisdirectedRequestError(err: unknown): boolean {
+  for (const candidate of collectTelegramErrorCandidates(err)) {
+    const code = normalizeCode(getErrorCode(candidate));
+    if (code === "421" || getNumericHttpStatus(candidate) === 421) {
+      return true;
+    }
+
+    const message = normalizeLowercaseStringOrEmpty(formatErrorMessage(candidate));
+    if (/\b421\b/.test(message) && message.includes("misdirected request")) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export type TelegramNetworkErrorContext = "polling" | "send" | "webhook" | "unknown";
 export type TelegramNetworkErrorOrigin = {
   method?: string | null;
@@ -161,6 +195,9 @@ export function isTelegramPollingNetworkError(err: unknown): boolean {
 export function isSafeToRetrySendError(err: unknown): boolean {
   if (!err) {
     return false;
+  }
+  if (isTelegramMisdirectedRequestError(err)) {
+    return true;
   }
   for (const candidate of collectTelegramErrorCandidates(err)) {
     const code = normalizeCode(getErrorCode(candidate));

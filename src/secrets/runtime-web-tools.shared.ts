@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
+import { setPathExistingStrict } from "./path-utils.js";
 import type {
   ResolverContext,
   SecretDefaults,
@@ -158,6 +159,33 @@ export function hasConfiguredSecretRef(
       defaults,
     }).ref,
   );
+}
+
+function getProviderEnvVars(provider: object): string[] {
+  return "envVars" in provider && Array.isArray(provider.envVars) ? provider.envVars : [];
+}
+
+function setResolvedCredentialPath(params: {
+  resolvedConfig: OpenClawConfig;
+  path: string;
+  value: string;
+}): void {
+  const pathSegments = params.path
+    .split(".")
+    .map((segment) => segment.trim())
+    .filter((segment) => segment.length > 0);
+  if (pathSegments.length === 0) {
+    return;
+  }
+  try {
+    setPathExistingStrict(
+      params.resolvedConfig as Record<string, unknown>,
+      pathSegments,
+      params.value,
+    );
+  } catch {
+    // Env-only provider defaults may not have a config path to mirror.
+  }
 }
 
 export type RuntimeWebProviderSurface<TProvider extends { id: string }> = {
@@ -356,7 +384,7 @@ export async function resolveRuntimeWebProviderSelection<
       const resolution = await params.resolveSecretInput({
         value,
         path,
-        envVars: "envVars" in provider && Array.isArray(provider.envVars) ? provider.envVars : [],
+        envVars: getProviderEnvVars(provider),
       });
       let selectedCandidatePath = path;
       let selectedCandidateResolution = resolution;
@@ -372,8 +400,31 @@ export async function resolveRuntimeWebProviderSelection<
           selectedCandidateResolution = await params.resolveSecretInput({
             value: fallback.value,
             path: fallback.path,
-            envVars: [],
+            envVars: getProviderEnvVars(provider),
           });
+        }
+      } else if (resolution.source === "env" && !resolution.secretRefConfigured) {
+        const fallback = params.readConfiguredCredentialFallback?.({
+          provider,
+          config: params.sourceConfig,
+          toolConfig: params.toolConfig,
+        });
+        if (
+          fallback?.value !== undefined &&
+          params.hasConfiguredSecretRef(fallback.value, params.defaults)
+        ) {
+          const fallbackResolution = await params.resolveSecretInput({
+            value: fallback.value,
+            path: fallback.path,
+            envVars: getProviderEnvVars(provider),
+          });
+          if (fallbackResolution.source === "secretRef" && fallbackResolution.value) {
+            setResolvedCredentialPath({
+              resolvedConfig: params.resolvedConfig,
+              path: fallback.path,
+              value: fallbackResolution.value,
+            });
+          }
         }
       }
 
@@ -413,6 +464,11 @@ export async function resolveRuntimeWebProviderSelection<
         selectedProvider = provider.id;
         selectedResolution = selectedCandidateResolution;
         if (selectedCandidateResolution.value) {
+          setResolvedCredentialPath({
+            resolvedConfig: params.resolvedConfig,
+            path: selectedCandidatePath,
+            value: selectedCandidateResolution.value,
+          });
           params.setResolvedCredential({
             resolvedConfig: params.resolvedConfig,
             provider,
@@ -425,6 +481,11 @@ export async function resolveRuntimeWebProviderSelection<
       if (selectedCandidateResolution.value) {
         selectedProvider = provider.id;
         selectedResolution = selectedCandidateResolution;
+        setResolvedCredentialPath({
+          resolvedConfig: params.resolvedConfig,
+          path: selectedCandidatePath,
+          value: selectedCandidateResolution.value,
+        });
         params.setResolvedCredential({
           resolvedConfig: params.resolvedConfig,
           provider,

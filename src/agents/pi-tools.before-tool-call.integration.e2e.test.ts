@@ -313,6 +313,46 @@ describe("before_tool_call hook deduplication (#15502)", () => {
     expect(beforeToolCallHook).toHaveBeenCalledTimes(1);
   });
 
+  it("passes hook context for unwrapped tool definitions", async () => {
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    const baseTool = { name: "exec", execute, description: "exec", parameters: {} } as any;
+    const [def] = toToolDefinitions([baseTool], {
+      agentId: "code-agent",
+      sessionKey: "agent:code-agent:main",
+      sessionId: "session-code",
+      runId: "run-code",
+      channelId: "channel-code",
+    });
+    const extensionContext = {} as Parameters<typeof def.execute>[4];
+
+    await def.execute(
+      "call-code-exec",
+      { code: "echo hi" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(beforeToolCallHook).toHaveBeenCalledTimes(1);
+    expect(beforeToolCallHook).toHaveBeenCalledWith(
+      {
+        toolName: "exec",
+        params: { code: "echo hi" },
+        runId: "run-code",
+        toolCallId: "call-code-exec",
+      },
+      {
+        toolName: "exec",
+        agentId: "code-agent",
+        sessionKey: "agent:code-agent:main",
+        sessionId: "session-code",
+        runId: "run-code",
+        toolCallId: "call-code-exec",
+        channelId: "channel-code",
+      },
+    );
+  });
+
   it("preserves the hook marker when abort wrapping a hooked tool", () => {
     const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
     const baseTool = { name: "Bash", execute, description: "bash", parameters: {} } as any;

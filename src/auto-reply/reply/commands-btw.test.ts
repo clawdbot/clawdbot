@@ -155,11 +155,52 @@ describe("handleBtwCommand", () => {
       sessionEntry: params.sessionEntry,
       resolvedThinkLevel: "off",
       resolvedReasoningLevel: "off",
+      messageChannel: "whatsapp",
+      messageProvider: "whatsapp",
     });
     expect(String(runnerArgs.agentDir)).toContain("/agents/main/agent");
     expect(result).toEqual({
       shouldContinue: false,
       reply: { text: "nothing important", btw: { question: "what changed?" } },
+    });
+  });
+
+  it("uses the originating target before the command transport target", async () => {
+    const params = buildParams("/btw what changed?");
+    params.ctx.OriginatingTo = "channel:source";
+    params.command.to = "slash:transport";
+    params.agentDir = "/tmp/agent";
+    params.sessionEntry = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+    };
+    runBtwSideQuestionMock.mockResolvedValue({ text: "source target" });
+
+    await handleBtwCommand(params, true);
+
+    expectObjectFields(mockFirstObjectArg(runBtwSideQuestionMock), {
+      currentChannelId: "channel:source",
+    });
+  });
+
+  it("keeps provider and conversation target separate for side-question approvals", async () => {
+    const params = buildParams("/btw what changed?");
+    params.command.channel = "telegram";
+    params.command.channelId = "telegram";
+    params.command.to = "+2000";
+    params.agentDir = "/tmp/agent";
+    params.sessionEntry = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+    };
+    runBtwSideQuestionMock.mockResolvedValue({ text: "targeted answer" });
+
+    await handleBtwCommand(params, true);
+
+    expectObjectFields(mockFirstObjectArg(runBtwSideQuestionMock), {
+      messageChannel: "telegram",
+      messageProvider: "telegram",
+      currentChannelId: "+2000",
     });
   });
 

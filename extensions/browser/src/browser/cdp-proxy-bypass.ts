@@ -45,15 +45,25 @@ export function hasProxyEnv(): boolean {
 
 const LOOPBACK_ENTRIES = "localhost,127.0.0.1,[::1]";
 
-function noProxyAlreadyCoversLocalhost(): boolean {
-  const current = process.env.NO_PROXY || process.env.no_proxy || "";
+function noProxyValueCoversLocalhost(value: string | undefined): boolean {
   const entries = new Set(
-    current
+    (value ?? "")
       .split(",")
       .map((entry) => entry.trim().toLowerCase())
       .filter(Boolean),
   );
   return entries.has("localhost") && entries.has("127.0.0.1") && entries.has("[::1]");
+}
+
+function noProxyAlreadyCoversLocalhost(): boolean {
+  return (
+    noProxyValueCoversLocalhost(process.env.NO_PROXY) &&
+    noProxyValueCoversLocalhost(process.env.no_proxy)
+  );
+}
+
+function appendLoopbackEntries(value: string | undefined): string {
+  return value ? `${value},${LOOPBACK_ENTRIES}` : LOOPBACK_ENTRIES;
 }
 
 export async function withNoProxyForLocalhost<T>(fn: () => Promise<T>): Promise<T> {
@@ -71,7 +81,8 @@ function isLoopbackCdpUrl(url: string): boolean {
 type NoProxySnapshot = {
   noProxy: string | undefined;
   noProxyLower: string | undefined;
-  applied: string;
+  appliedNoProxy: string;
+  appliedNoProxyLower: string;
 };
 
 class NoProxyLeaseManager {
@@ -86,11 +97,11 @@ class NoProxyLeaseManager {
     if (this.leaseCount === 0 && !noProxyAlreadyCoversLocalhost()) {
       const noProxy = process.env.NO_PROXY;
       const noProxyLower = process.env.no_proxy;
-      const current = noProxy || noProxyLower || "";
-      const applied = current ? `${current},${LOOPBACK_ENTRIES}` : LOOPBACK_ENTRIES;
-      process.env.NO_PROXY = applied;
-      process.env.no_proxy = applied;
-      this.snapshot = { noProxy, noProxyLower, applied };
+      const appliedNoProxy = appendLoopbackEntries(noProxy || noProxyLower);
+      const appliedNoProxyLower = appendLoopbackEntries(noProxyLower || noProxy);
+      process.env.NO_PROXY = appliedNoProxy;
+      process.env.no_proxy = appliedNoProxyLower;
+      this.snapshot = { noProxy, noProxyLower, appliedNoProxy, appliedNoProxyLower };
     }
 
     this.leaseCount += 1;
@@ -113,18 +124,17 @@ class NoProxyLeaseManager {
       return;
     }
 
-    const { noProxy, noProxyLower, applied } = this.snapshot;
+    const { noProxy, noProxyLower, appliedNoProxy, appliedNoProxyLower } = this.snapshot;
     const currentNoProxy = process.env.NO_PROXY;
     const currentNoProxyLower = process.env.no_proxy;
-    const untouched =
-      currentNoProxy === applied &&
-      (currentNoProxyLower === applied || currentNoProxyLower === undefined);
-    if (untouched) {
+    if (currentNoProxy === appliedNoProxy) {
       if (noProxy !== undefined) {
         process.env.NO_PROXY = noProxy;
       } else {
         delete process.env.NO_PROXY;
       }
+    }
+    if (currentNoProxyLower === appliedNoProxyLower) {
       if (noProxyLower !== undefined) {
         process.env.no_proxy = noProxyLower;
       } else {

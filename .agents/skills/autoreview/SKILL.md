@@ -1,11 +1,13 @@
 ---
-name: codex-review
-description: "Codex code review closeout: local dirty changes, PR branch vs main, parallel tests."
+name: autoreview
+description: "Autoreview closeout: local dirty changes, PR branch vs main, parallel tests."
 ---
 
-# Codex Review
+# Autoreview
 
 Run Codex's built-in code review as a closeout check. This is code review (`codex review`), not Guardian `auto_review` approval routing.
+
+Codex native review mode performs best and is recommended. Non-Codex reviewers are fallback/second-opinion paths that receive a generated diff prompt, not the full Codex review-mode runtime.
 
 Use when:
 - user asks for Codex review / autoreview / second-model review
@@ -19,13 +21,14 @@ Use when:
 - Read dependency docs/source/types when the finding depends on external behavior.
 - Reject unrealistic edge cases, speculative risks, broad rewrites, and fixes that over-complicate the codebase.
 - Prefer small fixes at the right ownership boundary; no refactor unless it clearly improves the bug class.
-- Keep going until Codex review returns no accepted/actionable findings.
-- If a review-triggered fix changes code, rerun focused tests and rerun Codex review.
-- Never switch or override the review model. If the review hits model capacity, retry the same command a few times with the same model. The helper runs nested review in yolo/full-access mode by default; use `--no-yolo` only when intentionally testing sandbox behavior.
+- Keep going until the selected review path returns no accepted/actionable findings.
+- If a review-triggered fix changes code, rerun focused tests and rerun the review helper.
+- Default to Codex review. If Codex is unavailable or exits with an error, the helper falls back to the first configured CLI from `claude -p`, `pi -p`, `opencode run`, `droid exec`, or `copilot`. Prefer Codex for final closeout because it uses native review mode; non-Codex reviewers use a Codex-inspired generated diff prompt. The helper runs nested Codex review in yolo/full-access mode by default; use `--no-yolo` only when intentionally testing sandbox behavior.
 - Stop as soon as the review command/helper exits 0 with no accepted/actionable findings. Do not run an extra direct `codex review` just to get a nicer "clean" line, a second opinion, or clearer closeout wording.
 - Treat the helper's successful exit plus absence of actionable findings as the clean review result, even if the underlying Codex CLI output is terse.
 - If rejecting a finding as intentional/not worth fixing, add a brief inline code comment only when it explains a real invariant or ownership decision that future reviewers should know.
 - Do not push just to review. Push only when the user requested push/ship/PR update.
+- For OpenClaw maintainers, keep autoreview validation Crabbox/Testbox-aware when maintainer validation mode is enabled (`OPENCLAW_TESTBOX=1` or `AUTOREVIEW_OPENCLAW_MAINTAINER_VALIDATION=1`). A review pass may inspect files and run cheap non-Node probes, but it must not start local `pnpm`, Vitest, `tsgo`, `npm test`, or `node scripts/run-vitest.mjs` from a Codex/worktree review unless the operator explicitly requested local proof. For runtime proof, use existing evidence or route through Crabbox/Testbox and report the id. Do not apply this rule to ordinary contributors who do not have maintainer Testbox access.
 
 ## Pick Target
 
@@ -48,7 +51,7 @@ git fetch origin
 codex review --base origin/main
 ```
 
-Do not pass an inline prompt with `--base`; current CLI rejects `--base` + `[PROMPT]` even though help text is ambiguous. If custom instructions are needed, run the plain base review first, then do a local/manual follow-up pass.
+Do not pass an inline prompt with `--base`; some CLI versions reject `--base` + `[PROMPT]` even though help text is ambiguous. If custom instructions are needed, prefer stdin prompt form (`codex review --base <ref> -`) as used by the helper.
 
 If an open PR exists, use its actual base:
 
@@ -66,7 +69,7 @@ codex review --commit HEAD
 or with the helper:
 
 ```bash
-/Users/steipete/Projects/agent-scripts/skills/codex-review/scripts/codex-review --mode commit --commit HEAD
+.agents/skills/autoreview/scripts/autoreview --mode commit --commit HEAD
 ```
 
 Use commit review for already-landed or already-pushed work on `main`. Reviewing
@@ -79,7 +82,7 @@ with `--base`.
 Format first if formatting can change line locations. Then it is OK to run tests and review in parallel:
 
 ```bash
-scripts/codex-review --parallel-tests "<focused test command>"
+.agents/skills/autoreview/scripts/autoreview --parallel-tests "<focused test command>"
 ```
 
 Tradeoff: tests may force code changes that stale the review. If tests or review lead to code edits, rerun the affected tests and rerun review until no accepted/actionable findings remain. Once that rerun exits cleanly, stop; do not spend another long review cycle on redundant confirmation.
@@ -98,13 +101,7 @@ Run inline only for tiny changes or when subagents are unavailable.
 Bundled helper:
 
 ```bash
-~/.codex/skills/codex-review/scripts/codex-review --help
-```
-
-If installed from `agent-scripts`, path is:
-
-```bash
-/Users/steipete/Projects/agent-scripts/skills/codex-review/scripts/codex-review --help
+.agents/skills/autoreview/scripts/autoreview --help
 ```
 
 The helper:
@@ -113,11 +110,16 @@ The helper:
 - otherwise uses `origin/main` for non-main branches
 - use `--mode commit --commit <ref>` for already-committed work, especially clean `main` after landing
 - should be left in `--mode auto` or forced to `--mode branch` for PR/branch work; do not force `--mode local` after committing
-- writes only to stdout unless `--output` or `CODEX_REVIEW_OUTPUT` is set
+- supports `--reviewer codex|claude|pi|opencode|droid|copilot|auto`; `auto` means Codex first
+- supports `--fallback-reviewer auto|claude|pi|opencode|droid|copilot|none`; default is configured CLI fallback
+- falls back only when Codex is unavailable or exits nonzero, not when Codex reports findings
+- writes only to stdout unless `--output` or `AUTOREVIEW_OUTPUT` is set
 - supports `--dry-run`, `--parallel-tests`, and commit refs
-- runs nested review with `--dangerously-bypass-approvals-and-sandbox` by default
-- keeps accepting `--full-access`; use `--no-yolo` or `CODEX_REVIEW_YOLO=0` to opt out
-- prints `codex-review clean: no accepted/actionable findings reported` when the selected review command exits 0
+- runs nested review with `--dangerously-bypass-approvals-and-sandbox --sandbox danger-full-access` by default
+- injects maintainer-only OpenClaw validation policy into native Codex review when `OPENCLAW_TESTBOX=1` or `AUTOREVIEW_OPENCLAW_MAINTAINER_VALIDATION=1`, so local memory-heavy Node/Vitest checks are avoided in favor of Crabbox/Testbox proof
+- keeps accepting `--full-access`; use `--no-yolo` or `AUTOREVIEW_YOLO=0` to opt out
+- still accepts legacy `CODEX_REVIEW_*` env vars when the matching `AUTOREVIEW_*` var is unset
+- prints `autoreview clean: no accepted/actionable findings reported` when the selected review command exits 0
 
 ## Final Report
 

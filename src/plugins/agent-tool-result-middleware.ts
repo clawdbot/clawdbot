@@ -30,7 +30,7 @@ export function normalizeAgentToolResultMiddlewareRuntimes(
   options?: AgentToolResultMiddlewareOptions,
 ): AgentToolResultMiddlewareRuntime[] {
   const requested = options?.runtimes ?? options?.harnesses;
-  if (!requested || requested.length === 0) {
+  if (!requested) {
     return [...AGENT_TOOL_RESULT_MIDDLEWARE_RUNTIMES];
   }
   const normalized: AgentToolResultMiddlewareRuntime[] = [];

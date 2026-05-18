@@ -79,7 +79,10 @@ export type SubagentRunRecord = {
     status?: string;
     lastError?: string | null;
   };
+  completionEnqueuedAt?: number;
+  completionDeliveredAt?: number;
   completionAnnouncedAt?: number;
+  lastAnnounceDropReason?: "queue_cap" | "parent_run_ended" | "sink_unavailable" | "dedupe";
   attachmentsDir?: string;
   attachmentsRootDir?: string;
   retainAttachmentsOnKeep?: boolean;

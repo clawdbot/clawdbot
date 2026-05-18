@@ -1,6 +1,6 @@
 ---
 name: 1password
-description: Set up and use 1Password CLI for sign-in, desktop integration, and reading or injecting secrets.
+description: "Set up and use 1Password CLI for sign-in, desktop integration, and reading or injecting secrets."
 homepage: https://developer.1password.com/docs/cli/get-started/
 metadata:
   {
@@ -41,7 +41,7 @@ Follow the official CLI get-started steps. Don't guess install commands.
 6. Verify access inside tmux: `op whoami` (must succeed before any secret read).
 7. If multiple accounts: use `--account` or `OP_ACCOUNT`.
 
-## REQUIRED tmux session (T-Max)
+## REQUIRED tmux session (tmux)
 
 The shell tool uses a fresh TTY per command. To avoid re-prompts and failures, always run `op` inside a dedicated tmux session with a fresh socket/session name.
 

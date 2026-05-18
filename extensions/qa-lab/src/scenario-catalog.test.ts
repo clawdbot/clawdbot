@@ -116,6 +116,43 @@ describe("qa scenario catalog", () => {
     expect(readQaScenarioExecutionConfig(soak.id)).toMatchObject({ turnCount: 100 });
   });
 
+  it("loads runtime tool fixture metadata for standard and optional lanes", () => {
+    const applyPatch = readQaScenarioById("runtime-tool-apply-patch");
+    const messageTool = readQaScenarioById("runtime-tool-message-tool");
+    const tavilySearch = readQaScenarioById("runtime-tool-tavily-search");
+    const webSearch = readQaScenarioById("runtime-tool-web-search");
+
+    expect(applyPatch.runtimeParityTier).toBe("standard");
+    expect(messageTool.runtimeParityTier).toBe("optional");
+    expect(tavilySearch.runtimeParityTier).toBe("optional");
+    expect(readQaScenarioExecutionConfig(applyPatch.id)).toMatchObject({
+      toolName: "apply_patch",
+      toolCoverage: {
+        bucket: "codex-native-workspace",
+        expectedLayer: "codex-native-workspace",
+      },
+    });
+    expect(readQaScenarioExecutionConfig(messageTool.id)).toMatchObject({
+      toolName: "message",
+      expectedAvailable: false,
+      toolCoverage: {
+        bucket: "optional-profile-or-plugin",
+        expectedLayer: "profile-or-plugin",
+        required: false,
+      },
+    });
+    expect(readQaScenarioExecutionConfig(webSearch.id)).toMatchObject({
+      toolName: "web_search",
+      toolCoverage: {
+        bucket: "openclaw-dynamic-integration",
+        expectedLayer: "openclaw-dynamic",
+        capabilityLayer: "openclaw-dynamic-direct",
+        required: true,
+      },
+    });
+    expect(readQaScenarioExecutionConfig(webSearch.id)).not.toHaveProperty("knownHarnessGap");
+  });
+
   it("loads the Codex Pi-shaped Read vocabulary live parity canary", () => {
     const scenario = readQaScenarioById("codex-pi-shaped-read-vocabulary");
     const config = readQaScenarioExecutionConfig(scenario.id) as

@@ -1339,7 +1339,7 @@ describe("chat session controls", () => {
     ]);
     expect(
       [...(thinkingSelect?.options ?? [])].map((option) => option.textContent?.trim()),
-    ).toEqual(["Off", "Off", "Override: adaptive", "Override: xhigh", "Override: maximum"]);
+    ).toEqual(["Off", "Off", "Adaptive", "Extra high", "Maximum"]);
   });
 
   it("labels chat thinking default from the active session row", () => {
@@ -1356,8 +1356,8 @@ describe("chat session controls", () => {
     );
 
     expect(thinkingSelect?.value).toBe("");
-    expect(thinkingSelect?.options[0]?.textContent?.trim()).toBe("Inherited: adaptive");
-    expect(thinkingSelect?.title).toBe("Inherited: adaptive");
+    expect(thinkingSelect?.options[0]?.textContent?.trim()).toBe("Inherited: Adaptive");
+    expect(thinkingSelect?.title).toBe("Inherited: Adaptive");
   });
 
   it("always renders full thinking labels", () => {
@@ -1387,14 +1387,14 @@ describe("chat session controls", () => {
 
     expect(container.querySelector('select[data-chat-thinking-select-compact="true"]')).toBeNull();
     expect(thinkingSelect?.value).toBe("");
-    expect(thinkingSelect?.title).toBe("Inherited: high");
+    expect(thinkingSelect?.title).toBe("Inherited: High");
     expect([...thinkingSelect!.options].map((option) => option.textContent?.trim())).toEqual([
-      "Inherited: high",
+      "Inherited: High",
       "Off",
-      "Override: low",
-      "Override: medium",
-      "Override: high",
-      "Override: xhigh",
+      "Low",
+      "Medium",
+      "High",
+      "Extra high",
     ]);
   });
 
@@ -1411,7 +1411,7 @@ describe("chat session controls", () => {
     );
 
     expect(thinkingSelect?.value).toBe("");
-    expect(thinkingSelect?.options[0]?.textContent?.trim()).toBe("Inherited: adaptive");
-    expect(thinkingSelect?.title).toBe("Inherited: adaptive");
+    expect(thinkingSelect?.options[0]?.textContent?.trim()).toBe("Inherited: Adaptive");
+    expect(thinkingSelect?.title).toBe("Inherited: Adaptive");
   });
 });

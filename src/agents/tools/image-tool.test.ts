@@ -1474,9 +1474,9 @@ describe("image tool implicit imageModel config", () => {
         type: "object",
         properties: {
           prompt: { type: "string" },
-          image: { description: "Single image path or URL.", type: "string" },
+          image: { description: "One image path/URL.", type: "string" },
           images: {
-            description: "Multiple image paths or URLs (up to maxImages, default 20).",
+            description: "Image paths/URLs; maxImages default 20.",
             type: "array",
             items: { type: "string" },
           },

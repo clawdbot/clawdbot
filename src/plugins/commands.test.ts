@@ -336,8 +336,21 @@ describe("registerPluginCommand", () => {
         error: "Command channel 2 cannot be empty",
       },
     },
+    {
+      name: "rejects primitive native command metadata",
+      command: {
+        name: "demo",
+        description: "Demo",
+        nativeNames: "demo-native",
+        handler: async () => ({ text: "ok" }),
+      },
+      expected: {
+        ok: false,
+        error: "Command nativeNames must be an object",
+      },
+    },
   ] as const)("$name", ({ command, expected }) => {
-    expect(registerPluginCommand("demo-plugin", command)).toEqual(expected);
+    expect(registerPluginCommand("demo-plugin", command as never)).toEqual(expected);
   });
 
   it("normalizes command metadata for downstream consumers", () => {
