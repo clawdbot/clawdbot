@@ -67,7 +67,7 @@ const bootstrapCacheMocks = vi.hoisted(() => ({
 
 const sessionHookMocks = vi.hoisted(() => ({
   hasInternalHookListeners: vi.fn(() => true),
-  triggerInternalHook: vi.fn(async (_event: unknown) => {}),
+  triggerInternalHook: vi.fn(async (_eventValue: unknown) => {}),
 }));
 
 const beforeResetHookMocks = vi.hoisted(() => ({

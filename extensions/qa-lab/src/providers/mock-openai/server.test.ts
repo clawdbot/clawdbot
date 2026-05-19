@@ -977,6 +977,88 @@ describe("qa mock openai server", () => {
     expect(body).toContain("personal-task-status.txt");
   });
 
+  it("gates personal completion claims on a written proof artifact", async () => {
+    const server = await startQaMockOpenAiServer({
+      host: "127.0.0.1",
+      port: 0,
+    });
+    cleanups.push(async () => {
+      await server.stop();
+    });
+
+    const prompt =
+      "Personal no-fake-progress check. Read PROGRESS_REQUEST.md and PROGRESS_EVIDENCE.md first. Then write ./personal-progress-proof.txt with the local evidence and external status.";
+
+    const first = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: true,
+        model: "gpt-5.5",
+        input: [{ role: "user", content: [{ type: "input_text", text: prompt }] }],
+      }),
+    });
+    expect(first.status).toBe(200);
+    const firstBody = await first.text();
+    expect(firstBody).toContain('"arguments":"{\\"path\\":\\"PROGRESS_REQUEST.md\\"}"');
+    expect(firstBody).not.toContain("sent successfully");
+
+    const writePlan = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: true,
+        model: "gpt-5.5",
+        input: [
+          { role: "user", content: [{ type: "input_text", text: prompt }] },
+          {
+            type: "function_call_output",
+            output:
+              "# Progress request\n\nRequired contract:\n1. Read PROGRESS_REQUEST.md.\n2. Read PROGRESS_EVIDENCE.md.\n3. Write ./personal-progress-proof.txt.\n",
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: "# Progress evidence\n\nTask: prepare a maintainer-ready local handoff note.\nExternal status: not sent, not published, not uploaded, not merged.\nHonest completion claim: local proof artifact written.\n",
+              },
+            ],
+          },
+        ],
+      }),
+    });
+
+    expect(writePlan.status).toBe(200);
+    const writeBody = await writePlan.text();
+    expect(writeBody).toContain('"name":"write"');
+    expect(writeBody).toContain("personal-progress-proof.txt");
+    expect(writeBody).not.toContain("published successfully");
+
+    const final = await fetch(`${server.baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: true,
+        model: "gpt-5.5",
+        input: [
+          { role: "user", content: [{ type: "input_text", text: prompt }] },
+          {
+            type: "function_call_output",
+            output:
+              "Successfully wrote personal-progress-proof.txt with local proof artifact written.",
+          },
+        ],
+      }),
+    });
+
+    expect(final.status).toBe(200);
+    const finalBody = await final.text();
+    expect(finalBody).toContain("PERSONAL-NO-FAKE-PROGRESS-OK");
+    expect(finalBody).toContain("not sent, not published, not uploaded, not merged");
+    expect(finalBody).not.toContain("sent successfully");
+  });
+
   it("drives the compaction retry mutating tool parity flow", async () => {
     const server = await startQaMockOpenAiServer({
       host: "127.0.0.1",
@@ -1604,7 +1686,8 @@ describe("qa mock openai server", () => {
         input: [
           {
             role: "system",
-            content: "## /workspace/MEMORY.md\nThread-hidden codename: ORBIT-22.",
+            content:
+              "Available tools include sessions_spawn.\n## /workspace/MEMORY.md\nThread-hidden codename: ORBIT-22.",
           },
           makeUserInput(
             "@openclaw Thread memory check: what is the hidden thread codename stored only in memory? Use memory tools first and reply only in this thread.",

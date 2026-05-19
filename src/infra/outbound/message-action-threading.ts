@@ -178,10 +178,10 @@ export async function prepareOutboundMirrorRoute(params: {
     });
   }
   if (outboundRoute && !params.dryRun) {
-    params.actionParams.__sessionKey = outboundRoute.sessionKey;
+    params.actionParams["__sessionKey"] = outboundRoute.sessionKey;
   }
   if (params.agentId) {
-    params.actionParams.__agentId = params.agentId;
+    params.actionParams["__agentId"] = params.agentId;
   }
   return {
     resolvedThreadId,

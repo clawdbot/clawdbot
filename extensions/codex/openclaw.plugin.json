@@ -161,6 +161,10 @@
             "type": "array",
             "items": { "type": "string" }
           },
+          "codeModeOnly": {
+            "type": "boolean",
+            "default": false
+          },
           "requestTimeoutMs": {
             "type": "number",
             "minimum": 1,
@@ -324,6 +328,11 @@
     "appServer.clearEnv": {
       "label": "Clear Environment",
       "help": "Environment variable names removed from the spawned stdio app-server process after overrides are applied.",
+      "advanced": true
+    },
+    "appServer.codeModeOnly": {
+      "label": "Code Mode Only",
+      "help": "Expose Codex's code-mode-only tool surface. OpenClaw dynamic tools remain available through Codex nested tool calls.",
       "advanced": true
     },
     "appServer.requestTimeoutMs": {

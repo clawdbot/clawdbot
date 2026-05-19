@@ -135,7 +135,8 @@ export async function suspendSession(params: {
   }
 }
 
-export const __testing = {
+export const testing = {
   resolveLaneResumeConcurrency,
   resolveSessionSuspensionReason,
 } as const;
+export { testing as __testing };

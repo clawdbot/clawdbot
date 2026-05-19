@@ -12,7 +12,7 @@ vi.mock("../media/input-files.js", async () => {
   };
 });
 
-import { __testOnlyOpenAiHttp } from "./openai-http.js";
+import { testOnlyOpenAiHttp } from "./openai-http.js";
 
 describe("openai image budget accounting", () => {
   beforeEach(() => {
@@ -26,12 +26,12 @@ describe("openai image budget accounting", () => {
       mimeType: "image/jpeg",
     });
 
-    const limits = __testOnlyOpenAiHttp.resolveOpenAiChatCompletionsLimits({
+    const limits = testOnlyOpenAiHttp.resolveOpenAiChatCompletionsLimits({
       maxTotalImageBytes: 5,
     });
 
     await expect(
-      __testOnlyOpenAiHttp.resolveImagesForRequest(
+      testOnlyOpenAiHttp.resolveImagesForRequest(
         {
           urls: ["data:image/heic;base64,QUJD"],
         },
@@ -47,12 +47,12 @@ describe("openai image budget accounting", () => {
       mimeType: "image/jpeg",
     });
 
-    const limits = __testOnlyOpenAiHttp.resolveOpenAiChatCompletionsLimits({
+    const limits = testOnlyOpenAiHttp.resolveOpenAiChatCompletionsLimits({
       maxTotalImageBytes: 4,
     });
 
     await expect(
-      __testOnlyOpenAiHttp.resolveImagesForRequest(
+      testOnlyOpenAiHttp.resolveImagesForRequest(
         {
           urls: ["data:image/jpeg;base64,QUJDRA=="],
         },

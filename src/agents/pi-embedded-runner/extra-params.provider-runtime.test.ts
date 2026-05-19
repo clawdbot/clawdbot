@@ -2,7 +2,7 @@ import type { Model } from "@earendil-works/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPiAiStreamSimpleMock } from "../../../test/helpers/agents/pi-ai-stream-simple-mock.js";
 import {
-  __testing as extraParamsTesting,
+  testing as extraParamsTesting,
   resolveAgentTransportOverride,
   resolveExplicitSettingsTransport,
 } from "./extra-params.js";

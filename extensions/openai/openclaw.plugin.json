@@ -848,6 +848,16 @@
       ]
     }
   },
+  "videoGenerationProviderMetadata": {
+    "openai": {
+      "aliases": ["openai-codex"],
+      "authSignals": [
+        {
+          "provider": "openai"
+        }
+      ]
+    }
+  },
   "mediaUnderstandingProviderMetadata": {
     "openai": {
       "capabilities": ["image", "audio"],

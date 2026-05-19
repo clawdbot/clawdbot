@@ -21,8 +21,8 @@ type JsonSchema = {
   additionalProperties?: boolean | JsonSchema;
 };
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(__dirname, "..");
+const scriptDir = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(scriptDir, "..");
 const outPaths = [
   path.join(
     repoRoot,

@@ -1,6 +1,10 @@
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
-import type { OpenClawPluginCommandDefinition } from "./types.js";
+import type {
+  AgentPromptGuidance,
+  AgentPromptSurfaceKind,
+  OpenClawPluginCommandDefinition,
+} from "./types.js";
 
 export type RegisteredPluginCommand = OpenClawPluginCommandDefinition & {
   pluginId: string;
@@ -58,12 +62,18 @@ export function listRegisteredPluginCommands(): RegisteredPluginCommand[] {
   return Array.from(pluginCommands.values());
 }
 
-export function listRegisteredPluginAgentPromptGuidance(): string[] {
+export function listRegisteredPluginAgentPromptGuidance(params?: {
+  surface?: AgentPromptSurfaceKind;
+  includeLegacyGlobalGuidance?: boolean;
+}): string[] {
   const lines: string[] = [];
   const seen = new Set<string>();
   for (const command of pluginCommands.values()) {
-    for (const line of command.agentPromptGuidance ?? []) {
-      const trimmed = line.trim();
+    for (const entry of command.agentPromptGuidance ?? []) {
+      const trimmed = resolveAgentPromptGuidanceTextForSurface(entry, {
+        surface: params?.surface,
+        includeLegacyGlobalGuidance: params?.includeLegacyGlobalGuidance ?? true,
+      });
       if (!trimmed || seen.has(trimmed)) {
         continue;
       }
@@ -72,6 +82,26 @@ export function listRegisteredPluginAgentPromptGuidance(): string[] {
     }
   }
   return lines;
+}
+
+function resolveAgentPromptGuidanceTextForSurface(
+  entry: AgentPromptGuidance,
+  params: {
+    surface?: AgentPromptSurfaceKind;
+    includeLegacyGlobalGuidance: boolean;
+  },
+): string | undefined {
+  if (typeof entry === "string") {
+    return params.includeLegacyGlobalGuidance ? entry.trim() : undefined;
+  }
+  const text = entry.text.trim();
+  if (!params.surface) {
+    return text;
+  }
+  if (!entry.surfaces || entry.surfaces.length === 0) {
+    return params.includeLegacyGlobalGuidance ? text : undefined;
+  }
+  return entry.surfaces.includes(params.surface) ? text : undefined;
 }
 
 export function restorePluginCommands(commands: readonly RegisteredPluginCommand[]): void {

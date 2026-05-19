@@ -16,7 +16,7 @@ import type { PluginHookRegistration } from "../plugins/types.js";
 import { toClientToolDefinitions, toToolDefinitions } from "./pi-tool-definition-adapter.js";
 import { wrapToolWithAbortSignal } from "./pi-tools.abort.js";
 import {
-  __testing as beforeToolCallTesting,
+  testing as beforeToolCallTesting,
   consumeAdjustedParamsForToolCall,
   isToolWrappedWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
@@ -533,7 +533,7 @@ describe("before_tool_call hook integration for client tools", () => {
         policy: {
           id: "client-tool-session-extension-policy",
           description: "client tool session extension policy",
-          evaluate(_event, ctx) {
+          evaluate(eventValue, ctx) {
             seen.push(ctx.getSessionExtension?.("policy"));
             return undefined;
           },

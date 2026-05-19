@@ -66,9 +66,10 @@ struct ConfigSchemaForm: View {
             if self.mode == .channelQuick, self.isChannelRoot(path) {
                 return AnyView(self.renderChannelQuickObject(schema, path: path, value: value))
             }
+            let showHeader = !self.isNestedChannelQuickConfigurationObject(path: path, label: label)
             return AnyView(
                 VStack(alignment: .leading, spacing: 12) {
-                    if let label {
+                    if showHeader, let label {
                         Text(label)
                             .font(.callout.weight(.semibold))
                     }
@@ -218,6 +219,14 @@ struct ConfigSchemaForm: View {
         guard path.count == 2 else { return false }
         guard case .key("channels") = path[0] else { return false }
         guard case .key = path[1] else { return false }
+        return true
+    }
+
+    private func isNestedChannelQuickConfigurationObject(path: ConfigPath, label: String?) -> Bool {
+        guard self.mode == .channelQuick, path.count == 3 else { return false }
+        guard case .key("channels") = path[0] else { return false }
+        guard case .key = path[1] else { return false }
+        guard label == "Configuration" else { return false }
         return true
     }
 

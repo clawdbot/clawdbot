@@ -475,7 +475,7 @@ describe("createDiscordGatewayPlugin", () => {
     const plugin = createDiscordGatewayPlugin({
       discordConfig: { proxy: "http://127.0.0.1:8080" },
       runtime,
-      __testing: createProxyTestingOverrides(),
+      testing: createProxyTestingOverrides(),
     });
 
     expect(Object.getPrototypeOf(plugin)).not.toBe(GatewayPlugin.prototype);
@@ -511,7 +511,7 @@ describe("createDiscordGatewayPlugin", () => {
     const plugin = createDiscordGatewayPlugin({
       discordConfig: { proxy: "http://127.0.0.1:8080" },
       runtime,
-      __testing: createProxyTestingOverrides(),
+      testing: createProxyTestingOverrides(),
     });
 
     await registerGatewayClientWithMetadata({ plugin, fetchMock: globalFetchMock });
@@ -546,7 +546,7 @@ describe("createDiscordGatewayPlugin", () => {
     const plugin = createDiscordGatewayPlugin({
       discordConfig: { proxy: "http://[::1]:8080" },
       runtime,
-      __testing: createProxyTestingOverrides(),
+      testing: createProxyTestingOverrides(),
     });
 
     const createWebSocket = (plugin as unknown as { createWebSocket: (url: string) => unknown })

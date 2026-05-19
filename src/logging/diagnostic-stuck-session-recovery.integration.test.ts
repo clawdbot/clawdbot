@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveEmbeddedSessionLane } from "../agents/pi-embedded-runner/lanes.js";
 import {
-  __testing as replyRunTesting,
+  testing as replyRunTesting,
   createReplyOperation,
 } from "../auto-reply/reply/reply-run-registry.js";
 import {
@@ -11,7 +11,7 @@ import {
   resetCommandQueueStateForTest,
 } from "../process/command-queue.js";
 import {
-  __testing as recoveryTesting,
+  testing as recoveryTesting,
   recoverStuckDiagnosticSession,
 } from "./diagnostic-stuck-session-recovery.runtime.js";
 

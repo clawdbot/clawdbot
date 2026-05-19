@@ -255,7 +255,7 @@ export function resetFacadeRuntimeStateForTest(): void {
   facadeActivationCheckRuntimeLoaders.clear();
 }
 
-export const __testing = {
+export const testing = {
   setFacadeActivationCheckRuntimeForTest,
   loadFacadeModuleAtLocationSync,
   resolveRegistryPluginModuleLocationFromRegistry: resolveRegistryPluginModuleLocationFromRecords,
@@ -299,3 +299,4 @@ export const __testing = {
       buildFacadeActivationCheckParams(params),
     )) as (params: BundledPluginPublicSurfaceParams) => string,
 };
+export { testing as __testing };

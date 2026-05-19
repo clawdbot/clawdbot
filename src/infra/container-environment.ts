@@ -52,6 +52,6 @@ function detectContainerEnvironment(): boolean {
 }
 
 /** @internal test helper */
-export function __resetContainerEnvironmentCacheForTest(): void {
+export function resetContainerEnvironmentCacheForTest(): void {
   containerEnvironmentCache = undefined;
 }

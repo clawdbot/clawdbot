@@ -98,7 +98,7 @@ function appendBlockedUserMessageWithSessionManager(params: {
       },
     },
   } as Parameters<typeof sessionManager.appendMessage>[0]);
-  (sessionManager as unknown as { _rewriteFile?: () => void })._rewriteFile?.();
+  (sessionManager as unknown as { _rewriteFile?: () => void })["_rewriteFile"]?.();
   return messageId;
 }
 
@@ -133,7 +133,7 @@ function expectMessageFields(
     expect(record.content).toEqual(fields.content);
   }
   if (fields.openclaw) {
-    const metadata = requireRecord(record.__openclaw, "message metadata");
+    const metadata = requireRecord(record["__openclaw"], "message metadata");
     for (const [key, value] of Object.entries(fields.openclaw)) {
       expect(metadata[key]).toEqual(value);
     }
@@ -612,8 +612,8 @@ describe("readSessionMessages", () => {
     };
     expect(marker.role).toBe("system");
     expect(marker.content?.[0]?.text).toBe("Compaction");
-    expect(marker.__openclaw?.kind).toBe("compaction");
-    expect(marker.__openclaw?.id).toBe("comp-1");
+    expect(marker["__openclaw"]?.kind).toBe("compaction");
+    expect(marker["__openclaw"]?.id).toBe("comp-1");
     expect(typeof marker.timestamp).toBe("number");
   });
 
@@ -1223,7 +1223,7 @@ describe("readSessionMessages", () => {
       const out = readSessionMessages(sessionId, wrongStorePath, sessionFile);
       expect(out).toHaveLength(1);
       expectMessageFields(out[0], message);
-      expect((out[0] as { __openclaw?: { seq?: number } }).__openclaw?.seq).toBe(1);
+      expect((out[0] as { __openclaw?: { seq?: number } })["__openclaw"]?.seq).toBe(1);
     },
   );
 
@@ -1321,7 +1321,7 @@ describe("readSessionMessages", () => {
       out.map((message) => ({
         role: (message as { role?: string }).role,
         content: (message as { content?: unknown }).content,
-        kind: (message as { __openclaw?: { kind?: string } }).__openclaw?.kind,
+        kind: (message as { __openclaw?: { kind?: string } })["__openclaw"]?.kind,
       })),
     ).toEqual([
       { role: "system", content: [{ type: "text", text: "Compaction" }], kind: "compaction" },

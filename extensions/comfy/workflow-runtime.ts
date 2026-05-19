@@ -107,7 +107,7 @@ type ComfyWorkflowResult = {
 
 let comfyFetchGuard = fetchWithSsrFGuard;
 
-export function _setComfyFetchGuardForTesting(impl: typeof fetchWithSsrFGuard | null): void {
+export function setComfyFetchGuardForTesting(impl: typeof fetchWithSsrFGuard | null): void {
   comfyFetchGuard = impl ?? fetchWithSsrFGuard;
 }
 

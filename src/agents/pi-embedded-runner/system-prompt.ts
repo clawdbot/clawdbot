@@ -4,6 +4,7 @@ import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options
 import type { SubagentDelegationMode } from "../../config/types.agent-defaults.js";
 import type { MemoryCitationsMode } from "../../config/types.memory.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { AgentPromptSurfaceKind } from "../../plugins/types.js";
 import type { ActiveProcessSessionReference } from "../bash-process-references.js";
 import type { BootstrapMode } from "../bootstrap-mode.js";
 import type { ResolvedTimeFormat } from "../date-time.js";
@@ -44,6 +45,8 @@ export function buildEmbeddedSystemPrompt(params: {
   subagentDelegationMode?: SubagentDelegationMode;
   /** Whether ACP-specific routing guidance should be included. Defaults to true. */
   acpEnabled?: boolean;
+  /** Prompt surface controls runtime-specific fallback fragments. Defaults to PI main. */
+  promptSurface?: AgentPromptSurfaceKind;
   /** Registered runtime slash/native command names such as `codex`. */
   nativeCommandNames?: string[];
   /** Plugin-owned prompt guidance for registered native slash commands. */
@@ -99,6 +102,7 @@ export function buildEmbeddedSystemPrompt(params: {
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     subagentDelegationMode: params.subagentDelegationMode,
     acpEnabled: params.acpEnabled,
+    promptSurface: params.promptSurface,
     nativeCommandNames: params.nativeCommandNames,
     nativeCommandGuidanceLines: params.nativeCommandGuidanceLines,
     runtimeInfo: params.runtimeInfo,
@@ -135,6 +139,6 @@ export function applySystemPromptOverrideToSession(
     _baseSystemPrompt?: string;
     _rebuildSystemPrompt?: (toolNames: string[]) => string;
   };
-  mutableSession._baseSystemPrompt = prompt;
-  mutableSession._rebuildSystemPrompt = () => prompt;
+  mutableSession["_baseSystemPrompt"] = prompt;
+  mutableSession["_rebuildSystemPrompt"] = () => prompt;
 }

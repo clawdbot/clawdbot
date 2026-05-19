@@ -234,7 +234,16 @@ describe("discord subagent hook handlers", () => {
       label: "banana",
       boundBy: "system",
     });
-    expect(result).toStrictEqual({ status: "ok", threadBindingReady: true });
+    expect(result).toMatchObject({
+      status: "ok",
+      threadBindingReady: true,
+      deliveryOrigin: {
+        channel: "discord",
+        accountId: "work",
+        to: "channel:thread-1",
+        threadId: "thread-1",
+      },
+    });
   });
 
   it("returns error when thread-bound subagent spawn is disabled", async () => {
@@ -330,7 +339,16 @@ describe("discord subagent hook handlers", () => {
     });
 
     expect(hookMocks.autoBindSpawnedDiscordSubagent).toHaveBeenCalledTimes(1);
-    expect(result).toStrictEqual({ status: "ok", threadBindingReady: true });
+    expect(result).toMatchObject({
+      status: "ok",
+      threadBindingReady: true,
+      deliveryOrigin: {
+        channel: "discord",
+        accountId: "work",
+        to: "channel:thread-1",
+        threadId: "thread-1",
+      },
+    });
   });
 
   it("defaults thread-bound subagent spawn to enabled when unset", async () => {
@@ -343,7 +361,16 @@ describe("discord subagent hook handlers", () => {
     });
 
     expect(hookMocks.autoBindSpawnedDiscordSubagent).toHaveBeenCalledTimes(1);
-    expect(result).toStrictEqual({ status: "ok", threadBindingReady: true });
+    expect(result).toMatchObject({
+      status: "ok",
+      threadBindingReady: true,
+      deliveryOrigin: {
+        channel: "discord",
+        accountId: "work",
+        to: "channel:thread-1",
+        threadId: "thread-1",
+      },
+    });
   });
 
   it("no-ops when thread binding is requested on non-discord channel", async () => {

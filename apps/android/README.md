@@ -209,15 +209,16 @@ Why these matter:
 
 - Google Play treats SMS and Call Log access as highly restricted. In most cases, Play only allows them for the default SMS app, default Phone app, default Assistant, or a narrow policy exception.
 - Review usually involves a `Permissions Declaration Form`, policy justification, and demo video evidence in Play Console.
-- If we want a Play-safe build, these should be the first permissions removed behind a dedicated product flavor / variant.
+- The Play build removes these behind the `play` flavor.
+- Photo library access is also removed from the Play build. Use third-party builds for `photos.latest`.
 
 Current OpenClaw Android implication:
 
-- APK / sideload build can keep SMS and Call Log features.
-- Google Play build should exclude SMS send/search and Call Log search unless the product is intentionally positioned and approved as a default-handler exception case.
+- APK / sideload build can keep SMS, Call Log, and recent-photo features.
+- Google Play build excludes SMS send/search, Call Log search, and recent-photo access unless the product is intentionally positioned and approved under the relevant policy exception.
 - The repo now ships this split as Android product flavors:
-  - `play`: removes `READ_SMS`, `SEND_SMS`, and `READ_CALL_LOG`, and hides SMS / Call Log surfaces in onboarding, settings, and advertised node capabilities.
-  - `thirdParty`: keeps the full permission set and the existing SMS / Call Log functionality.
+  - `play`: removes `READ_SMS`, `SEND_SMS`, `READ_CALL_LOG`, `READ_MEDIA_IMAGES`, `READ_MEDIA_VISUAL_USER_SELECTED`, and `READ_EXTERNAL_STORAGE`; hides SMS, Call Log, and Photos surfaces in onboarding, settings, and advertised node capabilities.
+  - `thirdParty`: keeps the full permission set and the existing SMS / Call Log / Photos functionality.
 
 Policy links:
 

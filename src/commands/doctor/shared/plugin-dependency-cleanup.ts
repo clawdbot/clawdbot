@@ -152,6 +152,7 @@ export async function cleanupLegacyPluginDependencyState(params: {
   return { changes, warnings };
 }
 
-export const __testing = {
+export const testing = {
   collectLegacyPluginDependencyTargets,
 };
+export { testing as __testing };

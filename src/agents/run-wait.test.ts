@@ -6,7 +6,7 @@ vi.mock("../gateway/call.js", () => ({
 }));
 
 import {
-  __testing,
+  testing,
   isRecoverableAgentWaitError,
   readLatestAssistantReply,
   readLatestAssistantReplySnapshot,
@@ -66,7 +66,7 @@ function expectAgentWaitRequest(
 describe("readLatestAssistantReply", () => {
   beforeEach(() => {
     callGatewayMock.mockClear();
-    __testing.setDepsForTest({
+    testing.setDepsForTest({
       callGateway: async (opts) => await callGatewayMock(opts),
     });
   });
@@ -184,7 +184,7 @@ describe("readLatestAssistantReply", () => {
 describe("waitForAgentRun", () => {
   beforeEach(() => {
     callGatewayMock.mockClear();
-    __testing.setDepsForTest({
+    testing.setDepsForTest({
       callGateway: async (opts) => await callGatewayMock(opts),
     });
   });
@@ -256,7 +256,7 @@ describe("waitForAgentRun", () => {
 describe("waitForAgentRunAndReadUpdatedAssistantReply", () => {
   beforeEach(() => {
     callGatewayMock.mockClear();
-    __testing.setDepsForTest({
+    testing.setDepsForTest({
       callGateway: async (opts) => await callGatewayMock(opts),
     });
   });
@@ -326,7 +326,7 @@ describe("waitForAgentRunAndReadUpdatedAssistantReply", () => {
 describe("waitForAgentRunsToDrain", () => {
   beforeEach(() => {
     callGatewayMock.mockClear();
-    __testing.setDepsForTest({
+    testing.setDepsForTest({
       callGateway: async (opts) => await callGatewayMock(opts),
     });
   });

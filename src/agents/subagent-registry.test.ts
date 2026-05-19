@@ -207,7 +207,7 @@ describe("subagent registry seam flow", () => {
       }
       return {};
     });
-    mod.__testing.setDepsForTest({
+    mod.testing.setDepsForTest({
       callGateway: mocks.callGateway,
       captureSubagentCompletionReply: mocks.captureSubagentCompletionReply,
       cleanupBrowserSessionsForLifecycleEnd: mocks.cleanupBrowserSessionsForLifecycleEnd,
@@ -225,7 +225,7 @@ describe("subagent registry seam flow", () => {
   });
 
   afterEach(() => {
-    mod.__testing.setDepsForTest();
+    mod.testing.setDepsForTest();
     mod.resetSubagentRegistryForTests({ persist: false });
     vi.useRealTimers();
   });
@@ -582,7 +582,7 @@ describe("subagent registry seam flow", () => {
     });
 
     vi.setSystemTime(new Date("2026-03-24T12:02:00Z"));
-    await mod.__testing.sweepOnceForTests();
+    await mod.testing.sweepOnceForTests();
 
     await waitForFast(() => {
       const announceParams = findRecordCallArg(
@@ -644,7 +644,7 @@ describe("subagent registry seam flow", () => {
     });
 
     vi.setSystemTime(new Date("2026-03-24T12:02:00Z"));
-    await mod.__testing.sweepOnceForTests();
+    await mod.testing.sweepOnceForTests();
 
     await waitForFast(() => {
       expectRecordFields(
@@ -812,7 +812,7 @@ describe("subagent registry seam flow", () => {
     });
 
     vi.setSystemTime(new Date(Date.parse("2026-03-24T12:00:00Z") + 10 * 60_000));
-    await mod.__testing.sweepOnceForTests();
+    await mod.testing.sweepOnceForTests();
 
     const run = mod
       .listSubagentRunsForRequester("agent:main:main")
@@ -1516,7 +1516,7 @@ describe("subagent registry seam flow", () => {
       cleanupHandled: true,
     });
 
-    await mod.__testing.sweepOnceForTests();
+    await mod.testing.sweepOnceForTests();
 
     await waitForFast(() => {
       findRecordCallArg(
@@ -1596,7 +1596,7 @@ describe("subagent registry seam flow", () => {
       lastAnnounceDeliveryError: "gateway request timeout for agent",
     });
 
-    await mod.__testing.sweepOnceForTests();
+    await mod.testing.sweepOnceForTests();
 
     const run = mod.getSubagentRunByChildSessionKey("agent:main:subagent:suspended-cron");
     expect(run).toMatchObject({
@@ -1667,7 +1667,7 @@ describe("subagent registry seam flow", () => {
       });
     }
 
-    await mod.__testing.sweepOnceForTests();
+    await mod.testing.sweepOnceForTests();
 
     const runs = Array.from({ length: 51 }, (_, i) =>
       mod.getSubagentRunByChildSessionKey(`agent:main:subagent:suspended-pressure-${i}`),

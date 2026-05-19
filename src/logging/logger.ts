@@ -370,7 +370,7 @@ function buildStructuredFileLogFields(logObj: TsLogRecord): Record<string, strin
 }
 
 function buildDiagnosticLogRecord(logObj: TsLogRecord) {
-  const meta = logObj._meta as
+  const meta = logObj["_meta"] as
     | {
         logLevelName?: string;
         date?: Date;
@@ -695,10 +695,11 @@ export function resetLogger() {
   loadLoggerConfig = loadLoggerConfigDefault;
 }
 
-export const __test__ = {
+export const testApi = {
   resolveActiveLogFile,
   shouldSkipMutatingLoggingConfigRead,
 };
+export { testApi as __test__ };
 
 function formatLocalDate(date: Date): string {
   const year = date.getFullYear();

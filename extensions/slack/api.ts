@@ -46,7 +46,8 @@ export {
   type SlackBlock,
 } from "./src/blocks-render.js";
 export {
-  __resetSlackChannelTypeCacheForTest,
+  resetSlackChannelTypeCacheForTest as __resetSlackChannelTypeCacheForTest,
+  resetSlackChannelTypeCacheForTest,
   resolveSlackChannelType,
 } from "./src/channel-type.js";
 export {

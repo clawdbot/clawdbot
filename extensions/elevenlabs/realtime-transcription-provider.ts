@@ -277,7 +277,8 @@ export function buildElevenLabsRealtimeTranscriptionProvider(): RealtimeTranscri
   };
 }
 
-export const __testing = {
+export const testing = {
   normalizeProviderConfig,
   toElevenLabsRealtimeWsUrl,
 };
+export { testing as __testing };

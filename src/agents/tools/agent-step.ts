@@ -117,7 +117,7 @@ export async function runAgentStep(params: {
   return result.replyText;
 }
 
-export const __testing = {
+export const testing = {
   setDepsForTest(
     overrides?: Partial<{
       agentCommandFromIngress: AgentCommandRunner;
@@ -132,3 +132,4 @@ export const __testing = {
       : defaultAgentStepDeps;
   },
 };
+export { testing as __testing };

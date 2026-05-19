@@ -87,6 +87,10 @@ const ChannelStreamingPreviewSchema = z
     commandText: z.enum(["raw", "status"]).optional(),
   })
   .strict();
+const TelegramStreamingPreviewSchema = ChannelStreamingPreviewSchema.extend({
+  nativeToolProgress: z.boolean().optional(),
+  nativeToolProgressAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+}).strict();
 const ChannelStreamingProgressSchema = z
   .object({
     label: z.union([z.string(), z.literal(false)]).optional(),
@@ -107,6 +111,9 @@ const ChannelPreviewStreamingConfigSchema = z
     block: ChannelStreamingBlockSchema.optional(),
   })
   .strict();
+const TelegramPreviewStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({
+  preview: TelegramStreamingPreviewSchema.optional(),
+}).strict();
 const SlackStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({
   nativeTransport: z.boolean().optional(),
 }).strict();
@@ -270,7 +277,7 @@ export const TelegramAccountSchemaBase = z
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     direct: z.record(z.string(), TelegramDirectSchema.optional()).optional(),
     textChunkLimit: z.number().int().positive().optional(),
-    streaming: ChannelPreviewStreamingConfigSchema.optional(),
+    streaming: TelegramPreviewStreamingConfigSchema.optional(),
     mediaMaxMb: z.number().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     mediaGroupFlushMs: z

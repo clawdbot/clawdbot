@@ -386,7 +386,7 @@ export function resolveActivatableProviderOwnerPluginIds(params: {
   });
 }
 
-export const __testing = {
+export const testing = {
   resolveActivatableProviderOwnerPluginIds,
   resolveEnabledProviderPluginIds,
   resolveExternalAuthProfileCompatFallbackPluginIds,
@@ -656,3 +656,4 @@ export function resolveCatalogHookProviderPluginIds(params: {
     (left, right) => left.localeCompare(right),
   );
 }
+export { testing as __testing };

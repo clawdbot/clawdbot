@@ -276,7 +276,8 @@ export function buildDeepgramRealtimeTranscriptionProvider(): RealtimeTranscript
   };
 }
 
-export const __testing = {
+export const testing = {
   normalizeProviderConfig,
   toDeepgramRealtimeWsUrl,
 };
+export { testing as __testing };

@@ -8,7 +8,7 @@ import {
   parseTransportChunkUsage,
   resolveAzureOpenAIApiVersion,
   sanitizeTransportPayloadText,
-  __testing,
+  testing,
 } from "./openai-transport-stream.js";
 import { attachModelProviderRequestTransport } from "./provider-request-config.js";
 import {
@@ -21,8 +21,8 @@ import {
 } from "./provider-transport-stream.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 
-type OpenAICompletionsOutput = Parameters<typeof __testing.processOpenAICompletionsStream>[1];
-type OpenAIResponsesOutput = Parameters<typeof __testing.processResponsesStream>[1];
+type OpenAICompletionsOutput = Parameters<typeof testing.processOpenAICompletionsStream>[1];
+type OpenAIResponsesOutput = Parameters<typeof testing.processResponsesStream>[1];
 
 type CapturedStreamEvent = { type?: string; delta?: string };
 
@@ -130,7 +130,7 @@ describe("openai transport stream", () => {
   it("fails Azure Responses streams when headers arrive but no first event follows", async () => {
     const model = createAzureResponsesModel();
     await expect(
-      __testing.processResponsesStream(
+      testing.processResponsesStream(
         neverYieldsStream(),
         createResponsesAssistantOutput(model),
         { push: vi.fn() },
@@ -165,8 +165,8 @@ describe("openai transport stream", () => {
       },
     };
 
-    const observation = __testing.buildResponsesFailedNoDetailsObservation(event, model);
-    const summary = __testing.summarizeResponsesFailedNoDetailsObservation(observation);
+    const observation = testing.buildResponsesFailedNoDetailsObservation(event, model);
+    const summary = testing.summarizeResponsesFailedNoDetailsObservation(observation);
 
     expect(observation.providerRuntimeFailureKind).toBe("no_error_details");
     expect(observation.responseId).toBe("resp_failed_123");
@@ -190,7 +190,7 @@ describe("openai transport stream", () => {
     const model = createAzureResponsesModel();
 
     expect(
-      __testing.normalizeResponsesFailedEvent(
+      testing.normalizeResponsesFailedEvent(
         {
           type: "response.failed",
           response: {
@@ -209,7 +209,7 @@ describe("openai transport stream", () => {
     });
 
     expect(
-      __testing.normalizeResponsesFailedEvent(
+      testing.normalizeResponsesFailedEvent(
         {
           type: "response.failed",
           response: {
@@ -230,7 +230,7 @@ describe("openai transport stream", () => {
     const output = createResponsesAssistantOutput(model);
 
     await expect(
-      __testing.processResponsesStream(
+      testing.processResponsesStream(
         streamChunks([
           {
             type: "response.failed",
@@ -255,7 +255,7 @@ describe("openai transport stream", () => {
     const output = createResponsesAssistantOutput(model);
 
     await expect(
-      __testing.processResponsesStream(
+      testing.processResponsesStream(
         streamChunks([
           {
             type: "response.failed",
@@ -281,7 +281,7 @@ describe("openai transport stream", () => {
     const model = createAzureResponsesModel();
     const output = createResponsesAssistantOutput(model);
 
-    await __testing.processResponsesStream(
+    await testing.processResponsesStream(
       streamChunks([
         {
           type: "response.completed",
@@ -315,7 +315,7 @@ describe("openai transport stream", () => {
     process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD = "tools";
     try {
       expect(
-        __testing.summarizeResponsesTools([
+        testing.summarizeResponsesTools([
           { type: "function", name: "exec" },
           { type: "function", function: { name: "wait" } },
         ]),
@@ -333,7 +333,7 @@ describe("openai transport stream", () => {
     const previous = process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD;
     process.env.OPENCLAW_DEBUG_MODEL_PAYLOAD = "full-redacted";
     try {
-      const summary = __testing.summarizeResponsesPayload({
+      const summary = testing.summarizeResponsesPayload({
         model: "gpt-5.5",
         stream: true,
         input: [],
@@ -361,14 +361,14 @@ describe("openai transport stream", () => {
       ],
     };
 
-    __testing.enforceCodeModeResponsesToolSurface(payload);
-    __testing.assertCodeModeResponsesToolSurface(payload);
+    testing.enforceCodeModeResponsesToolSurface(payload);
+    testing.assertCodeModeResponsesToolSurface(payload);
     expect(payload.tools).toHaveLength(2);
   });
 
   it("fails closed when the code mode final payload tool surface is not exec/wait", () => {
     expect(() =>
-      __testing.assertCodeModeResponsesToolSurface({
+      testing.assertCodeModeResponsesToolSurface({
         tools: [{ type: "function", name: "exec" }, { type: "web_search_preview" }],
       }),
     ).toThrow(/Code mode payload tool surface violation/);
@@ -376,7 +376,7 @@ describe("openai transport stream", () => {
 
   it("adds OpenClaw attribution to native OpenAI transport headers and protects it from pi", () => {
     vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
-    const headers = __testing.buildOpenAIClientHeaders(
+    const headers = testing.buildOpenAIClientHeaders(
       {
         id: "gpt-5.4",
         name: "GPT-5.4",
@@ -413,7 +413,7 @@ describe("openai transport stream", () => {
 
   it("adds OpenClaw attribution to native OpenAI Codex transport headers", () => {
     vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
-    const headers = __testing.buildOpenAIClientHeaders(
+    const headers = testing.buildOpenAIClientHeaders(
       {
         id: "gpt-5.4-codex",
         name: "GPT-5.4 Codex",
@@ -441,7 +441,7 @@ describe("openai transport stream", () => {
   });
 
   it("moves Azure OpenAI completions api-version headers into default query params", () => {
-    const config = __testing.buildOpenAICompletionsClientConfig(
+    const config = testing.buildOpenAICompletionsClientConfig(
       {
         id: "gpt-4o-mini",
         name: "GPT-4o Mini",
@@ -476,7 +476,7 @@ describe("openai transport stream", () => {
   });
 
   it("preserves configured base URL query params without moving non-Azure headers", () => {
-    const config = __testing.buildOpenAICompletionsClientConfig(
+    const config = testing.buildOpenAICompletionsClientConfig(
       {
         id: "proxy-model",
         name: "Proxy Model",
@@ -808,9 +808,9 @@ describe("openai transport stream", () => {
       reasoning: false,
     } satisfies Model<"openai-completions"> & { requestTimeoutMs: number };
 
-    expect(__testing.buildOpenAISdkClientOptions(responsesModel).timeout).toBe(requestTimeoutMs);
-    expect(__testing.buildOpenAISdkClientOptions(azureModel).timeout).toBe(requestTimeoutMs);
-    expect(__testing.buildOpenAISdkClientOptions(completionsModel).timeout).toBe(requestTimeoutMs);
+    expect(testing.buildOpenAISdkClientOptions(responsesModel).timeout).toBe(requestTimeoutMs);
+    expect(testing.buildOpenAISdkClientOptions(azureModel).timeout).toBe(requestTimeoutMs);
+    expect(testing.buildOpenAISdkClientOptions(completionsModel).timeout).toBe(requestTimeoutMs);
   });
 
   it("passes provider request timeouts to OpenAI SDK per-request options", () => {
@@ -829,12 +829,12 @@ describe("openai transport stream", () => {
       requestTimeoutMs: 900_000.7,
     } satisfies Model<"openai-completions"> & { requestTimeoutMs: number };
 
-    expect(__testing.buildOpenAISdkRequestOptions(model, signal)).toEqual({
+    expect(testing.buildOpenAISdkRequestOptions(model, signal)).toEqual({
       signal,
       timeout: 900_000,
     });
     expect(
-      __testing.buildOpenAISdkRequestOptions(
+      testing.buildOpenAISdkRequestOptions(
         { ...model, requestTimeoutMs: -1 } as Model<"openai-completions">,
         undefined,
       ),
@@ -1161,7 +1161,7 @@ describe("openai transport stream", () => {
       };
     }
 
-    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+    await testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
     expectRecordFields(output.usage, {
       input: 8,
@@ -1214,7 +1214,7 @@ describe("openai transport stream", () => {
     }, 0);
 
     await expect(
-      __testing.processOpenAICompletionsStream(mockStream(), output, model, stream, {
+      testing.processOpenAICompletionsStream(mockStream(), output, model, stream, {
         signal: abort.signal,
       }),
     ).rejects.toThrow("Request was aborted");
@@ -1242,7 +1242,7 @@ describe("openai transport stream", () => {
     }, 0);
 
     await expect(
-      __testing.processResponsesStream(mockStream(), output, stream, model, {
+      testing.processResponsesStream(mockStream(), output, stream, model, {
         signal: abort.signal,
       }),
     ).rejects.toThrow("Request was aborted");
@@ -1301,7 +1301,7 @@ describe("openai transport stream", () => {
       };
     }
 
-    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+    await testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
     expect(output.content).toStrictEqual([{ type: "text", text: "ok" }]);
     expect(output.stopReason).toBe("stop");
@@ -1312,7 +1312,7 @@ describe("openai transport stream", () => {
     const output = createAssistantOutput(model);
     const events: CapturedStreamEvent[] = [];
 
-    await __testing.processOpenAICompletionsStream(
+    await testing.processOpenAICompletionsStream(
       streamChunks([
         {
           id: "chatcmpl-deepseek-dsml",
@@ -1377,7 +1377,7 @@ describe("openai transport stream", () => {
     const model = createDeepSeekCompletionsModel();
     const output = createAssistantOutput(model);
 
-    await __testing.processOpenAICompletionsStream(
+    await testing.processOpenAICompletionsStream(
       streamChunks([
         {
           id: "chatcmpl-deepseek-native-tool",
@@ -1426,7 +1426,7 @@ describe("openai transport stream", () => {
     const output = createAssistantOutput(model);
     const events: CapturedStreamEvent[] = [];
 
-    await __testing.processOpenAICompletionsStream(
+    await testing.processOpenAICompletionsStream(
       streamChunks([
         {
           id: "chatcmpl-deepseek-post-tool-dsml",
@@ -1491,7 +1491,7 @@ describe("openai transport stream", () => {
     const output = createAssistantOutput(model);
     const events: CapturedStreamEvent[] = [];
 
-    await __testing.processOpenAICompletionsStream(
+    await testing.processOpenAICompletionsStream(
       streamChunks([
         {
           id: "chatcmpl-deepseek-split-dsml",
@@ -1953,7 +1953,7 @@ describe("openai transport stream", () => {
       top_p: 0.85,
     };
 
-    const sanitized = __testing.sanitizeOpenAICodexResponsesParams(
+    const sanitized = testing.sanitizeOpenAICodexResponsesParams(
       {
         id: "gpt-5.4",
         name: "GPT-5.4",
@@ -2080,7 +2080,7 @@ describe("openai transport stream", () => {
       temperature: 0.2,
     };
 
-    const sanitized = __testing.sanitizeOpenAICodexResponsesParams(
+    const sanitized = testing.sanitizeOpenAICodexResponsesParams(
       {
         id: "gpt-5.4",
         name: "GPT-5.4",
@@ -4465,7 +4465,7 @@ describe("openai transport stream", () => {
         }
       }
 
-      await __testing.processOpenAICompletionsStream(mockStream(), output, geminiModel, {
+      await testing.processOpenAICompletionsStream(mockStream(), output, geminiModel, {
         push() {},
       });
 
@@ -5059,7 +5059,7 @@ describe("openai transport stream", () => {
       }
     }
 
-    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+    await testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
     expect(output.stopReason).toBe("stop");
     expect(
@@ -5153,7 +5153,7 @@ describe("openai transport stream", () => {
       }
     }
 
-    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+    await testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
     const thinkingBlock = output.content[0] as { type: string; thinking: string };
     const textBlock = output.content[1] as { type: string; text: string };
@@ -5236,7 +5236,7 @@ describe("openai transport stream", () => {
       }
     }
 
-    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+    await testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
     expect(output.content).toEqual([
       { type: "thinking", thinking: "Need to think.", thinkingSignature: "content" },
@@ -5320,7 +5320,7 @@ describe("openai transport stream", () => {
       }
     }
 
-    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+    await testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
     expect(output.stopReason).toBe("toolUse");
     expect(output.content).toHaveLength(2);
@@ -5416,7 +5416,7 @@ describe("openai transport stream", () => {
       }
     }
 
-    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+    await testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
     expect(output.stopReason).toBe("toolUse");
     const toolCall = (output.content as Array<{ type?: string }>).find(
@@ -5522,7 +5522,7 @@ describe("openai transport stream", () => {
       }
     }
 
-    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+    await testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
     expect(output.stopReason).toBe("toolUse");
     expect(output.content).toHaveLength(3);
@@ -5619,7 +5619,7 @@ describe("openai transport stream", () => {
       }
     }
 
-    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+    await testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
     expect(output.stopReason).toBe("toolUse");
     expect(output.content).toHaveLength(3);
@@ -5709,7 +5709,7 @@ describe("openai transport stream", () => {
       }
     }
 
-    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+    await testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
     expect(output.content).toHaveLength(1);
     expectRecordFields(output.content[0], {
@@ -5780,7 +5780,7 @@ describe("openai transport stream", () => {
       }
     }
 
-    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+    await testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
     expect(output.content).toHaveLength(3);
     expectRecordFields(output.content[0], { type: "text", text: "Visible first." });
@@ -5850,7 +5850,7 @@ describe("openai transport stream", () => {
       }
     }
 
-    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+    await testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
     expect(output.content).toHaveLength(1);
     expectRecordFields(output.content[0], {
@@ -5918,7 +5918,7 @@ describe("openai transport stream", () => {
       }
     }
 
-    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+    await testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
     expect(output.content).toHaveLength(2);
     expectRecordFields(output.content[0], { type: "text", text: "Visible answer." });
@@ -6025,7 +6025,7 @@ describe("openai transport stream", () => {
       }
     }
 
-    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+    await testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
     expect(output.stopReason).toBe("toolUse");
     expect(output.content).toHaveLength(2);
@@ -6147,7 +6147,7 @@ describe("openai transport stream", () => {
       }
     }
 
-    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+    await testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
     expect(output.stopReason).toBe("toolUse");
     expect(output.content).toHaveLength(2);
@@ -6239,7 +6239,7 @@ describe("openai transport stream", () => {
     }
 
     await expect(
-      __testing.processOpenAICompletionsStream(mockStream(), output, model, stream),
+      testing.processOpenAICompletionsStream(mockStream(), output, model, stream),
     ).rejects.toThrow("Exceeded post-tool-call delta buffer limit");
   });
 
@@ -6308,7 +6308,7 @@ describe("openai transport stream", () => {
     }
 
     await expect(
-      __testing.processOpenAICompletionsStream(mockStream(), output, model, stream),
+      testing.processOpenAICompletionsStream(mockStream(), output, model, stream),
     ).rejects.toThrow("Exceeded tool-call argument buffer limit");
   });
 });

@@ -30,7 +30,15 @@ async function getConfigSnapshot() {
   if (process.env.VITEST === "true") {
     return readConfigFileSnapshot();
   }
-  configSnapshotPromise ??= readConfigFileSnapshot();
+  if (!configSnapshotPromise) {
+    const pendingSnapshot = readConfigFileSnapshot();
+    configSnapshotPromise = pendingSnapshot;
+    pendingSnapshot.catch(() => {
+      if (configSnapshotPromise === pendingSnapshot) {
+        configSnapshotPromise = null;
+      }
+    });
+  }
   return configSnapshotPromise;
 }
 
@@ -137,6 +145,7 @@ export async function ensureConfigReady(params: {
   }
 }
 
-export const __test__ = {
+export const testApi = {
   resetConfigGuardStateForTests,
 };
+export { testApi as __test__ };

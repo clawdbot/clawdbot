@@ -99,7 +99,7 @@ describe("announce loop guard (#18264)", () => {
     mocks.saveSubagentRegistryToDisk.mockClear();
     mocks.updateSessionStore.mockClear();
     registry.resetSubagentRegistryForTests({ persist: false });
-    registry.__testing.setDepsForTest({
+    registry.testing.setDepsForTest({
       captureSubagentCompletionReply: mocks.captureSubagentCompletionReply,
       cleanupBrowserSessionsForLifecycleEnd: async () => {},
       runSubagentAnnounceFlow: mocks.runSubagentAnnounceFlow,
@@ -108,7 +108,7 @@ describe("announce loop guard (#18264)", () => {
 
   afterEach(() => {
     registry.resetSubagentRegistryForTests({ persist: false });
-    registry.__testing.setDepsForTest();
+    registry.testing.setDepsForTest();
     vi.useRealTimers();
     vi.clearAllMocks();
   });

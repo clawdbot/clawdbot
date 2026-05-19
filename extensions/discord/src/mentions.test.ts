@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
-  __resetDiscordDirectoryCacheForTest,
+  resetDiscordDirectoryCacheForTest,
   rememberDiscordDirectoryUser,
 } from "./directory-cache.js";
 import { formatMention, rewriteDiscordKnownMentions } from "./mentions.js";
@@ -29,7 +29,7 @@ describe("formatMention", () => {
 
 describe("rewriteDiscordKnownMentions", () => {
   beforeEach(() => {
-    __resetDiscordDirectoryCacheForTest();
+    resetDiscordDirectoryCacheForTest();
   });
 
   it("rewrites @name mentions when a cached user id exists", () => {

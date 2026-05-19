@@ -8,6 +8,7 @@
   },
   "rules": {
     "curly": "error",
+    "eslint/no-underscore-dangle": "error",
     "eslint-plugin-unicorn/prefer-array-find": "error",
     "eslint/no-array-constructor": "error",
     "eslint/no-await-in-loop": "off",

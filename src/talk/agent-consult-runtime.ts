@@ -43,7 +43,7 @@ const defaultRealtimeVoiceAgentConsultDeps: RealtimeVoiceAgentConsultDeps = {
 
 let realtimeVoiceAgentConsultDeps = defaultRealtimeVoiceAgentConsultDeps;
 
-export function __setRealtimeVoiceAgentConsultDepsForTest(
+export function setRealtimeVoiceAgentConsultDepsForTest(
   deps: Partial<RealtimeVoiceAgentConsultDeps> | null,
 ): void {
   realtimeVoiceAgentConsultDeps = deps

@@ -311,7 +311,7 @@ export const PROVIDER_AUTH_ENV_VAR_CANDIDATES = createLazyReadonlyRecord(() =>
  */
 export const PROVIDER_ENV_VARS = createLazyReadonlyRecord(() => resolveProviderEnvVars());
 
-export const __testing = {
+export const testing = {
   resetProviderEnvVarCachesForTests(): void {
     for (const reset of lazyRecordCacheResetters) {
       reset();
@@ -367,3 +367,4 @@ export function omitEnvKeysCaseInsensitive(
   }
   return env;
 }
+export { testing as __testing };

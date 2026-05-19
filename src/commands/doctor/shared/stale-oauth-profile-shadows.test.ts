@@ -12,7 +12,7 @@ import type { AuthProfileStore, OAuthCredential } from "../../../agents/auth-pro
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { captureEnv } from "../../../test-utils/env.js";
 import {
-  __testing,
+  testing,
   collectStaleOAuthProfileShadowWarnings,
   repairStaleOAuthProfileShadows,
   scanStaleOAuthProfileShadows,
@@ -335,7 +335,7 @@ describe("stale OAuth profile shadow doctor repair", () => {
   it("rechecks stale OAuth shadows against the locked store before removal", () => {
     const profileId = "anthropic:default";
     const now = Date.now();
-    const result = __testing.removeStaleProfilesFromStore({
+    const result = testing.removeStaleProfilesFromStore({
       store: storeWith(
         profileId,
         oauthCredential({
@@ -362,7 +362,7 @@ describe("stale OAuth profile shadow doctor repair", () => {
     const profileId = "anthropic:default";
     const now = Date.now();
     const childAgentDir = path.join(stateDir, "agents", "telegram", "agent");
-    const repair = await __testing.repairStaleOAuthProfilesForAgent({
+    const repair = await testing.repairStaleOAuthProfilesForAgent({
       agentDir: childAgentDir,
       mainStore: storeWith(
         profileId,

@@ -1,10 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   MOCK_ONLY_PROOF_LABEL,
   NEEDS_REAL_BEHAVIOR_PROOF_LABEL,
   PROOF_OVERRIDE_LABEL,
   PROOF_SUPPLIED_LABEL,
+  evaluateClawSweeperExactHeadProof,
   evaluateRealBehaviorProof,
+  hasClawSweeperExactHeadProof,
+  isMaintainerTeamMember,
   labelsForRealBehaviorProof,
 } from "../../scripts/github/real-behavior-proof-policy.mjs";
 
@@ -172,5 +175,139 @@ describe("real-behavior-proof-policy", () => {
         pullRequest: externalPr("", { labels: [{ name: PROOF_OVERRIDE_LABEL }] }),
       }).status,
     ).toBe("override");
+  });
+
+  it("accepts ClawSweeper pass verdict comments only for the exact PR head", () => {
+    const pullRequest = {
+      number: 83581,
+      head: {
+        sha: "06ee95df6608d29a395c52ba8ab53fdd93a9dc4f",
+      },
+    };
+    const comments = [
+      {
+        user: {
+          login: "clawsweeper[bot]",
+          type: "Bot",
+        },
+        performed_via_github_app: {
+          slug: "clawsweeper",
+        },
+        body: [
+          "Codex review: passed.",
+          "<!-- clawsweeper-verdict:pass item=83581 sha=06ee95df6608d29a395c52ba8ab53fdd93a9dc4f confidence=high -->",
+        ].join("\n"),
+      },
+    ];
+
+    expect(hasClawSweeperExactHeadProof({ pullRequest, comments })).toBe(true);
+    expect(evaluateClawSweeperExactHeadProof({ pullRequest, comments }).passed).toBe(true);
+    expect(
+      hasClawSweeperExactHeadProof({
+        pullRequest: {
+          ...pullRequest,
+          head: { sha: "d0215b2d67a45a783277fc7d2949ac4a30f63ec6" },
+        },
+        comments,
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects forged ClawSweeper pass verdict markers from contributor comments", () => {
+    const pullRequest = {
+      number: 83581,
+      head: {
+        sha: "06ee95df6608d29a395c52ba8ab53fdd93a9dc4f",
+      },
+    };
+    const comments = [
+      {
+        user: {
+          login: "external-contributor",
+          type: "User",
+        },
+        body: "<!-- clawsweeper-verdict:pass item=83581 sha=06ee95df6608d29a395c52ba8ab53fdd93a9dc4f confidence=high -->",
+      },
+    ];
+
+    expect(hasClawSweeperExactHeadProof({ pullRequest, comments })).toBe(false);
+    expect(evaluateClawSweeperExactHeadProof({ pullRequest, comments }).passed).toBe(false);
+  });
+
+  it("rejects bot-shaped ClawSweeper pass verdict markers without the GitHub App source", () => {
+    const pullRequest = {
+      number: 83581,
+      head: {
+        sha: "06ee95df6608d29a395c52ba8ab53fdd93a9dc4f",
+      },
+    };
+    const comments = [
+      {
+        user: {
+          login: "clawsweeper[bot]",
+          type: "Bot",
+        },
+        body: "<!-- clawsweeper-verdict:pass item=83581 sha=06ee95df6608d29a395c52ba8ab53fdd93a9dc4f confidence=high -->",
+      },
+    ];
+
+    expect(hasClawSweeperExactHeadProof({ pullRequest, comments })).toBe(false);
+    expect(evaluateClawSweeperExactHeadProof({ pullRequest, comments }).passed).toBe(false);
+  });
+});
+
+describe("isMaintainerTeamMember", () => {
+  function jsonResponse(status: number, body: unknown = {}) {
+    return {
+      ok: status >= 200 && status < 300,
+      status,
+      json: () => Promise.resolve(body),
+    };
+  }
+
+  it("returns true for active members", async () => {
+    const fetch = vi.fn().mockResolvedValue(jsonResponse(200, { state: "active" }));
+    const result = await isMaintainerTeamMember({
+      token: "tok",
+      org: "openclaw",
+      login: "private-maint",
+      fetch,
+    });
+
+    expect(result).toBe(true);
+    expect(fetch).toHaveBeenCalledWith(
+      "https://api.github.com/orgs/openclaw/teams/maintainer/memberships/private-maint",
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: "Bearer tok",
+          Accept: "application/vnd.github+json",
+        }),
+      }),
+    );
+  });
+
+  it("returns false for non-active membership states", async () => {
+    const fetch = vi.fn().mockResolvedValue(jsonResponse(200, { state: "pending" }));
+    expect(await isMaintainerTeamMember({ token: "t", org: "o", login: "u", fetch })).toBe(false);
+  });
+
+  it("returns false when GitHub returns 404", async () => {
+    const fetch = vi.fn().mockResolvedValue(jsonResponse(404));
+    expect(await isMaintainerTeamMember({ token: "t", org: "o", login: "u", fetch })).toBe(false);
+  });
+
+  it("returns false when the token, org, or login is missing", async () => {
+    const fetch = vi.fn();
+    expect(await isMaintainerTeamMember({ org: "o", login: "u", fetch })).toBe(false);
+    expect(await isMaintainerTeamMember({ token: "t", login: "u", fetch })).toBe(false);
+    expect(await isMaintainerTeamMember({ token: "t", org: "o", fetch })).toBe(false);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("throws on unexpected HTTP errors so the caller can warn and fall back", async () => {
+    const fetch = vi.fn().mockResolvedValue(jsonResponse(500));
+    await expect(
+      isMaintainerTeamMember({ token: "t", org: "o", login: "u", fetch }),
+    ).rejects.toThrow(/500/);
   });
 });

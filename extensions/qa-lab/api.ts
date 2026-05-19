@@ -82,7 +82,8 @@ export {
 } from "./src/self-check.js";
 export { runQaE2eSelfCheck, runQaLabSelfCheck } from "./src/self-check-runner.js";
 export {
-  __testing,
+  testing,
+  testing as __testing,
   buildQaRuntimeEnv,
   type QaCliBackendAuthMode,
   type QaGatewayChildCommand,

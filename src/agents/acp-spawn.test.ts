@@ -6,7 +6,7 @@ import type { AcpInitializeSessionInput } from "../acp/control-plane/manager.typ
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  __testing as sessionBindingServiceTesting,
+  testing as sessionBindingServiceTesting,
   registerSessionBindingAdapter,
   type SessionBindingAdapterCapabilities,
   type SessionBindingPlacement,

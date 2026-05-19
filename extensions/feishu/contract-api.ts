@@ -1,5 +1,5 @@
 export { createFeishuThreadBindingManager } from "./src/thread-bindings.js";
-export { __testing as feishuThreadBindingTesting } from "./src/thread-bindings.js";
+export { testing as feishuThreadBindingTesting } from "./src/thread-bindings.js";
 export {
   collectRuntimeConfigAssignments,
   secretTargetRegistryEntries,

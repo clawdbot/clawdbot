@@ -21,7 +21,7 @@ describe("gateway startup import boundaries", () => {
       /import\s+\{[^}]*resolveSessionKeyForRun[^}]*\}\s+from "\.\/server-session-key\.js"/s,
     );
     expect(serverImpl).not.toMatch(
-      /export\s+\{[^}]*__resetModelCatalogCacheForTest[^}]*\}\s+from "\.\/server-model-catalog\.js"/s,
+      /export\s+\{[^}]*resetModelCatalogCacheForTest[^}]*\}\s+from "\.\/server-model-catalog\.js"/s,
     );
     expect(readSource("src/gateway/server-runtime-subscriptions.ts")).toContain(
       'import("./server-session-key.js")',

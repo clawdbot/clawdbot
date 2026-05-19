@@ -11,11 +11,11 @@ vi.mock("./resolve-targets.js", () => ({
   resolveMatrixTargets: resolveMatrixTargetsMock,
 }));
 
-let promptMatrixAllowFrom: typeof import("./onboarding.js").__testing.promptMatrixAllowFrom;
+let promptMatrixAllowFrom: typeof import("./onboarding.js").testing.promptMatrixAllowFrom;
 
 describe("matrix onboarding account-scoped resolution", () => {
   beforeAll(async () => {
-    ({ promptMatrixAllowFrom } = (await import("./onboarding.js")).__testing);
+    ({ promptMatrixAllowFrom } = (await import("./onboarding.js")).testing);
   });
 
   beforeEach(() => {

@@ -48,6 +48,7 @@ vi.mock("../plugins/clawhub.js", () => ({
   CLAWHUB_INSTALL_ERROR_CODE: {
     PACKAGE_NOT_FOUND: "package_not_found",
     VERSION_NOT_FOUND: "version_not_found",
+    ARTIFACT_UNAVAILABLE: "artifact_unavailable",
     ARTIFACT_DOWNLOAD_UNAVAILABLE: "artifact_download_unavailable",
   },
   installPluginFromClawHub,
@@ -761,11 +762,11 @@ describe("ensureOnboardingPluginInstalled", () => {
     expect(captured?.initialValue).toBe("clawhub");
   });
 
-  it("falls back from ClawHub to npm when the ClawHub package is unavailable", async () => {
+  it("falls back from ClawHub to npm when the ClawHub artifact is unavailable", async () => {
     installPluginFromClawHub.mockResolvedValueOnce({
       ok: false,
-      code: "package_not_found",
-      error: "Package not found on ClawHub.",
+      code: "artifact_unavailable",
+      error: "ClawHub artifact download is not available yet.",
     });
     installPluginFromNpmSpec.mockResolvedValueOnce({
       ok: true,

@@ -574,6 +574,118 @@ describe("installSessionToolResultGuard", () => {
     expect((persisted[0] as { content?: unknown } | undefined)?.content).toBe("second");
   });
 
+  it("suppresses assistant error stubs when requested", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm, {
+      suppressAssistantErrorPersistence: true,
+    });
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "[assistant turn failed before producing content]" }],
+        stopReason: "error",
+        timestamp: Date.now(),
+      }),
+    );
+    sm.appendMessage(
+      asAppendMessage({
+        role: "user",
+        content: "next user message",
+        timestamp: Date.now() + 1,
+      }),
+    );
+
+    const persisted = getPersistedMessages(sm);
+    expect(persisted.map((message) => message.role)).toEqual(["user"]);
+  });
+
+  it("notifies after assistant error stubs persist", () => {
+    const sm = SessionManager.inMemory();
+    const persistedErrors: Array<Extract<AgentMessage, { role: "assistant" }>> = [];
+    installSessionToolResultGuard(sm, {
+      onAssistantErrorMessagePersisted: (message) => {
+        persistedErrors.push(message);
+      },
+    });
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "[assistant turn failed before producing content]" }],
+        stopReason: "error",
+        timestamp: Date.now(),
+      }),
+    );
+
+    expect(persistedErrors).toHaveLength(1);
+    expect(persistedErrors[0]?.stopReason).toBe("error");
+  });
+
+  it("models a four-candidate followup fallback cascade producing exactly one user and one assistant-error entry", () => {
+    const sm = SessionManager.inMemory();
+    const FALLBACK_CANDIDATES = 4;
+    let userPersisted = false;
+    let assistantErrorPersisted = false;
+
+    for (let attempt = 0; attempt < FALLBACK_CANDIDATES; attempt += 1) {
+      installSessionToolResultGuard(sm, {
+        suppressNextUserMessagePersistence: userPersisted,
+        suppressAssistantErrorPersistence: assistantErrorPersisted,
+        onUserMessagePersisted: () => {
+          userPersisted = true;
+        },
+        onAssistantErrorMessagePersisted: () => {
+          assistantErrorPersisted = true;
+        },
+      });
+      sm.appendMessage(
+        asAppendMessage({
+          role: "user",
+          content: "queued user message",
+          timestamp: Date.now() + attempt,
+        }),
+      );
+      sm.appendMessage(
+        asAppendMessage({
+          role: "assistant",
+          content: [{ type: "text", text: "[assistant turn failed before producing content]" }],
+          stopReason: "error",
+          timestamp: Date.now() + attempt,
+        }),
+      );
+    }
+
+    const persisted = getPersistedMessages(sm);
+    const roles = persisted.map((m) => m.role);
+    expect(roles).toEqual(["user", "assistant"]);
+    const consecutiveSameRole = roles.reduce(
+      (acc, role, idx) => acc + (idx > 0 && role === roles[idx - 1] ? 1 : 0),
+      0,
+    );
+    expect(consecutiveSameRole).toBe(0);
+  });
+
+  it("still persists successful assistant messages when error suppression is on", () => {
+    const sm = SessionManager.inMemory();
+    installSessionToolResultGuard(sm, {
+      suppressAssistantErrorPersistence: true,
+    });
+
+    sm.appendMessage(
+      asAppendMessage({
+        role: "assistant",
+        content: "ok response",
+        stopReason: "stop",
+        timestamp: Date.now(),
+      }),
+    );
+
+    const persisted = getPersistedMessages(sm);
+    expect(persisted).toHaveLength(1);
+    expect(persisted[0]?.role).toBe("assistant");
+  });
+
   it("suppresses transcript-only assistant messages when requested", () => {
     const sm = SessionManager.inMemory();
     installSessionToolResultGuard(sm, {

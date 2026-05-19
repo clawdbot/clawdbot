@@ -105,6 +105,33 @@ describe("admin-http-rpc plugin handler", () => {
     });
   });
 
+  it.each([
+    ["web.login.start", { force: true, timeoutMs: 1000 }],
+    ["web.login.wait", { timeoutMs: 1000 }],
+  ] as const)(
+    "allows web QR login method %s through the authenticated plugin request scope",
+    async (method, params) => {
+      dispatchGatewayMethod.mockResolvedValueOnce({
+        ok: true,
+        payload: { status: "ok" },
+      });
+
+      const result = await invoke({
+        id: "web-login",
+        method,
+        params,
+      });
+
+      expect(dispatchGatewayMethod).toHaveBeenCalledWith(method, params);
+      expect(result.captured.statusCode).toBe(200);
+      expect(result.json).toEqual({
+        id: "web-login",
+        ok: true,
+        payload: { status: "ok" },
+      });
+    },
+  );
+
   it("rejects methods outside the admin HTTP RPC allowlist", async () => {
     const result = await invoke({ id: "bad", method: "sessions.send" });
 

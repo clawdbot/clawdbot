@@ -89,7 +89,7 @@ function classifyProjectedAttemptResult(result: ProjectedAttemptResult) {
 }
 
 function readMirrorIdentity(message: unknown): string | undefined {
-  const meta = (message as MirrorTaggedMessage | undefined)?.__openclaw;
+  const meta = (message as MirrorTaggedMessage | undefined)?.["__openclaw"];
   return meta?.mirrorIdentity;
 }
 

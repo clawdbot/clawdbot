@@ -45,6 +45,20 @@ describe("resolveAuthProfileFailureReason", () => {
     ).toBeNull();
   });
 
+  it("does not persist empty responses as auth-profile health", () => {
+    expect(
+      resolveAuthProfileFailureReason({
+        failoverReason: "empty_response",
+      }),
+    ).toBeNull();
+    expect(
+      resolveAuthProfileFailureReason({
+        failoverReason: "empty_response",
+        policy: "shared",
+      }),
+    ).toBeNull();
+  });
+
   it("does not persist request-shape (format) rejections as auth-profile health (#77228)", () => {
     // A format rejection (e.g. the github-copilot prefill-strict 400
     // "conversation must end with a user message" reported in #77228) is

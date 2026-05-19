@@ -57,8 +57,23 @@ function actionNeedsExplicitTarget(action: ChannelMessageActionName): boolean {
 function stripFormattedReasoningMessage(text: string): string {
   const stripped = stripReasoningTagsFromText(text);
   const lines = stripped.split(/\r?\n/u);
-  if (lines[0]?.trim() !== "Reasoning:") {
+  const prefix = lines[0]?.trim();
+  if (prefix !== "Reasoning:" && !/^Thinking\.{0,3}$/u.test(prefix ?? "")) {
     return stripped;
+  }
+  if (/^Thinking\.{0,3}$/u.test(prefix ?? "")) {
+    const firstBodyLine = lines.slice(1).find((line) => line.trim());
+    const trimmedBodyLine = firstBodyLine?.trim() ?? "";
+    if (
+      !trimmedBodyLine ||
+      !(
+        trimmedBodyLine.startsWith("_") &&
+        trimmedBodyLine.endsWith("_") &&
+        trimmedBodyLine.length >= 2
+      )
+    ) {
+      return stripped;
+    }
   }
 
   let index = 1;
@@ -551,6 +566,7 @@ type MessageToolOptions = {
   currentMessageId?: string | number;
   replyToMode?: "off" | "first" | "all" | "batched";
   hasRepliedRef?: { value: boolean };
+  sameChannelThreadRequired?: boolean;
   sandboxRoot?: string;
   requireExplicitTarget?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
@@ -1008,7 +1024,8 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         currentThreadTs ||
         hasCurrentMessageId ||
         replyToMode ||
-        options?.hasRepliedRef
+        options?.hasRepliedRef ||
+        options?.sameChannelThreadRequired
           ? {
               currentChannelId: effectiveCurrentChannel.currentChannelId,
               currentChannelProvider: effectiveCurrentChannel.currentChannelProvider,
@@ -1016,6 +1033,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
               currentMessageId: options?.currentMessageId,
               replyToMode,
               hasRepliedRef: options?.hasRepliedRef,
+              sameChannelThreadRequired: options?.sameChannelThreadRequired,
               // Direct tool invocations should not add cross-context decoration.
               // The agent is composing a message, not forwarding from another chat.
               skipCrossContextDecoration: true,

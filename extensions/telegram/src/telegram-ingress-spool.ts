@@ -28,6 +28,10 @@ type TelegramSpooledUpdatePayload = {
   };
 };
 
+type TelegramFailedSpooledUpdatePayload = Omit<TelegramSpooledUpdatePayload, "claim" | "update"> & {
+  failure: NonNullable<TelegramSpooledUpdatePayload["failure"]>;
+};
+
 export type TelegramSpooledUpdate = {
   updateId: number;
   path: string;
@@ -326,12 +330,10 @@ export async function failTelegramSpooledUpdateClaim(params: {
     if (!parsed) {
       return false;
     }
-    const payload: TelegramSpooledUpdatePayload = {
+    const payload: TelegramFailedSpooledUpdatePayload = {
       version: SPOOL_VERSION,
       updateId: parsed.updateId,
       receivedAt: parsed.receivedAt,
-      update: parsed.update,
-      ...(parsed.claim ? { claim: parsed.claim } : {}),
       failure: {
         reason: params.reason,
         message: params.message,

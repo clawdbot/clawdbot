@@ -44,7 +44,7 @@ describe("logger transport registry", () => {
       (loggerModule as unknown as Record<string, unknown>).registerLogTransport,
     ).toBeUndefined();
     expect(
-      (loggerModule.__test__ as unknown as Record<string, unknown>).registerLogTransportForTest,
+      (loggerModule.testApi as unknown as Record<string, unknown>).registerLogTransportForTest,
     ).toBeUndefined();
   });
 

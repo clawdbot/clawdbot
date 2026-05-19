@@ -575,7 +575,7 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
   return withWarnings(await executeInstallCommand({ argv, timeoutMs, env }), warnings);
 }
 
-export const __testing = {
+export const testing = {
   resolveDefaultNodeInstallStateDir,
   setDepsForTest(overrides?: Partial<SkillsInstallDeps>): void {
     skillsInstallDeps = {
@@ -584,3 +584,4 @@ export const __testing = {
     };
   },
 };
+export { testing as __testing };

@@ -1,5 +1,6 @@
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { GroupKeyResolution, SessionEntry } from "../config/sessions/types.js";
+import type { ChannelRouteRef } from "../plugin-sdk/channel-route.js";
 
 export type InboundLastRouteUpdate = {
   sessionKey: string;
@@ -7,6 +8,7 @@ export type InboundLastRouteUpdate = {
   to: string;
   accountId?: string;
   threadId?: string | number;
+  route?: ChannelRouteRef;
   mainDmOwnerPin?: {
     ownerRecipient: string;
     senderRecipient: string;

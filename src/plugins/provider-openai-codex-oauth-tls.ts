@@ -86,7 +86,7 @@ function hasOpenAICodexOAuthProfile(cfg: OpenClawConfig): boolean {
   );
 }
 
-function shouldRunOpenAIOAuthTlsPrerequisites(params: {
+export function shouldRunOpenAIOAuthTlsPrerequisites(params: {
   cfg: OpenClawConfig;
   deep?: boolean;
 }): boolean {

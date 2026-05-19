@@ -4,7 +4,7 @@ import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { _resetIMessageShortIdState, rememberIMessageReplyCache } from "../monitor-reply-cache.js";
+import { resetIMessageShortIdState, rememberIMessageReplyCache } from "../monitor-reply-cache.js";
 import {
   buildIMessageInboundContext,
   describeIMessageEchoDropLog,
@@ -547,7 +547,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     const priorStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = tempStateDir;
     try {
-      _resetIMessageShortIdState();
+      resetIMessageShortIdState();
       rememberIMessageReplyCache({
         accountId: "default",
         messageId: "p:0/imsg-production",
@@ -585,7 +585,7 @@ describe("resolveIMessageInboundDecision echo detection", () => {
         "iMessage reaction added: ❤️ by +15555550123 on msg imsg-production",
       );
     } finally {
-      _resetIMessageShortIdState();
+      resetIMessageShortIdState();
       if (priorStateDir === undefined) {
         delete process.env.OPENCLAW_STATE_DIR;
       } else {
@@ -869,7 +869,7 @@ describe("buildIMessageInboundContext MessageSid handling (rowid-leak regression
     fs.rmSync(tempStateDir, { recursive: true, force: true });
   });
   beforeEach(() => {
-    _resetIMessageShortIdState();
+    resetIMessageShortIdState();
     try {
       fs.rmSync(path.join(tempStateDir, "imessage", "reply-cache.jsonl"), { force: true });
     } catch {

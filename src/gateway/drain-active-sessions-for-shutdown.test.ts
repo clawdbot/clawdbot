@@ -14,7 +14,7 @@ type SessionEndHookEvent = {
   sessionKey?: string;
 };
 
-const runSessionEndMock = vi.fn(async (_event: SessionEndHookEvent) => undefined);
+const runSessionEndMock = vi.fn(async (eventValue: SessionEndHookEvent) => undefined);
 const hasHooksMock = vi.fn((name: string) => name === "session_end");
 const getGlobalHookRunnerMock = vi.fn(() => ({
   hasHooks: hasHooksMock,

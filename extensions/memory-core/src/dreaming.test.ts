@@ -7,7 +7,7 @@ import {
 } from "openclaw/plugin-sdk/system-event-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  __testing,
+  testing,
   reconcileShortTermDreamingCronJob,
   registerShortTermPromotionDreaming,
   resolveShortTermPromotionDreamingConfig,
@@ -16,7 +16,7 @@ import {
 import { recordShortTermRecalls } from "./short-term-promotion.js";
 import { createMemoryCoreTestHarness } from "./test-helpers.js";
 
-const constants = __testing.constants;
+const constants = testing.constants;
 const { createTempWorkspace } = createMemoryCoreTestHarness();
 
 afterEach(() => {
@@ -505,7 +505,7 @@ describe("short-term dreaming config", () => {
 describe("short-term dreaming gateway_start context parsing", () => {
   it("resolves cron service from the typed gateway_start cron getter", () => {
     const harness = createCronHarness();
-    const resolved = __testing.resolveCronServiceFromGatewayContext({
+    const resolved = testing.resolveCronServiceFromGatewayContext({
       getCron: () => harness.cron,
     });
     expect(resolved).toBe(harness.cron);
@@ -557,7 +557,7 @@ describe("short-term dreaming cron reconciliation", () => {
       recencyHalfLifeDays: constants.DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS,
       verboseLogging: false,
     } as const;
-    const desired = __testing.buildManagedDreamingCronJob(desiredConfig);
+    const desired = testing.buildManagedDreamingCronJob(desiredConfig);
     const stalePrimary: CronJobLike = {
       id: "job-primary",
       name: desired.name,

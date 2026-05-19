@@ -388,7 +388,7 @@ export function createDiscordDraftPreviewController(params: {
 
 function normalizeReasoningProgressLine(text: string): string {
   return text
-    .replace(/^\s*(?:>\s*)?Reasoning:\s*/i, "")
+    .replace(/^\s*(?:>\s*)?(?:Reasoning:|Thinking\.{0,3})\s*/i, "")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -409,7 +409,7 @@ function mergeReasoningProgressText(current: string, incoming: string): string {
 }
 
 function isReasoningSnapshotText(text: string): boolean {
-  return /^\s*(?:>\s*)?Reasoning:\s*/i.test(text);
+  return /^\s*(?:>\s*)?(?:Reasoning:|Thinking\.{0,3})\s*/i.test(text);
 }
 
 function isEmptyDiscordProgressLine(line: string | ChannelProgressDraftLine | undefined): boolean {

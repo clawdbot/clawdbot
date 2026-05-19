@@ -31,38 +31,38 @@ export class Base {
 }
 
 export class User<IsPartial extends boolean = false> extends Base {
-  protected _rawData: APIUser | null;
+  protected rawDataValue: APIUser | null;
   readonly id: string;
 
   constructor(client: StructureClient, rawDataOrId: IsPartial extends true ? string : APIUser) {
     super(client);
-    this._rawData = typeof rawDataOrId === "string" ? null : rawDataOrId;
+    this.rawDataValue = typeof rawDataOrId === "string" ? null : rawDataOrId;
     this.id = typeof rawDataOrId === "string" ? rawDataOrId : rawDataOrId.id;
   }
 
   get rawData(): Readonly<APIUser> {
-    if (!this._rawData) {
+    if (!this.rawDataValue) {
       throw new Error("Partial Discord user has no raw data");
     }
-    return this._rawData;
+    return this.rawDataValue;
   }
   get partial(): IsPartial {
-    return (this._rawData === null) as IsPartial;
+    return (this.rawDataValue === null) as IsPartial;
   }
   get username() {
-    return this._rawData?.username ?? "";
+    return this.rawDataValue?.username ?? "";
   }
   get globalName() {
-    return this._rawData?.global_name;
+    return this.rawDataValue?.global_name;
   }
   get discriminator() {
-    return this._rawData?.discriminator;
+    return this.rawDataValue?.discriminator;
   }
   get bot() {
-    return this._rawData?.bot;
+    return this.rawDataValue?.bot;
   }
   get avatar() {
-    return this._rawData?.avatar;
+    return this.rawDataValue?.avatar;
   }
   get avatarUrl() {
     return this.avatar ? `https://cdn.discordapp.com/avatars/${this.id}/${this.avatar}.png` : null;
@@ -86,28 +86,28 @@ export class User<IsPartial extends boolean = false> extends Base {
 }
 
 export class Role<IsPartial extends boolean = false> extends Base {
-  protected _rawData: APIRole | null;
+  protected rawDataValue: APIRole | null;
   readonly id: string;
   constructor(client: StructureClient, rawDataOrId: IsPartial extends true ? string : APIRole) {
     super(client);
-    this._rawData = typeof rawDataOrId === "string" ? null : rawDataOrId;
+    this.rawDataValue = typeof rawDataOrId === "string" ? null : rawDataOrId;
     this.id = typeof rawDataOrId === "string" ? rawDataOrId : rawDataOrId.id;
   }
   get name() {
-    return this._rawData?.name ?? "";
+    return this.rawDataValue?.name ?? "";
   }
 }
 
 export class Guild<IsPartial extends boolean = false> extends Base {
-  protected _rawData: APIGuild | null;
+  protected rawDataValue: APIGuild | null;
   readonly id: string;
   constructor(client: StructureClient, rawDataOrId: IsPartial extends true ? string : APIGuild) {
     super(client);
-    this._rawData = typeof rawDataOrId === "string" ? null : rawDataOrId;
+    this.rawDataValue = typeof rawDataOrId === "string" ? null : rawDataOrId;
     this.id = typeof rawDataOrId === "string" ? rawDataOrId : rawDataOrId.id;
   }
   get name() {
-    return this._rawData?.name ?? "";
+    return this.rawDataValue?.name ?? "";
   }
 }
 
@@ -130,13 +130,13 @@ export class GuildMember extends Base {
 }
 
 export class Message<IsPartial extends boolean = false> extends Base {
-  protected _rawData: APIMessage | null;
+  protected rawDataValue: APIMessage | null;
   readonly id: string;
   readonly channelId: string;
 
   constructor(client: StructureClient, rawDataOrIds: RawOrId<APIMessage>) {
     super(client);
-    this._rawData =
+    this.rawDataValue =
       typeof rawDataOrIds === "string" || !("author" in rawDataOrIds) ? null : rawDataOrIds;
     this.id = typeof rawDataOrIds === "string" ? rawDataOrIds : rawDataOrIds.id;
     this.channelId =
@@ -148,13 +148,13 @@ export class Message<IsPartial extends boolean = false> extends Base {
   }
 
   get rawData(): Readonly<APIMessage> {
-    if (!this._rawData) {
+    if (!this.rawDataValue) {
       throw new Error("Partial Discord message has no raw data");
     }
-    return this._rawData;
+    return this.rawDataValue;
   }
   get partial(): IsPartial {
-    return (this._rawData === null) as IsPartial;
+    return (this.rawDataValue === null) as IsPartial;
   }
   get message(): Message<IsPartial> {
     return this;
@@ -163,7 +163,7 @@ export class Message<IsPartial extends boolean = false> extends Base {
     return this.channelId;
   }
   get guild_id() {
-    return (this._rawData as { guild_id?: string } | null)?.guild_id;
+    return (this.rawDataValue as { guild_id?: string } | null)?.guild_id;
   }
   get guild() {
     return this.guild_id ? new Guild<true>(this.client, this.guild_id) : null;
@@ -172,55 +172,55 @@ export class Message<IsPartial extends boolean = false> extends Base {
     return this.webhook_id;
   }
   get webhook_id() {
-    return (this._rawData as { webhook_id?: string | null } | null)?.webhook_id ?? null;
+    return (this.rawDataValue as { webhook_id?: string | null } | null)?.webhook_id ?? null;
   }
   get member() {
-    const member = (this._rawData as { member?: APIGuildMember } | null)?.member;
+    const member = (this.rawDataValue as { member?: APIGuildMember } | null)?.member;
     return member ? new GuildMember(this.client, member) : null;
   }
   get rawMember() {
-    return (this._rawData as { member?: APIGuildMember } | null)?.member;
+    return (this.rawDataValue as { member?: APIGuildMember } | null)?.member;
   }
   get content() {
-    return this._rawData?.content ?? "";
+    return this.rawDataValue?.content ?? "";
   }
   get author() {
-    return this._rawData?.author ? new User(this.client, this._rawData.author) : null;
+    return this.rawDataValue?.author ? new User(this.client, this.rawDataValue.author) : null;
   }
   get embeds(): APIEmbed[] {
-    return this._rawData?.embeds ?? [];
+    return this.rawDataValue?.embeds ?? [];
   }
   get attachments() {
-    return this._rawData?.attachments ?? [];
+    return this.rawDataValue?.attachments ?? [];
   }
   get stickers() {
-    return this._rawData?.sticker_items ?? [];
+    return this.rawDataValue?.sticker_items ?? [];
   }
   get mentionedUsers() {
-    return (this._rawData?.mentions ?? []).map((user) => new User(this.client, user));
+    return (this.rawDataValue?.mentions ?? []).map((user) => new User(this.client, user));
   }
   get mentionedRoles() {
-    return this._rawData?.mention_roles ?? [];
+    return this.rawDataValue?.mention_roles ?? [];
   }
   get mentionedEveryone() {
-    return this._rawData?.mention_everyone ?? false;
+    return this.rawDataValue?.mention_everyone ?? false;
   }
   get timestamp() {
-    return this._rawData?.timestamp;
+    return this.rawDataValue?.timestamp;
   }
   get type(): MessageType | undefined {
-    return this._rawData?.type;
+    return this.rawDataValue?.type;
   }
   get messageReference() {
-    return this._rawData?.message_reference;
+    return this.rawDataValue?.message_reference;
   }
   get referencedMessage() {
-    return this._rawData?.referenced_message
-      ? new Message(this.client, this._rawData.referenced_message)
+    return this.rawDataValue?.referenced_message
+      ? new Message(this.client, this.rawDataValue.referenced_message)
       : null;
   }
   get thread() {
-    return this._rawData?.thread ? channelFactory(this.client, this._rawData.thread) : null;
+    return this.rawDataValue?.thread ? channelFactory(this.client, this.rawDataValue.thread) : null;
   }
   async fetch(): Promise<Message> {
     const raw = await getChannelMessage(this.client.rest, this.channelId, this.id);
@@ -262,7 +262,7 @@ export type DiscordChannel = APIChannel & {
 };
 
 export function channelFactory(
-  _client: StructureClient,
+  clientForTest: StructureClient,
   channelData: APIChannel,
   _partial?: boolean,
 ): DiscordChannel {
@@ -272,7 +272,7 @@ export function channelFactory(
     guildId: "guild_id" in channelData ? channelData.guild_id : undefined,
     guild:
       "guild_id" in channelData && typeof channelData.guild_id === "string"
-        ? new Guild<true>(_client, channelData.guild_id)
+        ? new Guild<true>(clientForTest, channelData.guild_id)
         : undefined,
     parentId: "parent_id" in channelData ? channelData.parent_id : undefined,
     ownerId: "owner_id" in channelData ? channelData.owner_id : undefined,

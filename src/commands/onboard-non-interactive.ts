@@ -5,55 +5,10 @@ import { logConfigUpdated } from "../config/logging.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
-import type { WizardPrompter } from "../wizard/prompts.js";
+import { createNonInteractiveLoggingPrompter } from "./non-interactive-prompter.js";
 import { runNonInteractiveLocalSetup } from "./onboard-non-interactive/local.js";
 import { runNonInteractiveRemoteSetup } from "./onboard-non-interactive/remote.js";
 import type { OnboardOptions } from "./onboard-types.js";
-
-function createNonInteractiveMigrationPrompter(runtime: RuntimeEnv): WizardPrompter {
-  const unavailable = <T>(message: string): Promise<T> =>
-    Promise.reject(
-      new Error(
-        `Non-interactive migration import needs explicit flags before prompting: ${message}`,
-      ),
-    );
-  return {
-    async intro(title) {
-      runtime.log(title);
-    },
-    async outro(message) {
-      runtime.log(message);
-    },
-    async note(message, title) {
-      runtime.log(title ? `${title}\n${message}` : message);
-    },
-    async select(params) {
-      return unavailable(params.message);
-    },
-    async multiselect(params) {
-      return unavailable(params.message);
-    },
-    async text(params) {
-      return unavailable(params.message);
-    },
-    async confirm(params) {
-      return unavailable(params.message);
-    },
-    progress(label) {
-      runtime.log(label);
-      return {
-        update(message) {
-          runtime.log(message);
-        },
-        stop(message) {
-          if (message) {
-            runtime.log(message);
-          }
-        },
-      };
-    },
-  };
-}
 
 async function runNonInteractiveMigrationImport(params: {
   opts: OnboardOptions;
@@ -79,7 +34,11 @@ async function runNonInteractiveMigrationImport(params: {
     opts: { ...params.opts, importFrom: providerId, nonInteractive: true },
     baseConfig: params.baseConfig,
     detections,
-    prompter: createNonInteractiveMigrationPrompter(params.runtime),
+    prompter: createNonInteractiveLoggingPrompter(
+      params.runtime,
+      (message) =>
+        `Non-interactive migration import needs explicit flags before prompting: ${message}`,
+    ),
     runtime: params.runtime,
     async commitConfigFile(config) {
       await replaceConfigFile({

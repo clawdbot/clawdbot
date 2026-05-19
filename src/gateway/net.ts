@@ -2,7 +2,7 @@ import type { IncomingMessage } from "node:http";
 import net from "node:net";
 import type { GatewayBindMode } from "../config/types.gateway.js";
 import {
-  __resetContainerEnvironmentCacheForTest,
+  resetContainerEnvironmentCacheForTest,
   isContainerEnvironment,
 } from "../infra/container-environment.js";
 import {
@@ -244,7 +244,7 @@ export function resolveRequestClientIp(
 
 export {
   isContainerEnvironment,
-  __resetContainerEnvironmentCacheForTest as __resetContainerCacheForTest,
+  resetContainerEnvironmentCacheForTest as __resetContainerCacheForTest,
 };
 
 /**

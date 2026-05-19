@@ -151,4 +151,30 @@ describe("ensureSkillsWatcher", () => {
       ]);
     },
   );
+
+  it("refreshes skills snapshots when watched skill roots change", () => {
+    const seen: SkillsChangeEvent[] = [];
+    refreshModule.registerSkillsChangeListener((change) => {
+      seen.push(change);
+    });
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir: "/tmp/workspace",
+      config: { skills: { load: { extraDirs: ["/tmp/shared-a"] } } },
+    });
+
+    refreshModule.ensureSkillsWatcher({
+      workspaceDir: "/tmp/workspace",
+      config: { skills: { load: { extraDirs: ["/tmp/shared-b"] } } },
+    });
+
+    expect(watchMock).toHaveBeenCalledTimes(2);
+    expect(createdWatchers[0]?.close).toHaveBeenCalledTimes(1);
+    expect(seen).toEqual([
+      {
+        workspaceDir: "/tmp/workspace",
+        reason: "watch-targets",
+        changedPath: expect.stringContaining("/tmp/shared-b"),
+      },
+    ]);
+  });
 });

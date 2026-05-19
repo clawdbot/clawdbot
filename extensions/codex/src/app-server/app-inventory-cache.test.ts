@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { CodexAppInventoryCache, buildCodexAppInventoryCacheKey } from "./app-inventory-cache.js";
+import {
+  CodexAppInventoryCache,
+  buildCodexAppInventoryCacheKey,
+  serializeCodexAppInventoryError,
+} from "./app-inventory-cache.js";
 import type { v2 } from "./protocol.js";
 
 describe("Codex app inventory cache", () => {
@@ -27,7 +31,27 @@ describe("Codex app inventory cache", () => {
     expect(fresh.snapshot?.apps.map((item) => item.id)).toEqual(["app-1", "app-2"]);
   });
 
-  it("uses stale inventory for the current read while refreshing asynchronously", async () => {
+  it("can read missing inventory without scheduling app/list", async () => {
+    const cache = new CodexAppInventoryCache({ ttlMs: 100 });
+    const request = vi.fn(async () => {
+      return {
+        data: [app("app-1")],
+        nextCursor: null,
+      } satisfies v2.AppsListResponse;
+    });
+
+    const read = cache.read({
+      key: "runtime",
+      request,
+      suppressRefresh: true,
+    });
+
+    expect(read.state).toBe("missing");
+    expect(read.refreshScheduled).toBe(false);
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("uses stale inventory for the current read while still refreshing asynchronously", async () => {
     const cache = new CodexAppInventoryCache({ ttlMs: 10 });
     const request = vi.fn(async () => {
       return {
@@ -38,7 +62,7 @@ describe("Codex app inventory cache", () => {
     const key = "runtime";
     await cache.refreshNow({ key, request, nowMs: 0 });
 
-    const stale = cache.read({ key, request, nowMs: 11 });
+    const stale = cache.read({ key, request, nowMs: 11, suppressRefresh: true });
     expect(stale.state).toBe("stale");
     expect(stale.snapshot?.apps.map((item) => item.id)).toEqual(["app-1"]);
     expect(stale.refreshScheduled).toBe(true);
@@ -73,6 +97,17 @@ describe("Codex app inventory cache", () => {
     });
     expect(read.snapshot?.apps.map((item) => item.id)).toEqual(["app-1"]);
     expect(read.diagnostic?.message).toBe("app list failed");
+  });
+
+  it("omits challenge HTML when serializing app/list errors", () => {
+    const error = new Error(
+      'failed to list apps: Request failed with status 403 Forbidden: <html><script src="/backend-api/connectors/directory/list?__cf_chl_tk=secret-token"></script></html>',
+    );
+    const serialized = serializeCodexAppInventoryError(error);
+
+    expect(serialized.message).toBe(
+      "failed to list apps: Request failed with status 403 Forbidden: [HTML response body omitted]",
+    );
   });
 
   it("forces a post-install refresh past an older in-flight app/list", async () => {

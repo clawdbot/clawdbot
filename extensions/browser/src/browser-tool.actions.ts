@@ -114,7 +114,7 @@ function resolveActProxyTimeoutMs(request: BrowserActRequest): number | undefine
   return candidateTimeouts.length ? Math.max(...candidateTimeouts) : undefined;
 }
 
-export const __testing = {
+export const testing = {
   setDepsForTest(
     overrides: Partial<{
       browserAct: typeof browserAct;
@@ -602,3 +602,4 @@ export async function executeActAction(params: {
     throw err;
   }
 }
+export { testing as __testing };

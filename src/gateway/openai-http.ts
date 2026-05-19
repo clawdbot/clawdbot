@@ -583,11 +583,12 @@ async function resolveImagesForRequest(
   return images;
 }
 
-export const __testOnlyOpenAiHttp = {
+export const testOnlyOpenAiHttp = {
   resolveImagesForRequest,
   resolveOpenAiChatCompletionsLimits,
   resolveChatCompletionUsage,
 };
+export { testOnlyOpenAiHttp as __testOnlyOpenAiHttp };
 
 function buildAgentPrompt(
   messagesUnknown: unknown,

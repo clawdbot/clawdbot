@@ -21,6 +21,7 @@ const t = createSetupTranslator();
 
 const channel = "feishu" as const;
 const SCAN_TO_CREATE_TP = "ob_cli_app";
+const FEISHU_SETUP_FLOW_KEY = "_flow";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -579,12 +580,12 @@ export const feishuSetupWizard: ChannelSetupWizard = {
 
     if (alreadyConfigured) {
       return {
-        credentialValues: { ...credentialValues, _flow: "edit" },
+        credentialValues: { ...credentialValues, [FEISHU_SETUP_FLOW_KEY]: "edit" },
       };
     }
 
     return {
-      credentialValues: { ...credentialValues, _flow: "new" },
+      credentialValues: { ...credentialValues, [FEISHU_SETUP_FLOW_KEY]: "new" },
     };
   },
 
@@ -594,7 +595,7 @@ export const feishuSetupWizard: ChannelSetupWizard = {
   // finalize: run the appropriate flow
   // -------------------------------------------------------------------------
   finalize: async ({ cfg, prompter, options, credentialValues }) => {
-    const flow = credentialValues._flow ?? "new";
+    const flow = credentialValues[FEISHU_SETUP_FLOW_KEY] ?? "new";
 
     if (flow === "edit") {
       const result = await runEditFlow({ cfg, prompter, options });

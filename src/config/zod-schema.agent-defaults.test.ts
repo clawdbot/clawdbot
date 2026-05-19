@@ -384,6 +384,41 @@ describe("agent defaults schema", () => {
     expect(config.agents?.list?.[0]?.contextTokens).toBe(1_048_576);
   });
 
+  it("accepts per-agent tools.codeMode config", () => {
+    expectSchemaSuccess(
+      AgentEntrySchema.safeParse({
+        id: "ops",
+        tools: { codeMode: { enabled: true } },
+      }),
+    );
+    expectSchemaSuccess(
+      AgentEntrySchema.safeParse({
+        id: "ops",
+        tools: { codeMode: true },
+      }),
+    );
+    expectSchemaSuccess(
+      AgentEntrySchema.safeParse({
+        id: "ops",
+        tools: {
+          codeMode: {
+            enabled: true,
+            runtime: "quickjs-wasi",
+            timeoutMs: 5000,
+            languages: ["javascript"],
+          },
+        },
+      }),
+    );
+    expectSchemaFailurePath(
+      AgentEntrySchema.safeParse({
+        id: "ops",
+        tools: { codeMode: { unknownKey: 1 } },
+      }),
+      "tools.codeMode",
+    );
+  });
+
   it("rejects non-positive contextTokens on agent entries and defaults", () => {
     expectSchemaFailurePath(
       AgentEntrySchema.safeParse({ id: "ops", contextTokens: 0 }),

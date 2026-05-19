@@ -303,6 +303,7 @@ export function prepareSecretsRuntimeFastPathSnapshot(params: {
     refreshContext: {
       env: runtimeEnv,
       explicitAgentDirs: params.agentDirs?.length ? [...candidateDirs] : null,
+      includeAuthStoreRefs,
       loadablePluginOrigins: params.loadablePluginOrigins ?? new Map<string, PluginOrigin>(),
       ...(params.loadAuthStore ? { loadAuthStore: params.loadAuthStore } : {}),
     },

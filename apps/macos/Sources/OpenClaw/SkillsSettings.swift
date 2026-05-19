@@ -27,9 +27,7 @@ struct SkillsSettings: View {
                 self.skillsList
                 Spacer(minLength: 8)
             }
-            .frame(maxWidth: 860, alignment: .leading)
-            .padding(.trailing, SettingsLayout.scrollbarGutter)
-            .padding(.vertical, 4)
+            .settingsDetailContent()
         }
         .task {
             guard !self.didScheduleInitialRefresh else { return }

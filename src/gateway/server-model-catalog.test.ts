@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayModelChoice } from "./server-model-catalog.js";
 import {
-  __resetModelCatalogCacheForTest,
+  resetModelCatalogCacheForTest,
   loadGatewayModelCatalog,
   markGatewayModelCatalogStaleForReload,
 } from "./server-model-catalog.js";
@@ -37,7 +37,7 @@ const getConfig = () => ({}) as OpenClawConfig;
 
 describe("loadGatewayModelCatalog", () => {
   beforeEach(async () => {
-    await __resetModelCatalogCacheForTest();
+    await resetModelCatalogCacheForTest();
   });
 
   it("caches the first successful catalog until reload marks it stale", async () => {

@@ -194,6 +194,16 @@ export async function readTailAssistantTextFromSessionTranscript(
 
   for await (const line of streamSessionTranscriptLinesReverse(sessionFile)) {
     try {
+      const parsed = JSON.parse(line) as { message?: unknown };
+      // Skip non-message entries (e.g. `openclaw.cache-ttl` custom events) so
+      // a metadata line emitted after the canonical assistant turn doesn't
+      // make the tail reader fall through to "no assistant tail" and cause
+      // persistTextTurnTranscript to append a duplicate. Stop at any real
+      // message entry — a user turn means a new turn has started and a
+      // matching reply is a legitimate repeat, not a gap-fill duplicate.
+      if (!parsed.message || typeof parsed.message !== "object") {
+        continue;
+      }
       return parseAssistantTranscriptText(line);
     } catch {
       continue;

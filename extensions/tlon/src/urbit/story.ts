@@ -196,7 +196,7 @@ function processInlinesForImages(inlines: StoryInline[]): {
 
   for (const inline of inlines) {
     if (typeof inline === "object" && "__image" in inline) {
-      const img = (inline as unknown as { __image: { src: string; alt: string } }).__image;
+      const img = (inline as unknown as { __image: { src: string; alt: string } })["__image"];
       imageBlocks.push(createImageBlock(img.src, img.alt));
     } else {
       cleanInlines.push(inline);

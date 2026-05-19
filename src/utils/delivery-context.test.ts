@@ -190,6 +190,25 @@ describe("delivery context helpers", () => {
   it("derives delivery context from a session entry", () => {
     expect(
       deliveryContextFromSession({
+        route: {
+          channel: "slack",
+          accountId: "work",
+          target: { to: "channel:C123" },
+          thread: { id: "177000.123" },
+        },
+        channel: "webchat",
+        lastChannel: "webchat",
+        lastTo: "user:old",
+      }),
+    ).toEqual({
+      channel: "slack",
+      to: "channel:C123",
+      accountId: "work",
+      threadId: "177000.123",
+    });
+
+    expect(
+      deliveryContextFromSession({
         channel: "webchat",
         lastChannel: " demo-channel ",
         lastTo: " +1777 ",
@@ -263,5 +282,40 @@ describe("delivery context helpers", () => {
     expect(normalized.lastTo).toBe("+1555");
     expect(normalized.lastAccountId).toBeUndefined();
     expect(normalized.lastThreadId).toBeUndefined();
+  });
+
+  it("normalizes route-first delivery fields and mirrors legacy fields", () => {
+    const normalized = normalizeSessionDeliveryFields({
+      route: {
+        channel: "Slack",
+        accountId: " work ",
+        target: { to: " channel:C123 ", rawTo: " slack://C123 ", chatType: "channel" },
+        thread: { id: " 177000.123 ", kind: "thread", source: "target" },
+      },
+      deliveryContext: {
+        channel: "discord",
+        to: "channel:old",
+        threadId: "old-thread",
+      },
+      lastChannel: "discord",
+      lastTo: "channel:older",
+    });
+
+    expect(normalized.route).toEqual({
+      channel: "slack",
+      accountId: "work",
+      target: { to: "channel:C123", rawTo: "slack://C123", chatType: "channel" },
+      thread: { id: "177000.123", kind: "thread", source: "target" },
+    });
+    expect(normalized.deliveryContext).toEqual({
+      channel: "slack",
+      to: "channel:C123",
+      accountId: "work",
+      threadId: "177000.123",
+    });
+    expect(normalized.lastChannel).toBe("slack");
+    expect(normalized.lastTo).toBe("channel:C123");
+    expect(normalized.lastAccountId).toBe("work");
+    expect(normalized.lastThreadId).toBe("177000.123");
   });
 });

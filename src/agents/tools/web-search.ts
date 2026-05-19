@@ -110,8 +110,9 @@ export function createWebSearchTool(options?: {
   };
 }
 
-export const __testing = {
+export const testing = {
   SEARCH_CACHE,
   resolveSearchProvider: (search?: Parameters<typeof resolveWebSearchProviderId>[0]["search"]) =>
     resolveWebSearchProviderId({ search }),
 };
+export { testing as __testing };

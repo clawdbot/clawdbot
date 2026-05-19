@@ -102,6 +102,56 @@ export function buildSandboxFsMounts(sandbox: SandboxFsBridgeContext): SandboxFs
   return dedupeMounts(mounts);
 }
 
+export function resolveWritableSandboxBindHostRoots(
+  binds: readonly string[] | undefined,
+): string[] {
+  const parsedBinds = parseSandboxBindMounts(binds);
+  const readonlyRoots = parsedBinds.filter((bind) => !bind.writable).map((bind) => bind.hostRoot);
+  const roots: string[] = [];
+  const seen = new Set<string>();
+  for (const parsed of parsedBinds) {
+    if (
+      !parsed.writable ||
+      seen.has(parsed.hostRoot) ||
+      readonlyRoots.some((root) => isHostPathWithinOrEqual(parsed.hostRoot, root))
+    ) {
+      continue;
+    }
+    seen.add(parsed.hostRoot);
+    roots.push(parsed.hostRoot);
+  }
+  return roots;
+}
+
+export function hasSandboxBindContainerPathAliases(binds: readonly string[] | undefined): boolean {
+  for (const parsed of parseSandboxBindMounts(binds)) {
+    if (parsed.hostRoot !== parsed.containerRoot) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function hasSandboxBindReadonlyHostShadows(binds: readonly string[] | undefined): boolean {
+  const parsedBinds = parseSandboxBindMounts(binds);
+  const writableRoots = parsedBinds.filter((bind) => bind.writable).map((bind) => bind.hostRoot);
+  const readonlyRoots = parsedBinds.filter((bind) => !bind.writable).map((bind) => bind.hostRoot);
+  return writableRoots.some((writableRoot) =>
+    readonlyRoots.some((readonlyRoot) => isHostPathWithinOrEqual(writableRoot, readonlyRoot)),
+  );
+}
+
+function parseSandboxBindMounts(binds: readonly string[] | undefined): ParsedBindMount[] {
+  const parsed: ParsedBindMount[] = [];
+  for (const bind of binds ?? []) {
+    const mount = parseSandboxBindMount(bind);
+    if (mount) {
+      parsed.push(mount);
+    }
+  }
+  return parsed;
+}
+
 export function resolveSandboxFsPathWithMounts(params: {
   filePath: string;
   cwd: string;
@@ -261,6 +311,11 @@ function isPathInsideHost(root: string, target: string): boolean {
   );
   const canonicalTarget = path.resolve(canonicalTargetParent, path.basename(resolvedTarget));
   return isPathInside(canonicalRoot, canonicalTarget);
+}
+
+function isHostPathWithinOrEqual(root: string, target: string): boolean {
+  const relative = path.relative(path.resolve(root), path.resolve(target));
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 function toHostSegments(relativePosix: string): string[] {

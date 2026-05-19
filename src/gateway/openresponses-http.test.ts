@@ -36,7 +36,7 @@ let openResponsesTesting: {
 };
 
 beforeAll(async () => {
-  ({ __testing: openResponsesTesting } = await import("./openresponses-http.js"));
+  ({ testing: openResponsesTesting } = await import("./openresponses-http.js"));
   const started = await startGatewayServerWithRetries({
     port: await getFreePort(),
     opts: {

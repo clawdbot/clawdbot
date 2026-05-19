@@ -14,7 +14,7 @@ import {
   waitForSessionsSpawnEvent,
 } from "./openclaw-tools.subagents.sessions-spawn.test-harness.js";
 import {
-  __testing as bundleMcpRuntimeTesting,
+  testing as bundleMcpRuntimeTesting,
   getOrCreateSessionMcpRuntime,
 } from "./pi-bundle-mcp-tools.js";
 import {

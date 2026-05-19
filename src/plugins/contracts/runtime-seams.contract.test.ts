@@ -132,7 +132,7 @@ describe("shared runtime seam contracts", () => {
       }).allowed,
     ).toBe(true);
     expect(
-      facadeRuntime.__testing.loadFacadeModuleAtLocationSync<{ marker: string }>({
+      facadeRuntime.testing.loadFacadeModuleAtLocationSync<{ marker: string }>({
         location,
         trackedPluginId: pluginId,
       }).marker,

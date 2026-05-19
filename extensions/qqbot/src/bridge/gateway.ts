@@ -13,10 +13,9 @@ import {
   startGateway as coreStartGateway,
   type CoreGatewayContext,
 } from "../engine/gateway/gateway.js";
-import type { GatewayPluginRuntime } from "../engine/gateway/types.js";
 import { initSender, registerAccount } from "../engine/messaging/sender.js";
 import type { EngineLogger } from "../engine/types.js";
-import * as _audioModule from "../engine/utils/audio.js";
+import * as audioModule from "../engine/utils/audio.js";
 import { formatDuration } from "../engine/utils/format.js";
 import { debugLog, debugError } from "../engine/utils/log.js";
 import type { ResolvedQQBotAccount } from "../types.js";
@@ -33,9 +32,9 @@ import {
 
 // ---- One-time startup initialization (module-level) ----
 
-const _pluginVersion = resolveQQBotPluginVersion(import.meta.url);
+const pluginVersion = resolveQQBotPluginVersion(import.meta.url);
 initSender({
-  pluginVersion: _pluginVersion,
+  pluginVersion,
   openclawVersion: resolveRuntimeServiceVersion(),
 });
 
@@ -75,26 +74,26 @@ export interface GatewayContext {
  * happens here. The engine receives a fully-populated
  * {@link EngineAdapters} object with zero global singletons.
  */
-function createEngineAdapters(_runtime: GatewayPluginRuntime): EngineAdapters {
+function createEngineAdapters(): EngineAdapters {
   return {
     history: createSdkHistoryAdapter(),
     mentionGate: createSdkMentionGateAdapter(),
     access: createSdkAccessAdapter(),
     audioConvert: {
-      convertSilkToWav: _audioModule.convertSilkToWav,
-      isVoiceAttachment: _audioModule.isVoiceAttachment,
+      convertSilkToWav: audioModule.convertSilkToWav,
+      isVoiceAttachment: audioModule.isVoiceAttachment,
       formatDuration,
     },
     outboundAudio: {
       audioFileToSilkBase64: async (p: string, f?: string[]) =>
-        (await _audioModule.audioFileToSilkBase64(p, f)) ?? undefined,
-      isAudioFile: (p: string, m?: string) => _audioModule.isAudioFile(p, m),
-      shouldTranscodeVoice: (p: string) => _audioModule.shouldTranscodeVoice(p),
-      waitForFile: (p: string, ms?: number) => _audioModule.waitForFile(p, ms),
+        (await audioModule.audioFileToSilkBase64(p, f)) ?? undefined,
+      isAudioFile: (p: string, m?: string) => audioModule.isAudioFile(p, m),
+      shouldTranscodeVoice: (p: string) => audioModule.shouldTranscodeVoice(p),
+      waitForFile: (p: string, ms?: number) => audioModule.waitForFile(p, ms),
     },
     commands: {
       resolveVersion: resolveRuntimeServiceVersion,
-      pluginVersion: _pluginVersion,
+      pluginVersion,
       approveRuntimeGetter: () => {
         const rt = getQQBotRuntime();
         return { config: rt.config };
@@ -146,7 +145,7 @@ export async function startGateway(ctx: GatewayContext): Promise<void> {
     onError: ctx.onError,
     log: accountLogger,
     runtime,
-    adapters: createEngineAdapters(runtime),
+    adapters: createEngineAdapters(),
   };
 
   return coreStartGateway(coreCtx);

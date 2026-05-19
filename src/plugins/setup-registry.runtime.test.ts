@@ -123,10 +123,10 @@ describe("setup-registry runtime fallback", () => {
       ],
     });
 
-    const { __testing, resolvePluginSetupCliBackendRuntime } =
+    const { testing, resolvePluginSetupCliBackendRuntime } =
       await import("./setup-registry.runtime.js");
-    __testing.resetRuntimeState();
-    __testing.setRuntimeModuleForTest(null);
+    testing.resetRuntimeState();
+    testing.setRuntimeModuleForTest(null);
 
     expect(resolvePluginSetupCliBackendRuntime({ backend: "codex-cli" })).toEqual({
       pluginId: "openai",
@@ -142,10 +142,10 @@ describe("setup-registry runtime fallback", () => {
   });
 
   it("refreshes bundled registry cliBackends when the current metadata snapshot changes", async () => {
-    const { __testing, resolvePluginSetupCliBackendRuntime } =
+    const { testing, resolvePluginSetupCliBackendRuntime } =
       await import("./setup-registry.runtime.js");
-    __testing.resetRuntimeState();
-    __testing.setRuntimeModuleForTest(null);
+    testing.resetRuntimeState();
+    testing.setRuntimeModuleForTest(null);
 
     setCurrentPluginMetadataSnapshot(
       createCurrentSnapshot({
@@ -178,10 +178,10 @@ describe("setup-registry runtime fallback", () => {
   });
 
   it("uses workspace-scoped current metadata through the active plugin runtime", async () => {
-    const { __testing, resolvePluginSetupCliBackendRuntime } =
+    const { testing, resolvePluginSetupCliBackendRuntime } =
       await import("./setup-registry.runtime.js");
-    __testing.resetRuntimeState();
-    __testing.setRuntimeModuleForTest(null);
+    testing.resetRuntimeState();
+    testing.setRuntimeModuleForTest(null);
 
     setActivePluginRegistry(
       createEmptyPluginRegistry(),
@@ -234,10 +234,10 @@ describe("setup-registry runtime fallback", () => {
       plugins: [],
     });
 
-    const { __testing, resolvePluginSetupCliBackendRuntime } =
+    const { testing, resolvePluginSetupCliBackendRuntime } =
       await import("./setup-registry.runtime.js");
-    __testing.resetRuntimeState();
-    __testing.setRuntimeModuleForTest(null);
+    testing.resetRuntimeState();
+    testing.setRuntimeModuleForTest(null);
 
     setCurrentPluginMetadataSnapshot(
       createCurrentSnapshot({
@@ -272,10 +272,10 @@ describe("setup-registry runtime fallback", () => {
       plugins: [],
     });
 
-    const { __testing, resolvePluginSetupCliBackendRuntime } =
+    const { testing, resolvePluginSetupCliBackendRuntime } =
       await import("./setup-registry.runtime.js");
-    __testing.resetRuntimeState();
-    __testing.setRuntimeModuleForTest({
+    testing.resetRuntimeState();
+    testing.setRuntimeModuleForTest({
       resolvePluginSetupCliBackend: () => undefined,
     });
 

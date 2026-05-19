@@ -22,6 +22,7 @@ class ConnectionManager(
   private val readSmsAvailable: () -> Boolean,
   private val smsSearchPossible: () -> Boolean,
   private val callLogAvailable: () -> Boolean,
+  private val photosAvailable: () -> Boolean,
   private val hasRecordAudioPermission: () -> Boolean,
   private val manualTls: () -> Boolean,
 ) {
@@ -96,6 +97,7 @@ class ConnectionManager(
       readSmsAvailable = readSmsAvailable(),
       smsSearchPossible = smsSearchPossible(),
       callLogAvailable = callLogAvailable(),
+      photosAvailable = photosAvailable(),
       voiceWakeEnabled = voiceWakeMode() != VoiceWakeMode.Off && hasRecordAudioPermission(),
       motionActivityAvailable = motionActivityAvailable(),
       motionPedometerAvailable = motionPedometerAvailable(),

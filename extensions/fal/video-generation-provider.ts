@@ -93,7 +93,7 @@ type FalQueueResponse = {
 
 let falFetchGuard = fetchWithSsrFGuard;
 
-export function _setFalVideoFetchGuardForTesting(impl: typeof fetchWithSsrFGuard | null): void {
+export function setFalVideoFetchGuardForTesting(impl: typeof fetchWithSsrFGuard | null): void {
   falFetchGuard = impl ?? fetchWithSsrFGuard;
 }
 

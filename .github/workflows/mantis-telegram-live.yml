@@ -272,16 +272,36 @@ jobs:
         run: |
           set -euo pipefail
           current_created="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" --jq .created_at)"
+          stale_before="$(date -u -d '8 hours ago' +%Y-%m-%dT%H:%M:%SZ)"
+          run_has_active_jobs() {
+            local run_id="$1"
+            local run_state="$2"
+            if [[ "$run_state" != "in_progress" ]]; then
+              return 0
+            fi
+            local active_jobs
+            active_jobs="$(gh run view "$run_id" --repo "$GITHUB_REPOSITORY" --json jobs --jq '[.jobs[] | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "pending" or .status == "requested")] | length')"
+            [[ "$active_jobs" != "0" ]]
+          }
           while true; do
-            blockers="$(
+            candidates="$(
               for workflow in mantis-telegram-desktop-proof.yml mantis-telegram-live.yml; do
-                gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" --limit 100 --json databaseId,status,createdAt,url \
-                  | jq -r \
-                    --argjson current_id "$GITHUB_RUN_ID" \
-                    --arg current_created "$current_created" \
-                    '.[] | select(.databaseId != $current_id) | select(.createdAt < $current_created or (.createdAt == $current_created and .databaseId < $current_id)) | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "pending" or .status == "requested") | "\(.createdAt)\t#\(.databaseId)\t\(.status)\t\(.url)"'
+                for status in queued in_progress waiting pending requested; do
+                  gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" --status "$status" --limit 100 --json databaseId,status,createdAt,url \
+                    | jq -r \
+                      --argjson current_id "$GITHUB_RUN_ID" \
+                      --arg current_created "$current_created" \
+                      --arg stale_before "$stale_before" \
+                      '.[] | select(.databaseId != $current_id) | select(.createdAt >= $stale_before) | select(.createdAt < $current_created or (.createdAt == $current_created and .databaseId < $current_id)) | "\(.createdAt)\t#\(.databaseId)\t\(.status)\t\(.url)"'
+                done
               done | sort -u
             )"
+            blockers=""
+            while IFS=$'\t' read -r created run_id run_state url; do
+              if [[ -n "$run_id" ]] && run_has_active_jobs "${run_id#\#}" "$run_state"; then
+                blockers+="${created}"$'\t'"${run_id}"$'\t'"${run_state}"$'\t'"${url}"$'\n'
+              fi
+            done <<<"$candidates"
             if [[ -z "$blockers" ]]; then
               break
             fi
@@ -479,7 +499,7 @@ jobs:
       - name: Upload Mantis Telegram artifacts
         id: upload_artifact
         if: ${{ always() && steps.run_mantis.outputs.output_dir != '' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mantis-telegram-live-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.run_mantis.outputs.output_dir }}

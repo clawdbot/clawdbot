@@ -6,6 +6,10 @@ import { resolveApiKeyForProfile } from "../agents/auth-profiles/oauth.js";
 import { resolveAuthProfileOrder } from "../agents/auth-profiles/order.js";
 import { listProfilesForProvider } from "../agents/auth-profiles/profiles.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles/store.js";
+import {
+  COPILOT_INTEGRATION_ID,
+  buildCopilotIdeHeaders,
+} from "../agents/copilot-dynamic-headers.js";
 import { resolveEnvApiKey } from "../agents/model-auth-env.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -94,19 +98,17 @@ export {
   DEFAULT_OAUTH_REFRESH_MARGIN_MS,
   hasUsableOAuthCredential,
 } from "../agents/auth-profiles/credential-state.js";
+export {
+  COPILOT_EDITOR_PLUGIN_VERSION,
+  COPILOT_EDITOR_VERSION,
+  COPILOT_GITHUB_API_VERSION,
+  COPILOT_INTEGRATION_ID,
+  COPILOT_USER_AGENT,
+  buildCopilotIdeHeaders,
+} from "../agents/copilot-dynamic-headers.js";
 
 const COPILOT_TOKEN_URL = "https://api.github.com/copilot_internal/v2/token";
 
-/** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
-export const COPILOT_EDITOR_VERSION = "vscode/1.107.0";
-/** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
-export const COPILOT_USER_AGENT = "GitHubCopilotChat/0.35.0";
-/** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
-export const COPILOT_EDITOR_PLUGIN_VERSION = "copilot-chat/0.35.0";
-/** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
-export const COPILOT_GITHUB_API_VERSION = "2025-04-01";
-/** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
-export const COPILOT_INTEGRATION_ID = "vscode-chat";
 /** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
 export const DEFAULT_COPILOT_API_BASE_URL = "https://api.individual.githubcopilot.com";
 
@@ -117,21 +119,6 @@ export type CachedCopilotToken = {
   updatedAt: number;
   integrationId?: string;
 };
-
-/** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
-export function buildCopilotIdeHeaders(
-  params: {
-    includeApiVersion?: boolean;
-  } = {},
-): Record<string, string> {
-  return {
-    "Accept-Encoding": "identity",
-    "Editor-Version": COPILOT_EDITOR_VERSION,
-    "Editor-Plugin-Version": COPILOT_EDITOR_PLUGIN_VERSION,
-    "User-Agent": COPILOT_USER_AGENT,
-    ...(params.includeApiVersion ? { "X-Github-Api-Version": COPILOT_GITHUB_API_VERSION } : {}),
-  };
-}
 
 function resolveCopilotTokenCachePath(env: NodeJS.ProcessEnv = process.env) {
   return path.join(resolveStateDir(env), "credentials", "github-copilot.token.json");

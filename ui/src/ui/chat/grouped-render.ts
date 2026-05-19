@@ -613,6 +613,8 @@ function renderMessageMeta(meta: GroupMeta | null) {
 }
 
 const SKIP_DELETE_CONFIRM_KEY = "openclaw:skipDeleteConfirm";
+const DELETE_CONFIRM_VIEWPORT_MARGIN_PX = 8;
+const DELETE_CONFIRM_TRIGGER_GAP_PX = 6;
 
 type DeleteConfirmSide = "left" | "right";
 
@@ -633,6 +635,63 @@ function dismissDeleteConfirm(element: Element) {
     return;
   }
   element.remove();
+}
+
+function resolveViewportBounds() {
+  const viewport = window.visualViewport;
+  const left = viewport?.offsetLeft ?? 0;
+  const top = viewport?.offsetTop ?? 0;
+  const width = viewport?.width ?? window.innerWidth ?? document.documentElement.clientWidth;
+  const height = viewport?.height ?? window.innerHeight ?? document.documentElement.clientHeight;
+
+  return {
+    bottom: top + height,
+    left,
+    right: left + width,
+    top,
+  };
+}
+
+function clampDeleteConfirmPosition(value: number, min: number, max: number) {
+  if (max < min) {
+    return min;
+  }
+  return Math.min(Math.max(value, min), max);
+}
+
+function placeDeleteConfirmPopover(
+  trigger: HTMLElement,
+  popover: HTMLElement,
+  side: DeleteConfirmSide,
+) {
+  const triggerRect = trigger.getBoundingClientRect();
+  const popoverRect = popover.getBoundingClientRect();
+  const viewport = resolveViewportBounds();
+  const margin = DELETE_CONFIRM_VIEWPORT_MARGIN_PX;
+  const gap = DELETE_CONFIRM_TRIGGER_GAP_PX;
+  const viewportWidth = viewport.right - viewport.left;
+  const viewportHeight = viewport.bottom - viewport.top;
+  const popoverWidth = Math.min(popoverRect.width, viewportWidth - margin * 2);
+  const popoverHeight = Math.min(popoverRect.height, viewportHeight - margin * 2);
+  const spaceAbove = triggerRect.top - viewport.top - margin - gap;
+  const spaceBelow = viewport.bottom - triggerRect.bottom - margin - gap;
+  const placeBelow = spaceAbove < popoverHeight && spaceBelow >= spaceAbove;
+  const desiredLeft = side === "left" ? triggerRect.right - popoverWidth : triggerRect.left;
+  const left = clampDeleteConfirmPosition(
+    desiredLeft,
+    viewport.left + margin,
+    viewport.right - margin - popoverWidth,
+  );
+  const desiredTop = placeBelow ? triggerRect.bottom + gap : triggerRect.top - gap - popoverHeight;
+  const top = clampDeleteConfirmPosition(
+    desiredTop,
+    viewport.top + margin,
+    viewport.bottom - margin - popoverHeight,
+  );
+
+  popover.style.left = `${Math.round(left)}px`;
+  popover.style.top = `${Math.round(top)}px`;
+  popover.dataset.placement = placeBelow ? "below" : "above";
 }
 
 function renderDeleteButton(onDelete: () => void, side: DeleteConfirmSide) {
@@ -668,6 +727,7 @@ function renderDeleteButton(onDelete: () => void, side: DeleteConfirmSide) {
             </div>
           `;
           wrap.appendChild(popover);
+          placeDeleteConfirmPopover(btn, popover, side);
 
           const cancel = popover.querySelector(".chat-delete-confirm__cancel")!;
           const yes = popover.querySelector(".chat-delete-confirm__yes")!;
@@ -705,6 +765,7 @@ function renderDeleteButton(onDelete: () => void, side: DeleteConfirmSide) {
 
           requestAnimationFrame(() => {
             if (!dismissed && popover.isConnected) {
+              placeDeleteConfirmPopover(btn, popover, side);
               document.addEventListener("click", closeOnOutside, true);
             }
           });

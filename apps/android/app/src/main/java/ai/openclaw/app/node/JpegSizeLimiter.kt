@@ -27,28 +27,23 @@ internal object JpegSizeLimiter {
     require(initialWidth > 0 && initialHeight > 0) { "Invalid image size" }
     require(maxBytes > 0) { "Invalid maxBytes" }
 
+    val clampedStartQuality = startQuality.coerceIn(minQuality, 100)
     var width = initialWidth
     var height = initialHeight
-    val clampedStartQuality = startQuality.coerceIn(minQuality, 100)
-    var best =
-      JpegSizeLimiterResult(
-        bytes = encode(width, height, clampedStartQuality),
-        width = width,
-        height = height,
-        quality = clampedStartQuality,
-      )
-    if (best.bytes.size <= maxBytes) return best
+    var best: JpegSizeLimiterResult? = null
 
-    repeat(maxScaleAttempts) {
+    repeat(maxScaleAttempts + 1) { scaleAttempt ->
       var quality = clampedStartQuality
       repeat(maxQualityAttempts) {
         val bytes = encode(width, height, quality)
-        best = JpegSizeLimiterResult(bytes = bytes, width = width, height = height, quality = quality)
+        val attempt = JpegSizeLimiterResult(bytes = bytes, width = width, height = height, quality = quality)
+        best = attempt
         if (bytes.size <= maxBytes) return best
         if (quality <= minQuality) return@repeat
         quality = max(minQuality, (quality * 0.75).roundToInt())
       }
 
+      if (scaleAttempt == maxScaleAttempts) return@repeat
       val minScale = (minSize.toDouble() / min(width, height).toDouble()).coerceAtMost(1.0)
       val nextScale = max(scaleStep, minScale)
       val nextWidth = max(minSize, (width * nextScale).roundToInt())
@@ -58,10 +53,11 @@ internal object JpegSizeLimiter {
       height = min(nextHeight, height)
     }
 
-    if (best.bytes.size > maxBytes) {
-      throw IllegalStateException("CAMERA_TOO_LARGE: ${best.bytes.size} bytes > $maxBytes bytes")
+    val failed = checkNotNull(best)
+    if (failed.bytes.size > maxBytes) {
+      throw IllegalStateException("CAMERA_TOO_LARGE: ${failed.bytes.size} bytes > $maxBytes bytes")
     }
 
-    return best
+    return failed
   }
 }

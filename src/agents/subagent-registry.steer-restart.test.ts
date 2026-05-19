@@ -65,7 +65,7 @@ vi.mock("../config/sessions.js", () => {
 });
 
 const announceSpy = vi.fn(async (_params: unknown) => true);
-const runSubagentEndedHookMock = vi.fn(async (_event?: unknown, _ctx?: unknown) => {});
+const runSubagentEndedHookMock = vi.fn(async (eventValue?: unknown, _ctx?: unknown) => {});
 const emitSessionLifecycleEventMock = vi.fn();
 
 function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean) {
@@ -166,7 +166,7 @@ describe("subagent registry steer restarts", () => {
   beforeEach(() => {
     vi.useRealTimers();
     lifecycleHandler = undefined;
-    mod.__testing.setDepsForTest({
+    mod.testing.setDepsForTest({
       ensureContextEnginesInitialized: () => {},
       ensureRuntimePluginsLoaded: () => {},
       resolveContextEngine: async () => noopContextEngine,
@@ -287,7 +287,7 @@ describe("subagent registry steer restarts", () => {
 
   afterEach(async () => {
     vi.useRealTimers();
-    mod.__testing.setDepsForTest();
+    mod.testing.setDepsForTest();
     announceSpy.mockReset();
     announceSpy.mockResolvedValue(true);
     runSubagentEndedHookMock.mockReset();

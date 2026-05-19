@@ -4,11 +4,11 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
-  __resetGatewayModelPricingCacheForTest,
-  __setGatewayModelPricingForTest,
+  resetGatewayModelPricingCacheForTest,
+  setGatewayModelPricingForTest,
 } from "../gateway/model-pricing-cache-state.js";
 import {
-  __resetUsageFormatCachesForTest,
+  resetUsageFormatCachesForTest,
   estimateUsageCost,
   formatTokenCount,
   formatUsd,
@@ -50,8 +50,8 @@ describe("usage-format", () => {
     process.env.OPENCLAW_STATE_DIR = stateDir;
     delete process.env.OPENCLAW_AGENT_DIR;
     await fs.mkdir(agentDir, { recursive: true });
-    __resetUsageFormatCachesForTest();
-    __resetGatewayModelPricingCacheForTest();
+    resetUsageFormatCachesForTest();
+    resetGatewayModelPricingCacheForTest();
   });
 
   afterEach(async () => {
@@ -65,8 +65,8 @@ describe("usage-format", () => {
     } else {
       process.env.OPENCLAW_STATE_DIR = originalStateDir;
     }
-    __resetUsageFormatCachesForTest();
-    __resetGatewayModelPricingCacheForTest();
+    resetUsageFormatCachesForTest();
+    resetGatewayModelPricingCacheForTest();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
@@ -175,7 +175,7 @@ describe("usage-format", () => {
       "utf8",
     );
 
-    __setGatewayModelPricingForTest([
+    setGatewayModelPricingForTest([
       {
         provider: "demo-preferred",
         model: "demo-model",
@@ -213,7 +213,7 @@ describe("usage-format", () => {
       },
     } as unknown as OpenClawConfig;
 
-    __setGatewayModelPricingForTest([
+    setGatewayModelPricingForTest([
       {
         provider: "demo-config-provider",
         model: "demo-model",
@@ -236,7 +236,7 @@ describe("usage-format", () => {
   });
 
   it("falls back to cached gateway pricing when no configured cost exists", () => {
-    __setGatewayModelPricingForTest([
+    setGatewayModelPricingForTest([
       {
         provider: "demo-cached-provider",
         model: "demo-model",
@@ -578,7 +578,7 @@ describe("usage-format", () => {
   });
 
   it("resolves tiered pricing from cached gateway (LiteLLM)", () => {
-    __setGatewayModelPricingForTest([
+    setGatewayModelPricingForTest([
       {
         provider: "volcengine",
         model: "doubao-seed",

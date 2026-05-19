@@ -1065,7 +1065,7 @@ export function buildWorkspaceSkillsPrompt(
   return resolveWorkspaceSkillPromptState(workspaceDir, opts).prompt;
 }
 
-export const __testing = {
+export const testing = {
   compactHomePath,
 };
 
@@ -1322,3 +1322,4 @@ export function filterWorkspaceSkillEntriesWithOptions(
 ): SkillEntry[] {
   return filterSkillEntries(entries, opts?.config, opts?.skillFilter, opts?.eligibility);
 }
+export { testing as __testing };

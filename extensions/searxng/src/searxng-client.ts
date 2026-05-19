@@ -313,7 +313,7 @@ export async function runSearxngSearch(params: {
   return payload;
 }
 
-export const __testing = {
+export const testing = {
   buildSearxngSearchUrl,
   normalizeSearxngResult,
   parseSearxngResponseText,
@@ -321,3 +321,4 @@ export const __testing = {
   validateSearxngBaseUrl,
   SEARXNG_SEARCH_CACHE,
 };
+export { testing as __testing };

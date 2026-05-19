@@ -149,7 +149,7 @@ export {
   wrapProviderStreamFn,
 };
 
-export const __testing = {
+export const testing = {
   resetExternalAuthFallbackWarningCacheForTest,
 } as const;
 
@@ -1015,3 +1015,4 @@ export async function augmentModelCatalogWithProviderPlugins(params: {
   }
   return supplemental;
 }
+export { testing as __testing };

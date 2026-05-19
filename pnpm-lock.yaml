@@ -262,6 +262,9 @@ importers:
         specifier: 4.1.6
         version: 4.1.6(@opentelemetry/api@1.9.1)(@types/node@25.8.0)(@vitest/browser-playwright@4.1.6)(@vitest/coverage-v8@4.1.6)(jsdom@29.1.1(@noble/hashes@2.0.1))(vite@8.0.13(@types/node@25.8.0)(esbuild@0.28.0)(jiti@2.7.0)(tsx@4.22.0)(yaml@2.9.0))
     optionalDependencies:
+      sharp:
+        specifier: 0.34.5
+        version: 0.34.5
       sqlite-vec:
         specifier: 0.1.9
         version: 0.1.9
@@ -1733,6 +1736,9 @@ importers:
       dompurify:
         specifier: 3.4.3
         version: 3.4.3
+      highlight.js:
+        specifier: 10.7.3
+        version: 10.7.3
       json5:
         specifier: 2.2.3
         version: 2.2.3

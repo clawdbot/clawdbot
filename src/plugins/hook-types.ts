@@ -587,7 +587,17 @@ export type PluginHookSubagentSpawningEvent = PluginHookSubagentSpawnBase;
 export type PluginHookSubagentSpawningResult =
   | {
       status: "ok";
+      /**
+       * @deprecated Core now resolves thread-bound spawn routing from session
+       * bindings and channel route projection. Keep returning this only for
+       * compatibility with older OpenClaw runtimes.
+       */
       threadBindingReady?: boolean;
+      /**
+       * @deprecated Use channel `resolveDeliveryTarget` plus core
+       * `SessionBindingRecord` projection instead of returning an ad hoc
+       * delivery route from this hook.
+       */
       deliveryOrigin?: {
         channel?: string;
         accountId?: string;
@@ -614,6 +624,11 @@ export type PluginHookSubagentDeliveryTargetEvent = {
   expectsCompletionMessage: boolean;
 };
 
+/**
+ * @deprecated Core route projection resolves subagent delivery targets from
+ * `SessionBindingRecord` and channel `resolveDeliveryTarget`. This hook result
+ * remains for plugin compatibility during the transition.
+ */
 export type PluginHookSubagentDeliveryTargetResult = {
   origin?: {
     channel?: string;

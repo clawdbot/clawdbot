@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it } from "vitest";
-import { _resetIMessageShortIdState } from "./monitor-reply-cache.js";
+import { resetIMessageShortIdState } from "./monitor-reply-cache.js";
 import {
   buildIMessageInboundContext,
   resolveIMessageInboundDecision,
@@ -9,7 +9,7 @@ import { parseIMessageNotification } from "./monitor/parse-notification.js";
 import type { IMessagePayload } from "./monitor/types.js";
 
 beforeEach(() => {
-  _resetIMessageShortIdState();
+  resetIMessageShortIdState();
 });
 
 function baseCfg(): OpenClawConfig {

@@ -378,6 +378,7 @@ export async function fetchBrowserJson<T>(
   }
 }
 
-export const __test = {
+export const testApi = {
   withLoopbackBrowserAuth: withLoopbackBrowserAuthImpl,
 };
+export { testApi as __test };

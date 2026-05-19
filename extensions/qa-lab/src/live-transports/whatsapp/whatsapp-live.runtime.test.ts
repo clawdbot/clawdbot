@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
-import { __testing } from "./whatsapp-live.runtime.js";
+import { testing } from "./whatsapp-live.runtime.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -23,7 +23,7 @@ async function createTgz(params: { entries: Record<string, string>; root: string
 
 describe("WhatsApp QA live runtime", () => {
   it("parses credential payloads and normalizes phone numbers", () => {
-    const payload = __testing.parseWhatsAppQaCredentialPayload({
+    const payload = testing.parseWhatsAppQaCredentialPayload({
       driverPhoneE164: "15550000001",
       sutPhoneE164: "+15550000002",
       driverAuthArchiveBase64: "driver",
@@ -37,7 +37,7 @@ describe("WhatsApp QA live runtime", () => {
 
   it("rejects credential payloads that reuse the same phone", () => {
     expect(() =>
-      __testing.parseWhatsAppQaCredentialPayload({
+      testing.parseWhatsAppQaCredentialPayload({
         driverPhoneE164: "+15550000001",
         sutPhoneE164: "+15550000001",
         driverAuthArchiveBase64: "driver",
@@ -48,7 +48,7 @@ describe("WhatsApp QA live runtime", () => {
 
   it("redacts observed message content and phone metadata by default", () => {
     expect(
-      __testing.toObservedWhatsAppArtifacts({
+      testing.toObservedWhatsAppArtifacts({
         includeContent: false,
         redactMetadata: true,
         messages: [
@@ -76,7 +76,7 @@ describe("WhatsApp QA live runtime", () => {
 
   it("keeps observed message content only when capture is requested", () => {
     expect(
-      __testing.toObservedWhatsAppArtifacts({
+      testing.toObservedWhatsAppArtifacts({
         includeContent: true,
         redactMetadata: true,
         messages: [
@@ -105,7 +105,7 @@ describe("WhatsApp QA live runtime", () => {
           "session/key.json": "{}\n",
         },
       });
-      const authDir = await __testing.unpackWhatsAppAuthArchive({
+      const authDir = await testing.unpackWhatsAppAuthArchive({
         archiveBase64,
         label: "driver",
         parentDir: tempRoot,
@@ -120,22 +120,22 @@ describe("WhatsApp QA live runtime", () => {
   });
 
   it("rejects unsafe archive entries before extraction", () => {
-    expect(() => __testing.assertSafeArchiveEntries(["../creds.json"])).toThrow("unsafe entry");
-    expect(() => __testing.assertSafeArchiveEntries(["/tmp/creds.json"])).toThrow("unsafe entry");
+    expect(() => testing.assertSafeArchiveEntries(["../creds.json"])).toThrow("unsafe entry");
+    expect(() => testing.assertSafeArchiveEntries(["/tmp/creds.json"])).toThrow("unsafe entry");
   });
 
   it("registers the WhatsApp canary and pairing scenarios", () => {
-    const scenarios = __testing.findScenarios(["whatsapp-canary", "whatsapp-pairing-block"]);
+    const scenarios = testing.findScenarios(["whatsapp-canary", "whatsapp-pairing-block"]);
     expect(scenarios.map(({ id }) => id)).toEqual(["whatsapp-canary", "whatsapp-pairing-block"]);
   });
 
   it("uses automatic visible replies for WhatsApp group mention gating", () => {
-    const [scenario] = __testing.findScenarios(["whatsapp-mention-gating"]);
+    const [scenario] = testing.findScenarios(["whatsapp-mention-gating"]);
     const scenarioRun = scenario.buildRun();
     expect(scenarioRun.input).toContain("openclawqa reply with only this exact marker");
     expect(scenarioRun.input).not.toContain("visible reply tool check");
 
-    const cfg = __testing.buildWhatsAppQaConfig(
+    const cfg = testing.buildWhatsAppQaConfig(
       {},
       {
         allowFrom: ["+15550000001"],
@@ -150,16 +150,16 @@ describe("WhatsApp QA live runtime", () => {
   });
 
   it("fails explicitly requested group scenarios when group credentials are missing", () => {
-    const [scenario] = __testing.findScenarios(["whatsapp-mention-gating"]);
+    const [scenario] = testing.findScenarios(["whatsapp-mention-gating"]);
 
-    const implicitResult = __testing.createMissingGroupJidScenarioResult({
+    const implicitResult = testing.createMissingGroupJidScenarioResult({
       explicitScenarioSelection: false,
       scenario,
     });
     expect(implicitResult.id).toBe("whatsapp-mention-gating");
     expect(implicitResult.status).toBe("skip");
 
-    const explicitResult = __testing.createMissingGroupJidScenarioResult({
+    const explicitResult = testing.createMissingGroupJidScenarioResult({
       explicitScenarioSelection: true,
       scenario,
     });
@@ -169,7 +169,7 @@ describe("WhatsApp QA live runtime", () => {
   });
 
   it("attributes pre-scenario setup failures to the selected scenario", () => {
-    const scenarios = __testing.findScenarios(["whatsapp-mention-gating"]);
+    const scenarios = testing.findScenarios(["whatsapp-mention-gating"]);
     const scenarioResults: Array<{
       details: string;
       id: string;
@@ -177,7 +177,7 @@ describe("WhatsApp QA live runtime", () => {
       title: string;
     }> = [];
 
-    __testing.appendPreScenarioFailureResults({
+    testing.appendPreScenarioFailureResults({
       details: "setup exploded",
       scenarioResults,
       scenarios,
@@ -194,18 +194,18 @@ describe("WhatsApp QA live runtime", () => {
   });
 
   it("classifies WhatsApp driver connection closures as retryable", () => {
-    expect(__testing.isTransientWhatsAppQaDriverError(new Error("Connection Closed"))).toBe(true);
+    expect(testing.isTransientWhatsAppQaDriverError(new Error("Connection Closed"))).toBe(true);
     expect(
-      __testing.isTransientWhatsAppQaDriverError(new Error("status 440: session conflict")),
+      testing.isTransientWhatsAppQaDriverError(new Error("status 440: session conflict")),
     ).toBe(true);
-    expect(__testing.isTransientWhatsAppQaDriverError(new Error("Stream Errored (conflict)"))).toBe(
+    expect(testing.isTransientWhatsAppQaDriverError(new Error("Stream Errored (conflict)"))).toBe(
       true,
     );
     expect(
-      __testing.isTransientWhatsAppQaDriverError(
+      testing.isTransientWhatsAppQaDriverError(
         new Error("timed out waiting for WhatsApp QA driver message"),
       ),
     ).toBe(true);
-    expect(__testing.isTransientWhatsAppQaDriverError(new Error("timed out waiting"))).toBe(false);
+    expect(testing.isTransientWhatsAppQaDriverError(new Error("timed out waiting"))).toBe(false);
   });
 });

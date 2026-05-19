@@ -869,7 +869,7 @@ export async function runSecretsApply(params: {
   };
 }
 
-export const __testing = {
+export const testing = {
   async projectConfigForTest(params: {
     plan: SecretsApplyPlan;
     env?: NodeJS.ProcessEnv;
@@ -883,3 +883,4 @@ export const __testing = {
     return projected.nextConfig;
   },
 };
+export { testing as __testing };

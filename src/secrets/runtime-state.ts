@@ -1,5 +1,6 @@
 import {
   clearRuntimeAuthProfileStoreSnapshots,
+  getRuntimeAuthProfileStoreSnapshot,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "../agents/auth-profiles/runtime-snapshots.js";
 import { clearLoadedAuthStoreCache } from "../agents/auth-profiles/store-cache.js";
@@ -30,6 +31,7 @@ export type PreparedSecretsRuntimeSnapshot = {
 export type SecretsRuntimeRefreshContext = {
   env: Record<string, string | undefined>;
   explicitAgentDirs: string[] | null;
+  includeAuthStoreRefs: boolean;
   loadAuthStore?: (agentDir?: string) => AuthProfileStore;
   loadablePluginOrigins: ReadonlyMap<string, PluginOrigin>;
 };
@@ -48,6 +50,7 @@ export function cloneSecretsRuntimeRefreshContext(
   const cloned: SecretsRuntimeRefreshContext = {
     env: { ...context.env },
     explicitAgentDirs: context.explicitAgentDirs ? [...context.explicitAgentDirs] : null,
+    includeAuthStoreRefs: context.includeAuthStoreRefs,
     loadablePluginOrigins: new Map(context.loadablePluginOrigins),
   };
   if (context.loadAuthStore) {
@@ -129,6 +132,16 @@ export function getActiveSecretsRuntimeSnapshot(): PreparedSecretsRuntimeSnapsho
     );
   }
   return snapshot;
+}
+
+export function getLiveSecretsRuntimeAuthStores(): PreparedSecretsRuntimeSnapshot["authStores"] {
+  if (!activeSnapshot) {
+    return [];
+  }
+  return activeSnapshot.authStores.map((entry) => ({
+    agentDir: entry.agentDir,
+    store: getRuntimeAuthProfileStoreSnapshot(entry.agentDir) ?? structuredClone(entry.store),
+  }));
 }
 
 export function clearSecretsRuntimeSnapshot(): void {

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runExtraParamsPayloadCase } from "./pi-embedded-runner-extraparams.test-support.js";
-import { __testing as extraParamsTesting } from "./pi-embedded-runner/extra-params.js";
+import { testing as extraParamsTesting } from "./pi-embedded-runner/extra-params.js";
 import {
   createMoonshotThinkingWrapper,
   resolveMoonshotThinkingKeep,

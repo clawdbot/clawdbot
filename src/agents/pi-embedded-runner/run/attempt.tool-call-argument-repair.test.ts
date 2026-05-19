@@ -161,7 +161,7 @@ describe("openai-completions malformed tool-call argument repair", () => {
           }),
       });
 
-      for await (const _item of stream) {
+      for await (const item of stream) {
         // drain
       }
       const result = await stream.result();

@@ -38,7 +38,7 @@ const {
 } = getProviderMonitorTestMocks();
 
 let monitorDiscordProvider: typeof import("./provider.js").monitorDiscordProvider;
-let providerTesting: typeof import("./provider.js").__testing;
+let providerTesting: typeof import("./provider.js").testing;
 let runtimeEnvModule: typeof import("openclaw/plugin-sdk/runtime-env");
 
 function createAcpRuntimeError(code: string, message: string): Error & { code: string } {
@@ -244,7 +244,7 @@ describe("monitorDiscordProvider", () => {
     }));
     runtimeEnvModule = await import("openclaw/plugin-sdk/runtime-env");
     vi.spyOn(runtimeEnvModule, "logVerbose").mockImplementation(() => undefined);
-    ({ monitorDiscordProvider, __testing: providerTesting } = await import("./provider.js"));
+    ({ monitorDiscordProvider, testing: providerTesting } = await import("./provider.js"));
   });
 
   beforeEach(() => {

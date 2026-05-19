@@ -363,9 +363,9 @@ filenames for persona files, because Codex fallbacks only apply when
 For OpenClaw workspace parity, the Codex harness resolves the other bootstrap
 files, including `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`,
 `HEARTBEAT.md`, `BOOTSTRAP.md`, and `MEMORY.md` when present, and forwards them
-through Codex developer instructions on `thread/start` and `thread/resume`.
-This keeps workspace persona and profile context visible on the native Codex
-behavior-shaping lane without duplicating `AGENTS.md`.
+as OpenClaw turn input reference context. This keeps workspace persona and
+profile context visible to the native Codex turn without promoting it above
+Codex-owned system/developer instructions or duplicating `AGENTS.md`.
 
 ## Environment overrides
 

@@ -177,6 +177,7 @@ export function createTalkRealtimeRelaySession(
     { onEvent: recordTalkObservabilityEvent },
   );
   let relay: RelaySession | undefined;
+  let bridgeSession: RealtimeVoiceBridgeSession | undefined;
   const emit = (event: TalkRealtimeRelayEventPayload, talkEvent?: TalkEventInput) =>
     broadcastToOwner(params.context, params.connId, {
       ...event,
@@ -188,6 +189,8 @@ export function createTalkRealtimeRelaySession(
     providerConfig: params.providerConfig,
     audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
     instructions: params.instructions,
+    autoRespondToAudio: false,
+    interruptResponseOnInputAudio: false,
     tools: params.tools,
     markStrategy: "ack-immediately",
     audioSink: {
@@ -252,6 +255,9 @@ export function createTalkRealtimeRelaySession(
           final,
         },
       );
+      if (role === "user" && final && text.trim()) {
+        bridgeSession?.sendUserMessage(text.trim());
+      }
     },
     onToolCall: (toolCall) => {
       const turnId = relay ? ensureRelayTurn(relay) : undefined;
@@ -295,6 +301,7 @@ export function createTalkRealtimeRelaySession(
       );
     },
   });
+  bridgeSession = bridge;
   relay = {
     id: relaySessionId,
     connId: params.connId,

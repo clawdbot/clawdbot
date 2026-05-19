@@ -319,8 +319,9 @@ export async function repairStaleOAuthProfileShadows(params: {
   return { changes, warnings };
 }
 
-export const __testing = {
+export const testing = {
   removeStaleProfilesFromStore,
   repairStaleOAuthProfilesForAgent,
   shouldRemoveLocalOAuthShadow,
 };
+export { testing as __testing };

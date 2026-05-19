@@ -901,7 +901,7 @@ export async function provisionMatrixQaRoom(params: {
   } satisfies MatrixQaProvisionResult;
 }
 
-export const __testing = {
+export const testing = {
   buildMatrixQaMessageContent,
   buildMatrixQaReplacementMessageContent,
   buildMatrixReactionRelation,
@@ -910,3 +910,4 @@ export const __testing = {
   createMatrixQaRoomObserver,
   resolveNextRegistrationAuth,
 };
+export { testing as __testing };

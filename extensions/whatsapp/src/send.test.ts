@@ -365,6 +365,51 @@ describe("web outbound", () => {
     });
   });
 
+  it("sends prehydrated media without loading the original media URL again", async () => {
+    const buf = Buffer.from("hydrated");
+    await sendMessageWhatsApp("+1555", "hydrated caption", {
+      verbose: false,
+      cfg: WHATSAPP_TEST_CFG,
+      mediaUrl: "https://one-shot.test/photo.png",
+      mediaPayload: {
+        buffer: buf,
+        contentType: "image/png",
+        fileName: "photo.png",
+      },
+    });
+
+    expect(hoisted.loadOutboundMediaFromUrl).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "hydrated caption", buf, "image/png");
+  });
+
+  it("uses prehydrated media for forced document sends", async () => {
+    const hydrated = Buffer.from("hydrated-original");
+
+    await sendMessageWhatsApp("+1555", "document caption", {
+      verbose: false,
+      cfg: WHATSAPP_TEST_CFG,
+      mediaUrl: "/tmp/photo.png",
+      mediaPayload: {
+        buffer: hydrated,
+        contentType: "image/png",
+        fileName: "photo.png",
+      },
+      forceDocument: true,
+    });
+
+    expect(hoisted.loadOutboundMediaFromUrl).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenLastCalledWith(
+      "+1555",
+      "document caption",
+      hydrated,
+      "image/png",
+      {
+        asDocument: true,
+        fileName: "photo.png",
+      },
+    );
+  });
+
   it("maps image with caption", async () => {
     const buf = Buffer.from("img");
     loadWebMediaMock.mockResolvedValueOnce({
@@ -449,6 +494,25 @@ describe("web outbound", () => {
     });
     expect(sendMessage).toHaveBeenLastCalledWith("+1555", "doc", buf, "application/pdf", {
       fileName: "file.pdf",
+    });
+  });
+
+  it("keeps explicit document kind for prehydrated image payloads", async () => {
+    const buf = Buffer.from("image-as-document");
+
+    await sendMessageWhatsApp("+1555", "doc", {
+      verbose: false,
+      cfg: WHATSAPP_TEST_CFG,
+      mediaPayload: {
+        buffer: buf,
+        contentType: "image/png",
+        kind: "document",
+        fileName: "photo.png",
+      },
+    });
+
+    expect(sendMessage).toHaveBeenLastCalledWith("+1555", "doc", buf, "image/png", {
+      fileName: "photo.png",
     });
   });
 

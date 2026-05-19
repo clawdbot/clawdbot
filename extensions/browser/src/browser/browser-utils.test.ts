@@ -4,7 +4,7 @@ import {
   getHeadersWithAuth,
   normalizeCdpHttpBaseForJsonEndpoints,
 } from "./cdp.helpers.js";
-import { __test } from "./client-fetch.js";
+import { testApi } from "./client-fetch.js";
 import { resolveBrowserConfig, resolveProfile } from "./config.js";
 import { shouldRejectBrowserMutation } from "./csrf.js";
 import { toBoolean } from "./routes/utils.js";
@@ -216,7 +216,7 @@ describe("fetchBrowserJson loopback auth (bridge auth registry)", () => {
     const getBridgeAuthForPort = vi.fn((candidate: number) =>
       candidate === port ? { token: "registry-token" } : undefined,
     );
-    const init = __test.withLoopbackBrowserAuth(`http://127.0.0.1:${port}/`, undefined, {
+    const init = testApi.withLoopbackBrowserAuth(`http://127.0.0.1:${port}/`, undefined, {
       getRuntimeConfig: () => ({}),
       resolveBrowserControlAuth: () => ({}),
       getBridgeAuthForPort,

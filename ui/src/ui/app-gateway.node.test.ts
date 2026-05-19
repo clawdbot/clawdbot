@@ -936,6 +936,39 @@ describe("connectGateway", () => {
     expect(loadChatHistoryMock).not.toHaveBeenCalled();
   });
 
+  it("renders session-scoped tool events for externally started runs", () => {
+    const { host, client } = connectHostGateway();
+
+    client.emitEvent({
+      event: "session.tool",
+      payload: {
+        runId: "external-run-1",
+        seq: 1,
+        stream: "tool",
+        ts: 123,
+        sessionKey: "main",
+        data: {
+          toolCallId: "session-tool-1",
+          name: "exec",
+          phase: "start",
+          args: { command: "pwd" },
+        },
+      },
+    });
+
+    expect(host.toolStreamOrder).toStrictEqual(["session-tool-1"]);
+    const entry = host.toolStreamById.get("session-tool-1") as
+      | { args?: unknown; name?: string; runId?: string; sessionKey?: string }
+      | undefined;
+    expect(entry).toMatchObject({
+      args: { command: "pwd" },
+      name: "exec",
+      runId: "external-run-1",
+      sessionKey: "main",
+    });
+    expect(loadChatHistoryMock).not.toHaveBeenCalled();
+  });
+
   it("stores BTW side results for the active session", () => {
     const { host, client } = connectHostGateway();
 

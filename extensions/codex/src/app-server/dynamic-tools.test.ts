@@ -729,7 +729,7 @@ describe("createCodexDynamicToolBridge", () => {
 
   it("passes raw tool failure state into agent tool result middleware", async () => {
     const registry = createEmptyPluginRegistry();
-    const handler = vi.fn(async (_event: { isError?: boolean }) => undefined);
+    const handler = vi.fn(async (eventValue: { isError?: boolean }) => undefined);
     registry.agentToolResultMiddlewares.push({
       pluginId: "tokenjuice",
       pluginName: "Tokenjuice",
@@ -853,7 +853,7 @@ describe("createCodexDynamicToolBridge", () => {
     const registry = createEmptyPluginRegistry();
     const middlewareContexts: Record<string, unknown>[] = [];
     const legacyContexts: Record<string, unknown>[] = [];
-    const middleware = vi.fn(async (_event: unknown, ctx: Record<string, unknown>) => {
+    const middleware = vi.fn(async (eventValue: unknown, ctx: Record<string, unknown>) => {
       middlewareContexts.push(ctx);
       return undefined;
     });
@@ -866,7 +866,7 @@ describe("createCodexDynamicToolBridge", () => {
         ) => Promise<{ result: AgentToolResult<unknown> } | void>,
       ) => void;
     }) => {
-      codex.on("tool_result", async (_event, ctx) => {
+      codex.on("tool_result", async (eventValue, ctx) => {
         legacyContexts.push(ctx);
       });
     };

@@ -16,6 +16,7 @@ import {
   resolveChannelDefaultBindingPlacement,
   resolveInboundConversationResolution,
 } from "../channels/conversation-resolution.js";
+import { routeFromBindingRecord, routeToDeliveryFields } from "../channels/route-projection.js";
 import {
   resolveThreadBindingIntroText,
   resolveThreadBindingThreadName,
@@ -63,7 +64,6 @@ import {
   deliveryContextFromSession,
   formatConversationTarget,
   normalizeDeliveryContext,
-  resolveConversationDeliveryTarget,
 } from "../utils/delivery-context.js";
 import {
   type AcpSpawnParentRelayHandle,
@@ -1091,11 +1091,7 @@ function resolveAcpSpawnBootstrapDeliveryPlan(params: {
     (params.binding?.conversation.parentConversationId ?? undefined) ===
       (requesterConversationRef.parentConversationId ?? undefined),
   );
-  const boundDeliveryTarget = resolveConversationDeliveryTarget({
-    channel: params.requester.origin?.channel ?? params.binding?.conversation.channel,
-    conversationId: params.binding?.conversation.conversationId,
-    parentConversationId: params.binding?.conversation.parentConversationId,
-  });
+  const boundDeliveryTarget = routeToDeliveryFields(routeFromBindingRecord(params.binding));
   const inferredDeliveryTo =
     (bindingMatchesRequesterConversation
       ? normalizeOptionalString(params.requester.origin?.to)
@@ -1123,7 +1119,10 @@ function resolveAcpSpawnBootstrapDeliveryPlan(params: {
     channel: useInlineDelivery ? params.requester.origin?.channel : undefined,
     accountId: useInlineDelivery ? requesterAccountId : undefined,
     to: useInlineDelivery ? inferredDeliveryTo : undefined,
-    threadId: useInlineDelivery ? resolvedDeliveryThreadId : undefined,
+    threadId:
+      useInlineDelivery && resolvedDeliveryThreadId != null
+        ? normalizeOptionalString(String(resolvedDeliveryThreadId))
+        : undefined,
   };
 }
 

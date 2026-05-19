@@ -234,6 +234,49 @@ function hasSessionWriteLockTimeout(err: unknown, seen: Set<object> = new Set())
   );
 }
 
+function isEmbeddedAttemptSessionTakeover(err: unknown): boolean {
+  // Match by name to avoid importing pi-embedded-runner here (would create a cycle).
+  return Boolean(
+    err && typeof err === "object" && readErrorName(err) === "EmbeddedAttemptSessionTakeoverError",
+  );
+}
+
+function hasEmbeddedAttemptSessionTakeover(err: unknown, seen: Set<object> = new Set()): boolean {
+  if (isEmbeddedAttemptSessionTakeover(err)) {
+    return true;
+  }
+  if (!err || typeof err !== "object") {
+    return false;
+  }
+  if (seen.has(err)) {
+    return false;
+  }
+  seen.add(err);
+  const candidate = err as { error?: unknown; cause?: unknown; reason?: unknown };
+  return (
+    hasEmbeddedAttemptSessionTakeover(candidate.error, seen) ||
+    hasEmbeddedAttemptSessionTakeover(candidate.cause, seen) ||
+    hasEmbeddedAttemptSessionTakeover(candidate.reason, seen)
+  );
+}
+
+/**
+ * True when the error is a local runtime coordination error (session write-lock
+ * timeout or embedded attempt session takeover) rather than a provider/model
+ * failure. The model fallback chain must abort on these instead of consuming
+ * candidate slots — retrying any model would hit the same local condition.
+ * See #83510.
+ */
+export function isNonProviderRuntimeCoordinationError(err: unknown): boolean {
+  if (!hasSessionWriteLockTimeout(err) && !hasEmbeddedAttemptSessionTakeover(err)) {
+    return false;
+  }
+  if (isFailoverError(err)) {
+    return false;
+  }
+  return resolveFailoverClassificationFromError(err) === null;
+}
+
 function hasTimeoutHint(err: unknown): boolean {
   if (!err) {
     return false;

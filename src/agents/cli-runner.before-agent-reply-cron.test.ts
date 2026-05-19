@@ -160,6 +160,7 @@ describe("runCliAgent cron before_agent_reply seam", () => {
     const { runCliAgent } = await import("./cli-runner.js");
     hasHooksMock.mockImplementation((hookName) => hookName === "before_agent_reply");
     runBeforeAgentReplyMock.mockResolvedValue(undefined);
+    executePreparedCliRunMock.mockResolvedValue({ text: "real reply" });
     const onExecutionPhase = vi.fn();
 
     await runCliAgent({
@@ -181,6 +182,19 @@ describe("runCliAgent cron before_agent_reply seam", () => {
     });
     expect(prepareCliRunContextMock).toHaveBeenCalledTimes(1);
     expect(executePreparedCliRunMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats empty CLI subprocess output as a failover failure, not a green cron run", async () => {
+    const { runCliAgent } = await import("./cli-runner.js");
+    executePreparedCliRunMock.mockResolvedValue({ text: "   " });
+
+    await expect(runCliAgent({ ...baseRunParams, trigger: "cron" })).rejects.toMatchObject({
+      name: "FailoverError",
+      reason: "empty_response",
+      provider: baseRunParams.provider,
+      model: baseRunParams.model,
+      sessionId: baseRunParams.sessionId,
+    });
   });
 
   it("returns a silent payload when a cron hook claims without a reply body", async () => {

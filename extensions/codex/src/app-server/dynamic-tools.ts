@@ -12,6 +12,7 @@ import {
   isMessagingToolSendAction,
   normalizeHeartbeatToolResponse,
   runAgentHarnessAfterToolCallHook,
+  setBeforeToolCallDiagnosticsEnabled,
   type AnyAgentTool,
   type HeartbeatToolResponse,
   type MessagingToolSend,
@@ -25,6 +26,7 @@ import {
   type CodexDynamicToolCallOutputContentItem,
   type CodexDynamicToolCallParams,
   type CodexDynamicToolCallResponse,
+  type CodexDynamicToolDiagnosticTerminalType,
   type CodexDynamicToolSpec,
   type JsonValue,
 } from "./protocol.js";
@@ -75,11 +77,13 @@ export function createCodexDynamicToolBridge(params: {
 }): CodexDynamicToolBridge {
   const toolResultHookContext = toToolResultHookContext(params.hookContext);
   const toolResultMaxChars = resolveCodexDynamicToolResultMaxChars(params.hookContext);
-  const tools = params.tools.map((tool) =>
-    isToolWrappedWithBeforeToolCallHook(tool)
-      ? tool
-      : wrapToolWithBeforeToolCallHook(tool, params.hookContext),
-  );
+  const tools = params.tools.map((tool) => {
+    if (isToolWrappedWithBeforeToolCallHook(tool)) {
+      setBeforeToolCallDiagnosticsEnabled(tool, false);
+      return tool;
+    }
+    return wrapToolWithBeforeToolCallHook(tool, params.hookContext, { emitDiagnostics: false });
+  });
   const toolMap = new Map(tools.map((tool) => [tool.name, tool]));
   const telemetry: CodexDynamicToolBridge["telemetry"] = {
     didSendViaMessagingTool: false,
@@ -163,10 +167,13 @@ export function createCodexDynamicToolBridge(params: {
           result,
           startedAt,
         });
-        return {
-          contentItems: convertToolContents(result.content, toolResultMaxChars),
-          success: !resultIsError,
-        };
+        return withDiagnosticTerminalType(
+          {
+            contentItems: convertToolContents(result.content, toolResultMaxChars),
+            success: !resultIsError,
+          },
+          inferToolResultDiagnosticTerminalType(result, resultIsError),
+        );
       } catch (error) {
         collectToolTelemetry({
           toolName: tool.name,
@@ -187,15 +194,18 @@ export function createCodexDynamicToolBridge(params: {
           error: error instanceof Error ? error.message : String(error),
           startedAt,
         });
-        return {
-          contentItems: [
-            {
-              type: "inputText",
-              text: error instanceof Error ? error.message : String(error),
-            },
-          ],
-          success: false,
-        };
+        return withDiagnosticTerminalType(
+          {
+            contentItems: [
+              {
+                type: "inputText",
+                text: error instanceof Error ? error.message : String(error),
+              },
+            ],
+            success: false,
+          },
+          "error",
+        );
       }
     },
   };
@@ -425,6 +435,32 @@ function isToolResultError(result: AgentToolResult<unknown>): boolean {
     status !== "recorded" &&
     status !== "running"
   );
+}
+
+function inferToolResultDiagnosticTerminalType(
+  result: AgentToolResult<unknown>,
+  isError: boolean,
+): CodexDynamicToolDiagnosticTerminalType {
+  const details = result.details;
+  if (isRecord(details) && typeof details.status === "string") {
+    const status = details.status.trim().toLowerCase();
+    if (status === "blocked") {
+      return "blocked";
+    }
+  }
+  return isError ? "error" : "completed";
+}
+
+function withDiagnosticTerminalType<T extends CodexDynamicToolCallResponse>(
+  response: T,
+  terminalType: CodexDynamicToolDiagnosticTerminalType,
+): T {
+  Object.defineProperty(response, "diagnosticTerminalType", {
+    configurable: true,
+    enumerable: false,
+    value: terminalType,
+  });
+  return response;
 }
 
 function normalizeToolResultMaxChars(maxChars: number): number {

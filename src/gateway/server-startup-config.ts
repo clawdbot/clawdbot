@@ -20,7 +20,12 @@ import {
   GATEWAY_AUTH_SURFACE_PATHS,
   evaluateGatewayAuthSurfaceStates,
 } from "../secrets/runtime-gateway-auth-surfaces.js";
-import { activateSecretsRuntimeSnapshotState } from "../secrets/runtime-state.js";
+import {
+  activateSecretsRuntimeSnapshotState,
+  getActiveSecretsRuntimeSnapshot,
+  getLiveSecretsRuntimeAuthStores,
+  setPreparedSecretsRuntimeSnapshotRefreshContext,
+} from "../secrets/runtime-state.js";
 import { resolveGatewayAuth } from "./auth.js";
 import { assertGatewayAuthNotKnownWeak } from "./known-weak-gateway-secrets.js";
 import {
@@ -249,17 +254,30 @@ export function createRuntimeSecretsActivator(params: {
                   snapshot,
                   refreshContext: fastPath.refreshContext,
                   refreshHandler: {
-                    refresh: async ({ sourceConfig }) => {
+                    refresh: async ({ sourceConfig, includeAuthStoreRefs }) => {
                       const secretsRuntime = await loadSecretsRuntime();
+                      const activeSnapshot = getActiveSecretsRuntimeSnapshot();
+                      const oneShotSkipAuthStoreRefs =
+                        includeAuthStoreRefs === false &&
+                        fastPath.refreshContext.includeAuthStoreRefs;
                       const refreshed = await secretsRuntime.prepareSecretsRuntimeSnapshot({
                         config: sourceConfig,
                         env: fastPath.refreshContext.env,
                         agentDirs: resolveRefreshAgentDirs(sourceConfig, fastPath.refreshContext),
+                        includeAuthStoreRefs:
+                          includeAuthStoreRefs ?? fastPath.refreshContext.includeAuthStoreRefs,
                         loadablePluginOrigins: fastPath.refreshContext.loadablePluginOrigins,
                         ...(fastPath.usesAuthStoreFallback || !fastPath.refreshContext.loadAuthStore
                           ? {}
                           : { loadAuthStore: fastPath.refreshContext.loadAuthStore }),
                       });
+                      if (oneShotSkipAuthStoreRefs && activeSnapshot) {
+                        refreshed.authStores = getLiveSecretsRuntimeAuthStores();
+                        setPreparedSecretsRuntimeSnapshotRefreshContext(
+                          refreshed,
+                          fastPath.refreshContext,
+                        );
+                      }
                       secretsRuntime.activateSecretsRuntimeSnapshot(refreshed);
                       return true;
                     },

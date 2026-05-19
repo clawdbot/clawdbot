@@ -109,6 +109,7 @@ const fallbackManager = vi.hoisted(() => ({
 const fallbackSearch = fallbackManager.search;
 const mockMemoryIndexGet = vi.hoisted(() => vi.fn(async () => fallbackManager));
 const mockCloseAllMemoryIndexManagers = vi.hoisted(() => vi.fn(async () => {}));
+const mockCloseMemoryIndexManagersForAgent = vi.hoisted(() => vi.fn(async () => {}));
 const checkQmdBinaryAvailability = vi.hoisted(() =>
   vi.fn<CheckQmdBinaryAvailability>(async () => ({ available: true })),
 );
@@ -128,10 +129,15 @@ vi.mock("../../manager-runtime.js", () => ({
     get: mockMemoryIndexGet,
   },
   closeAllMemoryIndexManagers: mockCloseAllMemoryIndexManagers,
+  closeMemoryIndexManagersForAgent: mockCloseMemoryIndexManagersForAgent,
 }));
 
 import { QmdMemoryManager } from "./qmd-manager.js";
-import { closeAllMemorySearchManagers, getMemorySearchManager } from "./search-manager.js";
+import {
+  closeAllMemorySearchManagers,
+  closeMemorySearchManager,
+  getMemorySearchManager,
+} from "./search-manager.js";
 const createQmdManagerMock = vi.mocked(QmdMemoryManager.create);
 
 type QmdManagerInstance = Awaited<ReturnType<typeof QmdMemoryManager.create>>;
@@ -280,6 +286,7 @@ beforeEach(async () => {
   fallbackManager.probeVectorAvailability.mockClear();
   fallbackManager.close.mockClear();
   mockCloseAllMemoryIndexManagers.mockClear();
+  mockCloseMemoryIndexManagersForAgent.mockClear();
   mockMemoryIndexGet.mockClear();
   mockMemoryIndexGet.mockResolvedValue(fallbackManager);
   checkQmdBinaryAvailability.mockClear();
@@ -378,6 +385,27 @@ describe("getMemorySearchManager caching", () => {
       expect(thirdManager.status().backend).toBe("qmd");
       expect(createQmdManagerMock).toHaveBeenCalledTimes(2);
       expect(checkQmdBinaryAvailability).toHaveBeenCalledTimes(2);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it("preserves qmd open-failure cooldown when scoped teardown closes no qmd manager", async () => {
+    const agentId = "qmd-open-cooldown-scoped-close";
+    const cfg = createQmdCfg(agentId);
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    createQmdManagerMock.mockRejectedValueOnce(new Error("Cannot find package 'chokidar'"));
+
+    try {
+      const first = await getMemorySearchManager({ cfg, agentId });
+      expect(first.manager).toBe(fallbackManager);
+      expect(createQmdManagerMock).toHaveBeenCalledTimes(1);
+
+      await closeMemorySearchManager({ cfg, agentId });
+
+      const second = await getMemorySearchManager({ cfg, agentId });
+      expect(second.manager).toBe(fallbackManager);
+      expect(createQmdManagerMock).toHaveBeenCalledTimes(1);
     } finally {
       nowSpy.mockRestore();
     }
@@ -928,6 +956,46 @@ describe("getMemorySearchManager caching", () => {
     const secondManager = requireManager(second);
     expect(secondManager).not.toBe(firstManager);
     expect(createQmdManagerMock.mock.calls).toHaveLength(2);
+  });
+
+  it("closes only the requested agent qmd manager on scoped teardown", async () => {
+    const mainCfg = createQmdCfg("main");
+    const otherPrimary = createQmdManagerInstanceMock();
+    createQmdManagerMock.mockImplementationOnce(
+      async () => mockPrimary as unknown as QmdManagerInstance,
+    );
+    createQmdManagerMock.mockImplementationOnce(
+      async () => otherPrimary as unknown as QmdManagerInstance,
+    );
+
+    const main = await getMemorySearchManager({ cfg: mainCfg, agentId: "main" });
+    const other = await getMemorySearchManager({ cfg: createQmdCfg("other"), agentId: "other" });
+    const mainManager = requireManager(main);
+    const otherManager = requireManager(other);
+
+    await closeMemorySearchManager({ cfg: mainCfg, agentId: "main" });
+
+    expect(mockPrimary.close).toHaveBeenCalledTimes(1);
+    expect(otherPrimary.close).not.toHaveBeenCalled();
+    const nextMain = await getMemorySearchManager({ cfg: mainCfg, agentId: "main" });
+    const nextOther = await getMemorySearchManager({
+      cfg: createQmdCfg("other"),
+      agentId: "other",
+    });
+    expect(nextMain.manager).not.toBe(mainManager);
+    expect(nextOther.manager).toBe(otherManager);
+  });
+
+  it("closes the requested agent builtin index manager on scoped teardown", async () => {
+    const cfg = createBuiltinCfg("main");
+    await getMemorySearchManager({ cfg, agentId: "main" });
+
+    await closeMemorySearchManager({ cfg, agentId: "main" });
+
+    expect(mockCloseMemoryIndexManagersForAgent).toHaveBeenCalledWith({
+      cfg,
+      agentId: "main",
+    });
   });
 
   it("waits for pending full qmd manager creation during global teardown", async () => {

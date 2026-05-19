@@ -10,7 +10,7 @@ import {
   writeFakeClaudeCli,
   writeFakeClaudeLiveCli,
 } from "./bundle-mcp.test-harness.js";
-import { __testing as cliBackendsTesting } from "./cli-backends.js";
+import { testing as cliBackendsTesting } from "./cli-backends.js";
 
 vi.mock("./cli-runner/helpers.js", async () => {
   const original =

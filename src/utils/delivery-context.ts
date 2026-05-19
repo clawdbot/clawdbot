@@ -2,6 +2,8 @@ import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeMessageChannel } from "./message-channel.js";
 export {
+  channelRouteFromDeliveryContext,
+  deliveryContextFromChannelRoute,
   deliveryContextFromSession,
   deliveryContextKey,
   mergeDeliveryContext,

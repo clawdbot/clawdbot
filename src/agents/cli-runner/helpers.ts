@@ -15,6 +15,7 @@ import { tempWorkspace } from "../../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { MAX_IMAGE_BYTES } from "../../media/constants.js";
 import { extensionForMime } from "../../media/mime.js";
+import { listRegisteredPluginAgentPromptGuidance } from "../../plugins/command-registry-state.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -116,6 +117,10 @@ export function buildCliAgentSystemPrompt(params: {
     docsPath: params.docsPath,
     sourcePath: params.sourcePath,
     acpEnabled: isAcpRuntimeSpawnAvailable({ config: params.config }),
+    promptSurface: "cli_backend",
+    nativeCommandGuidanceLines: listRegisteredPluginAgentPromptGuidance({
+      surface: "cli_backend",
+    }),
     runtimeInfo,
     toolNames: params.tools.map((tool) => tool.name),
     skillsPrompt: params.skillsPrompt,

@@ -181,6 +181,7 @@ export async function checkInboundAccessControl(params: {
   };
 }
 
-export const __testing = {
+export const testing = {
   resolveWhatsAppInboundPolicy,
 };
+export { testing as __testing };

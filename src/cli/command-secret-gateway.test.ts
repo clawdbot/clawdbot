@@ -7,7 +7,7 @@ import {
   TALK_TEST_PROVIDER_API_KEY_PATH_SEGMENTS,
 } from "../test-utils/talk-test-provider.js";
 import {
-  __testing as commandSecretGatewayTesting,
+  testing as commandSecretGatewayTesting,
   resolveCommandSecretRefsViaGateway,
 } from "./command-secret-gateway.js";
 

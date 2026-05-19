@@ -144,8 +144,8 @@ describe("plugin session attachments", () => {
     workflowMocks.sendMessage.mockReset();
     setActivePluginRegistry(createEmptyPluginRegistry());
     clearPluginLoaderCache();
-    delete (globalThis as { __proofAttachmentApi?: OpenClawPluginApi }).__proofAttachmentApi;
-    delete (globalThis as { __proofAttachmentLog?: unknown[] }).__proofAttachmentLog;
+    delete (globalThis as { proofAttachmentApi?: OpenClawPluginApi }).proofAttachmentApi;
+    delete (globalThis as { proofAttachmentLog?: unknown[] }).proofAttachmentLog;
   });
 
   it("resolves channel hint precedence for attachment delivery", () => {

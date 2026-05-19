@@ -34,9 +34,10 @@ export function readCliStartupMetadata(moduleUrl: string): Record<string, unknow
   return null;
 }
 
-export const __testing = {
+export const testing = {
   resolveStartupMetadataPathCandidates,
   clearStartupMetadataCache(): void {
     startupMetadataByPath.clear();
   },
 };
+export { testing as __testing };

@@ -1291,6 +1291,7 @@ async function createSessionMemoryPathVisibilityChecker(params: {
     if (!identity) {
       return false;
     }
+    const isQmdSessionPath = relPath.replace(/\\/g, "/").startsWith("qmd/");
     const normalizedScopedAgentId = normalizeLowercaseStringOrEmpty(scopedAgentId);
     const normalizedOwnerAgentId = normalizeLowercaseStringOrEmpty(identity.ownerAgentId);
     if (
@@ -1302,18 +1303,32 @@ async function createSessionMemoryPathVisibilityChecker(params: {
     }
     const archivedOwnerMatchesScope = Boolean(
       identity.archived &&
-      identity.ownerAgentId &&
-      (!normalizedScopedAgentId || normalizedOwnerAgentId === normalizedScopedAgentId),
+      ((identity.ownerAgentId &&
+        (!normalizedScopedAgentId || normalizedOwnerAgentId === normalizedScopedAgentId)) ||
+        (isQmdSessionPath && scopedAgentId)),
     );
-    const archivedOwnerAgentId = archivedOwnerMatchesScope ? identity.ownerAgentId : undefined;
+    const archivedOwnerAgentId = archivedOwnerMatchesScope
+      ? (identity.ownerAgentId ?? scopedAgentId)
+      : undefined;
+    const liveKeys = identity.liveStem
+      ? resolveTranscriptStemToSessionKeys({
+          store: combinedSessionStore,
+          stem: identity.liveStem,
+          allowQmdSlugFallback: false,
+        })
+      : [];
     const keys = filterSessionKeysByScopedAgent({
       cfg: params.cfg,
       scopedAgentId,
-      keys: resolveTranscriptStemToSessionKeys({
-        store: combinedSessionStore,
-        stem: identity.stem,
-        ...(archivedOwnerAgentId ? { archivedOwnerAgentId } : {}),
-      }),
+      keys:
+        liveKeys.length > 0
+          ? liveKeys
+          : resolveTranscriptStemToSessionKeys({
+              store: combinedSessionStore,
+              stem: identity.stem,
+              allowQmdSlugFallback: isQmdSessionPath && !identity.archived,
+              ...(archivedOwnerAgentId ? { archivedOwnerAgentId } : {}),
+            }),
     });
     if (!guard) {
       return Boolean(scopedAgentId && keys.length > 0);

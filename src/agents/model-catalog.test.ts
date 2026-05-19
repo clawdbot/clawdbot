@@ -4,7 +4,7 @@ import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 
 type PiSdkModule = typeof import("./pi-model-discovery.js");
 
-let __setModelCatalogImportForTest: typeof import("./model-catalog.js").__setModelCatalogImportForTest;
+let setModelCatalogImportForTest: typeof import("./model-catalog.js").setModelCatalogImportForTest;
 let findModelCatalogEntry: typeof import("./model-catalog.js").findModelCatalogEntry;
 let findModelInCatalog: typeof import("./model-catalog.js").findModelInCatalog;
 let loadManifestModelCatalog: typeof import("./model-catalog.js").loadManifestModelCatalog;
@@ -39,7 +39,7 @@ function isSuppressedModel(provider?: string, id?: string): boolean {
 
 function mockCatalogImportFailThenRecover() {
   let call = 0;
-  __setModelCatalogImportForTest(async () => {
+  setModelCatalogImportForTest(async () => {
     call += 1;
     if (call === 1) {
       throw new Error("boom");
@@ -58,7 +58,7 @@ function mockCatalogImportFailThenRecover() {
 }
 
 function mockPiDiscoveryModels(models: unknown[]) {
-  __setModelCatalogImportForTest(
+  setModelCatalogImportForTest(
     async () =>
       ({
         discoverAuthStorage: () => ({}),
@@ -194,7 +194,7 @@ describe("loadModelCatalog", () => {
     }));
 
     ({
-      __setModelCatalogImportForTest,
+      setModelCatalogImportForTest,
       findModelCatalogEntry,
       findModelInCatalog,
       loadManifestModelCatalog,
@@ -221,7 +221,7 @@ describe("loadModelCatalog", () => {
   });
 
   afterEach(() => {
-    __setModelCatalogImportForTest();
+    setModelCatalogImportForTest();
     resetModelCatalogCacheForTest();
     vi.restoreAllMocks();
   });
@@ -300,7 +300,7 @@ describe("loadModelCatalog", () => {
   it("returns partial results on discovery errors", async () => {
     setLoggerOverride({ level: "silent", consoleLevel: "warn" });
     try {
-      __setModelCatalogImportForTest(
+      setModelCatalogImportForTest(
         async () =>
           ({
             discoverAuthStorage: () => ({}),
@@ -334,7 +334,7 @@ describe("loadModelCatalog", () => {
     const importPiSdk = vi.fn(async () => {
       throw new Error("provider discovery should not load");
     });
-    __setModelCatalogImportForTest(importPiSdk as unknown as () => Promise<PiSdkModule>);
+    setModelCatalogImportForTest(importPiSdk as unknown as () => Promise<PiSdkModule>);
     currentPluginMetadataSnapshotMock.mockReturnValueOnce(undefined);
     loadPluginMetadataSnapshotMock.mockImplementationOnce(() => {
       throw new Error("metadata scan should not run");
@@ -465,7 +465,7 @@ describe("loadModelCatalog", () => {
     const importPiSdk = vi.fn(async () => {
       throw new Error("provider discovery should not load");
     });
-    __setModelCatalogImportForTest(importPiSdk as unknown as () => Promise<PiSdkModule>);
+    setModelCatalogImportForTest(importPiSdk as unknown as () => Promise<PiSdkModule>);
 
     const result = await loadModelCatalog({ config: {} as OpenClawConfig, readOnly: true });
 

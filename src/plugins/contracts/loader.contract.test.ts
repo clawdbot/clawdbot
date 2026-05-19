@@ -2,7 +2,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { uniqueSortedStrings } from "../../plugin-sdk/test-helpers/string-utils.js";
 import { withBundledPluginAllowlistCompat } from "../bundled-compat.js";
 import { resolveManifestContractPluginIds } from "../plugin-registry.js";
-import { __testing as providerTesting } from "../providers.js";
+import { testing as providerTesting } from "../providers.js";
 import { resolveBundledContractSnapshotPluginIds } from "./inventory/bundled-capability-metadata.js";
 import { providerContractCompatPluginIds } from "./registry.js";
 

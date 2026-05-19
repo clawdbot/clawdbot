@@ -39,7 +39,7 @@ type BundledSetupCliBackendCache = {
 let setupRegistryRuntimeModule: SetupRegistryRuntimeModule | null | undefined;
 let cachedBundledSetupCliBackends: BundledSetupCliBackendCache | undefined;
 
-export const __testing = {
+export const testing = {
   resetRuntimeState(): void {
     setupRegistryRuntimeModule = undefined;
     cachedBundledSetupCliBackends = undefined;
@@ -131,3 +131,4 @@ export function resolvePluginSetupCliBackendRuntime(params: SetupCliBackendRunti
     (entry) => normalizeProviderId(entry.backend.id) === normalized,
   );
 }
+export { testing as __testing };

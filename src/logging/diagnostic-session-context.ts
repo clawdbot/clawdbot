@@ -196,6 +196,7 @@ export function formatStoppedCronSessionDiagnosticFields(context: CronSessionCon
   return fields.join(" ");
 }
 
-export const __testing = {
+export const testing = {
   quoteLogField,
 };
+export { testing as __testing };

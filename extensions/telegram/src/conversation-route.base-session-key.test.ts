@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
-  __testing as conversationBindingTesting,
+  testing as conversationBindingTesting,
   registerSessionBindingAdapter,
   type SessionBindingAdapter,
 } from "openclaw/plugin-sdk/conversation-runtime";

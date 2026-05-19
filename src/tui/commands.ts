@@ -2,6 +2,7 @@ import type { SlashCommand } from "@earendil-works/pi-tui";
 import { listChatCommands, listChatCommandsForConfig } from "../auto-reply/commands-registry.js";
 import { formatThinkingLevels, listThinkingLevelLabels } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.js";
+import type { CommandEntry } from "../gateway/protocol/index.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
 const VERBOSE_LEVELS = ["on", "off"];
@@ -23,6 +24,7 @@ export type SlashCommandOptions = {
   model?: string;
   thinkingLevels?: Array<{ id: string; label: string }>;
   local?: boolean;
+  dynamicCommands?: CommandEntry[];
 };
 
 const COMMAND_ALIASES: Record<string, string> = {
@@ -40,6 +42,24 @@ function createLevelCompletion(
         value,
         label: value,
       }));
+}
+
+function normalizeSlashCommandName(value: string): string {
+  return value.replace(/^\//, "").trim();
+}
+
+function appendSlashCommand(
+  commands: SlashCommand[],
+  seen: Set<string>,
+  name: string,
+  description: string,
+) {
+  const normalizedName = normalizeSlashCommandName(name);
+  if (!normalizedName || seen.has(normalizedName)) {
+    return;
+  }
+  seen.add(normalizedName);
+  commands.push({ name: normalizedName, description });
 }
 
 export function parseCommand(input: string): ParsedCommand {
@@ -142,12 +162,14 @@ export function getSlashCommands(options: SlashCommandOptions = {}): SlashComman
   for (const command of gatewayCommands) {
     const aliases = command.textAliases.length > 0 ? command.textAliases : [`/${command.key}`];
     for (const alias of aliases) {
-      const name = alias.replace(/^\//, "").trim();
-      if (!name || seen.has(name)) {
-        continue;
-      }
-      seen.add(name);
-      commands.push({ name, description: command.description });
+      appendSlashCommand(commands, seen, alias, command.description);
+    }
+  }
+
+  for (const command of options.dynamicCommands ?? []) {
+    const aliases = command.textAliases?.length ? command.textAliases : [command.name];
+    for (const alias of aliases) {
+      appendSlashCommand(commands, seen, alias, command.description);
     }
   }
 

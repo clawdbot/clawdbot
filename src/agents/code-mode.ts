@@ -6,6 +6,7 @@ import type { AgentToolUpdateCallback } from "@earendil-works/pi-agent-core";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveAgentConfig } from "./agent-scope-config.js";
 import type { HookContext } from "./pi-tools.before-tool-call.js";
 import { optionalStringEnum } from "./schema/typebox.js";
 import {
@@ -121,16 +122,25 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
-function readCodeModeRawConfig(config?: OpenClawConfig): Record<string, unknown> {
-  const tools = isRecord(config?.tools) ? config.tools : undefined;
-  const codeMode = tools?.codeMode;
+function normalizeCodeModeRawConfig(value: unknown): Record<string, unknown> | undefined {
+  const codeMode = value;
   if (codeMode === true) {
     return { enabled: true };
   }
   if (codeMode === false) {
     return { enabled: false };
   }
-  return isRecord(codeMode) ? codeMode : {};
+  return isRecord(codeMode) ? codeMode : undefined;
+}
+
+function readCodeModeRawConfig(config?: OpenClawConfig, agentId?: string): Record<string, unknown> {
+  const tools = isRecord(config?.tools) ? config.tools : undefined;
+  const globalRaw = normalizeCodeModeRawConfig(tools?.codeMode) ?? {};
+  const agentRaw =
+    config && agentId
+      ? normalizeCodeModeRawConfig(resolveAgentConfig(config, agentId)?.tools?.codeMode)
+      : undefined;
+  return agentRaw ? { ...globalRaw, ...agentRaw } : globalRaw;
 }
 
 function readBoolean(value: unknown, fallback: boolean): boolean {
@@ -155,8 +165,8 @@ function readLanguages(value: unknown): CodeModeLanguage[] {
   return languages.length > 0 ? [...new Set(languages)] : ["javascript", "typescript"];
 }
 
-export function resolveCodeModeConfig(config?: OpenClawConfig): CodeModeConfig {
-  const raw = readCodeModeRawConfig(config);
+export function resolveCodeModeConfig(config?: OpenClawConfig, agentId?: string): CodeModeConfig {
+  const raw = readCodeModeRawConfig(config, agentId);
   const maxSearchLimit = clampInteger(
     readPositiveInteger(raw.maxSearchLimit, DEFAULT_MAX_SEARCH_LIMIT),
     1,
@@ -634,7 +644,10 @@ async function runExec(params: {
   onUpdate?: AgentToolUpdateCallback<unknown>;
 }) {
   removeExpiredRuns();
-  const config = resolveCodeModeConfig(params.ctx.runtimeConfig ?? params.ctx.config);
+  const config = resolveCodeModeConfig(
+    params.ctx.runtimeConfig ?? params.ctx.config,
+    params.ctx.agentId,
+  );
   if (!config.enabled) {
     throw new ToolInputError("code mode is disabled.");
   }
@@ -875,7 +888,7 @@ export function applyCodeModeCatalog(params: {
   catalogRef?: ToolSearchCatalogRef;
   toolHookContext?: HookContext;
 }) {
-  const config = resolveCodeModeConfig(params.config);
+  const config = resolveCodeModeConfig(params.config, params.agentId);
   if (!config.enabled) {
     return applyToolCatalogCompaction({
       ...params,
@@ -911,11 +924,11 @@ export function addClientToolsToCodeModeCatalog(params: {
 }) {
   return addClientToolsToToolCatalog({
     ...params,
-    enabled: resolveCodeModeConfig(params.config).enabled,
+    enabled: resolveCodeModeConfig(params.config, params.agentId).enabled,
   });
 }
 
-export const __testing = {
+export const testing = {
   activeRuns,
   resumingRunIds,
   codeModeWorkerUrl,
@@ -923,3 +936,4 @@ export const __testing = {
   resolveCodeModeConfig,
   getTypescriptRuntimePromise: () => typescriptRuntimePromise,
 };
+export { testing as __testing };

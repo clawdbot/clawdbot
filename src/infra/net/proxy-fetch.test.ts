@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  _resetActiveManagedProxyStateForTests,
+  resetActiveManagedProxyStateForTests,
   registerActiveManagedProxyUrl,
   stopActiveManagedProxyRegistration,
 } from "./proxy/active-proxy-state.js";
@@ -147,11 +147,11 @@ describe("makeProxyFetch", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    _resetActiveManagedProxyStateForTests();
+    resetActiveManagedProxyStateForTests();
   });
 
   afterEach(() => {
-    _resetActiveManagedProxyStateForTests();
+    resetActiveManagedProxyStateForTests();
   });
 
   it("uses undici fetch with ProxyAgent dispatcher", async () => {
@@ -336,12 +336,12 @@ describe("resolveProxyFetchFromEnv", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.unstubAllEnvs();
-    _resetActiveManagedProxyStateForTests();
+    resetActiveManagedProxyStateForTests();
     clearProxyEnv();
   });
   afterEach(() => {
     vi.unstubAllEnvs();
-    _resetActiveManagedProxyStateForTests();
+    resetActiveManagedProxyStateForTests();
     restoreProxyEnv();
   });
 

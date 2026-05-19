@@ -33,7 +33,7 @@ vi.mock("openclaw/plugin-sdk/json-store", async () => {
 });
 
 import {
-  __testing,
+  testing,
   createTelegramThreadBindingManager as createTelegramThreadBindingManagerImpl,
   setTelegramThreadBindingIdleTimeoutBySessionKey,
   setTelegramThreadBindingMaxAgeBySessionKey,
@@ -76,12 +76,12 @@ describe("telegram thread bindings", () => {
       "openclaw/plugin-sdk/acp-runtime",
     );
     readAcpSessionEntryMock.mockImplementation(acpRuntime.readAcpSessionEntry);
-    await __testing.resetTelegramThreadBindingsForTests();
+    await testing.resetTelegramThreadBindingsForTests();
   });
 
   afterEach(async () => {
     vi.useRealTimers();
-    await __testing.resetTelegramThreadBindingsForTests();
+    await testing.resetTelegramThreadBindingsForTests();
     if (stateDirOverride) {
       fs.rmSync(stateDirOverride, { recursive: true, force: true });
       stateDirOverride = undefined;
@@ -183,7 +183,7 @@ describe("telegram thread bindings", () => {
       "./thread-bindings.js?scope=shared-b",
     );
 
-    await bindingsA.__testing.resetTelegramThreadBindingsForTests();
+    await bindingsA.testing.resetTelegramThreadBindingsForTests();
 
     try {
       const managerA = bindingsA.createTelegramThreadBindingManager({
@@ -218,7 +218,7 @@ describe("telegram thread bindings", () => {
           ?.getByConversationId("-100200300:topic:44")?.targetSessionKey,
       ).toBe("agent:main:subagent:child-shared");
     } finally {
-      await bindingsA.__testing.resetTelegramThreadBindingsForTests();
+      await bindingsA.testing.resetTelegramThreadBindingsForTests();
     }
   });
 
@@ -334,7 +334,7 @@ describe("telegram thread bindings", () => {
       reason: "test-detach",
     });
 
-    await __testing.resetTelegramThreadBindingsForTests();
+    await testing.resetTelegramThreadBindingsForTests();
 
     const reloaded = createTelegramThreadBindingManager({
       accountId: "default",
@@ -365,7 +365,7 @@ describe("telegram thread bindings", () => {
       },
     });
 
-    await __testing.resetTelegramThreadBindingsForTests();
+    await testing.resetTelegramThreadBindingsForTests();
     readAcpSessionEntryMock.mockReturnValue({
       cfg: {} as never,
       storePath: "/tmp/acp-store.json",
@@ -383,7 +383,7 @@ describe("telegram thread bindings", () => {
     });
 
     expect(reloaded.getByConversationId("cleanup-me")).toBeUndefined();
-    await __testing.resetTelegramThreadBindingsForTests();
+    await testing.resetTelegramThreadBindingsForTests();
     const persisted = JSON.parse(
       fs.readFileSync(
         path.join(
@@ -419,7 +419,7 @@ describe("telegram thread bindings", () => {
       },
     });
 
-    await __testing.resetTelegramThreadBindingsForTests();
+    await testing.resetTelegramThreadBindingsForTests();
 
     const reloaded = createTelegramThreadBindingManager({
       accountId: "default",
@@ -453,7 +453,7 @@ describe("telegram thread bindings", () => {
       },
     });
 
-    await __testing.resetTelegramThreadBindingsForTests();
+    await testing.resetTelegramThreadBindingsForTests();
     readAcpSessionEntryMock.mockReturnValue({
       cfg: {} as never,
       storePath: "/tmp/acp-store.json",
@@ -503,7 +503,7 @@ describe("telegram thread bindings", () => {
       idleTimeoutMs: 90_000,
     });
 
-    await __testing.resetTelegramThreadBindingsForTests();
+    await testing.resetTelegramThreadBindingsForTests();
 
     const statePath = path.join(
       resolveStateDir(process.env, os.homedir),
@@ -547,7 +547,7 @@ describe("telegram thread bindings", () => {
       });
       manager.touchConversation("-100200300:topic:100");
 
-      await __testing.resetTelegramThreadBindingsForTests();
+      await testing.resetTelegramThreadBindingsForTests();
       await flushMicrotasks();
       expect(unhandled).toStrictEqual([]);
     } finally {

@@ -33,11 +33,11 @@ let summarizeTextCore: TtsCoreModule["summarizeText"];
 let resolveTtsConfig: TtsRuntimeModule["resolveTtsConfig"];
 let maybeApplyTtsToPayload: TtsRuntimeModule["maybeApplyTtsToPayload"];
 let getTtsProvider: TtsRuntimeModule["getTtsProvider"];
-let parseTtsDirectives: TtsRuntimeModule["_test"]["parseTtsDirectives"];
-let resolveModelOverridePolicy: TtsRuntimeModule["_test"]["resolveModelOverridePolicy"];
-let getResolvedSpeechProviderConfig: TtsRuntimeModule["_test"]["getResolvedSpeechProviderConfig"];
-let formatTtsProviderError: TtsRuntimeModule["_test"]["formatTtsProviderError"];
-let sanitizeTtsErrorForLog: TtsRuntimeModule["_test"]["sanitizeTtsErrorForLog"];
+let parseTtsDirectives: TtsRuntimeModule["testApi"]["parseTtsDirectives"];
+let resolveModelOverridePolicy: TtsRuntimeModule["testApi"]["resolveModelOverridePolicy"];
+let getResolvedSpeechProviderConfig: TtsRuntimeModule["testApi"]["getResolvedSpeechProviderConfig"];
+let formatTtsProviderError: TtsRuntimeModule["testApi"]["formatTtsProviderError"];
+let sanitizeTtsErrorForLog: TtsRuntimeModule["testApi"]["sanitizeTtsErrorForLog"];
 
 const SPEECH_PROVIDER_ENV_KEYS = [
   ...new Set(
@@ -456,7 +456,7 @@ async function setupTtsRuntime() {
     getResolvedSpeechProviderConfig,
     formatTtsProviderError,
     sanitizeTtsErrorForLog,
-  } = ttsRuntime._test);
+  } = ttsRuntime.testApi);
   ttsRuntimeInitialized = true;
 }
 

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { __testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.js";
-import { __testing as subagentAnnounceOutputTesting } from "./subagent-announce-output.js";
-import { __testing as subagentAnnounceTesting } from "./subagent-announce.js";
+import { testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.js";
+import { testing as subagentAnnounceOutputTesting } from "./subagent-announce-output.js";
+import { testing as subagentAnnounceTesting } from "./subagent-announce.js";
 import * as mod from "./subagent-registry.js";
 
 const noop = () => {};
@@ -157,7 +157,7 @@ describe("subagent registry lifecycle error grace", () => {
         },
       },
     );
-    mod.__testing.setDepsForTest({
+    mod.testing.setDepsForTest({
       callGateway: callGatewayMock as typeof import("../gateway/call.js").callGateway,
       getRuntimeConfig: loadConfigMock as typeof import("../config/config.js").getRuntimeConfig,
       onAgentEvent:
@@ -201,7 +201,7 @@ describe("subagent registry lifecycle error grace", () => {
     subagentAnnounceDeliveryTesting.setDepsForTest();
     subagentAnnounceOutputTesting.setDepsForTest();
     subagentAnnounceTesting.setDepsForTest();
-    mod.__testing.setDepsForTest();
+    mod.testing.setDepsForTest();
     mod.resetSubagentRegistryForTests({ persist: false });
     vi.useRealTimers();
     if (previousFastTestEnv === undefined) {

@@ -948,14 +948,14 @@ export function attachGatewayUpgradeHandler(opts: {
               __openclawPreauthBudgetClaimed?: boolean;
               __openclawPreauthBudgetKey?: string;
             }
-          ).__openclawPreauthBudgetKey = preauthBudgetKey;
+          )["__openclawPreauthBudgetKey"] = preauthBudgetKey;
           wss.emit("connection", ws, req);
           const budgetClaimed = Boolean(
             (
               ws as unknown as import("ws").WebSocket & {
                 __openclawPreauthBudgetClaimed?: boolean;
               }
-            ).__openclawPreauthBudgetClaimed,
+            )["__openclawPreauthBudgetClaimed"],
           );
           if (budgetClaimed) {
             budgetTransferred = true;

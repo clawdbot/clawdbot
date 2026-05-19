@@ -12,7 +12,7 @@ vi.mock("./ddg-client.js", () => ({
 
 describe("duckduckgo web search provider", () => {
   let createDuckDuckGoWebSearchProvider: typeof import("./ddg-search-provider.js").createDuckDuckGoWebSearchProvider;
-  let ddgClientTesting: typeof import("./ddg-client.js").__testing;
+  let ddgClientTesting: typeof import("./ddg-client.js").testing;
 
   afterAll(() => {
     vi.doUnmock("./ddg-client.js");
@@ -21,7 +21,7 @@ describe("duckduckgo web search provider", () => {
 
   beforeAll(async () => {
     ({ createDuckDuckGoWebSearchProvider } = await import("./ddg-search-provider.js"));
-    ({ __testing: ddgClientTesting } =
+    ({ testing: ddgClientTesting } =
       await vi.importActual<typeof import("./ddg-client.js")>("./ddg-client.js"));
     await import("../index.js");
   });

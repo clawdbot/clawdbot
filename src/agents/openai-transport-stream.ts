@@ -3160,7 +3160,7 @@ function mapStopReason(reason: string | null) {
   }
 }
 
-export const __testing = {
+export const testing = {
   assertCodeModeResponsesToolSurface,
   buildOpenAIClientHeaders,
   buildOpenAISdkClientOptions,
@@ -3181,3 +3181,4 @@ export const __testing = {
   summarizeResponsesTools,
   withResponsesFirstEventTimeout,
 };
+export { testing as __testing };

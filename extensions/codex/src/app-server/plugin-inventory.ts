@@ -1,3 +1,4 @@
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   type CodexAppInventoryCache,
   type CodexAppInventoryCacheRead,
@@ -70,6 +71,7 @@ export type ReadCodexPluginInventoryParams = {
   appCacheKey?: string;
   nowMs?: number;
   readPluginDetails?: boolean;
+  suppressAppInventoryRefresh?: boolean;
 };
 
 export async function readCodexPluginInventory(
@@ -167,6 +169,7 @@ export async function readCodexPluginInventory(
     }
 
     const apps = resolveOwnedApps({
+      pluginPolicy,
       detail,
       appInventory,
     });
@@ -182,13 +185,14 @@ export async function readCodexPluginInventory(
     });
   }
 
-  return {
+  const inventory = {
     policy,
     marketplace,
     records,
     diagnostics,
     ...(appInventory ? { appInventory } : {}),
   };
+  return inventory;
 }
 
 export function findOpenAiCuratedPluginSummary(
@@ -230,6 +234,7 @@ function readCachedAppInventory(
     key: params.appCacheKey,
     request,
     nowMs: params.nowMs,
+    suppressRefresh: params.suppressAppInventoryRefresh,
   });
 }
 
@@ -276,6 +281,7 @@ function resolveAppOwnership(params: {
 }
 
 function resolveOwnedApps(params: {
+  pluginPolicy: ResolvedCodexPluginPolicy;
   detail?: v2.PluginDetail;
   appInventory?: CodexAppInventoryCacheRead;
 }): CodexPluginOwnedApp[] {
@@ -284,6 +290,11 @@ function resolveOwnedApps(params: {
     return [];
   }
   if (params.appInventory?.state === "missing") {
+    embeddedAgentLog.warn("codex plugin inventory missing app inventory for detail apps", {
+      configKey: params.pluginPolicy.configKey,
+      pluginName: params.pluginPolicy.pluginName,
+      appIds: detailApps.map((app) => app.id).toSorted(),
+    });
     return [];
   }
   const appInfoById = new Map(

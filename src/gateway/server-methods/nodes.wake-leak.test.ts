@@ -14,7 +14,7 @@
 //
 // CAL-003 compliance: the null-registration branch is already exercised by
 // existing nodes.invoke-wake.test.ts cases. The test just observes that the
-// Map size returns to 0, using a minimal read-only __testing seam mirrored on
+// Map size returns to 0, using a minimal read-only testing seam mirrored on
 // agent-wait-dedupe.ts:223 and agents.ts:78.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -39,7 +39,7 @@ vi.mock("../../infra/push-apns.js", () => ({
   shouldClearStoredApnsRegistration: mocks.shouldClearStoredApnsRegistration,
 }));
 
-import { __testing as wakeTesting } from "./nodes-wake-state.js";
+import { testing as wakeTesting } from "./nodes-wake-state.js";
 import { maybeWakeNodeWithApns } from "./nodes.js";
 
 describe("maybeWakeNodeWithApns — no-registration leak guard", () => {

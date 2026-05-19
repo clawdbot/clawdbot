@@ -39,7 +39,7 @@ vi.mock("./provider-hook-runtime.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./provider-hook-runtime.js")>();
   return {
     ...actual,
-    __testing: {},
+    testing: {},
     prepareProviderExtraParams: vi.fn(),
     resolveProviderHookPlugin: vi.fn(),
     resolveProviderPluginsForHooks: vi.fn(() => []),

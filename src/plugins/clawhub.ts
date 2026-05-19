@@ -47,6 +47,7 @@ export const CLAWHUB_INSTALL_ERROR_CODE = {
   PRIVATE_PACKAGE: "private_package",
   INCOMPATIBLE_PLUGIN_API: "incompatible_plugin_api",
   INCOMPATIBLE_GATEWAY: "incompatible_gateway",
+  ARTIFACT_UNAVAILABLE: "artifact_unavailable",
   MISSING_ARCHIVE_INTEGRITY: "missing_archive_integrity",
   ARTIFACT_DOWNLOAD_UNAVAILABLE: "artifact_download_unavailable",
   ARCHIVE_INTEGRITY_MISMATCH: "archive_integrity_mismatch",
@@ -564,7 +565,7 @@ async function readLimitedClawHubArchiveEntry<T>(
     onEnd: () => T;
   },
 ): Promise<T | ClawHubInstallFailure> {
-  const hintedSize = (entry as JSZipObjectWithSize)._data?.uncompressedSize;
+  const hintedSize = (entry as JSZipObjectWithSize)["_data"]?.uncompressedSize;
   if (
     typeof hintedSize === "number" &&
     Number.isFinite(hintedSize) &&
@@ -1117,7 +1118,7 @@ export async function installPluginFromClawHub(
         packageName: canonicalPackageName,
         version: versionState.version,
       }),
-      CLAWHUB_INSTALL_ERROR_CODE.MISSING_ARCHIVE_INTEGRITY,
+      CLAWHUB_INSTALL_ERROR_CODE.ARTIFACT_UNAVAILABLE,
     );
   }
   logClawHubPackageSummary({
@@ -1153,7 +1154,9 @@ export async function installPluginFromClawHub(
         error.status === 404 &&
         error.requestPath.endsWith("/artifact/download")
         ? CLAWHUB_INSTALL_ERROR_CODE.ARTIFACT_DOWNLOAD_UNAVAILABLE
-        : undefined,
+        : error instanceof ClawHubRequestError
+          ? CLAWHUB_INSTALL_ERROR_CODE.ARTIFACT_UNAVAILABLE
+          : undefined,
     );
   }
   try {

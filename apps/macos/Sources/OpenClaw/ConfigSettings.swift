@@ -19,6 +19,7 @@ struct ConfigSettings: View {
             self.detail
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .settingsDetailContent()
         .task {
             guard !self.hasLoaded else { return }
             guard !self.isPreview else { return }
@@ -117,8 +118,8 @@ extension ConfigSettings {
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 18)
+        .padding(.horizontal, SettingsLayout.detailHorizontalPadding)
+        .padding(.vertical, SettingsLayout.detailVerticalPadding)
     }
 
     private var schemaUnavailableDetail: some View {
@@ -129,8 +130,8 @@ extension ConfigSettings {
                 .foregroundStyle(.secondary)
             self.actionRow
         }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 18)
+        .padding(.horizontal, SettingsLayout.detailHorizontalPadding)
+        .padding(.vertical, SettingsLayout.detailVerticalPadding)
     }
 
     private func sectionDetail(_ section: ConfigSection) -> some View {
@@ -153,8 +154,8 @@ extension ConfigSettings {
                 Spacer(minLength: 0)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 24)
-            .padding(.vertical, 18)
+            .padding(.horizontal, SettingsLayout.detailHorizontalPadding)
+            .padding(.vertical, SettingsLayout.detailVerticalPadding)
             .groupBoxStyle(PlainSettingsGroupBoxStyle())
         }
     }

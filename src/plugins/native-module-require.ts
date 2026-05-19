@@ -84,11 +84,11 @@ export function withNativeRequireAliases<T>(
   aliasMap: Record<string, string> | undefined,
   run: () => T,
 ): T {
-  if (!aliasMap || Object.keys(aliasMap).length === 0 || !moduleWithResolver._resolveFilename) {
+  if (!aliasMap || Object.keys(aliasMap).length === 0 || !moduleWithResolver["_resolveFilename"]) {
     return run();
   }
-  const originalResolveFilename = moduleWithResolver._resolveFilename;
-  moduleWithResolver._resolveFilename = ((request, parent, isMain, options) => {
+  const originalResolveFilename = moduleWithResolver["_resolveFilename"];
+  moduleWithResolver["_resolveFilename"] = ((request, parent, isMain, options) => {
     const aliasTarget = aliasMap[request];
     if (aliasTarget) {
       return aliasTarget;
@@ -98,6 +98,6 @@ export function withNativeRequireAliases<T>(
   try {
     return run();
   } finally {
-    moduleWithResolver._resolveFilename = originalResolveFilename;
+    moduleWithResolver["_resolveFilename"] = originalResolveFilename;
   }
 }

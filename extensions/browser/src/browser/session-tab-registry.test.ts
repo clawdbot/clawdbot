@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  __countTrackedSessionBrowserTabsForTests,
-  __resetTrackedSessionBrowserTabsForTests,
+  countTrackedSessionBrowserTabsForTests,
+  resetTrackedSessionBrowserTabsForTests,
   closeTrackedBrowserTabsForSessions,
   sweepTrackedBrowserTabs,
   touchSessionBrowserTab,
@@ -12,11 +12,11 @@ import {
 describe("session tab registry", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    __resetTrackedSessionBrowserTabsForTests();
+    resetTrackedSessionBrowserTabsForTests();
   });
 
   afterEach(() => {
-    __resetTrackedSessionBrowserTabsForTests();
+    resetTrackedSessionBrowserTabsForTests();
     vi.useRealTimers();
   });
 
@@ -33,7 +33,7 @@ describe("session tab registry", () => {
       baseUrl: "http://127.0.0.1:9222",
       profile: "OpenClaw",
     });
-    expect(__countTrackedSessionBrowserTabsForTests("agent:main:main")).toBe(2);
+    expect(countTrackedSessionBrowserTabsForTests("agent:main:main")).toBe(2);
 
     const closeTab = vi.fn(async () => {});
     const closed = await closeTrackedBrowserTabsForSessions({
@@ -53,7 +53,7 @@ describe("session tab registry", () => {
       baseUrl: "http://127.0.0.1:9222",
       profile: "openclaw",
     });
-    expect(__countTrackedSessionBrowserTabsForTests()).toBe(0);
+    expect(countTrackedSessionBrowserTabsForTests()).toBe(0);
   });
 
   it("untracks specific tabs", async () => {
@@ -113,7 +113,7 @@ describe("session tab registry", () => {
     expect(closed).toBe(0);
     expect(closeTab).toHaveBeenCalledTimes(2);
     expect(warnings).toEqual(["failed to close tracked browser tab tab-b: Error: network down"]);
-    expect(__countTrackedSessionBrowserTabsForTests()).toBe(0);
+    expect(countTrackedSessionBrowserTabsForTests()).toBe(0);
   });
 
   it("sweeps idle tracked tabs and keeps recently touched tabs", async () => {
@@ -145,7 +145,7 @@ describe("session tab registry", () => {
       baseUrl: undefined,
       profile: undefined,
     });
-    expect(__countTrackedSessionBrowserTabsForTests("agent:main:main")).toBe(1);
+    expect(countTrackedSessionBrowserTabsForTests("agent:main:main")).toBe(1);
   });
 
   it("caps tracked tabs per session by closing least recently used tabs first", async () => {
@@ -169,7 +169,7 @@ describe("session tab registry", () => {
       baseUrl: undefined,
       profile: undefined,
     });
-    expect(__countTrackedSessionBrowserTabsForTests("agent:main:main")).toBe(2);
+    expect(countTrackedSessionBrowserTabsForTests("agent:main:main")).toBe(2);
   });
 
   it("honors session filters during sweeps", async () => {
@@ -191,6 +191,6 @@ describe("session tab registry", () => {
       baseUrl: undefined,
       profile: undefined,
     });
-    expect(__countTrackedSessionBrowserTabsForTests()).toBe(1);
+    expect(countTrackedSessionBrowserTabsForTests()).toBe(1);
   });
 });

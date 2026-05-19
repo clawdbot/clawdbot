@@ -62,9 +62,7 @@ struct DebugSettings: View {
 
                 Spacer(minLength: 0)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 4)
-            .padding(.trailing, SettingsLayout.scrollbarGutter)
+            .settingsDetailContent()
             .groupBoxStyle(PlainSettingsGroupBoxStyle())
         }
         .task {

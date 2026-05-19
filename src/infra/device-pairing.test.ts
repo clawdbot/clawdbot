@@ -714,7 +714,7 @@ describe("device pairing tokens", () => {
     });
   });
 
-  test("metadata refresh cannot mutate approved role and scope fields", async () => {
+  test("metadata refresh can update display metadata but not approved role and scope fields", async () => {
     const baseDir = await makeDevicePairingDir();
     await setupPairedNodeDevice(baseDir);
 
@@ -722,6 +722,7 @@ describe("device pairing tokens", () => {
       "node-1",
       {
         displayName: "renamed-node",
+        platform: "iOS 26.5.0",
         role: "operator",
         roles: ["operator"],
         scopes: ["operator.admin"],
@@ -734,6 +735,7 @@ describe("device pairing tokens", () => {
 
     const paired = await getPairedDevice("node-1", baseDir);
     expect(paired?.displayName).toBe("renamed-node");
+    expect(paired?.platform).toBe("iOS 26.5.0");
     expect(paired?.publicKey).toBe("public-key-node-1");
     expect(paired?.role).toBe("node");
     expect(paired?.roles).toEqual(["node"]);

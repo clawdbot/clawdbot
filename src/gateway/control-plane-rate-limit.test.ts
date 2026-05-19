@@ -2,12 +2,12 @@ import { afterEach, describe, expect, test } from "vitest";
 import {
   consumeControlPlaneWriteBudget,
   pruneStaleControlPlaneBuckets,
-  __testing,
+  testing,
 } from "./control-plane-rate-limit.js";
 
 describe("control-plane-rate-limit", () => {
   afterEach(() => {
-    __testing.resetControlPlaneRateLimitState();
+    testing.resetControlPlaneRateLimitState();
   });
 
   test("pruneStaleControlPlaneBuckets removes expired buckets (#63643)", () => {
@@ -50,6 +50,6 @@ describe("control-plane-rate-limit", () => {
       });
     }
 
-    expect(__testing.getControlPlaneRateLimitBucketCount()).toBe(10_000);
+    expect(testing.getControlPlaneRateLimitBucketCount()).toBe(10_000);
   });
 });

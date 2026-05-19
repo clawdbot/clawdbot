@@ -81,6 +81,39 @@ function normalizeDeliveryTarget(channel: string, to: string): string {
   return normalizeTargetForProvider(channel, toTrimmed) ?? toTrimmed;
 }
 
+const caseSensitivePrefixedTargetProviders = new Set(["googlechat", "mattermost", "matrix"]);
+const lowercaseNormalizedPrefixedTargetProviders = new Set(["discord", "slack"]);
+
+function deliveryTargetsMatch(channel: string, targetTo: string, deliveryTo: string): boolean {
+  const targetToTrimmed = targetTo.trim();
+  const deliveryToTrimmed = deliveryTo.trim();
+  if (targetToTrimmed === deliveryToTrimmed) {
+    return true;
+  }
+  const targetPrefixed = targetToTrimmed.match(/^([a-z][a-z0-9_-]*):(.*)$/i);
+  const deliveryPrefixed = deliveryToTrimmed.match(/^([a-z][a-z0-9_-]*):(.*)$/i);
+  const targetKind = targetPrefixed?.[1]?.toLowerCase();
+  const deliveryKind = deliveryPrefixed?.[1]?.toLowerCase();
+  if (
+    targetKind &&
+    targetKind === deliveryKind &&
+    ["channel", "conversation", "group", "user"].includes(targetKind)
+  ) {
+    const targetId = targetPrefixed?.[2]?.trim();
+    const deliveryId = deliveryPrefixed?.[2]?.trim();
+    if (caseSensitivePrefixedTargetProviders.has(channel)) {
+      return targetId === deliveryId;
+    }
+    if (lowercaseNormalizedPrefixedTargetProviders.has(channel)) {
+      return targetId?.toLowerCase() === deliveryId?.toLowerCase();
+    }
+  }
+  return (
+    normalizeDeliveryTarget(channel, targetToTrimmed) ===
+    normalizeDeliveryTarget(channel, deliveryToTrimmed)
+  );
+}
+
 function normalizeDeliveryThreadId(threadId: string | number | undefined): string | undefined {
   return stringifyRouteThreadId(threadId)?.trim() || undefined;
 }
@@ -106,9 +139,7 @@ export function sourceDeliveryTargetsMatch(
   }
   // Strip :topic:NNN from message targets and normalize Feishu/Lark prefixes on
   // both sides so source-delivery suppression compares canonical IDs.
-  const normalizedTargetTo = normalizeDeliveryTarget(channel, target.to.replace(/:topic:\d+$/, ""));
-  const normalizedDeliveryTo = normalizeDeliveryTarget(channel, delivery.to);
-  if (normalizedTargetTo !== normalizedDeliveryTo) {
+  if (!deliveryTargetsMatch(channel, target.to.replace(/:topic:\d+$/, ""), delivery.to)) {
     return false;
   }
   const deliveryThreadId = normalizeDeliveryThreadId(delivery.threadId);

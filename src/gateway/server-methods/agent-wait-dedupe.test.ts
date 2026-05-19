@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DedupeEntry } from "../server-shared.js";
 import {
-  __testing,
+  testing,
   readTerminalSnapshotFromGatewayDedupe,
   setGatewayDedupeEntry,
   waitForTerminalGatewayDedupe,
@@ -28,12 +28,12 @@ describe("agent wait dedupe helper", () => {
   }
 
   beforeEach(() => {
-    __testing.resetWaiters();
+    testing.resetWaiters();
     vi.useFakeTimers();
   });
 
   afterEach(() => {
-    __testing.resetWaiters();
+    testing.resetWaiters();
     vi.useRealTimers();
   });
 
@@ -47,7 +47,7 @@ describe("agent wait dedupe helper", () => {
     });
 
     await Promise.resolve();
-    expect(__testing.getWaiterCount(runId)).toBe(1);
+    expect(testing.getWaiterCount(runId)).toBe(1);
 
     setRunEntry({
       dedupe,
@@ -67,7 +67,7 @@ describe("agent wait dedupe helper", () => {
       endedAt: 200,
       error: undefined,
     });
-    expect(__testing.getWaiterCount(runId)).toBe(0);
+    expect(testing.getWaiterCount(runId)).toBe(0);
   });
 
   it("preserves structured yield metadata from terminal agent results", () => {
@@ -144,7 +144,7 @@ describe("agent wait dedupe helper", () => {
     });
     await vi.advanceTimersByTimeAsync(30);
     await expect(blockedWait).resolves.toBeNull();
-    expect(__testing.getWaiterCount(runId)).toBe(0);
+    expect(testing.getWaiterCount(runId)).toBe(0);
   });
 
   it("uses newer terminal chat snapshot when agent entry is non-terminal", () => {
@@ -214,7 +214,7 @@ describe("agent wait dedupe helper", () => {
       ignoreAgentTerminalSnapshot: true,
     });
     await Promise.resolve();
-    expect(__testing.getWaiterCount(runId)).toBe(1);
+    expect(testing.getWaiterCount(runId)).toBe(1);
 
     setRunEntry({
       dedupe,
@@ -377,7 +377,7 @@ describe("agent wait dedupe helper", () => {
     });
 
     await Promise.resolve();
-    expect(__testing.getWaiterCount(runId)).toBe(2);
+    expect(testing.getWaiterCount(runId)).toBe(2);
 
     setRunEntry({
       dedupe,
@@ -395,7 +395,7 @@ describe("agent wait dedupe helper", () => {
     expect(firstResult.error).toBeUndefined();
     expect(secondResult.status).toBe("ok");
     expect(secondResult.error).toBeUndefined();
-    expect(__testing.getWaiterCount(runId)).toBe(0);
+    expect(testing.getWaiterCount(runId)).toBe(0);
   });
 
   it("cleans up waiter registration on timeout", async () => {
@@ -408,10 +408,10 @@ describe("agent wait dedupe helper", () => {
     });
 
     await Promise.resolve();
-    expect(__testing.getWaiterCount(runId)).toBe(1);
+    expect(testing.getWaiterCount(runId)).toBe(1);
 
     await vi.advanceTimersByTimeAsync(25);
     await expect(wait).resolves.toBeNull();
-    expect(__testing.getWaiterCount(runId)).toBe(0);
+    expect(testing.getWaiterCount(runId)).toBe(0);
   });
 });

@@ -149,6 +149,11 @@ SKIP_SMOKE_IMAGE_BUILD="${OPENCLAW_INSTALL_SMOKE_SKIP_IMAGE_BUILD:-0}"
 SKIP_NONROOT_IMAGE_BUILD="${OPENCLAW_INSTALL_NONROOT_SKIP_IMAGE_BUILD:-0}"
 SKIP_UPDATE="${OPENCLAW_INSTALL_SMOKE_SKIP_UPDATE:-0}"
 SKIP_NPM_GLOBAL="${OPENCLAW_INSTALL_SMOKE_SKIP_NPM_GLOBAL:-0}"
+SKIP_FRESHNESS="${OPENCLAW_INSTALL_SMOKE_SKIP_FRESHNESS:-0}"
+FRESHNESS_INSTALL_URL="${OPENCLAW_INSTALL_SMOKE_FRESHNESS_INSTALL_URL:-file:///tmp/openclaw-install.sh}"
+# npm min-release-age is days; 10000 keeps the control failure independent of normal release cadence.
+FRESHNESS_MIN_RELEASE_AGE="${OPENCLAW_INSTALL_FRESHNESS_MIN_RELEASE_AGE:-10000}"
+FRESHNESS_NPM_VERSION="${OPENCLAW_INSTALL_FRESHNESS_NPM_VERSION:-11.14.1}"
 UPDATE_BASELINE_VERSION="${OPENCLAW_INSTALL_SMOKE_UPDATE_BASELINE:-latest}"
 UPDATE_PACKAGE_SPEC="${OPENCLAW_INSTALL_SMOKE_UPDATE_PACKAGE_SPEC:-}"
 UPDATE_DIST_IMAGE="${OPENCLAW_INSTALL_SMOKE_UPDATE_DIST_IMAGE:-}"
@@ -169,6 +174,7 @@ UPDATE_TAG_URL=""
 UPDATE_DOCKER_HOST_ARGS=()
 NPM_CACHE_DIR="${OPENCLAW_INSTALL_SMOKE_NPM_CACHE_DIR:-}"
 NPM_CACHE_OWNED=0
+NPM_CACHE_PREPARED=0
 NPM_CACHE_DOCKER_ARGS=()
 
 remove_owned_npm_cache() {
@@ -334,6 +340,9 @@ prepare_update_host_access() {
 }
 
 prepare_npm_cache() {
+  if [[ "$NPM_CACHE_PREPARED" == "1" ]]; then
+    return
+  fi
   if [[ -z "$NPM_CACHE_DIR" ]]; then
     NPM_CACHE_DIR="$(mktemp -d)"
     NPM_CACHE_OWNED=1
@@ -345,6 +354,7 @@ prepare_npm_cache() {
     -e npm_config_cache=/npm-cache
     -e NPM_CONFIG_CACHE=/npm-cache
   )
+  NPM_CACHE_PREPARED=1
 }
 
 start_update_server() {
@@ -445,6 +455,27 @@ else
       -e DEBIAN_FRONTEND=noninteractive \
       "$SMOKE_IMAGE"
   fi
+fi
+
+if [[ "$SKIP_FRESHNESS" == "1" ]]; then
+  echo "==> Skip installer npm freshness smoke (OPENCLAW_INSTALL_SMOKE_SKIP_FRESHNESS=1)"
+else
+  prepare_npm_cache
+  echo "==> Run installer npm freshness smoke"
+  docker run --rm -t \
+    --platform "$SMOKE_PLATFORM" \
+    "${NPM_CACHE_DOCKER_ARGS[@]}" \
+    -v "$ROOT_DIR/scripts/install.sh:/tmp/openclaw-install.sh:ro" \
+    -e OPENCLAW_INSTALL_URL="$FRESHNESS_INSTALL_URL" \
+    -e OPENCLAW_INSTALL_PACKAGE="$PACKAGE_NAME" \
+    -e OPENCLAW_INSTALL_SMOKE_MODE=freshness \
+    -e OPENCLAW_INSTALL_FRESHNESS_VERSION="${OPENCLAW_INSTALL_FRESHNESS_VERSION:-latest}" \
+    -e OPENCLAW_INSTALL_FRESHNESS_MIN_RELEASE_AGE="$FRESHNESS_MIN_RELEASE_AGE" \
+    -e OPENCLAW_INSTALL_FRESHNESS_NPM_VERSION="$FRESHNESS_NPM_VERSION" \
+    -e OPENCLAW_NO_ONBOARD=1 \
+    -e OPENCLAW_NO_PROMPT=1 \
+    -e DEBIAN_FRONTEND=noninteractive \
+    "$SMOKE_IMAGE"
 fi
 
 LATEST_VERSION="${LATEST_VERSION:-}"

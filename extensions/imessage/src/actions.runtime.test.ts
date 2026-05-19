@@ -8,7 +8,7 @@ vi.mock("node:child_process", async (importOriginal) => ({
   spawn: spawnMock,
 }));
 
-const { imessageActionsRuntime, _findChatGuidForTest, _normalizeDirectChatIdentifierForTest } =
+const { imessageActionsRuntime, findChatGuidForTest, normalizeDirectChatIdentifierForTest } =
   await import("./actions.runtime.js");
 
 function mockSpawnJsonResponse(payload: Record<string, unknown> = { success: true }) {
@@ -91,7 +91,7 @@ describe("findChatGuid cross-format identifier resolution", () => {
   ];
 
   it("matches a synthesized iMessage;-;<phone> target against the chats.list <phone> identifier", () => {
-    const result = _findChatGuidForTest(chatsList, {
+    const result = findChatGuidForTest(chatsList, {
       kind: "chat_identifier",
       chatIdentifier: "iMessage;-;+12069106512",
     });
@@ -99,7 +99,7 @@ describe("findChatGuid cross-format identifier resolution", () => {
   });
 
   it("matches a synthesized SMS;-;<phone> target the same way", () => {
-    const result = _findChatGuidForTest(chatsList, {
+    const result = findChatGuidForTest(chatsList, {
       kind: "chat_identifier",
       chatIdentifier: "SMS;-;+12069106512",
     });
@@ -107,7 +107,7 @@ describe("findChatGuid cross-format identifier resolution", () => {
   });
 
   it("matches a bare <phone> identifier exactly", () => {
-    const result = _findChatGuidForTest(chatsList, {
+    const result = findChatGuidForTest(chatsList, {
       kind: "chat_identifier",
       chatIdentifier: "+12069106512",
     });
@@ -115,7 +115,7 @@ describe("findChatGuid cross-format identifier resolution", () => {
   });
 
   it("matches an any;-;<phone> guid form against the chats.list guid column", () => {
-    const result = _findChatGuidForTest(chatsList, {
+    const result = findChatGuidForTest(chatsList, {
       kind: "chat_identifier",
       chatIdentifier: "any;-;+12069106512",
     });
@@ -123,7 +123,7 @@ describe("findChatGuid cross-format identifier resolution", () => {
   });
 
   it("matches a group chat by exact guid", () => {
-    const result = _findChatGuidForTest(chatsList, {
+    const result = findChatGuidForTest(chatsList, {
       kind: "chat_identifier",
       chatIdentifier: "iMessage;+;chat0000",
     });
@@ -131,12 +131,12 @@ describe("findChatGuid cross-format identifier resolution", () => {
   });
 
   it("matches a group chat by chat_id", () => {
-    const result = _findChatGuidForTest(chatsList, { kind: "chat_id", chatId: 7 });
+    const result = findChatGuidForTest(chatsList, { kind: "chat_id", chatId: 7 });
     expect(result).toBe("iMessage;+;chat0000");
   });
 
   it("returns null for a phone number that does not exist in chats.list", () => {
-    const result = _findChatGuidForTest(chatsList, {
+    const result = findChatGuidForTest(chatsList, {
       kind: "chat_identifier",
       chatIdentifier: "iMessage;-;+19999999999",
     });
@@ -144,7 +144,7 @@ describe("findChatGuid cross-format identifier resolution", () => {
   });
 
   it("does not cross-match different phone numbers via the prefix-stripping path", () => {
-    const result = _findChatGuidForTest(chatsList, {
+    const result = findChatGuidForTest(chatsList, {
       kind: "chat_identifier",
       chatIdentifier: "iMessage;-;+18001234567",
     });
@@ -152,7 +152,7 @@ describe("findChatGuid cross-format identifier resolution", () => {
   });
 
   it("does not match a DM target against a group's chat_identifier", () => {
-    const result = _findChatGuidForTest(chatsList, {
+    const result = findChatGuidForTest(chatsList, {
       kind: "chat_identifier",
       chatIdentifier: "iMessage;+;chat-not-here",
     });
@@ -162,24 +162,22 @@ describe("findChatGuid cross-format identifier resolution", () => {
 
 describe("normalizeDirectChatIdentifier", () => {
   it("strips the iMessage;-; prefix", () => {
-    expect(_normalizeDirectChatIdentifierForTest("iMessage;-;+12069106512")).toBe("+12069106512");
+    expect(normalizeDirectChatIdentifierForTest("iMessage;-;+12069106512")).toBe("+12069106512");
   });
   it("strips the SMS;-; prefix", () => {
-    expect(_normalizeDirectChatIdentifierForTest("SMS;-;+12069106512")).toBe("+12069106512");
+    expect(normalizeDirectChatIdentifierForTest("SMS;-;+12069106512")).toBe("+12069106512");
   });
   it("strips the any;-; prefix", () => {
-    expect(_normalizeDirectChatIdentifierForTest("any;-;+12069106512")).toBe("+12069106512");
+    expect(normalizeDirectChatIdentifierForTest("any;-;+12069106512")).toBe("+12069106512");
   });
   it("matches case-insensitively", () => {
-    expect(_normalizeDirectChatIdentifierForTest("IMESSAGE;-;+12069106512")).toBe("+12069106512");
+    expect(normalizeDirectChatIdentifierForTest("IMESSAGE;-;+12069106512")).toBe("+12069106512");
   });
   it("leaves group identifiers (iMessage;+;chat...) unchanged", () => {
-    expect(_normalizeDirectChatIdentifierForTest("iMessage;+;chat0000")).toBe(
-      "iMessage;+;chat0000",
-    );
+    expect(normalizeDirectChatIdentifierForTest("iMessage;+;chat0000")).toBe("iMessage;+;chat0000");
   });
   it("leaves bare values unchanged", () => {
-    expect(_normalizeDirectChatIdentifierForTest("+12069106512")).toBe("+12069106512");
-    expect(_normalizeDirectChatIdentifierForTest("foo@bar.com")).toBe("foo@bar.com");
+    expect(normalizeDirectChatIdentifierForTest("+12069106512")).toBe("+12069106512");
+    expect(normalizeDirectChatIdentifierForTest("foo@bar.com")).toBe("foo@bar.com");
   });
 });

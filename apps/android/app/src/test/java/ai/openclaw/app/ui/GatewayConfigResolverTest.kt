@@ -269,6 +269,14 @@ class GatewayConfigResolverTest {
   }
 
   @Test
+  fun parseGatewayEndpointResultRejectsUnsupportedSchemes() {
+    val parsed = parseGatewayEndpointResult("ftp://gateway.example:21")
+
+    assertNull(parsed.config)
+    assertEquals(GatewayEndpointValidationError.INVALID_URL, parsed.error)
+  }
+
+  @Test
   fun parseGatewayEndpointResultFlagsInsecureLanCleartextGateway() {
     val parsed = parseGatewayEndpointResult("ws://192.168.1.20:18789")
     assertNull(parsed.config)

@@ -7,7 +7,7 @@ import type { ClawdbotConfig, OpenClawPluginApi } from "../runtime-api.js";
 import { registerFeishuSubagentHooks } from "../subagent-hooks-api.js";
 import {
   createFeishuThreadBindingManager,
-  __testing as threadBindingTesting,
+  testing as threadBindingTesting,
 } from "./thread-bindings.js";
 
 const baseConfig: ClawdbotConfig = {

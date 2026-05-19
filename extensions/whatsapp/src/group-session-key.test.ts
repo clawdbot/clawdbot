@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveWhatsAppGroupSessionRoute, __testing } from "./group-session-key.js";
+import { resolveWhatsAppGroupSessionRoute, testing } from "./group-session-key.js";
 
 describe("resolveWhatsAppGroupSessionRoute", () => {
   it("keeps default-account group routes unchanged", () => {
@@ -35,7 +35,7 @@ describe("resolveWhatsAppGroupSessionRoute", () => {
 
   it("derives the legacy group session key from a named-account scoped group route", () => {
     expect(
-      __testing.resolveWhatsAppLegacyGroupSessionKey({
+      testing.resolveWhatsAppLegacyGroupSessionKey({
         accountId: "work",
         sessionKey: "agent:main:whatsapp:group:123@g.us:thread:whatsapp-account-work",
       }),
@@ -44,7 +44,7 @@ describe("resolveWhatsAppGroupSessionRoute", () => {
 
   it("normalizes mixed-case account ids when resolving legacy scoped group keys", () => {
     expect(
-      __testing.resolveWhatsAppLegacyGroupSessionKey({
+      testing.resolveWhatsAppLegacyGroupSessionKey({
         accountId: "Work",
         sessionKey: "agent:main:whatsapp:group:123@g.us:thread:whatsapp-account-work",
       }),

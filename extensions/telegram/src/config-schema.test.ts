@@ -84,6 +84,28 @@ describe("telegram custom commands schema", () => {
     expectTelegramConfigIssue({ mediaGroupFlushMs: 60_001 }, "mediaGroupFlushMs");
   });
 
+  it("accepts Telegram native tool-progress draft config only on Telegram", () => {
+    expectTelegramConfigValid({
+      streaming: {
+        preview: {
+          toolProgress: true,
+          nativeToolProgress: true,
+          nativeToolProgressAllowFrom: ["123456789"],
+        },
+      },
+      accounts: {
+        ops: {
+          streaming: {
+            preview: {
+              nativeToolProgress: true,
+              nativeToolProgressAllowFrom: [123456789],
+            },
+          },
+        },
+      },
+    });
+  });
+
   it("accepts DM thread reply policy overrides", () => {
     const res = TelegramConfigSchema.safeParse({
       dm: { threadReplies: "off" },

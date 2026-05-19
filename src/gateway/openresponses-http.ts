@@ -198,7 +198,7 @@ function lookupResponseSession(
   return entry.sessionKey;
 }
 
-export const __testing = {
+export const testing = {
   resetResponseSessionState() {
     responseSessionMap.clear();
   },
@@ -1224,3 +1224,4 @@ export async function handleOpenResponsesHttpRequest(
 
   return true;
 }
+export { testing as __testing };

@@ -1,7 +1,7 @@
 import type { ApproveRuntimeGetter, CommandsPort } from "../../adapter/commands.port.js";
 
-let _resolveVersion: () => string = () => "unknown";
-let _approveRuntimeGetter: ApproveRuntimeGetter | null = null;
+let resolveVersionGetter: () => string = () => "unknown";
+let approveRuntimeGetter: ApproveRuntimeGetter | null = null;
 let PLUGIN_VERSION = "unknown";
 
 /**
@@ -9,13 +9,13 @@ let PLUGIN_VERSION = "unknown";
  * Called once by the bridge layer during startup.
  */
 export function initSlashCommandDeps(port: CommandsPort): void {
-  _resolveVersion = port.resolveVersion;
+  resolveVersionGetter = port.resolveVersion;
   PLUGIN_VERSION = port.pluginVersion;
-  _approveRuntimeGetter = port.approveRuntimeGetter ?? null;
+  approveRuntimeGetter = port.approveRuntimeGetter ?? null;
 }
 
 export function resolveRuntimeServiceVersion(): string {
-  return _resolveVersion();
+  return resolveVersionGetter();
 }
 
 export function getPluginVersionString(): string {
@@ -23,9 +23,9 @@ export function getPluginVersionString(): string {
 }
 
 export function getFrameworkVersionString(): string {
-  return _resolveVersion();
+  return resolveVersionGetter();
 }
 
 export function getApproveRuntimeGetter(): ApproveRuntimeGetter | null {
-  return _approveRuntimeGetter;
+  return approveRuntimeGetter;
 }

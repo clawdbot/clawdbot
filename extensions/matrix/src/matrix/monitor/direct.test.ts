@@ -62,7 +62,7 @@ function createMockClient(params: {
         }
       }
     }),
-    __setMembers(next: string[]) {
+    setMembersForTest(next: string[]) {
       members = next;
     },
   } as unknown as MatrixClient & {
@@ -74,7 +74,7 @@ function createMockClient(params: {
     getJoinedRoomMembers: ReturnType<typeof vi.fn>;
     getRoomStateEvent: ReturnType<typeof vi.fn>;
     setAccountData: ReturnType<typeof vi.fn>;
-    __setMembers: (members: string[]) => void;
+    setMembersForTest: (members: string[]) => void;
   };
 }
 
@@ -466,7 +466,7 @@ describe("createDirectRoomTracker", () => {
       }),
     ).resolves.toBe(true);
 
-    client.__setMembers(["@alice:example.org", "@bot:example.org", "@mallory:example.org"]);
+    client.setMembersForTest(["@alice:example.org", "@bot:example.org", "@mallory:example.org"]);
     tracker.invalidateRoom("!room:example.org");
 
     await expect(

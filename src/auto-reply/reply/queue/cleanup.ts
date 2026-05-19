@@ -31,7 +31,7 @@ function resolveQueueCleanupLaneClearer() {
     : defaultQueueCleanupDeps.clearCommandLane;
 }
 
-export const __testing = {
+export const testing = {
   setDepsForTests(deps: Partial<typeof defaultQueueCleanupDeps> | undefined): void {
     queueCleanupDeps.resolveEmbeddedSessionLane =
       typeof deps?.resolveEmbeddedSessionLane === "function"
@@ -71,3 +71,4 @@ export function clearSessionQueues(keys: Array<string | undefined>): ClearSessio
 
   return { followupCleared, laneCleared, keys: clearedKeys };
 }
+export { testing as __testing };

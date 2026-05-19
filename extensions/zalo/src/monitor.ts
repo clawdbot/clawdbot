@@ -1005,7 +1005,8 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
   }
 }
 
-export const __testing = {
+export const testing = {
   resolveZaloRuntimeGroupPolicy,
   clearHostedMediaRouteRefsForTest: () => hostedMediaRouteRefs.clear(),
 };
+export { testing as __testing };

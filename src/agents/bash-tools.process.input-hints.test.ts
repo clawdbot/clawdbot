@@ -43,7 +43,7 @@ function installWritableStdin(
   state?: { writableEnded?: boolean; writableFinished?: boolean; destroyed?: boolean },
 ) {
   session.stdin = {
-    write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => cb?.(null)),
+    write: vi.fn((dataValue: string, cb?: (err?: Error | null) => void) => cb?.(null)),
     end: vi.fn(),
     destroyed: state?.destroyed ?? false,
     writableEnded: state?.writableEnded,

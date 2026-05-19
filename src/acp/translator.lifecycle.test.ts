@@ -43,7 +43,7 @@ function createListSessionsRequest(params: {
     request.cursor = params.cursor;
   }
   if (params.limit !== undefined) {
-    request._meta = { limit: params.limit };
+    request["_meta"] = { limit: params.limit };
   }
   return request;
 }
@@ -312,7 +312,7 @@ describe("acp translator stable lifecycle handlers", () => {
 
   it("resumes an existing Gateway session without replaying transcript history", async () => {
     const connection = createAcpConnection();
-    const sessionUpdate = connection.__sessionUpdateMock;
+    const sessionUpdate = connection["__sessionUpdateMock"];
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.list") {
         return createGatewaySessions([

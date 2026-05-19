@@ -789,7 +789,7 @@ export async function acquireSessionWriteLock(params: {
   }
 }
 
-export const __testing = {
+export const testing = {
   cleanupSignals: [...CLEANUP_SIGNALS],
   handleTerminationSignal,
   releaseAllLocksSync,
@@ -811,3 +811,4 @@ export function resetSessionWriteLockStateForTest(): void {
   unregisterCleanupHandlers();
   resolveProcessStartTimeForLock = getProcessStartTime;
 }
+export { testing as __testing };

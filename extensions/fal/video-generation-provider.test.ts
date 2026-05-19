@@ -3,7 +3,7 @@ import * as providerHttp from "openclaw/plugin-sdk/provider-http";
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  _setFalVideoFetchGuardForTesting,
+  setFalVideoFetchGuardForTesting,
   buildFalVideoGenerationProvider,
 } from "./video-generation-provider.js";
 
@@ -30,7 +30,7 @@ describe("fal video generation provider", () => {
       requestConfig: createMockRequestConfig(),
     });
     vi.spyOn(providerHttp, "assertOkOrThrowHttpError").mockResolvedValue(undefined);
-    _setFalVideoFetchGuardForTesting(fetchGuardMock as never);
+    setFalVideoFetchGuardForTesting(fetchGuardMock as never);
   }
 
   function releasedJson(value: unknown) {
@@ -111,7 +111,7 @@ describe("fal video generation provider", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     fetchGuardMock.mockReset();
-    _setFalVideoFetchGuardForTesting(null);
+    setFalVideoFetchGuardForTesting(null);
   });
 
   it("declares explicit mode capabilities", () => {

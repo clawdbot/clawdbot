@@ -4,7 +4,7 @@ import {
   resetDiagnosticRunActivityForTest,
 } from "../../logging/diagnostic-run-activity.js";
 import {
-  __testing,
+  testing,
   abortActiveReplyRuns,
   createReplyOperation,
   forceClearReplyRunBySessionId,
@@ -17,7 +17,7 @@ import {
 
 describe("reply run registry", () => {
   afterEach(() => {
-    __testing.resetReplyRunRegistry();
+    testing.resetReplyRunRegistry();
     resetDiagnosticRunActivityForTest();
     vi.restoreAllMocks();
   });

@@ -69,13 +69,13 @@ private object SystemCallLogDataSource : CallLogDataSource {
     val selectionArgs = mutableListOf<String>()
 
     request.cachedName?.let {
-      selections.add("${CallLog.Calls.CACHED_NAME} LIKE ?")
-      selectionArgs.add("%$it%")
+      selections.add(buildCallLogCachedNameLikeSelection())
+      selectionArgs.add(buildCallLogLikeArg(it))
     }
 
     request.number?.let {
-      selections.add("${CallLog.Calls.NUMBER} LIKE ?")
-      selectionArgs.add("%$it%")
+      selections.add(buildCallLogNumberLikeSelection())
+      selectionArgs.add(buildCallLogLikeArg(it))
     }
 
     // Support time range query
@@ -148,6 +148,25 @@ private object SystemCallLogDataSource : CallLogDataSource {
       }
   }
 }
+
+internal fun escapeCallLogSqlLikeLiteral(value: String): String =
+  buildString(value.length) {
+    for (ch in value) {
+      when (ch) {
+        '\\', '%', '_' -> {
+          append('\\')
+          append(ch)
+        }
+        else -> append(ch)
+      }
+    }
+  }
+
+internal fun buildCallLogCachedNameLikeSelection(): String = "${CallLog.Calls.CACHED_NAME} LIKE ? ESCAPE '\\'"
+
+internal fun buildCallLogNumberLikeSelection(): String = "${CallLog.Calls.NUMBER} LIKE ? ESCAPE '\\'"
+
+internal fun buildCallLogLikeArg(value: String): String = "%${escapeCallLogSqlLikeLiteral(value)}%"
 
 class CallLogHandler private constructor(
   private val appContext: Context,

@@ -218,8 +218,8 @@ vi.mock("./browser-tool.runtime.js", () => {
   };
 });
 
-import { __testing as browserToolActionsTesting } from "./browser-tool.actions.js";
-import { __testing as browserToolTesting, createBrowserTool } from "./browser-tool.js";
+import { testing as browserToolActionsTesting } from "./browser-tool.actions.js";
+import { testing as browserToolTesting, createBrowserTool } from "./browser-tool.js";
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "./browser/constants.js";
 
 function mockSingleBrowserProxyNode() {

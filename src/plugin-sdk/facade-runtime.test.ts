@@ -10,7 +10,7 @@ import {
   throwForBundledPluginPublicSurfaceAccess,
 } from "./facade-activation-check.runtime.js";
 import {
-  __testing,
+  testing,
   listImportedBundledPluginFacadeIds,
   loadBundledPluginPublicSurfaceModuleSync,
   resetFacadeRuntimeStateForTest,
@@ -117,7 +117,7 @@ describe("plugin-sdk facade runtime", () => {
     const overrideB = createBundledPluginDir("openclaw-facade-runtime-b-", "override-b");
 
     useBundledPluginDirOverrideForTest(overrideA);
-    const fromA = __testing.resolveFacadeModuleLocation({
+    const fromA = testing.resolveFacadeModuleLocation({
       dirName: "demo",
       artifactBasename: "api.js",
     });
@@ -127,7 +127,7 @@ describe("plugin-sdk facade runtime", () => {
     });
 
     useBundledPluginDirOverrideForTest(overrideB);
-    const fromB = __testing.resolveFacadeModuleLocation({
+    const fromB = testing.resolveFacadeModuleLocation({
       dirName: "demo",
       artifactBasename: "api.js",
     });
@@ -141,7 +141,7 @@ describe("plugin-sdk facade runtime", () => {
     const overrideDir = createTrustedBundledFixtureRoot("openclaw-facade-runtime-empty-");
     useBundledPluginDirOverrideForTest(overrideDir);
 
-    const resolved = __testing.resolveFacadeModuleLocation({
+    const resolved = testing.resolveFacadeModuleLocation({
       dirName: "browser",
       artifactBasename: "browser-maintenance.js",
     });
@@ -155,12 +155,12 @@ describe("plugin-sdk facade runtime", () => {
   it("does not fall back to package source surfaces when bundled plugins are disabled", () => {
     process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-    __testing.setFacadeActivationCheckRuntimeForTest({
+    testing.setFacadeActivationCheckRuntimeForTest({
       resolveRegistryPluginModuleLocation: () => null,
     } as never);
 
     expect(
-      __testing.resolveFacadeModuleLocation({
+      testing.resolveFacadeModuleLocation({
         dirName: "browser",
         artifactBasename: "browser-maintenance.js",
       }),
@@ -176,12 +176,12 @@ describe("plugin-sdk facade runtime", () => {
     };
     const loader = vi.fn(() => ({ marker: "identity-check" }));
 
-    const first = __testing.loadFacadeModuleAtLocationSync<{ marker: string }>({
+    const first = testing.loadFacadeModuleAtLocationSync<{ marker: string }>({
       location,
       trackedPluginId: "demo",
       loadModule: loader,
     });
-    const second = __testing.loadFacadeModuleAtLocationSync<{ marker: string }>({
+    const second = testing.loadFacadeModuleAtLocationSync<{ marker: string }>({
       location,
       trackedPluginId: "demo",
       loadModule: loader,
@@ -200,7 +200,7 @@ describe("plugin-sdk facade runtime", () => {
     };
     let reentered: { marker?: string } | undefined;
     const loader = vi.fn(() => {
-      reentered = __testing.loadFacadeModuleAtLocationSync<{ marker?: string }>({
+      reentered = testing.loadFacadeModuleAtLocationSync<{ marker?: string }>({
         location,
         trackedPluginId: "demo",
         loadModule: loader,
@@ -208,7 +208,7 @@ describe("plugin-sdk facade runtime", () => {
       return { marker: "circular-ok" };
     });
 
-    const loaded = __testing.loadFacadeModuleAtLocationSync<{ marker: string }>({
+    const loaded = testing.loadFacadeModuleAtLocationSync<{ marker: string }>({
       location,
       trackedPluginId: "demo",
       loadModule: loader,
@@ -229,10 +229,10 @@ describe("plugin-sdk facade runtime", () => {
     const reentryMarkers: Array<string | undefined> = [];
     const loader = vi.fn(() => ({ marker: "post-load-ok" }));
 
-    const loaded = __testing.loadFacadeModuleAtLocationSync<{ marker: string }>({
+    const loaded = testing.loadFacadeModuleAtLocationSync<{ marker: string }>({
       location,
       trackedPluginId: () => {
-        const reentered = __testing.loadFacadeModuleAtLocationSync<{ marker?: string }>({
+        const reentered = testing.loadFacadeModuleAtLocationSync<{ marker?: string }>({
           location,
           trackedPluginId: "demo",
           loadModule: loader,
@@ -347,7 +347,7 @@ describe("plugin-sdk facade runtime", () => {
     };
 
     expect(access.allowed).toBe(true);
-    const loaded = __testing.loadFacadeModuleAtLocationSync<{ marker: string }>({
+    const loaded = testing.loadFacadeModuleAtLocationSync<{ marker: string }>({
       location,
       trackedPluginId: "discord",
       loadModule: loader,
@@ -387,7 +387,7 @@ describe("plugin-sdk facade runtime", () => {
     );
 
     expect(
-      __testing.resolveRegistryPluginModuleLocationFromRegistry({
+      testing.resolveRegistryPluginModuleLocationFromRegistry({
         registry: [
           {
             id: "line",
@@ -437,7 +437,7 @@ describe("plugin-sdk facade runtime", () => {
     );
 
     expect(
-      __testing.resolveRegistryPluginModuleLocationFromRegistry({
+      testing.resolveRegistryPluginModuleLocationFromRegistry({
         registry: [
           {
             id: "line",
@@ -485,7 +485,7 @@ describe("plugin-sdk facade runtime", () => {
     );
 
     expect(
-      __testing.resolveRegistryPluginModuleLocationFromRegistry({
+      testing.resolveRegistryPluginModuleLocationFromRegistry({
         registry: [
           {
             id: "line",

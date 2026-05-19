@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import * as activationCheckRuntime from "./facade-activation-check.runtime.js";
 import {
-  __testing as facadeRuntimeTesting,
+  testing as facadeRuntimeTesting,
   resetFacadeRuntimeStateForTest,
 } from "./facade-runtime.js";
 import { listQaRunnerCliContributions } from "./qa-runner-runtime.js";

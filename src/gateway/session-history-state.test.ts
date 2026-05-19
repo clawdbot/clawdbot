@@ -39,7 +39,7 @@ describe("SessionHistorySseState", () => {
           state.snapshot().messages[0] as {
             __openclaw?: { seq?: number };
           }
-        ).__openclaw?.seq,
+        )["__openclaw"]?.seq,
       ).toBe(2);
 
       const appended = state.appendInlineMessage({
@@ -74,7 +74,7 @@ describe("SessionHistorySseState", () => {
     });
 
     expect(snapshot.history.items).toBe(snapshot.history.messages);
-    expect(snapshot.history.messages[0]?.__openclaw?.seq).toBe(2);
+    expect(snapshot.history.messages[0]?.["__openclaw"]?.seq).toBe(2);
     expect(snapshot.rawTranscriptSeq).toBe(2);
   });
 
@@ -99,7 +99,7 @@ describe("SessionHistorySseState", () => {
     });
 
     expect(appended?.messageSeq).toBe(9);
-    expect(state.snapshot().messages.at(-1)?.__openclaw?.seq).toBe(9);
+    expect(state.snapshot().messages.at(-1)?.["__openclaw"]?.seq).toBe(9);
   });
 
   test("requests refresh when inline TTS supplement merges into an existing assistant message", () => {
@@ -179,7 +179,7 @@ describe("SessionHistorySseState", () => {
 
     expect(appended).toEqual({ shouldRefresh: true });
     expect(state.snapshot().messages).toHaveLength(1);
-    expect(state.snapshot().messages.at(-1)?.__openclaw?.seq).toBe(5);
+    expect(state.snapshot().messages.at(-1)?.["__openclaw"]?.seq).toBe(5);
   });
 
   test("marks bounded tail snapshots as having older history", () => {
@@ -230,12 +230,12 @@ describe("SessionHistorySseState", () => {
         limit: 1,
       });
 
-      expect(state.snapshot().messages[0]?.__openclaw?.seq).toBe(7);
+      expect(state.snapshot().messages[0]?.["__openclaw"]?.seq).toBe(7);
       const refreshed = await state.refreshAsync();
 
       expect(refreshed.hasMore).toBe(true);
       expect(refreshed.nextCursor).toBe("8");
-      expect(refreshed.messages[0]?.__openclaw?.seq).toBe(8);
+      expect(refreshed.messages[0]?.["__openclaw"]?.seq).toBe(8);
       expect(tailReadSpy).toHaveBeenCalledTimes(1);
       expect(fullReadSpy).not.toHaveBeenCalled();
     } finally {

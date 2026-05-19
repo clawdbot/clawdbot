@@ -228,7 +228,11 @@ export type RunEmbeddedPiAgentParams = {
   allowTransientCooldownProbe?: boolean;
   suppressNextUserMessagePersistence?: boolean;
   suppressTranscriptOnlyAssistantPersistence?: boolean;
+  suppressAssistantErrorPersistence?: boolean;
   onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;
+  onAssistantErrorMessagePersisted?: (
+    message: Extract<AgentMessage, { role: "assistant" }>,
+  ) => void;
   /**
    * Dispose bundled MCP runtimes when the overall run ends instead of preserving
    * the session-scoped cache. Intended for one-shot local CLI runs that must

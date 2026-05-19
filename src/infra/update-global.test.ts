@@ -148,7 +148,8 @@ describe("update global helpers", () => {
     expect(defaultEnv?.COREPACK_ENABLE_DOWNLOAD_PROMPT).toBe("0");
     expect(defaultEnv?.NPM_CONFIG_BEFORE).toBe("");
     expect(defaultEnv?.npm_config_before).toBe("");
-    expect(defaultEnv?.["npm_config_min-release-age"]).toBe("0");
+    expect(defaultEnv?.["npm_config_min-release-age"]).toBe("");
+    expect(defaultEnv?.npm_config_min_release_age).toBe("0");
 
     const explicitEnv = await createGlobalInstallEnv({
       COREPACK_ENABLE_DOWNLOAD_PROMPT: "1",

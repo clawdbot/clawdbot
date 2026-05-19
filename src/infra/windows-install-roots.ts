@@ -233,7 +233,7 @@ export function getWindowsProgramFilesRoots(
   return result;
 }
 
-export function _resetWindowsInstallRootsForTests(
+export function resetWindowsInstallRootsForTests(
   overrides: WindowsInstallRootsTestOverrides = {},
 ): void {
   queryRegistryValueFn = overrides.queryRegistryValue ?? defaultQueryRegistryValue;
@@ -241,7 +241,7 @@ export function _resetWindowsInstallRootsForTests(
   cachedProcessInstallRoots = null;
 }
 
-export const _private = {
+export const privateTestApi = {
   getWindowsRegExeCandidates,
   locateWindowsRegExe,
 };

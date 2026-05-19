@@ -1,11 +1,12 @@
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildFileEntry,
   buildMultimodalChunkForIndexing,
   chunkMarkdown,
+  ensureDir,
   isMemoryPath,
   listMemoryFiles,
   normalizeExtraMemoryPaths,
@@ -32,6 +33,10 @@ afterAll(() => {
   if (sharedTempRoot) {
     fsSync.rmSync(sharedTempRoot, { recursive: true, force: true });
   }
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 function setupTempDirLifecycle(prefix: string): () => string {
@@ -76,6 +81,17 @@ const multimodal: MemoryMultimodalSettings = {
 
 describe("memory host SDK package internals", () => {
   const getTmpDir = setupTempDirLifecycle("memory-package-");
+
+  it("propagates directory creation failures", () => {
+    const mkdirError = new Error("disk full");
+    const targetDir = path.join(getTmpDir(), "blocked");
+    const mkdirSync = vi.spyOn(fsSync, "mkdirSync").mockImplementation(() => {
+      throw mkdirError;
+    });
+
+    expect(() => ensureDir(targetDir)).toThrow(mkdirError);
+    expect(mkdirSync).toHaveBeenCalledWith(targetDir, { recursive: true });
+  });
 
   it("normalizes additional memory paths", () => {
     const workspaceDir = path.join(os.tmpdir(), "memory-test-workspace");

@@ -58,6 +58,9 @@ vi.mock("./message-handler/dispatch.js", () => ({
 
 let createSlackMessageHandler: typeof import("./message-handler.js").createSlackMessageHandler;
 let SlackRetryableInboundError: typeof import("./message-handler.js").SlackRetryableInboundError;
+let clearSlackInboundDeliveryStateForTest: typeof import("./inbound-delivery-state.js").clearSlackInboundDeliveryStateForTest;
+let clearSlackRuntime: typeof import("../runtime.js").clearSlackRuntime;
+let setSlackRuntime: typeof import("../runtime.js").setSlackRuntime;
 
 function createMarkMessageSeen() {
   const seen = new Set<string>();
@@ -137,11 +140,15 @@ describe("createSlackMessageHandler app_mention race handling", () => {
   beforeAll(async () => {
     ({ createSlackMessageHandler, SlackRetryableInboundError } =
       await import("./message-handler.js"));
+    ({ clearSlackInboundDeliveryStateForTest } = await import("./inbound-delivery-state.js"));
+    ({ clearSlackRuntime, setSlackRuntime } = await import("../runtime.js"));
   });
 
   beforeEach(() => {
     prepareSlackMessageMock.mockReset();
     dispatchPreparedSlackMessageMock.mockReset();
+    clearSlackInboundDeliveryStateForTest();
+    clearSlackRuntime();
   });
 
   it("allows a single app_mention retry when message event was dropped before dispatch", async () => {
@@ -228,6 +235,39 @@ describe("createSlackMessageHandler app_mention race handling", () => {
     );
     await sendMessageEvent(handler, "1700000000.000300");
 
+    expect(prepareSlackMessageMock).toHaveBeenCalledTimes(1);
+    expect(dispatchPreparedSlackMessageMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("dedupes delayed app_mention replays after in-memory seen state is gone", async () => {
+    const stored = new Map<string, unknown>();
+    const register = vi.fn(async (key: string, value: unknown) => {
+      stored.set(key, value);
+    });
+    const lookup = vi.fn(async (key: string) => stored.get(key));
+    setSlackRuntime({
+      state: {
+        openKeyedStore: vi.fn(() => ({
+          register,
+          lookup,
+          consume: vi.fn(),
+          delete: vi.fn(),
+          entries: vi.fn(),
+          clear: vi.fn(),
+        })),
+      },
+      logging: { getChildLogger: () => ({ warn: vi.fn() }) },
+    } as never);
+    prepareSlackMessageMock.mockResolvedValue({ ctxPayload: {} });
+
+    await sendMessageEvent(createTestHandler(), "1700000000.000350");
+    clearSlackInboundDeliveryStateForTest();
+    await sendMentionEvent(createTestHandler(), "1700000000.000350");
+
+    expect(register).toHaveBeenCalledWith("default:C1:1700000000.000350", {
+      deliveredAt: expect.any(Number),
+    });
+    expect(lookup).toHaveBeenCalledWith("default:C1:1700000000.000350");
     expect(prepareSlackMessageMock).toHaveBeenCalledTimes(1);
     expect(dispatchPreparedSlackMessageMock).toHaveBeenCalledTimes(1);
   });

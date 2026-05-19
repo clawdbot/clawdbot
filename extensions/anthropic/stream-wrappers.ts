@@ -221,7 +221,8 @@ export function wrapAnthropicProviderStream(
   );
 }
 
-export const __testing = {
+export const testing = {
   log,
   stripTrailingAssistantPrefillWhenThinking: stripTrailingAnthropicAssistantPrefillWhenThinking,
 };
+export { testing as __testing };

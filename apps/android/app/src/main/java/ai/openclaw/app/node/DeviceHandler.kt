@@ -28,6 +28,7 @@ class DeviceHandler(
   private val appContext: Context,
   private val smsEnabled: Boolean = SensitiveFeatureConfig.smsEnabled,
   private val callLogEnabled: Boolean = SensitiveFeatureConfig.callLogEnabled,
+  private val photosEnabled: Boolean = SensitiveFeatureConfig.photosEnabled,
 ) {
   companion object {
     internal fun hasAnySmsCapability(
@@ -150,7 +151,9 @@ class DeviceHandler(
     val smsReadGranted = hasPermission(Manifest.permission.READ_SMS)
     val notificationAccess = DeviceNotificationListenerService.isAccessEnabled(appContext)
     val photosGranted =
-      if (Build.VERSION.SDK_INT >= 33) {
+      if (!photosEnabled) {
+        false
+      } else if (Build.VERSION.SDK_INT >= 33) {
         hasPermission(Manifest.permission.READ_MEDIA_IMAGES)
       } else {
         hasPermission(Manifest.permission.READ_EXTERNAL_STORAGE)
@@ -248,7 +251,7 @@ class DeviceHandler(
             "photos",
             permissionStateJson(
               granted = photosGranted,
-              promptableWhenDenied = true,
+              promptableWhenDenied = photosEnabled,
             ),
           )
           put(

@@ -30,6 +30,10 @@ type ReloadRule = {
   actions?: ReloadAction[];
 };
 
+export type ConfigReloadMetadata = {
+  kind: ReloadRule["kind"];
+};
+
 type ReloadAction =
   | "reload-hooks"
   | "restart-gmail-watcher"
@@ -220,6 +224,13 @@ function matchRule(path: string): ReloadRule | null {
     }
   }
   return null;
+}
+
+export function resolveConfigReloadMetadata(path: string): ConfigReloadMetadata {
+  if (isPluginInstallTimestampPath(path)) {
+    return { kind: "none" };
+  }
+  return { kind: matchRule(path)?.kind ?? "restart" };
 }
 
 function isPluginInstallTimestampPath(path: string): boolean {

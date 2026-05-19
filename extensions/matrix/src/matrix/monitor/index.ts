@@ -110,7 +110,7 @@ function resolveMatrixPreviewToolProgressEnabled(streaming: MatrixConfig["stream
   );
 }
 
-export const __testing = {
+export const testing = {
   resolveMatrixPreviewToolProgress,
   resolveMatrixPreviewToolProgressEnabled,
   resolveMatrixStreamingMode,
@@ -537,3 +537,4 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     throw err;
   }
 }
+export { testing as __testing };

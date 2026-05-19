@@ -25,11 +25,11 @@ import {
   resolveConfiguredMediaMaxBytes,
   resolveGeneratedMediaMaxBytes,
 } from "../../media/configured-max-bytes.js";
-import { getImageMetadata } from "../../media/image-ops.js";
 import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
 } from "../../media/media-reference.js";
+import { getImageMetadata } from "../../media/media-services.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { loadWebMedia } from "../../media/web-media.js";
 import { resolveUserPath } from "../../utils.js";
@@ -819,15 +819,16 @@ export function createImageGenerateTool(options?: {
       const effectiveCfg =
         applyImageGenerationModelConfigDefaults(cfg, imageGenerationModelConfig) ?? cfg;
       const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
+      const prompt = readStringParam(params, "prompt", { required: true });
 
       const duplicateGuardResult = createImageGenerateDuplicateGuardResult(
         options?.agentSessionKey,
+        { prompt },
       );
       if (duplicateGuardResult) {
         return duplicateGuardResult;
       }
 
-      const prompt = readStringParam(params, "prompt", { required: true });
       const imageInputs = normalizeReferenceImages(params);
       const model = readStringParam(params, "model");
       const filename = readStringParam(params, "filename");

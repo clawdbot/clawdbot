@@ -599,6 +599,7 @@ async function collectNpmResolvedManagedNpmRootPeerDependencyPins(params: {
       timeoutMs: Math.max(params.timeoutMs ?? 300_000, 300_000),
       env: createSafeNpmInstallEnv(process.env, {
         legacyPeerDeps: false,
+        npmConfigCwd: tempRoot,
         packageLock: true,
         quiet: true,
       }),
@@ -614,6 +615,7 @@ async function collectNpmResolvedManagedNpmRootPeerDependencyPins(params: {
           ...npmPlanOptions,
           env: createSafeNpmInstallEnv(process.env, {
             legacyPeerDeps: true,
+            npmConfigCwd: tempRoot,
             packageLock: true,
             quiet: true,
           }),
@@ -815,6 +817,7 @@ export async function repairManagedNpmRootOpenClawPeer(params: {
       timeoutMs: Math.max(params.timeoutMs ?? 300_000, 300_000),
       env: createSafeNpmInstallEnv(process.env, {
         legacyPeerDeps: true,
+        npmConfigCwd: params.npmRoot,
         packageLock: true,
         quiet: true,
       }),

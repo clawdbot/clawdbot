@@ -160,7 +160,7 @@ describe("cli session history", () => {
         role: "user",
       });
       expect(String(messages[0]?.content)).toContain("[Thu 2026-03-26 16:29 GMT] hi");
-      expectFields(messages[0]?.__openclaw, {
+      expectFields(messages[0]?.["__openclaw"], {
         importedFrom: "claude-cli",
         externalId: "user-1",
         cliSessionId: sessionId,
@@ -176,7 +176,7 @@ describe("cli session history", () => {
         output: 7,
         cacheRead: 22,
       });
-      expectFields(messages[1]?.__openclaw, {
+      expectFields(messages[1]?.["__openclaw"], {
         importedFrom: "claude-cli",
         externalId: "assistant-1",
         cliSessionId: sessionId,
@@ -333,7 +333,8 @@ describe("cli session history", () => {
         const record = readRecord(message);
         return (
           record.role === "user" &&
-          (record.__openclaw as { cliSessionId?: unknown } | undefined)?.cliSessionId === sessionId
+          (record["__openclaw"] as { cliSessionId?: unknown } | undefined)?.cliSessionId ===
+            sessionId
         );
       });
       if (!importedUser) {

@@ -229,6 +229,33 @@ describe("channel registry pinning", () => {
     expect(adapter).toBe(outboundAdapter);
   });
 
+  it("loadChannelOutboundAdapter falls back to active registry when pinned setup entry cannot send", async () => {
+    const outboundAdapter = { sendText: async () => ({ messageId: "1" }) };
+    const startup = createEmptyPluginRegistry();
+    startup.channels = [
+      {
+        pluginId: "discord",
+        plugin: { id: "discord", meta: {} },
+        source: "setup",
+      },
+    ] as never;
+    const replacement = createEmptyPluginRegistry();
+    replacement.channels = [
+      {
+        pluginId: "discord",
+        plugin: { id: "discord", meta: {}, outbound: outboundAdapter },
+        source: "runtime",
+      },
+    ] as never;
+
+    setActivePluginRegistry(startup);
+    pinActivePluginChannelRegistry(startup);
+    setActivePluginRegistry(replacement);
+
+    const adapter = await loadChannelOutboundAdapter("discord");
+    expect(adapter).toBe(outboundAdapter);
+  });
+
   it("keeps pinned channel registry agent-event subscriptions live after active registry replacement", () => {
     const observed: string[] = [];
     const startup = createEmptyPluginRegistry();

@@ -46,10 +46,7 @@ struct GeneralSettings: View {
                     self.connectionPage
                 }
             }
-            .frame(maxWidth: 760, alignment: .leading)
-            .padding(.bottom, 16)
-            .padding(.leading, 18)
-            .padding(.trailing, SettingsLayout.scrollbarGutter)
+            .settingsDetailContent()
         }
         .onAppear {
             self.updateActiveWork(active: self.isActive)

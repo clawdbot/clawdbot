@@ -7,7 +7,7 @@ import {
 } from "../config/config.js";
 import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";
 import {
-  __testing,
+  testing,
   consumeGatewaySigusr1RestartAuthorization,
   emitGatewayRestart,
   isGatewaySigusr1RestartExternallyAllowed,
@@ -92,7 +92,7 @@ function withRestartSupervisorEnabled(fn: () => void): void {
 describe("infra runtime", () => {
   function setupRestartSignalSuite() {
     beforeEach(() => {
-      __testing.resetSigusr1State();
+      testing.resetSigusr1State();
       relaunchGatewayScheduledTaskMock.mockReset();
       relaunchGatewayScheduledTaskMock.mockReturnValue({ ok: true, method: "schtasks" });
       cleanStaleGatewayProcessesSyncMock.mockReset();
@@ -104,7 +104,7 @@ describe("infra runtime", () => {
     });
 
     afterEach(async () => {
-      __testing.resetSigusr1State();
+      testing.resetSigusr1State();
       clearRuntimeConfigSnapshot();
       clearConfigCache();
       await vi.runOnlyPendingTimersAsync();

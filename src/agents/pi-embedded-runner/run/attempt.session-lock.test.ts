@@ -325,11 +325,11 @@ describe("embedded attempt session lock lifecycle", () => {
       },
     });
 
-    await session._processAgentEvent({ type: "message_update" });
-    await session._processAgentEvent({ type: "tool_execution_end" });
-    await session._processAgentEvent({ type: "message_end" });
-    await session._processAgentEvent({ type: "agent_end" });
-    await session._processAgentEvent({});
+    await session["_processAgentEvent"]({ type: "message_update" });
+    await session["_processAgentEvent"]({ type: "tool_execution_end" });
+    await session["_processAgentEvent"]({ type: "message_end" });
+    await session["_processAgentEvent"]({ type: "agent_end" });
+    await session["_processAgentEvent"]({});
 
     expect(processed).toEqual([
       "message_update",
@@ -418,7 +418,7 @@ describe("embedded attempt session lock lifecycle", () => {
     await session.agent.beforeToolCall();
 
     expect(events).toEqual(["lock", "tool_call"]);
-    expect(session._extensionRunner.hasHandlers).not.toHaveBeenCalledWith("tool_call");
+    expect(session["_extensionRunner"].hasHandlers).not.toHaveBeenCalledWith("tool_call");
   });
 
   it("drains queued session events before locking a tool-call extension hook", async () => {
@@ -436,7 +436,7 @@ describe("embedded attempt session lock lifecycle", () => {
       agent: {
         beforeToolCall: vi.fn(async () => {
           events.push("hook-start");
-          await session._agentEventQueue;
+          await session["_agentEventQueue"];
           events.push("hook-end");
         }),
       },

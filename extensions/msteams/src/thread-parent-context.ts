@@ -153,7 +153,7 @@ export function markParentContextInjected(sessionKey: string, parentId: string):
 }
 
 // Exported for test isolation.
-export function _resetThreadParentContextCachesForTest(): void {
+export function resetThreadParentContextCachesForTest(): void {
   parentCache.clear();
   injectedParents.clear();
 }

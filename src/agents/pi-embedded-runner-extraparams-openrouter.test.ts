@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { runExtraParamsPayloadCase } from "./pi-embedded-runner-extraparams.test-support.js";
 import {
   applyExtraParamsToAgent,
-  __testing as extraParamsTesting,
+  testing as extraParamsTesting,
 } from "./pi-embedded-runner/extra-params.js";
 import {
   createOpenRouterSystemCacheWrapper,

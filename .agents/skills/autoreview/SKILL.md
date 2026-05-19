@@ -51,7 +51,11 @@ git fetch origin
 codex review --base origin/main
 ```
 
-Do not pass an inline prompt with `--base`; some CLI versions reject `--base` + `[PROMPT]` even though help text is ambiguous. If custom instructions are needed, prefer stdin prompt form (`codex review --base <ref> -`) as used by the helper.
+Do not pass any prompt with `--base`. Some Codex CLI versions reject both inline
+and stdin prompt forms, including the helper's `codex review --base <ref> -`,
+with `--base <BRANCH> cannot be used with [PROMPT]`. If the helper hits this
+error, run plain `codex review --base <ref>` and report that the helper prompt
+injection was skipped.
 
 If an open PR exists, use its actual base:
 
@@ -108,6 +112,7 @@ The helper:
 - chooses dirty `--uncommitted` first
 - otherwise uses current PR base if `gh pr view` works
 - otherwise uses `origin/main` for non-main branches
+- auto-runs `PNPM_CONFIG_PM_ON_FAIL=ignore PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false PNPM_CONFIG_OFFLINE=true pnpm run check` in parallel when a repo has `package.json`, `pnpm-lock.yaml`, `node_modules`, and a `check` script; disable with `AUTOREVIEW_AUTO_TESTS=0`
 - use `--mode commit --commit <ref>` for already-committed work, especially clean `main` after landing
 - should be left in `--mode auto` or forced to `--mode branch` for PR/branch work; do not force `--mode local` after committing
 - supports `--reviewer codex|claude|pi|opencode|droid|copilot|auto`; `auto` means Codex first
@@ -117,6 +122,7 @@ The helper:
 - supports `--dry-run`, `--parallel-tests`, and commit refs
 - runs nested review with `--dangerously-bypass-approvals-and-sandbox --sandbox danger-full-access` by default
 - injects maintainer-only OpenClaw validation policy into native Codex review when `OPENCLAW_TESTBOX=1` or `AUTOREVIEW_OPENCLAW_MAINTAINER_VALIDATION=1`, so local memory-heavy Node/Vitest checks are avoided in favor of Crabbox/Testbox proof
+- branch mode may fail on Codex CLI versions that reject `--base` plus the helper's stdin prompt; on that exact parser error, rerun plain `codex review --base <ref>` instead of falling back to a non-Codex reviewer
 - keeps accepting `--full-access`; use `--no-yolo` or `AUTOREVIEW_YOLO=0` to opt out
 - still accepts legacy `CODEX_REVIEW_*` env vars when the matching `AUTOREVIEW_*` var is unset
 - prints `autoreview clean: no accepted/actionable findings reported` when the selected review command exits 0
@@ -130,3 +136,10 @@ Include:
 - the clean review result from the final helper/review run, or why a remaining finding was consciously rejected
 
 Do not run another Codex review solely to improve the final report wording. If the final helper run exited 0 and produced no accepted/actionable findings, report that exact run as clean.
+
+## PR / CI Closeout
+
+- Prefer direct run/job APIs after CI starts: `gh run view <run-id> --json jobs`; use PR rollup only for final mergeability.
+- After rebase, compare `origin/main..HEAD`; drop CI-fix commits already upstream before pushing.
+- For prompt snapshot CI failures, prove/generate with Linux Node 24 before rerunning the failed job.
+- Update PR body once near the final head unless proof labels are missing or stale enough to block CI.

@@ -77,6 +77,7 @@ class InvokeDispatcher(
   private val smsFeatureEnabled: () -> Boolean,
   private val smsTelephonyAvailable: () -> Boolean,
   private val callLogAvailable: () -> Boolean,
+  private val photosAvailable: () -> Boolean,
   private val debugBuild: () -> Boolean,
   private val onCanvasA2uiPush: () -> Unit,
   private val onCanvasA2uiReset: () -> Unit,
@@ -323,6 +324,15 @@ class InvokeDispatcher(
           GatewaySession.InvokeResult.error(
             code = "CALL_LOG_UNAVAILABLE",
             message = "CALL_LOG_UNAVAILABLE: call log not available on this build",
+          )
+        }
+      InvokeCommandAvailability.PhotosAvailable ->
+        if (photosAvailable()) {
+          null
+        } else {
+          GatewaySession.InvokeResult.error(
+            code = "PHOTOS_UNAVAILABLE",
+            message = "PHOTOS_UNAVAILABLE: photos not available on this build",
           )
         }
       InvokeCommandAvailability.DebugBuild ->

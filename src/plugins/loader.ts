@@ -589,7 +589,7 @@ function resolvePreferredBuiltBundledRuntimeArtifact(params: {
   return { source, rootDir };
 }
 
-export const __testing = {
+export const testing = {
   buildPluginLoaderJitiOptions,
   buildPluginLoaderAliasMap,
   listPluginSdkAliasCandidates,
@@ -2927,3 +2927,4 @@ function resolveCliMetadataEntrySource(rootDir: string): string | null {
   }
   return null;
 }
+export { testing as __testing };

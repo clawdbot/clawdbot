@@ -188,7 +188,7 @@ async function callWrappedStream(
       modelDescriptor,
     );
     if (Object.keys(payload).length > 0) {
-      return { ...result, _capturedPayload: payload };
+      return { ...result, capturedPayload: payload };
     }
   }
 
@@ -234,7 +234,7 @@ function expectWrappedResultFields(result: unknown, fields: Record<string, unkno
 }
 
 function expectPayloadServiceTier(result: Record<string, unknown>, type: string) {
-  expectRecordFields(requireRecord(result._capturedPayload, "captured payload"), {
+  expectRecordFields(requireRecord(result.capturedPayload, "captured payload"), {
     serviceTier: { type },
   });
 }
@@ -633,7 +633,7 @@ describe("amazon-bedrock provider plugin", () => {
       const provider = await registerWithConfig(undefined);
       const result = await callWrappedStream(provider, NON_ANTHROPIC_MODEL, MODEL_DESCRIPTOR);
 
-      expect(result).not.toHaveProperty("_capturedPayload");
+      expect(result).not.toHaveProperty("capturedPayload");
       // The onPayload hook should not exist when no guardrail is configured
       expectWrappedResultFields(result, { cacheRetention: "none" });
     });
@@ -649,7 +649,7 @@ describe("amazon-bedrock provider plugin", () => {
       });
       const result = await callWrappedStream(provider, NON_ANTHROPIC_MODEL, MODEL_DESCRIPTOR);
 
-      expect(result._capturedPayload).toEqual({
+      expect(result.capturedPayload).toEqual({
         guardrailConfig: {
           guardrailIdentifier: "my-guardrail-id",
           guardrailVersion: "1",
@@ -668,7 +668,7 @@ describe("amazon-bedrock provider plugin", () => {
       });
       const result = await callWrappedStream(provider, NON_ANTHROPIC_MODEL, MODEL_DESCRIPTOR);
 
-      expect(result._capturedPayload).toEqual({
+      expect(result.capturedPayload).toEqual({
         guardrailConfig: {
           guardrailIdentifier: "abc123",
           guardrailVersion: "DRAFT",
@@ -688,7 +688,7 @@ describe("amazon-bedrock provider plugin", () => {
       const result = await callWrappedStream(provider, ANTHROPIC_MODEL, ANTHROPIC_MODEL_DESCRIPTOR);
 
       // Anthropic models should get guardrailConfig
-      expect(result._capturedPayload).toEqual({
+      expect(result.capturedPayload).toEqual({
         guardrailConfig: {
           guardrailIdentifier: "guardrail-anthropic",
           guardrailVersion: "2",
@@ -710,7 +710,7 @@ describe("amazon-bedrock provider plugin", () => {
       const result = await callWrappedStream(provider, NON_ANTHROPIC_MODEL, MODEL_DESCRIPTOR);
 
       // Non-Anthropic models should get guardrailConfig
-      expect(result._capturedPayload).toEqual({
+      expect(result.capturedPayload).toEqual({
         guardrailConfig: {
           guardrailIdentifier: "guardrail-nova",
           guardrailVersion: "3",
@@ -734,7 +734,7 @@ describe("amazon-bedrock provider plugin", () => {
         }),
       );
 
-      expect(result._capturedPayload).toEqual({
+      expect(result.capturedPayload).toEqual({
         guardrailConfig: {
           guardrailIdentifier: "live-guardrail",
           guardrailVersion: "7",
@@ -756,7 +756,7 @@ describe("amazon-bedrock provider plugin", () => {
         runtimePluginConfig(undefined),
       );
 
-      expect(result).not.toHaveProperty("_capturedPayload");
+      expect(result).not.toHaveProperty("capturedPayload");
       expectWrappedResultFields(result, { cacheRetention: "none" });
     });
   });
@@ -815,7 +815,7 @@ describe("amazon-bedrock provider plugin", () => {
         runtimePluginConfig(undefined),
         { serviceTier: "not-a-tier" },
       );
-      expect(result).not.toHaveProperty("_capturedPayload");
+      expect(result).not.toHaveProperty("capturedPayload");
     });
 
     it("does not overwrite caller-provided serviceTier in payload", async () => {
@@ -840,7 +840,7 @@ describe("amazon-bedrock provider plugin", () => {
         runtimePluginConfig(undefined),
         { serviceTier: "flex" },
       );
-      expect(result).not.toHaveProperty("_capturedPayload");
+      expect(result).not.toHaveProperty("capturedPayload");
     });
   });
 

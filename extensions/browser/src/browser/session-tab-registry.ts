@@ -308,11 +308,11 @@ export async function sweepTrackedBrowserTabs(params: {
   });
 }
 
-export function __resetTrackedSessionBrowserTabsForTests(): void {
+export function resetTrackedSessionBrowserTabsForTests(): void {
   trackedTabsBySession.clear();
 }
 
-export function __countTrackedSessionBrowserTabsForTests(sessionKey?: string): number {
+export function countTrackedSessionBrowserTabsForTests(sessionKey?: string): number {
   if (typeof sessionKey === "string" && sessionKey.trim()) {
     return trackedTabsBySession.get(normalizeSessionKey(sessionKey))?.size ?? 0;
   }

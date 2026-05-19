@@ -71,7 +71,7 @@ const agentsHandlerDeps = {
   isWorkspaceSetupCompleted,
 };
 
-export const __testing = {
+export const testing = {
   setDepsForTests(
     overrides: Partial<{
       root: typeof root;
@@ -865,3 +865,4 @@ export const agentsHandlers: GatewayRequestHandlers = {
     );
   },
 };
+export { testing as __testing };

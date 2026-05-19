@@ -911,7 +911,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
   });
 }
 
-export const __testing = {
+export const testing = {
   buildManagedDreamingCronJob,
   buildManagedDreamingPatch,
   isManagedDreamingJob,
@@ -930,3 +930,4 @@ export const __testing = {
     STARTUP_CRON_RETRY_MAX_ATTEMPTS,
   },
 };
+export { testing as __testing };

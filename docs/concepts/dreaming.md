@@ -107,6 +107,18 @@ Deep ranking uses six weighted base signals plus phase reinforcement:
 
 Light and REM phase hits add a small recency-decayed boost from `memory/.dreams/phase-signals.json`.
 
+## QA shadow trial report coverage
+
+QA Lab includes a report-only scenario for exploring how a future dreaming
+shadow trial could review a candidate memory before promotion. The scenario asks
+an agent to compare a baseline answer with an answer that can use the candidate
+memory, then write a local report with a verdict, reason, and risk flags.
+
+This coverage is intentionally scoped to QA. It verifies that the report artifact
+stays separate from `MEMORY.md` and that the agent does not claim the candidate
+was promoted. It does not add production shadow-trial behavior or change the
+deep-phase promotion engine.
+
 ## Scheduling
 
 When enabled, `memory-core` auto-manages one cron job for a full dreaming sweep. Each sweep runs phases in order: light → REM → deep.

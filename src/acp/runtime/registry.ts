@@ -109,7 +109,7 @@ export function requireAcpRuntimeBackend(id?: string): AcpRuntimeBackend {
   return backend;
 }
 
-export const __testing = {
+export const testing = {
   resetAcpRuntimeBackendsForTests() {
     ACP_BACKENDS_BY_ID.clear();
   },
@@ -117,3 +117,4 @@ export const __testing = {
     return resolveAcpRuntimeRegistryGlobalState();
   },
 };
+export { testing as __testing };

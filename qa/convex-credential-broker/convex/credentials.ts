@@ -175,7 +175,7 @@ async function readCredentialPayload(
   for (let index = 0; index < row.payload.chunkCount; index += 1) {
     const rows = await ctx.db
       .query("credential_payload_chunks")
-      .withIndex("by_credential_index", (q) => q.eq("credentialId", row._id).eq("index", index))
+      .withIndex("by_credential_index", (q) => q.eq("credentialId", row["_id"]).eq("index", index))
       .collect();
     const chunk = rows[0];
     if (!chunk) {
@@ -215,7 +215,7 @@ function toCredentialSummary(
   resolvedPayload?: unknown,
 ) {
   return {
-    credentialId: row._id,
+    credentialId: row["_id"],
     kind: row.kind,
     status: row.status,
     createdAtMs: row.createdAtMs,
@@ -293,8 +293,8 @@ function sortByLeastRecentlyLeasedThenId(
     if (left.lastLeasedAtMs !== right.lastLeasedAtMs) {
       return left.lastLeasedAtMs - right.lastLeasedAtMs;
     }
-    const leftId = String(left._id);
-    const rightId = String(right._id);
+    const leftId = String(left["_id"]);
+    const rightId = String(right["_id"]);
     return leftId.localeCompare(rightId);
   });
 }
@@ -312,7 +312,7 @@ function sortCredentialRowsForList(rows: CredentialSetRecord[]) {
     if (left.updatedAtMs !== right.updatedAtMs) {
       return right.updatedAtMs - left.updatedAtMs;
     }
-    return String(left._id).localeCompare(String(right._id));
+    return String(left["_id"]).localeCompare(String(right["_id"]));
   });
 }
 
@@ -385,7 +385,7 @@ export const acquireLease = internalMutation({
     const selected = availableRows[0];
     const leaseToken = crypto.randomUUID();
 
-    await ctx.db.patch(selected._id, {
+    await ctx.db.patch(selected["_id"], {
       lease: {
         ownerId: args.ownerId,
         actorRole: args.actorRole,
@@ -405,12 +405,12 @@ export const acquireLease = internalMutation({
       actorRole: args.actorRole,
       ownerId: args.ownerId,
       occurredAtMs: nowMs,
-      credentialId: selected._id,
+      credentialId: selected["_id"],
     });
 
     return {
       status: "ok",
-      credentialId: selected._id,
+      credentialId: selected["_id"],
       leaseToken,
       payload: selected.payload,
       leaseTtlMs,
@@ -662,7 +662,7 @@ export const disableCredentialSet = internalMutation({
         actorRole: "maintainer",
         actorId,
         occurredAtMs: nowMs,
-        credentialId: row._id,
+        credentialId: row["_id"],
         kind: row.kind,
         code: "LEASE_ACTIVE",
         message: "Credential is currently leased and cannot be disabled yet.",
@@ -689,7 +689,7 @@ export const disableCredentialSet = internalMutation({
       actorRole: "maintainer",
       actorId,
       occurredAtMs: nowMs,
-      credentialId: row._id,
+      credentialId: row["_id"],
       kind: row.kind,
     });
 
@@ -775,7 +775,7 @@ export const cleanupLeaseEvents = internalMutation({
       .take(EVENT_RETENTION_BATCH_SIZE);
 
     for (const row of staleRows) {
-      await ctx.db.delete(row._id);
+      await ctx.db.delete(row["_id"]);
     }
 
     if (staleRows.length === EVENT_RETENTION_BATCH_SIZE) {
@@ -800,7 +800,7 @@ export const cleanupAdminEvents = internalMutation({
       .take(EVENT_RETENTION_BATCH_SIZE);
 
     for (const row of staleRows) {
-      await ctx.db.delete(row._id);
+      await ctx.db.delete(row["_id"]);
     }
 
     if (staleRows.length === EVENT_RETENTION_BATCH_SIZE) {

@@ -11,7 +11,8 @@ import {
 } from "../../context-engine/registry.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { __testing as cliBackendsTesting } from "../cli-backends.js";
+import { clearMemoryPluginState, registerMemoryPromptSection } from "../../plugins/memory-state.js";
+import { testing as cliBackendsTesting } from "../cli-backends.js";
 import { hashCliSessionText } from "../cli-session.js";
 import { buildActiveImageGenerationTaskPromptContextForSession } from "../image-generation-task-status.js";
 import { buildActiveMusicGenerationTaskPromptContextForSession } from "../music-generation-task-status.js";
@@ -197,6 +198,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       getActiveMcpLoopbackRuntime: vi.fn(() => undefined),
       ensureMcpLoopbackServer: vi.fn(createTestMcpLoopbackServer),
       createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
+      resolveMcpLoopbackScopedTools: vi.fn(() => ({ agentId: "main", tools: [] })),
       resolveOpenClawReferencePaths: vi.fn(async () => ({ docsPath: null, sourcePath: null })),
     });
     mockGetGlobalHookRunner.mockReturnValue(null);
@@ -213,6 +215,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     mockBuildActiveImageGenerationTaskPromptContextForSession.mockReset();
     mockBuildActiveVideoGenerationTaskPromptContextForSession.mockReset();
     mockBuildActiveMusicGenerationTaskPromptContextForSession.mockReset();
+    clearMemoryPluginState();
     vi.unstubAllEnvs();
   });
 
@@ -982,6 +985,178 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       expect(context.preparedBackend.mcpConfigHash).toBeUndefined();
       expect(context.preparedBackend.env).toBeUndefined();
       expect(context.preparedBackend.backend.args).toEqual(["--print"]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses loopback-scoped tools when building bundled MCP CLI prompts", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      registerMemoryPromptSection(({ availableTools }) =>
+        availableTools.has("memory_search")
+          ? ["## Memory Recall", `tools=${[...availableTools].toSorted().join(",")}`, ""]
+          : [],
+      );
+      const getActiveMcpLoopbackRuntime = vi.fn(() => ({
+        port: 31783,
+        ownerToken: "owner-token",
+        nonOwnerToken: "non-owner-token",
+      }));
+      const ensureMcpLoopbackServer = vi.fn(createTestMcpLoopbackServer);
+      const createMcpLoopbackServerConfig = vi.fn(createTestMcpLoopbackServerConfig);
+      const resolveMcpLoopbackScopedTools = vi.fn(() => ({
+        agentId: "main",
+        tools: [
+          {
+            name: "memory_search",
+            label: "Memory Search",
+            description: "Search memory",
+            parameters: { type: "object", properties: {} },
+            execute: vi.fn(),
+          },
+        ],
+      }));
+      setCliRunnerPrepareTestDeps({
+        getActiveMcpLoopbackRuntime,
+        ensureMcpLoopbackServer,
+        createMcpLoopbackServerConfig,
+        resolveMcpLoopbackScopedTools,
+      });
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [
+          {
+            id: "native-cli",
+            pluginId: "native-plugin",
+            bundleMcp: true,
+            bundleMcpMode: "claude-config-file",
+            config: {
+              command: "native-cli",
+              args: ["--print"],
+              systemPromptArg: "--system-prompt",
+              systemPromptWhen: "first",
+              output: "text",
+              input: "arg",
+              sessionMode: "existing",
+            },
+          },
+        ],
+      });
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "native-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-loopback-prompt-tools",
+        config: createCliBackendConfig({ bundleMcp: true, systemPromptOverride: null }),
+        cliSessionBinding: {
+          sessionId: "cli-session",
+          promptToolNamesHash: "old-tool-surface",
+        },
+      });
+
+      expect(resolveMcpLoopbackScopedTools).toHaveBeenCalledWith({
+        cfg: expect.any(Object),
+        sessionKey: "agent:main:test",
+        messageProvider: undefined,
+        accountId: undefined,
+        inboundEventKind: undefined,
+        senderIsOwner: undefined,
+      });
+      expect(context.systemPrompt).toContain("## Memory Recall");
+      expect(context.systemPrompt).toContain("tools=memory_search");
+      expect(context.systemPromptReport.tools.entries.map((entry) => entry.name)).toEqual([
+        "memory_search",
+      ]);
+      expect(context.promptToolNamesHash).toBe(
+        hashCliSessionText(JSON.stringify(["memory_search"])),
+      );
+      expect(context.reusableCliSession).toEqual({ invalidatedReason: "system-prompt" });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not advertise loopback prompt tools when the runtime is unavailable", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      registerMemoryPromptSection(({ availableTools }) =>
+        availableTools.has("memory_search")
+          ? ["## Memory Recall", `tools=${[...availableTools].toSorted().join(",")}`, ""]
+          : [],
+      );
+      const getActiveMcpLoopbackRuntime = vi.fn(() => undefined);
+      const ensureMcpLoopbackServer = vi.fn(async () => {
+        throw new Error("loopback unavailable");
+      });
+      const createMcpLoopbackServerConfig = vi.fn(createTestMcpLoopbackServerConfig);
+      const resolveMcpLoopbackScopedTools = vi.fn(() => ({
+        agentId: "main",
+        tools: [
+          {
+            name: "memory_search",
+            label: "Memory Search",
+            description: "Search memory",
+            parameters: { type: "object", properties: {} },
+            execute: vi.fn(),
+          },
+        ],
+      }));
+      setCliRunnerPrepareTestDeps({
+        getActiveMcpLoopbackRuntime,
+        ensureMcpLoopbackServer,
+        createMcpLoopbackServerConfig,
+        resolveMcpLoopbackScopedTools,
+      });
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [
+          {
+            id: "native-cli",
+            pluginId: "native-plugin",
+            bundleMcp: true,
+            bundleMcpMode: "claude-config-file",
+            config: {
+              command: "native-cli",
+              args: ["--print"],
+              systemPromptArg: "--system-prompt",
+              systemPromptWhen: "first",
+              output: "text",
+              input: "arg",
+              sessionMode: "existing",
+            },
+          },
+        ],
+      });
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        provider: "native-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-loopback-prompt-tools-fallback",
+        config: createCliBackendConfig({ bundleMcp: true, systemPromptOverride: null }),
+      });
+
+      expect(ensureMcpLoopbackServer).toHaveBeenCalledTimes(1);
+      expect(getActiveMcpLoopbackRuntime).toHaveBeenCalledTimes(2);
+      expect(createMcpLoopbackServerConfig).not.toHaveBeenCalled();
+      expect(resolveMcpLoopbackScopedTools).not.toHaveBeenCalled();
+      expect(context.systemPrompt).not.toContain("## Memory Recall");
+      expect(context.systemPrompt).not.toContain("memory_search");
+      expect(context.systemPromptReport.tools.entries).toEqual([]);
+      expect(context.promptToolNamesHash).toBeUndefined();
+      expect(context.preparedBackend.env).toBeUndefined();
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

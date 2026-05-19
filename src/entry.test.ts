@@ -11,6 +11,7 @@ describe("entry root help fast path", () => {
         outputPrecomputedRootHelpTextCalls += 1;
         return true;
       },
+      loadRootHelpRenderOptionsForConfigSensitivePlugins: async () => null,
     });
 
     expect(handled).toBe(true);
@@ -24,11 +25,43 @@ describe("entry root help fast path", () => {
       outputRootHelp: () => {
         outputRootHelpCalls += 1;
       },
+      loadRootHelpRenderOptionsForConfigSensitivePlugins: async () => null,
       env: {},
     });
 
     expect(handled).toBe(true);
     expect(outputRootHelpCalls).toBe(1);
+  });
+
+  it("renders live root help when plugin config changes command descriptors", async () => {
+    let outputPrecomputedRootHelpTextCalls = 0;
+    const outputRootHelpOptions: unknown[] = [];
+    const liveOptions = {
+      config: {
+        plugins: {
+          slots: {
+            memory: "memory-lancedb",
+          },
+        },
+      },
+      env: {},
+    };
+
+    const handled = await tryHandleRootHelpFastPath(["node", "openclaw", "--help"], {
+      env: {},
+      outputPrecomputedRootHelpText: () => {
+        outputPrecomputedRootHelpTextCalls += 1;
+        return true;
+      },
+      outputRootHelp: (options) => {
+        outputRootHelpOptions.push(options);
+      },
+      loadRootHelpRenderOptionsForConfigSensitivePlugins: async () => liveOptions,
+    });
+
+    expect(handled).toBe(true);
+    expect(outputPrecomputedRootHelpTextCalls).toBe(0);
+    expect(outputRootHelpOptions).toEqual([liveOptions]);
   });
 
   it("ignores non-root help invocations", async () => {
@@ -38,6 +71,7 @@ describe("entry root help fast path", () => {
       outputRootHelp: () => {
         outputRootHelpCalls += 1;
       },
+      loadRootHelpRenderOptionsForConfigSensitivePlugins: async () => null,
       env: {},
     });
 
@@ -54,6 +88,7 @@ describe("entry root help fast path", () => {
         outputRootHelp: () => {
           outputRootHelpCalls += 1;
         },
+        loadRootHelpRenderOptionsForConfigSensitivePlugins: async () => null,
         env: {},
       },
     );

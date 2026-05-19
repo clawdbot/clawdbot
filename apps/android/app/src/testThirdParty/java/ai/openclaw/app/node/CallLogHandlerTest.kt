@@ -1,6 +1,7 @@
 package ai.openclaw.app.node
 
 import android.content.Context
+import android.provider.CallLog
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -244,6 +245,13 @@ class CallLogHandlerTest : NodeHandlerRobolectricTest() {
     assertTrue(result.ok)
     assertEquals(200, source.lastRequest?.limit)
     assertEquals(0, source.lastRequest?.offset)
+  }
+
+  @Test
+  fun callLogLikeFiltersEscapeWildcards() {
+    assertEquals("${CallLog.Calls.CACHED_NAME} LIKE ? ESCAPE '\\'", buildCallLogCachedNameLikeSelection())
+    assertEquals("${CallLog.Calls.NUMBER} LIKE ? ESCAPE '\\'", buildCallLogNumberLikeSelection())
+    assertEquals("%a\\%b\\_c\\\\d%", buildCallLogLikeArg("a%b_c\\d"))
   }
 
   @Test

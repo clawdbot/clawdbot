@@ -27,14 +27,14 @@ interface RefIndexLine {
   t: number;
 }
 
-let cache: Map<string, RefIndexEntry & { _createdAt: number }> | null = null;
+let cache: Map<string, RefIndexEntry & { createdAt: number }> | null = null;
 let totalLinesOnDisk = 0;
 
 function getRefIndexFile(): string {
   return path.join(getQQBotDataPath("data"), "ref-index.jsonl");
 }
 
-function loadFromFile(): Map<string, RefIndexEntry & { _createdAt: number }> {
+function loadFromFile(): Map<string, RefIndexEntry & { createdAt: number }> {
   if (cache !== null) {
     return cache;
   }
@@ -66,7 +66,7 @@ function loadFromFile(): Map<string, RefIndexEntry & { _createdAt: number }> {
           expired++;
           continue;
         }
-        cache.set(entry.k, { ...entry.v, _createdAt: entry.t });
+        cache.set(entry.k, { ...entry.v, createdAt: entry.t });
       } catch {}
     }
     debugLog(
@@ -123,7 +123,7 @@ function compactFile(): void {
             isBot: entry.isBot,
             attachments: entry.attachments,
           },
-          t: entry._createdAt,
+          t: entry.createdAt,
         }),
       );
     }
@@ -145,12 +145,12 @@ function evictIfNeeded(): void {
   }
   const now = Date.now();
   for (const [key, entry] of cache) {
-    if (now - entry._createdAt > TTL_MS) {
+    if (now - entry.createdAt > TTL_MS) {
       cache.delete(key);
     }
   }
   if (cache.size >= MAX_ENTRIES) {
-    const sorted = [...cache.entries()].toSorted((a, b) => a[1]._createdAt - b[1]._createdAt);
+    const sorted = [...cache.entries()].toSorted((a, b) => a[1].createdAt - b[1].createdAt);
     const toRemove = sorted.slice(0, cache.size - MAX_ENTRIES + 1000);
     for (const [key] of toRemove) {
       cache.delete(key);
@@ -164,7 +164,7 @@ export function setRefIndex(refIdx: string, entry: RefIndexEntry): void {
   const store = loadFromFile();
   evictIfNeeded();
   const now = Date.now();
-  store.set(refIdx, { ...entry, _createdAt: now });
+  store.set(refIdx, { ...entry, createdAt: now });
   appendLine({
     k: refIdx,
     v: {
@@ -189,7 +189,7 @@ export function getRefIndex(refIdx: string): RefIndexEntry | null {
   if (!entry) {
     return null;
   }
-  if (Date.now() - entry._createdAt > TTL_MS) {
+  if (Date.now() - entry.createdAt > TTL_MS) {
     store.delete(refIdx);
     return null;
   }

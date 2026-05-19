@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GraphThreadMessage } from "./graph-thread.js";
 import {
-  _resetThreadParentContextCachesForTest,
+  resetThreadParentContextCachesForTest,
   fetchParentMessageCached,
   formatParentContextEvent,
   markParentContextInjected,
@@ -92,7 +92,7 @@ describe("formatParentContextEvent", () => {
 
 describe("fetchParentMessageCached", () => {
   beforeEach(() => {
-    _resetThreadParentContextCachesForTest();
+    resetThreadParentContextCachesForTest();
   });
 
   it("invokes the fetcher on first call", async () => {
@@ -200,7 +200,7 @@ describe("fetchParentMessageCached", () => {
 
 describe("shouldInjectParentContext / markParentContextInjected", () => {
   beforeEach(() => {
-    _resetThreadParentContextCachesForTest();
+    resetThreadParentContextCachesForTest();
   });
 
   it("returns true for first observation", () => {

@@ -1,4 +1,19 @@
 import DOMPurify from "dompurify";
+import hljs from "highlight.js/lib/core.js";
+import bash from "highlight.js/lib/languages/bash.js";
+import cpp from "highlight.js/lib/languages/cpp.js";
+import css from "highlight.js/lib/languages/css.js";
+import diff from "highlight.js/lib/languages/diff.js";
+import go from "highlight.js/lib/languages/go.js";
+import java from "highlight.js/lib/languages/java.js";
+import javascript from "highlight.js/lib/languages/javascript.js";
+import json from "highlight.js/lib/languages/json.js";
+import markdown from "highlight.js/lib/languages/markdown.js";
+import python from "highlight.js/lib/languages/python.js";
+import rust from "highlight.js/lib/languages/rust.js";
+import typescript from "highlight.js/lib/languages/typescript.js";
+import xml from "highlight.js/lib/languages/xml.js";
+import yaml from "highlight.js/lib/languages/yaml.js";
 import MarkdownIt from "markdown-it";
 import markdownItTaskLists from "markdown-it-task-lists";
 import { i18n, t } from "../i18n/index.ts";
@@ -149,6 +164,90 @@ function escapeHtml(value: string): string {
 function normalizeMarkdownImageLabel(text?: string | null): string {
   const trimmed = text?.trim();
   return trimmed ? trimmed : "image";
+}
+
+for (const [language, definition, aliases] of [
+  ["bash", bash, ["sh", "shell"]],
+  ["cpp", cpp, ["c++", "cxx"]],
+  ["css", css, []],
+  ["diff", diff, ["patch"]],
+  ["go", go, ["golang"]],
+  ["java", java, []],
+  ["javascript", javascript, ["js", "jsx"]],
+  ["json", json, []],
+  ["markdown", markdown, ["md"]],
+  ["python", python, ["py"]],
+  ["rust", rust, ["rs"]],
+  ["typescript", typescript, ["ts", "tsx"]],
+  ["xml", xml, ["html", "svg"]],
+  ["yaml", yaml, ["yml"]],
+] as const) {
+  hljs.registerLanguage(language, definition);
+  if (aliases.length > 0) {
+    hljs.registerAliases([...aliases], { languageName: language });
+  }
+}
+
+function normalizeHighlightLanguage(lang: string): string {
+  const normalized = lang.trim().toLowerCase();
+  if (!normalized) {
+    return "";
+  }
+  const aliases: Record<string, string> = {
+    "c++": "cpp",
+    cxx: "cpp",
+    js: "javascript",
+    jsx: "javascript",
+    md: "markdown",
+    sh: "bash",
+    shell: "bash",
+    ts: "typescript",
+    tsx: "typescript",
+  };
+  return aliases[normalized] ?? normalized;
+}
+
+const autoHighlightLanguages = [
+  "bash",
+  "cpp",
+  "css",
+  "diff",
+  "go",
+  "java",
+  "javascript",
+  "json",
+  "markdown",
+  "python",
+  "rust",
+  "typescript",
+  "xml",
+  "yaml",
+];
+
+function highlightCode(text: string, lang: string): string {
+  const language = normalizeHighlightLanguage(lang);
+  try {
+    if (language && hljs.getLanguage(language)) {
+      return hljs.highlight(text, { language, ignoreIllegals: true }).value;
+    }
+    if (!language && text.trim()) {
+      const result = hljs.highlightAuto(text, autoHighlightLanguages);
+      if (result.relevance >= 2) {
+        return result.value;
+      }
+    }
+  } catch {
+    // Fall back to escaped plaintext; malformed input should not break chat rendering.
+  }
+  return escapeHtml(text);
+}
+
+function codeClassAttribute(lang: string, highlighted: string): string {
+  const classes = [
+    highlighted.includes("hljs-") ? "hljs" : "",
+    lang ? `language-${lang}` : "",
+  ].filter(Boolean);
+  return classes.length > 0 ? ` class="${escapeHtml(classes.join(" "))}"` : "";
 }
 
 export const md = new MarkdownIt({
@@ -427,9 +526,9 @@ md.renderer.rules.fence = (tokens, idx) => {
   // extract only the first whitespace-separated token as the language.
   const lang = token.info.trim().split(/\s+/)[0] || "";
   const text = token.content;
-  const langClass = lang ? ` class="language-${escapeHtml(lang)}"` : "";
-  const safeText = escapeHtml(text);
-  const codeBlock = `<pre><code${langClass}>${safeText}</code></pre>`;
+  const highlighted = highlightCode(text, lang);
+  const classAttr = codeClassAttribute(lang, highlighted);
+  const codeBlock = `<pre><code${classAttr}>${highlighted}</code></pre>`;
   const langLabel = lang ? `<span class="code-block-lang">${escapeHtml(lang)}</span>` : "";
   const attrSafe = escapeHtml(text);
   const copyBtn = `<button type="button" class="code-block-copy" data-code="${attrSafe}" aria-label="${escapeHtml(t("common.copyCode"))}"><span class="code-block-copy__idle">${escapeHtml(t("common.copy"))}</span><span class="code-block-copy__done">${escapeHtml(t("common.copied"))}</span></button>`;
@@ -455,8 +554,9 @@ md.renderer.rules.fence = (tokens, idx) => {
 md.renderer.rules.code_block = (tokens, idx) => {
   const token = tokens[idx];
   const text = token.content;
-  const safeText = escapeHtml(text);
-  const codeBlock = `<pre><code>${safeText}</code></pre>`;
+  const highlighted = highlightCode(text, "");
+  const classAttr = codeClassAttribute("", highlighted);
+  const codeBlock = `<pre><code${classAttr}>${highlighted}</code></pre>`;
   const attrSafe = escapeHtml(text);
   const copyBtn = `<button type="button" class="code-block-copy" data-code="${attrSafe}" aria-label="${escapeHtml(t("common.copyCode"))}"><span class="code-block-copy__idle">${escapeHtml(t("common.copy"))}</span><span class="code-block-copy__done">${escapeHtml(t("common.copied"))}</span></button>`;
   const header = `<div class="code-block-header">${copyBtn}</div>`;

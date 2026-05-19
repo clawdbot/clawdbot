@@ -290,8 +290,9 @@ function isNotFoundError(err: unknown): boolean {
   return code === "ENOENT" || code === "ENOTDIR";
 }
 
-export const __testing = {
+export const testing = {
   isGeneratedPluginSkillEntry,
   publishPluginSkills,
   resolvePluginSkillLinkType,
 };
+export { testing as __testing };

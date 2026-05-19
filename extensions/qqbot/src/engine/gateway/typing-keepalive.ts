@@ -15,13 +15,19 @@ type SendInputNotifyFn = (
   inputSecond: number,
 ) => Promise<unknown>;
 
-/** Refresh every 50s for the QQ API's 60s input-notify window. */
-const TYPING_INTERVAL_MS = 50_000;
-export const TYPING_INPUT_SECOND = 60;
+/** Refresh every 5s for the QQ API's 10s input-notify window. */
+const TYPING_INTERVAL_MS = 5_000;
+export const TYPING_INPUT_SECOND = 10;
+const QQ_C2C_PASSIVE_REPLY_LIMIT = 5;
+const INITIAL_TYPING_NOTIFY_COUNT = 1;
+const FINAL_REPLY_RESERVE_COUNT = 1;
+export const TYPING_RENEWAL_LIMIT =
+  QQ_C2C_PASSIVE_REPLY_LIMIT - INITIAL_TYPING_NOTIFY_COUNT - FINAL_REPLY_RESERVE_COUNT;
 
 export class TypingKeepAlive {
   private timer: ReturnType<typeof setInterval> | null = null;
   private stopped = false;
+  private renewalsRemaining = TYPING_RENEWAL_LIMIT;
 
   constructor(
     private readonly getToken: () => Promise<string>,
@@ -62,17 +68,34 @@ export class TypingKeepAlive {
   private async send(): Promise<void> {
     try {
       const token = await this.getToken();
-      await this.sendInputNotify(token, this.openid, this.msgId, TYPING_INPUT_SECOND);
-      this.log?.debug?.(`Typing keep-alive sent to ${this.openid}`);
+      await this.sendAttempt(token);
     } catch (err) {
       try {
         this.clearCache();
         const token = await this.getToken();
-        await this.sendInputNotify(token, this.openid, this.msgId, TYPING_INPUT_SECOND);
+        await this.sendAttempt(token);
       } catch {
         this.log?.debug?.(
           `Typing keep-alive failed for ${this.openid}: ${formatErrorMessage(err)}`,
         );
+      }
+    }
+  }
+
+  private async sendAttempt(token: string): Promise<void> {
+    if (this.stopped || this.renewalsRemaining <= 0) {
+      this.stop();
+      return;
+    }
+
+    this.renewalsRemaining--;
+    try {
+      await this.sendInputNotify(token, this.openid, this.msgId, TYPING_INPUT_SECOND);
+      this.log?.debug?.(`Typing keep-alive sent to ${this.openid}`);
+    } finally {
+      if (this.renewalsRemaining <= 0) {
+        this.log?.debug?.(`Typing keep-alive budget exhausted for ${this.openid}`);
+        this.stop();
       }
     }
   }

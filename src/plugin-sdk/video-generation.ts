@@ -171,7 +171,7 @@ export type VideoGenerationProvider = {
 };
 
 type AssertAssignable<_Left extends _Right, _Right> = true;
-const _videoGenerationSdkCompat: [
+const videoGenerationSdkCompat: [
   AssertAssignable<GeneratedVideoAsset, CoreGeneratedVideoAsset>,
   AssertAssignable<CoreGeneratedVideoAsset, GeneratedVideoAsset>,
   AssertAssignable<VideoGenerationAssetRole, CoreVideoGenerationAssetRole>,
@@ -213,7 +213,7 @@ const _videoGenerationSdkCompat: [
   AssertAssignable<VideoGenerationTransformCapabilities, CoreVideoGenerationTransformCapabilities>,
   AssertAssignable<CoreVideoGenerationTransformCapabilities, VideoGenerationTransformCapabilities>,
 ] = [] as never;
-void _videoGenerationSdkCompat;
+void videoGenerationSdkCompat;
 
 export {
   DASHSCOPE_WAN_VIDEO_CAPABILITIES,

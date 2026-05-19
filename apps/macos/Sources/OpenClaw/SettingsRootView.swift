@@ -8,7 +8,6 @@ struct SettingsRootView: View {
     @State private var monitoringPermissions = false
     @State private var selectedTab: SettingsTab = .general
     @State private var cachedTabs: Set<SettingsTab>
-    @State private var sidebarVisible = true
     @State private var snapshotPaths: (configPath: String?, stateDir: String?) = (nil, nil)
     let updater: UpdaterProviding?
     private let isPreview = ProcessInfo.processInfo.isPreview
@@ -24,36 +23,20 @@ struct SettingsRootView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            if self.sidebarVisible {
-                SettingsSidebar(
-                    groups: self.visibleGroups,
-                    selectedTab: self.$selectedTab)
-                    .frame(width: SettingsLayout.sidebarWidth)
-                    .transition(.move(edge: .leading).combined(with: .opacity))
-            }
+            SettingsSidebar(
+                groups: self.visibleGroups,
+                selectedTab: self.$selectedTab)
+                .frame(width: SettingsLayout.sidebarWidth)
 
             self.detailContainer
         }
         .frame(width: SettingsTab.windowWidth, height: SettingsTab.windowHeight, alignment: .topLeading)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(SettingsWindowChromeConfigurator())
-        .toolbar {
-            ToolbarItem(placement: .navigation) {
-                Button {
-                    withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) {
-                        self.sidebarVisible.toggle()
-                    }
-                } label: {
-                    Image(systemName: "sidebar.leading")
-                }
-                .help(self.sidebarVisible ? "Hide Sidebar" : "Show Sidebar")
-            }
-        }
         .onReceive(NotificationCenter.default.publisher(for: .openclawSelectSettingsTab)) { note in
             if let tab = note.object as? SettingsTab {
                 withAnimation(.spring(response: 0.32, dampingFraction: 0.85)) {
                     self.selectedTab = self.validTab(for: tab)
-                    self.sidebarVisible = true
                 }
             }
         }
@@ -101,7 +84,7 @@ struct SettingsRootView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(.horizontal, SettingsLayout.detailHorizontalPadding)
-        .padding(.vertical, 18)
+        .padding(.vertical, SettingsLayout.detailVerticalPadding)
     }
 
     private var cachedDetailTabs: [SettingsTab] {

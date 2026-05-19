@@ -44,8 +44,9 @@ export function formatCliChannelOptions(extra: string[] = []): string {
   return options.length > 0 ? options.join("|") : "channel";
 }
 
-export const __testing = {
+export const testing = {
   resetPrecomputedChannelOptionsForTests(): void {
     precomputedChannelOptions = undefined;
   },
 };
+export { testing as __testing };

@@ -23,6 +23,7 @@ export {
   IMAGE_REDUCE_QUALITY_STEPS,
   buildImageResizeSideGrid,
   getImageMetadata,
+  isImageProcessorUnavailableError,
   resizeToJpeg,
 } from "openclaw/plugin-sdk/media-runtime";
 export { detectMime } from "openclaw/plugin-sdk/media-mime";

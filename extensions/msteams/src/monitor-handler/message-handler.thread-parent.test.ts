@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../runtime-api.js";
-import { _resetThreadParentContextCachesForTest } from "../thread-parent-context.js";
+import { resetThreadParentContextCachesForTest } from "../thread-parent-context.js";
 import "./message-handler-mock-support.test-support.js";
 import { getRuntimeApiMockState } from "./message-handler-mock-support.test-support.js";
 import { createMSTeamsMessageHandler } from "./message-handler.js";
@@ -59,7 +59,7 @@ describe("msteams thread parent context injection", () => {
   }
 
   beforeEach(() => {
-    _resetThreadParentContextCachesForTest();
+    resetThreadParentContextCachesForTest();
     fetchChannelMessageMock.mockReset();
     fetchThreadRepliesMock.mockReset();
     fetchThreadRepliesMock.mockImplementation(async () => []);

@@ -65,3 +65,28 @@ describe("browser action input wait command", () => {
     expect(options?.timeoutMs).toBeGreaterThan(21000);
   });
 });
+
+describe("browser action input evaluate command", () => {
+  beforeEach(() => {
+    mocks.callBrowserRequest.mockClear();
+    getBrowserCliRuntimeCapture().resetRuntimeCapture();
+  });
+
+  it("passes timeout-ms through to the evaluate action and outer request", async () => {
+    const program = createActionInputProgram();
+
+    await program.parseAsync(
+      ["browser", "evaluate", "--fn", "() => true", "--timeout-ms", "30000"],
+      { from: "user" },
+    );
+
+    const request = mocks.callBrowserRequest.mock.calls.at(-1)?.[1] as
+      | { body?: { timeoutMs?: number } }
+      | undefined;
+    const options = mocks.callBrowserRequest.mock.calls.at(-1)?.[2] as
+      | { timeoutMs?: number }
+      | undefined;
+    expect(request?.body?.timeoutMs).toBe(30000);
+    expect(options?.timeoutMs).toBeGreaterThan(30000);
+  });
+});

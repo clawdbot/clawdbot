@@ -6,7 +6,8 @@ export type TtsResult = unknown;
 export type TtsSynthesisResult = unknown;
 export type TtsTelephonyResult = unknown;
 
-export const _test: unknown;
+export const testApi: unknown;
+export { testApi as _test };
 export const buildTtsSystemPromptHint: (...args: unknown[]) => unknown;
 export const getLastTtsAttempt: (...args: unknown[]) => unknown;
 export const getResolvedSpeechProviderConfig: (...args: unknown[]) => unknown;

@@ -37,7 +37,7 @@ const {
   })),
   ensureSkillsWatcherMock: vi.fn(),
   getSkillsSnapshotVersionMock: vi.fn(() => 0),
-  shouldRefreshSnapshotForVersionMock: vi.fn(() => false),
+  shouldRefreshSnapshotForVersionMock: vi.fn((_cached?: number, _next?: number) => false),
   getRemoteSkillEligibilityMock: vi.fn(() => ({
     platforms: [],
     hasBin: () => false,
@@ -59,6 +59,9 @@ vi.mock("../../agents/skills.js", () => ({
 
 vi.mock("../../agents/skills/refresh.js", () => ({
   ensureSkillsWatcher: ensureSkillsWatcherMock,
+}));
+
+vi.mock("../../agents/skills/refresh-state.js", () => ({
   getSkillsSnapshotVersion: getSkillsSnapshotVersionMock,
   shouldRefreshSnapshotForVersion: shouldRefreshSnapshotForVersionMock,
 }));
@@ -79,13 +82,13 @@ vi.mock("../../routing/session-key.js", () => ({
   resolveAgentIdFromSessionKey: resolveAgentIdFromSessionKeyMock,
 }));
 
-const { ensureSkillSnapshot, __testing_resetResolvedSkillsCache } =
+const { ensureSkillSnapshot, resetResolvedSkillsCacheForTests } =
   await import("./session-updates.js");
 
 describe("ensureSkillSnapshot", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    __testing_resetResolvedSkillsCache();
+    resetResolvedSkillsCacheForTests();
     buildWorkspaceSkillSnapshotMock.mockReturnValue({ prompt: "", skills: [], resolvedSkills: [] });
     getSkillsSnapshotVersionMock.mockReturnValue(0);
     shouldRefreshSnapshotForVersionMock.mockReturnValue(false);
@@ -195,6 +198,31 @@ describe("ensureSkillSnapshot", () => {
       cfg: {},
     });
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("reads the skills snapshot version after watcher-side invalidation", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "0");
+    getSkillsSnapshotVersionMock.mockReturnValue(0);
+    ensureSkillsWatcherMock.mockImplementation(() => {
+      getSkillsSnapshotVersionMock.mockReturnValue(5);
+    });
+    shouldRefreshSnapshotForVersionMock.mockImplementation((cached = 0, next = 0) => cached < next);
+
+    await ensureSkillSnapshot({
+      sessionEntry: testSessionEntry("sess-1", strippedSnapshot()),
+      sessionStore: {},
+      sessionKey: "main",
+      isFirstTurnInSession: false,
+      workspaceDir: TEST_WORKSPACE_DIR,
+      cfg: { skills: { load: { extraDirs: ["/tmp/shared-skills"] } } },
+    });
+
+    expect(shouldRefreshSnapshotForVersionMock).toHaveBeenCalledWith(0, 5);
+    expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
+    const [[, snapshotParams]] = buildWorkspaceSkillSnapshotMock.mock.calls as unknown as Array<
+      [string, { snapshotVersion?: number }]
+    >;
+    expect(snapshotParams.snapshotVersion).toBe(5);
   });
 
   it("invalidates cache when non-skills config gates change", async () => {

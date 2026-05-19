@@ -31,7 +31,11 @@ import {
   buildMissingXSearchApiKeyPayload,
   createXSearchToolDefinition,
 } from "./x-search-tool-shared.js";
-import { createXaiOAuthAuthMethod, refreshXaiOAuthCredential } from "./xai-oauth.js";
+import {
+  createXaiDeviceCodeAuthMethod,
+  createXaiOAuthAuthMethod,
+  refreshXaiOAuthCredential,
+} from "./xai-oauth.js";
 
 const PROVIDER_ID = "xai";
 type CodeExecutionModule = typeof import("./code-execution.js");
@@ -183,7 +187,7 @@ export default defineSingleProviderPluginEntry({
         },
       },
     ],
-    extraAuth: [createXaiOAuthAuthMethod()],
+    extraAuth: [createXaiOAuthAuthMethod(), createXaiDeviceCodeAuthMethod()],
     catalog: {
       buildProvider: buildXaiProvider,
     },

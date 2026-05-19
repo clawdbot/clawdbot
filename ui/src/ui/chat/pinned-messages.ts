@@ -4,7 +4,7 @@ const PREFIX = "openclaw:pinned:";
 
 export class PinnedMessages {
   private key: string;
-  private _indices = new Set<number>();
+  private pinnedIndices = new Set<number>();
 
   constructor(sessionKey: string) {
     this.key = PREFIX + sessionKey;
@@ -12,25 +12,25 @@ export class PinnedMessages {
   }
 
   get indices(): Set<number> {
-    return this._indices;
+    return this.pinnedIndices;
   }
 
   has(index: number): boolean {
-    return this._indices.has(index);
+    return this.pinnedIndices.has(index);
   }
 
   pin(index: number): void {
-    this._indices.add(index);
+    this.pinnedIndices.add(index);
     this.save();
   }
 
   unpin(index: number): void {
-    this._indices.delete(index);
+    this.pinnedIndices.delete(index);
     this.save();
   }
 
   toggle(index: number): void {
-    if (this._indices.has(index)) {
+    if (this.pinnedIndices.has(index)) {
       this.unpin(index);
     } else {
       this.pin(index);
@@ -38,7 +38,7 @@ export class PinnedMessages {
   }
 
   clear(): void {
-    this._indices.clear();
+    this.pinnedIndices.clear();
     this.save();
   }
 
@@ -50,7 +50,7 @@ export class PinnedMessages {
       }
       const arr = JSON.parse(raw);
       if (Array.isArray(arr)) {
-        this._indices = new Set(arr.filter((n) => typeof n === "number"));
+        this.pinnedIndices = new Set(arr.filter((n) => typeof n === "number"));
       }
     } catch {
       // ignore
@@ -59,7 +59,7 @@ export class PinnedMessages {
 
   private save(): void {
     try {
-      getSafeLocalStorage()?.setItem(this.key, JSON.stringify([...this._indices]));
+      getSafeLocalStorage()?.setItem(this.key, JSON.stringify([...this.pinnedIndices]));
     } catch {
       // ignore
     }

@@ -29,7 +29,7 @@ vi.mock("./pi-embedded-helpers.js", async () => ({
 }));
 
 vi.mock("../plugins/provider-hook-runtime.js", async () => ({
-  __testing: {},
+  testing: {},
   prepareProviderExtraParams: vi.fn(() => undefined),
   resolveProviderHookPlugin: vi.fn(() => undefined),
   resolveProviderPluginsForHooks: vi.fn(() => []),

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  __testing,
+  testing,
   buildChildCompletionFindings,
   readSubagentOutput,
 } from "./subagent-announce-output.js";
@@ -11,7 +11,7 @@ type ReadLatestAssistantReply = typeof import("./tools/agent-step.js").readLates
 function installOutputDeps(params: { messages: Array<unknown>; latestAssistantReply?: string }) {
   const callGateway = vi.fn(async () => ({ messages: params.messages }));
   const readLatestAssistantReply = vi.fn(async () => params.latestAssistantReply);
-  __testing.setDepsForTest({
+  testing.setDepsForTest({
     callGateway: callGateway as unknown as CallGateway,
     readLatestAssistantReply: readLatestAssistantReply as unknown as ReadLatestAssistantReply,
   });
@@ -50,7 +50,7 @@ function sessionsYieldTurn(message = "Waiting for subagent completion.") {
 
 describe("readSubagentOutput", () => {
   afterEach(() => {
-    __testing.setDepsForTest();
+    testing.setDepsForTest();
   });
 
   it("does not treat a sessions_yield wait turn as subagent completion output", async () => {

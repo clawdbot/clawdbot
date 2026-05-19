@@ -148,6 +148,41 @@ describe("handleSlackAction", () => {
     expectLastSlackSend("Second", params.cfg);
   }
 
+  it("fails closed for same-channel sends from thread-required contexts with no thread ts", async () => {
+    const cfg = slackConfig();
+    sendSlackMessage.mockClear();
+
+    await expect(
+      handleSlackAction(
+        { action: "sendMessage", to: "channel:C123", content: "keep private" },
+        cfg,
+        {
+          currentChannelId: "C123",
+          replyToMode: "all",
+          sameChannelThreadRequired: true,
+        },
+      ),
+    ).rejects.toThrow("Slack thread context is required");
+    expect(sendSlackMessage).not.toHaveBeenCalled();
+  });
+
+  it("allows explicit top-level sends from thread-required contexts", async () => {
+    const cfg = slackConfig();
+    sendSlackMessage.mockClear();
+
+    await handleSlackAction(
+      { action: "sendMessage", to: "channel:C123", content: "root", topLevel: true },
+      cfg,
+      {
+        currentChannelId: "C123",
+        replyToMode: "all",
+        sameChannelThreadRequired: true,
+      },
+    );
+
+    expectLastSlackSend("root", cfg);
+  });
+
   async function resolveReadToken(cfg: OpenClawConfig): Promise<string | undefined> {
     readSlackMessages.mockClear();
     readSlackMessages.mockResolvedValueOnce({ messages: [], hasMore: false });

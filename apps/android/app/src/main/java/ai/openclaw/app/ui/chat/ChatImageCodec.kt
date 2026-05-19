@@ -13,7 +13,7 @@ import kotlin.math.max
 import kotlin.math.roundToInt
 
 private const val CHAT_ATTACHMENT_MAX_WIDTH = 1600
-private const val CHAT_ATTACHMENT_MAX_BASE64_CHARS = 300 * 1024
+internal const val CHAT_IMAGE_MAX_BASE64_CHARS = 300 * 1024
 private const val CHAT_ATTACHMENT_START_QUALITY = 85
 private const val CHAT_DECODE_MAX_DIMENSION = 1600
 private const val CHAT_IMAGE_CACHE_BYTES = 16 * 1024 * 1024
@@ -35,7 +35,7 @@ internal fun loadSizedImageAttachment(
   if (bitmap == null) {
     throw IllegalStateException("unsupported attachment")
   }
-  val maxBytes = (CHAT_ATTACHMENT_MAX_BASE64_CHARS / 4) * 3
+  val maxBytes = (CHAT_IMAGE_MAX_BASE64_CHARS / 4) * 3
   val encoded =
     JpegSizeLimiter.compressToLimit(
       initialWidth = bitmap.width,

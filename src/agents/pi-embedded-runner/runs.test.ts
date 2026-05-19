@@ -1,11 +1,12 @@
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { diagnosticLogger } from "../../logging/diagnostic.js";
 import {
-  __testing as replyRunTesting,
+  testing as replyRunTesting,
   createReplyOperation,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import {
-  __testing,
+  testing,
   abortAndDrainEmbeddedPiRun,
   abortEmbeddedPiRun,
   clearActiveEmbeddedRun,
@@ -44,7 +45,7 @@ function createRunHandle(
 
 describe("pi-embedded runner run registry", () => {
   afterEach(() => {
-    __testing.resetActiveEmbeddedRuns();
+    testing.resetActiveEmbeddedRuns();
     replyRunTesting.resetReplyRunRegistry();
     vi.restoreAllMocks();
   });
@@ -324,8 +325,8 @@ describe("pi-embedded runner run registry", () => {
     );
     const handle = createRunHandle();
 
-    runsA.__testing.resetActiveEmbeddedRuns();
-    runsB.__testing.resetActiveEmbeddedRuns();
+    runsA.testing.resetActiveEmbeddedRuns();
+    runsB.testing.resetActiveEmbeddedRuns();
 
     try {
       runsA.setActiveEmbeddedRun("session-shared", handle);
@@ -334,8 +335,8 @@ describe("pi-embedded runner run registry", () => {
       runsB.clearActiveEmbeddedRun("session-shared", handle);
       expect(runsA.isEmbeddedPiRunActive("session-shared")).toBe(false);
     } finally {
-      runsA.__testing.resetActiveEmbeddedRuns();
-      runsB.__testing.resetActiveEmbeddedRuns();
+      runsA.testing.resetActiveEmbeddedRuns();
+      runsB.testing.resetActiveEmbeddedRuns();
     }
   });
 
@@ -354,6 +355,35 @@ describe("pi-embedded runner run registry", () => {
 
     expect(isEmbeddedPiRunHandleActive("session-a")).toBe(false);
     expect(resolveActiveEmbeddedRunHandleSessionId("agent:main:main")).toBeUndefined();
+  });
+
+  it("treats repeated clears for a completed run handle as idempotent", () => {
+    const debugSpy = vi.spyOn(diagnosticLogger, "debug").mockImplementation(() => undefined);
+    const handle = createRunHandle();
+
+    setActiveEmbeddedRun("session-repeat-clear", handle, "agent:main:main");
+    clearActiveEmbeddedRun("session-repeat-clear", handle, "agent:main:main");
+    clearActiveEmbeddedRun("session-repeat-clear", handle, "agent:main:main");
+
+    expect(isEmbeddedPiRunHandleActive("session-repeat-clear")).toBe(false);
+    expect(resolveActiveEmbeddedRunHandleSessionId("agent:main:main")).toBeUndefined();
+    expect(
+      debugSpy.mock.calls.some(([message]) => message.includes("reason=handle_mismatch")),
+    ).toBe(false);
+  });
+
+  it("still logs handle mismatches when another run owns the session", () => {
+    const debugSpy = vi.spyOn(diagnosticLogger, "debug").mockImplementation(() => undefined);
+    const staleHandle = createRunHandle();
+    const activeHandle = createRunHandle();
+
+    setActiveEmbeddedRun("session-handle-replaced", activeHandle);
+    clearActiveEmbeddedRun("session-handle-replaced", staleHandle);
+
+    expect(isEmbeddedPiRunHandleActive("session-handle-replaced")).toBe(true);
+    expect(
+      debugSpy.mock.calls.some(([message]) => message.includes("reason=handle_mismatch")),
+    ).toBe(true);
   });
 
   it("tracks and clears per-session transcript snapshots for active runs", () => {

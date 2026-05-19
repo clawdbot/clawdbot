@@ -125,7 +125,7 @@ const config = {
     "**/*.test-helpers.ts",
     "**/*.test-mocks.ts",
     "**/*.test-utils.ts",
-    "src/gateway/live-image-probe.ts",
+    "test/helpers/live-image-probe.ts",
     "src/secrets/credential-matrix.ts",
     "src/agents/claude-cli-runner.ts",
     "src/agents/pi-auth-json.ts",

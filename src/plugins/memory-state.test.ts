@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  _resetMemoryPluginState,
+  resetMemoryPluginState,
   buildMemoryPromptSection,
   clearMemoryPluginState,
   getMemoryCapabilityRegistration,
@@ -292,7 +292,7 @@ describe("memory plugin state", () => {
     });
     const snapshot = createMemoryStateSnapshot();
 
-    _resetMemoryPluginState();
+    resetMemoryPluginState();
     expectClearedMemoryState();
 
     restoreMemoryPluginState(snapshot);

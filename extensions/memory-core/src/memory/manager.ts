@@ -86,6 +86,32 @@ export async function closeAllMemoryIndexManagers(): Promise<void> {
   });
 }
 
+export async function closeMemoryIndexManagersForAgent(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+}): Promise<void> {
+  const settings = resolveMemorySearchConfig(params.cfg, params.agentId);
+  if (!settings) {
+    return;
+  }
+  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
+  const key = `${params.agentId}:${workspaceDir}:${JSON.stringify(settings)}:default`;
+  const pending = INDEX_CACHE_PENDING.get(key);
+  if (pending) {
+    await Promise.allSettled([pending]);
+  }
+  const manager = INDEX_CACHE.get(key);
+  if (!manager) {
+    return;
+  }
+  INDEX_CACHE.delete(key);
+  try {
+    await manager.close();
+  } catch (err) {
+    log.warn(`failed to close memory index manager for agent ${params.agentId}: ${String(err)}`);
+  }
+}
+
 export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements MemorySearchManager {
   private readonly cacheKey: string;
   protected readonly cfg: OpenClawConfig;
@@ -933,8 +959,36 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       this.sessionUnsubscribe();
       this.sessionUnsubscribe = null;
     }
-    await awaitPendingManagerWork({ pendingSync, pendingProviderInit });
-    closeMemoryDatabase(this.db);
-    INDEX_CACHE.delete(this.cacheKey);
+    const closeErrors = new Map<EmbeddingProvider, unknown>();
+    const closeCurrentProvider = async () => {
+      const provider = this.provider;
+      if (!provider) {
+        return;
+      }
+      try {
+        await provider.close?.();
+        closeErrors.delete(provider);
+        if (this.provider === provider) {
+          this.provider = null;
+        }
+      } catch (err) {
+        closeErrors.set(provider, err);
+      }
+    };
+    await awaitPendingManagerWork({ pendingProviderInit });
+    await closeCurrentProvider();
+    try {
+      await awaitPendingManagerWork({ pendingSync });
+      await closeCurrentProvider();
+    } finally {
+      closeMemoryDatabase(this.db);
+      if (INDEX_CACHE.get(this.cacheKey) === this) {
+        INDEX_CACHE.delete(this.cacheKey);
+      }
+    }
+    const closeError = closeErrors.values().next().value;
+    if (closeError) {
+      throw closeError;
+    }
   }
 }

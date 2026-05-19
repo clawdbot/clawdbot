@@ -279,6 +279,7 @@ function buildClaudeLiveFingerprint(params: {
       : undefined,
     authEpochHash: params.context.authEpoch ? sha256(params.context.authEpoch) : undefined,
     extraSystemPromptHash: params.context.extraSystemPromptHash,
+    promptToolNamesHash: params.context.promptToolNamesHash,
     mcpConfigHash: params.context.preparedBackend.mcpConfigHash,
     skillsFingerprint,
     argv: stableArgv,

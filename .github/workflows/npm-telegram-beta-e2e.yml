@@ -270,7 +270,7 @@ jobs:
 
       - name: Upload npm Telegram E2E artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: npm-telegram-beta-e2e-${{ github.run_id }}-${{ github.run_attempt }}
           path: .artifacts/qa-e2e/

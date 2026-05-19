@@ -9,11 +9,16 @@ import { createHookRunner } from "../../plugins/hooks.js";
 import { addTestHook } from "../../plugins/hooks.test-helpers.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import {
+  pinActivePluginChannelRegistry,
   releasePinnedPluginChannelRegistry,
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
 import type { PluginHookRegistration } from "../../plugins/types.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import {
+  createChannelTestPluginBase,
+  createOutboundTestPlugin,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
 import {
   onInternalDiagnosticEvent,
@@ -316,6 +321,43 @@ describe("deliverOutboundPayloads", () => {
     resetDiagnosticEventsForTest();
     releasePinnedPluginChannelRegistry();
     setActivePluginRegistry(emptyRegistry);
+  });
+
+  it("delivers through full active plugin when pinned setup channel has no sender", async () => {
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
+    const setupRegistry = createTestRegistry([
+      {
+        pluginId: "matrix",
+        source: "setup",
+        plugin: createChannelTestPluginBase({ id: "matrix" }),
+      },
+    ]);
+    const runtimeRegistry = createTestRegistry([
+      {
+        pluginId: "matrix",
+        source: "runtime",
+        plugin: createOutboundTestPlugin({ id: "matrix", outbound: matrixOutboundForTest }),
+      },
+    ]);
+
+    setActivePluginRegistry(setupRegistry);
+    pinActivePluginChannelRegistry(setupRegistry);
+    setActivePluginRegistry(runtimeRegistry);
+
+    const results = await deliverOutboundPayloads({
+      cfg: matrixChunkConfig,
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "hello from queue" }],
+      deps: { matrix: sendMatrix },
+    });
+
+    expect(sendMatrix).toHaveBeenCalledWith("!room:example", "hello from queue", {
+      cfg: matrixChunkConfig,
+      accountId: undefined,
+      gifPlayback: undefined,
+    });
+    expect(results).toEqual([{ channel: "matrix", messageId: "m1", roomId: "!room:example" }]);
   });
 
   it("reports unsupported durable final delivery when required capabilities are missing", async () => {

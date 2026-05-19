@@ -23,7 +23,7 @@ type ExternalCliOverlayOptions = {
 
 let resolveExternalAuthProfilesForRuntime: ResolveExternalAuthProfiles | undefined;
 
-export const __testing = {
+export const testing = {
   resetResolveExternalAuthProfilesForTest(): void {
     resolveExternalAuthProfilesForRuntime = undefined;
   },
@@ -195,3 +195,4 @@ export function syncPersistedExternalCliAuthProfiles(
 // Compat aliases while file/function naming catches up.
 export const overlayExternalOAuthProfiles = overlayExternalAuthProfiles;
 export const shouldPersistExternalOAuthProfile = shouldPersistExternalAuthProfile;
+export { testing as __testing };

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resolveNextcloudTalkRoomKind, __testing } from "./room-info.js";
+import { resolveNextcloudTalkRoomKind, testing } from "./room-info.js";
 
 const fetchWithSsrFGuard = vi.hoisted(() => vi.fn());
 const readFileSync = vi.hoisted(() => vi.fn());
@@ -23,7 +23,7 @@ vi.mock("node:fs", () => {
 afterEach(() => {
   fetchWithSsrFGuard.mockReset();
   readFileSync.mockReset();
-  __testing.resetRoomCache();
+  testing.resetRoomCache();
 });
 
 function requireFirstFetchParams(): { auditContext?: string; url?: string } {

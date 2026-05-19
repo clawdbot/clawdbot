@@ -103,6 +103,9 @@ function latestNormalizerOptions(): MediaNormalizerOptions {
 }
 
 function latestOutboundDeliveryArgs(): {
+  channel?: string;
+  to?: string;
+  accountId?: string;
   payloads: ReplyPayload[];
   bestEffort?: boolean;
   queuePolicy?: string;
@@ -111,7 +114,14 @@ function latestOutboundDeliveryArgs(): {
   if (!args || typeof args !== "object") {
     throw new Error("expected outbound delivery arguments");
   }
-  return args as { payloads: ReplyPayload[]; bestEffort?: boolean; queuePolicy?: string };
+  return args as {
+    channel?: string;
+    to?: string;
+    accountId?: string;
+    payloads: ReplyPayload[];
+    bestEffort?: boolean;
+    queuePolicy?: string;
+  };
 }
 
 type DeliveryStatusLike = {
@@ -326,6 +336,116 @@ describe("normalizeAgentCommandReplyPayloads", () => {
       status: "suppressed",
       succeeded: true,
       reason: "no_visible_result",
+    });
+  });
+
+  it("refreshes stale implicit session routing before final delivery", async () => {
+    deliverOutboundPayloadsMock.mockResolvedValue([{ channel: "slack", messageId: "msg-1" }]);
+    const runtime = { log: vi.fn(), error: vi.fn() };
+    const resolveFreshSessionEntryForDelivery = vi.fn(async () => ({
+      sessionId: "session-1",
+      updatedAt: 2,
+      deliveryContext: {
+        channel: "slack",
+        to: "#fresh",
+        accountId: "workspace-1",
+      },
+    }));
+
+    const delivered = await deliverAgentCommandResult({
+      cfg: {
+        agents: {
+          list: [{ id: "tester", workspace: "/tmp/agent-workspace" }],
+        },
+      } as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: runtime as never,
+      opts: {
+        message: "go",
+        deliver: true,
+        bestEffortDeliver: true,
+        sessionKey: "agent:tester:main",
+      } as AgentCommandOpts,
+      outboundSession: {
+        key: "agent:tester:main",
+        agentId: "tester",
+      } as never,
+      sessionEntry: {
+        sessionId: "session-1",
+        updatedAt: 1,
+      },
+      expectedSessionIdForFreshDelivery: "session-1",
+      resolveFreshSessionEntryForDelivery,
+      payloads: [{ text: "final answer" }],
+      result: createResult(),
+    });
+
+    expect(resolveFreshSessionEntryForDelivery).toHaveBeenCalledTimes(1);
+    expect(deliverOutboundPayloadsMock).toHaveBeenCalledTimes(1);
+    const deliverArgs = latestOutboundDeliveryArgs();
+    expect(deliverArgs.channel).toBe("slack");
+    expect(deliverArgs.to).toBe("#fresh");
+    expect(deliverArgs.accountId).toBe("workspace-1");
+    expect(delivered.deliverySucceeded).toBe(true);
+    expectDeliveryStatusFields(delivered, {
+      requested: true,
+      attempted: true,
+      status: "sent",
+      succeeded: true,
+      resultCount: 1,
+    });
+  });
+
+  it("does not refresh final delivery routing from a different logical session", async () => {
+    deliverOutboundPayloadsMock.mockResolvedValue([{ channel: "slack", messageId: "msg-1" }]);
+    const runtime = { log: vi.fn(), error: vi.fn() };
+    const resolveFreshSessionEntryForDelivery = vi.fn(async () => ({
+      sessionId: "session-2",
+      updatedAt: 2,
+      deliveryContext: {
+        channel: "slack",
+        to: "#fresh",
+        accountId: "workspace-1",
+      },
+    }));
+
+    const delivered = await deliverAgentCommandResult({
+      cfg: {
+        agents: {
+          list: [{ id: "tester", workspace: "/tmp/agent-workspace" }],
+        },
+      } as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: runtime as never,
+      opts: {
+        message: "go",
+        deliver: true,
+        bestEffortDeliver: true,
+        sessionKey: "agent:tester:main",
+      } as AgentCommandOpts,
+      outboundSession: {
+        key: "agent:tester:main",
+        agentId: "tester",
+      } as never,
+      sessionEntry: {
+        sessionId: "session-1",
+        updatedAt: 1,
+      },
+      expectedSessionIdForFreshDelivery: "session-1",
+      resolveFreshSessionEntryForDelivery,
+      payloads: [{ text: "final answer" }],
+      result: createResult(),
+    });
+
+    expect(resolveFreshSessionEntryForDelivery).toHaveBeenCalledTimes(1);
+    expect(deliverOutboundPayloadsMock).not.toHaveBeenCalled();
+    expect(delivered.deliverySucceeded).toBe(false);
+    expectDeliveryStatusFields(delivered, {
+      requested: true,
+      attempted: false,
+      status: "failed",
+      succeeded: false,
+      reason: "channel_resolved_to_internal",
     });
   });
 

@@ -17,80 +17,148 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
 
-class PermissionRequester(
+class PermissionRequester internal constructor(
   private val activity: ComponentActivity,
+  launcherFactory: ((Map<String, Boolean>) -> Unit) -> ActivityResultLauncher<Array<String>>,
 ) {
-  private val mutex = Mutex()
-  private var pending: CompletableDeferred<Map<String, Boolean>>? = null
-  private val mainHandler = Handler(Looper.getMainLooper())
+  private data class PendingPermissionRequest(
+    val deferred: CompletableDeferred<Map<String, Boolean>>,
+    var timedOut: Boolean = false,
+  )
 
-  private val launcher: ActivityResultLauncher<Array<String>> =
-    activity.registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
-      val p = pending
-      pending = null
-      p?.complete(result)
-    }
+  private class PermissionRequestSlot(
+    val launcher: ActivityResultLauncher<Array<String>>,
+    var request: PendingPermissionRequest? = null,
+  )
+
+  constructor(activity: ComponentActivity) : this(
+    activity = activity,
+    launcherFactory = { callback ->
+      activity.registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions(), callback)
+    },
+  )
+
+  private val mutex = Mutex()
+  private val requestSlotsLock = Any()
+  private val mainHandler = Handler(Looper.getMainLooper())
+  private val launchers = List(4) { createPermissionRequestSlot(launcherFactory) }
 
   suspend fun requestIfMissing(
     permissions: List<String>,
     timeoutMs: Long = 20_000,
-  ): Map<String, Boolean> =
-    mutex.withLock {
-      val missing =
-        permissions.filter { perm ->
-          ContextCompat.checkSelfPermission(activity, perm) != PackageManager.PERMISSION_GRANTED
+  ): Map<String, Boolean> {
+    return mutex.withLock {
+      while (true) {
+        val missing =
+          permissions.filter { perm ->
+            ContextCompat.checkSelfPermission(activity, perm) != PackageManager.PERMISSION_GRANTED
+          }
+        if (missing.isEmpty()) {
+          return permissions.associateWith { true }
         }
-      if (missing.isEmpty()) {
-        return permissions.associateWith { true }
-      }
 
-      val needsRationale =
-        missing.any { ActivityCompat.shouldShowRequestPermissionRationale(activity, it) }
-      if (needsRationale) {
-        val proceed = showRationaleDialog(missing)
-        if (!proceed) {
-          return permissions.associateWith { perm ->
-            ContextCompat.checkSelfPermission(activity, perm) == PackageManager.PERMISSION_GRANTED
+        val needsRationale =
+          missing.any { ActivityCompat.shouldShowRequestPermissionRationale(activity, it) }
+        if (needsRationale) {
+          val proceed = showRationaleDialog(missing)
+          if (!proceed) {
+            return permissions.associateWith { perm ->
+              ContextCompat.checkSelfPermission(activity, perm) == PackageManager.PERMISSION_GRANTED
+            }
           }
         }
-      }
 
-      val deferred = CompletableDeferred<Map<String, Boolean>>()
-      pending = deferred
-      withContext(Dispatchers.Main) {
-        launcher.launch(missing.toTypedArray())
-      }
-
-      val result =
-        withContext(Dispatchers.Default) {
-          kotlinx.coroutines.withTimeout(timeoutMs) { deferred.await() }
+        val deferred = CompletableDeferred<Map<String, Boolean>>()
+        val request = PendingPermissionRequest(deferred)
+        val slot = reservePermissionRequestSlot(request)
+        try {
+          withContext(Dispatchers.Main) {
+            slot.launcher.launch(missing.toTypedArray())
+          }
+        } catch (err: Throwable) {
+          clearPermissionRequestSlot(slot, request)
+          throw err
         }
 
-      // Merge: if something was already granted, treat it as granted even if launcher omitted it.
-      val merged =
-        permissions.associateWith { perm ->
-          val nowGranted =
-            ContextCompat.checkSelfPermission(activity, perm) == PackageManager.PERMISSION_GRANTED
-          result[perm] == true || nowGranted
+        val result =
+          try {
+            withTimeout(timeoutMs) { deferred.await() }
+          } catch (err: TimeoutCancellationException) {
+            request.timedOut = true
+            throw err
+          }
+
+        val merged =
+          permissions.associateWith { perm ->
+            val nowGranted =
+              ContextCompat.checkSelfPermission(activity, perm) == PackageManager.PERMISSION_GRANTED
+            result[perm] == true || nowGranted
+          }
+
+        val denied =
+          merged.filterValues { !it }.keys.filter {
+            !ActivityCompat.shouldShowRequestPermissionRationale(activity, it)
+          }
+        if (denied.isNotEmpty()) {
+          showSettingsDialog(denied)
         }
 
-      val denied =
-        merged.filterValues { !it }.keys.filter {
-          !ActivityCompat.shouldShowRequestPermissionRationale(activity, it)
-        }
-      if (denied.isNotEmpty()) {
-        showSettingsDialog(denied)
+        return merged
       }
-
-      return merged
+      error("unreachable")
     }
+  }
+
+  private fun createPermissionRequestSlot(
+    launcherFactory: ((Map<String, Boolean>) -> Unit) -> ActivityResultLauncher<Array<String>>,
+  ): PermissionRequestSlot {
+    var slot: PermissionRequestSlot? = null
+    val launcher = launcherFactory { result -> completePermissionRequest(checkNotNull(slot), result) }
+    val created = PermissionRequestSlot(launcher)
+    slot = created
+    return created
+  }
+
+  private fun reservePermissionRequestSlot(request: PendingPermissionRequest): PermissionRequestSlot =
+    synchronized(requestSlotsLock) {
+      val slot = launchers.firstOrNull { it.request == null } ?: error("permission request launcher busy")
+      slot.request = request
+      slot
+    }
+
+  private fun completePermissionRequest(
+    slot: PermissionRequestSlot,
+    result: Map<String, Boolean>,
+  ) {
+    val request =
+      synchronized(requestSlotsLock) {
+        slot.request.also {
+          slot.request = null
+        }
+      } ?: return
+    if (request.timedOut) return
+    request.deferred.complete(result)
+  }
+
+  private fun clearPermissionRequestSlot(
+    slot: PermissionRequestSlot,
+    request: PendingPermissionRequest,
+  ) {
+    synchronized(requestSlotsLock) {
+      if (slot.request === request) {
+        slot.request = null
+      }
+    }
+  }
 
   private suspend fun showRationaleDialog(permissions: List<String>): Boolean =
     withContext(Dispatchers.Main) {

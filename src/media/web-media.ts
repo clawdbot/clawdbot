@@ -10,18 +10,19 @@ import { maxBytesForKind, type MediaKind } from "./constants.js";
 import { readRemoteMediaBuffer } from "./fetch.js";
 import { basenameFromAnyPath, extnameFromAnyPath } from "./file-name.js";
 import {
-  convertHeicToJpeg,
-  hasAlphaChannel,
-  optimizeImageToPng,
-  resizeToJpeg,
-} from "./image-ops.js";
-import {
   assertLocalMediaAllowed,
   getDefaultLocalRoots,
   LocalMediaAccessError,
   type LocalMediaAccessErrorCode,
 } from "./local-media-access.js";
 import { MediaReferenceError, resolveInboundMediaReference } from "./media-reference.js";
+import {
+  convertHeicToJpeg,
+  hasAlphaChannel,
+  isImageProcessorUnavailableError,
+  optimizeImageToPng,
+  resizeToJpeg,
+} from "./media-services.js";
 import {
   detectMime,
   extensionForMime,
@@ -229,23 +230,6 @@ function formatCapReduce(label: string, cap: number, size: number): string {
   return `${label} could not be reduced below ${formatMb(cap, 0)}MB (got ${formatMb(size)}MB)`;
 }
 
-function isOptionalImageOptimizerUnavailable(err: unknown): boolean {
-  const messages: string[] = [];
-  let current: unknown = err;
-  while (current instanceof Error) {
-    messages.push(current.message);
-    current = current.cause;
-  }
-  const detail = messages.join("\n").toLowerCase();
-  return (
-    detail.includes("optional dependency sharp is required") ||
-    detail.includes("cannot find package 'sharp'") ||
-    detail.includes('cannot find package "sharp"') ||
-    detail.includes("cannot find module 'sharp'") ||
-    detail.includes('cannot find module "sharp"')
-  );
-}
-
 function isHeicSource(opts: { contentType?: string; fileName?: string }): boolean {
   if (opts.contentType && HEIC_MIME_RE.test(opts.contentType.trim())) {
     return true;
@@ -438,7 +422,7 @@ async function loadWebMediaInternal(
       optimized = await optimizeImageWithFallback({ buffer, cap, meta });
     } catch (err) {
       if (
-        isOptionalImageOptimizerUnavailable(err) &&
+        isImageProcessorUnavailableError(err) &&
         !isHeicSource(meta ?? {}) &&
         buffer.length <= cap
       ) {
@@ -722,6 +706,10 @@ export async function optimizeImageToJpeg(
       resizeSide: smallest.resizeSide,
       quality: smallest.quality,
     };
+  }
+
+  if (isImageProcessorUnavailableError(firstResizeError)) {
+    throw firstResizeError;
   }
 
   const detail = errors.length > 0 ? `: ${errors.slice(0, 3).join("; ")}` : "";

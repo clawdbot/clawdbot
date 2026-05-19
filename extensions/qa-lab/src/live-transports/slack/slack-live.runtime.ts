@@ -1200,10 +1200,11 @@ export async function runSlackQaLive(params: {
   };
 }
 
-export const __testing = {
+export const testing = {
   findScenario,
   parseSlackQaCredentialPayload,
   resolveSlackQaRuntimeEnv,
   SLACK_QA_STANDARD_SCENARIO_IDS,
   waitForSlackNoReply,
 };
+export { testing as __testing };

@@ -2,7 +2,7 @@ import { recordChannelBotPairLoopAndCheckSuppression } from "openclaw/plugin-sdk
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import type { GoogleChatCoreRuntime, GoogleChatRuntimeEnv } from "./monitor-types.js";
-import { __testing } from "./monitor.js";
+import { testing } from "./monitor.js";
 import type { GoogleChatEvent } from "./types.js";
 
 const apiMocks = vi.hoisted(() => ({
@@ -32,7 +32,7 @@ beforeEach(() => {
 describe("googlechat monitor bot loop protection", () => {
   it("maps accepted bot-authored messages to shared channel-turn facts", () => {
     expect(
-      __testing.resolveGoogleChatBotLoopProtection({
+      testing.resolveGoogleChatBotLoopProtection({
         allowBots: true,
         isBotSender: true,
         senderId: "users/other-bot",
@@ -57,7 +57,7 @@ describe("googlechat monitor bot loop protection", () => {
 
   it("does not guard human messages or the app's own echo", () => {
     expect(
-      __testing.resolveGoogleChatBotLoopProtection({
+      testing.resolveGoogleChatBotLoopProtection({
         allowBots: true,
         isBotSender: false,
         senderId: "users/alice",
@@ -67,7 +67,7 @@ describe("googlechat monitor bot loop protection", () => {
       }),
     ).toBeUndefined();
     expect(
-      __testing.resolveGoogleChatBotLoopProtection({
+      testing.resolveGoogleChatBotLoopProtection({
         allowBots: true,
         isBotSender: true,
         senderId: "users/app",
@@ -80,7 +80,7 @@ describe("googlechat monitor bot loop protection", () => {
 
   it("layers space bot loop overrides over account settings field-by-field", () => {
     expect(
-      __testing.resolveGoogleChatBotLoopProtectionConfig({
+      testing.resolveGoogleChatBotLoopProtectionConfig({
         accountConfig: { windowSeconds: 120, cooldownSeconds: 240 },
         groupConfig: { maxEventsPerWindow: 3 },
       }),
@@ -143,7 +143,7 @@ describe("googlechat monitor bot loop protection", () => {
       nowMs: eventTimeMs,
     });
 
-    await __testing.processMessageWithPipeline({
+    await testing.processMessageWithPipeline({
       event,
       account,
       config: {},

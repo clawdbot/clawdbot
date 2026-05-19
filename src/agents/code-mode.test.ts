@@ -6,7 +6,7 @@ import {
   CODE_MODE_WAIT_TOOL_NAME,
   createCodeModeTools,
   resolveCodeModeConfig,
-  __testing,
+  testing,
 } from "./code-mode.js";
 import { createToolSearchCatalogRef, type ToolSearchCatalogRef } from "./tool-search.js";
 import {
@@ -94,8 +94,8 @@ async function runUntilCompleted(params: {
 
 describe("Code Mode", () => {
   afterEach(() => {
-    __testing.activeRuns.clear();
-    __testing.resumingRunIds.clear();
+    testing.activeRuns.clear();
+    testing.resumingRunIds.clear();
   });
 
   it("resolves object config defaults", () => {
@@ -128,13 +128,52 @@ describe("Code Mode", () => {
     expect(limitedSearch.maxSearchLimit).toBe(3);
   });
 
+  it("resolves active-agent code mode over the runtime default", () => {
+    const config = {
+      tools: {
+        codeMode: {
+          enabled: false,
+          timeoutMs: 1234,
+          searchDefaultLimit: 6,
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "ops",
+            tools: {
+              codeMode: {
+                enabled: true,
+                searchDefaultLimit: 4,
+              },
+            },
+          },
+          {
+            id: "chat",
+            tools: {
+              codeMode: false,
+            },
+          },
+        ],
+      },
+    } as never;
+
+    const ops = resolveCodeModeConfig(config, "ops");
+    expect(ops.enabled).toBe(true);
+    expect(ops.timeoutMs).toBe(1234);
+    expect(ops.searchDefaultLimit).toBe(4);
+
+    expect(resolveCodeModeConfig(config, "chat").enabled).toBe(false);
+    expect(resolveCodeModeConfig(config, "missing").enabled).toBe(false);
+  });
+
   it("resolves the packaged worker URL from stable and hashed dist modules", () => {
-    expect(
-      __testing.resolveCodeModeWorkerUrl("file:///repo/dist/agents/code-mode.js").pathname,
-    ).toBe("/repo/dist/agents/code-mode.worker.js");
-    expect(
-      __testing.resolveCodeModeWorkerUrl("file:///repo/dist/selection-abc123.js").pathname,
-    ).toBe("/repo/dist/agents/code-mode.worker.js");
+    expect(testing.resolveCodeModeWorkerUrl("file:///repo/dist/agents/code-mode.js").pathname).toBe(
+      "/repo/dist/agents/code-mode.worker.js",
+    );
+    expect(testing.resolveCodeModeWorkerUrl("file:///repo/dist/selection-abc123.js").pathname).toBe(
+      "/repo/dist/agents/code-mode.worker.js",
+    );
   });
 
   it("hides all normal tools behind exec and wait", () => {
@@ -156,6 +195,39 @@ describe("Code Mode", () => {
       CODE_MODE_WAIT_TOOL_NAME,
     ]);
     expect(compacted.catalogToolCount).toBe(2);
+  });
+
+  it("hides normal tools when only the active agent enables code mode", () => {
+    const catalogRef = createToolSearchCatalogRef();
+    const config = {
+      agents: {
+        list: [{ id: "ops", tools: { codeMode: true } }],
+      },
+    } as never;
+    const codeModeTools = createCodeModeTools({
+      config,
+      runtimeConfig: config,
+      agentId: "ops",
+      sessionId: "session-code-mode",
+      sessionKey: "agent:ops:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+    const compacted = applyCodeModeCatalog({
+      tools: [...codeModeTools, pluginTool("fake_create_ticket", "Create a fake ticket")],
+      config,
+      agentId: "ops",
+      sessionId: "session-code-mode",
+      sessionKey: "agent:ops:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    expect(compacted.compacted).toBe(true);
+    expect(compacted.tools.map((tool) => tool.name)).toEqual([
+      CODE_MODE_EXEC_TOOL_NAME,
+      CODE_MODE_WAIT_TOOL_NAME,
+    ]);
   });
 
   it("uses a flat enum for the exec language schema", () => {
@@ -431,7 +503,7 @@ describe("Code Mode", () => {
 
     expect(details.status).toBe("completed");
     expect(details.value).toBe(42);
-    expect(__testing.getTypescriptRuntimePromise()).toBeNull();
+    expect(testing.getTypescriptRuntimePromise()).toBeNull();
   });
 
   it("allows identifiers and strings that contain import without module access", async () => {
@@ -470,7 +542,7 @@ describe("Code Mode", () => {
       catalogRef,
     });
 
-    const beforeRunCount = __testing.activeRuns.size;
+    const beforeRunCount = testing.activeRuns.size;
     const details = resultDetails(
       await codeModeTools[0].execute("code-call-empty-wait", {
         code: "await new Promise(() => undefined); return 'never';",
@@ -479,7 +551,7 @@ describe("Code Mode", () => {
 
     expect(details.status).toBe("failed");
     expect(String(details.error)).toContain("pending without host work");
-    expect(__testing.activeRuns.size).toBe(beforeRunCount);
+    expect(testing.activeRuns.size).toBe(beforeRunCount);
   });
 
   it("clamps omitted code-mode catalog search limits to maxSearchLimit", async () => {
@@ -644,7 +716,7 @@ describe("Code Mode", () => {
       catalogRef,
     });
 
-    const beforeRunCount = __testing.activeRuns.size;
+    const beforeRunCount = testing.activeRuns.size;
     const details = resultDetails(
       await tools[0].execute("code-call-large-suspend", {
         code: "text('x'.repeat(2048)); await yield_control('pause'); return 1;",
@@ -653,7 +725,7 @@ describe("Code Mode", () => {
 
     expect(details.status).toBe("failed");
     expect(String(details.error)).toContain("output limit exceeded");
-    expect(__testing.activeRuns.size).toBe(beforeRunCount);
+    expect(testing.activeRuns.size).toBe(beforeRunCount);
   });
 
   it("terminates hostile infinite loops outside the main event loop", async () => {

@@ -5,7 +5,7 @@ import { createSessionConversationTestRegistry } from "../../test-utils/session-
 import { readLatestAssistantReplySnapshot, waitForAgentRun } from "../run-wait.js";
 import { runAgentStep } from "./agent-step.js";
 import type { SessionListRow } from "./sessions-helpers.js";
-import { runSessionsSendA2AFlow, __testing } from "./sessions-send-tool.a2a.js";
+import { runSessionsSendA2AFlow, testing } from "./sessions-send-tool.a2a.js";
 
 const callGatewayMock = vi.hoisted(() => vi.fn());
 
@@ -60,7 +60,7 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
       text: "Test announce reply",
       fingerprint: "test-announce-reply",
     });
-    __testing.setDepsForTest({
+    testing.setDepsForTest({
       callGateway,
     });
   });
@@ -74,7 +74,7 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
   }
 
   afterEach(() => {
-    __testing.setDepsForTest();
+    testing.setDepsForTest();
     vi.restoreAllMocks();
   });
 

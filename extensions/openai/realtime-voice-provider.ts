@@ -159,7 +159,7 @@ type RealtimeGaSessionUpdate = {
       input: {
         format: OpenAIRealtimeAudioFormatConfig;
         turn_detection: RealtimeTurnDetectionConfig;
-        noise_reduction?: { type: "near_field" };
+        noise_reduction?: { type: "near_field" } | null;
         transcription?: { model: string };
       };
       output: {
@@ -772,7 +772,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         audio: {
           input: {
             format: this.resolveRealtimeAudioFormat(),
-            noise_reduction: { type: "near_field" },
+            noise_reduction: null,
             transcription: { model: OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL },
             turn_detection: {
               type: "server_vad",

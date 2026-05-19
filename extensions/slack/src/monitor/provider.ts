@@ -645,7 +645,7 @@ export { isNonRecoverableSlackAuthError } from "./reconnect-policy.js";
 
 export const resolveSlackRuntimeGroupPolicy = resolveOpenProviderRuntimeGroupPolicy;
 
-export const __testing = {
+export const testing = {
   formatSlackChannelResolved,
   formatSlackUserResolved,
   publishSlackConnectedStatus,
@@ -661,3 +661,4 @@ export const __testing = {
   getSocketEmitter,
   waitForSlackSocketDisconnect,
 };
+export { testing as __testing };

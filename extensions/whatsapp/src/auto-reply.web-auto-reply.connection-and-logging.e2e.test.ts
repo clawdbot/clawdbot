@@ -27,6 +27,25 @@ import {
   startWebAutoReplyMonitor,
 } from "./auto-reply.test-harness.js";
 
+type DrainSelectionEntry = {
+  channel: string;
+  accountId?: string | null;
+  lastError?: string;
+};
+type DrainPendingDeliveriesCall = {
+  drainKey: string;
+  logLabel: string;
+  selectEntry: (entry: DrainSelectionEntry) => { match: boolean; bypassBackoff: boolean };
+};
+
+const deliveryQueueMocks = vi.hoisted(() => ({
+  drainPendingDeliveries: vi.fn(async (_opts: unknown) => undefined),
+}));
+
+vi.mock("openclaw/plugin-sdk/delivery-queue-runtime", () => ({
+  drainPendingDeliveries: deliveryQueueMocks.drainPendingDeliveries,
+}));
+
 installWebAutoReplyTestHomeHooks();
 
 function requireOnMessage(
@@ -245,6 +264,78 @@ describe("web auto-reply connection", () => {
 
     expect(scripted.getListenerCount()).toBeGreaterThanOrEqual(2);
     expect(sleep).toHaveBeenCalled();
+  });
+
+  it("drains pending deliveries while connected and stops after close", async () => {
+    vi.useFakeTimers();
+    try {
+      const sleep = vi.fn(async () => {});
+      const scripted = createScriptedWebListenerFactory();
+      const { controller, run } = startWebAutoReplyMonitor({
+        monitorWebChannelFn: monitorWebChannel as never,
+        listenerFactory: scripted.listenerFactory,
+        sleep,
+        accountId: "work",
+      });
+
+      await vi.waitFor(
+        () => {
+          expect(scripted.getListenerCount()).toBe(1);
+        },
+        { timeout: 250, interval: 2 },
+      );
+      expect(deliveryQueueMocks.drainPendingDeliveries).toHaveBeenCalledWith(
+        expect.objectContaining({
+          drainKey: "whatsapp:work",
+          logLabel: "WhatsApp reconnect drain",
+        }),
+      );
+
+      deliveryQueueMocks.drainPendingDeliveries.mockClear();
+      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.waitFor(() => {
+        expect(deliveryQueueMocks.drainPendingDeliveries).toHaveBeenCalledTimes(1);
+      });
+
+      const periodicCall = deliveryQueueMocks.drainPendingDeliveries.mock.calls.at(-1)?.[0] as
+        | DrainPendingDeliveriesCall
+        | undefined;
+      expect(periodicCall).toBeDefined();
+      if (!periodicCall) {
+        throw new Error("Expected WhatsApp periodic drain call");
+      }
+      expect(periodicCall.drainKey).toBe("whatsapp:work");
+      expect(periodicCall.logLabel).toBe("WhatsApp periodic drain");
+      expect(
+        periodicCall.selectEntry({
+          channel: "whatsapp",
+          accountId: "work",
+        }),
+      ).toEqual({ match: true, bypassBackoff: false });
+      expect(
+        periodicCall.selectEntry({
+          channel: "whatsapp",
+          accountId: "default",
+        }),
+      ).toEqual({ match: false, bypassBackoff: false });
+      expect(
+        periodicCall.selectEntry({
+          channel: "telegram",
+          accountId: "work",
+        }),
+      ).toEqual({ match: false, bypassBackoff: false });
+
+      controller.abort();
+      scripted.resolveClose(0, { status: 499, isLoggedOut: false, error: "aborted" });
+      await Promise.resolve();
+      await run;
+
+      deliveryQueueMocks.drainPendingDeliveries.mockClear();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(deliveryQueueMocks.drainPendingDeliveries).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("treats status 440 as non-retryable and stops without retrying", async () => {

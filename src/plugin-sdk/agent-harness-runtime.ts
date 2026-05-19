@@ -156,6 +156,11 @@ export async function loadCodexBundleMcpThreadConfig(
   return load(params);
 }
 export { resolveSandboxContext } from "../agents/sandbox.js";
+export {
+  hasSandboxBindContainerPathAliases,
+  hasSandboxBindReadonlyHostShadows,
+  resolveWritableSandboxBindHostRoots,
+} from "../agents/sandbox/fs-paths.js";
 export { resolveBootstrapContextForRun } from "../agents/bootstrap-files.js";
 export type { EmbeddedContextFile } from "../agents/pi-embedded-helpers/types.js";
 export { isSubagentSessionKey } from "../routing/session-key.js";
@@ -171,6 +176,7 @@ export {
   hasBeforeToolCallPolicy,
   isToolWrappedWithBeforeToolCallHook,
   runBeforeToolCallHook,
+  setBeforeToolCallDiagnosticsEnabled,
   wrapToolWithBeforeToolCallHook,
 } from "../agents/pi-tools.before-tool-call.js";
 export {
@@ -204,7 +210,7 @@ export {
   buildNativeHookRelayCommand,
   hasNativeHookRelayInvocation,
   invokeNativeHookRelay,
-  __testing as nativeHookRelayTesting,
+  testing as nativeHookRelayTesting,
   registerNativeHookRelay,
 } from "../agents/harness/native-hook-relay.js";
 

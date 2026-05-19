@@ -14,7 +14,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import { _setGitHubCopilotDeviceFlowFetchGuardForTesting } from "./login.js";
+import { setGitHubCopilotDeviceFlowFetchGuardForTesting } from "./login.js";
 
 const mocks = vi.hoisted(() => ({
   githubCopilotLoginCommand: vi.fn(),
@@ -64,7 +64,7 @@ type GithubCopilotTestModelCatalogProvider = {
 afterEach(async () => {
   vi.clearAllMocks();
   vi.unstubAllGlobals();
-  _setGitHubCopilotDeviceFlowFetchGuardForTesting(null);
+  setGitHubCopilotDeviceFlowFetchGuardForTesting(null);
   clearRuntimeAuthProfileStoreSnapshots();
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
 });
@@ -80,7 +80,7 @@ async function createAgentDir() {
   return dir;
 }
 
-function _registerProvider() {
+function registerProviderForTest() {
   return registerProviderWithPluginConfig({});
 }
 
@@ -359,7 +359,7 @@ describe("github-copilot plugin", () => {
       throw new Error(`unexpected fetch in github-copilot refresh test: ${target}`);
     });
     vi.stubGlobal("fetch", fetchMock);
-    _setGitHubCopilotDeviceFlowFetchGuardForTesting(async (params) => ({
+    setGitHubCopilotDeviceFlowFetchGuardForTesting(async (params) => ({
       response: await fetchMock(params.url, params.init),
       finalUrl: params.url,
       release: async () => {},

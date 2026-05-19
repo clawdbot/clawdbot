@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderQaMarkdownReport } from "../../report.js";
-import { __testing as liveTesting } from "./runtime.js";
+import { testing as liveTesting } from "./runtime.js";
 
 afterEach(() => {
   vi.useRealTimers();

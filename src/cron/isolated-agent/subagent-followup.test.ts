@@ -30,7 +30,7 @@ vi.mock("../../gateway/call.js", () => ({
 }));
 
 const { listDescendantRunsForRequester } = await import("../../agents/subagent-registry-read.js");
-const { __testing: runWaitTesting, readLatestAssistantReply } =
+const { testing: runWaitTesting, readLatestAssistantReply } =
   await import("../../agents/run-wait.js");
 const { callGateway } = await import("../../gateway/call.js");
 

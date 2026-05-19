@@ -169,6 +169,33 @@ describe("trajectory runtime", () => {
     expect(truncated?.data.droppedEvents).toBeGreaterThan(0);
   });
 
+  it("describes queued writer state for cleanup timeout logs", () => {
+    const recorder = createTrajectoryRuntimeRecorder({
+      sessionId: "session-1",
+      sessionFile: "/tmp/session.jsonl",
+      writer: {
+        filePath: "/tmp/session.trajectory.jsonl",
+        write: () => "queued",
+        flush: async () => undefined,
+        describeQueue: () => ({
+          pendingWrites: 2,
+          queuedBytes: 256,
+          activeOperation: "file-append",
+          activeWriteBytes: 128,
+          maxFileBytes: 1024,
+          maxQueuedBytes: 1024,
+          yieldBeforeWrite: true,
+        }),
+      },
+    });
+
+    const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
+
+    expect(runtimeRecorder.describeFlushState()).toBe(
+      "pendingWrites=2 queuedBytes=256 activeOperation=file-append yieldBeforeWrite=true activeWriteBytes=128 maxQueuedBytes=1024 maxFileBytes=1024",
+    );
+  });
+
   it("writes a session-adjacent pointer when using an override directory", () => {
     const tmpDir = makeTempDir();
     const sessionFile = path.join(tmpDir, "session.jsonl");

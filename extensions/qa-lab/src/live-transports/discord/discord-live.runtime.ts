@@ -1937,7 +1937,7 @@ export async function runDiscordQaLive(params: {
   };
 }
 
-export const __testing = {
+export const testing = {
   DISCORD_QA_SCENARIOS,
   DISCORD_QA_STANDARD_SCENARIO_IDS,
   collectSeenReactionSequence,
@@ -1962,3 +1962,4 @@ export const __testing = {
   resolveDiscordQaRuntimeEnv,
   waitForDiscordChannelRunning,
 };
+export { testing as __testing };

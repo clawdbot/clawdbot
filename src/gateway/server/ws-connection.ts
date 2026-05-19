@@ -93,7 +93,7 @@ function resolveSocketAddress(socket: WebSocket): {
   localPort?: number;
   endpoint?: string;
 } {
-  const rawSocket = (socket as WebSocket & { _socket?: Socket })._socket;
+  const rawSocket = (socket as WebSocket & { _socket?: Socket })["_socket"];
   const remoteAddr = rawSocket?.remoteAddress;
   const remotePort = rawSocket?.remotePort;
   const localAddr = rawSocket?.localAddress;
@@ -241,12 +241,12 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         __openclawPreauthBudgetClaimed?: boolean;
         __openclawPreauthBudgetKey?: string;
       }
-    ).__openclawPreauthBudgetKey;
+    )["__openclawPreauthBudgetKey"];
     (
       socket as WebSocket & {
         __openclawPreauthBudgetClaimed?: boolean;
       }
-    ).__openclawPreauthBudgetClaimed = true;
+    )["__openclawPreauthBudgetClaimed"] = true;
     const headerValue = (value: string | string[] | undefined) =>
       Array.isArray(value) ? value[0] : value;
     const requestHost = headerValue(upgradeReq.headers.host);

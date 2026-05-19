@@ -1,19 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { __test__ } from "./logger.js";
+import { testApi } from "./logger.js";
 
 describe("shouldSkipMutatingLoggingConfigRead", () => {
   it("matches config schema and validate invocations", () => {
     expect(
-      __test__.shouldSkipMutatingLoggingConfigRead(["node", "openclaw", "config", "schema"]),
+      testApi.shouldSkipMutatingLoggingConfigRead(["node", "openclaw", "config", "schema"]),
     ).toBe(true);
     expect(
-      __test__.shouldSkipMutatingLoggingConfigRead(["node", "openclaw", "config", "validate"]),
+      testApi.shouldSkipMutatingLoggingConfigRead(["node", "openclaw", "config", "validate"]),
     ).toBe(true);
   });
 
   it("handles root flags before config validate", () => {
     expect(
-      __test__.shouldSkipMutatingLoggingConfigRead([
+      testApi.shouldSkipMutatingLoggingConfigRead([
         "node",
         "openclaw",
         "--profile",
@@ -28,10 +28,8 @@ describe("shouldSkipMutatingLoggingConfigRead", () => {
 
   it("does not match other commands", () => {
     expect(
-      __test__.shouldSkipMutatingLoggingConfigRead(["node", "openclaw", "config", "get", "foo"]),
+      testApi.shouldSkipMutatingLoggingConfigRead(["node", "openclaw", "config", "get", "foo"]),
     ).toBe(false);
-    expect(__test__.shouldSkipMutatingLoggingConfigRead(["node", "openclaw", "status"])).toBe(
-      false,
-    );
+    expect(testApi.shouldSkipMutatingLoggingConfigRead(["node", "openclaw", "status"])).toBe(false);
   });
 });

@@ -48,14 +48,14 @@ describe("tavily tools", () => {
   let createTavilyWebSearchProvider: typeof import("./tavily-search-provider.js").createTavilyWebSearchProvider;
   let createTavilySearchTool: typeof import("./tavily-search-tool.js").createTavilySearchTool;
   let createTavilyExtractTool: typeof import("./tavily-extract-tool.js").createTavilyExtractTool;
-  let tavilyClientTesting: typeof import("./tavily-client.js").__testing;
+  let tavilyClientTesting: typeof import("./tavily-client.js").testing;
   let tavilyPlugin: typeof import("../index.js").default;
 
   beforeAll(async () => {
     ({ createTavilyWebSearchProvider } = await import("./tavily-search-provider.js"));
     ({ createTavilySearchTool } = await import("./tavily-search-tool.js"));
     ({ createTavilyExtractTool } = await import("./tavily-extract-tool.js"));
-    ({ __testing: tavilyClientTesting } =
+    ({ testing: tavilyClientTesting } =
       await vi.importActual<typeof import("./tavily-client.js")>("./tavily-client.js"));
     ({ default: tavilyPlugin } = await import("../index.js"));
   });

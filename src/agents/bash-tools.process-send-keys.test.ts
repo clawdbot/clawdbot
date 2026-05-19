@@ -4,7 +4,7 @@ import { handleProcessSendKeys, type WritableStdin } from "./bash-tools.process-
 
 function createWritableStdinStub(): WritableStdin {
   return {
-    write(_data: string, cb?: (err?: Error | null) => void) {
+    write(dataValue: string, cb?: (err?: Error | null) => void) {
       cb?.();
     },
     end() {},

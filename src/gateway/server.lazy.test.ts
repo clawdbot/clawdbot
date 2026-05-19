@@ -13,7 +13,7 @@ vi.mock("./server.impl.js", () => {
       lazyState.startCalls.push(args);
       return { close: vi.fn(async () => undefined) };
     }),
-    __resetModelCatalogCacheForTest: vi.fn(() => {
+    resetModelCatalogCacheForTest: vi.fn(() => {
       lazyState.resetCalls += 1;
     }),
   };
@@ -31,7 +31,7 @@ describe("gateway server boundary", () => {
 
     expect(lazyState.loads).toBe(0);
 
-    await mod.__resetModelCatalogCacheForTest();
+    await mod.resetModelCatalogCacheForTest();
     expect(lazyState.loads).toBe(1);
     expect(lazyState.resetCalls).toBe(1);
 

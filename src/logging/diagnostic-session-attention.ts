@@ -43,6 +43,19 @@ export function classifySessionAttention(params: {
         recoveryEligible: false,
       };
     }
+    if (
+      params.queueDepth > 0 &&
+      params.activity.activeWorkKind === "embedded_run" &&
+      isTerminalDiagnosticProgressReason(params.activity.lastProgressReason)
+    ) {
+      return {
+        eventType: "session.stalled",
+        reason: "queued_behind_terminal_active_work",
+        classification: "stalled_agent_run",
+        activeWorkKind: params.activity.activeWorkKind,
+        recoveryEligible: false,
+      };
+    }
     if ((params.activity.lastProgressAgeMs ?? 0) > params.staleMs) {
       return {
         eventType: "session.stalled",
@@ -67,4 +80,18 @@ export function classifySessionAttention(params: {
     classification: "stale_session_state",
     recoveryEligible: true,
   };
+}
+
+export function isTerminalDiagnosticProgressReason(reason: string | undefined): boolean {
+  if (!reason) {
+    return false;
+  }
+  return (
+    reason === "run:completed" ||
+    reason === "embedded_run:ended" ||
+    reason.includes("response.completed") ||
+    reason.includes("rawResponseItem/completed") ||
+    reason.includes("raw_response_item.completed") ||
+    reason.includes("output_item.done")
+  );
 }

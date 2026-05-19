@@ -152,7 +152,7 @@ describe("scripts/mantis/publish-pr-evidence", () => {
       "content-type": "image/png",
       "x-amz-date": expect.any(String),
     });
-    expect(String((requests[0]?.headers as Record<string, string>).authorization)).toContain(
+    expect((requests[0]?.headers as Record<string, string>).authorization).toContain(
       "Credential=access/",
     );
     expect(String(requests[4]?.body)).toContain(
@@ -277,11 +277,13 @@ describe("scripts/mantis/publish-pr-evidence", () => {
       "mantis-evidence.json",
     ]);
     expect(body).toContain(
-      "Summary: Mantis did not generate before/after GIFs because this PR does not have a clean Telegram-visible before/after proof in the standard Mantis run.",
+      "Summary: Mantis did not generate before/after GIFs because this PR changes CI wiring only.",
     );
-    expect(body).toContain("- Overall: `skipped`");
+    expect(body).toContain("- Overall: `true`");
     expect(body).not.toContain("<table");
     expect(body).not.toContain("<img ");
+    expect(shouldPublishPrComment(manifest, { requestSource: "issue_comment" })).toBe(true);
+    expect(shouldPublishPrComment(manifest, { requestSource: "pull_request_target" })).toBe(false);
   });
 
   it("does not publish PR comments for Telegram capture infrastructure failures", () => {
@@ -323,10 +325,11 @@ describe("scripts/mantis/publish-pr-evidence", () => {
     });
 
     expect(body).toContain(
-      "Summary: Mantis did not generate before/after GIFs because this PR does not have a clean Telegram-visible before/after proof in the standard Mantis run.",
+      "Summary: Mantis could not capture Telegram Desktop proof because native Telegram Desktop opened to the logged-out welcome screen.",
     );
-    expect(body).toContain("- Overall: `skipped`");
-    expect(shouldPublishPrComment(manifest)).toBe(false);
+    expect(body).toContain("- Overall: `false`");
+    expect(shouldPublishPrComment(manifest, { requestSource: "issue_comment" })).toBe(false);
+    expect(shouldPublishPrComment(manifest, { requestSource: "pull_request_target" })).toBe(false);
   });
 
   it("rejects artifact paths that escape the manifest directory", () => {

@@ -38,14 +38,14 @@ vi.mock("gaxios", () => ({
   Gaxios: mocks.gaxiosCtor,
 }));
 
-let __testing: typeof import("./google-auth.runtime.js").__testing;
+let testing: typeof import("./google-auth.runtime.js").testing;
 let createGoogleAuthFetch: typeof import("./google-auth.runtime.js").createGoogleAuthFetch;
 let getGoogleAuthTransport: typeof import("./google-auth.runtime.js").getGoogleAuthTransport;
 let resolveValidatedGoogleChatCredentials: typeof import("./google-auth.runtime.js").resolveValidatedGoogleChatCredentials;
 
 beforeAll(async () => {
   ({
-    __testing,
+    testing,
     createGoogleAuthFetch,
     getGoogleAuthTransport,
     resolveValidatedGoogleChatCredentials,
@@ -53,7 +53,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  __testing.resetGoogleAuthRuntimeForTests();
+  testing.resetGoogleAuthRuntimeForTests();
   mocks.buildHostnameAllowlistPolicyFromSuffixAllowlist.mockClear();
   mocks.fetchWithSsrFGuard.mockReset();
   mocks.gaxiosCtor.mockClear();
@@ -242,10 +242,10 @@ describe("googlechat google auth runtime", () => {
     vi.stubEnv("HTTPS_PROXY", "http://upper-https-proxy.example:8080");
     vi.stubEnv("https_proxy", "http://lower-https-proxy.example:8080");
 
-    expect(__testing.resolveGoogleAuthEnvProxyUrl("https")).toBe(
+    expect(testing.resolveGoogleAuthEnvProxyUrl("https")).toBe(
       "http://upper-https-proxy.example:8080",
     );
-    expect(__testing.resolveGoogleAuthEnvProxyUrl("http")).toBe(
+    expect(testing.resolveGoogleAuthEnvProxyUrl("http")).toBe(
       "http://upper-http-proxy.example:8080",
     );
   });
@@ -399,7 +399,7 @@ describe("googlechat google auth runtime", () => {
       url: new URL("https://www.googleapis.com/oauth2/v1/certs"),
     };
 
-    const normalized = __testing.normalizeGoogleAuthPreparedRequestHeaders(config);
+    const normalized = testing.normalizeGoogleAuthPreparedRequestHeaders(config);
 
     expect(normalized.headers).toBeInstanceOf(Headers);
     expect(normalized.headers.has("x-test")).toBe(true);
@@ -414,7 +414,7 @@ describe("googlechat google auth runtime", () => {
       },
     };
 
-    const normalized = __testing.normalizeGoogleAuthResponseHeaders(response);
+    const normalized = testing.normalizeGoogleAuthResponseHeaders(response);
 
     expect(normalized.headers).toBeInstanceOf(Headers);
     expect(normalized.headers.get("cache-control")).toBe("public, max-age=3600");

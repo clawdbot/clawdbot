@@ -259,7 +259,7 @@ export async function executeMiniMaxWebSearchProviderTool(
   return payload;
 }
 
-export const __testing = {
+export const testing = {
   MINIMAX_SEARCH_ENDPOINT_GLOBAL,
   MINIMAX_SEARCH_ENDPOINT_CN,
   resolveMiniMaxApiKey,
@@ -267,3 +267,4 @@ export const __testing = {
   resolveMiniMaxRegion,
   readMiniMaxSearchJsonResponse: readProviderJsonResponse<MiniMaxSearchResponse>,
 } as const;
+export { testing as __testing };

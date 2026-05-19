@@ -2057,7 +2057,7 @@ export async function removeGroundedShortTermCandidates(params: {
   return { removed, storePath };
 }
 
-export const __testing = {
+export const testing = {
   parseLockOwnerPid,
   canStealStaleLock,
   isProcessLikelyAlive,
@@ -2069,3 +2069,4 @@ export const __testing = {
   isContaminatedDreamingSnippet,
   lineRangeOverlapsDreamingFence,
 };
+export { testing as __testing };

@@ -64,6 +64,7 @@ import { resolveUserPath, shortenHomePath } from "../../utils.js";
 import { resolveProviderAuthOverview } from "./list.auth-overview.js";
 import { isRich } from "./list.format.js";
 import { type AuthProbeSummary } from "./list.probe.js";
+import type { ProviderAuthOverview } from "./list.types.js";
 import { loadModelsConfig } from "./load-config.js";
 import {
   DEFAULT_MODEL,
@@ -402,16 +403,17 @@ export async function modelsStatusCommand(
     const syntheticProvidersToProbe = new Set(
       providers.map((provider) => normalizeProviderId(provider)),
     );
-    for (const usage of providerUses) {
-      if (
+    const codexProvider = normalizeProviderId(OPENAI_CODEX_PROVIDER_ID);
+    const codexProviderAlias = aliasMap[codexProvider] ?? codexProvider;
+    const codexRuntimeAuthUsages = providerUses.filter(
+      (usage) =>
         usage.allowCodexRuntimeFallback &&
-        openAIProviderUsesCodexRuntimeByDefault({ provider: usage.provider, config: cfg })
-      ) {
-        const codexProvider = normalizeProviderId(OPENAI_CODEX_PROVIDER_ID);
-        syntheticProvidersToProbe.add(codexProvider);
-        syntheticProvidersToProbe.add(aliasMap[codexProvider] ?? codexProvider);
-        syntheticProvidersToProbe.add("codex");
-      }
+        openAIProviderUsesCodexRuntimeByDefault({ provider: usage.provider, config: cfg }),
+    );
+    if (codexRuntimeAuthUsages.length > 0) {
+      syntheticProvidersToProbe.add(codexProvider);
+      syntheticProvidersToProbe.add(codexProviderAlias);
+      syntheticProvidersToProbe.add("codex");
     }
     for (const provider of syntheticProvidersToProbe) {
       const normalized = normalizeProviderId(provider);
@@ -438,8 +440,7 @@ export async function modelsStatusCommand(
         expiresAt: resolved.expiresAt,
       };
       syntheticAuthByProvider.set(normalized, syntheticAuth);
-      const codexProvider = normalizeProviderId(OPENAI_CODEX_PROVIDER_ID);
-      if (normalized === "codex" || (aliasMap[codexProvider] ?? codexProvider) === normalized) {
+      if (normalized === "codex" || normalized === codexProviderAlias) {
         syntheticAuthByProvider.set(codexProvider, syntheticAuth);
       }
     }
@@ -453,7 +454,15 @@ export async function modelsStatusCommand(
     const shellFallbackEnabled =
       shouldEnableShellEnvFallback(process.env) || cfg.env?.shellEnv?.enabled === true;
 
-    const providerAuth = providers
+    const providerAuth = Array.from(
+      new Set([
+        ...providers,
+        ...(codexRuntimeAuthUsages.length > 0 && syntheticAuthByProvider.has(codexProvider)
+          ? [codexProvider]
+          : []),
+      ]),
+    )
+      .toSorted((a, b) => a.localeCompare(b))
       .map((provider) =>
         resolveProviderAuthOverview({
           provider,
@@ -477,8 +486,38 @@ export async function modelsStatusCommand(
         return hasAny;
       });
     const providerAuthMap = new Map(providerAuth.map((entry) => [entry.provider, entry]));
+    const missingProviderAuthEffective: ProviderAuthOverview["effective"] = {
+      kind: "missing",
+      detail: "missing",
+    };
     const resolveProviderAuthHealthId = (provider: string): string =>
       resolveProviderIdForAuth(provider, envLookupParams);
+    const resolveRuntimeAuthRouteEffective = (
+      provider: string,
+    ): ProviderAuthOverview["effective"] => {
+      const direct = providerAuthMap.get(provider)?.effective;
+      if (direct && direct.kind !== "missing") {
+        return direct;
+      }
+      const orderedProfiles = resolveAuthProfileOrder({
+        cfg,
+        store,
+        provider,
+      });
+      const profileId = orderedProfiles[0];
+      const credential = profileId ? store.profiles[profileId] : undefined;
+      if (profileId && credential) {
+        const sourceProvider = resolveProviderAuthHealthId(credential.provider);
+        const source = providerAuthMap.get(sourceProvider)?.effective;
+        return source && source.kind !== "missing"
+          ? source
+          : {
+              kind: "profiles",
+              detail: `${profileId} (${credential.provider})`,
+            };
+      }
+      return direct ?? missingProviderAuthEffective;
+    };
     const hasUsableNonProfileAuth = (provider: string): boolean => {
       const authProvider = resolveProviderAuthHealthId(provider);
       for (const candidate of new Set([provider, authProvider])) {
@@ -523,6 +562,23 @@ export async function modelsStatusCommand(
         hasUsableProviderAuth(OPENAI_CODEX_PROVIDER_ID)
       );
     };
+    const runtimeAuthRoutes = Array.from(
+      new Map(
+        codexRuntimeAuthUsages.map((usage) => {
+          const effective = resolveRuntimeAuthRouteEffective(codexProvider);
+          return [
+            `${usage.provider}:codex:${codexProvider}`,
+            {
+              provider: usage.provider,
+              runtime: "codex",
+              authProvider: codexProvider,
+              status: hasUsableProviderAuth(codexProvider) ? "usable" : "missing",
+              effective,
+            },
+          ] as const;
+        }),
+      ).values(),
+    ).toSorted((a, b) => a.provider.localeCompare(b.provider));
     const missingProvidersInUse = Array.from(
       new Set(
         providerUses
@@ -730,6 +786,7 @@ export async function modelsStatusCommand(
           },
           providersWithOAuth: providersWithOauth,
           missingProvidersInUse,
+          runtimeAuthRoutes,
           providers: providerAuth,
           unusableProfiles,
           oauth: {
@@ -913,6 +970,27 @@ export async function modelsStatusCommand(
         );
       }
       runtime.log(`- ${theme.heading(entry.provider)} ${bits.join(separator)}`);
+    }
+
+    if (runtimeAuthRoutes.length > 0) {
+      runtime.log("");
+      runtime.log(colorize(rich, theme.heading, "Runtime auth"));
+      for (const route of runtimeAuthRoutes) {
+        runtime.log(
+          `- ${theme.heading(route.provider)} via ${colorize(
+            rich,
+            theme.accentBright,
+            route.runtime,
+          )} uses ${theme.heading(route.authProvider)} ${formatKeyValue(
+            "effective",
+            `${colorize(rich, theme.accentBright, route.effective.kind)}:${colorize(
+              rich,
+              theme.muted,
+              route.effective.detail,
+            )}`,
+          )}${formatSeparator()}${formatKeyValue("status", route.status)}`,
+        );
+      }
     }
 
     if (missingProvidersInUse.length > 0) {

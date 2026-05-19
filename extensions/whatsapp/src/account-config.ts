@@ -28,7 +28,7 @@ function resolveWhatsAppDefaultAccountSharedConfig(
   return sharedDefaults;
 }
 
-function _resolveWhatsAppAccountConfig(
+function resolveWhatsAppAccountConfigForTest(
   cfg: OpenClawConfig,
   accountId: string,
 ): WhatsAppAccountConfig | undefined {
@@ -40,7 +40,7 @@ function resolveMergedNamedWhatsAppAccountConfig(params: {
   accountId: string;
 }): WhatsAppAccountConfig {
   const rootCfg = params.cfg.channels?.whatsapp;
-  const accountConfig = _resolveWhatsAppAccountConfig(params.cfg, params.accountId);
+  const accountConfig = resolveWhatsAppAccountConfigForTest(params.cfg, params.accountId);
   return {
     ...mergeAccountConfig<WhatsAppAccountConfig>({
       channelConfig: rootCfg as WhatsAppAccountConfig | undefined,

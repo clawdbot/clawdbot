@@ -13,7 +13,7 @@ import { onAgentEvent } from "../infra/agent-events.js";
 import { captureEnv, withEnv } from "../test-utils/env.js";
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
 import {
-  __testing,
+  testing,
   addSubagentRunForTests,
   clearSubagentRunSteerRestart,
   getLatestSubagentRunByChildSessionKey,
@@ -200,7 +200,7 @@ describe("subagent registry persistence", () => {
   beforeEach(() => {
     announceSpy.mockReset();
     announceSpy.mockResolvedValue(true);
-    __testing.setDepsForTest({
+    testing.setDepsForTest({
       ...createSubagentRegistryTestDeps(),
       persistSubagentRunsToDisk: fastPersistSubagentRunsToDisk,
       runSubagentAnnounceFlow: announceSpy,
@@ -216,7 +216,7 @@ describe("subagent registry persistence", () => {
   });
 
   afterEach(async () => {
-    __testing.setDepsForTest();
+    testing.setDepsForTest();
     resetSubagentRegistryForTests({ persist: false });
     await drainSessionStoreWriterQueuesForTest();
     clearSessionStoreCacheForTest();

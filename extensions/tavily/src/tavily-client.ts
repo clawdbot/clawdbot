@@ -306,7 +306,8 @@ export async function runTavilyExtract(
   return result;
 }
 
-export const __testing = {
+export const testing = {
   readTavilyJsonResponse,
   resolveEndpoint,
 };
+export { testing as __testing };

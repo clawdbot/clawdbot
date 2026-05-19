@@ -23,6 +23,7 @@ describe("cli-session helpers", () => {
       authEpoch: "auth-epoch",
       authEpochVersion: 2,
       extraSystemPromptHash: "prompt-hash",
+      promptToolNamesHash: "prompt-tools-hash",
       mcpConfigHash: "mcp-hash",
       mcpResumeHash: "mcp-resume-hash",
     });
@@ -36,6 +37,7 @@ describe("cli-session helpers", () => {
       authEpoch: "auth-epoch",
       authEpochVersion: 2,
       extraSystemPromptHash: "prompt-hash",
+      promptToolNamesHash: "prompt-tools-hash",
       mcpConfigHash: "mcp-hash",
       mcpResumeHash: "mcp-resume-hash",
     });
@@ -151,6 +153,17 @@ describe("cli-session helpers", () => {
         authEpoch: "auth-epoch-a",
         authEpochVersion: 2,
         extraSystemPromptHash: "prompt-b",
+        mcpConfigHash: "mcp-a",
+      }),
+    ).toEqual({ invalidatedReason: "system-prompt" });
+    expect(
+      resolveCliSessionReuse({
+        binding,
+        authProfileId: "anthropic:work",
+        authEpoch: "auth-epoch-a",
+        authEpochVersion: 2,
+        extraSystemPromptHash: "prompt-a",
+        promptToolNamesHash: "prompt-tools-b",
         mcpConfigHash: "mcp-a",
       }),
     ).toEqual({ invalidatedReason: "system-prompt" });

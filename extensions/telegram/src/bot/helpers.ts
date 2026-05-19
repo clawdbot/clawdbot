@@ -121,18 +121,35 @@ export function extractTelegramForumFlag(value: unknown): boolean | undefined {
   return typeof forum === "boolean" ? forum : undefined;
 }
 
+export function resolveTelegramMessageForumFlagHint(params: {
+  chatType?: Chat["type"];
+  isForum?: boolean;
+  isTopicMessage?: boolean;
+}): boolean | undefined {
+  if (params.chatType === "supergroup" && params.isTopicMessage === true) {
+    return true;
+  }
+  return typeof params.isForum === "boolean" ? params.isForum : undefined;
+}
+
 export async function resolveTelegramForumFlag(params: {
   chatId: string | number;
   chatType?: Chat["type"];
   isGroup: boolean;
   isForum?: boolean;
+  isTopicMessage?: boolean;
   getChat?: TelegramGetChat;
 }): Promise<boolean> {
-  if (typeof params.isForum === "boolean") {
+  const forumHint = resolveTelegramMessageForumFlagHint({
+    chatType: params.chatType,
+    isForum: params.isForum,
+    isTopicMessage: params.isTopicMessage,
+  });
+  if (typeof forumHint === "boolean") {
     if (params.isGroup && params.chatType === "supergroup") {
-      cacheTelegramForumFlag(params.chatId, params.isForum);
+      cacheTelegramForumFlag(params.chatId, forumHint);
     }
-    return params.isForum;
+    return forumHint;
   }
   if (!params.isGroup || params.chatType !== "supergroup" || !params.getChat) {
     return false;

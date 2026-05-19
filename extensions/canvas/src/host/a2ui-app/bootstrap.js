@@ -484,7 +484,7 @@ class OpenClawA2UIHost extends LitElement {
       ...(Object.keys(context).length ? { context } : {}),
     };
 
-    globalThis.__openclawLastA2UIAction = userAction;
+    globalThis["__openclawLastA2UIAction"] = userAction;
 
     const handler =
       globalThis.webkit?.messageHandlers?.openclawCanvasA2UIAction ??

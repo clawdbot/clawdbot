@@ -32,7 +32,7 @@ vi.mock("./outbound/deliver.js", () => ({
 type SessionMaintenanceWarningModule = typeof import("./session-maintenance-warning.js");
 
 let deliverSessionMaintenanceWarning: SessionMaintenanceWarningModule["deliverSessionMaintenanceWarning"];
-let resetSessionMaintenanceWarningForTests: SessionMaintenanceWarningModule["__testing"]["resetSessionMaintenanceWarningForTests"];
+let resetSessionMaintenanceWarningForTests: SessionMaintenanceWarningModule["testing"]["resetSessionMaintenanceWarningForTests"];
 
 function createParams(
   overrides: Partial<Parameters<typeof deliverSessionMaintenanceWarning>[0]> = {},
@@ -93,7 +93,7 @@ describe("deliverSessionMaintenanceWarning", () => {
     }));
     ({
       deliverSessionMaintenanceWarning,
-      __testing: { resetSessionMaintenanceWarningForTests },
+      testing: { resetSessionMaintenanceWarningForTests },
     } = await import("./session-maintenance-warning.js"));
   });
 

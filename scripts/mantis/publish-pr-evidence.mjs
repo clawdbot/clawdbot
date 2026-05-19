@@ -316,37 +316,27 @@ function hasVisibleProofArtifacts(manifest) {
   );
 }
 
-function isSkippedNoVisualProof(manifest) {
-  const comparison = manifest.comparison ?? {};
-  return (
-    !hasVisibleProofArtifacts(manifest) &&
-    comparison.baseline?.status === "skipped" &&
-    comparison.candidate?.status === "skipped"
-  );
+function isTelegramDesktopProof(manifest) {
+  return manifest.id === "telegram-desktop-proof" || manifest.scenario === "telegram-desktop-proof";
 }
 
 function publicSummary(manifest) {
-  if (isSkippedNoVisualProof(manifest)) {
-    return "Mantis did not generate before/after GIFs because this PR does not have a clean Telegram-visible before/after proof in the standard Mantis run.";
-  }
   return manifest.summary ?? "Mantis captured QA evidence for this scenario.";
 }
 
 function overallStatus(manifest) {
-  if (isSkippedNoVisualProof(manifest)) {
-    return "skipped";
-  }
   const pass = manifest.comparison?.pass;
   return typeof pass === "boolean" ? String(pass) : "";
 }
 
-export function shouldPublishPrComment(manifest) {
-  if (!isSkippedNoVisualProof(manifest)) {
+export function shouldPublishPrComment(manifest, { requestSource } = {}) {
+  if (!isTelegramDesktopProof(manifest) || hasVisibleProofArtifacts(manifest)) {
     return true;
   }
-  return !/(authorization[- ]?error|credential infrastructure|logged[- ]out|login screen|welcome screen|bad telegram session)/iu.test(
-    manifest.summary ?? "",
-  );
+  if (requestSource === "pull_request_target") {
+    return false;
+  }
+  return manifest.comparison?.pass === true;
 }
 
 export function renderEvidenceComment({
@@ -593,7 +583,7 @@ export async function publishEvidence(rawArgs = process.argv.slice(2)) {
     runUrl: args.run_url,
     treeUrl: published.treeUrl,
   });
-  if (!shouldPublishPrComment(manifest)) {
+  if (!shouldPublishPrComment(manifest, { requestSource: args.request_source })) {
     console.log("Skipped Mantis QA evidence PR comment because the run did not capture proof.");
     return;
   }

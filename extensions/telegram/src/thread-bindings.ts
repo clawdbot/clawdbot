@@ -917,6 +917,7 @@ export async function resetTelegramThreadBindingsForTests() {
   getThreadBindingsState().bindingsByAccountConversation.clear();
 }
 
-export const __testing = {
+export const testing = {
   resetTelegramThreadBindingsForTests,
 };
+export { testing as __testing };

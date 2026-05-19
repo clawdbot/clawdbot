@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import "../test-support/browser-security.mock.js";
 import { BROWSER_NAVIGATION_BLOCKED_MESSAGE } from "./errors.js";
 import { DEFAULT_DOWNLOAD_DIR, DEFAULT_TRACE_DIR, DEFAULT_UPLOAD_DIR } from "./paths.js";
 import {
@@ -27,6 +28,8 @@ type GuardedCurrentTabRouteCase = {
   body?: Record<string, unknown>;
   mockName:
     | "cookiesGetViaPlaywright"
+    | "executeActViaPlaywright"
+    | "highlightViaPlaywright"
     | "pdfViaPlaywright"
     | "getConsoleMessagesViaPlaywright"
     | "getPageErrorsViaPlaywright"
@@ -73,6 +76,28 @@ const guardedCurrentTabRouteCases: readonly GuardedCurrentTabRouteCase[] = [
     mockName: "responseBodyViaPlaywright",
   },
   {
+    method: "POST",
+    path: "/act",
+    body: { targetId: "abcd1234", kind: "evaluate", fn: "() => document.body.innerText" },
+    mockName: "executeActViaPlaywright",
+  },
+  {
+    method: "POST",
+    path: "/act",
+    body: {
+      targetId: "abcd1234",
+      kind: "batch",
+      actions: [{ kind: "evaluate", fn: "() => document.body.innerText" }],
+    },
+    mockName: "executeActViaPlaywright",
+  },
+  {
+    method: "POST",
+    path: "/highlight",
+    body: { targetId: "abcd1234", ref: "e1" },
+    mockName: "highlightViaPlaywright",
+  },
+  {
     method: "GET",
     path: "/cookies?targetId=abcd1234",
     mockName: "cookiesGetViaPlaywright",
@@ -93,6 +118,19 @@ const guardedCurrentTabRouteCases: readonly GuardedCurrentTabRouteCase[] = [
     path: "/trace/stop",
     body: { targetId: "abcd1234" },
     mockName: "traceStopViaPlaywright",
+  },
+] as const;
+
+const tabManagementActCases = [
+  {
+    kind: "resize",
+    body: { targetId: "abcd1234", kind: "resize", width: 1024, height: 768 },
+    mockName: "resizeViewportViaPlaywright",
+  },
+  {
+    kind: "close",
+    body: { targetId: "abcd1234", kind: "close" },
+    mockName: "closePageViaPlaywright",
   },
 ] as const;
 
@@ -559,6 +597,20 @@ describe("browser control server", () => {
       const body = (await res.json()) as { error?: unknown };
       expect(body.error).toBe(BROWSER_NAVIGATION_BLOCKED_MESSAGE);
       expect(pwMocks[routeCase.mockName]).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(tabManagementActCases)(
+    "allows tab-management act:$kind on disallowed current tab URLs",
+    async ({ body, mockName }) => {
+      setBrowserControlServerSsrFPolicy({ allowPrivateNetwork: false });
+      setBrowserControlServerTabUrl("http://127.0.0.1:8080/admin");
+      const base = await startServerAndBase();
+
+      const res = await postJson<{ ok?: boolean }>(`${base}/act`, body);
+
+      expect(res.ok).toBe(true);
+      expect(pwMocks[mockName]).toHaveBeenCalled();
     },
   );
 

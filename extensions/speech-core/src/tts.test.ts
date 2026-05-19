@@ -55,7 +55,7 @@ const transcodeAudioBufferMock = vi.hoisted(() =>
   >(async () => ({ ok: false, reason: "platform-unsupported" })),
 );
 
-vi.mock("./audio-transcode.js", () => ({
+vi.mock("openclaw/plugin-sdk/media-runtime", () => ({
   transcodeAudioBuffer: transcodeAudioBufferMock,
 }));
 
@@ -107,7 +107,7 @@ vi.mock("../api.js", async () => {
 });
 
 const {
-  _test,
+  testApi,
   buildTtsSystemPromptHint,
   getTtsPersona,
   getTtsProvider,
@@ -233,11 +233,11 @@ describe("speech-core native voice-note routing", () => {
 
   it("resolves voice delivery support from channel capabilities", () => {
     for (const channel of nativeVoiceNoteChannels) {
-      expect(_test.supportsNativeVoiceNoteTts(channel)).toBe(true);
-      expect(_test.supportsNativeVoiceNoteTts(channel.toUpperCase())).toBe(true);
+      expect(testApi.supportsNativeVoiceNoteTts(channel)).toBe(true);
+      expect(testApi.supportsNativeVoiceNoteTts(channel.toUpperCase())).toBe(true);
     }
-    expect(_test.supportsNativeVoiceNoteTts("slack")).toBe(false);
-    expect(_test.supportsNativeVoiceNoteTts(undefined)).toBe(false);
+    expect(testApi.supportsNativeVoiceNoteTts("slack")).toBe(false);
+    expect(testApi.supportsNativeVoiceNoteTts(undefined)).toBe(false);
   });
 
   it("tells generic TTS guidance to defer to MEMORY voice-delivery instructions", () => {
@@ -400,7 +400,7 @@ describe("speech-core native voice-note routing", () => {
   it.each(["feishu", "whatsapp"] as const)(
     "marks %s voice-note TTS for channel-side transcoding when provider returns mp3",
     async (channel) => {
-      expect(_test.supportsTranscodedVoiceNoteTts(channel)).toBe(true);
+      expect(testApi.supportsTranscodedVoiceNoteTts(channel)).toBe(true);
       await expectTtsPayloadResult({
         channel,
         prefsName: `openclaw-speech-core-tts-${channel}-mp3-test`,

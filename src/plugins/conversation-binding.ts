@@ -1003,7 +1003,7 @@ export function buildPluginBindingResolvedText(params: PluginBindingResolveResul
   return `Allowed ${params.request.pluginName ?? params.request.pluginId} to bind this conversation once.${summarySuffix}`;
 }
 
-export const __testing = {
+export const testing = {
   reset() {
     pendingRequests.clear();
     const state = getPluginBindingGlobalState();
@@ -1012,3 +1012,4 @@ export const __testing = {
     state.fallbackNoticeBindingIds.clear();
   },
 };
+export { testing as __testing };

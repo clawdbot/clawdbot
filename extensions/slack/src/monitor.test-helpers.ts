@@ -1,4 +1,5 @@
 import { Mock, vi } from "vitest";
+import { clearSlackInboundDeliveryStateForTest } from "./monitor/inbound-delivery-state.js";
 
 type SlackHandler = (args: unknown) => Promise<void>;
 type SlackMiddleware = (args: { next: () => Promise<void> } & Record<string, unknown>) => unknown;
@@ -72,11 +73,11 @@ function ensureSlackTestRuntime(): {
     __slackHandlers?: Map<string, SlackHandler>;
     __slackClient?: SlackClient;
   };
-  if (!globalState.__slackHandlers) {
-    globalState.__slackHandlers = new Map<string, SlackHandler>();
+  if (!globalState["__slackHandlers"]) {
+    globalState["__slackHandlers"] = new Map<string, SlackHandler>();
   }
-  if (!globalState.__slackClient) {
-    globalState.__slackClient = {
+  if (!globalState["__slackClient"]) {
+    globalState["__slackClient"] = {
       auth: { test: vi.fn().mockResolvedValue({ user_id: "bot-user" }) },
       conversations: {
         info: vi.fn().mockResolvedValue({
@@ -108,8 +109,8 @@ function ensureSlackTestRuntime(): {
     };
   }
   return {
-    handlers: globalState.__slackHandlers,
-    client: globalState.__slackClient,
+    handlers: globalState["__slackHandlers"],
+    client: globalState["__slackClient"],
   };
 }
 
@@ -191,6 +192,7 @@ export const defaultSlackTestConfig = () => ({
 });
 
 export function resetSlackTestState(config: Record<string, unknown> = defaultSlackTestConfig()) {
+  clearSlackInboundDeliveryStateForTest();
   slackTestState.config = config;
   slackTestState.sendMock.mockReset().mockResolvedValue(undefined);
   slackTestState.replyMock.mockReset();
@@ -208,6 +210,17 @@ export function resetSlackTestState(config: Record<string, unknown> = defaultSla
     .mockImplementation(async ({ entries }) =>
       entries.map((input) => ({ input, resolved: false })),
     );
+  const client = getSlackClient();
+  client.auth.test.mockReset().mockResolvedValue({ user_id: "bot-user" });
+  client.conversations.info.mockReset().mockResolvedValue({
+    channel: { name: "dm", is_im: true },
+  });
+  client.conversations.replies.mockReset().mockResolvedValue({ messages: [] });
+  client.conversations.history.mockReset().mockResolvedValue({ messages: [] });
+  client.users.info.mockReset().mockResolvedValue({
+    user: { profile: { display_name: "Ada" } },
+  });
+  client.assistant.threads.setStatus.mockReset().mockResolvedValue({ ok: true });
   getSlackHandlers()?.clear();
 }
 

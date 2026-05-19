@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { __testing, type EmbeddedPiActiveSessionSteerTarget } from "./attempt.js";
+import { testing, type EmbeddedPiActiveSessionSteerTarget } from "./attempt.js";
 
 describe("embedded Pi queued steering cancellation", () => {
   it("waits for the queued user message_end transcript boundary", async () => {
@@ -12,7 +12,7 @@ describe("embedded Pi queued steering cancellation", () => {
         return () => {};
       },
     };
-    const wait = __testing.steerAndWaitForTranscriptCommit(
+    const wait = testing.steerAndWaitForTranscriptCommit(
       activeSession,
       "queued completion",
       10_000,
@@ -79,7 +79,7 @@ describe("embedded Pi queued steering cancellation", () => {
     };
 
     await expect(
-      __testing.cancelQueuedSteeringMessage(activeSession, "timed-out completion announce"),
+      testing.cancelQueuedSteeringMessage(activeSession, "timed-out completion announce"),
     ).resolves.toBe(true);
 
     expect(queueMessages).toEqual([unrelatedMessage, trailingMessage]);
@@ -121,7 +121,7 @@ describe("embedded Pi queued steering cancellation", () => {
       },
     };
 
-    const wait = __testing.steerAndWaitForTranscriptCommit(
+    const wait = testing.steerAndWaitForTranscriptCommit(
       activeSession,
       "completion after parent stopped",
       10_000,
@@ -168,7 +168,7 @@ describe("embedded Pi queued steering cancellation", () => {
         },
       };
 
-      const wait = __testing.steerAndWaitForTranscriptCommit(
+      const wait = testing.steerAndWaitForTranscriptCommit(
         activeSession,
         "completion survives retry",
         10_000,
@@ -220,7 +220,7 @@ describe("embedded Pi queued steering cancellation", () => {
         },
       };
 
-      const wait = __testing.steerAndWaitForTranscriptCommit(
+      const wait = testing.steerAndWaitForTranscriptCommit(
         activeSession,
         "completion survives compaction",
         10_000,

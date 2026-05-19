@@ -215,8 +215,8 @@ export function aggregateOAuthStatus(
     // Compile-time guard: exhaustiveness over AuthProfileHealthStatus. If
     // auth-health ever adds a new variant without updating this rollup,
     // TypeScript will fail the `never` assignment.
-    const _exhaustive: never = Array.from(statuses)[0] as never;
-    void _exhaustive;
+    const exhaustive: never = Array.from(statuses)[0] as never;
+    void exhaustive;
     status = "static";
   }
   const expirable = oauth

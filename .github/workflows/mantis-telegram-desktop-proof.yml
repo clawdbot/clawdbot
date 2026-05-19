@@ -308,16 +308,36 @@ jobs:
         run: |
           set -euo pipefail
           current_created="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" --jq .created_at)"
+          stale_before="$(date -u -d '8 hours ago' +%Y-%m-%dT%H:%M:%SZ)"
+          run_has_active_jobs() {
+            local run_id="$1"
+            local run_state="$2"
+            if [[ "$run_state" != "in_progress" ]]; then
+              return 0
+            fi
+            local active_jobs
+            active_jobs="$(gh run view "$run_id" --repo "$GITHUB_REPOSITORY" --json jobs --jq '[.jobs[] | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "pending" or .status == "requested")] | length')"
+            [[ "$active_jobs" != "0" ]]
+          }
           while true; do
-            blockers="$(
+            candidates="$(
               for workflow in mantis-telegram-desktop-proof.yml mantis-telegram-live.yml; do
-                gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" --limit 100 --json databaseId,status,createdAt,url \
-                  | jq -r \
-                    --argjson current_id "$GITHUB_RUN_ID" \
-                    --arg current_created "$current_created" \
-                    '.[] | select(.databaseId != $current_id) | select(.createdAt < $current_created or (.createdAt == $current_created and .databaseId < $current_id)) | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "pending" or .status == "requested") | "\(.createdAt)\t#\(.databaseId)\t\(.status)\t\(.url)"'
+                for status in queued in_progress waiting pending requested; do
+                  gh run list --repo "$GITHUB_REPOSITORY" --workflow "$workflow" --status "$status" --limit 100 --json databaseId,status,createdAt,url \
+                    | jq -r \
+                      --argjson current_id "$GITHUB_RUN_ID" \
+                      --arg current_created "$current_created" \
+                      --arg stale_before "$stale_before" \
+                      '.[] | select(.databaseId != $current_id) | select(.createdAt >= $stale_before) | select(.createdAt < $current_created or (.createdAt == $current_created and .databaseId < $current_id)) | "\(.createdAt)\t#\(.databaseId)\t\(.status)\t\(.url)"'
+                done
               done | sort -u
             )"
+            blockers=""
+            while IFS=$'\t' read -r created run_id run_state url; do
+              if [[ -n "$run_id" ]] && run_has_active_jobs "${run_id#\#}" "$run_state"; then
+                blockers+="${created}"$'\t'"${run_id}"$'\t'"${run_state}"$'\t'"${url}"$'\n'
+              fi
+            done <<<"$candidates"
             if [[ -z "$blockers" ]]; then
               break
             fi
@@ -406,7 +426,7 @@ jobs:
             printf '%s\n' 'Defaults env_keep += "BASELINE_REF BASELINE_SHA CANDIDATE_REF CANDIDATE_SHA"'
             printf '%s\n' 'Defaults env_keep += "CRABBOX_ACCESS_CLIENT_ID CRABBOX_ACCESS_CLIENT_SECRET CRABBOX_COORDINATOR CRABBOX_COORDINATOR_TOKEN CRABBOX_LEASE_ID CRABBOX_PROVIDER"'
             printf '%s\n' 'Defaults env_keep += "GH_TOKEN MANTIS_CANDIDATE_TRUST MANTIS_INSTRUCTIONS MANTIS_OUTPUT_DIR MANTIS_PR_NUMBER"'
-            printf '%s\n' 'Defaults env_keep += "OPENCLAW_BUILD_PRIVATE_QA OPENCLAW_ENABLE_PRIVATE_QA_CLI OPENCLAW_QA_CONVEX_SECRET_CI OPENCLAW_QA_CONVEX_SITE_URL OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN"'
+            printf '%s\n' 'Defaults env_keep += "OPENCLAW_BUILD_PRIVATE_QA OPENCLAW_ENABLE_PRIVATE_QA_CLI OPENCLAW_QA_CONVEX_SECRET_CI OPENCLAW_QA_CONVEX_SITE_URL OPENCLAW_QA_CREDENTIAL_OWNER_ID OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN"'
             printf '%s\n' 'Defaults env_keep += "OPENCLAW_TELEGRAM_USER_CRABBOX_BIN OPENCLAW_TELEGRAM_USER_CRABBOX_PROVIDER OPENCLAW_TELEGRAM_USER_DRIVER_SCRIPT OPENCLAW_TELEGRAM_USER_PROOF_CMD"'
           } | sudo tee /etc/sudoers.d/mantis-codex-env >/dev/null
           sudo chmod 0440 /etc/sudoers.d/mantis-codex-env
@@ -442,6 +462,7 @@ jobs:
           MANTIS_PR_NUMBER: ${{ needs.resolve_request.outputs.pr_number }}
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+          OPENCLAW_QA_CREDENTIAL_OWNER_ID: mantis-telegram-desktop-${{ github.run_id }}-${{ github.run_attempt }}
           OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR: ${{ secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR }}
           OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN: ${{ secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN }}
           OPENCLAW_TELEGRAM_USER_CRABBOX_BIN: /usr/local/bin/crabbox
@@ -459,6 +480,29 @@ jobs:
           safety-strategy: unprivileged-user
           codex-user: codex
           allow-bot-users: clawsweeper[bot]
+
+      - name: Release leaked Telegram proof leases
+        if: ${{ always() }}
+        env:
+          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -d .artifacts/qa-e2e ]]; then
+            exit 0
+          fi
+          mapfile -d '' lease_files < <(sudo find .artifacts/qa-e2e -path '*/telegram-user-crabbox/*/.session/lease.json' -type f -print0)
+          if [[ "${#lease_files[@]}" -eq 0 ]]; then
+            exit 0
+          fi
+          for lease_file in "${lease_files[@]}"; do
+            sudo -u codex env \
+              OPENCLAW_QA_CONVEX_SECRET_CI="$OPENCLAW_QA_CONVEX_SECRET_CI" \
+              OPENCLAW_QA_CONVEX_SITE_URL="$OPENCLAW_QA_CONVEX_SITE_URL" \
+              node --import tsx "$GITHUB_WORKSPACE/scripts/e2e/telegram-user-credential.ts" \
+                release --lease-file "$lease_file"
+          done
 
       - name: Inspect Mantis evidence manifest
         id: inspect
@@ -479,7 +523,7 @@ jobs:
       - name: Upload Mantis Telegram desktop artifacts
         id: upload_artifact
         if: ${{ always() && steps.inspect.outputs.output_dir != '' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mantis-telegram-desktop-proof-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.inspect.outputs.output_dir }}

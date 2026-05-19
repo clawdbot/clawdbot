@@ -28,4 +28,5 @@ export function wrapCloudflareAiGatewayProviderStream(
   return createCloudflareAiGatewayAnthropicThinkingPrefillWrapper(ctx.streamFn);
 }
 
-export const __testing = { log, shouldPatchAnthropicMessagesPayload };
+export const testing = { log, shouldPatchAnthropicMessagesPayload };
+export { testing as __testing };

@@ -2,7 +2,7 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import { fetchWithSsrFGuard } from "../runtime-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import {
-  __testing as googleAuthRuntimeTesting,
+  testing as googleAuthRuntimeTesting,
   getGoogleAuthTransport,
   loadGoogleAuthRuntime,
   resolveValidatedGoogleChatCredentials,
@@ -207,7 +207,7 @@ export async function verifyGoogleChatRequest(params: {
   return { ok: false, reason: "unsupported audience type" };
 }
 
-export const __testing = {
+export const testing = {
   resetGoogleChatAuthForTests(): void {
     authCache.clear();
     cachedCerts = null;
@@ -215,3 +215,4 @@ export const __testing = {
     googleAuthRuntimeTesting.resetGoogleAuthRuntimeForTests();
   },
 };
+export { testing as __testing };

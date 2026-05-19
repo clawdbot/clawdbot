@@ -4,7 +4,7 @@ import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import "./monitor.send-mocks.js";
 import "./zalo-js.test-mocks.js";
 import { resolveZalouserAccountSync } from "./accounts.js";
-import { __testing, monitorZalouserProvider } from "./monitor.js";
+import { testing, monitorZalouserProvider } from "./monitor.js";
 import {
   sendDeliveredZalouserMock,
   sendMessageZalouserMock,
@@ -317,7 +317,7 @@ async function processGroupControlCommand(params: {
   content?: string;
   commandContent?: string;
 }) {
-  await __testing.processMessage({
+  await testing.processMessage({
     message: createGroupMessage({
       content: params.content ?? "/new",
       commandContent: params.commandContent ?? "/new",
@@ -389,7 +389,7 @@ describe("zalouser monitor group mention gating", () => {
       >;
     };
   }) {
-    await __testing.processMessage({
+    await testing.processMessage({
       message: params.message,
       account: params.account ?? createAccount(),
       config: createConfig(),
@@ -538,7 +538,7 @@ describe("zalouser monitor group mention gating", () => {
     };
     const account = resolveZalouserAccountSync({ cfg, accountId: "default" });
 
-    await __testing.processMessage({
+    await testing.processMessage({
       message: createGroupMessage({
         content: "ping @bot",
         hasAnyMention: true,
@@ -598,7 +598,7 @@ describe("zalouser monitor group mention gating", () => {
       replyPayload: { text: replyText },
     });
 
-    await __testing.processMessage({
+    await testing.processMessage({
       message: createDmMessage({
         content: "hello",
       }),
@@ -627,7 +627,7 @@ describe("zalouser monitor group mention gating", () => {
     const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime({
       commandAuthorized: false,
     });
-    await __testing.processMessage({
+    await testing.processMessage({
       message: createDmMessage({ senderId: "321" }),
       account: {
         ...createAccount(),
@@ -680,7 +680,7 @@ describe("zalouser monitor group mention gating", () => {
     const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime({
       commandAuthorized: false,
     });
-    await __testing.processMessage({
+    await testing.processMessage({
       message: createGroupMessage({
         content: "ping @bot",
         hasAnyMention: true,
@@ -709,7 +709,7 @@ describe("zalouser monitor group mention gating", () => {
     const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime({
       commandAuthorized: false,
     });
-    await __testing.processMessage({
+    await testing.processMessage({
       message: createGroupMessage({
         content: "ping @bot",
         hasAnyMention: true,
@@ -743,7 +743,7 @@ describe("zalouser monitor group mention gating", () => {
     const { dispatchReplyWithBufferedBlockDispatcher } = installRuntime({
       commandAuthorized: false,
     });
-    await __testing.processMessage({
+    await testing.processMessage({
       message: createGroupMessage({
         content: "ping @bot",
         hasAnyMention: true,
@@ -861,7 +861,7 @@ describe("zalouser monitor group mention gating", () => {
       commandAuthorized: false,
     });
     const account = createAccount();
-    await __testing.processMessage({
+    await testing.processMessage({
       message: createDmMessage({ content: "/new", commandContent: "/new" }),
       account: {
         ...account,
@@ -882,7 +882,7 @@ describe("zalouser monitor group mention gating", () => {
       commandAuthorized: false,
     });
     const account = createAccount();
-    await __testing.processMessage({
+    await testing.processMessage({
       message: createDmMessage({ content: "hello there" }),
       account: {
         ...account,
@@ -911,7 +911,7 @@ describe("zalouser monitor group mention gating", () => {
     };
     const account = createAccount();
     const config = createConfig();
-    await __testing.processMessage({
+    await testing.processMessage({
       message: createGroupMessage({
         content: "first unmentioned line",
         msgId: "history-1",
@@ -926,7 +926,7 @@ describe("zalouser monitor group mention gating", () => {
     });
     expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
 
-    await __testing.processMessage({
+    await testing.processMessage({
       message: createGroupMessage({
         content: "second line @bot",
         hasAnyMention: true,
@@ -949,7 +949,7 @@ describe("zalouser monitor group mention gating", () => {
     ]);
     expect(firstDispatch?.ctx?.Body ?? "").toContain("first unmentioned line");
 
-    await __testing.processMessage({
+    await testing.processMessage({
       message: createGroupMessage({
         content: "third line @bot",
         hasAnyMention: true,

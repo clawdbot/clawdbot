@@ -12,7 +12,9 @@ import {
   disableUnavailableSkillsInConfig,
 } from "../commands/doctor-skills.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { hasAmbiguousGatewayAuthModeConfig } from "../gateway/auth-mode-policy.js";
+import { resolveGatewayAuth } from "../gateway/auth.js";
 import { registerHealthCheck } from "./health-check-registry.js";
 import type { HealthCheck, HealthFinding } from "./health-checks.js";
 
@@ -84,6 +86,403 @@ const commandOwnerCheck: HealthCheck = {
           "Set commands.ownerAllowFrom to your channel user id, e.g. `openclaw config set commands.ownerAllowFrom '[\"telegram:123456789\"]'`.",
       },
     ];
+  },
+};
+
+function resolveDoctorMode(cfg: OpenClawConfig): "local" | "remote" {
+  return cfg.gateway?.mode === "remote" ? "remote" : "local";
+}
+
+const gatewayAuthCheck: HealthCheck = {
+  id: "core/doctor/gateway-auth",
+  kind: "core",
+  description: "Local Gateway auth mode has a usable token or another explicit auth mode.",
+  source: "doctor",
+  async detect(ctx) {
+    if (resolveDoctorMode(ctx.cfg) !== "local") {
+      return [];
+    }
+    const gatewayTokenRef = resolveSecretInputRef({
+      value: ctx.cfg.gateway?.auth?.token,
+      defaults: ctx.cfg.secrets?.defaults,
+    }).ref;
+    const auth = resolveGatewayAuth({
+      authConfig: ctx.cfg.gateway?.auth,
+      tailscaleMode: ctx.cfg.gateway?.tailscale?.mode ?? "off",
+    });
+    const needsToken =
+      auth.mode !== "password" &&
+      auth.mode !== "none" &&
+      auth.mode !== "trusted-proxy" &&
+      (auth.mode !== "token" || !auth.token);
+    if (!needsToken) {
+      return [];
+    }
+    if (gatewayTokenRef) {
+      return [
+        {
+          checkId: "core/doctor/gateway-auth",
+          severity: "warning",
+          message: "Gateway token is managed via SecretRef and is currently unavailable.",
+          path: "gateway.auth.token",
+          fixHint: "Resolve or rotate the external secret source, then rerun doctor.",
+        },
+      ];
+    }
+    return [
+      {
+        checkId: "core/doctor/gateway-auth",
+        severity: "warning",
+        message: "Gateway auth is off or missing a token.",
+        path: "gateway.auth",
+        fixHint: "Run `openclaw doctor --fix --generate-gateway-token` to generate a token.",
+      },
+    ];
+  },
+};
+
+const hooksModelCheck: HealthCheck = {
+  id: "core/doctor/hooks-model",
+  kind: "core",
+  description: "hooks.gmail.model resolves to an allowed catalog model.",
+  source: "doctor",
+  async detect(ctx) {
+    if (!ctx.cfg.hooks?.gmail?.model?.trim()) {
+      return [];
+    }
+    const { DEFAULT_MODEL, DEFAULT_PROVIDER } = await import("../agents/defaults.js");
+    const { loadModelCatalog } = await import("../agents/model-catalog.js");
+    const { getModelRefStatus, resolveConfiguredModelRef, resolveHooksGmailModel } =
+      await import("../agents/model-selection.js");
+    const hooksModelRef = resolveHooksGmailModel({
+      cfg: ctx.cfg,
+      defaultProvider: DEFAULT_PROVIDER,
+    });
+    if (!hooksModelRef) {
+      return [
+        {
+          checkId: "core/doctor/hooks-model",
+          severity: "warning",
+          message: `hooks.gmail.model "${ctx.cfg.hooks.gmail.model}" could not be resolved.`,
+          path: "hooks.gmail.model",
+        },
+      ];
+    }
+    const { provider: defaultProvider, model: defaultModel } = resolveConfiguredModelRef({
+      cfg: ctx.cfg,
+      defaultProvider: DEFAULT_PROVIDER,
+      defaultModel: DEFAULT_MODEL,
+    });
+    const catalog = await loadModelCatalog({ config: ctx.cfg });
+    const status = getModelRefStatus({
+      cfg: ctx.cfg,
+      catalog,
+      ref: hooksModelRef,
+      defaultProvider,
+      defaultModel,
+    });
+    const findings: HealthFinding[] = [];
+    if (!status.allowed) {
+      findings.push({
+        checkId: "core/doctor/hooks-model",
+        severity: "warning",
+        message: `hooks.gmail.model "${status.key}" is not in agents.defaults.models allowlist.`,
+        path: "hooks.gmail.model",
+        fixHint: "Add the model to agents.defaults.models or remove hooks.gmail.model.",
+      });
+    }
+    if (!status.inCatalog) {
+      findings.push({
+        checkId: "core/doctor/hooks-model",
+        severity: "warning",
+        message: `hooks.gmail.model "${status.key}" is not in the model catalog.`,
+        path: "hooks.gmail.model",
+        fixHint: "Choose a model from the configured provider catalog.",
+      });
+    }
+    return findings;
+  },
+};
+
+const legacyStateCheck: HealthCheck = {
+  id: "core/doctor/legacy-state",
+  kind: "core",
+  description: "Legacy sessions, agent state, and channel auth paths have been migrated.",
+  source: "doctor",
+  async detect(ctx) {
+    const { detectLegacyStateMigrations } = await import("../commands/doctor-state-migrations.js");
+    const detected = await detectLegacyStateMigrations({ cfg: ctx.cfg });
+    return detected.preview.map(
+      (line): HealthFinding => ({
+        checkId: "core/doctor/legacy-state",
+        severity: "warning",
+        message: line.replace(/^- /, ""),
+        path: detected.stateDir,
+        fixHint: "Run `openclaw doctor --fix` to migrate legacy state.",
+      }),
+    );
+  },
+};
+
+const bootstrapSizeCheck: HealthCheck = {
+  id: "core/doctor/bootstrap-size",
+  kind: "core",
+  description: "Workspace bootstrap files fit within configured injection limits.",
+  source: "doctor",
+  async detect(ctx) {
+    const { buildBootstrapInjectionStats, analyzeBootstrapBudget } =
+      await import("../agents/bootstrap-budget.js");
+    const { resolveBootstrapContextForRun } = await import("../agents/bootstrap-files.js");
+    const { resolveBootstrapMaxChars, resolveBootstrapTotalMaxChars } =
+      await import("../agents/pi-embedded-helpers.js");
+    const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
+    const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForRun({
+      workspaceDir,
+      config: ctx.cfg,
+    });
+    const analysis = analyzeBootstrapBudget({
+      files: buildBootstrapInjectionStats({
+        bootstrapFiles,
+        injectedFiles: contextFiles,
+      }),
+      bootstrapMaxChars: resolveBootstrapMaxChars(ctx.cfg),
+      bootstrapTotalMaxChars: resolveBootstrapTotalMaxChars(ctx.cfg),
+    });
+    const findings: HealthFinding[] = [];
+    for (const file of analysis.truncatedFiles) {
+      findings.push({
+        checkId: "core/doctor/bootstrap-size",
+        severity: "warning",
+        message: `${file.name} exceeds bootstrap limits and will be truncated.`,
+        path: file.path,
+        fixHint: "Reduce the file size or tune agents.defaults.bootstrapMaxChars/TotalMaxChars.",
+      });
+    }
+    for (const file of analysis.nearLimitFiles) {
+      if (file.truncated) {
+        continue;
+      }
+      findings.push({
+        checkId: "core/doctor/bootstrap-size",
+        severity: "info",
+        message: `${file.name} is near the configured bootstrap file limit.`,
+        path: file.path,
+        fixHint: "Reduce the file size or tune agents.defaults.bootstrapMaxChars.",
+      });
+    }
+    if (analysis.totalNearLimit) {
+      findings.push({
+        checkId: "core/doctor/bootstrap-size",
+        severity: analysis.hasTruncation ? "warning" : "info",
+        message: "Total bootstrap context is near the configured total limit.",
+        path: workspaceDir,
+        fixHint: "Reduce bootstrap file sizes or tune agents.defaults.bootstrapTotalMaxChars.",
+      });
+    }
+    return findings;
+  },
+};
+
+function normalizeDoctorNoteLine(line: string): string {
+  return line.replace(/^- /, "").trim();
+}
+
+function noteTextToFinding(params: {
+  checkId: string;
+  severity: HealthFinding["severity"];
+  text: string;
+}): HealthFinding {
+  const lines = params.text.split("\n");
+  const first = normalizeDoctorNoteLine(lines[0] ?? params.text);
+  const rest = lines.slice(1).join("\n");
+  return {
+    checkId: params.checkId,
+    severity: params.severity,
+    message: first,
+    ...(rest ? { fixHint: rest } : {}),
+  };
+}
+
+function inferCapturedNoteSeverity(text: string): HealthFinding["severity"] {
+  if (text.includes("CRITICAL")) {
+    return "error";
+  }
+  if (
+    text.includes("- Fix:") ||
+    text.includes("unavailable") ||
+    text.includes("not found") ||
+    text.includes("missing") ||
+    text.includes("not readable") ||
+    text.includes("not writable") ||
+    text.includes("readonly")
+  ) {
+    return "warning";
+  }
+  return "info";
+}
+
+function createNoteCollector(checkId: string): {
+  readonly findings: readonly HealthFinding[];
+  readonly noteFn: (message: unknown) => void;
+} {
+  const findings: HealthFinding[] = [];
+  const noteFn = (message: unknown): void => {
+    const text = noteMessageToText(message);
+    if (!text.trim()) {
+      return;
+    }
+    const severity = inferCapturedNoteSeverity(text);
+    if (severity === "info") {
+      return;
+    }
+    findings.push(
+      noteTextToFinding({
+        checkId,
+        severity,
+        text,
+      }),
+    );
+  };
+  return {
+    findings,
+    noteFn,
+  };
+}
+
+function noteMessageToText(message: unknown): string {
+  if (message instanceof Error) {
+    return message.message;
+  }
+  if (message == null) {
+    return "";
+  }
+  if (typeof message === "string") {
+    return message;
+  }
+  if (typeof message === "number" || typeof message === "boolean" || typeof message === "bigint") {
+    return String(message);
+  }
+  try {
+    return JSON.stringify(message) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+const claudeCliCheck: HealthCheck = {
+  id: "core/doctor/claude-cli",
+  kind: "core",
+  description: "Claude CLI readiness is captured as structured findings.",
+  source: "doctor",
+  async detect(ctx) {
+    const { noteClaudeCliHealth } = await import("../commands/doctor-claude-cli.js");
+    const collector = createNoteCollector("core/doctor/claude-cli");
+    noteClaudeCliHealth(ctx.cfg, {
+      noteFn: collector.noteFn,
+      ...(ctx.cwd ? { workspaceDir: ctx.cwd } : {}),
+    });
+    return collector.findings;
+  },
+};
+
+const securityCheck: HealthCheck = {
+  id: "core/doctor/security",
+  kind: "core",
+  description: "Security posture checks produce structured findings.",
+  source: "doctor",
+  async detect(ctx) {
+    const { collectSecurityWarnings } = await import("../commands/doctor-security.js");
+    const warnings = await collectSecurityWarnings(ctx.cfg);
+    return warnings.map((warning) =>
+      noteTextToFinding({
+        checkId: "core/doctor/security",
+        severity: warning.includes("CRITICAL") ? "error" : "warning",
+        text: warning,
+      }),
+    );
+  },
+};
+
+const openAIOAuthTlsCheck: HealthCheck = {
+  id: "core/doctor/oauth-tls",
+  kind: "core",
+  description: "OpenAI OAuth TLS prerequisites are satisfied before browser auth.",
+  source: "doctor",
+  async detect(ctx) {
+    const {
+      formatOpenAIOAuthTlsPreflightFix,
+      runOpenAIOAuthTlsPreflight,
+      shouldRunOpenAIOAuthTlsPrerequisites,
+    } = await import("../commands/oauth-tls-preflight.js");
+    if (!shouldRunOpenAIOAuthTlsPrerequisites({ cfg: ctx.cfg, deep: ctx.mode === "doctor" })) {
+      return [];
+    }
+    const result = await runOpenAIOAuthTlsPreflight({ timeoutMs: 4000 });
+    if (result.ok || result.kind !== "tls-cert") {
+      return [];
+    }
+    const fix = formatOpenAIOAuthTlsPreflightFix(result);
+    return [
+      noteTextToFinding({
+        checkId: "core/doctor/oauth-tls",
+        severity: "warning",
+        text: fix,
+      }),
+    ];
+  },
+};
+
+const legacyWhatsAppCrontabCheck: HealthCheck = {
+  id: "core/doctor/legacy-whatsapp-crontab",
+  kind: "core",
+  description: "Legacy WhatsApp crontab health entries are detected as structured findings.",
+  source: "doctor",
+  async detect() {
+    const { collectLegacyWhatsAppCrontabHealthWarning } =
+      await import("../commands/doctor-cron.js");
+    const warning = await collectLegacyWhatsAppCrontabHealthWarning();
+    if (!warning) {
+      return [];
+    }
+    return [
+      noteTextToFinding({
+        checkId: "core/doctor/legacy-whatsapp-crontab",
+        severity: "warning",
+        text: warning,
+      }),
+    ];
+  },
+};
+
+const gatewayPlatformNotesCheck: HealthCheck = {
+  id: "core/doctor/gateway-services/platform-notes",
+  kind: "core",
+  description: "Gateway platform notes are captured as structured findings.",
+  source: "doctor",
+  async detect(ctx) {
+    const { collectMacGatewayPlatformWarnings } =
+      await import("../commands/doctor-platform-notes.js");
+    const warnings = await collectMacGatewayPlatformWarnings(ctx.cfg);
+    return warnings.map((warning) =>
+      noteTextToFinding({
+        checkId: "core/doctor/gateway-services/platform-notes",
+        severity: "warning",
+        text: warning,
+      }),
+    );
+  },
+};
+
+const browserCheck: HealthCheck = {
+  id: "core/doctor/browser",
+  kind: "core",
+  description: "Browser readiness is captured as structured findings.",
+  source: "doctor",
+  async detect(ctx) {
+    const { noteChromeMcpBrowserReadiness } = await import("../commands/doctor-browser.js");
+    const collector = createNoteCollector("core/doctor/browser");
+    await noteChromeMcpBrowserReadiness(ctx.cfg, { noteFn: collector.noteFn });
+    return collector.findings;
   },
 };
 
@@ -267,13 +666,62 @@ const finalConfigValidationCheck: HealthCheck = {
   source: "doctor",
   async detect() {
     const { readConfigFileSnapshot } = await import("../config/config.js");
-    const snap = await readConfigFileSnapshot();
+    const snap = await readConfigFileSnapshot({ observe: false });
     if (!snap.exists || snap.valid) {
       return [];
     }
     return configValidationIssuesToHealthFindings(snap.issues);
   },
 };
+
+const workspaceSuggestionsCheck: HealthCheck = {
+  id: "core/doctor/workspace-suggestions",
+  kind: "core",
+  description:
+    "Workspace backup and memory-system suggestions are captured as structured findings.",
+  source: "doctor",
+  async detect(ctx) {
+    const { collectWorkspaceBackupTip } = await import("../commands/doctor-state-integrity.js");
+    const { MEMORY_SYSTEM_PROMPT, shouldSuggestMemorySystem } =
+      await import("../commands/doctor-workspace.js");
+    const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
+    const findings: HealthFinding[] = [];
+    const backupTip = collectWorkspaceBackupTip(workspaceDir);
+    if (backupTip) {
+      findings.push(
+        noteTextToFinding({
+          checkId: "core/doctor/workspace-suggestions",
+          severity: "info",
+          text: backupTip,
+        }),
+      );
+    }
+    if (await shouldSuggestMemorySystem(workspaceDir)) {
+      findings.push(
+        noteTextToFinding({
+          checkId: "core/doctor/workspace-suggestions",
+          severity: "info",
+          text: MEMORY_SYSTEM_PROMPT,
+        }),
+      );
+    }
+    return findings;
+  },
+};
+
+const convertedWorkflowChecks: readonly HealthCheck[] = [
+  claudeCliCheck,
+  gatewayAuthCheck,
+  legacyStateCheck,
+  legacyWhatsAppCrontabCheck,
+  gatewayPlatformNotesCheck,
+  securityCheck,
+  browserCheck,
+  openAIOAuthTlsCheck,
+  hooksModelCheck,
+  bootstrapSizeCheck,
+  workspaceSuggestionsCheck,
+];
 
 let registered = false;
 
@@ -282,6 +730,9 @@ export function registerCoreHealthChecks(): void {
     return;
   }
   registerHealthCheck(gatewayConfigCheck);
+  for (const check of convertedWorkflowChecks) {
+    registerHealthCheck(check);
+  }
   registerHealthCheck(commandOwnerCheck);
   registerHealthCheck(workspaceStatusCheck);
   registerHealthCheck(skillsReadinessCheck);
@@ -296,6 +747,7 @@ export function resetCoreHealthChecksForTest(): void {
 
 export const CORE_HEALTH_CHECKS: readonly HealthCheck[] = [
   gatewayConfigCheck,
+  ...convertedWorkflowChecks,
   commandOwnerCheck,
   workspaceStatusCheck,
   skillsReadinessCheck,

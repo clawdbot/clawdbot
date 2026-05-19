@@ -107,7 +107,7 @@ describe("pw-tools-core", () => {
     await fs.writeFile(uploadPath, "fixture", "utf8");
     const canonicalUploadPath = await fs.realpath(uploadPath);
     const fileChooser = { setFiles: vi.fn(async () => {}) };
-    const waitForEvent = vi.fn(async (_event: string, _opts: unknown) => fileChooser);
+    const waitForEvent = vi.fn(async (eventValue: string, _opts: unknown) => fileChooser);
     setPwToolsCoreCurrentPage({
       waitForEvent,
       keyboard: { press: vi.fn(async () => {}) },

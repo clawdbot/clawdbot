@@ -9,7 +9,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const MIN_NODE_MAJOR = 22;
-const MIN_NODE_MINOR = 16;
+const MIN_NODE_MINOR = 19;
 const MIN_NODE_VERSION = `${MIN_NODE_MAJOR}.${MIN_NODE_MINOR}`;
 
 const parseNodeVersion = (rawVersion) => {
@@ -334,6 +334,72 @@ const isBrowserHelpInvocation = (argv) =>
 const isHelpFastPathDisabled = () =>
   process.env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH === "1";
 
+const normalizeLauncherHomeValue = (value) => {
+  const trimmed = value?.trim();
+  return trimmed && trimmed !== "undefined" && trimmed !== "null" ? trimmed : undefined;
+};
+
+const resolveLauncherOsHomeDir = () =>
+  normalizeLauncherHomeValue(process.env.HOME) ??
+  normalizeLauncherHomeValue(process.env.USERPROFILE) ??
+  os.homedir();
+
+const resolveLauncherHomeDir = () => {
+  const explicit = normalizeLauncherHomeValue(process.env.OPENCLAW_HOME);
+  const rawHome =
+    explicit && (explicit === "~" || explicit.startsWith("~/") || explicit.startsWith("~\\"))
+      ? explicit.replace(/^~(?=$|[\\/])/, resolveLauncherOsHomeDir())
+      : (explicit ?? resolveLauncherOsHomeDir());
+  return path.resolve(rawHome);
+};
+
+const resolveLauncherUserPath = (input) => {
+  if (input === "~") {
+    return resolveLauncherHomeDir();
+  }
+  if (input.startsWith("~/") || input.startsWith("~\\")) {
+    return path.join(resolveLauncherHomeDir(), input.slice(2));
+  }
+  return path.resolve(input);
+};
+
+const resolveLauncherConfigPaths = () => {
+  const explicit = process.env.OPENCLAW_CONFIG_PATH?.trim();
+  if (explicit) {
+    return [resolveLauncherUserPath(explicit)];
+  }
+  const stateOverride = process.env.OPENCLAW_STATE_DIR?.trim();
+  if (stateOverride) {
+    const stateDir = resolveLauncherUserPath(stateOverride);
+    return [path.join(stateDir, "openclaw.json"), path.join(stateDir, "clawdbot.json")];
+  }
+  const homeDir = resolveLauncherHomeDir();
+  return [
+    path.join(homeDir, ".openclaw", "openclaw.json"),
+    path.join(homeDir, ".openclaw", "clawdbot.json"),
+    path.join(homeDir, ".clawdbot", "openclaw.json"),
+    path.join(homeDir, ".clawdbot", "clawdbot.json"),
+  ];
+};
+
+const shouldDeferRootHelpToRuntimeEntry = () => {
+  if (
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR?.trim() ||
+    process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS?.trim()
+  ) {
+    return true;
+  }
+  for (const configPath of resolveLauncherConfigPaths()) {
+    try {
+      const raw = readFileSync(configPath, "utf8");
+      return /\bplugins\b|\$include\b/.test(raw);
+    } catch {
+      continue;
+    }
+  }
+  return false;
+};
+
 const loadPrecomputedHelpText = (key) => {
   try {
     const raw = readFileSync(new URL("./dist/cli-startup-metadata.json", import.meta.url), "utf8");
@@ -349,6 +415,9 @@ const tryOutputBareRootHelp = async () => {
   if (!isBareRootHelpInvocation(process.argv)) {
     return false;
   }
+  if (shouldDeferRootHelpToRuntimeEntry()) {
+    return false;
+  }
   const precomputed = loadPrecomputedHelpText("rootHelpText");
   if (precomputed) {
     process.stdout.write(precomputed);
@@ -358,7 +427,7 @@ const tryOutputBareRootHelp = async () => {
     try {
       const mod = await import(specifier);
       if (typeof mod.outputRootHelp === "function") {
-        mod.outputRootHelp();
+        await mod.outputRootHelp();
         return true;
       }
     } catch (err) {

@@ -6,7 +6,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 vi.mock("@earendil-works/pi-ai", () => createPiAiStreamSimpleMock());
 
 let runExtraParamsCase: typeof import("./extra-params.test-support.js").runExtraParamsCase;
-let extraParamsTesting: typeof import("./extra-params.js").__testing;
+let extraParamsTesting: typeof import("./extra-params.js").testing;
 
 type ToolStreamCase = {
   applyProvider: string;
@@ -29,7 +29,7 @@ function runToolStreamCase(params: ToolStreamCase) {
 
 describe("extra-params: provider tool_stream support", () => {
   beforeEach(async () => {
-    ({ __testing: extraParamsTesting } = await import("./extra-params.js"));
+    ({ testing: extraParamsTesting } = await import("./extra-params.js"));
     ({ runExtraParamsCase } = await import("./extra-params.test-support.js"));
     extraParamsTesting.setProviderRuntimeDepsForTest({
       prepareProviderExtraParams: (params) => {

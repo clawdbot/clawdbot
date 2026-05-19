@@ -94,8 +94,8 @@ describe("message action threading helpers", () => {
     });
 
     expect(result.outboundRoute?.sessionKey).toBe(testCase.expectedSessionKey);
-    expect(actionParams.__sessionKey).toBe(testCase.expectedSessionKey);
-    expect(actionParams.__agentId).toBe("main");
+    expect(actionParams["__sessionKey"]).toBe(testCase.expectedSessionKey);
+    expect(actionParams["__agentId"]).toBe("main");
     expect(ensureOutboundSessionEntry).toHaveBeenCalledTimes(1);
   });
 

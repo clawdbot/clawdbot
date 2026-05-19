@@ -706,9 +706,10 @@ function formatExitValue(value: unknown): string {
   return "unknown";
 }
 
-export const __testing = {
+export const testing = {
   closeCodexAppServerTransport,
   closeCodexAppServerTransportAndWait,
   CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS,
   redactCodexAppServerLinePreview,
 } as const;
+export { testing as __testing };

@@ -355,7 +355,7 @@ describe("buildButtonAttachments", () => {
     });
 
     const action = requireAction(result);
-    expect(action.integration.context._token).toMatch(/^[0-9a-f]{64}$/);
+    expect(action.integration.context["_token"]).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it("includes sanitized action_id in integration context", () => {
@@ -380,7 +380,7 @@ describe("buildButtonAttachments", () => {
     expect(ctx.tweet_id).toBe("123");
     expect(ctx.batch).toBe(true);
     expect(ctx.action_id).toBe("btn");
-    expect(ctx._token).toMatch(/^[0-9a-f]{64}$/);
+    expect(ctx["_token"]).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it("passes callback URL to each button integration", () => {
@@ -437,7 +437,7 @@ describe("buildButtonAttachments", () => {
     });
 
     const ctx = requireAction(result).integration.context;
-    const token = ctx._token as string;
+    const token = ctx["_token"] as string;
     const { _token, ...contextWithoutToken } = ctx;
     expect(verifyInteractionToken(contextWithoutToken, token)).toBe(true);
   });
@@ -449,7 +449,7 @@ describe("buildButtonAttachments", () => {
     });
 
     const ctx = requireAction(result).integration.context;
-    const token = ctx._token as string;
+    const token = ctx["_token"] as string;
 
     // Simulate Mattermost returning context with keys in a different order
     const reordered: Record<string, unknown> = {};

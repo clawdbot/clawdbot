@@ -8,6 +8,10 @@ import type { SlackMessageEvent } from "../types.js";
 import { stripSlackMentionsForCommandDetection } from "./commands.js";
 import type { SlackMonitorContext } from "./context.js";
 import {
+  hasSlackInboundMessageDelivery,
+  recordSlackInboundMessageDeliveries,
+} from "./inbound-delivery-state.js";
+import {
   buildSlackDebounceKey,
   buildTopLevelSlackConversationKey,
 } from "./message-handler/debounce-key.js";
@@ -138,7 +142,21 @@ export function createSlackMessageHandler(params: {
             prepared.ctxPayload.MessageSidLast = ids[ids.length - 1];
           }
         }
-        await dispatchPreparedSlackMessage(prepared);
+        try {
+          await dispatchPreparedSlackMessage(prepared);
+          await recordSlackInboundMessageDeliveries({
+            accountId: ctx.accountId,
+            messages: entries.map((entry) => entry.message),
+          });
+        } catch (error) {
+          if (!(error instanceof SlackRetryableInboundError)) {
+            await recordSlackInboundMessageDeliveries({
+              accountId: ctx.accountId,
+              messages: entries.map((entry) => entry.message),
+            });
+          }
+          throw error;
+        }
       } catch (error) {
         if (error instanceof SlackRetryableInboundError) {
           if (seenMessageKey) {
@@ -201,6 +219,16 @@ export function createSlackMessageHandler(params: {
       return;
     }
     const seenMessageKey = buildSeenMessageKey(message.channel, message.ts);
+    if (
+      seenMessageKey &&
+      (await hasSlackInboundMessageDelivery({
+        accountId: ctx.accountId,
+        channelId: message.channel,
+        ts: message.ts,
+      }))
+    ) {
+      return;
+    }
     const wasSeen = seenMessageKey ? ctx.markMessageSeen(message.channel, message.ts) : false;
     if (seenMessageKey && opts.source === "message" && !wasSeen) {
       // Prime exactly one fallback app_mention allowance immediately so a near-simultaneous

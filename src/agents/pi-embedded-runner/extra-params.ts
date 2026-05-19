@@ -50,7 +50,7 @@ const providerRuntimeDeps = {
 let preparedExtraParamsCache = new WeakMap<OpenClawConfig, Map<string, Record<string, unknown>>>();
 const REQUEST_SCOPED_EXTRA_PARAM_KEYS = new Set(["response_format", "responseFormat"]);
 
-export const __testing = {
+export const testing = {
   setProviderRuntimeDepsForTest(
     deps: Partial<typeof defaultProviderRuntimeDeps> | undefined,
   ): void {
@@ -986,3 +986,4 @@ export function applyExtraParamsToAgent(
 
   return { effectiveExtraParams };
 }
+export { testing as __testing };

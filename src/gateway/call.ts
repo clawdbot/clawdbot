@@ -266,7 +266,7 @@ export function buildGatewayConnectionDetails(
   });
 }
 
-export const __testing = {
+export const testing = {
   setDepsForTests(deps: Partial<typeof defaultGatewayCallDeps> | undefined): void {
     gatewayCallDeps.createGatewayClient =
       deps?.createGatewayClient ?? defaultGatewayCallDeps.createGatewayClient;
@@ -871,3 +871,4 @@ export async function callGateway<T = Record<string, unknown>>(
 export function randomIdempotencyKey() {
   return randomUUID();
 }
+export { testing as __testing };

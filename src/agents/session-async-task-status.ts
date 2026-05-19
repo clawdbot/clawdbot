@@ -8,6 +8,7 @@ export function findActiveSessionTask(params: {
   sessionKey?: string;
   runtime?: TaskRuntime;
   taskKind?: string;
+  task?: string;
   statuses?: ReadonlySet<TaskStatus>;
   sourceIdPrefix?: string;
 }): TaskRecord | undefined {
@@ -17,6 +18,7 @@ export function findActiveSessionTask(params: {
   }
   const statuses = params.statuses ?? DEFAULT_ACTIVE_STATUSES;
   const taskKind = normalizeOptionalString(params.taskKind);
+  const taskLabel = normalizeOptionalString(params.task);
   const sourceIdPrefix = normalizeOptionalString(params.sourceIdPrefix);
   const matches = listTasksForOwnerKey(normalizedSessionKey).filter((task) => {
     if (task.scopeKind !== "session") {
@@ -30,6 +32,12 @@ export function findActiveSessionTask(params: {
     }
     if (taskKind && task.taskKind !== taskKind) {
       return false;
+    }
+    if (taskLabel) {
+      const currentTaskLabel = normalizeOptionalString(task.task);
+      if (currentTaskLabel !== taskLabel) {
+        return false;
+      }
     }
     if (sourceIdPrefix) {
       const sourceId = normalizeOptionalString(task.sourceId) ?? "";

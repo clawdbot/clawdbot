@@ -97,7 +97,7 @@ async function runDangerousNameMatchReply(
   const res = makeRes();
   await handler(req, res);
 
-  expect(res._status).toBe(204);
+  expect(res.status).toBe(204);
   expect(resolveLegacyWebhookNameToChatUserId).toHaveBeenCalledWith({
     incomingUrl: "https://nas.example.com/incoming",
     mutableWebhookUsername: "testuser",
@@ -140,8 +140,8 @@ describe("createWebhookHandler", () => {
     const res = makeRes();
     await handler(req, res);
 
-    expect(res._status).toBe(403);
-    expect(res._body).toContain(params.bodyContains);
+    expect(res.status).toBe(403);
+    expect(res.body).toContain(params.bodyContains);
     expect(deliver).not.toHaveBeenCalled();
   }
 
@@ -185,7 +185,7 @@ describe("createWebhookHandler", () => {
       makeFormBody({ user_id: "123", username: "testuser", text: "hello" }),
       params.options,
     );
-    expect(res._status).toBe(204);
+    expect(res.status).toBe(204);
     expect(deliver).toHaveBeenCalled();
   }
 
@@ -196,7 +196,7 @@ describe("createWebhookHandler", () => {
       deliver,
     });
     const res = await postToWebhook(handler);
-    expect(res._status).toBe(204);
+    expect(res.status).toBe(204);
     return { deliver, res };
   }
 
@@ -220,7 +220,7 @@ describe("createWebhookHandler", () => {
     const res = makeRes();
     await handler(req, res);
 
-    expect(res._status).toBe(405);
+    expect(res.status).toBe(405);
   });
 
   it("returns 400 for missing required fields", async () => {
@@ -234,7 +234,7 @@ describe("createWebhookHandler", () => {
     const res = makeRes();
     await handler(req, res);
 
-    expect(res._status).toBe(400);
+    expect(res.status).toBe(400);
   });
 
   it("returns 408 when request body times out", async () => {
@@ -249,8 +249,8 @@ describe("createWebhookHandler", () => {
     const res = makeRes();
     await handler(req, res);
 
-    expect(res._status).toBe(408);
-    expect(res._body).toContain("timeout");
+    expect(res.status).toBe(408);
+    expect(res.body).toContain("timeout");
   });
 
   it("rejects excess concurrent pre-auth body reads from the same remote IP", async () => {
@@ -269,8 +269,8 @@ describe("createWebhookHandler", () => {
     const runs = requests.map((req, index) => handler(req, responses[index]));
 
     // Default maxInFlightPerKey is 8; 12 total requests leaves 4 rejected with 429.
-    expect(countMatching(responses, (res) => res._status === 0)).toBe(8);
-    expect(countMatching(responses, (res) => res._status === 429)).toBe(4);
+    expect(countMatching(responses, (res) => res.status === 0)).toBe(8);
+    expect(countMatching(responses, (res) => res.status === 429)).toBe(4);
 
     for (const req of requests) {
       req.emit("end");
@@ -295,7 +295,7 @@ describe("createWebhookHandler", () => {
     const res = makeRes();
     await handler(req, res);
 
-    expect(res._status).toBe(401);
+    expect(res.status).toBe(401);
   });
 
   it("rate limits repeated invalid token guesses before the correct token can succeed", async () => {
@@ -329,17 +329,17 @@ describe("createWebhookHandler", () => {
       const res = makeRes();
       await handler(req, res);
 
-      if (res._status === 429) {
+      if (res.status === 429) {
         saw429 = true;
         break;
       }
 
-      if (res._status === 204) {
+      if (res.status === 204) {
         guessedToken = candidate;
         break;
       }
 
-      expect(res._status).toBe(401);
+      expect(res.status).toBe(401);
     }
 
     expect(saw429).toBe(true);
@@ -357,7 +357,7 @@ describe("createWebhookHandler", () => {
     const lockedRes = makeRes();
     await handler(lockedReq, lockedRes);
 
-    expect(lockedRes._status).toBe(429);
+    expect(lockedRes.status).toBe(429);
     expect(deliver).not.toHaveBeenCalled();
   });
 
@@ -384,14 +384,14 @@ describe("createWebhookHandler", () => {
     (invalidReq.socket as { remoteAddress?: string }).remoteAddress = "203.0.113.10";
     const invalidRes = makeRes();
     await handler(invalidReq, invalidRes);
-    expect(invalidRes._status).toBe(401);
+    expect(invalidRes.status).toBe(401);
 
     const validReq = makeReq("POST", validBody);
     (validReq.socket as { remoteAddress?: string }).remoteAddress = "203.0.113.11";
     const validRes = makeRes();
     await handler(validReq, validRes);
 
-    expect(validRes._status).toBe(204);
+    expect(validRes.status).toBe(204);
     expect(deliver).toHaveBeenCalledTimes(1);
   });
 
@@ -411,7 +411,7 @@ describe("createWebhookHandler", () => {
       (req.socket as { remoteAddress?: string }).remoteAddress = "203.0.113.20";
       const res = makeRes();
       await handler(req, res);
-      expect(res._status).toBe(204);
+      expect(res.status).toBe(204);
     }
 
     expect(deliver).toHaveBeenCalledTimes(11);
@@ -438,7 +438,7 @@ describe("createWebhookHandler", () => {
     const res = makeRes();
     await handler(req, res);
 
-    expect(res._status).toBe(204);
+    expect(res.status).toBe(204);
     const message = deliveredMessage(deliver);
     expect(message.body).toBe("Hello from json");
     expect(message.from).toBe("123");
@@ -463,8 +463,8 @@ describe("createWebhookHandler", () => {
     const res = makeRes();
     await handler(req, res);
 
-    expect(res._status).toBe(400);
-    expect(res._body).toContain("Invalid request body");
+    expect(res.status).toBe(400);
+    expect(res.body).toContain("Invalid request body");
     expect(deliver).not.toHaveBeenCalled();
     expect(log.warn).toHaveBeenCalledWith(
       "Failed to parse webhook payload",
@@ -538,13 +538,13 @@ describe("createWebhookHandler", () => {
     const req1 = makeReq("POST", validBody);
     const res1 = makeRes();
     await handler(req1, res1);
-    expect(res1._status).toBe(204);
+    expect(res1.status).toBe(204);
 
     // Second request should be rate limited
     const req2 = makeReq("POST", validBody);
     const res2 = makeRes();
     await handler(req2, res2);
-    expect(res2._status).toBe(429);
+    expect(res2.status).toBe(429);
   });
 
   it("strips trigger word from message", async () => {
@@ -567,14 +567,14 @@ describe("createWebhookHandler", () => {
     const res = makeRes();
     await handler(req, res);
 
-    expect(res._status).toBe(204);
+    expect(res.status).toBe(204);
     // deliver should have been called with the stripped text
     expect(deliveredMessage(deliver).body).toBe("Hello there");
   });
 
   it("responds 204 immediately and delivers async", async () => {
     const { deliver, res } = await runValidReply({ accountIdSuffix: "async-test" });
-    expect(res._body).toBe("");
+    expect(res.body).toBe("");
     const message = deliveredMessage(deliver);
     expect(message.body).toBe("Hello bot");
     expect(message.from).toBe("123");

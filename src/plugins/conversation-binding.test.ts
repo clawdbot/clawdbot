@@ -118,7 +118,7 @@ vi.mock("./runtime.js", async () => {
   };
 });
 
-let __testing: typeof import("./conversation-binding.js").__testing;
+let testing: typeof import("./conversation-binding.js").testing;
 let buildPluginBindingApprovalCustomId: typeof import("./conversation-binding.js").buildPluginBindingApprovalCustomId;
 let detachPluginConversationBinding: typeof import("./conversation-binding.js").detachPluginConversationBinding;
 let getCurrentPluginConversationBinding: typeof import("./conversation-binding.js").getCurrentPluginConversationBinding;
@@ -169,7 +169,7 @@ afterAll(() => {
 
 beforeAll(async () => {
   ({
-    __testing,
+    testing,
     buildPluginBindingApprovalCustomId,
     detachPluginConversationBinding,
     getCurrentPluginConversationBinding,
@@ -282,7 +282,7 @@ async function approveBindingRequest(
 async function importDuplicateConversationBindingModules() {
   const first = await importConversationBindingModule(`first-${Date.now()}`);
   const second = await importConversationBindingModule(`second-${Date.now()}`);
-  first.__testing.reset();
+  first.testing.reset();
   return { first, second };
 }
 
@@ -415,7 +415,7 @@ async function expectResolutionDoesNotWait(params: {
 describe("plugin conversation binding approvals", () => {
   beforeEach(() => {
     sessionBindingState.reset();
-    __testing.reset();
+    testing.reset();
     setActivePluginRegistry(createEmptyPluginRegistry());
     fs.rmSync(approvalsPath, { force: true });
     unregisterSessionBindingAdapter({ channel: "discord", accountId: "default" });
@@ -506,7 +506,7 @@ describe("plugin conversation binding approvals", () => {
     expect(approved.binding.pluginRoot).toBe("/plugins/codex-a");
     expect(approved.binding.conversationId).toBe("-10099:topic:77");
 
-    second.__testing.reset();
+    second.testing.reset();
   });
 
   it("shares persistent approvals across duplicate module instances", async () => {
@@ -541,7 +541,7 @@ describe("plugin conversation binding approvals", () => {
 
     expect(rebound.status).toBe("bound");
 
-    first.__testing.reset();
+    first.testing.reset();
     fs.rmSync(approvalsPath, { force: true });
   });
 

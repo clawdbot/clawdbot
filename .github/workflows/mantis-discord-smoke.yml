@@ -168,7 +168,7 @@ jobs:
 
       - name: Upload Mantis artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: mantis-discord-smoke-${{ github.run_id }}-${{ github.run_attempt }}
           path: .artifacts/qa-e2e/mantis/

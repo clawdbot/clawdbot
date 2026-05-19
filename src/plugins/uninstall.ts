@@ -622,6 +622,7 @@ export async function applyPluginUninstallDirectoryRemoval(
         timeoutMs: 300_000,
         env: createSafeNpmInstallEnv(process.env, {
           legacyPeerDeps: true,
+          npmConfigCwd: removal.cleanup.npmRoot,
           packageLock: true,
           quiet: true,
         }),
@@ -660,6 +661,7 @@ export async function applyPluginUninstallDirectoryRemoval(
             timeoutMs: 300_000,
             env: createSafeNpmInstallEnv(process.env, {
               legacyPeerDeps: true,
+              npmConfigCwd: removal.cleanup.npmRoot,
               packageLock: true,
               quiet: true,
             }),

@@ -340,7 +340,7 @@ function sanitizeStructuredJsonValue(
     copied += 1;
   }
   if (skipped > 0) {
-    output.__truncated = `${skipped} more keys`;
+    output["__truncated"] = `${skipped} more keys`;
   }
   seen.delete(value);
   return output;

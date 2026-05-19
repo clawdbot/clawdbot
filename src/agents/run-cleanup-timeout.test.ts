@@ -65,6 +65,50 @@ describe("agent cleanup timeout", () => {
     );
   });
 
+  it("includes cleanup timeout details when the cleanup step exposes them", async () => {
+    const cleanup = vi.fn(async () => new Promise<never>(() => {}));
+
+    const result = runAgentCleanupStep({
+      runId: "run-trajectory",
+      sessionId: "session-trajectory",
+      step: "pi-trajectory-flush",
+      cleanup,
+      log,
+      timeoutMs: 5,
+      getTimeoutDetails: () => "pendingWrites=2 queuedBytes=128 activeOperation=file-append",
+    });
+
+    await vi.advanceTimersByTimeAsync(5);
+    await expect(result).resolves.toBeUndefined();
+
+    expect(log.warn).toHaveBeenCalledWith(
+      "agent cleanup timed out: runId=run-trajectory sessionId=session-trajectory step=pi-trajectory-flush timeoutMs=5 details=pendingWrites=2 queuedBytes=128 activeOperation=file-append",
+    );
+  });
+
+  it("does not fail cleanup when timeout details throw", async () => {
+    const cleanup = vi.fn(async () => new Promise<never>(() => {}));
+
+    const result = runAgentCleanupStep({
+      runId: "run-trajectory",
+      sessionId: "session-trajectory",
+      step: "pi-trajectory-flush",
+      cleanup,
+      log,
+      timeoutMs: 5,
+      getTimeoutDetails: () => {
+        throw new Error("details unavailable");
+      },
+    });
+
+    await vi.advanceTimersByTimeAsync(5);
+    await expect(result).resolves.toBeUndefined();
+
+    expect(log.warn).toHaveBeenCalledWith(
+      "agent cleanup timed out: runId=run-trajectory sessionId=session-trajectory step=pi-trajectory-flush timeoutMs=5 detailsError=details unavailable",
+    );
+  });
+
   it("uses the general cleanup timeout environment override for other cleanup steps", async () => {
     const cleanup = vi.fn(async () => new Promise<never>(() => {}));
 

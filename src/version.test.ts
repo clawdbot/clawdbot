@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createSuiteTempRootTracker } from "./test-helpers/temp-dir.js";
 import {
@@ -50,6 +50,14 @@ function expectVersionMetadataToBeMissing(moduleUrl: string) {
 }
 
 describe("version resolution", () => {
+  it("keeps bundled version injection as a direct define identifier", async () => {
+    const source = await fs.readFile(fileURLToPath(new URL("./version.ts", import.meta.url)), {
+      encoding: "utf-8",
+    });
+    expect(source).toContain("typeof __OPENCLAW_VERSION__");
+    expect(source).toContain("? __OPENCLAW_VERSION__");
+  });
+
   it("resolves package version from nested dist/plugin-sdk module URL", async () => {
     await withVersionFixtureDir(async (root) => {
       await writeJsonFixture(root, "package.json", { name: "openclaw", version: "1.2.3" });

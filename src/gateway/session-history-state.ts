@@ -89,7 +89,7 @@ function buildPaginatedSessionHistory(params: {
 }
 
 function resolveMessageSeq(message: SessionHistoryMessage | undefined): number | undefined {
-  return asPositiveSafeInteger(message?.__openclaw?.seq);
+  return asPositiveSafeInteger(message?.["__openclaw"]?.seq);
 }
 
 function paginateSessionMessages(

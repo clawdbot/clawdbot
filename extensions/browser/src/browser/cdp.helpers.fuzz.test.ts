@@ -133,8 +133,8 @@ describe("fuzz: isWebSocketUrl", () => {
       try {
         // Only assert the property when the URL itself parses; assign
         // the result to satisfy eslint's no-new rule.
-        const _parsed = new URL(url);
-        void _parsed;
+        const parsedValue = new URL(url);
+        void parsedValue;
       } catch {
         continue;
       }

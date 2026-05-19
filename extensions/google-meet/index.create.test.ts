@@ -1,6 +1,6 @@
 import { Command } from "commander";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import plugin, { __testing as googleMeetPluginTesting } from "./index.js";
+import plugin, { testing as googleMeetPluginTesting } from "./index.js";
 import { registerGoogleMeetCli } from "./src/cli.js";
 import { resolveGoogleMeetConfig } from "./src/config.js";
 import type { GoogleMeetRuntime } from "./src/runtime.js";

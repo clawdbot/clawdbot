@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { __testing, startMatrixQaHarness, writeMatrixQaHarnessFiles } from "./harness.runtime.js";
+import { testing, startMatrixQaHarness, writeMatrixQaHarnessFiles } from "./harness.runtime.js";
 
 type MatrixQaHarnessDeps = Parameters<typeof startMatrixQaHarness>[1];
 type MatrixQaHarnessResult = Awaited<ReturnType<typeof startMatrixQaHarness>>;
@@ -75,14 +75,14 @@ describe("matrix harness runtime", () => {
         composeFile: string;
       };
 
-      expect(compose).toContain(`image: ${__testing.MATRIX_QA_DEFAULT_IMAGE}`);
+      expect(compose).toContain(`image: ${testing.MATRIX_QA_DEFAULT_IMAGE}`);
       expect(compose).toContain('      - "127.0.0.1:28008:8008"');
       expect(compose).toContain('TUWUNEL_ALLOW_ENCRYPTION: "true"');
       expect(compose).toContain('TUWUNEL_ALLOW_REGISTRATION: "true"');
       expect(compose).toContain('TUWUNEL_REGISTRATION_TOKEN: "secret-token"');
       expect(compose).toContain('TUWUNEL_SERVER_NAME: "matrix-qa.test"');
       expect(manifest).toEqual({
-        image: __testing.MATRIX_QA_DEFAULT_IMAGE,
+        image: testing.MATRIX_QA_DEFAULT_IMAGE,
         serverName: "matrix-qa.test",
         homeserverPort: 28008,
         composeFile: path.join(outputDir, "docker-compose.matrix-qa.yml"),

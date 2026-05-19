@@ -103,6 +103,59 @@ function formatSkillMissingSummary(skill: SkillStatusEntry): string {
   return missing.join("; ");
 }
 
+function normalizeSkillLookupToken(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[\s_/]+/g, "-")
+    .replace(/[^a-z0-9-]+/g, "")
+    .replace(/-+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function resolveSkillByName(
+  report: SkillStatusReport,
+  requestedName: string,
+): SkillStatusEntry | null {
+  const raw = requestedName.trim();
+  if (!raw) {
+    return null;
+  }
+
+  const direct = report.skills.find((s) => s.name === raw || s.skillKey === raw);
+  if (direct) {
+    return direct;
+  }
+
+  const lower = raw.toLowerCase();
+  const caseInsensitiveMatches = report.skills.filter(
+    (s) => s.name.toLowerCase() === lower || s.skillKey.toLowerCase() === lower,
+  );
+  if (caseInsensitiveMatches.length === 1) {
+    return caseInsensitiveMatches[0] ?? null;
+  }
+  if (caseInsensitiveMatches.length > 1) {
+    return null;
+  }
+
+  const normalized = normalizeSkillLookupToken(raw);
+  if (!normalized) {
+    return null;
+  }
+
+  const normalizedMatches = report.skills.filter(
+    (s) =>
+      normalizeSkillLookupToken(s.name) === normalized ||
+      normalizeSkillLookupToken(s.skillKey) === normalized,
+  );
+
+  if (normalizedMatches.length !== 1) {
+    return null;
+  }
+
+  return normalizedMatches[0] ?? null;
+}
+
 export function formatSkillsList(report: SkillStatusReport, opts: SkillsListOptions): string {
   const isReadyForAgent = (skill: SkillStatusEntry) =>
     skill.eligible && !skill.blockedByAgentFilter;
@@ -183,14 +236,20 @@ export function formatSkillInfo(
   skillName: string,
   opts: SkillInfoOptions,
 ): string {
-  const skill = report.skills.find((s) => s.name === skillName || s.skillKey === skillName);
+  const requestedName = skillName.trim();
+  const safeRequestedName = sanitizeJsonString(sanitizeForLog(requestedName));
+  const skill = resolveSkillByName(report, requestedName);
 
   if (!skill) {
     if (opts.json) {
-      return JSON.stringify({ error: "not found", skill: skillName }, null, 2);
+      return JSON.stringify(
+        sanitizeJsonValue({ error: "not found", skill: requestedName }),
+        null,
+        2,
+      );
     }
     return appendClawHubHint(
-      `Skill "${skillName}" not found. Run \`${formatCliCommand("openclaw skills list")}\` to see available skills.`,
+      `Skill "${safeRequestedName}" not found. Run \`${formatCliCommand("openclaw skills list")}\` to see available skills.`,
       opts.json,
     );
   }

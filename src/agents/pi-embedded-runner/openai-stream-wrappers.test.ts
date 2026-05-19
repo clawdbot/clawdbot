@@ -188,6 +188,100 @@ describe("createCodexNativeWebSearchWrapper", () => {
     expect(observedOptions[0]?.openclawCodeModeToolSurface).toBeUndefined();
     expect(payloads[0]).toEqual({ model: "gpt-5.5" });
   });
+
+  it("enforces the code-mode transport surface when the run enables it at agent scope", () => {
+    const observedOptions: Array<Record<string, unknown>> = [];
+    const payloads: Array<Record<string, unknown>> = [];
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      observedOptions.push(options as Record<string, unknown>);
+      const payload: Record<string, unknown> = {
+        model: model.id,
+        tools: [
+          { type: "function", name: "exec" },
+          { type: "function", name: "wait" },
+          { type: "function", name: "read" },
+        ],
+      };
+      options?.onPayload?.(payload, model);
+      payloads.push(structuredClone(payload));
+      return createAssistantMessageEventStream();
+    };
+    const wrapped = createCodexNativeWebSearchWrapper(baseStreamFn, {
+      codeModeToolSurfaceEnabled: true,
+    });
+
+    void wrapped(
+      {
+        api: "openai-codex-responses",
+        provider: "gateway",
+        id: "gpt-5.5",
+      } as Model<"openai-codex-responses">,
+      {
+        messages: [],
+        tools: [
+          { name: "exec", description: "", parameters: {} },
+          { name: "wait", description: "", parameters: {} },
+        ],
+      },
+      {},
+    );
+
+    expect(observedOptions[0]?.openclawCodeModeToolSurface).toBe(true);
+    expect(payloads[0]?.tools).toEqual([
+      { type: "function", name: "exec" },
+      { type: "function", name: "wait" },
+    ]);
+  });
+
+  it("keeps grouped provider tool declarations when code mode filters the payload", () => {
+    const payloads: Array<Record<string, unknown>> = [];
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        model: model.id,
+        tools: [
+          {
+            functionDeclarations: [
+              { name: "exec", description: "Run code" },
+              { name: "read", description: "Read a file" },
+              { name: "wait", description: "Resume code" },
+            ],
+          },
+          { google_search: {} },
+        ],
+      };
+      options?.onPayload?.(payload, model);
+      payloads.push(structuredClone(payload));
+      return createAssistantMessageEventStream();
+    };
+    const wrapped = createCodexNativeWebSearchWrapper(baseStreamFn, {
+      codeModeToolSurfaceEnabled: true,
+    });
+
+    void wrapped(
+      {
+        api: "google-generative-ai",
+        provider: "google",
+        id: "gemini-3.1-pro",
+      } as never,
+      {
+        messages: [],
+        tools: [
+          { name: "exec", description: "", parameters: {} },
+          { name: "wait", description: "", parameters: {} },
+        ],
+      },
+      {},
+    );
+
+    expect(payloads[0]?.tools).toEqual([
+      {
+        functionDeclarations: [
+          { name: "exec", description: "Run code" },
+          { name: "wait", description: "Resume code" },
+        ],
+      },
+    ]);
+  });
 });
 
 describe("createOpenAICompletionsStrictMessageKeysWrapper", () => {

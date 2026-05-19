@@ -1651,7 +1651,7 @@ async function main() {
   }
 }
 
-export const __testing = {
+export const testing = {
   classifyGatewayReadyLog,
   classifyProbeErrorKind,
   collectOutputLines,
@@ -1680,3 +1680,4 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     process.exitCode = 1;
   });
 }
+export { testing as __testing };

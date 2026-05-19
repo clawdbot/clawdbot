@@ -333,7 +333,7 @@ function commandsEqual(a: unknown, b: unknown) {
   return JSON.stringify(comparableCommand(a)) === JSON.stringify(comparableCommand(b));
 }
 
-export const __testing = {
+export const testing = {
   commandsEqual,
   comparableCommand,
   normalizeDescriptionForComparison,
@@ -349,3 +349,4 @@ function stableCommandSetHash(commands: SerializedCommand[]): string {
     );
   return createHash("sha256").update(JSON.stringify(stable)).digest("hex");
 }
+export { testing as __testing };

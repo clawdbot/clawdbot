@@ -65,7 +65,7 @@ vi.mock("../health-state.js", () => ({
   incrementPresenceVersion: incrementPresenceVersionMock,
 }));
 
-import { __testing, attachGatewayWsMessageHandler } from "./message-handler.js";
+import { testing, attachGatewayWsMessageHandler } from "./message-handler.js";
 
 function createLogger() {
   return {
@@ -404,7 +404,7 @@ describe("resolvePinnedClientMetadata", () => {
     "pins legacy node-host platform alias %s to paired canonical %s",
     (claimedPlatform, pairedPlatform) => {
       expect(
-        __testing.resolvePinnedClientMetadata({
+        testing.resolvePinnedClientMetadata({
           clientId: "node-host",
           clientMode: "node",
           claimedPlatform,
@@ -428,7 +428,7 @@ describe("resolvePinnedClientMetadata", () => {
     "pins canonical node-host platform %s over paired legacy alias %s",
     (claimedPlatform, pairedPlatform, deviceFamily) => {
       expect(
-        __testing.resolvePinnedClientMetadata({
+        testing.resolvePinnedClientMetadata({
           clientId: "node-host",
           clientMode: "node",
           claimedPlatform,
@@ -444,4 +444,68 @@ describe("resolvePinnedClientMetadata", () => {
       });
     },
   );
+
+  it.each([
+    ["openclaw-ios", "iOS 26.5.0", "iOS 26.4.2", "iPhone"],
+    ["openclaw-ios", "iPadOS 26.5.0", "iPadOS 26.4.2", "iPad"],
+    ["openclaw-ios", "iPadOS 26.5.0", "iOS 26.4.2", "iPad"],
+    ["openclaw-android", "Android 16", "Android 15", "Android"],
+  ])(
+    "allows %s platform version refresh without metadata-upgrade approval",
+    (clientId, claimedPlatform, pairedPlatform, deviceFamily) => {
+      expect(
+        testing.resolvePinnedClientMetadata({
+          clientId,
+          clientMode: "node",
+          claimedPlatform,
+          claimedDeviceFamily: deviceFamily,
+          pairedPlatform,
+          pairedDeviceFamily: deviceFamily,
+        }),
+      ).toEqual({
+        platformMismatch: false,
+        deviceFamilyMismatch: false,
+        pinnedPlatform: claimedPlatform,
+        pinnedDeviceFamily: deviceFamily,
+        refreshPairedPlatform: claimedPlatform,
+      });
+    },
+  );
+
+  it("still requires approval when an iOS device family changes", () => {
+    expect(
+      testing.resolvePinnedClientMetadata({
+        clientId: "openclaw-ios",
+        clientMode: "node",
+        claimedPlatform: "iOS 26.5.0",
+        claimedDeviceFamily: "iPad",
+        pairedPlatform: "iOS 26.4.2",
+        pairedDeviceFamily: "iPhone",
+      }),
+    ).toEqual({
+      platformMismatch: false,
+      deviceFamilyMismatch: true,
+      pinnedPlatform: "iOS 26.5.0",
+      pinnedDeviceFamily: "iPhone",
+      refreshPairedPlatform: "iOS 26.5.0",
+    });
+  });
+
+  it("keeps non-mobile platform version changes approval-bound", () => {
+    expect(
+      testing.resolvePinnedClientMetadata({
+        clientId: "node-host",
+        clientMode: "node",
+        claimedPlatform: "linux 6.9",
+        claimedDeviceFamily: "Linux",
+        pairedPlatform: "linux 6.8",
+        pairedDeviceFamily: "Linux",
+      }),
+    ).toEqual({
+      platformMismatch: true,
+      deviceFamilyMismatch: false,
+      pinnedPlatform: undefined,
+      pinnedDeviceFamily: "Linux",
+    });
+  });
 });

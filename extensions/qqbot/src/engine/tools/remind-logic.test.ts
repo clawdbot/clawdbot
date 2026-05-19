@@ -110,7 +110,7 @@ describe("engine/tools/remind-logic", () => {
         action: "list",
         summary: undefined,
       });
-      expect((result.details as { _instruction: string })._instruction).not.toContain(
+      expect((result.details as { _instruction: string })["_instruction"]).not.toContain(
         "Use the cron tool",
       );
       expect(result.details).not.toHaveProperty("cronParams");

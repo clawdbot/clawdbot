@@ -26,8 +26,14 @@ type DiagnosticToolStartedActivityEvent = Pick<
   "runId" | "sessionId" | "sessionKey" | "toolName" | "toolCallId"
 >;
 
+type DiagnosticModelStartedActivityEvent = Pick<
+  Extract<DiagnosticEventPayload, { type: "model.call.started" }>,
+  "runId" | "sessionId" | "sessionKey" | "provider" | "model"
+>;
+
 export type DiagnosticSessionActivitySnapshot = {
   activeWorkKind?: DiagnosticSessionActiveWorkKind;
+  hasActiveEmbeddedRun?: boolean;
   activeToolName?: string;
   activeToolCallId?: string;
   activeToolAgeMs?: number;
@@ -194,9 +200,7 @@ function recordToolEnded(
   touchSessionActivity(activity, `tool:${event.toolName}:ended`);
 }
 
-function recordModelStarted(
-  event: Extract<DiagnosticEventPayload, { type: "model.call.started" }>,
-): void {
+function recordModelStarted(event: DiagnosticModelStartedActivityEvent): void {
   const activity = resolveSessionActivity({ ...event, create: true });
   if (!activity) {
     return;
@@ -300,6 +304,7 @@ export function getDiagnosticSessionActivitySnapshot(
 
   return {
     activeWorkKind,
+    ...(activity.activeEmbeddedRuns.size > 0 ? { hasActiveEmbeddedRun: true } : {}),
     activeToolName: activeTool?.toolName,
     activeToolCallId: activeTool?.toolCallId,
     activeToolAgeMs: activeTool ? Math.max(0, now - activeTool.startedAt) : undefined,
@@ -329,6 +334,12 @@ export function markDiagnosticToolStartedForTest(params: {
   toolCallId?: string;
 }): void {
   recordToolStarted(params);
+}
+
+export function markDiagnosticModelStartedForTest(
+  params: DiagnosticModelStartedActivityEvent,
+): void {
+  recordModelStarted(params);
 }
 
 export function resetDiagnosticRunActivityForTest(): void {

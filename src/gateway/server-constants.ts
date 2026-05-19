@@ -9,7 +9,7 @@ let maxChatHistoryMessagesBytes = DEFAULT_MAX_CHAT_HISTORY_MESSAGES_BYTES;
 
 export const getMaxChatHistoryMessagesBytes = () => maxChatHistoryMessagesBytes;
 
-export const __setMaxChatHistoryMessagesBytesForTest = (value?: number) => {
+export const setMaxChatHistoryMessagesBytesForTest = (value?: number) => {
   if (!process.env.VITEST && process.env.NODE_ENV !== "test") {
     return;
   }

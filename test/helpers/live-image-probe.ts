@@ -1,4 +1,4 @@
-import { encodePngRgba, fillPixel } from "../media/png-encode.js";
+import { encodePngRgba, fillPixel } from "../../src/media/png-encode.js";
 
 const GLYPH_ROWS_5X7: Record<string, number[]> = {
   "0": [0b01110, 0b10001, 0b10011, 0b10101, 0b11001, 0b10001, 0b01110],
@@ -87,6 +87,52 @@ function drawText(params: {
 
 function measureTextWidthPx(text: string, scale: number) {
   return text.length * 6 * scale - scale; // 5px glyph + 1px space
+}
+
+export function renderBitmapTextPngBase64(
+  text: string,
+  options: {
+    background?: { r: number; g: number; b: number; a?: number };
+    foreground?: { r: number; g: number; b: number; a?: number };
+    padding?: number;
+    scale?: number;
+  } = {},
+): string {
+  const normalized = text.trim().toUpperCase();
+  if (!normalized) {
+    throw new Error("bitmap text image requires non-empty text");
+  }
+  const unsupported = [...normalized].filter((ch) => !(ch in GLYPH_ROWS_5X7));
+  if (unsupported.length > 0) {
+    throw new Error(`bitmap text image contains unsupported glyphs: ${unsupported.join(",")}`);
+  }
+  const scale = Math.max(1, Math.floor(options.scale ?? 4));
+  const padding = Math.max(0, Math.floor(options.padding ?? 8));
+  const width = measureTextWidthPx(normalized, scale) + padding * 2;
+  const height = 7 * scale + padding * 2;
+  const background = options.background ?? { r: 245, g: 247, b: 250, a: 255 };
+  const foreground = options.foreground ?? { r: 18, g: 24, b: 33, a: 255 };
+  const buf = Buffer.alloc(width * height * 4);
+  fillRect({
+    buf,
+    width,
+    height,
+    x: 0,
+    y: 0,
+    w: width,
+    h: height,
+    color: background,
+  });
+  drawText({
+    buf,
+    width,
+    x: padding,
+    y: padding,
+    text: normalized,
+    scale,
+    color: foreground,
+  });
+  return encodePngRgba(buf, width, height).toString("base64");
 }
 
 function fillRect(params: {

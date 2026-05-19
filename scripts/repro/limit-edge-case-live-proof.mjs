@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { __testing as voiceCallCliTesting } from "../../extensions/voice-call/src/cli.ts";
+import { testing as voiceCallCliTesting } from "../../extensions/voice-call/src/cli.ts";
 import { loadSessionLogs, loadSessionUsageTimeSeries } from "../../src/infra/session-cost-usage.ts";
 import {
   getRecentDiagnosticPhases,

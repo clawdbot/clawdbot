@@ -249,7 +249,7 @@ export async function waitForAgentRunsToDrain(params: {
   };
 }
 
-export const __testing = {
+export const testing = {
   setDepsForTest(overrides?: Partial<{ callGateway: GatewayCaller }>) {
     runWaitDeps = overrides
       ? {
@@ -259,3 +259,4 @@ export const __testing = {
       : defaultRunWaitDeps;
   },
 };
+export { testing as __testing };

@@ -1,16 +1,9 @@
-import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 import { isInboundPathAllowed } from "openclaw/plugin-sdk/media-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
-import { buildRandomTempFilePath } from "openclaw/plugin-sdk/temp-path";
+import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import type { IMessageAttachment } from "./types.js";
-
-const execFileAsync = promisify(execFile);
-
-const HEIC_CONVERSION_TIMEOUT_MS = 15_000;
-const HEIC_CONVERSION_MAX_BUFFER_BYTES = 64 * 1024;
 
 export type StagedIMessageAttachment = {
   path: string;
@@ -73,43 +66,6 @@ async function resolveAllowedCanonicalAttachmentPath(params: {
   return canonicalPath;
 }
 
-async function convertHeicToJpegWithSips(sourcePath: string, maxBytes: number): Promise<Buffer> {
-  const tempPath = buildRandomTempFilePath({
-    prefix: "openclaw-imessage",
-    extension: "jpg",
-  });
-  try {
-    await execFileAsync(
-      "sips",
-      [
-        "-s",
-        "format",
-        "jpeg",
-        "-s",
-        "formatOptions",
-        "90",
-        "-Z",
-        "4096",
-        sourcePath,
-        "--out",
-        tempPath,
-      ],
-      {
-        timeout: HEIC_CONVERSION_TIMEOUT_MS,
-        maxBuffer: HEIC_CONVERSION_MAX_BUFFER_BYTES,
-        killSignal: "SIGKILL",
-      },
-    );
-    const stat = await fs.stat(tempPath);
-    if (stat.size > maxBytes) {
-      throw new Error(`converted media exceeds ${Math.round(maxBytes / (1024 * 1024))}MB limit`);
-    }
-    return await fs.readFile(tempPath);
-  } finally {
-    await fs.rm(tempPath, { force: true }).catch(() => {});
-  }
-}
-
 async function readAttachmentBuffer(params: {
   attachmentPath: string;
   mimeType?: string | null;
@@ -142,11 +98,20 @@ async function readAttachmentBuffer(params: {
 
   if (isHeicAttachment(params.attachmentPath, params.mimeType)) {
     try {
-      const convert = params.deps.convertHeicToJpeg ?? convertHeicToJpegWithSips;
+      const convert = params.deps.convertHeicToJpeg;
+      const converted = convert
+        ? {
+            buffer: await convert(canonicalPath, params.maxBytes),
+            fileName: jpegFilenameForAttachment(params.attachmentPath),
+          }
+        : await loadWebMedia(canonicalPath, {
+            maxBytes: params.maxBytes,
+            localRoots: [path.dirname(canonicalPath)],
+          });
       return {
-        buffer: await convert(canonicalPath, params.maxBytes),
+        buffer: converted.buffer,
         contentType: "image/jpeg",
-        originalFilename: jpegFilenameForAttachment(params.attachmentPath),
+        originalFilename: converted.fileName ?? jpegFilenameForAttachment(params.attachmentPath),
       };
     } catch (err) {
       params.deps.logVerbose?.(

@@ -20,7 +20,7 @@ import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { writeExternalFileWithinRoot } from "../infra/fs-safe.js";
 import { resolveProxyFetchFromEnv } from "../infra/net/proxy-fetch.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
-import { runFfmpeg } from "../media/ffmpeg-exec.js";
+import { runFfmpeg } from "../media/media-services.js";
 import { runExec } from "../process/exec.js";
 import { providerOperationRetryConfig } from "../provider-runtime/operation-retry.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
@@ -413,8 +413,8 @@ function resolveMediaRequestOverrides(config: MediaUnderstandingConfig | undefin
     _requestLanguageOverride?: string;
   };
   return {
-    prompt: overrides._requestPromptOverride,
-    language: overrides._requestLanguageOverride,
+    prompt: overrides["_requestPromptOverride"],
+    language: overrides["_requestLanguageOverride"],
   };
 }
 

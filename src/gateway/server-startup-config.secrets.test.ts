@@ -523,7 +523,7 @@ describe("gateway startup config secret preflight", () => {
           activateRuntimeSecretsSnapshot: typeof activateRuntimeSecretsSnapshot;
         };
       }
-    ).__gatewayStartupSecretsRuntimeMock = {
+    )["__gatewayStartupSecretsRuntimeMock"] = {
       runtimeImport,
       prepareRuntimeSecretsSnapshot,
       activateRuntimeSecretsSnapshot,
@@ -540,7 +540,7 @@ describe("gateway startup config secret preflight", () => {
             activateRuntimeSecretsSnapshot: typeof activateRuntimeSecretsSnapshot;
           };
         }
-      ).__gatewayStartupSecretsRuntimeMock;
+      )["__gatewayStartupSecretsRuntimeMock"];
       if (!state) {
         throw new Error("missing gateway startup secrets runtime mock");
       }
@@ -612,7 +612,7 @@ describe("gateway startup config secret preflight", () => {
         globalThis as typeof globalThis & {
           __gatewayStartupSecretsRuntimeMock?: unknown;
         }
-      ).__gatewayStartupSecretsRuntimeMock;
+      )["__gatewayStartupSecretsRuntimeMock"];
       rmSync(agentDir, { recursive: true, force: true });
       vi.resetModules();
     }
@@ -632,7 +632,7 @@ describe("gateway startup config secret preflight", () => {
           activateRuntimeSecretsSnapshot: typeof activateRuntimeSecretsSnapshot;
         };
       }
-    ).__gatewayStartupSecretsRuntimeMock = {
+    )["__gatewayStartupSecretsRuntimeMock"] = {
       runtimeImport,
       prepareRuntimeSecretsSnapshot,
       activateRuntimeSecretsSnapshot,
@@ -652,7 +652,7 @@ describe("gateway startup config secret preflight", () => {
             activateRuntimeSecretsSnapshot: typeof activateRuntimeSecretsSnapshot;
           };
         }
-      ).__gatewayStartupSecretsRuntimeMock;
+      )["__gatewayStartupSecretsRuntimeMock"];
       if (!state) {
         throw new Error("missing gateway startup secrets runtime mock");
       }
@@ -705,7 +705,7 @@ describe("gateway startup config secret preflight", () => {
         globalThis as typeof globalThis & {
           __gatewayStartupSecretsRuntimeMock?: unknown;
         }
-      ).__gatewayStartupSecretsRuntimeMock;
+      )["__gatewayStartupSecretsRuntimeMock"];
       rmSync(agentDir, { recursive: true, force: true });
       vi.resetModules();
     }
@@ -738,7 +738,7 @@ describe("gateway startup config secret preflight", () => {
           activateRuntimeSecretsSnapshot: typeof activateRuntimeSecretsSnapshot;
         };
       }
-    ).__gatewayStartupSecretsRuntimeMock = {
+    )["__gatewayStartupSecretsRuntimeMock"] = {
       runtimeImport,
       prepareRuntimeSecretsSnapshot,
       activateRuntimeSecretsSnapshot,
@@ -758,7 +758,7 @@ describe("gateway startup config secret preflight", () => {
             activateRuntimeSecretsSnapshot: typeof activateRuntimeSecretsSnapshot;
           };
         }
-      ).__gatewayStartupSecretsRuntimeMock;
+      )["__gatewayStartupSecretsRuntimeMock"];
       if (!state) {
         throw new Error("missing gateway startup secrets runtime mock");
       }
@@ -803,7 +803,7 @@ describe("gateway startup config secret preflight", () => {
         globalThis as typeof globalThis & {
           __gatewayStartupSecretsRuntimeMock?: unknown;
         }
-      ).__gatewayStartupSecretsRuntimeMock;
+      )["__gatewayStartupSecretsRuntimeMock"];
       rmSync(agentDir, { recursive: true, force: true });
       vi.resetModules();
     }

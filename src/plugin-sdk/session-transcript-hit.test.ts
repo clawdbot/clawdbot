@@ -43,6 +43,95 @@ describe("extractTranscriptStemFromSessionsMemoryHit", () => {
     ).toBe("ghi-thread");
   });
 
+  it("recognizes QMD-normalized archived reset transcript .md stems", () => {
+    expect(
+      extractTranscriptStemFromSessionsMemoryHit(
+        "qmd/sessions-main/abc-uuid-jsonl-reset-2026-02-16T22-26-33.000Z.md",
+      ),
+    ).toBe("abc-uuid");
+  });
+
+  it("recognizes QMD-normalized archived deleted transcript .md stems", () => {
+    expect(
+      extractTranscriptStemFromSessionsMemoryHit(
+        "qmd/sessions-main/def-uuid-jsonl-deleted-2026-02-16T22-27-33.000Z.md",
+      ),
+    ).toBe("def-uuid");
+  });
+
+  it("recognizes real QMD-slugified archived reset transcript .md stems", () => {
+    expect(
+      extractTranscriptStemFromSessionsMemoryHit(
+        "qmd/sessions-main/abc-uuid-jsonl-reset-2026-02-16t22-26-33-000z.md",
+      ),
+    ).toBe("abc-uuid");
+  });
+
+  it("returns non-archived identity for QMD .md stems that are not archive patterns", () => {
+    const identity = extractTranscriptIdentityFromSessionsMemoryHit(
+      "qmd/sessions-main/normal-session.md",
+    );
+    expect(identity).toEqual({ stem: "normal-session", archived: false });
+  });
+
+  it("returns archived identity for QMD-normalized reset .md stems", () => {
+    const identity = extractTranscriptIdentityFromSessionsMemoryHit(
+      "qmd/sessions-main/abc-uuid-jsonl-reset-2026-02-16T22-26-33.000Z.md",
+    );
+    expect(identity).toEqual({
+      stem: "abc-uuid",
+      liveStem: "abc-uuid-jsonl-reset-2026-02-16T22-26-33.000Z",
+      archived: true,
+    });
+  });
+
+  it("recognizes QMD-exported dot-form archived reset .md paths", () => {
+    expect(
+      extractTranscriptStemFromSessionsMemoryHit(
+        "qmd/sessions-main/abc-uuid.jsonl.reset.2026-02-16T22-26-33.000Z.md",
+      ),
+    ).toBe("abc-uuid");
+  });
+
+  it("recognizes QMD-exported dot-form archived deleted .md paths", () => {
+    expect(
+      extractTranscriptStemFromSessionsMemoryHit(
+        "qmd/sessions-main/def-uuid.jsonl.deleted.2026-02-16T22-27-33.000Z.md",
+      ),
+    ).toBe("def-uuid");
+  });
+
+  it("returns archived identity for QMD-exported dot-form reset .md paths", () => {
+    const identity = extractTranscriptIdentityFromSessionsMemoryHit(
+      "qmd/sessions-main/abc-uuid.jsonl.reset.2026-02-16T22-26-33.000Z.md",
+    );
+    expect(identity).toEqual({
+      stem: "abc-uuid",
+      liveStem: "abc-uuid.jsonl.reset.2026-02-16T22-26-33.000Z",
+      archived: true,
+    });
+  });
+
+  it("does not treat QMD .md names with invalid archive timestamps as archives", () => {
+    const identity = extractTranscriptIdentityFromSessionsMemoryHit(
+      "qmd/sessions-main/abc.jsonl.reset.not-a-timestamp.md",
+    );
+    expect(identity).toEqual({
+      stem: "abc.jsonl.reset.not-a-timestamp",
+      archived: false,
+    });
+  });
+
+  it("does not treat non-QMD .md names with archive-looking timestamps as archives", () => {
+    const identity = extractTranscriptIdentityFromSessionsMemoryHit(
+      "abc-uuid-jsonl-reset-2026-02-16t22-26-33-000z.md",
+    );
+    expect(identity).toEqual({
+      stem: "abc-uuid-jsonl-reset-2026-02-16t22-26-33-000z",
+      archived: false,
+    });
+  });
+
   it("does not mistake arbitrary suffixes containing .jsonl. for archives", () => {
     // Not a real archive pattern: suffix after .jsonl. must be `reset` or `deleted`.
     expect(
@@ -60,6 +149,18 @@ describe("extractTranscriptIdentityFromSessionsMemoryHit", () => {
     ).toEqual({
       stem: "deleted-uuid",
       ownerAgentId: "main",
+      archived: true,
+    });
+  });
+
+  it("does not derive owner metadata from lossy QMD session collection names", () => {
+    expect(
+      extractTranscriptIdentityFromSessionsMemoryHit(
+        "qmd/sessions-main/deleted-uuid-jsonl-deleted-2026-02-16t22-27-33-000z.md",
+      ),
+    ).toEqual({
+      stem: "deleted-uuid",
+      liveStem: "deleted-uuid-jsonl-deleted-2026-02-16t22-27-33-000z",
       archived: true,
     });
   });
@@ -100,5 +201,57 @@ describe("resolveTranscriptStemToSessionKeys", () => {
     });
 
     expect(keys).toEqual(["agent:main:deleted-stem"]);
+  });
+
+  it("matches QMD-slugified stems to unique session ids with safe punctuation", () => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:s1": baseEntry({ sessionId: "foo_bar.v1" }),
+    };
+
+    expect(
+      resolveTranscriptStemToSessionKeys({
+        store,
+        stem: "foo-bar-v1",
+        allowQmdSlugFallback: true,
+      }),
+    ).toEqual(["agent:main:s1"]);
+  });
+
+  it("does not use QMD-slugified fallback unless requested", () => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:s1": baseEntry({ sessionId: "foo_bar.v1" }),
+    };
+
+    expect(resolveTranscriptStemToSessionKeys({ store, stem: "foo-bar-v1" })).toEqual([]);
+  });
+
+  it("prefers exact stem matches before QMD-slugified fallback matches", () => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:exact": baseEntry({ sessionId: "foo-bar" }),
+      "agent:main:slug": baseEntry({ sessionId: "foo_bar" }),
+    };
+
+    expect(
+      resolveTranscriptStemToSessionKeys({
+        store,
+        stem: "foo-bar",
+        allowQmdSlugFallback: true,
+      }),
+    ).toEqual(["agent:main:exact"]);
+  });
+
+  it("does not guess when QMD-slugified fallback matches multiple sessions", () => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:dot": baseEntry({ sessionId: "foo.bar" }),
+      "agent:main:underscore": baseEntry({ sessionId: "foo_bar" }),
+    };
+
+    expect(
+      resolveTranscriptStemToSessionKeys({
+        store,
+        stem: "foo-bar",
+        allowQmdSlugFallback: true,
+      }),
+    ).toEqual([]);
   });
 });

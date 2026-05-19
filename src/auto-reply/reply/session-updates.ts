@@ -39,7 +39,7 @@ export { drainFormattedSystemEvents } from "./session-system-events.js";
 const resolvedSkillsCache = new Map<string, SkillSnapshot["resolvedSkills"]>();
 const RESOLVED_SKILLS_CACHE_MAX = 10;
 
-export function __testing_resetResolvedSkillsCache(): void {
+export function resetResolvedSkillsCacheForTests(): void {
   resolvedSkillsCache.clear();
 }
 
@@ -259,9 +259,9 @@ export async function ensureSkillSnapshot(params: {
       agentId: sessionAgentId,
     }),
   });
-  const snapshotVersion = getSkillsSnapshotVersion(workspaceDir);
   const existingSnapshot = nextEntry?.skillsSnapshot;
   ensureSkillsWatcher({ workspaceDir, config: cfg });
+  const snapshotVersion = getSkillsSnapshotVersion(workspaceDir);
   const shouldRefreshSnapshot =
     shouldRefreshSnapshotForVersion(existingSnapshot?.version, snapshotVersion) ||
     !matchesSkillFilter(existingSnapshot?.skillFilter, skillFilter);

@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { __testing, deferGatewayRestartUntilIdle, type RestartDeferralHooks } from "./restart.js";
+import { testing, deferGatewayRestartUntilIdle, type RestartDeferralHooks } from "./restart.js";
 
 describe("deferGatewayRestartUntilIdle timeout", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    __testing.resetSigusr1State();
+    testing.resetSigusr1State();
     // Add a listener so emitGatewayRestart uses process.emit instead of process.kill
     process.on("SIGUSR1", () => {});
   });
@@ -12,7 +12,7 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
-    __testing.resetSigusr1State();
+    testing.resetSigusr1State();
     process.removeAllListeners("SIGUSR1");
   });
 

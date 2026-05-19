@@ -5,7 +5,7 @@ import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
-  __testing,
+  testing,
   listAllChannelSupportedActions,
   listChannelSupportedActions,
 } from "./channel-tools.js";
@@ -35,7 +35,7 @@ describe("channel tools", () => {
       },
     };
 
-    __testing.resetLoggedListActionErrors();
+    testing.resetLoggedListActionErrors();
     errorSpy.mockClear();
     setActivePluginRegistry(createTestRegistry([{ pluginId: "test", source: "test", plugin }]));
   });

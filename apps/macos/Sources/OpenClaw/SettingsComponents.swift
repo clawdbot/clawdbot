@@ -3,8 +3,18 @@ import SwiftUI
 enum SettingsLayout {
     static let sidebarWidth: CGFloat = 250
     static let detailHorizontalPadding: CGFloat = 22
+    static let detailVerticalPadding: CGFloat = 18
     static let nestedSidebarWidth: CGFloat = 260
-    static let scrollbarGutter: CGFloat = 36
+    static let detailBottomPadding: CGFloat = 16
+}
+
+extension View {
+    func settingsDetailContent() -> some View {
+        self
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 4)
+            .padding(.bottom, SettingsLayout.detailBottomPadding)
+    }
 }
 
 struct SettingsPageHeader: View {

@@ -181,6 +181,26 @@ describe("resolveChannelModelOverride", () => {
     expect(resolved?.matchKey).toBe("room:topic:thread");
   });
 
+  it("applies provider wildcard model overrides to direct chats", () => {
+    const resolved = resolveChannelModelOverride({
+      cfg: {
+        channels: {
+          modelByChannel: {
+            telegram: {
+              "*": "demo-provider/demo-direct-model",
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      channel: "telegram",
+      groupChatType: "direct",
+    });
+
+    expect(resolved?.model).toBe("demo-provider/demo-direct-model");
+    expect(resolved?.matchKey).toBe("*");
+    expect(resolved?.matchSource).toBe("wildcard");
+  });
+
   it("prefers parent conversation ids over channel-name fallbacks", () => {
     const resolved = resolveChannelModelOverride({
       cfg: {

@@ -8,6 +8,7 @@ extension ChannelsSettings {
             self.detail
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .settingsDetailContent()
         .onAppear {
             self.updateActiveWork(active: self.isActive)
             self.ensureSelection(in: channels)
@@ -72,8 +73,8 @@ extension ChannelsSettings {
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 18)
+        .padding(.horizontal, SettingsLayout.detailHorizontalPadding)
+        .padding(.vertical, SettingsLayout.detailVerticalPadding)
     }
 
     private func channelDetail(_ channel: ChannelItem) -> some View {
@@ -85,8 +86,8 @@ extension ChannelsSettings {
                 Spacer(minLength: 0)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 24)
-            .padding(.vertical, 18)
+            .padding(.horizontal, SettingsLayout.detailHorizontalPadding)
+            .padding(.vertical, SettingsLayout.detailVerticalPadding)
         }
     }
 

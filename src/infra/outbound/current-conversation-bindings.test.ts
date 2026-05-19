@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
-  __testing,
+  testing,
   bindGenericCurrentConversation,
   getGenericCurrentConversationBindingCapabilities,
   listGenericCurrentConversationBindingsBySession,
@@ -70,13 +70,13 @@ describe("generic current-conversation bindings", () => {
     testStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-current-bindings-"));
     process.env.OPENCLAW_STATE_DIR = testStateDir;
     setMinimalCurrentConversationRegistry();
-    __testing.resetCurrentConversationBindingsForTests({
+    testing.resetCurrentConversationBindingsForTests({
       deletePersistedFile: true,
     });
   });
 
   afterEach(async () => {
-    __testing.resetCurrentConversationBindingsForTests({
+    testing.resetCurrentConversationBindingsForTests({
       deletePersistedFile: true,
     });
     if (previousStateDir == null) {
@@ -137,7 +137,7 @@ describe("generic current-conversation bindings", () => {
       targetSessionKey: "agent:codex:acp:workspace-dm",
     });
 
-    __testing.resetCurrentConversationBindingsForTests();
+    testing.resetCurrentConversationBindingsForTests();
 
     const resolved = resolveGenericCurrentConversationBinding({
       channel: "workspace",
@@ -152,7 +152,7 @@ describe("generic current-conversation bindings", () => {
   });
 
   it("normalizes persisted target session keys on reload", async () => {
-    const filePath = __testing.resolveBindingsFilePath();
+    const filePath = testing.resolveBindingsFilePath();
     await fs.mkdir(path.dirname(filePath), { recursive: true });
     await fs.writeFile(
       filePath,
@@ -234,7 +234,7 @@ describe("generic current-conversation bindings", () => {
   });
 
   it("migrates persisted legacy self-parent binding ids on load", async () => {
-    const filePath = __testing.resolveBindingsFilePath();
+    const filePath = testing.resolveBindingsFilePath();
     await fs.mkdir(path.dirname(filePath), { recursive: true });
     await fs.writeFile(
       filePath,
@@ -287,7 +287,7 @@ describe("generic current-conversation bindings", () => {
       bindingId: "generic:forum\u241fdefault\u241f\u241f6098642967",
     });
 
-    __testing.resetCurrentConversationBindingsForTests();
+    testing.resetCurrentConversationBindingsForTests();
     expect(
       resolveGenericCurrentConversationBinding({
         channel: "forum",
@@ -313,7 +313,7 @@ describe("generic current-conversation bindings", () => {
       reason: "test cleanup",
     });
 
-    __testing.resetCurrentConversationBindingsForTests();
+    testing.resetCurrentConversationBindingsForTests();
 
     expect(
       resolveGenericCurrentConversationBinding({
@@ -345,7 +345,7 @@ describe("generic current-conversation bindings", () => {
       1_234_567_890,
     );
 
-    __testing.resetCurrentConversationBindingsForTests();
+    testing.resetCurrentConversationBindingsForTests();
 
     expectBindingMetadata(
       resolveGenericCurrentConversationBinding({

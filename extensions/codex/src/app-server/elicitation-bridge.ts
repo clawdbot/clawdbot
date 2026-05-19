@@ -149,7 +149,7 @@ function resolvePluginElicitation(params: {
   if (!requestParams) {
     return { kind: "not_plugin" };
   }
-  const meta = isJsonObject(requestParams._meta) ? requestParams._meta : {};
+  const meta = isJsonObject(requestParams["_meta"]) ? requestParams["_meta"] : {};
   const context = params.pluginAppPolicyContext;
   const entries = context ? Object.values(context.apps) : [];
 
@@ -293,7 +293,7 @@ function buildPluginPolicyElicitationResponse(
     logPluginElicitationDecline("unsupported_schema", requestParams);
     return declineElicitationResponse();
   }
-  const meta = isJsonObject(requestParams._meta) ? requestParams._meta : {};
+  const meta = isJsonObject(requestParams["_meta"]) ? requestParams["_meta"] : {};
   const response = buildElicitationResponse(requestParams.requestedSchema, meta, "approved-once");
   if (isJsonObject(response) && response.action === "accept") {
     return response;
@@ -320,8 +320,8 @@ function readBridgeableApprovalElicitation(
   if (
     !requestParams ||
     readString(requestParams, "mode") !== "form" ||
-    !isJsonObject(requestParams._meta) ||
-    requestParams._meta[MCP_TOOL_APPROVAL_KIND_KEY] !== MCP_TOOL_APPROVAL_KIND ||
+    !isJsonObject(requestParams["_meta"]) ||
+    requestParams["_meta"][MCP_TOOL_APPROVAL_KIND_KEY] !== MCP_TOOL_APPROVAL_KIND ||
     !isJsonObject(requestParams.requestedSchema)
   ) {
     return undefined;
@@ -341,12 +341,12 @@ function readBridgeableApprovalElicitation(
     title,
     description: buildApprovalDescription({
       title,
-      meta: requestParams._meta,
+      meta: requestParams["_meta"],
       requestedSchema,
       serverName: sanitizeOptionalDisplayText(readString(requestParams, "serverName")),
     }),
     requestedSchema,
-    meta: requestParams._meta,
+    meta: requestParams["_meta"],
   };
 }
 

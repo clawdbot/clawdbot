@@ -205,8 +205,8 @@ function collectGatewayProcessResourceCounts(): ReadonlyArray<readonly [string, 
     _getActiveRequests?: () => unknown[];
     getActiveResourcesInfo?: () => string[];
   };
-  const activeHandles = processWithResourceAccess._getActiveHandles?.();
-  const activeRequests = processWithResourceAccess._getActiveRequests?.();
+  const activeHandles = processWithResourceAccess["_getActiveHandles"]?.();
+  const activeRequests = processWithResourceAccess["_getActiveRequests"]?.();
   const activeResources = processWithResourceAccess.getActiveResourcesInfo?.();
   const metrics: Array<readonly [string, number]> = [
     ["processSigintListenersCount", process.listenerCount("SIGINT")],

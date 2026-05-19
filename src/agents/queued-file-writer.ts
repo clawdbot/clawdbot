@@ -4,10 +4,21 @@ import { appendRegularFile, resolveRegularFileAppendFlags } from "../infra/fs-sa
 
 export type QueuedFileWriteResult = "queued" | "dropped";
 
+export type QueuedFileWriterDiagnostics = {
+  pendingWrites: number;
+  queuedBytes: number;
+  activeOperation: "idle" | "mkdir" | "yield" | "file-append";
+  activeWriteBytes?: number;
+  maxFileBytes?: number;
+  maxQueuedBytes?: number;
+  yieldBeforeWrite: boolean;
+};
+
 export type QueuedFileWriter = {
   filePath: string;
   write: (line: string) => unknown;
   flush: () => Promise<void>;
+  describeQueue?: () => QueuedFileWriterDiagnostics;
 };
 
 type QueuedFileWriterOptions = {
@@ -50,7 +61,10 @@ export function getQueuedFileWriter(
   const dir = path.dirname(filePath);
   const ready = fs.mkdir(dir, { recursive: true, mode: 0o700 }).catch(() => undefined);
   let queue: Promise<unknown> = Promise.resolve();
+  let pendingWrites = 0;
   let queuedBytes = 0;
+  let activeOperation: QueuedFileWriterDiagnostics["activeOperation"] = "idle";
+  let activeWriteBytes: number | undefined;
 
   const writer: QueuedFileWriter = {
     filePath,
@@ -62,20 +76,45 @@ export function getQueuedFileWriter(
       ) {
         return "dropped";
       }
+      pendingWrites += 1;
       queuedBytes += lineBytes;
       queue = queue
-        .then(() => ready)
-        .then(() => (options.yieldBeforeWrite ? waitForImmediate() : undefined))
-        .then(() => safeAppendFile(filePath, line, options))
+        .then(async () => {
+          activeOperation = "mkdir";
+          await ready;
+        })
+        .then(async () => {
+          if (options.yieldBeforeWrite) {
+            activeOperation = "yield";
+            await waitForImmediate();
+          }
+        })
+        .then(async () => {
+          activeOperation = "file-append";
+          activeWriteBytes = lineBytes;
+          await safeAppendFile(filePath, line, options);
+        })
         .catch(() => undefined)
         .finally(() => {
+          pendingWrites = Math.max(0, pendingWrites - 1);
           queuedBytes = Math.max(0, queuedBytes - lineBytes);
+          activeWriteBytes = undefined;
+          activeOperation = pendingWrites > 0 ? activeOperation : "idle";
         });
       return "queued";
     },
     flush: async () => {
       await queue;
     },
+    describeQueue: () => ({
+      pendingWrites,
+      queuedBytes,
+      activeOperation,
+      activeWriteBytes,
+      maxFileBytes: options.maxFileBytes,
+      maxQueuedBytes: options.maxQueuedBytes,
+      yieldBeforeWrite: options.yieldBeforeWrite === true,
+    }),
   };
 
   writers.set(filePath, writer);

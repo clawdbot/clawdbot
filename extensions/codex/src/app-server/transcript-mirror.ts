@@ -70,7 +70,7 @@ export function buildCodexUserPromptMessage(params: EmbeddedRunAttemptParams): A
  */
 export function attachCodexMirrorIdentity<T extends AgentMessage>(message: T, identity: string): T {
   const record = message as unknown as Record<string, unknown>;
-  const existing = record.__openclaw;
+  const existing = record["__openclaw"];
   const baseMeta =
     existing && typeof existing === "object" && !Array.isArray(existing)
       ? (existing as Record<string, unknown>)
@@ -83,7 +83,7 @@ export function attachCodexMirrorIdentity<T extends AgentMessage>(message: T, id
 
 function readMirrorIdentity(message: MirroredAgentMessage): string | undefined {
   const record = message as unknown as { __openclaw?: unknown };
-  const meta = record.__openclaw;
+  const meta = record["__openclaw"];
   if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
     return undefined;
   }

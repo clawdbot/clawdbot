@@ -111,6 +111,17 @@ describe("install.ps1 failure handling", () => {
     expect(mainBody).not.toContain("Remove-LegacySubmodule");
   });
 
+  it("launches interactive onboarding outside Main's captured output", () => {
+    const interactiveCommandBody = extractFunctionBody(source, "Invoke-InteractiveOpenClawCommand");
+    const mainBody = extractFunctionBody(source, "Main");
+    expect(interactiveCommandBody).toContain("Start-Process");
+    expect(interactiveCommandBody).toContain("-NoNewWindow");
+    expect(interactiveCommandBody).toContain("-Wait");
+    expect(interactiveCommandBody).toContain("-PassThru");
+    expect(mainBody).toContain('Write-Host "Starting setup..." -ForegroundColor Cyan');
+    expect(mainBody).toContain("Invoke-InteractiveOpenClawCommand onboard");
+  });
+
   runIfPowerShell("exits non-zero when run as a script file", () => {
     const tempDir = harness.createTempDir("openclaw-install-ps1-");
     const scriptPath = join(tempDir, "install.ps1");

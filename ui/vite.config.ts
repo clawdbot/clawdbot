@@ -86,7 +86,7 @@ export default defineConfig(() => {
   return {
     base,
     define: {
-      __OPENCLAW_CONTROL_UI_BUILD_ID__: JSON.stringify(controlUiBuildId),
+      OPENCLAW_CONTROL_UI_BUILD_ID: JSON.stringify(controlUiBuildId),
     },
     publicDir: path.resolve(here, "public"),
     optimizeDeps: {

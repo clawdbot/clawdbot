@@ -24,8 +24,7 @@ struct SessionsSettings: View {
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .padding(.leading, 18)
-        .padding(.trailing, SettingsLayout.scrollbarGutter)
+        .settingsDetailContent()
         .task {
             guard !self.hasLoaded else { return }
             guard !self.isPreview else { return }

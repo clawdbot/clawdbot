@@ -332,6 +332,7 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
   };
   await finalizeRuntimeSnapshotWrite({
     nextSourceConfig: refreshedSnapshot.sourceConfig,
+    refreshOptions: params.writeOptions?.runtimeRefresh,
     hadRuntimeSnapshot,
     hadBothSnapshots,
     loadFreshConfig: () => refreshedSnapshot.runtimeConfig,

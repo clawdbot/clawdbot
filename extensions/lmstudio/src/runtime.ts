@@ -74,6 +74,7 @@ export async function resolveLmstudioConfiguredApiKey(params: {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   path?: string;
+  allowUnresolved?: boolean;
 }): Promise<string | undefined> {
   const providerConfig = params.config?.models?.providers?.[LMSTUDIO_PROVIDER_ID];
   const apiKeyInput = providerConfig?.apiKey;
@@ -81,14 +82,32 @@ export async function resolveLmstudioConfiguredApiKey(params: {
     return undefined;
   }
 
+  const path = params.path ?? "models.providers.lmstudio.apiKey";
+  const env = params.env ?? process.env;
   const directApiKey = normalizeOptionalSecretInput(apiKeyInput);
   if (directApiKey !== undefined) {
-    const trimmed = normalizeApiKeyConfig(directApiKey).trim();
+    const resolved = params.config
+      ? await resolveConfiguredSecretInputString({
+          config: params.config,
+          env,
+          value: directApiKey,
+          path,
+          unresolvedReasonStyle: "detailed",
+        })
+      : { value: directApiKey };
+    if (resolved.unresolvedRefReason) {
+      if (params.allowUnresolved) {
+        return undefined;
+      }
+      throw new Error(`${path}: ${resolved.unresolvedRefReason}`);
+    }
+    const resolvedValue = normalizeOptionalSecretInput(resolved.value);
+    const trimmed = resolvedValue ? normalizeApiKeyConfig(resolvedValue).trim() : "";
     if (!trimmed) {
       return undefined;
     }
     if (isKnownEnvApiKeyMarker(trimmed)) {
-      const envValue = normalizeOptionalSecretInput((params.env ?? process.env)[trimmed]);
+      const envValue = normalizeOptionalSecretInput(env[trimmed]);
       return envValue;
     }
     return isNonSecretApiKeyMarker(trimmed) ? undefined : trimmed;
@@ -97,15 +116,17 @@ export async function resolveLmstudioConfiguredApiKey(params: {
   if (!params.config) {
     return undefined;
   }
-  const path = params.path ?? "models.providers.lmstudio.apiKey";
   const resolved = await resolveConfiguredSecretInputString({
     config: params.config,
-    env: params.env ?? process.env,
+    env,
     value: apiKeyInput,
     path,
     unresolvedReasonStyle: "detailed",
   });
   if (resolved.unresolvedRefReason) {
+    if (params.allowUnresolved) {
+      return undefined;
+    }
     throw new Error(`${path}: ${resolved.unresolvedRefReason}`);
   }
   const resolvedValue = normalizeOptionalSecretInput(resolved.value);
@@ -205,6 +226,7 @@ export async function resolveLmstudioRuntimeApiKey(params: {
     configuredApiKeyPromise ??= resolveLmstudioConfiguredApiKey({
       config,
       env: params.env,
+      allowUnresolved: hasAuthorizationHeader,
     });
     return await configuredApiKeyPromise;
   };

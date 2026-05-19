@@ -26,7 +26,7 @@ const authProfileUsageDeps = {
   updateAuthProfileStoreWithLock,
 };
 
-export const __testing = {
+export const testing = {
   setDepsForTest(
     overrides: Partial<{
       saveAuthProfileStore: typeof saveAuthProfileStore;
@@ -927,3 +927,4 @@ export async function clearAuthProfileCooldown(params: {
   updateUsageStatsEntry(store, profileId, (existing) => resetUsageStats(existing));
   authProfileUsageDeps.saveAuthProfileStore(store, agentDir);
 }
+export { testing as __testing };

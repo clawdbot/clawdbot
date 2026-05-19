@@ -74,7 +74,7 @@ export async function recoverStuckDiagnosticSession(
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
         generation: params.stateGeneration,
-        state: "processing",
+        state: params.expectedState ?? "processing",
       })
     ) {
       return {
@@ -176,6 +176,7 @@ export async function recoverStuckDiagnosticSession(
       }
     }
 
+    const queuedCount = sessionLane ? getCommandLaneSnapshot(sessionLane).queuedCount : 0;
     const released =
       sessionLane && (!activeSessionId || !aborted || !drained) ? resetCommandLane(sessionLane) : 0;
 
@@ -207,6 +208,7 @@ export async function recoverStuckDiagnosticSession(
               forceCleared,
               released,
               lane: sessionLane ?? undefined,
+              ...(queuedCount > 0 ? { queuedCount } : {}),
             }
           : {
               status: "released",
@@ -249,8 +251,9 @@ export async function recoverStuckDiagnosticSession(
   }
 }
 
-export const __testing = {
+export const testing = {
   resetRecoveriesInFlight(): void {
     recoveriesInFlight.clear();
   },
 };
+export { testing as __testing };

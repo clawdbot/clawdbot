@@ -143,27 +143,15 @@ internal fun parseGatewayEndpointResult(rawInput: String): GatewayEndpointParseR
       ?.trim()
       ?.lowercase(Locale.US)
       .orEmpty()
-  val tls =
-    when (scheme) {
-      "ws", "http" -> false
-      "wss", "https" -> true
-      else -> true
-    }
+  if (scheme !in setOf("ws", "wss", "http", "https")) {
+    return GatewayEndpointParseResult(error = GatewayEndpointValidationError.INVALID_URL)
+  }
+  val tls = scheme == "wss" || scheme == "https"
   if (!tls && !isLoopbackGatewayHost(host)) {
     return GatewayEndpointParseResult(error = GatewayEndpointValidationError.INSECURE_REMOTE_URL)
   }
-  val defaultPort =
-    when (scheme) {
-      "wss", "https" -> 443
-      "ws", "http" -> 18789
-      else -> 443
-    }
-  val displayPort =
-    when (scheme) {
-      "wss", "https" -> 443
-      "ws", "http" -> 80
-      else -> 443
-    }
+  val defaultPort = if (tls) 443 else 18789
+  val displayPort = if (tls) 443 else 80
   val port = uri.port.takeIf { it in 1..65535 } ?: defaultPort
   val displayHost = if (host.contains(":")) "[$host]" else host
   val displayUrl =

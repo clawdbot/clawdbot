@@ -86,12 +86,13 @@ Name lookup:
   - Telegram only: `--poll-duration-seconds` (5-600), `--silent`, `--poll-anonymous` / `--poll-public`, `--thread-id`
 
 - `react`
-  - Channels: Discord/Google Chat/Slack/Telegram/WhatsApp/Signal/Matrix
+  - Channels: Discord/Google Chat/Matrix/Nextcloud Talk/Signal/Slack/Telegram/WhatsApp
   - Required: `--message-id`, `--target`
   - Optional: `--emoji`, `--remove`, `--participant`, `--from-me`, `--target-author`, `--target-author-uuid`
   - Note: `--remove` requires `--emoji` (omit `--emoji` to clear own reactions where supported; see /tools/reactions)
   - WhatsApp only: `--participant`, `--from-me`
   - Signal group reactions: `--target-author` or `--target-author-uuid` required
+  - Nextcloud Talk: adding reactions only; `--remove` is rejected with a clear error (see /tools/reactions)
 
 - `reactions`
   - Channels: Discord/Google Chat/Slack/Matrix

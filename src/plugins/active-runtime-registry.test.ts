@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
-import { __testing, clearPluginLoaderCache } from "./loader.js";
+import { testing, clearPluginLoaderCache } from "./loader.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
@@ -63,7 +63,7 @@ describe("getLoadedRuntimePluginRegistry", () => {
       onlyPluginIds: ["demo"],
       workspaceDir: "/tmp/ws",
     };
-    const { cacheKey } = __testing.resolvePluginLoadCacheContext(loadOptions);
+    const { cacheKey } = testing.resolvePluginLoadCacheContext(loadOptions);
     setActivePluginRegistry(registry, cacheKey, "default", "/tmp/ws");
 
     expect(

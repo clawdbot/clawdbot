@@ -17,7 +17,7 @@ type AjvCacheOwner = {
 };
 
 function readAjvInternalCacheSize(ajv: unknown): number {
-  return (ajv as AjvCacheOwner)._cache?.size ?? 0;
+  return (ajv as AjvCacheOwner)["_cache"]?.size ?? 0;
 }
 
 function createRepeatedResponseSchema() {

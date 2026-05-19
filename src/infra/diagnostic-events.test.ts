@@ -248,7 +248,7 @@ describe("diagnostic-events", () => {
     globalStore[Symbol.for("openclaw.diagnosticEventsState")] = {
       listeners: new Set([() => events.push(true)]),
     };
-    onInternalDiagnosticEvent((_event, metadata) => {
+    onInternalDiagnosticEvent((eventValue, metadata) => {
       events.push(metadata.trusted);
     });
 
@@ -291,10 +291,10 @@ describe("diagnostic-events", () => {
   it("isolates diagnostic metadata from listener mutation", () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const seen: boolean[] = [];
-    onInternalDiagnosticEvent((_event, metadata) => {
+    onInternalDiagnosticEvent((eventValue, metadata) => {
       (metadata as { trusted: boolean }).trusted = true;
     });
-    onInternalDiagnosticEvent((_event, metadata) => {
+    onInternalDiagnosticEvent((eventValue, metadata) => {
       seen.push(metadata.trusted);
     });
 

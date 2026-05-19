@@ -39,25 +39,25 @@ export const mockedGlobalHookRunner = {
   hasHooks: vi.fn((_hookName: string) => false),
   runBeforeAgentReply: vi.fn(
     async (
-      _event: { cleanedBody: string },
+      _eventValue: { cleanedBody: string },
       _ctx: PluginHookAgentContext,
     ): Promise<PluginHookBeforeAgentReplyResult | undefined> => undefined,
   ),
   runBeforeAgentStart: vi.fn(
     async (
-      _event: { prompt: string; messages?: unknown[] },
+      _eventValue: { prompt: string; messages?: unknown[] },
       _ctx: PluginHookAgentContext,
     ): Promise<PluginHookBeforeAgentStartResult | undefined> => undefined,
   ),
   runBeforePromptBuild: vi.fn(
     async (
-      _event: { prompt: string; messages: unknown[] },
+      _eventValue: { prompt: string; messages: unknown[] },
       _ctx: PluginHookAgentContext,
     ): Promise<PluginHookBeforePromptBuildResult | undefined> => undefined,
   ),
   runBeforeModelResolve: vi.fn(
     async (
-      _event: { prompt: string },
+      _eventValue: { prompt: string },
       _ctx: PluginHookAgentContext,
     ): Promise<PluginHookBeforeModelResolveResult | undefined> => undefined,
   ),

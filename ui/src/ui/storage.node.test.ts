@@ -29,7 +29,7 @@ function setControlUiBasePath(value: string | undefined) {
     return;
   }
   if (value == null) {
-    delete window.__OPENCLAW_CONTROL_UI_BASE_PATH__;
+    delete window["__OPENCLAW_CONTROL_UI_BASE_PATH__"];
     return;
   }
   Object.defineProperty(window, "__OPENCLAW_CONTROL_UI_BASE_PATH__", {

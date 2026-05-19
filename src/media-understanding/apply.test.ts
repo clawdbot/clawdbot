@@ -281,7 +281,7 @@ describe("applyMediaUnderstanding", () => {
     vi.doMock("../media/fetch.js", () => ({
       readRemoteMediaBuffer: readRemoteMediaBufferMock,
     }));
-    vi.doMock("../media/ffmpeg-exec.js", () => ({
+    vi.doMock("../media/media-services.js", () => ({
       runFfmpeg: runFfmpegMock,
     }));
     vi.doMock("../process/exec.js", () => ({

@@ -750,7 +750,7 @@ describe("gateway hot reload", () => {
       const onRestart = hoisted.getOnRestart();
       expect(onRestart).toBeTypeOf("function");
 
-      const restartTesting = (await import("../infra/restart.js")).__testing;
+      const restartTesting = (await import("../infra/restart.js")).testing;
       restartTesting.resetSigusr1State();
       hoisted.activeTaskBlockers.push({
         taskId: "task-running-1",

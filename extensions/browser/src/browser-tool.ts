@@ -70,7 +70,7 @@ const browserToolDeps = {
   untrackSessionBrowserTab,
 };
 
-export const __testing = {
+export const testing = {
   setDepsForTest(
     overrides: Partial<{
       browserAct: typeof browserAct;
@@ -914,3 +914,4 @@ export function createBrowserTool(opts?: {
     },
   };
 }
+export { testing as __testing };

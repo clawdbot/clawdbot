@@ -20,6 +20,7 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
+import { listRegisteredPluginAgentPromptGuidance } from "../../plugins/command-registry-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { extractModelCompat } from "../../plugins/provider-model-compat.js";
@@ -88,6 +89,7 @@ import {
 } from "../pi-settings.js";
 import { createOpenClawCodingTools, resolveProcessToolScopeKey } from "../pi-tools.js";
 import { wrapStreamFnTextTransforms } from "../plugin-text-transforms.js";
+import { resolveAgentPromptSurfaceForSessionKey } from "../prompt-surface.js";
 import { registerProviderStreamForModel } from "../provider-stream.js";
 import { collectRuntimeChannelCapabilities } from "../runtime-capabilities.js";
 import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
@@ -809,7 +811,11 @@ async function compactEmbeddedPiSessionDirectOnce(
       senderIsOwner: params.senderIsOwner,
       warn: (message) => log.warn(message),
     });
-    const effectiveTools = [...tools, ...filteredBundledTools];
+    const normalizedBundledTools =
+      filteredBundledTools.length > 0
+        ? runtimePlan.tools.normalize(filteredBundledTools, runtimePlanModelContext)
+        : filteredBundledTools;
+    const effectiveTools = [...tools, ...normalizedBundledTools];
     const allowedToolNames = collectAllowedToolNames({ tools: effectiveTools });
     runtimePlan.tools.logDiagnostics(effectiveTools, runtimePlanModelContext);
     const machineName = await getMachineDisplayName();
@@ -886,10 +892,14 @@ async function compactEmbeddedPiSessionDirectOnce(
     const userTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
     const userTimeFormat = resolveUserTimeFormat(params.config?.agents?.defaults?.timeFormat);
     const userTime = formatUserTime(new Date(), userTimezone, userTimeFormat);
+    const promptSurface = resolveAgentPromptSurfaceForSessionKey(params.sessionKey);
     const promptMode =
       isSubagentSessionKey(params.sessionKey) || isCronSessionKey(params.sessionKey)
         ? "minimal"
         : "full";
+    const nativeCommandGuidanceLines = listRegisteredPluginAgentPromptGuidance({
+      surface: promptSurface,
+    });
     const openClawReferences = await resolveOpenClawReferencePaths({
       workspaceDir: effectiveWorkspace,
       argv1: process.argv[1],
@@ -935,6 +945,7 @@ async function compactEmbeddedPiSessionDirectOnce(
           docsPath: openClawReferences.docsPath ?? undefined,
           sourcePath: openClawReferences.sourcePath ?? undefined,
           promptMode,
+          promptSurface,
           sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
           acpEnabled: isAcpRuntimeSpawnAvailable({
             config: params.config,
@@ -950,6 +961,7 @@ async function compactEmbeddedPiSessionDirectOnce(
           userTimeFormat,
           contextFiles,
           promptContribution,
+          nativeCommandGuidanceLines,
         });
       return createSystemPromptOverride(
         transformProviderSystemPrompt({
@@ -1451,7 +1463,7 @@ async function compactEmbeddedPiSessionDirectOnce(
   }
 }
 
-export const __testing = {
+export const testing = {
   hasRealConversationContent,
   hasMeaningfulConversationContent,
   containsRealConversationMessages,
@@ -1466,3 +1478,4 @@ export const __testing = {
 } as const;
 
 export { runPostCompactionSideEffects } from "./compaction-hooks.js";
+export { testing as __testing };

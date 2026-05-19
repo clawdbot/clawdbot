@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
+  collectMacLaunchAgentOverrideWarning,
+  collectMacLaunchctlGatewayEnvOverrideWarning,
+  collectMacStaleOpenClawUpdateLaunchdJobsWarning,
   noteMacLaunchctlGatewayEnvOverrides,
   noteMacStaleOpenClawUpdateLaunchdJobs,
 } from "./doctor-platform-notes.js";
@@ -14,6 +17,29 @@ function requireNoteCall(noteFn: { mock: { calls: unknown[][] } }, index = 0): u
 }
 
 describe("noteMacLaunchctlGatewayEnvOverrides", () => {
+  it("collects clear unsetenv instructions for token override", async () => {
+    const getenv = vi.fn(async (name: string) =>
+      name === "OPENCLAW_GATEWAY_TOKEN" ? "launchctl-token" : undefined,
+    );
+    const cfg = {
+      gateway: {
+        auth: {
+          token: "config-token",
+        },
+      },
+    } as OpenClawConfig;
+
+    const warning = await collectMacLaunchctlGatewayEnvOverrideWarning(cfg, {
+      platform: "darwin",
+      getenv,
+    });
+
+    expect(warning).toContain("Host-wide launchctl gateway auth overrides detected");
+    expect(warning).toContain("OPENCLAW_GATEWAY_TOKEN");
+    expect(warning).toContain("launchctl unsetenv OPENCLAW_GATEWAY_TOKEN");
+    expect(warning).not.toContain("OPENCLAW_GATEWAY_PASSWORD");
+  });
+
   it("prints clear unsetenv instructions for token override", async () => {
     const noteFn = vi.fn();
     const getenv = vi.fn(async (name: string) =>
@@ -96,6 +122,26 @@ describe("noteMacLaunchctlGatewayEnvOverrides", () => {
 });
 
 describe("noteMacStaleOpenClawUpdateLaunchdJobs", () => {
+  it("collects stale updater job cleanup guidance on macOS", async () => {
+    const findJobs = vi.fn(async () => [
+      {
+        label: "ai.openclaw.update.2026.5.12",
+        lastExitStatus: 127,
+      },
+    ]);
+
+    const warning = await collectMacStaleOpenClawUpdateLaunchdJobsWarning({
+      platform: "darwin",
+      findJobs,
+    });
+
+    expect(findJobs).toHaveBeenCalledTimes(1);
+    expect(warning).toContain("Stale OpenClaw updater launchd job(s) detected");
+    expect(warning).toContain("ai.openclaw.update.2026.5.12");
+    expect(warning).toContain("launchctl remove <label>");
+    expect(warning).toContain("openclaw gateway restart");
+  });
+
   it("prints stale updater job cleanup guidance on macOS", async () => {
     const noteFn = vi.fn();
     const findJobs = vi.fn(async () => [
@@ -131,5 +177,29 @@ describe("noteMacStaleOpenClawUpdateLaunchdJobs", () => {
     });
 
     expect(noteFn).not.toHaveBeenCalled();
+  });
+});
+
+describe("collectMacLaunchAgentOverrideWarning", () => {
+  it("collects guidance when launch agent writes are disabled", () => {
+    const warning = collectMacLaunchAgentOverrideWarning({
+      platform: "darwin",
+      homeDir: "/Users/tester",
+      exists: (candidate) => candidate.includes("disable-launchagent"),
+    });
+
+    expect(warning).toContain("LaunchAgent writes are disabled");
+    expect(warning).toContain("rm ");
+    expect(warning).toContain("disable-launchagent");
+  });
+
+  it("does nothing when launch agent writes are not disabled", () => {
+    expect(
+      collectMacLaunchAgentOverrideWarning({
+        platform: "darwin",
+        homeDir: "/Users/tester",
+        exists: () => false,
+      }),
+    ).toBeNull();
   });
 });

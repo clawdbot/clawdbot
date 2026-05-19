@@ -23,6 +23,7 @@ data class NodeRuntimeFlags(
   val readSmsAvailable: Boolean,
   val smsSearchPossible: Boolean,
   val callLogAvailable: Boolean,
+  val photosAvailable: Boolean,
   val voiceWakeEnabled: Boolean,
   val motionActivityAvailable: Boolean,
   val motionPedometerAvailable: Boolean,
@@ -37,6 +38,7 @@ enum class InvokeCommandAvailability {
   ReadSmsAvailable,
   RequestableSmsSearchAvailable,
   CallLogAvailable,
+  PhotosAvailable,
   MotionActivityAvailable,
   MotionPedometerAvailable,
   DebugBuild,
@@ -48,6 +50,7 @@ enum class NodeCapabilityAvailability {
   LocationEnabled,
   SmsAvailable,
   CallLogAvailable,
+  PhotosAvailable,
   VoiceWakeEnabled,
   MotionAvailable,
 }
@@ -87,7 +90,10 @@ object InvokeCommandRegistry {
         name = OpenClawCapability.Location.rawValue,
         availability = NodeCapabilityAvailability.LocationEnabled,
       ),
-      NodeCapabilitySpec(name = OpenClawCapability.Photos.rawValue),
+      NodeCapabilitySpec(
+        name = OpenClawCapability.Photos.rawValue,
+        availability = NodeCapabilityAvailability.PhotosAvailable,
+      ),
       NodeCapabilitySpec(name = OpenClawCapability.Contacts.rawValue),
       NodeCapabilitySpec(name = OpenClawCapability.Calendar.rawValue),
       NodeCapabilitySpec(
@@ -188,6 +194,7 @@ object InvokeCommandRegistry {
       ),
       InvokeCommandSpec(
         name = OpenClawPhotosCommand.Latest.rawValue,
+        availability = InvokeCommandAvailability.PhotosAvailable,
       ),
       InvokeCommandSpec(
         name = OpenClawContactsCommand.Search.rawValue,
@@ -244,6 +251,7 @@ object InvokeCommandRegistry {
           NodeCapabilityAvailability.LocationEnabled -> flags.locationEnabled
           NodeCapabilityAvailability.SmsAvailable -> flags.sendSmsAvailable || flags.readSmsAvailable
           NodeCapabilityAvailability.CallLogAvailable -> flags.callLogAvailable
+          NodeCapabilityAvailability.PhotosAvailable -> flags.photosAvailable
           NodeCapabilityAvailability.VoiceWakeEnabled -> flags.voiceWakeEnabled
           NodeCapabilityAvailability.MotionAvailable -> flags.motionActivityAvailable || flags.motionPedometerAvailable
         }
@@ -260,6 +268,7 @@ object InvokeCommandRegistry {
           InvokeCommandAvailability.ReadSmsAvailable -> flags.readSmsAvailable
           InvokeCommandAvailability.RequestableSmsSearchAvailable -> flags.smsSearchPossible
           InvokeCommandAvailability.CallLogAvailable -> flags.callLogAvailable
+          InvokeCommandAvailability.PhotosAvailable -> flags.photosAvailable
           InvokeCommandAvailability.MotionActivityAvailable -> flags.motionActivityAvailable
           InvokeCommandAvailability.MotionPedometerAvailable -> flags.motionPedometerAvailable
           InvokeCommandAvailability.DebugBuild -> flags.debugBuild

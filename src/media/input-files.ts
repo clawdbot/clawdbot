@@ -7,7 +7,7 @@ import {
   normalizeOptionalString,
 } from "../shared/string-coerce.js";
 import { canonicalizeBase64, estimateBase64DecodedBytes } from "./base64.js";
-import { convertHeicToJpeg } from "./image-ops.js";
+import { convertHeicToJpeg } from "./media-services.js";
 import { detectMime } from "./mime.js";
 import { extractPdfContent, type PdfExtractedImage } from "./pdf-extract.js";
 import { readResponseWithLimit } from "./read-response-with-limit.js";

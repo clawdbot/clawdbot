@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { describe, expect, it } from "vitest";
-import { __testing } from "../../scripts/bench-gateway-restart.ts";
+import { testing } from "../../scripts/bench-gateway-restart.ts";
 
 describe("gateway restart benchmark script", () => {
   it("prints help without running benchmark cases", () => {
@@ -35,30 +35,30 @@ describe("gateway restart benchmark script", () => {
   });
 
   it("rejects ambiguous benchmark CLI values before spawning Node", () => {
-    expect(__testing.parsePositiveInt("5", 1, "--restarts")).toBe(5);
-    expect(__testing.parseNonNegativeInt("0", 1, "--warmup")).toBe(0);
-    expect(() => __testing.parsePositiveInt("2abc", 1, "--restarts")).toThrow(
+    expect(testing.parsePositiveInt("5", 1, "--restarts")).toBe(5);
+    expect(testing.parseNonNegativeInt("0", 1, "--warmup")).toBe(0);
+    expect(() => testing.parsePositiveInt("2abc", 1, "--restarts")).toThrow(
       /--restarts must be an integer/u,
     );
-    expect(() => __testing.resolveEntry("--inspect")).toThrow(/must be a file path/u);
+    expect(() => testing.resolveEntry("--inspect")).toThrow(/must be a file path/u);
   });
 
   it("guards the SIGUSR1 restart benchmark on Windows", () => {
-    expect(() => __testing.ensureSupportedRestartPlatform("linux")).not.toThrow();
-    expect(() => __testing.ensureSupportedRestartPlatform("darwin")).not.toThrow();
-    expect(() => __testing.ensureSupportedRestartPlatform("win32")).toThrow(
+    expect(() => testing.ensureSupportedRestartPlatform("linux")).not.toThrow();
+    expect(() => testing.ensureSupportedRestartPlatform("darwin")).not.toThrow();
+    expect(() => testing.ensureSupportedRestartPlatform("win32")).toThrow(
       /not supported on Windows/u,
     );
   });
 
   it("buffers child output lines split across chunks", () => {
-    const first = __testing.collectOutputLines("", "[gateway] restart trace: restart.ready 12");
+    const first = testing.collectOutputLines("", "[gateway] restart trace: restart.ready 12");
     expect(first.lines).toEqual([]);
 
-    const second = __testing.collectOutputLines(first.carry, ".5ms total=45.0ms\r");
+    const second = testing.collectOutputLines(first.carry, ".5ms total=45.0ms\r");
     expect(second.lines).toEqual([]);
 
-    const third = __testing.collectOutputLines(second.carry, "\n[gateway] ready\npartial");
+    const third = testing.collectOutputLines(second.carry, "\n[gateway] ready\npartial");
     expect(third.lines).toEqual([
       "[gateway] restart trace: restart.ready 12.5ms total=45.0ms",
       "[gateway] ready",
@@ -67,7 +67,7 @@ describe("gateway restart benchmark script", () => {
   });
 
   it("flushes buffered restart output before classifying an iteration", () => {
-    const iteration = __testing.createRestartIteration(1);
+    const iteration = testing.createRestartIteration(1);
     iteration.healthz = {
       downtimeMs: 10,
       firstErrorKind: "econnreset",
@@ -87,7 +87,7 @@ describe("gateway restart benchmark script", () => {
       unavailableMs: 30,
     };
 
-    const failure = __testing.finalizeRestartIteration(iteration, false, () => {
+    const failure = testing.finalizeRestartIteration(iteration, false, () => {
       iteration.gatewayReadyLogLine = "[gateway] ready";
       iteration.gatewayReadyLogMs = 45;
       iteration.restartTrace["restart.ready.total"] = 50;
@@ -103,7 +103,7 @@ describe("gateway restart benchmark script", () => {
     };
     const lines: string[] = [];
 
-    __testing.flushOutputLineBuffers(buffers, (line) => lines.push(line), 1);
+    testing.flushOutputLineBuffers(buffers, (line) => lines.push(line), 1);
 
     expect(lines).toEqual([]);
     expect(buffers).toEqual({
@@ -119,7 +119,7 @@ describe("gateway restart benchmark script", () => {
     };
     const lines: string[] = [];
 
-    __testing.flushOutputLineBuffers(buffers, (line) => lines.push(line), 1, {
+    testing.flushOutputLineBuffers(buffers, (line) => lines.push(line), 1, {
       flushPartial: true,
     });
 
@@ -132,7 +132,7 @@ describe("gateway restart benchmark script", () => {
 
   it("counts only numeric descriptors from lsof output", () => {
     expect(
-      __testing.countLsofFileDescriptors(`COMMAND   PID USER   FD   TYPE DEVICE SIZE/OFF NODE NAME
+      testing.countLsofFileDescriptors(`COMMAND   PID USER   FD   TYPE DEVICE SIZE/OFF NODE NAME
 node    1234 user  cwd    DIR    1,2      128    2 /tmp
 node    1234 user  txt    REG    1,2    12345    3 /usr/bin/node
 node    1234 user  mem    REG    1,2    12345    4 /usr/lib/lib.dylib
@@ -144,7 +144,7 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
   });
 
   it("enables both startup and restart trace in the child gateway environment", () => {
-    const env = __testing.sanitizedEnv("/tmp/openclaw-bench", "/tmp/openclaw-bench/config.json", {
+    const env = testing.sanitizedEnv("/tmp/openclaw-bench", "/tmp/openclaw-bench/config.json", {
       config: {},
       id: "skipChannels",
       name: "gateway restart, skip channels",
@@ -157,7 +157,7 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
   });
 
   it("can pin ACPX startup probe policy per benchmark case", () => {
-    const probeOffEnv = __testing.sanitizedEnv(
+    const probeOffEnv = testing.sanitizedEnv(
       "/tmp/openclaw-bench",
       "/tmp/openclaw-bench/config.json",
       {
@@ -174,7 +174,7 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
   it("parses restart trace metrics including resource Count fields", () => {
     const restartTrace: Record<string, number> = {};
 
-    __testing.collectTraceLine(
+    testing.collectTraceLine(
       "[gateway] restart trace: restart.ready 12.5ms total=45.0ms rssMb=200.5 heapUsedMb=80.1 activeHandlesCount=12 activeTimersCount=2 indexPlugins=50",
       "restart trace",
       restartTrace,
@@ -191,13 +191,13 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
 
   it("requires initial ready logs before restart attribution", () => {
     expect(
-      __testing.hasInitialReadyLogs({
+      testing.hasInitialReadyLogs({
         initialGatewayReadyLogMs: 20,
         initialHttpListenLogMs: 10,
       }),
     ).toBe(true);
     expect(
-      __testing.hasInitialReadyLogs({
+      testing.hasInitialReadyLogs({
         initialGatewayReadyLogMs: 20,
         initialHttpListenLogMs: null,
       }),
@@ -205,12 +205,12 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
   });
 
   it("reports deadline expiry separately from child exit", () => {
-    expect(__testing.resolveRestartDeadlineFailure(false)).toBe("restart_deadline_timeout");
-    expect(__testing.resolveRestartDeadlineFailure(true)).toBe("restart_child_exited");
+    expect(testing.resolveRestartDeadlineFailure(false)).toBe("restart_deadline_timeout");
+    expect(testing.resolveRestartDeadlineFailure(true)).toBe("restart_child_exited");
   });
 
   it("does not fail successful restarts when probes miss the unavailable window", () => {
-    const iteration = __testing.createRestartIteration(1);
+    const iteration = testing.createRestartIteration(1);
     iteration.gatewayReadyLogMs = 40;
     iteration.gatewayReadyLogLine = "[gateway] ready";
     iteration.healthz = {
@@ -233,11 +233,11 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
     };
     iteration.restartTrace = { "restart.ready.total": 35 };
 
-    expect(__testing.finalizeRestartIteration(iteration, false, () => {})).toBeNull();
+    expect(testing.finalizeRestartIteration(iteration, false, () => {})).toBeNull();
   });
 
   it("summarizes failure rate, restart.ready totals, and resource slope", () => {
-    const result = __testing.summarizeCase({ config: {}, id: "demo", name: "demo" }, [
+    const result = testing.summarizeCase({ config: {}, id: "demo", name: "demo" }, [
       {
         childExitCode: null,
         childSignal: "SIGTERM",
@@ -362,7 +362,7 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
   });
 
   it("counts sample failures that happen before restart iterations", () => {
-    const result = __testing.summarizeCase({ config: {}, id: "demo", name: "demo" }, [
+    const result = testing.summarizeCase({ config: {}, id: "demo", name: "demo" }, [
       {
         childExitCode: null,
         childSignal: null,
@@ -415,7 +415,7 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
     try {
       const env = { OPENCLAW_STATE_DIR: path.join(root, "state") };
 
-      expect(__testing.writeRestartIntent(env, 12345, "gateway-restart-bench")).toBe(true);
+      expect(testing.writeRestartIntent(env, 12345, "gateway-restart-bench")).toBe(true);
       const raw = fs.readFileSync(path.join(root, "state", "gateway-restart-intent.json"), "utf8");
       const parsed = JSON.parse(raw) as {
         kind?: unknown;
@@ -446,7 +446,7 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
         throw new Error("test server did not bind to a TCP port");
       }
       const sampleStartAt = performance.now();
-      const result = await __testing.waitForRestartProbe({
+      const result = await testing.waitForRestartProbe({
         deadlineAt: sampleStartAt + 2_000,
         events: [],
         isDone: () => performance.now() - sampleStartAt > 60,
@@ -486,7 +486,7 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
         throw new Error("test server did not bind to a TCP port");
       }
       const sampleStartAt = performance.now();
-      const result = await __testing.waitForRestartProbe({
+      const result = await testing.waitForRestartProbe({
         deadlineAt: sampleStartAt + 2_000,
         events: [],
         isDone: () => requests >= 1,
@@ -512,7 +512,7 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
   it("writes plugin fixtures as a parent load path with explicit startup activation", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-restart-bench-config-test-"));
     try {
-      const configPath = __testing.writeConfig(root, {
+      const configPath = testing.writeConfig(root, {
         config: {},
         id: "fiftyPlugins",
         name: "gateway restart, 50 manifest plugins",

@@ -195,3 +195,71 @@ export function hasSnapshotProviderEnvAvailability(params: {
   }
   return false;
 }
+
+export function hasSnapshotCapabilityProviderAvailability(params: {
+  snapshot: Pick<PluginMetadataSnapshot, "index" | "plugins">;
+  key: CapabilityContractKey;
+  providerId: string;
+  config?: OpenClawConfig;
+  authStore?: AuthProfileStore;
+}): boolean {
+  if (params.config?.plugins?.enabled === false) {
+    return false;
+  }
+  for (const plugin of params.snapshot.plugins) {
+    if (
+      !isManifestPluginAvailableForControlPlane({
+        snapshot: params.snapshot,
+        plugin,
+        config: params.config,
+      })
+    ) {
+      continue;
+    }
+    if (!plugin.contracts?.[params.key]?.includes(params.providerId)) {
+      continue;
+    }
+    const metadataKey = metadataKeyForCapabilityContract(params.key);
+    const metadata = metadataKey ? plugin[metadataKey]?.[params.providerId] : undefined;
+    if (
+      metadata?.configSignals?.some((signal) =>
+        manifestConfigSignalPasses({
+          config: params.config,
+          env: process.env,
+          signal,
+        }),
+      )
+    ) {
+      return true;
+    }
+    for (const signal of listCapabilityAuthSignals({
+      plugin,
+      key: params.key,
+      providerId: params.providerId,
+    })) {
+      if (
+        !manifestProviderBaseUrlGuardPasses({
+          config: params.config,
+          guard: signal.providerBaseUrl,
+        })
+      ) {
+        continue;
+      }
+      if (
+        params.authStore &&
+        listProfilesForProvider(params.authStore, signal.provider).length > 0
+      ) {
+        return true;
+      }
+      if (
+        hasNonEmptyManifestEnvCandidate(
+          process.env,
+          manifestPluginSetupProviderEnvVars(plugin, signal.provider),
+        )
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}

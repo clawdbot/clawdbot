@@ -23,7 +23,9 @@ const mockWriteConfigFile = vi.fn<
 >(async () => {});
 const mockResolveSecretRefValue = vi.fn();
 const mockReadBestEffortRuntimeConfigSchema = vi.fn();
-const mockLoadPluginMetadataSnapshot = vi.fn((_config: unknown) => createPluginMetadataSnapshot());
+const mockLoadPluginMetadataSnapshot = vi.fn((configForTest: unknown) =>
+  createPluginMetadataSnapshot(),
+);
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
@@ -1222,14 +1224,13 @@ describe("config cli", () => {
       expect(helpText).toContain("--batch-json");
       expect(helpText).toContain("--dry-run");
       expect(helpText).toContain("--allow-exec");
-      expect(helpText).toContain("openclaw config set gateway.port 19001 --strict-json");
-      expect(helpText).toContain(
-        "openclaw config set channels.discord.token --ref-provider default --ref-source",
+      // Ignore Commander line wrapping and env-injected CLI prefixes.
+      const normalizedHelp = helpText.replace(/\s+/g, " ");
+      expect(normalizedHelp).toContain("config set gateway.port 19001 --strict-json");
+      expect(normalizedHelp).toContain(
+        "channels.discord.token --ref-provider default --ref-source env --ref-id DISCORD_BOT_TOKEN",
       );
-      expect(helpText).toContain("--ref-id DISCORD_BOT_TOKEN");
-      expect(helpText).toContain(
-        "openclaw config set --batch-file ./config-set.batch.json --dry-run",
-      );
+      expect(normalizedHelp).toContain("--batch-file ./config-set.batch.json --dry-run");
     });
   });
 

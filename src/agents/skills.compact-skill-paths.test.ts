@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createCanonicalFixtureSkill } from "./skills.test-helpers.js";
 import {
-  __testing as workspaceSkillsTesting,
+  testing as workspaceSkillsTesting,
   buildWorkspaceSkillsPrompt,
 } from "./skills/workspace.js";
 

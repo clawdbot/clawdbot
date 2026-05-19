@@ -28,6 +28,22 @@ function createDueMainJob(params: { now: number; wakeMode: CronJob["wakeMode"] }
   };
 }
 
+function createDueIsolatedAgentJob(params: { now: number }): CronJob {
+  return {
+    id: "isolated-agent-job",
+    agentId: "finn",
+    name: "isolated agent job",
+    enabled: true,
+    createdAtMs: params.now - 60_000,
+    updatedAtMs: params.now - 60_000,
+    schedule: { kind: "every", everyMs: 60_000, anchorMs: params.now - 60_000 },
+    sessionTarget: "isolated",
+    wakeMode: "now",
+    payload: { kind: "agentTurn", message: "run isolated cron" },
+    state: { nextRunAtMs: params.now - 1 },
+  };
+}
+
 afterEach(() => {
   resetTaskRegistryForTests();
 });
@@ -106,6 +122,49 @@ describe("cron service timer seam coverage", () => {
     expect(positiveDelays.length).toBeGreaterThan(0);
 
     timeoutSpy.mockRestore();
+  });
+
+  it("records isolated cron task runs against the backing cron session", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeat = vi.fn();
+    const runIsolatedAgentJob = vi.fn(async () => ({
+      status: "ok" as const,
+      summary: "done",
+      sessionKey: "agent:finn:cron:isolated-agent-job:run:run-1",
+    }));
+
+    await writeCronStoreSnapshot({
+      storePath,
+      jobs: [createDueIsolatedAgentJob({ now })],
+    });
+
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      log: logger,
+      nowMs: () => now,
+      enqueueSystemEvent,
+      requestHeartbeat,
+      runIsolatedAgentJob,
+    });
+
+    await onTimer(state);
+
+    expect(runIsolatedAgentJob).toHaveBeenCalledWith(
+      expect.objectContaining({
+        job: expect.objectContaining({ id: "isolated-agent-job" }),
+        message: "run isolated cron",
+      }),
+    );
+    const task = findTaskByRunId(`cron:isolated-agent-job:${now}`);
+    if (!task) {
+      throw new Error("expected isolated cron task ledger record");
+    }
+    expect(task.childSessionKey).toBe("agent:finn:cron:isolated-agent-job");
+    expect(task.status).toBe("succeeded");
+    expect(task.terminalSummary).toBe("done");
   });
 
   it("keeps scheduler progress when task ledger creation fails", async () => {

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../../runtime-api.js";
 import type { GraphThreadMessage } from "../graph-thread.js";
-import { _resetThreadParentContextCachesForTest } from "../thread-parent-context.js";
+import { resetThreadParentContextCachesForTest } from "../thread-parent-context.js";
 import "./message-handler-mock-support.test-support.js";
 import { getRuntimeApiMockState } from "./message-handler-mock-support.test-support.js";
 import { createMSTeamsMessageHandler } from "./message-handler.js";
@@ -110,7 +110,7 @@ describe("msteams monitor handler authz", () => {
     graphThreadMockState.fetchThreadReplies.mockReset();
     // Parent-context LRU + per-session dedupe are module-level; clear between
     // cases so stale parent fetches from earlier tests don't bleed in.
-    _resetThreadParentContextCachesForTest();
+    resetThreadParentContextCachesForTest();
   }
 
   function createThreadMessage(params: {

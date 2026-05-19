@@ -295,7 +295,7 @@ describe("createGatewayPluginRequestHandler", () => {
     expect(routeHandler).toHaveBeenCalledTimes(1);
   });
 
-  it("does not fall back to stale routes when the pinned route registry is empty", async () => {
+  it("uses the explicit registry when no route registry resolver is provided", async () => {
     const explicitRouteHandler = vi.fn(async (_req, res: ServerResponse) => {
       res.statusCode = 200;
       return true;
@@ -315,8 +315,8 @@ describe("createGatewayPluginRequestHandler", () => {
 
     const { res } = makeMockHttpResponse();
     const handled = await handler({ url: "/demo" } as IncomingMessage, res);
-    expect(handled).toBe(false);
-    expect(explicitRouteHandler).not.toHaveBeenCalled();
+    expect(handled).toBe(true);
+    expect(explicitRouteHandler).toHaveBeenCalledTimes(1);
   });
 
   it("handles routes registered into the pinned startup registry after the active registry changes", async () => {
@@ -353,7 +353,7 @@ describe("createGatewayPluginRequestHandler", () => {
     }
   });
 
-  it("prefers the pinned route registry over a stale explicit registry", async () => {
+  it("prefers the server-local route registry resolver over a stale explicit registry", async () => {
     const startupRegistry = createTestRegistry();
     const staleExplicitRegistry = createTestRegistry({
       httpRoutes: [createRoute({ path: "/plugins/diffs", auth: "plugin" })],
@@ -375,6 +375,7 @@ describe("createGatewayPluginRequestHandler", () => {
     try {
       const handler = createGatewayPluginRequestHandler({
         registry: staleExplicitRegistry,
+        getRouteRegistry: () => startupRegistry,
         log: createPluginLog(),
       });
 

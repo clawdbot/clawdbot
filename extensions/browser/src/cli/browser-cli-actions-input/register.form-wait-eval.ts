@@ -107,6 +107,11 @@ export function registerBrowserFormWaitEvalCommands(
     .description("Evaluate a function against the page or a ref")
     .option("--fn <code>", "Function source, e.g. (el) => el.textContent")
     .option("--ref <id>", "Ref from snapshot")
+    .option(
+      "--timeout-ms <ms>",
+      "How long to allow the evaluate function to run (default: 20000)",
+      (v: string) => Number(v),
+    )
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (opts, cmd) => {
       const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
@@ -116,6 +121,7 @@ export function registerBrowserFormWaitEvalCommands(
         return;
       }
       try {
+        const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : undefined;
         const result = await callBrowserAct<{ result?: unknown }>({
           parent,
           profile,
@@ -124,7 +130,9 @@ export function registerBrowserFormWaitEvalCommands(
             fn: opts.fn,
             ref: normalizeOptionalString(opts.ref),
             targetId: normalizeOptionalString(opts.targetId),
+            timeoutMs,
           },
+          timeoutMs,
         });
         if (parent?.json) {
           defaultRuntime.writeJson(result);

@@ -15,7 +15,9 @@ const {
       title: "Telegram setup fallback audited",
     },
   ]),
-  collectEnabledInsecureOrDangerousFlagsMock: vi.fn((_config: OpenClawConfig): string[] => []),
+  collectEnabledInsecureOrDangerousFlagsMock: vi.fn(
+    (configForTest: OpenClawConfig): string[] => [],
+  ),
   listReadOnlyChannelPluginsForConfigMock: vi.fn(),
   hasConfiguredChannelsForReadOnlyScopeMock: vi.fn(),
 }));

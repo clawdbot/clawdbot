@@ -16,6 +16,12 @@ vi.mock("../logging/subsystem.js", () => ({
 }));
 
 import { STATE_DIR } from "../config/paths.js";
+import { registerPluginHttpRoute } from "./http-registry.js";
+import {
+  pinActivePluginHttpRouteRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "./runtime.js";
 import { startPluginServices } from "./services.js";
 
 function createRegistry(
@@ -138,6 +144,7 @@ function createTrackingService(
 describe("startPluginServices", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetPluginRuntimeStateForTest();
   });
 
   it("starts services and stops them in reverse order", async () => {
@@ -158,6 +165,35 @@ describe("startPluginServices", () => {
     await handle.stop();
 
     expectServiceLifecycleState({ starts, stops, contexts, config });
+  });
+
+  it("registers dynamic HTTP routes into the service registry scope", async () => {
+    const serviceRegistry = createRegistry([
+      {
+        id: "route-service",
+        start: () => {
+          registerPluginHttpRoute({
+            path: "/service-route",
+            auth: "plugin",
+            handler: vi.fn(),
+          });
+        },
+      },
+    ]);
+    const pinnedRegistry = createEmptyPluginRegistry();
+
+    setActivePluginRegistry(pinnedRegistry);
+    pinActivePluginHttpRouteRegistry(pinnedRegistry);
+
+    const handle = await startPluginServices({
+      registry: serviceRegistry,
+      config: createServiceConfig(),
+    });
+
+    expect(serviceRegistry.httpRoutes.map((route) => route.path)).toEqual(["/service-route"]);
+    expect(pinnedRegistry.httpRoutes).toHaveLength(0);
+
+    await handle.stop();
   });
 
   it("logs start/stop failures and continues", async () => {

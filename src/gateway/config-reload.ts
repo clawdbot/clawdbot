@@ -14,6 +14,7 @@ import {
   buildGatewayReloadPlan,
   listPluginInstallTimestampMetadataPaths,
   listPluginInstallWholeRecordPaths,
+  resolveConfigReloadMetadata,
   type GatewayReloadPlan,
 } from "./config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "./config-reload-settings.js";
@@ -23,6 +24,7 @@ export {
   diffConfigPaths,
   listPluginInstallTimestampMetadataPaths,
   listPluginInstallWholeRecordPaths,
+  resolveConfigReloadMetadata,
   resolveGatewayReloadSettings,
 };
 export type { ChannelKind, GatewayReloadPlan } from "./config-reload-plan.js";

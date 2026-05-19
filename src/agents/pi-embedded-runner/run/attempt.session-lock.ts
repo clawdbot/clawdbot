@@ -50,12 +50,13 @@ type LockableFunction = ((...args: unknown[]) => unknown) & {
 };
 
 function sessionHasExtensionHandlers(session: SessionEventProcessor, eventType: string): boolean {
-  const hasHandlers = session._extensionRunner?.hasHandlers;
+  const extensionRunner = session["_extensionRunner"];
+  const hasHandlers = extensionRunner?.hasHandlers;
   if (typeof hasHandlers !== "function") {
     return false;
   }
   try {
-    return hasHandlers.call(session._extensionRunner, eventType);
+    return hasHandlers.call(extensionRunner, eventType);
   } catch {
     return true;
   }
@@ -80,7 +81,7 @@ function installLockableFunction(params: {
   withSessionWriteLock: <T>(run: () => Promise<T> | T) => Promise<T>;
 }): void {
   const current = params.owner[params.key] as LockableFunction | undefined;
-  if (typeof current !== "function" || current.__openclawSessionWriteLockInstalled === true) {
+  if (typeof current !== "function" || current["__openclawSessionWriteLockInstalled"] === true) {
     return;
   }
   const wrapped: LockableFunction = async function lockedExternalHook(
@@ -93,7 +94,7 @@ function installLockableFunction(params: {
     await params.waitBeforeLock?.();
     return await params.withSessionWriteLock(async () => await current.apply(this, args));
   };
-  wrapped.__openclawSessionWriteLockInstalled = true;
+  wrapped["__openclawSessionWriteLockInstalled"] = true;
   params.owner[params.key] = wrapped;
 }
 
@@ -149,16 +150,16 @@ async function readSessionFileFingerprint(sessionFile: string): Promise<SessionF
 async function waitForSessionEventQueue(session: unknown): Promise<void> {
   const owner = session as SessionEventQueueOwner;
   for (let attempts = 0; attempts < 5; attempts += 1) {
-    const queue = owner?._agentEventQueue;
+    const queue = owner?.["_agentEventQueue"];
     if (!queue || typeof queue.then !== "function") {
       return;
     }
     await Promise.resolve(queue).catch(() => {});
-    if (owner?._agentEventQueue === queue) {
+    if (owner?.["_agentEventQueue"] === queue) {
       return;
     }
   }
-  const queue = owner?._agentEventQueue;
+  const queue = owner?.["_agentEventQueue"];
   if (queue && typeof queue.then === "function") {
     await Promise.resolve(queue).catch(() => {});
   }
@@ -176,12 +177,15 @@ export function installSessionEventWriteLock(params: {
   withSessionWriteLock: <T>(run: () => Promise<T> | T) => Promise<T>;
 }): void {
   const session = params.session as SessionEventProcessor;
-  const original = session._processAgentEvent;
-  if (typeof original !== "function" || session.__openclawSessionEventWriteLockInstalled === true) {
+  const original = session["_processAgentEvent"];
+  if (
+    typeof original !== "function" ||
+    session["__openclawSessionEventWriteLockInstalled"] === true
+  ) {
     return;
   }
-  session.__openclawSessionEventWriteLockInstalled = true;
-  session._processAgentEvent = async function lockedProcessAgentEvent(
+  session["__openclawSessionEventWriteLockInstalled"] = true;
+  session["_processAgentEvent"] = async function lockedProcessAgentEvent(
     this: unknown,
     event: unknown,
   ) {
@@ -378,7 +382,7 @@ export function installPromptSubmissionLockRelease(params: {
     return;
   }
   const currentStreamFn = agent.streamFn;
-  if (currentStreamFn.__openclawSessionLockPromptReleaseInstalled === true) {
+  if (currentStreamFn["__openclawSessionLockPromptReleaseInstalled"] === true) {
     return;
   }
   const originalStreamFn = currentStreamFn.bind(agent);
@@ -387,6 +391,6 @@ export function installPromptSubmissionLockRelease(params: {
     await params.releaseForPrompt();
     return await originalStreamFn(...args);
   };
-  wrappedStreamFn.__openclawSessionLockPromptReleaseInstalled = true;
+  wrappedStreamFn["__openclawSessionLockPromptReleaseInstalled"] = true;
   agent.streamFn = wrappedStreamFn;
 }

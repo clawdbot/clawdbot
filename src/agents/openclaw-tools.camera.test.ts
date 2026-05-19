@@ -10,7 +10,7 @@ const { callGateway } = vi.hoisted(() => ({
 }));
 
 vi.mock("../gateway/call.js", () => ({ callGateway }));
-vi.mock("../media/image-ops.js", () => ({
+vi.mock("../media/media-services.js", () => ({
   getImageMetadata: vi.fn(async () => ({ width: 1, height: 1 })),
   resizeToJpeg: vi.fn(async () => Buffer.from("jpeg")),
 }));

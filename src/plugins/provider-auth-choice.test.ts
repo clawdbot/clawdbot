@@ -15,7 +15,7 @@ vi.mock("../wizard/setup.post-install-migration.js", () => ({
   offerPostInstallMigrations,
 }));
 
-const { __testing, applyAuthChoicePluginProvider } = await import("./provider-auth-choice.js");
+const { testing, applyAuthChoicePluginProvider } = await import("./provider-auth-choice.js");
 
 function buildProvider(): ProviderPlugin {
   return {
@@ -38,7 +38,7 @@ function buildProvider(): ProviderPlugin {
 
 describe("applyAuthChoicePluginProvider", () => {
   beforeEach(() => {
-    __testing.resetDepsForTest();
+    testing.resetDepsForTest();
     ensureCodexRuntimePluginForModelSelection.mockReset();
     offerPostInstallMigrations.mockReset();
   });
@@ -46,7 +46,7 @@ describe("applyAuthChoicePluginProvider", () => {
   it("returns post-install Codex migration config when setting an OpenAI default model", async () => {
     const provider = buildProvider();
     const runProviderModelSelectedHook = vi.fn(async () => undefined);
-    __testing.setDepsForTest({
+    testing.setDepsForTest({
       loadPluginProviderRuntime: async () =>
         ({
           resolvePluginProviders: () => [provider],

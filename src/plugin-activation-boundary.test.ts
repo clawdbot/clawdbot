@@ -110,7 +110,7 @@ vi.mock("./plugin-sdk/facade-loader.js", () => ({
 
 vi.mock("./plugin-sdk/facade-runtime.js", () => ({
   ...facadeMockHelpers,
-  __testing: {},
+  testing: {},
   canLoadActivatedBundledPluginPublicSurface: () => true,
   listImportedBundledPluginFacadeIds: () => [],
   loadActivatedBundledPluginPublicSurfaceModuleSync: loadBundledPluginPublicSurfaceModuleSync,

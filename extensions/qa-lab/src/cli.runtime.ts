@@ -1172,6 +1172,7 @@ export async function runQaProviderServerCommand(
   await runInterruptibleServer(standaloneCommand.serverLabel, server);
 }
 
-export const __testing = {
+export const testing = {
   resolveRepoRelativeOutputDir,
 };
+export { testing as __testing };

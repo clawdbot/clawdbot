@@ -502,7 +502,7 @@ export async function runKimiSearchProviderSetup(
   return next;
 }
 
-export const __testing = {
+export const testing = {
   resolveKimiApiKey,
   resolveKimiModel,
   resolveKimiBaseUrl,
@@ -510,3 +510,4 @@ export const __testing = {
   hasKimiSearchResults,
   extractKimiToolResultContent,
 } as const;
+export { testing as __testing };

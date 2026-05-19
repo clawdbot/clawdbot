@@ -1023,7 +1023,7 @@ export async function monitorZalouserProvider(
   return { stop };
 }
 
-export const __testing = {
+export const testing = {
   processMessage: async (params: {
     message: ZaloInboundMessage;
     account: ResolvedZalouserAccount;
@@ -1054,3 +1054,4 @@ export const __testing = {
     );
   },
 };
+export { testing as __testing };

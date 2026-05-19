@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
-import { __testing as setupRegistryRuntimeTesting } from "../plugins/setup-registry.runtime.js";
+import { testing as setupRegistryRuntimeTesting } from "../plugins/setup-registry.runtime.js";
 import { isCliProvider } from "./model-selection-cli.js";
 
 describe("isCliProvider", () => {

@@ -10,7 +10,7 @@ type GatewayCaller = typeof defaultCallGateway;
 
 let callGatewayForListSpawned: GatewayCaller = defaultCallGateway;
 
-/** Test hook: must stay aligned with `sessions-resolution` `__testing.setDepsForTest`. */
+/** Test hook: must stay aligned with `sessions-resolution` `testing.setDepsForTest`. */
 export const sessionVisibilityGatewayTesting = {
   setCallGatewayForListSpawned(overrides?: GatewayCaller) {
     callGatewayForListSpawned = overrides ?? defaultCallGateway;

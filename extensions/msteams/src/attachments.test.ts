@@ -25,7 +25,6 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async () => ({
 }));
 
 const GRAPH_HOST = "graph.microsoft.com";
-const _SHAREPOINT_HOST = "contoso.sharepoint.com";
 const AZUREEDGE_HOST = "azureedge.net";
 const TEST_HOST = "x";
 const createUrlForHost = (host: string, pathSegment: string) => `https://${host}/${pathSegment}`;
@@ -33,14 +32,6 @@ const createTestUrl = (pathSegment: string) => createUrlForHost(TEST_HOST, pathS
 const SAVED_PNG_PATH = "/tmp/saved.png";
 const SAVED_PDF_PATH = "/tmp/saved.pdf";
 const TEST_URL_IMAGE = createTestUrl("img");
-const _TEST_URL_IMAGE_PNG = createTestUrl("img.png");
-const _TEST_URL_IMAGE_1_PNG = createTestUrl("1.png");
-const _TEST_URL_IMAGE_2_JPG = createTestUrl("2.jpg");
-const _TEST_URL_PDF = createTestUrl("x.pdf");
-const _TEST_URL_PDF_1 = createTestUrl("1.pdf");
-const _TEST_URL_PDF_2 = createTestUrl("2.pdf");
-const _TEST_URL_HTML_A = createTestUrl("a.png");
-const _TEST_URL_HTML_B = createTestUrl("b.png");
 const TEST_URL_INLINE_IMAGE = createTestUrl("inline.png");
 const TEST_URL_DOC_PDF = createTestUrl("doc.pdf");
 const TEST_URL_FILE_DOWNLOAD = createTestUrl("dl");
@@ -165,8 +156,6 @@ const DEFAULT_MAX_BYTES = 1024 * 1024;
 const DEFAULT_ALLOW_HOSTS = [TEST_HOST];
 const MEDIA_PLACEHOLDER_IMAGE = "<media:image>";
 const MEDIA_PLACEHOLDER_DOCUMENT = "<media:document>";
-const _formatImagePlaceholder = (count: number) =>
-  count > 1 ? `${MEDIA_PLACEHOLDER_IMAGE} (${count} images)` : MEDIA_PLACEHOLDER_IMAGE;
 const formatDocumentPlaceholder = (count: number) =>
   count > 1 ? `${MEDIA_PLACEHOLDER_DOCUMENT} (${count} files)` : MEDIA_PLACEHOLDER_DOCUMENT;
 const IMAGE_ATTACHMENT = { contentType: CONTENT_TYPE_IMAGE_PNG, contentUrl: TEST_URL_IMAGE };
@@ -211,12 +200,7 @@ const createTeamsFileDownloadInfoAttachments = (
   );
 const createHostedContentsWithType = (contentType: string, ...ids: string[]) =>
   ids.map((id) => ({ id, contentType, contentBytes: PNG_BASE64 }));
-const _createHostedImageContents = (...ids: string[]) =>
-  createHostedContentsWithType(CONTENT_TYPE_IMAGE_PNG, ...ids);
 type BinaryPayload = Uint8Array | string;
-const _createPdfResponse = (payload: BinaryPayload = PDF_BUFFER) => {
-  return createBufferResponse(payload, CONTENT_TYPE_APPLICATION_PDF);
-};
 const createBufferResponse = (payload: BinaryPayload, contentType: string, status = 200) => {
   const raw = typeof payload === "string" ? Buffer.from(payload) : payload;
   return new Response(new Uint8Array(raw), {
@@ -227,7 +211,6 @@ const createBufferResponse = (payload: BinaryPayload, contentType: string, statu
 const createJsonResponse = (payload: unknown, status = 200) =>
   new Response(JSON.stringify(payload), { status });
 const createTextResponse = (body: string, status = 200) => new Response(body, { status });
-const _createGraphCollectionResponse = (value: unknown[]) => createJsonResponse({ value });
 const createNotFoundResponse = () => new Response("not found", { status: 404 });
 const createRedirectResponse = (location: string, status = 302) =>
   new Response(null, { status, headers: { location } });

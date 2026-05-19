@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { __testing, createMatrixQaClient, provisionMatrixQaRoom } from "./client.js";
+import { testing, createMatrixQaClient, provisionMatrixQaRoom } from "./client.js";
 import { buildDefaultMatrixQaTopologySpec } from "./topology.js";
 
 function resolveRequestUrl(input: RequestInfo | URL) {
@@ -22,7 +22,7 @@ function parseJsonRequestBody(init?: RequestInit) {
 describe("matrix driver client", () => {
   it("builds Matrix HTML mentions for QA driver messages", () => {
     expect(
-      __testing.buildMatrixQaMessageContent({
+      testing.buildMatrixQaMessageContent({
         body: "@sut:matrix-qa.test reply with exactly: TOKEN",
         mentionUserIds: ["@sut:matrix-qa.test"],
       }),
@@ -40,7 +40,7 @@ describe("matrix driver client", () => {
 
   it("omits Matrix HTML markup when the body has no visible mention token", () => {
     expect(
-      __testing.buildMatrixQaMessageContent({
+      testing.buildMatrixQaMessageContent({
         body: "reply with exactly: TOKEN",
         mentionUserIds: ["@sut:matrix-qa.test"],
       }),
@@ -54,7 +54,7 @@ describe("matrix driver client", () => {
   });
 
   it("builds trimmed Matrix reaction relations for QA driver events", () => {
-    expect(__testing.buildMatrixReactionRelation(" $msg-1 ", " 👍 ")).toEqual({
+    expect(testing.buildMatrixReactionRelation(" $msg-1 ", " 👍 ")).toEqual({
       "m.relates_to": {
         rel_type: "m.annotation",
         event_id: "$msg-1",
@@ -65,7 +65,7 @@ describe("matrix driver client", () => {
 
   it("builds Matrix replacement messages with replacement-local mention metadata", () => {
     expect(
-      __testing.buildMatrixQaReplacementMessageContent({
+      testing.buildMatrixQaReplacementMessageContent({
         body: "@sut:matrix-qa.test updated prompt",
         mentionUserIds: ["@sut:matrix-qa.test"],
         targetEventId: " $msg-1 ",
@@ -91,7 +91,7 @@ describe("matrix driver client", () => {
   });
 
   it("advances Matrix registration through token then dummy auth stages", () => {
-    const firstStage = __testing.resolveNextRegistrationAuth({
+    const firstStage = testing.resolveNextRegistrationAuth({
       registrationToken: "reg-token",
       response: {
         session: "uiaa-session",
@@ -106,7 +106,7 @@ describe("matrix driver client", () => {
     });
 
     expect(
-      __testing.resolveNextRegistrationAuth({
+      testing.resolveNextRegistrationAuth({
         registrationToken: "reg-token",
         response: {
           session: "uiaa-session",
@@ -122,7 +122,7 @@ describe("matrix driver client", () => {
 
   it("rejects Matrix UIAA flows that require unsupported stages", () => {
     expect(() =>
-      __testing.resolveNextRegistrationAuth({
+      testing.resolveNextRegistrationAuth({
         registrationToken: "reg-token",
         response: {
           session: "uiaa-session",

@@ -22,6 +22,7 @@ import {
   WHATSAPP_WATCHDOG_TIMEOUT_ERROR,
   type ManagedWhatsAppListener,
 } from "../connection-controller.js";
+import { resolveWhatsAppInboundPolicy } from "../inbound-policy.js";
 import { attachWebInboxToSocket, type WhatsAppGroupMetadataCache } from "../inbound/monitor.js";
 import {
   newConnectionId,
@@ -42,6 +43,7 @@ import { whatsappHeartbeatLog, whatsappLog } from "./loggers.js";
 import { buildMentionConfig } from "./mentions.js";
 import { createWebChannelStatusController } from "./monitor-state.js";
 import { createEchoTracker } from "./monitor/echo.js";
+import { formatWhatsAppInboundListeningLog } from "./monitor/listener-log.js";
 import { createWebOnMessageHandler } from "./monitor/on-message.js";
 import type { WebInboundMsg, WebMonitorTuning } from "./types.js";
 import { isLikelyWhatsAppCryptoError } from "./util.js";
@@ -541,17 +543,51 @@ export async function monitorWebChannel(
         );
       });
 
-      whatsappLog.info("Listening for personal WhatsApp inbound messages.");
+      const periodicDrainInterval = setInterval(() => {
+        void drainPendingDeliveries({
+          drainKey: `whatsapp:${normalizedAccountId}`,
+          logLabel: "WhatsApp periodic drain",
+          cfg,
+          log: reconnectLogger,
+          selectEntry: (entry) => ({
+            match:
+              entry.channel === "whatsapp" &&
+              normalizeReconnectAccountId(entry.accountId) === normalizedAccountId,
+            bypassBackoff: false,
+          }),
+        }).catch((err) => {
+          reconnectLogger.warn(
+            { connectionId: connection.connectionId, error: String(err) },
+            "periodic drain failed",
+          );
+        });
+      }, 30_000);
+
+      const inboundPolicy = resolveWhatsAppInboundPolicy({
+        cfg,
+        accountId: account.accountId,
+        selfE164: selfE164 ?? null,
+      });
+      whatsappLog.info(
+        formatWhatsAppInboundListeningLog({
+          groups: inboundPolicy.account.groups,
+          groupPolicy: inboundPolicy.groupPolicy,
+          hasGroupAllowFrom: inboundPolicy.groupAllowFrom.length > 0,
+        }),
+      );
       if (process.stdout.isTTY || process.stderr.isTTY) {
         whatsappLog.raw("Ctrl+C to stop.");
       }
 
       if (!keepAlive) {
+        clearInterval(periodicDrainInterval);
         await controller.shutdown();
         return;
       }
 
-      const reason = await controller.waitForClose();
+      const reason = await controller
+        .waitForClose()
+        .finally(() => clearInterval(periodicDrainInterval));
       if (stopRequested() || sigintStop || reason === "aborted") {
         await controller.shutdown();
         break;

@@ -399,8 +399,9 @@ export function channelSupportsMessageCapabilityForChannel(
   return listChannelMessageCapabilitiesForChannel(params).includes(capability);
 }
 
-export const __testing = {
+export const testing = {
   resetLoggedMessageActionErrors() {
     loggedMessageActionErrors.clear();
   },
 };
+export { testing as __testing };

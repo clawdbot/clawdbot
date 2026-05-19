@@ -264,9 +264,10 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   });
 }
 
-export const __testing = {
+export const testing = {
   parseArgs,
   parseProviderMode,
   parsePositiveInt,
   resolveHome,
 };
+export { testing as __testing };

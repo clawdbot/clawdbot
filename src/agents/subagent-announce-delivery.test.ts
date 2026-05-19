@@ -1,15 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  __testing as sessionBindingServiceTesting,
+  testing as sessionBindingServiceTesting,
   registerSessionBindingAdapter,
 } from "../infra/outbound/session-binding-service.js";
 import type { AgentInternalEvent } from "./internal-events.js";
 import type {
+  EmbeddedPiQueueFailureReason,
   EmbeddedPiQueueMessageOptions,
   EmbeddedPiQueueMessageOutcome,
 } from "./pi-embedded-runner/runs.js";
 import {
-  __testing,
+  testing,
   deliverSubagentAnnouncement,
   resolveSubagentCompletionOrigin,
 } from "./subagent-announce-delivery.js";
@@ -22,7 +23,7 @@ import { resolveAnnounceOrigin } from "./subagent-announce-origin.js";
 
 afterEach(() => {
   sessionBindingServiceTesting.resetSessionBindingAdaptersForTests();
-  __testing.setDepsForTest();
+  testing.setDepsForTest();
 });
 
 const slackThreadOrigin = {
@@ -34,6 +35,17 @@ const slackThreadOrigin = {
 
 function createGatewayMock(response: Record<string, unknown> = {}) {
   return vi.fn(async () => response) as unknown as typeof runtimeCallGateway;
+}
+
+function createGatewaySequenceMock(
+  responses: Record<string, unknown>[],
+): ReturnType<typeof vi.fn> & typeof runtimeCallGateway {
+  let index = 0;
+  return vi.fn(async () => {
+    const response = responses[Math.min(index, responses.length - 1)] ?? {};
+    index += 1;
+    return response;
+  }) as unknown as ReturnType<typeof vi.fn> & typeof runtimeCallGateway;
 }
 
 function createInProcessGatewayMock(response: Record<string, unknown> = {}) {
@@ -76,6 +88,29 @@ function createQueueOutcomeMock(
           gatewayHealth: "live",
         },
   );
+}
+
+function createQueueOutcomeSequenceMock(
+  queuedOutcomes: (boolean | EmbeddedPiQueueFailureReason)[],
+): ReturnType<typeof vi.fn<QueueEmbeddedPiMessageWithOutcome>> {
+  let index = 0;
+  return vi.fn((sessionId: string) => {
+    const outcome = queuedOutcomes[Math.min(index, queuedOutcomes.length - 1)] ?? false;
+    index += 1;
+    return outcome === true
+      ? {
+          queued: true,
+          sessionId,
+          target: "embedded_run",
+          gatewayHealth: "live",
+        }
+      : {
+          queued: false,
+          sessionId,
+          reason: typeof outcome === "string" ? outcome : "not_streaming",
+          gatewayHealth: "live",
+        };
+  });
 }
 
 const longChildCompletionOutput = [
@@ -137,7 +172,7 @@ async function deliverSlackThreadAnnouncement(params: {
   internalEvents?: AgentInternalEvent[];
   sourceTool?: string;
 }) {
-  __testing.setDepsForTest({
+  testing.setDepsForTest({
     callGateway: params.callGateway,
     getRequesterSessionActivity: () => ({
       sessionId: params.sessionId,
@@ -178,7 +213,7 @@ async function deliverDiscordDirectMessageCompletion(params: {
     to: "dm:U123",
     accountId: "acct-1",
   };
-  __testing.setDepsForTest({
+  testing.setDepsForTest({
     callGateway: params.callGateway,
     getRequesterSessionActivity: () => ({
       sessionId: "requester-session-dm",
@@ -211,13 +246,22 @@ async function deliverTelegramDirectMessageCompletion(params: {
   internalEvents?: AgentInternalEvent[];
   isActive?: boolean;
   queueEmbeddedPiMessageWithOutcome?: QueueEmbeddedPiMessageWithOutcome;
+  requesterSessionKey?: string;
+  sourceTool?: string;
+  origin?: {
+    channel: "telegram";
+    to: string;
+    accountId?: string;
+    threadId?: string | number;
+  };
 }) {
-  const origin = {
+  const origin = params.origin ?? {
     channel: "telegram",
     to: "123456789",
     accountId: "bot-1",
   };
-  __testing.setDepsForTest({
+  const requesterSessionKey = params.requesterSessionKey ?? "agent:main:telegram:123456789";
+  testing.setDepsForTest({
     callGateway: params.callGateway,
     getRequesterSessionActivity: () => ({
       sessionId: "requester-session-telegram",
@@ -230,8 +274,8 @@ async function deliverTelegramDirectMessageCompletion(params: {
   });
 
   return deliverSubagentAnnouncement({
-    requesterSessionKey: "agent:main:telegram:123456789",
-    targetRequesterSessionKey: "agent:main:telegram:123456789",
+    requesterSessionKey,
+    targetRequesterSessionKey: requesterSessionKey,
     triggerMessage: "child done",
     steerMessage: "child done",
     requesterOrigin: origin,
@@ -243,6 +287,7 @@ async function deliverTelegramDirectMessageCompletion(params: {
     bestEffortDeliver: true,
     directIdempotencyKey: "announce-telegram-dm-fallback",
     internalEvents: params.internalEvents,
+    sourceTool: params.sourceTool,
   });
 }
 
@@ -269,6 +314,7 @@ async function deliverSlackChannelAnnouncement(params: {
   sendMessage?: typeof runtimeSendMessage;
   internalEvents?: AgentInternalEvent[];
   sourceTool?: string;
+  runtimeConfig?: Record<string, unknown>;
 }) {
   const origin = {
     channel: "slack",
@@ -276,13 +322,13 @@ async function deliverSlackChannelAnnouncement(params: {
     accountId: "acct-1",
   } as const;
 
-  __testing.setDepsForTest({
+  testing.setDepsForTest({
     callGateway: params.callGateway,
     getRequesterSessionActivity: () => ({
       sessionId: params.sessionId,
       isActive: params.isActive,
     }),
-    getRuntimeConfig: () => ({}) as never,
+    getRuntimeConfig: () => (params.runtimeConfig ?? {}) as never,
     ...(params.queueEmbeddedPiMessageWithOutcome
       ? { queueEmbeddedPiMessageWithOutcome: params.queueEmbeddedPiMessageWithOutcome }
       : {}),
@@ -557,7 +603,7 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
   }) {
     const callGateway = createGatewayMock();
     let activityChecks = 0;
-    __testing.setDepsForTest({
+    testing.setDepsForTest({
       callGateway,
       getRequesterSessionActivity: () => ({
         sessionId: "paperclip-session",
@@ -713,7 +759,7 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
       errorMessage: "cannot steer a compact turn",
     }));
     const callGateway = createGatewayMock();
-    __testing.setDepsForTest({
+    testing.setDepsForTest({
       callGateway,
       getRequesterSessionActivity: () => ({
         sessionId: "paperclip-session",
@@ -763,7 +809,7 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
       },
     });
     let activityChecks = 0;
-    __testing.setDepsForTest({
+    testing.setDepsForTest({
       callGateway,
       getRequesterSessionActivity: () => ({
         sessionId: "paperclip-session",
@@ -838,12 +884,14 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
 
   it("keeps direct external delivery for dormant completion requesters", async () => {
     const callGateway = createGatewayMock();
+    const queueEmbeddedPiMessageWithOutcome = createQueueOutcomeMock(false);
     await deliverSlackThreadAnnouncement({
       callGateway,
       sessionId: "requester-session-2",
       isActive: false,
       expectsCompletionMessage: true,
       directIdempotencyKey: "announce-1b",
+      queueEmbeddedPiMessageWithOutcome,
     });
 
     expectGatewayAgentParams(callGateway, {
@@ -854,6 +902,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       threadId: "171.222",
       bestEffortDeliver: true,
     });
+    expect(queueEmbeddedPiMessageWithOutcome).not.toHaveBeenCalled();
   });
 
   it("uses in-process agent dispatch for dormant completion requesters", async () => {
@@ -863,7 +912,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         payloads: [{ text: "requester voice completion" }],
       },
     });
-    __testing.setDepsForTest({
+    testing.setDepsForTest({
       callGateway,
       dispatchGatewayMethodInProcess,
       getRequesterSessionActivity: () => ({
@@ -1156,6 +1205,104 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("forces message-tool thread completions after transcript-wait wake falls stale", async () => {
+    const callGateway = createGatewaySequenceMock([
+      {
+        result: {
+          payloads: [],
+        },
+      },
+      {
+        result: {
+          payloads: [],
+          messagingToolSentTargets: [
+            {
+              tool: "message",
+              provider: "slack",
+              accountId: "acct-1",
+              to: "channel:C123",
+              threadId: "171.222",
+              text: "The background task completed.",
+            },
+          ],
+        },
+      },
+    ]);
+    const sendMessage = createSendMessageMock();
+    const queueEmbeddedPiMessageWithOutcome = createQueueOutcomeSequenceMock([
+      "transcript_commit_wait_unsupported",
+      "no_active_run",
+    ]);
+    const result = await deliverSlackThreadAnnouncement({
+      callGateway,
+      sendMessage,
+      queueEmbeddedPiMessageWithOutcome,
+      sessionId: "requester-session-4",
+      isActive: true,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-thread-fallback-empty",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "thread completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "child completion output",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expect(callGateway).toHaveBeenCalledTimes(2);
+    expectGatewayAgentParams(callGateway, {
+      deliver: true,
+      channel: "slack",
+      accountId: "acct-1",
+      to: "channel:C123",
+      threadId: "171.222",
+    });
+    expectRecordFields(mockCallArg(callGateway, 1).params, {
+      deliver: false,
+      channel: "slack",
+      accountId: "acct-1",
+      to: "channel:C123",
+      threadId: "171.222",
+      sourceReplyDeliveryMode: "message_tool_only",
+      idempotencyKey: "announce-thread-fallback-empty:message-tool",
+    });
+    expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenCalledTimes(2);
+    expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenNthCalledWith(
+      1,
+      "requester-session-4",
+      "child done",
+      {
+        debounceMs: 500,
+        deliveryTimeoutMs: 120_000,
+        steeringMode: "all",
+        waitForTranscriptCommit: true,
+      },
+    );
+    expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenNthCalledWith(
+      2,
+      "requester-session-4",
+      "child done",
+      {
+        debounceMs: 500,
+        deliveryTimeoutMs: 120_000,
+        steeringMode: "all",
+      },
+    );
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("keeps concise requester rewrites primary even when child output is long", async () => {
     const callGateway = createGatewayMock({
       result: {
@@ -1378,7 +1525,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     const result = await deliverSlackChannelAnnouncement({
       callGateway,
       sessionId: "requester-session-channel",
-      isActive: false,
+      isActive: true,
       expectsCompletionMessage: true,
       directIdempotencyKey: "announce-channel-empty-direct-steer-fallback",
       queueEmbeddedPiMessageWithOutcome,
@@ -1420,18 +1567,23 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(callGateway).toHaveBeenCalledTimes(1);
   });
 
-  it("reports failure when announce-agent returns no visible output", async () => {
+  it("reports message-tool failure when stale thread completion remains invisible", async () => {
     const callGateway = createGatewayMock({
       result: {
         payloads: [],
       },
     });
     const sendMessage = createSendMessageMock();
+    const queueEmbeddedPiMessageWithOutcome = createQueueOutcomeSequenceMock([
+      "transcript_commit_wait_unsupported",
+      "no_active_run",
+    ]);
     const result = await deliverSlackThreadAnnouncement({
       callGateway,
       sendMessage,
+      queueEmbeddedPiMessageWithOutcome,
       sessionId: "requester-session-4",
-      isActive: false,
+      isActive: true,
       expectsCompletionMessage: true,
       directIdempotencyKey: "announce-thread-fallback-empty",
       internalEvents: [
@@ -1453,9 +1605,9 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expectRecordFields(result, {
       delivered: false,
       path: "direct",
-      error: "completion agent did not produce a visible reply",
+      error: "completion agent did not deliver through the message tool",
     });
-    expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(callGateway).toHaveBeenCalledTimes(2);
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
@@ -1598,6 +1750,56 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       accountId: "acct-1",
       to: "dm:U123",
       threadId: undefined,
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("stringifies Telegram topic ids for generated video completion handoff", async () => {
+    const callGateway = createGatewayMock({
+      payloads: [],
+      didSendViaMessagingTool: true,
+      messagingToolSentMediaUrls: ["/tmp/generated-corgi.mp4"],
+    });
+    const sendMessage = createSendMessageMock();
+    const result = await deliverTelegramDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      requesterSessionKey: "agent:main:telegram:group:-1003970070733:topic:1",
+      origin: {
+        channel: "telegram",
+        to: "telegram:-1003970070733",
+        accountId: "bot-1",
+        threadId: 1,
+      },
+      sourceTool: "video_generate",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "video_generation",
+          childSessionKey: "video_generate:task-123",
+          childSessionId: "task-123",
+          announceType: "video generation task",
+          taskLabel: "anime corgi skateboard",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated 1 video.\nMEDIA:/tmp/generated-corgi.mp4",
+          mediaUrls: ["/tmp/generated-corgi.mp4"],
+          replyInstruction: "Deliver the generated video through the message tool.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expectGatewayAgentParams(callGateway, {
+      deliver: false,
+      channel: "telegram",
+      accountId: "bot-1",
+      to: "telegram:-1003970070733",
+      threadId: "1",
       sourceReplyDeliveryMode: "message_tool_only",
     });
     expect(sendMessage).not.toHaveBeenCalled();
@@ -2077,18 +2279,23 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("reports channel completion failure when announce-agent returns no visible output", async () => {
+  it("reports channel message-tool failure when stale completion remains invisible", async () => {
     const callGateway = createGatewayMock({
       result: {
         payloads: [],
       },
     });
     const sendMessage = createSendMessageMock();
+    const queueEmbeddedPiMessageWithOutcome = createQueueOutcomeSequenceMock([
+      "transcript_commit_wait_unsupported",
+      "no_active_run",
+    ]);
     const result = await deliverSlackChannelAnnouncement({
       callGateway,
       sendMessage,
+      queueEmbeddedPiMessageWithOutcome,
       sessionId: "requester-session-channel",
-      isActive: false,
+      isActive: true,
       expectsCompletionMessage: true,
       directIdempotencyKey: "announce-channel-fallback-empty",
       internalEvents: [
@@ -2110,18 +2317,19 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expectRecordFields(result, {
       delivered: false,
       path: "direct",
-      error: "completion agent did not produce a visible reply",
+      error: "completion agent did not deliver through the message tool",
     });
-    expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(callGateway).toHaveBeenCalledTimes(2);
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("requires message-tool delivery for channel subagent completions", async () => {
+  it("requires message-tool delivery for configured channel subagent completions", async () => {
     const callGateway = createGatewayMock({
       result: {
         payloads: [{ text: "The subagent is done." }],
       },
     });
+    const queueEmbeddedPiMessageWithOutcome = createQueueOutcomeMock(false);
     const result = await deliverSlackChannelAnnouncement({
       callGateway,
       sessionId: "requester-session-channel",
@@ -2129,6 +2337,8 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       expectsCompletionMessage: true,
       directIdempotencyKey: "announce-channel-subagent-message-tool",
       sourceTool: "subagent_announce",
+      runtimeConfig: { messages: { groupChat: { visibleReplies: "message_tool" } } },
+      queueEmbeddedPiMessageWithOutcome,
       internalEvents: [
         {
           type: "task_completion",

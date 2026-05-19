@@ -21,7 +21,7 @@ vi.mock("./runtime.js", () => ({
 }));
 
 let runSecretsApply: typeof import("./apply.js").runSecretsApply;
-let applyTesting: typeof import("./apply.js").__testing;
+let applyTesting: typeof import("./apply.js").testing;
 let clearSecretsRuntimeSnapshot: typeof import("./runtime.js").clearSecretsRuntimeSnapshot;
 
 const OPENAI_API_KEY_ENV_REF = {
@@ -249,7 +249,7 @@ describe("secrets apply", () => {
   let fixture: ApplyFixture;
 
   beforeAll(async () => {
-    ({ __testing: applyTesting, runSecretsApply } = await import("./apply.js"));
+    ({ testing: applyTesting, runSecretsApply } = await import("./apply.js"));
     ({ clearSecretsRuntimeSnapshot } = await import("./runtime.js"));
   });
 

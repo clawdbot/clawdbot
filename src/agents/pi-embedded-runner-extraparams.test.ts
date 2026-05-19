@@ -2,10 +2,10 @@ import type { StreamFn } from "@earendil-works/pi-agent-core";
 import type { Context, Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { __testing as extraParamsTesting } from "./pi-embedded-runner/extra-params.js";
+import { testing as extraParamsTesting } from "./pi-embedded-runner/extra-params.js";
 
 vi.mock("../plugins/provider-hook-runtime.js", () => ({
-  __testing: {
+  testing: {
     buildHookProviderCacheKey: () => "test-provider-hook-cache-key",
   },
   prepareProviderExtraParams: () => undefined,

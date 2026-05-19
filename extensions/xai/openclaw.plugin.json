@@ -62,6 +62,17 @@
       "groupLabel": "xAI (Grok)",
       "groupHint": "API key or browser OAuth",
       "onboardingFeatured": true
+    },
+    {
+      "provider": "xai",
+      "method": "device-code",
+      "choiceId": "xai-device-code",
+      "choiceLabel": "xAI device code",
+      "choiceHint": "Remote-friendly browser sign-in without a localhost callback",
+      "groupId": "xai",
+      "groupLabel": "xAI (Grok)",
+      "groupHint": "API key or browser OAuth",
+      "onboardingFeatured": true
     }
   ],
   "uiHints": {

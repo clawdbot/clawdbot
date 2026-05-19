@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 const FAKE_STARTTIME = 12345;
-let __testing: typeof import("./session-write-lock.js").__testing;
+let testing: typeof import("./session-write-lock.js").testing;
 let acquireSessionWriteLock: typeof import("./session-write-lock.js").acquireSessionWriteLock;
 let cleanStaleLockFiles: typeof import("./session-write-lock.js").cleanStaleLockFiles;
 let resetSessionWriteLockStateForTest: typeof import("./session-write-lock.js").resetSessionWriteLockStateForTest;
@@ -141,7 +141,7 @@ async function expectActiveInProcessLockIsNotReclaimed(params?: {
 describe("acquireSessionWriteLock", () => {
   beforeAll(async () => {
     ({
-      __testing,
+      testing,
       acquireSessionWriteLock,
       cleanStaleLockFiles,
       resetSessionWriteLockStateForTest,
@@ -157,7 +157,7 @@ describe("acquireSessionWriteLock", () => {
   });
 
   function pinCurrentProcessStartTimeForTest(): void {
-    __testing.setProcessStartTimeResolverForTest((pid) =>
+    testing.setProcessStartTimeResolverForTest((pid) =>
       pid === process.pid ? FAKE_STARTTIME : null,
     );
   }
@@ -322,7 +322,7 @@ describe("acquireSessionWriteLock", () => {
         maxHoldMs: 1,
       });
 
-      const released = await __testing.runLockWatchdogCheck(Date.now() + 1000);
+      const released = await testing.runLockWatchdogCheck(Date.now() + 1000);
       expect(released).toBe(1);
       await expectPathMissing(lockPath);
 
@@ -345,7 +345,7 @@ describe("acquireSessionWriteLock", () => {
     await withTempSessionLockFile(async ({ sessionFile, lockPath }) => {
       const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
 
-      __testing.releaseAllLocksSync();
+      testing.releaseAllLocksSync();
 
       await expectPathMissing(lockPath);
       await lock.release();
@@ -779,7 +779,7 @@ describe("acquireSessionWriteLock", () => {
             process.on(signal, keepAlive);
           }
 
-          __testing.handleTerminationSignal(signal);
+          testing.handleTerminationSignal(signal);
 
           await expectPathMissing(lockPath);
           if (signal === "SIGINT") {
@@ -842,8 +842,8 @@ describe("acquireSessionWriteLock", () => {
   });
 
   it("registers cleanup for SIGQUIT and SIGABRT", () => {
-    expect(__testing.cleanupSignals).toContain("SIGQUIT");
-    expect(__testing.cleanupSignals).toContain("SIGABRT");
+    expect(testing.cleanupSignals).toContain("SIGQUIT");
+    expect(testing.cleanupSignals).toContain("SIGABRT");
   });
   it("cleans up locks on SIGINT without removing other handlers", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
@@ -867,7 +867,7 @@ describe("acquireSessionWriteLock", () => {
       const lockPath = `${sessionFile}.lock`;
       await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
 
-      __testing.handleTerminationSignal("SIGINT");
+      testing.handleTerminationSignal("SIGINT");
 
       await expectPathMissing(lockPath);
       expect(otherHandlerCalled).toBe(false);
@@ -909,7 +909,7 @@ describe("acquireSessionWriteLock", () => {
     process.on("SIGINT", keepAlive);
 
     try {
-      __testing.handleTerminationSignal("SIGINT");
+      testing.handleTerminationSignal("SIGINT");
       expect(process.listeners("SIGINT")).toContain(keepAlive);
     } finally {
       process.off("SIGINT", keepAlive);

@@ -28,6 +28,17 @@ function parseTimeoutEnvValue(value: string | undefined): number | undefined {
   return normalized > 0 ? normalized : undefined;
 }
 
+function resolveCleanupTimeoutDetails(
+  getTimeoutDetails: (() => string | undefined) | undefined,
+): string {
+  try {
+    const timeoutDetails = getTimeoutDetails?.()?.trim();
+    return timeoutDetails ? ` details=${timeoutDetails}` : "";
+  } catch (error) {
+    return ` detailsError=${formatErrorMessage(error)}`;
+  }
+}
+
 export function resolveAgentCleanupStepTimeoutMs(params: {
   step: string;
   timeoutMs?: number;
@@ -54,6 +65,7 @@ export async function runAgentCleanupStep(params: {
   sessionId: string;
   step: string;
   cleanup: () => Promise<void>;
+  getTimeoutDetails?: () => string | undefined;
   log: AgentCleanupLogger;
   env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
@@ -88,8 +100,9 @@ export async function runAgentCleanupStep(params: {
     clearTimeout(timeoutHandle);
   }
   if (result === "timeout") {
+    const details = resolveCleanupTimeoutDetails(params.getTimeoutDetails);
     params.log.warn(
-      `agent cleanup timed out: runId=${params.runId} sessionId=${params.sessionId} step=${params.step} timeoutMs=${timeoutMs}`,
+      `agent cleanup timed out: runId=${params.runId} sessionId=${params.sessionId} step=${params.step} timeoutMs=${timeoutMs}${details}`,
     );
     void cleanupPromise.catch((error) => {
       params.log.warn(

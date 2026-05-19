@@ -149,7 +149,7 @@ export function requireXaiResponseTextCitationsAndInline(
   };
 }
 
-export const __testing = {
+export const testing = {
   buildXaiResponsesToolBody,
   extractXaiWebSearchContent,
   requireXaiResponseTextCitationsAndInline,
@@ -160,3 +160,4 @@ export const __testing = {
   XAI_RESPONSES_BASE_URL,
   XAI_RESPONSES_ENDPOINT,
 } as const;
+export { testing as __testing };

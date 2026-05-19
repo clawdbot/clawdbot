@@ -8,7 +8,7 @@
  * Each account gets its own isolated resource stack:
  *
  * ```
- * _accountRegistry: Map<appId, AccountContext>
+ * accountRegistry: Map<appId, AccountContext>
  *
  * AccountContext {
  *   logger      — per-account prefixed logger
@@ -54,12 +54,12 @@ export { UploadDailyLimitExceededError } from "../api/media-chunked.js";
 
 // ============ Plugin User-Agent ============
 
-let _pluginVersion = "unknown";
-let _openclawVersion = "unknown";
+let pluginVersion = "unknown";
+let openclawVersion = "unknown";
 
 /** Build the User-Agent string from the current plugin and framework versions. */
 function buildUserAgent(): string {
-  return `QQBotPlugin/${_pluginVersion} (Node/${process.versions.node}; ${os.platform()}; OpenClaw/${_openclawVersion})`;
+  return `QQBotPlugin/${pluginVersion} (Node/${process.versions.node}; ${os.platform()}; OpenClaw/${openclawVersion})`;
 }
 
 /** Return the current User-Agent string. */
@@ -73,17 +73,17 @@ export function getPluginUserAgent(): string {
  */
 export function initSender(options: { pluginVersion?: string; openclawVersion?: string }): void {
   if (options.pluginVersion) {
-    _pluginVersion = options.pluginVersion;
+    pluginVersion = options.pluginVersion;
   }
   if (options.openclawVersion) {
-    _openclawVersion = options.openclawVersion;
+    openclawVersion = options.openclawVersion;
   }
 }
 
 /** Update the OpenClaw framework version in the User-Agent (called after runtime injection). */
 export function setOpenClawVersion(version: string): void {
   if (version) {
-    _openclawVersion = version;
+    openclawVersion = version;
   }
 }
 
@@ -101,10 +101,10 @@ interface AccountContext {
 }
 
 /** Per-appId account registry — each account owns all its resources. */
-const _accountRegistry = new Map<string, AccountContext>();
+const accountRegistry = new Map<string, AccountContext>();
 
 /** Fallback logger for unregistered accounts (CLI / test scenarios). */
-const _fallbackLogger: EngineLogger = {
+const fallbackLogger: EngineLogger = {
   info: (msg: string) => debugLog(msg),
   error: (msg: string) => debugError(msg),
   warn: (msg: string) => debugWarn(msg),
@@ -171,7 +171,7 @@ export function registerAccount(
 ): void {
   const key = appId.trim();
   const md = options.markdownSupport === true;
-  _accountRegistry.set(key, buildAccountContext(options.logger, md));
+  accountRegistry.set(key, buildAccountContext(options.logger, md));
 }
 
 /**
@@ -184,7 +184,7 @@ export function registerAccount(
 export function initApiConfig(appId: string, options: { markdownSupport?: boolean }): void {
   const key = appId.trim();
   const md = options.markdownSupport === true;
-  const existing = _accountRegistry.get(key);
+  const existing = accountRegistry.get(key);
   if (existing) {
     // Re-create only MessageApi with updated config, reuse existing stack.
     existing.messageApi = new MessageApiClass(existing.client, existing.tokenMgr, {
@@ -193,7 +193,7 @@ export function initApiConfig(appId: string, options: { markdownSupport?: boolea
     });
     existing.markdownSupport = md;
   } else {
-    _accountRegistry.set(key, buildAccountContext(_fallbackLogger, md));
+    accountRegistry.set(key, buildAccountContext(fallbackLogger, md));
   }
 }
 
@@ -205,10 +205,10 @@ export function initApiConfig(appId: string, options: { markdownSupport?: boolea
  */
 function resolveAccount(appId: string): AccountContext {
   const key = appId.trim();
-  let ctx = _accountRegistry.get(key);
+  let ctx = accountRegistry.get(key);
   if (!ctx) {
-    ctx = buildAccountContext(_fallbackLogger, false);
-    _accountRegistry.set(key, ctx);
+    ctx = buildAccountContext(fallbackLogger, false);
+    accountRegistry.set(key, ctx);
   }
   return ctx;
 }
@@ -239,7 +239,7 @@ export function clearTokenCache(appId?: string): void {
   if (appId) {
     resolveAccount(appId).tokenMgr.clearCache(appId);
   } else {
-    for (const ctx of _accountRegistry.values()) {
+    for (const ctx of accountRegistry.values()) {
       ctx.tokenMgr.clearCache();
     }
   }
@@ -267,7 +267,7 @@ export function stopBackgroundTokenRefresh(appId?: string): void {
   if (appId) {
     resolveAccount(appId).tokenMgr.stopBackgroundRefresh(appId);
   } else {
-    for (const ctx of _accountRegistry.values()) {
+    for (const ctx of accountRegistry.values()) {
       ctx.tokenMgr.stopBackgroundRefresh();
     }
   }
@@ -700,9 +700,9 @@ async function dispatchUpload(
         fileName: fileName ?? source.fileName,
       });
     default: {
-      const _exhaustive: never = source;
+      const exhaustive: never = source;
       throw new Error(
-        `dispatchUpload: unsupported MediaSource kind: ${JSON.stringify(_exhaustive)}`,
+        `dispatchUpload: unsupported MediaSource kind: ${JSON.stringify(exhaustive)}`,
       );
     }
   }

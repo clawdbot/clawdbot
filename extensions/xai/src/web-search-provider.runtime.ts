@@ -216,7 +216,7 @@ export async function executeXaiWebSearchProviderTool(
   });
 }
 
-export const __testing = {
+export const testing = {
   buildXaiWebSearchPayload,
   extractXaiWebSearchContent,
   resolveXaiToolSearchConfig,
@@ -227,3 +227,4 @@ export const __testing = {
   resolveXaiWebSearchTimeoutSeconds,
   requestXaiWebSearch,
 };
+export { testing as __testing };

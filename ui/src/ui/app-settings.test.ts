@@ -440,7 +440,7 @@ describe("applySettingsFromUrl", () => {
           password?: string;
         };
       }
-    ).__OPENCLAW_NATIVE_CONTROL_AUTH__ = {
+    )["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = {
       gatewayUrl: "wss://control.example/ui/",
       token: "device-token",
       password: "shared-password",
@@ -457,7 +457,7 @@ describe("applySettingsFromUrl", () => {
         window as unknown as {
           __OPENCLAW_NATIVE_CONTROL_AUTH__?: unknown;
         }
-      ).__OPENCLAW_NATIVE_CONTROL_AUTH__,
+      )["__OPENCLAW_NATIVE_CONTROL_AUTH__"],
     ).toBeUndefined();
   });
 

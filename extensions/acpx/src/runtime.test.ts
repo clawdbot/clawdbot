@@ -9,7 +9,7 @@ import {
   type AcpRuntimeTurn,
 } from "../runtime-api.js";
 import { OPENCLAW_ACPX_LEASE_ID_ARG, OPENCLAW_GATEWAY_INSTANCE_ID_ARG } from "./process-lease.js";
-import { AcpxRuntime, __testing } from "./runtime.js";
+import { AcpxRuntime, testing } from "./runtime.js";
 
 type TestSessionStore = {
   load(sessionId: string): Promise<Record<string, unknown> | undefined>;
@@ -179,9 +179,9 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   });
 
   it("exposes assertSupportedRuntimeSessionMode as a typed guard", () => {
-    expect(__testing.assertSupportedRuntimeSessionMode("persistent")).toBeUndefined();
-    expect(__testing.assertSupportedRuntimeSessionMode("oneshot")).toBeUndefined();
-    expect(() => __testing.assertSupportedRuntimeSessionMode("run" as never)).toThrow(
+    expect(testing.assertSupportedRuntimeSessionMode("persistent")).toBeUndefined();
+    expect(testing.assertSupportedRuntimeSessionMode("oneshot")).toBeUndefined();
+    expect(() => testing.assertSupportedRuntimeSessionMode("run" as never)).toThrow(
       AcpRuntimeError,
     );
   });
@@ -335,7 +335,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     });
 
     await expect(async () => {
-      for await (const _event of runtime.runTurn({
+      for await (const eventValue of runtime.runTurn({
         handle: {
           sessionKey: "agent:codex:acp:test",
           backend: "acpx",
@@ -568,7 +568,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       }),
     );
 
-    for await (const _event of runtime.runTurn({
+    for await (const eventValue of runtime.runTurn({
       handle: {
         sessionKey: "agent:codex:acp:test",
         backend: "acpx",
@@ -599,7 +599,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       mode: "prompt",
       requestId: "turn-2",
     });
-    for await (const _event of turn.events) {
+    for await (const eventValue of turn.events) {
       // no-op
     }
     await turn.result;
@@ -644,17 +644,17 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   });
 
   it("injects Codex ACP startup config into the scoped registry", () => {
-    expect(__testing.isCodexAcpCommand(CODEX_ACP_COMMAND)).toBe(true);
-    expect(__testing.isCodexAcpCommand(CODEX_ACP_WRAPPER_COMMAND)).toBe(true);
+    expect(testing.isCodexAcpCommand(CODEX_ACP_COMMAND)).toBe(true);
+    expect(testing.isCodexAcpCommand(CODEX_ACP_WRAPPER_COMMAND)).toBe(true);
     expect(
-      __testing.appendCodexAcpConfigOverrides(CODEX_ACP_COMMAND, {
+      testing.appendCodexAcpConfigOverrides(CODEX_ACP_COMMAND, {
         model: "gpt-5.4",
         reasoningEffort: "medium",
       }),
     ).toBe(
       "npx @zed-industries/codex-acp@0.13.0 -c model=gpt-5.4 -c model_reasoning_effort=medium",
     );
-    expect(__testing.isCodexAcpCommand("openclaw acp")).toBe(false);
+    expect(testing.isCodexAcpCommand("openclaw acp")).toBe(false);
   });
 
   it("passes gpt-5.5 Codex ACP startup through instead of blocking it", async () => {
@@ -913,27 +913,27 @@ describe("AcpxRuntime fresh reset wrapper", () => {
   });
 
   it("recognizes claude-agent-acp commands", () => {
-    expect(__testing.isClaudeAcpCommand("npx @agentclientprotocol/claude-agent-acp")).toBe(true);
+    expect(testing.isClaudeAcpCommand("npx @agentclientprotocol/claude-agent-acp")).toBe(true);
+    expect(testing.isClaudeAcpCommand("npx -y @agentclientprotocol/claude-agent-acp@0.33.1")).toBe(
+      true,
+    );
+    expect(testing.isClaudeAcpCommand("claude-agent-acp")).toBe(true);
+    expect(testing.isClaudeAcpCommand("claude-agent-acp.exe")).toBe(true);
     expect(
-      __testing.isClaudeAcpCommand("npx -y @agentclientprotocol/claude-agent-acp@0.33.1"),
+      testing.isClaudeAcpCommand(`node "/tmp/openclaw/acpx/claude-agent-acp-wrapper.mjs"`),
     ).toBe(true);
-    expect(__testing.isClaudeAcpCommand("claude-agent-acp")).toBe(true);
-    expect(__testing.isClaudeAcpCommand("claude-agent-acp.exe")).toBe(true);
     expect(
-      __testing.isClaudeAcpCommand(`node "/tmp/openclaw/acpx/claude-agent-acp-wrapper.mjs"`),
-    ).toBe(true);
-    expect(
-      __testing.isClaudeAcpCommand(
+      testing.isClaudeAcpCommand(
         `node.exe "C:/Users/runner/AppData/Local/Temp/openclaw/acpx/claude-agent-acp-wrapper.mjs"`,
       ),
     ).toBe(true);
     expect(
-      __testing.isClaudeAcpCommand(
+      testing.isClaudeAcpCommand(
         `Node.EXE "C:/Users/runner/AppData/Local/Temp/openclaw/acpx/claude-agent-acp-wrapper.mjs"`,
       ),
     ).toBe(true);
-    expect(__testing.isClaudeAcpCommand("openclaw acp")).toBe(false);
-    expect(__testing.isClaudeAcpCommand("npx @zed-industries/codex-acp")).toBe(false);
+    expect(testing.isClaudeAcpCommand("openclaw acp")).toBe(false);
+    expect(testing.isClaudeAcpCommand("npx @zed-industries/codex-acp")).toBe(false);
   });
 
   it("keeps stale persistent loads hidden until a fresh record is saved", async () => {

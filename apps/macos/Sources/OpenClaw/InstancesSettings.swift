@@ -32,8 +32,7 @@ struct InstancesSettings: View {
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .padding(.leading, 18)
-        .padding(.trailing, SettingsLayout.scrollbarGutter)
+        .settingsDetailContent()
         .onAppear { self.updateActiveWork(active: self.isActive) }
         .onChange(of: self.isActive) { _, active in
             self.updateActiveWork(active: active)

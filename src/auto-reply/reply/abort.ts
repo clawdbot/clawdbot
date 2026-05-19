@@ -71,7 +71,7 @@ const abortDeps = {
   ...defaultAbortDeps,
 };
 
-export const __testing = {
+export const testing = {
   setDepsForTests(deps: Partial<typeof defaultAbortDeps> | undefined): void {
     abortDeps.getAcpSessionManager =
       deps?.getAcpSessionManager ?? defaultAbortDeps.getAcpSessionManager;
@@ -367,3 +367,4 @@ export async function tryFastAbortFromMessage(params: {
   const { stopped } = stopSubagentsForRequester({ cfg, requesterSessionKey });
   return { handled: true, aborted: false, stoppedSubagents: stopped };
 }
+export { testing as __testing };

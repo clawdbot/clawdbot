@@ -120,6 +120,26 @@ Plugin commands can set `agentPromptGuidance` when the agent needs a short,
 command-owned routing hint. Keep that text about the command itself; do not add
 provider- or plugin-specific policy to core prompt builders.
 
+Guidance entries may be legacy strings, which apply to every prompt surface, or
+structured entries:
+
+```ts
+agentPromptGuidance: [
+  "Global command hint.",
+  { text: "Only show this in the main PI prompt.", surfaces: ["pi_main"] },
+];
+```
+
+Structured `surfaces` may include `pi_main`, `codex_app_server`, `cli_backend`,
+`acp_backend`, or `subagent`. Omit `surfaces` for intentional all-surface
+guidance. Do not pass an empty `surfaces` array; it is rejected so accidental
+scope loss does not become global prompt text.
+
+Native Codex app-server developer instructions are stricter than other prompt
+surfaces: only guidance explicitly scoped to `codex_app_server` is promoted into
+that higher-priority lane. Legacy string guidance and unscoped structured
+guidance remain available to non-Codex prompt surfaces for compatibility.
+
 ### Infrastructure
 
 | Method                                         | What it registers                       |

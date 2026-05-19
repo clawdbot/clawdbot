@@ -238,12 +238,12 @@ openclaw ltm search "project preferences"
 openclaw ltm stats
 ```
 
-The plugin also extends `openclaw memory` with a non-vector `query` subcommand
-that runs against the LanceDB table directly:
+The `query` subcommand runs a non-vector query against the LanceDB table
+directly:
 
 ```bash
-openclaw memory query --cols id,text,createdAt --limit 20
-openclaw memory query --filter "category = 'preference'" --order-by createdAt:desc
+openclaw ltm query --cols id,text,createdAt --limit 20
+openclaw ltm query --filter "category = 'preference'" --order-by createdAt:desc
 ```
 
 - `--cols <columns>`: comma-separated column allowlist (defaults to `id`, `text`, `importance`, `category`, `createdAt`).

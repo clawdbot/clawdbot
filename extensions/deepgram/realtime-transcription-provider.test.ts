@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  __testing,
+  testing,
   buildDeepgramRealtimeTranscriptionProvider,
 } from "./realtime-transcription-provider.js";
 
@@ -42,7 +42,7 @@ describe("buildDeepgramRealtimeTranscriptionProvider", () => {
   });
 
   it("builds a Deepgram listen websocket URL", () => {
-    const url = __testing.toDeepgramRealtimeWsUrl({
+    const url = testing.toDeepgramRealtimeWsUrl({
       apiKey: "dg-key",
       baseUrl: "https://api.deepgram.com/v1",
       model: "nova-3",

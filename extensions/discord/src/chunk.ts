@@ -287,7 +287,7 @@ function rebalanceReasoningItalics(source: string, chunks: string[]): string[] {
   }
 
   const opensWithReasoningItalics =
-    source.startsWith("Reasoning:\n_") && source.trimEnd().endsWith("_");
+    /^(?:Reasoning:|Thinking\.{0,3})\n+_/u.test(source) && source.trimEnd().endsWith("_");
   if (!opensWithReasoningItalics) {
     return chunks;
   }

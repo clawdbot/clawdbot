@@ -109,14 +109,29 @@ function hasPositiveNumber(value: unknown): boolean {
 }
 
 export function getGatewayAgentResult(response: unknown): AgentDeliveryEvidence | null {
-  if (!response || typeof response !== "object" || !("result" in response)) {
+  if (!response || typeof response !== "object") {
     return null;
   }
-  const result = (response as { result?: unknown }).result;
-  if (!result || typeof result !== "object") {
+  const candidate = hasAgentDeliveryEvidenceShape(response)
+    ? response
+    : (response as { result?: unknown }).result;
+  if (!candidate || typeof candidate !== "object" || !hasAgentDeliveryEvidenceShape(candidate)) {
     return null;
   }
-  return result as AgentDeliveryEvidence;
+  return candidate as AgentDeliveryEvidence;
+}
+
+function hasAgentDeliveryEvidenceShape(value: object): boolean {
+  return (
+    "payloads" in value ||
+    "deliveryStatus" in value ||
+    "didSendViaMessagingTool" in value ||
+    "messagingToolSentTexts" in value ||
+    "messagingToolSentMediaUrls" in value ||
+    "messagingToolSentTargets" in value ||
+    "successfulCronAdds" in value ||
+    "meta" in value
+  );
 }
 
 export function hasVisibleAgentPayload(

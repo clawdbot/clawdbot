@@ -256,7 +256,7 @@ export function waitForDiscordGatewayPluginRegistration(
 export function createDiscordGatewayPlugin(params: {
   discordConfig: DiscordAccountConfig;
   runtime: RuntimeEnv;
-  __testing?: CreateDiscordGatewayPluginTestingOptions;
+  testing?: CreateDiscordGatewayPluginTestingOptions;
 }): discordGateway.GatewayPlugin {
   const intents = resolveDiscordGatewayIntents({
     intentsConfig: params.discordConfig?.intents,
@@ -277,7 +277,7 @@ export function createDiscordGatewayPlugin(params: {
     try {
       validateDiscordProxyUrl(proxy);
       const HttpsProxyAgentCtor =
-        params.__testing?.HttpsProxyAgentCtor ?? httpsProxyAgent.HttpsProxyAgent;
+        params.testing?.HttpsProxyAgentCtor ?? httpsProxyAgent.HttpsProxyAgent;
       wsAgent = new HttpsProxyAgentCtor<string>(proxy);
       params.runtime.log?.("discord: gateway proxy enabled");
     } catch (err) {
@@ -296,7 +296,7 @@ export function createDiscordGatewayPlugin(params: {
     gatewayInfoTimeoutMs,
     fetchImpl,
     runtime: params.runtime,
-    testing: params.__testing,
+    testing: params.testing,
     ...(wsAgent ? { wsAgent } : {}),
   });
 }

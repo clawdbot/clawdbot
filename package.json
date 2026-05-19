@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.5.17",
+  "version": "2026.5.19",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -1603,6 +1603,7 @@
     "test:docker:crestodian-planner": "bash scripts/e2e/crestodian-planner-docker.sh",
     "test:docker:crestodian-rescue": "bash scripts/e2e/crestodian-rescue-docker.sh",
     "test:docker:cron-mcp-cleanup": "bash scripts/e2e/cron-mcp-cleanup-docker.sh",
+    "test:docker:codex-media-path": "bash scripts/e2e/codex-media-path-docker.sh",
     "test:docker:doctor-switch": "bash scripts/e2e/doctor-install-switch-docker.sh",
     "test:docker:e2e-build": "bash scripts/e2e/build-image.sh",
     "test:docker:gateway-network": "bash scripts/e2e/gateway-network-docker.sh",
@@ -1624,6 +1625,7 @@
     "test:docker:live-cli-backend:gemini:resume": "OPENCLAW_LIVE_CLI_BACKEND_MODEL=google-gemini-cli/gemini-3-flash-preview OPENCLAW_LIVE_CLI_BACKEND_RESUME_PROBE=1 bash scripts/test-live-cli-backend-docker.sh",
     "test:docker:live-codex-bind": "OPENCLAW_LIVE_CODEX_BIND=1 OPENCLAW_LIVE_CODEX_TEST_FILES=src/gateway/gateway-codex-bind.live.test.ts bash scripts/test-live-codex-harness-docker.sh",
     "test:docker:live-codex-harness": "bash scripts/test-live-codex-harness-docker.sh",
+    "test:docker:live-codex-media-path": "OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key OPENCLAW_LIVE_CODEX_HARNESS_CHAT_IMAGE_PROBE=1 OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE=0 OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE=0 OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_PROBE=0 OPENCLAW_LIVE_CODEX_HARNESS_GUARDIAN_PROBE=0 bash scripts/test-live-codex-harness-docker.sh",
     "test:docker:live-codex-npm-plugin": "bash scripts/e2e/codex-npm-plugin-live-docker.sh",
     "test:docker:live-plugin-tool": "bash scripts/e2e/live-plugin-tool-docker.sh",
     "test:docker:live-subagent-announce": "bash scripts/test-live-subagent-announce-docker.sh",
@@ -1837,6 +1839,7 @@
     "vitest": "4.1.6"
   },
   "optionalDependencies": {
+    "sharp": "0.34.5",
     "sqlite-vec": "0.1.9"
   },
   "overrides": {

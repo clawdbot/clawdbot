@@ -85,9 +85,7 @@ struct AboutSettings: View {
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(.top, 4)
-        .padding(.horizontal, 24)
-        .padding(.bottom, 24)
+        .settingsDetailContent()
         .onAppear {
             guard let updater, !self.didLoadUpdaterState else { return }
             // Keep Sparkle’s auto-check setting in sync with the persisted toggle.

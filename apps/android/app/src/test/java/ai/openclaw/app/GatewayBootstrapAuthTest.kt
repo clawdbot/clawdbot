@@ -65,7 +65,7 @@ class GatewayBootstrapAuthTest {
         storedOperatorToken = "stored-token",
       ),
     )
-    assertFalse(
+    assertTrue(
       shouldConnectOperatorSession(
         NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = "", password = null),
         storedOperatorToken = null,
@@ -93,6 +93,17 @@ class GatewayBootstrapAuthTest {
       )
 
     assertNull(resolved)
+  }
+
+  @Test
+  fun resolveOperatorSessionConnectAuthUsesNoAuthWhenGatewayHasNoAuth() {
+    val resolved =
+      resolveOperatorSessionConnectAuth(
+        auth = NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = null, password = null),
+        storedOperatorToken = null,
+      )
+
+    assertEquals(NodeRuntime.GatewayConnectAuth(token = null, bootstrapToken = null, password = null), resolved)
   }
 
   @Test

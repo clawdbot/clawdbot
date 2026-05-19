@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  _resetWindowsInstallRootsForTests,
+  resetWindowsInstallRootsForTests,
   getWindowsInstallRoots,
 } from "../infra/windows-install-roots.js";
 import { withMockedWindowsPlatform, withRestoredMocks } from "../test-utils/vitest-spies.js";
@@ -149,7 +149,7 @@ describe("windows command wrapper behavior", () => {
     // Stub the registry probe so install-root resolution is fully driven by
     // process.env in tests; on real Windows runners the registry returns the
     // canonical SystemRoot and would shadow the test's env setup.
-    _resetWindowsInstallRootsForTests({ queryRegistryValue: () => null });
+    resetWindowsInstallRootsForTests({ queryRegistryValue: () => null });
     spawnMock.mockReset();
     spawnSyncMock.mockReset();
     spawnSyncMock.mockReturnValue({ stdout: "Active code page: 936", stderr: "" });
@@ -243,7 +243,7 @@ describe("windows command wrapper behavior", () => {
           "\\Windows",
           "relative\\path",
         ]) {
-          _resetWindowsInstallRootsForTests({ queryRegistryValue: () => null });
+          resetWindowsInstallRootsForTests({ queryRegistryValue: () => null });
           // Set every install-root env source to the unsafe value so the
           // resolver rejects each one and falls through to the safe default.
           // Deleting WINDIR here is unreliable on real Windows runners, so

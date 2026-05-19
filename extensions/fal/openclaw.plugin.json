@@ -29,6 +29,11 @@
     "musicGenerationProviders": ["fal"],
     "videoGenerationProviders": ["fal"]
   },
+  "videoGenerationProviderMetadata": {
+    "fal": {
+      "referenceAudioInputs": true
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

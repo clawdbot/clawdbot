@@ -167,7 +167,7 @@ export function enqueueMemoryTargetedSessionSync(
   return state.getQueuedSessionSync() ?? Promise.resolve();
 }
 
-export function _createMemorySyncControlConfigForTests(
+export function createMemorySyncControlConfigForTests(
   workspaceDir: string,
   indexPath: string,
 ): OpenClawConfig {

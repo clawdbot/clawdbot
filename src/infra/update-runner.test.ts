@@ -186,7 +186,7 @@ describe("runGatewayUpdate", () => {
       argv: string[],
       options?: { env?: NodeJS.ProcessEnv; cwd?: string; timeoutMs?: number },
     ) => {
-      const key = argv.join(" ");
+      const key = normalizeNpmFreshnessArgs(argv).join(" ");
       calls.push(key);
       const override = await params.onCommand?.(key, options);
       if (override) {
@@ -286,6 +286,10 @@ describe("runGatewayUpdate", () => {
     return { nodeModules, pkgRoot };
   }
 
+  const npmFreshnessArg = "--min-release-age=0";
+  const normalizeNpmFreshnessArgs = (argv: string[]) =>
+    argv.map((arg) => (/^--before=\d{4}-\d{2}-\d{2}T/u.test(arg) ? npmFreshnessArg : arg));
+
   const npmGlobalInstallCommand = (spec: string, extraArgs: string[] = []) =>
     [
       "npm",
@@ -296,7 +300,7 @@ describe("runGatewayUpdate", () => {
       "--no-fund",
       "--no-audit",
       "--loglevel=error",
-      "--min-release-age=0",
+      npmFreshnessArg,
     ].join(" ");
 
   function createGlobalNpmUpdateRunner(params: {
@@ -309,7 +313,7 @@ describe("runGatewayUpdate", () => {
     const omitOptionalInstallKey = npmGlobalInstallCommand("openclaw@latest", ["--omit=optional"]);
 
     return async (argv: string[]): Promise<CommandResult> => {
-      const key = argv.join(" ");
+      const key = normalizeNpmFreshnessArgs(argv).join(" ");
       if (key === `git -C ${params.pkgRoot} rev-parse --show-toplevel`) {
         return { stdout: "", stderr: "not a git repository", code: 128 };
       }
@@ -1660,7 +1664,7 @@ describe("runGatewayUpdate", () => {
   }) => {
     const calls: string[] = [];
     const runCommand = async (argv: string[], options?: { env?: NodeJS.ProcessEnv }) => {
-      const key = argv.join(" ");
+      const key = normalizeNpmFreshnessArgs(argv).join(" ");
       calls.push(key);
       if (key === `git -C ${params.pkgRoot} rev-parse --show-toplevel`) {
         if (params.gitRootMode === "missing") {
@@ -1687,10 +1691,10 @@ describe("runGatewayUpdate", () => {
       const prefixIndex = argv.indexOf("--prefix");
       const installPrefix = prefixIndex >= 0 ? argv[prefixIndex + 1] : undefined;
       if (installPrefix) {
-        const normalizedInstallCommand = [
+        const normalizedInstallCommand = normalizeNpmFreshnessArgs([
           ...argv.slice(0, prefixIndex),
           ...argv.slice(prefixIndex + 2),
-        ].join(" ");
+        ]).join(" ");
         if (normalizedInstallCommand === params.installCommand) {
           const packageRoot =
             process.platform === "win32"

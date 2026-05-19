@@ -19,7 +19,7 @@ const acpResetTargetDeps = {
   resolveConfiguredBindingRecord,
 };
 
-export const __testing = {
+export const testing = {
   setDepsForTest(
     overrides?: Partial<{
       getSessionBindingService: typeof getSessionBindingService;
@@ -182,3 +182,4 @@ export function resolveEffectiveResetTargetSessionKey(params: {
   }
   return activeAcpSessionKey;
 }
+export { testing as __testing };

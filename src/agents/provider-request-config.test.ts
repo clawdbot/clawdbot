@@ -461,6 +461,44 @@ describe("provider request config", () => {
     });
   });
 
+  it("protects NVIDIA billing invoke origin on official NIM routes", () => {
+    const resolved = resolveProviderRequestHeaders({
+      provider: "custom-nim",
+      api: "openai-completions",
+      baseUrl: "https://integrate.api.nvidia.com/v1",
+      capability: "llm",
+      transport: "stream",
+      callerHeaders: {
+        "X-BILLING-INVOKE-ORIGIN": "spoofed",
+        "X-Custom": "1",
+      },
+      precedence: "caller-wins",
+    });
+
+    expect(resolved).toEqual({
+      "X-BILLING-INVOKE-ORIGIN": "OpenClaw",
+      "X-Custom": "1",
+    });
+  });
+
+  it("does not attach NVIDIA billing invoke origin to custom proxy routes", () => {
+    const resolved = resolveProviderRequestHeaders({
+      provider: "nvidia",
+      api: "openai-completions",
+      baseUrl: "https://proxy.example.com/v1",
+      capability: "llm",
+      transport: "stream",
+      callerHeaders: {
+        "X-BILLING-INVOKE-ORIGIN": "operator-value",
+      },
+      precedence: "caller-wins",
+    });
+
+    expect(resolved).toEqual({
+      "X-BILLING-INVOKE-ORIGIN": "operator-value",
+    });
+  });
+
   it("merges header names case-insensitively", () => {
     const resolved = resolveProviderRequestHeaders({
       provider: "openai",

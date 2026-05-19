@@ -3,6 +3,7 @@ import {
   coerceToFailoverError,
   describeFailoverError,
   FailoverError,
+  isNonProviderRuntimeCoordinationError,
   isTimeoutError,
   resolveFailoverReasonFromError,
   resolveFailoverStatus,
@@ -1111,5 +1112,55 @@ describe("failover-error", () => {
     expect(err?.sessionId).toBe("session:browser-1234");
     expect(err?.lane).toBe("draft");
     expect(err?.provider).toBe("openai");
+  });
+
+  describe("isNonProviderRuntimeCoordinationError", () => {
+    const makeSessionLockError = () =>
+      new SessionWriteLockTimeoutError({
+        timeoutMs: 10_000,
+        owner: "pid=37121",
+        lockPath: "/tmp/openclaw/session.jsonl.lock",
+      });
+    const makeEmbeddedTakeoverError = () => {
+      const err = new Error(
+        "session file changed while embedded prompt lock was released: /tmp/openclaw/session.jsonl",
+      );
+      err.name = "EmbeddedAttemptSessionTakeoverError";
+      return err;
+    };
+
+    it("returns true for direct session write-lock timeout errors", () => {
+      expect(isNonProviderRuntimeCoordinationError(makeSessionLockError())).toBe(true);
+    });
+
+    it("returns true for direct embedded attempt session takeover errors", () => {
+      expect(isNonProviderRuntimeCoordinationError(makeEmbeddedTakeoverError())).toBe(true);
+    });
+
+    it("returns true when the coordination error is nested via cause", () => {
+      const wrapped = new Error("wrapper", { cause: makeSessionLockError() });
+      expect(isNonProviderRuntimeCoordinationError(wrapped)).toBe(true);
+
+      const wrappedTakeover = new Error("wrapper", { cause: makeEmbeddedTakeoverError() });
+      expect(isNonProviderRuntimeCoordinationError(wrappedTakeover)).toBe(true);
+    });
+
+    it("returns false for plain timeouts and provider errors", () => {
+      const timeoutErr = Object.assign(new Error("operation timed out"), { name: "TimeoutError" });
+      expect(isNonProviderRuntimeCoordinationError(timeoutErr)).toBe(false);
+      expect(isNonProviderRuntimeCoordinationError({ status: 429, message: "rate limit" })).toBe(
+        false,
+      );
+      expect(
+        isNonProviderRuntimeCoordinationError({
+          status: 429,
+          code: "RESOURCE_EXHAUSTED",
+          message: "upstream quota pressure",
+          cause: makeSessionLockError(),
+        }),
+      ).toBe(false);
+      expect(isNonProviderRuntimeCoordinationError(null)).toBe(false);
+      expect(isNonProviderRuntimeCoordinationError(undefined)).toBe(false);
+    });
   });
 });

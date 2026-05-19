@@ -12,8 +12,7 @@ struct ExecApprovalsSettings: View {
 
                 SystemRunSettingsView()
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 4)
+            .settingsDetailContent()
         }
     }
 }

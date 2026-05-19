@@ -166,6 +166,10 @@ const memoryRuntime: MemoryPluginRuntime = {
     const { memoryRuntime: runtime } = await loadRuntimeProviderModule();
     await runtime.closeAllMemorySearchManagers?.();
   },
+  async closeMemorySearchManager(params) {
+    const { memoryRuntime: runtime } = await loadRuntimeProviderModule();
+    await runtime.closeMemorySearchManager?.(params);
+  },
 };
 export default definePluginEntry({
   id: "memory-core",

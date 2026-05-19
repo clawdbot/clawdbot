@@ -502,7 +502,8 @@ export async function agentsAddCommand(
   }
 }
 
-export const __testing = {
+export const testing = {
   copyPortableAuthProfiles,
   formatSkippedOAuthProfilesMessage,
 };
+export { testing as __testing };

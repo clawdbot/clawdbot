@@ -38,7 +38,7 @@ describe("sessions_spawn tool", () => {
   });
 
   beforeEach(() => {
-    acpRuntimeRegistry.__testing.resetAcpRuntimeBackendsForTests();
+    acpRuntimeRegistry.testing.resetAcpRuntimeBackendsForTests();
     hoisted.spawnSubagentDirectMock.mockReset().mockResolvedValue({
       status: "accepted",
       childSessionKey: "agent:main:subagent:1",

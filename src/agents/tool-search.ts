@@ -1504,7 +1504,7 @@ export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[
   ];
 }
 
-export const __testing = {
+export const testing = {
   sessionCatalogs,
   resolveToolSearchConfig,
   isToolSearchCodeModeSupported,
@@ -1514,3 +1514,4 @@ export const __testing = {
   applyToolSearchCatalog,
   addClientToolsToToolSearchCatalog,
 };
+export { testing as __testing };

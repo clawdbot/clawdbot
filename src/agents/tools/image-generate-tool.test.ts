@@ -1,5 +1,9 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+const taskRuntimeInternalMocks = vi.hoisted(() => ({
+  listTasksForOwnerKey: vi.fn(),
+}));
+
 const taskRuntimeMocks = vi.hoisted(() => ({
   createRunningTaskRun: vi.fn(),
   recordTaskRunProgressByRunId: vi.fn(),
@@ -7,10 +11,11 @@ const taskRuntimeMocks = vi.hoisted(() => ({
   failTaskRunByRunId: vi.fn(),
 }));
 
+vi.mock("../../tasks/runtime-internal.js", () => taskRuntimeInternalMocks);
 vi.mock("../../tasks/detached-task-runtime.js", () => taskRuntimeMocks);
 
 let imageGenerationRuntime: typeof import("../../image-generation/runtime.js");
-let imageOps: typeof import("../../media/image-ops.js");
+let imageOps: typeof import("../../media/media-services.js");
 let splitMediaFromOutput: typeof import("../../media/parse.js").splitMediaFromOutput;
 let mediaStore: typeof import("../../media/store.js");
 let webMedia: typeof import("../../media/web-media.js");
@@ -288,7 +293,7 @@ describe("createImageGenerateTool", () => {
       };
     });
     imageGenerationRuntime = await import("../../image-generation/runtime.js");
-    imageOps = await import("../../media/image-ops.js");
+    imageOps = await import("../../media/media-services.js");
     ({ splitMediaFromOutput } = await import("../../media/parse.js"));
     mediaStore = await import("../../media/store.js");
     webMedia = await import("../../media/web-media.js");
@@ -304,6 +309,8 @@ describe("createImageGenerateTool", () => {
     taskRuntimeMocks.recordTaskRunProgressByRunId.mockReset();
     taskRuntimeMocks.completeTaskRunByRunId.mockReset();
     taskRuntimeMocks.failTaskRunByRunId.mockReset();
+    taskRuntimeInternalMocks.listTasksForOwnerKey.mockReset();
+    taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([]);
   });
 
   afterEach(() => {
@@ -734,6 +741,131 @@ describe("createImageGenerateTool", () => {
         progressSummary: "Queued image generation",
       }),
     );
+  });
+
+  it("allows a distinct image request while another image generation task is active", async () => {
+    stubImageGenerationProviders();
+    vi.stubEnv("OPENAI_API_KEY", "openai-test");
+    vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "openai",
+      model: "gpt-image-1",
+      attempts: [],
+      ignoredOverrides: [],
+      images: [
+        {
+          buffer: Buffer.from("png-out"),
+          mimeType: "image/png",
+          fileName: "second.png",
+        },
+      ],
+    });
+    taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
+      {
+        taskId: "task-first-image",
+        runtime: "cli",
+        taskKind: "image_generation",
+        sourceId: "image_generate:openai",
+        requesterSessionKey: "agent:main:discord:direct:123",
+        ownerKey: "agent:main:discord:direct:123",
+        scopeKind: "session",
+        task: "First diagram prompt",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+        createdAt: Date.now(),
+      },
+    ]);
+    taskRuntimeMocks.createRunningTaskRun.mockReturnValue({
+      taskId: "task-second-image",
+    });
+    const scheduled: Array<() => Promise<void>> = [];
+    const tool = requireImageGenerateTool(
+      createImageGenerateTool({
+        config: {
+          agents: {
+            defaults: {
+              imageGenerationModel: {
+                primary: "openai/gpt-image-1",
+              },
+            },
+          },
+        },
+        agentDir: "/tmp/agent",
+        agentSessionKey: "agent:main:discord:direct:123",
+        requesterOrigin: {
+          channel: "discord",
+          to: "dm:123",
+        },
+        scheduleBackgroundWork: (work) => {
+          scheduled.push(work);
+        },
+      }),
+    );
+
+    const result = await tool.execute("call-second", {
+      prompt: "Second diagram prompt",
+      filename: "second.png",
+      model: "openai/gpt-image-1",
+    });
+
+    expect(scheduled).toHaveLength(1);
+    expect(resultDetails(result).taskId).toBe("task-second-image");
+    expect(taskRuntimeMocks.createRunningTaskRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "Second diagram prompt",
+      }),
+    );
+  });
+
+  it("returns active status for a duplicate image request with the same prompt", async () => {
+    stubImageGenerationProviders();
+    vi.stubEnv("OPENAI_API_KEY", "openai-test");
+    taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
+      {
+        taskId: "task-existing-image",
+        runtime: "cli",
+        taskKind: "image_generation",
+        sourceId: "image_generate:openai",
+        requesterSessionKey: "agent:main:discord:direct:123",
+        ownerKey: "agent:main:discord:direct:123",
+        scopeKind: "session",
+        task: "Same diagram prompt",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+        createdAt: Date.now(),
+        progressSummary: "Generating image",
+      },
+    ]);
+    const tool = requireImageGenerateTool(
+      createImageGenerateTool({
+        config: {
+          agents: {
+            defaults: {
+              imageGenerationModel: {
+                primary: "openai/gpt-image-1",
+              },
+            },
+          },
+        },
+        agentDir: "/tmp/agent",
+        agentSessionKey: "agent:main:discord:direct:123",
+      }),
+    );
+
+    const result = await tool.execute("call-duplicate", {
+      prompt: "Same diagram prompt",
+      filename: "same.png",
+      model: "openai/gpt-image-1",
+    });
+
+    expect(taskRuntimeMocks.createRunningTaskRun).not.toHaveBeenCalled();
+    expect(resultText(result)).toContain(
+      "Image generation task task-existing-image is already running",
+    );
+    const details = resultDetails(result);
+    expect(details.duplicateGuard).toBe(true);
+    expect(details.task).toEqual({ taskId: "task-existing-image" });
   });
 
   it("uses configured timeoutMs for image generation and lets calls override it", async () => {

@@ -700,12 +700,14 @@ function resolveHeartbeatReasoningPayloads(
   const reasoningPayloads: ReplyPayload[] = [];
   for (const payload of payloads) {
     const text = typeof payload.text === "string" ? payload.text : "";
-    const hasLegacyReasoningPrefix = text.trimStart().startsWith("Reasoning:");
-    if (payload.isReasoning !== true && !hasLegacyReasoningPrefix) {
+    const hasFormattedReasoningPrefix = /^(?:Reasoning:|Thinking\.{0,3}(?=\s*_))/u.test(
+      text.trimStart(),
+    );
+    if (payload.isReasoning !== true && !hasFormattedReasoningPrefix) {
       continue;
     }
 
-    const formattedText = hasLegacyReasoningPrefix ? text : formatReasoningMessage(text);
+    const formattedText = hasFormattedReasoningPrefix ? text : formatReasoningMessage(text);
     if (!formattedText.trim()) {
       continue;
     }

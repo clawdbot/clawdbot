@@ -579,7 +579,7 @@ function isPositiveChatMatch(entry: IMessageReplyCacheEntry, ctx: IMessageChatCo
   return false;
 }
 
-export function _resetIMessageShortIdState(): void {
+export function resetIMessageShortIdState(): void {
   imessageReplyCacheByMessageId.clear();
   imessageShortIdToUuid.clear();
   imessageUuidToShortId.clear();

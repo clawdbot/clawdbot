@@ -515,6 +515,22 @@ describe("runMessageAction media behavior", () => {
       expectAttachmentRemoteMediaPayload(result);
     });
 
+    it("keeps original upload-file bytes when forced to send as a document", async () => {
+      await runMessageAction({
+        cfg,
+        action: "upload-file",
+        params: {
+          channel: "attachmentchat",
+          target: "+15551234567",
+          media: "https://example.com/pic.png",
+          message: "caption",
+          forceDocument: true,
+        },
+      });
+
+      expect(requireLoadWebMediaOptions().optimizeImages).toBe(false);
+    });
+
     it("enforces sandboxed attachment paths for attachment actions", async () => {
       for (const testCase of [
         {

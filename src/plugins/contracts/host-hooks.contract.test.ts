@@ -1715,7 +1715,7 @@ describe("host-hook fixture plugin contract", () => {
         api.registerAgentEventSubscription({
           id: "delayed",
           streams: ["tool"],
-          async handle(_event, ctx) {
+          async handle(eventValue, ctx) {
             await new Promise<void>((resolve) => {
               releaseToolHandler = resolve;
             });

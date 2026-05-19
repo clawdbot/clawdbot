@@ -355,6 +355,7 @@ async function rollbackManagedNpmPluginInstall(params: {
         timeoutMs: Math.max(params.timeoutMs, 300_000),
         env: createSafeNpmInstallEnv(process.env, {
           legacyPeerDeps: true,
+          npmConfigCwd: params.npmRoot,
           packageLock: true,
           quiet: true,
         }),
@@ -415,6 +416,7 @@ async function rollbackManagedNpmPluginInstall(params: {
           timeoutMs: Math.max(params.timeoutMs, 300_000),
           env: createSafeNpmInstallEnv(process.env, {
             legacyPeerDeps: true,
+            npmConfigCwd: params.npmRoot,
             packageLock: true,
             quiet: true,
           }),
@@ -697,6 +699,7 @@ async function installPluginFromManagedNpmRoot(
     timeoutMs: Math.max(timeoutMs, 300_000),
     env: createSafeNpmInstallEnv(process.env, {
       legacyPeerDeps: true,
+      npmConfigCwd: npmRoot,
       packageLock: true,
       quiet: true,
     }),

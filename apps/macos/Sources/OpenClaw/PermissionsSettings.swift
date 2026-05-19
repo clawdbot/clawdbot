@@ -36,9 +36,7 @@ struct PermissionsSettings: View {
                     }
                 }
             }
-            .frame(maxWidth: 760, alignment: .leading)
-            .padding(.trailing, SettingsLayout.scrollbarGutter)
-            .padding(.vertical, 4)
+            .settingsDetailContent()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }

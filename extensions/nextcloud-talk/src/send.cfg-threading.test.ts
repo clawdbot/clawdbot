@@ -310,4 +310,50 @@ describe("nextcloud-talk send cfg threading", () => {
     expect(hoisted.loadConfig).not.toHaveBeenCalled();
     expect(hoisted.resolveNextcloudTalkAccount).not.toHaveBeenCalled();
   });
+
+  it("uses provided cfg for sendReaction and posts the reaction payload", async () => {
+    const cfg = { source: "provided" } as const;
+    fetchMock.mockResolvedValueOnce(new Response("{}", { status: 200 }));
+
+    const result = await sendReactionNextcloudTalk("room:ops", "m-1", "👍", {
+      cfg,
+      accountId: "work",
+    });
+
+    expectProvidedCfgSkipsRuntimeLoad({
+      loadConfig: hoisted.loadConfig,
+      resolveAccount: hoisted.resolveNextcloudTalkAccount,
+      cfg,
+      accountId: "work",
+    });
+    expect(hoisted.generateNextcloudTalkSignature).toHaveBeenCalledWith({
+      body: "👍",
+      secret: "secret-value",
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://nextcloud.example.com/ocs/v2.php/apps/spreed/api/v1/bot/ops/reaction/m-1",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "OCS-APIRequest": "true",
+          "X-Nextcloud-Talk-Bot-Random": "r",
+          "X-Nextcloud-Talk-Bot-Signature": "s",
+        },
+        body: JSON.stringify({ reaction: "👍" }),
+      },
+    );
+    expect(result).toEqual({ ok: true });
+  });
+
+  it("surfaces sendReaction HTTP failures", async () => {
+    fetchMock.mockResolvedValueOnce(new Response("forbidden", { status: 403 }));
+
+    await expect(
+      sendReactionNextcloudTalk("room:ops", "m-1", "👍", {
+        cfg: { source: "provided" },
+        accountId: "work",
+      }),
+    ).rejects.toThrow("Nextcloud Talk reaction failed: 403 forbidden");
+  });
 });

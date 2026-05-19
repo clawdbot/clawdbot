@@ -6,7 +6,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 let listSkillCommandsForAgents: typeof import("./skill-commands.js").listSkillCommandsForAgents;
 let listSkillCommandsForWorkspace: typeof import("./skill-commands.js").listSkillCommandsForWorkspace;
 let resolveSkillCommandInvocation: typeof import("./skill-commands.js").resolveSkillCommandInvocation;
-let skillCommandsTesting: typeof import("./skill-commands.js").__testing;
+let skillCommandsTesting: typeof import("./skill-commands.js").testing;
 
 const tempDirs: string[] = [];
 
@@ -140,7 +140,7 @@ beforeAll(async () => {
     listSkillCommandsForAgents,
     listSkillCommandsForWorkspace,
     resolveSkillCommandInvocation,
-    __testing: skillCommandsTesting,
+    testing: skillCommandsTesting,
   } = await import("./skill-commands.js"));
 });
 

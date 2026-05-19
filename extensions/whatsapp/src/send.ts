@@ -73,6 +73,12 @@ export async function sendMessageWhatsApp(
     };
     mediaLocalRoots?: readonly string[];
     mediaReadFile?: (filePath: string) => Promise<Buffer>;
+    mediaPayload?: {
+      buffer: Buffer;
+      contentType?: string;
+      kind?: "image" | "audio" | "video" | "document";
+      fileName?: string;
+    };
     gifPlayback?: boolean;
     audioAsVoice?: boolean;
     forceDocument?: boolean;
@@ -90,8 +96,10 @@ export async function sendMessageWhatsApp(
   let text = options.preserveLeadingWhitespace ? body : normalizeWhatsAppPayloadText(body);
   const jid = toWhatsappJid(to);
   const mediaUrls = resolveWhatsAppOutboundMediaUrls(options);
-  const primaryMediaUrl = mediaUrls[0];
-  if (!text && !primaryMediaUrl) {
+  const mediaPayload = options.mediaPayload;
+  const primaryMediaUrl = mediaUrls[0] ?? mediaPayload?.fileName;
+  const hasMedia = Boolean(mediaPayload || primaryMediaUrl);
+  if (!text && !hasMedia) {
     return { messageId: "", toJid: jid };
   }
   const correlationId = generateSecureUuid();
@@ -125,7 +133,30 @@ export async function sendMessageWhatsApp(
     let documentFileName: string | undefined;
     let visibleTextAfterVoice: string | undefined;
     let forceDocumentDelivery = false;
-    if (primaryMediaUrl) {
+    if (mediaPayload) {
+      const media = await prepareWhatsAppOutboundMedia(mediaPayload, primaryMediaUrl);
+      const caption = text || undefined;
+      mediaBuffer = media.buffer;
+      mediaType = media.mimetype;
+      forceDocumentDelivery = Boolean(
+        options.forceDocument && supportsForcedDocumentDelivery(media.kind),
+      );
+      if (media.kind === "audio" && caption) {
+        visibleTextAfterVoice = caption;
+        text = "";
+      } else if (media.kind === "document") {
+        text = caption ?? "";
+        documentFileName = media.fileName;
+      } else {
+        text = caption ?? "";
+      }
+      if (forceDocumentDelivery) {
+        documentFileName ??= resolveWhatsAppDocumentFileName({
+          fileName: media.fileName,
+          mimetype: media.mimetype,
+        });
+      }
+    } else if (primaryMediaUrl) {
       const media = await prepareWhatsAppOutboundMedia(
         await loadOutboundMediaFromUrl(primaryMediaUrl, {
           maxBytes: resolveWhatsAppMediaMaxBytes(account),
@@ -158,8 +189,8 @@ export async function sendMessageWhatsApp(
         });
       }
     }
-    outboundLog.info(`Sending message -> ${redactedJid}${primaryMediaUrl ? " (media)" : ""}`);
-    logger.info({ jid: redactedJid, hasMedia: Boolean(primaryMediaUrl) }, "sending message");
+    outboundLog.info(`Sending message -> ${redactedJid}${hasMedia ? " (media)" : ""}`);
+    logger.info({ jid: redactedJid, hasMedia }, "sending message");
     if (!isWhatsAppNewsletterJid(jid)) {
       await active.sendComposingTo(to);
     }
@@ -192,15 +223,12 @@ export async function sendMessageWhatsApp(
     const messageId = (result as { messageId?: string })?.messageId ?? "unknown";
     const durationMs = Date.now() - startedAt;
     outboundLog.info(
-      `Sent message ${messageId} -> ${redactedJid}${primaryMediaUrl ? " (media)" : ""} (${durationMs}ms)`,
+      `Sent message ${messageId} -> ${redactedJid}${hasMedia ? " (media)" : ""} (${durationMs}ms)`,
     );
     logger.info({ jid: redactedJid, messageId }, "sent message");
     return { messageId, toJid: jid };
   } catch (err) {
-    logger.error(
-      { err: String(err), to: redactedTo, hasMedia: Boolean(primaryMediaUrl) },
-      "failed to send via web session",
-    );
+    logger.error({ err: String(err), to: redactedTo, hasMedia }, "failed to send via web session");
     throw err;
   }
 }

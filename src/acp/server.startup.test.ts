@@ -28,7 +28,7 @@ const mockState = vi.hoisted(() => ({
   agentSideConnectionCtor: vi.fn(),
   agentStart: vi.fn(),
   routeLogsToStderr: vi.fn(),
-  startProxy: vi.fn(async (_config: unknown) => null as unknown),
+  startProxy: vi.fn(async (configForTest: unknown) => null as unknown),
   stopProxy: vi.fn(async (_handle: unknown) => {}),
   resolveGatewayClientBootstrap: vi.fn<ResolveGatewayClientBootstrap>(async (_params) => ({
     url: "ws://127.0.0.1:18789",

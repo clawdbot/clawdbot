@@ -57,7 +57,7 @@ describe("action client helpers", () => {
     primeMatrixClientResolverMocks();
     resolveMatrixRoomIdMock
       .mockReset()
-      .mockImplementation(async (_client, roomId: string) => roomId);
+      .mockImplementation(async (clientForTest, roomId: string) => roomId);
   });
 
   afterEach(() => {

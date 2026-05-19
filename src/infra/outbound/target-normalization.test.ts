@@ -13,7 +13,7 @@ let maybeResolvePluginMessagingTarget: TargetNormalizationModule["maybeResolvePl
 let normalizeChannelTargetInput: TargetNormalizationModule["normalizeChannelTargetInput"];
 let resolveNormalizedTargetInput: TargetNormalizationModule["resolveNormalizedTargetInput"];
 let normalizeTargetForProvider: TargetNormalizationModule["normalizeTargetForProvider"];
-let resetTargetNormalizerCacheForTests: TargetNormalizationModule["__testing"]["resetTargetNormalizerCacheForTests"];
+let resetTargetNormalizerCacheForTests: TargetNormalizationModule["testing"]["resetTargetNormalizerCacheForTests"];
 
 vi.mock("../../channels/plugins/registry-loaded-read.js", () => ({
   getLoadedChannelPluginForRead: (...args: unknown[]) => getLoadedChannelPluginMock(...args),
@@ -38,7 +38,7 @@ beforeAll(async () => {
     resolveNormalizedTargetInput,
   } = await import("./target-normalization.js"));
   ({
-    __testing: { resetTargetNormalizerCacheForTests },
+    testing: { resetTargetNormalizerCacheForTests },
   } = await import("./target-normalization.js"));
 });
 

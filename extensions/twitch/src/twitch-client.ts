@@ -269,7 +269,7 @@ export class TwitchClientManager {
   /**
    * Clear all clients and handlers (for testing)
    */
-  _clearForTest(): void {
+  clearForTest(): void {
     this.clients.clear();
     this.messageHandlers.clear();
   }

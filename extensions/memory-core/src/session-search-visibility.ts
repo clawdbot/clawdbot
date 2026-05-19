@@ -87,6 +87,7 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
     if (!identity) {
       continue;
     }
+    const isQmdSessionHit = hit.path.replace(/\\/g, "/").startsWith("qmd/");
     const normalizedScopedAgentId = normalizeAgentIdForCompare(scopedAgentId);
     const normalizedOwnerAgentId = normalizeAgentIdForCompare(identity.ownerAgentId);
     if (
@@ -98,20 +99,34 @@ export async function filterMemorySearchHitsBySessionVisibility(params: {
     }
     const archivedOwnerMatchesScope = Boolean(
       identity.archived &&
-      identity.ownerAgentId &&
-      (!scopedAgentId ||
-        normalizeAgentIdForCompare(identity.ownerAgentId) ===
-          normalizeAgentIdForCompare(scopedAgentId)),
+      ((identity.ownerAgentId &&
+        (!scopedAgentId ||
+          normalizeAgentIdForCompare(identity.ownerAgentId) ===
+            normalizeAgentIdForCompare(scopedAgentId))) ||
+        (isQmdSessionHit && scopedAgentId)),
     );
-    const archivedOwnerAgentId = archivedOwnerMatchesScope ? identity.ownerAgentId : undefined;
+    const archivedOwnerAgentId = archivedOwnerMatchesScope
+      ? (identity.ownerAgentId ?? scopedAgentId)
+      : undefined;
+    const liveKeys = identity.liveStem
+      ? resolveTranscriptStemToSessionKeys({
+          store: combinedSessionStore,
+          stem: identity.liveStem,
+          allowQmdSlugFallback: false,
+        })
+      : [];
     const keys = filterSessionKeysByScopedAgent({
       cfg: params.cfg,
       scopedAgentId,
-      keys: resolveTranscriptStemToSessionKeys({
-        store: combinedSessionStore,
-        stem: identity.stem,
-        ...(archivedOwnerAgentId ? { archivedOwnerAgentId } : {}),
-      }),
+      keys:
+        liveKeys.length > 0
+          ? liveKeys
+          : resolveTranscriptStemToSessionKeys({
+              store: combinedSessionStore,
+              stem: identity.stem,
+              allowQmdSlugFallback: isQmdSessionHit && !identity.archived,
+              ...(archivedOwnerAgentId ? { archivedOwnerAgentId } : {}),
+            }),
     });
     if (keys.length === 0) {
       continue;

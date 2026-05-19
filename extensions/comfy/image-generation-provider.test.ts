@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  _setComfyFetchGuardForTesting,
+  setComfyFetchGuardForTesting,
   buildComfyImageGenerationProvider,
 } from "./image-generation-provider.js";
 import {
@@ -43,7 +43,7 @@ describe("comfy image-generation provider", () => {
   });
 
   afterEach(() => {
-    _setComfyFetchGuardForTesting(null);
+    setComfyFetchGuardForTesting(null);
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
   });
@@ -114,7 +114,7 @@ describe("comfy image-generation provider", () => {
   });
 
   it("submits a local workflow, waits for history, and downloads images", async () => {
-    _setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
+    setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce({
         response: new Response(JSON.stringify({ prompt_id: "local-prompt-1" }), {
@@ -202,7 +202,7 @@ describe("comfy image-generation provider", () => {
   });
 
   it("reports malformed local workflow submit JSON as a provider error", async () => {
-    _setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
+    setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
     const release = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
       response: new Response("{ nope", {
@@ -232,7 +232,7 @@ describe("comfy image-generation provider", () => {
   });
 
   it("uploads reference images for local edit workflows", async () => {
-    _setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
+    setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce({
         response: new Response(JSON.stringify({ name: "upload.png" }), {
@@ -320,7 +320,7 @@ describe("comfy image-generation provider", () => {
 
   it("uses cloud endpoints, auth headers, and partner-node extra_data", async () => {
     mockComfyProviderApiKey();
-    _setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
+    setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
     mockComfyCloudJobResponses(fetchWithSsrFGuardMock, {
       body: Buffer.from("cloud-data"),
       contentType: "image/png",
@@ -383,7 +383,7 @@ describe("comfy image-generation provider", () => {
 
   it("uses plugin config env SecretRef auth for cloud workflows", async () => {
     vi.stubEnv("COMFY_TEST_API_KEY", "comfy-secret-ref-key");
-    _setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
+    setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
     mockComfyCloudJobResponses(fetchWithSsrFGuardMock, {
       body: Buffer.from("cloud-data"),
       contentType: "image/png",
@@ -421,7 +421,7 @@ describe("comfy image-generation provider", () => {
   it("uses provider auth fallback for cloud workflows without plugin config API keys", async () => {
     vi.stubEnv("COMFY_API_KEY", "stale-env-key");
     mockComfyProviderApiKey("profile-key");
-    _setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
+    setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
     mockComfyCloudJobResponses(fetchWithSsrFGuardMock, {
       body: Buffer.from("cloud-data"),
       contentType: "image/png",

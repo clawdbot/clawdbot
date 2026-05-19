@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import {
+  pinActivePluginHttpRouteRegistry,
   releasePinnedPluginHttpRouteRegistry,
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
@@ -11,6 +12,7 @@ import { ExecApprovalManager } from "../exec-approval-manager.js";
 import type { AuthorizedGatewayHttpRequest } from "../http-utils.js";
 import { authorizeOperatorScopesForMethod, CLI_DEFAULT_OPERATOR_SCOPES } from "../method-scopes.js";
 import { isApprovalRecordVisibleToClient } from "../server-methods/approval-shared.js";
+import type { GatewayRequestContext } from "../server-methods/types.js";
 import { makeMockHttpResponse } from "../test-http-response.js";
 import { createTestRegistry } from "./__tests__/test-utils.js";
 import { createGatewayPluginRequestHandler } from "./plugins-http.js";
@@ -187,6 +189,84 @@ describe("plugin HTTP route runtime scopes", () => {
       pluginSource: "route",
       gatewayMethodDispatchAllowed: true,
     });
+  });
+
+  it("uses server-local routes and gateway context when the active registry belongs to another gateway", async () => {
+    const serverAContext = { label: "server-a" } as unknown as GatewayRequestContext;
+    const serverBContext = { label: "server-b" } as unknown as GatewayRequestContext;
+    const observed: Array<{ route: string; context?: GatewayRequestContext }> = [];
+    const serverARegistry = createTestRegistry({
+      httpRoutes: [
+        createRoute({
+          path: "/secure-hook",
+          auth: "gateway",
+          handler: async () => {
+            const context = getPluginRuntimeGatewayRequestScope()?.context;
+            observed.push({ route: "server-a", ...(context ? { context } : {}) });
+            return true;
+          },
+        }),
+      ],
+    });
+    const serverBRegistry = createTestRegistry({
+      httpRoutes: [
+        createRoute({
+          path: "/secure-hook",
+          auth: "gateway",
+          handler: async () => {
+            const context = getPluginRuntimeGatewayRequestScope()?.context;
+            observed.push({ route: "server-b", ...(context ? { context } : {}) });
+            return true;
+          },
+        }),
+      ],
+    });
+
+    setActivePluginRegistry(serverBRegistry);
+    pinActivePluginHttpRouteRegistry(serverBRegistry);
+
+    const handlerA = createGatewayPluginRequestHandler({
+      registry: serverARegistry,
+      getRouteRegistry: () => serverARegistry,
+      log: createMockLogger(),
+      getGatewayRequestContext: () => serverAContext,
+    });
+    const handlerB = createGatewayPluginRequestHandler({
+      registry: serverBRegistry,
+      getRouteRegistry: () => serverBRegistry,
+      log: createMockLogger(),
+      getGatewayRequestContext: () => serverBContext,
+    });
+
+    const responseA = makeMockHttpResponse();
+    const handledA = await handlerA(
+      { url: "/secure-hook" } as IncomingMessage,
+      responseA.res,
+      undefined,
+      {
+        gatewayAuthSatisfied: true,
+        gatewayRequestOperatorScopes: ["operator.write"],
+      },
+    );
+    const responseB = makeMockHttpResponse();
+    const handledB = await handlerB(
+      { url: "/secure-hook" } as IncomingMessage,
+      responseB.res,
+      undefined,
+      {
+        gatewayAuthSatisfied: true,
+        gatewayRequestOperatorScopes: ["operator.write"],
+      },
+    );
+
+    expect(handledA).toBe(true);
+    expect(handledB).toBe(true);
+    expect(responseA.res.statusCode).toBe(200);
+    expect(responseB.res.statusCode).toBe(200);
+    expect(observed).toEqual([
+      { route: "server-a", context: serverAContext },
+      { route: "server-b", context: serverBContext },
+    ]);
   });
 
   it("does not give approval-scoped gateway-auth routes global approval visibility", async () => {

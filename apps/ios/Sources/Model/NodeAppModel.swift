@@ -546,6 +546,7 @@ final class NodeAppModel {
                 self.talkMode.updateGatewayConnected(false)
                 if self.isBackgrounded {
                     self.gatewayStatusText = "Background idle"
+                    LiveActivityManager.shared.endActivity(reason: "background_idle")
                     self.gatewayServerName = nil
                     self.gatewayRemoteAddress = nil
                     self.showLocalCanvasOnDisconnect()
@@ -1839,7 +1840,7 @@ extension NodeAppModel {
         self.operatorGatewayTask = nil
         self.voiceWakeSyncTask?.cancel()
         self.voiceWakeSyncTask = nil
-        LiveActivityManager.shared.handleDisconnect()
+        LiveActivityManager.shared.endActivity(reason: "manual_disconnect")
         self.gatewayHealthMonitor.stop()
         Task {
             await self.operatorGateway.disconnect()
@@ -1877,7 +1878,7 @@ extension NodeAppModel {
         self.operatorConnected = false
         self.voiceWakeSyncTask?.cancel()
         self.voiceWakeSyncTask = nil
-        LiveActivityManager.shared.handleDisconnect()
+        LiveActivityManager.shared.endActivity(reason: "new_gateway_connect")
         self.gatewayDefaultAgentId = nil
         self.gatewayAgents = []
         self.selectedAgentId = GatewaySettingsStore.loadGatewaySelectedAgentId(stableID: stableID)
@@ -1907,6 +1908,12 @@ extension NodeAppModel {
         } else {
             self.gatewayPairingPaused = false
             self.gatewayPairingRequestId = nil
+        }
+        if problem.needsPairingApproval || problem.pauseReconnect {
+            LiveActivityManager.shared.showAttention(
+                statusText: problem.needsPairingApproval ? "Approval needed" : "Action required",
+                agentName: self.activeAgentName,
+                sessionKey: self.mainSessionKey)
         }
     }
 
@@ -2112,7 +2119,6 @@ extension NodeAppModel {
                             await self.refreshShareRouteFromGateway()
                             await self.registerAPNsTokenIfNeeded()
                             await self.startVoiceWakeSync()
-                            await MainActor.run { LiveActivityManager.shared.handleReconnect() }
                             await MainActor.run { self.startGatewayHealthMonitor() }
                         },
                         onDisconnected: { [weak self] reason in
@@ -2120,7 +2126,7 @@ extension NodeAppModel {
                             await MainActor.run {
                                 self.operatorConnected = false
                                 self.talkMode.updateGatewayConnected(false)
-                                LiveActivityManager.shared.handleDisconnect()
+                                LiveActivityManager.shared.endActivity(reason: "operator_disconnected")
                             }
                             GatewayDiagnostics.log("operator gateway disconnected reason=\(reason)")
                             await MainActor.run { self.stopGatewayHealthMonitor() }
@@ -2186,14 +2192,10 @@ extension NodeAppModel {
                     self.gatewayStatusText = (attempt == 0) ? "Connecting…" : "Reconnecting…"
                     self.gatewayServerName = nil
                     self.gatewayRemoteAddress = nil
-                    let liveActivity = LiveActivityManager.shared
-                    if liveActivity.isActive {
-                        liveActivity.handleConnecting()
-                    } else {
-                        liveActivity.startActivity(
-                            agentName: self.selectedAgentId ?? "main",
-                            sessionKey: self.mainSessionKey)
-                    }
+                    LiveActivityManager.shared.showConnecting(
+                        statusText: (attempt == 0) ? "Connecting..." : "Reconnecting...",
+                        agentName: self.activeAgentName,
+                        sessionKey: self.mainSessionKey)
                 }
 
                 do {
@@ -2220,6 +2222,7 @@ extension NodeAppModel {
                                 self.gatewayConnected = true
                                 self.screen.errorText = nil
                                 UserDefaults.standard.set(true, forKey: "gateway.autoconnect")
+                                LiveActivityManager.shared.handleReconnect()
                             }
                             let usedBootstrapToken =
                                 reconnectAuth.token?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false &&
@@ -2360,6 +2363,7 @@ extension NodeAppModel {
             await MainActor.run {
                 self.lastGatewayProblem = nil
                 self.gatewayStatusText = "Offline"
+                LiveActivityManager.shared.endActivity(reason: "gateway_loop_stopped")
                 self.gatewayServerName = nil
                 self.gatewayRemoteAddress = nil
                 self.connectedGatewayID = nil
@@ -3962,7 +3966,7 @@ extension NodeAppModel {
         switch route {
         case let .agent(link):
             await self.handleAgentDeepLink(link, originalURL: url)
-        case .gateway:
+        case .gateway, .dashboard:
             break
         }
     }

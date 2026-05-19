@@ -322,7 +322,7 @@ export const toolsEffectiveHandlers: GatewayRequestHandlers = {
   },
 };
 
-export const __testing = {
+export const testing = {
   resetToolsEffectiveCacheForTest() {
     toolsEffectiveCache.clear();
     toolsEffectiveInflight.clear();
@@ -334,3 +334,4 @@ export const __testing = {
     nowForToolsEffectiveCache = () => Date.now();
   },
 } as const;
+export { testing as __testing };

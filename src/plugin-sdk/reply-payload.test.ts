@@ -24,11 +24,32 @@ import {
 describe("isReasoningReplyPayload", () => {
   it.each([
     { name: "flagged", payload: { text: "Visible", isReasoning: true }, expected: true },
-    { name: "prefix", payload: { text: "  \n Reasoning:\n_hidden_" }, expected: true },
-    { name: "blockquote", payload: { text: "> Reasoning:\n> _hidden_" }, expected: true },
+    { name: "prefix", payload: { text: "  \n Thinking\n_hidden_" }, expected: true },
+    {
+      name: "legacy animated prefix",
+      payload: { text: "Thinking...\n\n_hidden_" },
+      expected: true,
+    },
+    { name: "legacy prefix", payload: { text: "  \n Reasoning:\n_hidden_" }, expected: true },
+    { name: "blockquote", payload: { text: "> Thinking\n> _hidden_" }, expected: true },
+    {
+      name: "visible prose starting with thinking",
+      payload: { text: "Thinking... this is the answer" },
+      expected: false,
+    },
+    {
+      name: "visible exact thinking label",
+      payload: { text: "Thinking..." },
+      expected: false,
+    },
+    {
+      name: "visible thinking status line",
+      payload: { text: "Thinking...\nI'll check that now" },
+      expected: false,
+    },
     {
       name: "mid-message mention",
-      payload: { text: "Intro\nReasoning: visible discussion" },
+      payload: { text: "Intro\nThinking: visible discussion" },
       expected: false,
     },
     { name: "missing text", payload: {}, expected: false },

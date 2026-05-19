@@ -3,7 +3,7 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmod, copyFile, mkdir, readFile, rm, unlink, writeFile } from "node:fs/promises";
-import { normalizeCredentialPayloadForKind } from "../qa/convex-credential-broker/convex/payload-validation.js";
+import { normalizeCredentialPayloadForKind } from "../../qa/convex-credential-broker/convex/payload-validation.js";
 
 type JsonObject = Record<string, unknown>;
 

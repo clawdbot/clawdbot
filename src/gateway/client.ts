@@ -307,7 +307,7 @@ export class GatewayClient {
     };
     if (url.startsWith("wss://") && this.opts.tlsFingerprint) {
       wsOptions.rejectUnauthorized = false;
-      wsOptions.checkServerIdentity = (_host: string, cert: CertMeta) => {
+      wsOptions.checkServerIdentity = (_hostValue: string, cert: CertMeta) => {
         const fingerprintValue =
           typeof cert === "object" && cert && "fingerprint256" in cert
             ? ((cert as { fingerprint256?: string }).fingerprint256 ?? "")
@@ -1070,7 +1070,7 @@ export class GatewayClient {
       this.ws as WebSocket & {
         _socket?: { getPeerCertificate?: () => { fingerprint256?: string } };
       }
-    )._socket;
+    )["_socket"];
     if (!socket || typeof socket.getPeerCertificate !== "function") {
       return new Error("gateway tls fingerprint unavailable");
     }

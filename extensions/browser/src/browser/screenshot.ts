@@ -2,8 +2,9 @@ import {
   buildImageResizeSideGrid,
   getImageMetadata,
   IMAGE_REDUCE_QUALITY_STEPS,
+  isImageProcessorUnavailableError,
   resizeToJpeg,
-} from "../media/image-ops.js";
+} from "../media/media-services.js";
 
 export const DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE = 2000;
 export const DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES = 5 * 1024 * 1024;
@@ -31,15 +32,25 @@ export async function normalizeBrowserScreenshot(
   const sideGrid = buildImageResizeSideGrid(maxSide, sideStart);
 
   let smallest: { buffer: Buffer; size: number } | null = null;
+  let processorUnavailableError: unknown;
 
   for (const side of sideGrid) {
     for (const quality of IMAGE_REDUCE_QUALITY_STEPS) {
-      const out = await resizeToJpeg({
-        buffer,
-        maxSide: side,
-        quality,
-        withoutEnlargement: true,
-      });
+      let out: Buffer;
+      try {
+        out = await resizeToJpeg({
+          buffer,
+          maxSide: side,
+          quality,
+          withoutEnlargement: true,
+        });
+      } catch (err) {
+        if (isImageProcessorUnavailableError(err)) {
+          processorUnavailableError = err;
+          break;
+        }
+        throw err;
+      }
 
       if (!smallest || out.byteLength < smallest.size) {
         smallest = { buffer: out, size: out.byteLength };
@@ -49,6 +60,13 @@ export async function normalizeBrowserScreenshot(
         return { buffer: out, contentType: "image/jpeg" };
       }
     }
+    if (processorUnavailableError) {
+      break;
+    }
+  }
+
+  if (processorUnavailableError) {
+    throw processorUnavailableError;
   }
 
   const best = smallest?.buffer ?? buffer;

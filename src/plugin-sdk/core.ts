@@ -37,6 +37,9 @@ import {
 } from "../shared/string-coerce.js";
 
 export type {
+  AgentPromptGuidance,
+  AgentPromptGuidanceEntry,
+  AgentPromptSurfaceKind,
   AgentHarness,
   AnyAgentTool,
   MediaUnderstandingProviderPlugin,

@@ -9,7 +9,7 @@ import * as configSessions from "../config/sessions.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import * as gatewayCall from "../gateway/call.js";
 import {
-  __testing as sessionBindingServiceTesting,
+  testing as sessionBindingServiceTesting,
   registerSessionBindingAdapter,
 } from "../infra/outbound/session-binding-service.js";
 import * as hookRunnerGlobal from "../plugins/hook-runner-global.js";
@@ -21,7 +21,7 @@ import {
   buildAnnounceIdempotencyKey,
 } from "./announce-idempotency.js";
 import * as piEmbedded from "./pi-embedded-runner/runs.js";
-import { __testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.js";
+import { testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.js";
 import { runSubagentAnnounceDispatch } from "./subagent-announce-dispatch.js";
 import * as agentStep from "./tools/agent-step.js";
 
@@ -180,7 +180,7 @@ const { subagentRegistryMock } = vi.hoisted(() => ({
   },
 }));
 const subagentDeliveryTargetHookMock = vi.fn(
-  async (_event?: unknown, _ctx?: unknown): Promise<SubagentDeliveryTargetResult | undefined> =>
+  async (eventValue?: unknown, _ctx?: unknown): Promise<SubagentDeliveryTargetResult | undefined> =>
     undefined,
 );
 let hasSubagentDeliveryTargetHook = false;
@@ -268,6 +268,13 @@ function setConfigOverride(next: OpenClawConfig): void {
   setRuntimeConfigSnapshot(configOverride);
 }
 
+function setMessageToolGroupReplyConfig(): void {
+  setConfigOverride({
+    session: { mainKey: "main", scope: "per-sender" },
+    messages: { groupChat: { visibleReplies: "message_tool" } },
+  });
+}
+
 function toSessionEntry(
   sessionKey: string,
   entry?: Partial<SessionEntry>,
@@ -306,7 +313,7 @@ vi.mock("./subagent-registry-runtime.js", () => subagentRegistryMock);
 describe("subagent announce formatting", () => {
   let previousFastTestEnv: string | undefined;
   let runSubagentAnnounceFlow: (typeof import("./subagent-announce.js"))["runSubagentAnnounceFlow"];
-  let subagentAnnounceTesting: (typeof import("./subagent-announce.js"))["__testing"];
+  let subagentAnnounceTesting: (typeof import("./subagent-announce.js"))["testing"];
 
   beforeAll(async () => {
     // Set FAST_TEST_MODE before importing the module to ensure the module-level
@@ -315,7 +322,7 @@ describe("subagent announce formatting", () => {
     // See: https://github.com/openclaw/openclaw/issues/31298
     previousFastTestEnv = process.env.OPENCLAW_TEST_FAST;
     process.env.OPENCLAW_TEST_FAST = "1";
-    ({ runSubagentAnnounceFlow, __testing: subagentAnnounceTesting } =
+    ({ runSubagentAnnounceFlow, testing: subagentAnnounceTesting } =
       await import("./subagent-announce.js"));
   });
 
@@ -780,6 +787,7 @@ describe("subagent announce formatting", () => {
   });
 
   it("keeps direct completion announce delivery immediate even when sibling counters are non-zero", async () => {
+    setMessageToolGroupReplyConfig();
     sessionStore = {
       "agent:main:subagent:test": {
         sessionId: "child-session-self-pending",
@@ -977,6 +985,7 @@ describe("subagent announce formatting", () => {
   });
 
   it("delivers completion-mode announces immediately even when sibling runs are still active", async () => {
+    setMessageToolGroupReplyConfig();
     sessionStore = {
       "agent:main:subagent:test": {
         sessionId: "child-session-coordinated",
@@ -1377,7 +1386,7 @@ describe("subagent announce formatting", () => {
           threadId: 99,
         },
         requesterSessionMeta: {},
-        expectedThreadId: 99,
+        expectedThreadId: "99",
       },
     ] as const;
 
@@ -1905,6 +1914,7 @@ describe("subagent announce formatting", () => {
   });
 
   it("uses direct completion delivery when explicit channel+to route is available", async () => {
+    setMessageToolGroupReplyConfig();
     sessionStore = {
       "agent:main:main": {
         sessionId: "requester-session-direct-route",

@@ -44,7 +44,7 @@ const { GatewayIntents, GatewayPlugin } = vi.hoisted(() => {
       this.options = options;
     }
 
-    async registerClient(_client: unknown): Promise<void> {}
+    async registerClient(clientForTest: unknown): Promise<void> {}
 
     connect(_resume = false): void {
       if (this.isConnecting) {
@@ -88,7 +88,7 @@ describe("createDiscordGatewayPlugin", () => {
   });
 
   function createPlugin(
-    testing?: NonNullable<Parameters<typeof createDiscordGatewayPlugin>[0]["__testing"]>,
+    testing?: NonNullable<Parameters<typeof createDiscordGatewayPlugin>[0]["testing"]>,
     discordConfig: Parameters<typeof createDiscordGatewayPlugin>[0]["discordConfig"] = {},
   ) {
     return createDiscordGatewayPlugin({
@@ -98,7 +98,7 @@ describe("createDiscordGatewayPlugin", () => {
         error: vi.fn(),
         exit: vi.fn(),
       },
-      ...(testing ? { __testing: testing } : {}),
+      ...(testing ? { testing: testing } : {}),
     });
   }
 
@@ -266,7 +266,7 @@ describe("createDiscordGatewayPlugin", () => {
       webSocketCtor: function WebSocketCtor() {
         return socket;
       } as unknown as NonNullable<
-        Parameters<typeof createDiscordGatewayPlugin>[0]["__testing"]
+        Parameters<typeof createDiscordGatewayPlugin>[0]["testing"]
       >["webSocketCtor"],
     });
     const activitySpy = vi.fn();
@@ -297,7 +297,7 @@ describe("createDiscordGatewayPlugin", () => {
       webSocketCtor: function WebSocketCtor() {
         return staleSocket;
       } as unknown as NonNullable<
-        Parameters<typeof createDiscordGatewayPlugin>[0]["__testing"]
+        Parameters<typeof createDiscordGatewayPlugin>[0]["testing"]
       >["webSocketCtor"],
     });
     const activitySpy = vi.fn();

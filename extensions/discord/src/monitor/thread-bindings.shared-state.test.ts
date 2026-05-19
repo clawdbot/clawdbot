@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
 import {
-  __testing as threadBindingsTesting,
+  testing as threadBindingsTesting,
   createThreadBindingManager,
   getThreadBindingManager,
 } from "./thread-bindings.js";

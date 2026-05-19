@@ -24,6 +24,7 @@ import {
   type GatewayReloadPlan,
   listPluginInstallTimestampMetadataPaths,
   listPluginInstallWholeRecordPaths,
+  resolveConfigReloadMetadata,
   resolveGatewayReloadSettings,
   shouldInvalidateSkillsSnapshotForPaths,
   startGatewayConfigReloader,
@@ -298,6 +299,12 @@ describe("buildGatewayReloadPlan", () => {
       "plugins.installs.lossless-claw.resolvedAt",
       "plugins.installs.lossless-claw.installedAt",
     ]);
+    expect(resolveConfigReloadMetadata("plugins.installs.lossless-claw.resolvedAt").kind).toBe(
+      "none",
+    );
+    expect(resolveConfigReloadMetadata("plugins.installs.lossless-claw.installedAt").kind).toBe(
+      "none",
+    );
   });
 
   it("restarts for whole-record plugin install changes", () => {

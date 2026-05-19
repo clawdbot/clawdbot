@@ -302,7 +302,7 @@ export function resolveCliBackendConfig(
   };
 }
 
-export const __testing = {
+export const testing = {
   resetDepsForTest(): void {
     cliBackendsDeps = defaultCliBackendsDeps;
   },
@@ -313,3 +313,4 @@ export const __testing = {
     };
   },
 } as const;
+export { testing as __testing };

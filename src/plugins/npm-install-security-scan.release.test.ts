@@ -281,7 +281,7 @@ describe("publishable plugin npm package install security scan", () => {
     });
   });
 
-  test.each(publishablePluginPackages)(
+  test.concurrent.each(publishablePluginPackages)(
     "keeps $packageName files clear of unexpected critical hits",
     async (plugin) => {
       const result = await scanPublishablePluginPackage(plugin);

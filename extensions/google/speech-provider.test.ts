@@ -17,10 +17,10 @@ const {
 } = getProviderHttpMocks();
 
 let buildGoogleSpeechProvider: typeof import("./speech-provider.js").buildGoogleSpeechProvider;
-let __testing: typeof import("./speech-provider.js").__testing;
+let testing: typeof import("./speech-provider.js").testing;
 
 beforeAll(async () => {
-  ({ buildGoogleSpeechProvider, __testing } = await import("./speech-provider.js"));
+  ({ buildGoogleSpeechProvider, testing } = await import("./speech-provider.js"));
 });
 
 installProviderHttpMockCleanup();
@@ -143,7 +143,7 @@ describe("Google speech provider", () => {
     expect(result.voiceCompatible).toBe(false);
     expect(result.audioBuffer.subarray(0, 4).toString("ascii")).toBe("RIFF");
     expect(result.audioBuffer.subarray(8, 12).toString("ascii")).toBe("WAVE");
-    expect(result.audioBuffer.readUInt32LE(24)).toBe(__testing.GOOGLE_TTS_SAMPLE_RATE);
+    expect(result.audioBuffer.readUInt32LE(24)).toBe(testing.GOOGLE_TTS_SAMPLE_RATE);
     expect(result.audioBuffer.subarray(44)).toEqual(Buffer.from([1, 0, 2, 0]));
     expect(transcodeAudioBufferToOpusMock).not.toHaveBeenCalled();
   });
@@ -186,7 +186,7 @@ describe("Google speech provider", () => {
   it("advertises all documented Gemini TTS-capable models", () => {
     const provider = buildGoogleSpeechProvider();
 
-    expect(provider.models).toEqual(__testing.GOOGLE_TTS_MODELS);
+    expect(provider.models).toEqual(testing.GOOGLE_TTS_MODELS);
   });
 
   it("renders deterministic audio-profile-v1 prompts without generating tags", async () => {

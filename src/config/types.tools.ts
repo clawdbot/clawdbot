@@ -370,6 +370,8 @@ export type AgentToolsConfig = {
   byProvider?: Record<string, ToolPolicyConfig>;
   /** Per-sender tool policy overrides keyed by sender identity. */
   toolsBySender?: GroupToolPolicyBySenderConfig;
+  /** Per-agent code mode override; merges over the top-level tools.codeMode config. */
+  codeMode?: CodeModeConfig;
   /** Per-agent elevated exec gate (can only further restrict global tools.elevated). */
   elevated?: {
     /** Enable or disable elevated mode for this agent (default: true). */

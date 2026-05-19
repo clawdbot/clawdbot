@@ -9,7 +9,6 @@ import {
   pinActivePluginHttpRouteRegistry,
   releasePinnedPluginChannelRegistry,
   releasePinnedPluginHttpRouteRegistry,
-  resolveActivePluginHttpRouteRegistry,
 } from "../plugins/runtime.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -27,6 +26,7 @@ import {
 } from "./server-chat-state.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
 import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
+import type { GatewayRequestContext } from "./server-methods/types.js";
 import type { DedupeEntry } from "./server-shared.js";
 import type { HookClientIpConfig, HooksRequestHandler } from "./server/hooks-request-handler.js";
 import { listenGatewayHttpServer } from "./server/http-listen.js";
@@ -84,6 +84,8 @@ export async function createGatewayRuntimeState(params: {
   hooksConfig: () => HooksConfigResolved | null;
   getHookClientIpConfig: () => HookClientIpConfig;
   pluginRegistry: PluginRegistry;
+  getPluginRouteRegistry?: () => PluginRegistry;
+  getGatewayRequestContext?: () => GatewayRequestContext | undefined;
   pinChannelRegistry?: boolean;
   deps: CliDeps;
   log: { info: (msg: string) => void; warn: (msg: string) => void };
@@ -123,6 +125,8 @@ export async function createGatewayRuntimeState(params: {
     releasePinnedPluginChannelRegistry();
   }
   try {
+    const resolvePluginRouteRegistry = () =>
+      params.getPluginRouteRegistry?.() ?? params.pluginRegistry;
     const clients = new Set<GatewayWsClient>();
     const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({ clients });
 
@@ -159,7 +163,7 @@ export async function createGatewayRuntimeState(params: {
       pathContext,
       dispatchContext,
     ) => {
-      const registry = resolveActivePluginHttpRouteRegistry(params.pluginRegistry);
+      const registry = resolvePluginRouteRegistry();
       if ((registry.httpRoutes ?? []).length === 0) {
         return false;
       }
@@ -167,7 +171,9 @@ export async function createGatewayRuntimeState(params: {
         const { createGatewayPluginRequestHandler } = await import("./server/plugins-http.js");
         loadedPluginRequestHandler = createGatewayPluginRequestHandler({
           registry: params.pluginRegistry,
+          getRouteRegistry: resolvePluginRouteRegistry,
           log: params.logPlugins,
+          getGatewayRequestContext: params.getGatewayRequestContext,
         });
       }
       return await loadedPluginRequestHandler(req, res, pathContext, dispatchContext);
@@ -179,7 +185,7 @@ export async function createGatewayRuntimeState(params: {
       pathContext,
       dispatchContext,
     ) => {
-      const registry = resolveActivePluginHttpRouteRegistry(params.pluginRegistry);
+      const registry = resolvePluginRouteRegistry();
       if ((registry.httpRoutes ?? []).length === 0) {
         return false;
       }
@@ -187,22 +193,19 @@ export async function createGatewayRuntimeState(params: {
         const { createGatewayPluginUpgradeHandler } = await import("./server/plugins-http.js");
         loadedPluginUpgradeHandler = createGatewayPluginUpgradeHandler({
           registry: params.pluginRegistry,
+          getRouteRegistry: resolvePluginRouteRegistry,
           log: params.logPlugins,
+          getGatewayRequestContext: params.getGatewayRequestContext,
         });
       }
       return await loadedPluginUpgradeHandler(req, socket, head, pathContext, dispatchContext);
     };
     const shouldEnforcePluginGatewayAuth = (pathContext: PluginRoutePathContext): boolean => {
-      return shouldEnforceGatewayAuthForPluginPath(
-        resolveActivePluginHttpRouteRegistry(params.pluginRegistry),
-        pathContext,
-      );
+      return shouldEnforceGatewayAuthForPluginPath(resolvePluginRouteRegistry(), pathContext);
     };
     const resolvePluginNodeCapabilityRoute = (pathContext: PluginRoutePathContext) =>
-      findMatchingPluginNodeCapabilityRoute(
-        resolveActivePluginHttpRouteRegistry(params.pluginRegistry),
-        pathContext,
-      )?.nodeCapability;
+      findMatchingPluginNodeCapabilityRoute(resolvePluginRouteRegistry(), pathContext)
+        ?.nodeCapability;
 
     const bindHosts = await resolveGatewayListenHosts(params.bindHost);
     if (!isLoopbackHost(params.bindHost)) {
@@ -228,7 +231,7 @@ export async function createGatewayRuntimeState(params: {
 
     const httpServers: HttpServer[] = [];
     const httpBindHosts: string[] = [];
-    for (const _host of bindHosts) {
+    for (const _ of bindHosts) {
       const httpServer = createGatewayHttpServer({
         clients,
         controlUiEnabled: params.controlUiEnabled,

@@ -177,11 +177,11 @@ export function getGatewayModelPricingCacheFingerprint(): string {
   return stablePricingValue(entries);
 }
 
-export function __resetGatewayModelPricingCacheForTest(): void {
+export function resetGatewayModelPricingCacheForTest(): void {
   clearGatewayModelPricingCacheState();
 }
 
-export function __setGatewayModelPricingForTest(
+export function setGatewayModelPricingForTest(
   entries: Array<{ provider: string; model: string; pricing: CachedModelPricing }>,
 ): void {
   replaceGatewayModelPricingCache(

@@ -51,7 +51,7 @@ class GitHubDeviceFlowError extends Error {
 
 let githubDeviceFlowFetchGuard = fetchWithSsrFGuard;
 
-export function _setGitHubCopilotDeviceFlowFetchGuardForTesting(
+export function setGitHubCopilotDeviceFlowFetchGuardForTesting(
   impl: typeof fetchWithSsrFGuard | null,
 ): void {
   githubDeviceFlowFetchGuard = impl ?? fetchWithSsrFGuard;

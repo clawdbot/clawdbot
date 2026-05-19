@@ -143,7 +143,13 @@ describe("Telegram ingress spool", () => {
       expect(entries).toEqual(["0000000000000032.json.failed"]);
       const failed = JSON.parse(
         await fs.readFile(path.join(spoolDir, "0000000000000032.json.failed"), "utf8"),
-      ) as { failure?: { reason?: string; message?: string; failedAt?: number } };
+      ) as {
+        update?: unknown;
+        claim?: unknown;
+        failure?: { reason?: string; message?: string; failedAt?: number };
+      };
+      expect(failed.update).toBeUndefined();
+      expect(failed.claim).toBeUndefined();
       expect(failed.failure).toEqual({
         reason: "handler-timeout",
         message: "timed out",

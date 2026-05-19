@@ -191,7 +191,11 @@ openclaw browser select <ref> OptionA OptionB
 openclaw browser fill --fields '[{"ref":"1","value":"Ada"}]'
 openclaw browser wait --text "Done"
 openclaw browser evaluate --fn '(el) => el.textContent' --ref <ref>
+openclaw browser evaluate --timeout-ms 30000 --fn 'async () => { await window.ready; return true; }'
 ```
+
+Use `evaluate --timeout-ms <ms>` when the page-side function may need longer
+than the default evaluate timeout.
 
 Action responses return the current raw `targetId` after action-triggered page
 replacement when OpenClaw can prove the replacement tab. Scripts should still

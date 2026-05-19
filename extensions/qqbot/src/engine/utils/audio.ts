@@ -17,20 +17,20 @@ import { debugLog, debugError, debugWarn } from "./log.js";
 import { normalizeLowercaseStringOrEmpty as normalizeLowercase } from "./string-normalize.js";
 
 type SilkWasm = typeof import("silk-wasm");
-let _silkWasmPromise: Promise<SilkWasm | null> | null = null;
+let silkWasmPromise: Promise<SilkWasm | null> | null = null;
 
 /** Lazy-load the silk-wasm module (singleton cache; returns null on failure). */
 function loadSilkWasm(): Promise<SilkWasm | null> {
-  if (_silkWasmPromise) {
-    return _silkWasmPromise;
+  if (silkWasmPromise) {
+    return silkWasmPromise;
   }
-  _silkWasmPromise = import("silk-wasm").catch((err) => {
+  silkWasmPromise = import("silk-wasm").catch((err) => {
     debugWarn(
       `[audio-convert] silk-wasm not available; SILK encode/decode disabled (${formatErrorMessage(err)})`,
     );
     return null;
   });
-  return _silkWasmPromise;
+  return silkWasmPromise;
 }
 
 /** Wrap raw PCM s16le data into a standard WAV file. */

@@ -1022,7 +1022,7 @@ export async function runWhatsAppQaLive(params: {
   };
 }
 
-export const __testing = {
+export const testing = {
   assertSafeArchiveEntries,
   appendPreScenarioFailureResults,
   buildWhatsAppQaConfig,
@@ -1036,3 +1036,4 @@ export const __testing = {
   unpackWhatsAppAuthArchive,
   WHATSAPP_QA_STANDARD_SCENARIO_IDS,
 };
+export { testing as __testing };

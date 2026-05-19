@@ -559,7 +559,7 @@ export function listActiveReplyRunSessionKeys(): string[] {
   return [...replyRunState.activeSessionIdsByKey.keys()];
 }
 
-export const __testing = {
+export const testing = {
   resetReplyRunRegistry(): void {
     for (const [sessionKey, sessionId] of replyRunState.activeSessionIdsByKey) {
       markReplyRunDiagnosticWorkEnded({ sessionKey, sessionId });
@@ -577,3 +577,4 @@ export const __testing = {
     replyRunState.waitersByKey.clear();
   },
 };
+export { testing as __testing };

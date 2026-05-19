@@ -319,7 +319,7 @@ export function getFeishuThreadBindingManager(
   return getState().managersByAccountId.get(normalizeAccountId(accountId)) ?? null;
 }
 
-export const __testing = {
+export const testing = {
   resetFeishuThreadBindingsForTests() {
     for (const manager of getState().managersByAccountId.values()) {
       manager.stop();
@@ -328,3 +328,4 @@ export const __testing = {
     getState().bindingsByAccountConversation.clear();
   },
 };
+export { testing as __testing };

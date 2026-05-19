@@ -57,9 +57,10 @@ export function outputPrecomputedBrowserHelpText(): boolean {
   return true;
 }
 
-export const __testing = {
+export const testing = {
   resetPrecomputedRootHelpTextForTests(): void {
     precomputedRootHelpText = undefined;
     precomputedBrowserHelpText = undefined;
   },
 };
+export { testing as __testing };

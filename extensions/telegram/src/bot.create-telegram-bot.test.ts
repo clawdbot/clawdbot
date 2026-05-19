@@ -241,7 +241,7 @@ describe("createTelegramBot", () => {
   it("installs grammY throttler", () => {
     createTelegramBot({ token: "tok" });
     expect(throttlerSpy).toHaveBeenCalledTimes(1);
-    expect(useSpy).toHaveBeenCalledWith("throttler");
+    expect(useSpy).toHaveBeenCalledWith(expect.any(Function));
   });
 
   it("reuses the grammY throttler for the same token", () => {

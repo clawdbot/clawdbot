@@ -6,7 +6,7 @@ import {
   wrapToolWithBeforeToolCallHook,
 } from "./pi-tools.before-tool-call.js";
 import {
-  __testing,
+  testing,
   addClientToolsToToolSearchCatalog,
   applyToolSearchCatalog,
   clearToolSearchCatalog,
@@ -61,7 +61,7 @@ function mockCall(mock: { mock: { calls: unknown[][] } }, index = 0): unknown[] 
 
 describe("Tool Search", () => {
   it("enables object config when a mode is set", () => {
-    const resolved = __testing.resolveToolSearchConfig({
+    const resolved = testing.resolveToolSearchConfig({
       tools: {
         toolSearch: {
           mode: "tools",
@@ -73,10 +73,10 @@ describe("Tool Search", () => {
   });
 
   it("falls back to structured controls when code mode is unsupported", () => {
-    __testing.setToolSearchCodeModeSupportedForTest(false);
+    testing.setToolSearchCodeModeSupportedForTest(false);
     try {
       const config = { tools: { toolSearch: true } } as never;
-      const resolved = __testing.resolveToolSearchConfig(config);
+      const resolved = testing.resolveToolSearchConfig(config);
       const compacted = applyToolSearchCatalog({
         tools: [
           fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode"),
@@ -97,7 +97,7 @@ describe("Tool Search", () => {
       ]);
       expect(compacted.catalogToolCount).toBe(1);
     } finally {
-      __testing.setToolSearchCodeModeSupportedForTest(undefined);
+      testing.setToolSearchCodeModeSupportedForTest(undefined);
     }
   });
 
@@ -199,8 +199,8 @@ describe("Tool Search", () => {
       sessionKey: "agent:main:main",
       runId: "run-a",
     });
-    expect(__testing.sessionCatalogs.has("run:run-a")).toBe(false);
-    expect(__testing.sessionCatalogs.has("run:run-b")).toBe(true);
+    expect(testing.sessionCatalogs.has("run:run-a")).toBe(false);
+    expect(testing.sessionCatalogs.has("run:run-b")).toBe(true);
     expect(runATool.execute).toHaveBeenCalledTimes(1);
     expect(runBTool.execute).not.toHaveBeenCalled();
     clearToolSearchCatalog({ runId: "run-b" });
@@ -316,7 +316,7 @@ describe("Tool Search", () => {
 
     expect(compacted.tools).toEqual([]);
     expect(compacted.catalogToolCount).toBe(1);
-    const clientEntry = __testing.sessionCatalogs
+    const clientEntry = testing.sessionCatalogs
       .get("session:session-client")
       ?.entries.find((entry) => entry.id === "client:client:client_pick_file");
     expect(clientEntry?.source).toBe("client");
@@ -337,7 +337,7 @@ describe("Tool Search", () => {
       },
     });
 
-    const entry = __testing.sessionCatalogs
+    const entry = testing.sessionCatalogs
       .get("session:session-hooks")
       ?.entries.find((candidate) => candidate.name === "fake_hooked");
     if (!entry) {
@@ -381,7 +381,7 @@ describe("Tool Search", () => {
       },
     });
 
-    const entry = __testing.sessionCatalogs
+    const entry = testing.sessionCatalogs
       .get("session:session-hooks-abort")
       ?.entries.find((candidate) => candidate.name === "fake_already_hooked");
     expect(entry?.tool).toBe(abortWrapped);

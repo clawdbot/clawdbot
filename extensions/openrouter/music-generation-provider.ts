@@ -339,6 +339,6 @@ export function buildOpenRouterMusicGenerationProvider(): MusicGenerationProvide
   };
 }
 
-export const _openRouterMusicTestInternals = {
+export const openRouterMusicTestInternals = {
   readOpenRouterAudioStream,
 };

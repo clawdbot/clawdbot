@@ -400,6 +400,32 @@ export async function closeAllMemorySearchManagers(): Promise<void> {
   }
 }
 
+export async function closeMemorySearchManager(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+}): Promise<void> {
+  const normalizedAgentId = normalizeAgentId(params.agentId);
+  const scopeKey = buildQmdManagerScopeKey(normalizedAgentId);
+  const pending = PENDING_QMD_MANAGER_CREATES.get(scopeKey);
+  if (pending) {
+    await Promise.allSettled([pending.promise]);
+  }
+  const cached = QMD_MANAGER_CACHE.get(scopeKey);
+  if (cached) {
+    QMD_MANAGER_CACHE.delete(scopeKey);
+    QMD_MANAGER_OPEN_FAILURES.delete(scopeKey);
+    try {
+      await cached.manager.close?.();
+    } catch (err) {
+      log.warn(`failed to close qmd memory manager for agent ${normalizedAgentId}: ${String(err)}`);
+    }
+  }
+  if (managerRuntimePromise !== null) {
+    const { closeMemoryIndexManagersForAgent } = await loadManagerRuntime();
+    await closeMemoryIndexManagersForAgent({ cfg: params.cfg, agentId: normalizedAgentId });
+  }
+}
+
 class FallbackMemoryManager implements MemorySearchManager {
   private fallback: Maybe<MemorySearchManager> = null;
   private primaryFailed = false;

@@ -17,7 +17,8 @@ artifact bundle. The runner leases the shared burner account from Convex.
 Run from the OpenClaw repo and branch under test:
 
 ```bash
-pnpm qa:telegram-user:crabbox -- start \
+proof_cmd="${OPENCLAW_TELEGRAM_USER_PROOF_CMD:-openclaw-telegram-user-crabbox-proof}"
+"$proof_cmd" start \
   --tdlib-url http://artifacts.openclaw.ai/tdlib-v1.8.0-linux-x64.tgz \
   --output-dir .artifacts/qa-e2e/telegram-user-crabbox/pr-review
 ```
@@ -39,7 +40,8 @@ For deterministic visual repros, put the exact mock-model reply in a file and
 pass it to `start`:
 
 ```bash
-pnpm qa:telegram-user:crabbox -- start \
+proof_cmd="${OPENCLAW_TELEGRAM_USER_PROOF_CMD:-openclaw-telegram-user-crabbox-proof}"
+"$proof_cmd" start \
   --tdlib-url http://artifacts.openclaw.ai/tdlib-v1.8.0-linux-x64.tgz \
   --mock-response-file .artifacts/qa-e2e/telegram-user-crabbox/reply.txt \
   --output-dir .artifacts/qa-e2e/telegram-user-crabbox/pr-review
@@ -55,15 +57,16 @@ For visual proof, first send or identify a bottom marker message, then open the
 group/topic directly by message id:
 
 ```bash
-pnpm qa:telegram-user:crabbox -- view \
+proof_cmd="${OPENCLAW_TELEGRAM_USER_PROOF_CMD:-openclaw-telegram-user-crabbox-proof}"
+"$proof_cmd" view \
   --session .artifacts/qa-e2e/telegram-user-crabbox/pr-review/session.json \
   --message-id <message-id>
 ```
 
 This uses Telegram Desktop directly with `tg://privatepost`, not `xdg-open`.
 It also resizes Telegram to `650x1000` at the tested desktop position so
-Telegram switches to single-chat mode with no left chat list or right info
-pane. Do not press Escape after this; Escape can close the selected chat.
+the crop can isolate the chat pane even if Telegram keeps a split/sidebar
+layout. Do not press Escape after this; Escape can close the selected chat.
 
 Bottom behavior matters:
 
@@ -71,13 +74,14 @@ Bottom behavior matters:
   later messages appear live in the recording
 - deep-linking to an older message does not auto-scroll to new arrivals; link
   again to the newest/final marker instead of clicking the down-arrow
-- `650px` is the largest tested clean width; `660px` switches Telegram back to
-  split/sidebar layout
+- the cropped GIF intentionally uses the chat pane, not the whole desktop or
+  whole Telegram window
 
 Send as the real Telegram user:
 
 ```bash
-pnpm qa:telegram-user:crabbox -- send \
+proof_cmd="${OPENCLAW_TELEGRAM_USER_PROOF_CMD:-openclaw-telegram-user-crabbox-proof}"
+"$proof_cmd" send \
   --session .artifacts/qa-e2e/telegram-user-crabbox/pr-review/session.json \
   --text /status
 ```
@@ -87,7 +91,8 @@ For slash commands, omit the bot username; the runner targets the SUT bot.
 Run arbitrary commands on the Crabbox:
 
 ```bash
-pnpm qa:telegram-user:crabbox -- run \
+proof_cmd="${OPENCLAW_TELEGRAM_USER_PROOF_CMD:-openclaw-telegram-user-crabbox-proof}"
+"$proof_cmd" run \
   --session .artifacts/qa-e2e/telegram-user-crabbox/pr-review/session.json \
   -- bash -lc 'source /tmp/openclaw-telegram-user-crabbox/env.sh && python3 /tmp/openclaw-telegram-user-crabbox/user-driver.py transcript --limit 20 --json'
 ```
@@ -106,14 +111,16 @@ python3 /tmp/openclaw-telegram-user-crabbox/user-driver.py probe --text '@{sut} 
 Capture the current desktop without ending the session:
 
 ```bash
-pnpm qa:telegram-user:crabbox -- screenshot \
+proof_cmd="${OPENCLAW_TELEGRAM_USER_PROOF_CMD:-openclaw-telegram-user-crabbox-proof}"
+"$proof_cmd" screenshot \
   --session .artifacts/qa-e2e/telegram-user-crabbox/pr-review/session.json
 ```
 
 Check lease state and get the WebVNC command:
 
 ```bash
-pnpm qa:telegram-user:crabbox -- status \
+proof_cmd="${OPENCLAW_TELEGRAM_USER_PROOF_CMD:-openclaw-telegram-user-crabbox-proof}"
+"$proof_cmd" status \
   --session .artifacts/qa-e2e/telegram-user-crabbox/pr-review/session.json
 ```
 
@@ -122,7 +129,8 @@ pnpm qa:telegram-user:crabbox -- status \
 Always finish or explicitly keep the box:
 
 ```bash
-pnpm qa:telegram-user:crabbox -- finish \
+proof_cmd="${OPENCLAW_TELEGRAM_USER_PROOF_CMD:-openclaw-telegram-user-crabbox-proof}"
+"$proof_cmd" finish \
   --session .artifacts/qa-e2e/telegram-user-crabbox/pr-review/session.json \
   --preview-crop telegram-window
 ```
@@ -150,7 +158,8 @@ Attach only the useful visual artifact to the PR unless logs are needed. The
 runner is GIF-only by default:
 
 ```bash
-pnpm qa:telegram-user:crabbox -- publish \
+proof_cmd="${OPENCLAW_TELEGRAM_USER_PROOF_CMD:-openclaw-telegram-user-crabbox-proof}"
+"$proof_cmd" publish \
   --session .artifacts/qa-e2e/telegram-user-crabbox/pr-review/session.json \
   --pr <pr-number> \
   --summary 'Telegram real-user Crabbox session motion GIF'
@@ -189,7 +198,8 @@ experiments unless those artifacts are explicitly needed.
 For a fast one-shot check, use:
 
 ```bash
-pnpm qa:telegram-user:crabbox -- --text /status
+proof_cmd="${OPENCLAW_TELEGRAM_USER_PROOF_CMD:-openclaw-telegram-user-crabbox-proof}"
+"$proof_cmd" --text /status
 ```
 
 This is a start/send/finish shortcut. Prefer the held session for PR review,

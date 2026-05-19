@@ -92,9 +92,12 @@ export function resetModelCatalogCacheForTest() {
 }
 
 // Test-only escape hatch: allow mocking the dynamic import to simulate transient failures.
-export function __setModelCatalogImportForTest(loader?: () => Promise<PiSdkModule>) {
+export function setModelCatalogImportForTest(loader?: () => Promise<PiSdkModule>) {
   importPiSdk = loader ?? defaultImportPiSdk;
 }
+
+/** @deprecated Use `setModelCatalogImportForTest`. */
+export { setModelCatalogImportForTest as __setModelCatalogImportForTest };
 
 function instantiatePiModelRegistry(
   piSdk: PiSdkModule,

@@ -8,7 +8,7 @@ import {
 } from "../hooks/internal-hooks.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import {
-  _resetBootstrapWarningCacheForTest,
+  resetBootstrapWarningCacheForTest,
   FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
   hasCompletedBootstrapTurn,
   makeBootstrapWarn,
@@ -568,7 +568,7 @@ describe("hasCompletedBootstrapTurn", () => {
 
 describe("makeBootstrapWarn", () => {
   afterEach(() => {
-    _resetBootstrapWarningCacheForTest();
+    resetBootstrapWarningCacheForTest();
   });
 
   it("deduplicates repeated warnings for the same session and message", () => {

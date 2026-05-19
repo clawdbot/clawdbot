@@ -372,7 +372,7 @@ export async function waitForAgentJob(params: {
 
 ensureAgentRunListener();
 
-export const __testing = {
+export const testing = {
   getWaiterCount(runId?: string): number {
     if (runId) {
       return agentRunWaiterCounts.get(runId) ?? 0;
@@ -387,3 +387,4 @@ export const __testing = {
     agentRunWaiterCounts.clear();
   },
 };
+export { testing as __testing };

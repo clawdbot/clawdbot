@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
-  _resetIMessageShortIdState,
+  resetIMessageShortIdState,
   findLatestIMessageEntryForChat,
   isKnownFromMeIMessageMessageId,
   rememberIMessageReplyCache,
@@ -34,7 +34,7 @@ afterAll(() => {
 });
 
 beforeEach(() => {
-  _resetIMessageShortIdState();
+  resetIMessageShortIdState();
   // Belt-and-suspenders: also nuke the persisted file directly. The
   // _reset helper does this when OPENCLAW_STATE_DIR is set, but explicitly
   // clearing here protects the test from any future refactor of _reset's
@@ -408,12 +408,12 @@ describe("hydrate-on-resolve (post-restart short-id persistence)", () => {
     expect(issued.shortId).not.toBe("");
 
     // Simulate a restart: clear the in-memory state but leave the JSONL on
-    // disk. _resetIMessageShortIdState only deletes the persisted file when
+    // disk. resetIMessageShortIdState only deletes the persisted file when
     // OPENCLAW_STATE_DIR is set, so we have to keep the file ourselves
     // since this test runs under the suite's temp state dir.
     const cachePath = path.join(tempStateDir, "imessage", "reply-cache.jsonl");
     const persisted = fs.readFileSync(cachePath, "utf8");
-    _resetIMessageShortIdState();
+    resetIMessageShortIdState();
     fs.mkdirSync(path.dirname(cachePath), { recursive: true });
     fs.writeFileSync(cachePath, persisted, "utf8");
 

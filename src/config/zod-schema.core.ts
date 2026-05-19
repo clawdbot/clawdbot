@@ -1,5 +1,6 @@
 import path from "node:path";
 import { z } from "zod";
+import { normalizeProviderId } from "../agents/provider-id.js";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
 import {
   formatExecSecretRefIdValidationMessage,
@@ -374,9 +375,77 @@ const ModelProviderLocalServiceSchema = z
   .strict()
   .optional();
 
+const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
+  "amazon-bedrock",
+  "amazon-bedrock-mantle",
+  "anthropic",
+  "anthropic-vertex",
+  "arcee",
+  "byteplus",
+  "byteplus-plan",
+  "cerebras",
+  "chutes",
+  "cloudflare-ai-gateway",
+  "codex",
+  "comfy",
+  "copilot-proxy",
+  "dashscope",
+  "deepinfra",
+  "deepseek",
+  "fal",
+  "fireworks",
+  "github-copilot",
+  "google",
+  "google-antigravity",
+  "google-gemini-cli",
+  "google-vertex",
+  "groq",
+  "huggingface",
+  "kilocode",
+  "kimi",
+  "kimi-coding",
+  "litellm",
+  "lmstudio",
+  "microsoft-foundry",
+  "minimax",
+  "minimax-portal",
+  "mistral",
+  "modelstudio",
+  "moonshot",
+  "nvidia",
+  "ollama",
+  "openai",
+  "openai-codex",
+  "opencode",
+  "opencode-go",
+  "openrouter",
+  "qianfan",
+  "qwen",
+  "qwencloud",
+  "sglang",
+  "stepfun",
+  "stepfun-plan",
+  "synthetic",
+  "tencent-tokenhub",
+  "together",
+  "venice",
+  "vercel-ai-gateway",
+  "vllm",
+  "volcengine",
+  "volcengine-plan",
+  "vydra",
+  "xai",
+  "xiaomi",
+  "zai",
+]);
+
+export function isBuiltInModelProviderOverlayId(providerId: string): boolean {
+  return BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS.has(normalizeProviderId(providerId));
+}
+
 const ModelProviderSchema = z
   .object({
-    baseUrl: z.string().min(1),
+    baseUrl: z.string().min(1).optional(),
     apiKey: SecretInputSchema.optional().register(sensitive),
     auth: z
       .union([z.literal("api-key"), z.literal("aws-sdk"), z.literal("oauth"), z.literal("token")])
@@ -393,9 +462,35 @@ const ModelProviderSchema = z
     headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
     authHeader: z.boolean().optional(),
     request: ConfiguredModelProviderRequestSchema,
-    models: z.array(ModelDefinitionSchema),
+    models: z.array(ModelDefinitionSchema).optional(),
   })
   .strict();
+
+const ModelProvidersSchema = z
+  .record(z.string(), ModelProviderSchema)
+  .superRefine((providers, ctx) => {
+    for (const [providerId, provider] of Object.entries(providers)) {
+      if (isBuiltInModelProviderOverlayId(providerId)) {
+        continue;
+      }
+      if (!provider.baseUrl) {
+        ctx.addIssue({
+          code: "custom",
+          path: [providerId, "baseUrl"],
+          message:
+            "custom model providers must declare baseUrl; provider overlays without baseUrl are only supported for bundled providers",
+        });
+      }
+      if (!Array.isArray(provider.models)) {
+        ctx.addIssue({
+          code: "custom",
+          path: [providerId, "models"],
+          message:
+            "custom model providers must declare models; provider overlays without models are only supported for bundled providers",
+        });
+      }
+    }
+  });
 
 const ModelPricingConfigSchema = z
   .object({
@@ -407,7 +502,7 @@ const ModelPricingConfigSchema = z
 export const ModelsConfigSchema = z
   .object({
     mode: z.union([z.literal("merge"), z.literal("replace")]).optional(),
-    providers: z.record(z.string(), ModelProviderSchema).optional(),
+    providers: ModelProvidersSchema.optional(),
     pricing: ModelPricingConfigSchema,
   })
   .strict()

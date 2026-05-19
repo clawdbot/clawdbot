@@ -24,11 +24,13 @@ export function getImageGenerationTaskProviderId(task: TaskRecord): string | und
 
 export function findActiveImageGenerationTaskForSession(
   sessionKey?: string,
+  params?: { prompt?: string },
 ): TaskRecord | undefined {
   return findActiveMediaGenerationTaskForSession({
     sessionKey,
     taskKind: IMAGE_GENERATION_TASK_KIND,
     sourcePrefix: IMAGE_GENERATION_SOURCE_PREFIX,
+    taskLabel: params?.prompt,
   });
 }
 

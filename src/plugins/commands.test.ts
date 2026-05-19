@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { listRegisteredPluginAgentPromptGuidance } from "./command-registry-state.js";
 import {
-  __testing,
+  testing,
   clearPluginCommands,
   executePluginCommand,
   getPluginCommandSpecs,
@@ -92,9 +92,9 @@ function registerVoiceCommandForTest(
 }
 
 function resolveBindingConversationFromCommand(
-  params: Parameters<typeof __testing.resolveBindingConversationFromCommand>[0],
+  params: Parameters<typeof testing.resolveBindingConversationFromCommand>[0],
 ) {
-  return __testing.resolveBindingConversationFromCommand(params);
+  return testing.resolveBindingConversationFromCommand(params);
 }
 
 function expectCommandMatch(
@@ -320,7 +320,34 @@ describe("registerPluginCommand", () => {
       },
       expected: {
         ok: false,
-        error: "Agent prompt guidance must be an array of strings",
+        error: "Agent prompt guidance must be an array of strings or objects",
+      },
+    },
+    {
+      name: "rejects invalid structured agent prompt guidance",
+      command: {
+        name: "demo",
+        description: "Demo",
+        agentPromptGuidance: [{ text: "Use /demo.", surfaces: ["nope"] }] as never,
+        handler: async () => ({ text: "ok" }),
+      },
+      expected: {
+        ok: false,
+        error:
+          "Agent prompt guidance 1 surface 1 must be one of: pi_main, codex_app_server, cli_backend, acp_backend, subagent",
+      },
+    },
+    {
+      name: "rejects empty structured agent prompt guidance surfaces",
+      command: {
+        name: "demo",
+        description: "Demo",
+        agentPromptGuidance: [{ text: "Use /demo.", surfaces: [] }] as never,
+        handler: async () => ({ text: "ok" }),
+      },
+      expected: {
+        ok: false,
+        error: "Agent prompt guidance 1 surfaces cannot be empty",
       },
     },
     {
@@ -377,6 +404,46 @@ describe("registerPluginCommand", () => {
       },
     ]);
     expect(listRegisteredPluginAgentPromptGuidance()).toEqual(["Use /demo_cmd for demo routing."]);
+  });
+
+  it("normalizes and filters structured agent prompt guidance by surface", () => {
+    const result = registerPluginCommand("demo-plugin", {
+      name: "demo_cmd",
+      description: "Demo command",
+      agentPromptGuidance: [
+        "  Use /demo_cmd everywhere.  ",
+        {
+          text: "  Use /demo_cmd for main agent routing.  ",
+          surfaces: ["pi_main"],
+        },
+        {
+          text: "Use /demo_cmd for subagents.",
+          surfaces: ["subagent"],
+        },
+      ],
+      handler: async () => ({ text: "ok" }),
+    });
+    expect(result).toEqual({ ok: true });
+
+    expect(listRegisteredPluginAgentPromptGuidance()).toEqual([
+      "Use /demo_cmd everywhere.",
+      "Use /demo_cmd for main agent routing.",
+      "Use /demo_cmd for subagents.",
+    ]);
+    expect(listRegisteredPluginAgentPromptGuidance({ surface: "pi_main" })).toEqual([
+      "Use /demo_cmd everywhere.",
+      "Use /demo_cmd for main agent routing.",
+    ]);
+    expect(listRegisteredPluginAgentPromptGuidance({ surface: "subagent" })).toEqual([
+      "Use /demo_cmd everywhere.",
+      "Use /demo_cmd for subagents.",
+    ]);
+    expect(
+      listRegisteredPluginAgentPromptGuidance({
+        surface: "subagent",
+        includeLegacyGlobalGuidance: false,
+      }),
+    ).toEqual(["Use /demo_cmd for subagents."]);
   });
 
   it("matches underscore aliases for hyphenated command names", () => {

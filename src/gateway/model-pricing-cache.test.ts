@@ -59,7 +59,7 @@ vi.mock("../plugins/manifest-metadata-scan.js", async (importOriginal) => {
 
 import { getGatewayModelPricingHealth } from "./model-pricing-cache-state.js";
 import {
-  __resetGatewayModelPricingCacheForTest,
+  resetGatewayModelPricingCacheForTest,
   collectConfiguredModelPricingRefs,
   getCachedGatewayModelPricing,
   refreshGatewayModelPricingCache,
@@ -97,7 +97,7 @@ function requireAbortSignal(signal: RequestInit["signal"] | undefined): AbortSig
 
 describe("model-pricing-cache", () => {
   beforeEach(() => {
-    __resetGatewayModelPricingCacheForTest();
+    resetGatewayModelPricingCacheForTest();
     pluginManifestRegistryMocks.manifestRegistry = undefined;
     pluginManifestRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockClear();
     pluginManifestRegistryMocks.listOpenClawPluginManifestMetadata.mockClear();
@@ -105,7 +105,7 @@ describe("model-pricing-cache", () => {
   });
 
   afterEach(() => {
-    __resetGatewayModelPricingCacheForTest();
+    resetGatewayModelPricingCacheForTest();
     loggingState.rawConsole = null;
     resetLogger();
   });

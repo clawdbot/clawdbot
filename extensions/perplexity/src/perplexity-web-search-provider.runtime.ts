@@ -536,7 +536,7 @@ export async function executePerplexitySearch(
   return payload;
 }
 
-export const __testing = {
+export const testing = {
   inferPerplexityBaseUrlFromApiKey,
   resolvePerplexityBaseUrl,
   resolvePerplexityModel,
@@ -548,3 +548,4 @@ export const __testing = {
   normalizeToIsoDate,
   isoToPerplexityDate,
 } as const;
+export { testing as __testing };

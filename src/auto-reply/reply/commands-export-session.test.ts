@@ -15,7 +15,7 @@ const hoisted = await vi.hoisted(async () => {
       sandboxRuntime: { sandboxed: false, mode: "off" },
     })),
     writeFileMock: vi.fn(
-      async (_filePath: string, _data: string, _encoding?: BufferEncoding) => undefined,
+      async (_filePath: string, dataValue: string, _encoding?: BufferEncoding) => undefined,
     ),
     mkdirMock: vi.fn(async (_filePath: string, _options?: { recursive?: boolean }) => undefined),
     accessMock: vi.fn(async (_filePath: string) => undefined),

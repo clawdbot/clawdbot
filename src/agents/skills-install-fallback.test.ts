@@ -27,10 +27,10 @@ vi.mock("./skills.js", async (importOriginal) => {
 });
 
 let installSkill: typeof import("./skills-install.js").installSkill;
-let skillsInstallTesting: typeof import("./skills-install.js").__testing;
+let skillsInstallTesting: typeof import("./skills-install.js").testing;
 
 async function loadSkillsInstallModulesForTest() {
-  ({ installSkill, __testing: skillsInstallTesting } = await import("./skills-install.js"));
+  ({ installSkill, testing: skillsInstallTesting } = await import("./skills-install.js"));
 }
 
 function makeSkillEntry(

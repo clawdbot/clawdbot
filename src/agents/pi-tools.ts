@@ -322,7 +322,7 @@ function resolveExecConfig(params: { cfg?: OpenClawConfig; agentId?: string }) {
 
 export { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
 
-export const __testing = {
+export const testing = {
   cleanToolSchemaForGemini,
   getToolParamsRecord,
   wrapToolParamValidation,
@@ -376,6 +376,8 @@ export function createOpenClawCodingTools(options?: {
   spawnWorkspaceDir?: string;
   config?: OpenClawConfig;
   abortSignal?: AbortSignal;
+  /** Disable hook-owned diagnostics when an outer runtime owns tool diagnostics. */
+  emitBeforeToolCallDiagnostics?: boolean;
   /**
    * Provider of the currently selected model (used for provider-specific tool quirks).
    * Example: "anthropic", "openai", "google", "openai-codex".
@@ -864,6 +866,7 @@ export function createOpenClawCodingTools(options?: {
             disableMessageTool: options?.disableMessageTool,
             requesterAgentIdOverride: agentId,
             allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
+            authProfileStore: options?.authProfileStore,
           },
           resolvedConfig: options?.config,
         });
@@ -1068,21 +1071,25 @@ export function createOpenClawCodingTools(options?: {
   );
   options?.recordToolPrepStage?.("schema-normalization");
   const withHooks = normalized.map((tool) =>
-    wrapToolWithBeforeToolCallHook(tool, {
-      agentId,
-      ...(options?.config ? { config: options.config } : {}),
-      cwd: sandboxRoot ?? workspaceRoot,
-      ...(sandboxRoot && allowWorkspaceWrites
-        ? { sandbox: { root: sandboxRoot, bridge: sandboxFsBridge! } }
-        : {}),
-      sessionKey: options?.sessionKey,
-      sessionId: options?.sessionId,
-      runId: options?.runId,
-      channelId: options?.hookChannelId ?? options?.currentChannelId,
-      ...(options?.trace ? { trace: options.trace } : {}),
-      loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
-      onToolOutcome: options?.onToolOutcome,
-    }),
+    wrapToolWithBeforeToolCallHook(
+      tool,
+      {
+        agentId,
+        ...(options?.config ? { config: options.config } : {}),
+        cwd: sandboxRoot ?? workspaceRoot,
+        ...(sandboxRoot && allowWorkspaceWrites
+          ? { sandbox: { root: sandboxRoot, bridge: sandboxFsBridge! } }
+          : {}),
+        sessionKey: options?.sessionKey,
+        sessionId: options?.sessionId,
+        runId: options?.runId,
+        channelId: options?.hookChannelId ?? options?.currentChannelId,
+        ...(options?.trace ? { trace: options.trace } : {}),
+        loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
+        onToolOutcome: options?.onToolOutcome,
+      },
+      { emitDiagnostics: options?.emitBeforeToolCallDiagnostics },
+    ),
   );
   options?.recordToolPrepStage?.("tool-hooks");
   const withAbort = options?.abortSignal
@@ -1099,3 +1106,4 @@ export function createOpenClawCodingTools(options?: {
   // on the wire and maps them back for tool dispatch.
   return withDeferredFollowupDescriptions;
 }
+export { testing as __testing };

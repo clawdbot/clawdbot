@@ -469,7 +469,7 @@ export async function resolveVisibleSessionReference(params: {
 
 export const normalizeOptionalKey: (value?: string) => string | undefined = normalizeOptionalString;
 
-export const __testing = {
+export const testing = {
   setDepsForTest(overrides?: Partial<{ callGateway: GatewayCaller }>) {
     sessionsResolutionDeps = overrides
       ? {
@@ -482,3 +482,4 @@ export const __testing = {
     );
   },
 };
+export { testing as __testing };

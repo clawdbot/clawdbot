@@ -23,7 +23,7 @@ import {
   SsrFBlockedError,
   type SsrFPolicy,
 } from "./ssrf.js";
-import { _globalUndiciStreamTimeoutMs } from "./undici-global-dispatcher.js";
+import { globalUndiciStreamTimeoutMs } from "./undici-global-dispatcher.js";
 import {
   createHttp1Agent,
   createHttp1EnvHttpProxyAgent,
@@ -36,8 +36,8 @@ function resolveDispatcherTimeoutMs(fromParams: number | undefined): number | un
   }
   // Fall back to module-level bridge set by ensureGlobalUndiciStreamTimeouts
   // (avoids reading Undici's non-public `.options` field)
-  if (_globalUndiciStreamTimeoutMs !== undefined) {
-    return _globalUndiciStreamTimeoutMs;
+  if (globalUndiciStreamTimeoutMs !== undefined) {
+    return globalUndiciStreamTimeoutMs;
   }
   return undefined;
 }

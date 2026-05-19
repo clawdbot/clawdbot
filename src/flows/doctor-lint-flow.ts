@@ -28,6 +28,7 @@ export async function runDoctorLintChecks(
   const all = opts.checks ?? listHealthChecks();
   const skip = opts.skipIds instanceof Set ? opts.skipIds : new Set(opts.skipIds ?? []);
   const only = opts.onlyIds instanceof Set ? opts.onlyIds : new Set(opts.onlyIds ?? []);
+  const allIds = new Set(all.map((check) => check.id));
 
   const selected = all.filter((c) => {
     if (only.size > 0 && !only.has(c.id)) {
@@ -40,6 +41,16 @@ export async function runDoctorLintChecks(
   });
 
   const findings: HealthFinding[] = [];
+  for (const id of only) {
+    if (!allIds.has(id)) {
+      findings.push({
+        checkId: "core/doctor/lint-selection",
+        severity: "error",
+        message: `Unknown health check id selected by --only: ${id}.`,
+        path: id,
+      });
+    }
+  }
   for (const check of selected) {
     try {
       const out = await check.detect(ctx);

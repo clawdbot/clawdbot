@@ -1,7 +1,7 @@
 import type { StreamFn } from "@earendil-works/pi-agent-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  __testing,
+  testing,
   createAnthropicBetaHeadersWrapper,
   createAnthropicFastModeWrapper,
   createAnthropicServiceTierWrapper,
@@ -89,14 +89,14 @@ describe("anthropic stream wrappers", () => {
   });
 
   it("strips context-1m for Claude CLI or legacy token auth and warns", () => {
-    const warn = vi.spyOn(__testing.log, "warn").mockImplementation(() => undefined);
+    const warn = vi.spyOn(testing.log, "warn").mockImplementation(() => undefined);
     const headers = runWrapper("sk-ant-oat01-123");
     expect(headers?.["anthropic-beta"]).toBe(OAUTH_BETA_HEADER);
     expect(warn).toHaveBeenCalledOnce();
   });
 
   it("keeps context-1m for API key auth", () => {
-    const warn = vi.spyOn(__testing.log, "warn").mockImplementation(() => undefined);
+    const warn = vi.spyOn(testing.log, "warn").mockImplementation(() => undefined);
     const headers = runWrapper("sk-ant-api-123");
     expect(headers?.["anthropic-beta"]).toBe(`${DEFAULT_BETA_HEADER},${CONTEXT_1M_BETA}`);
     expect(warn).not.toHaveBeenCalled();
@@ -126,7 +126,7 @@ describe("createAnthropicThinkingPrefillWrapper", () => {
   }
 
   it("removes trailing assistant prefill when extended thinking is enabled", () => {
-    const warn = vi.spyOn(__testing.log, "warn").mockImplementation(() => undefined);
+    const warn = vi.spyOn(testing.log, "warn").mockImplementation(() => undefined);
     const payload = runThinkingPrefillWrapper({
       thinking: { type: "enabled", budget_tokens: 1024 },
       messages: [

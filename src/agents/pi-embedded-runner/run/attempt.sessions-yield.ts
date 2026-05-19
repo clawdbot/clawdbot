@@ -216,6 +216,6 @@ export function stripSessionsYieldArtifacts(activeSession: {
     changed = true;
   }
   if (changed) {
-    sessionManager._rewriteFile?.();
+    sessionManager["_rewriteFile"]?.();
   }
 }

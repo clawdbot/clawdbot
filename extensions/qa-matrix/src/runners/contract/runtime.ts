@@ -1124,7 +1124,7 @@ export async function runMatrixQaLive(params: {
   };
 }
 
-export const __testing = {
+export const testing = {
   buildMatrixQaSummary,
   getMatrixQaScenarioRestartReadyTimeoutMs,
   scheduleMatrixQaScenariosInCatalogOrder,
@@ -1141,3 +1141,4 @@ export const __testing = {
   summarizeMatrixQaConfigSnapshot,
   waitForMatrixChannelReady,
 };
+export { testing as __testing };

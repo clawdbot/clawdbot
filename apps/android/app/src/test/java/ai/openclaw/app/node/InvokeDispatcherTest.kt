@@ -6,6 +6,7 @@ import ai.openclaw.app.protocol.OpenClawCallLogCommand
 import ai.openclaw.app.protocol.OpenClawCameraCommand
 import ai.openclaw.app.protocol.OpenClawLocationCommand
 import ai.openclaw.app.protocol.OpenClawMotionCommand
+import ai.openclaw.app.protocol.OpenClawPhotosCommand
 import ai.openclaw.app.protocol.OpenClawSmsCommand
 import ai.openclaw.app.protocol.OpenClawTalkCommand
 import android.content.Context
@@ -202,6 +203,15 @@ class InvokeDispatcherTest {
     }
 
   @Test
+  fun handleInvoke_blocksPhotosWhenUnavailable() =
+    runTest {
+      val result = newDispatcher(photosAvailable = false).handleInvoke(OpenClawPhotosCommand.Latest.rawValue, null)
+
+      assertEquals("PHOTOS_UNAVAILABLE", result.error?.code)
+      assertEquals("PHOTOS_UNAVAILABLE: photos not available on this build", result.error?.message)
+    }
+
+  @Test
   fun handleInvoke_treatsDebugCommandsAsUnknownOutsideDebugBuilds() =
     runTest {
       val result = newDispatcher(debugBuild = false).handleInvoke("debug.logs", null)
@@ -239,6 +249,7 @@ class InvokeDispatcherTest {
     smsFeatureEnabled: Boolean = true,
     smsTelephonyAvailable: Boolean = true,
     callLogAvailable: Boolean = false,
+    photosAvailable: Boolean = true,
     debugBuild: Boolean = false,
     motionActivityAvailable: Boolean = false,
     motionPedometerAvailable: Boolean = false,
@@ -285,6 +296,7 @@ class InvokeDispatcherTest {
       smsFeatureEnabled = { smsFeatureEnabled },
       smsTelephonyAvailable = { smsTelephonyAvailable },
       callLogAvailable = { callLogAvailable },
+      photosAvailable = { photosAvailable },
       debugBuild = { debugBuild },
       onCanvasA2uiPush = {},
       onCanvasA2uiReset = {},

@@ -354,6 +354,20 @@ function Invoke-OpenClawCommand {
     & $commandPath @Arguments
 }
 
+function Invoke-InteractiveOpenClawCommand {
+    param(
+        [Parameter(ValueFromRemainingArguments = $true)]
+        [string[]]$Arguments
+    )
+
+    $commandPath = Get-OpenClawCommandPath
+    if (-not $commandPath) {
+        throw "openclaw command not found on PATH."
+    }
+
+    $null = Start-Process -FilePath $commandPath -ArgumentList $Arguments -NoNewWindow -Wait -PassThru
+}
+
 function Resolve-CommandPath {
     param(
         [Parameter(Mandatory = $true)]
@@ -875,7 +889,7 @@ function Main {
         } else {
             Write-Host "Starting setup..." -ForegroundColor Cyan
             Write-Host ""
-            Invoke-OpenClawCommand onboard
+            Invoke-InteractiveOpenClawCommand onboard
         }
     }
 

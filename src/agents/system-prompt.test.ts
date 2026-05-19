@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { typedCases } from "../test-utils/typed-cases.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
+import { resolveAgentPromptSurfaceForSessionKey } from "./prompt-surface.js";
 import { buildSubagentSystemPrompt } from "./subagent-system-prompt.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 import {
@@ -14,6 +15,13 @@ import {
 } from "./system-prompt.js";
 
 describe("buildAgentSystemPrompt", () => {
+  it("resolves helper session keys to scoped prompt surfaces", () => {
+    expect(resolveAgentPromptSurfaceForSessionKey("agent:main:subagent:child")).toBe("subagent");
+    expect(resolveAgentPromptSurfaceForSessionKey("agent:codex:acp:child")).toBe("acp_backend");
+    expect(resolveAgentPromptSurfaceForSessionKey("agent:main")).toBe("pi_main");
+    expect(resolveAgentPromptSurfaceForSessionKey(undefined)).toBe("pi_main");
+  });
+
   it("formats owner section for plain, hash, and missing owner lists", () => {
     const cases = typedCases<{
       name: string;
@@ -365,6 +373,16 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("- web_search: Search the web using the configured provider");
     expect(prompt).not.toContain("Brave API");
+  });
+
+  it("keeps the PI empty-tool fallback on the main prompt surface", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: [],
+    });
+
+    expect(prompt).toContain("Pi lists the standard tools above");
+    expect(prompt).toContain("- sessions_spawn: spawn an isolated sub-agent session");
   });
 
   it("documents ACP sessions_spawn agent targeting requirements", () => {
@@ -1330,6 +1348,20 @@ describe("buildSubagentSystemPrompt", () => {
     expect(prompt).not.toContain("For ACP harness sessions (claudecode/gemini/opencode");
     expect(prompt).not.toContain("set `agentId` unless `acp.defaultAgent` is configured");
     expect(prompt).toContain("You CAN spawn your own sub-agents");
+  });
+
+  it("renders subagent-scoped native command guidance when ACP is disabled", () => {
+    const prompt = buildSubagentSystemPrompt({
+      childSessionKey: "agent:main:subagent:abc",
+      task: "research task",
+      childDepth: 1,
+      maxSpawnDepth: 2,
+      acpEnabled: false,
+      nativeCommandGuidanceLines: ["Subagent-only command guidance."],
+    });
+
+    expect(prompt).toContain("Subagent-only command guidance.");
+    expect(prompt).not.toContain('runtime: "acp"');
   });
 
   it("omits ACP spawning guidance by default", () => {

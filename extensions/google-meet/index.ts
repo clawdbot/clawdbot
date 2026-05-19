@@ -383,7 +383,7 @@ const googleMeetToolDeps = {
   platform: () => process.platform,
 };
 
-export const __testing = {
+export const testing = {
   setCallGatewayFromCliForTests(next?: typeof callGatewayFromCli): void {
     googleMeetToolDeps.callGatewayFromCli = next ?? callGatewayFromCli;
   },
@@ -392,6 +392,9 @@ export const __testing = {
   },
   isGoogleMeetAgentToolActionUnsupportedOnHost,
 };
+
+/** @deprecated Use `testing`. */
+export { testing as __testing };
 
 type GoogleMeetGatewayToolAction =
   | "join"

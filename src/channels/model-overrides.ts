@@ -188,6 +188,16 @@ export function resolveChannelModelOverride(
 
   const { keys, parentKeys } = buildChannelCandidates(params);
   if (keys.length === 0 && parentKeys.length === 0) {
+    const wildcardModel = normalizeOptionalString(providerEntries["*"]);
+    if (wildcardModel) {
+      return {
+        channel:
+          normalizeMessageChannel(channel) ?? normalizeOptionalLowercaseString(channel) ?? "",
+        model: wildcardModel,
+        matchKey: "*",
+        matchSource: "wildcard",
+      };
+    }
     return null;
   }
   const match = resolveChannelEntryMatchWithFallback({

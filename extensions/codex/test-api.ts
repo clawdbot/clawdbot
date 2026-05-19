@@ -43,7 +43,9 @@ export function buildCodexHarnessPromptSnapshot(params: {
   config?: JsonObject;
   promptText?: string;
 }): CodexHarnessPromptSnapshot {
-  const developerInstructions = buildDeveloperInstructions(params.attempt);
+  const developerInstructions = buildDeveloperInstructions(params.attempt, {
+    dynamicTools: params.dynamicTools,
+  });
   return {
     developerInstructions,
     threadStartParams: buildThreadStartParams(params.attempt, {

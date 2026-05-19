@@ -33,7 +33,7 @@ class VoiceWakeManager(
 
   private var recognizer: SpeechRecognizer? = null
   private var restartJob: Job? = null
-  private var lastDispatched: String? = null
+  private var lastCycleDispatched: String? = null
   private var stopRequested = false
 
   fun setTriggerWords(words: List<String>) {
@@ -110,8 +110,8 @@ class VoiceWakeManager(
 
   private fun handleTranscription(text: String) {
     val command = VoiceWakeCommandExtractor.extractCommand(text, triggerWords) ?: return
-    if (command == lastDispatched) return
-    lastDispatched = command
+    if (command == lastCycleDispatched) return
+    lastCycleDispatched = command
 
     scope.launch { onCommand(command) }
     _statusText.value = "Triggered"
@@ -121,6 +121,7 @@ class VoiceWakeManager(
   private val listener =
     object : RecognitionListener {
       override fun onReadyForSpeech(params: Bundle?) {
+        lastCycleDispatched = null
         _statusText.value = "Listening"
       }
 

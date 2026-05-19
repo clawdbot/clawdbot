@@ -8,7 +8,7 @@ import {
 import { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
 import { captureEnv } from "../test-utils/env.js";
 import { createFixtureSuite } from "../test-utils/fixture-suite.js";
-import { installSkill, __testing as skillsInstallTesting } from "./skills-install.js";
+import { installSkill, testing as skillsInstallTesting } from "./skills-install.js";
 import {
   runCommandWithTimeoutMock,
   scanDirectoryWithSummaryMock,

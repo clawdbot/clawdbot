@@ -110,14 +110,35 @@ export function normalizeWhatsAppOutboundPayload<T extends WhatsAppOutboundPaylo
   };
 }
 
+function inferWhatsAppMediaKind(
+  media: WhatsAppLoadedMediaLike,
+): "image" | "audio" | "video" | "document" {
+  if (
+    media.kind === "image" ||
+    media.kind === "audio" ||
+    media.kind === "video" ||
+    media.kind === "document"
+  ) {
+    return media.kind;
+  }
+  const contentType = normalizeContentType(media.contentType);
+  if (contentType.startsWith("image/")) {
+    return "image";
+  }
+  if (contentType.startsWith("audio/")) {
+    return "audio";
+  }
+  if (contentType.startsWith("video/")) {
+    return "video";
+  }
+  return "document";
+}
+
 function normalizeWhatsAppLoadedMedia(
   media: WhatsAppLoadedMediaLike,
   mediaUrl?: string,
 ): CanonicalWhatsAppLoadedMedia {
-  const kind =
-    media.kind === "image" || media.kind === "audio" || media.kind === "video"
-      ? media.kind
-      : "document";
+  const kind = inferWhatsAppMediaKind(media);
   const mimetype =
     kind === "audio" && isWhatsAppNativeVoiceAudio({ contentType: media.contentType, mediaUrl })
       ? WHATSAPP_VOICE_MIMETYPE

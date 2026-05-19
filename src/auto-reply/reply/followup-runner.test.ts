@@ -506,13 +506,17 @@ afterEach(() => {
   if (!FOLLOWUP_DEBUG) {
     return;
   }
-  const handles = (process as NodeJS.Process & { _getActiveHandles?: () => unknown[] })
-    ._getActiveHandles?.()
-    .map((handle) => handle?.constructor?.name ?? typeof handle);
+  const processWithDebugHandles = process as NodeJS.Process & {
+    _getActiveHandles?: () => unknown[];
+    _getActiveRequests?: () => unknown[];
+  };
+  const handles = processWithDebugHandles["_getActiveHandles"]?.().map(
+    (handle) => handle?.constructor?.name ?? typeof handle,
+  );
   debugFollowupTest(`active handles: ${JSON.stringify(handles ?? [])}`);
-  const requests = (process as NodeJS.Process & { _getActiveRequests?: () => unknown[] })
-    ._getActiveRequests?.()
-    .map((request) => request?.constructor?.name ?? typeof request);
+  const requests = processWithDebugHandles["_getActiveRequests"]?.().map(
+    (request) => request?.constructor?.name ?? typeof request,
+  );
   debugFollowupTest(`active requests: ${JSON.stringify(requests ?? [])}`);
 });
 
@@ -822,6 +826,8 @@ describe("createFollowupRunner runtime config", () => {
 
     expect(runCliAgentMock).toHaveBeenCalledTimes(1);
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
+    const embeddedCall = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
+    expect(embeddedCall.suppressAssistantErrorPersistence).toBe(false);
     expect(lifecyclePhases).toEqual(["start", "start", "end"]);
   });
 
@@ -934,6 +940,35 @@ describe("createFollowupRunner runtime config", () => {
 
     const call = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
     expect(call.abortSignal).toBe(abortController.signal);
+  });
+
+  it("does not inherit source abort signals for queued user followups", async () => {
+    const sourceAbortController = new AbortController();
+    sourceAbortController.abort();
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {},
+    });
+    const runner = createFollowupRunner({
+      opts: { abortSignal: sourceAbortController.signal },
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "openai/gpt-5.4",
+    });
+
+    await runner(
+      createQueuedRun({
+        currentInboundEventKind: "user_request",
+        run: {
+          provider: "openai",
+          model: "gpt-5.4",
+          sourceReplyDeliveryMode: "message_tool_only",
+        },
+      }),
+    );
+
+    const call = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
+    expect(call.abortSignal).toBeUndefined();
   });
 
   it("keeps queued delivery correlations active during followup agent runs", async () => {
@@ -2336,5 +2371,165 @@ describe("createFollowupRunner agentDir forwarding", () => {
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
     const call = requireLastMockCallArg(runEmbeddedPiAgentMock, "run embedded pi agent");
     expect(call.agentDir).toBe(agentDir);
+  });
+});
+
+describe("createFollowupRunner queued user message idempotency across fallback", () => {
+  it("suppresses queued user message persistence after first fallback candidate persists it", async () => {
+    runEmbeddedPiAgentMock.mockClear();
+    runWithModelFallbackMock.mockReset();
+    runWithModelFallbackMock.mockImplementationOnce(
+      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => {
+        await expect(params.run("anthropic", "claude-opus-4-7")).rejects.toThrow("upstream 500");
+        return {
+          result: await params.run("openai", "gpt-5.4"),
+          provider: "openai",
+          model: "gpt-5.4",
+        };
+      },
+    );
+    runEmbeddedPiAgentMock.mockImplementationOnce(
+      async (args: {
+        onUserMessagePersisted?: (message: {
+          role: "user";
+          content: Array<{ type: "text"; text: string }>;
+        }) => void;
+      }) => {
+        args.onUserMessagePersisted?.({
+          role: "user",
+          content: [{ type: "text", text: "queued message" }],
+        });
+        throw new Error("upstream 500");
+      },
+    );
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-7",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+          suppressNextUserMessagePersistence: false,
+        },
+      }),
+    );
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(2);
+    const firstAttempt = requireMockCallArg(runEmbeddedPiAgentMock, 0);
+    const secondAttempt = requireMockCallArg(runEmbeddedPiAgentMock, 1);
+    expect(firstAttempt.suppressNextUserMessagePersistence).toBe(false);
+    expect(secondAttempt.suppressNextUserMessagePersistence).toBe(true);
+  });
+
+  it("only persists assistant error stub on the first fallback candidate", async () => {
+    runEmbeddedPiAgentMock.mockClear();
+    runWithModelFallbackMock.mockReset();
+    runWithModelFallbackMock.mockImplementationOnce(
+      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => {
+        await expect(params.run("anthropic", "claude-opus-4-7")).rejects.toThrow("upstream 500");
+        await expect(params.run("anthropic", "claude-opus-4-6")).rejects.toThrow("upstream 500");
+        return {
+          result: await params.run("openai", "gpt-5.4"),
+          provider: "openai",
+          model: "gpt-5.4",
+        };
+      },
+    );
+    runEmbeddedPiAgentMock.mockImplementationOnce(
+      async (args: {
+        onAssistantErrorMessagePersisted?: (message: {
+          role: "assistant";
+          content: string;
+          stopReason: "error";
+        }) => void;
+      }) => {
+        args.onAssistantErrorMessagePersisted?.({
+          role: "assistant",
+          content: "[assistant turn failed before producing content]",
+          stopReason: "error",
+        });
+        throw new Error("upstream 500");
+      },
+    );
+    runEmbeddedPiAgentMock.mockRejectedValueOnce(new Error("upstream 500"));
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-7",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+        },
+      }),
+    );
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(3);
+    const firstAttempt = requireMockCallArg(runEmbeddedPiAgentMock, 0);
+    const secondAttempt = requireMockCallArg(runEmbeddedPiAgentMock, 1);
+    const thirdAttempt = requireMockCallArg(runEmbeddedPiAgentMock, 2);
+    expect(firstAttempt.suppressAssistantErrorPersistence).toBe(false);
+    expect(secondAttempt.suppressAssistantErrorPersistence).toBe(true);
+    expect(thirdAttempt.suppressAssistantErrorPersistence).toBe(true);
+  });
+
+  it("does not suppress when no fallback candidate persisted the queued message", async () => {
+    runEmbeddedPiAgentMock.mockClear();
+    runWithModelFallbackMock.mockReset();
+    runWithModelFallbackMock.mockImplementationOnce(
+      async (params: { run: (provider: string, model: string) => Promise<unknown> }) => {
+        await expect(params.run("anthropic", "claude-opus-4-7")).rejects.toThrow("upstream early");
+        return {
+          result: await params.run("openai", "gpt-5.4"),
+          provider: "openai",
+          model: "gpt-5.4",
+        };
+      },
+    );
+    runEmbeddedPiAgentMock.mockRejectedValueOnce(new Error("upstream early"));
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude-opus-4-7",
+    });
+
+    await runner(
+      createQueuedRun({
+        run: {
+          provider: "anthropic",
+          model: "claude-opus-4-7",
+          suppressNextUserMessagePersistence: false,
+        },
+      }),
+    );
+
+    expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(2);
+    const firstAttempt = requireMockCallArg(runEmbeddedPiAgentMock, 0);
+    const secondAttempt = requireMockCallArg(runEmbeddedPiAgentMock, 1);
+    expect(firstAttempt.suppressNextUserMessagePersistence).toBe(false);
+    expect(secondAttempt.suppressNextUserMessagePersistence).toBe(false);
+    expect(secondAttempt.suppressAssistantErrorPersistence).toBe(false);
   });
 });

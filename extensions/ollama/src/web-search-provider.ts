@@ -336,7 +336,7 @@ export function createOllamaWebSearchProvider(): WebSearchProviderPlugin {
   };
 }
 
-export const __testing = {
+export const testing = {
   buildOllamaWebSearchAttempts,
   normalizeOllamaWebSearchResult,
   resolveConfiguredOllamaWebSearchApiKey,
@@ -347,3 +347,4 @@ export const __testing = {
   readOllamaWebSearchResponse,
   warnOllamaWebSearchPrereqs,
 };
+export { testing as __testing };

@@ -7,7 +7,7 @@ import {
   parseComfyJsonBody,
 } from "./test-helpers.js";
 import {
-  _setComfyFetchGuardForTesting,
+  setComfyFetchGuardForTesting,
   buildComfyVideoGenerationProvider,
 } from "./video-generation-provider.js";
 
@@ -33,7 +33,7 @@ describe("comfy video-generation provider", () => {
   });
 
   afterEach(() => {
-    _setComfyFetchGuardForTesting(null);
+    setComfyFetchGuardForTesting(null);
     vi.restoreAllMocks();
   });
 
@@ -58,7 +58,7 @@ describe("comfy video-generation provider", () => {
   });
 
   it("submits a local workflow, waits for history, and downloads videos", async () => {
-    _setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
+    setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
     fetchWithSsrFGuardMock
       .mockResolvedValueOnce({
         response: new Response(JSON.stringify({ prompt_id: "local-video-1" }), {
@@ -146,7 +146,7 @@ describe("comfy video-generation provider", () => {
 
   it("uses cloud endpoints for video workflows", async () => {
     mockComfyProviderApiKey();
-    _setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
+    setComfyFetchGuardForTesting(fetchWithSsrFGuardMock);
     mockComfyCloudJobResponses(fetchWithSsrFGuardMock, {
       body: Buffer.from("cloud-video-data"),
       contentType: "video/mp4",

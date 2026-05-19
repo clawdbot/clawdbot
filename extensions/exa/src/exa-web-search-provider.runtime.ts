@@ -589,7 +589,7 @@ export async function executeExaWebSearchProviderTool(
   return payload;
 }
 
-export const __testing = {
+export const testing = {
   normalizeExaResults,
   normalizeExaFreshness,
   parseExaContents,
@@ -602,3 +602,4 @@ export const __testing = {
   resolveFreshnessStartDate,
   readExaSearchResults,
 } as const;
+export { testing as __testing };

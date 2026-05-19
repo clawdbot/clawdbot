@@ -259,7 +259,7 @@ export async function installPackageDir(params: {
             {
               timeoutMs: Math.max(params.timeoutMs, 300_000),
               cwd: stageDir,
-              env: createSafeNpmInstallEnv(process.env),
+              env: createSafeNpmInstallEnv(process.env, { npmConfigCwd: stageDir }),
             },
           );
         } finally {

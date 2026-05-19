@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import {
-  __testing,
+  testing,
   buildElevenLabsRealtimeTranscriptionProvider,
 } from "./realtime-transcription-provider.js";
 
@@ -40,7 +40,7 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
   });
 
   it("builds an ElevenLabs realtime websocket URL", () => {
-    const url = __testing.toElevenLabsRealtimeWsUrl({
+    const url = testing.toElevenLabsRealtimeWsUrl({
       apiKey: "eleven-key",
       baseUrl: "https://api.elevenlabs.io",
       providerConfig: {},

@@ -23,7 +23,7 @@ const HTTP1_ONLY_DISPATCHER_OPTIONS = Object.freeze({
  * can read the global dispatcher timeout without relying on Undici's
  * non-public `.options` field.
  */
-export let _globalUndiciStreamTimeoutMs: number | undefined;
+export let globalUndiciStreamTimeoutMs: number | undefined;
 
 let lastAppliedTimeoutKey: string | null = null;
 let lastAppliedProxyBootstrapKey: string | null = null;
@@ -284,7 +284,7 @@ export function ensureGlobalUndiciStreamTimeouts(opts?: { timeoutMs?: number }):
   if (timeoutMs === null) {
     return;
   }
-  _globalUndiciStreamTimeoutMs = timeoutMs;
+  globalUndiciStreamTimeoutMs = timeoutMs;
   if (!hasEnvHttpProxyAgentConfigured()) {
     lastAppliedTimeoutKey = null;
     return;
@@ -311,7 +311,7 @@ export function ensureGlobalUndiciDispatcherStreamTimeouts(opts?: { timeoutMs?: 
   if (timeoutMs === null) {
     return;
   }
-  _globalUndiciStreamTimeoutMs = timeoutMs;
+  globalUndiciStreamTimeoutMs = timeoutMs;
   const runtime = loadUndiciGlobalDispatcherDeps();
   const current = resolveCurrentDispatcherInfo(runtime);
   if (current === null) {
@@ -328,7 +328,7 @@ export function ensureGlobalUndiciDispatcherStreamTimeouts(opts?: { timeoutMs?: 
 export function resetGlobalUndiciStreamTimeoutsForTests(): void {
   lastAppliedTimeoutKey = null;
   lastAppliedProxyBootstrapKey = null;
-  _globalUndiciStreamTimeoutMs = undefined;
+  globalUndiciStreamTimeoutMs = undefined;
 }
 
 /**

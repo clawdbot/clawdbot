@@ -67,7 +67,7 @@ async function expectReadPayloadTooLarge(params: {
     statusCode: 413,
   });
   await waitForMicrotaskTurn();
-  expect(req.__unhandledDestroyError).toBeUndefined();
+  expect(req["__unhandledDestroyError"]).toBeUndefined();
 }
 
 async function expectGuardPayloadTooLarge(params: {
@@ -92,7 +92,7 @@ async function expectGuardPayloadTooLarge(params: {
   expect(guard.isTripped()).toBe(true);
   expect(guard.code()).toBe("PAYLOAD_TOO_LARGE");
   expect(res.statusCode).toBe(413);
-  expect(req.__unhandledDestroyError).toBeUndefined();
+  expect(req["__unhandledDestroyError"]).toBeUndefined();
   return { req, res, guard };
 }
 
@@ -127,7 +127,7 @@ function createMockRequest(params: {
         try {
           req.emit("error", error);
         } catch (err) {
-          req.__unhandledDestroyError = err;
+          req["__unhandledDestroyError"] = err;
         }
       });
     }
@@ -251,7 +251,7 @@ describe("http body limits", () => {
       message: "RequestBodyTimeout",
       statusCode: 408,
     });
-    expect(req.__unhandledDestroyError).toBeUndefined();
+    expect(req["__unhandledDestroyError"]).toBeUndefined();
   });
 
   it("guard clamps invalid maxBytes to one byte", async () => {

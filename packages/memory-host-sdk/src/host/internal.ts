@@ -65,9 +65,7 @@ const DISABLED_MULTIMODAL_SETTINGS: MemoryMultimodalSettings = {
 };
 
 export function ensureDir(dir: string): string {
-  try {
-    fsSync.mkdirSync(dir, { recursive: true });
-  } catch {}
+  fsSync.mkdirSync(dir, { recursive: true });
   return dir;
 }
 

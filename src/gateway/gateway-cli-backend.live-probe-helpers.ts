@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { renderCatFacePngBase64 } from "../../test/helpers/live-image-probe.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import type { GatewayClient } from "./client.js";
@@ -15,7 +16,6 @@ import {
   runOpenClawCliJson,
   type CronListJob,
 } from "./live-agent-probes.js";
-import { renderCatFacePngBase64 } from "./live-image-probe.js";
 import { getActiveMcpLoopbackRuntime } from "./mcp-http.js";
 import { resolveMcpLoopbackBearerToken } from "./mcp-http.loopback-runtime.js";
 import { extractPayloadText } from "./test-helpers.agent-results.js";

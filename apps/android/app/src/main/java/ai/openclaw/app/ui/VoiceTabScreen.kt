@@ -96,8 +96,10 @@ fun VoiceTabScreen(viewModel: MainViewModel) {
   val talkModeEnabled by viewModel.talkModeEnabled.collectAsState()
   val talkModeListening by viewModel.talkModeListening.collectAsState()
   val talkModeSpeaking by viewModel.talkModeSpeaking.collectAsState()
+  val talkModeConversation by viewModel.talkModeConversation.collectAsState()
 
-  val hasStreamingAssistant = micConversation.any { it.role == VoiceConversationRole.Assistant && it.isStreaming }
+  val activeConversation = if (voiceCaptureMode == VoiceCaptureMode.TalkMode) talkModeConversation else micConversation
+  val hasStreamingAssistant = activeConversation.any { it.role == VoiceConversationRole.Assistant && it.isStreaming }
   val showThinkingBubble = micIsSending && !hasStreamingAssistant
 
   var hasMicPermission by remember { mutableStateOf(context.hasRecordAudioPermission()) }
@@ -131,8 +133,8 @@ fun VoiceTabScreen(viewModel: MainViewModel) {
       pendingVoicePermissionAction = null
     }
 
-  LaunchedEffect(micConversation.size, showThinkingBubble) {
-    val total = micConversation.size + if (showThinkingBubble) 1 else 0
+  LaunchedEffect(voiceCaptureMode, activeConversation.size, showThinkingBubble) {
+    val total = activeConversation.size + if (showThinkingBubble) 1 else 0
     if (total > 0) {
       listState.animateScrollToItem(total - 1)
     }
@@ -154,7 +156,7 @@ fun VoiceTabScreen(viewModel: MainViewModel) {
       contentPadding = PaddingValues(vertical = 4.dp),
       verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-      if (micConversation.isEmpty() && !showThinkingBubble) {
+      if (activeConversation.isEmpty() && !showThinkingBubble) {
         item {
           Box(
             modifier = Modifier.fillParentMaxHeight().fillMaxWidth(),
@@ -185,7 +187,7 @@ fun VoiceTabScreen(viewModel: MainViewModel) {
         }
       }
 
-      items(items = micConversation, key = { it.id }) { entry ->
+      items(items = activeConversation, key = { it.id }) { entry ->
         VoiceTurnBubble(entry = entry)
       }
 
@@ -347,10 +349,8 @@ fun VoiceTabScreen(viewModel: MainViewModel) {
           voiceCaptureMode == VoiceCaptureMode.TalkMode && talkModeSpeaking -> "Talk speaking"
           voiceCaptureMode == VoiceCaptureMode.TalkMode && talkModeListening -> "Talk listening"
           voiceCaptureMode == VoiceCaptureMode.TalkMode -> "Talk on"
+          micEnabled || micIsSending || micCooldown -> micStatusText
           queueCount > 0 -> "$queueCount queued"
-          micIsSending -> "Sending"
-          micCooldown -> "Cooldown"
-          micEnabled -> "Listening"
           else -> "Mic off"
         }
       val stateColor =

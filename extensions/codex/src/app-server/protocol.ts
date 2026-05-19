@@ -255,8 +255,11 @@ export type CodexDynamicToolCallParams = {
 
 export type CodexDynamicToolCallResponse = {
   contentItems: CodexDynamicToolCallOutputContentItem[];
+  diagnosticTerminalType?: CodexDynamicToolDiagnosticTerminalType;
   success: boolean;
 };
+
+export type CodexDynamicToolDiagnosticTerminalType = "blocked" | "completed" | "error";
 
 export type CodexDynamicToolCallOutputContentItem =
   | {

@@ -4,7 +4,7 @@ import { splitTelegramReasoningText } from "./reasoning-lane-coordinator.js";
 describe("splitTelegramReasoningText", () => {
   it("splits real tagged reasoning and answer", () => {
     expect(splitTelegramReasoningText("<think>example</think>Done")).toEqual({
-      reasoningText: "Reasoning:\n_example_",
+      reasoningText: "Thinking\n\n_example_",
       answerText: "Done",
     });
   });
@@ -25,5 +25,12 @@ describe("splitTelegramReasoningText", () => {
 
   it("does not emit partial reasoning tag prefixes", () => {
     expect(splitTelegramReasoningText("  <thi")).toStrictEqual({});
+  });
+
+  it("keeps visible Thinking-prefixed answers in the answer lane", () => {
+    const text = "Thinking...\nI'll check that now";
+    expect(splitTelegramReasoningText(text)).toEqual({
+      answerText: text,
+    });
   });
 });

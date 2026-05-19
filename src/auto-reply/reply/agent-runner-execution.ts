@@ -1526,6 +1526,8 @@ export async function runAgentTurnWithFallback(params: {
       const onToolResult = params.opts?.onToolResult;
       const outcomePlan = buildAgentRuntimeOutcomePlan();
       const runLane = CommandLane.Main;
+      let queuedUserMessagePersistedAcrossFallback = false;
+      let assistantErrorPersistedAcrossFallback = false;
       const fallbackResult = await runWithModelFallback<EmbeddedAgentRunResult>({
         ...resolveModelFallbackOptions(effectiveRun, runtimeConfig),
         runId,
@@ -1570,6 +1572,11 @@ export async function runAgentTurnWithFallback(params: {
           return classification;
         },
         run: async (provider, model, runOptions) => {
+          const suppressQueuedUserPersistenceForCandidate =
+            (params.followupRun.run.suppressNextUserMessagePersistence ?? false) ||
+            queuedUserMessagePersistedAcrossFallback;
+          const suppressAssistantErrorPersistenceForCandidate =
+            assistantErrorPersistedAcrossFallback;
           const candidateRun = resolveRunForFallbackCandidate(provider, model);
           const activeProbe = effectiveRun.autoFallbackPrimaryProbe;
           if (activeProbe && provider === activeProbe.provider && model === activeProbe.model) {
@@ -1793,10 +1800,16 @@ export async function runAgentTurnWithFallback(params: {
                 forceMessageTool:
                   params.followupRun.run.sourceReplyDeliveryMode === "message_tool_only",
                 silentReplyPromptMode: params.followupRun.run.silentReplyPromptMode,
-                suppressNextUserMessagePersistence:
-                  params.followupRun.run.suppressNextUserMessagePersistence,
+                suppressNextUserMessagePersistence: suppressQueuedUserPersistenceForCandidate,
+                onUserMessagePersisted: () => {
+                  queuedUserMessagePersistedAcrossFallback = true;
+                },
                 suppressTranscriptOnlyAssistantPersistence:
                   params.followupRun.run.suppressTranscriptOnlyAssistantPersistence,
+                suppressAssistantErrorPersistence: suppressAssistantErrorPersistenceForCandidate,
+                onAssistantErrorMessagePersisted: () => {
+                  assistantErrorPersistedAcrossFallback = true;
+                },
                 toolResultFormat: (() => {
                   const channel = resolveMessageChannel(
                     params.sessionCtx.Surface,

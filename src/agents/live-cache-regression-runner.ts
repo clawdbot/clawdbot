@@ -696,7 +696,7 @@ async function runAnthropicDisabledCacheLane(params: {
   }
 }
 
-export const __testing = {
+export const testing = {
   assertAgainstBaseline,
   evaluateAgainstBaseline,
   resolveCacheProbeMaxTokens,
@@ -807,3 +807,4 @@ export async function runLiveCacheRegression(): Promise<LiveCacheRegressionResul
   }
   return { regressions, summary, warnings };
 }
+export { testing as __testing };

@@ -78,7 +78,7 @@ function resolveToolNameForPermission(params: {
   };
 }): string | undefined {
   const toolCall = params.toolCall;
-  const toolMeta = asRecord(toolCall?._meta);
+  const toolMeta = asRecord(toolCall?.["_meta"]);
   const rawInput = asRecord(toolCall?.rawInput);
 
   const fromMeta = readFirstStringValue(toolMeta, ["toolName", "tool_name", "name"]);

@@ -143,8 +143,9 @@ export function createGeminiWebSearchProvider(): WebSearchProviderPlugin {
   };
 }
 
-export const __testing = {
+export const testing = {
   resolveGeminiApiKey,
   resolveGeminiBaseUrl,
   resolveGeminiModel,
 } as const;
+export { testing as __testing };

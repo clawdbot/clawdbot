@@ -142,7 +142,7 @@ export function createOutboundThreadingMock() {
           resolveAutoThreadId,
         });
         if (agentId) {
-          actionParams.__agentId = agentId;
+          actionParams["__agentId"] = agentId;
         }
         return {
           resolvedThreadId,

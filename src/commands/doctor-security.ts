@@ -180,9 +180,11 @@ function collectExecFilesystemPolicyWarnings(cfg: OpenClawConfig): string[] {
   );
 }
 
-export async function noteSecurityWarnings(cfg: OpenClawConfig) {
+export async function collectSecurityWarnings(
+  cfg: OpenClawConfig,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<string[]> {
   const warnings: string[] = [];
-  const auditHint = `- Run: ${formatCliCommand("openclaw security audit --deep")}`;
 
   if (cfg.approvals?.exec?.enabled === false) {
     warnings.push(
@@ -217,7 +219,7 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
 
   const resolvedAuth = resolveGatewayAuth({
     authConfig: cfg.gateway?.auth,
-    env: process.env,
+    env,
     tailscaleMode,
   });
   const authToken = normalizeOptionalString(resolvedAuth.token) ?? "";
@@ -269,7 +271,7 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
     }
   }
 
-  const tokenConflict = resolveGatewayAuthTokenSourceConflict({ cfg, env: process.env });
+  const tokenConflict = resolveGatewayAuthTokenSourceConflict({ cfg, env });
   if (tokenConflict) {
     warnings.push(...tokenConflict.warningLines);
   }
@@ -377,6 +379,12 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
       }
     }
   }
+  return warnings;
+}
+
+export async function noteSecurityWarnings(cfg: OpenClawConfig) {
+  const warnings = await collectSecurityWarnings(cfg);
+  const auditHint = `- Run: ${formatCliCommand("openclaw security audit --deep")}`;
 
   const lines = warnings.length > 0 ? warnings : ["- No channel security warnings detected."];
   lines.push(auditHint);

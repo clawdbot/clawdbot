@@ -18,8 +18,8 @@ export function resolveSqliteVecPlatformVariant():
     return undefined;
   }
   try {
-    const require_ = createRequire(import.meta.url);
-    const extensionPath = require_.resolve(`${entry.pkg}/${entry.file}`);
+    const requireForResolve = createRequire(import.meta.url);
+    const extensionPath = requireForResolve.resolve(`${entry.pkg}/${entry.file}`);
     return { pkg: entry.pkg, extensionPath };
   } catch {
     return undefined;

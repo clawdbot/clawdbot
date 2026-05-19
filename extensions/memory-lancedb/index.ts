@@ -266,7 +266,7 @@ class MemoryDB {
 
     // LanceDB uses L2 distance by default; convert to similarity score
     const mapped = results.map((row) => {
-      const distance = row._distance ?? 0;
+      const distance = row["_distance"] ?? 0;
       // Use inverse for a 0-1 range: sim = 1 / (1 + d)
       const score = 1 / (1 + distance);
       return {

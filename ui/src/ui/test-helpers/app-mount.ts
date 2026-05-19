@@ -115,7 +115,7 @@ export function registerAppMountHooks() {
     const localStorage = createStorageMock();
     const sessionStorage = createStorageMock();
     const matchMedia = createMatchMediaMock(390);
-    window.__OPENCLAW_CONTROL_UI_BASE_PATH__ = undefined;
+    window["__OPENCLAW_CONTROL_UI_BASE_PATH__"] = undefined;
     vi.stubGlobal("localStorage", localStorage);
     vi.stubGlobal("sessionStorage", sessionStorage);
     vi.stubGlobal("matchMedia", matchMedia);
@@ -157,7 +157,7 @@ export function registerAppMountHooks() {
 
   afterEach(async () => {
     await cleanupMountedApps();
-    window.__OPENCLAW_CONTROL_UI_BASE_PATH__ = undefined;
+    window["__OPENCLAW_CONTROL_UI_BASE_PATH__"] = undefined;
     getSafeLocalStorage()?.clear();
     getSafeSessionStorage()?.clear();
     await i18n.setLocale("en");

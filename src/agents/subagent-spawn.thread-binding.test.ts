@@ -199,7 +199,7 @@ describe("spawnSubagentDirect thread binding delivery", () => {
       (hookName?: string) => hookName === "subagent_spawning",
     );
     hoisted.hookRunner.runSubagentSpawning.mockImplementation(
-      async (_event: unknown, ctx?: { requesterSessionKey?: string }) => {
+      async (eventValue: unknown, ctx?: { requesterSessionKey?: string }) => {
         hookRequesterSessionKey = ctx?.requesterSessionKey;
         return {
           status: "ok",

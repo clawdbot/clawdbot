@@ -254,7 +254,7 @@ describe("searchKeyword FTS MATCH fallback", () => {
         snippetMaxChars: 200,
         sourceFilter: { sql: "", params: [] },
         buildFtsQuery: brokenBuildFtsQuery,
-        bm25RankToScore: bm25RankToScore,
+        bm25RankToScore,
       });
 
       // LIKE fallback should find "Agent" in the first row
@@ -377,7 +377,7 @@ describe("searchKeyword FTS MATCH fallback", () => {
         snippetMaxChars: 200,
         sourceFilter: { sql: "", params: [] },
         buildFtsQuery: brokenBuildFtsQuery,
-        bm25RankToScore: bm25RankToScore,
+        bm25RankToScore,
       });
 
       // Per-token fallback: both "Agent" AND "cron" must match
@@ -407,7 +407,7 @@ describe("searchKeyword FTS MATCH fallback", () => {
         snippetMaxChars: 200,
         sourceFilter: { sql: "", params: [] },
         buildFtsQuery: () => "BROKEN <<<",
-        bm25RankToScore: bm25RankToScore,
+        bm25RankToScore,
       });
 
       expect(warnSpy).toHaveBeenCalledTimes(1);
@@ -428,8 +428,9 @@ describe("searchKeyword FTS MATCH fallback", () => {
 describe("searchVector sqlite-vec KNN", () => {
   const { DatabaseSync } = requireNodeSqlite();
 
-  it("streams fallback chunk scoring without materializing candidates", async () => {
+  it("batches fallback chunk scoring without materializing all candidates", async () => {
     type ChunkRow = {
+      rowid: number;
       id: string;
       path: string;
       start_line: number;
@@ -438,10 +439,57 @@ describe("searchVector sqlite-vec KNN", () => {
       embedding: string;
       source: string;
     };
-    type StatementWithAll = {
-      all: (...params: unknown[]) => ChunkRow[];
-    };
 
+    const chunkRows: ChunkRow[] = Array.from({ length: 513 }, (_, index) => {
+      const vector: [number, number] = index === 511 ? [1, 0] : index === 512 ? [0.9, 0.1] : [0, 1];
+      return {
+        rowid: index + 1,
+        id: `target-${index}`,
+        path: `memory/target-${index}.md`,
+        start_line: 1,
+        end_line: 1,
+        text: `chunk target-${index}`,
+        embedding: JSON.stringify(vector),
+        source: "memory",
+      };
+    });
+    const batchSizes: number[] = [];
+    const prepare = vi.fn((sql: string) => {
+      expect(sql).toContain("SELECT rowid, id, path");
+      expect(sql).toContain("ORDER BY rowid ASC");
+      expect(sql).toContain("LIMIT ?");
+      return {
+        all: (_model: string, lastRowid: number, limit: number) => {
+          const batch = chunkRows.filter((row) => row.rowid > lastRowid).slice(0, limit);
+          batchSizes.push(batch.length);
+          return batch;
+        },
+      };
+    });
+
+    const results = await searchVector({
+      db: { prepare } as unknown as Parameters<typeof searchVector>[0]["db"],
+      vectorTable: "chunks_vec",
+      providerModel: "target-model",
+      queryVec: [1, 0],
+      limit: 2,
+      snippetMaxChars: 200,
+      ensureVectorReady: async () => false,
+      sourceFilterVec: { sql: "", params: [] },
+      sourceFilterChunks: { sql: "", params: [] },
+    });
+
+    expect(results.map((row) => row.id)).toEqual(["target-511", "target-512"]);
+    expect(batchSizes).toEqual([256, 256, 1]);
+  });
+
+  it("yields to the event loop during large fallback scans (issue #81172)", async () => {
+    // Real Nextcloud-scale corpus where the vec0 fast path is unavailable
+    // (e.g., extension not loaded or dimension mismatch with active model)
+    // used to pin the main thread for the entire fallback scan, blocking
+    // channel I/O. After fix the loop yields after each full
+    // FALLBACK_VECTOR_BATCH_SIZE batch so a setImmediate-scheduled task can
+    // interleave between batches.
     const db = new DatabaseSync(":memory:");
     try {
       ensureMemoryIndexSchema({
@@ -455,66 +503,290 @@ describe("searchVector sqlite-vec KNN", () => {
       const insertChunk = db.prepare(
         "INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       );
-      const addChunk = (params: { id: string; model: string; vector: [number, number] }) => {
+      // Just over 3x the yield batch (FALLBACK_VECTOR_BATCH_SIZE=256), so we
+      // expect at least 3 yield points to fire during the scan.
+      const N = 1024;
+      for (let i = 0; i < N; i += 1) {
         insertChunk.run(
-          params.id,
-          `memory/${params.id}.md`,
+          `chunk-${i}`,
+          `memory/chunk-${i}.md`,
           "memory",
           1,
           1,
-          params.id,
-          params.model,
-          `chunk ${params.id}`,
-          JSON.stringify(params.vector),
-          1,
+          `hash-${i}`,
+          "yield-model",
+          `chunk ${i}`,
+          // Tiny 2-dim embeddings: the test asserts the yielding *cadence*,
+          // not real similarity scoring (other tests cover scoring).
+          JSON.stringify([Math.cos(i), Math.sin(i)]),
+          i,
         );
-      };
-      addChunk({ id: "target-1", model: "target-model", vector: [1, 0] });
-      addChunk({ id: "target-2", model: "target-model", vector: [0.8, 0.2] });
-      addChunk({ id: "target-3", model: "target-model", vector: [0, 1] });
-      addChunk({ id: "other-1", model: "other-model", vector: [1, 0] });
+      }
 
-      const prepareTarget = db as unknown as { prepare: (sql: string) => unknown };
-      const originalPrepare = prepareTarget.prepare.bind(db);
-      const chunkRows = (
-        originalPrepare(
-          "SELECT id, path, start_line, end_line, text, embedding, source\n" +
-            "  FROM chunks\n" +
-            " WHERE model = ?",
-        ) as StatementWithAll
-      ).all("target-model");
-      const prepareSpy = vi.spyOn(prepareTarget, "prepare").mockImplementation((sql: string) => {
-        if (
-          sql.includes("SELECT id, path, start_line, end_line, text, embedding, source") &&
-          sql.includes("FROM chunks")
-        ) {
-          return {
-            all: () => {
-              throw new Error("fallback vector search must stream rows via iterate()");
-            },
-            iterate: () => chunkRows[Symbol.iterator](),
-          };
-        }
-        return originalPrepare(sql);
-      });
+      // Heartbeat captures whether the event loop gets a chance to run between
+      // setImmediate batches. With the pre-fix synchronous loop, this would
+      // fire zero times during searchVector. With the fix it should fire at
+      // least once because we yield ≥3 times across 1024 rows.
+      let heartbeats = 0;
+      const heartbeatInterval = setInterval(() => {
+        heartbeats += 1;
+      }, 0);
 
       try {
         const results = await searchVector({
           db,
           vectorTable: "chunks_vec",
-          providerModel: "target-model",
+          providerModel: "yield-model",
           queryVec: [1, 0],
-          limit: 2,
+          limit: 4,
           snippetMaxChars: 200,
           ensureVectorReady: async () => false,
           sourceFilterVec: { sql: "", params: [] },
           sourceFilterChunks: { sql: "", params: [] },
         });
-
-        expect(results.map((row) => row.id)).toEqual(["target-1", "target-2"]);
+        expect(results).toHaveLength(4);
+        // ≥1 heartbeat proves the event loop was given a chance to run during
+        // the scan. (Exact counts depend on machine speed; we only check the
+        // qualitative property that the loop is no longer fully blocked.)
+        expect(heartbeats).toBeGreaterThan(0);
       } finally {
-        prepareSpy.mockRestore();
+        clearInterval(heartbeatInterval);
       }
+    } finally {
+      db.close();
+    }
+  });
+
+  // ===== Fallback path boundary coverage (issue #81172 review diligence) =====
+
+  function createFallbackDb(): InstanceType<typeof DatabaseSync> {
+    const db = new DatabaseSync(":memory:");
+    ensureMemoryIndexSchema({
+      db,
+      embeddingCacheTable: "embedding_cache",
+      cacheEnabled: false,
+      ftsTable: "chunks_fts",
+      ftsEnabled: false,
+    });
+    return db;
+  }
+
+  function insertFallbackChunk(
+    db: InstanceType<typeof DatabaseSync>,
+    params: { id: string; model: string; vector: number[] },
+  ): void {
+    db.prepare(
+      "INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    ).run(
+      params.id,
+      `memory/${params.id}.md`,
+      "memory",
+      1,
+      1,
+      params.id,
+      params.model,
+      `chunk ${params.id}`,
+      JSON.stringify(params.vector),
+      1,
+    );
+  }
+
+  it("returns an empty result set when no chunks match the provider model", async () => {
+    const db = createFallbackDb();
+    try {
+      // One chunk with a different model must not appear in results.
+      insertFallbackChunk(db, { id: "other-only", model: "other-model", vector: [1, 0] });
+      const results = await searchVector({
+        db,
+        vectorTable: "chunks_vec",
+        providerModel: "target-model",
+        queryVec: [1, 0],
+        limit: 5,
+        snippetMaxChars: 200,
+        ensureVectorReady: async () => false,
+        sourceFilterVec: { sql: "", params: [] },
+        sourceFilterChunks: { sql: "", params: [] },
+      });
+      expect(results).toEqual([]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("handles a single matching row (below the yield batch size)", async () => {
+    const db = createFallbackDb();
+    try {
+      insertFallbackChunk(db, { id: "lone", model: "target-model", vector: [1, 0] });
+      const results = await searchVector({
+        db,
+        vectorTable: "chunks_vec",
+        providerModel: "target-model",
+        queryVec: [1, 0],
+        limit: 5,
+        snippetMaxChars: 200,
+        ensureVectorReady: async () => false,
+        sourceFilterVec: { sql: "", params: [] },
+        sourceFilterChunks: { sql: "", params: [] },
+      });
+      expect(results.map((r) => r.id)).toEqual(["lone"]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("handles an exact batch-size boundary (FALLBACK_VECTOR_BATCH_SIZE rows)", async () => {
+    // When N === FALLBACK_VECTOR_BATCH_SIZE exactly, the loop produces one
+    // full batch and then must take one extra empty-batch step before
+    // breaking; verify no row is dropped or double-counted at the seam.
+    const db = createFallbackDb();
+    try {
+      const N = 256;
+      for (let i = 0; i < N; i += 1) {
+        // Each chunk gets a unique vector so cosine scoring is well-defined.
+        insertFallbackChunk(db, {
+          id: `chunk-${i}`,
+          model: "target-model",
+          vector: [Math.cos(i), Math.sin(i)],
+        });
+      }
+      const results = await searchVector({
+        db,
+        vectorTable: "chunks_vec",
+        providerModel: "target-model",
+        queryVec: [1, 0],
+        limit: 3,
+        snippetMaxChars: 200,
+        ensureVectorReady: async () => false,
+        sourceFilterVec: { sql: "", params: [] },
+        sourceFilterChunks: { sql: "", params: [] },
+      });
+      expect(results).toHaveLength(3);
+      // Strictly decreasing scores confirms top-K maintenance is intact.
+      for (let i = 1; i < results.length; i += 1) {
+        expect(results[i - 1].score).toBeGreaterThan(results[i].score);
+      }
+    } finally {
+      db.close();
+    }
+  });
+
+  it("preserves top-K ordering vs. a naive reference cosine implementation", async () => {
+    // Guards against accidental algorithmic regressions from the control-flow
+    // refactor: insert 200 chunks with random vectors and assert our patched
+    // fallback search returns the same top-K by id, in the same order, as a
+    // straight-line JS reference that scores every row.
+    const db = createFallbackDb();
+    try {
+      const dim = 16;
+      const N = 200;
+      const limit = 5;
+      // Use a deterministic seed-free PRNG-equivalent: hash-derived floats so
+      // the test is repeatable across machines.
+      const vectorFor = (i: number, j: number): number => {
+        const s = Math.sin(i * 31 + j * 17 + 3) * 1000;
+        return s - Math.floor(s) - 0.5;
+      };
+      const chunks: Array<{ id: string; vector: number[] }> = [];
+      for (let i = 0; i < N; i += 1) {
+        const vector = Array.from({ length: dim }, (_, j) => vectorFor(i, j));
+        chunks.push({ id: `chunk-${i}`, vector });
+        insertFallbackChunk(db, { id: `chunk-${i}`, model: "target-model", vector });
+      }
+      const queryVec = Array.from({ length: dim }, (_, j) => vectorFor(-1, j));
+
+      function refCosine(a: number[], b: number[]): number {
+        let dot = 0;
+        let normA = 0;
+        let normB = 0;
+        const len = Math.min(a.length, b.length);
+        for (let i = 0; i < len; i += 1) {
+          dot += a[i] * b[i];
+          normA += a[i] * a[i];
+          normB += b[i] * b[i];
+        }
+        return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+      }
+      const referenceTopIds = chunks
+        .map((c) => ({ id: c.id, score: refCosine(queryVec, c.vector) }))
+        .toSorted((a, b) => b.score - a.score)
+        .slice(0, limit)
+        .map((r) => r.id);
+
+      const results = await searchVector({
+        db,
+        vectorTable: "chunks_vec",
+        providerModel: "target-model",
+        queryVec,
+        limit,
+        snippetMaxChars: 200,
+        ensureVectorReady: async () => false,
+        sourceFilterVec: { sql: "", params: [] },
+        sourceFilterChunks: { sql: "", params: [] },
+      });
+      expect(results.map((r) => r.id)).toEqual(referenceTopIds);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("picks up rows inserted during the inter-batch event-loop yield (rowid cursor)", async () => {
+    // The fix's rowid-paginated batches yield via setImmediate between batches.
+    // Schedule an INSERT to land in that yield gap and verify the search picks
+    // up the new rows in the next batch: no double-counting, no missed rows.
+    const db = createFallbackDb();
+    try {
+      // 257 baseline rows: first batch sees 256 (score 0 vs. query), second
+      // batch would have seen just 1 until our setImmediate insert lands.
+      const baselineCount = 257;
+      for (let i = 0; i < baselineCount; i += 1) {
+        insertFallbackChunk(db, {
+          id: `baseline-${i}`,
+          model: "target-model",
+          // Perpendicular to the query: cosine 0.
+          vector: [0, 1],
+        });
+      }
+
+      // setImmediate fires during the search's first inter-batch yield. We
+      // queue an insert of two near-perfect matches; their rowids (258, 259)
+      // are strictly greater than `lastRowid` (256), so the rowid cursor
+      // must include them in batch 2.
+      let inserted = false;
+      const insertDuringYield = (): void => {
+        if (inserted) {
+          return;
+        }
+        inserted = true;
+        insertFallbackChunk(db, {
+          id: "winner-A",
+          model: "target-model",
+          vector: [1, 0],
+        });
+        insertFallbackChunk(db, {
+          id: "winner-B",
+          model: "target-model",
+          vector: [0.9, 0.1],
+        });
+      };
+      setImmediate(insertDuringYield);
+
+      const results = await searchVector({
+        db,
+        vectorTable: "chunks_vec",
+        providerModel: "target-model",
+        queryVec: [1, 0],
+        limit: 2,
+        snippetMaxChars: 200,
+        ensureVectorReady: async () => false,
+        sourceFilterVec: { sql: "", params: [] },
+        sourceFilterChunks: { sql: "", params: [] },
+      });
+
+      // The winners must dominate the top-2. If the rowid cursor were broken
+      // (either skipping or duplicating rows past the yield), one of these
+      // would be wrong.
+      expect(inserted).toBe(true);
+      expect(results.map((r) => r.id)).toEqual(["winner-A", "winner-B"]);
     } finally {
       db.close();
     }

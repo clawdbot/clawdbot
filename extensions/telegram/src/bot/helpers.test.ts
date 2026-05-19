@@ -68,6 +68,36 @@ describe("resolveTelegramForumFlag", () => {
     expect(getChat).toHaveBeenCalledWith(-100789);
   });
 
+  it("uses supergroup topic-message metadata before getChat lookup", async () => {
+    const getChat = vi.fn(async () => {
+      throw new Error("lookup should not run");
+    });
+    await expect(
+      resolveTelegramForumFlag({
+        chatId: -100987,
+        chatType: "supergroup",
+        isGroup: true,
+        isTopicMessage: true,
+        getChat,
+      }),
+    ).resolves.toBe(true);
+    expect(getChat).not.toHaveBeenCalled();
+  });
+
+  it("does not treat private DM topic metadata as forum metadata", async () => {
+    const getChat = vi.fn(async () => ({ is_forum: true }));
+    await expect(
+      resolveTelegramForumFlag({
+        chatId: 123456,
+        chatType: "private",
+        isGroup: false,
+        isTopicMessage: true,
+        getChat,
+      }),
+    ).resolves.toBe(false);
+    expect(getChat).not.toHaveBeenCalled();
+  });
+
   it("reuses resolved forum metadata for later supergroup updates", async () => {
     const getChat = vi.fn(async () => ({ is_forum: true }));
     const params = {

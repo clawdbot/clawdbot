@@ -24,6 +24,7 @@ Options:
   --no-yolo                  Run nested Codex review with normal sandbox/approval prompts.
   --output FILE              Also save output to file.
   --parallel-tests CMD       Run review and test command concurrently.
+                              Default: PNPM_CONFIG_PM_ON_FAIL=ignore PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false PNPM_CONFIG_OFFLINE=true pnpm run check when available.
   --dry-run                  Print selected commands, do not run.
   -h, --help                 Show help.
 
@@ -54,8 +55,11 @@ codex_args=()
 yolo=${AUTOREVIEW_YOLO:-${CODEX_REVIEW_YOLO:-1}}
 output=${AUTOREVIEW_OUTPUT:-${CODEX_REVIEW_OUTPUT:-}}
 parallel_tests=
+parallel_tests_auto=false
 dry_run=false
 codex_review_prompt=
+codex_review_stdin_prompt=false
+codex_review_prompt_file=false
 openclaw_maintainer_validation=${AUTOREVIEW_OPENCLAW_MAINTAINER_VALIDATION:-${OPENCLAW_TESTBOX:-0}}
 
 while [[ $# -gt 0 ]]; do
@@ -165,6 +169,21 @@ case "$fallback_reviewer" in
 esac
 
 repo_root=$(git rev-parse --show-toplevel)
+printf -v quoted_repo_root '%q' "$repo_root"
+
+has_package_check_script() {
+  command -v node >/dev/null 2>&1 || return 1
+  node -e 'const { readFileSync } = require("node:fs"); const p = JSON.parse(readFileSync(process.argv[1], "utf8")); process.exit(p.scripts?.check ? 0 : 1)' \
+    "$repo_root/package.json" \
+    >/dev/null 2>&1
+}
+
+auto_tests_disabled() {
+  case "${AUTOREVIEW_AUTO_TESTS:-${CODEX_REVIEW_AUTO_TESTS:-1}}" in
+    0|false|False|FALSE|no|No|NO|off|Off|OFF) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 
 current_branch=$(git branch --show-current 2>/dev/null || true)
 dirty=false
@@ -212,6 +231,15 @@ case "$openclaw_maintainer_validation" in
   1|true|True|TRUE|yes|Yes|YES|on|On|ON) openclaw_maintainer_validation=1 ;;
   *) openclaw_maintainer_validation=0 ;;
 esac
+if [[ -z "$parallel_tests" && "$openclaw_maintainer_validation" != 1 ]] &&
+  ! auto_tests_disabled; then
+  if [[ -f "$repo_root/package.json" && -f "$repo_root/pnpm-lock.yaml" && -d "$repo_root/node_modules" ]] &&
+    command -v pnpm >/dev/null 2>&1 &&
+    has_package_check_script; then
+    parallel_tests="cd $quoted_repo_root && PNPM_CONFIG_PM_ON_FAIL=ignore PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false PNPM_CONFIG_OFFLINE=true pnpm run check"
+    parallel_tests_auto=true
+  fi
+fi
 if [[ "$repo_url" == *"openclaw/openclaw"* && "$openclaw_maintainer_validation" == 1 ]]; then
   codex_review_prompt=$(cat <<'EOF'
 OpenClaw maintainer autoreview validation policy:
@@ -221,7 +249,13 @@ OpenClaw maintainer autoreview validation policy:
 - If remote validation is not necessary for the finding, state the targeted proof that should be run instead of starting local tests.
 EOF
 )
-  review_cmd+=(-)
+  if [[ "$review_kind" == local ]]; then
+    review_cmd+=(-)
+    codex_review_stdin_prompt=true
+  else
+    review_cmd=("$codex_bin" "${codex_args[@]}" review -)
+    codex_review_prompt_file=true
+  fi
 fi
 
 printf 'autoreview target: %s\n' "$review_kind"
@@ -244,14 +278,18 @@ if [[ "$reviewer" == auto || "$reviewer" == codex ]]; then
   printf 'review:'
   printf ' %q' "${review_cmd[@]}"
   printf '\n'
-  if [[ -n "$codex_review_prompt" ]]; then
+  if [[ "$codex_review_stdin_prompt" == true || "$codex_review_prompt_file" == true ]]; then
     printf 'review policy: OpenClaw maintainer Crabbox/Testbox-aware validation prompt injected\n'
   fi
 else
   printf 'review: %s prompt review\n' "$reviewer"
 fi
 if [[ -n "$parallel_tests" ]]; then
-  printf 'tests: %s\n' "$parallel_tests"
+  printf 'tests: %s' "$parallel_tests"
+  if [[ "$parallel_tests_auto" == true ]]; then
+    printf ' (auto)'
+  fi
+  printf '\n'
 fi
 if [[ "$review_kind" == branch ]]; then
   printf 'fetch: git fetch origin --quiet\n'
@@ -290,8 +328,16 @@ cleanup() {
 trap cleanup EXIT
 
 run_review() {
+  local status=0
   mkdir -p "$(dirname "$review_output")"
-  if [[ -n "$codex_review_prompt" ]]; then
+  if [[ "$codex_review_prompt_file" == true ]]; then
+    build_prompt_file || return
+    "${review_cmd[@]}" < "$prompt_file" 2>&1 | tee "$review_output"
+    status=${PIPESTATUS[0]}
+    rm -f "$prompt_file"
+    prompt_file=
+    return "$status"
+  elif [[ "$codex_review_stdin_prompt" == true ]]; then
     printf '%s\n' "$codex_review_prompt" | "${review_cmd[@]}" 2>&1 | tee "$review_output"
   else
     "${review_cmd[@]}" 2>&1 | tee "$review_output"

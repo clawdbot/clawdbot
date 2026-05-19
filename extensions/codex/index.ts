@@ -31,7 +31,9 @@ export default definePluginEntry({
         "codex",
         api.pluginConfig as Record<string, unknown>,
       ) ?? api.pluginConfig;
-    api.registerAgentHarness(createCodexAppServerAgentHarness({ pluginConfig: api.pluginConfig }));
+    api.registerAgentHarness(
+      createCodexAppServerAgentHarness({ resolvePluginConfig: resolveCurrentPluginConfig }),
+    );
     api.registerProvider(buildCodexProvider({ pluginConfig: api.pluginConfig }));
     api.registerMediaUnderstandingProvider(
       buildCodexMediaUnderstandingProvider({ pluginConfig: api.pluginConfig }),

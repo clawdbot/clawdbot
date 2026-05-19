@@ -1,9 +1,9 @@
 import { vi } from "vitest";
-import { __testing as queueCleanupTesting } from "../auto-reply/reply/queue/cleanup.js";
+import { testing as queueCleanupTesting } from "../auto-reply/reply/queue/cleanup.js";
 import type { CallGatewayOptions } from "../gateway/call.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
-import { __testing as subagentAnnounceTesting } from "./subagent-announce.js";
-import { __testing as subagentControlTesting } from "./subagent-control.js";
+import { testing as subagentAnnounceTesting } from "./subagent-announce.js";
+import { testing as subagentControlTesting } from "./subagent-control.js";
 
 type LoadedConfig = ReturnType<(typeof import("../config/config.js"))["getRuntimeConfig"]>;
 

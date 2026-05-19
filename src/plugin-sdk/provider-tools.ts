@@ -394,13 +394,127 @@ export function inspectOpenAIToolSchemas(
   return [];
 }
 
-export type ProviderToolCompatFamily = "gemini" | "openai";
+export const DEEPSEEK_UNSUPPORTED_SCHEMA_KEYWORDS = new Set(["anyOf", "oneOf"]);
+
+function isNullSchemaVariant(schema: unknown): boolean {
+  if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
+    return false;
+  }
+  const record = schema as Record<string, unknown>;
+  if (record.type === "null") {
+    return true;
+  }
+  if (Array.isArray(record.type) && record.type.length === 1 && record.type[0] === "null") {
+    return true;
+  }
+  if ("const" in record && record.const === null) {
+    return true;
+  }
+  return Array.isArray(record.enum) && record.enum.length === 1 && record.enum[0] === null;
+}
+
+function normalizeDeepSeekSchema(schema: unknown): unknown {
+  if (Array.isArray(schema)) {
+    let changed = false;
+    const normalized = schema.map((entry) => {
+      const next = normalizeDeepSeekSchema(entry);
+      changed ||= next !== entry;
+      return next;
+    });
+    return changed ? normalized : schema;
+  }
+  if (!schema || typeof schema !== "object") {
+    return schema;
+  }
+
+  const record = schema as Record<string, unknown>;
+  const unionKey = Array.isArray(record.anyOf)
+    ? "anyOf"
+    : Array.isArray(record.oneOf)
+      ? "oneOf"
+      : undefined;
+
+  let changed = false;
+  const normalized: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(record)) {
+    if (key === "anyOf" || key === "oneOf") {
+      if (key === unionKey) {
+        changed = true;
+        continue;
+      }
+    }
+    const next = normalizeDeepSeekSchema(value);
+    normalized[key] = next;
+    changed ||= next !== value;
+  }
+
+  if (!unionKey) {
+    return changed ? normalized : schema;
+  }
+
+  const variants = record[unionKey] as unknown[];
+  const normalizedVariants = variants.map((entry) => normalizeDeepSeekSchema(entry));
+  const nonNullVariants = normalizedVariants.filter((entry) => !isNullSchemaVariant(entry));
+  const selected = nonNullVariants[0] ?? normalizedVariants[0];
+  if (!selected || typeof selected !== "object" || Array.isArray(selected)) {
+    return normalized;
+  }
+
+  const merged = {
+    ...(selected as Record<string, unknown>),
+    ...normalized,
+  };
+  if (nonNullVariants.length < normalizedVariants.length) {
+    merged.nullable = true;
+  }
+  return merged;
+}
+
+export function normalizeDeepSeekToolSchemas(
+  ctx: ProviderNormalizeToolSchemasContext,
+): AnyAgentTool[] {
+  return ctx.tools.map((tool) => {
+    if (!tool.parameters || typeof tool.parameters !== "object") {
+      return tool;
+    }
+    const parameters = normalizeDeepSeekSchema(tool.parameters);
+    return parameters === tool.parameters
+      ? tool
+      : {
+          ...tool,
+          parameters: parameters as TSchema,
+        };
+  });
+}
+
+export function inspectDeepSeekToolSchemas(
+  ctx: ProviderNormalizeToolSchemasContext,
+): ProviderToolSchemaDiagnostic[] {
+  return ctx.tools.flatMap((tool, toolIndex) => {
+    const violations = findUnsupportedSchemaKeywords(
+      tool.parameters,
+      `${tool.name}.parameters`,
+      DEEPSEEK_UNSUPPORTED_SCHEMA_KEYWORDS,
+    );
+    if (violations.length === 0) {
+      return [];
+    }
+    return [{ toolName: tool.name, toolIndex, violations }];
+  });
+}
+
+export type ProviderToolCompatFamily = "deepseek" | "gemini" | "openai";
 
 export function buildProviderToolCompatFamilyHooks(family: ProviderToolCompatFamily): {
   normalizeToolSchemas: (ctx: ProviderNormalizeToolSchemasContext) => AnyAgentTool[];
   inspectToolSchemas: (ctx: ProviderNormalizeToolSchemasContext) => ProviderToolSchemaDiagnostic[];
 } {
   switch (family) {
+    case "deepseek":
+      return {
+        normalizeToolSchemas: normalizeDeepSeekToolSchemas,
+        inspectToolSchemas: inspectDeepSeekToolSchemas,
+      };
     case "gemini":
       return {
         normalizeToolSchemas: normalizeGeminiToolSchemas,

@@ -67,6 +67,25 @@ describe("getSlashCommands", () => {
     const completions = await think?.getArgumentCompletions?.("");
     expect(completions?.length).toBeGreaterThan(0);
   });
+
+  it("merges dynamic gateway commands", () => {
+    const commands = getSlashCommands({
+      dynamicCommands: [
+        {
+          name: "dreaming",
+          textAliases: ["/dreaming"],
+          description: "Enable or disable memory dreaming.",
+          source: "plugin",
+          scope: "both",
+          acceptsArgs: true,
+        },
+      ],
+    });
+
+    expect(commands.find((command) => command.name === "dreaming")?.description).toBe(
+      "Enable or disable memory dreaming.",
+    );
+  });
 });
 
 describe("helpText", () => {

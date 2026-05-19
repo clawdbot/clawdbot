@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { __testOnlyOpenAiHttp } from "./openai-http.js";
+import { testOnlyOpenAiHttp } from "./openai-http.js";
 
-const { resolveChatCompletionUsage } = __testOnlyOpenAiHttp;
+const { resolveChatCompletionUsage } = testOnlyOpenAiHttp;
 
 describe("resolveChatCompletionUsage", () => {
   it("maps agentMeta.usage to OpenAI prompt/completion/total fields", () => {

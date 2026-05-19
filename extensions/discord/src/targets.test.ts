@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  __resetDiscordDirectoryCacheForTest,
+  resetDiscordDirectoryCacheForTest,
   resolveDiscordDirectoryUserId,
 } from "./directory-cache.js";
 import * as directoryLive from "./directory-live.js";
@@ -103,7 +103,7 @@ describe("resolveDiscordTarget", () => {
 
   beforeEach(() => {
     vi.restoreAllMocks();
-    __resetDiscordDirectoryCacheForTest();
+    resetDiscordDirectoryCacheForTest();
   });
 
   it("returns a resolved user for usernames", async () => {

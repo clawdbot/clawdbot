@@ -42,6 +42,7 @@ function createAppServerOptions(): Parameters<typeof startOrResumeThread>[0]["ap
       args: ["app-server"],
       headers: {},
     },
+    codeModeOnly: false,
     requestTimeoutMs: 60_000,
     turnCompletionIdleTimeoutMs: 60_000,
     approvalPolicy: "never",

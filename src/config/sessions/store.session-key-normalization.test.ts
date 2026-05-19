@@ -95,6 +95,10 @@ describe("session store key normalization", () => {
     expect(Object.keys(store)).toEqual([CANONICAL_KEY]);
     expect(store[CANONICAL_KEY]?.lastChannel).toBe("webchat");
     expect(store[CANONICAL_KEY]?.lastTo).toBe("webchat:user-1");
+    expect(store[CANONICAL_KEY]?.route).toEqual({
+      channel: "webchat",
+      target: { to: "webchat:user-1" },
+    });
   });
 
   it("migrates legacy mixed-case entries to the canonical key on update", async () => {
@@ -214,5 +218,74 @@ describe("session store key normalization", () => {
     expect(store[SIGNAL_GROUP_KEY]?.sessionId).toBe("legacy-signal-session");
     expect(store[SIGNAL_GROUP_KEY]?.groupId).toBe(SIGNAL_GROUP_ID);
     expect(store[LEGACY_SIGNAL_GROUP_KEY]).toBeUndefined();
+  });
+
+  it("stores canonical route metadata and derives legacy delivery fields", async () => {
+    await updateLastRoute({
+      storePath,
+      sessionKey: CANONICAL_KEY,
+      route: {
+        channel: "slack",
+        accountId: "work",
+        target: { to: "channel:C123", rawTo: "slack://C123", chatType: "channel" },
+        thread: { id: "177000.123", kind: "thread", source: "target" },
+      },
+      deliveryContext: {
+        channel: "discord",
+        to: "channel:old",
+        threadId: "old-thread",
+      },
+    });
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+    expect(store[CANONICAL_KEY]?.route).toEqual({
+      channel: "slack",
+      accountId: "work",
+      target: { to: "channel:C123", rawTo: "slack://C123", chatType: "channel" },
+      thread: { id: "177000.123", kind: "thread", source: "target" },
+    });
+    expect(store[CANONICAL_KEY]?.deliveryContext).toEqual({
+      channel: "slack",
+      to: "channel:C123",
+      accountId: "work",
+      threadId: "177000.123",
+    });
+    expect(store[CANONICAL_KEY]?.lastChannel).toBe("slack");
+    expect(store[CANONICAL_KEY]?.lastTo).toBe("channel:C123");
+    expect(store[CANONICAL_KEY]?.lastAccountId).toBe("work");
+    expect(store[CANONICAL_KEY]?.lastThreadId).toBe("177000.123");
+  });
+
+  it("normalizes malformed persisted route metadata on load", async () => {
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          [CANONICAL_KEY]: {
+            sessionId: "legacy-route-session",
+            updatedAt: 1,
+            route: "stale-custom-slot",
+            deliveryContext: {
+              channel: "slack",
+              to: "channel:C123",
+              accountId: "work",
+              threadId: "177000.123",
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    clearSessionStoreCacheForTest();
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+    expect(store[CANONICAL_KEY]?.route).toEqual({
+      channel: "slack",
+      accountId: "work",
+      target: { to: "channel:C123" },
+      thread: { id: "177000.123" },
+    });
   });
 });

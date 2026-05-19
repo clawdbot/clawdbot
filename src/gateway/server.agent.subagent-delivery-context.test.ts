@@ -68,6 +68,12 @@ afterAll(async () => {
 });
 
 type StoredEntry = {
+  route?: {
+    channel?: string;
+    accountId?: string;
+    target?: { to?: string; rawTo?: string; chatType?: string };
+    thread?: { id?: string | number; kind?: string; source?: string };
+  };
   deliveryContext?: { channel?: string; to?: string; threadId?: string; accountId?: string };
   lastChannel?: string;
   lastTo?: string;
@@ -118,6 +124,12 @@ describe("subagent session deliveryContext from spawn request params", () => {
     expect(deliveryContext.to).toBe("channel:C0AF8TW48UQ");
     expect(deliveryContext.threadId).toBe("1774374945.091819");
     expect(deliveryContext.accountId).toBe("default");
+    expect(entry.route).toEqual({
+      channel: "slack",
+      accountId: "default",
+      target: { to: "channel:C0AF8TW48UQ" },
+      thread: { id: "1774374945.091819" },
+    });
     expect(entry.lastChannel).toBe("slack");
     expect(entry.lastTo).toBe("channel:C0AF8TW48UQ");
   });
@@ -167,6 +179,75 @@ describe("subagent session deliveryContext from spawn request params", () => {
     expect(entry.lastTo).toBe("user:U09U1LV7JDN");
   });
 
+  test("existing session route metadata survives agent request delivery normalization", async () => {
+    setRegistry(defaultRegistry);
+    testState.sessionStorePath = sessionStorePath;
+    await writeSessionStore({
+      entries: {
+        "agent:main:subagent:existing-route-metadata": {
+          sessionId: "sess-existing-route",
+          updatedAt: Date.now(),
+          route: {
+            channel: "slack",
+            accountId: "default",
+            target: {
+              to: "channel:C0AF8TW48UQ",
+              rawTo: "slack://C0AF8TW48UQ",
+              chatType: "channel",
+            },
+            thread: {
+              id: "1771242986.529939",
+              kind: "thread",
+              source: "target",
+            },
+          },
+          deliveryContext: {
+            channel: "slack",
+            to: "channel:C0AF8TW48UQ",
+            accountId: "default",
+            threadId: "1771242986.529939",
+          },
+          lastChannel: "slack",
+          lastTo: "channel:C0AF8TW48UQ",
+          lastAccountId: "default",
+          lastThreadId: "1771242986.529939",
+        },
+      },
+    });
+
+    const res = await rpcReq(ws, "agent", {
+      message: "follow-up",
+      sessionKey: "agent:main:subagent:existing-route-metadata",
+      channel: "slack",
+      to: "channel:C0AF8TW48UQ",
+      accountId: "default",
+      threadId: "1771242986.529939",
+      deliver: false,
+      idempotencyKey: "idem-subagent-delivery-route-metadata",
+    });
+    expect(res.ok).toBe(true);
+
+    const stored = JSON.parse(await fs.readFile(sessionStorePath, "utf-8")) as Record<
+      string,
+      StoredEntry
+    >;
+    const entry = readStoredEntry(stored, "agent:main:subagent:existing-route-metadata");
+    expect(entry.route).toEqual({
+      channel: "slack",
+      accountId: "default",
+      target: {
+        to: "channel:C0AF8TW48UQ",
+        rawTo: "slack://C0AF8TW48UQ",
+        chatType: "channel",
+      },
+      thread: {
+        id: "1771242986.529939",
+        kind: "thread",
+        source: "target",
+      },
+    });
+  });
+
   test("pre-patched subagent session (via sessions.patch) inherits deliveryContext from agent request", async () => {
     // Simulates the real subagent spawn flow: spawnSubagentDirect calls sessions.patch
     // first (to set spawnDepth, spawnedBy, etc.), then calls callSubagentGateway({method: "agent"}).
@@ -207,6 +288,12 @@ describe("subagent session deliveryContext from spawn request params", () => {
     expect(deliveryContext.to).toBe("user:U07FDR83W6N");
     expect(deliveryContext.threadId).toBe("1775577152.364109");
     expect(deliveryContext.accountId).toBe("default");
+    expect(entry.route).toEqual({
+      channel: "slack",
+      accountId: "default",
+      target: { to: "user:U07FDR83W6N" },
+      thread: { id: "1775577152.364109" },
+    });
     expect(entry.lastThreadId).toBe("1775577152.364109");
   });
 

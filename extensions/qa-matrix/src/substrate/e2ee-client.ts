@@ -420,9 +420,10 @@ export async function runMatrixQaE2eeBootstrap(
   }
 }
 
-export const __testing = {
+export const testing = {
   MATRIX_QA_E2EE_SYNC_FILTER,
   buildMatrixQaE2eeStoragePaths,
   findMatrixQaObservedEventMatch,
   shouldRecordMatrixQaObservedEventUpdate,
 };
+export { testing as __testing };

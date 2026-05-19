@@ -5066,4 +5066,120 @@ describe("runAgentTurnWithFallback", () => {
       modelOverrideFallbackOriginModel: "claude-opus",
     });
   });
+
+  it("latches assistant error stub suppression across main reply fallback candidates", async () => {
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+      await params.run("anthropic", "claude-opus-4-7").catch(() => undefined);
+      await params.run("anthropic", "claude-opus-4-6").catch(() => undefined);
+      return {
+        result: await params.run("openai", "gpt-5.4"),
+        provider: "openai",
+        model: "gpt-5.4",
+        attempts: [],
+      };
+    });
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(
+      async (args: {
+        onAssistantErrorMessagePersisted?: (message: {
+          role: "assistant";
+          content: string;
+          stopReason: "error";
+        }) => void;
+      }) => {
+        args.onAssistantErrorMessagePersisted?.({
+          role: "assistant",
+          content: "[assistant turn failed before producing content]",
+          stopReason: "error",
+        });
+        throw new Error("upstream 500");
+      },
+    );
+    state.runEmbeddedPiAgentMock.mockRejectedValueOnce(new Error("upstream 500"));
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledTimes(3);
+    expectMockCallArgFields(state.runEmbeddedPiAgentMock, 0, "primary candidate", {
+      suppressAssistantErrorPersistence: false,
+    });
+    expectMockCallArgFields(state.runEmbeddedPiAgentMock, 1, "first fallback candidate", {
+      suppressAssistantErrorPersistence: true,
+    });
+    expectMockCallArgFields(state.runEmbeddedPiAgentMock, 2, "second fallback candidate", {
+      suppressAssistantErrorPersistence: true,
+    });
+  });
+
+  it("does not suppress the first embedded assistant error after a CLI fallback failure", async () => {
+    state.isCliProviderMock.mockImplementation((provider: unknown) => provider === "anthropic");
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+      await params.run("anthropic", "claude-opus-4-7").catch(() => undefined);
+      return {
+        result: await params.run("openai", "gpt-5.4"),
+        provider: "openai",
+        model: "gpt-5.4",
+        attempts: [],
+      };
+    });
+    state.runCliAgentMock.mockRejectedValueOnce(new Error("cli failed"));
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    expect(state.runCliAgentMock).toHaveBeenCalledOnce();
+    expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
+    expectMockCallArgFields(state.runEmbeddedPiAgentMock, 0, "embedded fallback candidate", {
+      suppressAssistantErrorPersistence: false,
+    });
+  });
+
+  it("latches queued user message persistence across main reply fallback candidates", async () => {
+    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+      await params.run("anthropic", "claude-opus-4-7").catch(() => undefined);
+      return {
+        result: await params.run("openai", "gpt-5.4"),
+        provider: "openai",
+        model: "gpt-5.4",
+        attempts: [],
+      };
+    });
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(
+      async (args: {
+        onUserMessagePersisted?: (m: {
+          role: "user";
+          content: Array<{ type: "text"; text: string }>;
+        }) => void;
+      }) => {
+        args.onUserMessagePersisted?.({
+          role: "user",
+          content: [{ type: "text", text: "queued" }],
+        });
+        throw new Error("upstream 500");
+      },
+    );
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "ok" }],
+      meta: {},
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    expect(state.runEmbeddedPiAgentMock).toHaveBeenCalledTimes(2);
+    expectMockCallArgFields(state.runEmbeddedPiAgentMock, 0, "primary candidate", {
+      suppressNextUserMessagePersistence: false,
+    });
+    expectMockCallArgFields(state.runEmbeddedPiAgentMock, 1, "fallback candidate", {
+      suppressNextUserMessagePersistence: true,
+    });
+  });
 });

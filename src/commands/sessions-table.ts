@@ -25,6 +25,7 @@ export type SessionDisplayRow = {
   providerOverride?: string;
   modelOverride?: string;
   contextTokens?: number;
+  runtimePolicySessionKey?: string;
 };
 
 export const SESSION_KEY_PAD = 26;
@@ -102,6 +103,7 @@ export function formatSessionFlagsCell(
     | "systemSent"
     | "abortedLastRun"
     | "sessionId"
+    | "runtimePolicySessionKey"
   >,
   rich: boolean,
 ): string {
@@ -115,6 +117,7 @@ export function formatSessionFlagsCell(
     row.groupActivation ? `activation:${row.groupActivation}` : null,
     row.systemSent ? "system" : null,
     row.abortedLastRun ? "aborted" : null,
+    row.runtimePolicySessionKey ? `policy:${row.runtimePolicySessionKey}` : null,
     row.sessionId ? `id:${row.sessionId}` : null,
   ].filter(Boolean);
   const label = flags.join(" ");

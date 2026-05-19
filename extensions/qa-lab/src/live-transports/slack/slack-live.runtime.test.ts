@@ -2,12 +2,12 @@ import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { __testing, runSlackQaLive } from "./slack-live.runtime.js";
+import { testing, runSlackQaLive } from "./slack-live.runtime.js";
 
 describe("Slack live QA runtime helpers", () => {
   it("resolves env credential payloads", () => {
     expect(
-      __testing.resolveSlackQaRuntimeEnv({
+      testing.resolveSlackQaRuntimeEnv({
         OPENCLAW_QA_SLACK_CHANNEL_ID: "C123456789",
         OPENCLAW_QA_SLACK_DRIVER_BOT_TOKEN: "xoxb-driver",
         OPENCLAW_QA_SLACK_SUT_BOT_TOKEN: "xoxb-sut",
@@ -23,7 +23,7 @@ describe("Slack live QA runtime helpers", () => {
 
   it("rejects malformed Slack channel ids", () => {
     expect(() =>
-      __testing.resolveSlackQaRuntimeEnv({
+      testing.resolveSlackQaRuntimeEnv({
         OPENCLAW_QA_SLACK_CHANNEL_ID: "qa-channel",
         OPENCLAW_QA_SLACK_DRIVER_BOT_TOKEN: "xoxb-driver",
         OPENCLAW_QA_SLACK_SUT_BOT_TOKEN: "xoxb-sut",
@@ -34,7 +34,7 @@ describe("Slack live QA runtime helpers", () => {
 
   it("parses Convex credential payloads", () => {
     expect(
-      __testing.parseSlackQaCredentialPayload({
+      testing.parseSlackQaCredentialPayload({
         channelId: "C123456789",
         driverBotToken: "xoxb-driver",
         sutBotToken: "xoxb-sut",
@@ -49,7 +49,7 @@ describe("Slack live QA runtime helpers", () => {
   });
 
   it("reports standard live transport scenario coverage", () => {
-    expect(__testing.SLACK_QA_STANDARD_SCENARIO_IDS).toEqual([
+    expect(testing.SLACK_QA_STANDARD_SCENARIO_IDS).toEqual([
       "canary",
       "mention-gating",
       "allowlist-block",
@@ -61,7 +61,7 @@ describe("Slack live QA runtime helpers", () => {
   });
 
   it("selects Slack scenarios by id", () => {
-    expect(__testing.findScenario(["slack-canary"]).map((scenario) => scenario.id)).toEqual([
+    expect(testing.findScenario(["slack-canary"]).map((scenario) => scenario.id)).toEqual([
       "slack-canary",
     ]);
   });
@@ -69,7 +69,7 @@ describe("Slack live QA runtime helpers", () => {
   it("ignores delayed unrelated SUT replies during mention-gating", async () => {
     const observedMessages: Array<unknown> = [];
     await expect(
-      __testing.waitForSlackNoReply({
+      testing.waitForSlackNoReply({
         channelId: "C123456789",
         client: {
           conversations: {
@@ -108,7 +108,7 @@ describe("Slack live QA runtime helpers", () => {
 
   it("fails mention-gating when the SUT replies with the marker", async () => {
     await expect(
-      __testing.waitForSlackNoReply({
+      testing.waitForSlackNoReply({
         channelId: "C123456789",
         client: {
           conversations: {

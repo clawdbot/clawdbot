@@ -217,9 +217,9 @@ function createQQBotApprovalCapability(): ChannelApprovalCapability {
 
 const qqbotApprovalCapability = createQQBotApprovalCapability();
 
-let _cachedCapability: ChannelApprovalCapability | undefined;
+let cachedCapability: ChannelApprovalCapability | undefined;
 
 export function getQQBotApprovalCapability(): ChannelApprovalCapability {
-  _cachedCapability ??= qqbotApprovalCapability;
-  return _cachedCapability;
+  cachedCapability ??= qqbotApprovalCapability;
+  return cachedCapability;
 }

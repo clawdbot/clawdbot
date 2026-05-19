@@ -1,5 +1,5 @@
 export {
-  __resetDiscordChannelInfoCacheForTest,
+  resetDiscordChannelInfoCacheForTest,
   resolveDiscordChannelInfo,
   resolveDiscordMessageChannelId,
   type DiscordChannelInfo,

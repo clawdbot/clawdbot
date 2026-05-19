@@ -1,4 +1,6 @@
 import type {
+  CommandEntry,
+  CommandsListParams,
   SessionsListParams,
   SessionsPatchParams,
   SessionsPatchResult,
@@ -119,4 +121,5 @@ export type TuiBackend = {
   resetSession: (key: string, reason?: "new" | "reset") => Promise<unknown>;
   getGatewayStatus: () => Promise<unknown>;
   listModels: () => Promise<TuiModelChoice[]>;
+  listCommands?: (opts?: CommandsListParams) => Promise<CommandEntry[]>;
 };

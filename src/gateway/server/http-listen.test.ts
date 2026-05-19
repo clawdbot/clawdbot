@@ -17,7 +17,7 @@ function createFakeHttpServer(outcomes: ListenOutcome[]) {
     public closeCalls = 0;
     private attempt = 0;
 
-    listen(_port: number, _host: string) {
+    listen(_port: number, hostValue: string) {
       const outcome = outcomes[this.attempt] ?? { kind: "listening" };
       this.attempt += 1;
       setImmediate(() => {

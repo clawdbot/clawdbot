@@ -77,7 +77,7 @@ vi.mock("./auth.js", async () => {
 });
 
 const authActual = await vi.importActual<typeof import("./auth.js")>("./auth.js");
-const { __testing: authTesting, getGoogleChatAccessToken, verifyGoogleChatRequest } = authActual;
+const { testing: authTesting, getGoogleChatAccessToken, verifyGoogleChatRequest } = authActual;
 
 afterAll(() => {
   vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");

@@ -46,7 +46,7 @@ vi.mock("../../../logger.js", () => ({
 
 import { logInfo, logWarn } from "../../../logger.js";
 import {
-  _resetActiveManagedProxyStateForTests,
+  resetActiveManagedProxyStateForTests,
   getActiveManagedProxyTlsOptions,
 } from "./active-proxy-state.js";
 import {
@@ -105,7 +105,7 @@ describe("startProxy", () => {
     mockLogInfo.mockReset();
     mockLogWarn.mockReset();
     resetProxyLifecycleForTests();
-    _resetActiveManagedProxyStateForTests();
+    resetActiveManagedProxyStateForTests();
     installGlobalProxyMock.mockClear();
     proxylineRegisterBypassMock.mockClear();
     proxylineStopMock.mockClear();

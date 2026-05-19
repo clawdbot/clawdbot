@@ -8,7 +8,7 @@ import type {
   CliBundleMcpMode,
 } from "../plugins/types.js";
 import {
-  __testing as cliBackendsTesting,
+  testing as cliBackendsTesting,
   resolveCliBackendConfig,
   resolveCliBackendLiveTest,
 } from "./cli-backends.js";

@@ -332,6 +332,9 @@ export function scheduleFollowupDrain(
           const isCrossChannel =
             hasCrossChannelItems(queue.items, resolveCrossChannelKey) ||
             queue.items.some(hasRuntimeOnlyFollowupMetadata);
+          if (collectState.forceIndividualCollect && !isCrossChannel && queue.items.length > 1) {
+            collectState.forceIndividualCollect = false;
+          }
 
           const collectDrainResult = await drainCollectQueueStep({
             collectState,

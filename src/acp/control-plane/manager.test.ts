@@ -35,7 +35,7 @@ vi.mock("../runtime/registry.js", () => ({
 
 const {
   AcpSessionManager,
-  __testing: { resetAcpSessionManagerForTests },
+  testing: { resetAcpSessionManagerForTests },
 } = await import("./manager.js");
 const { AcpRuntimeError } = await import("../runtime/errors.js");
 const { findTaskByRunId, resetTaskRegistryForTests } = await import("../../tasks/task-registry.js");

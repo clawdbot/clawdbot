@@ -215,7 +215,13 @@ export async function commitGatewayConfigWrite(params: {
 }): Promise<{ path: string; config: OpenClawConfig; queueFollowUp: () => void }> {
   const result = await replaceConfigFile({
     nextConfig: params.nextConfig,
-    writeOptions: params.writeOptions,
+    writeOptions: {
+      ...params.writeOptions,
+      runtimeRefresh: {
+        ...params.writeOptions.runtimeRefresh,
+        includeAuthStoreRefs: false,
+      },
+    },
     afterWrite: { mode: "auto" },
   });
   return {

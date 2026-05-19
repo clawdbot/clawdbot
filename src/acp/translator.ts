@@ -715,7 +715,7 @@ export class AcpGatewayAgent implements Agent {
     this.enforceSessionCreateRateLimit("newSession");
 
     const sessionId = randomUUID();
-    const meta = parseSessionMeta(params._meta);
+    const meta = parseSessionMeta(params["_meta"]);
     const sessionKey = await this.resolveSessionKeyFromMeta({
       meta,
       fallbackKey: `acp:${sessionId}`,
@@ -748,7 +748,7 @@ export class AcpGatewayAgent implements Agent {
       this.enforceSessionCreateRateLimit("loadSession");
     }
 
-    const meta = parseSessionMeta(params._meta);
+    const meta = parseSessionMeta(params["_meta"]);
     const hasExplicitRouting = hasExplicitSessionRouting(meta, this.opts);
     const exactLedgerReplay: AcpEventLedgerReplay = hasExplicitRouting
       ? { complete: false, events: [] }
@@ -815,7 +815,7 @@ export class AcpGatewayAgent implements Agent {
       throw new Error("ACP session list cursor does not match the cwd filter.");
     }
 
-    const pageSize = resolveListSessionsPageSize(params._meta);
+    const pageSize = resolveListSessionsPageSize(params["_meta"]);
     const start = cursor.offset;
     const end = start + pageSize;
     let fetchLimit = end + 1;
@@ -866,7 +866,7 @@ export class AcpGatewayAgent implements Agent {
       this.enforceSessionCreateRateLimit("resumeSession");
     }
 
-    const meta = parseSessionMeta(params._meta);
+    const meta = parseSessionMeta(params["_meta"]);
     const fallbackKey = existingSession?.sessionKey ?? params.sessionId;
     const sessionKey = await this.resolveSessionKeyFromMeta({
       meta,
@@ -984,7 +984,7 @@ export class AcpGatewayAgent implements Agent {
       this.sessionStore.cancelActiveRun(params.sessionId);
     }
 
-    const meta = parseSessionMeta(params._meta);
+    const meta = parseSessionMeta(params["_meta"]);
     // Pass MAX_PROMPT_BYTES so extractTextFromPrompt rejects oversized content
     // block-by-block, before the full string is ever assembled in memory (CWE-400)
     const userText = extractTextFromPrompt(params.prompt, MAX_PROMPT_BYTES);
@@ -1017,9 +1017,9 @@ export class AcpGatewayAgent implements Agent {
       message,
       attachments: attachments.length > 0 ? attachments : undefined,
       idempotencyKey: runId,
-      thinking: readString(params._meta, ["thinking", "thinkingLevel"]),
-      deliver: readBool(params._meta, ["deliver"]),
-      timeoutMs: readNumber(params._meta, ["timeoutMs"]),
+      thinking: readString(params["_meta"], ["thinking", "thinkingLevel"]),
+      deliver: readBool(params["_meta"], ["deliver"]),
+      timeoutMs: readNumber(params["_meta"], ["timeoutMs"]),
     };
 
     return new Promise<PromptResponse>((resolve, reject) => {

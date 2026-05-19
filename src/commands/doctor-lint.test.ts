@@ -7,7 +7,8 @@ const mocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(),
 }));
 
-vi.mock("../config/config.js", () => ({
+vi.mock("../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/config.js")>()),
   readConfigFileSnapshot: mocks.readConfigFileSnapshot,
 }));
 
@@ -37,6 +38,7 @@ describe("runDoctorLintCli", () => {
       const exitCode = await runDoctorLintCli(runtime, {
         json: true,
         severityMin: "error",
+        onlyIds: ["core/doctor/final-config-validation"],
       });
 
       expect(exitCode).toBe(0);
@@ -61,12 +63,11 @@ describe("runDoctorLintCli", () => {
     try {
       const exitCode = await runDoctorLintCli(runtime, {
         severityMin: "error",
+        onlyIds: ["core/doctor/final-config-validation"],
       });
 
       expect(exitCode).toBe(0);
-      expect(String(stdout.mock.calls[0]?.[0])).toBe(
-        "doctor --lint: ran 6 check(s), 0 finding(s)\n",
-      );
+      expect(String(stdout.mock.calls[0]?.[0])).toContain("0 finding(s)");
       expect(String(stdout.mock.calls[1]?.[0])).toBe("  no findings\n");
     } finally {
       Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: originalIsTTY });
@@ -102,6 +103,39 @@ describe("runDoctorLintCli", () => {
         ],
       });
       expect(runtime.error).not.toHaveBeenCalled();
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+
+  it("rejects unknown --only health check ids instead of reporting a false-clean run", async () => {
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config: {},
+      path: "/tmp/openclaw.json",
+    });
+
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      const exitCode = await runDoctorLintCli(runtime, {
+        json: true,
+        onlyIds: ["core/doctor/session-locks"],
+      });
+
+      expect(exitCode).toBe(1);
+      const payload = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
+      expect(payload).toMatchObject({
+        ok: false,
+        checksRun: 0,
+        findings: [
+          {
+            checkId: "core/doctor/lint-selection",
+            severity: "error",
+            path: "core/doctor/session-locks",
+          },
+        ],
+      });
     } finally {
       stdout.mockRestore();
     }

@@ -9,6 +9,10 @@ import {
 } from "./node-llama.js";
 import { normalizeOptionalString } from "./string-utils.js";
 
+type DisposableResource = {
+  dispose?: () => Promise<void> | void;
+};
+
 export type {
   EmbeddingProvider,
   EmbeddingProviderFallback,
@@ -19,6 +23,22 @@ export type {
 } from "./embeddings.types.js";
 
 export { DEFAULT_LOCAL_MODEL } from "./embedding-defaults.js";
+
+async function disposeResources(
+  resources: Array<DisposableResource | null | undefined>,
+): Promise<void> {
+  let firstError: unknown;
+  for (const resource of resources) {
+    try {
+      await resource?.dispose?.();
+    } catch (err) {
+      firstError ??= err;
+    }
+  }
+  if (firstError) {
+    throw firstError;
+  }
+}
 
 export async function createLocalEmbeddingProvider(
   options: EmbeddingProviderOptions,
@@ -34,8 +54,26 @@ export async function createLocalEmbeddingProvider(
   let embeddingModel: LlamaModel | null = null;
   let embeddingContext: LlamaEmbeddingContext | null = null;
   let initPromise: Promise<LlamaEmbeddingContext> | null = null;
+  let initAbortController: AbortController | null = null;
+  let closePromise: Promise<void> | null = null;
+  let closed = false;
+
+  const throwIfClosed = () => {
+    if (closed) {
+      throw new Error("Local embedding provider has been closed");
+    }
+  };
+  const disposeAndThrowIfClosed = async <T extends DisposableResource>(resource: T): Promise<T> => {
+    if (!closed) {
+      return resource;
+    }
+    await disposeResources([resource]);
+    throwIfClosed();
+    return resource;
+  };
 
   const ensureContext = async (): Promise<LlamaEmbeddingContext> => {
+    throwIfClosed();
     if (embeddingContext) {
       return embeddingContext;
     }
@@ -43,21 +81,40 @@ export async function createLocalEmbeddingProvider(
       return initPromise;
     }
     initPromise = (async () => {
+      const abortController = new AbortController();
+      initAbortController = abortController;
       try {
         if (!llama) {
-          llama = await getLlama({ logLevel: LlamaLogLevel.error });
+          const nextLlama = await getLlama({ logLevel: LlamaLogLevel.error });
+          llama = await disposeAndThrowIfClosed(nextLlama);
         }
         if (!embeddingModel) {
-          const resolved = await resolveModelFile(modelPath, modelCacheDir || undefined);
-          embeddingModel = await llama.loadModel({ modelPath: resolved });
+          const resolved = await resolveModelFile(modelPath, {
+            ...(modelCacheDir ? { directory: modelCacheDir } : {}),
+            signal: abortController.signal,
+          });
+          throwIfClosed();
+          const nextModel = await llama.loadModel({
+            modelPath: resolved,
+            loadSignal: abortController.signal,
+          });
+          embeddingModel = await disposeAndThrowIfClosed(nextModel);
         }
         if (!embeddingContext) {
-          embeddingContext = await embeddingModel.createEmbeddingContext({ contextSize });
+          const nextContext = await embeddingModel.createEmbeddingContext({
+            contextSize,
+            createSignal: abortController.signal,
+          });
+          embeddingContext = await disposeAndThrowIfClosed(nextContext);
         }
         return embeddingContext;
       } catch (err) {
         initPromise = null;
         throw err;
+      } finally {
+        if (initAbortController === abortController) {
+          initAbortController = null;
+        }
       }
     })();
     return initPromise;
@@ -67,24 +124,48 @@ export async function createLocalEmbeddingProvider(
     id: "local",
     model: modelPath,
     embedQuery: async (text, options) => {
+      throwIfClosed();
       options?.signal?.throwIfAborted();
       const ctx = await ensureContext();
+      throwIfClosed();
       options?.signal?.throwIfAborted();
       const embedding = await ctx.getEmbeddingFor(text);
       return sanitizeAndNormalizeEmbedding(Array.from(embedding.vector));
     },
     embedBatch: async (texts, options) => {
+      throwIfClosed();
       options?.signal?.throwIfAborted();
       const ctx = await ensureContext();
+      throwIfClosed();
       options?.signal?.throwIfAborted();
       const embeddings = await Promise.all(
         texts.map(async (text) => {
+          throwIfClosed();
           options?.signal?.throwIfAborted();
           const embedding = await ctx.getEmbeddingFor(text);
           return sanitizeAndNormalizeEmbedding(Array.from(embedding.vector));
         }),
       );
       return embeddings;
+    },
+    close: async () => {
+      if (closePromise) {
+        return closePromise;
+      }
+      closed = true;
+      initAbortController?.abort();
+      initAbortController = null;
+      closePromise = (async () => {
+        const context = embeddingContext;
+        const model = embeddingModel;
+        const runtime = llama;
+        embeddingContext = null;
+        embeddingModel = null;
+        llama = null;
+        initPromise = null;
+        await disposeResources([context, model, runtime]);
+      })();
+      return closePromise;
     },
   };
 }

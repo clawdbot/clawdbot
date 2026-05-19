@@ -68,7 +68,65 @@ describe("Codex app-server native code mode config", () => {
     );
   });
 
-  it("enables Codex code-mode-only on thread/start without clobbering other config", () => {
+  it("summarizes deferred dynamic tool names in developer instructions", () => {
+    const instructions = buildDeveloperInstructions(createAttemptParams({ provider: "openai" }), {
+      dynamicTools: [
+        {
+          name: "message",
+          description: "Send a message",
+          inputSchema: { type: "object" },
+        },
+        {
+          name: "music_generate",
+          description: "Create music",
+          inputSchema: { type: "object" },
+          namespace: "openclaw",
+          deferLoading: true,
+        },
+        {
+          name: "image_generate",
+          description: "Create images",
+          inputSchema: { type: "object" },
+          namespace: "openclaw",
+          deferLoading: true,
+        },
+      ],
+    });
+
+    expect(instructions).toContain(
+      "Deferred searchable OpenClaw dynamic tools available: image_generate, music_generate.",
+    );
+    expect(instructions).toContain("Use `tool_search` to load exact callable specs before use.");
+    expect(instructions).not.toContain("message,");
+  });
+
+  it("keeps developer instructions compact when no dynamic tools are deferred", () => {
+    const instructions = buildDeveloperInstructions(createAttemptParams({ provider: "openai" }), {
+      dynamicTools: [
+        {
+          name: "message",
+          description: "Send a message",
+          inputSchema: { type: "object" },
+        },
+      ],
+    });
+
+    expect(instructions).not.toContain("Deferred searchable OpenClaw dynamic tools available");
+  });
+
+  it("keeps OpenClaw skill catalogs out of developer instructions", () => {
+    const params = createAttemptParams({ provider: "openai" });
+    params.skillsSnapshot = {
+      prompt: "<available_skills><skill><name>demo</name></skill></available_skills>",
+      skills: [],
+    };
+
+    const instructions = buildDeveloperInstructions(params);
+
+    expect(instructions).not.toContain("<available_skills>");
+  });
+
+  it("enables Codex code mode on thread/start without clobbering other config", () => {
     const request = buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
       cwd: "/repo",
       dynamicTools: [],
@@ -84,11 +142,46 @@ describe("Codex app-server native code mode config", () => {
       "features.hooks": true,
       apps: { _default: { enabled: false } },
       "features.code_mode": true,
+      "features.code_mode_only": false,
+    });
+  });
+
+  it("allows thread config to opt into Codex code-mode-only", () => {
+    const request = buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
+      cwd: "/repo",
+      dynamicTools: [],
+      appServer: createAppServerOptions() as never,
+      developerInstructions: "test instructions",
+      config: {
+        "features.code_mode_only": true,
+      },
+    });
+
+    expect(request.config).toEqual({
+      "features.code_mode": true,
       "features.code_mode_only": true,
     });
   });
 
-  it("enables Codex code-mode-only on thread/resume", () => {
+  it("forces Codex code-mode-only when app-server policy opts in", () => {
+    const request = buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
+      cwd: "/repo",
+      dynamicTools: [],
+      appServer: createAppServerOptions() as never,
+      developerInstructions: "test instructions",
+      nativeCodeModeOnlyEnabled: true,
+      config: {
+        "features.code_mode_only": false,
+      },
+    });
+
+    expect(request.config).toEqual({
+      "features.code_mode": true,
+      "features.code_mode_only": true,
+    });
+  });
+
+  it("enables Codex code mode on thread/resume", () => {
     const request = buildThreadResumeParams(createAttemptParams({ provider: "openai" }), {
       threadId: "thread-1",
       appServer: createAppServerOptions() as never,
@@ -97,7 +190,7 @@ describe("Codex app-server native code mode config", () => {
 
     expect(request.config).toEqual({
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
     });
   });
 
@@ -108,6 +201,7 @@ describe("Codex app-server native code mode config", () => {
       appServer: createAppServerOptions() as never,
       developerInstructions: "test instructions",
       nativeCodeModeEnabled: false,
+      nativeCodeModeOnlyEnabled: true,
       config: {
         "features.code_mode": true,
         "features.code_mode_only": true,
@@ -157,7 +251,7 @@ describe("Codex app-server native code mode config", () => {
       project_doc_max_bytes: 0,
       "features.hooks": true,
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
     });
   });
 
@@ -177,7 +271,7 @@ describe("Codex app-server native code mode config", () => {
     expect(request.config).toEqual({
       project_doc_max_bytes: 64_000,
       "features.code_mode": true,
-      "features.code_mode_only": true,
+      "features.code_mode_only": false,
     });
   });
 });

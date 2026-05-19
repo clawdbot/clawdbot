@@ -109,7 +109,7 @@ export function pruneStaleControlPlaneBuckets(nowMs = Date.now()): number {
   return pruned;
 }
 
-export const __testing = {
+export const testing = {
   getControlPlaneRateLimitBucketCount() {
     return controlPlaneBuckets.size;
   },
@@ -117,3 +117,4 @@ export const __testing = {
     controlPlaneBuckets.clear();
   },
 };
+export { testing as __testing };

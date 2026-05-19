@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RunEmbeddedPiAgentParams } from "../agents/pi-embedded-runner/run/params.js";
 import {
-  __setRealtimeVoiceAgentConsultDepsForTest,
+  setRealtimeVoiceAgentConsultDepsForTest,
   consultRealtimeVoiceAgent,
   resolveRealtimeVoiceAgentConsultTools,
   resolveRealtimeVoiceAgentConsultToolsAllow,
@@ -91,7 +91,7 @@ function expectNonEmptyString(value: unknown) {
 
 describe("realtime voice agent consult runtime", () => {
   afterEach(() => {
-    __setRealtimeVoiceAgentConsultDepsForTest(null);
+    setRealtimeVoiceAgentConsultDepsForTest(null);
   });
 
   it("exposes the shared consult tool based on policy", () => {
@@ -238,7 +238,7 @@ describe("realtime voice agent consult runtime", () => {
       sessionId: "forked-session",
       sessionFile: "/tmp/forked.jsonl",
     }));
-    __setRealtimeVoiceAgentConsultDepsForTest({
+    setRealtimeVoiceAgentConsultDepsForTest({
       resolveParentForkDecision,
       forkSessionFromParent,
     });

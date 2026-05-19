@@ -5,7 +5,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  __testing,
+  testing,
   buildQaRuntimeEnv,
   resolveQaControlUiRoot,
   startQaGatewayChild,
@@ -168,8 +168,8 @@ describe("buildQaRuntimeEnv", () => {
   });
 
   it("defaults gateway-child provider mode to mock-openai when omitted", () => {
-    expect(__testing.resolveQaGatewayChildProviderMode(undefined)).toBe("mock-openai");
-    expect(__testing.resolveQaGatewayChildProviderMode("live-frontier")).toBe("live-frontier");
+    expect(testing.resolveQaGatewayChildProviderMode(undefined)).toBe("mock-openai");
+    expect(testing.resolveQaGatewayChildProviderMode("live-frontier")).toBe("live-frontier");
   });
 
   it("keeps explicit provider env vars over live aliases", () => {
@@ -383,20 +383,18 @@ describe("buildQaRuntimeEnv", () => {
   );
 
   it("treats restart socket closures as retryable gateway call errors", () => {
-    expect(__testing.isRetryableGatewayCallError("gateway closed (1006 abnormal closure)")).toBe(
+    expect(testing.isRetryableGatewayCallError("gateway closed (1006 abnormal closure)")).toBe(
       true,
     );
-    expect(__testing.isRetryableGatewayCallError("gateway closed (1012 service restart)")).toBe(
-      true,
-    );
-    expect(__testing.isRetryableGatewayCallError("service restart in progress")).toBe(true);
-    expect(__testing.isRetryableGatewayCallError("permission denied")).toBe(false);
+    expect(testing.isRetryableGatewayCallError("gateway closed (1012 service restart)")).toBe(true);
+    expect(testing.isRetryableGatewayCallError("service restart in progress")).toBe(true);
+    expect(testing.isRetryableGatewayCallError("permission denied")).toBe(false);
   });
 
   it("waits for a fresh in-process restart boundary after the current log offset", async () => {
     let logs = "old restart mode: in-process restart\n";
     const offset = logs.length;
-    const wait = __testing.waitForQaGatewayRestartBoundary({
+    const wait = testing.waitForQaGatewayRestartBoundary({
       logs: () => logs,
       offset,
       pollMs: 1,
@@ -409,11 +407,11 @@ describe("buildQaRuntimeEnv", () => {
   });
 
   it("keeps restart offsets stable after stderr output", async () => {
-    const output = __testing.createQaGatewayChildLogCollector();
+    const output = testing.createQaGatewayChildLogCollector();
     output.push(Buffer.from("gateway ready\n"));
     output.push(Buffer.from("stderr warning\n"));
     const offset = output.text().length;
-    const wait = __testing.waitForQaGatewayRestartBoundary({
+    const wait = testing.waitForQaGatewayRestartBoundary({
       logs: () => output.text(),
       offset,
       pollMs: 1,
@@ -427,7 +425,7 @@ describe("buildQaRuntimeEnv", () => {
 
   it("times out when a SIGUSR1 restart never reaches the boundary", async () => {
     await expect(
-      __testing.waitForQaGatewayRestartBoundary({
+      testing.waitForQaGatewayRestartBoundary({
         logs: () => "signal SIGUSR1 received\n",
         offset: 0,
         pollMs: 1,
@@ -443,7 +441,7 @@ describe("buildQaRuntimeEnv", () => {
     });
     const token = `sk-ant-oat01-${"c".repeat(80)}`;
 
-    const cfg = await __testing.stageQaLiveAnthropicSetupToken({
+    const cfg = await testing.stageQaLiveAnthropicSetupToken({
       cfg: {},
       stateDir,
       env: {
@@ -473,7 +471,7 @@ describe("buildQaRuntimeEnv", () => {
       await rm(stateDir, { recursive: true, force: true });
     });
 
-    const cfg = await __testing.stageQaLiveApiKeyProfiles({
+    const cfg = await testing.stageQaLiveApiKeyProfiles({
       cfg: {},
       stateDir,
       providerIds: ["openai"],
@@ -508,7 +506,7 @@ describe("buildQaRuntimeEnv", () => {
       await rm(stateDir, { recursive: true, force: true });
     });
 
-    const cfg = await __testing.stageQaLiveApiKeyProfiles({
+    const cfg = await testing.stageQaLiveApiKeyProfiles({
       cfg: {},
       stateDir,
       providerIds: ["openai-codex"],
@@ -550,7 +548,7 @@ describe("buildQaRuntimeEnv", () => {
       await rm(stateDir, { recursive: true, force: true });
     });
 
-    const cfg = await __testing.stageQaLiveApiKeyProfiles({
+    const cfg = await testing.stageQaLiveApiKeyProfiles({
       cfg: {},
       stateDir,
       providerIds: ["openai-codex"],
@@ -572,7 +570,7 @@ describe("buildQaRuntimeEnv", () => {
     expect(storeProfile.key).toBe("qa-live-direct-codex-key");
 
     expect(() =>
-      __testing.assertQaLiveCodexAuthAvailable({
+      testing.assertQaLiveCodexAuthAvailable({
         cfg,
         providerIds: ["openai-codex"],
         env: {
@@ -585,7 +583,7 @@ describe("buildQaRuntimeEnv", () => {
 
   it("fails fast when live OpenAI Codex runs have no portable QA auth", () => {
     expect(() =>
-      __testing.assertQaLiveCodexAuthAvailable({
+      testing.assertQaLiveCodexAuthAvailable({
         cfg: {},
         providerIds: ["openai-codex"],
         env: {
@@ -598,7 +596,7 @@ describe("buildQaRuntimeEnv", () => {
 
   it("fails fast when default OpenAI model refs route through Codex without portable QA auth", () => {
     expect(() =>
-      __testing.assertQaLiveCodexAuthAvailable({
+      testing.assertQaLiveCodexAuthAvailable({
         cfg: {},
         providerIds: ["openai"],
         env: {
@@ -611,7 +609,7 @@ describe("buildQaRuntimeEnv", () => {
 
   it("does not require Codex auth for custom OpenAI-compatible provider configs", () => {
     expect(() =>
-      __testing.assertQaLiveCodexAuthAvailable({
+      testing.assertQaLiveCodexAuthAvailable({
         cfg: {
           models: {
             providers: {
@@ -633,7 +631,7 @@ describe("buildQaRuntimeEnv", () => {
 
   it("fails fast when forced Codex runtime uses OpenAI model refs without portable QA auth", () => {
     expect(() =>
-      __testing.assertQaLiveCodexAuthAvailable({
+      testing.assertQaLiveCodexAuthAvailable({
         cfg: {},
         providerIds: ["openai"],
         env: {
@@ -647,7 +645,7 @@ describe("buildQaRuntimeEnv", () => {
 
   it("accepts OpenAI API-key fallback auth for forced Codex runtime QA runs", () => {
     expect(() =>
-      __testing.assertQaLiveCodexAuthAvailable({
+      testing.assertQaLiveCodexAuthAvailable({
         cfg: {},
         providerIds: ["openai"],
         env: {
@@ -664,7 +662,7 @@ describe("buildQaRuntimeEnv", () => {
     cleanups.push(async () => {
       await rm(stateDir, { recursive: true, force: true });
     });
-    const cfg = await __testing.stageQaLiveApiKeyProfiles({
+    const cfg = await testing.stageQaLiveApiKeyProfiles({
       cfg: {
         models: {
           providers: {
@@ -699,7 +697,7 @@ describe("buildQaRuntimeEnv", () => {
     }
 
     expect(() =>
-      __testing.assertQaLiveCodexAuthAvailable({
+      testing.assertQaLiveCodexAuthAvailable({
         cfg,
         providerIds: ["openai-codex"],
         env: {},
@@ -716,7 +714,7 @@ describe("buildQaRuntimeEnv", () => {
     const env = {
       OPENCLAW_LIVE_CODEX_API_KEY: "qa-configured-env-ref-not-a-real-key",
     };
-    const cfg = await __testing.stageQaLiveApiKeyProfiles({
+    const cfg = await testing.stageQaLiveApiKeyProfiles({
       cfg: {
         models: {
           providers: {
@@ -750,7 +748,7 @@ describe("buildQaRuntimeEnv", () => {
     expect(storeProfile.key).toBe("qa-configured-env-ref-not-a-real-key");
 
     expect(() =>
-      __testing.assertQaLiveCodexAuthAvailable({
+      testing.assertQaLiveCodexAuthAvailable({
         cfg,
         providerIds: ["openai"],
         env,
@@ -764,7 +762,7 @@ describe("buildQaRuntimeEnv", () => {
     cleanups.push(async () => {
       await rm(stateDir, { recursive: true, force: true });
     });
-    const cfg = await __testing.stageQaLiveApiKeyProfiles({
+    const cfg = await testing.stageQaLiveApiKeyProfiles({
       cfg: {
         models: {
           providers: {
@@ -796,7 +794,7 @@ describe("buildQaRuntimeEnv", () => {
     expect(storeProfile.key).toBe("qa-configured-marker-not-a-real-key");
 
     expect(() =>
-      __testing.assertQaLiveCodexAuthAvailable({
+      testing.assertQaLiveCodexAuthAvailable({
         cfg,
         providerIds: ["openai-codex"],
         env: {},
@@ -815,7 +813,7 @@ describe("buildQaRuntimeEnv", () => {
     }));
 
     expect(() =>
-      __testing.assertQaLiveCodexAuthAvailable({
+      testing.assertQaLiveCodexAuthAvailable({
         cfg: {},
         providerIds: ["openai-codex"],
         env: {
@@ -837,7 +835,7 @@ describe("buildQaRuntimeEnv", () => {
       await rm(stateDir, { recursive: true, force: true });
     });
 
-    const cfg = await __testing.stageQaMockAuthProfiles({
+    const cfg = await testing.stageQaMockAuthProfiles({
       cfg: {},
       stateDir,
     });
@@ -881,7 +879,7 @@ describe("buildQaRuntimeEnv", () => {
       await rm(stateDir, { recursive: true, force: true });
     });
 
-    const cfg = await __testing.stageQaMockAuthProfiles({
+    const cfg = await testing.stageQaMockAuthProfiles({
       cfg: {},
       stateDir,
       agentIds: ["qa"],
@@ -916,7 +914,7 @@ describe("buildQaRuntimeEnv", () => {
     });
 
     await expect(
-      __testing.fetchLocalGatewayHealth({
+      testing.fetchLocalGatewayHealth({
         baseUrl: "http://127.0.0.1:18789",
         healthPath: "/readyz",
       }),
@@ -950,8 +948,8 @@ describe("buildQaRuntimeEnv", () => {
       return true;
     });
 
-    await __testing.stopQaGatewayChildProcessTree(
-      child as unknown as Parameters<typeof __testing.stopQaGatewayChildProcessTree>[0],
+    await testing.stopQaGatewayChildProcessTree(
+      child as unknown as Parameters<typeof testing.stopQaGatewayChildProcessTree>[0],
       {
         gracefulTimeoutMs: 1,
         forceTimeoutMs: 10,
@@ -970,27 +968,25 @@ describe("buildQaRuntimeEnv", () => {
 
   it("treats bind collisions as retryable gateway startup errors", () => {
     expect(
-      __testing.isRetryableGatewayStartupError(
+      testing.isRetryableGatewayStartupError(
         "another gateway instance is already listening on ws://127.0.0.1:43124",
       ),
     ).toBe(true);
     expect(
-      __testing.isRetryableGatewayStartupError(
+      testing.isRetryableGatewayStartupError(
         "failed to bind gateway socket on ws://127.0.0.1:43124: Error: listen EADDRINUSE",
       ),
     ).toBe(true);
-    expect(__testing.isRetryableGatewayStartupError("gateway failed to become healthy")).toBe(
-      false,
-    );
+    expect(testing.isRetryableGatewayStartupError("gateway failed to become healthy")).toBe(false);
   });
 
   it("treats startup token mismatches as retryable rpc startup errors", () => {
     expect(
-      __testing.isRetryableRpcStartupError(
+      testing.isRetryableRpcStartupError(
         "unauthorized: gateway token mismatch (set gateway.remote.token to match gateway.auth.token)",
       ),
     ).toBe(true);
-    expect(__testing.isRetryableRpcStartupError("permission denied")).toBe(false);
+    expect(testing.isRetryableRpcStartupError("permission denied")).toBe(false);
   });
 
   it("probes gateway health with a one-shot HEAD request through the SSRF guard", async () => {
@@ -1001,7 +997,7 @@ describe("buildQaRuntimeEnv", () => {
     });
 
     await expect(
-      __testing.fetchLocalGatewayHealth({
+      testing.fetchLocalGatewayHealth({
         baseUrl: "http://127.0.0.1:43124",
         healthPath: "/readyz",
       }),
@@ -1049,7 +1045,7 @@ describe("buildQaRuntimeEnv", () => {
     await mkdir(path.join(tempRoot, "state"), { recursive: true });
     await writeFile(path.join(tempRoot, "state", "secret.txt"), "do-not-copy", "utf8");
 
-    await __testing.preserveQaGatewayDebugArtifacts({
+    await testing.preserveQaGatewayDebugArtifacts({
       preserveToDir: artifactDir,
       stdoutLogPath,
       stderrLogPath,
@@ -1086,7 +1082,7 @@ describe("buildQaRuntimeEnv", () => {
 
   it("rejects preserved gateway artifacts outside the repo root", async () => {
     await expect(
-      __testing.assertQaArtifactDirWithinRepo("/tmp/openclaw-repo", "/tmp/outside"),
+      testing.assertQaArtifactDirWithinRepo("/tmp/openclaw-repo", "/tmp/outside"),
     ).rejects.toThrow("QA gateway artifact directory must stay within the repo root.");
   });
 
@@ -1101,7 +1097,7 @@ describe("buildQaRuntimeEnv", () => {
     await symlink(outsideRoot, path.join(repoRoot, ".artifacts", "qa-e2e"), "dir");
 
     await expect(
-      __testing.assertQaArtifactDirWithinRepo(
+      testing.assertQaArtifactDirWithinRepo(
         repoRoot,
         path.join(repoRoot, ".artifacts", "qa-e2e", "gateway-runtime"),
       ),
@@ -1119,7 +1115,7 @@ describe("buildQaRuntimeEnv", () => {
     await writeFile(path.join(tempRoot, "openclaw.json"), "{}", "utf8");
     await writeFile(path.join(stagedRoot, "marker.txt"), "x", "utf8");
 
-    await __testing.cleanupQaGatewayTempRoots({
+    await testing.cleanupQaGatewayTempRoots({
       tempRoot,
       stagedBundledPluginsRoot: stagedRoot,
     });
@@ -1179,7 +1175,7 @@ describe("qa bundled plugin dir", () => {
     await writeFile(path.join(repoRoot, "extensions", "qa-channel", "package.json"), "{}", "utf8");
 
     expect(
-      __testing.resolveQaBundledPluginSourceDir({
+      testing.resolveQaBundledPluginSourceDir({
         repoRoot,
         pluginId: "qa-channel",
       }),
@@ -1195,7 +1191,7 @@ describe("qa bundled plugin dir", () => {
     await writeFile(path.join(repoRoot, "extensions", "qa-channel", "package.json"), "{}", "utf8");
 
     expect(
-      __testing.resolveQaBundledPluginSourceDir({
+      testing.resolveQaBundledPluginSourceDir({
         repoRoot,
         pluginId: "qa-channel",
       }),
@@ -1222,7 +1218,7 @@ describe("qa bundled plugin dir", () => {
     );
 
     expect(
-      __testing.resolveQaBundledPluginSourceDir({
+      testing.resolveQaBundledPluginSourceDir({
         repoRoot,
         pluginId: "kimi",
       }),
@@ -1259,7 +1255,7 @@ describe("qa bundled plugin dir", () => {
     );
 
     expect(
-      __testing.resolveQaBundledPluginSourceDir({
+      testing.resolveQaBundledPluginSourceDir({
         repoRoot,
         pluginId: "memory-core",
       }),
@@ -1318,7 +1314,7 @@ describe("qa bundled plugin dir", () => {
       await rm(tempRoot, { recursive: true, force: true });
     });
 
-    const { bundledPluginsDir, stagedRoot } = await __testing.createQaBundledPluginsDir({
+    const { bundledPluginsDir, stagedRoot } = await testing.createQaBundledPluginsDir({
       repoRoot,
       tempRoot,
       allowedPluginIds: ["qa-channel", "memory-core"],
@@ -1408,7 +1404,7 @@ describe("qa bundled plugin dir", () => {
       await rm(tempRoot, { recursive: true, force: true });
     });
 
-    const { bundledPluginsDir } = await __testing.createQaBundledPluginsDir({
+    const { bundledPluginsDir } = await testing.createQaBundledPluginsDir({
       repoRoot,
       tempRoot,
       allowedPluginIds: ["runtime-only"],
@@ -1461,7 +1457,7 @@ describe("qa bundled plugin dir", () => {
     });
 
     await expect(
-      __testing.createQaBundledPluginsDir({
+      testing.createQaBundledPluginsDir({
         repoRoot,
         tempRoot,
         allowedPluginIds: ["../escape"],
@@ -1536,7 +1532,7 @@ describe("qa bundled plugin dir", () => {
       await rm(tempRoot, { recursive: true, force: true });
     });
 
-    const { bundledPluginsDir, stagedRoot } = await __testing.createQaBundledPluginsDir({
+    const { bundledPluginsDir, stagedRoot } = await testing.createQaBundledPluginsDir({
       repoRoot,
       tempRoot,
       allowedPluginIds: ["qa-channel"],
@@ -1586,7 +1582,7 @@ describe("qa bundled plugin dir", () => {
     );
 
     await expect(
-      __testing.resolveQaOwnerPluginIdsForProviderIds({
+      testing.resolveQaOwnerPluginIdsForProviderIds({
         repoRoot,
         providerIds: ["codex-cli"],
       }),
@@ -1610,7 +1606,7 @@ describe("qa bundled plugin dir", () => {
     );
 
     await expect(
-      __testing.resolveQaOwnerPluginIdsForProviderIds({
+      testing.resolveQaOwnerPluginIdsForProviderIds({
         repoRoot,
         providerIds: ["custom-openai"],
         providerConfigs: {
@@ -1675,7 +1671,7 @@ describe("qa bundled plugin dir", () => {
       "utf8",
     );
 
-    const overrides = await __testing.readQaLiveProviderConfigOverrides({
+    const overrides = await testing.readQaLiveProviderConfigOverrides({
       providerIds: ["custom-openai"],
       env: { OPENCLAW_QA_LIVE_PROVIDER_CONFIG_PATH: configPath },
     });
@@ -1709,7 +1705,7 @@ describe("qa bundled plugin dir", () => {
       "utf8",
     );
 
-    const overrides = await __testing.readQaLiveProviderConfigOverrides({
+    const overrides = await testing.readQaLiveProviderConfigOverrides({
       providerIds: ["openai"],
       env: { OPENCLAW_QA_LIVE_PROVIDER_CONFIG_PATH: configPath },
     });
@@ -1751,7 +1747,7 @@ describe("qa bundled plugin dir", () => {
       "utf8",
     );
 
-    const overrides = await __testing.readQaLiveProviderConfigOverrides({
+    const overrides = await testing.readQaLiveProviderConfigOverrides({
       providerIds: ["openai"],
       env: { OPENCLAW_QA_LIVE_PROVIDER_CONFIG_PATH: configPath },
     });
@@ -1786,7 +1782,7 @@ describe("qa bundled plugin dir", () => {
     );
 
     await expect(
-      __testing.resolveQaRuntimeHostVersion({
+      testing.resolveQaRuntimeHostVersion({
         repoRoot,
         allowedPluginIds: ["memory-core", "qa-channel"],
       }),
@@ -1818,7 +1814,7 @@ describe("qa bundled plugin dir", () => {
     );
 
     await expect(
-      __testing.resolveQaRuntimeHostVersion({
+      testing.resolveQaRuntimeHostVersion({
         repoRoot,
         allowedPluginIds: ["qa-channel"],
       }),

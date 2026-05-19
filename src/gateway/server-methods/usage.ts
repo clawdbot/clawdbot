@@ -801,7 +801,7 @@ function mergeUsageCacheStatus(
 }
 
 // Exposed for unit tests (kept as a single export to avoid widening the public API surface).
-export const __test = {
+export const testApi = {
   parseDateParts,
   parseUtcOffsetToMinutes,
   resolveDateInterpretation,
@@ -813,6 +813,7 @@ export const __test = {
   loadCostUsageSummaryCached,
   costUsageCache,
 };
+export { testApi as __test };
 
 export type { SessionUsageEntry, SessionsUsageAggregates, SessionsUsageResult };
 

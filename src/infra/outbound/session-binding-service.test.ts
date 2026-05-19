@@ -7,7 +7,7 @@ import {
 } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
-  __testing,
+  testing,
   getSessionBindingService,
   isSessionBindingError,
   registerSessionBindingAdapter,
@@ -120,7 +120,7 @@ function expectConversationFields(value: unknown, fields: Record<string, unknown
 
 describe("session binding service", () => {
   beforeEach(() => {
-    __testing.resetSessionBindingAdaptersForTests();
+    testing.resetSessionBindingAdaptersForTests();
     setMinimalCurrentConversationRegistry();
   });
 
@@ -546,11 +546,11 @@ describe("session binding service", () => {
       resolveByConversation: () => null,
     };
 
-    first.__testing.resetSessionBindingAdaptersForTests();
+    first.testing.resetSessionBindingAdaptersForTests();
     first.registerSessionBindingAdapter(firstAdapter);
     second.registerSessionBindingAdapter(secondAdapter);
 
-    expect(second.__testing.getRegisteredAdapterKeys()).toEqual(["demo-binding:default"]);
+    expect(second.testing.getRegisteredAdapterKeys()).toEqual(["demo-binding:default"]);
 
     const secondBound = await second.getSessionBindingService().bind({
       targetSessionKey: "agent:main:subagent:child-1",
@@ -611,6 +611,6 @@ describe("session binding service", () => {
       "BINDING_ADAPTER_UNAVAILABLE",
     );
 
-    first.__testing.resetSessionBindingAdaptersForTests();
+    first.testing.resetSessionBindingAdaptersForTests();
   });
 });

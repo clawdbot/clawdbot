@@ -96,6 +96,110 @@ describe("followup queue collect routing", () => {
     expect(calls[0]?.originatingTo).toBe("channel:A");
   });
 
+  it("collects compatible items after one cross-channel drain", async () => {
+    const key = `test-collect-after-cross-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      if (calls.length >= 2) {
+        done.resolve();
+      }
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "first route",
+        originatingChannel: "slack",
+        originatingTo: "channel:A",
+      }),
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "second route one",
+        originatingChannel: "slack",
+        originatingTo: "channel:B",
+      }),
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "second route two",
+        originatingChannel: "slack",
+        originatingTo: "channel:B",
+      }),
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.prompt).toBe("first route");
+    expect(calls[1]?.prompt).toContain("[Queued messages while agent was busy]");
+    expect(calls[1]?.prompt).toContain("Queued #1\nsecond route one");
+    expect(calls[1]?.prompt).toContain("Queued #2\nsecond route two");
+    expect(calls[1]?.originatingChannel).toBe("slack");
+    expect(calls[1]?.originatingTo).toBe("channel:B");
+  });
+
+  it("collects unresolved-origin items with an otherwise single route", async () => {
+    const key = `test-collect-unresolved-origin-${Date.now()}`;
+    const calls: FollowupRun[] = [];
+    const done = createDeferred<void>();
+    const runFollowup = async (run: FollowupRun) => {
+      calls.push(run);
+      done.resolve();
+    };
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    enqueueFollowupRun(key, createRun({ prompt: "unresolved origin" }), settings);
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "keyed one",
+        originatingChannel: "slack",
+        originatingTo: "channel:B",
+      }),
+      settings,
+    );
+    enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "keyed two",
+        originatingChannel: "slack",
+        originatingTo: "channel:B",
+      }),
+      settings,
+    );
+
+    scheduleFollowupDrain(key, runFollowup);
+    await done.promise;
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.prompt).toContain("[Queued messages while agent was busy]");
+    expect(calls[0]?.prompt).toContain("Queued #1\nunresolved origin");
+    expect(calls[0]?.prompt).toContain("Queued #2\nkeyed one");
+    expect(calls[0]?.prompt).toContain("Queued #3\nkeyed two");
+    expect(calls[0]?.originatingChannel).toBe("slack");
+    expect(calls[0]?.originatingTo).toBe("channel:B");
+  });
+
   it("collects ordinary user-request followups with current turn kind", async () => {
     const key = `test-collect-user-request-kind-${Date.now()}`;
     const calls: FollowupRun[] = [];

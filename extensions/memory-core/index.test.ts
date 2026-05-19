@@ -1,5 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { describe, expect, it } from "vitest";
+import type { MemoryPluginRuntime } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildMemoryFlushPlan,
   DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES,
@@ -7,6 +9,33 @@ import {
   DEFAULT_MEMORY_FLUSH_SOFT_TOKENS,
 } from "./src/flush-plan.js";
 import { buildPromptSection } from "./src/prompt-section.js";
+
+const closeMemorySearchManagerMock = vi.hoisted(() => vi.fn(async () => {}));
+
+vi.mock("./src/runtime-provider.js", () => ({
+  memoryRuntime: {
+    closeAllMemorySearchManagers: vi.fn(async () => {}),
+    closeMemorySearchManager: closeMemorySearchManagerMock,
+    getMemorySearchManager: vi.fn(async () => null),
+  },
+}));
+
+import plugin from "./index.js";
+
+function registerMemoryCoreRuntime(): MemoryPluginRuntime {
+  let runtime: MemoryPluginRuntime | undefined;
+  plugin.register(
+    createTestPluginApi({
+      registerMemoryCapability(capability) {
+        runtime = capability.runtime;
+      },
+    }),
+  );
+  if (!runtime) {
+    throw new Error("expected memory-core to register a memory runtime");
+  }
+  return runtime;
+}
 
 describe("buildPromptSection", () => {
   it("returns empty when no memory tools are available", () => {
@@ -50,6 +79,21 @@ describe("buildPromptSection", () => {
     expect(result).toContain(
       "Citations are disabled: do not mention file paths or line numbers in replies unless the user explicitly asks.",
     );
+  });
+});
+
+describe("memory-core plugin runtime registration", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("wires scoped memory search cleanup through the lazy runtime", async () => {
+    const runtime = registerMemoryCoreRuntime();
+    const cfg = {} as OpenClawConfig;
+
+    await runtime.closeMemorySearchManager?.({ cfg, agentId: "main" });
+
+    expect(closeMemorySearchManagerMock).toHaveBeenCalledWith({ cfg, agentId: "main" });
   });
 });
 

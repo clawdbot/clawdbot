@@ -1,4 +1,5 @@
 import { withTempWorkspace, type TempWorkspace } from "../infra/private-temp-workspace.js";
+import { resolveSystemBin } from "../infra/resolve-system-bin.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runExec } from "../process/exec.js";
 import { createLazyPromiseLoader } from "../shared/lazy-promise.js";
@@ -11,30 +12,94 @@ export type ImageMetadata = {
 type MediaAttachmentImageOps = {
   getImageMetadata(buffer: Buffer): Promise<ImageMetadata | null>;
   normalizeExifOrientation(buffer: Buffer): Promise<Buffer>;
-  resizeToJpeg(params: {
-    buffer: Buffer;
-    maxSide: number;
-    quality: number;
-    withoutEnlargement?: boolean;
-  }): Promise<Buffer>;
+  resizeToJpeg(params: ResizeToJpegParams): Promise<Buffer>;
   convertHeicToJpeg(buffer: Buffer): Promise<Buffer>;
   hasAlphaChannel(buffer: Buffer): Promise<boolean>;
-  resizeToPng(params: {
-    buffer: Buffer;
-    maxSide: number;
-    compressionLevel?: number;
-    withoutEnlargement?: boolean;
-  }): Promise<Buffer>;
+  resizeToPng(params: ResizeToPngParams): Promise<Buffer>;
 };
 
 type MediaAttachmentImageOpsModule = {
   createMediaAttachmentImageOps?: (options: { maxInputPixels: number }) => MediaAttachmentImageOps;
 };
 
+type ResizeToJpegParams = {
+  buffer: Buffer;
+  maxSide: number;
+  quality: number;
+  withoutEnlargement?: boolean;
+};
+
+type ResizeToPngParams = {
+  buffer: Buffer;
+  maxSide: number;
+  compressionLevel?: number;
+  withoutEnlargement?: boolean;
+};
+
+type ImageBackend =
+  | "sharp"
+  | "sips"
+  | "windows-native"
+  | "imagemagick"
+  | "graphicsmagick"
+  | "ffmpeg";
+type ImageBackendPreference = ImageBackend | "auto";
+type ImageOperation =
+  | "metadata"
+  | "normalizeExifOrientation"
+  | "resizeToJpeg"
+  | "convertHeicToJpeg"
+  | "resizeToPng";
+
+type ExternalImageTool =
+  | { backend: "imagemagick"; flavor: "magick" | "convert"; command: string }
+  | { backend: "graphicsmagick"; flavor: "gm"; command: string }
+  | { backend: "ffmpeg"; flavor: "ffmpeg"; command: string }
+  | { backend: "windows-native"; flavor: "powershell"; command: string }
+  | { backend: "sips"; flavor: "sips"; command: string };
+
 export const IMAGE_REDUCE_QUALITY_STEPS = [85, 75, 65, 55, 45, 35] as const;
 export const MAX_IMAGE_INPUT_PIXELS = 25_000_000;
+const IMAGE_PROCESS_TIMEOUT_MS = 20_000;
+const IMAGE_TOOL_MAX_BUFFER = 1024 * 1024;
 const MEDIA_UNDERSTANDING_CORE_PLUGIN_ID = "media-understanding-core";
 const MEDIA_UNDERSTANDING_CORE_IMAGE_OPS_ARTIFACT = "image-ops.js";
+
+export class ImageProcessorUnavailableError extends Error {
+  readonly code = "IMAGE_PROCESSOR_UNAVAILABLE";
+  readonly operation: string;
+  readonly causes: unknown[];
+
+  constructor(operation: string, message?: string, causes: unknown[] = []) {
+    super(message ?? `Image processor unavailable for ${operation}`, {
+      cause: causes.find((cause): cause is Error => cause instanceof Error),
+    });
+    this.name = "ImageProcessorUnavailableError";
+    this.operation = operation;
+    this.causes = causes;
+  }
+}
+
+export function isImageProcessorUnavailableError(err: unknown): boolean {
+  const messages: string[] = [];
+  let current: unknown = err;
+  while (current instanceof Error) {
+    if (current instanceof ImageProcessorUnavailableError) {
+      return true;
+    }
+    messages.push(current.message);
+    current = current.cause;
+  }
+  const detail = messages.join("\n").toLowerCase();
+  return (
+    detail.includes("image processor unavailable") ||
+    detail.includes("optional dependency sharp is required") ||
+    detail.includes("cannot find package 'sharp'") ||
+    detail.includes('cannot find package "sharp"') ||
+    detail.includes("cannot find module 'sharp'") ||
+    detail.includes('cannot find module "sharp"')
+  );
+}
 
 export function buildImageResizeSideGrid(maxSide: number, sideStart: number): number[] {
   return [sideStart, 1800, 1600, 1400, 1200, 1000, 800]
@@ -43,15 +108,126 @@ export function buildImageResizeSideGrid(maxSide: number, sideStart: number): nu
     .toSorted((a, b) => b - a);
 }
 
-function isBun(): boolean {
-  return typeof (process.versions as { bun?: unknown }).bun === "string";
+function getImageBackendPreference(): ImageBackendPreference {
+  const raw = process.env.OPENCLAW_IMAGE_BACKEND?.trim().toLowerCase();
+  switch (raw) {
+    case "sharp":
+    case "sips":
+    case "windows-native":
+    case "imagemagick":
+    case "graphicsmagick":
+    case "ffmpeg":
+      return raw;
+    case "windows":
+    case "powershell":
+    case "system.drawing":
+    case "systemdrawing":
+      return "windows-native";
+    case "magick":
+    case "convert":
+      return "imagemagick";
+    case "gm":
+      return "graphicsmagick";
+    default:
+      return "auto";
+  }
 }
 
-function prefersSips(): boolean {
-  return (
-    process.env.OPENCLAW_IMAGE_BACKEND === "sips" ||
-    (process.env.OPENCLAW_IMAGE_BACKEND !== "sharp" && isBun() && process.platform === "darwin")
+function shouldFailClosedOnUnknownMetadata(): boolean {
+  return getImageBackendPreference() !== "auto";
+}
+
+function imageBackendsForOperation(operation: ImageOperation): ImageBackend[] {
+  const preference = getImageBackendPreference();
+  if (preference !== "auto") {
+    return [preference];
+  }
+
+  if (operation === "resizeToPng") {
+    if (process.platform === "win32") {
+      return ["sharp", "windows-native", "imagemagick", "graphicsmagick"];
+    }
+    return ["sharp", "imagemagick", "graphicsmagick"];
+  }
+
+  if (operation === "normalizeExifOrientation") {
+    if (process.platform === "win32") {
+      return ["sharp", "imagemagick", "graphicsmagick"];
+    }
+    return process.platform === "darwin"
+      ? ["sharp", "sips", "imagemagick", "graphicsmagick"]
+      : ["sharp", "imagemagick", "graphicsmagick"];
+  }
+
+  if (process.platform === "win32") {
+    if (operation === "convertHeicToJpeg") {
+      return ["sharp", "imagemagick", "graphicsmagick", "ffmpeg"];
+    }
+    return ["sharp", "windows-native", "imagemagick", "graphicsmagick", "ffmpeg"];
+  }
+
+  const fallbacks =
+    process.platform === "darwin"
+      ? (["sips", "imagemagick", "graphicsmagick", "ffmpeg"] as const)
+      : (["imagemagick", "graphicsmagick", "ffmpeg"] as const);
+  return ["sharp", ...fallbacks];
+}
+
+function createImageProcessorUnavailableError(
+  operation: ImageOperation,
+  causes: unknown[],
+): ImageProcessorUnavailableError {
+  const backends = imageBackendsForOperation(operation).join(", ");
+  const hint =
+    process.platform === "win32"
+      ? "Install Sharp, ImageMagick, GraphicsMagick, or ffmpeg; Windows native image resizing is tried automatically when available."
+      : process.platform === "darwin"
+        ? "Install Sharp or a system image tool such as sips, ImageMagick, GraphicsMagick, or ffmpeg."
+        : "Install Sharp, ImageMagick, GraphicsMagick, or ffmpeg.";
+  return new ImageProcessorUnavailableError(
+    operation,
+    `Image processor unavailable for ${operation}; tried: ${backends}. ${hint}`,
+    causes,
   );
+}
+
+function isImageBackendUnavailableCause(error: unknown): boolean {
+  const messages: string[] = [];
+  let current: unknown = error;
+  while (current instanceof Error) {
+    messages.push(current.message);
+    current = current.cause;
+  }
+  const detail = messages.join("\n").toLowerCase();
+  return (
+    detail.includes("optional dependency sharp is required") ||
+    detail.includes("cannot find package 'sharp'") ||
+    detail.includes('cannot find package "sharp"') ||
+    detail.includes("cannot find module 'sharp'") ||
+    detail.includes('cannot find module "sharp"') ||
+    detail.includes("support for this compression format has not been built in") ||
+    detail.includes("is not available") ||
+    detail.includes("command not found") ||
+    detail.includes("enoent")
+  );
+}
+
+async function runWithImageBackends<T>(
+  operation: ImageOperation,
+  fn: (backend: ImageBackend) => Promise<T>,
+): Promise<T> {
+  const errors: unknown[] = [];
+  for (const backend of imageBackendsForOperation(operation)) {
+    try {
+      return await fn(backend);
+    } catch (error) {
+      errors.push(error);
+      if (!isImageBackendUnavailableCause(error)) {
+        throw error;
+      }
+    }
+  }
+  throw createImageProcessorUnavailableError(operation, errors);
 }
 
 function isMediaAttachmentImageOps(value: unknown): value is MediaAttachmentImageOps {
@@ -120,6 +296,42 @@ function readPngMetadata(buffer: Buffer): ImageMetadata | null {
   return buildImageMetadata(buffer.readUInt32BE(16), buffer.readUInt32BE(20));
 }
 
+function readPngAlphaChannel(buffer: Buffer): boolean | null {
+  if (buffer.length < 29 || readPngMetadata(buffer) === null) {
+    return null;
+  }
+
+  const colorType = buffer[25];
+  if (colorType === 4 || colorType === 6) {
+    return true;
+  }
+  if (colorType !== 0 && colorType !== 2 && colorType !== 3) {
+    return null;
+  }
+
+  let offset = 8;
+  while (offset + 8 <= buffer.length) {
+    const chunkLength = buffer.readUInt32BE(offset);
+    const typeStart = offset + 4;
+    const dataStart = offset + 8;
+    const dataEnd = dataStart + chunkLength;
+    const nextOffset = dataEnd + 4;
+    if (dataEnd > buffer.length || nextOffset > buffer.length) {
+      return null;
+    }
+    const chunkType = buffer.toString("ascii", typeStart, typeStart + 4);
+    if (chunkType === "tRNS") {
+      return chunkLength > 0;
+    }
+    if (chunkType === "IDAT" || chunkType === "IEND") {
+      return false;
+    }
+    offset = nextOffset;
+  }
+
+  return false;
+}
+
 function readGifMetadata(buffer: Buffer): ImageMetadata | null {
   if (buffer.length < 10) {
     return null;
@@ -160,6 +372,122 @@ function readWebpMetadata(buffer: Buffer): ImageMetadata | null {
     return buildImageMetadata((bits & 0x3fff) + 1, ((bits >> 14) & 0x3fff) + 1);
   }
   return null;
+}
+
+const ISO_BMFF_IMAGE_BRANDS = new Set([
+  "avif",
+  "avis",
+  "heic",
+  "heix",
+  "hevc",
+  "hevx",
+  "heif",
+  "mif1",
+  "msf1",
+]);
+
+const ISO_BMFF_CONTAINER_BOXES = new Set([
+  "edts",
+  "ipco",
+  "iprp",
+  "mdia",
+  "meta",
+  "minf",
+  "moov",
+  "stbl",
+  "trak",
+]);
+
+function readIsoBmffBoxSize(buffer: Buffer, offset: number, end: number): number | null {
+  if (offset + 8 > end) {
+    return null;
+  }
+  const size32 = buffer.readUInt32BE(offset);
+  if (size32 === 0) {
+    return end - offset;
+  }
+  if (size32 === 1) {
+    if (offset + 16 > end) {
+      return null;
+    }
+    const size64 = buffer.readBigUInt64BE(offset + 8);
+    return size64 <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(size64) : null;
+  }
+  return size32;
+}
+
+function isIsoBmffImage(buffer: Buffer): boolean {
+  if (buffer.length < 16 || buffer.toString("ascii", 4, 8) !== "ftyp") {
+    return false;
+  }
+  const ftypSize = readIsoBmffBoxSize(buffer, 0, buffer.length);
+  if (!ftypSize || ftypSize < 16 || ftypSize > buffer.length) {
+    return false;
+  }
+  for (let offset = 8; offset + 4 <= ftypSize; offset += 4) {
+    if (ISO_BMFF_IMAGE_BRANDS.has(buffer.toString("ascii", offset, offset + 4))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function pickLargerImageMetadata(
+  current: ImageMetadata | null,
+  candidate: ImageMetadata | null,
+): ImageMetadata | null {
+  if (!candidate) {
+    return current;
+  }
+  if (!current) {
+    return candidate;
+  }
+  const currentPixels = BigInt(current.width) * BigInt(current.height);
+  const candidatePixels = BigInt(candidate.width) * BigInt(candidate.height);
+  return candidatePixels > currentPixels ? candidate : current;
+}
+
+function findIsoBmffIspeMetadata(
+  buffer: Buffer,
+  start: number,
+  end: number,
+  depth: number,
+): ImageMetadata | null {
+  if (depth > 8) {
+    return null;
+  }
+  let offset = start;
+  let largest: ImageMetadata | null = null;
+  while (offset + 8 <= end) {
+    const boxSize = readIsoBmffBoxSize(buffer, offset, end);
+    if (!boxSize || boxSize < 8 || offset + boxSize > end) {
+      return null;
+    }
+    const type = buffer.toString("ascii", offset + 4, offset + 8);
+    const headerSize = buffer.readUInt32BE(offset) === 1 ? 16 : 8;
+    const dataStart = offset + headerSize;
+    const boxEnd = offset + boxSize;
+    if (type === "ispe" && dataStart + 12 <= boxEnd) {
+      largest = pickLargerImageMetadata(
+        largest,
+        buildImageMetadata(buffer.readUInt32BE(dataStart + 4), buffer.readUInt32BE(dataStart + 8)),
+      );
+    }
+    if (ISO_BMFF_CONTAINER_BOXES.has(type)) {
+      const childStart = type === "meta" ? dataStart + 4 : dataStart;
+      const meta = findIsoBmffIspeMetadata(buffer, childStart, boxEnd, depth + 1);
+      largest = pickLargerImageMetadata(largest, meta);
+    }
+    offset = boxEnd;
+  }
+  return largest;
+}
+
+function readIsoBmffImageMetadata(buffer: Buffer): ImageMetadata | null {
+  if (!isIsoBmffImage(buffer)) {
+    return null;
+  }
+  return findIsoBmffIspeMetadata(buffer, 0, buffer.length, 0);
 }
 
 function readJpegMetadata(buffer: Buffer): ImageMetadata | null {
@@ -213,6 +541,7 @@ function readImageMetadataFromHeader(buffer: Buffer): ImageMetadata | null {
     readPngMetadata(buffer) ??
     readGifMetadata(buffer) ??
     readWebpMetadata(buffer) ??
+    readIsoBmffImageMetadata(buffer) ??
     readJpegMetadata(buffer)
   );
 }
@@ -251,10 +580,18 @@ async function readImageMetadataForLimit(buffer: Buffer): Promise<ImageMetadata 
 async function assertImagePixelLimit(buffer: Buffer): Promise<void> {
   const meta = await readImageMetadataForLimit(buffer);
   if (!meta) {
-    if (prefersSips()) {
+    if (shouldFailClosedOnUnknownMetadata()) {
       throw new Error("Unable to determine image dimensions; refusing to process");
     }
     return;
+  }
+  validateImagePixelLimit(meta);
+}
+
+function assertKnownImagePixelLimitBeforeExternalFallback(buffer: Buffer): void {
+  const meta = readImageMetadataFromHeader(buffer);
+  if (!meta) {
+    throw new Error("Unable to determine image dimensions; refusing to process");
   }
   validateImagePixelLimit(meta);
 }
@@ -363,31 +700,342 @@ async function withImageTemp<T>(fn: (workspace: TempWorkspace) => Promise<T>): P
   );
 }
 
-async function sipsMetadataFromBuffer(buffer: Buffer): Promise<ImageMetadata | null> {
+function clampInteger(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, Math.round(value)));
+}
+
+function resolveImageTool(backend: Exclude<ImageBackend, "sharp">): ExternalImageTool | null {
+  if (backend === "sips") {
+    return process.platform === "darwin"
+      ? { backend, flavor: "sips", command: "/usr/bin/sips" }
+      : null;
+  }
+  if (backend === "windows-native") {
+    const powershell = resolveSystemBin("powershell", { trust: "strict" });
+    return powershell && process.platform === "win32"
+      ? { backend, flavor: "powershell", command: powershell }
+      : null;
+  }
+  if (backend === "imagemagick") {
+    const magick = resolveSystemBin("magick", { trust: "standard" });
+    if (magick) {
+      return { backend, flavor: "magick", command: magick };
+    }
+    if (process.platform !== "win32") {
+      const convert = resolveSystemBin("convert", { trust: "standard" });
+      if (convert) {
+        return { backend, flavor: "convert", command: convert };
+      }
+    }
+    return null;
+  }
+  if (backend === "graphicsmagick") {
+    const gm = resolveSystemBin("gm", { trust: "standard" });
+    return gm ? { backend, flavor: "gm", command: gm } : null;
+  }
+  const ffmpeg = resolveSystemBin("ffmpeg", { trust: "standard" });
+  return ffmpeg ? { backend, flavor: "ffmpeg", command: ffmpeg } : null;
+}
+
+function convertToolArgs(
+  tool: Extract<ExternalImageTool, { flavor: "magick" | "convert" | "gm" }>,
+  args: string[],
+): string[] {
+  return tool.flavor === "gm" ? ["convert", ...args] : args;
+}
+
+async function runPowerShellImageScript(
+  scriptName: string,
+  script: string,
+  args: readonly string[],
+): Promise<{ stdout: string }> {
+  const tool = resolveImageTool("windows-native");
+  if (!tool || tool.flavor !== "powershell") {
+    throw new Error("Windows native image backend is not available");
+  }
   return await withImageTemp(async (workspace) => {
-    const input = await workspace.write("in.img", buffer);
-    const { stdout } = await runExec(
-      "/usr/bin/sips",
-      ["-g", "pixelWidth", "-g", "pixelHeight", input],
+    const scriptPath = await workspace.write(scriptName, Buffer.from(script, "utf8"));
+    return await runExec(
+      tool.command,
+      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", scriptPath, ...args],
       {
-        timeoutMs: 10_000,
-        maxBuffer: 512 * 1024,
+        timeoutMs: IMAGE_PROCESS_TIMEOUT_MS,
+        maxBuffer: IMAGE_TOOL_MAX_BUFFER,
       },
     );
-    const w = stdout.match(/pixelWidth:\s*([0-9]+)/);
-    const h = stdout.match(/pixelHeight:\s*([0-9]+)/);
-    if (!w?.[1] || !h?.[1]) {
-      return null;
+  });
+}
+
+const WINDOWS_NATIVE_RESIZE_SCRIPT = `
+param(
+  [string]$InputPath,
+  [string]$OutputPath,
+  [int]$MaxSide,
+  [int]$Quality,
+  [int]$WithoutEnlargement,
+  [string]$Format
+)
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Drawing
+$source = [System.Drawing.Image]::FromFile($InputPath)
+$bitmap = $null
+$graphics = $null
+try {
+  try {
+    if ($source.PropertyIdList -contains 274) {
+      $orientation = [BitConverter]::ToUInt16($source.GetPropertyItem(274).Value, 0)
+      switch ($orientation) {
+        2 { $source.RotateFlip([System.Drawing.RotateFlipType]::RotateNoneFlipX) }
+        3 { $source.RotateFlip([System.Drawing.RotateFlipType]::Rotate180FlipNone) }
+        4 { $source.RotateFlip([System.Drawing.RotateFlipType]::Rotate180FlipX) }
+        5 { $source.RotateFlip([System.Drawing.RotateFlipType]::Rotate90FlipX) }
+        6 { $source.RotateFlip([System.Drawing.RotateFlipType]::Rotate90FlipNone) }
+        7 { $source.RotateFlip([System.Drawing.RotateFlipType]::Rotate270FlipX) }
+        8 { $source.RotateFlip([System.Drawing.RotateFlipType]::Rotate270FlipNone) }
+      }
+      try { $source.RemovePropertyItem(274) } catch {}
     }
-    const width = Number.parseInt(w[1], 10);
-    const height = Number.parseInt(h[1], 10);
-    if (!Number.isFinite(width) || !Number.isFinite(height)) {
-      return null;
+  } catch {}
+  $maxDim = [Math]::Max($source.Width, $source.Height)
+  if ($maxDim -le 0) { throw 'Invalid image dimensions' }
+  $scale = $MaxSide / [double]$maxDim
+  if ($WithoutEnlargement -eq 1) {
+    $scale = [Math]::Min(1.0, $scale)
+  }
+  $width = [Math]::Max(1, [int][Math]::Round($source.Width * $scale))
+  $height = [Math]::Max(1, [int][Math]::Round($source.Height * $scale))
+  $pixelFormat = [System.Drawing.Imaging.PixelFormat]::Format24bppRgb
+  if ($Format -eq 'png') {
+    $pixelFormat = [System.Drawing.Imaging.PixelFormat]::Format32bppArgb
+  }
+  $bitmap = New-Object System.Drawing.Bitmap($width, $height, $pixelFormat)
+  $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+  $graphics.CompositingQuality = [System.Drawing.Drawing2D.CompositingQuality]::HighQuality
+  $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+  $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
+  if ($Format -eq 'png') {
+    $graphics.Clear([System.Drawing.Color]::Transparent)
+  } else {
+    $graphics.Clear([System.Drawing.Color]::White)
+  }
+  $graphics.DrawImage($source, 0, 0, $width, $height)
+  if ($Format -eq 'png') {
+    $bitmap.Save($OutputPath, [System.Drawing.Imaging.ImageFormat]::Png)
+  } else {
+    $codec = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() |
+      Where-Object { $_.MimeType -eq 'image/jpeg' } |
+      Select-Object -First 1
+    if ($null -eq $codec) { throw 'JPEG encoder not available' }
+    $encoder = [System.Drawing.Imaging.Encoder]::Quality
+    $encoderParam = New-Object System.Drawing.Imaging.EncoderParameter($encoder, [int64]$Quality)
+    $encoderParams = New-Object System.Drawing.Imaging.EncoderParameters(1)
+    try {
+      $encoderParams.Param[0] = $encoderParam
+      $bitmap.Save($OutputPath, $codec, $encoderParams)
+    } finally {
+      $encoderParam.Dispose()
+      $encoderParams.Dispose()
     }
-    if (width <= 0 || height <= 0) {
-      return null;
+  }
+} finally {
+  if ($null -ne $graphics) { $graphics.Dispose() }
+  if ($null -ne $bitmap) { $bitmap.Dispose() }
+  $source.Dispose()
+}
+`;
+
+async function windowsNativeResize(
+  params: ResizeToJpegParams | ResizeToPngParams,
+  format: "jpeg" | "png",
+): Promise<Buffer> {
+  return await withImageTemp(async (workspace) => {
+    const input = await workspace.write("in.img", params.buffer);
+    const outputName = format === "png" ? "out.png" : "out.jpg";
+    const output = workspace.path(outputName);
+    await runPowerShellImageScript("resize.ps1", WINDOWS_NATIVE_RESIZE_SCRIPT, [
+      input,
+      output,
+      String(clampInteger(params.maxSide, 1, Number.MAX_SAFE_INTEGER)),
+      String(clampInteger("quality" in params ? params.quality : 90, 1, 100)),
+      params.withoutEnlargement === false ? "0" : "1",
+      format === "png" ? "png" : "jpeg",
+    ]);
+    return await workspace.read(outputName);
+  });
+}
+
+async function runConvertTool(
+  tool: Extract<ExternalImageTool, { flavor: "magick" | "convert" | "gm" }>,
+  args: string[],
+): Promise<void> {
+  await runExec(tool.command, convertToolArgs(tool, args), {
+    timeoutMs: IMAGE_PROCESS_TIMEOUT_MS,
+    maxBuffer: IMAGE_TOOL_MAX_BUFFER,
+  });
+}
+
+function buildResizeGeometry(maxSide: number, withoutEnlargement?: boolean): string {
+  const side = clampInteger(maxSide, 1, Number.MAX_SAFE_INTEGER);
+  return `${side}x${side}${withoutEnlargement === false ? "" : ">"}`;
+}
+
+function buildFfmpegResizeFilter(maxSide: number, withoutEnlargement?: boolean): string {
+  const side = clampInteger(maxSide, 1, Number.MAX_SAFE_INTEGER);
+  if (withoutEnlargement === false) {
+    return `scale=w=${side}:h=${side}:force_original_aspect_ratio=decrease`;
+  }
+  return `scale=w='min(${side},iw)':h='min(${side},ih)':force_original_aspect_ratio=decrease`;
+}
+
+async function externalResizeToJpeg(
+  backend: Exclude<ImageBackend, "sharp">,
+  params: ResizeToJpegParams,
+): Promise<Buffer> {
+  const tool = resolveImageTool(backend);
+  if (!tool) {
+    throw new Error(`Image backend ${backend} is not available`);
+  }
+  if (tool.flavor === "sips") {
+    const normalized = await normalizeExifOrientationSips(params.buffer);
+    if (params.withoutEnlargement !== false) {
+      const meta = await getImageMetadata(normalized);
+      if (meta) {
+        const maxDim = Math.max(meta.width, meta.height);
+        if (maxDim > 0 && maxDim <= params.maxSide) {
+          return await sipsResizeToJpeg({
+            buffer: normalized,
+            maxSide: maxDim,
+            quality: params.quality,
+          });
+        }
+      }
     }
-    return { width, height };
+    return await sipsResizeToJpeg({
+      buffer: normalized,
+      maxSide: params.maxSide,
+      quality: params.quality,
+    });
+  }
+  if (tool.flavor === "powershell") {
+    return await windowsNativeResize(params, "jpeg");
+  }
+
+  return await withImageTemp(async (workspace) => {
+    const input = await workspace.write("in.img", params.buffer);
+    const output = workspace.path("out.jpg");
+    if (tool.flavor === "ffmpeg") {
+      const side = clampInteger(params.maxSide, 1, Number.MAX_SAFE_INTEGER);
+      const qv = clampInteger(31 - params.quality * 0.29, 2, 31);
+      await runExec(
+        tool.command,
+        [
+          "-y",
+          "-i",
+          input,
+          "-vf",
+          buildFfmpegResizeFilter(side, params.withoutEnlargement),
+          "-frames:v",
+          "1",
+          "-q:v",
+          String(qv),
+          output,
+        ],
+        { timeoutMs: IMAGE_PROCESS_TIMEOUT_MS, maxBuffer: IMAGE_TOOL_MAX_BUFFER },
+      );
+      return await workspace.read("out.jpg");
+    }
+
+    await runConvertTool(tool, [
+      input,
+      "-auto-orient",
+      "-resize",
+      buildResizeGeometry(params.maxSide, params.withoutEnlargement),
+      "-quality",
+      String(clampInteger(params.quality, 1, 100)),
+      output,
+    ]);
+    return await workspace.read("out.jpg");
+  });
+}
+
+async function externalConvertToJpeg(
+  backend: Exclude<ImageBackend, "sharp">,
+  buffer: Buffer,
+): Promise<Buffer> {
+  const tool = resolveImageTool(backend);
+  if (!tool) {
+    throw new Error(`Image backend ${backend} is not available`);
+  }
+  if (tool.flavor === "sips") {
+    return await sipsConvertToJpeg(buffer);
+  }
+  if (tool.flavor === "powershell") {
+    throw new Error("Windows native image backend does not convert HEIC to JPEG");
+  }
+  return await withImageTemp(async (workspace) => {
+    const input = await workspace.write("in.img", buffer);
+    const output = workspace.path("out.jpg");
+    if (tool.flavor === "ffmpeg") {
+      await runExec(tool.command, ["-y", "-i", input, "-frames:v", "1", "-q:v", "3", output], {
+        timeoutMs: IMAGE_PROCESS_TIMEOUT_MS,
+        maxBuffer: IMAGE_TOOL_MAX_BUFFER,
+      });
+    } else {
+      await runConvertTool(tool, [input, "-auto-orient", "-quality", "90", output]);
+    }
+    return await workspace.read("out.jpg");
+  });
+}
+
+async function externalNormalizeExifOrientation(
+  backend: Exclude<ImageBackend, "sharp" | "ffmpeg">,
+  buffer: Buffer,
+): Promise<Buffer> {
+  if (backend === "sips") {
+    return await normalizeExifOrientationSips(buffer);
+  }
+  const tool = resolveImageTool(backend);
+  if (!tool || tool.flavor === "ffmpeg" || tool.flavor === "sips" || tool.flavor === "powershell") {
+    throw new Error(`Image backend ${backend} is not available`);
+  }
+  if (!readJpegExifOrientation(buffer)) {
+    return buffer;
+  }
+  return await withImageTemp(async (workspace) => {
+    const input = await workspace.write("in.jpg", buffer);
+    const output = workspace.path("out.jpg");
+    await runConvertTool(tool, [input, "-auto-orient", output]);
+    return await workspace.read("out.jpg");
+  });
+}
+
+async function externalResizeToPng(
+  backend: Exclude<ImageBackend, "sharp" | "sips" | "ffmpeg">,
+  params: ResizeToPngParams,
+): Promise<Buffer> {
+  const tool = resolveImageTool(backend);
+  if (!tool || tool.flavor === "ffmpeg" || tool.flavor === "sips") {
+    throw new Error(`Image backend ${backend} is not available`);
+  }
+  if (tool.flavor === "powershell") {
+    return await windowsNativeResize(params, "png");
+  }
+  return await withImageTemp(async (workspace) => {
+    const input = await workspace.write("in.img", params.buffer);
+    const output = workspace.path("out.png");
+    const args = [
+      input,
+      "-auto-orient",
+      "-resize",
+      buildResizeGeometry(params.maxSide, params.withoutEnlargement),
+    ];
+    const compressionLevel = params.compressionLevel;
+    if (compressionLevel !== undefined && tool.flavor !== "gm") {
+      args.push("-define", `png:compression-level=${clampInteger(compressionLevel, 0, 9)}`);
+    }
+    args.push(output);
+    await runConvertTool(tool, args);
+    return await workspace.read("out.png");
   });
 }
 
@@ -414,7 +1062,7 @@ async function sipsResizeToJpeg(params: {
         "--out",
         output,
       ],
-      { timeoutMs: 20_000, maxBuffer: 1024 * 1024 },
+      { timeoutMs: IMAGE_PROCESS_TIMEOUT_MS, maxBuffer: IMAGE_TOOL_MAX_BUFFER },
     );
     return await workspace.read("out.jpg");
   });
@@ -425,8 +1073,8 @@ async function sipsConvertToJpeg(buffer: Buffer): Promise<Buffer> {
     const input = await workspace.write("in.heic", buffer);
     const output = workspace.path("out.jpg");
     await runExec("/usr/bin/sips", ["-s", "format", "jpeg", input, "--out", output], {
-      timeoutMs: 20_000,
-      maxBuffer: 1024 * 1024,
+      timeoutMs: IMAGE_PROCESS_TIMEOUT_MS,
+      maxBuffer: IMAGE_TOOL_MAX_BUFFER,
     });
     return await workspace.read("out.jpg");
   });
@@ -442,17 +1090,15 @@ export async function getImageMetadata(buffer: Buffer): Promise<ImageMetadata | 
     }
   }
 
-  if (prefersSips()) {
-    return await sipsMetadataFromBuffer(buffer).catch(() => null);
-  }
-
-  try {
-    const ops = await loadMediaAttachmentImageOps();
-    const meta = await ops.getImageMetadata(buffer);
-    return meta ? validateImagePixelLimit(meta) : null;
-  } catch {
+  const preference = getImageBackendPreference();
+  if (preference !== "auto" && preference !== "sharp") {
     return null;
   }
+
+  return await (async () => {
+    const meta = await (await loadMediaAttachmentImageOps()).getImageMetadata(buffer);
+    return meta ? validateImagePixelLimit(meta) : null;
+  })().catch(() => null);
 }
 
 /**
@@ -493,8 +1139,8 @@ async function sipsApplyOrientation(buffer: Buffer, orientation: number): Promis
     const input = await workspace.write("in.jpg", buffer);
     const output = workspace.path("out.jpg");
     await runExec("/usr/bin/sips", [...ops, input, "--out", output], {
-      timeoutMs: 20_000,
-      maxBuffer: 1024 * 1024,
+      timeoutMs: IMAGE_PROCESS_TIMEOUT_MS,
+      maxBuffer: IMAGE_TOOL_MAX_BUFFER,
     });
     return await workspace.read("out.jpg");
   });
@@ -508,78 +1154,44 @@ async function sipsApplyOrientation(buffer: Buffer, orientation: number): Promis
 export async function normalizeExifOrientation(buffer: Buffer): Promise<Buffer> {
   await assertImagePixelLimit(buffer);
 
-  if (prefersSips()) {
+  for (const backend of imageBackendsForOperation("normalizeExifOrientation")) {
     try {
-      const orientation = readJpegExifOrientation(buffer);
-      if (!orientation || orientation === 1) {
-        return buffer; // No rotation needed
+      if (backend === "sharp") {
+        const ops = await loadMediaAttachmentImageOps();
+        return await ops.normalizeExifOrientation(buffer);
       }
-      return await sipsApplyOrientation(buffer, orientation);
+      if (backend !== "ffmpeg") {
+        assertKnownImagePixelLimitBeforeExternalFallback(buffer);
+        return await externalNormalizeExifOrientation(backend, buffer);
+      }
     } catch {
-      return buffer;
+      // Orientation normalization is best-effort; resizing still handles raw buffers.
     }
   }
 
-  try {
-    const ops = await loadMediaAttachmentImageOps();
-    return await ops.normalizeExifOrientation(buffer);
-  } catch {
-    return buffer;
-  }
+  return buffer;
 }
 
-export async function resizeToJpeg(params: {
-  buffer: Buffer;
-  maxSide: number;
-  quality: number;
-  withoutEnlargement?: boolean;
-}): Promise<Buffer> {
+export async function resizeToJpeg(params: ResizeToJpegParams): Promise<Buffer> {
   await assertImagePixelLimit(params.buffer);
-
-  if (prefersSips()) {
-    // Normalize EXIF orientation BEFORE resizing (sips resize doesn't auto-rotate)
-    const normalized = await normalizeExifOrientationSips(params.buffer);
-
-    // Avoid enlarging by checking dimensions first (sips has no withoutEnlargement flag).
-    if (params.withoutEnlargement !== false) {
-      const meta = await getImageMetadata(normalized);
-      if (meta) {
-        const maxDim = Math.max(meta.width, meta.height);
-        if (maxDim > 0 && maxDim <= params.maxSide) {
-          return await sipsResizeToJpeg({
-            buffer: normalized,
-            maxSide: maxDim,
-            quality: params.quality,
-          });
-        }
-      }
+  return await runWithImageBackends("resizeToJpeg", async (backend) => {
+    if (backend === "sharp") {
+      return await (await loadMediaAttachmentImageOps()).resizeToJpeg(params);
     }
-    return await sipsResizeToJpeg({
-      buffer: normalized,
-      maxSide: params.maxSide,
-      quality: params.quality,
-    });
-  }
-
-  const ops = await loadMediaAttachmentImageOps();
-  return await ops.resizeToJpeg(params);
+    assertKnownImagePixelLimitBeforeExternalFallback(params.buffer);
+    return await externalResizeToJpeg(backend, params);
+  });
 }
 
 export async function convertHeicToJpeg(buffer: Buffer): Promise<Buffer> {
   await assertImagePixelLimit(buffer);
-
-  if (prefersSips()) {
-    return await sipsConvertToJpeg(buffer);
-  }
-  const ops = await loadMediaAttachmentImageOps();
-  try {
-    return await ops.convertHeicToJpeg(buffer);
-  } catch (error) {
-    if (process.platform !== "darwin") {
-      throw error;
+  return await runWithImageBackends("convertHeicToJpeg", async (backend) => {
+    if (backend === "sharp") {
+      return await (await loadMediaAttachmentImageOps()).convertHeicToJpeg(buffer);
     }
-    return await sipsConvertToJpeg(buffer);
-  }
+    assertKnownImagePixelLimitBeforeExternalFallback(buffer);
+    return await externalConvertToJpeg(backend, buffer);
+  });
 }
 
 /**
@@ -588,6 +1200,11 @@ export async function convertHeicToJpeg(buffer: Buffer): Promise<Buffer> {
  */
 export async function hasAlphaChannel(buffer: Buffer): Promise<boolean> {
   await assertImagePixelLimit(buffer);
+
+  const pngAlphaChannel = readPngAlphaChannel(buffer);
+  if (pngAlphaChannel !== null) {
+    return pngAlphaChannel;
+  }
 
   try {
     const ops = await loadMediaAttachmentImageOps();
@@ -601,16 +1218,18 @@ export async function hasAlphaChannel(buffer: Buffer): Promise<boolean> {
  * Resizes an image to PNG format, preserving alpha channel (transparency).
  * Falls back to the media attachments plugin only (no sips fallback for PNG with alpha).
  */
-export async function resizeToPng(params: {
-  buffer: Buffer;
-  maxSide: number;
-  compressionLevel?: number;
-  withoutEnlargement?: boolean;
-}): Promise<Buffer> {
+export async function resizeToPng(params: ResizeToPngParams): Promise<Buffer> {
   await assertImagePixelLimit(params.buffer);
-
-  const ops = await loadMediaAttachmentImageOps();
-  return await ops.resizeToPng(params);
+  return await runWithImageBackends("resizeToPng", async (backend) => {
+    if (backend === "sharp") {
+      return await (await loadMediaAttachmentImageOps()).resizeToPng(params);
+    }
+    if (backend === "windows-native" || backend === "imagemagick" || backend === "graphicsmagick") {
+      assertKnownImagePixelLimitBeforeExternalFallback(params.buffer);
+      return await externalResizeToPng(backend, params);
+    }
+    throw new Error(`Image backend ${backend} is not available for PNG resizing`);
+  });
 }
 
 export async function optimizeImageToPng(
@@ -632,6 +1251,7 @@ export async function optimizeImageToPng(
     resizeSide: number;
     compressionLevel: number;
   } | null = null;
+  let firstResizeError: unknown;
 
   for (const side of sides) {
     for (const compressionLevel of compressionLevels) {
@@ -654,7 +1274,8 @@ export async function optimizeImageToPng(
             compressionLevel,
           };
         }
-      } catch {
+      } catch (err) {
+        firstResizeError ??= err;
         // Continue trying other size/compression combinations.
       }
     }
@@ -667,6 +1288,10 @@ export async function optimizeImageToPng(
       resizeSide: smallest.resizeSide,
       compressionLevel: smallest.compressionLevel,
     };
+  }
+
+  if (firstResizeError) {
+    throw firstResizeError;
   }
 
   throw new Error("Failed to optimize PNG image");

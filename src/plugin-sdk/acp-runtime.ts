@@ -1,7 +1,7 @@
 // Public ACP runtime helpers for plugins that integrate with ACP control/session state.
 
-import { __testing as managerTesting, getAcpSessionManager } from "../acp/control-plane/manager.js";
-import { __testing as registryTesting } from "../acp/runtime/registry.js";
+import { testing as managerTesting, getAcpSessionManager } from "../acp/control-plane/manager.js";
+import { testing as registryTesting } from "../acp/runtime/registry.js";
 
 export { getAcpSessionManager };
 export { AcpRuntimeError, isAcpRuntimeError } from "../acp/runtime/errors.js";
@@ -34,7 +34,7 @@ export { tryDispatchAcpReplyHook } from "./acp-runtime-backend.js";
 // Keep test helpers off the hot init path. Eagerly merging them here can
 // create a back-edge through the bundled ACP runtime chunk before the imported
 // testing bindings finish initialization.
-export const __testing = new Proxy({} as typeof managerTesting & typeof registryTesting, {
+export const testing = new Proxy({} as typeof managerTesting & typeof registryTesting, {
   get(_target, prop, receiver) {
     if (Reflect.has(managerTesting, prop)) {
       return Reflect.get(managerTesting, prop, receiver);
@@ -59,3 +59,6 @@ export const __testing = new Proxy({} as typeof managerTesting & typeof registry
     return undefined;
   },
 });
+
+/** @deprecated Use `testing`. */
+export { testing as __testing };

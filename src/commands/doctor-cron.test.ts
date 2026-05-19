@@ -3,7 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { maybeRepairLegacyCronStore, noteLegacyWhatsAppCrontabHealthCheck } from "./doctor-cron.js";
+import {
+  collectLegacyWhatsAppCrontabHealthWarning,
+  maybeRepairLegacyCronStore,
+  noteLegacyWhatsAppCrontabHealthCheck,
+} from "./doctor-cron.js";
 
 type TerminalNote = (message: string, title?: string) => void;
 
@@ -536,7 +540,25 @@ describe("maybeRepairLegacyCronStore", () => {
   });
 });
 
-describe("noteLegacyWhatsAppCrontabHealthCheck", () => {
+describe("legacy WhatsApp crontab health check", () => {
+  it("collects a warning about legacy ensure-whatsapp crontab entries on Linux", async () => {
+    const warning = await collectLegacyWhatsAppCrontabHealthWarning({
+      platform: "linux",
+      readCrontab: async () => ({
+        stdout: [
+          "# keep comments ignored",
+          "*/5 * * * * ~/.openclaw/bin/ensure-whatsapp.sh >> ~/.openclaw/logs/whatsapp-health.log 2>&1",
+          "0 9 * * * /usr/bin/true",
+          "",
+        ].join("\n"),
+      }),
+    });
+
+    expect(warning).toContain("Legacy WhatsApp crontab health check detected");
+    expect(warning).toContain("systemd user bus environment is missing");
+    expect(warning).toContain("Matched 1 entry");
+  });
+
   it("warns about legacy ensure-whatsapp crontab entries on Linux", async () => {
     await noteLegacyWhatsAppCrontabHealthCheck({
       platform: "linux",

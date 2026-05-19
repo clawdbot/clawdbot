@@ -109,23 +109,23 @@ export function getTempDir(): string {
 
 // ---- silk-wasm detection ----
 
-let _silkWasmAvailable: boolean | null = null;
+let silkWasmAvailable: boolean | null = null;
 
 /** Check whether silk-wasm can run in the current environment. */
 export async function checkSilkWasmAvailable(): Promise<boolean> {
-  if (_silkWasmAvailable !== null) {
-    return _silkWasmAvailable;
+  if (silkWasmAvailable !== null) {
+    return silkWasmAvailable;
   }
   try {
     const { isSilk } = await import("silk-wasm");
     isSilk(new Uint8Array(0));
-    _silkWasmAvailable = true;
+    silkWasmAvailable = true;
     debugLog("[platform] silk-wasm: available");
   } catch (err) {
-    _silkWasmAvailable = false;
+    silkWasmAvailable = false;
     debugWarn(`[platform] silk-wasm: NOT available (${formatErrorMessage(err)})`);
   }
-  return _silkWasmAvailable;
+  return silkWasmAvailable;
 }
 
 // ---- Tilde expansion and path normalization ----

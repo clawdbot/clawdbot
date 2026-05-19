@@ -93,6 +93,8 @@ export type SlackActionContext = {
   replyToMode?: "off" | "first" | "all" | "batched";
   /** Mutable ref to track if a reply was sent for single-use reply modes. */
   hasRepliedRef?: { value: boolean };
+  /** True when same-channel root posting would leak a thread-originated reply. */
+  sameChannelThreadRequired?: boolean;
   /** Allowed local media directories for file uploads. */
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
@@ -117,13 +119,20 @@ function resolveThreadTsFromContext(
   if (opts?.suppressImplicitThread) {
     return undefined;
   }
-  // No context or missing required fields
-  if (!context?.currentThreadTs || !context?.currentChannelId) {
+  if (!context?.currentChannelId) {
     return undefined;
   }
 
   // Different channel - don't inject
   if (!sameSlackChannelTarget(targetChannel, context.currentChannelId)) {
+    return undefined;
+  }
+  if (!context.currentThreadTs) {
+    if (context.sameChannelThreadRequired) {
+      throw new Error(
+        "Slack thread context is required for same-channel replies from a threaded Slack turn. Set topLevel=true or threadId=null to post at the channel root.",
+      );
+    }
     return undefined;
   }
 

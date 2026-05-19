@@ -6,7 +6,7 @@ import { resolveOAuthDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { captureEnv } from "../../test-utils/env.js";
-import { __testing as externalAuthTesting } from "./external-auth.js";
+import { testing as externalAuthTesting } from "./external-auth.js";
 import { legacyOAuthSidecarTestUtils } from "./legacy-oauth-sidecar.js";
 import {
   createOAuthManager,

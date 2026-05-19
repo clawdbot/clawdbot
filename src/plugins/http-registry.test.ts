@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { registerPluginHttpRoute } from "./http-registry.js";
+import { registerPluginHttpRoute, withPluginHttpRouteRegistry } from "./http-registry.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { createPluginRegistry } from "./registry.js";
 import {
@@ -278,5 +278,30 @@ describe("registerPluginHttpRoute", () => {
 
     unregister();
     expect(startupRegistry.httpRoutes).toHaveLength(0);
+  });
+
+  it("prefers the scoped route registry over the process-global pinned registry", () => {
+    const scopedRegistry = createEmptyPluginRegistry();
+    const pinnedRegistry = createEmptyPluginRegistry();
+
+    setActivePluginRegistry(pinnedRegistry);
+    pinActivePluginHttpRouteRegistry(pinnedRegistry);
+
+    const unregister = withPluginHttpRouteRegistry(scopedRegistry, () =>
+      registerPluginHttpRoute({
+        path: "/scoped-webhook",
+        auth: "plugin",
+        handler: vi.fn(),
+      }),
+    );
+
+    expectRegisteredRouteShape(scopedRegistry, {
+      path: "/scoped-webhook",
+      auth: "plugin",
+    });
+    expect(pinnedRegistry.httpRoutes).toHaveLength(0);
+
+    unregister();
+    expect(scopedRegistry.httpRoutes).toHaveLength(0);
   });
 });

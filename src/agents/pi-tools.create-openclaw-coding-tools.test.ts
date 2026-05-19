@@ -12,6 +12,7 @@ import {
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
@@ -517,6 +518,56 @@ describe("createOpenClawCodingTools", () => {
       const pluginToolOptions = resolvePluginToolsSpy.mock.calls[0]?.[0].options;
       expect(pluginToolOptions?.modelProvider).toBe("openrouter");
       expect(pluginToolOptions?.modelId).toBe("openrouter/auto");
+    } finally {
+      resolvePluginToolsSpy.mockRestore();
+    }
+  });
+
+  it("forwards auth profiles to plugin-only tool construction", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+    const resolvePluginToolsSpy = vi
+      .spyOn(openClawPluginTools, "resolveOpenClawPluginToolsForOptions")
+      .mockReturnValue([]);
+    const authProfileStore = {
+      version: 1,
+      order: { xai: ["xai-oauth"] },
+      profiles: {
+        "xai-oauth": {
+          type: "oauth",
+          provider: "xai",
+          access: "xai-oauth-access-token", // pragma: allowlist secret
+          refresh: "xai-oauth-refresh-token", // pragma: allowlist secret
+          expires: Date.now() + 60_000,
+        },
+      },
+    } satisfies AuthProfileStore;
+
+    try {
+      createOpenClawCodingTools({
+        config: {
+          auth: {
+            order: {
+              xai: ["xai-oauth"],
+            },
+          },
+        },
+        authProfileStore,
+        includeCoreTools: false,
+        runtimeToolAllowlist: ["x_search"],
+        toolConstructionPlan: {
+          includeBaseCodingTools: false,
+          includeShellTools: false,
+          includeChannelTools: false,
+          includeOpenClawTools: false,
+          includePluginTools: true,
+        },
+      });
+
+      expect(createOpenClawToolsMock).not.toHaveBeenCalled();
+      expect(resolvePluginToolsSpy).toHaveBeenCalledTimes(1);
+      const pluginToolOptions = resolvePluginToolsSpy.mock.calls[0]?.[0].options;
+      expect(pluginToolOptions?.authProfileStore).toBe(authProfileStore);
     } finally {
       resolvePluginToolsSpy.mockRestore();
     }

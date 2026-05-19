@@ -112,7 +112,7 @@ function isCanonicalCandidateShadowedByExecutionAlias(
   );
 }
 
-export const __testing = {
+export const testing = {
   decodeDataUrl,
   coerceImageAssistantText,
   hasImageReasoningOnlyResponse,
@@ -749,3 +749,4 @@ export function createImageTool(options?: {
     },
   };
 }
+export { testing as __testing };

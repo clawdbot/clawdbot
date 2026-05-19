@@ -38,7 +38,7 @@ function buildUnsupportedNativePlatformMessage(params: {
 }
 
 export function createLanceDbRuntimeLoader(overrides: Partial<LanceDbRuntimeLoaderDeps> = {}): {
-  load: (_logger?: LanceDbRuntimeLogger) => Promise<LanceDbModule>;
+  load: (loggerInstance?: LanceDbRuntimeLogger) => Promise<LanceDbModule>;
 } {
   const deps: LanceDbRuntimeLoaderDeps = {
     platform: overrides.platform ?? process.platform,

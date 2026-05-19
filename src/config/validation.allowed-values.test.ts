@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { __testing, validateConfigObjectRaw } from "./validation.js";
+import { testing, validateConfigObjectRaw } from "./validation.js";
 
 function requireIssue<T extends { path: string }>(issues: T[], path: string): T {
   const issue = issues.find((entry) => entry.path === path);
@@ -23,7 +23,7 @@ function mapFirstIssue(
   if (!issue) {
     throw new Error("expected first zod issue");
   }
-  return __testing.mapZodIssueToConfigIssue(issue);
+  return testing.mapZodIssueToConfigIssue(issue);
 }
 
 describe("config validation allowed-values metadata", () => {
@@ -54,7 +54,7 @@ describe("config validation allowed-values metadata", () => {
   });
 
   it("includes boolean variants for boolean-or-enum unions", () => {
-    const issue = __testing.mapZodIssueToConfigIssue({
+    const issue = testing.mapZodIssueToConfigIssue({
       code: "custom",
       path: ["channels", "telegram"],
       message:

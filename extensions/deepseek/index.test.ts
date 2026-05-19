@@ -222,6 +222,51 @@ describe("deepseek provider plugin", () => {
     expect(replayPolicy?.validateAnthropicTurns).toBe(true);
   });
 
+  it("owns DeepSeek tool schema compatibility for MCP union schemas", async () => {
+    const provider = await registerSingleProviderPlugin(deepseekPlugin);
+    const mcpTool = {
+      name: "unusual-whales__get_balance_sheet_screener",
+      description: "",
+      parameters: {
+        type: "object",
+        properties: {
+          date: {
+            anyOf: [{ type: "string" }, { type: "integer" }],
+          },
+          period: {
+            oneOf: [{ type: "string" }, { type: "null" }],
+          },
+        },
+      },
+      execute: () => undefined,
+    } as never;
+
+    const normalized = provider.normalizeToolSchemas?.({
+      provider: "deepseek",
+      modelId: "deepseek-v4-pro",
+      modelApi: "openai-completions",
+      model: deepSeekV4Model("deepseek-v4-pro"),
+      tools: [mcpTool],
+    } as never);
+
+    expect(normalized?.[0]?.parameters).toEqual({
+      type: "object",
+      properties: {
+        date: { type: "string" },
+        period: { type: "string", nullable: true },
+      },
+    });
+    expect(
+      provider.inspectToolSchemas?.({
+        provider: "deepseek",
+        modelId: "deepseek-v4-pro",
+        modelApi: "openai-completions",
+        model: deepSeekV4Model("deepseek-v4-pro"),
+        tools: normalized ?? [],
+      } as never),
+    ).toStrictEqual([]);
+  });
+
   it("advertises max thinking levels for DeepSeek V4 models only", async () => {
     const provider = await registerSingleProviderPlugin(deepseekPlugin);
     const resolveThinkingProfile = requireThinkingProfileResolver(provider);

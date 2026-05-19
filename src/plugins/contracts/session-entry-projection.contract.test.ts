@@ -904,7 +904,7 @@ describe("plugin session extension SessionEntry projection", () => {
         api.registerTrustedToolPolicy({
           id: "inspect-session-state",
           description: "inspect session extension",
-          evaluate(_event, ctx) {
+          evaluate(eventValue, ctx) {
             seen.push(ctx.getSessionExtension?.("policy"));
             seen.push(ctx.getSessionExtension?.("second"));
             seen.push(ctx.getSessionExtension?.("missing"));

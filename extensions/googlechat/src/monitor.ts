@@ -438,7 +438,7 @@ async function processMessageWithPipeline(params: {
   });
 }
 
-export const __testing = {
+export const testing = {
   processMessageWithPipeline,
   resolveGoogleChatBotLoopProtection,
   resolveGoogleChatBotLoopProtectionConfig,
@@ -524,3 +524,4 @@ export function resolveGoogleChatWebhookPath(params: {
     }) ?? "/googlechat"
   );
 }
+export { testing as __testing };

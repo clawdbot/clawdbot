@@ -435,6 +435,97 @@ describe("telegram media groups", () => {
     },
     MEDIA_GROUP_TEST_TIMEOUT_MS,
   );
+
+  it(
+    "flushes same-id forum topic media groups in parallel",
+    async () => {
+      const originalLoadConfig = telegramBotDepsForTest.getRuntimeConfig;
+      telegramBotDepsForTest.getRuntimeConfig = (() => ({
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            allowFrom: ["*"],
+            groupPolicy: "open",
+            groups: { "*": { requireMention: false } },
+          },
+        },
+      })) as typeof telegramBotDepsForTest.getRuntimeConfig;
+
+      const runtimeError = vi.fn();
+      const { handler, replySpy } = await createBotHandlerWithOptions({ runtimeError });
+      const fetchSpy = mockTelegramPngDownload();
+      let releaseFirstReply: (() => void) | undefined;
+      const firstReplyStarted = new Promise<void>((resolve) => {
+        replySpy.mockImplementationOnce(async (_ctx, opts?: { onReplyStart?: () => unknown }) => {
+          await opts?.onReplyStart?.();
+          resolve();
+          await new Promise<void>((release) => {
+            releaseFirstReply = release;
+          });
+          return undefined;
+        });
+      });
+
+      try {
+        await Promise.all([
+          handler({
+            message: {
+              chat: { id: -10042, type: "supergroup" as const, is_forum: true },
+              from: { id: 777, is_bot: false, first_name: "Ada" },
+              message_id: 31,
+              message_thread_id: 101,
+              caption: "Topic one album",
+              date: 1736380800,
+              media_group_id: "album-shared-by-telegram",
+              photo: [{ file_id: "topic1photo" }],
+            },
+            me: { username: "openclaw_bot" },
+            getFile: async () => ({ file_path: "photos/topic1.jpg" }),
+          }),
+          handler({
+            message: {
+              chat: { id: -10042, type: "supergroup" as const, is_forum: true },
+              from: { id: 777, is_bot: false, first_name: "Ada" },
+              message_id: 32,
+              message_thread_id: 202,
+              caption: "Topic two album",
+              date: 1736380801,
+              media_group_id: "album-shared-by-telegram",
+              photo: [{ file_id: "topic2photo" }],
+            },
+            me: { username: "openclaw_bot" },
+            getFile: async () => ({ file_path: "photos/topic2.jpg" }),
+          }),
+        ]);
+
+        await firstReplyStarted;
+        expect(replySpy).toHaveBeenCalledTimes(1);
+        await vi.waitFor(
+          () => {
+            expect(replySpy).toHaveBeenCalledTimes(2);
+          },
+          { timeout: MEDIA_GROUP_WAIT_TIMEOUT_MS, interval: 2 },
+        );
+
+        const firstPayload = replyPayload(replySpy, 0);
+        const secondPayload = replyPayload(replySpy, 1);
+        expect([firstPayload.Body, secondPayload.Body]).toEqual(
+          expect.arrayContaining([
+            expect.stringContaining("Topic one album"),
+            expect.stringContaining("Topic two album"),
+          ]),
+        );
+        expect(firstPayload.MediaPaths).toHaveLength(1);
+        expect(secondPayload.MediaPaths).toHaveLength(1);
+        expect(runtimeError).not.toHaveBeenCalled();
+      } finally {
+        releaseFirstReply?.();
+        fetchSpy.mockRestore();
+        telegramBotDepsForTest.getRuntimeConfig = originalLoadConfig;
+      }
+    },
+    MEDIA_GROUP_TEST_TIMEOUT_MS,
+  );
 });
 
 describe("telegram forwarded bursts", () => {

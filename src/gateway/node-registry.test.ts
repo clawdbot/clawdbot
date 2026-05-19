@@ -68,7 +68,7 @@ describe("gateway/node-registry", () => {
     };
     socket.readyState = 1;
     socket.send = () => {};
-    socket.ping = (_data, _mask, cb) => {
+    socket.ping = (dataValue, _mask, cb) => {
       cb?.();
       queueMicrotask(() => socket.emit("pong"));
     };
@@ -91,7 +91,7 @@ describe("gateway/node-registry", () => {
     };
     socket.readyState = 1;
     socket.send = () => {};
-    socket.ping = (_data, _mask, cb) => {
+    socket.ping = (dataValue, _mask, cb) => {
       cb?.();
     };
     registry.register(

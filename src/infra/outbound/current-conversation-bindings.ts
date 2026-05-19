@@ -260,7 +260,7 @@ export async function unbindGenericCurrentConversationBindings(
   return removed;
 }
 
-export const __testing = {
+export const testing = {
   resetCurrentConversationBindingsForTests(params?: {
     deletePersistedFile?: boolean;
     env?: NodeJS.ProcessEnv;
@@ -278,3 +278,4 @@ export const __testing = {
   },
   resolveBindingsFilePath,
 };
+export { testing as __testing };

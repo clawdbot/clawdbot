@@ -41,6 +41,13 @@ tool with the `react` action. Reaction behavior varies by channel and transport.
 
   </Accordion>
 
+  <Accordion title="Nextcloud Talk">
+    - Adding reactions only: `emoji` is required and must be non-empty.
+    - Reaction removal is not supported yet; calls with `remove: true` (or empty `emoji`) are rejected with a clear error rather than silently no-oping.
+    - Requires the Talk bot to be registered with the `reaction` feature (see [Nextcloud Talk channel docs](/channels/nextcloud-talk)).
+
+  </Accordion>
+
   <Accordion title="Telegram">
     - Empty `emoji` removes the bot's reactions.
     - `remove: true` also removes reactions but still requires a non-empty `emoji` for tool validation.

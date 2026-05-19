@@ -41,7 +41,7 @@ const chromeTransportDeps: {
   callGatewayFromCli,
 };
 
-export const __testing = {
+export const testing = {
   setDepsForTest(deps: { callGatewayFromCli?: typeof callGatewayFromCli } | null) {
     chromeTransportDeps.callGatewayFromCli = deps?.callGatewayFromCli ?? callGatewayFromCli;
   },
@@ -1062,3 +1062,4 @@ export async function launchChromeMeetOnNode(params: {
     browser: browserControl.browser ?? result.browser,
   };
 }
+export { testing as __testing };

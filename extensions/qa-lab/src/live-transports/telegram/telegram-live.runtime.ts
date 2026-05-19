@@ -2029,7 +2029,7 @@ export async function runTelegramQaLive(params: {
   };
 }
 
-export const __testing = {
+export const testing = {
   TELEGRAM_QA_SCENARIOS,
   TELEGRAM_QA_STANDARD_SCENARIO_IDS,
   buildTelegramQaConfig,
@@ -2055,3 +2055,4 @@ export const __testing = {
   renderTelegramQaMarkdown,
   waitForObservedMessage,
 };
+export { testing as __testing };

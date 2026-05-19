@@ -107,6 +107,7 @@ export type MemoryPluginRuntime = {
     cfg: OpenClawConfig;
     agentId: string;
   }): MemoryRuntimeBackendConfig;
+  closeMemorySearchManager?(params: { cfg: OpenClawConfig; agentId: string }): Promise<void>;
   closeAllMemorySearchManagers?(): Promise<void>;
 };
 
@@ -340,4 +341,4 @@ export function clearMemoryPluginState(): void {
   memoryPluginState.promptSupplements = [];
 }
 
-export const _resetMemoryPluginState = clearMemoryPluginState;
+export const resetMemoryPluginState = clearMemoryPluginState;

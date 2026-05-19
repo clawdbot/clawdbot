@@ -1,4 +1,5 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { dirname, normalize } from "node:path";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
@@ -10,6 +11,7 @@ const PACKAGE_JSON = "package.json";
 const WORKFLOW = ".github/workflows/mantis-telegram-desktop-proof.yml";
 const LIVE_WORKFLOW = ".github/workflows/mantis-telegram-live.yml";
 const PROMPT = ".github/codex/prompts/mantis-telegram-desktop-proof.md";
+const TELEGRAM_PROOF_SKILL = ".agents/skills/telegram-crabbox-e2e-proof/SKILL.md";
 const DOCS = ["docs/help/testing.md", "docs/concepts/qa-e2e-automation.md"];
 
 type WorkflowStep = {
@@ -112,10 +114,52 @@ describe("Mantis Telegram Desktop proof workflow", () => {
       expect(step.run).toContain("mantis-telegram-desktop-proof.yml");
       expect(step.run).toContain("mantis-telegram-live.yml");
       expect(step.run).toContain('gh run list --repo "$GITHUB_REPOSITORY"');
+      expect(step.run).toContain('--status "$status"');
       expect(step.run).toContain("GITHUB_RUN_ID");
       expect(step.run).toContain(".createdAt < $current_created");
+      expect(step.run).toContain("for status in queued in_progress waiting pending requested");
+      expect(step.run).toContain("stale_before=");
+      expect(step.run).toContain(".createdAt >= $stale_before");
+      expect(step.run).toContain("run_has_active_jobs()");
+      expect(step.run).toContain('gh run view "$run_id"');
+      expect(step.run).toContain("${run_id#\\#}");
+      expect(step.run).not.toContain('.[] | select(.status == "queued"');
       expect(step.run).toContain("sleep 60");
     }
+  });
+
+  it("releases Telegram Desktop proof leases left by interrupted agents", () => {
+    const workflow = parse(readFileSync(WORKFLOW, "utf8")) as Workflow;
+    const steps = workflow.jobs?.run_telegram_desktop_proof?.steps ?? [];
+    const codexStep = workflowStep("Run Codex Mantis Telegram agent");
+    const cleanupIndex = steps.findIndex(
+      (step) => step.name === "Release leaked Telegram proof leases",
+    );
+    const inspectIndex = steps.findIndex(
+      (step) => step.name === "Inspect Mantis evidence manifest",
+    );
+
+    expect(codexStep.env?.OPENCLAW_QA_CREDENTIAL_OWNER_ID).toContain(
+      "mantis-telegram-desktop-${{ github.run_id }}-${{ github.run_attempt }}",
+    );
+    expect(workflowStep("Prepare Codex user").run).toContain("OPENCLAW_QA_CREDENTIAL_OWNER_ID");
+    expect(cleanupIndex).toBeGreaterThan(steps.findIndex((step) => step.name === codexStep.name));
+    expect(cleanupIndex).toBeGreaterThanOrEqual(0);
+    expect(inspectIndex).toBeGreaterThan(cleanupIndex);
+
+    const cleanupStep = workflowStep("Release leaked Telegram proof leases");
+    expect(cleanupStep.if).toBe("${{ always() }}");
+    expect(cleanupStep.env?.OPENCLAW_QA_CONVEX_SECRET_CI).toContain(
+      "secrets.OPENCLAW_QA_CONVEX_SECRET_CI",
+    );
+    expect(cleanupStep.env?.OPENCLAW_QA_CONVEX_SITE_URL).toContain(
+      "secrets.OPENCLAW_QA_CONVEX_SITE_URL",
+    );
+    expect(cleanupStep.run).toContain("sudo find .artifacts/qa-e2e");
+    expect(cleanupStep.run).toContain("*/telegram-user-crabbox/*/.session/lease.json");
+    expect(cleanupStep.run).toContain("telegram-user-credential.ts");
+    expect(cleanupStep.run).toContain("release --lease-file");
+    expect(cleanupStep.run).toContain("sudo -u codex env");
   });
 
   it("uses the OpenClaw Mantis mention as the comment trigger", () => {
@@ -196,12 +240,25 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     for (const doc of DOCS) {
       expect(readFileSync(doc, "utf8")).not.toContain("pnpm qa:telegram-user:crabbox");
     }
+    expect(readFileSync(TELEGRAM_PROOF_SKILL, "utf8")).not.toContain(
+      "pnpm qa:telegram-user:crabbox",
+    );
+    expect(readFileSync(TELEGRAM_PROOF_SKILL, "utf8")).toContain(
+      "OPENCLAW_TELEGRAM_USER_PROOF_CMD",
+    );
     expect(readFileSync(PROOF_SCRIPT, "utf8")).not.toContain("pnpm qa:telegram-user:crabbox");
+    const payloadValidationImport =
+      "../../qa/convex-credential-broker/convex/payload-validation.js";
     expect(readFileSync(CREDENTIAL_SCRIPT, "utf8")).toContain(
       'const TELEGRAM_USER_QA_CREDENTIAL_KIND = "telegram-user";',
     );
-    expect(readFileSync(CREDENTIAL_SCRIPT, "utf8")).toContain(
-      "../qa/convex-credential-broker/convex/payload-validation.js",
+    expect(readFileSync(CREDENTIAL_SCRIPT, "utf8")).toContain(payloadValidationImport);
+    const payloadValidationSource = normalize(
+      `${dirname(CREDENTIAL_SCRIPT)}/${payloadValidationImport.replace(/\.js$/, ".ts")}`,
+    );
+    expect(existsSync(payloadValidationSource)).toBe(true);
+    expect(readFileSync(CREDENTIAL_SCRIPT, "utf8")).not.toMatch(
+      /from "\.\.\/qa\/convex-credential-broker\/convex\/payload-validation\.js"/u,
     );
   });
 
@@ -260,6 +317,10 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     const prompt = readFileSync(PROMPT, "utf8");
     expect(prompt).toContain("$OPENCLAW_TELEGRAM_USER_PROOF_CMD");
     expect(prompt).toContain("do not run\n   `pnpm qa:telegram-user:crabbox` directly");
+    expect(prompt).toContain("Let `start` return or fail on its\n   own");
+    expect(prompt).toContain(
+      "Use a long\n   command timeout for `start`, `send`, `view`, and `finish`",
+    );
   });
 
   it("runs the Mantis Codex agent in fast medium-effort mode", () => {
@@ -317,6 +378,20 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(defaultProof.indexOf("requireUserDriverScript(opts);")).toBeLessThan(
       defaultProof.indexOf("leaseCredential({ localRoot, opts, root })"),
     );
+  });
+
+  it("crops the Telegram Desktop chat pane for PR proof GIFs", () => {
+    const proofScript = readFileSync(PROOF_SCRIPT, "utf8");
+    const skill = readFileSync(TELEGRAM_PROOF_SKILL, "utf8");
+
+    expect(proofScript).toContain("const TELEGRAM_PROOF_WINDOW =");
+    expect(proofScript).toContain("const TELEGRAM_PROOF_CROP =");
+    expect(proofScript).toContain("x: TELEGRAM_PROOF_WINDOW.x + 220");
+    expect(proofScript).toContain("width: 430");
+    expect(proofScript).toContain("geometry: TELEGRAM_PROOF_WINDOW");
+    expect(proofScript).toContain("crop: TELEGRAM_PROOF_CROP");
+    expect(skill).toContain("crop can isolate the chat pane");
+    expect(skill).not.toContain("650px` is the largest tested clean width");
   });
 
   it("does not pass the full workflow environment into the local Telegram SUT", () => {

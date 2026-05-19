@@ -307,7 +307,7 @@ function parseCohereBatch(family: Family, raw: string): number[][] {
   return asNumberArrayBatch(embeddings);
 }
 
-export const __testing = {
+export const testing = {
   parseCohereBatch,
   parseSingle,
 };
@@ -467,3 +467,4 @@ export async function hasAwsCredentials(
     return false;
   }
 }
+export { testing as __testing };

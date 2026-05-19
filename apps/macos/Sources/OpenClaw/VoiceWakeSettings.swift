@@ -186,9 +186,7 @@ struct VoiceWakeSettings: View {
 
                 Spacer(minLength: 8)
             }
-            .frame(maxWidth: 760, alignment: .leading)
-            .padding(.trailing, SettingsLayout.scrollbarGutter)
-            .padding(.vertical, 4)
+            .settingsDetailContent()
         }
         .task {
             guard !self.isPreview else { return }
@@ -253,67 +251,67 @@ struct VoiceWakeSettings: View {
 
     private var triggerTable: some View {
         SettingsCardGroup("Trigger Words") {
-            HStack {
-                Text("Wake phrases")
-                    .font(.callout.weight(.semibold))
-                Spacer()
-                Button {
-                    self.addWord()
-                } label: {
-                    Label("Add word", systemImage: "plus")
-                }
-                .disabled(self.triggerEntries
-                    .contains(where: { $0.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }))
-
-                Button("Reset defaults") {
-                    self.triggerEntries = defaultVoiceWakeTriggers.map { TriggerEntry(id: UUID(), value: $0) }
-                    self.syncTriggerEntriesToState()
-                }
-            }
-            .padding(.horizontal, 14)
-            .padding(.top, 12)
-
-            VStack(spacing: 0) {
-                ForEach(self.$triggerEntries) { $entry in
-                    HStack(spacing: 8) {
-                        TextField("Wake word", text: $entry.value)
-                            .textFieldStyle(.roundedBorder)
-                            .onSubmit {
-                                self.syncTriggerEntriesToState()
-                            }
-
-                        Button {
-                            self.removeWord(id: entry.id)
-                        } label: {
-                            Image(systemName: "trash")
-                        }
-                        .buttonStyle(.borderless)
-                        .help("Remove trigger word")
-                        .frame(width: 24)
+            SettingsCardRow(
+                title: "Wake phrases",
+                subtitle: "Short phrases that start voice wake detection.")
+            {
+                HStack(spacing: 8) {
+                    Button {
+                        self.addWord()
+                    } label: {
+                        Label("Add word", systemImage: "plus")
                     }
-                    .padding(8)
+                    .disabled(self.triggerEntries
+                        .contains(where: { $0.value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }))
 
-                    if entry.id != self.triggerEntries.last?.id {
-                        Divider()
+                    Button("Reset") {
+                        self.triggerEntries = defaultVoiceWakeTriggers.map { TriggerEntry(id: UUID(), value: $0) }
+                        self.syncTriggerEntriesToState()
                     }
                 }
+                .buttonStyle(.bordered)
             }
-            .frame(maxWidth: .infinity, minHeight: 180, alignment: .topLeading)
-            .background(Color(nsColor: .textBackgroundColor))
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-            .overlay(
-                RoundedRectangle(cornerRadius: 6)
-                    .stroke(Color.secondary.opacity(0.25), lineWidth: 1))
-            .padding(.horizontal, 14)
 
-            Text(
-                "OpenClaw reacts when any trigger appears in a transcription. "
-                    + "Keep them short to avoid false positives.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            self.triggerPhraseRows
+
+            TriggerPhraseHelpRow()
+        }
+    }
+
+    private var triggerPhraseRows: some View {
+        Group {
+            if self.triggerEntries.isEmpty {
+                HStack(spacing: 10) {
+                    Image(systemName: "text.badge.plus")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 22)
+                    Text("No wake phrases configured")
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                }
                 .padding(.horizontal, 14)
-                .padding(.bottom, 12)
+                .padding(.vertical, 14)
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(self.$triggerEntries) { $entry in
+                        TriggerPhraseRow(
+                            value: $entry.value,
+                            showsDivider: entry.id != self.triggerEntries.last?.id,
+                            onSubmit: {
+                                self.syncTriggerEntriesToState()
+                            },
+                            onRemove: {
+                                self.removeWord(id: entry.id)
+                            })
+                    }
+                }
+            }
+        }
+        .overlay(alignment: .bottom) {
+            Divider()
+                .padding(.leading, 14)
         }
     }
 
@@ -537,67 +535,79 @@ struct VoiceWakeSettings: View {
                 .frame(width: self.controlWidth)
             }
 
-            if !self.state.voiceWakeAdditionalLocaleIDs.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Additional languages")
-                        .font(.footnote.weight(.semibold))
-                    ForEach(
-                        Array(self.state.voiceWakeAdditionalLocaleIDs.enumerated()),
-                        id: \.offset)
-                    { idx, localeID in
-                        HStack(spacing: 8) {
-                            Picker("Extra \(idx + 1)", selection: Binding(
-                                get: { localeID },
-                                set: { newValue in
-                                    guard self.state
-                                        .voiceWakeAdditionalLocaleIDs.indices
-                                        .contains(idx) else { return }
-                                    self.state
-                                        .voiceWakeAdditionalLocaleIDs[idx] =
-                                        newValue
-                                })) {
-                                    ForEach(self.availableLocales.map(\.identifier), id: \.self) { id in
-                                        Text(self.friendlyName(for: Locale(identifier: id))).tag(id)
-                                    }
-                                }
-                                .labelsHidden()
-                                    .frame(width: 220)
-
-                            Button {
-                                guard self.state.voiceWakeAdditionalLocaleIDs.indices.contains(idx) else { return }
-                                self.state.voiceWakeAdditionalLocaleIDs.remove(at: idx)
-                            } label: {
-                                Image(systemName: "trash")
-                            }
-                            .buttonStyle(.borderless)
-                            .help("Remove language")
-                        }
-                    }
-
+            SettingsCardRow(
+                title: "Additional languages",
+                subtitle: self.additionalLanguagesSubtitle,
+                showsDivider: !self.state.voiceWakeAdditionalLocaleIDs.isEmpty)
+            {
+                if self.state.voiceWakeAdditionalLocaleIDs.isEmpty {
                     Button {
-                        if let first = availableLocales.first {
-                            self.state.voiceWakeAdditionalLocaleIDs.append(first.identifier)
-                        }
+                        self.addAdditionalLocale()
                     } label: {
-                        Label("Add language", systemImage: "plus")
+                        Label("Add", systemImage: "plus")
                     }
+                    .buttonStyle(.bordered)
                     .disabled(self.availableLocales.isEmpty)
                 }
-                .padding(.horizontal, 14)
-                .padding(.bottom, 10)
-            } else {
-                Button {
-                    if let first = availableLocales.first {
-                        self.state.voiceWakeAdditionalLocaleIDs.append(first.identifier)
-                    }
-                } label: {
-                    Label("Add additional language", systemImage: "plus")
-                }
-                .buttonStyle(.link)
-                .disabled(self.availableLocales.isEmpty)
-                .padding(.horizontal, 14)
-                .padding(.bottom, 10)
             }
+
+            if !self.state.voiceWakeAdditionalLocaleIDs.isEmpty {
+                self.additionalLanguageRows
+            }
+        }
+    }
+
+    private var additionalLanguagesSubtitle: String {
+        if self.state.voiceWakeAdditionalLocaleIDs.isEmpty {
+            return "None configured."
+        }
+        return "Tried after the primary language."
+    }
+
+    private var additionalLanguageRows: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(Array(self.state.voiceWakeAdditionalLocaleIDs.enumerated()), id: \.offset) { idx, localeID in
+                AdditionalLanguageRow(
+                    index: idx,
+                    selection: self.additionalLocaleBinding(index: idx, fallback: localeID),
+                    localeIDs: self.availableLocales.map(\.identifier),
+                    localeName: { id in self.friendlyName(for: Locale(identifier: id)) },
+                    showsDivider: true,
+                    onRemove: {
+                        guard self.state.voiceWakeAdditionalLocaleIDs.indices.contains(idx) else { return }
+                        self.state.voiceWakeAdditionalLocaleIDs.remove(at: idx)
+                    })
+            }
+
+            SettingsCardRow(title: "Add another language", showsDivider: false) {
+                Button {
+                    self.addAdditionalLocale()
+                } label: {
+                    Label("Add", systemImage: "plus")
+                }
+                .buttonStyle(.bordered)
+                .disabled(self.availableLocales.isEmpty)
+            }
+        }
+    }
+
+    private func additionalLocaleBinding(index: Int, fallback: String) -> Binding<String> {
+        Binding(
+            get: {
+                guard self.state.voiceWakeAdditionalLocaleIDs.indices.contains(index) else { return fallback }
+                return self.state.voiceWakeAdditionalLocaleIDs[index]
+            },
+            set: { newValue in
+                guard self.state.voiceWakeAdditionalLocaleIDs.indices.contains(index) else { return }
+                self.state.voiceWakeAdditionalLocaleIDs[index] = newValue
+            })
+    }
+
+    private func addAdditionalLocale() {
+        let selected = Set([self.state.voiceWakeLocaleID] + self.state.voiceWakeAdditionalLocaleIDs)
+        let next = self.availableLocales.first { !selected.contains($0.identifier) } ?? self.availableLocales.first
+        if let next {
+            self.state.voiceWakeAdditionalLocaleIDs.append(next.identifier)
         }
     }
 
@@ -715,6 +725,110 @@ struct VoiceWakeSettings: View {
         } catch {
             self.meterError = error.localizedDescription
         }
+    }
+}
+
+private struct TriggerPhraseRow: View {
+    @Binding var value: String
+    let showsDivider: Bool
+    let onSubmit: () -> Void
+    let onRemove: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "quote.opening")
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 24)
+
+            TextField("Wake phrase", text: self.$value)
+                .textFieldStyle(.roundedBorder)
+                .font(.callout.weight(.medium))
+                .frame(maxWidth: 420)
+                .onSubmit(self.onSubmit)
+
+            Spacer(minLength: 8)
+
+            Button(action: self.onRemove) {
+                Image(systemName: "trash")
+                    .font(.callout)
+                    .symbolRenderingMode(.hierarchical)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .frame(width: 26, height: 26)
+            .contentShape(Rectangle())
+            .help("Remove trigger word")
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .overlay(alignment: .bottom) {
+            if self.showsDivider {
+                Divider()
+                    .padding(.leading, 50)
+            }
+        }
+    }
+}
+
+private struct AdditionalLanguageRow: View {
+    let index: Int
+    @Binding var selection: String
+    let localeIDs: [String]
+    let localeName: (String) -> String
+    let showsDivider: Bool
+    let onRemove: () -> Void
+
+    var body: some View {
+        SettingsCardRow(
+            title: "Language \(self.index + 2)",
+            subtitle: "Fallback recognition language.",
+            showsDivider: self.showsDivider)
+        {
+            HStack(spacing: 10) {
+                Picker("Language \(self.index + 2)", selection: self.$selection) {
+                    ForEach(self.localeIDs, id: \.self) { id in
+                        Text(self.localeName(id)).tag(id)
+                    }
+                }
+                .labelsHidden()
+                .frame(width: 220)
+
+                Button(action: self.onRemove) {
+                    Image(systemName: "trash")
+                        .font(.callout)
+                        .symbolRenderingMode(.hierarchical)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .frame(width: 26, height: 26)
+                .contentShape(Rectangle())
+                .help("Remove language")
+            }
+        }
+    }
+}
+
+private struct TriggerPhraseHelpRow: View {
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "info.circle")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 18)
+                .padding(.top, 1)
+
+            Text(
+                "OpenClaw reacts when any trigger appears in a transcription. " +
+                    "Keep phrases short to avoid false positives.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
     }
 }
 

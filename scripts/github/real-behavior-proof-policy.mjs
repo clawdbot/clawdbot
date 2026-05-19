@@ -3,6 +3,9 @@ export const PROOF_SUPPLIED_LABEL = "proof: supplied";
 export const PROOF_SUFFICIENT_LABEL = "proof: sufficient";
 export const NEEDS_REAL_BEHAVIOR_PROOF_LABEL = "triage: needs-real-behavior-proof";
 export const MOCK_ONLY_PROOF_LABEL = "triage: mock-only-proof";
+export const MAINTAINER_TEAM_SLUG = "maintainer";
+
+export const CLAWSWEEPER_PROOF_VERDICT_STATUS = "clawsweeper_exact_head_pass";
 
 const privilegedAuthorAssociations = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 
@@ -111,6 +114,34 @@ export function hasProofOverride(labels) {
   return labelNames(labels).has(PROOF_OVERRIDE_LABEL);
 }
 
+export async function isMaintainerTeamMember({
+  token,
+  org,
+  login,
+  teamSlug = MAINTAINER_TEAM_SLUG,
+  fetch = globalThis.fetch,
+} = {}) {
+  if (!token || !org || !login) {
+    return false;
+  }
+  const url = `https://api.github.com/orgs/${encodeURIComponent(org)}/teams/${encodeURIComponent(teamSlug)}/memberships/${encodeURIComponent(login)}`;
+  const response = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
+    },
+  });
+  if (response.status === 404) {
+    return false;
+  }
+  if (!response.ok) {
+    throw new Error(`Team membership lookup failed: ${response.status}`);
+  }
+  const body = await response.json();
+  return body?.state === "active";
+}
+
 export function extractRealBehaviorProofSection(body = "") {
   // Normalize CRLF → LF so regexes and section slicing see GitHub web-editor PR
   // bodies the same way as locally-authored Markdown.
@@ -201,9 +232,55 @@ function result(status, reason, details = {}) {
     status,
     reason,
     applies: ["passed", "missing", "mock_only", "insufficient", "override"].includes(status),
-    passed: ["passed", "skipped", "override"].includes(status),
+    passed: ["passed", "skipped", "override", CLAWSWEEPER_PROOF_VERDICT_STATUS].includes(status),
     ...details,
   };
+}
+
+function extractMarkerField(marker, name) {
+  const match = marker.match(new RegExp(`\\b${escapeRegex(name)}=([^\\s>]+)`, "i"));
+  return match?.[1] ?? "";
+}
+
+function isTrustedClawSweeperComment(comment) {
+  const appSlug = String(
+    comment?.performed_via_github_app?.slug ?? comment?.performedViaGithubApp?.slug ?? "",
+  ).toLowerCase();
+  return appSlug === "clawsweeper";
+}
+
+export function hasClawSweeperExactHeadProof({ pullRequest, comments = [] } = {}) {
+  const pullNumber = String(pullRequest?.number ?? "");
+  const headSha = String(pullRequest?.head?.sha ?? pullRequest?.head_sha ?? "").toLowerCase();
+  if (!pullNumber || !/^[0-9a-f]{40}$/i.test(headSha)) {
+    return false;
+  }
+
+  for (const comment of comments) {
+    if (!isTrustedClawSweeperComment(comment)) {
+      continue;
+    }
+    const body = String(comment?.body ?? "");
+    const markers = body.match(/<!--\s*clawsweeper-verdict:pass\b[\s\S]*?-->/gi) ?? [];
+    for (const marker of markers) {
+      const item = extractMarkerField(marker, "item");
+      const sha = extractMarkerField(marker, "sha").toLowerCase();
+      if (item === pullNumber && sha === headSha) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+export function evaluateClawSweeperExactHeadProof({ pullRequest, comments = [] } = {}) {
+  if (hasClawSweeperExactHeadProof({ pullRequest, comments })) {
+    return result(
+      CLAWSWEEPER_PROOF_VERDICT_STATUS,
+      "ClawSweeper accepted real behavior proof for the exact PR head.",
+    );
+  }
+  return result("insufficient", "No exact-head ClawSweeper proof verdict was found.");
 }
 
 export function evaluateRealBehaviorProof({ pullRequest, labels } = {}) {

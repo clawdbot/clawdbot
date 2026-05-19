@@ -281,7 +281,7 @@ export async function loadUsage(
   }
 }
 
-export const __test = {
+export const testApi = {
   formatUtcOffset,
   buildDateInterpretationParams,
   toErrorMessage,
@@ -297,6 +297,7 @@ export const __test = {
     legacyUsageScopeParamsCache = null;
   },
 };
+export { testApi as __test };
 
 async function runOptionalUsageDetailRequest(
   state: UsageState,

@@ -91,6 +91,23 @@ function coerceLegacyOAuthEncryptedPayload(raw: unknown): LegacyOAuthEncryptedPa
     : null;
 }
 
+export function isLegacyOAuthSidecarPayload(raw: unknown): boolean {
+  if (!isRecord(raw)) {
+    return false;
+  }
+  if (
+    raw.version !== LEGACY_OAUTH_SECRET_VERSION ||
+    readNonEmptyString(raw.profileId) === undefined ||
+    raw.provider !== LEGACY_OAUTH_REF_PROVIDER
+  ) {
+    return false;
+  }
+  return (
+    coerceLegacyOAuthEncryptedPayload(raw.encrypted) !== null ||
+    normalizeLegacyOAuthSecretMaterial(raw) !== null
+  );
+}
+
 function buildLegacyOAuthSecretAad(params: {
   ref: LegacyOAuthRef;
   profileId: string;

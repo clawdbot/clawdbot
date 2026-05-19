@@ -1,4 +1,8 @@
-import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
+import {
+  isAbortRequestText,
+  isBtwRequestText,
+} from "openclaw/plugin-sdk/command-primitives-runtime";
+import { isTelegramReadOnlyControlLaneText } from "./sequential-key.js";
 
 type TelegramReplyFenceState = {
   generation: number;
@@ -21,6 +25,17 @@ export function buildTelegramReplyFenceLaneKey(params: {
   sequentialKey: string;
 }): string {
   return `${params.accountId}\0${params.sequentialKey}`;
+}
+
+export function buildTelegramNonInterruptingReplyFenceKey(params: {
+  activeKey: string;
+  laneKey: string;
+}): string {
+  return `${buildTelegramNonInterruptingReplyFenceKeyPrefix(params.activeKey)}${params.laneKey}`;
+}
+
+function buildTelegramNonInterruptingReplyFenceKeyPrefix(activeKey: string): string {
+  return `${activeKey}\0non-interrupting\0`;
 }
 
 function normalizeTelegramFenceKey(value: unknown): string | undefined {
@@ -87,6 +102,7 @@ export function beginTelegramReplyFence(params: {
   if (params.supersede) {
     state.generation += 1;
     abortTelegramReplyFenceControllers(state);
+    supersedeTelegramNonInterruptingReplyFenceChildren(params.key);
   }
   if (params.abortController) {
     (state.abortControllers ??= new Set()).add(params.abortController);
@@ -103,7 +119,7 @@ export function beginTelegramReplyFence(params: {
   return state.generation;
 }
 
-export function supersedeTelegramReplyFence(key: string): boolean {
+function supersedeTelegramReplyFenceState(key: string): boolean {
   const state = telegramReplyFenceByKey.get(key);
   if (!state) {
     return false;
@@ -112,6 +128,23 @@ export function supersedeTelegramReplyFence(key: string): boolean {
   abortTelegramReplyFenceControllers(state);
   maybeDeleteTelegramReplyFenceState(key, state);
   return true;
+}
+
+function supersedeTelegramNonInterruptingReplyFenceChildren(key: string): boolean {
+  let superseded = false;
+  const childPrefix = buildTelegramNonInterruptingReplyFenceKeyPrefix(key);
+  for (const childKey of telegramReplyFenceByKey.keys()) {
+    if (childKey.startsWith(childPrefix)) {
+      superseded = supersedeTelegramReplyFenceState(childKey) || superseded;
+    }
+  }
+  return superseded;
+}
+
+export function supersedeTelegramReplyFence(key: string): boolean {
+  let superseded = supersedeTelegramReplyFenceState(key);
+  superseded = supersedeTelegramNonInterruptingReplyFenceChildren(key) || superseded;
+  return superseded;
 }
 
 export function supersedeTelegramReplyFenceLane(laneKey: string): boolean {
@@ -164,7 +197,16 @@ export function shouldSupersedeTelegramReplyFence(ctxPayload: {
   CommandAuthorized: boolean;
 }): boolean {
   const dispatchText = ctxPayload.CommandBody ?? ctxPayload.RawBody ?? ctxPayload.Body ?? "";
-  return !isAbortRequestText(dispatchText) || ctxPayload.CommandAuthorized;
+  if (isAbortRequestText(dispatchText)) {
+    return ctxPayload.CommandAuthorized;
+  }
+  if (
+    isBtwRequestText(dispatchText) ||
+    isTelegramReadOnlyControlLaneText({ rawText: dispatchText })
+  ) {
+    return false;
+  }
+  return true;
 }
 
 export function getTelegramReplyFenceSizeForTests(): number {

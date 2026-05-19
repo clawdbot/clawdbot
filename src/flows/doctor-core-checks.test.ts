@@ -8,6 +8,7 @@ import {
   registerCoreHealthChecks,
   resetCoreHealthChecksForTest,
 } from "./doctor-core-checks.js";
+import { doctorHealthConversionRules } from "./doctor-health-conversion-plan.js";
 import {
   clearHealthChecksForTest,
   listHealthChecks,
@@ -33,14 +34,9 @@ describe("registerCoreHealthChecks", () => {
     registerCoreHealthChecks();
     registerCoreHealthChecks();
 
-    expect(listHealthChecks().map((check) => check.id)).toEqual([
-      "core/doctor/gateway-config",
-      "core/doctor/command-owner",
-      "core/doctor/workspace-status",
-      "core/doctor/skills-readiness",
-      "core/doctor/browser-clawd-profile-residue",
-      "core/doctor/final-config-validation",
-    ]);
+    expect(listHealthChecks().map((check) => check.id)).toEqual(
+      CORE_HEALTH_CHECKS.map((check) => check.id),
+    );
   });
 
   it("can retry after a duplicate registration failure is cleared", () => {
@@ -58,7 +54,38 @@ describe("registerCoreHealthChecks", () => {
     clearHealthChecksForTest();
     registerCoreHealthChecks();
 
-    expect(listHealthChecks()).toHaveLength(6);
+    expect(listHealthChecks()).toHaveLength(CORE_HEALTH_CHECKS.length);
+  });
+
+  it("registers only implemented core health targets from the doctor conversion inventory", () => {
+    registerCoreHealthChecks();
+
+    const registeredIds = new Set(listHealthChecks().map((check) => check.id));
+    const coreTargets = new Set<string>(
+      doctorHealthConversionRules.flatMap((rule) =>
+        rule.target.filter((target) => target.startsWith("core/doctor/")),
+      ),
+    );
+    const plannedOnlyTargets = [
+      "core/doctor/auth-profiles/keychain",
+      "core/doctor/session-locks",
+      "core/doctor/gateway-daemon",
+    ];
+
+    for (const id of CORE_HEALTH_CHECKS.map((check) => check.id)) {
+      if (id === "core/doctor/browser-clawd-profile-residue") {
+        continue;
+      }
+      expect(coreTargets.has(id)).toBe(true);
+    }
+    for (const id of plannedOnlyTargets) {
+      expect(registeredIds.has(id)).toBe(false);
+    }
+    expect(
+      CORE_HEALTH_CHECKS.some((check) =>
+        check.description.endsWith("represented in the health registry."),
+      ),
+    ).toBe(false);
   });
 
   it("shows the repair-capable health check shape with skills readiness", async () => {
@@ -145,6 +172,66 @@ metadata: '{"openclaw":{"requires":{"bins":["openclaw-test-missing-skill-bin"]}}
         kind: "config",
         action: "disable-skill",
         target: "skills.entries.missing-tool.enabled",
+      }),
+    );
+  });
+
+  it("converts security doctor warnings into health findings", async () => {
+    const check = CORE_HEALTH_CHECKS.find((entry) => entry.id === "core/doctor/security");
+
+    const findings = await check?.detect({
+      mode: "lint",
+      runtime: { log() {}, error() {}, exit() {} },
+      cfg: {
+        gateway: {
+          bind: "lan",
+          auth: {
+            mode: "none",
+          },
+        },
+      },
+    });
+
+    expect(findings).toContainEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/security",
+        severity: "error",
+        message: expect.stringContaining("Gateway bound"),
+      }),
+    );
+  });
+
+  it("converts workspace suggestions into info findings", async () => {
+    tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-health-workspace-"));
+    const check = CORE_HEALTH_CHECKS.find(
+      (entry) => entry.id === "core/doctor/workspace-suggestions",
+    );
+
+    const findings = await check?.detect({
+      mode: "lint",
+      runtime: { log() {}, error() {}, exit() {} },
+      cfg: {
+        agents: {
+          defaults: {
+            workspace: tmp,
+          },
+        },
+      },
+      cwd: tmp,
+    });
+
+    expect(findings).toContainEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/workspace-suggestions",
+        severity: "info",
+        message: "Tip: back up the workspace in a private git repo (GitHub or GitLab).",
+      }),
+    );
+    expect(findings).toContainEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/workspace-suggestions",
+        severity: "info",
+        message: "Memory system not found in workspace.",
       }),
     );
   });

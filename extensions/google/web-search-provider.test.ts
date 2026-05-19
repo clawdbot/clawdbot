@@ -1,7 +1,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { withEnv, withEnvAsync, withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { __testing, createGeminiWebSearchProvider } from "./src/gemini-web-search-provider.js";
+import { testing, createGeminiWebSearchProvider } from "./src/gemini-web-search-provider.js";
 
 type TestModelProviderConfig = NonNullable<
   NonNullable<OpenClawConfig["models"]>["providers"]
@@ -103,13 +103,13 @@ describe("google web search provider", () => {
 
   it("falls back to GEMINI_API_KEY from the environment", () => {
     withEnv({ GEMINI_API_KEY: "AIza-env-test" }, () => {
-      expect(__testing.resolveGeminiApiKey()).toBe("AIza-env-test");
+      expect(testing.resolveGeminiApiKey()).toBe("AIza-env-test");
     });
   });
 
   it("prefers configured api keys over env fallbacks", () => {
     withEnv({ GEMINI_API_KEY: "AIza-env-test" }, () => {
-      expect(__testing.resolveGeminiApiKey({ apiKey: "AIza-configured-test" })).toBe(
+      expect(testing.resolveGeminiApiKey({ apiKey: "AIza-configured-test" })).toBe(
         "AIza-configured-test",
       );
     });
@@ -117,7 +117,7 @@ describe("google web search provider", () => {
 
   it("uses provider api keys only after env fallbacks", () => {
     withEnv({ GEMINI_API_KEY: "AIza-env-test" }, () => {
-      expect(__testing.resolveGeminiApiKey({ providerApiKey: "AIza-provider-test" })).toBe(
+      expect(testing.resolveGeminiApiKey({ providerApiKey: "AIza-provider-test" })).toBe(
         "AIza-env-test",
       );
     });
@@ -134,8 +134,8 @@ describe("google web search provider", () => {
   });
 
   it("defaults the Gemini web search model and trims explicit overrides", () => {
-    expect(__testing.resolveGeminiModel()).toBe("gemini-2.5-flash");
-    expect(__testing.resolveGeminiModel({ model: "  gemini-2.5-pro  " })).toBe("gemini-2.5-pro");
+    expect(testing.resolveGeminiModel()).toBe("gemini-2.5-flash");
+    expect(testing.resolveGeminiModel({ model: "  gemini-2.5-pro  " })).toBe("gemini-2.5-pro");
   });
 
   it("routes Gemini web search through plugin webSearch.baseUrl", async () => {
@@ -501,7 +501,7 @@ describe("google web search provider", () => {
 
   it("normalizes Gemini shorthand base URLs", () => {
     expect(
-      __testing.resolveGeminiBaseUrl({ baseUrl: "https://generativelanguage.googleapis.com" }),
+      testing.resolveGeminiBaseUrl({ baseUrl: "https://generativelanguage.googleapis.com" }),
     ).toBe("https://generativelanguage.googleapis.com/v1beta");
   });
 });

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { formatCliCommand } from "../command-format.js";
-import { ensureConfigReady, __test__ } from "./config-guard.js";
+import { ensureConfigReady, testApi } from "./config-guard.js";
 
 const loadAndMaybeMigrateDoctorConfigMock = vi.hoisted(() => vi.fn());
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
@@ -52,7 +52,7 @@ async function withCapturedStdout(run: () => Promise<void>): Promise<string> {
 }
 
 describe("ensureConfigReady", () => {
-  const resetConfigGuardStateForTests = __test__.resetConfigGuardStateForTests;
+  const resetConfigGuardStateForTests = testApi.resetConfigGuardStateForTests;
 
   async function runEnsureConfigReady(commandPath: string[], suppressDoctorStdout = false) {
     const runtime = makeRuntime();
@@ -128,6 +128,31 @@ describe("ensureConfigReady", () => {
       snapshot.runtimeConfig,
       snapshot.sourceConfig,
     );
+  });
+
+  it("retries the cached config snapshot after a read rejection", async () => {
+    const originalVitest = process.env.VITEST;
+    process.env.VITEST = "false";
+    const transientError = new Error("temporary config read failure");
+    const recoveredSnapshot = makeSnapshot();
+    readConfigFileSnapshotMock
+      .mockRejectedValueOnce(transientError)
+      .mockResolvedValueOnce(recoveredSnapshot);
+
+    try {
+      await expect(runEnsureConfigReady(["status"])).rejects.toThrow(transientError);
+      await expect(runEnsureConfigReady(["status"])).resolves.toBeDefined();
+      await expect(runEnsureConfigReady(["status"])).resolves.toBeDefined();
+    } finally {
+      if (originalVitest === undefined) {
+        delete process.env.VITEST;
+      } else {
+        process.env.VITEST = originalVitest;
+      }
+    }
+
+    expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(2);
+    expect(setRuntimeConfigSnapshotMock).toHaveBeenCalledWith(undefined, undefined);
   });
 
   it("exits for invalid config on non-allowlisted commands", async () => {

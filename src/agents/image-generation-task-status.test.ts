@@ -115,6 +115,50 @@ describe("image generation task status", () => {
     expect(details.progressSummary).toBe("Generating image");
   });
 
+  it("can restrict active lookup to the matching image prompt", () => {
+    taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
+      {
+        taskId: "task-first",
+        runtime: "cli",
+        taskKind: IMAGE_GENERATION_TASK_KIND,
+        sourceId: "image_generate:openai",
+        requesterSessionKey: "agent:main",
+        ownerKey: "agent:main",
+        scopeKind: "session",
+        task: "First diagram prompt",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+        createdAt: Date.now(),
+      },
+      {
+        taskId: "task-second",
+        runtime: "cli",
+        taskKind: IMAGE_GENERATION_TASK_KIND,
+        sourceId: "image_generate:openai",
+        requesterSessionKey: "agent:main",
+        ownerKey: "agent:main",
+        scopeKind: "session",
+        task: "Second diagram prompt",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+        createdAt: Date.now(),
+      },
+    ]);
+
+    expect(
+      findActiveImageGenerationTaskForSession("agent:main", {
+        prompt: "Second diagram prompt",
+      })?.taskId,
+    ).toBe("task-second");
+    expect(
+      findActiveImageGenerationTaskForSession("agent:main", {
+        prompt: "Third diagram prompt",
+      }),
+    ).toBeUndefined();
+  });
+
   it("builds prompt context for active session work", () => {
     taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
       {

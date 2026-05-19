@@ -418,6 +418,34 @@ describe("qa scenario catalog", () => {
     expect(scenario.title).toBe("Instruction followthrough repo contract");
   });
 
+  it("adds a dreaming shadow trial report scenario", () => {
+    const scenario = readQaScenarioById("dreaming-shadow-trial-report");
+    const config = readQaScenarioExecutionConfig("dreaming-shadow-trial-report") as
+      | {
+          prompt?: string;
+          reportName?: string;
+          expectedReportAll?: string[];
+          forbiddenReplyNeedles?: string[];
+          seededMemory?: string;
+        }
+      | undefined;
+    const flow = JSON.stringify(scenario.execution.flow);
+
+    expect(scenario.sourcePath).toBe("qa/scenarios/memory/dreaming-shadow-trial-report.md");
+    expect(scenario.coverage?.primary).toContain("memory.dreaming");
+    expect(config?.prompt).toContain("Dreaming shadow trial report check");
+    expect(config?.reportName).toBe("dreaming-shadow-trial-report.md");
+    expect(config?.seededMemory).toBe("# Memory\n\n");
+    expect(config?.expectedReportAll).toContain("verdict: helpful");
+    expect(config?.expectedReportAll).toContain("exact verification commands and remaining risk");
+    expect(config?.expectedReportAll).toContain("omits the exact command and remaining risk");
+    expect(config?.expectedReportAll).toContain("calls out the remaining review risk");
+    expect(config?.forbiddenReplyNeedles).toContain("candidate was promoted to MEMORY.md");
+    expect(flow).toContain("plannedToolName === 'write'");
+    expect(flow).toContain("readIndices[1] < firstWrite");
+    expect(flow).toContain("String(memoryAfter) === config.seededMemory");
+  });
+
   it("rejects malformed string matcher lists before running a flow", () => {
     expect(() =>
       validateQaScenarioExecutionConfig({

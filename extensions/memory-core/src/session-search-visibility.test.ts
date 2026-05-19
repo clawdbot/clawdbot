@@ -359,4 +359,127 @@ describe("filterMemorySearchHitsBySessionVisibility", () => {
 
     expect(filtered).toStrictEqual([]);
   });
+
+  it("keeps same-agent QMD-normalized archived reset .md hits when the store has a matching entry", async () => {
+    combinedSessionStore = {
+      "agent:main:abc-uuid": {
+        sessionId: "abc-uuid",
+        updatedAt: 1,
+        sessionFile: "/tmp/sessions/abc-uuid.jsonl",
+      },
+    };
+    const hit: MemorySearchResult = {
+      path: "qmd/sessions-main/abc-uuid-jsonl-reset-2026-02-16t22-26-33-000z.md",
+      source: "sessions",
+      score: 1,
+      snippet: "x",
+      startLine: 1,
+      endLine: 2,
+    };
+    const cfg = asOpenClawConfig({
+      tools: {
+        sessions: { visibility: "agent" },
+      },
+    });
+
+    const filtered = await filterMemorySearchHitsBySessionVisibility({
+      cfg,
+      requesterSessionKey: "agent:main:main",
+      sandboxed: false,
+      hits: [hit],
+    });
+
+    expect(filtered).toEqual([hit]);
+  });
+
+  it("keeps QMD .md hits whose live session id looks like an archive name", async () => {
+    const sessionId = "foo.jsonl.deleted.2026-02-16T22-27-33.000Z";
+    combinedSessionStore = {
+      "agent:main:archive-looking": {
+        sessionId,
+        updatedAt: 1,
+        sessionFile: `/tmp/sessions/${sessionId}.jsonl`,
+      },
+    };
+    const hit: MemorySearchResult = {
+      path: `qmd/sessions-main/${sessionId}.md`,
+      source: "sessions",
+      score: 1,
+      snippet: "x",
+      startLine: 1,
+      endLine: 2,
+    };
+    const cfg = asOpenClawConfig({
+      tools: {
+        sessions: { visibility: "self" },
+      },
+    });
+
+    const filtered = await filterMemorySearchHitsBySessionVisibility({
+      cfg,
+      requesterSessionKey: "agent:main:archive-looking",
+      sandboxed: false,
+      hits: [hit],
+    });
+
+    expect(filtered).toEqual([hit]);
+  });
+
+  it("does not authorize QMD archived .md hits through lossy slug fallback", async () => {
+    combinedSessionStore = {
+      "agent:main:foo_bar": {
+        sessionId: "foo_bar",
+        updatedAt: 1,
+        sessionFile: "/tmp/sessions/foo_bar.jsonl",
+      },
+    };
+    const hit: MemorySearchResult = {
+      path: "qmd/sessions-main/foo-bar-jsonl-deleted-2026-02-16t22-26-33-000z.md",
+      source: "sessions",
+      score: 1,
+      snippet: "x",
+      startLine: 1,
+      endLine: 2,
+    };
+    const cfg = asOpenClawConfig({
+      tools: {
+        sessions: { visibility: "self" },
+      },
+    });
+
+    const filtered = await filterMemorySearchHitsBySessionVisibility({
+      cfg,
+      requesterSessionKey: "agent:main:foo_bar",
+      sandboxed: false,
+      hits: [hit],
+    });
+
+    expect(filtered).toStrictEqual([]);
+  });
+
+  it("keeps same-agent QMD archived deleted .md hits when no store entry remains", async () => {
+    combinedSessionStore = {};
+    const hit: MemorySearchResult = {
+      path: "qmd/sessions-main/abc-uuid-jsonl-deleted-2026-02-16t22-26-33-000z.md",
+      source: "sessions",
+      score: 1,
+      snippet: "x",
+      startLine: 1,
+      endLine: 2,
+    };
+    const cfg = asOpenClawConfig({
+      tools: {
+        sessions: { visibility: "all" },
+      },
+    });
+
+    const filtered = await filterMemorySearchHitsBySessionVisibility({
+      cfg,
+      requesterSessionKey: "agent:main:main",
+      sandboxed: false,
+      hits: [hit],
+    });
+
+    expect(filtered).toEqual([hit]);
+  });
 });

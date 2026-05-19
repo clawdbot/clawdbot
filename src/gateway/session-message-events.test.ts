@@ -554,7 +554,7 @@ describe("session.message websocket events", () => {
       });
       const payload = requireRecord(messageEvent.payload, "session.message payload");
       const message = requireRecord(payload.message, "session.message payload message");
-      expect((message.__openclaw as { seq?: unknown } | undefined)?.seq).toBe(7);
+      expect((message["__openclaw"] as { seq?: unknown } | undefined)?.seq).toBe(7);
     });
   });
 

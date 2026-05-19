@@ -212,8 +212,9 @@ export function ensurePluginRegistryLoaded(options?: {
   }
 }
 
-export const __testing = {
+export const testing = {
   resetPluginRegistryLoadedForTests(): void {
     pluginRegistryLoaded = "none";
   },
 };
+export { testing as __testing };

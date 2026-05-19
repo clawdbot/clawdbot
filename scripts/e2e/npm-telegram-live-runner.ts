@@ -106,7 +106,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   });
 }
 
-export const __testing = {
+export const testing = {
   resolveCredentialRole,
   resolveCredentialSource,
 };
+export { testing as __testing };

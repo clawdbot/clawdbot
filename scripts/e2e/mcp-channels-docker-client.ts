@@ -192,7 +192,7 @@ async function main() {
       "seeded attachment message",
       () =>
         messages.find((entry) => {
-          const raw = entry.__openclaw;
+          const raw = entry["__openclaw"];
           return (
             raw && typeof raw === "object" && (raw as { id?: unknown }).id === "msg-attachment"
           );

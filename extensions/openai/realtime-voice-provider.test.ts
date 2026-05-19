@@ -110,7 +110,7 @@ type SentRealtimeEvent = {
     audio?: {
       input?: {
         format?: Record<string, unknown>;
-        noise_reduction?: Record<string, unknown>;
+        noise_reduction?: Record<string, unknown> | null;
         transcription?: Record<string, unknown>;
         turn_detection?: {
           create_response?: boolean;
@@ -668,7 +668,7 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
     const inputAudio = requireNestedRecord(session, ["audio", "input"]);
     expectRecordFields(inputAudio, "session audio input", {
       format: { type: "audio/pcmu" },
-      noise_reduction: { type: "near_field" },
+      noise_reduction: null,
       transcription: { model: "gpt-4o-mini-transcribe" },
     });
     expect(requireNestedRecord(session, ["audio", "output"])).toEqual({

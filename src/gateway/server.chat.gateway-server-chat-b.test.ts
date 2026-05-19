@@ -6,7 +6,7 @@ import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import { clearConfigCache } from "../config/config.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
-import { __setMaxChatHistoryMessagesBytesForTest } from "./server-constants.js";
+import { setMaxChatHistoryMessagesBytesForTest } from "./server-constants.js";
 import type { GatewayRequestContext, RespondFn } from "./server-methods/shared-types.js";
 import {
   connectOk,
@@ -79,7 +79,7 @@ async function withGatewayChatHarness(
   try {
     await run({ ws, createSessionDir });
   } finally {
-    __setMaxChatHistoryMessagesBytesForTest();
+    setMaxChatHistoryMessagesBytesForTest();
     clearConfigCache();
     testState.sessionStorePath = undefined;
     ws.close();
@@ -154,7 +154,7 @@ async function prepareMainHistoryHarness(params: {
   historyMaxBytes?: number;
 }) {
   if (params.historyMaxBytes !== undefined) {
-    __setMaxChatHistoryMessagesBytesForTest(params.historyMaxBytes);
+    setMaxChatHistoryMessagesBytesForTest(params.historyMaxBytes);
   }
   await connectOk(params.ws);
   const sessionDir = await params.createSessionDir();

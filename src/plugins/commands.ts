@@ -22,6 +22,7 @@ import {
 } from "./command-registration.js";
 import {
   isTrustedReservedCommandOwner,
+  listRegisteredPluginAgentPromptGuidance,
   pluginCommands,
   setPluginCommandRegistryLocked,
   type RegisteredPluginCommand,
@@ -47,6 +48,7 @@ export {
   clearPluginCommandsForPlugin,
   getPluginCommandSpecs,
   listProviderPluginCommandSpecs,
+  listRegisteredPluginAgentPromptGuidance,
   registerPluginCommand,
   validateCommandName,
   validatePluginCommandDefinition,
@@ -390,6 +392,7 @@ function listPluginInvocationNames(command: OpenClawPluginCommandDefinition): st
   return listPluginInvocationKeys(command);
 }
 
-export const __testing = {
+export const testing = {
   resolveBindingConversationFromCommand,
 };
+export { testing as __testing };

@@ -56,6 +56,22 @@ describe("classifySessionAttention", () => {
       },
     },
     {
+      name: "queued behind terminal embedded progress",
+      queueDepth: 1,
+      activity: {
+        activeWorkKind: "embedded_run" as const,
+        lastProgressAgeMs: 100,
+        lastProgressReason: "codex_app_server:notification:rawResponseItem/completed",
+      },
+      expected: {
+        eventType: "session.stalled",
+        reason: "queued_behind_terminal_active_work",
+        classification: "stalled_agent_run",
+        activeWorkKind: "embedded_run",
+        recoveryEligible: false,
+      },
+    },
+    {
       name: "active work without progress",
       queueDepth: 0,
       activity: {

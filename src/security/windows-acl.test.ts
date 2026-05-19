@@ -1,7 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_WINDOWS_SYSTEM_ROOT,
-  _resetWindowsInstallRootsForTests,
+  resetWindowsInstallRootsForTests,
 } from "../infra/windows-install-roots.js";
 import type { WindowsAclEntry, WindowsAclSummary } from "./windows-acl.js";
 
@@ -33,7 +33,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   vi.unstubAllEnvs();
-  _resetWindowsInstallRootsForTests();
+  resetWindowsInstallRootsForTests();
 });
 
 function aclEntry(params: {
@@ -510,7 +510,7 @@ Successfully processed 1 files`;
     });
 
     it("uses the discovered process SystemRoot when env options are omitted", async () => {
-      _resetWindowsInstallRootsForTests({ queryRegistryValue: () => null });
+      resetWindowsInstallRootsForTests({ queryRegistryValue: () => null });
       vi.stubEnv("SystemRoot", "D:\\Windows");
 
       const mockExec = vi.fn().mockResolvedValue({

@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
-  __setGatewayModelPricingForTest,
+  setGatewayModelPricingForTest,
   clearGatewayModelPricingCacheState,
 } from "../gateway/model-pricing-cache-state.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
@@ -551,7 +551,7 @@ describe("session cost usage", () => {
     );
 
     const setGatewayPricing = (input: number, output: number) =>
-      __setGatewayModelPricingForTest([
+      setGatewayModelPricingForTest([
         {
           provider: "openai",
           model: "gpt-5.4",

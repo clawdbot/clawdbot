@@ -92,6 +92,25 @@ export function createImageGenerateStatusActionResult(
 
 export function createImageGenerateDuplicateGuardResult(
   sessionKey?: string,
+  params?: { prompt?: string },
 ): ImageGenerateActionResult | undefined {
-  return imageGenerateTaskStatusActions.createDuplicateGuardResult(sessionKey);
+  const activeTask = findActiveImageGenerationTaskForSession(sessionKey, {
+    prompt: params?.prompt,
+  });
+  if (!activeTask) {
+    return undefined;
+  }
+  return {
+    content: [
+      {
+        type: "text",
+        text: buildImageGenerationTaskStatusText(activeTask, { duplicateGuard: true }),
+      },
+    ],
+    details: {
+      action: "status",
+      duplicateGuard: true,
+      ...buildImageGenerationTaskStatusDetails(activeTask),
+    },
+  };
 }

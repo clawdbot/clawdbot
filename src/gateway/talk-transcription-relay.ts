@@ -15,6 +15,8 @@ const MAX_AUDIO_BASE64_BYTES = 512 * 1024;
 const MAX_TRANSCRIPTION_SESSIONS_PER_CONN = 2;
 const MAX_TRANSCRIPTION_SESSIONS_GLOBAL = 64;
 const TRANSCRIPTION_EVENT = "talk.event";
+const RELAY_INPUT_ENCODING = "g711_ulaw";
+const RELAY_INPUT_SAMPLE_RATE_HZ = 8000;
 
 type TalkTranscriptionRelayEventPayload =
   | { transcriptionSessionId: string; type: "ready" }
@@ -54,13 +56,91 @@ type TalkTranscriptionRelaySessionResult = {
   transport: "gateway-relay";
   transcriptionSessionId: string;
   audio: {
-    inputEncoding: "pcm16";
-    inputSampleRateHz: 24000;
+    inputEncoding: "g711_ulaw";
+    inputSampleRateHz: 8000;
   };
   expiresAt: number;
 };
 
 const transcriptionSessions = new Map<string, TranscriptionRelaySession>();
+
+function normalizeRelayInputEncoding(
+  value: unknown,
+): "g711_ulaw" | "g711_alaw" | "pcm16" | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if (
+    normalized === "mulaw" ||
+    normalized === "ulaw" ||
+    normalized === "g711_ulaw" ||
+    normalized === "g711-mulaw" ||
+    normalized === "pcm_mulaw" ||
+    normalized === "audio/pcmu" ||
+    normalized === "ulaw_8000"
+  ) {
+    return "g711_ulaw";
+  }
+  if (
+    normalized === "alaw" ||
+    normalized === "g711_alaw" ||
+    normalized === "g711-alaw" ||
+    normalized === "pcm_alaw"
+  ) {
+    return "g711_alaw";
+  }
+  if (
+    normalized === "pcm" ||
+    normalized === "pcm16" ||
+    normalized === "linear16" ||
+    normalized === "pcm_s16le"
+  ) {
+    return "pcm16";
+  }
+  return undefined;
+}
+
+function readFiniteNumber(value: unknown): number | undefined {
+  const next =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number.parseFloat(value)
+        : undefined;
+  return Number.isFinite(next) ? next : undefined;
+}
+
+function inferSampleRateFromAudioFormat(value: unknown): number | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const match = value.match(/_(\d+)$/);
+  return match ? readFiniteNumber(match[1]) : undefined;
+}
+
+function assertRelayInputAudioConfig(providerConfig: RealtimeTranscriptionProviderConfig): void {
+  const encodingValue =
+    providerConfig.encoding ?? providerConfig.audioFormat ?? providerConfig.audio_format;
+  const encoding = normalizeRelayInputEncoding(encodingValue);
+  if (encoding && encoding !== RELAY_INPUT_ENCODING) {
+    throw new Error(
+      `Gateway transcription relay requires ${RELAY_INPUT_ENCODING}/${RELAY_INPUT_SAMPLE_RATE_HZ} audio`,
+    );
+  }
+
+  const sampleRate =
+    readFiniteNumber(providerConfig.sampleRate ?? providerConfig.sample_rate) ??
+    inferSampleRateFromAudioFormat(encodingValue);
+  if (sampleRate && sampleRate !== RELAY_INPUT_SAMPLE_RATE_HZ) {
+    throw new Error(
+      `Gateway transcription relay requires ${RELAY_INPUT_ENCODING}/${RELAY_INPUT_SAMPLE_RATE_HZ} audio`,
+    );
+  }
+}
 
 function broadcastToOwner(
   context: GatewayRequestContext,
@@ -137,6 +217,7 @@ export function createTalkTranscriptionRelaySession(
   params: CreateTalkTranscriptionRelaySessionParams,
 ): TalkTranscriptionRelaySessionResult {
   enforceTranscriptionSessionLimits(params.connId);
+  assertRelayInputAudioConfig(params.providerConfig);
   const transcriptionSessionId = randomUUID();
   const expiresAtMs = Date.now() + TRANSCRIPTION_SESSION_TTL_MS;
   const talk = createTalkSessionController(
@@ -262,8 +343,8 @@ export function createTalkTranscriptionRelaySession(
     transport: "gateway-relay",
     transcriptionSessionId,
     audio: {
-      inputEncoding: "pcm16",
-      inputSampleRateHz: 24000,
+      inputEncoding: RELAY_INPUT_ENCODING,
+      inputSampleRateHz: RELAY_INPUT_SAMPLE_RATE_HZ,
     },
     expiresAt: Math.floor(expiresAtMs / 1000),
   };

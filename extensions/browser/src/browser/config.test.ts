@@ -556,23 +556,216 @@ describe("browser config", () => {
     expect(profile?.cdpIsLoopback).toBe(true);
   });
 
-  it("prefers cdpPort over stale WebSocket devtools cdpUrl when both are set", () => {
-    const resolved = resolveBrowserConfig({
-      profiles: {
-        "chrome-cdp": {
-          cdpPort: 9222,
-          cdpUrl: "ws://127.0.0.1:9222/devtools/browser/old-stale-id",
-          attachOnly: true,
-          color: "#F59E0B",
+  describe("cdpPort vs cdpUrl port precedence", () => {
+    it("URL with non-default port wins over cdpPort", () => {
+      const resolved = resolveBrowserConfig({
+        profiles: {
+          openclaw: {
+            cdpPort: 18800,
+            cdpUrl: "http://127.0.0.1:9222",
+            color: "#FF4500",
+            driver: "openclaw",
+          },
         },
-      },
+      });
+      const profile = resolveProfile(resolved, "openclaw");
+      expect(profile?.cdpPort).toBe(9222);
+      expect(profile?.cdpUrl).toBe("http://127.0.0.1:9222");
     });
-    const profile = resolveProfile(resolved, "chrome-cdp");
-    // cdpPort produces a stable HTTP endpoint; the stale WS session ID is dropped.
-    expect(profile?.cdpUrl).toBe("http://127.0.0.1:9222");
-    expect(profile?.cdpPort).toBe(9222);
-    expect(profile?.cdpIsLoopback).toBe(true);
-    expect(profile?.attachOnly).toBe(true);
+
+    it("URL with explicit default port :80 wins over cdpPort", () => {
+      const resolved = resolveBrowserConfig({
+        profiles: {
+          openclaw: {
+            cdpPort: 18800,
+            cdpUrl: "http://127.0.0.1:80",
+            color: "#FF4500",
+            driver: "openclaw",
+          },
+        },
+      });
+      const profile = resolveProfile(resolved, "openclaw");
+      expect(profile?.cdpPort).toBe(80);
+      expect(profile?.cdpUrl).toBe("http://127.0.0.1:80");
+    });
+
+    it("URL with explicit default port preserves normalized URL details", () => {
+      const resolved = resolveBrowserConfig({
+        profiles: {
+          secure: {
+            cdpPort: 18800,
+            cdpUrl: "https://user:pass@remote-browser.example.com:443/json/version?token=abc#frag",
+            color: "#0066CC",
+            driver: "openclaw",
+          },
+          websocket: {
+            cdpPort: 18800,
+            cdpUrl: "wss://remote-browser.example.com:443/json/version?token=abc",
+            color: "#0066CC",
+            driver: "openclaw",
+          },
+          ipv6: {
+            cdpPort: 18800,
+            cdpUrl: "http://[::1]:80/json/version?token=abc",
+            color: "#0066CC",
+            driver: "openclaw",
+          },
+        },
+      });
+
+      const secure = resolveProfile(resolved, "secure");
+      expect(secure?.cdpPort).toBe(443);
+      expect(secure?.cdpUrl).toBe(
+        "https://user:pass@remote-browser.example.com:443/json/version?token=abc#frag",
+      );
+
+      const websocket = resolveProfile(resolved, "websocket");
+      expect(websocket?.cdpPort).toBe(443);
+      expect(websocket?.cdpUrl).toBe("wss://remote-browser.example.com:443/json/version?token=abc");
+
+      const ipv6 = resolveProfile(resolved, "ipv6");
+      expect(ipv6?.cdpPort).toBe(80);
+      expect(ipv6?.cdpUrl).toBe("http://[::1]:80/json/version?token=abc");
+    });
+
+    it("userinfo colons without a URL port defer to cdpPort", () => {
+      const resolved = resolveBrowserConfig({
+        profiles: {
+          openclaw: {
+            cdpPort: 18800,
+            cdpUrl: "http://user:pass@127.0.0.1/json/version",
+            color: "#FF4500",
+            driver: "openclaw",
+          },
+        },
+      });
+      const profile = resolveProfile(resolved, "openclaw");
+      expect(profile?.cdpPort).toBe(18800);
+      expect(profile?.cdpUrl).toBe("http://user:pass@127.0.0.1:18800/json/version");
+    });
+
+    it("URL without port defers to cdpPort", () => {
+      const resolved = resolveBrowserConfig({
+        profiles: {
+          openclaw: {
+            cdpPort: 18800,
+            cdpUrl: "http://127.0.0.1",
+            color: "#FF4500",
+            driver: "openclaw",
+          },
+        },
+      });
+      const profile = resolveProfile(resolved, "openclaw");
+      expect(profile?.cdpPort).toBe(18800);
+      expect(profile?.cdpUrl).toBe("http://127.0.0.1:18800");
+    });
+
+    it("URL with non-default port, no cdpPort configured", () => {
+      const resolved = resolveBrowserConfig({
+        profiles: {
+          openclaw: {
+            cdpUrl: "http://127.0.0.1:9222",
+            color: "#FF4500",
+            driver: "openclaw",
+          },
+        },
+      });
+      const profile = resolveProfile(resolved, "openclaw");
+      expect(profile?.cdpPort).toBe(9222);
+      expect(profile?.cdpUrl).toBe("http://127.0.0.1:9222");
+    });
+
+    it("URL without port and no cdpPort falls back to protocol default", () => {
+      const resolved = resolveBrowserConfig({
+        profiles: {
+          openclaw: {
+            cdpUrl: "https://remote-browser.example.com",
+            color: "#FF4500",
+            driver: "openclaw",
+          },
+        },
+      });
+      const profile = resolveProfile(resolved, "openclaw");
+      expect(profile?.cdpPort).toBe(443);
+      expect(profile?.cdpUrl).toBe("https://remote-browser.example.com");
+    });
+
+    it("no URL + cdpPort constructs URL from defaults", () => {
+      const resolved = resolveBrowserConfig({
+        profiles: {
+          openclaw: {
+            cdpPort: 9222,
+            color: "#FF4500",
+            driver: "openclaw",
+          },
+        },
+      });
+      const profile = resolveProfile(resolved, "openclaw");
+      expect(profile?.cdpPort).toBe(9222);
+      expect(profile?.cdpUrl).toContain(":9222");
+    });
+
+    it("no URL + no cdpPort throws", () => {
+      const resolved = resolveBrowserConfig({
+        profiles: {
+          bad: {
+            color: "#FF4500",
+            driver: "openclaw",
+          },
+        },
+      });
+      expect(() => resolveProfile(resolved, "bad")).toThrow("must define cdpPort or cdpUrl");
+    });
+
+    it("stale WS devtools URL + cdpPort drops path and uses cdpPort", () => {
+      const resolved = resolveBrowserConfig({
+        profiles: {
+          "chrome-cdp": {
+            cdpPort: 9222,
+            cdpUrl: "ws://127.0.0.1:12345/devtools/browser/old-stale-id",
+            attachOnly: true,
+            color: "#F59E0B",
+          },
+        },
+      });
+      const profile = resolveProfile(resolved, "chrome-cdp");
+      expect(profile?.cdpUrl).toBe("http://127.0.0.1:9222");
+      expect(profile?.cdpPort).toBe(9222);
+      expect(profile?.cdpIsLoopback).toBe(true);
+      expect(profile?.attachOnly).toBe(true);
+    });
+
+    it("IPv6 URL without port defers to cdpPort", () => {
+      const resolved = resolveBrowserConfig({
+        profiles: {
+          openclaw: {
+            cdpPort: 18800,
+            cdpUrl: "http://[::1]",
+            color: "#FF4500",
+            driver: "openclaw",
+          },
+        },
+      });
+      const profile = resolveProfile(resolved, "openclaw");
+      expect(profile?.cdpPort).toBe(18800);
+      expect(profile?.cdpUrl).toBe("http://[::1]:18800");
+    });
+
+    it("IPv6 URL with explicit port wins over cdpPort", () => {
+      const resolved = resolveBrowserConfig({
+        profiles: {
+          openclaw: {
+            cdpPort: 18800,
+            cdpUrl: "http://[::1]:9222",
+            color: "#FF4500",
+            driver: "openclaw",
+          },
+        },
+      });
+      const profile = resolveProfile(resolved, "openclaw");
+      expect(profile?.cdpPort).toBe(9222);
+      expect(profile?.cdpUrl).toBe("http://[::1]:9222");
+    });
   });
 
   it("preserves profile host when dropping stale devtools WS path", () => {

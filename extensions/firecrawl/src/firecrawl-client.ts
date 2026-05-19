@@ -603,7 +603,7 @@ export async function runFirecrawlScrape(
   return result;
 }
 
-export const __testing = {
+export const testing = {
   assertFirecrawlScrapeTargetAllowed,
   parseFirecrawlScrapePayload,
   postFirecrawlJson,
@@ -611,3 +611,4 @@ export const __testing = {
   validateFirecrawlBaseUrl,
   resolveSearchItems,
 };
+export { testing as __testing };

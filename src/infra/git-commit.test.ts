@@ -54,26 +54,26 @@ async function makeFakeGitRepo(
 describe("git commit resolution", () => {
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
   let resolveCommitHash: (typeof import("./git-commit.js"))["resolveCommitHash"];
-  let __testing: (typeof import("./git-commit.js"))["__testing"];
+  let testing: (typeof import("./git-commit.js"))["testing"];
 
   beforeAll(async () => {
     vi.doUnmock("node:fs");
     vi.doUnmock("node:module");
-    ({ resolveCommitHash, __testing } = await import("./git-commit.js"));
+    ({ resolveCommitHash, testing } = await import("./git-commit.js"));
   });
 
   beforeEach(() => {
     vi.restoreAllMocks();
     vi.doUnmock("node:fs");
     vi.doUnmock("node:module");
-    __testing.clearCachedGitCommits();
+    testing.clearCachedGitCommits();
   });
 
   afterEach(async () => {
     vi.restoreAllMocks();
     vi.doUnmock("node:fs");
     vi.doUnmock("node:module");
-    __testing.clearCachedGitCommits();
+    testing.clearCachedGitCommits();
     await tempDirs.cleanup();
   });
 

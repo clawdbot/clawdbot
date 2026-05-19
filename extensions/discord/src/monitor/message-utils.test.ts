@@ -45,7 +45,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   };
 });
 
-let __resetDiscordChannelInfoCacheForTest: typeof import("./message-utils.js").__resetDiscordChannelInfoCacheForTest;
+let resetDiscordChannelInfoCacheForTest: typeof import("./message-utils.js").resetDiscordChannelInfoCacheForTest;
 let resolveDiscordChannelInfo: typeof import("./message-utils.js").resolveDiscordChannelInfo;
 let resolveDiscordMessageChannelId: typeof import("./message-utils.js").resolveDiscordMessageChannelId;
 let resolveDiscordMessageText: typeof import("./message-utils.js").resolveDiscordMessageText;
@@ -55,7 +55,7 @@ let resolveReferencedReplyMediaList: typeof import("./message-utils.js").resolve
 
 beforeAll(async () => {
   ({
-    __resetDiscordChannelInfoCacheForTest,
+    resetDiscordChannelInfoCacheForTest,
     resolveDiscordChannelInfo,
     resolveDiscordMessageChannelId,
     resolveDiscordMessageText,
@@ -1196,7 +1196,7 @@ describe("resolveDiscordMessageText", () => {
 
 describe("resolveDiscordChannelInfo", () => {
   beforeEach(() => {
-    __resetDiscordChannelInfoCacheForTest();
+    resetDiscordChannelInfoCacheForTest();
   });
 
   it("caches channel lookups between calls", async () => {

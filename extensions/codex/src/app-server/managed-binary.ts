@@ -144,7 +144,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
-export const __testing = {
+export const testing = {
   resolveDefaultCodexPluginRoot,
 };
 
@@ -190,3 +190,4 @@ async function commandPathExists(filePath: string, platform: NodeJS.Platform): P
     return false;
   }
 }
+export { testing as __testing };

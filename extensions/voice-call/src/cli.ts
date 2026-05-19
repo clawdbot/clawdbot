@@ -56,7 +56,7 @@ const voiceCallCliDeps = {
   callGatewayFromCli,
 };
 
-export const __testing = {
+export const testing = {
   setCallGatewayFromCliForTests(next?: typeof callGatewayFromCli): void {
     voiceCallCliDeps.callGatewayFromCli = next ?? callGatewayFromCli;
   },
@@ -863,3 +863,4 @@ export function registerVoiceCallCli(params: {
       },
     );
 }
+export { testing as __testing };

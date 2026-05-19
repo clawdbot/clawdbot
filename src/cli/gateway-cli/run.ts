@@ -857,8 +857,9 @@ export async function runGatewayCommand(opts: GatewayRunOpts) {
   }
 }
 
-export const __testing = {
+export const testing = {
   normalizeGatewayHealthProbeHost,
   resolveGatewayLockErrorExitCode,
   runGatewayLoopWithSupervisedLockRecovery,
 };
+export { testing as __testing };

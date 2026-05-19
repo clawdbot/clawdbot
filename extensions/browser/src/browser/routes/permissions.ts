@@ -17,7 +17,7 @@ const permissionRouteDeps = {
   getPwAiModule,
 };
 
-export const __testing = {
+export const testing = {
   setDepsForTest(deps: { getPwAiModule?: typeof getPwAiModule } | null) {
     permissionRouteDeps.getPwAiModule = deps?.getPwAiModule ?? getPwAiModule;
   },
@@ -193,3 +193,4 @@ export function registerBrowserPermissionRoutes(
     }),
   );
 }
+export { testing as __testing };

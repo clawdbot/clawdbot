@@ -40,7 +40,7 @@ else
 fi
 
 echo "🧾 Notarizing: $ARTIFACT"
-xcrun notarytool submit "$ARTIFACT" "${auth_args[@]}" --wait
+xcrun notarytool submit "$ARTIFACT" "${auth_args[@]}" --wait --no-s3-acceleration
 
 case "$ARTIFACT" in
   *.dmg|*.pkg)

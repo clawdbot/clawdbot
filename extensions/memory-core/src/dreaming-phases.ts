@@ -1896,7 +1896,7 @@ async function runPhaseIfTriggered(
   return { handled: true, reason: `memory-core: ${params.phase} dreaming processed` };
 }
 
-export const __testing = {
+export const testing = {
   runPhaseIfTriggered,
   previewRemDreaming,
   constants: {
@@ -1904,3 +1904,4 @@ export const __testing = {
     REM_SLEEP_EVENT_TEXT,
   },
 };
+export { testing as __testing };

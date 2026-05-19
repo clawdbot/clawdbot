@@ -9,8 +9,7 @@ extension CronSettings {
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .padding(.leading, 18)
-        .padding(.trailing, SettingsLayout.scrollbarGutter)
+        .settingsDetailContent()
         .onAppear {
             self.updateActiveWork(active: self.isActive)
         }

@@ -7,7 +7,7 @@ import { buildXaiCatalogModels, resolveXaiCatalogEntry } from "./model-definitio
 import { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
 import { resolveFallbackXaiAuth } from "./src/tool-auth-shared.js";
 import { wrapXaiWebSearchError } from "./src/web-search-shared.js";
-import { __testing } from "./test-api.js";
+import { testing } from "./test-api.js";
 import { createXaiWebSearchProvider } from "./web-search.js";
 
 vi.mock("openclaw/plugin-sdk/provider-web-search", async (importOriginal) => {
@@ -45,7 +45,7 @@ const {
   resolveXaiWebSearchCredential,
   resolveXaiWebSearchModel,
   resolveXaiWebSearchTimeoutSeconds,
-} = __testing;
+} = testing;
 
 function installXaiWebSearchFetch() {
   const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
@@ -476,7 +476,7 @@ describe("xai web search config resolution", () => {
   });
 
   it("builds wrapped payloads with optional inline citations", () => {
-    const payload = __testing.buildXaiWebSearchPayload({
+    const payload = testing.buildXaiWebSearchPayload({
       query: "q",
       provider: "grok",
       model: "grok-4-fast",

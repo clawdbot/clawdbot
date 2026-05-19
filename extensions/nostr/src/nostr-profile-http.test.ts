@@ -185,8 +185,8 @@ function createProfileHttpHarness(
 }
 
 function expectOkResponse(res: MockResponse) {
-  expect(res._getStatusCode()).toBe(200);
-  const data = JSON.parse(res._getData());
+  expect(res["_getStatusCode"]()).toBe(200);
+  const data = JSON.parse(res["_getData"]());
   expect(data.ok).toBe(true);
   return data;
 }
@@ -222,8 +222,8 @@ async function expectAdminScopeRejected(params: {
 
   await run();
 
-  expect(res._getStatusCode()).toBe(403);
-  const data = JSON.parse(res._getData());
+  expect(res["_getStatusCode"]()).toBe(403);
+  const data = JSON.parse(res["_getData"]());
   expect(data.error).toBe("missing scope: operator.admin");
   params.expectOperationNotCalled();
   expect(ctx.updateConfigProfile).not.toHaveBeenCalled();
@@ -285,8 +285,8 @@ describe("nostr-profile-http", () => {
 
       await run();
 
-      expect(res._getStatusCode()).toBe(200);
-      const data = JSON.parse(res._getData());
+      expect(res["_getStatusCode"]()).toBe(200);
+      const data = JSON.parse(res["_getData"]());
       expect(data.ok).toBe(true);
       expect(data.profile.name).toBe("testuser");
       expect(data.publishState.lastPublishedAt).toBe(1234567890);
@@ -304,8 +304,8 @@ describe("nostr-profile-http", () => {
     }
 
     function expectBadRequestResponse(res: ReturnType<typeof createMockResponse>) {
-      expect(res._getStatusCode()).toBe(400);
-      const data = JSON.parse(res._getData());
+      expect(res["_getStatusCode"]()).toBe(400);
+      const data = JSON.parse(res["_getData"]());
       expect(data.ok).toBe(false);
       return data;
     }
@@ -355,7 +355,7 @@ describe("nostr-profile-http", () => {
       });
 
       await run();
-      expect(res._getStatusCode()).toBe(403);
+      expect(res["_getStatusCode"]()).toBe(403);
     });
 
     it("rejects cross-origin profile mutation attempts", async () => {
@@ -365,7 +365,7 @@ describe("nostr-profile-http", () => {
       });
 
       await run();
-      expect(res._getStatusCode()).toBe(403);
+      expect(res["_getStatusCode"]()).toBe(403);
     });
 
     it("rejects profile mutation with cross-site sec-fetch-site header", async () => {
@@ -375,7 +375,7 @@ describe("nostr-profile-http", () => {
       });
 
       await run();
-      expect(res._getStatusCode()).toBe(403);
+      expect(res["_getStatusCode"]()).toBe(403);
     });
 
     it("rejects profile mutation when forwarded client ip is non-loopback", async () => {
@@ -385,7 +385,7 @@ describe("nostr-profile-http", () => {
       });
 
       await run();
-      expect(res._getStatusCode()).toBe(403);
+      expect(res["_getStatusCode"]()).toBe(403);
     });
 
     it("rejects profile mutation when gateway caller is missing operator.admin", async () => {
@@ -453,8 +453,8 @@ describe("nostr-profile-http", () => {
 
       await run();
 
-      expect(res._getStatusCode()).toBe(200);
-      const data = JSON.parse(res._getData());
+      expect(res["_getStatusCode"]()).toBe(200);
+      const data = JSON.parse(res["_getData"]());
       expect(data.persisted).toBe(false);
       expect(ctx.updateConfigProfile).not.toHaveBeenCalled();
     });
@@ -478,8 +478,8 @@ describe("nostr-profile-http", () => {
         if (i < 5) {
           expectOkResponse(res);
         } else {
-          expect(res._getStatusCode()).toBe(429);
-          const data = JSON.parse(res._getData());
+          expect(res["_getStatusCode"]()).toBe(429);
+          const data = JSON.parse(res["_getData"]());
           expect(data.error).toContain("Rate limit");
         }
       }
@@ -538,7 +538,7 @@ describe("nostr-profile-http", () => {
       );
 
       await run();
-      expect(res._getStatusCode()).toBe(403);
+      expect(res["_getStatusCode"]()).toBe(403);
     });
 
     it("rejects cross-origin import mutation attempts", async () => {
@@ -552,7 +552,7 @@ describe("nostr-profile-http", () => {
       );
 
       await run();
-      expect(res._getStatusCode()).toBe(403);
+      expect(res["_getStatusCode"]()).toBe(403);
     });
 
     it("rejects import mutation when x-real-ip is non-loopback", async () => {
@@ -566,7 +566,7 @@ describe("nostr-profile-http", () => {
       );
 
       await run();
-      expect(res._getStatusCode()).toBe(403);
+      expect(res["_getStatusCode"]()).toBe(403);
     });
 
     it("rejects profile import when gateway caller is missing operator.admin", async () => {
@@ -624,8 +624,8 @@ describe("nostr-profile-http", () => {
 
       await run();
 
-      expect(res._getStatusCode()).toBe(404);
-      const data = JSON.parse(res._getData());
+      expect(res["_getStatusCode"]()).toBe(404);
+      const data = JSON.parse(res["_getData"]());
       expect(data.error).toContain("not found");
     });
   });

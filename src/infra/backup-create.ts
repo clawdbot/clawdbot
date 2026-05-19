@@ -172,7 +172,8 @@ async function writeTarArchiveWithRetry(params: {
   throw new Error(`Backup archive write failed: ${final.message}${suffix}`, { cause: final });
 }
 
-export const __test = { writeTarArchiveWithRetry, isTarEofRaceError };
+export const testApi = { writeTarArchiveWithRetry, isTarEofRaceError };
+export { testApi as __test };
 
 async function resolveOutputPath(params: {
   output?: string;

@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { setRuntimeAuthProfileStoreSnapshot } from "../agents/auth-profiles/runtime-snapshots.js";
+import { getRuntimeConfigSnapshotRefreshHandler } from "../config/runtime-snapshot.js";
+import { activateSecretsRuntimeSnapshot, getActiveSecretsRuntimeSnapshot } from "./runtime.js";
 import {
   asConfig,
   loadAuthStoreWithProfiles,
@@ -39,6 +42,65 @@ describe("secrets runtime snapshot request secret refs", () => {
     });
 
     expect(snapshot.authStores).toStrictEqual([]);
+  });
+
+  it("can skip auth-profile SecretRef resolution during active runtime refresh", async () => {
+    const initialEnvVar = `OPENCLAW_INITIAL_AUTH_PROFILE_SECRET_${Date.now()}`;
+    const missingEnvVar = `OPENCLAW_MISSING_AUTH_PROFILE_SECRET_${Date.now()}`;
+    delete process.env[missingEnvVar];
+
+    let useMissingProfileRef = false;
+    let loadAuthStoreCalls = 0;
+    const loadAuthStore = () => {
+      loadAuthStoreCalls += 1;
+      return loadAuthStoreWithProfiles({
+        "custom:token": {
+          type: "token",
+          provider: "custom",
+          tokenRef: {
+            source: "env",
+            provider: "default",
+            id: useMissingProfileRef ? missingEnvVar : initialEnvVar,
+          },
+        },
+      });
+    };
+
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({}),
+      env: { [initialEnvVar]: "sk-initial" },
+      agentDirs: ["/tmp/openclaw-agent-main"],
+      loadAuthStore,
+    });
+    activateSecretsRuntimeSnapshot(snapshot);
+    expect(loadAuthStoreCalls).toBe(1);
+    setRuntimeAuthProfileStoreSnapshot(
+      loadAuthStoreWithProfiles({
+        "custom:token": {
+          type: "token",
+          provider: "custom",
+          token: "sk-live",
+        },
+      }),
+      "/tmp/openclaw-agent-main",
+    );
+
+    useMissingProfileRef = true;
+    const refreshHandler = getRuntimeConfigSnapshotRefreshHandler();
+    if (!refreshHandler) {
+      throw new Error("Expected active runtime refresh handler");
+    }
+    await expect(
+      refreshHandler.refresh({
+        sourceConfig: asConfig({ gateway: { port: 19001 } }),
+        includeAuthStoreRefs: false,
+      }),
+    ).resolves.toBe(true);
+    expect(loadAuthStoreCalls).toBe(1);
+    const profile = getActiveSecretsRuntimeSnapshot()?.authStores[0]?.store.profiles[
+      "custom:token"
+    ] as { token?: string } | undefined;
+    expect(profile?.token).toBe("sk-live");
   });
 
   it("resolves model provider request secret refs for headers, auth, and tls material", async () => {

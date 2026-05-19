@@ -7,7 +7,8 @@ export type {
   SessionMcpRuntimeManager,
 } from "./pi-bundle-mcp-types.js";
 export {
-  __testing,
+  testing,
+  testing as __testing,
   createSessionMcpRuntime,
   disposeAllSessionMcpRuntimes,
   disposeSessionMcpRuntime,

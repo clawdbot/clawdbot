@@ -5,10 +5,15 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
+import {
+  renderBitmapTextPngBase64,
+  renderSolidColorPngBase64,
+} from "../../test/helpers/live-image-probe.js";
 import { isLiveTestEnabled } from "../agents/live-test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ContextEngine } from "../context-engine/types.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import type { CallGatewayOptions } from "./call.js";
 import type { GatewayClient } from "./client.js";
 import {
@@ -30,7 +35,6 @@ import {
   type CronListJob,
 } from "./live-agent-probes.js";
 import { restoreLiveEnv, snapshotLiveEnv, type LiveEnvSnapshot } from "./live-env-test-helpers.js";
-import { renderSolidColorPngBase64 } from "./live-image-probe.js";
 import type { EventFrame } from "./protocol/index.js";
 
 const LIVE = isLiveTestEnabled();
@@ -39,6 +43,9 @@ const CODEX_HARNESS_DEBUG = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CODEX_HAR
 const CODEX_HARNESS_IMAGE_PROBE = isTruthyEnvValue(
   process.env.OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE,
 );
+const CODEX_HARNESS_CHAT_IMAGE_PROBE = isTruthyEnvValue(
+  process.env.OPENCLAW_LIVE_CODEX_HARNESS_CHAT_IMAGE_PROBE,
+);
 const CODEX_HARNESS_MCP_PROBE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE);
 const CODEX_HARNESS_SUBAGENT_PROBE = isTruthyEnvValue(
   process.env.OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_PROBE,
@@ -46,8 +53,12 @@ const CODEX_HARNESS_SUBAGENT_PROBE = isTruthyEnvValue(
 const CODEX_HARNESS_GUARDIAN_PROBE = isTruthyEnvValue(
   process.env.OPENCLAW_LIVE_CODEX_HARNESS_GUARDIAN_PROBE,
 );
+const CODEX_HARNESS_CODE_MODE_ONLY = isTruthyEnvValue(
+  process.env.OPENCLAW_LIVE_CODEX_HARNESS_CODE_MODE_ONLY,
+);
 const CODEX_HARNESS_SUBAGENT_ONLY =
   CODEX_HARNESS_SUBAGENT_PROBE &&
+  !CODEX_HARNESS_CHAT_IMAGE_PROBE &&
   !CODEX_HARNESS_IMAGE_PROBE &&
   !CODEX_HARNESS_MCP_PROBE &&
   !CODEX_HARNESS_GUARDIAN_PROBE &&
@@ -198,6 +209,7 @@ function parseModelKey(modelKey: string): { provider: string; modelId: string } 
 
 async function writeLiveGatewayConfig(params: {
   codexAppServerMode?: "guardian" | "yolo";
+  codeModeOnly?: boolean;
   configPath: string;
   modelKey: string;
   port: number;
@@ -219,6 +231,7 @@ async function writeLiveGatewayConfig(params: {
           config: {
             appServer: {
               mode: params.codexAppServerMode ?? "yolo",
+              ...(params.codeModeOnly === true ? { codeModeOnly: true } : {}),
             },
           },
         },
@@ -312,6 +325,39 @@ async function requestAgentText(params: {
   return text;
 }
 
+async function verifyCodexCodeModeOnlyDynamicToolProbe(params: {
+  client: GatewayClient;
+  sessionKey: string;
+}): Promise<void> {
+  const runId = randomUUID();
+  const expectedToken = `CODEX-CODEMODE-TOOL-${runId.slice(0, 6).toUpperCase()}`;
+  const { text, events } = await requestAgentTextWithEvents({
+    client: params.client,
+    eventPrefix: "tool",
+    sessionKey: params.sessionKey,
+    message: [
+      "Code-mode-only bridge probe.",
+      "Before replying, call the OpenClaw sessions_list tool exactly once.",
+      "Use limit=1 and includeLastMessage=false.",
+      `After the tool result returns, reply exactly ${expectedToken} and nothing else.`,
+    ].join("\n"),
+  });
+  expect(text).toContain(expectedToken);
+  expect(
+    events.some((event) => event.data?.phase === "start" && event.data?.name === "sessions_list"),
+    `expected sessions_list start event; events=${JSON.stringify(events)}`,
+  ).toBe(true);
+  expect(
+    events.some(
+      (event) =>
+        event.data?.phase === "result" &&
+        event.data?.name === "sessions_list" &&
+        event.data?.isError !== true,
+    ),
+    `expected successful sessions_list result event; events=${JSON.stringify(events)}`,
+  ).toBe(true);
+}
+
 async function requestCodexCommandText(params: {
   client: GatewayClient;
   command: string;
@@ -370,6 +416,22 @@ async function waitForChatFinalText(params: {
   throw new Error(`timed out waiting for chat final for ${params.runId}`);
 }
 
+async function waitForChatAgentRunOk(client: GatewayClient, runId: string): Promise<void> {
+  const result: { status?: string } = await client.request(
+    "agent.wait",
+    {
+      runId,
+      timeoutMs: CODEX_HARNESS_REQUEST_TIMEOUT_MS,
+    },
+    {
+      timeoutMs: CODEX_HARNESS_REQUEST_TIMEOUT_MS + 5_000,
+    },
+  );
+  if (result?.status !== "ok") {
+    throw new Error(`agent.wait failed for ${runId}: status=${String(result?.status)}`);
+  }
+}
+
 function extractChatFinalText(event: EventFrame, runId: string): string | undefined {
   if (event.event !== "chat") {
     return undefined;
@@ -398,6 +460,69 @@ function extractChatFinalText(event: EventFrame, runId: string): string | undefi
     .filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0)
     .join("\n")
     .trim();
+}
+
+function extractAssistantTexts(messages: unknown[]): string[] {
+  const texts: string[] = [];
+  for (const entry of messages) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    if ((entry as { role?: unknown }).role !== "assistant") {
+      continue;
+    }
+    const text = extractFirstTextBlock(entry);
+    if (typeof text === "string" && text.trim().length > 0) {
+      texts.push(text);
+    }
+  }
+  return texts;
+}
+
+function formatAssistantTextPreview(texts: string[], maxChars = 800): string {
+  const combined = texts.join("\n\n").trim();
+  if (!combined) {
+    return "<none>";
+  }
+  return combined.length > maxChars ? `${combined.slice(0, maxChars)}...` : combined;
+}
+
+async function waitForAssistantText(params: {
+  client: GatewayClient;
+  sessionKey: string;
+  contains: string;
+  timeoutMs?: number;
+}): Promise<string> {
+  const timeoutMs = params.timeoutMs ?? 60_000;
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const history: { messages?: unknown[] } = await params.client.request("chat.history", {
+      sessionKey: params.sessionKey,
+      limit: 24,
+    });
+    const assistantTexts = extractAssistantTexts(history.messages ?? []);
+    const normalizedContains = params.contains.toUpperCase();
+    const matched = assistantTexts.find((text) =>
+      text
+        .toUpperCase()
+        .replace(/[^A-F0-9]/g, "")
+        .includes(normalizedContains),
+    );
+    if (matched) {
+      return matched;
+    }
+    await delay(500);
+  }
+
+  const finalHistory: { messages?: unknown[] } = await params.client.request("chat.history", {
+    sessionKey: params.sessionKey,
+    limit: 24,
+  });
+  throw new Error(
+    `timed out waiting for assistant text containing ${params.contains}: ${formatAssistantTextPreview(
+      extractAssistantTexts(finalHistory.messages ?? []),
+    )}`,
+  );
 }
 
 async function verifyCodexImageProbe(params: {
@@ -451,6 +576,51 @@ async function verifyCodexImageProbe(params: {
   const { extractPayloadText } = await import("./test-helpers.agent-results.js");
   expect(extractPayloadText(payload.result)).toContain(expectedToken);
   expect(events.map((event) => event.stream)).toContain("codex_app_server.lifecycle");
+}
+
+async function verifyCodexChatImageProbe(params: {
+  client: GatewayClient;
+  sessionKey: string;
+}): Promise<void> {
+  const token = randomBitmapTextToken();
+  const runId = `idem-${randomUUID()}-codex-chat-image`;
+  const started: { runId?: string; status?: string } = await params.client.request(
+    "chat.send",
+    {
+      sessionKey: params.sessionKey,
+      idempotencyKey: runId,
+      message: "Read the code printed in the attached image. Reply with only that code.",
+      attachments: [
+        {
+          mimeType: "image/png",
+          fileName: "codex-chat-image-probe.png",
+          content: renderBitmapTextPngBase64(token),
+        },
+      ],
+      originatingChannel: "codex-harness-live",
+      originatingTo: "codex-harness-live",
+      originatingAccountId: "codex-harness-live",
+    },
+    { timeoutMs: CODEX_HARNESS_REQUEST_TIMEOUT_MS },
+  );
+  if (started?.status !== "started" || typeof started.runId !== "string") {
+    throw new Error(`codex chat image probe did not start correctly: ${JSON.stringify(started)}`);
+  }
+  await waitForChatAgentRunOk(params.client, started.runId);
+  const text = await waitForAssistantText({
+    client: params.client,
+    sessionKey: params.sessionKey,
+    contains: token,
+  });
+  const normalized = text.toUpperCase().replace(/[^A-F0-9]/g, "");
+  expect(normalized, `Expected Codex to read bitmap token ${token}; received:\n${text}`).toContain(
+    token,
+  );
+}
+
+function randomBitmapTextToken(length = 6): string {
+  const alphabet = "24567ACEF";
+  return [...randomBytes(length)].map((byte) => alphabet[byte % alphabet.length]).join("");
 }
 
 function findGuardianReviewStatus(events: CapturedAgentEvent[]): "approved" | "denied" | undefined {
@@ -705,7 +875,7 @@ async function verifyCodexSubagentProbe(params: {
     });
   });
   try {
-    const { __testing: subagentSpawnTesting, spawnSubagentDirect } =
+    const { testing: subagentSpawnTesting, spawnSubagentDirect } =
       await import("../agents/subagent-spawn.js");
     const noOpContextEngine: ContextEngine = {
       info: { id: "codex-harness-subagent-smoke", name: "Codex harness subagent smoke" },
@@ -782,7 +952,7 @@ async function verifyCodexSubagentProbe(params: {
     });
     expect(childRow?.key).toBe(childSessionKey);
   } finally {
-    const { __testing: subagentSpawnTesting } = await import("../agents/subagent-spawn.js");
+    const { testing: subagentSpawnTesting } = await import("../agents/subagent-spawn.js");
     subagentSpawnTesting.setDepsForTest();
     unsubscribe();
   }
@@ -834,6 +1004,7 @@ describeLive("gateway live (Codex harness)", () => {
         token,
         workspace,
         codexAppServerMode: CODEX_HARNESS_GUARDIAN_PROBE ? "guardian" : "yolo",
+        codeModeOnly: CODEX_HARNESS_CODE_MODE_ONLY,
       });
       const deviceIdentity = await ensurePairedTestGatewayClientIdentity({
         displayName: "vitest-codex-harness-live",
@@ -895,6 +1066,12 @@ describeLive("gateway live (Codex harness)", () => {
             });
             expect(secondText).toContain(secondToken);
             logCodexLiveStep("second-turn", { secondText });
+
+            if (CODEX_HARNESS_CODE_MODE_ONLY) {
+              logCodexLiveStep("code-mode-only-tool-probe:start", { sessionKey });
+              await verifyCodexCodeModeOnlyDynamicToolProbe({ client, sessionKey });
+              logCodexLiveStep("code-mode-only-tool-probe:done");
+            }
           } finally {
             unsubscribeDebugEvents();
           }
@@ -918,6 +1095,12 @@ describeLive("gateway live (Codex harness)", () => {
             isExpectedText: isExpectedCodexModelsCommandText,
           });
           logCodexLiveStep("codex-models-command", { modelsText });
+
+          if (CODEX_HARNESS_CHAT_IMAGE_PROBE) {
+            logCodexLiveStep("chat-image-probe:start", { sessionKey });
+            await verifyCodexChatImageProbe({ client, sessionKey });
+            logCodexLiveStep("chat-image-probe:done");
+          }
 
           if (CODEX_HARNESS_IMAGE_PROBE) {
             logCodexLiveStep("image-probe:start", { sessionKey });

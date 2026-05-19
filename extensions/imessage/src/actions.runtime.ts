@@ -109,11 +109,11 @@ function chatListCacheSet(
  * and `guid: any;-;<phone>`. Comparing the raw strings would falsely
  * miss the match. Mirror of the same helper in monitor-reply-cache.ts.
  */
-export function _normalizeDirectChatIdentifierForTest(raw: string): string {
+export function normalizeDirectChatIdentifierForTest(raw: string): string {
   return normalizeDirectChatIdentifier(raw);
 }
 
-export function _findChatGuidForTest(
+export function findChatGuidForTest(
   chats: readonly Record<string, unknown>[],
   target: Extract<IMessageTarget, { kind: "chat_id" | "chat_identifier" }>,
 ): string | null {

@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { note } from "../terminal/note.js";
@@ -15,8 +16,24 @@ type ProcessController = {
   kill: (pid: number, signal: ProcessSignal | 0) => boolean;
 };
 
-const LOCAL_TUI_CMD_RE =
-  /(?:^|\s)(?:openclaw-tui|openclaw\s+tui|openclaw\s+chat|openclaw\s+terminal)(?:\s|$)/;
+const LOCAL_TUI_SUBCOMMANDS = new Set(["chat", "terminal", "tui"]);
+
+function tokenizeCommandLine(command: string): string[] {
+  return command.trim().split(/\s+/u).filter(Boolean);
+}
+
+function normalizeExecutableName(value: string | undefined): string {
+  return path.basename(value ?? "").replace(/\.exe$/iu, "");
+}
+
+function isLocalTuiCommand(command: string): boolean {
+  const argv = tokenizeCommandLine(command);
+  const executable = normalizeExecutableName(argv[0]);
+  if (executable === "openclaw-tui") {
+    return true;
+  }
+  return executable === "openclaw" && LOCAL_TUI_SUBCOMMANDS.has(argv[1] ?? "");
+}
 
 function parsePsPidLine(line: string): LocalTuiProcess | null {
   const match = line.match(/^\s*(\d+)\s+(.+)$/);
@@ -28,7 +45,7 @@ function parsePsPidLine(line: string): LocalTuiProcess | null {
     return null;
   }
   const command = match[2]?.trim() ?? "";
-  if (!LOCAL_TUI_CMD_RE.test(command)) {
+  if (!isLocalTuiCommand(command)) {
     return null;
   }
   return { pid, command };

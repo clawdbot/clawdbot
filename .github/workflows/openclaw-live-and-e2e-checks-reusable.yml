@@ -321,9 +321,6 @@ jobs:
           set -euo pipefail
           trusted_reason=""
 
-          git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
-          git fetch --tags origin '+refs/tags/*:refs/tags/*'
-
           # Resolve here instead of in actions/checkout so short SHAs work too.
           if ! selected_sha="$(git rev-parse --verify "${INPUT_REF}^{commit}")"; then
             echo "Ref '${INPUT_REF}' could not be resolved to a commit." >&2

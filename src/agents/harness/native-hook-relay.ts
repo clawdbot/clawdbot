@@ -1821,7 +1821,7 @@ function isJsonObject(value: unknown): value is Record<string, unknown> {
   }
 }
 
-export const __testing = {
+export const testing = {
   clearNativeHookRelaysForTests(): void {
     for (const relayId of relayBridges.keys()) {
       unregisterNativeHookRelayBridge(relayId);
@@ -1868,3 +1868,4 @@ export const __testing = {
     nativeHookRelayPermissionApprovalRequester = requester;
   },
 } as const;
+export { testing as __testing };

@@ -242,12 +242,12 @@ vi.mock("../media-understanding/provider-registry.js", () => ({
     mocks.buildMediaUnderstandingRegistry as typeof import("../media-understanding/provider-registry.js").buildMediaUnderstandingRegistry,
 }));
 
-vi.mock("../media/image-ops.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../media/image-ops.js")>();
+vi.mock("../media/media-services.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../media/media-services.js")>();
   return {
     ...actual,
     convertHeicToJpeg:
-      mocks.convertHeicToJpeg as typeof import("../media/image-ops.js").convertHeicToJpeg,
+      mocks.convertHeicToJpeg as typeof import("../media/media-services.js").convertHeicToJpeg,
   };
 });
 

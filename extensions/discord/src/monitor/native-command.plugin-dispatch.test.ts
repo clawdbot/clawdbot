@@ -23,7 +23,7 @@ import {
 import { createNoopThreadBindingManager } from "./thread-bindings.manager.js";
 
 let createDiscordNativeCommand: typeof import("./native-command.js").createDiscordNativeCommand;
-let discordNativeCommandTesting: typeof import("./native-command.js").__testing;
+let discordNativeCommandTesting: typeof import("./native-command.js").testing;
 const runtimeModuleMocks = vi.hoisted(() => ({
   matchPluginCommand: vi.fn(),
   executePluginCommand: vi.fn(),
@@ -392,7 +392,7 @@ async function expectBoundStatusCommandDirectReply(params: {
 
 describe("Discord native plugin command dispatch", () => {
   beforeAll(async () => {
-    ({ createDiscordNativeCommand, __testing: discordNativeCommandTesting } =
+    ({ createDiscordNativeCommand, testing: discordNativeCommandTesting } =
       await import("./native-command.js"));
   });
 

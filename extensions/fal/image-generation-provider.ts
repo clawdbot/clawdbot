@@ -52,7 +52,7 @@ type FalNetworkPolicy = {
 
 let falFetchGuard = fetchWithSsrFGuard;
 
-export function _setFalFetchGuardForTesting(impl: typeof fetchWithSsrFGuard | null): void {
+export function setFalFetchGuardForTesting(impl: typeof fetchWithSsrFGuard | null): void {
   falFetchGuard = impl ?? fetchWithSsrFGuard;
 }
 

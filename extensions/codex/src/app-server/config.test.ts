@@ -67,6 +67,7 @@ describe("Codex app-server config", () => {
           sandbox: "danger-full-access",
           approvalsReviewer: "guardian_subagent",
           serviceTier: "flex",
+          codeModeOnly: true,
           turnCompletionIdleTimeoutMs: 120_000,
         },
       },
@@ -81,6 +82,7 @@ describe("Codex app-server config", () => {
       sandbox: "danger-full-access",
       approvalsReviewer: "guardian_subagent",
       serviceTier: "flex",
+      codeModeOnly: true,
       turnCompletionIdleTimeoutMs: 120_000,
     });
     expectFields(runtime.start, "runtime start", {
@@ -183,6 +185,7 @@ describe("Codex app-server config", () => {
       sandbox: "danger-full-access",
       approvalsReviewer: "user",
     });
+    expect(runtime.codeModeOnly).toBe(false);
     expectFields(runtime.start, "runtime start", {
       command: "codex",
       commandSource: "managed",

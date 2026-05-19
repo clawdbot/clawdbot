@@ -77,7 +77,7 @@ function isPreloadCoolingDown(preloadKey: string, now: number): PreloadCooldownE
 }
 
 /** Test-only hook for clearing preload cooldown state between cases. */
-export function __resetLmstudioPreloadCooldownForTest(): void {
+export function resetLmstudioPreloadCooldownForTest(): void {
   preloadCooldown.clear();
   preloadInFlight.clear();
 }

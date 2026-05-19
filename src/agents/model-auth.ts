@@ -573,11 +573,12 @@ export async function resolveApiKeyForProvider(params: {
     if (!resolved) {
       throw new Error(`No credentials found for profile "${profileId}".`);
     }
-    const mode = store.profiles[profileId]?.type;
+    const resolvedProfileId = resolved.profileId ?? profileId;
+    const mode = resolved.profileType ?? store.profiles[resolvedProfileId]?.type;
     const result: ResolvedProviderAuth = {
       apiKey: resolved.apiKey,
-      profileId,
-      source: `profile:${profileId}`,
+      profileId: resolvedProfileId,
+      source: `profile:${resolvedProfileId}`,
       mode: mode ? profileTypeToAuthMode(mode) : "api-key",
     };
     // When the resolved key is a provider-owned synthetic profile marker and
@@ -706,14 +707,15 @@ export async function resolveApiKeyForProvider(params: {
         agentDir: params.agentDir,
       });
       if (resolved) {
-        const mode = store.profiles[candidate]?.type;
+        const resolvedProfileId = resolved.profileId ?? candidate;
+        const mode = resolved.profileType ?? store.profiles[resolvedProfileId]?.type;
         const resolvedMode: ResolvedProviderAuth["mode"] = mode
           ? profileTypeToAuthMode(mode)
           : "api-key";
         const result: ResolvedProviderAuth = {
           apiKey: resolved.apiKey,
-          profileId: candidate,
-          source: `profile:${candidate}`,
+          profileId: resolvedProfileId,
+          source: `profile:${resolvedProfileId}`,
           mode: resolvedMode,
         };
         if (

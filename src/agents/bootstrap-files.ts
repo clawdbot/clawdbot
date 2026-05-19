@@ -49,7 +49,7 @@ function rememberBootstrapWarning(key: string): boolean {
   return true;
 }
 
-export function _resetBootstrapWarningCacheForTest(): void {
+export function resetBootstrapWarningCacheForTest(): void {
   seenBootstrapWarnings.clear();
   bootstrapWarningOrder.length = 0;
 }

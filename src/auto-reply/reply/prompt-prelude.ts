@@ -66,10 +66,7 @@ export function buildReplyPromptBodies(params: {
       params.sessionCtx.InputProvenance,
     ),
     queuedBody: annotateInterSessionPromptText(queuedBodyRaw, params.sessionCtx.InputProvenance),
-    transcriptCommandBody: annotateInterSessionPromptText(
-      transcriptCommandBodyRaw,
-      params.sessionCtx.InputProvenance,
-    ),
+    transcriptCommandBody: transcriptCommandBodyRaw,
   };
 }
 

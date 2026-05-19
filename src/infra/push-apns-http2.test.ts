@@ -2,7 +2,7 @@ import type http2 from "node:http2";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HttpConnectTunnelParams } from "./net/http-connect-tunnel.js";
 import {
-  _resetActiveManagedProxyStateForTests,
+  resetActiveManagedProxyStateForTests,
   registerActiveManagedProxyUrl,
   stopActiveManagedProxyRegistration,
 } from "./net/proxy/active-proxy-state.js";
@@ -115,7 +115,7 @@ describe("connectApnsHttp2Session", () => {
     fakeSession.close.mockClear();
     fakeSession.destroy.mockClear();
     fakeSession.request.mockClear();
-    _resetActiveManagedProxyStateForTests();
+    resetActiveManagedProxyStateForTests();
   });
   it("uses direct http2.connect when managed proxy is inactive", async () => {
     const { connectApnsHttp2Session } = await import("./push-apns-http2.js");

@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { describe, expect, it } from "vitest";
-import { __testing } from "../../scripts/bench-gateway-startup.ts";
+import { testing } from "../../scripts/bench-gateway-startup.ts";
 
 async function listenOnLoopback(handler: Parameters<typeof createServer>[0]) {
   const server = createServer(handler);
@@ -46,16 +46,16 @@ describe("gateway startup benchmark script", () => {
   });
 
   it("rejects ambiguous benchmark CLI values before spawning Node", () => {
-    expect(__testing.parsePositiveInt("5", 1, "--runs")).toBe(5);
-    expect(__testing.parseNonNegativeInt("0", 1, "--warmup")).toBe(0);
-    expect(() => __testing.parsePositiveInt("2abc", 1, "--runs")).toThrow(
+    expect(testing.parsePositiveInt("5", 1, "--runs")).toBe(5);
+    expect(testing.parseNonNegativeInt("0", 1, "--warmup")).toBe(0);
+    expect(() => testing.parsePositiveInt("2abc", 1, "--runs")).toThrow(
       /--runs must be an integer/u,
     );
-    expect(() => __testing.resolveEntry("--inspect")).toThrow(/must be a file path/u);
+    expect(() => testing.resolveEntry("--inspect")).toThrow(/must be a file path/u);
   });
 
   it("does not disable local-check policy in the child gateway environment", () => {
-    const env = __testing.sanitizedEnv("/tmp/openclaw-bench", "/tmp/openclaw-bench/config.json", {
+    const env = testing.sanitizedEnv("/tmp/openclaw-bench", "/tmp/openclaw-bench/config.json", {
       config: {},
       id: "default",
       name: "gateway default",
@@ -67,17 +67,17 @@ describe("gateway startup benchmark script", () => {
 
   it("classifies HTTP listen and gateway ready logs separately", () => {
     expect(
-      __testing.classifyGatewayReadyLog("[gateway] http server listening (0 plugins, 0.8s)"),
+      testing.classifyGatewayReadyLog("[gateway] http server listening (0 plugins, 0.8s)"),
     ).toBe("http-listen");
-    expect(__testing.classifyGatewayReadyLog("[gateway] ready (0 plugins, 0.8s)")).toBe(
+    expect(testing.classifyGatewayReadyLog("[gateway] ready (0 plugins, 0.8s)")).toBe(
       "gateway-ready",
     );
-    expect(__testing.classifyGatewayReadyLog("[gateway] ready")).toBe("gateway-ready");
-    expect(__testing.classifyGatewayReadyLog("[gateway] starting HTTP server...")).toBeNull();
+    expect(testing.classifyGatewayReadyLog("[gateway] ready")).toBe("gateway-ready");
+    expect(testing.classifyGatewayReadyLog("[gateway] starting HTTP server...")).toBeNull();
   });
 
   it("summarizes split ready log timings without the ambiguous readyLogMs field", () => {
-    const result = __testing.summarizeCase({ config: {}, id: "demo", name: "demo" }, [
+    const result = testing.summarizeCase({ config: {}, id: "demo", name: "demo" }, [
       {
         cpuCoreRatio: null,
         cpuMs: null,
@@ -116,7 +116,7 @@ describe("gateway startup benchmark script", () => {
   it("collects Count-suffixed startup trace metrics", () => {
     const startupTrace: Record<string, number> = {};
 
-    __testing.collectStartupTrace(
+    testing.collectStartupTrace(
       "[gateway] startup trace: sidecars.acp.runtime-ready ready=1 readyCount=1 backend=acpx",
       startupTrace,
     );
@@ -134,7 +134,7 @@ describe("gateway startup benchmark script", () => {
     });
     try {
       const startAt = performance.now();
-      const result = await __testing.waitForProbe({
+      const result = await testing.waitForProbe({
         deadlineAt: startAt + 1_000,
         path: "/readyz",
         port,
@@ -156,7 +156,7 @@ describe("gateway startup benchmark script", () => {
   it("writes 50-plugin fixtures as a parent load path with explicit startup activation", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bench-config-test-"));
     try {
-      const configPath = __testing.writeConfig(root, {
+      const configPath = testing.writeConfig(root, {
         config: {},
         id: "fiftyPlugins",
         name: "gateway, 50 manifest plugins",
@@ -184,7 +184,7 @@ describe("gateway startup benchmark script", () => {
   it("keeps startup-lazy plugin fixtures opted out of startup activation", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bench-config-test-"));
     try {
-      __testing.writeConfig(root, {
+      testing.writeConfig(root, {
         config: {},
         id: "fiftyStartupLazyPlugins",
         name: "gateway, 50 startup-lazy manifest plugins",

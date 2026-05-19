@@ -22,7 +22,7 @@ export function getAcpSessionManager(): AcpSessionManager {
   return ACP_SESSION_MANAGER_SINGLETON;
 }
 
-export const __testing = {
+export const testing = {
   resetAcpSessionManagerForTests() {
     ACP_SESSION_MANAGER_SINGLETON = null;
   },
@@ -30,3 +30,4 @@ export const __testing = {
     ACP_SESSION_MANAGER_SINGLETON = manager as AcpSessionManager | null;
   },
 };
+export { testing as __testing };

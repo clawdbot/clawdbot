@@ -276,6 +276,12 @@ const SELECTOR_ALLOWED_KINDS: ReadonlySet<string> = new Set([
   "type",
   "wait",
 ]);
+
+function shouldEnforceCurrentUrlForAct(action: BrowserActRequest): boolean {
+  // Batch stays guarded because nested actions can read or return page data.
+  return action.kind !== "resize" && action.kind !== "close";
+}
+
 function getExistingSessionUnsupportedMessage(action: BrowserActRequest): string | null {
   switch (action.kind) {
     case "click":
@@ -387,6 +393,7 @@ export function registerBrowserAgentActRoutes(
         res,
         ctx,
         targetId,
+        enforceCurrentUrlAllowed: shouldEnforceCurrentUrlForAct(action),
         run: async ({ profileCtx, cdpUrl, tab, resolveTabUrl }) => {
           const evaluateEnabled = ctx.state().resolved.evaluateEnabled;
           const ssrfPolicy = ctx.state().resolved.ssrfPolicy;
@@ -744,6 +751,7 @@ export function registerBrowserAgentActRoutes(
         res,
         ctx,
         targetId,
+        enforceCurrentUrlAllowed: true,
         run: async ({ profileCtx, cdpUrl, tab, resolveTabUrl }) => {
           const jsonOk = async () => {
             const currentUrl = await resolveTabUrl(tab.url);

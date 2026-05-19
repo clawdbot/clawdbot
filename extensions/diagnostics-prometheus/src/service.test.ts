@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { DiagnosticEventMetadata, DiagnosticEventPayload } from "../api.js";
-import { createDiagnosticsPrometheusExporter, __test__ } from "./service.js";
+import { createDiagnosticsPrometheusExporter, testApi } from "./service.js";
 
 const trusted: DiagnosticEventMetadata = Object.freeze({ trusted: true });
 const untrusted: DiagnosticEventMetadata = Object.freeze({ trusted: false });
@@ -11,9 +11,9 @@ function baseEvent(): Pick<DiagnosticEventPayload, "seq" | "ts"> {
 
 describe("diagnostics-prometheus service", () => {
   it("records trusted run metrics without raw diagnostic identifiers", () => {
-    const store = __test__.createPrometheusMetricStore();
+    const store = testApi.createPrometheusMetricStore();
 
-    __test__.recordDiagnosticEvent(
+    testApi.recordDiagnosticEvent(
       store,
       {
         ...baseEvent(),
@@ -30,7 +30,7 @@ describe("diagnostics-prometheus service", () => {
       trusted,
     );
 
-    const rendered = __test__.renderPrometheusMetrics(store);
+    const rendered = testApi.renderPrometheusMetrics(store);
 
     expect(rendered).toContain("# TYPE openclaw_run_completed_total counter");
     expect(rendered).toContain(
@@ -44,9 +44,9 @@ describe("diagnostics-prometheus service", () => {
   });
 
   it("records hook-blocked run metrics with safe blocker originator only", () => {
-    const store = __test__.createPrometheusMetricStore();
+    const store = testApi.createPrometheusMetricStore();
 
-    __test__.recordDiagnosticEvent(
+    testApi.recordDiagnosticEvent(
       store,
       {
         ...baseEvent(),
@@ -64,7 +64,7 @@ describe("diagnostics-prometheus service", () => {
       trusted,
     );
 
-    const rendered = __test__.renderPrometheusMetrics(store);
+    const rendered = testApi.renderPrometheusMetrics(store);
 
     expect(rendered).toContain(
       'openclaw_run_completed_total{blocked_by="policy-plugin",channel="slack",model="gpt-5.4",outcome="blocked",provider="openai",trigger="message"} 1',
@@ -75,9 +75,9 @@ describe("diagnostics-prometheus service", () => {
   });
 
   it("drops untrusted plugin-emitted diagnostic events", () => {
-    const store = __test__.createPrometheusMetricStore();
+    const store = testApi.createPrometheusMetricStore();
 
-    __test__.recordDiagnosticEvent(
+    testApi.recordDiagnosticEvent(
       store,
       {
         ...baseEvent(),
@@ -91,13 +91,13 @@ describe("diagnostics-prometheus service", () => {
       untrusted,
     );
 
-    expect(__test__.renderPrometheusMetrics(store)).toBe("");
+    expect(testApi.renderPrometheusMetrics(store)).toBe("");
   });
 
   it("redacts and bounds label values", () => {
-    const store = __test__.createPrometheusMetricStore();
+    const store = testApi.createPrometheusMetricStore();
 
-    __test__.recordDiagnosticEvent(
+    testApi.recordDiagnosticEvent(
       store,
       {
         ...baseEvent(),
@@ -109,7 +109,7 @@ describe("diagnostics-prometheus service", () => {
       trusted,
     );
 
-    const rendered = __test__.renderPrometheusMetrics(store);
+    const rendered = testApi.renderPrometheusMetrics(store);
 
     expect(rendered).toContain(
       'openclaw_tool_execution_total{error_category="other",outcome="error",params_kind="unknown",tool="tool"} 1',
@@ -119,9 +119,9 @@ describe("diagnostics-prometheus service", () => {
   });
 
   it("bounds messaging labels without exporting raw chat identifiers", () => {
-    const store = __test__.createPrometheusMetricStore();
+    const store = testApi.createPrometheusMetricStore();
 
-    __test__.recordDiagnosticEvent(
+    testApi.recordDiagnosticEvent(
       store,
       {
         ...baseEvent(),
@@ -132,7 +132,7 @@ describe("diagnostics-prometheus service", () => {
       },
       trusted,
     );
-    __test__.recordDiagnosticEvent(
+    testApi.recordDiagnosticEvent(
       store,
       {
         ...baseEvent(),
@@ -146,7 +146,7 @@ describe("diagnostics-prometheus service", () => {
       },
       trusted,
     );
-    __test__.recordDiagnosticEvent(
+    testApi.recordDiagnosticEvent(
       store,
       {
         ...baseEvent(),
@@ -159,7 +159,7 @@ describe("diagnostics-prometheus service", () => {
       trusted,
     );
 
-    const rendered = __test__.renderPrometheusMetrics(store);
+    const rendered = testApi.renderPrometheusMetrics(store);
 
     expect(rendered).toContain(
       'openclaw_message_delivery_started_total{channel="matrix",delivery_kind="text"} 1',
@@ -177,9 +177,9 @@ describe("diagnostics-prometheus service", () => {
   });
 
   it("records session recovery and talk metrics without exporting raw ids or content", () => {
-    const store = __test__.createPrometheusMetricStore();
+    const store = testApi.createPrometheusMetricStore();
 
-    __test__.recordDiagnosticEvent(
+    testApi.recordDiagnosticEvent(
       store,
       {
         ...baseEvent(),
@@ -198,7 +198,7 @@ describe("diagnostics-prometheus service", () => {
       },
       trusted,
     );
-    __test__.recordDiagnosticEvent(
+    testApi.recordDiagnosticEvent(
       store,
       {
         ...baseEvent(),
@@ -215,7 +215,7 @@ describe("diagnostics-prometheus service", () => {
       trusted,
     );
 
-    const rendered = __test__.renderPrometheusMetrics(store);
+    const rendered = testApi.renderPrometheusMetrics(store);
 
     expect(rendered).toContain(
       'openclaw_session_recovery_total{action="abort-active-run",active_work_kind="tool_call",state="processing",status="released"} 1',
@@ -236,10 +236,10 @@ describe("diagnostics-prometheus service", () => {
   });
 
   it("caps metric series growth and reports dropped series", () => {
-    const store = __test__.createPrometheusMetricStore();
+    const store = testApi.createPrometheusMetricStore();
 
     for (let index = 0; index < 2100; index += 1) {
-      __test__.recordDiagnosticEvent(
+      testApi.recordDiagnosticEvent(
         store,
         {
           ...baseEvent(),
@@ -254,7 +254,7 @@ describe("diagnostics-prometheus service", () => {
       );
     }
 
-    const rendered = __test__.renderPrometheusMetrics(store);
+    const rendered = testApi.renderPrometheusMetrics(store);
 
     expect(rendered).toContain("# TYPE openclaw_prometheus_series_dropped_total counter");
     expect(rendered).toContain("openclaw_prometheus_series_dropped_total ");

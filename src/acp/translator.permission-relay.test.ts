@@ -457,7 +457,7 @@ describe("ACP translator permission relay", () => {
     } as EventFrame);
 
     expect(harness.requestPermission).not.toHaveBeenCalled();
-    const sessionUpdate = firstCallArg(harness.connection.__sessionUpdateMock);
+    const sessionUpdate = firstCallArg(harness.connection["__sessionUpdateMock"]);
     const update = requireRecord(sessionUpdate.update);
     expect(sessionUpdate.sessionId).toBe(SESSION_ID);
     expect(update.sessionUpdate).toBe("tool_call");

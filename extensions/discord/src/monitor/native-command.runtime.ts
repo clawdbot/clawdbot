@@ -11,7 +11,7 @@ export const nativeCommandRuntime = {
   resolveDiscordNativeInteractionRouteState,
 };
 
-export const __testing = {
+export const testing = {
   setMatchPluginCommand(
     next: typeof pluginRuntime.matchPluginCommand,
   ): typeof pluginRuntime.matchPluginCommand {
@@ -48,3 +48,4 @@ export const __testing = {
     return previous;
   },
 };
+export { testing as __testing };

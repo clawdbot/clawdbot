@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  __test,
+  testApi,
   loadSessionLogs,
   loadSessionTimeSeries,
   loadUsage,
@@ -55,7 +55,7 @@ function expectSpecificTimezoneCalls(request: ReturnType<typeof vi.fn>, startCal
 
 describe("usage controller date interpretation params", () => {
   beforeEach(() => {
-    __test.resetLegacyUsageDateParamsCache();
+    testApi.resetLegacyUsageDateParamsCache();
   });
 
   afterEach(() => {
@@ -63,9 +63,9 @@ describe("usage controller date interpretation params", () => {
   });
 
   it("formats UTC offsets for whole and half-hour timezones", () => {
-    expect(__test.formatUtcOffset(240)).toBe("UTC-4");
-    expect(__test.formatUtcOffset(-330)).toBe("UTC+5:30");
-    expect(__test.formatUtcOffset(0)).toBe("UTC+0");
+    expect(testApi.formatUtcOffset(240)).toBe("UTC-4");
+    expect(testApi.formatUtcOffset(-330)).toBe("UTC+5:30");
+    expect(testApi.formatUtcOffset(0)).toBe("UTC+0");
   });
 
   it("sends specific mode with browser offset when usage timezone is local", async () => {
@@ -112,7 +112,7 @@ describe("usage controller date interpretation params", () => {
   });
 
   it("serializes non-Error objects without object-to-string coercion", () => {
-    expect(__test.toErrorMessage({ reason: "nope" })).toBe('{"reason":"nope"}');
+    expect(testApi.toErrorMessage({ reason: "nope" })).toBe('{"reason":"nope"}');
   });
 
   it("falls back and remembers compatibility when sessions.usage rejects mode/utcOffset", async () => {
@@ -171,8 +171,8 @@ describe("usage controller date interpretation params", () => {
     });
 
     // Persisted flag should survive cache resets (simulating app reload).
-    __test.resetLegacyUsageDateParamsCache();
-    expect(__test.shouldSendLegacyDateInterpretation(state)).toBe(false);
+    testApi.resetLegacyUsageDateParamsCache();
+    expect(testApi.shouldSendLegacyDateInterpretation(state)).toBe(false);
 
     vi.unstubAllGlobals();
   });

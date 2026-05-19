@@ -123,36 +123,38 @@ def validate_skill(skill_path):
     if not isinstance(name, str):
         return False, f"Name must be a string, got {type(name).__name__}"
     name = name.strip()
-    if name:
-        if not re.match(r"^[a-z0-9-]+$", name):
-            return (
-                False,
-                f"Name '{name}' should be hyphen-case (lowercase letters, digits, and hyphens only)",
-            )
-        if name.startswith("-") or name.endswith("-") or "--" in name:
-            return (
-                False,
-                f"Name '{name}' cannot start/end with hyphen or contain consecutive hyphens",
-            )
-        if len(name) > MAX_SKILL_NAME_LENGTH:
-            return (
-                False,
-                f"Name is too long ({len(name)} characters). "
-                f"Maximum is {MAX_SKILL_NAME_LENGTH} characters.",
-            )
+    if not name:
+        return False, "Name must not be empty"
+    if not re.match(r"^[a-z0-9-]+$", name):
+        return (
+            False,
+            f"Name '{name}' should be hyphen-case (lowercase letters, digits, and hyphens only)",
+        )
+    if name.startswith("-") or name.endswith("-") or "--" in name:
+        return (
+            False,
+            f"Name '{name}' cannot start/end with hyphen or contain consecutive hyphens",
+        )
+    if len(name) > MAX_SKILL_NAME_LENGTH:
+        return (
+            False,
+            f"Name is too long ({len(name)} characters). "
+            f"Maximum is {MAX_SKILL_NAME_LENGTH} characters.",
+        )
 
     description = frontmatter.get("description", "")
     if not isinstance(description, str):
         return False, f"Description must be a string, got {type(description).__name__}"
     description = description.strip()
-    if description:
-        if "<" in description or ">" in description:
-            return False, "Description cannot contain angle brackets (< or >)"
-        if len(description) > 1024:
-            return (
-                False,
-                f"Description is too long ({len(description)} characters). Maximum is 1024 characters.",
-            )
+    if not description:
+        return False, "Description must not be empty"
+    if "<" in description or ">" in description:
+        return False, "Description cannot contain angle brackets (< or >)"
+    if len(description) > 1024:
+        return (
+            False,
+            f"Description is too long ({len(description)} characters). Maximum is 1024 characters.",
+        )
 
     return True, "Skill is valid!"
 

@@ -48,29 +48,29 @@ export interface PlatformAdapter {
   resolveApproval?(approvalId: string, decision: string): Promise<boolean>;
 }
 
-let _adapter: PlatformAdapter | null = null;
-let _adapterFactory: (() => PlatformAdapter) | null = null;
+let platformAdapter: PlatformAdapter | null = null;
+let platformAdapterFactory: (() => PlatformAdapter) | null = null;
 
 export function registerPlatformAdapter(adapter: PlatformAdapter): void {
-  _adapter = adapter;
+  platformAdapter = adapter;
 }
 
 export function registerPlatformAdapterFactory(factory: () => PlatformAdapter): void {
-  _adapterFactory = factory;
+  platformAdapterFactory = factory;
 }
 
 export function getPlatformAdapter(): PlatformAdapter {
-  if (!_adapter && _adapterFactory) {
-    _adapter = _adapterFactory();
+  if (!platformAdapter && platformAdapterFactory) {
+    platformAdapter = platformAdapterFactory();
   }
-  if (!_adapter) {
+  if (!platformAdapter) {
     throw new Error(
       "PlatformAdapter not registered. Call registerPlatformAdapter() during bootstrap.",
     );
   }
-  return _adapter;
+  return platformAdapter;
 }
 
 export function hasPlatformAdapter(): boolean {
-  return _adapter !== null || _adapterFactory !== null;
+  return platformAdapter !== null || platformAdapterFactory !== null;
 }

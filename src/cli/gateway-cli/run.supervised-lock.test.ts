@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
-import { __testing } from "./run.js";
+import { testing } from "./run.js";
 
 function createLogger() {
   return {
@@ -17,7 +17,7 @@ describe("supervised gateway lock recovery", () => {
     });
 
     await expect(
-      __testing.runGatewayLoopWithSupervisedLockRecovery({
+      testing.runGatewayLoopWithSupervisedLockRecovery({
         startLoop,
         supervisor: null,
         port: 18789,
@@ -36,7 +36,7 @@ describe("supervised gateway lock recovery", () => {
     const probeHealth = vi.fn(async () => true);
     const log = createLogger();
 
-    await __testing.runGatewayLoopWithSupervisedLockRecovery({
+    await testing.runGatewayLoopWithSupervisedLockRecovery({
       startLoop,
       supervisor: "launchd",
       port: 18789,
@@ -60,7 +60,7 @@ describe("supervised gateway lock recovery", () => {
     const probeHealth = vi.fn(async () => true);
 
     await expect(
-      __testing.runGatewayLoopWithSupervisedLockRecovery({
+      testing.runGatewayLoopWithSupervisedLockRecovery({
         startLoop,
         supervisor: "systemd",
         port: 18789,
@@ -73,7 +73,7 @@ describe("supervised gateway lock recovery", () => {
     expect(startLoop).toHaveBeenCalledTimes(1);
     expect(probeHealth).toHaveBeenCalledWith({ host: "127.0.0.1", port: 18789 });
     expect(
-      __testing.resolveGatewayLockErrorExitCode(
+      testing.resolveGatewayLockErrorExitCode(
         new GatewayLockError("gateway already running under systemd; existing gateway is healthy"),
         "systemd",
       ),
@@ -90,7 +90,7 @@ describe("supervised gateway lock recovery", () => {
     });
 
     await expect(
-      __testing.runGatewayLoopWithSupervisedLockRecovery({
+      testing.runGatewayLoopWithSupervisedLockRecovery({
         startLoop,
         supervisor: "systemd",
         port: 18789,
@@ -124,7 +124,7 @@ describe("supervised gateway lock recovery", () => {
     });
 
     await expect(
-      __testing.runGatewayLoopWithSupervisedLockRecovery({
+      testing.runGatewayLoopWithSupervisedLockRecovery({
         startLoop,
         supervisor: "systemd",
         port: 18789,
@@ -148,7 +148,7 @@ describe("supervised gateway lock recovery", () => {
 
   it("keeps unmanaged duplicate starts on the existing exit-success path", () => {
     expect(
-      __testing.resolveGatewayLockErrorExitCode(
+      testing.resolveGatewayLockErrorExitCode(
         new GatewayLockError("another gateway instance is already listening"),
         null,
       ),
@@ -156,8 +156,8 @@ describe("supervised gateway lock recovery", () => {
   });
 
   it("normalizes wildcard bind hosts for local health probes", () => {
-    expect(__testing.normalizeGatewayHealthProbeHost("0.0.0.0")).toBe("127.0.0.1");
-    expect(__testing.normalizeGatewayHealthProbeHost("::")).toBe("127.0.0.1");
-    expect(__testing.normalizeGatewayHealthProbeHost("127.0.0.1")).toBe("127.0.0.1");
+    expect(testing.normalizeGatewayHealthProbeHost("0.0.0.0")).toBe("127.0.0.1");
+    expect(testing.normalizeGatewayHealthProbeHost("::")).toBe("127.0.0.1");
+    expect(testing.normalizeGatewayHealthProbeHost("127.0.0.1")).toBe("127.0.0.1");
   });
 });

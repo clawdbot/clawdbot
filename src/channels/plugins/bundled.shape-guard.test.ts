@@ -179,8 +179,9 @@ function packageMarkerPathsToRoots(markerPaths: string[], extensionsDir: string)
 }
 
 afterEach(() => {
-  delete (globalThis as { __openclawBundledChannelReenter?: () => void })
-    .__openclawBundledChannelReenter;
+  delete (globalThis as { __openclawBundledChannelReenter?: () => void })[
+    "__openclawBundledChannelReenter"
+  ];
   vi.resetModules();
   vi.doUnmock("../../plugins/bundled-channel-runtime.js");
   vi.doUnmock("../../plugins/bundled-plugin-metadata.js");
@@ -325,7 +326,7 @@ describe("bundled channel entry shape guards", () => {
     fs.writeFileSync(
       path.join(pluginDir, "index.js"),
       [
-        "globalThis.__bundledOverrideRuntime = undefined;",
+        'globalThis["__bundledOverrideRuntime"] = undefined;',
         "const plugin = { id: 'alpha', meta: {}, capabilities: {}, config: {} };",
         "export default {",
         "  kind: 'bundled-channel-entry',",
@@ -334,7 +335,7 @@ describe("bundled channel entry shape guards", () => {
         "  description: 'Alpha',",
         "  register() {},",
         "  loadChannelPlugin() { return plugin; },",
-        "  setChannelRuntime(runtime) { globalThis.__bundledOverrideRuntime = runtime.marker; },",
+        '  setChannelRuntime(runtime) { globalThis["__bundledOverrideRuntime"] = runtime.marker; },',
         "};",
         "",
       ].join("\n"),
@@ -380,12 +381,12 @@ describe("bundled channel entry shape guards", () => {
 
       expect(metadataRootDir).toBe(tempRoot);
       expect(generatedRootDir).toBe(tempRoot);
-      expect(testGlobal.__bundledOverrideRuntime).toBe("ok");
+      expect(testGlobal["__bundledOverrideRuntime"]).toBe("ok");
       expect(bundled.requireBundledChannelPlugin("alpha").id).toBe("alpha");
     } finally {
       restoreBundledPluginsDir(previousBundledPluginsDir);
       fs.rmSync(tempRoot, { recursive: true, force: true });
-      delete (globalThis as { __bundledOverrideRuntime?: unknown }).__bundledOverrideRuntime;
+      delete (globalThis as { __bundledOverrideRuntime?: unknown })["__bundledOverrideRuntime"];
     }
   });
 
@@ -398,7 +399,7 @@ describe("bundled channel entry shape guards", () => {
     fs.writeFileSync(
       path.join(pluginDir, "index.js"),
       [
-        "globalThis.__bundledOverrideRuntime = undefined;",
+        'globalThis["__bundledOverrideRuntime"] = undefined;',
         "const plugin = { id: 'alpha', meta: {}, capabilities: {}, config: {} };",
         "export default {",
         "  kind: 'bundled-channel-entry',",
@@ -407,7 +408,7 @@ describe("bundled channel entry shape guards", () => {
         "  description: 'Alpha',",
         "  register() {},",
         "  loadChannelPlugin() { return plugin; },",
-        "  setChannelRuntime(runtime) { globalThis.__bundledOverrideRuntime = runtime.marker; },",
+        '  setChannelRuntime(runtime) { globalThis["__bundledOverrideRuntime"] = runtime.marker; },',
         "};",
         "",
       ].join("\n"),
@@ -455,12 +456,12 @@ describe("bundled channel entry shape guards", () => {
       expect(metadataScanDir).toBe(pluginsRoot);
       expect(generatedRootDir).toBe(pluginsRoot);
       expect(generatedScanDir).toBe(pluginsRoot);
-      expect(testGlobal.__bundledOverrideRuntime).toBe("ok");
+      expect(testGlobal["__bundledOverrideRuntime"]).toBe("ok");
       expect(bundled.requireBundledChannelPlugin("alpha").id).toBe("alpha");
     } finally {
       restoreBundledPluginsDir(previousBundledPluginsDir);
       fs.rmSync(tempRoot, { recursive: true, force: true });
-      delete (globalThis as { __bundledOverrideRuntime?: unknown }).__bundledOverrideRuntime;
+      delete (globalThis as { __bundledOverrideRuntime?: unknown })["__bundledOverrideRuntime"];
     }
   });
 
@@ -478,7 +479,7 @@ describe("bundled channel entry shape guards", () => {
       fs.writeFileSync(
         path.join(pluginDir, "index.js"),
         [
-          `globalThis.__bundledRootRuntime = globalThis.__bundledRootRuntime ?? [];`,
+          `globalThis["__bundledRootRuntime"] = globalThis["__bundledRootRuntime"] ?? [];`,
           "export default {",
           "  kind: 'bundled-channel-entry',",
           "  id: 'alpha',",
@@ -498,7 +499,7 @@ describe("bundled channel entry shape guards", () => {
           `    return { secretTargetRegistryEntries: [{ id: ${JSON.stringify(`channels.alpha.${label}.entry-token`)}, targetType: 'channel' }] };`,
           "  },",
           "  setChannelRuntime(runtime) {",
-          `    globalThis.__bundledRootRuntime.push(${JSON.stringify(`entry:${label}`)} + ':' + String(runtime.marker));`,
+          `    globalThis["__bundledRootRuntime"].push(${JSON.stringify(`entry:${label}`)} + ':' + String(runtime.marker));`,
           "  },",
           "};",
           "",
@@ -562,12 +563,12 @@ describe("bundled channel entry shape guards", () => {
       ).toBe("channels.alpha.B.setup-entry-token");
       bundled.setBundledChannelRuntime("alpha", { marker: "second" } as never);
 
-      expect(testGlobal.__bundledRootRuntime).toEqual(["entry:A:first", "entry:B:second"]);
+      expect(testGlobal["__bundledRootRuntime"]).toEqual(["entry:A:first", "entry:B:second"]);
     } finally {
       restoreBundledPluginsDir(previousBundledPluginsDir);
       fs.rmSync(rootA, { recursive: true, force: true });
       fs.rmSync(rootB, { recursive: true, force: true });
-      delete testGlobal.__bundledRootRuntime;
+      delete testGlobal["__bundledRootRuntime"];
     }
   });
 
@@ -641,7 +642,7 @@ describe("bundled channel entry shape guards", () => {
     fs.writeFileSync(
       path.join(pluginDir, "index.js"),
       [
-        "globalThis.__bundledSetupOnlyMainLoaded = true;",
+        'globalThis["__bundledSetupOnlyMainLoaded"] = true;',
         "throw new Error('main entry loaded');",
         "",
       ].join("\n"),
@@ -650,12 +651,12 @@ describe("bundled channel entry shape guards", () => {
     fs.writeFileSync(
       path.join(pluginDir, "setup-entry.js"),
       [
-        "globalThis.__bundledSetupOnlySetupLoaded = (globalThis.__bundledSetupOnlySetupLoaded ?? 0) + 1;",
+        'globalThis["__bundledSetupOnlySetupLoaded"] = (globalThis["__bundledSetupOnlySetupLoaded"] ?? 0) + 1;',
         "export default {",
         "  kind: 'bundled-channel-setup-entry',",
         "  features: { legacyStateMigrations: true },",
         "  loadSetupPlugin() {",
-        "    globalThis.__bundledSetupOnlyPluginLoaded = true;",
+        '    globalThis["__bundledSetupOnlyPluginLoaded"] = true;',
         "    throw new Error('setup plugin loaded');",
         "  },",
         "  loadLegacyStateMigrationDetector() {",
@@ -687,7 +688,7 @@ describe("bundled channel entry shape guards", () => {
           config: { channels: { alpha: { enabled: false } } },
         }),
       ).toStrictEqual([]);
-      expect(testGlobal.__bundledSetupOnlySetupLoaded).toBeUndefined();
+      expect(testGlobal["__bundledSetupOnlySetupLoaded"]).toBeUndefined();
 
       const detectors = bundled.listBundledChannelLegacyStateMigrationDetectors();
       expect(
@@ -704,15 +705,15 @@ describe("bundled channel entry shape guards", () => {
           },
         ],
       ]);
-      expect(testGlobal.__bundledSetupOnlySetupLoaded).toBe(1);
-      expect(testGlobal.__bundledSetupOnlyMainLoaded).toBeUndefined();
-      expect(testGlobal.__bundledSetupOnlyPluginLoaded).toBeUndefined();
+      expect(testGlobal["__bundledSetupOnlySetupLoaded"]).toBe(1);
+      expect(testGlobal["__bundledSetupOnlyMainLoaded"]).toBeUndefined();
+      expect(testGlobal["__bundledSetupOnlyPluginLoaded"]).toBeUndefined();
     } finally {
       restoreBundledPluginsDir(previousBundledPluginsDir);
       fs.rmSync(root, { recursive: true, force: true });
-      delete testGlobal.__bundledSetupOnlyMainLoaded;
-      delete testGlobal.__bundledSetupOnlySetupLoaded;
-      delete testGlobal.__bundledSetupOnlyPluginLoaded;
+      delete testGlobal["__bundledSetupOnlyMainLoaded"];
+      delete testGlobal["__bundledSetupOnlySetupLoaded"];
+      delete testGlobal["__bundledSetupOnlyPluginLoaded"];
     }
   });
   it("swallows and caches bundled plugin and setup load failures", async () => {
@@ -741,11 +742,11 @@ describe("bundled channel entry shape guards", () => {
         "  description: 'Alpha',",
         "  register() {},",
         "  loadChannelSecrets() {",
-        "    globalThis.__bundledSecretsFailureLoads = (globalThis.__bundledSecretsFailureLoads ?? 0) + 1;",
+        '    globalThis["__bundledSecretsFailureLoads"] = (globalThis["__bundledSecretsFailureLoads"] ?? 0) + 1;',
         "    throw new Error('missing channel secrets dep');",
         "  },",
         "  loadChannelPlugin() {",
-        "    globalThis.__bundledPluginFailureLoads = (globalThis.__bundledPluginFailureLoads ?? 0) + 1;",
+        '    globalThis["__bundledPluginFailureLoads"] = (globalThis["__bundledPluginFailureLoads"] ?? 0) + 1;',
         "    throw new Error('missing channel plugin dep');",
         "  },",
         "};",
@@ -759,11 +760,11 @@ describe("bundled channel entry shape guards", () => {
         "export default {",
         "  kind: 'bundled-channel-setup-entry',",
         "  loadSetupSecrets() {",
-        "    globalThis.__bundledSetupSecretsFailureLoads = (globalThis.__bundledSetupSecretsFailureLoads ?? 0) + 1;",
+        '    globalThis["__bundledSetupSecretsFailureLoads"] = (globalThis["__bundledSetupSecretsFailureLoads"] ?? 0) + 1;',
         "    throw new Error('missing setup secrets dep');",
         "  },",
         "  loadSetupPlugin() {",
-        "    globalThis.__bundledSetupFailureLoads = (globalThis.__bundledSetupFailureLoads ?? 0) + 1;",
+        '    globalThis["__bundledSetupFailureLoads"] = (globalThis["__bundledSetupFailureLoads"] ?? 0) + 1;',
         "    throw new Error('missing setup plugin dep');",
         "  },",
         "};",
@@ -790,17 +791,17 @@ describe("bundled channel entry shape guards", () => {
       expect(bundled.getBundledChannelSecrets("alpha")).toBeUndefined();
       expect(bundled.getBundledChannelSetupSecrets("alpha")).toBeUndefined();
       expect(bundled.getBundledChannelSetupSecrets("alpha")).toBeUndefined();
-      expect(testGlobal.__bundledPluginFailureLoads).toBe(1);
-      expect(testGlobal.__bundledSetupFailureLoads).toBe(1);
-      expect(testGlobal.__bundledSecretsFailureLoads).toBe(1);
-      expect(testGlobal.__bundledSetupSecretsFailureLoads).toBe(1);
+      expect(testGlobal["__bundledPluginFailureLoads"]).toBe(1);
+      expect(testGlobal["__bundledSetupFailureLoads"]).toBe(1);
+      expect(testGlobal["__bundledSecretsFailureLoads"]).toBe(1);
+      expect(testGlobal["__bundledSetupSecretsFailureLoads"]).toBe(1);
     } finally {
       restoreBundledPluginsDir(previousBundledPluginsDir);
       fs.rmSync(root, { recursive: true, force: true });
-      delete testGlobal.__bundledPluginFailureLoads;
-      delete testGlobal.__bundledSetupFailureLoads;
-      delete testGlobal.__bundledSecretsFailureLoads;
-      delete testGlobal.__bundledSetupSecretsFailureLoads;
+      delete testGlobal["__bundledPluginFailureLoads"];
+      delete testGlobal["__bundledSetupFailureLoads"];
+      delete testGlobal["__bundledSecretsFailureLoads"];
+      delete testGlobal["__bundledSetupSecretsFailureLoads"];
     }
   });
 
@@ -822,7 +823,7 @@ describe("bundled channel entry shape guards", () => {
         "  description: 'Alpha',",
         "  register() {},",
         "  loadChannelPlugin() {",
-        "    globalThis.__bundledPluginUndefinedLoads = (globalThis.__bundledPluginUndefinedLoads ?? 0) + 1;",
+        '    globalThis["__bundledPluginUndefinedLoads"] = (globalThis["__bundledPluginUndefinedLoads"] ?? 0) + 1;',
         "    return undefined;",
         "  },",
         "};",
@@ -843,11 +844,11 @@ describe("bundled channel entry shape guards", () => {
 
       expect(bundled.getBundledChannelPlugin("alpha")).toBeUndefined();
       expect(bundled.getBundledChannelPlugin("alpha")).toBeUndefined();
-      expect(testGlobal.__bundledPluginUndefinedLoads).toBe(1);
+      expect(testGlobal["__bundledPluginUndefinedLoads"]).toBe(1);
     } finally {
       restoreBundledPluginsDir(previousBundledPluginsDir);
       fs.rmSync(root, { recursive: true, force: true });
-      delete testGlobal.__bundledPluginUndefinedLoads;
+      delete testGlobal["__bundledPluginUndefinedLoads"];
     }
   });
 
@@ -980,7 +981,7 @@ describe("bundled channel entry shape guards", () => {
     fs.writeFileSync(
       modulePath,
       `
-const reenter = globalThis.__openclawBundledChannelReenter;
+const reenter = globalThis["__openclawBundledChannelReenter"];
 if (typeof reenter === "function") {
   reenter();
 }
@@ -1040,9 +1041,9 @@ module.exports = {
     }));
 
     let reentered = false;
-    (
-      globalThis as { __openclawBundledChannelReenter?: () => void }
-    ).__openclawBundledChannelReenter = () => {
+    (globalThis as { __openclawBundledChannelReenter?: () => void })[
+      "__openclawBundledChannelReenter"
+    ] = () => {
       if (!reentered) {
         reentered = true;
         expect(bundled.listBundledChannelPlugins()).toStrictEqual([]);

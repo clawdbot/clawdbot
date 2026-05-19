@@ -42,6 +42,7 @@ export type MemoryEmbeddingProvider = {
     inputs: EmbeddingInput[],
     options?: MemoryEmbeddingProviderCallOptions,
   ) => Promise<number[][]>;
+  close?: () => Promise<void> | void;
 };
 
 export type MemoryEmbeddingProviderCreateOptions = {
@@ -161,4 +162,4 @@ export function clearMemoryEmbeddingProviders(): void {
   getMemoryEmbeddingProviders().clear();
 }
 
-export const _resetMemoryEmbeddingProviders = clearMemoryEmbeddingProviders;
+export const resetMemoryEmbeddingProviders = clearMemoryEmbeddingProviders;

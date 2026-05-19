@@ -273,6 +273,134 @@ describe("CodexNativeSubagentTaskMirror", () => {
     });
   });
 
+  it("finalizes stale collab agent state from the blocked tool call status", () => {
+    const runtime = createRuntime();
+    const mirror = new CodexNativeSubagentTaskMirror(
+      {
+        parentThreadId: "parent-thread",
+        requesterSessionKey: "agent:main:main",
+        now: () => 45_000,
+      },
+      runtime,
+    );
+
+    mirror.handleNotification({
+      method: "item/completed",
+      params: {
+        item: {
+          type: "collabAgentToolCall",
+          tool: "spawnAgent",
+          status: "blocked",
+          senderThreadId: "parent-thread",
+          receiverThreadIds: ["child-thread"],
+          prompt: "read cwd",
+          agentsStates: {
+            "child-thread": {
+              status: "pendingInit",
+              message: "Native hook relay unavailable",
+            },
+          },
+        },
+      },
+    });
+
+    expect(runtime.recordTaskRunProgressByRunId).not.toHaveBeenCalledWith({
+      runId: "codex-thread:child-thread",
+      runtime: "subagent",
+      lastEventAt: 45_000,
+      progressSummary: "Native hook relay unavailable",
+    });
+    expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledWith({
+      runId: "codex-thread:child-thread",
+      runtime: "subagent",
+      status: "succeeded",
+      endedAt: 45_000,
+      lastEventAt: 45_000,
+      progressSummary: "Native hook relay unavailable",
+      terminalSummary: "Native hook relay unavailable",
+      terminalOutcome: "blocked",
+    });
+  });
+
+  it("does not treat completed tool calls as completed subagents", () => {
+    const runtime = createRuntime();
+    const mirror = new CodexNativeSubagentTaskMirror(
+      {
+        parentThreadId: "parent-thread",
+        requesterSessionKey: "agent:main:main",
+        now: () => 46_000,
+      },
+      runtime,
+    );
+
+    mirror.handleNotification({
+      method: "item/completed",
+      params: {
+        item: {
+          type: "collabAgentToolCall",
+          tool: "spawnAgent",
+          status: "completed",
+          senderThreadId: "parent-thread",
+          receiverThreadIds: ["child-thread"],
+          prompt: "read cwd",
+          agentsStates: {
+            "child-thread": {
+              status: "pendingInit",
+              message: null,
+            },
+          },
+        },
+      },
+    });
+
+    expect(runtime.recordTaskRunProgressByRunId).toHaveBeenCalledWith({
+      runId: "codex-thread:child-thread",
+      runtime: "subagent",
+      lastEventAt: 46_000,
+      progressSummary: "Codex native subagent is initializing.",
+    });
+    expect(runtime.finalizeTaskRunByRunId).not.toHaveBeenCalled();
+  });
+
+  it("does not treat failed non-spawn tool calls as failed subagents", () => {
+    const runtime = createRuntime();
+    const mirror = new CodexNativeSubagentTaskMirror(
+      {
+        parentThreadId: "parent-thread",
+        requesterSessionKey: "agent:main:main",
+        now: () => 47_000,
+      },
+      runtime,
+    );
+
+    mirror.handleNotification({
+      method: "item/completed",
+      params: {
+        item: {
+          type: "collabAgentToolCall",
+          tool: "wait",
+          status: "failed",
+          senderThreadId: "parent-thread",
+          receiverThreadIds: [],
+          agentsStates: {
+            "child-thread": {
+              status: "running",
+              message: "wait timed out",
+            },
+          },
+        },
+      },
+    });
+
+    expect(runtime.recordTaskRunProgressByRunId).toHaveBeenCalledWith({
+      runId: "codex-thread:child-thread",
+      runtime: "subagent",
+      lastEventAt: 47_000,
+      progressSummary: "wait timed out",
+    });
+    expect(runtime.finalizeTaskRunByRunId).not.toHaveBeenCalled();
+  });
+
   it("preserves a completed collab agent message when the thread later goes idle", () => {
     const runtime = createRuntime();
     const mirror = new CodexNativeSubagentTaskMirror(
@@ -319,6 +447,65 @@ describe("CodexNativeSubagentTaskMirror", () => {
       lastEventAt: 50_000,
       progressSummary: "No user task is specified.",
       terminalSummary: "No user task is specified.",
+    });
+  });
+
+  it("lets terminal collab agent state correct an earlier idle thread status", () => {
+    const runtime = createRuntime();
+    const mirror = new CodexNativeSubagentTaskMirror(
+      {
+        parentThreadId: "parent-thread",
+        requesterSessionKey: "agent:main:main",
+        now: () => 55_000,
+      },
+      runtime,
+    );
+
+    mirror.handleNotification({
+      method: "thread/status/changed",
+      params: {
+        threadId: "child-thread",
+        status: { type: "idle" },
+      },
+    });
+    mirror.handleNotification({
+      method: "item/completed",
+      params: {
+        item: {
+          type: "collabAgentToolCall",
+          tool: "spawnAgent",
+          status: "failed",
+          senderThreadId: "parent-thread",
+          receiverThreadIds: ["child-thread"],
+          prompt: "read cwd",
+          agentsStates: {
+            "child-thread": {
+              status: "pendingInit",
+              message: "Native hook relay unavailable",
+            },
+          },
+        },
+      },
+    });
+
+    expect(runtime.finalizeTaskRunByRunId).toHaveBeenNthCalledWith(1, {
+      runId: "codex-thread:child-thread",
+      runtime: "subagent",
+      status: "succeeded",
+      endedAt: 55_000,
+      lastEventAt: 55_000,
+      progressSummary: "Codex native subagent is idle.",
+      terminalSummary: "Codex native subagent finished.",
+    });
+    expect(runtime.finalizeTaskRunByRunId).toHaveBeenNthCalledWith(2, {
+      runId: "codex-thread:child-thread",
+      runtime: "subagent",
+      status: "failed",
+      endedAt: 55_000,
+      lastEventAt: 55_000,
+      error: "Native hook relay unavailable",
+      progressSummary: "Native hook relay unavailable",
+      terminalSummary: "Native hook relay unavailable",
     });
   });
 

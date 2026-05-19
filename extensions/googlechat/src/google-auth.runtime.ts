@@ -556,7 +556,7 @@ export async function resolveValidatedGoogleChatCredentials(
   return null;
 }
 
-export const __testing = {
+export const testing = {
   resetGoogleAuthRuntimeForTests(): void {
     googleAuthRuntimePromise = null;
   },
@@ -565,3 +565,4 @@ export const __testing = {
   resolveGoogleAuthEnvProxyUrl,
   validateGoogleChatServiceAccountCredentials,
 };
+export { testing as __testing };

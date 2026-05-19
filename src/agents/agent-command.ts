@@ -1524,7 +1524,23 @@ async function agentCommandInternal(
     }
 
     const { deliverAgentCommandResult } = await loadDeliveryRuntime();
-    const deliveryResult = await deliverAgentCommandResult({
+    const resolveFreshSessionEntryForDelivery =
+      sessionStore && sessionKey
+        ? async (): Promise<SessionEntry | undefined> => {
+            const { loadSessionStore } = await loadSessionStoreRuntime();
+            const freshStore = loadSessionStore(storePath, {
+              skipCache: true,
+              clone: false,
+            });
+            const freshEntry = freshStore[sessionKey];
+            if (!freshEntry || freshEntry.sessionId !== sessionId) {
+              return undefined;
+            }
+            sessionStore[sessionKey] = freshEntry;
+            return freshEntry;
+          }
+        : undefined;
+    const deliveryParams = {
       cfg,
       deps: resolvedDeps,
       runtime,
@@ -1533,7 +1549,16 @@ async function agentCommandInternal(
       sessionEntry,
       result,
       payloads,
-    });
+    };
+    const deliveryResult = await deliverAgentCommandResult(
+      resolveFreshSessionEntryForDelivery
+        ? {
+            ...deliveryParams,
+            expectedSessionIdForFreshDelivery: sessionId,
+            resolveFreshSessionEntryForDelivery,
+          }
+        : deliveryParams,
+    );
 
     // Phase 2: Clear pending delivery payload after successful delivery.
     if (
@@ -1617,7 +1642,10 @@ export async function agentCommandFromIngress(
   );
 }
 
-export const __testing = {
+export const testing = {
   resolveAgentRuntimeConfig,
   prepareAgentCommandExecution,
 };
+
+/** @deprecated Use `testing`. */
+export { testing as __testing };

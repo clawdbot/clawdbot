@@ -3,8 +3,11 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildSandboxFsMounts,
+  hasSandboxBindContainerPathAliases,
+  hasSandboxBindReadonlyHostShadows,
   parseSandboxBindMount,
   resolveSandboxFsPathWithMounts,
+  resolveWritableSandboxBindHostRoots,
 } from "./fs-paths.js";
 import { createSandboxTestContext } from "./test-fixtures.js";
 import type { SandboxContext } from "./types.js";
@@ -46,6 +49,50 @@ describe("parseSandboxBindMount", () => {
       containerRoot: "/workspace",
       writable: false,
     });
+  });
+
+  it("returns only unique writable bind host roots", () => {
+    expect(
+      resolveWritableSandboxBindHostRoots([
+        "/tmp/data:/data:rw",
+        "/tmp/read-only:/read-only:ro",
+        "/tmp/default-write:/default-write",
+        "/tmp/data:/data-two:rw",
+        "invalid-bind",
+      ]),
+    ).toEqual([path.resolve("/tmp/data"), path.resolve("/tmp/default-write")]);
+  });
+
+  it("omits writable bind roots that contain read-only host shadows", () => {
+    expect(
+      resolveWritableSandboxBindHostRoots([
+        "/tmp/data:/tmp/data:rw",
+        "/tmp/data/secrets:/tmp/data/secrets:ro",
+        "/tmp/readonly-parent:/tmp/readonly-parent:ro",
+        "/tmp/readonly-parent/work:/tmp/readonly-parent/work:rw",
+      ]),
+    ).toEqual([path.resolve("/tmp/readonly-parent/work")]);
+  });
+
+  it("detects bind mounts whose container path differs from the host path", () => {
+    expect(hasSandboxBindContainerPathAliases(["/tmp/data:/tmp/data:rw"])).toBe(false);
+    expect(hasSandboxBindContainerPathAliases(["/tmp/data:/data:rw"])).toBe(true);
+    expect(hasSandboxBindContainerPathAliases(["invalid-bind"])).toBe(false);
+  });
+
+  it("detects read-only bind shadows inside writable host roots", () => {
+    expect(
+      hasSandboxBindReadonlyHostShadows([
+        "/tmp/data:/tmp/data:rw",
+        "/tmp/data/secrets:/tmp/data/secrets:ro",
+      ]),
+    ).toBe(true);
+    expect(
+      hasSandboxBindReadonlyHostShadows([
+        "/tmp/data:/tmp/data:ro",
+        "/tmp/data/work:/tmp/data/work:rw",
+      ]),
+    ).toBe(false);
   });
 });
 

@@ -130,17 +130,22 @@ Use native `openclaw skills` commands for discover/install/update, or the
 separate `clawhub` CLI for publish/sync workflows. Full guide:
 [ClawHub](/clawhub).
 
-| Action                             | Command                                |
-| ---------------------------------- | -------------------------------------- |
-| Install a skill into the workspace | `openclaw skills install <skill-slug>` |
-| Update all installed skills        | `openclaw skills update --all`         |
-| Sync (scan + publish updates)      | `clawhub sync --all`                   |
+| Action                                 | Command                                         |
+| -------------------------------------- | ----------------------------------------------- |
+| Install a skill into the workspace     | `openclaw skills install <skill-slug>`          |
+| Install a skill for all local agents   | `openclaw skills install <skill-slug> --global` |
+| Update all workspace-installed skills  | `openclaw skills update --all`                  |
+| Update a single shared managed skill   | `openclaw skills update <skill-slug> --global`  |
+| Update all shared managed/local skills | `openclaw skills update --all --global`         |
+| Sync (scan + publish updates)          | `clawhub sync --all`                            |
 
 Native `openclaw skills install` installs into the active workspace
-`skills/` directory. The separate `clawhub` CLI also installs into
-`./skills` under your current working directory (or falls back to the
-configured OpenClaw workspace). OpenClaw picks that up as
-`<workspace>/skills` on the next session.
+`skills/` directory by default. Add `--global` to install into the shared
+managed/local directory (`~/.openclaw/skills` by default), which is visible to
+all local agents unless agent skill allowlists narrow visibility. The separate
+`clawhub` CLI also installs into `./skills` under your current working
+directory (or falls back to the configured OpenClaw workspace). OpenClaw picks
+that up as `<workspace>/skills` on the next session.
 Configured skill roots also support one grouping level, such as
 `skills/<group>/<skill>/SKILL.md`, so related third-party skills can be
 kept under a shared folder without broad recursive scanning.
@@ -178,7 +183,7 @@ Prefer sandboxed runs for untrusted inputs and risky tools. See
   `skills.install.allowUploadedArchives`; normal ClawHub installs do not require
   that setting.
 - Gateway-backed skill dependency installs (`skills.install`, onboarding, and the Skills settings UI) run the built-in dangerous-code scanner before executing installer metadata. `critical` findings block by default unless the caller explicitly sets the dangerous override; suspicious findings still warn only.
-- `openclaw skills install <slug>` is different - it downloads a ClawHub skill folder into the workspace and does not use the installer-metadata path above.
+- `openclaw skills install <slug>` is different — it downloads a ClawHub skill folder into the workspace, or into shared managed/local skills with `--global`, and does not use the installer-metadata path above.
 - `skills.entries.*.env` and `skills.entries.*.apiKey` inject secrets into the **host** process for that agent turn (not the sandbox). Keep secrets out of prompts and logs.
 
 For a broader threat model and checklists, see [Security](/gateway/security).

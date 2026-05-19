@@ -29,7 +29,7 @@ const acpManagerMock = vi.hoisted(() => ({
 }));
 
 vi.mock("../acp/control-plane/manager.js", () => ({
-  __testing: {
+  testing: {
     resetAcpSessionManagerForTests: vi.fn(() => {
       acpManagerMock.current = {
         resolveSession: vi.fn(() => null),

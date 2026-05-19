@@ -751,8 +751,9 @@ export function createDiagnosticsPrometheusExporter() {
   };
 }
 
-export const __test__ = {
+export const testApi = {
   createPrometheusMetricStore,
   recordDiagnosticEvent,
   renderPrometheusMetrics,
 };
+export { testApi as __test__ };

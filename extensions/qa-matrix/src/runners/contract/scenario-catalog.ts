@@ -1308,7 +1308,7 @@ export function findMatrixQaScenarios(ids?: string[], profile?: string) {
   });
 }
 
-export const __matrixQaProfileTesting = {
+export const matrixQaProfileTesting = {
   getMatrixQaProfileScenarioIds,
   normalizeMatrixQaProfile,
 };

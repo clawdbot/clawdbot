@@ -184,7 +184,7 @@ export function resolveEmbeddedAgentStreamFn(params: {
   return currentStreamFn;
 }
 
-export const __testing = {
+export const testing = {
   setPiNativeCodexResponsesStreamFnForTest(streamFn: StreamFn | undefined): void {
     piNativeCodexResponsesStreamFnForTest = streamFn;
   },
@@ -230,3 +230,4 @@ function wrapEmbeddedAgentStreamFn(
     });
   };
 }
+export { testing as __testing };

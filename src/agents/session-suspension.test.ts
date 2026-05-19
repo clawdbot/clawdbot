@@ -64,12 +64,12 @@ describe("session suspension", () => {
   });
 
   it("maps failover reasons to persisted suspension reasons", async () => {
-    const { __testing } = await import("./session-suspension.js");
+    const { testing } = await import("./session-suspension.js");
 
-    expect(__testing.resolveSessionSuspensionReason("rate_limit")).toBe("quota_exhausted");
-    expect(__testing.resolveSessionSuspensionReason("billing")).toBe("manual");
-    expect(__testing.resolveSessionSuspensionReason("overloaded")).toBe("circuit_open");
-    expect(__testing.resolveSessionSuspensionReason("timeout")).toBe("circuit_open");
-    expect(__testing.resolveSessionSuspensionReason("auth")).toBe("circuit_open");
+    expect(testing.resolveSessionSuspensionReason("rate_limit")).toBe("quota_exhausted");
+    expect(testing.resolveSessionSuspensionReason("billing")).toBe("manual");
+    expect(testing.resolveSessionSuspensionReason("overloaded")).toBe("circuit_open");
+    expect(testing.resolveSessionSuspensionReason("timeout")).toBe("circuit_open");
+    expect(testing.resolveSessionSuspensionReason("auth")).toBe("circuit_open");
   });
 });

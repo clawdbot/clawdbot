@@ -760,18 +760,6 @@ export async function discoverLmstudioProvider(ctx: ProviderCatalogContext): Pro
   }
   const hasExplicitModels = Array.isArray(explicit?.models) && explicit.models.length > 0;
   const { apiKey, discoveryApiKey } = ctx.resolveProviderApiKey(PROVIDER_ID);
-  let configuredDiscoveryApiKey: string | undefined;
-  try {
-    configuredDiscoveryApiKey = await resolveLmstudioConfiguredApiKey({
-      config: ctx.config,
-      env: ctx.env,
-    });
-  } catch (error) {
-    if (isLmstudioDiscoveryConfigResolutionError(error)) {
-      return null;
-    }
-    throw error;
-  }
   let resolvedHeaders: Record<string, string> | undefined;
   try {
     resolvedHeaders = await resolveLmstudioProviderHeaders({
@@ -786,6 +774,19 @@ export async function discoverLmstudioProvider(ctx: ProviderCatalogContext): Pro
     throw error;
   }
   const hasAuthorizationHeader = hasLmstudioAuthorizationHeader(resolvedHeaders);
+  let configuredDiscoveryApiKey: string | undefined;
+  try {
+    configuredDiscoveryApiKey = await resolveLmstudioConfiguredApiKey({
+      config: ctx.config,
+      env: ctx.env,
+      allowUnresolved: hasAuthorizationHeader || Boolean(discoveryApiKey),
+    });
+  } catch (error) {
+    if (isLmstudioDiscoveryConfigResolutionError(error)) {
+      return null;
+    }
+    throw error;
+  }
   const resolvedDiscoveryApiKey = hasAuthorizationHeader
     ? undefined
     : (discoveryApiKey ?? configuredDiscoveryApiKey);

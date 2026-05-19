@@ -205,6 +205,27 @@ export async function removeProviderAuthProfilesWithLock(params: {
   });
 }
 
+export async function clearLastGoodProfileWithLock(params: {
+  provider: string;
+  profileId: string;
+  agentDir?: string;
+}): Promise<AuthProfileStore | null> {
+  const providerKey = resolveProviderIdForAuth(params.provider);
+  return await updateAuthProfileStoreWithLock({
+    agentDir: params.agentDir,
+    updater: (store) => {
+      if (store.lastGood?.[providerKey] !== params.profileId) {
+        return false;
+      }
+      delete store.lastGood[providerKey];
+      if (Object.keys(store.lastGood).length === 0) {
+        store.lastGood = undefined;
+      }
+      return true;
+    },
+  });
+}
+
 export async function markAuthProfileSuccess(params: {
   store: AuthProfileStore;
   provider: string;

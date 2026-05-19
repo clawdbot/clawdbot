@@ -27,3 +27,11 @@ export async function closeActiveMemorySearchManagers(cfg?: OpenClawConfig): Pro
   const runtime = await loadMemoryHostSearchRuntime();
   await runtime.closeActiveMemorySearchManagers(cfg);
 }
+
+export async function closeActiveMemorySearchManager(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+}): Promise<void> {
+  const runtime = await loadMemoryHostSearchRuntime();
+  await runtime.closeActiveMemorySearchManager(params);
+}

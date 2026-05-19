@@ -11,7 +11,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { describe, expect, it, vi } from "vitest";
 import {
-  __testing,
+  testing,
   filterRecallEntriesWithinLookback,
   runDreamingSweepPhases,
   seedHistoricalDailyMemorySignals,
@@ -118,7 +118,7 @@ function requireFirstIngestionEntry(sessionIngestion: {
 function createHarness(
   config: OpenClawConfig,
   workspaceDir?: string,
-  subagent?: Parameters<typeof __testing.runPhaseIfTriggered>[0]["subagent"],
+  subagent?: Parameters<typeof testing.runPhaseIfTriggered>[0]["subagent"],
 ) {
   const logger = {
     info: vi.fn(),
@@ -154,7 +154,7 @@ function createHarness(
     ctx: { trigger?: string; workspaceDir?: string },
   ) => {
     const light = resolveMemoryLightDreamingConfig({ pluginConfig, cfg: resolvedConfig });
-    const lightResult = await __testing.runPhaseIfTriggered({
+    const lightResult = await testing.runPhaseIfTriggered({
       cleanedBody: event.cleanedBody,
       trigger: ctx.trigger,
       workspaceDir: ctx.workspaceDir,
@@ -162,14 +162,14 @@ function createHarness(
       logger,
       subagent,
       phase: "light",
-      eventText: __testing.constants.LIGHT_SLEEP_EVENT_TEXT,
+      eventText: testing.constants.LIGHT_SLEEP_EVENT_TEXT,
       config: light,
     });
     if (lightResult) {
       return lightResult;
     }
     const rem = resolveMemoryRemDreamingConfig({ pluginConfig, cfg: resolvedConfig });
-    return await __testing.runPhaseIfTriggered({
+    return await testing.runPhaseIfTriggered({
       cleanedBody: event.cleanedBody,
       trigger: ctx.trigger,
       workspaceDir: ctx.workspaceDir,
@@ -177,7 +177,7 @@ function createHarness(
       logger,
       subagent,
       phase: "rem",
-      eventText: __testing.constants.REM_SLEEP_EVENT_TEXT,
+      eventText: testing.constants.REM_SLEEP_EVENT_TEXT,
       config: rem,
     });
   };
@@ -1662,7 +1662,7 @@ describe("memory-core dreaming phases", () => {
   });
 
   it("ignores chat scaffolding tags when building rem reflections", () => {
-    const preview = __testing.previewRemDreaming({
+    const preview = testing.previewRemDreaming({
       entries: [
         {
           key: "memory:1",
@@ -2592,13 +2592,13 @@ describe("memory-core dreaming phases", () => {
 
     await withDreamingTestClock(async () => {
       setDreamingTestTime();
-      await __testing.runPhaseIfTriggered({
-        cleanedBody: __testing.constants.REM_SLEEP_EVENT_TEXT,
+      await testing.runPhaseIfTriggered({
+        cleanedBody: testing.constants.REM_SLEEP_EVENT_TEXT,
         trigger: "heartbeat",
         workspaceDir,
         logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
         phase: "rem",
-        eventText: __testing.constants.REM_SLEEP_EVENT_TEXT,
+        eventText: testing.constants.REM_SLEEP_EVENT_TEXT,
         config: {
           enabled: true,
           lookbackDays: 7,

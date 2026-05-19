@@ -77,7 +77,7 @@ describe("backoff helpers", () => {
       get reason() {
         return new Error("listener-registration-race");
       },
-      addEventListener(_event: string, _listener: EventListenerOrEventListenerObject) {
+      addEventListener(eventValue: string, _listener: EventListenerOrEventListenerObject) {
         aborted = true;
       },
       removeEventListener() {},

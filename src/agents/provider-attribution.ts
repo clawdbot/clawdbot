@@ -48,6 +48,7 @@ export type ProviderEndpointClass =
   | "mistral-public"
   | "moonshot-native"
   | "modelstudio-native"
+  | "nvidia-native"
   | "openai-public"
   | "openai-codex"
   | "opencode-native"
@@ -144,6 +145,7 @@ const MANIFEST_PROVIDER_ENDPOINT_CLASSES = new Set<ProviderEndpointClass>([
   "mistral-public",
   "moonshot-native",
   "modelstudio-native",
+  "nvidia-native",
   "openai-public",
   "openai-codex",
   "opencode-native",
@@ -482,6 +484,23 @@ function buildOpenRouterAttributionPolicy(
   };
 }
 
+function buildNvidiaAttributionPolicy(
+  env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
+): ProviderAttributionPolicy {
+  return {
+    provider: "nvidia",
+    enabledByDefault: true,
+    verification: "vendor-documented",
+    hook: "request-headers",
+    reviewNote:
+      "NVIDIA NIM billing invoke-origin attribution header. Applied only on verified NVIDIA routes.",
+    ...resolveProviderAttributionIdentity(env),
+    headers: {
+      "X-BILLING-INVOKE-ORIGIN": OPENCLAW_ATTRIBUTION_PRODUCT,
+    },
+  };
+}
+
 function buildOpenAIAttributionPolicy(
   env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
 ): ProviderAttributionPolicy {
@@ -563,6 +582,7 @@ export function listProviderAttributionPolicies(
 ): ProviderAttributionPolicy[] {
   return [
     buildOpenRouterAttributionPolicy(env),
+    buildNvidiaAttributionPolicy(env),
     buildOpenAIAttributionPolicy(env),
     buildOpenAICodexAttributionPolicy(env),
     buildXaiAttributionPolicy(env),
@@ -655,21 +675,28 @@ export function resolveProviderRequestPolicy(
       attributionProvider = "xai";
     }
   }
+  if (!attributionProvider && endpointClass === "nvidia-native") {
+    attributionProvider = "nvidia";
+  }
 
-  const attributionHeaders = attributionProvider
-    ? resolveProviderAttributionHeaders(attributionProvider, env)
+  const attributionPolicy = attributionProvider
+    ? resolveProviderAttributionPolicy(attributionProvider, env)
+    : undefined;
+  const attributionHeaders = attributionPolicy?.enabledByDefault
+    ? attributionPolicy.headers
     : undefined;
 
   return {
     provider: provider || undefined,
-    policy,
+    policy: attributionPolicy ?? policy,
     endpointClass,
     usesConfiguredBaseUrl,
     knownProviderFamily: resolveKnownProviderFamily(provider || undefined),
     attributionProvider,
     attributionHeaders,
     allowsHiddenAttribution:
-      attributionProvider !== undefined && policy?.verification === "vendor-hidden-api-spec",
+      attributionProvider !== undefined &&
+      attributionPolicy?.verification === "vendor-hidden-api-spec",
     usesKnownNativeOpenAIEndpoint,
     usesKnownNativeOpenAIRoute:
       endpointClass === "default" ? provider === "openai" : usesKnownNativeOpenAIEndpoint,
@@ -703,6 +730,7 @@ export function resolveProviderRequestCapabilities(
     endpointClass === "mistral-public" ||
     endpointClass === "moonshot-native" ||
     endpointClass === "modelstudio-native" ||
+    endpointClass === "nvidia-native" ||
     endpointClass === "openai-public" ||
     endpointClass === "openai-codex" ||
     endpointClass === "opencode-native" ||

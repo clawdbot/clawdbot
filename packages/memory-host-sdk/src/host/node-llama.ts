@@ -4,16 +4,25 @@ export type LlamaEmbedding = {
 
 export type LlamaEmbeddingContext = {
   getEmbeddingFor: (text: string) => Promise<LlamaEmbedding>;
+  dispose?: () => Promise<void> | void;
 };
 
 export type LlamaModel = {
   createEmbeddingContext: (options?: {
     contextSize?: number | "auto";
+    createSignal?: AbortSignal;
   }) => Promise<LlamaEmbeddingContext>;
+  dispose?: () => Promise<void> | void;
+};
+
+export type ResolveModelFileOptions = {
+  directory?: string;
+  signal?: AbortSignal;
 };
 
 export type Llama = {
-  loadModel: (params: { modelPath: string }) => Promise<LlamaModel>;
+  loadModel: (params: { modelPath: string; loadSignal?: AbortSignal }) => Promise<LlamaModel>;
+  dispose?: () => Promise<void> | void;
 };
 
 export type NodeLlamaCppModule = {
@@ -21,7 +30,10 @@ export type NodeLlamaCppModule = {
     error: number;
   };
   getLlama: (params: { logLevel: number }) => Promise<Llama>;
-  resolveModelFile: (modelPath: string, cacheDir?: string) => Promise<string>;
+  resolveModelFile: (
+    modelPath: string,
+    optionsOrDirectory?: string | ResolveModelFileOptions,
+  ) => Promise<string>;
 };
 
 const NODE_LLAMA_CPP_MODULE = "node-llama-cpp";

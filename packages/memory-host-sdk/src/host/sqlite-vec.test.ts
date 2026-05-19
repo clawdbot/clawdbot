@@ -115,10 +115,10 @@ describe("loadSqliteVecExtension", () => {
       return;
     }
 
-    const require_ = createRequire(import.meta.url);
+    const requireForResolve = createRequire(import.meta.url);
     let expectedPath: string;
     try {
-      expectedPath = require_.resolve(`${entry.pkg}/${entry.file}`);
+      expectedPath = requireForResolve.resolve(`${entry.pkg}/${entry.file}`);
     } catch (err) {
       if (isMissingModuleError(err)) {
         return;

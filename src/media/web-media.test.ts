@@ -241,15 +241,19 @@ describe("loadWebMedia", () => {
 
   async function withUnavailableImageOptimizer<T>(fn: () => Promise<T>): Promise<T> {
     vi.resetModules();
-    vi.doMock("./image-ops.js", () => ({
+    vi.doMock("./media-services.js", () => ({
       convertHeicToJpeg: vi.fn(async (buffer: Buffer) => buffer),
       hasAlphaChannel: vi.fn(async () => {
         throw new Error(
           "Optional dependency sharp is required for image attachment processing | Cannot find package 'sharp' imported from image-ops.js",
         );
       }),
+      isImageProcessorUnavailableError: (err: unknown) =>
+        err instanceof Error && err.message.includes("Optional dependency sharp is required"),
       optimizeImageToPng: vi.fn(async () => {
-        throw new Error("should not optimize png");
+        throw new Error(
+          "Optional dependency sharp is required for image attachment processing | Cannot find package 'sharp' imported from image-ops.js",
+        );
       }),
       resizeToJpeg: vi.fn(async () => {
         throw new Error(
@@ -260,7 +264,7 @@ describe("loadWebMedia", () => {
     try {
       return await fn();
     } finally {
-      vi.doUnmock("./image-ops.js");
+      vi.doUnmock("./media-services.js");
       vi.resetModules();
     }
   }

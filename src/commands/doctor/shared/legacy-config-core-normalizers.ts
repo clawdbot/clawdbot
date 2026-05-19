@@ -1,5 +1,6 @@
 import {
   legacyRuntimeModelAliasRequiresRuntimePolicy,
+  listLegacyRuntimeModelProviderAliases,
   migrateLegacyRuntimeModelRef,
 } from "../../../agents/model-runtime-aliases.js";
 import { normalizeProviderId } from "../../../agents/provider-id.js";
@@ -204,6 +205,32 @@ type SelectedRuntimeRef = {
 
 const LEGACY_CODEX_CLI_RUNTIME_ID = "codex-cli";
 const CODEX_APP_SERVER_RUNTIME_ID = "codex";
+
+function resolveLegacyWholeAgentRuntimePolicy(raw: unknown):
+  | {
+      provider: string;
+      runtime: string;
+      requiresRuntimePolicy: boolean;
+    }
+  | undefined {
+  if (!isRecord(raw)) {
+    return undefined;
+  }
+  const runtime = normalizeOptionalLowercaseString(raw.id);
+  if (!runtime || runtime === "auto" || runtime === "pi") {
+    return undefined;
+  }
+  const alias = listLegacyRuntimeModelProviderAliases().find(
+    (entry) => entry.cli && normalizeProviderId(entry.runtime) === runtime,
+  );
+  return alias
+    ? {
+        provider: alias.provider,
+        runtime: alias.runtime,
+        requiresRuntimePolicy: alias.requiresRuntimePolicy,
+      }
+    : undefined;
+}
 
 function migratedRuntimeRequiresPolicy(legacyProvider: string): boolean {
   return legacyRuntimeModelAliasRequiresRuntimePolicy(legacyProvider);
@@ -417,6 +444,44 @@ function ensureSelectedModelRuntimePolicies(
   return { value: next, changed };
 }
 
+function selectedCanonicalModelRefsForRuntimePolicy(
+  rawModel: unknown,
+  provider: string,
+  runtime: string,
+  requiresRuntimePolicy: boolean,
+): SelectedRuntimeRef[] {
+  const refs: SelectedRuntimeRef[] = [];
+  const addRef = (rawRef: unknown) => {
+    if (typeof rawRef !== "string") {
+      return;
+    }
+    const trimmed = rawRef.trim();
+    const slash = trimmed.indexOf("/");
+    if (slash <= 0 || slash >= trimmed.length - 1) {
+      return;
+    }
+    if (normalizeProviderId(trimmed.slice(0, slash)) !== normalizeProviderId(provider)) {
+      return;
+    }
+    refs.push({ ref: trimmed, runtime, requiresRuntimePolicy });
+  };
+
+  if (typeof rawModel === "string") {
+    addRef(rawModel);
+    return refs;
+  }
+  if (!isRecord(rawModel)) {
+    return refs;
+  }
+  addRef(rawModel.primary);
+  if (Array.isArray(rawModel.fallbacks)) {
+    for (const fallback of rawModel.fallbacks) {
+      addRef(fallback);
+    }
+  }
+  return refs;
+}
+
 function normalizeLegacyCodexCliRuntimePinsInModels(
   rawModels: unknown,
   path: string,
@@ -451,6 +516,7 @@ function normalizeLegacyRuntimeAgentContainer(
 ): { value: Record<string, unknown>; changed: boolean } {
   let changed = false;
   const next: Record<string, unknown> = { ...raw };
+  const legacyWholeAgentRuntime = resolveLegacyWholeAgentRuntimePolicy(raw.agentRuntime);
 
   const model = normalizeLegacyRuntimeAgentModelConfig(raw.model);
   if (model.changed) {
@@ -481,6 +547,23 @@ function normalizeLegacyRuntimeAgentContainer(
       next.models = modelRuntimes.value;
       changed = true;
       changes.push(`Selected ${model.selectedRuntime} runtime for ${path}.models entries.`);
+    }
+  }
+
+  if (legacyWholeAgentRuntime) {
+    const selectedRefs = selectedCanonicalModelRefsForRuntimePolicy(
+      next.model ?? raw.model,
+      legacyWholeAgentRuntime.provider,
+      legacyWholeAgentRuntime.runtime,
+      legacyWholeAgentRuntime.requiresRuntimePolicy,
+    );
+    const modelRuntimes = ensureSelectedModelRuntimePolicies(next.models, selectedRefs);
+    if (modelRuntimes.changed) {
+      next.models = modelRuntimes.value;
+      changed = true;
+      changes.push(
+        `Moved ${path}.agentRuntime.id ${legacyWholeAgentRuntime.runtime} to matching ${legacyWholeAgentRuntime.provider} model runtime policy.`,
+      );
     }
   }
 

@@ -11,6 +11,7 @@ import {
 import {
   getDiagnosticSessionState,
   isDiagnosticSessionStateCurrent,
+  peekDiagnosticSessionState,
 } from "./diagnostic-session-state.js";
 
 export type RecoverStuckSession = (
@@ -27,7 +28,7 @@ function emitSessionRecoveryRequested(params: {
     type: "session.recovery.requested",
     sessionId: params.request.sessionId,
     sessionKey: params.request.sessionKey,
-    state: "processing",
+    state: params.request.expectedState ?? "processing",
     stateGeneration: params.request.stateGeneration,
     ageMs: params.request.ageMs,
     queueDepth: params.request.queueDepth,
@@ -46,7 +47,7 @@ function emitSessionRecoveryCompleted(params: {
     type: "session.recovery.completed",
     sessionId: params.request.sessionId,
     sessionKey: params.request.sessionKey,
-    state: "processing",
+    state: params.request.expectedState ?? "processing",
     stateGeneration: params.request.stateGeneration,
     ageMs: params.request.ageMs,
     queueDepth: params.request.queueDepth,
@@ -75,6 +76,10 @@ function isRecoveryPromiseLike(
   );
 }
 
+function recoveryOutcomeHasQueuedLaneWork(outcome: StuckSessionRecoveryOutcome): boolean {
+  return outcome.status === "aborted" && (outcome.queuedCount ?? 0) > 0;
+}
+
 function applyRecoveryOutcomeToDiagnosticState(params: {
   request: StuckSessionRecoveryRequest;
   outcome: StuckSessionRecoveryOutcome | undefined;
@@ -86,14 +91,23 @@ function applyRecoveryOutcomeToDiagnosticState(params: {
     emitSessionRecoveryCompleted({ request: params.request, outcome: params.outcome });
     return;
   }
-  if (
-    !isDiagnosticSessionStateCurrent({
-      sessionId: params.request.sessionId,
-      sessionKey: params.request.sessionKey,
-      generation: params.request.stateGeneration,
-      state: "processing",
-    })
-  ) {
+  const expectedState = params.request.expectedState ?? "processing";
+  const currentState = peekDiagnosticSessionState(params.request);
+  const currentGeneration = currentState?.generation ?? 0;
+  const requestGeneration = params.request.stateGeneration ?? 0;
+  const stateIsCurrent =
+    expectedState === "idle" &&
+    params.request.stateGeneration !== undefined &&
+    params.outcome.action === "abort_embedded_run"
+      ? currentState?.state === "idle" &&
+        (currentGeneration === requestGeneration || currentGeneration === requestGeneration + 1)
+      : isDiagnosticSessionStateCurrent({
+          sessionId: params.request.sessionId,
+          sessionKey: params.request.sessionKey,
+          generation: params.request.stateGeneration,
+          state: expectedState,
+        });
+  if (!stateIsCurrent) {
     emitSessionRecoveryCompleted({
       request: params.request,
       outcome: params.outcome,
@@ -108,9 +122,13 @@ function applyRecoveryOutcomeToDiagnosticState(params: {
   state.generation = (state.generation ?? 0) + 1;
   state.lastStuckWarnAgeMs = undefined;
   state.lastLongRunningWarnAgeMs = undefined;
+  const preserveQueuedIdleWork =
+    params.request.expectedState === "idle" && recoveryOutcomeHasQueuedLaneWork(params.outcome);
   state.queueDepth = recoveryOutcomeClearsQueuedSessionState(params.outcome)
     ? 0
-    : Math.max(0, state.queueDepth - 1);
+    : preserveQueuedIdleWork
+      ? Math.max(state.queueDepth, params.request.queueDepth ?? 0)
+      : Math.max(0, state.queueDepth - 1);
   emitDiagnosticEvent({
     type: "session.state",
     sessionId: state.sessionId,

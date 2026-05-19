@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   buildProviderToolCompatFamilyHooks,
+  inspectDeepSeekToolSchemas,
   findOpenAIStrictSchemaViolations,
   inspectGeminiToolSchemas,
   inspectOpenAIToolSchemas,
+  normalizeDeepSeekToolSchemas,
   normalizeGeminiToolSchemas,
   normalizeOpenAIToolSchemas,
 } from "./provider-tools.js";
@@ -30,6 +32,11 @@ describe("buildProviderToolCompatFamilyHooks", () => {
   it("covers the tool compat family matrix", () => {
     const cases = [
       {
+        family: "deepseek" as const,
+        normalizeToolSchemas: normalizeDeepSeekToolSchemas,
+        inspectToolSchemas: inspectDeepSeekToolSchemas,
+      },
+      {
         family: "gemini" as const,
         normalizeToolSchemas: normalizeGeminiToolSchemas,
         inspectToolSchemas: inspectGeminiToolSchemas,
@@ -47,6 +54,69 @@ describe("buildProviderToolCompatFamilyHooks", () => {
       expect(hooks.normalizeToolSchemas).toBe(testCase.normalizeToolSchemas);
       expect(hooks.inspectToolSchemas).toBe(testCase.inspectToolSchemas);
     }
+  });
+
+  it("collapses anyOf and oneOf unions for the deepseek family", () => {
+    const hooks = buildProviderToolCompatFamilyHooks("deepseek");
+    const tools = [
+      {
+        name: "unusual-whales__get_balance_sheet_screener",
+        description: "",
+        parameters: {
+          type: "object",
+          properties: {
+            date: {
+              description: "Balance sheet date",
+              anyOf: [{ type: "string" }, { type: "integer" }],
+            },
+            ticker: {
+              oneOf: [{ type: "string" }, { type: "null" }],
+            },
+          },
+          required: ["date"],
+        },
+      },
+    ] as never;
+
+    const normalized = hooks.normalizeToolSchemas({
+      provider: "deepseek",
+      modelId: "deepseek-v4-pro",
+      modelApi: "openai-completions",
+      model: {
+        provider: "deepseek",
+        api: "openai-completions",
+        id: "deepseek-v4-pro",
+      } as never,
+      tools,
+    });
+
+    expect(normalized[0]?.parameters).toEqual({
+      type: "object",
+      properties: {
+        date: {
+          description: "Balance sheet date",
+          type: "string",
+        },
+        ticker: {
+          type: "string",
+          nullable: true,
+        },
+      },
+      required: ["date"],
+    });
+    expect(
+      hooks.inspectToolSchemas({
+        provider: "deepseek",
+        modelId: "deepseek-v4-pro",
+        modelApi: "openai-completions",
+        model: {
+          provider: "deepseek",
+          api: "openai-completions",
+          id: "deepseek-v4-pro",
+        } as never,
+        tools: normalized,
+      }),
+    ).toStrictEqual([]);
   });
 
   it("normalizes parameter-free and typed-object schemas for the openai family", () => {

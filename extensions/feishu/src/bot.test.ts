@@ -162,7 +162,7 @@ function buildDefaultResolveRoute(): ResolvedAgentRoute {
   };
 }
 
-function _createUnboundConfiguredRoute(
+function createUnboundConfiguredRoute(
   route: NonNullable<ConfiguredBindingRoute>["route"],
 ): ConfiguredBindingRoute {
   return { bindingResolution: null, route };
