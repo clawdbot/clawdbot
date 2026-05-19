@@ -114,6 +114,11 @@ export function resolveJobErrorBackoffUntilMs(
   if (resolveJobLastRunStatus(job) !== "error" || !isFiniteTimestamp(job.state.lastRunAtMs)) {
     return undefined;
   }
+  // Manual (force/due) errors are recorded but must not open a backoff window:
+  // doing so would delay the next timer-scheduled fire of a recurring job.
+  if (job.state.lastRunWasManual === true) {
+    return undefined;
+  }
   const consecutiveErrorsRaw = job.state.consecutiveErrors;
   const consecutiveErrors =
     typeof consecutiveErrorsRaw === "number" && Number.isFinite(consecutiveErrorsRaw)

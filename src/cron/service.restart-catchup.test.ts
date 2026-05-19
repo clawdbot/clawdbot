@@ -353,6 +353,51 @@ describe("CronService restart catch-up", () => {
     );
   });
 
+  it("#83933: restart catch-up fires at-job after manual run with terminal status", async () => {
+    const store = await makeStorePath();
+    const baseMs = Date.parse("2025-12-13T17:00:00.000Z");
+    const scheduledAtMs = baseMs + 60_000;
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeat = vi.fn();
+
+    await writeStoreJobs(store.storePath, [
+      {
+        id: "manual-then-restart",
+        name: "manual-then-restart",
+        enabled: true,
+        createdAtMs: baseMs - 120_000,
+        updatedAtMs: baseMs - 120_000,
+        schedule: { kind: "at", at: new Date(scheduledAtMs).toISOString() },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        deleteAfterRun: false,
+        payload: { kind: "systemEvent", text: "catch-me" },
+        state: {
+          nextRunAtMs: scheduledAtMs,
+          lastRunAtMs: baseMs,
+          lastRunStatus: "ok",
+          lastRunWasManual: true,
+        },
+      },
+    ]);
+
+    const cron = createRestartCronService({
+      storePath: store.storePath,
+      enqueueSystemEvent,
+      requestHeartbeat,
+      nowMs: () => scheduledAtMs + 5_000,
+    });
+
+    try {
+      await cron.start();
+      expectQueuedSystemEvent(enqueueSystemEvent, "catch-me");
+      expect(requestHeartbeat).toHaveBeenCalled();
+    } finally {
+      cron.stop();
+      await store.cleanup();
+    }
+  });
+
   it("defers overdue isolated agent-turn jobs during gateway startup", async () => {
     const store = await makeStorePath();
     const startNow = Date.parse("2025-12-13T17:00:00.000Z");

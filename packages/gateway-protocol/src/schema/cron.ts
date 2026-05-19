@@ -475,6 +475,10 @@ export const CronJobStateSchema = closedObject({
   streamCoalescedBatches: Type.Optional(Type.Integer({ minimum: 0 })),
   streamLastStartedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
   streamLastExitAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+  // Persisted so a delete-after-run job survives an operator-triggered manual
+  // run: manual runs skip deleteAfterRun, and this flag lets the scheduler
+  // preserve the job's paced slot instead of tearing it down.
+  lastRunWasManual: Type.Optional(Type.Boolean()),
 });
 
 const CronJobStatePatchSchema = closedObject({
@@ -516,6 +520,7 @@ const CronJobStatePatchSchema = closedObject({
   streamCoalescedBatches: Type.Optional(Type.Integer({ minimum: 0 })),
   streamLastStartedAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
   streamLastExitAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+  lastRunWasManual: Type.Optional(Type.Boolean()),
 });
 
 /** Persisted cron job definition returned by scheduler list/get APIs. */

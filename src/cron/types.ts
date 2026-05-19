@@ -372,6 +372,8 @@ export type CronJobState = {
   lastRunAtMs?: number;
   /** Preferred execution outcome field. */
   lastRunStatus?: CronRunStatus;
+  /** Whether the last run was triggered manually (via `cron run`). */
+  lastRunWasManual?: boolean;
   /** @deprecated Use lastRunStatus. */
   lastStatus?: "ok" | "error" | "skipped";
   lastError?: string;

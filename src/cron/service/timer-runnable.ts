@@ -35,14 +35,17 @@ export function isRunnableJob(params: {
   }
   const lastRunStatus = resolveJobLastRunStatus(job);
   if (params.skipAtIfAlreadyRan && job.schedule.kind === "at" && lastRunStatus) {
-    // One-shot with terminal status: skip unless it has an explicit retry
-    // scheduled after the failed/skipped run (#24355, #91775).
-    const lastRun = job.state.lastRunAtMs;
-    const nextRun = job.state.nextRunAtMs;
-    if (isScheduledTerminalOneShotRetry(job, lastRunStatus, lastRun, nextRun)) {
-      return typeof nextRun === "number" && nowMs >= nextRun;
+    if (!job.state.lastRunWasManual) {
+      // One-shot with terminal status: skip unless it has an explicit retry
+      // scheduled after the failed/skipped run (#24355, #91775). Manual runs
+      // fall through so a `cron run` does not suppress the scheduled fire (#83538).
+      const lastRun = job.state.lastRunAtMs;
+      const nextRun = job.state.nextRunAtMs;
+      if (isScheduledTerminalOneShotRetry(job, lastRunStatus, lastRun, nextRun)) {
+        return typeof nextRun === "number" && nowMs >= nextRun;
+      }
+      return false;
     }
-    return false;
   }
   const next = job.state.nextRunAtMs;
   if (isErrorBackoffPending(params.state, job, nowMs)) {

@@ -43,6 +43,8 @@ export function applyJobResult(
     scheduleMode?: "advance" | "preserve";
     // Startup replay restores alert cooldown bookkeeping without redelivery.
     replayFailureAlertAtMs?: number;
+    // Manual runs should never trigger deleteAfterRun.
+    isManual?: boolean;
   },
 ): boolean {
   const previousScheduleState = {
@@ -55,6 +57,7 @@ export function applyJobResult(
   job.state.forcePreservedNextRunAtMs = undefined;
   job.state.lastRunAtMs = result.startedAt;
   job.state.lastRunStatus = result.status;
+  job.state.lastRunWasManual = opts?.isManual === true;
   job.state.lastStatus = result.status;
   job.state.lastDurationMs = Math.max(0, result.endedAt - result.startedAt);
   job.state.lastError = result.error;
@@ -102,126 +105,157 @@ export function applyJobResult(
   const previousConsecutiveErrors = job.state.consecutiveErrors ?? 0;
   const alertConfig = resolveFailureAlert(state, job);
   if (result.status === "error") {
-    job.state.consecutiveErrors = (job.state.consecutiveErrors ?? 0) + 1;
-    job.state.consecutiveSkipped = 0;
-    maybeEmitFailureAlert(state, {
-      job,
-      alertConfig,
-      status: "error",
-      error: result.error,
-      errorReason: job.state.lastErrorReason,
-      consecutiveCount: job.state.consecutiveErrors,
-      ...(opts?.replayFailureAlertAtMs !== undefined
-        ? { delivery: "record-only" as const, occurredAtMs: opts.replayFailureAlertAtMs }
-        : {}),
-    });
-  } else if (result.status === "skipped") {
-    job.state.consecutiveErrors = 0;
-    job.state.consecutiveSkipped = (job.state.consecutiveSkipped ?? 0) + 1;
-    if (alertConfig?.includeSkipped) {
+    if (!opts?.isManual) {
+      job.state.consecutiveErrors = (job.state.consecutiveErrors ?? 0) + 1;
+      job.state.consecutiveSkipped = 0;
       maybeEmitFailureAlert(state, {
         job,
         alertConfig,
-        status: "skipped",
+        status: "error",
         error: result.error,
-        consecutiveCount: job.state.consecutiveSkipped,
+        errorReason: job.state.lastErrorReason,
+        consecutiveCount: job.state.consecutiveErrors,
         ...(opts?.replayFailureAlertAtMs !== undefined
           ? { delivery: "record-only" as const, occurredAtMs: opts.replayFailureAlertAtMs }
           : {}),
       });
-    } else {
-      job.state.lastFailureAlertAtMs = undefined;
+    }
+  } else if (result.status === "skipped") {
+    if (!opts?.isManual) {
+      job.state.consecutiveErrors = 0;
+      job.state.consecutiveSkipped = (job.state.consecutiveSkipped ?? 0) + 1;
+      if (alertConfig?.includeSkipped) {
+        maybeEmitFailureAlert(state, {
+          job,
+          alertConfig,
+          status: "skipped",
+          error: result.error,
+          consecutiveCount: job.state.consecutiveSkipped,
+          ...(opts?.replayFailureAlertAtMs !== undefined
+            ? { delivery: "record-only" as const, occurredAtMs: opts.replayFailureAlertAtMs }
+            : {}),
+        });
+      } else {
+        job.state.lastFailureAlertAtMs = undefined;
+      }
     }
   } else {
-    job.state.consecutiveErrors = 0;
-    job.state.consecutiveSkipped = 0;
-    job.state.lastFailureAlertAtMs = undefined;
+    if (!opts?.isManual) {
+      job.state.consecutiveErrors = 0;
+      job.state.consecutiveSkipped = 0;
+      job.state.lastFailureAlertAtMs = undefined;
+    }
   }
 
   // The gateway watcher disables on-exit jobs before firing; successful removal here
   // completes the same deleteAfterRun contract as a one-shot at schedule.
   const isOneShotSchedule = job.schedule.kind === "at" || job.schedule.kind === "on-exit";
-  const shouldDelete = isOneShotSchedule && job.deleteAfterRun === true && result.status === "ok";
+  const wouldDelete = isOneShotSchedule && job.deleteAfterRun === true && result.status === "ok";
   const retryDisabledHeartbeatOneShot = shouldRetryDisabledHeartbeatOneShot(job, result);
+
+  const shouldDelete = wouldDelete && !opts?.isManual;
+
+  if (wouldDelete && opts?.isManual) {
+    state.deps.log.info(
+      { jobId: job.id, jobName: job.name },
+      "cron: skipping deleteAfterRun for manual run — job preserved for scheduled execution",
+    );
+  }
 
   if (!shouldDelete) {
     if (job.schedule.kind === "at") {
       if (retryDisabledHeartbeatOneShot) {
-        const retryDecision = resolveDisabledHeartbeatOneShotRetryDecision({
-          cronConfig: state.deps.cronConfig,
-          consecutiveSkipped: job.state.consecutiveSkipped,
-        });
-        if (retryDecision.retryable && retryDecision.backoffMs !== undefined) {
-          job.enabled = true;
-          job.state.nextRunAtMs = result.endedAt + retryDecision.backoffMs;
-          state.deps.log.info(
-            {
-              jobId: job.id,
-              jobName: job.name,
-              consecutiveSkipped: retryDecision.consecutiveSkipped,
-              backoffMs: retryDecision.backoffMs,
-              nextRunAtMs: job.state.nextRunAtMs,
-            },
-            "cron: scheduling one-shot retry after disabled heartbeat",
-          );
-        } else {
-          job.enabled = false;
-          job.state.nextRunAtMs = undefined;
-          state.deps.log.warn(
-            {
-              jobId: job.id,
-              jobName: job.name,
-              consecutiveSkipped: retryDecision.consecutiveSkipped,
-              reason: retryDecision.reason,
-            },
-            "cron: disabling one-shot job after disabled heartbeat retries",
-          );
+        if (!opts?.isManual) {
+          // Manual runs never disable the one-shot or reschedule a retry; the
+          // scheduled execution path stays intact (#83538).
+          const retryDecision = resolveDisabledHeartbeatOneShotRetryDecision({
+            cronConfig: state.deps.cronConfig,
+            consecutiveSkipped: job.state.consecutiveSkipped,
+          });
+          if (retryDecision.retryable && retryDecision.backoffMs !== undefined) {
+            job.enabled = true;
+            job.state.nextRunAtMs = result.endedAt + retryDecision.backoffMs;
+            state.deps.log.info(
+              {
+                jobId: job.id,
+                jobName: job.name,
+                consecutiveSkipped: retryDecision.consecutiveSkipped,
+                backoffMs: retryDecision.backoffMs,
+                nextRunAtMs: job.state.nextRunAtMs,
+              },
+              "cron: scheduling one-shot retry after disabled heartbeat",
+            );
+          } else {
+            job.enabled = false;
+            job.state.nextRunAtMs = undefined;
+            state.deps.log.warn(
+              {
+                jobId: job.id,
+                jobName: job.name,
+                consecutiveSkipped: retryDecision.consecutiveSkipped,
+                reason: retryDecision.reason,
+              },
+              "cron: disabling one-shot job after disabled heartbeat retries",
+            );
+          }
         }
       } else if (result.status === "ok" || result.status === "skipped") {
-        // One-shot done or skipped: disable to prevent tight-loop (#11452).
-        job.enabled = false;
-        job.state.nextRunAtMs = undefined;
-      } else if (result.status === "error") {
-        const retryDecision = resolveTransientCronRetryDecision({
-          cronConfig: state.deps.cronConfig,
-          error: result.error,
-          errorClassification: result.errorClassification,
-          lastErrorReason: job.state.lastErrorReason,
-          executionStarted: result.executionStarted,
-          consecutiveErrors: job.state.consecutiveErrors,
-        });
-        if (retryDecision.retryable && retryDecision.backoffMs !== undefined) {
-          // Schedule retry with backoff (#24355).
-          job.state.nextRunAtMs = result.endedAt + retryDecision.backoffMs;
-          state.deps.log.info(
-            {
-              jobId: job.id,
-              jobName: job.name,
-              consecutiveErrors: retryDecision.consecutiveErrors,
-              backoffMs: retryDecision.backoffMs,
-              nextRunAtMs: job.state.nextRunAtMs,
-              retryCategory: retryDecision.retryCategory,
-            },
-            "cron: scheduling one-shot retry after transient error",
-          );
-        } else {
-          // Permanent error or max retries exhausted: disable.
-          // Note: deleteAfterRun:true only triggers on ok (see shouldDelete above),
-          // so exhausted-retry jobs are disabled but intentionally kept in the store
-          // to preserve the error state for inspection.
+        if (!opts?.isManual) {
+          // One-shot done or skipped: disable to prevent tight-loop (#11452).
           job.enabled = false;
           job.state.nextRunAtMs = undefined;
-          state.deps.log.warn(
-            {
-              jobId: job.id,
-              jobName: job.name,
-              consecutiveErrors: retryDecision.consecutiveErrors,
-              error: result.error,
-              reason: retryDecision.reason,
-              retryCategory: retryDecision.retryCategory,
-            },
-            "cron: disabling one-shot job after error",
+        }
+      } else if (result.status === "error") {
+        if (opts?.isManual) {
+          // Manual runs do not participate in at-job retry/disable state.
+          // Leave enabled, nextRunAtMs, and counters unchanged so the
+          // scheduled execution path is not affected.
+          state.deps.log.info(
+            { jobId: job.id, jobName: job.name },
+            "cron: skipping at-job error handling for manual run — job preserved for scheduled execution",
           );
+        } else {
+          const retryDecision = resolveTransientCronRetryDecision({
+            cronConfig: state.deps.cronConfig,
+            error: result.error,
+            errorClassification: result.errorClassification,
+            lastErrorReason: job.state.lastErrorReason,
+            executionStarted: result.executionStarted,
+            consecutiveErrors: job.state.consecutiveErrors,
+          });
+          if (retryDecision.retryable && retryDecision.backoffMs !== undefined) {
+            // Schedule retry with backoff (#24355).
+            job.state.nextRunAtMs = result.endedAt + retryDecision.backoffMs;
+            state.deps.log.info(
+              {
+                jobId: job.id,
+                jobName: job.name,
+                consecutiveErrors: retryDecision.consecutiveErrors,
+                backoffMs: retryDecision.backoffMs,
+                nextRunAtMs: job.state.nextRunAtMs,
+                retryCategory: retryDecision.retryCategory,
+              },
+              "cron: scheduling one-shot retry after transient error",
+            );
+          } else {
+            // Permanent error or max retries exhausted: disable.
+            // Note: deleteAfterRun:true only triggers on ok (see shouldDelete above),
+            // so exhausted-retry jobs are disabled but intentionally kept in the store
+            // to preserve the error state for inspection.
+            job.enabled = false;
+            job.state.nextRunAtMs = undefined;
+            state.deps.log.warn(
+              {
+                jobId: job.id,
+                jobName: job.name,
+                consecutiveErrors: retryDecision.consecutiveErrors,
+                error: result.error,
+                reason: retryDecision.reason,
+                retryCategory: retryDecision.retryCategory,
+              },
+              "cron: disabling one-shot job after error",
+            );
+          }
         }
       }
     } else if (opts?.scheduleMode === "preserve") {
