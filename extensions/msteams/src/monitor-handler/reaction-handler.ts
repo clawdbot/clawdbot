@@ -116,6 +116,8 @@ export function createMSTeamsReactionHandler(deps: MSTeamsMessageHandlerDeps) {
       core.system.enqueueSystemEvent(label, {
         sessionKey: route.sessionKey,
         contextKey: `msteams:reaction:${conversationId}:${targetMessageId}:${senderId}:${reactionType}:${direction}`,
+        forceSenderIsOwnerFalse: true,
+        trusted: false,
       });
     }
   };

@@ -434,6 +434,7 @@ export function runAgentAttempt(params: {
         cfg: params.cfg,
         agentId: params.sessionAgentId,
         modelId: params.modelOverride,
+        authProfileId: params.sessionEntry?.authProfileOverride,
       }) ?? params.providerOverride);
   const agentHarnessPolicy = isRawModelRun
     ? ({ runtime: "pi" } as const)

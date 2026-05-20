@@ -461,17 +461,20 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(details.codexThreadBindingInvalidated).toBe(true);
     expect(await readCodexAppServerBinding(sessionFile)).toBeUndefined();
     expect(compact).toHaveBeenCalledTimes(1);
-    expect(compact).toHaveBeenCalledWith({
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      sessionFile,
-      tokenBudget: 777,
-      currentTokenCount: 123,
-      compactionTarget: "threshold",
-      customInstructions: undefined,
-      force: true,
-      runtimeContext: { workspaceDir: tempDir, provider: "codex" },
-    });
+    expect(compact).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        sessionFile,
+        tokenBudget: 777,
+        currentTokenCount: 123,
+        compactionTarget: "threshold",
+        customInstructions: undefined,
+        force: true,
+        runtimeContext: { workspaceDir: tempDir, provider: "codex" },
+        abortSignal: expect.any(AbortSignal),
+      }),
+    );
     expect(maintain).toHaveBeenCalledTimes(1);
     const [maintainCall] = maintain.mock.calls[0] ?? [];
     const maintainParams = maintainCall as
@@ -682,6 +685,100 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(compactResult.compacted).toBe(false);
     expect(compactResult.reason).toBe("below threshold");
     expect(maintain).not.toHaveBeenCalled();
+  });
+
+  describe("owning context-engine compaction safety timeout", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("bounds a hung owning context-engine compact() and reports a clean ok:false", async () => {
+      const sessionFile = await writeTestBinding();
+      const compact = vi.fn<ContextEngine["compact"]>(() => new Promise(() => {}));
+      const contextEngine: ContextEngine = {
+        info: { id: "lossless-claw", name: "Lossless Claw", ownsCompaction: true },
+        assemble: vi.fn() as never,
+        ingest: vi.fn() as never,
+        compact,
+      };
+
+      vi.useFakeTimers();
+      const pendingResult = maybeCompactCodexAppServerSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        sessionFile,
+        workspaceDir: tempDir,
+        contextEngine,
+        // 1 s host-resolved compaction timeout.
+        config: { agents: { defaults: { compaction: { timeoutSeconds: 1 } } } },
+      });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      const result = requireCompactResult(await pendingResult);
+
+      expect(result.ok).toBe(false);
+      expect(result.compacted).toBe(false);
+      expect(result.reason).toContain("timed out");
+      expect(compact).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("threads a composed caller abort signal into the owning context-engine compact()", async () => {
+      const sessionFile = await writeTestBinding();
+      const controller = new AbortController();
+      const compact = vi.fn<ContextEngine["compact"]>(async () => ({
+        ok: true,
+        compacted: false,
+        reason: "below threshold",
+      }));
+      const contextEngine: ContextEngine = {
+        info: { id: "lossless-claw", name: "Lossless Claw", ownsCompaction: true },
+        assemble: vi.fn() as never,
+        ingest: vi.fn() as never,
+        compact,
+      };
+
+      await maybeCompactCodexAppServerSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        sessionFile,
+        workspaceDir: tempDir,
+        contextEngine,
+        abortSignal: controller.signal,
+      });
+
+      expect(compact).toHaveBeenCalledTimes(1);
+      expect(compact.mock.calls[0]?.[0]?.abortSignal).toBeInstanceOf(AbortSignal);
+    });
+
+    it("aborts a hung owning context-engine compact() when the caller signal fires", async () => {
+      const sessionFile = await writeTestBinding();
+      const controller = new AbortController();
+      const compact = vi.fn<ContextEngine["compact"]>(() => new Promise(() => {}));
+      const contextEngine: ContextEngine = {
+        info: { id: "lossless-claw", name: "Lossless Claw", ownsCompaction: true },
+        assemble: vi.fn() as never,
+        ingest: vi.fn() as never,
+        compact,
+      };
+
+      const pendingResult = maybeCompactCodexAppServerSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        sessionFile,
+        workspaceDir: tempDir,
+        contextEngine,
+        abortSignal: controller.signal,
+      });
+
+      controller.abort(new Error("run aborted"));
+      const result = requireCompactResult(await pendingResult);
+
+      expect(result.ok).toBe(false);
+      expect(result.compacted).toBe(false);
+      expect(result.reason).toContain("run aborted");
+      expect(compact).toHaveBeenCalledTimes(1);
+    });
   });
 });
 

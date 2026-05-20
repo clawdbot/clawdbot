@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildInlineProviderModels } from "./model.inline-provider.js";
+import { buildInlineProviderModels, resolveProviderModelInput } from "./model.inline-provider.js";
 import { makeModel } from "./model.test-harness.js";
 
 describe("buildInlineProviderModels", () => {
@@ -259,5 +259,18 @@ describe("buildInlineProviderModels", () => {
     expect(result[0].headers).toEqual({
       "X-Static": "tenant-a",
     });
+  });
+});
+
+describe("resolveProviderModelInput", () => {
+  it("keeps configured Anthropic model input unchanged before provider-owned normalization", () => {
+    expect(
+      resolveProviderModelInput({
+        provider: "anthropic",
+        modelId: "claude-sonnet-4-5",
+        modelName: "Claude Sonnet 4.5",
+        input: ["text"],
+      }),
+    ).toEqual(["text"]);
   });
 });

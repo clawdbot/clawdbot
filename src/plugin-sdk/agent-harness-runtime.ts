@@ -195,6 +195,15 @@ export {
   isActiveHarnessContextEngine,
   runHarnessContextEngineMaintenance,
 } from "../agents/harness/context-engine-lifecycle.js";
+// Plugin-owned (`ownsCompaction`) compaction safety timeout. Exposed on the
+// agent-harness-runtime surface so plugin harnesses such as Codex bound their
+// own `ContextEngine.compact()` calls with the exact same finite, host-resolved
+// timeout the built-in pi-embedded runner uses — one shared implementation, no
+// copy-pasted watchdog.
+export {
+  compactContextEngineWithSafetyTimeout,
+  resolveCompactionTimeoutMs,
+} from "../agents/pi-embedded-runner/compaction-safety-timeout.js";
 export { resolveContextEngineOwnerPluginId } from "../context-engine/registry.js";
 export {
   runAgentHarnessAfterToolCallHook,

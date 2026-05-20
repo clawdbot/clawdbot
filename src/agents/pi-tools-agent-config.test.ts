@@ -167,6 +167,38 @@ describe("Agent-specific tool filtering", () => {
     expect(toolNames).not.toContain("apply_patch");
   });
 
+  it("uses the configured default agent for lean local-model filtering on legacy session keys", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          {
+            id: "local",
+            default: true,
+            experimental: {
+              localModelLean: true,
+            },
+          },
+        ],
+      },
+    };
+
+    const tools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "main",
+      workspaceDir: "/tmp/test",
+      agentDir: "/tmp/agent-local",
+      senderIsOwner: true,
+      modelProvider: "lmstudio",
+      modelId: "gemma-4-e4b-it",
+    });
+
+    const toolNames = tools.map((t) => t.name);
+    expect(toolNames).toContain("read");
+    expect(toolNames).not.toContain("browser");
+    expect(toolNames).not.toContain("cron");
+    expect(toolNames).not.toContain("message");
+  });
+
   it("should allow apply_patch for OpenAI models when write is allow-listed", () => {
     const cfg: OpenClawConfig = {
       tools: {

@@ -57,10 +57,10 @@ describe("device bootstrap profile", () => {
     });
   });
 
-  test("default setup profile is node-only", () => {
+  test("default setup profile carries node plus bounded operator handoff", () => {
     expect(PAIRING_SETUP_BOOTSTRAP_PROFILE).toEqual({
-      roles: ["node"],
-      scopes: [],
+      roles: ["node", "operator"],
+      scopes: ["operator.approvals", "operator.read", "operator.write"],
     });
   });
 
@@ -68,7 +68,6 @@ describe("device bootstrap profile", () => {
     expect([...BOOTSTRAP_HANDOFF_OPERATOR_SCOPES]).toEqual([
       "operator.approvals",
       "operator.read",
-      "operator.talk.secrets",
       "operator.write",
     ]);
   });

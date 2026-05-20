@@ -518,6 +518,7 @@ export async function processDiscordMessage(
       return;
     }
     finalReplyStartNotified = true;
+    draftPreview.markFinalReplyStarted();
     observer?.onFinalReplyStart?.();
   };
 
@@ -533,6 +534,9 @@ export async function processDiscordMessage(
         if (payload.isReasoning) {
           // Reasoning/thinking payloads should not be delivered to Discord.
           return;
+        }
+        if (isFinal) {
+          draftPreview.markFinalReplyStarted();
         }
         const finalText =
           isFinal && typeof payload.text === "string"
@@ -550,11 +554,12 @@ export async function processDiscordMessage(
             return;
           }
         }
-        if (
+        const shouldFinalizeDraftPreview =
           draftStream &&
           isFinal &&
-          (!draftPreview.isProgressMode || draftPreview.hasProgressDraftStarted)
-        ) {
+          (!draftPreview.isProgressMode || draftPreview.hasProgressDraftStarted) &&
+          !payload.isError;
+        if (shouldFinalizeDraftPreview) {
           const reply = resolveSendableOutboundReplyParts(effectivePayload);
           const hasMedia = reply.hasMedia;
           const ttsSupplement = getReplyPayloadTtsSupplement(effectivePayload);
@@ -721,7 +726,8 @@ export async function processDiscordMessage(
           kind: info.kind,
         });
         replyReference.markSent();
-        if (isFinal) {
+        if (isFinal && payload.isError !== true) {
+          draftPreview.markFinalReplyDelivered();
           observer?.onFinalReplyDelivered?.();
         }
       },

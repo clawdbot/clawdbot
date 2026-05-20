@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { HEARTBEAT_TRANSCRIPT_PROMPT } from "../../../auto-reply/heartbeat.js";
 import type { OpenClawConfig } from "../../../config/types.js";
 import { buildMemorySystemPromptAddition } from "../../../context-engine/delegate.js";
 import {
@@ -390,6 +391,294 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       expect(String(value)).not.toContain("OPENCLAW_INTERNAL_CONTEXT");
       expect(String(value)).not.toContain("secret runtime context");
     }
+  });
+
+  it("filters heartbeat response-tool transcript artifacts before normal prompt snapshots", async () => {
+    const contextEngine = createContextEngineBootstrapAndAssemble();
+    const sessionMessages = [
+      { role: "user", content: HEARTBEAT_TRANSCRIPT_PROMPT, timestamp: 1 },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_bash",
+            name: "bash",
+            arguments: { command: "cat HEARTBEAT.md" },
+          },
+        ],
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_bash",
+        content: [{ type: "text", text: "HEARTBEAT.md says stay quiet" }],
+        timestamp: 3,
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_heartbeat",
+            name: "heartbeat_respond",
+            arguments: {
+              outcome: "no_change",
+              notify: false,
+              summary: "No visible update.",
+            },
+          },
+        ],
+        timestamp: 4,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_heartbeat",
+        content: [{ type: "text", text: '{"notify":false}' }],
+        timestamp: 5,
+      },
+      { role: "assistant", content: "No visible update. notify=false", timestamp: 6 },
+    ] as AgentMessage[];
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine,
+      sessionKey,
+      tempPaths,
+      sessionMessages,
+      attemptOverrides: {
+        prompt: "what model are you",
+        transcriptPrompt: "what model are you",
+      },
+      sessionPrompt: async (session) => {
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: "gpt-test", timestamp: 7 },
+        ];
+      },
+    });
+
+    const assembleInput = contextEngine.assemble.mock.calls.at(0)?.[0];
+    const assembledMessagesJson = JSON.stringify(assembleInput?.messages ?? []);
+    const snapshotJson = JSON.stringify(result.messagesSnapshot);
+    for (const artifact of [
+      "HEARTBEAT.md",
+      "heartbeat_respond",
+      "notify=false",
+      '"notify":false',
+      HEARTBEAT_TRANSCRIPT_PROMPT,
+    ]) {
+      expect(assembledMessagesJson).not.toContain(artifact);
+      expect(snapshotJson).not.toContain(artifact);
+    }
+    expect(result.finalPromptText).toBe("what model are you");
+  });
+
+  it("filters interrupted prompt-only heartbeat artifacts before normal prompt snapshots", async () => {
+    const contextEngine = createContextEngineBootstrapAndAssemble();
+    const sessionMessages = [
+      { role: "user", content: HEARTBEAT_TRANSCRIPT_PROMPT, timestamp: 1 },
+    ] as AgentMessage[];
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine,
+      sessionKey,
+      tempPaths,
+      sessionMessages,
+      attemptOverrides: {
+        prompt: "what model are you",
+        transcriptPrompt: "what model are you",
+      },
+      sessionPrompt: async (session) => {
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: "gpt-test", timestamp: 2 },
+        ];
+      },
+    });
+
+    const assembleInput = contextEngine.assemble.mock.calls.at(0)?.[0];
+    const assembledMessagesJson = JSON.stringify(assembleInput?.messages ?? []);
+    const snapshotJson = JSON.stringify(result.messagesSnapshot);
+    expect(assembledMessagesJson).not.toContain(HEARTBEAT_TRANSCRIPT_PROMPT);
+    expect(snapshotJson).not.toContain(HEARTBEAT_TRANSCRIPT_PROMPT);
+    expect(result.finalPromptText).toBe("what model are you");
+  });
+
+  it("filters pending notify=true heartbeat response-tool calls before normal prompt snapshots", async () => {
+    const contextEngine = createContextEngineBootstrapAndAssemble();
+    const sessionMessages = [
+      { role: "user", content: HEARTBEAT_TRANSCRIPT_PROMPT, timestamp: 1 },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_heartbeat",
+            name: "heartbeat_respond",
+            arguments: {
+              outcome: "needs_attention",
+              notify: true,
+              summary: "Build is blocked.",
+              notificationText: "Build is blocked on missing credentials.",
+            },
+          },
+        ],
+        timestamp: 2,
+      },
+    ] as AgentMessage[];
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine,
+      sessionKey,
+      tempPaths,
+      sessionMessages,
+      attemptOverrides: {
+        prompt: "what model are you",
+        transcriptPrompt: "what model are you",
+      },
+      sessionPrompt: async (session) => {
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: "gpt-test", timestamp: 3 },
+        ];
+      },
+    });
+
+    const assembleInput = contextEngine.assemble.mock.calls.at(0)?.[0];
+    const assembledMessagesJson = JSON.stringify(assembleInput?.messages ?? []);
+    const snapshotJson = JSON.stringify(result.messagesSnapshot);
+    for (const artifact of [
+      HEARTBEAT_TRANSCRIPT_PROMPT,
+      "heartbeat_respond",
+      '"notify":true',
+      "Build is blocked on missing credentials.",
+    ]) {
+      expect(assembledMessagesJson).not.toContain(artifact);
+      expect(snapshotJson).not.toContain(artifact);
+    }
+    expect(result.finalPromptText).toBe("what model are you");
+  });
+
+  it("preserves visible heartbeat alerts in normal prompt snapshots", async () => {
+    const contextEngine = createContextEngineBootstrapAndAssemble();
+    const sessionMessages = [
+      { role: "user", content: HEARTBEAT_TRANSCRIPT_PROMPT, timestamp: 1 },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_bash",
+            name: "bash",
+            arguments: { command: "cat HEARTBEAT.md" },
+          },
+        ],
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_bash",
+        content: [{ type: "text", text: "HEARTBEAT.md says check deployment" }],
+        timestamp: 3,
+      },
+      {
+        role: "assistant",
+        content: "Build is blocked on a failing release check.",
+        timestamp: 4,
+      },
+    ] as AgentMessage[];
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine,
+      sessionKey,
+      tempPaths,
+      sessionMessages,
+      attemptOverrides: {
+        prompt: "what changed while I was away?",
+        transcriptPrompt: "what changed while I was away?",
+      },
+      sessionPrompt: async (session) => {
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: "gpt-test", timestamp: 5 },
+        ];
+      },
+    });
+
+    const assembleInput = contextEngine.assemble.mock.calls.at(0)?.[0];
+    const assembledMessagesJson = JSON.stringify(assembleInput?.messages ?? []);
+    const snapshotJson = JSON.stringify(result.messagesSnapshot);
+    for (const visibleContext of [
+      HEARTBEAT_TRANSCRIPT_PROMPT,
+      "HEARTBEAT.md says check deployment",
+      "Build is blocked on a failing release check.",
+    ]) {
+      expect(assembledMessagesJson).toContain(visibleContext);
+      expect(snapshotJson).toContain(visibleContext);
+    }
+    expect(result.finalPromptText).toBe("what changed while I was away?");
+  });
+
+  it("preserves visible heartbeat response-tool notifications in normal prompt snapshots", async () => {
+    const contextEngine = createContextEngineBootstrapAndAssemble();
+    const sessionMessages = [
+      { role: "user", content: HEARTBEAT_TRANSCRIPT_PROMPT, timestamp: 1 },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_heartbeat",
+            name: "heartbeat_respond",
+            arguments: {
+              outcome: "needs_attention",
+              notify: true,
+              summary: "Build is blocked.",
+              notificationText: "Build is blocked on missing credentials.",
+            },
+          },
+        ],
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_heartbeat",
+        content: [{ type: "text", text: '{"notify":true}' }],
+        timestamp: 3,
+      },
+      { role: "assistant", content: "HEARTBEAT_OK", timestamp: 4 },
+    ] as AgentMessage[];
+
+    const result = await createContextEngineAttemptRunner({
+      contextEngine,
+      sessionKey,
+      tempPaths,
+      sessionMessages,
+      attemptOverrides: {
+        prompt: "what changed while I was away?",
+        transcriptPrompt: "what changed while I was away?",
+      },
+      sessionPrompt: async (session) => {
+        session.messages = [
+          ...session.messages,
+          { role: "assistant", content: "gpt-test", timestamp: 5 },
+        ];
+      },
+    });
+
+    const assembleInput = contextEngine.assemble.mock.calls.at(0)?.[0];
+    const assembledMessagesJson = JSON.stringify(assembleInput?.messages ?? []);
+    const snapshotJson = JSON.stringify(result.messagesSnapshot);
+    for (const visibleContext of [
+      "heartbeat_respond",
+      '"notify":true',
+      "Build is blocked on missing credentials.",
+      "HEARTBEAT_OK",
+    ]) {
+      expect(assembledMessagesJson).toContain(visibleContext);
+      expect(snapshotJson).toContain(visibleContext);
+    }
+    expect(result.finalPromptText).toBe("what changed while I was away?");
   });
 
   it("rebuilds skill prompt inputs from the sandbox workspace for non-rw sandbox runs", async () => {

@@ -6,13 +6,21 @@ import {
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
   isRetryableHeartbeatBusySkipReason,
 } from "../../infra/heartbeat-wake.js";
-import { DEFAULT_AGENT_ID, isSubagentSessionKey } from "../../routing/session-key.js";
+import { loadSessionStore } from "../../config/sessions/store-load.js";
+import {
+  DEFAULT_AGENT_ID,
+  isSubagentSessionKey,
+  normalizeAgentId,
+  resolveAgentIdFromSessionKey,
+} from "../../routing/session-key.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import {
   completeTaskRunByRunId,
   createRunningTaskRun,
   failTaskRunByRunId,
 } from "../../tasks/detached-task-runtime.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
+import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { clearCronJobActive, markCronJobActive } from "../active-jobs.js";
 import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-plan.js";
 import { resolveCronAgentSessionKey } from "../isolated-agent/session-key.js";
@@ -420,10 +428,55 @@ export function normalizeCronRunErrorText(err: unknown): string {
   return String(err);
 }
 
+function normalizeCronLaneSegment(value: string | undefined, fallback: string): string {
+  const normalized = normalizeOptionalLowercaseString(value)
+    ?.replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 64);
+  return normalized || fallback;
+}
+
+function resolveMainSessionCronRunSessionKey(job: CronJob, startedAt: number): string {
+  const explicitAgentId = job.agentId?.trim();
+  const agentId = normalizeAgentId(
+    explicitAgentId || resolveAgentIdFromSessionKey(job.sessionKey),
+  );
+  const jobSegment = normalizeCronLaneSegment(job.id, "job");
+  const runSegment = normalizeCronLaneSegment(String(Math.max(0, Math.floor(startedAt))), "run");
+  return `agent:${agentId}:cron:${jobSegment}:run:${runSegment}`;
+}
+
+function resolveMainSessionCronDeliveryContext(
+  state: CronServiceState,
+  job: CronJob,
+): DeliveryContext | undefined {
+  const targetSessionKey = job.sessionKey?.trim();
+  if (!targetSessionKey) {
+    return undefined;
+  }
+  const explicitAgentId = job.agentId?.trim();
+  const agentId = normalizeAgentId(
+    explicitAgentId || resolveAgentIdFromSessionKey(targetSessionKey),
+  );
+  const storePath = state.deps.resolveSessionStorePath?.(agentId) ?? state.deps.sessionStorePath;
+  if (!storePath) {
+    return undefined;
+  }
+  try {
+    return deliveryContextFromSession(loadSessionStore(storePath)[targetSessionKey]);
+  } catch {
+    return undefined;
+  }
+}
+
 function resolveCronTaskChildSessionKey(params: {
   state: CronServiceState;
   job: CronJob;
+  startedAt: number;
 }): string | undefined {
+  if (params.job.sessionTarget === "main") {
+    return resolveMainSessionCronRunSessionKey(params.job, params.startedAt);
+  }
   const explicitSessionKey = params.job.sessionKey?.trim();
   if (explicitSessionKey) {
     return explicitSessionKey;
@@ -1706,11 +1759,15 @@ async function executeMainSessionCronJob(
           : 'main job requires payload.kind="systemEvent"',
     };
   }
-  const targetMainSessionKey = job.sessionKey;
+  const cronStartedAt =
+    typeof job.state.runningAtMs === "number" ? job.state.runningAtMs : state.deps.nowMs();
+  const cronRunSessionKey = resolveMainSessionCronRunSessionKey(job, cronStartedAt);
+  const deliveryContext = resolveMainSessionCronDeliveryContext(state, job);
   state.deps.enqueueSystemEvent(text, {
     agentId: job.agentId,
-    sessionKey: targetMainSessionKey,
+    sessionKey: cronRunSessionKey,
     contextKey: `cron:${job.id}`,
+    ...(deliveryContext ? { deliveryContext } : {}),
   });
   if (job.wakeMode === "now" && state.deps.runHeartbeatOnce) {
     const reason = `cron:${job.id}`;
@@ -1728,7 +1785,7 @@ async function executeMainSessionCronJob(
         intent: "immediate",
         reason,
         agentId: job.agentId,
-        sessionKey: targetMainSessionKey,
+        sessionKey: cronRunSessionKey,
         heartbeat: { target: "last" },
       });
       if (
@@ -1744,10 +1801,10 @@ async function executeMainSessionCronJob(
           intent: "immediate",
           reason,
           agentId: job.agentId,
-          sessionKey: targetMainSessionKey,
+          sessionKey: cronRunSessionKey,
           heartbeat: { target: "last" },
         });
-        return { status: "ok", summary: text };
+        return { status: "ok", summary: text, sessionKey: cronRunSessionKey };
       }
       if (abortSignal?.aborted) {
         return { status: "error", error: timeoutErrorMessage() };
@@ -1761,21 +1818,31 @@ async function executeMainSessionCronJob(
           intent: "immediate",
           reason,
           agentId: job.agentId,
-          sessionKey: targetMainSessionKey,
+          sessionKey: cronRunSessionKey,
           heartbeat: { target: "last" },
         });
-        return { status: "ok", summary: text };
+        return { status: "ok", summary: text, sessionKey: cronRunSessionKey };
       }
       await waitWithAbort(retryDelayMs);
     }
 
     if (heartbeatResult.status === "ran") {
-      return { status: "ok", summary: text };
+      return { status: "ok", summary: text, sessionKey: cronRunSessionKey };
     }
     if (heartbeatResult.status === "skipped") {
-      return { status: "skipped", error: heartbeatResult.reason, summary: text };
+      return {
+        status: "skipped",
+        error: heartbeatResult.reason,
+        summary: text,
+        sessionKey: cronRunSessionKey,
+      };
     }
-    return { status: "error", error: heartbeatResult.reason, summary: text };
+    return {
+      status: "error",
+      error: heartbeatResult.reason,
+      summary: text,
+      sessionKey: cronRunSessionKey,
+    };
   }
 
   if (abortSignal?.aborted) {
@@ -1786,10 +1853,10 @@ async function executeMainSessionCronJob(
     intent: job.wakeMode === "now" ? "immediate" : "event",
     reason: `cron:${job.id}`,
     agentId: job.agentId,
-    sessionKey: targetMainSessionKey,
+    sessionKey: cronRunSessionKey,
     heartbeat: { target: "last" },
   });
-  return { status: "ok", summary: text };
+  return { status: "ok", summary: text, sessionKey: cronRunSessionKey };
 }
 
 async function executeDetachedCronJob(

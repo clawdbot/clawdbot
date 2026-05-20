@@ -121,6 +121,10 @@ public struct GatewayConnectionProblem: Equatable, Sendable {
         }
     }
 
+    public var suggestsOnboardingReset: Bool {
+        self.kind == .gatewayAuthTokenMismatch
+    }
+
     public var statusText: String {
         switch self.kind {
         case .pairingRequired, .pairingRoleUpgradeRequired, .pairingScopeUpgradeRequired,

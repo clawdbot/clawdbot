@@ -626,6 +626,13 @@ describe("sessions tools", () => {
           type: "thinking",
           thinking: "y".repeat(7000),
           thinkingSignature: "sig".repeat(4000),
+          openclawReasoningReplay: {
+            v: 1,
+            source: "openai-responses",
+            provider: "openai-codex",
+            api: "openai-codex-responses",
+            model: "gpt-5.5",
+          },
         },
       ],
       details: {
@@ -678,6 +685,7 @@ describe("sessions tools", () => {
             text?: string;
             thinking?: string;
             thinkingSignature?: string;
+            openclawReasoningReplay?: unknown;
           }>;
         }
       | undefined;
@@ -688,6 +696,7 @@ describe("sessions tools", () => {
     expect((textBlock?.text ?? "").length <= 4015).toBe(true);
     const thinkingBlock = first?.content?.find((block) => block.type === "thinking");
     expect(thinkingBlock?.thinkingSignature).toBeUndefined();
+    expect(thinkingBlock?.openclawReasoningReplay).toBeUndefined();
   });
 
   it("sessions_history enforces a hard byte cap even when a single message is huge", async () => {

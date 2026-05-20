@@ -202,6 +202,8 @@ Common command routing:
 | Attach the current chat                               | `/codex bind [--cwd <path>]`                                                                          |
 | Resume an existing Codex thread                       | `/codex resume <thread-id>`                                                                           |
 | List or filter Codex threads                          | `/codex threads [filter]`                                                                             |
+| List native Codex plugins                             | `/codex plugins list`                                                                                 |
+| Enable or disable a configured native Codex plugin    | `/codex plugins enable <name>`, `/codex plugins disable <name>`                                       |
 | Attach an existing Codex CLI session on a paired node | `/codex sessions --host <node> [filter]`, then `/codex resume <session-id> --host <node> --bind here` |
 | Send Codex feedback only                              | `/codex diagnostics [note]`                                                                           |
 | Start an ACP/acpx task                                | ACP/acpx session commands, not `/codex`                                                               |
@@ -530,9 +532,10 @@ Supported `appServer` fields:
 OpenClaw-owned dynamic tool calls are bounded independently from
 `appServer.requestTimeoutMs`: Codex `item/tool/call` requests use a 30 second
 OpenClaw watchdog by default. A positive per-call `timeoutMs` argument extends
-or shortens that specific tool budget. The `image_generate` tool also uses
+or shortens that specific tool budget. The `image_generate` tool uses
 `agents.defaults.imageGenerationModel.timeoutMs` when the tool call does not
-provide its own timeout, and the media-understanding `image` tool uses
+provide its own timeout, or a 120 second image-generation default otherwise.
+The media-understanding `image` tool uses
 `tools.media.image.timeoutSeconds` or its 60 second media default. Dynamic tool
 budgets are capped at 600000 ms. On timeout, OpenClaw aborts the tool signal
 where supported and returns a failed dynamic-tool response to Codex so the turn

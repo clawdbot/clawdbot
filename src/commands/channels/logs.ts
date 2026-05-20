@@ -63,6 +63,12 @@ async function readTailLines(file: string, limit: number): Promise<string[]> {
   const start = Math.max(0, size - MAX_BYTES);
   const handle = await fs.open(file, "r");
   try {
+    let prefix = "";
+    if (start > 0) {
+      const prefixBuf = Buffer.alloc(1);
+      const prefixRead = await handle.read(prefixBuf, 0, 1, start - 1);
+      prefix = prefixBuf.toString("utf8", 0, prefixRead.bytesRead);
+    }
     const length = Math.max(0, size - start);
     if (length === 0) {
       return [];
@@ -71,7 +77,7 @@ async function readTailLines(file: string, limit: number): Promise<string[]> {
     const readResult = await handle.read(buffer, 0, length, start);
     const text = buffer.toString("utf8", 0, readResult.bytesRead);
     let lines = text.split("\n");
-    if (start > 0) {
+    if (start > 0 && prefix !== "\n") {
       lines = lines.slice(1);
     }
     if (lines.length && lines[lines.length - 1] === "") {

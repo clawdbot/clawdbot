@@ -60,6 +60,7 @@ function createButtonComponent(params: {
     class DynamicLinkButton extends LinkButton {
       label = params.spec.label;
       url = linkUrl;
+      override disabled = params.spec.disabled ?? false;
     }
     return { component: new DynamicLinkButton() };
   }

@@ -64,4 +64,59 @@ describe("subagent target policy", () => {
       allowedIds: ["planner"],
     });
   });
+
+  it("limits wildcard allowlists to configured agents plus the requester", () => {
+    expect(
+      resolveSubagentAllowedTargetIds({
+        requesterAgentId: "main",
+        allowAgents: ["*"],
+        configuredAgentIds: ["planner", "checker"],
+      }),
+    ).toEqual({
+      allowAny: true,
+      allowedIds: ["checker", "main", "planner"],
+    });
+  });
+
+  it("rejects wildcard targets outside the configured registry", () => {
+    const result = resolveSubagentTargetPolicy({
+      requesterAgentId: "main",
+      targetAgentId: "bogus",
+      requestedAgentId: "bogus",
+      allowAgents: ["*"],
+      configuredAgentIds: ["main", "planner"],
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("Expected target policy to reject unconfigured wildcard target");
+    }
+    expect(result.allowedText).toBe("main, planner");
+    expect(result.error).toBe(
+      'agentId "bogus" is not in the configured agent registry (allowed: main, planner)',
+    );
+  });
+
+  it("preserves explicit targets when wildcard allowlists are mixed", () => {
+    expect(
+      resolveSubagentAllowedTargetIds({
+        requesterAgentId: "main",
+        allowAgents: ["*", "beta"],
+        configuredAgentIds: ["main", "planner"],
+      }),
+    ).toEqual({
+      allowAny: true,
+      allowedIds: ["beta", "main", "planner"],
+    });
+
+    expect(
+      resolveSubagentTargetPolicy({
+        requesterAgentId: "main",
+        targetAgentId: "beta",
+        requestedAgentId: "beta",
+        allowAgents: ["*", "beta"],
+        configuredAgentIds: ["main", "planner"],
+      }),
+    ).toEqual({ ok: true });
+  });
 });

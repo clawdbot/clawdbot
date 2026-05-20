@@ -137,14 +137,39 @@ describe("subagent spawn allowlist + sandbox guards", () => {
     expectChildSessionKey(result, /^agent:beta:subagent:/);
   });
 
-  it("allows any agent when allowlist contains *", async () => {
+  it("allows configured agents when allowlist contains *", async () => {
+    setConfig({
+      agents: {
+        list: [{ id: "main", subagents: { allowAgents: ["*"] } }, { id: "beta" }],
+      },
+    });
+    const result = await spawn({ agentId: "beta" });
+    expectStatus(result, "accepted");
+  });
+
+  it("rejects unconfigured agent ids when allowlist contains *", async () => {
     setConfig({
       agents: {
         list: [{ id: "main", subagents: { allowAgents: ["*"] } }],
       },
     });
     const result = await spawn({ agentId: "beta" });
+    expectStatus(result, "forbidden");
+    expect(result.error ?? "").toBe(
+      'agentId "beta" is not in the configured agent registry (allowed: main)',
+    );
+    expect(hoisted.callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("allows explicit unconfigured agent ids when allowlist also contains *", async () => {
+    setConfig({
+      agents: {
+        list: [{ id: "main", subagents: { allowAgents: ["*", "beta"] } }],
+      },
+    });
+    const result = await spawn({ agentId: "beta" });
     expectStatus(result, "accepted");
+    expectChildSessionKey(result, /^agent:beta:subagent:/);
   });
 
   it("normalizes allowlisted agent ids", async () => {

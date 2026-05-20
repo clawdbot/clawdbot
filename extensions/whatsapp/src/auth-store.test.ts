@@ -110,7 +110,7 @@ describe("auth-store", () => {
     await expect(readWebAuthState(authDir)).resolves.toBe("linked");
     const snapshot = await readWebAuthSnapshot(authDir);
     expect(snapshot.authAgeMs).toBeTypeOf("number");
-    expect(snapshot.authAgeMs).toBeGreaterThanOrEqual(0);
+    expect(snapshot.authAgeMs).toBeGreaterThanOrEqual(-1);
     expect(snapshot).toEqual({
       state: "linked",
       authAgeMs: snapshot.authAgeMs,

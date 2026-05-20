@@ -461,6 +461,44 @@ describe("sanitizeChatHistoryMessages", () => {
     ]);
   });
 
+  it("strips internal reasoning replay metadata from chat history", () => {
+    const result = sanitizeChatHistoryMessages([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "Need a tool.",
+            thinkingSignature: "large-provider-payload",
+            openclawReasoningReplay: {
+              v: 1,
+              source: "openai-responses",
+              provider: "openai-codex",
+              api: "openai-codex-responses",
+              model: "gpt-5.5",
+            },
+          },
+          { type: "text", text: "Checking." },
+        ],
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "thinking",
+            thinking: "Need a tool.",
+          },
+          { type: "text", text: "Checking." },
+        ],
+        timestamp: 1,
+      },
+    ]);
+  });
+
   it("drops commentary-only assistant entries when phase exists only in textSignature", () => {
     const result = sanitizeChatHistoryMessages([
       {

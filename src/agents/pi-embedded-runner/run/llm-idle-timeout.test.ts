@@ -43,13 +43,23 @@ describe("resolveLlmIdleTimeoutMs", () => {
     expect(resolveLlmIdleTimeoutMs({ runTimeoutMs: 2_147_000_000 })).toBe(0);
   });
 
-  it("caps remote provider request timeouts at the default idle watchdog", () => {
-    expect(resolveLlmIdleTimeoutMs({ modelRequestTimeoutMs: 300_000 })).toBe(
-      DEFAULT_LLM_IDLE_TIMEOUT_MS,
-    );
+  it("honors an explicit models.providers.<id>.timeoutSeconds for cloud providers (#77744, #78361)", () => {
+    // models.providers.<id>.timeoutSeconds is documented as the user-facing
+    // knob to extend slow model responses. The idle watchdog must respect it
+    // instead of clamping back to DEFAULT_LLM_IDLE_TIMEOUT_MS.
+    expect(resolveLlmIdleTimeoutMs({ modelRequestTimeoutMs: 300_000 })).toBe(300_000);
   });
 
-  it("uses remote provider request timeouts when shorter than the default idle watchdog", () => {
+  it("honors explicit provider timeouts for self-hosted bare hostnames", () => {
+    expect(
+      resolveLlmIdleTimeoutMs({
+        model: { baseUrl: "http://cerebro-mac:8080/v1" },
+        modelRequestTimeoutMs: 600_000,
+      }),
+    ).toBe(600_000);
+  });
+
+  it("honors short explicit provider request timeouts", () => {
     expect(resolveLlmIdleTimeoutMs({ modelRequestTimeoutMs: 30_000 })).toBe(30_000);
   });
 

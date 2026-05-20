@@ -67,6 +67,13 @@ from that checkout. The `stable` and `beta` channels use package installs. If th
 gateway is already installed, `openclaw update` refreshes the service metadata
 and restarts it unless you pass `--no-restart`.
 
+For package installs with a managed Gateway service, `openclaw update` targets
+the package root used by that service. If the shell `openclaw` command comes
+from a different install, the updater prints both roots and the managed service
+Node path. The package update uses the package manager that owns the service
+root and checks the managed service Node against the target release engine
+before replacing the package.
+
 ## Alternative: re-run the installer
 
 ```bash

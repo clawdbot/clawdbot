@@ -81,8 +81,35 @@ config looks like this:
 }
 ```
 
-After changing `codexPlugins`, use `/new`, `/reset`, or restart the gateway so
-future Codex harness sessions start with the updated app set.
+After changing `codexPlugins`, new Codex conversations pick up the updated app
+set automatically. Use `/new` or `/reset` to refresh the current conversation.
+A gateway restart is not required for plugin enable or disable changes.
+
+## Manage plugins from chat
+
+Use `/codex plugins` when you want to inspect or change configured native Codex
+plugins from the same chat where you operate the Codex harness:
+
+```text
+/codex plugins
+/codex plugins list
+/codex plugins disable google-calendar
+/codex plugins enable google-calendar
+```
+
+`/codex plugins` is an alias for `/codex plugins list`. The list output shows
+the configured plugin keys, on/off state, Codex plugin name, and marketplace
+from `plugins.entries.codex.config.codexPlugins.plugins`.
+
+`enable` and `disable` write only to OpenClaw config at
+`~/.openclaw/openclaw.json`; they do not edit `~/.codex/config.toml` or install
+new Codex plugins. Only the owner or a gateway client with the
+`operator.admin` scope can change plugin state.
+
+Enabling a configured plugin also turns on the global
+`codexPlugins.enabled` switch. If the plugin was written disabled because
+migration returned `auth_required`, reauthorize the app in Codex before enabling
+it in OpenClaw.
 
 ## How native plugin setup works
 
@@ -110,7 +137,10 @@ check after migration. Codex harness session setup then computes a restrictive
 thread app config for the enabled and accessible plugin apps.
 
 Thread app config is computed when OpenClaw establishes a Codex harness session
-or replaces a stale Codex thread binding. It is not recomputed on every turn.
+or replaces a stale Codex thread binding. It is not recomputed on every turn, so
+`/codex plugins enable` and `/codex plugins disable` affect new Codex
+conversations. Use `/new` or `/reset` when the current conversation should pick
+up the updated app set.
 
 ## V1 support boundary
 
@@ -228,10 +258,10 @@ apps until ownership and readiness are known.
 **`app_ownership_ambiguous`:** app inventory only matched by display name, so
 the app is not exposed to the Codex thread.
 
-**Config changed but the agent cannot see the plugin:** use `/new`, `/reset`, or
-restart the gateway. Existing Codex thread bindings keep the app config they
-started with until OpenClaw establishes a new harness session or replaces a
-stale binding.
+**Config changed but the agent cannot see the plugin:** use `/codex plugins
+list` to confirm the configured state, then use `/new` or `/reset`. Existing
+Codex thread bindings keep the app config they started with until OpenClaw
+establishes a new harness session or replaces a stale binding.
 
 **Destructive action is declined:** check the global and per-plugin
 `allow_destructive_actions` values. Even when policy is true, unsafe elicitation

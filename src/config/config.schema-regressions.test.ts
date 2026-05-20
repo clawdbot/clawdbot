@@ -157,6 +157,23 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts agents.list experimental localModelLean overrides", () => {
+    const res = validateConfigObject({
+      agents: {
+        list: [
+          {
+            id: "gemma",
+            experimental: {
+              localModelLean: true,
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it("accepts agents.defaults.compaction.truncateAfterCompaction", () => {
     const res = validateConfigObject({
       agents: {
@@ -171,6 +188,65 @@ describe("config schema regressions", () => {
 
     expect(res.ok).toBe(true);
   });
+
+  it("accepts Matrix queue byChannel overrides", () => {
+    const res = validateConfigObject({
+      messages: {
+        queue: {
+          byChannel: {
+            matrix: "steer",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts Matrix interrupt queue byChannel overrides", () => {
+    const res = validateConfigObject({
+      messages: {
+        queue: {
+          byChannel: {
+            matrix: "interrupt",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("keeps queue byChannel schema and config type providers aligned", () => {
+    const res = validateConfigObject({
+      messages: {
+        queue: {
+          byChannel: {
+            googlechat: "followup",
+            mattermost: "collect",
+            matrix: "steer",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects unknown queue byChannel providers", () => {
+    const res = validateConfigObject({
+      messages: {
+        queue: {
+          byChannel: {
+            unknown: "steer",
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+  });
+
   it("accepts string values for agents defaults model inputs", () => {
     const res = validateConfigObject({
       agents: {

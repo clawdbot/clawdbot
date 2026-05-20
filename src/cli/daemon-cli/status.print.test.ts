@@ -321,6 +321,44 @@ describe("printDaemonStatus", () => {
     );
   });
 
+  it("prints gateway version from gathered gateway status when probe server metadata is absent", () => {
+    printDaemonStatus(
+      {
+        cli: {
+          version: "2026.4.23",
+          entrypoint: "/usr/local/bin/openclaw",
+        },
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: { status: "running", pid: 8000 },
+        },
+        gateway: {
+          bindMode: "loopback",
+          bindHost: "127.0.0.1",
+          port: 18789,
+          portSource: "env/config",
+          probeUrl: "ws://127.0.0.1:18789",
+          version: "2026.5.7",
+        },
+        rpc: {
+          ok: true,
+          kind: "read",
+          capability: "read_only",
+          url: "ws://127.0.0.1:18789",
+          version: "2026.5.7",
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    expectMockLineContains(runtime.log, "Gateway version: 2026.5.7");
+    expectMockLineContains(runtime.error, "this OpenClaw command is version 2026.4.23");
+  });
+
   it("prints restart handoff diagnostics when deep status gathered one", () => {
     printDaemonStatus(
       {

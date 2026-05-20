@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as loggingConfigModule from "../logging/config.js";
 import {
+  buildToolLifecycleErrorResult,
+  extractToolErrorCode,
   extractToolErrorMessage,
   sanitizeToolArgs,
   sanitizeToolResult,
@@ -34,13 +36,88 @@ describe("extractToolErrorMessage", () => {
     ).toBe("SYSTEM_RUN_DENIED: approval required");
   });
 
-  it("uses result text before generic failed status when details omit aggregated output", () => {
+  it("does not promote prose-only denial output ahead of generic failed status", () => {
     expect(
       extractToolErrorMessage({
         content: [{ type: "text", text: "SYSTEM_RUN_DENIED: approval required" }],
         details: { status: "failed" },
       }),
-    ).toBe("SYSTEM_RUN_DENIED: approval required");
+    ).toBe("failed");
+  });
+
+  it("extracts structured tool error codes", () => {
+    expect(
+      extractToolErrorCode({
+        details: {
+          status: "failed",
+          error: {
+            code: "SYSTEM_RUN_DENIED",
+            message: "approval required",
+          },
+        },
+      }),
+    ).toBe("SYSTEM_RUN_DENIED");
+    expect(
+      extractToolErrorCode({
+        details: {
+          status: "failed",
+          gatewayCode: "UNAVAILABLE",
+          nodeError: {
+            code: "UNAVAILABLE",
+            message: "SYSTEM_RUN_DENIED: approval required",
+          },
+        },
+      }),
+    ).toBe("SYSTEM_RUN_DENIED");
+    expect(
+      extractToolErrorCode({
+        details: {
+          status: "failed",
+          nodeError: {
+            code: "INVALID_REQUEST",
+            message: "approval expired",
+          },
+        },
+      }),
+    ).toBe("INVALID_REQUEST");
+  });
+
+  it("does not extract error codes from prose-only tool output", () => {
+    expect(
+      extractToolErrorCode({
+        content: [{ type: "text", text: "SYSTEM_RUN_DENIED: approval required" }],
+        details: { status: "failed" },
+      }),
+    ).toBeUndefined();
+    expect(
+      extractToolErrorCode({
+        details: {
+          status: "failed",
+          error: "SYSTEM_RUN_DENIED: approval required",
+        },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("preserves structured codes from thrown gateway errors", () => {
+    const error = new Error("UNAVAILABLE: SYSTEM_RUN_DENIED: approval required") as Error & {
+      gatewayCode?: string;
+      details?: unknown;
+    };
+    error.gatewayCode = "UNAVAILABLE";
+    error.details = {
+      nodeError: {
+        code: "UNAVAILABLE",
+        message: "SYSTEM_RUN_DENIED: approval required",
+      },
+    };
+
+    const result = buildToolLifecycleErrorResult(error);
+
+    expect(extractToolErrorCode(result)).toBe("SYSTEM_RUN_DENIED");
+    expect(extractToolErrorMessage(result)).toBe(
+      "UNAVAILABLE: SYSTEM_RUN_DENIED: approval required",
+    );
   });
 });
 

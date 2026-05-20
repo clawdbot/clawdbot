@@ -1,3 +1,4 @@
+import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type {
@@ -272,10 +273,13 @@ export function createCronRunDiagnosticsFromToolPayload(
   });
   const isError = payload.isError === true;
   const text = typeof payload.text === "string" ? payload.text : undefined;
+  const isNonTerminalToolWarning =
+    opts?.finalStatus === "ok" &&
+    getReplyPayloadMetadata(payload)?.nonTerminalToolErrorWarning === true;
   const textDiagnostics =
     isError && text
       ? createCronRunDiagnosticsFromError("tool", text, {
-          severity: "error",
+          severity: isNonTerminalToolWarning ? "warn" : "error",
           nowMs: opts?.nowMs,
           toolName,
         })

@@ -1057,10 +1057,15 @@ struct SettingsTab: View {
     }
 
     private func gatewayProblemPrimaryActionTitle(_ problem: GatewayConnectionProblem) -> String {
-        problem.canTrustRotatedCertificate ? "Trust certificate" : "Retry connection"
+        if problem.suggestsOnboardingReset { return "Reset onboarding" }
+        return problem.canTrustRotatedCertificate ? "Trust certificate" : "Retry connection"
     }
 
     private func handleGatewayProblemPrimaryAction(_ problem: GatewayConnectionProblem) async {
+        if problem.suggestsOnboardingReset {
+            self.resetOnboarding()
+            return
+        }
         if problem.canTrustRotatedCertificate {
             _ = await self.gatewayController.trustRotatedGatewayCertificate(from: problem)
             return
@@ -1070,7 +1075,6 @@ struct SettingsTab: View {
 
     private func resetOnboarding() {
         // Disconnect first so RootCanvas doesn't instantly mark onboarding complete again.
-        self.appModel.disconnectGateway()
         self.connectingGatewayID = nil
         self.setupStatusText = nil
         self.setupCode = ""
@@ -1082,19 +1086,7 @@ struct SettingsTab: View {
         self.gatewayToken = ""
         self.gatewayPassword = ""
 
-        let trimmedInstanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !trimmedInstanceId.isEmpty {
-            GatewaySettingsStore.deleteGatewayCredentials(instanceId: trimmedInstanceId)
-        }
-
-        // Reset onboarding state + clear saved gateway connection (the two things RootCanvas checks).
-        GatewaySettingsStore.clearLastGatewayConnection()
-        GatewaySettingsStore.clearPreferredGatewayStableID()
-        GatewaySettingsStore.clearLastDiscoveredGatewayStableID()
-        // Resetting onboarding should also forget trusted gateway TLS fingerprints.
-        // Otherwise a restarted dev gateway can stay stuck in a local TLS cancel loop.
-        GatewayTLSStore.clearAllFingerprints()
-        OnboardingStateStore.reset()
+        GatewayOnboardingReset.reset(appModel: self.appModel, instanceId: self.instanceId)
 
         // RootCanvas also short-circuits onboarding when these are true.
         self.onboardingComplete = false

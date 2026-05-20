@@ -5,6 +5,7 @@ import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.OutgoingAttachment
 import ai.openclaw.app.gateway.GatewayEndpoint
+import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
 import ai.openclaw.app.node.CameraCaptureManager
 import ai.openclaw.app.node.CanvasController
 import ai.openclaw.app.node.SmsManager
@@ -81,6 +82,40 @@ class MainViewModel(
   val statusText: StateFlow<String> = runtimeState(initial = "Offline") { it.statusText }
   val serverName: StateFlow<String?> = runtimeState(initial = null) { it.serverName }
   val remoteAddress: StateFlow<String?> = runtimeState(initial = null) { it.remoteAddress }
+  val gatewayVersion: StateFlow<String?> = runtimeState(initial = null) { it.gatewayVersion }
+  val gatewayUpdateAvailable: StateFlow<GatewayUpdateAvailableSummary?> = runtimeState(initial = null) { it.gatewayUpdateAvailable }
+  val modelCatalog: StateFlow<List<GatewayModelSummary>> = runtimeState(initial = emptyList()) { it.modelCatalog }
+  val modelAuthProviders: StateFlow<List<GatewayModelProviderSummary>> = runtimeState(initial = emptyList()) { it.modelAuthProviders }
+  val modelCatalogRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.modelCatalogRefreshing }
+  val modelCatalogErrorText: StateFlow<String?> = runtimeState(initial = null) { it.modelCatalogErrorText }
+  val gatewayDefaultAgentId: StateFlow<String?> = runtimeState(initial = null) { it.gatewayDefaultAgentId }
+  val gatewayAgents: StateFlow<List<GatewayAgentSummary>> = runtimeState(initial = emptyList()) { it.gatewayAgents }
+  val cronStatus: StateFlow<GatewayCronStatus> = runtimeState(initial = GatewayCronStatus(enabled = false, jobs = 0, nextWakeAtMs = null)) { it.cronStatus }
+  val cronJobs: StateFlow<List<GatewayCronJobSummary>> = runtimeState(initial = emptyList()) { it.cronJobs }
+  val cronRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.cronRefreshing }
+  val cronErrorText: StateFlow<String?> = runtimeState(initial = null) { it.cronErrorText }
+  val usageSummary: StateFlow<GatewayUsageSummary> = runtimeState(initial = GatewayUsageSummary(updatedAtMs = null, providers = emptyList())) { it.usageSummary }
+  val usageRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.usageRefreshing }
+  val usageErrorText: StateFlow<String?> = runtimeState(initial = null) { it.usageErrorText }
+  val skillsSummary: StateFlow<GatewaySkillsSummary> = runtimeState(initial = GatewaySkillsSummary(skills = emptyList())) { it.skillsSummary }
+  val skillsRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.skillsRefreshing }
+  val skillsErrorText: StateFlow<String?> = runtimeState(initial = null) { it.skillsErrorText }
+  val nodesDevicesSummary: StateFlow<GatewayNodesDevicesSummary> =
+    runtimeState(initial = GatewayNodesDevicesSummary(nodes = emptyList(), pendingDevices = emptyList(), pairedDevices = emptyList())) { it.nodesDevicesSummary }
+  val nodesDevicesRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.nodesDevicesRefreshing }
+  val nodesDevicesErrorText: StateFlow<String?> = runtimeState(initial = null) { it.nodesDevicesErrorText }
+  val channelsSummary: StateFlow<GatewayChannelsSummary> =
+    runtimeState(initial = GatewayChannelsSummary(channels = emptyList())) { it.channelsSummary }
+  val channelsRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.channelsRefreshing }
+  val channelsErrorText: StateFlow<String?> = runtimeState(initial = null) { it.channelsErrorText }
+  val dreamingSummary: StateFlow<GatewayDreamingSummary> =
+    runtimeState(initial = GatewayDreamingSummary()) { it.dreamingSummary }
+  val dreamingRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.dreamingRefreshing }
+  val dreamingErrorText: StateFlow<String?> = runtimeState(initial = null) { it.dreamingErrorText }
+  val healthLogsSummary: StateFlow<GatewayHealthLogsSummary> =
+    runtimeState(initial = GatewayHealthLogsSummary()) { it.healthLogsSummary }
+  val healthLogsRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.healthLogsRefreshing }
+  val healthLogsErrorText: StateFlow<String?> = runtimeState(initial = null) { it.healthLogsErrorText }
   val pendingGatewayTrust: StateFlow<NodeRuntime.GatewayTrustPrompt?> = runtimeState(initial = null) { it.pendingGatewayTrust }
   val seamColorArgb: StateFlow<Long> = runtimeState(initial = 0xFF0EA5E9) { it.seamColorArgb }
   val mainSessionKey: StateFlow<String> = runtimeState(initial = "main") { it.mainSessionKey }
@@ -293,6 +328,10 @@ class MainViewModel(
     ensureRuntime().setMicEnabled(enabled)
   }
 
+  fun cancelMicCapture() {
+    ensureRuntime().cancelMicCapture()
+  }
+
   fun setTalkModeEnabled(enabled: Boolean) {
     ensureRuntime().setTalkModeEnabled(enabled)
   }
@@ -353,6 +392,42 @@ class MainViewModel(
 
   fun refreshHomeCanvasOverviewIfConnected() {
     ensureRuntime().refreshHomeCanvasOverviewIfConnected()
+  }
+
+  fun refreshModelCatalog() {
+    ensureRuntime().refreshModelCatalog()
+  }
+
+  fun refreshAgents() {
+    ensureRuntime().refreshAgents()
+  }
+
+  fun refreshCronJobs() {
+    ensureRuntime().refreshCronJobs()
+  }
+
+  fun refreshUsage() {
+    ensureRuntime().refreshUsage()
+  }
+
+  fun refreshSkills() {
+    ensureRuntime().refreshSkills()
+  }
+
+  fun refreshNodesDevices() {
+    ensureRuntime().refreshNodesDevices()
+  }
+
+  fun refreshChannels() {
+    ensureRuntime().refreshChannels()
+  }
+
+  fun refreshDreaming() {
+    ensureRuntime().refreshDreaming()
+  }
+
+  fun refreshHealthLogs() {
+    ensureRuntime().refreshHealthLogs()
   }
 
   fun loadChat(sessionKey: String) {

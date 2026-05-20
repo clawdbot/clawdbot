@@ -62,6 +62,73 @@ describe("legacy web search config", () => {
     ]);
   });
 
+  it("preserves unrelated record-valued web search config", () => {
+    const res = migrateLegacyWebSearchConfig<OpenClawConfig>({
+      tools: {
+        web: {
+          search: {
+            apiKey: "brave-key",
+            customSearch: {
+              endpoint: "https://search.example.test",
+              mode: "strict",
+            },
+            openaiCodex: {
+              enabled: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.config.tools?.web?.search).toEqual({
+      customSearch: {
+        endpoint: "https://search.example.test",
+        mode: "strict",
+      },
+      openaiCodex: {
+        enabled: true,
+      },
+    });
+    expect(res.config.plugins?.entries?.brave).toEqual({
+      enabled: true,
+      config: {
+        webSearch: {
+          apiKey: "brave-key",
+        },
+      },
+    });
+  });
+
+  it("drops dangerous record keys while preserving unrelated web search config", () => {
+    const res = migrateLegacyWebSearchConfig<OpenClawConfig>({
+      tools: {
+        web: {
+          search: {
+            apiKey: "brave-key",
+            ["__proto__"]: {
+              polluted: true,
+            },
+            constructor: {
+              polluted: true,
+            },
+            customSearch: {
+              endpoint: "https://search.example.test",
+            },
+            prototype: {
+              polluted: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.config.tools?.web?.search).toEqual({
+      customSearch: {
+        endpoint: "https://search.example.test",
+      },
+    });
+  });
+
   it("lists legacy paths for metadata-owned provider config", () => {
     expect(
       listLegacyWebSearchConfigPaths({

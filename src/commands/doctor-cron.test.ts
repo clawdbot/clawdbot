@@ -80,6 +80,11 @@ async function writeCronStore(storePath: string, jobs: Array<Record<string, unkn
   );
 }
 
+async function writeLegacyCronArrayStore(storePath: string, jobs: Array<Record<string, unknown>>) {
+  await fs.mkdir(path.dirname(storePath), { recursive: true });
+  await fs.writeFile(storePath, JSON.stringify(jobs, null, 2), "utf-8");
+}
+
 async function readPersistedJobs(storePath: string): Promise<Array<Record<string, unknown>>> {
   const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
     jobs: Array<Record<string, unknown>>;
@@ -296,6 +301,29 @@ describe("maybeRepairLegacyCronStore", () => {
     expect(payload.kind).toBe("systemEvent");
     expect(payload.text).toBe("Morning brief");
 
+    expectNoteContaining("Legacy cron job storage detected", "Cron");
+    expectNoteContaining("Cron store normalized", "Doctor changes");
+  });
+
+  it("repairs legacy top-level array cron stores instead of treating them as empty (#60799)", async () => {
+    const storePath = await makeTempStorePath();
+    await writeLegacyCronArrayStore(storePath, [createLegacyCronJob()]);
+
+    await maybeRepairLegacyCronStore({
+      cfg: createCronConfig(storePath),
+      options: {},
+      prompter: makePrompter(true),
+    });
+
+    const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
+      version?: unknown;
+      jobs?: Array<Record<string, unknown>>;
+    };
+    const job = requirePersistedJob(persisted.jobs ?? [], 0);
+    expect(persisted.version).toBe(1);
+    expect(job.jobId).toBeUndefined();
+    expect(job.id).toBe("legacy-job");
+    expect(job.notify).toBeUndefined();
     expectNoteContaining("Legacy cron job storage detected", "Cron");
     expectNoteContaining("Cron store normalized", "Doctor changes");
   });

@@ -1204,6 +1204,7 @@
                 "group": "Bundled plugin guides",
                 "pages": [
                   "plugins/codex-harness",
+                  "plugins/codex-native-plugins",
                   "plugins/codex-computer-use",
                   "plugins/google-meet",
                   "plugins/webhooks",
@@ -1703,8 +1704,7 @@
                 "group": "Codex harness",
                 "pages": [
                   "plugins/codex-harness-reference",
-                  "plugins/codex-harness-runtime",
-                  "plugins/codex-native-plugins"
+                  "plugins/codex-harness-runtime"
                 ]
               },
               {

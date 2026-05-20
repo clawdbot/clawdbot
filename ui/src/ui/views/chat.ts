@@ -71,6 +71,10 @@ const COMPOSER_CHROME_INTERACTIVE_SELECTOR = [
   "[role='option']",
 ].join(",");
 
+function hasTerminalRunStatus(status: ChatRunUiStatus | null | undefined): boolean {
+  return status?.phase === "done" || status?.phase === "interrupted";
+}
+
 export type ChatProps = {
   sessionKey: string;
   onSessionKeyChange: (next: string) => void;
@@ -979,7 +983,8 @@ export function renderChat(props: ChatProps) {
   const canCompose = props.connected;
   const isBusy = props.sending || props.stream !== null;
   const canAbort = Boolean(props.canAbort && props.onAbort);
-  const composerRunStatus = canAbort ? { phase: "in-progress" as const } : props.runStatus;
+  const showAbortableUi = canAbort && !hasTerminalRunStatus(props.runStatus);
+  const composerRunStatus = showAbortableUi ? { phase: "in-progress" as const } : props.runStatus;
   const compactBusy =
     props.compactionStatus?.phase === "active" || props.compactionStatus?.phase === "retrying";
   const activeSession = props.sessions?.sessions?.find((row) => row.key === props.sessionKey);
@@ -1402,7 +1407,7 @@ export function renderChat(props: ChatProps) {
 
       ${renderChatQueue({
         queue: props.queue,
-        canAbort: props.canAbort,
+        canAbort: showAbortableUi,
         onQueueSteer: props.onQueueSteer,
         onQueueRemove: props.onQueueRemove,
       })}
@@ -1411,7 +1416,7 @@ export function renderChat(props: ChatProps) {
       ${renderCompactionIndicator(props.compactionStatus)}
       ${renderContextNotice(activeSession, props.sessions?.defaults?.contextTokens ?? null, {
         compactBusy,
-        compactDisabled: !props.connected || isBusy || Boolean(props.canAbort),
+        compactDisabled: !props.connected || isBusy || showAbortableUi,
         onCompact: props.onCompact,
       })}
       ${props.showNewMessages
@@ -1533,7 +1538,7 @@ export function renderChat(props: ChatProps) {
           </div>
 
           ${renderChatRunControls({
-            canAbort,
+            canAbort: showAbortableUi,
             connected: props.connected,
             draft: props.draft,
             hasMessages: props.messages.length > 0,

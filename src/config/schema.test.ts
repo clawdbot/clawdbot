@@ -701,6 +701,13 @@ describe("config schema", () => {
     expect(schema?.properties).toBeUndefined();
   });
 
+  it("lists Matrix in messages.queue.byChannel schema lookup", () => {
+    const lookup = lookupConfigSchema(baseSchema, "messages.queue.byChannel");
+    expect(lookup?.path).toBe("messages.queue.byChannel");
+    expect(lookup?.children.map((child) => child.key)).toEqual(expect.arrayContaining(["matrix"]));
+    expect(lookup?.schema).toMatchObject({ additionalProperties: false });
+  });
+
   it("includes reload metadata when a resolver is provided", () => {
     const lookup = lookupConfigSchema(baseSchema, "gateway", (path) => {
       if (path === "gateway.channelHealthCheckMinutes") {

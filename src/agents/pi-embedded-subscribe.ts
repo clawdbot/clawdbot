@@ -40,7 +40,10 @@ import type {
   EmbeddedPiSubscribeState,
 } from "./pi-embedded-subscribe.handlers.types.js";
 import { isPromiseLike } from "./pi-embedded-subscribe.promise.js";
-import { filterToolResultMediaUrls } from "./pi-embedded-subscribe.tools.js";
+import {
+  buildToolLifecycleErrorResult,
+  filterToolResultMediaUrls,
+} from "./pi-embedded-subscribe.tools.js";
 import type { SubscribeEmbeddedPiSessionParams } from "./pi-embedded-subscribe.types.js";
 import { stripDowngradedToolCallText, THINKING_TAG_SCAN_RE } from "./pi-embedded-utils.js";
 import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
@@ -550,6 +553,18 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       result,
       params.builtinToolNames,
     );
+    if (
+      params.sourceReplyDeliveryMode === "message_tool_only" &&
+      cleanedText &&
+      filteredMediaUrls.length === 0 &&
+      hasCommittedMessagingToolDeliveryEvidence({
+        messagingToolSentTexts,
+        messagingToolSentMediaUrls,
+        messagingToolSentTargets,
+      })
+    ) {
+      return;
+    }
     if (!cleanedText && filteredMediaUrls.length === 0) {
       return;
     }
@@ -1074,12 +1089,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
           toolName: toolParams.toolName,
           toolCallId: toolParams.toolCallId,
           isError: true,
-          result: {
-            details: {
-              status: "error",
-              error: error instanceof Error ? error.message : String(error),
-            },
-          },
+          result: buildToolLifecycleErrorResult(error),
         } as never);
         throw error;
       }

@@ -105,7 +105,7 @@ function resolveCurrentReportPath() {
     "--output",
     reportPath,
   ];
-  const run = spawnSync("node", args, {
+  const run = spawnSync(process.execPath, args, {
     cwd: process.cwd(),
     stdio: "inherit",
     env: process.env,
@@ -124,6 +124,7 @@ const baseline = readJsonFile(opts.baseline);
 const current = readJsonFile(resolveCurrentReportPath());
 const baselineCases = indexCases(baseline);
 const currentCases = indexCases(current);
+const shouldRequireEveryBaselineCase = opts.preset === "all";
 
 let failed = false;
 
@@ -131,8 +132,10 @@ if (!opts.skipBaseline) {
   for (const [id, baselineCase] of baselineCases) {
     const currentCase = currentCases.get(id);
     if (!currentCase) {
-      console.error(`[test-cli-startup-bench-budget] missing current case ${String(id)}`);
-      failed = true;
+      if (shouldRequireEveryBaselineCase) {
+        console.error(`[test-cli-startup-bench-budget] missing current case ${String(id)}`);
+        failed = true;
+      }
       continue;
     }
 

@@ -22,7 +22,7 @@ export function registerAcpCli(program: Command) {
     .option("--session-label <label>", "Default session label to resolve")
     .option("--require-existing", "Fail if the session key/label does not exist", false)
     .option("--reset-session", "Reset the session key before first use", false)
-    .option("--no-prefix-cwd", "Do not prefix prompts with the working directory", false)
+    .option("--no-prefix-cwd", "Do not prefix prompts with the working directory")
     .option("--provenance <mode>", "ACP provenance mode: off, meta, or meta+receipt")
     .option("-v, --verbose", "Verbose logging to stderr", false)
     .addHelpText(
@@ -44,7 +44,7 @@ export function registerAcpCli(program: Command) {
           defaultSessionLabel: opts.sessionLabel as string | undefined,
           requireExistingSession: Boolean(opts.requireExisting),
           resetSession: Boolean(opts.resetSession),
-          prefixCwd: !opts.noPrefixCwd,
+          prefixCwd: opts.prefixCwd !== false,
           provenanceMode,
           verbose: Boolean(opts.verbose),
         });
@@ -73,7 +73,7 @@ export function registerAcpCli(program: Command) {
           verbose: Boolean(opts.verbose || inheritedVerbose),
         });
       } catch (err) {
-        defaultRuntime.error(String(err));
+        defaultRuntime.error(formatErrorMessage(err));
         defaultRuntime.exit(1);
       }
     });

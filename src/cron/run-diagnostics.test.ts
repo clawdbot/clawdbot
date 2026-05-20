@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import {
   createCronRunDiagnosticsFromAgentResult,
   createCronRunDiagnosticsFromError,
@@ -147,6 +148,35 @@ describe("cron run diagnostics", () => {
     expect(
       createCronRunDiagnosticsFromAgentResult(result, { finalStatus: "error" }),
     ).toBeUndefined();
+  });
+
+  it("keeps non-terminal tool warnings as warning diagnostics for successful runs", () => {
+    const toolWarning = setReplyPayloadMetadata(
+      {
+        toolName: "exec",
+        text: "⚠️ Exec failed",
+        isError: true,
+      },
+      { nonTerminalToolErrorWarning: true },
+    );
+
+    const diagnostics = createCronRunDiagnosticsFromAgentResult(
+      {
+        payloads: [{ text: "Queued 3 topics." }, toolWarning],
+      },
+      { finalStatus: "ok", nowMs: () => 700 },
+    );
+
+    expect(diagnostics?.entries).toEqual([
+      {
+        ts: 700,
+        source: "tool",
+        severity: "warn",
+        message: "⚠️ Exec failed",
+        toolName: "exec",
+      },
+    ]);
+    expect(diagnostics?.summary).toBe("⚠️ Exec failed");
   });
 
   it("captures silent failed exec details with a fallback message", () => {

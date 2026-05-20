@@ -1,4 +1,4 @@
-import { MessageFlags } from "discord-api-types/v10";
+import { ButtonStyle, MessageFlags } from "discord-api-types/v10";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 let clearDiscordComponentEntries: typeof import("./components-registry.js").clearDiscordComponentEntries;
@@ -58,6 +58,41 @@ describe("discord components", () => {
     );
     expect(result.modals[0]?.callbackData).toBe("codex:modal");
     expect(result.modals[0]?.allowedUsers).toEqual(["discord:user-1"]);
+  });
+
+  it("serializes disabled link buttons", () => {
+    const spec = readDiscordComponentSpec({
+      blocks: [
+        {
+          type: "actions",
+          buttons: [
+            {
+              label: "Open docs",
+              style: "link",
+              url: "https://example.com/docs",
+              disabled: true,
+            },
+          ],
+        },
+      ],
+    });
+    if (!spec) {
+      throw new Error("Expected component spec to be parsed");
+    }
+
+    const result = buildDiscordComponentMessage({ spec });
+    const serialized = result.components[0]?.serialize() as
+      | { components?: Array<{ components?: Array<Record<string, unknown>> }> }
+      | undefined;
+    const button = serialized?.components?.[0]?.components?.[0];
+
+    expect(button).toMatchObject({
+      label: "Open docs",
+      style: ButtonStyle.Link,
+      url: "https://example.com/docs",
+      disabled: true,
+    });
+    expect(result.entries).toHaveLength(0);
   });
 
   it("requires options for modal select fields", () => {

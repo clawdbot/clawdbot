@@ -569,7 +569,7 @@ export function createFollowupRunner(params: {
                 sessionKey: replySessionKey,
               });
             }
-            const authProfile = resolveRunAuthProfile(candidateRun, provider, {
+            const selectedAuthProfile = resolveRunAuthProfile(candidateRun, provider, {
               config: runtimeConfig,
             });
             const sessionRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
@@ -587,6 +587,7 @@ export function createFollowupRunner(params: {
                     cfg: runtimeConfig,
                     agentId: run.agentId,
                     modelId: model,
+                    authProfileId: selectedAuthProfile.authProfileId,
                   }) ??
                   provider);
             let attemptCompactionCount = 0;
@@ -733,7 +734,7 @@ export function createFollowupRunner(params: {
                 allowEmptyAssistantReplyAsSilent: run.allowEmptyAssistantReplyAsSilent,
                 provider,
                 model,
-                ...authProfile,
+                ...selectedAuthProfile,
                 thinkLevel: run.thinkLevel,
                 verboseLevel: run.verboseLevel,
                 reasoningLevel: run.reasoningLevel,

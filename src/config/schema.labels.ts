@@ -83,6 +83,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.list[].contextInjection": "Agent Context Injection",
   "agents.list[].bootstrapMaxChars": "Agent Bootstrap Max Chars",
   "agents.list[].bootstrapTotalMaxChars": "Agent Bootstrap Total Max Chars",
+  "agents.list[].experimental": "Agent Experimental Flags",
+  "agents.list[].experimental.localModelLean": "Agent Lean Local Model Mode",
   agents: "Agents",
   "agents.defaults": "Agent Defaults",
   "agents.defaults.contextLimits": "Default Context Limits",

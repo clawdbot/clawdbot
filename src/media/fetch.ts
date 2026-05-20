@@ -129,6 +129,18 @@ function parseContentDispositionFileName(header?: string | null): string | undef
   return undefined;
 }
 
+function basenameFromUrlPathname(pathname: string): string {
+  const base = basenameFromAnyPath(pathname);
+  if (!base) {
+    return "";
+  }
+  try {
+    return decodeURIComponent(base).replace(/[\\/]/g, "_");
+  } catch {
+    return base;
+  }
+}
+
 async function readErrorBodySnippet(
   res: Response,
   opts?: {
@@ -295,7 +307,7 @@ function resolveRemoteFileName(params: {
   let fileNameFromUrl: string | undefined;
   try {
     const parsed = new URL(params.finalUrl);
-    const base = basenameFromAnyPath(parsed.pathname);
+    const base = basenameFromUrlPathname(parsed.pathname);
     fileNameFromUrl = base || undefined;
   } catch {
     // ignore parse errors; leave undefined

@@ -241,7 +241,7 @@ class GatewaySessionReconnectTest {
         scope = CoroutineScope(sessionJob + Dispatchers.Default),
         identityStore = DeviceIdentityStore(app),
         deviceAuthStore = ReconnectDeviceAuthStore(),
-        onConnected = { _, _, _ -> },
+        onConnected = {},
         onDisconnected = { _ -> },
         onEvent = { _, _ -> },
         onInvoke = { GatewaySession.InvokeResult.ok("""{"handled":true}""") },

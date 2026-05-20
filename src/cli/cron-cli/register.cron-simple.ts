@@ -15,6 +15,7 @@ import {
 } from "./shared.js";
 
 const CRON_SHOW_PAGE_SIZE = 200;
+const CRON_SHOW_LOOKUP_MAX_PAGES = 50;
 const CRON_RUN_WAIT_TIMEOUT_DEFAULT = "10m";
 const CRON_RUN_WAIT_POLL_INTERVAL_DEFAULT = "2s";
 
@@ -87,32 +88,36 @@ function findCronJobInPage(jobs: CronJob[], idOrName: string): CronJob | undefin
   );
 }
 
-async function loadCronJobForShow(
+export async function loadCronJobForShow(
   opts: GatewayRpcOpts,
   idOrName: string,
 ): Promise<{ job?: CronJob; deliveryPreview?: CronDeliveryPreview }> {
   let offset = 0;
-  for (;;) {
+  for (let page = 0; page < CRON_SHOW_LOOKUP_MAX_PAGES; page += 1) {
     const res = await callGatewayFromCli("cron.list", opts, {
       includeDisabled: true,
       limit: CRON_SHOW_PAGE_SIZE,
       offset,
     });
-    const page = res as {
+    const listed = res as {
       jobs?: CronJob[];
       hasMore?: boolean;
       nextOffset?: number | null;
     };
-    const jobs = page.jobs ?? [];
+    const jobs = listed.jobs ?? [];
     const job = findCronJobInPage(jobs, idOrName);
     if (job) {
       return { job, deliveryPreview: coerceCronDeliveryPreviews(res).get(job.id) };
     }
-    if (!page.hasMore || typeof page.nextOffset !== "number") {
+    if (!listed.hasMore || typeof listed.nextOffset !== "number") {
       return {};
     }
-    offset = page.nextOffset;
+    if (listed.nextOffset <= offset) {
+      throw new Error("cron.list pagination did not advance while looking up cron job");
+    }
+    offset = listed.nextOffset;
   }
+  throw new Error("cron.list pagination exceeded maximum pages while looking up cron job");
 }
 
 function registerCronToggleCommand(params: {

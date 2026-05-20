@@ -8,10 +8,12 @@ export type {
 export {
   emitDiagnosticEvent,
   emitTrustedDiagnosticEvent,
+  hasPendingInternalDiagnosticEvent,
   isDiagnosticsEnabled,
   onInternalDiagnosticEvent,
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
+  waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
 export type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 export {

@@ -31,11 +31,11 @@ when it uses Codex-flavored OpenAI auth or transport.
 Native Codex keeps Codex-owned base/model/personality instructions and
 project-doc behavior according to the active Codex thread config. Lightweight
 OpenClaw runs still preserve their existing project-doc suppression. OpenClaw
-developer instructions are limited to OpenClaw runtime concerns such as
-source-channel delivery, OpenClaw dynamic tools, ACP delegation, and adapter
-context. OpenClaw skill catalogs and non-AGENTS
-workspace bootstrap files are projected as turn input reference context for
-native Codex instead of being promoted into Codex developer instructions.
+developer instructions cover OpenClaw runtime concerns such as source-channel
+delivery, OpenClaw dynamic tools, ACP delegation, adapter context, and the
+active agent workspace profile files. OpenClaw skill catalogs plus `MEMORY.md`
+and active `BOOTSTRAP.md` content are projected as turn input reference context
+for native Codex.
 
 ## Thread bindings and model changes
 
@@ -61,7 +61,9 @@ quiet or notify without encoding that control flow in final text.
 Heartbeat-specific initiative guidance is sent as a Codex collaboration-mode
 developer instruction on the heartbeat turn itself. Ordinary chat turns restore
 Codex Default mode instead of carrying heartbeat philosophy in their normal
-runtime prompt.
+runtime prompt. When a non-empty `HEARTBEAT.md` exists, the heartbeat
+collaboration-mode instructions point Codex at the file instead of inlining its
+contents.
 
 ## Hook boundaries
 

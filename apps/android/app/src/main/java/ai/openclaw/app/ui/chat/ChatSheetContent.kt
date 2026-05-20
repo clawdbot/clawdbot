@@ -71,6 +71,16 @@ internal suspend fun dispatchPendingAssistantAutoSend(
   return dispatch(prompt)
 }
 
+internal fun resolveInitialChatLoadSessionKey(
+  sessionKey: String,
+  mainSessionKey: String,
+): String? {
+  val current = sessionKey.trim()
+  val main = mainSessionKey.trim().ifEmpty { "main" }
+  if (current.isNotEmpty() && current != "main" && current != main) return null
+  return main
+}
+
 @Composable
 fun ChatSheetContent(viewModel: MainViewModel) {
   val messages by viewModel.chatMessages.collectAsState()
@@ -87,7 +97,10 @@ fun ChatSheetContent(viewModel: MainViewModel) {
   val pendingAssistantAutoSend by viewModel.pendingAssistantAutoSend.collectAsState()
 
   LaunchedEffect(Unit) {
-    viewModel.loadChat(mainSessionKey)
+    val loadSessionKey = resolveInitialChatLoadSessionKey(sessionKey, mainSessionKey)
+    if (loadSessionKey != null) {
+      viewModel.loadChat(loadSessionKey)
+    }
   }
 
   LaunchedEffect(pendingAssistantAutoSend, healthOk, pendingRunCount, thinkingLevel) {

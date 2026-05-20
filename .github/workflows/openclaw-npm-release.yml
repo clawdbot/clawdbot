@@ -32,7 +32,7 @@ on:
 
 concurrency:
   group: openclaw-npm-release-${{ github.event_name == 'workflow_dispatch' && format('{0}-{1}', inputs.tag, inputs.npm_dist_tag) || github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' && inputs.preflight_only && inputs.npm_dist_tag == 'alpha' }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -511,10 +511,25 @@ jobs:
             preferred_name="openclaw-npm-preflight-${RELEASE_TAG}"
             rm -rf preflight-tarball
             mkdir -p preflight-tarball
-            if gh run download "${PREFLIGHT_RUN_ID}" \
-              --repo "${GITHUB_REPOSITORY}" \
-              --name "${preferred_name}" \
-              --dir preflight-tarball; then
+
+            download_named_artifact() {
+              local artifact_name="$1"
+              for attempt in 1 2 3; do
+                if gh run download "${PREFLIGHT_RUN_ID}" \
+                  --repo "${GITHUB_REPOSITORY}" \
+                  --name "${artifact_name}" \
+                  --dir preflight-tarball; then
+                  return 0
+                fi
+                if [[ "$attempt" != "3" ]]; then
+                  echo "::warning::Artifact download for ${artifact_name} failed on attempt ${attempt}; retrying."
+                  sleep $((attempt * 10))
+                fi
+              done
+              return 1
+            }
+
+            if download_named_artifact "${preferred_name}"; then
               echo "Downloaded ${preferred_name}."
               return 0
             fi
@@ -530,10 +545,7 @@ jobs:
               exit 1
             fi
             fallback_name="${matches[0]}"
-            gh run download "${PREFLIGHT_RUN_ID}" \
-              --repo "${GITHUB_REPOSITORY}" \
-              --name "${fallback_name}" \
-              --dir preflight-tarball
+            download_named_artifact "${fallback_name}"
             echo "Downloaded fallback preflight artifact ${fallback_name}."
           }
 

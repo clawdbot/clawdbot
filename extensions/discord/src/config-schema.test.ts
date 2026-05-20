@@ -310,6 +310,15 @@ describe("discord config schema", () => {
     expect(cfg.execApprovals?.approvers).toEqual(["555"]);
   });
 
+  it.each([true, false, "auto"] as const)("accepts execApprovals.enabled=%s", (enabled) => {
+    const cfg = expectValidDiscordConfig({ execApprovals: { enabled } });
+    expect(cfg.execApprovals?.enabled).toBe(enabled);
+  });
+
+  it("rejects execApprovals.enabled with other string values", () => {
+    expectInvalidDiscordConfig({ execApprovals: { enabled: "on" } });
+  });
+
   it("rejects numeric IDs that are not valid non-negative safe integers", () => {
     const cases = [106232522769186816, -1, 123.45];
     for (const id of cases) {

@@ -201,6 +201,33 @@ describe("TwitchClientManager", () => {
       );
     });
 
+    it("should register refreshing tokens for Twurple chat intent", async () => {
+      const refreshingAccount: TwitchAccountConfig = {
+        ...testAccount,
+        clientSecret: "test-client-secret",
+        refreshToken: "test-refresh-token",
+        expiresIn: 3600,
+        obtainmentTimestamp: 1_700_000_000_000,
+      };
+
+      await manager.getClient(refreshingAccount);
+
+      expect(mockAddUserForToken).toHaveBeenCalledTimes(1);
+      expect(mockAddUserForToken).toHaveBeenCalledWith(
+        {
+          accessToken: "mock-token-from-tests",
+          refreshToken: "test-refresh-token",
+          expiresIn: 3600,
+          obtainmentTimestamp: 1_700_000_000_000,
+        },
+        ["chat"],
+      );
+      expect(mockAuthProvider.constructor).not.toHaveBeenCalled();
+      expect(mockLogger.info).toHaveBeenCalledWith(
+        "Using RefreshingAuthProvider for testbot (automatic token refresh enabled)",
+      );
+    });
+
     it("should throw error when clientId is missing", async () => {
       const accountWithoutClientId: TwitchAccountConfig = {
         ...testAccount,

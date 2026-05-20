@@ -141,7 +141,7 @@ fun ChatComposer(
 
     if (!healthOk) {
       Text(
-        text = "Gateway is offline. Connect first in the Connect tab.",
+        text = "Gateway is offline. Open Settings to reconnect.",
         style = mobileCallout,
         color = ai.openclaw.app.ui.mobileWarning,
       )

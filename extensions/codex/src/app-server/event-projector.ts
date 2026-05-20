@@ -1153,6 +1153,7 @@ export class CodexAppServerEventProjector {
       itemId,
       text: formatToolOutput(toolName, itemMeta(item, this.toolProgressDetailMode()), output),
       finalOutput: true,
+      isError: isNonSuccessItemStatus(itemStatus(item)),
     });
   }
 
@@ -1160,6 +1161,7 @@ export class CodexAppServerEventProjector {
     itemId: string;
     text: string;
     finalOutput?: boolean;
+    isError?: boolean;
   }): void {
     const text = params.text.trim();
     if (!text) {
@@ -1170,7 +1172,12 @@ export class CodexAppServerEventProjector {
       this.toolResultOutputItemIds.add(params.itemId);
     }
     try {
-      void Promise.resolve(this.params.onToolResult?.({ text })).catch(() => {
+      void Promise.resolve(
+        this.params.onToolResult?.({
+          text,
+          ...(params.isError === true ? { isError: true } : {}),
+        }),
+      ).catch(() => {
         // Tool progress delivery is best-effort and should not affect the turn.
       });
     } catch {
@@ -1331,6 +1338,7 @@ export class CodexAppServerEventProjector {
       itemId: params.id,
       text: formatToolOutput(params.name, undefined, text),
       finalOutput: true,
+      isError: params.isError,
     });
   }
 

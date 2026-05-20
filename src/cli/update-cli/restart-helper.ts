@@ -68,7 +68,6 @@ export async function prepareRestartScript(
   env: NodeJS.ProcessEnv = process.env,
   gatewayPort: number = DEFAULT_GATEWAY_PORT,
 ): Promise<string | null> {
-  const tmpDir = os.tmpdir();
   const timestamp = Date.now();
   const platform = process.platform;
 
@@ -110,8 +109,10 @@ else
   fi
 fi
 # Self-cleanup
+script_dir=$(dirname "$0")
 exec 3>&-
 rm -f "$0"
+rmdir "$script_dir" 2>/dev/null || true
 exit "$status"
 `;
     } else if (platform === "darwin") {
@@ -157,7 +158,9 @@ else
   printf '[%s] openclaw restart failed source=update status=%s\\n' "$(date -u +%FT%TZ)" "$status" >&2
 fi
 # Self-cleanup (log is retained under the OpenClaw state logs directory).
+script_dir=$(dirname "$0")
 rm -f "$0"
+rmdir "$script_dir" 2>/dev/null || true
 exit "$status"
 `;
     } else if (platform === "win32") {
@@ -177,9 +180,11 @@ REM Keep this as a cmd wrapper so Group Policy script execution policies
 REM cannot block the update restart handoff before schtasks.exe runs.
 setlocal
 set "OPENCLAW_RESTART_SCRIPT=%~f0"
+set "OPENCLAW_RESTART_SCRIPT_DIR=%~dp0."
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$p=$env:OPENCLAW_RESTART_SCRIPT; $s=Get-Content -Raw -LiteralPath $p; $m='# POWERSHELL'; $i=$s.IndexOf($m); if ($i -lt 0) { exit 1 }; Invoke-Expression $s.Substring($i)"
 set "status=%ERRORLEVEL%"
 del "%~f0" >nul 2>&1
+rmdir "%OPENCLAW_RESTART_SCRIPT_DIR%" >nul 2>&1
 exit /b %status%
 # POWERSHELL
 # Wait briefly to ensure file locks are released after update.
@@ -370,8 +375,14 @@ exit $status
       return null;
     }
 
-    const scriptPath = path.join(tmpDir, filename);
-    await fs.writeFile(scriptPath, scriptContent, { mode: 0o755 });
+    const scriptDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-restart-"));
+    const scriptPath = path.join(scriptDir, filename);
+    try {
+      await fs.writeFile(scriptPath, scriptContent, { mode: 0o755, flag: "wx" });
+    } catch (error) {
+      await fs.rm(scriptDir, { recursive: true, force: true }).catch(() => {});
+      throw error;
+    }
     return scriptPath;
   } catch {
     // If we can't write the script, we'll fall back to the standard restart method

@@ -166,7 +166,8 @@ PR.
 
 ## Workspace bootstrap injection
 
-Bootstrap files are trimmed and appended under **Project Context** so the model sees identity and profile context without needing explicit reads:
+Bootstrap files are resolved from the active workspace, then routed to the
+prompt surface that matches their lifetime:
 
 - `AGENTS.md`
 - `SOUL.md`
@@ -177,22 +178,23 @@ Bootstrap files are trimmed and appended under **Project Context** so the model 
 - `BOOTSTRAP.md` (only on brand-new workspaces)
 - `MEMORY.md` when present
 
-All of these files are **injected into the context window** on every turn unless
-a file-specific gate applies. `HEARTBEAT.md` is omitted on normal runs when
-heartbeats are disabled for the default agent or
+On the native Codex harness, OpenClaw avoids repeating stable workspace files
+in every user turn. Codex loads `AGENTS.md` through its own project-doc
+discovery. `SOUL.md`, `IDENTITY.md`, `TOOLS.md`, and `USER.md` are forwarded as
+Codex developer instructions. `HEARTBEAT.md` content is not injected; heartbeat
+turns get a collaboration-mode note pointing to the file when it exists and is
+non-empty. `MEMORY.md` and active `BOOTSTRAP.md` content keep the normal
+turn-context role for now.
+
+On non-Codex harnesses, bootstrap files continue to be composed into the
+OpenClaw prompt according to their existing gates. `HEARTBEAT.md` is omitted on
+normal runs when heartbeats are disabled for the default agent or
 `agents.defaults.heartbeat.includeSystemPromptSection` is false. Keep injected
-files concise, especially `MEMORY.md`. `MEMORY.md` is intended to stay a
-curated long-term summary; detailed daily notes belong in `memory/*.md` where
+files concise, especially `MEMORY.md`. `MEMORY.md` is intended to stay a curated
+long-term summary; detailed daily notes belong in `memory/*.md` where
 `memory_search` and `memory_get` can retrieve them on demand. Oversized
 `MEMORY.md` files increase prompt usage and can be partially injected because of
 the bootstrap file limits below.
-
-When a session runs on the native Codex harness, Codex loads `AGENTS.md`
-through its own project-doc discovery. OpenClaw still resolves the remaining
-bootstrap files and forwards them as Codex config instructions, so `SOUL.md`,
-`TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`, and
-`MEMORY.md` keep the same workspace-context role without duplicating
-`AGENTS.md`.
 
 <Note>
 `memory/*.md` daily files are **not** part of the normal bootstrap Project Context. On ordinary turns they are accessed on demand via the `memory_search` and `memory_get` tools, so they do not count against the context window unless the model explicitly reads them. Bare `/new` and `/reset` turns are the exception: the runtime can prepend recent daily memory as a one-shot startup-context block for that first turn.

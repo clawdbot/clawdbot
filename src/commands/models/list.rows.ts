@@ -10,6 +10,8 @@ import type { ModelDefinitionConfig, ModelProviderConfig } from "../../config/ty
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { NormalizedModelCatalogRow } from "../../model-catalog/index.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
+import { normalizeProviderResolvedModelWithPlugin } from "../../plugins/provider-runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { ModelListAuthIndex } from "./list.auth-index.js";
 import type { ListRowModel } from "./list.model-row.js";
@@ -37,6 +39,7 @@ export type RowBuilderContext = {
   filter: RowFilter;
   skipRuntimeModelSuppression?: boolean;
   metadataSnapshot?: PluginMetadataSnapshot;
+  workspaceDir?: string;
 };
 
 const modelCatalogModuleLoader = createLazyImportLoader<ModelCatalogModule>(
@@ -116,6 +119,38 @@ function shouldSuppressListModel(params: {
   });
 }
 
+function normalizeListRowWithProviderPlugin(params: {
+  model: ListRowModel;
+  context: RowBuilderContext;
+}): ListRowModel {
+  const normalized = normalizeProviderResolvedModelWithPlugin({
+    provider: params.model.provider,
+    config: params.context.cfg,
+    workspaceDir: params.context.workspaceDir,
+    context: {
+      config: params.context.cfg,
+      agentDir: params.context.agentDir,
+      workspaceDir: params.context.workspaceDir,
+      provider: params.model.provider,
+      modelId: params.model.id,
+      model: params.model as ProviderRuntimeModel,
+    },
+  });
+  if (!normalized) {
+    return params.model;
+  }
+  return {
+    ...params.model,
+    id: normalized.id,
+    name: normalized.name,
+    provider: normalized.provider,
+    baseUrl: normalized.baseUrl,
+    input: toListRowInput(normalized.input),
+    contextWindow: normalized.contextWindow,
+    contextTokens: normalized.contextTokens,
+  };
+}
+
 async function appendVisibleRow(params: {
   rows: ModelRow[];
   model: ListRowModel;
@@ -131,15 +166,19 @@ async function appendVisibleRow(params: {
   if (!matchesRowFilter(params.context.filter, params.model)) {
     return false;
   }
+  const normalizedModel = normalizeListRowWithProviderPlugin({
+    model: params.model,
+    context: params.context,
+  });
   if (
     !params.skipSuppression &&
-    shouldSuppressListModel({ model: params.model, context: params.context })
+    shouldSuppressListModel({ model: normalizedModel, context: params.context })
   ) {
     return false;
   }
   params.rows.push(
     await buildRow({
-      model: params.model,
+      model: normalizedModel,
       key: params.key,
       context: params.context,
       allowProviderAvailabilityFallback: params.allowProviderAvailabilityFallback,
@@ -444,16 +483,21 @@ export async function appendProviderCatalogRows(params: {
   context: RowBuilderContext;
   seenKeys: Set<string>;
   staticOnly?: boolean;
+  catalogModels?: readonly Model<Api>[];
 }): Promise<number> {
   let appended = 0;
-  const { loadProviderCatalogModelsForList } = await loadProviderCatalogModule();
-  for (const model of await loadProviderCatalogModelsForList({
-    cfg: params.context.cfg,
-    agentDir: params.context.agentDir,
-    providerFilter: params.context.filter.provider,
-    staticOnly: params.staticOnly,
-    metadataSnapshot: params.context.metadataSnapshot,
-  })) {
+  let catalogModels = params.catalogModels;
+  if (catalogModels == null) {
+    const { loadProviderCatalogModelsForList } = await loadProviderCatalogModule();
+    catalogModels = await loadProviderCatalogModelsForList({
+      cfg: params.context.cfg,
+      agentDir: params.context.agentDir,
+      providerFilter: params.context.filter.provider,
+      staticOnly: params.staticOnly,
+      metadataSnapshot: params.context.metadataSnapshot,
+    });
+  }
+  for (const model of catalogModels) {
     const key = modelKey(model.provider, model.id);
     if (
       await appendVisibleRow({
@@ -487,7 +531,7 @@ export async function appendConfiguredRows(params: {
     ) {
       continue;
     }
-    const model =
+    const resolvedModel =
       params.modelRegistry && resolveModelWithRegistry
         ? resolveModelWithRegistry({
             provider: entry.ref.provider,
@@ -496,6 +540,9 @@ export async function appendConfiguredRows(params: {
             cfg: params.context.cfg,
           })
         : toFallbackConfiguredListModel(entry, params.context.cfg);
+    const model = resolvedModel
+      ? normalizeListRowWithProviderPlugin({ model: resolvedModel, context: params.context })
+      : resolvedModel;
     if (params.context.filter.local && model && !isLocalBaseUrl(model.baseUrl ?? "")) {
       continue;
     }

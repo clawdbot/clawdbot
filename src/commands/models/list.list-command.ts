@@ -166,6 +166,7 @@ export async function modelsListCommand(
     },
     skipRuntimeModelSuppression,
     metadataSnapshot,
+    workspaceDir,
   });
   const rows: ModelRow[] = [];
 

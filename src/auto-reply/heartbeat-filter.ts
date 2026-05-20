@@ -1,9 +1,262 @@
-import { stripHeartbeatToken } from "./heartbeat.js";
-import { HEARTBEAT_TRANSCRIPT_PROMPT } from "./heartbeat.js";
+import { HEARTBEAT_RESPONSE_TOOL_NAME } from "./heartbeat-tool-response.js";
+import {
+  HEARTBEAT_RESPONSE_TOOL_PROMPT,
+  HEARTBEAT_TRANSCRIPT_PROMPT,
+  resolveHeartbeatPromptForResponseTool,
+  stripHeartbeatToken,
+} from "./heartbeat.js";
 
 const HEARTBEAT_TASK_PROMPT_PREFIX =
   "Run the following periodic tasks (only those due based on their intervals):";
 const HEARTBEAT_TASK_PROMPT_ACK = "After completing all due tasks, reply HEARTBEAT_OK.";
+const TOOL_CALL_BLOCK_TYPES = new Set([
+  "toolCall",
+  "functionCall",
+  "toolUse",
+  "tool_call",
+  "function_call",
+  "tool_use",
+]);
+const TOOL_RESULT_BLOCK_TYPES = new Set([
+  "toolResult",
+  "tool_result",
+  "tool_result_error",
+  "function_call_output",
+]);
+const MESSAGE_TOOL_DELIVERY_PREFIX = "Delivery: to send a message, use the `message` tool.";
+
+type HeartbeatTranscriptMessage = { role: string; content?: unknown };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function readString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readNestedString(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key];
+  if (typeof value === "string" && value.trim()) {
+    return value.trim();
+  }
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  return readString(value.name);
+}
+
+function collectToolCallBlocks(content: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(content)) {
+    return [];
+  }
+  return content.filter(
+    (block): block is Record<string, unknown> =>
+      isRecord(block) && TOOL_CALL_BLOCK_TYPES.has(readString(block.type) ?? ""),
+  );
+}
+
+function collectToolResultBlocks(content: unknown): Array<Record<string, unknown>> {
+  if (!Array.isArray(content)) {
+    return [];
+  }
+  return content.filter(
+    (block): block is Record<string, unknown> =>
+      isRecord(block) && TOOL_RESULT_BLOCK_TYPES.has(readString(block.type) ?? ""),
+  );
+}
+
+function readToolCallName(block: Record<string, unknown>): string | undefined {
+  return readString(block.name) ?? readNestedString(block, "function");
+}
+
+function collectToolCallIds(block: Record<string, unknown>): string[] {
+  const ids = [
+    readString(block.call_id),
+    readString(block.tool_call_id),
+    readString(block.toolCallId),
+    readString(block.tool_use_id),
+    readString(block.toolUseId),
+    readString(block.id),
+  ].filter((id): id is string => Boolean(id));
+  return [...new Set(ids)];
+}
+
+function readNestedToolCallArguments(record: Record<string, unknown>): unknown {
+  const value = record.function;
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  return value.arguments ?? value.args ?? value.input;
+}
+
+function readToolCallArguments(block: Record<string, unknown>): unknown {
+  return block.arguments ?? block.args ?? block.input ?? readNestedToolCallArguments(block);
+}
+
+function parseToolCallArguments(value: unknown): Record<string, unknown> | undefined {
+  if (isRecord(value)) {
+    return value;
+  }
+  if (typeof value !== "string" || !value.trim()) {
+    return undefined;
+  }
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return isRecord(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function isVisibleHeartbeatResponseToolCall(block: Record<string, unknown>): boolean {
+  const args = parseToolCallArguments(readToolCallArguments(block));
+  if (!args) {
+    return false;
+  }
+  return args.notify === true || args.notify === "true";
+}
+
+function collectVisibleHeartbeatResponseToolCalls(message: {
+  role: string;
+  content?: unknown;
+}): Array<Record<string, unknown>> {
+  if (message.role !== "assistant") {
+    return [];
+  }
+  return [...collectMessageToolCalls(message), ...collectToolCallBlocks(message.content)].filter(
+    (block) =>
+      readToolCallName(block) === HEARTBEAT_RESPONSE_TOOL_NAME &&
+      isVisibleHeartbeatResponseToolCall(block),
+  );
+}
+
+function collectMessageToolCalls(message: { role: string; content?: unknown }) {
+  const toolCalls = (message as Record<string, unknown>).tool_calls;
+  if (!Array.isArray(toolCalls)) {
+    return [];
+  }
+  return toolCalls.filter((call): call is Record<string, unknown> => isRecord(call));
+}
+
+function hasAssistantToolCall(message: { role: string; content?: unknown }): boolean {
+  return (
+    message.role === "assistant" &&
+    (collectMessageToolCalls(message).length > 0 ||
+      collectToolCallBlocks(message.content).length > 0)
+  );
+}
+
+function isRemovableHeartbeatResponseToolCall(message: {
+  role: string;
+  content?: unknown;
+}): boolean {
+  if (message.role !== "assistant") {
+    return false;
+  }
+  for (const call of collectMessageToolCalls(message)) {
+    const name = readToolCallName(call);
+    if (name === HEARTBEAT_RESPONSE_TOOL_NAME && !isVisibleHeartbeatResponseToolCall(call)) {
+      return true;
+    }
+  }
+  return collectToolCallBlocks(message.content).some(
+    (block) =>
+      readToolCallName(block) === HEARTBEAT_RESPONSE_TOOL_NAME &&
+      !isVisibleHeartbeatResponseToolCall(block),
+  );
+}
+
+function hasVisibleHeartbeatResponseToolCall(message: {
+  role: string;
+  content?: unknown;
+}): boolean {
+  return collectVisibleHeartbeatResponseToolCalls(message).length > 0;
+}
+
+function isEmbeddedToolResultOnlyContent(content: unknown): boolean {
+  return (
+    Array.isArray(content) &&
+    content.length > 0 &&
+    content.every(
+      (block) => isRecord(block) && TOOL_RESULT_BLOCK_TYPES.has(readString(block.type) ?? ""),
+    )
+  );
+}
+
+function isToolResultMessage(message: { role: string; content?: unknown }): boolean {
+  return (
+    message.role === "toolResult" ||
+    message.role === "tool" ||
+    (message.role === "user" && isEmbeddedToolResultOnlyContent(message.content))
+  );
+}
+
+function isFailedToolResultRecord(record: Record<string, unknown>): boolean {
+  return (
+    record.isError === true ||
+    record.is_error === true ||
+    readString(record.type) === "tool_result_error"
+  );
+}
+
+function hasSuccessfulToolResultMessage(message: { role: string; content?: unknown }): boolean {
+  const resultBlocks = collectToolResultBlocks(message.content);
+  if (resultBlocks.length > 0) {
+    return resultBlocks.some((block) => !isFailedToolResultRecord(block));
+  }
+  if (!isToolResultMessage(message)) {
+    return false;
+  }
+  return !isFailedToolResultRecord(message as Record<string, unknown>);
+}
+
+function collectSuccessfulToolResultCallIds(message: {
+  role: string;
+  content?: unknown;
+}): string[] {
+  const record = message as Record<string, unknown>;
+  const resultBlocks = collectToolResultBlocks(message.content);
+  const ids: string[] = [];
+  if (resultBlocks.length === 0) {
+    if (!isFailedToolResultRecord(record)) {
+      ids.push(
+        ...[
+          readString(record.toolCallId),
+          readString(record.tool_call_id),
+          readString(record.toolUseId),
+          readString(record.tool_use_id),
+          readString(record.call_id),
+          readString(record.id),
+        ].filter((id): id is string => Boolean(id)),
+      );
+    }
+  } else {
+    for (const block of resultBlocks) {
+      if (isFailedToolResultRecord(block)) {
+        continue;
+      }
+      ids.push(...collectToolCallIds(block));
+    }
+  }
+  return [...new Set(ids)];
+}
+
+function isRealNonHeartbeatUserMessage(
+  message: { role: string; content?: unknown },
+  heartbeatPrompt?: string,
+): boolean {
+  return (
+    message.role === "user" &&
+    !isEmbeddedToolResultOnlyContent(message.content) &&
+    !isHeartbeatUserMessage(message, heartbeatPrompt)
+  );
+}
+
+function matchesHeartbeatPromptText(text: string, prompt: string | undefined): boolean {
+  const normalized = prompt?.trim();
+  return Boolean(normalized) && (text === normalized || text.startsWith(`${normalized}\n`));
+}
 
 function resolveMessageText(content: unknown): { text: string; hasNonTextContent: boolean } {
   if (typeof content === "string") {
@@ -19,7 +272,7 @@ function resolveMessageText(content: unknown): { text: string; hasNonTextContent
       hasNonTextContent = true;
       continue;
     }
-    if (block.type !== "text") {
+    if (block.type !== "text" && block.type !== "input_text" && block.type !== "output_text") {
       hasNonTextContent = true;
       continue;
     }
@@ -49,7 +302,25 @@ export function isHeartbeatUserMessage(
   if (trimmed === HEARTBEAT_TRANSCRIPT_PROMPT) {
     return true;
   }
-  if (normalizedHeartbeatPrompt && trimmed.startsWith(normalizedHeartbeatPrompt)) {
+  if (
+    trimmed.startsWith(MESSAGE_TOOL_DELIVERY_PREFIX) &&
+    trimmed.endsWith(HEARTBEAT_TRANSCRIPT_PROMPT)
+  ) {
+    return true;
+  }
+  if (matchesHeartbeatPromptText(trimmed, normalizedHeartbeatPrompt)) {
+    return true;
+  }
+  if (matchesHeartbeatPromptText(trimmed, HEARTBEAT_RESPONSE_TOOL_PROMPT)) {
+    return true;
+  }
+  if (
+    normalizedHeartbeatPrompt &&
+    matchesHeartbeatPromptText(
+      trimmed,
+      resolveHeartbeatPromptForResponseTool(normalizedHeartbeatPrompt),
+    )
+  ) {
     return true;
   }
   return (
@@ -64,6 +335,9 @@ export function isHeartbeatOkResponse(
   if (message.role !== "assistant") {
     return false;
   }
+  if (hasAssistantToolCall(message)) {
+    return false;
+  }
   const { text, hasNonTextContent } = resolveMessageText(message.content);
   if (hasNonTextContent) {
     return false;
@@ -71,28 +345,134 @@ export function isHeartbeatOkResponse(
   return stripHeartbeatToken(text, { mode: "heartbeat", maxAckChars: ackMaxChars }).shouldSkip;
 }
 
-export function filterHeartbeatPairs<T extends { role: string; content?: unknown }>(
+function advancePastAdjacentToolResults(
+  messages: HeartbeatTranscriptMessage[],
+  startIndex: number,
+): number {
+  let index = startIndex;
+  while (index < messages.length && isToolResultMessage(messages[index])) {
+    index++;
+  }
+  return index;
+}
+
+function isToolResultCompletionCandidate(message: { role: string; content?: unknown }): boolean {
+  return isToolResultMessage(message) || collectToolResultBlocks(message.content).length > 0;
+}
+
+function hasCompletedVisibleHeartbeatResponseToolCall(
+  messages: HeartbeatTranscriptMessage[],
+  index: number,
+): boolean {
+  const visibleCalls = collectVisibleHeartbeatResponseToolCalls(messages[index]);
+  if (visibleCalls.length === 0) {
+    return false;
+  }
+  const callIds = new Set(visibleCalls.flatMap((call) => collectToolCallIds(call)));
+  for (
+    let resultIndex = index + 1;
+    resultIndex < messages.length && isToolResultCompletionCandidate(messages[resultIndex]);
+    resultIndex++
+  ) {
+    const result = messages[resultIndex];
+    if (!hasSuccessfulToolResultMessage(result)) {
+      continue;
+    }
+    if (callIds.size === 0) {
+      return true;
+    }
+    for (const resultId of collectSuccessfulToolResultCallIds(result)) {
+      if (callIds.has(resultId)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function resolveHeartbeatArtifactSpanEnd(
+  messages: HeartbeatTranscriptMessage[],
+  startIndex: number,
+  ackMaxChars?: number,
+  heartbeatPrompt?: string,
+): number | undefined {
+  let index = startIndex + 1;
+  let sawTerminalHeartbeatArtifact = false;
+  let sawNonTerminalAssistantOutput = false;
+
+  while (index < messages.length) {
+    const message = messages[index];
+    if (isRealNonHeartbeatUserMessage(message, heartbeatPrompt)) {
+      break;
+    }
+    if (isHeartbeatUserMessage(message, heartbeatPrompt)) {
+      break;
+    }
+    if (isHeartbeatOkResponse(message, ackMaxChars)) {
+      sawTerminalHeartbeatArtifact = true;
+      index = advancePastAdjacentToolResults(messages, index + 1);
+      continue;
+    }
+    if (hasVisibleHeartbeatResponseToolCall(message)) {
+      if (hasCompletedVisibleHeartbeatResponseToolCall(messages, index)) {
+        return undefined;
+      }
+      index++;
+      continue;
+    }
+    if (isRemovableHeartbeatResponseToolCall(message)) {
+      sawTerminalHeartbeatArtifact = true;
+      index = advancePastAdjacentToolResults(messages, index + 1);
+      continue;
+    }
+    if (sawTerminalHeartbeatArtifact) {
+      index++;
+      continue;
+    }
+    if (isToolResultMessage(message) || hasAssistantToolCall(message)) {
+      index++;
+      continue;
+    }
+    if (message.role === "assistant") {
+      sawNonTerminalAssistantOutput = true;
+      index++;
+      continue;
+    }
+    return undefined;
+  }
+
+  if (sawNonTerminalAssistantOutput && !sawTerminalHeartbeatArtifact) {
+    return undefined;
+  }
+  return index;
+}
+
+export function filterHeartbeatTranscriptArtifacts<T extends { role: string; content?: unknown }>(
   messages: T[],
   ackMaxChars?: number,
   heartbeatPrompt?: string,
 ): T[] {
-  if (messages.length < 2) {
+  if (messages.length === 0) {
     return messages;
   }
 
   const result: T[] = [];
   let i = 0;
   while (i < messages.length) {
-    if (
-      i + 1 < messages.length &&
-      isHeartbeatUserMessage(messages[i], heartbeatPrompt) &&
-      isHeartbeatOkResponse(messages[i + 1], ackMaxChars)
-    ) {
-      i += 2;
+    if (!isHeartbeatUserMessage(messages[i], heartbeatPrompt)) {
+      result.push(messages[i]);
+      i++;
       continue;
     }
-    result.push(messages[i]);
-    i++;
+
+    const next = resolveHeartbeatArtifactSpanEnd(messages, i, ackMaxChars, heartbeatPrompt);
+    if (next === undefined) {
+      result.push(messages[i]);
+      i++;
+      continue;
+    }
+
+    i = next;
   }
 
   return result;

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Command } from "commander";
+import type { OperatorScope } from "../../gateway/method-scopes.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveNodeFromNodeList } from "../../shared/node-resolve.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
@@ -31,6 +32,16 @@ export const callGatewayCli = async (
 ) => {
   const runtime = await loadNodesCliRpcRuntime();
   return await runtime.callGatewayCliRuntime(method, opts, params, callOpts);
+};
+
+export const callNodePairApprovalGatewayCli = async (
+  method: "node.pair.list" | "node.pair.approve",
+  opts: NodesRpcOpts,
+  params: unknown,
+  callOpts: { scopes: OperatorScope[]; transportTimeoutMs?: number },
+) => {
+  const runtime = await loadNodesCliRpcRuntime();
+  return await runtime.callNodePairApprovalGatewayCliRuntime(method, opts, params, callOpts);
 };
 
 export function buildNodeInvokeParams(params: {

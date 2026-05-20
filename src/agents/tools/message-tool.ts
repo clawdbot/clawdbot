@@ -158,6 +158,7 @@ const presentationButtonSchema = Type.Object({
   url: Type.Optional(Type.String()),
   webApp: Type.Optional(Type.Object({ url: Type.String() })),
   web_app: Type.Optional(Type.Object({ url: Type.String() })),
+  disabled: Type.Optional(Type.Boolean()),
   style: Type.Optional(stringEnum(["primary", "secondary", "success", "danger"])),
 });
 

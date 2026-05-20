@@ -38,11 +38,20 @@ vi.mock("../graph-thread.js", () => {
 
 describe("msteams thread parent context injection", () => {
   type MessageHandler = ReturnType<typeof createMSTeamsMessageHandler>;
+  type ParentSystemEventCall = [
+    string,
+    {
+      sessionKey: string;
+      contextKey?: string;
+      forceSenderIsOwnerFalse?: boolean;
+      trusted?: boolean;
+    },
+  ];
 
   function findParentSystemEventCall(
     mock: ReturnType<typeof vi.fn>,
-  ): [string, { sessionKey: string; contextKey?: string }] | undefined {
-    const calls = mock.mock.calls as Array<[string, { sessionKey: string; contextKey?: string }]>;
+  ): ParentSystemEventCall | undefined {
+    const calls = mock.mock.calls as ParentSystemEventCall[];
     return calls.find(([text]) => text.startsWith("Replying to @"));
   }
 
@@ -93,6 +102,10 @@ describe("msteams thread parent context injection", () => {
     expect(parentCall[0]).toBe("Replying to @Alice: Can someone investigate the latency spike?");
     expect(parentCall[1]?.contextKey).toContain("msteams:thread-parent:");
     expect(parentCall[1]?.contextKey).toContain("thread-root-123");
+    expect(parentCall[1]).toMatchObject({
+      forceSenderIsOwnerFalse: true,
+      trusted: false,
+    });
   });
 
   it("caches parent fetches across thread replies in the same session", async () => {

@@ -54,6 +54,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
+function normalizeCronStoreFile(parsed: unknown): CronStoreFile {
+  const rawJobs = Array.isArray(parsed)
+    ? parsed
+    : isRecord(parsed) && Array.isArray(parsed.jobs)
+      ? parsed.jobs
+      : [];
+  return {
+    version: 1,
+    jobs: rawJobs.filter(isRecord) as never as CronStoreFile["jobs"],
+  };
+}
+
 function stripRuntimeOnlyCronFields(store: CronStoreFile): unknown {
   return {
     version: store.version,
@@ -156,10 +168,7 @@ function loadStateFileSync(statePath: string): CronStateFile | null {
 
 function hasInlineState(jobs: Array<Record<string, unknown> | null | undefined>): boolean {
   return jobs.some(
-    (job) =>
-      job != null &&
-      isRecord(job.state) &&
-      Object.keys(job.state).length > 0,
+    (job) => job != null && isRecord(job.state) && Object.keys(job.state).length > 0,
   );
 }
 
@@ -215,23 +224,13 @@ export async function loadCronStore(storePath: string): Promise<CronStoreFile> {
         cause: err,
       });
     }
-    const parsedRecord =
-      parsed && typeof parsed === "object" && !Array.isArray(parsed)
-        ? (parsed as Record<string, unknown>)
-        : {};
-    const jobs = Array.isArray(parsedRecord.jobs)
-      ? (parsedRecord.jobs.filter(isRecord) as never[])
-      : [];
-    const store = {
-      version: 1 as const,
-      jobs: jobs.filter(Boolean) as never as CronStoreFile["jobs"],
-    };
+    const store = normalizeCronStoreFile(parsed);
+    const jobs = store.jobs as unknown as Array<Record<string, unknown>>;
 
     // Load state file and merge.
     const statePath = resolveStatePath(storePath);
     const stateFile = await loadStateFile(statePath);
-    const hasLegacyInlineState =
-      !stateFile && hasInlineState(jobs as unknown as Array<Record<string, unknown>>);
+    const hasLegacyInlineState = !stateFile && hasInlineState(jobs);
 
     if (stateFile) {
       // State file exists: merge state by job ID. Inline state in jobs.json is ignored.
@@ -285,21 +284,11 @@ export function loadCronStoreSync(storePath: string): CronStoreFile {
         cause: err,
       });
     }
-    const parsedRecord =
-      parsed && typeof parsed === "object" && !Array.isArray(parsed)
-        ? (parsed as Record<string, unknown>)
-        : {};
-    const jobs = Array.isArray(parsedRecord.jobs)
-      ? (parsedRecord.jobs.filter(isRecord) as never[])
-      : [];
-    const store = {
-      version: 1 as const,
-      jobs: jobs.filter(Boolean) as never as CronStoreFile["jobs"],
-    };
+    const store = normalizeCronStoreFile(parsed);
+    const jobs = store.jobs as unknown as Array<Record<string, unknown>>;
 
     const stateFile = loadStateFileSync(resolveStatePath(storePath));
-    const hasLegacyInlineState =
-      !stateFile && hasInlineState(jobs as unknown as Array<Record<string, unknown>>);
+    const hasLegacyInlineState = !stateFile && hasInlineState(jobs);
 
     if (stateFile) {
       for (const job of store.jobs) {

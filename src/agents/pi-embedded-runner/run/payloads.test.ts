@@ -351,6 +351,28 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
+  it("marks middleware tool-error warnings after assistant output as non-terminal", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Queued 3 topics."],
+      lastToolError: {
+        toolName: "exec",
+        error: "Tool output unavailable due to post-processing error",
+        middlewareError: true,
+      },
+      verboseLevel: "off",
+    });
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]?.text).toBe("Queued 3 topics.");
+    expect(payloads[1]).toMatchObject({
+      isError: true,
+    });
+    expect(payloads[1]?.text).toContain("Exec failed");
+    expect(getReplyPayloadMetadata(payloads[1] as object)).toMatchObject({
+      nonTerminalToolErrorWarning: true,
+    });
+  });
+
   it("surfaces concise bash tool errors when verbose mode is off", () => {
     const payloads = buildPayloads({
       lastToolError: { toolName: "bash", error: "command failed" },
@@ -430,10 +452,22 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
-  it("shows exec tool errors when verbose mode is on", () => {
+  it("keeps exec tool errors compact when verbose mode is on", () => {
     const payloads = buildPayloads({
       lastToolError: { toolName: "exec", error: "command failed" },
       verboseLevel: "on",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Exec",
+      absentDetail: "command failed",
+    });
+  });
+
+  it("shows exec tool error details when verbose mode is full", () => {
+    const payloads = buildPayloads({
+      lastToolError: { toolName: "exec", error: "command failed" },
+      verboseLevel: "full",
     });
 
     expectSingleToolErrorPayload(payloads, {
@@ -456,10 +490,10 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
 
   it.each([
     {
-      name: "includes details for mutating tool failures when verbose is on",
+      name: "keeps mutating tool failures compact when verbose is on",
       verboseLevel: "on" as const,
-      detail: "permission denied",
-      absentDetail: undefined,
+      detail: undefined,
+      absentDetail: "permission denied",
     },
     {
       name: "includes details for mutating tool failures when verbose is full",

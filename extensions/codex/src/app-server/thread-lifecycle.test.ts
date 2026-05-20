@@ -59,12 +59,12 @@ function createAppServerOptions() {
 }
 
 describe("Codex app-server native code mode config", () => {
-  it("keeps Codex-native subagents primary while routing OpenClaw spawn through dynamic search", () => {
+  it("keeps Codex-native subagents primary while limiting OpenClaw spawn to OpenClaw delegation", () => {
     const instructions = buildDeveloperInstructions(createAttemptParams({ provider: "openai" }));
 
     expect(instructions).toContain("Use Codex native `spawn_agent` for Codex subagents");
     expect(instructions).toContain(
-      "search for `sessions_spawn` in the `openclaw` dynamic tool namespace",
+      "Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation.",
     );
   });
 

@@ -186,6 +186,15 @@ class MicCaptureManager(
     }
   }
 
+  fun cancelMicCapture() {
+    transcriptionDrainJob?.cancel()
+    transcriptionDrainJob = null
+    _micEnabled.value = false
+    _micCooldown.value = false
+    _liveTranscript.value = null
+    stop()
+  }
+
   suspend fun pauseForTts() {
     val shouldPause =
       synchronized(ttsPauseLock) {

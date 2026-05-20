@@ -8,6 +8,7 @@ describe("resolveEmbeddedRunFailureSignal", () => {
         trigger: "cron",
         lastToolError: {
           toolName: "exec",
+          errorCode: "SYSTEM_RUN_DENIED",
           error: "SYSTEM_RUN_DENIED: approval required",
         },
       }),
@@ -27,6 +28,7 @@ describe("resolveEmbeddedRunFailureSignal", () => {
         trigger: "cron",
         lastToolError: {
           toolName: "bash",
+          errorCode: "INVALID_REQUEST",
           error: "INVALID_REQUEST: approval denied",
         },
       })?.code,
@@ -39,6 +41,7 @@ describe("resolveEmbeddedRunFailureSignal", () => {
         trigger: "user",
         lastToolError: {
           toolName: "exec",
+          errorCode: "SYSTEM_RUN_DENIED",
           error: "SYSTEM_RUN_DENIED: approval required",
         },
       }),
@@ -63,25 +66,26 @@ describe("resolveEmbeddedRunFailureSignal", () => {
         trigger: "cron",
         lastToolError: {
           toolName: "browser",
+          errorCode: "INVALID_REQUEST",
           error: "INVALID_REQUEST: url required",
         },
       }),
     ).toBeUndefined();
   });
 
-  it("does not mark non-exec tool output that merely mentions host denial tokens", () => {
+  it("does not mark tool output that merely mentions host denial tokens", () => {
     expect(
       resolveEmbeddedRunFailureSignal({
         trigger: "cron",
         lastToolError: {
-          toolName: "web_fetch",
+          toolName: "exec",
           error: "The fetched page says SYSTEM_RUN_DENIED in its troubleshooting section.",
         },
       }),
     ).toBeUndefined();
   });
 
-  it("infers approval-binding denials even when the host code is omitted", () => {
+  it("does not infer approval-binding denials when the structured code is omitted", () => {
     expect(
       resolveEmbeddedRunFailureSignal({
         trigger: "cron",
@@ -89,7 +93,26 @@ describe("resolveEmbeddedRunFailureSignal", () => {
           toolName: "exec",
           error: "Approval cannot safely bind this interpreter/runtime command",
         },
-      })?.code,
-    ).toBe("SYSTEM_RUN_DENIED");
+      }),
+    ).toBeUndefined();
+  });
+
+  it("uses a structured code even when the message is omitted", () => {
+    expect(
+      resolveEmbeddedRunFailureSignal({
+        trigger: "cron",
+        lastToolError: {
+          toolName: "exec",
+          errorCode: "SYSTEM_RUN_DENIED",
+        },
+      }),
+    ).toEqual({
+      kind: "execution_denied",
+      source: "tool",
+      toolName: "exec",
+      code: "SYSTEM_RUN_DENIED",
+      message: "SYSTEM_RUN_DENIED",
+      fatalForCron: true,
+    });
   });
 });

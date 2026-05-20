@@ -165,7 +165,9 @@ If an isolated cron run returns only the silent token (`NO_REPLY` or `no_reply`)
 
 ### Structured denials
 
-Isolated cron runs prefer structured execution-denial metadata from the embedded run, then fall back to known denial markers in final output, such as `SYSTEM_RUN_DENIED`, `INVALID_REQUEST`, and approval-binding refusal phrases.
+Isolated cron runs use structured execution-denial metadata from the embedded run as the authoritative denial signal. They also honor node-host `UNAVAILABLE` wrappers when the nested structured error message starts with `SYSTEM_RUN_DENIED` or `INVALID_REQUEST`.
+
+Cron does not classify final-output prose or approval-looking refusal phrases as denials unless the embedded run also provides structured denial metadata, so ordinary assistant text is not treated as a blocked command.
 
 `cron list` and run history surface the denial reason instead of reporting a blocked command as `ok`.
 

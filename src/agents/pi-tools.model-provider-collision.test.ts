@@ -164,6 +164,145 @@ describe("applyModelProviderToolPolicy", () => {
     expect(toolNames(filtered)).toEqual(["read", "exec"]);
   });
 
+  it("drops heavyweight tools when lean local-model mode is enabled for the current agent", () => {
+    const filtered = testing.applyModelProviderToolPolicy(
+      [
+        { name: "read" },
+        { name: "browser" },
+        { name: "cron" },
+        { name: "message" },
+        { name: "exec" },
+      ] as unknown as AnyAgentTool[],
+      {
+        config: {
+          agents: {
+            list: [
+              {
+                id: "gemma",
+                experimental: {
+                  localModelLean: true,
+                },
+              },
+            ],
+          },
+        },
+        agentId: "gemma",
+        modelProvider: "lmstudio",
+        modelApi: "openai-compatible",
+        modelId: "gemma-4-e4b-it",
+      },
+    );
+
+    expect(toolNames(filtered)).toEqual(["read", "exec"]);
+  });
+
+  it("drops heavyweight tools when lean local-model mode is enabled for the default agent", () => {
+    const filtered = testing.applyModelProviderToolPolicy(
+      [
+        { name: "read" },
+        { name: "browser" },
+        { name: "cron" },
+        { name: "message" },
+        { name: "exec" },
+      ] as unknown as AnyAgentTool[],
+      {
+        config: {
+          agents: {
+            list: [
+              {
+                id: "gemma",
+                default: true,
+                experimental: {
+                  localModelLean: true,
+                },
+              },
+            ],
+          },
+        },
+        modelProvider: "lmstudio",
+        modelApi: "openai-compatible",
+        modelId: "gemma-4-e4b-it",
+      },
+    );
+
+    expect(toolNames(filtered)).toEqual(["read", "exec"]);
+  });
+
+  it("drops heavyweight tools when lean local-model mode is enabled for the session agent", () => {
+    const filtered = testing.applyModelProviderToolPolicy(
+      [
+        { name: "read" },
+        { name: "browser" },
+        { name: "cron" },
+        { name: "message" },
+        { name: "exec" },
+      ] as unknown as AnyAgentTool[],
+      {
+        config: {
+          agents: {
+            list: [
+              {
+                id: "main",
+                experimental: {
+                  localModelLean: false,
+                },
+              },
+              {
+                id: "gemma",
+                experimental: {
+                  localModelLean: true,
+                },
+              },
+            ],
+          },
+        },
+        sessionKey: "agent:gemma:main",
+        modelProvider: "lmstudio",
+        modelApi: "openai-compatible",
+        modelId: "gemma-4-e4b-it",
+      },
+    );
+
+    expect(toolNames(filtered)).toEqual(["read", "exec"]);
+  });
+
+  it("lets a current agent disable inherited lean local-model mode", () => {
+    const filtered = testing.applyModelProviderToolPolicy(
+      [
+        { name: "read" },
+        { name: "browser" },
+        { name: "cron" },
+        { name: "message" },
+        { name: "exec" },
+      ] as unknown as AnyAgentTool[],
+      {
+        config: {
+          agents: {
+            defaults: {
+              experimental: {
+                localModelLean: true,
+              },
+            },
+            list: [
+              {
+                id: "main",
+                experimental: {
+                  localModelLean: false,
+                },
+              },
+            ],
+          },
+        },
+        agentId: "main",
+        modelProvider: "openai",
+        modelApi: "openai-responses",
+        modelId: "gpt-5.4",
+      },
+    );
+
+    expect(toolNames(filtered)).toEqual(["read", "browser", "cron", "message", "exec"]);
+  });
+
   it("keeps heavyweight tools when the experimental lean local-model flag is not enabled", () => {
     const filtered = testing.applyModelProviderToolPolicy(
       [

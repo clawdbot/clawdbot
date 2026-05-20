@@ -7,6 +7,7 @@ import YAML from "yaml";
 
 const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 const dockerfilePath = join(repoRoot, "Dockerfile");
+const dockerReleaseWorkflowPath = join(repoRoot, ".github/workflows/docker-release.yml");
 const dockerSetupDockerfilePaths = ["Dockerfile", "scripts/docker/sandbox/Dockerfile"] as const;
 const pnpmWorkspacePath = join(repoRoot, "pnpm-workspace.yaml");
 
@@ -221,6 +222,14 @@ describe("Dockerfile", () => {
     expect(dockerfile).toContain(
       "COPY --from=runtime-assets --chown=node:node /app/patches ./patches",
     );
+  });
+
+  it("keeps the Codex plugin in official Docker release images", async () => {
+    const workflow = await readFile(dockerReleaseWorkflowPath, "utf8");
+    const releaseKeepList = "OPENCLAW_EXTENSIONS=diagnostics-otel,codex";
+
+    expect(workflow.match(new RegExp(releaseKeepList, "g"))).toHaveLength(2);
+    expect(workflow).not.toContain("OPENCLAW_EXTENSIONS=diagnostics-otel\n");
   });
 
   it("does not override bundled plugin discovery in runtime images", async () => {

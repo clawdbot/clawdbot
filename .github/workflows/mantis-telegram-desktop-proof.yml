@@ -484,6 +484,7 @@ jobs:
       - name: Release leaked Telegram proof leases
         if: ${{ always() }}
         env:
+          CRABBOX_PROVIDER: ${{ needs.resolve_request.outputs.crabbox_provider }}
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
         shell: bash
@@ -492,17 +493,34 @@ jobs:
           if [[ ! -d .artifacts/qa-e2e ]]; then
             exit 0
           fi
+          status=0
+          mapfile -d '' session_files < <(sudo find .artifacts/qa-e2e -path '*/telegram-user-crabbox/*/session.json' -type f -print0)
+          for session_file in "${session_files[@]}"; do
+            lease_file="${session_file%/session.json}/.session/lease.json"
+            if [[ ! -f "$lease_file" ]]; then
+              continue
+            fi
+            if ! sudo -u codex env \
+              OPENCLAW_QA_CONVEX_SECRET_CI="$OPENCLAW_QA_CONVEX_SECRET_CI" \
+              OPENCLAW_QA_CONVEX_SITE_URL="$OPENCLAW_QA_CONVEX_SITE_URL" \
+              OPENCLAW_TELEGRAM_USER_CRABBOX_BIN=/usr/local/bin/crabbox \
+              OPENCLAW_TELEGRAM_USER_CRABBOX_PROVIDER="$CRABBOX_PROVIDER" \
+              node --import tsx "$GITHUB_WORKSPACE/scripts/e2e/telegram-user-crabbox-proof.ts" \
+                finish --session "$session_file" --preview-crop telegram-window; then
+              status=1
+            fi
+          done
           mapfile -d '' lease_files < <(sudo find .artifacts/qa-e2e -path '*/telegram-user-crabbox/*/.session/lease.json' -type f -print0)
-          if [[ "${#lease_files[@]}" -eq 0 ]]; then
-            exit 0
-          fi
           for lease_file in "${lease_files[@]}"; do
-            sudo -u codex env \
+            if ! sudo -u codex env \
               OPENCLAW_QA_CONVEX_SECRET_CI="$OPENCLAW_QA_CONVEX_SECRET_CI" \
               OPENCLAW_QA_CONVEX_SITE_URL="$OPENCLAW_QA_CONVEX_SITE_URL" \
               node --import tsx "$GITHUB_WORKSPACE/scripts/e2e/telegram-user-credential.ts" \
-                release --lease-file "$lease_file"
+                release --lease-file "$lease_file"; then
+              status=1
+            fi
           done
+          exit "$status"
 
       - name: Inspect Mantis evidence manifest
         id: inspect

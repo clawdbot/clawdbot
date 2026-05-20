@@ -13,15 +13,17 @@ export type DeviceBootstrapProfileInput = {
 export const BOOTSTRAP_HANDOFF_OPERATOR_SCOPES = [
   "operator.approvals",
   "operator.read",
-  "operator.talk.secrets",
   "operator.write",
 ] as const;
 
 const BOOTSTRAP_HANDOFF_OPERATOR_SCOPE_SET = new Set<string>(BOOTSTRAP_HANDOFF_OPERATOR_SCOPES);
 
 export const PAIRING_SETUP_BOOTSTRAP_PROFILE: DeviceBootstrapProfile = {
-  roles: ["node"],
-  scopes: [],
+  // QR/setup-code bootstrap must hand off both tokens for native onboarding:
+  // iOS/Android suppress the operator loop while bootstrap auth is active and
+  // only start it after persisting this bounded operator token.
+  roles: ["node", "operator"],
+  scopes: [...BOOTSTRAP_HANDOFF_OPERATOR_SCOPES],
 };
 
 export function resolveBootstrapProfileScopesForRole(

@@ -691,6 +691,7 @@ export function buildTurnStartParams(
     appServer: CodexAppServerRuntimeOptions;
     promptText?: string;
     sandboxPolicy?: CodexSandboxPolicy;
+    heartbeatCollaborationInstructions?: string;
   },
 ): CodexTurnStartParams {
   return {
@@ -704,7 +705,9 @@ export function buildTurnStartParams(
     model: params.modelId,
     ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
     effort: resolveReasoningEffort(params.thinkLevel, params.modelId),
-    collaborationMode: buildTurnCollaborationMode(params),
+    collaborationMode: buildTurnCollaborationMode(params, {
+      heartbeatCollaborationInstructions: options.heartbeatCollaborationInstructions,
+    }),
   };
 }
 
@@ -712,23 +715,30 @@ type CodexTurnCollaborationMode = NonNullable<CodexTurnStartParams["collaboratio
 
 export function buildTurnCollaborationMode(
   params: EmbeddedRunAttemptParams,
+  options: { heartbeatCollaborationInstructions?: string } = {},
 ): CodexTurnCollaborationMode {
   return {
     mode: "default",
     settings: {
       model: params.modelId,
       reasoning_effort: resolveReasoningEffort(params.thinkLevel, params.modelId),
-      developer_instructions: buildTurnScopedCollaborationInstructions(params),
+      developer_instructions: buildTurnScopedCollaborationInstructions(params, options),
     },
   };
 }
 
-function buildTurnScopedCollaborationInstructions(params: EmbeddedRunAttemptParams): string | null {
+function buildTurnScopedCollaborationInstructions(
+  params: EmbeddedRunAttemptParams,
+  options: { heartbeatCollaborationInstructions?: string } = {},
+): string | null {
   if (params.trigger === "cron") {
     return buildCronCollaborationInstructions();
   }
   if (params.trigger === "heartbeat") {
-    return buildHeartbeatCollaborationInstructions();
+    return joinPresentSections(
+      buildHeartbeatCollaborationInstructions(),
+      options.heartbeatCollaborationInstructions,
+    );
   }
   return null;
 }
@@ -748,6 +758,10 @@ function buildHeartbeatCollaborationInstructions(): string {
     "When you are ready to end the heartbeat, prefer the structured `heartbeat_respond` tool so OpenClaw can record the wake outcome and notification decision. If `heartbeat_respond` is not already available and `tool_search` is available, search for `heartbeat_respond`, load it, then call it. Use `notify=false` when nothing should visibly interrupt the user.",
     CODEX_GPT5_HEARTBEAT_PROMPT_OVERLAY,
   ].join("\n\n");
+}
+
+function joinPresentSections(...sections: Array<string | undefined>): string {
+  return sections.filter((section): section is string => Boolean(section?.trim())).join("\n\n");
 }
 
 export function codexDynamicToolsFingerprint(dynamicTools: CodexDynamicToolSpec[]): string {
@@ -835,10 +849,10 @@ export function buildDeveloperInstructions(
     includeLegacyGlobalGuidance: false,
   }).join("\n");
   const sections = [
-    "Running inside OpenClaw. Use OpenClaw dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes capabilities when available.",
+    "You are a personal agent running inside OpenClaw. OpenClaw has dynamic tools for OpenClaw-owned messaging, cron, sessions, media, gateway, and nodes.",
     buildDeferredDynamicToolManifest(options.dynamicTools),
-    "Use Codex native `spawn_agent` for Codex subagents. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation; if it is not already loaded, search for `sessions_spawn` in the `openclaw` dynamic tool namespace before calling it.",
-    buildVisibleReplyInstruction(params),
+    "Use Codex native `spawn_agent` for Codex subagents. Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation.",
+    buildVisibleReplyInstruction(params, options.dynamicTools),
     nativeCommandGuidance,
     params.extraSystemPrompt,
   ];
@@ -862,11 +876,17 @@ function buildDeferredDynamicToolManifest(
   return `Deferred searchable OpenClaw dynamic tools available: ${deferredToolNames.join(", ")}. Use \`tool_search\` to load exact callable specs before use.`;
 }
 
-function buildVisibleReplyInstruction(params: EmbeddedRunAttemptParams): string {
-  if (params.sourceReplyDeliveryMode === "message_tool_only") {
-    return "Preserve channel/session context. Visible channel replies: use `message`, do not describe would-reply.";
+function buildVisibleReplyInstruction(
+  params: EmbeddedRunAttemptParams,
+  dynamicTools: readonly CodexDynamicToolSpec[] | undefined,
+): string {
+  const messageToolAvailable = dynamicTools
+    ? dynamicTools.some((tool) => tool.name.trim() === "message")
+    : params.disableMessageTool !== true;
+  if (params.sourceReplyDeliveryMode === "message_tool_only" && messageToolAvailable) {
+    return "To send a visible message, use the `message` tool.";
   }
-  return "Preserve channel/session context. Visible channel replies should use the active Codex delivery path; do not describe would-reply.";
+  return "To send a visible reply, use the active Codex delivery path.";
 }
 
 function buildUserInput(

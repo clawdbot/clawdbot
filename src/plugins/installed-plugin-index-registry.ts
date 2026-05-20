@@ -25,12 +25,14 @@ export function resolveInstalledPluginIndexRegistry(params: LoadInstalledPluginI
   const normalized = normalizePluginsConfig(params.config?.plugins);
   const installRecords =
     params.installRecords ?? loadInstalledPluginIndexInstallRecordsSync({ env: params.env });
-  const discovery = discoverOpenClawPlugins({
-    workspaceDir: params.workspaceDir,
-    extraPaths: normalized.loadPaths,
-    env: params.env,
-    installRecords,
-  });
+  const discovery =
+    params.discovery ??
+    discoverOpenClawPlugins({
+      workspaceDir: params.workspaceDir,
+      extraPaths: normalized.loadPaths,
+      env: params.env,
+      installRecords,
+    });
   return {
     candidates: discovery.candidates,
     registry: loadPluginManifestRegistry({

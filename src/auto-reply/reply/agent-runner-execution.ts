@@ -43,6 +43,7 @@ import {
   isTransientHttpError,
 } from "../../agents/pi-embedded-helpers.js";
 import { sanitizeUserFacingText } from "../../agents/pi-embedded-helpers/sanitize-user-facing-text.js";
+import { isMessagingToolSendAction } from "../../agents/pi-embedded-messaging.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { buildAgentRuntimeOutcomePlan } from "../../agents/runtime-plan/build.js";
 import {
@@ -1523,6 +1524,12 @@ export async function runAgentTurnWithFallback(params: {
             directlySentBlockKeys,
           })
         : undefined;
+      let messageToolOnlyDeliveryCompleted = false;
+      const messageToolOnlyDeliveryToolCallIds = new Set<string>();
+      const sourceRepliesAreToolOnly =
+        params.followupRun.run.sourceReplyDeliveryMode === "message_tool_only";
+      const shouldSuppressProgressAfterMessageToolDelivery = () =>
+        sourceRepliesAreToolOnly && messageToolOnlyDeliveryCompleted;
       const onToolResult = params.opts?.onToolResult;
       const outcomePlan = buildAgentRuntimeOutcomePlan();
       const runLane = CommandLane.Main;
@@ -1616,6 +1623,9 @@ export async function runAgentTurnWithFallback(params: {
             provider,
             entry: params.getActiveSessionEntry(),
           });
+          const selectedAuthProfile = resolveRunAuthProfile(candidateRun, provider, {
+            config: runtimeConfig,
+          });
           const cliExecutionProvider =
             sessionRuntimeOverride === "pi"
               ? provider
@@ -1627,6 +1637,7 @@ export async function runAgentTurnWithFallback(params: {
                   cfg: runtimeConfig,
                   agentId: params.followupRun.run.agentId,
                   modelId: model,
+                  authProfileId: selectedAuthProfile.authProfileId,
                 }) ??
                 provider);
 
@@ -1874,14 +1885,29 @@ export async function runAgentTurnWithFallback(params: {
                   if (evt.stream === "tool") {
                     const phase = readStringValue(evt.data.phase) ?? "";
                     const name = readStringValue(evt.data.name);
+                    const toolCallId = readStringValue(evt.data.toolCallId) ?? "";
+                    const args =
+                      evt.data.args && typeof evt.data.args === "object"
+                        ? (evt.data.args as Record<string, unknown>)
+                        : undefined;
+                    if (
+                      sourceRepliesAreToolOnly &&
+                      toolCallId &&
+                      name &&
+                      (phase === "start" || phase === "update") &&
+                      args &&
+                      isMessagingToolSendAction(name, args)
+                    ) {
+                      messageToolOnlyDeliveryToolCallIds.add(toolCallId);
+                    }
+                    if (shouldSuppressProgressAfterMessageToolDelivery()) {
+                      return;
+                    }
                     if (phase === "start" || phase === "update") {
                       const toolStartProgressPromise = params.opts?.onToolStart?.({
                         name,
                         phase,
-                        args:
-                          evt.data.args && typeof evt.data.args === "object"
-                            ? (evt.data.args as Record<string, unknown>)
-                            : undefined,
+                        args,
                         detailMode: params.toolProgressDetail,
                       });
                       await Promise.all([
@@ -1894,14 +1920,35 @@ export async function runAgentTurnWithFallback(params: {
                     evt.stream === "item" &&
                     evt.data.suppressChannelProgress === true &&
                     Boolean(params.opts?.onToolStart);
-                  if (evt.stream === "item" && !suppressItemChannelProgress) {
+                  const itemPhase = evt.stream === "item" ? readStringValue(evt.data.phase) : "";
+                  const itemName = evt.stream === "item" ? readStringValue(evt.data.name) : "";
+                  const itemStatus = evt.stream === "item" ? readStringValue(evt.data.status) : "";
+                  const itemToolCallId =
+                    evt.stream === "item" ? (readStringValue(evt.data.toolCallId) ?? "") : "";
+                  const completedMessageToolDelivery =
+                    sourceRepliesAreToolOnly &&
+                    itemPhase === "end" &&
+                    itemStatus === "completed" &&
+                    itemToolCallId.length > 0 &&
+                    messageToolOnlyDeliveryToolCallIds.has(itemToolCallId);
+                  const suppressProgressAfterMessageToolDelivery =
+                    shouldSuppressProgressAfterMessageToolDelivery();
+                  if (completedMessageToolDelivery) {
+                    messageToolOnlyDeliveryToolCallIds.delete(itemToolCallId);
+                    messageToolOnlyDeliveryCompleted = true;
+                  }
+                  if (
+                    evt.stream === "item" &&
+                    !suppressItemChannelProgress &&
+                    (!suppressProgressAfterMessageToolDelivery || completedMessageToolDelivery)
+                  ) {
                     await params.opts?.onItemEvent?.({
                       itemId: readStringValue(evt.data.itemId),
                       kind: readStringValue(evt.data.kind),
                       title: readStringValue(evt.data.title),
-                      name: readStringValue(evt.data.name),
-                      phase: readStringValue(evt.data.phase),
-                      status: readStringValue(evt.data.status),
+                      name: itemName,
+                      phase: itemPhase,
+                      status: itemStatus,
                       summary: readStringValue(evt.data.summary),
                       progressText: readStringValue(evt.data.progressText),
                       meta: readStringValue(evt.data.meta),
@@ -1909,7 +1956,7 @@ export async function runAgentTurnWithFallback(params: {
                       approvalSlug: readStringValue(evt.data.approvalSlug),
                     });
                   }
-                  if (evt.stream === "plan") {
+                  if (evt.stream === "plan" && !shouldSuppressProgressAfterMessageToolDelivery()) {
                     await params.opts?.onPlanUpdate?.({
                       phase: readStringValue(evt.data.phase),
                       title: readStringValue(evt.data.title),
@@ -1920,7 +1967,10 @@ export async function runAgentTurnWithFallback(params: {
                       source: readStringValue(evt.data.source),
                     });
                   }
-                  if (evt.stream === "approval") {
+                  if (
+                    evt.stream === "approval" &&
+                    !shouldSuppressProgressAfterMessageToolDelivery()
+                  ) {
                     await params.opts?.onApprovalEvent?.({
                       phase: readStringValue(evt.data.phase),
                       kind: readStringValue(evt.data.kind),
@@ -1937,7 +1987,10 @@ export async function runAgentTurnWithFallback(params: {
                       message: readStringValue(evt.data.message),
                     });
                   }
-                  if (evt.stream === "command_output") {
+                  if (
+                    evt.stream === "command_output" &&
+                    !shouldSuppressProgressAfterMessageToolDelivery()
+                  ) {
                     await params.opts?.onCommandOutput?.({
                       itemId: readStringValue(evt.data.itemId),
                       phase: readStringValue(evt.data.phase),
@@ -1955,7 +2008,7 @@ export async function runAgentTurnWithFallback(params: {
                       cwd: readStringValue(evt.data.cwd),
                     });
                   }
-                  if (evt.stream === "patch") {
+                  if (evt.stream === "patch" && !shouldSuppressProgressAfterMessageToolDelivery()) {
                     await params.opts?.onPatchSummary?.({
                       itemId: readStringValue(evt.data.itemId),
                       phase: readStringValue(evt.data.phase),

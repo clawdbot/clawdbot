@@ -70,6 +70,19 @@ import Testing
         #expect(problem?.needsCredentialUpdate == false)
     }
 
+    @Test func tokenMismatchSuggestsOnboardingReset() {
+        let error = GatewayConnectAuthError(
+            message: "token mismatch",
+            detailCode: GatewayConnectAuthDetailCode.authTokenMismatch.rawValue,
+            canRetryWithDeviceToken: false)
+
+        let problem = GatewayConnectionProblemMapper.map(error: error)
+
+        #expect(problem?.kind == .gatewayAuthTokenMismatch)
+        #expect(problem?.suggestsOnboardingReset == true)
+        #expect(problem?.needsCredentialUpdate == true)
+    }
+
     @Test func cancelledTransportDoesNotReplaceStructuredPairingProblem() {
         let pairing = GatewayConnectAuthError(
             message: "pairing required",

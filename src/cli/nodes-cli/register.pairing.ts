@@ -1,4 +1,6 @@
 import type { Command } from "commander";
+import type { OperatorScope } from "../../gateway/method-scopes.js";
+import { resolveNodePairApprovalScopes } from "../../infra/node-pairing-authz.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { getTerminalTableWidth } from "../../terminal/table.js";
@@ -6,8 +8,60 @@ import { formatCliCommand } from "../command-format.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import { parsePairingList } from "./format.js";
 import { renderPendingPairingRequestsTable } from "./pairing-render.js";
-import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
-import type { NodesRpcOpts } from "./types.js";
+import {
+  callGatewayCli,
+  callNodePairApprovalGatewayCli,
+  nodesCallOpts,
+  resolveNodeId,
+} from "./rpc.js";
+import type { NodesRpcOpts, PendingRequest } from "./types.js";
+
+const DEFAULT_NODE_PAIR_APPROVE_SCOPES: OperatorScope[] = ["operator.pairing"];
+const NODE_PAIR_APPROVE_SCOPE_SET = new Set<OperatorScope>([
+  "operator.pairing",
+  "operator.write",
+  "operator.admin",
+]);
+
+function normalizeNodePairApproveScopes(scopes: unknown): OperatorScope[] {
+  const normalized = new Set<OperatorScope>(DEFAULT_NODE_PAIR_APPROVE_SCOPES);
+  if (!Array.isArray(scopes)) {
+    return [...normalized];
+  }
+  for (const scope of scopes) {
+    if (typeof scope !== "string") {
+      continue;
+    }
+    if (!NODE_PAIR_APPROVE_SCOPE_SET.has(scope as OperatorScope)) {
+      continue;
+    }
+    normalized.add(scope as OperatorScope);
+  }
+  return [...normalized];
+}
+
+async function resolveApproveScopesForRequest(
+  opts: NodesRpcOpts,
+  requestId: string,
+): Promise<OperatorScope[]> {
+  try {
+    const result = await callNodePairApprovalGatewayCli(
+      "node.pair.list",
+      opts,
+      {},
+      { scopes: DEFAULT_NODE_PAIR_APPROVE_SCOPES },
+    );
+    const { pending } = parsePairingList(result);
+    const request = pending.find((candidate: PendingRequest) => candidate.requestId === requestId);
+    const scopes = normalizeNodePairApproveScopes(request?.requiredApproveScopes);
+    if (scopes.length > DEFAULT_NODE_PAIR_APPROVE_SCOPES.length) {
+      return scopes;
+    }
+    return resolveNodePairApprovalScopes(request?.commands) as OperatorScope[];
+  } catch {
+    return [...DEFAULT_NODE_PAIR_APPROVE_SCOPES];
+  }
+}
 
 export function registerNodesPairingCommands(nodes: Command) {
   nodesCallOpts(
@@ -49,9 +103,17 @@ export function registerNodesPairingCommands(nodes: Command) {
       .argument("<requestId>", "Pending request id")
       .action(async (requestId: string, opts: NodesRpcOpts) => {
         await runNodesCommand("approve", async () => {
-          const result = await callGatewayCli("node.pair.approve", opts, {
-            requestId,
-          });
+          const scopes = await resolveApproveScopesForRequest(opts, requestId);
+          const result = await callNodePairApprovalGatewayCli(
+            "node.pair.approve",
+            opts,
+            {
+              requestId,
+            },
+            {
+              scopes,
+            },
+          );
           defaultRuntime.writeJson(result);
         });
       }),

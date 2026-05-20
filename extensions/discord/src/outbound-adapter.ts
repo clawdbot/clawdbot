@@ -126,6 +126,7 @@ export const discordOutbound: ChannelOutboundAdapter = {
         maxActionsPerRow: 5,
         maxRows: 5,
         maxLabelLength: 80,
+        supportsDisabled: true,
       },
       selects: {
         maxOptions: 25,

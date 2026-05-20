@@ -43,8 +43,8 @@ import { materializeRuntimeConfig } from "./materialize.js";
 import { collectConfiguredModelRefs } from "./model-refs.js";
 import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 import { coerceSecretRef } from "./types.secrets.js";
-import { OpenClawSchema } from "./zod-schema.js";
 import { isBuiltInModelProviderOverlayId } from "./zod-schema.core.js";
+import { OpenClawSchema } from "./zod-schema.js";
 
 const LEGACY_REMOVED_PLUGIN_IDS = new Set(["google-antigravity-auth", "google-gemini-cli-auth"]);
 const BLOCKED_PLUGIN_CANDIDATE_PREFIX = "blocked plugin candidate:";
@@ -1605,6 +1605,7 @@ function validateConfigObjectWithPluginsBase(
       blockedDiagnosticSourceMatchesPluginId(diagnostic, pluginId),
     );
   };
+  const missingOfficialPluginWarningIds = new Set<string>();
   const pushMissingPluginIssue = (
     path: string,
     pluginId: string,
@@ -1632,6 +1633,13 @@ function validateConfigObjectWithPluginsBase(
       const externalInstallWarning =
         opts.missingMessage ?? formatMissingOfficialExternalPluginWarning(pluginId);
       if (externalInstallWarning) {
+        const normalizedPluginId = normalizePluginId(pluginId);
+        if (!opts.missingMessage && normalizedPluginId) {
+          if (missingOfficialPluginWarningIds.has(normalizedPluginId)) {
+            return;
+          }
+          missingOfficialPluginWarningIds.add(normalizedPluginId);
+        }
         warnings.push({
           path,
           message: externalInstallWarning,

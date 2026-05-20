@@ -21,6 +21,11 @@ import {
   resetCodexDiagnosticsFeedbackStateForTests,
   type CodexCommandDeps,
 } from "./command-handlers.js";
+import type {
+  CodexPluginsConfigBlock,
+  CodexPluginConfigEntry,
+  CodexPluginsManagementIO,
+} from "./command-plugins-management.js";
 import { handleCodexCommand } from "./commands.js";
 
 let tempDir: string;
@@ -70,6 +75,27 @@ function createDeps(overrides: Partial<CodexCommandDeps> = {}): Partial<CodexCom
     ),
     safeCodexControlRequest: vi.fn(),
     ...overrides,
+  };
+}
+
+function inMemoryCodexPluginsIO(
+  initial: Record<string, CodexPluginConfigEntry> = {},
+  options: { enabled?: boolean } = { enabled: true },
+): CodexPluginsManagementIO & {
+  current: () => Record<string, CodexPluginConfigEntry>;
+  currentConfig: () => CodexPluginsConfigBlock;
+} {
+  const store: CodexPluginsConfigBlock = {
+    enabled: options.enabled,
+    plugins: JSON.parse(JSON.stringify(initial)),
+  };
+  return {
+    current: () => JSON.parse(JSON.stringify(store.plugins ?? {})),
+    currentConfig: () => JSON.parse(JSON.stringify(store)),
+    readConfig: () => Promise.resolve(JSON.parse(JSON.stringify(store))),
+    mutate: async (update) => {
+      update(store);
+    },
   };
 }
 
@@ -214,6 +240,46 @@ describe("codex command", () => {
 
     expect(result.text).toContain("Codex command failed: &lt;\uff20U123&gt; loader failed");
     expect(result.text).not.toContain("<@U123>");
+  });
+
+  it("lists Codex sub-plugins through the /codex plugins command surface", async () => {
+    const codexPluginsManagementIo = inMemoryCodexPluginsIO({
+      "google-calendar": {
+        enabled: true,
+        marketplaceName: "openai-curated",
+        pluginName: "google-calendar",
+      },
+    });
+
+    const result = await handleCodexCommand(createContext("plugins list"), {
+      deps: createDeps({ codexPluginsManagementIo }),
+    });
+
+    expectResultTextContains(result, "ON   google-calendar");
+    expectResultTextContains(result, "openclaw.json");
+  });
+
+  it("enables and disables Codex sub-plugins through the /codex plugins command surface", async () => {
+    const codexPluginsManagementIo = inMemoryCodexPluginsIO({
+      "google-calendar": {
+        enabled: true,
+        marketplaceName: "openai-curated",
+        pluginName: "google-calendar",
+      },
+    });
+
+    const disabled = await handleCodexCommand(createContext("plugins disable google-calendar"), {
+      deps: createDeps({ codexPluginsManagementIo }),
+    });
+    expectResultTextContains(disabled, "google-calendar: disabled in openclaw.json");
+    expect(codexPluginsManagementIo.current()["google-calendar"]?.enabled).toBe(false);
+
+    const enabled = await handleCodexCommand(createContext("plugins enable google-calendar"), {
+      deps: createDeps({ codexPluginsManagementIo }),
+    });
+    expectResultTextContains(enabled, "google-calendar: enabled in openclaw.json");
+    expect(codexPluginsManagementIo.currentConfig().enabled).toBe(true);
+    expect(codexPluginsManagementIo.current()["google-calendar"]?.enabled).toBe(true);
   });
 
   it("attaches the current session to an existing Codex thread", async () => {

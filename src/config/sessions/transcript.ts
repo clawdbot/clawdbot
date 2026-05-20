@@ -22,6 +22,7 @@ import {
   streamSessionTranscriptLines,
   streamSessionTranscriptLinesReverse,
 } from "./transcript-stream.js";
+import { runWithOwnedSessionTranscriptWriteLock } from "./transcript-write-context.js";
 import type { SessionEntry } from "./types.js";
 
 let piCodingAgentModulePromise: Promise<typeof import("@earendil-works/pi-coding-agent")> | null =
@@ -313,49 +314,60 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
     };
   }
 
-  await ensureSessionHeader({ sessionFile, sessionId: entry.sessionId });
+  return await runWithOwnedSessionTranscriptWriteLock(
+    { sessionFile, sessionKey: resolved.normalizedKey },
+    async () => {
+      await ensureSessionHeader({ sessionFile, sessionId: entry.sessionId });
 
-  const explicitIdempotencyKey =
-    params.idempotencyKey ??
-    ((params.message as { idempotencyKey?: unknown }).idempotencyKey as string | undefined);
-  const existingMessageId = explicitIdempotencyKey
-    ? await transcriptHasIdempotencyKey(sessionFile, explicitIdempotencyKey)
-    : undefined;
-  if (existingMessageId) {
-    return {
-      ok: true,
-      sessionFile,
-      messageId: existingMessageId === true ? (explicitIdempotencyKey ?? "") : existingMessageId,
-    };
-  }
+      const explicitIdempotencyKey =
+        params.idempotencyKey ??
+        ((params.message as { idempotencyKey?: unknown }).idempotencyKey as string | undefined);
+      const existingMessageId = explicitIdempotencyKey
+        ? await transcriptHasIdempotencyKey(sessionFile, explicitIdempotencyKey)
+        : undefined;
+      if (existingMessageId) {
+        return {
+          ok: true,
+          sessionFile,
+          messageId:
+            existingMessageId === true ? (explicitIdempotencyKey ?? "") : existingMessageId,
+        };
+      }
 
-  const latestEquivalentAssistantId = isRedundantDeliveryMirror(params.message)
-    ? await findLatestEquivalentAssistantMessageId(sessionFile, params.message, params.config)
-    : undefined;
-  if (latestEquivalentAssistantId) {
-    return { ok: true, sessionFile, messageId: latestEquivalentAssistantId };
-  }
-  const message = {
-    ...params.message,
-    ...(explicitIdempotencyKey ? { idempotencyKey: explicitIdempotencyKey } : {}),
-  } as Parameters<SessionManager["appendMessage"]>[0];
-  const { messageId, message: appendedMessage } = await appendSessionTranscriptMessage({
-    transcriptPath: sessionFile,
-    message,
-    config: params.config,
-  });
+      const latestEquivalentAssistantId = isRedundantDeliveryMirror(params.message)
+        ? await findLatestEquivalentAssistantMessageId(sessionFile, params.message, params.config)
+        : undefined;
+      if (latestEquivalentAssistantId) {
+        return { ok: true, sessionFile, messageId: latestEquivalentAssistantId };
+      }
+      const message = {
+        ...params.message,
+        ...(explicitIdempotencyKey ? { idempotencyKey: explicitIdempotencyKey } : {}),
+      } as Parameters<SessionManager["appendMessage"]>[0];
+      const { messageId, message: appendedMessage } = await appendSessionTranscriptMessage({
+        transcriptPath: sessionFile,
+        message,
+        config: params.config,
+      });
 
-  switch (params.updateMode ?? "inline") {
-    case "inline":
-      emitSessionTranscriptUpdate({ sessionFile, sessionKey, message: appendedMessage, messageId });
-      break;
-    case "file-only":
-      emitSessionTranscriptUpdate({ sessionFile, sessionKey });
-      break;
-    case "none":
-      break;
-  }
-  return { ok: true, sessionFile, messageId };
+      switch (params.updateMode ?? "inline") {
+        case "inline":
+          emitSessionTranscriptUpdate({
+            sessionFile,
+            sessionKey,
+            message: appendedMessage,
+            messageId,
+          });
+          break;
+        case "file-only":
+          emitSessionTranscriptUpdate({ sessionFile, sessionKey });
+          break;
+        case "none":
+          break;
+      }
+      return { ok: true, sessionFile, messageId };
+    },
+  );
 }
 
 async function transcriptHasIdempotencyKey(

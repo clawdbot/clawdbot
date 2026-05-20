@@ -147,24 +147,33 @@ When a device token is issued, `hello-ok` also includes:
 }
 ```
 
-Built-in QR/setup-code bootstrap is node-only. After the owner approves the
-pending node request, `hello-ok.auth` includes the primary node token:
+Built-in QR/setup-code bootstrap is a fresh mobile handoff path. A successful
+baseline setup-code connect returns a primary node token plus one bounded
+operator token:
 
 ```json
 {
   "auth": {
     "deviceToken": "…",
     "role": "node",
-    "scopes": []
+    "scopes": [],
+    "deviceTokens": [
+      {
+        "deviceToken": "…",
+        "role": "operator",
+        "scopes": ["operator.approvals", "operator.read", "operator.write"]
+      }
+    ]
   }
 }
 ```
 
-The built-in setup-code flow does not include additional `deviceTokens` entries
-or hand off an operator token. Client authors should treat the optional
-`hello-ok.auth.deviceTokens` field as legacy/custom bootstrap extension data:
-persist it only when present on a trusted transport, and do not require it for
-built-in pairing.
+The operator handoff is intentionally bounded so QR onboarding can start the
+mobile operator loop without granting `operator.admin`, `operator.pairing`, or
+`operator.talk.secrets`. Those scopes require a separate approved operator
+pairing or token flow. Clients should persist `hello-ok.auth.deviceTokens` only
+when the connect used bootstrap auth on trusted transport such as `wss://` or
+loopback/local pairing.
 
 ### Node example
 
@@ -691,17 +700,16 @@ rather than the pre-handshake defaults.
     `AUTH_TOKEN_MISMATCH` retry is gated to **trusted endpoints only** —
     loopback, or `wss://` with a pinned `tlsFingerprint`. Public `wss://`
     without pinning does not qualify.
-- Built-in setup-code bootstrap returns only the primary node
-  `hello-ok.auth.deviceToken`; clients must not expect an additional operator
-  token in `hello-ok.auth.deviceTokens`.
-- While built-in setup-code bootstrap is waiting for approval, `PAIRING_REQUIRED`
+- Built-in setup-code bootstrap returns the primary node
+  `hello-ok.auth.deviceToken` plus a bounded operator token in
+  `hello-ok.auth.deviceTokens` for trusted mobile handoff. The operator token
+  excludes `operator.admin`, `operator.pairing`, and `operator.talk.secrets`.
+- While a non-baseline setup-code bootstrap is waiting for approval, `PAIRING_REQUIRED`
   details include `recommendedNextStep: "wait_then_retry"`, `retryable: true`,
   and `pauseReconnect: false`. Clients should keep reconnecting with the same
   bootstrap token until the request is approved or the token becomes invalid.
-- If an older or custom trusted bootstrap flow includes optional
-  `hello-ok.auth.deviceTokens` entries, persist them only when the connect used
-  bootstrap auth on a trusted transport such as `wss://` or loopback/local
-  pairing.
+- Persist `hello-ok.auth.deviceTokens` only when the connect used bootstrap auth
+  on a trusted transport such as `wss://` or loopback/local pairing.
 - If a client supplies an **explicit** `deviceToken` or explicit `scopes`, that
   caller-requested scope set remains authoritative; cached scopes are only
   reused when the client is reusing the stored per-device token.

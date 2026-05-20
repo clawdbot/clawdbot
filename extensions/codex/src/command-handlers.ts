@@ -29,6 +29,10 @@ import {
   readString,
 } from "./command-formatters.js";
 import {
+  handleCodexPluginsSubcommand,
+  type CodexPluginsManagementIO,
+} from "./command-plugins-management.js";
+import {
   codexControlRequest,
   readCodexStatusProbes,
   requestOptions,
@@ -80,6 +84,7 @@ export type CodexCommandDeps = {
   stopCodexConversationTurn: typeof stopCodexConversationTurn;
   listCodexCliSessionsOnNode: ListCodexCliSessionsOnNodeFn;
   resolveCodexCliSessionForBindingOnNode: ResolveCodexCliSessionForBindingOnNodeFn;
+  codexPluginsManagementIo?: CodexPluginsManagementIO;
 };
 
 type CodexControlRequestFn = (
@@ -227,6 +232,16 @@ export async function handleCodexSubcommand(
   const normalized = subcommand.toLowerCase();
   if (normalized === "help") {
     return { text: buildHelp() };
+  }
+  if (normalized === "plugins") {
+    if (!deps.codexPluginsManagementIo) {
+      return {
+        text:
+          "Codex sub-plugin management is not wired up (codexPluginsManagementIo dep is undefined). " +
+          "Edit ~/.openclaw/openclaw.json or use `openclaw config patch` until the runtime exposes the IO.",
+      };
+    }
+    return await handleCodexPluginsSubcommand(ctx, rest, deps.codexPluginsManagementIo);
   }
   if (normalized === "status") {
     if (rest.length > 0) {

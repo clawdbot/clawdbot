@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isRecord } from "../utils.js";
-import { discoverOpenClawPlugins } from "./discovery.js";
+import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginManifestConfigContracts } from "./manifest.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
@@ -114,6 +114,7 @@ export function resolvePluginConfigContractsById(params: {
   fallbackToBundledMetadataForResolvedBundled?: boolean;
   fallbackBundledPluginIds?: readonly string[];
   pluginIds: readonly string[];
+  discovery?: PluginDiscoveryResult;
 }): ReadonlyMap<string, PluginConfigContractMetadata> {
   const matches = new Map<string, PluginConfigContractMetadata>();
   const pluginIds = [
@@ -132,10 +133,12 @@ export function resolvePluginConfigContractsById(params: {
     if (bundledContractFallbacks.has(pluginId)) {
       return bundledContractFallbacks.get(pluginId);
     }
-    const discovery = discoverOpenClawPlugins({
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-    });
+    const discovery =
+      params.discovery ??
+      discoverOpenClawPlugins({
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+      });
     const registry = loadPluginManifestRegistry({
       config: params.config,
       workspaceDir: params.workspaceDir,

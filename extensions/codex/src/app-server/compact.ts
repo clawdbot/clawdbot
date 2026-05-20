@@ -1,7 +1,9 @@
 import {
+  compactContextEngineWithSafetyTimeout,
   embeddedAgentLog,
   formatErrorMessage,
   isActiveHarnessContextEngine,
+  resolveCompactionTimeoutMs,
   resolveContextEngineOwnerPluginId,
   runHarnessContextEngineMaintenance,
   type CompactEmbeddedPiSessionParams,
@@ -79,17 +81,27 @@ async function compactOwningContextEngine(
   });
   let result: Awaited<ReturnType<typeof contextEngine.compact>>;
   try {
-    result = await contextEngine.compact({
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      sessionFile: params.sessionFile,
-      tokenBudget: params.contextTokenBudget,
-      currentTokenCount: params.currentTokenCount,
-      compactionTarget: params.trigger === "manual" ? "threshold" : "budget",
-      customInstructions: params.customInstructions,
-      force: params.trigger === "manual",
-      runtimeContext: params.contextEngineRuntimeContext,
-    });
+    // Bound the plugin-owned compaction with the same finite safety timeout
+    // that protects native runtime compaction, and thread the caller's abort
+    // signal through, so a slow/hung plugin compact() cannot hang the Codex
+    // compaction lane indefinitely. A timeout/abort (or any thrown error) is
+    // converted to a clean { ok: false } result by the catch below.
+    result = await compactContextEngineWithSafetyTimeout(
+      contextEngine,
+      {
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        sessionFile: params.sessionFile,
+        tokenBudget: params.contextTokenBudget,
+        currentTokenCount: params.currentTokenCount,
+        compactionTarget: params.trigger === "manual" ? "threshold" : "budget",
+        customInstructions: params.customInstructions,
+        force: params.trigger === "manual",
+        runtimeContext: params.contextEngineRuntimeContext,
+      },
+      resolveCompactionTimeoutMs(params.config),
+      params.abortSignal,
+    );
   } catch (error) {
     embeddedAgentLog.warn("context-engine-owned Codex app-server compaction failed", {
       sessionId: params.sessionId,

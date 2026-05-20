@@ -4,6 +4,7 @@ import { formatRelativeTimestamp, parseSessionKeyParts } from "../format.ts";
 import { icons } from "../icons.ts";
 import { pathForTab } from "../navigation.ts";
 import { formatSessionTokens } from "../presenter.ts";
+import { isSessionRunActive } from "../session-run-state.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
 import {
   formatInheritedThinkingLabel,
@@ -196,7 +197,7 @@ function resolveSessionStatusBadge(row: GatewaySessionRow): {
   label: string;
   tone: "live" | "idle" | "done" | "failed" | "muted";
 } {
-  if (row.hasActiveRun === true || row.status === "running") {
+  if (isSessionRunActive(row)) {
     return { label: t("sessionsView.statusLive"), tone: "live" };
   }
   if (row.status) {
@@ -247,8 +248,11 @@ function filterRows(
     const displayName = normalizeLowercaseStringOrEmpty(row.displayName);
     const runtime = normalizeLowercaseStringOrEmpty(resolveAgentRuntimeLabel(row.agentRuntime));
     const status = normalizeLowercaseStringOrEmpty(row.status);
-    const liveState =
-      row.hasActiveRun === true ? "live running" : row.hasActiveRun === false ? "idle" : "";
+    const liveState = isSessionRunActive(row)
+      ? "live running"
+      : row.hasActiveRun === false
+        ? "idle"
+        : "";
     if (
       key.includes(q) ||
       label.includes(q) ||

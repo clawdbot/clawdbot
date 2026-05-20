@@ -123,10 +123,13 @@ The setup code is a base64-encoded JSON payload that contains:
 
 That bootstrap token carries the built-in pairing bootstrap profile:
 
-- the built-in setup profile allows only the `node` role
-- after approval, the handed-off `node` token stays `scopes: []`
-- the built-in setup-code flow does not hand off an `operator` token
-- operator access requires a separate approved operator pairing or token flow
+- the built-in setup profile allows the fresh QR/setup-code baseline only:
+  `node` plus a bounded `operator` handoff
+- the handed-off `node` token stays `scopes: []`
+- the handed-off `operator` token is limited to `operator.approvals`,
+  `operator.read`, and `operator.write`
+- `operator.admin` and `operator.pairing` are not granted by QR/setup-code
+  bootstrap; they require a separate approved operator pairing or token flow
 - later token rotation/revocation remains bounded by both the device's approved
   role contract and the caller session's operator scopes
 

@@ -4,14 +4,13 @@ import type { EmbeddedRunFailureSignal } from "./types.js";
 
 const FAILURE_SIGNAL_CODES = ["SYSTEM_RUN_DENIED", "INVALID_REQUEST"] as const;
 
-function resolveFailureSignalCode(message: string): EmbeddedRunFailureSignal["code"] | undefined {
+function resolveFailureSignalCode(
+  value: string | undefined,
+): EmbeddedRunFailureSignal["code"] | undefined {
   for (const code of FAILURE_SIGNAL_CODES) {
-    if (message.includes(code)) {
+    if (value === code) {
       return code;
     }
-  }
-  if (message.toLowerCase().includes("approval cannot safely bind")) {
-    return "SYSTEM_RUN_DENIED";
   }
   return undefined;
 }
@@ -27,14 +26,11 @@ export function resolveEmbeddedRunFailureSignal(params: {
   if (!lastToolError || !isExecLikeToolName(lastToolError.toolName)) {
     return undefined;
   }
-  const message = normalizeOptionalString(lastToolError.error);
-  if (!message) {
-    return undefined;
-  }
-  const code = resolveFailureSignalCode(message);
+  const code = resolveFailureSignalCode(normalizeOptionalString(lastToolError.errorCode));
   if (!code) {
     return undefined;
   }
+  const message = normalizeOptionalString(lastToolError.error) ?? code;
   return {
     kind: "execution_denied",
     source: "tool",

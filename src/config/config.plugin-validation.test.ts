@@ -315,7 +315,7 @@ describe("config plugin validation", () => {
     }
   });
 
-  it("reports catalog install hints for missing configured official external plugins", () => {
+  it("deduplicates catalog install hints for missing configured official external plugins", () => {
     const res = validateConfigObjectWithPlugins(
       {
         agents: { list: [{ id: "pi" }] },
@@ -339,7 +339,7 @@ describe("config plugin validation", () => {
     const message =
       "plugin not installed: brave — install the official external plugin with: openclaw plugins install @openclaw/brave-plugin";
     expectPathMessage(res.warnings, "plugins.entries.brave", message);
-    expectPathMessage(res.warnings, "plugins.allow", message);
+    expect((res.warnings ?? []).filter((warning) => warning.message === message)).toHaveLength(1);
     expect(
       (res.warnings ?? []).some(
         (warning) =>
@@ -403,12 +403,39 @@ describe("config plugin validation", () => {
     const message =
       "plugin not installed: memory-lancedb — install the official external plugin with: openclaw plugins install @openclaw/memory-lancedb";
     expectPathMessage(res.warnings, "plugins.entries.memory-lancedb", message);
-    expectPathMessage(res.warnings, "plugins.allow", message);
+    expect((res.warnings ?? []).filter((warning) => warning.message === message)).toHaveLength(1);
     expect(
       (res.warnings ?? []).some((warning) =>
         warning.message.includes("gateway will run without persistent memory"),
       ),
     ).toBe(false);
+  });
+
+  it("deduplicates yuanbao missing-plugin warnings across entries and allow", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "pi" }] },
+        plugins: {
+          entries: { yuanbao: { enabled: true } },
+          allow: ["yuanbao"],
+        },
+      },
+      {
+        env: suiteEnv(),
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [],
+            diagnostics: [],
+          },
+        },
+      },
+    );
+
+    expect(res.ok).toBe(true);
+    const message =
+      "plugin not installed: yuanbao — install the official external plugin with: openclaw plugins install openclaw-plugin-yuanbao@2.13.1";
+    expectPathMessage(res.warnings, "plugins.entries.yuanbao", message);
+    expect((res.warnings ?? []).filter((warning) => warning.message === message)).toHaveLength(1);
   });
 
   it("keeps official external non-memory plugins fatal in the memory slot", () => {

@@ -8,6 +8,10 @@ import type { EmbeddedRunAttemptParams } from "./run/types.js";
 let embeddedAgentBaseStreamFnCache = new WeakMap<object, StreamFn | undefined>();
 let piNativeCodexResponsesStreamFnForTest: StreamFn | undefined;
 
+type EmbeddedStreamOptions = Parameters<StreamFn>[2] & {
+  authProfileId?: string;
+};
+
 export function resolveEmbeddedAgentBaseStreamFn(params: {
   session: { agent: { streamFn?: StreamFn } };
 }): StreamFn | undefined {
@@ -113,12 +117,14 @@ export function resolveEmbeddedAgentStreamFn(params: {
   signal?: AbortSignal;
   model: EmbeddedRunAttemptParams["model"];
   resolvedApiKey?: string;
+  authProfileId?: string;
   authStorage?: { getApiKey(provider: string): Promise<string | undefined> };
 }): StreamFn {
   if (params.providerStreamFn) {
     return wrapEmbeddedAgentStreamFn(params.providerStreamFn, {
       runSignal: params.signal,
       resolvedApiKey: params.resolvedApiKey,
+      authProfileId: params.authProfileId,
       authStorage: params.authStorage,
       providerId: params.model.provider,
       transformContext: (context) =>
@@ -144,6 +150,7 @@ export function resolveEmbeddedAgentStreamFn(params: {
     return wrapEmbeddedAgentStreamFn(piNativeCodexResponsesStreamFn, {
       runSignal: params.signal,
       resolvedApiKey: params.resolvedApiKey,
+      authProfileId: params.authProfileId,
       authStorage: params.authStorage,
       providerId: params.model.provider,
       sessionId: params.sessionId,
@@ -175,6 +182,7 @@ export function resolveEmbeddedAgentStreamFn(params: {
       return wrapEmbeddedAgentStreamFn(boundaryAwareStreamFn, {
         runSignal: params.signal,
         resolvedApiKey: params.resolvedApiKey,
+        authProfileId: params.authProfileId,
         authStorage: params.authStorage,
         providerId: params.model.provider,
       });
@@ -198,6 +206,7 @@ function wrapEmbeddedAgentStreamFn(
   params: {
     runSignal: AbortSignal | undefined;
     resolvedApiKey: string | undefined;
+    authProfileId: string | undefined;
     authStorage: { getApiKey(provider: string): Promise<string | undefined> } | undefined;
     providerId: string;
     sessionId?: string;
@@ -207,11 +216,15 @@ function wrapEmbeddedAgentStreamFn(
   const transformContext =
     params.transformContext ?? ((context: Parameters<StreamFn>[1]) => context);
   const mergeRunSignal = (options: Parameters<StreamFn>[2]) => {
-    const signal = options?.signal ?? params.runSignal;
-    const merged =
-      params.sessionId && !options?.sessionId
-        ? { ...options, sessionId: params.sessionId }
-        : options;
+    const embeddedOptions = options as EmbeddedStreamOptions | undefined;
+    const signal = embeddedOptions?.signal ?? params.runSignal;
+    let merged =
+      params.sessionId && !embeddedOptions?.sessionId
+        ? { ...embeddedOptions, sessionId: params.sessionId }
+        : embeddedOptions;
+    if (params.authProfileId && !merged?.authProfileId) {
+      merged = { ...merged, authProfileId: params.authProfileId };
+    }
     return signal ? { ...merged, signal } : merged;
   };
   if (!params.authStorage && !params.resolvedApiKey) {

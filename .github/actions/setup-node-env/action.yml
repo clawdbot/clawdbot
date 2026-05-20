@@ -40,6 +40,7 @@ runs:
       id: pnpm-cache
       uses: ./.github/actions/setup-pnpm-store-cache
       with:
+        node-version: ${{ inputs.node-version }}
         pnpm-version: ${{ inputs.pnpm-version }}
         cache-key-suffix: ${{ inputs.cache-key-suffix }}
 

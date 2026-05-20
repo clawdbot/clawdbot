@@ -19,6 +19,7 @@ export type ReleaseVerifyBetaArgs = {
   pluginSelection: string[];
   evidenceOut?: string;
   skipPostpublish: boolean;
+  skipClawHub: boolean;
   rerunFailedClawHub: boolean;
   workflowRuns: {
     fullReleaseValidation?: string;
@@ -113,7 +114,7 @@ export function parseReleaseVerifyBetaArgs(argv: string[]): ReleaseVerifyBetaArg
   const version = values.shift();
   if (!version || version.startsWith("-")) {
     throw new Error(
-      "Usage: pnpm release:verify-beta -- <version> [--workflow-ref REF] [--full-release-validation-run ID] [--openclaw-npm-run ID] [--plugin-npm-run ID] [--plugin-clawhub-run ID] [--npm-telegram-run ID]",
+      "Usage: pnpm release:verify-beta -- <version> [--workflow-ref REF] [--full-release-validation-run ID] [--openclaw-npm-run ID] [--plugin-npm-run ID] [--plugin-clawhub-run ID] [--npm-telegram-run ID] [--skip-clawhub]",
     );
   }
 
@@ -127,6 +128,7 @@ export function parseReleaseVerifyBetaArgs(argv: string[]): ReleaseVerifyBetaArg
     pluginSelection: [],
     evidenceOut: undefined,
     skipPostpublish: false,
+    skipClawHub: false,
     rerunFailedClawHub: false,
     workflowRuns: {},
   };
@@ -184,6 +186,9 @@ export function parseReleaseVerifyBetaArgs(argv: string[]): ReleaseVerifyBetaArg
         break;
       case "--skip-postpublish":
         parsed.skipPostpublish = true;
+        break;
+      case "--skip-clawhub":
+        parsed.skipClawHub = true;
         break;
       case "--rerun-failed-clawhub":
         parsed.rerunFailedClawHub = true;
@@ -482,23 +487,29 @@ export async function verifyBetaRelease(
   }
   lines.push(`plugin npm OK: ${npmPlugins.length}`);
 
-  const clawHubPlugins = collectClawHubPublishablePluginPackages(rootDir, {
-    packageNames: args.pluginSelection.length > 0 ? args.pluginSelection : undefined,
-  });
-  assertSelectedPackagesResolved({
-    label: "ClawHub plugin",
-    selection: args.pluginSelection,
-    packages: clawHubPlugins,
-  });
-  for (const plugin of clawHubPlugins) {
-    await verifyClawHubPackage({
-      registry: args.registry,
-      packageName: plugin.packageName,
-      version: args.version,
-      distTag: args.distTag,
+  const clawHubPlugins = args.skipClawHub
+    ? []
+    : collectClawHubPublishablePluginPackages(rootDir, {
+        packageNames: args.pluginSelection.length > 0 ? args.pluginSelection : undefined,
+      });
+  if (args.skipClawHub) {
+    lines.push("ClawHub skipped");
+  } else {
+    assertSelectedPackagesResolved({
+      label: "ClawHub plugin",
+      selection: args.pluginSelection,
+      packages: clawHubPlugins,
     });
+    for (const plugin of clawHubPlugins) {
+      await verifyClawHubPackage({
+        registry: args.registry,
+        packageName: plugin.packageName,
+        version: args.version,
+        distTag: args.distTag,
+      });
+    }
+    lines.push(`ClawHub OK: ${clawHubPlugins.length}`);
   }
-  lines.push(`ClawHub OK: ${clawHubPlugins.length}`);
 
   const workflowRuns: WorkflowRunSummary[] = [];
   if (args.workflowRuns.fullReleaseValidation !== undefined) {

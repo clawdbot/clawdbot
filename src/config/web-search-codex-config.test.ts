@@ -31,6 +31,50 @@ describe("web search Codex native config validation", () => {
     expect(result.success).toBe(true);
   });
 
+  it("preserves extension-owned tools.web.search entries", () => {
+    const result = validateConfigObjectRaw({
+      tools: {
+        web: {
+          search: {
+            customSearch: {
+              endpoint: "https://search.example.test",
+              mode: "strict",
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.tools?.web?.search?.customSearch).toEqual({
+        endpoint: "https://search.example.test",
+        mode: "strict",
+      });
+    }
+  });
+
+  it.each(["__proto__", "prototype", "constructor"])(
+    "rejects blocked tools.web.search key %s",
+    (key) => {
+      const result = validateConfigObjectRaw(
+        JSON.parse(`{"tools":{"web":{"search":{${JSON.stringify(key)}:{"polluted":true}}}}}`),
+      );
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.issues).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              path: `tools.web.search.${key}`,
+              message: "tools.web.search must not contain blocked object keys",
+            }),
+          ]),
+        );
+      }
+    },
+  );
+
   it("rejects invalid openaiCodex.mode", () => {
     const result = validateConfigObjectRaw({
       tools: {

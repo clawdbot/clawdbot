@@ -244,13 +244,14 @@ describe("daemon-cli coverage", () => {
     expect(inspectPortUsage).toHaveBeenCalledWith(19001);
 
     const parsed = parseFirstJsonRuntimeLine<{
-      gateway?: { port?: number; portSource?: string; probeUrl?: string };
+      gateway?: { port?: number; portSource?: string; probeUrl?: string; version?: string | null };
       config?: { mismatch?: boolean };
       rpc?: { url?: string; ok?: boolean };
     }>();
     expect(parsed.gateway?.port).toBe(19001);
     expect(parsed.gateway?.portSource).toBe("service args");
     expect(parsed.gateway?.probeUrl).toBe("ws://127.0.0.1:19001");
+    expect(parsed.gateway?.version).toBeNull();
     expect(parsed.config?.mismatch).toBe(true);
     expect(parsed.rpc?.url).toBe("ws://127.0.0.1:19001");
     expect(parsed.rpc?.ok).toBe(true);

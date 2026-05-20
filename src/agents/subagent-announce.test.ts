@@ -3,8 +3,14 @@ import type { EmbeddedPiQueueMessageOutcome } from "./pi-embedded-runner/runs.js
 import { createSubagentAnnounceDeliveryRuntimeMock } from "./subagent-announce.test-support.js";
 
 type AgentCallRequest = { method?: string; params?: Record<string, unknown> };
+type AgentCallResponse = { runId?: string; status: string; error?: string };
 
-const agentSpy = vi.fn(async (_req: AgentCallRequest) => ({ runId: "run-main", status: "ok" }));
+const agentSpy = vi.fn(
+  async (_req: AgentCallRequest): Promise<AgentCallResponse> => ({
+    runId: "run-main",
+    status: "ok",
+  }),
+);
 const sessionsDeleteSpy = vi.fn((_req: AgentCallRequest) => undefined);
 const callGatewayMock = vi.fn(async (_request: unknown) => ({}));
 const loadSessionStoreMock = vi.fn((_storePath: string) => ({}));
@@ -120,7 +126,7 @@ vi.mock("./subagent-announce-delivery.js", () => ({
     const effectiveOrigin =
       params.completionDirectOrigin ?? params.requesterOrigin ?? params.directOrigin;
 
-    await callGatewayMock({
+    const response = (await callGatewayMock({
       method: "agent",
       params: {
         sessionKey: params.targetRequesterSessionKey,
@@ -139,7 +145,11 @@ vi.mock("./subagent-announce-delivery.js", () => ({
               threadId: effectiveOrigin?.threadId,
             }),
       },
-    });
+    })) as { status?: string; error?: string };
+
+    if (response.status === "error") {
+      return { delivered: false, path: "direct", error: response.error ?? "agent delivery failed" };
+    }
 
     return { delivered: true, path: "direct" };
   },
@@ -180,6 +190,7 @@ vi.mock("./subagent-announce-delivery.js", () => ({
 }));
 
 vi.mock("./subagent-announce.registry.runtime.js", () => subagentRegistryRuntimeMock);
+import { defaultRuntime } from "../runtime.js";
 import { applySubagentWaitOutcome } from "./subagent-announce-output.js";
 import { runSubagentAnnounceFlow } from "./subagent-announce.js";
 
@@ -501,5 +512,36 @@ describe("subagent announce seam flow", () => {
     expect(agentCall.params?.channel).toBe("telegram");
     expect(agentCall.params?.accountId).toBe("bot-123");
     expect(agentCall.params?.to).toBe("-1001234567890");
+  });
+
+  it("logs direct completion announce delivery failures through the gateway log path", async () => {
+    const logSpy = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+    agentSpy.mockResolvedValueOnce({ status: "error", error: "Outbound not configured for slack" });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:slack",
+      childRunId: "run-direct-failure-log",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: {
+        channel: "slack",
+        to: "C123",
+      },
+      task: "deliver completion",
+      timeoutMs: 10,
+      cleanup: "keep",
+      waitForCompletion: false,
+      startedAt: 10,
+      endedAt: 20,
+      outcome: { status: "ok" },
+      roundOneReply: "done",
+      expectsCompletionMessage: true,
+    });
+
+    expect(didAnnounce).toBe(false);
+    expect(logSpy).toHaveBeenCalledWith(
+      "[warn] Subagent completion direct announce failed for run run-direct-failure-log: Outbound not configured for slack",
+    );
+    logSpy.mockRestore();
   });
 });

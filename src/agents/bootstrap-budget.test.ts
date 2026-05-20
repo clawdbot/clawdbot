@@ -326,6 +326,28 @@ describe("bootstrap prompt warnings", () => {
     expect(lines).toContain("+1 more truncated file(s).");
   });
 
+  it("warns explicitly when AGENTS.md bootstrap policy is truncated", () => {
+    const analysis = analyzeBootstrapBudget({
+      files: [
+        {
+          name: "AGENTS.md",
+          path: "/tmp/AGENTS.md",
+          missing: false,
+          rawChars: 150,
+          injectedChars: 100,
+          truncated: true,
+        },
+      ],
+      bootstrapMaxChars: 120,
+      bootstrapTotalMaxChars: 200,
+    });
+    const lines = formatBootstrapTruncationWarningLines({ analysis });
+
+    expect(lines).toContain(
+      "AGENTS.md was truncated; read the full AGENTS.md before relying on scoped policy.",
+    );
+  });
+
   it("disambiguates duplicate file names in warning lines", () => {
     const analysis = analyzeBootstrapBudget({
       files: [
@@ -390,6 +412,7 @@ describe("bootstrap prompt warnings", () => {
     expect(always.warningShown).toBe(true);
     expect(always.lines).toStrictEqual([
       "AGENTS.md: 150 raw -> 100 injected (~33% removed; max/file).",
+      "AGENTS.md was truncated; read the full AGENTS.md before relying on scoped policy.",
       "If unintentional, raise agents.defaults.bootstrapMaxChars and/or agents.defaults.bootstrapTotalMaxChars.",
     ]);
   });

@@ -153,10 +153,25 @@ jobs:
           preflight_dir="${RUNNER_TEMP}/openclaw-npm-preflight-manifest"
           rm -rf "${preflight_dir}"
           mkdir -p "${preflight_dir}"
-          if gh run download "${PREFLIGHT_RUN_ID}" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --name "${preferred_name}" \
-            --dir "${preflight_dir}"; then
+
+          download_named_artifact() {
+            local artifact_name="$1"
+            for attempt in 1 2 3; do
+              if gh run download "${PREFLIGHT_RUN_ID}" \
+                --repo "${GITHUB_REPOSITORY}" \
+                --name "${artifact_name}" \
+                --dir "${preflight_dir}"; then
+                return 0
+              fi
+              if [[ "$attempt" != "3" ]]; then
+                echo "::warning::Artifact download for ${artifact_name} failed on attempt ${attempt}; retrying."
+                sleep $((attempt * 10))
+              fi
+            done
+            return 1
+          }
+
+          if download_named_artifact "${preferred_name}"; then
             echo "name=${preferred_name}" >> "$GITHUB_OUTPUT"
             exit 0
           fi
@@ -172,10 +187,7 @@ jobs:
             exit 1
           fi
           fallback_name="${matches[0]}"
-          gh run download "${PREFLIGHT_RUN_ID}" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --name "${fallback_name}" \
-            --dir "${preflight_dir}"
+          download_named_artifact "${fallback_name}"
           echo "name=${fallback_name}" >> "$GITHUB_OUTPUT"
 
       - name: Download full release validation manifest
@@ -645,10 +657,14 @@ jobs:
               --workflow-ref "${CHILD_WORKFLOW_REF}"
               --full-release-validation-run "${FULL_RELEASE_VALIDATION_RUN_ID}"
               --plugin-npm-run "${plugin_npm_run_id}"
-              --plugin-clawhub-run "${plugin_clawhub_run_id}"
               --openclaw-npm-run "${openclaw_npm_run_id}"
               --evidence-out "${evidence_path}"
             )
+            if [[ "${WAIT_FOR_CLAWHUB}" == "true" ]]; then
+              verify_args+=(--plugin-clawhub-run "${plugin_clawhub_run_id}")
+            else
+              verify_args+=(--skip-clawhub)
+            fi
             if [[ -n "${PLUGINS// }" ]]; then
               verify_args+=(--plugins "${PLUGINS}")
             fi
@@ -671,11 +687,11 @@ jobs:
             echo "- Release SHA: \`${TARGET_SHA}\`"
             echo "- Plugin npm and ClawHub publish: dispatched in parallel"
             if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" ]]; then
-              echo "- OpenClaw npm publish: starts after plugin npm succeeds; final verification waits for ClawHub"
+              echo "- OpenClaw npm publish: starts after plugin npm succeeds"
             else
               echo "- OpenClaw npm publish: skipped by input"
             fi
-            if [[ "${WAIT_FOR_CLAWHUB}" == "true" || "${PUBLISH_OPENCLAW_NPM}" == "true" ]]; then
+            if [[ "${WAIT_FOR_CLAWHUB}" == "true" ]]; then
               echo "- Workflow completion waits for ClawHub"
             else
               echo "- Workflow completion does not wait for ClawHub; monitor the dispatched ClawHub run separately"
@@ -717,7 +733,7 @@ jobs:
 
           clawhub_result=""
           clawhub_pid=""
-          if [[ "${WAIT_FOR_CLAWHUB}" == "true" || "${PUBLISH_OPENCLAW_NPM}" == "true" ]]; then
+          if [[ "${WAIT_FOR_CLAWHUB}" == "true" ]]; then
             clawhub_result="$RUNNER_TEMP/clawhub-result.txt"
             wait_run_pid=""
             wait_for_run_background plugin-clawhub-release.yml "${plugin_clawhub_run_id}" "${clawhub_result}"

@@ -6,6 +6,8 @@ import { resolveTwitchToken } from "./token.js";
 import type { ChannelLogSink, TwitchAccountConfig, TwitchChatMessage } from "./types.js";
 import { normalizeToken } from "./utils/twitch.js";
 
+const TWITCH_CHAT_AUTH_INTENTS = ["chat"];
+
 /**
  * Manages Twitch chat client connections
  */
@@ -33,12 +35,15 @@ export class TwitchClientManager {
       });
 
       await authProvider
-        .addUserForToken({
-          accessToken: normalizedToken,
-          refreshToken: account.refreshToken ?? null,
-          expiresIn: account.expiresIn ?? null,
-          obtainmentTimestamp: account.obtainmentTimestamp ?? Date.now(),
-        })
+        .addUserForToken(
+          {
+            accessToken: normalizedToken,
+            refreshToken: account.refreshToken ?? null,
+            expiresIn: account.expiresIn ?? null,
+            obtainmentTimestamp: account.obtainmentTimestamp ?? Date.now(),
+          },
+          TWITCH_CHAT_AUTH_INTENTS,
+        )
         .then((userId) => {
           this.logger.info(
             `Added user ${userId} to RefreshingAuthProvider for ${account.username}`,

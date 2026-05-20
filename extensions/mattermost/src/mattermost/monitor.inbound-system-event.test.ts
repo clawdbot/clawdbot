@@ -432,6 +432,117 @@ describe("mattermost inbound user posts", () => {
     expect(ctx?.Provider).toBe("mattermost");
   });
 
+  it("uses websocket channel type when REST channel lookup fails", async () => {
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+    const runtimeCore = createRuntimeCore(testConfig);
+    mockState.runtimeCore = runtimeCore;
+    mockState.resolveChannelInfo.mockResolvedValue(null);
+
+    const monitor = monitorMattermostProvider({
+      config: testConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+
+    await socket.emitMessage({
+      event: "posted",
+      data: {
+        channel_id: "chan-1",
+        channel_name: "town-square",
+        channel_display_name: "Town Square",
+        channel_type: "O",
+        sender_name: "alice",
+        post: JSON.stringify({
+          id: "post-ws-kind",
+          channel_id: "chan-1",
+          user_id: "user-1",
+          message: "hello with websocket kind",
+          create_at: 1_714_000_000_000,
+        }),
+      },
+      broadcast: {
+        channel_id: "chan-1",
+        user_id: "user-1",
+      },
+    });
+    socket.emitClose(1000);
+    await monitor;
+
+    expect(mockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    const ctx = mockState.dispatchReplyFromConfig.mock.calls.at(0)?.[0].ctx;
+    expect(ctx?.BodyForAgent).toBe("hello with websocket kind");
+    expect(ctx?.ChatType).toBe("channel");
+    expect(ctx?.ConversationLabel).toBe("Town Square id:chan-1");
+    expect(runtimeCore.channel.session.recordInboundSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops posts when neither REST nor websocket channel type can be resolved", async () => {
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+    const channelTypeConfig: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          enabled: true,
+          baseUrl: "https://mattermost.example.com",
+          botToken: "bot-token",
+          chatmode: "onmessage",
+          dmPolicy: "allowlist",
+          groupPolicy: "open",
+          allowFrom: ["trusted-user"],
+        },
+      },
+    };
+    const runtimeCore = createRuntimeCore(channelTypeConfig);
+    mockState.runtimeCore = runtimeCore;
+    mockState.resolveChannelInfo.mockResolvedValue(null);
+
+    const monitor = monitorMattermostProvider({
+      config: channelTypeConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+
+    await socket.emitMessage({
+      event: "posted",
+      data: {
+        channel_id: "dm-1",
+        sender_name: "mallory",
+        post: JSON.stringify({
+          id: "post-missing-kind",
+          channel_id: "dm-1",
+          user_id: "new-user",
+          message: "hello",
+          create_at: 1_714_000_000_000,
+        }),
+      },
+      broadcast: {
+        channel_id: "dm-1",
+        user_id: "new-user",
+      },
+    });
+    abortController.abort();
+    socket.emitClose(1000);
+    await monitor;
+
+    expect(mockState.dispatchReplyFromConfig).not.toHaveBeenCalled();
+    expect(runtimeCore.channel.session.recordInboundSession).not.toHaveBeenCalled();
+  });
+
   it("pins direct-message main route updates to the configured owner", async () => {
     const socket = new FakeWebSocket();
     const abortController = new AbortController();

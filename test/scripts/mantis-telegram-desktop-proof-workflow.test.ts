@@ -155,11 +155,30 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(cleanupStep.env?.OPENCLAW_QA_CONVEX_SITE_URL).toContain(
       "secrets.OPENCLAW_QA_CONVEX_SITE_URL",
     );
+    expect(cleanupStep.env?.CRABBOX_PROVIDER).toContain(
+      "needs.resolve_request.outputs.crabbox_provider",
+    );
     expect(cleanupStep.run).toContain("sudo find .artifacts/qa-e2e");
+    expect(cleanupStep.run).toContain("*/telegram-user-crabbox/*/session.json");
+    expect(cleanupStep.run).toContain("telegram-user-crabbox-proof.ts");
+    expect(cleanupStep.run).toContain(
+      'finish --session "$session_file" --preview-crop telegram-window',
+    );
     expect(cleanupStep.run).toContain("*/telegram-user-crabbox/*/.session/lease.json");
     expect(cleanupStep.run).toContain("telegram-user-credential.ts");
     expect(cleanupStep.run).toContain("release --lease-file");
+    expect(cleanupStep.run).toContain("status=1");
     expect(cleanupStep.run).toContain("sudo -u codex env");
+  });
+
+  it("cleans partially started proof daemons when local SUT startup fails", () => {
+    const proofScript = readFileSync(PROOF_SCRIPT, "utf8");
+
+    expect(proofScript).toContain("let mockPid: number | undefined;");
+    expect(proofScript).toContain("let gatewayPid: number | undefined;");
+    expect(proofScript).toContain("killPidTree(gatewayPid);");
+    expect(proofScript).toContain("killPidTree(mockPid);");
+    expect(proofScript).toContain("throw error;");
   });
 
   it("uses the OpenClaw Mantis mention as the comment trigger", () => {

@@ -12,6 +12,7 @@ import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.GatewayTlsProbeFailure
 import ai.openclaw.app.gateway.GatewayTlsProbeResult
+import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
 import ai.openclaw.app.gateway.normalizeGatewayTlsFingerprint
 import ai.openclaw.app.gateway.probeGatewayTlsFingerprint
 import ai.openclaw.app.node.A2UIHandler
@@ -267,7 +268,7 @@ class NodeRuntime(
   val pendingGatewayTrust: StateFlow<GatewayTrustPrompt?> = _pendingGatewayTrust.asStateFlow()
   private val connectAttemptSeq = AtomicLong(0)
 
-  private fun resolveNodeMainSessionKey(agentId: String? = gatewayDefaultAgentId): String {
+  private fun resolveNodeMainSessionKey(agentId: String? = null): String {
     val deviceId = identityStore.loadOrCreate().deviceId
     return buildNodeMainSessionKey(deviceId, agentId)
   }
@@ -295,14 +296,81 @@ class NodeRuntime(
   private val _remoteAddress = MutableStateFlow<String?>(null)
   val remoteAddress: StateFlow<String?> = _remoteAddress.asStateFlow()
 
+  private val _gatewayVersion = MutableStateFlow<String?>(null)
+  val gatewayVersion: StateFlow<String?> = _gatewayVersion.asStateFlow()
+
+  private val _gatewayUpdateAvailable = MutableStateFlow<GatewayUpdateAvailableSummary?>(null)
+  val gatewayUpdateAvailable: StateFlow<GatewayUpdateAvailableSummary?> = _gatewayUpdateAvailable.asStateFlow()
+
   private val _seamColorArgb = MutableStateFlow(DEFAULT_SEAM_COLOR_ARGB)
   val seamColorArgb: StateFlow<Long> = _seamColorArgb.asStateFlow()
+  private val _modelCatalog = MutableStateFlow<List<GatewayModelSummary>>(emptyList())
+  val modelCatalog: StateFlow<List<GatewayModelSummary>> = _modelCatalog.asStateFlow()
+  private val _modelAuthProviders = MutableStateFlow<List<GatewayModelProviderSummary>>(emptyList())
+  val modelAuthProviders: StateFlow<List<GatewayModelProviderSummary>> = _modelAuthProviders.asStateFlow()
+  private val _modelCatalogRefreshing = MutableStateFlow(false)
+  val modelCatalogRefreshing: StateFlow<Boolean> = _modelCatalogRefreshing.asStateFlow()
+  private val _modelCatalogErrorText = MutableStateFlow<String?>(null)
+  val modelCatalogErrorText: StateFlow<String?> = _modelCatalogErrorText.asStateFlow()
+  private val _gatewayDefaultAgentId = MutableStateFlow<String?>(null)
+  val gatewayDefaultAgentId: StateFlow<String?> = _gatewayDefaultAgentId.asStateFlow()
+  private val _gatewayAgents = MutableStateFlow<List<GatewayAgentSummary>>(emptyList())
+  val gatewayAgents: StateFlow<List<GatewayAgentSummary>> = _gatewayAgents.asStateFlow()
+  private val _cronStatus = MutableStateFlow(GatewayCronStatus(enabled = false, jobs = 0, nextWakeAtMs = null))
+  val cronStatus: StateFlow<GatewayCronStatus> = _cronStatus.asStateFlow()
+  private val _cronJobs = MutableStateFlow<List<GatewayCronJobSummary>>(emptyList())
+  val cronJobs: StateFlow<List<GatewayCronJobSummary>> = _cronJobs.asStateFlow()
+  private val _cronRefreshing = MutableStateFlow(false)
+  val cronRefreshing: StateFlow<Boolean> = _cronRefreshing.asStateFlow()
+  private val _cronErrorText = MutableStateFlow<String?>(null)
+  val cronErrorText: StateFlow<String?> = _cronErrorText.asStateFlow()
+  private val _usageSummary = MutableStateFlow(GatewayUsageSummary(updatedAtMs = null, providers = emptyList()))
+  val usageSummary: StateFlow<GatewayUsageSummary> = _usageSummary.asStateFlow()
+  private val _usageRefreshing = MutableStateFlow(false)
+  val usageRefreshing: StateFlow<Boolean> = _usageRefreshing.asStateFlow()
+  private val _usageErrorText = MutableStateFlow<String?>(null)
+  val usageErrorText: StateFlow<String?> = _usageErrorText.asStateFlow()
+  private val _skillsSummary = MutableStateFlow(GatewaySkillsSummary(skills = emptyList()))
+  val skillsSummary: StateFlow<GatewaySkillsSummary> = _skillsSummary.asStateFlow()
+  private val _skillsRefreshing = MutableStateFlow(false)
+  val skillsRefreshing: StateFlow<Boolean> = _skillsRefreshing.asStateFlow()
+  private val _skillsErrorText = MutableStateFlow<String?>(null)
+  val skillsErrorText: StateFlow<String?> = _skillsErrorText.asStateFlow()
+  private val _nodesDevicesSummary =
+    MutableStateFlow(
+      GatewayNodesDevicesSummary(
+        nodes = emptyList(),
+        pendingDevices = emptyList(),
+        pairedDevices = emptyList(),
+      ),
+    )
+  val nodesDevicesSummary: StateFlow<GatewayNodesDevicesSummary> = _nodesDevicesSummary.asStateFlow()
+  private val _nodesDevicesRefreshing = MutableStateFlow(false)
+  val nodesDevicesRefreshing: StateFlow<Boolean> = _nodesDevicesRefreshing.asStateFlow()
+  private val _nodesDevicesErrorText = MutableStateFlow<String?>(null)
+  val nodesDevicesErrorText: StateFlow<String?> = _nodesDevicesErrorText.asStateFlow()
+  private val _channelsSummary = MutableStateFlow(GatewayChannelsSummary(channels = emptyList()))
+  val channelsSummary: StateFlow<GatewayChannelsSummary> = _channelsSummary.asStateFlow()
+  private val _channelsRefreshing = MutableStateFlow(false)
+  val channelsRefreshing: StateFlow<Boolean> = _channelsRefreshing.asStateFlow()
+  private val _channelsErrorText = MutableStateFlow<String?>(null)
+  val channelsErrorText: StateFlow<String?> = _channelsErrorText.asStateFlow()
+  private val _dreamingSummary = MutableStateFlow(GatewayDreamingSummary())
+  val dreamingSummary: StateFlow<GatewayDreamingSummary> = _dreamingSummary.asStateFlow()
+  private val _dreamingRefreshing = MutableStateFlow(false)
+  val dreamingRefreshing: StateFlow<Boolean> = _dreamingRefreshing.asStateFlow()
+  private val _dreamingErrorText = MutableStateFlow<String?>(null)
+  val dreamingErrorText: StateFlow<String?> = _dreamingErrorText.asStateFlow()
+  private val _healthLogsSummary = MutableStateFlow(GatewayHealthLogsSummary())
+  val healthLogsSummary: StateFlow<GatewayHealthLogsSummary> = _healthLogsSummary.asStateFlow()
+  private val _healthLogsRefreshing = MutableStateFlow(false)
+  val healthLogsRefreshing: StateFlow<Boolean> = _healthLogsRefreshing.asStateFlow()
+  private val _healthLogsErrorText = MutableStateFlow<String?>(null)
+  val healthLogsErrorText: StateFlow<String?> = _healthLogsErrorText.asStateFlow()
 
   private val _isForeground = MutableStateFlow(true)
   val isForeground: StateFlow<Boolean> = _isForeground.asStateFlow()
 
-  private var gatewayDefaultAgentId: String? = null
-  private var gatewayAgents: List<GatewayAgentSummary> = emptyList()
   private var didAutoRequestCanvasRehydrate = false
   private val canvasRehydrateSeq = AtomicLong(0)
 
@@ -316,13 +384,15 @@ class NodeRuntime(
       scope = scope,
       identityStore = identityStore,
       deviceAuthStore = deviceAuthStore,
-      onConnected = { name, remote, mainSessionKey ->
+      onConnected = { hello ->
         operatorConnected = true
         operatorStatusText = "Connected"
-        _serverName.value = name
-        _remoteAddress.value = remote
+        _serverName.value = hello.serverName
+        _remoteAddress.value = hello.remoteAddress
+        _gatewayVersion.value = hello.serverVersion
+        _gatewayUpdateAvailable.value = hello.updateAvailable
         _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
-        syncMainSessionKey(resolveAgentIdFromMainSessionKey(mainSessionKey))
+        syncMainSessionKey(resolveAgentIdFromMainSessionKey(hello.mainSessionKey))
         updateStatus()
         micCapture.onGatewayConnectionChanged(true)
         scope.launch {
@@ -337,7 +407,26 @@ class NodeRuntime(
         operatorStatusText = message
         _serverName.value = null
         _remoteAddress.value = null
+        _gatewayVersion.value = null
+        _gatewayUpdateAvailable.value = null
         _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
+        _gatewayDefaultAgentId.value = null
+        _gatewayAgents.value = emptyList()
+        _modelCatalog.value = emptyList()
+        _modelAuthProviders.value = emptyList()
+        _cronStatus.value = GatewayCronStatus(enabled = false, jobs = 0, nextWakeAtMs = null)
+        _cronJobs.value = emptyList()
+        _usageSummary.value = GatewayUsageSummary(updatedAtMs = null, providers = emptyList())
+        _skillsSummary.value = GatewaySkillsSummary(skills = emptyList())
+        _nodesDevicesSummary.value =
+          GatewayNodesDevicesSummary(
+            nodes = emptyList(),
+            pendingDevices = emptyList(),
+            pairedDevices = emptyList(),
+          )
+        _channelsSummary.value = GatewayChannelsSummary(channels = emptyList())
+        _dreamingSummary.value = GatewayDreamingSummary()
+        _healthLogsSummary.value = GatewayHealthLogsSummary()
         chat.applyMainSessionKey(resolveMainSessionKey())
         chat.onDisconnected(message)
         updateStatus()
@@ -353,7 +442,7 @@ class NodeRuntime(
       scope = scope,
       identityStore = identityStore,
       deviceAuthStore = deviceAuthStore,
-      onConnected = { _, _, _ ->
+      onConnected = {
         _nodeConnected.value = true
         nodeStatusText = "Connected"
         didAutoRequestCanvasRehydrate = false
@@ -603,6 +692,68 @@ class NodeRuntime(
     scope.launch {
       refreshBrandingFromGateway()
       refreshAgentsFromGateway()
+      refreshModelCatalogFromGateway()
+      refreshCronFromGateway()
+      refreshUsageFromGateway()
+      refreshSkillsFromGateway()
+      refreshNodesDevicesFromGateway()
+      refreshChannelsFromGateway()
+      refreshDreamingFromGateway()
+      refreshHealthLogsFromGateway()
+    }
+  }
+
+  fun refreshModelCatalog() {
+    scope.launch {
+      refreshModelCatalogFromGateway()
+    }
+  }
+
+  fun refreshAgents() {
+    scope.launch {
+      refreshAgentsFromGateway()
+    }
+  }
+
+  fun refreshCronJobs() {
+    scope.launch {
+      refreshCronFromGateway()
+    }
+  }
+
+  fun refreshUsage() {
+    scope.launch {
+      refreshUsageFromGateway()
+    }
+  }
+
+  fun refreshSkills() {
+    scope.launch {
+      refreshSkillsFromGateway()
+    }
+  }
+
+  fun refreshNodesDevices() {
+    scope.launch {
+      refreshNodesDevicesFromGateway()
+    }
+  }
+
+  fun refreshChannels() {
+    scope.launch {
+      refreshChannelsFromGateway()
+    }
+  }
+
+  fun refreshDreaming() {
+    scope.launch {
+      refreshDreamingFromGateway()
+    }
+  }
+
+  fun refreshHealthLogs() {
+    scope.launch {
+      refreshHealthLogsFromGateway()
     }
   }
 
@@ -932,6 +1083,12 @@ class NodeRuntime(
 
   fun setMicEnabled(value: Boolean) {
     setVoiceCaptureMode(if (value) VoiceCaptureMode.ManualMic else VoiceCaptureMode.Off)
+  }
+
+  fun cancelMicCapture() {
+    micCapture.cancelMicCapture()
+    setVoiceCaptureMode(VoiceCaptureMode.Off, persistManualMic = false)
+    prefs.setVoiceMicEnabled(false)
   }
 
   fun setTalkModeEnabled(value: Boolean) {
@@ -1447,9 +1604,26 @@ class NodeRuntime(
     event: String,
     payloadJson: String?,
   ) {
+    if (event == "update.available") {
+      _gatewayUpdateAvailable.value = parseGatewayUpdateAvailable(payloadJson)
+    }
     micCapture.handleGatewayEvent(event, payloadJson)
     talkMode.handleGatewayEvent(event, payloadJson)
     chat.handleGatewayEvent(event, payloadJson)
+  }
+
+  private fun parseGatewayUpdateAvailable(payloadJson: String?): GatewayUpdateAvailableSummary? {
+    return try {
+      val root = payloadJson?.let { json.parseToJsonElement(it).asObjectOrNull() }
+      val update = root?.get("updateAvailable").asObjectOrNull() ?: return null
+      GatewayUpdateAvailableSummary(
+        currentVersion = update["currentVersion"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+        latestVersion = update["latestVersion"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+        channel = update["channel"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+      )
+    } catch (_: Throwable) {
+      null
+    }
   }
 
   private fun parseChatSendRunId(response: String): String? {
@@ -1480,7 +1654,7 @@ class NodeRuntime(
       val config = root?.get("config").asObjectOrNull()
       val ui = config?.get("ui").asObjectOrNull()
       val raw = ui?.get("seamColor").asStringOrNull()?.trim()
-      syncMainSessionKey(gatewayDefaultAgentId)
+      syncMainSessionKey(gatewayDefaultAgentId.value)
 
       val parsed = parseHexColorArgb(raw)
       _seamColorArgb.value = parsed ?: DEFAULT_SEAM_COLOR_ARGB
@@ -1516,12 +1690,643 @@ class NodeRuntime(
           )
         } ?: emptyList()
 
-      gatewayDefaultAgentId = defaultAgentId.ifEmpty { null }
-      gatewayAgents = agents
-      syncMainSessionKey(resolveAgentIdFromMainSessionKey(mainKey) ?: gatewayDefaultAgentId)
+      _gatewayDefaultAgentId.value = defaultAgentId.ifEmpty { null }
+      _gatewayAgents.value = agents
+      syncMainSessionKey(resolveAgentIdFromMainSessionKey(mainKey) ?: gatewayDefaultAgentId.value)
       updateHomeCanvasState()
     } catch (_: Throwable) {
       // ignore
+    }
+  }
+
+  private suspend fun refreshModelCatalogFromGateway() {
+    _modelCatalogRefreshing.value = true
+    _modelCatalogErrorText.value = null
+    if (!operatorConnected) {
+      _modelCatalog.value = emptyList()
+      _modelAuthProviders.value = emptyList()
+      _modelCatalogRefreshing.value = false
+      return
+    }
+    try {
+      val modelsRes = operatorSession.request("models.list", """{"view":"all"}""")
+      val modelsRoot = json.parseToJsonElement(modelsRes).asObjectOrNull()
+      _modelCatalog.value = parseGatewayModels(modelsRoot?.get("models") as? JsonArray)
+
+      val authRes = operatorSession.request("models.authStatus", "{}")
+      val authRoot = json.parseToJsonElement(authRes).asObjectOrNull()
+      _modelAuthProviders.value = parseGatewayModelProviders(authRoot?.get("providers") as? JsonArray)
+    } catch (_: Throwable) {
+      _modelCatalogErrorText.value = "Could not load provider catalog."
+    } finally {
+      _modelCatalogRefreshing.value = false
+    }
+  }
+
+  private suspend fun refreshCronFromGateway() {
+    _cronRefreshing.value = true
+    _cronErrorText.value = null
+    if (!operatorConnected) {
+      _cronStatus.value = GatewayCronStatus(enabled = false, jobs = 0, nextWakeAtMs = null)
+      _cronJobs.value = emptyList()
+      _cronRefreshing.value = false
+      return
+    }
+    try {
+      val statusRes = operatorSession.request("cron.status", "{}")
+      val statusRoot = json.parseToJsonElement(statusRes).asObjectOrNull()
+      _cronStatus.value =
+        GatewayCronStatus(
+          enabled = statusRoot.boolean("enabled"),
+          jobs = statusRoot.long("jobs")?.toInt() ?: 0,
+          nextWakeAtMs = statusRoot.long("nextWakeAtMs"),
+        )
+
+      val listRes = operatorSession.request("cron.list", """{"includeDisabled":true,"limit":20,"sortBy":"nextRunAtMs","sortDir":"asc"}""")
+      val listRoot = json.parseToJsonElement(listRes).asObjectOrNull()
+      _cronJobs.value = parseCronJobs(listRoot?.get("jobs") as? JsonArray)
+    } catch (_: Throwable) {
+      _cronErrorText.value = "Could not load cron jobs."
+    } finally {
+      _cronRefreshing.value = false
+    }
+  }
+
+  private suspend fun refreshUsageFromGateway() {
+    _usageRefreshing.value = true
+    _usageErrorText.value = null
+    if (!operatorConnected) {
+      _usageSummary.value = GatewayUsageSummary(updatedAtMs = null, providers = emptyList())
+      _usageRefreshing.value = false
+      return
+    }
+    try {
+      val res = operatorSession.request("usage.status", "{}")
+      val root = json.parseToJsonElement(res).asObjectOrNull()
+      _usageSummary.value =
+        GatewayUsageSummary(
+          updatedAtMs = root.long("updatedAt"),
+          providers = parseUsageProviders(root?.get("providers") as? JsonArray),
+        )
+    } catch (_: Throwable) {
+      _usageErrorText.value = "Could not load usage."
+    } finally {
+      _usageRefreshing.value = false
+    }
+  }
+
+  private suspend fun refreshSkillsFromGateway() {
+    _skillsRefreshing.value = true
+    _skillsErrorText.value = null
+    if (!operatorConnected) {
+      _skillsSummary.value = GatewaySkillsSummary(skills = emptyList())
+      _skillsRefreshing.value = false
+      return
+    }
+    try {
+      val res = operatorSession.request("skills.status", "{}")
+      val root = json.parseToJsonElement(res).asObjectOrNull()
+      _skillsSummary.value =
+        GatewaySkillsSummary(
+          managedSkillsDirAvailable =
+            root
+              ?.get("managedSkillsDir")
+              .asStringOrNull()
+              ?.trim()
+              ?.isNotEmpty() == true,
+          skills = parseSkillSummaries(root?.get("skills") as? JsonArray),
+        )
+    } catch (_: Throwable) {
+      _skillsErrorText.value = "Could not load skills."
+    } finally {
+      _skillsRefreshing.value = false
+    }
+  }
+
+  private suspend fun refreshNodesDevicesFromGateway() {
+    _nodesDevicesRefreshing.value = true
+    _nodesDevicesErrorText.value = null
+    if (!operatorConnected) {
+      _nodesDevicesSummary.value =
+        GatewayNodesDevicesSummary(
+          nodes = emptyList(),
+          pendingDevices = emptyList(),
+          pairedDevices = emptyList(),
+        )
+      _nodesDevicesRefreshing.value = false
+      return
+    }
+    try {
+      val nodesRes = operatorSession.request("node.list", "{}")
+      val nodesRoot = json.parseToJsonElement(nodesRes).asObjectOrNull()
+      val devicesRoot =
+        try {
+          val devicesRes = operatorSession.request("device.pair.list", "{}")
+          json.parseToJsonElement(devicesRes).asObjectOrNull()
+        } catch (_: Throwable) {
+          null
+        }
+      _nodesDevicesSummary.value =
+        GatewayNodesDevicesSummary(
+          nodes = parseGatewayNodes(nodesRoot?.get("nodes") as? JsonArray),
+          pendingDevices = parsePendingDevices(devicesRoot?.get("pending") as? JsonArray),
+          pairedDevices = parsePairedDevices(devicesRoot?.get("paired") as? JsonArray),
+          devicePairingAvailable = devicesRoot != null,
+        )
+    } catch (_: Throwable) {
+      _nodesDevicesErrorText.value = "Could not load nodes and devices."
+    } finally {
+      _nodesDevicesRefreshing.value = false
+    }
+  }
+
+  private suspend fun refreshChannelsFromGateway() {
+    _channelsRefreshing.value = true
+    _channelsErrorText.value = null
+    if (!operatorConnected) {
+      _channelsSummary.value = GatewayChannelsSummary(channels = emptyList())
+      _channelsRefreshing.value = false
+      return
+    }
+    try {
+      val res = operatorSession.request("channels.status", """{"probe":false,"timeoutMs":8000}""")
+      val root = json.parseToJsonElement(res).asObjectOrNull()
+      _channelsSummary.value =
+        GatewayChannelsSummary(
+          updatedAtMs = root.long("ts"),
+          partial = root.boolean("partial"),
+          warnings = parseStringArray(root?.get("warnings") as? JsonArray),
+          channels = parseChannelSummaries(root),
+        )
+    } catch (_: Throwable) {
+      _channelsErrorText.value = "Could not load channels."
+    } finally {
+      _channelsRefreshing.value = false
+    }
+  }
+
+  private suspend fun refreshDreamingFromGateway() {
+    _dreamingRefreshing.value = true
+    _dreamingErrorText.value = null
+    if (!operatorConnected) {
+      _dreamingSummary.value = GatewayDreamingSummary()
+      _dreamingRefreshing.value = false
+      return
+    }
+    try {
+      val statusRes = operatorSession.request("doctor.memory.status", "{}")
+      val statusRoot = json.parseToJsonElement(statusRes).asObjectOrNull()
+      val diaryRes = operatorSession.request("doctor.memory.dreamDiary", "{}")
+      val diaryRoot = json.parseToJsonElement(diaryRes).asObjectOrNull()
+      val dreaming = statusRoot?.get("dreaming").asObjectOrNull()
+      _dreamingSummary.value =
+        parseDreamingSummary(
+          dreaming = dreaming,
+          diary = diaryRoot,
+        )
+    } catch (_: Throwable) {
+      _dreamingErrorText.value = "Could not load dreaming."
+    } finally {
+      _dreamingRefreshing.value = false
+    }
+  }
+
+  private suspend fun refreshHealthLogsFromGateway() {
+    _healthLogsRefreshing.value = true
+    _healthLogsErrorText.value = null
+    if (!operatorConnected) {
+      _healthLogsSummary.value = GatewayHealthLogsSummary()
+      _healthLogsRefreshing.value = false
+      return
+    }
+    try {
+      val res = operatorSession.request("logs.tail", """{"limit":40,"maxBytes":65536}""")
+      val root = json.parseToJsonElement(res).asObjectOrNull()
+      val lines = (root?.get("lines") as? JsonArray)?.mapNotNull { it.asStringOrNull() }.orEmpty()
+      _healthLogsSummary.value =
+        GatewayHealthLogsSummary(
+          fileName =
+            root
+              ?.get("file")
+              .asStringOrNull()
+              ?.trim()
+              ?.takeIf { it.isNotEmpty() }
+              ?.substringAfterLast('/')
+              ?.substringAfterLast('\\'),
+          cursor = root.long("cursor"),
+          truncated = root.boolean("truncated"),
+          entries = lines.map { parseGatewayLogEntry(it) },
+        )
+    } catch (_: Throwable) {
+      _healthLogsErrorText.value = "Could not load gateway logs."
+    } finally {
+      _healthLogsRefreshing.value = false
+    }
+  }
+
+  private fun parseGatewayModels(models: JsonArray?): List<GatewayModelSummary> =
+    models
+      ?.mapNotNull { item ->
+        val obj = item.asObjectOrNull() ?: return@mapNotNull null
+        val id = obj["id"].asStringOrNull()?.trim().orEmpty()
+        if (id.isEmpty()) return@mapNotNull null
+        val provider = obj["provider"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: id.substringBefore('/', "default")
+        val inputTypes = (obj["input"] as? JsonArray)?.mapNotNull { it.asStringOrNull()?.trim()?.lowercase() }?.toSet().orEmpty()
+        GatewayModelSummary(
+          id = id,
+          name = obj["name"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: id,
+          provider = provider,
+          supportsVision = "image" in inputTypes,
+          supportsAudio = "audio" in inputTypes,
+          supportsDocuments = "document" in inputTypes,
+          supportsReasoning = obj["reasoning"].toString().trim() == "true",
+          contextTokens = obj["contextWindow"].toString().toLongOrNull() ?: obj["contextTokens"].toString().toLongOrNull(),
+        )
+      }.orEmpty()
+
+  private fun parseGatewayLogEntry(line: String): GatewayLogEntry {
+    val root =
+      try {
+        json.parseToJsonElement(line).asObjectOrNull()
+      } catch (_: Throwable) {
+        null
+      } ?: return GatewayLogEntry(time = null, level = null, subsystem = null, message = line.trim().ifEmpty { "Empty log entry" })
+    val meta = root["_meta"].asObjectOrNull()
+    val time = root["time"].asStringOrNull() ?: meta?.get("date").asStringOrNull()
+    val level = normalizeLogLevel(meta?.get("logLevelName").asStringOrNull() ?: meta?.get("level").asStringOrNull())
+    val contextCandidate = root["0"].asStringOrNull() ?: meta?.get("name").asStringOrNull()
+    val contextObject = parseMaybeJsonObject(contextCandidate)
+    val subsystem =
+      contextObject?.get("subsystem").asStringOrNull()
+        ?: contextObject?.get("module").asStringOrNull()
+        ?: contextCandidate?.takeIf { it.length < 80 && contextObject == null }
+    val contextMessage = if (contextObject == null) root["0"].asStringOrNull() else null
+    val message =
+      root["1"].asStringOrNull()
+        ?: root["2"].asStringOrNull()
+        ?: contextMessage
+        ?: root["message"].asStringOrNull()
+        ?: line
+    val normalizedMessage =
+      message
+        .trim()
+        .replace(Regex("\\s+"), " ")
+        .take(240)
+        .ifEmpty { "Log entry" }
+    return GatewayLogEntry(
+      time = time,
+      level = level,
+      subsystem = subsystem?.trim()?.takeIf { it.isNotEmpty() },
+      message = normalizedMessage,
+    )
+  }
+
+  private fun parseMaybeJsonObject(value: String?): JsonObject? {
+    val trimmed = value?.trim().orEmpty()
+    if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return null
+    return try {
+      json.parseToJsonElement(trimmed).asObjectOrNull()
+    } catch (_: Throwable) {
+      null
+    }
+  }
+
+  private fun normalizeLogLevel(value: String?): String? {
+    val level = value?.trim()?.lowercase().orEmpty()
+    return if (level in setOf("trace", "debug", "info", "warn", "error", "fatal")) level else null
+  }
+
+  private fun parseGatewayModelProviders(providers: JsonArray?): List<GatewayModelProviderSummary> =
+    providers
+      ?.mapNotNull { item ->
+        val obj = item.asObjectOrNull() ?: return@mapNotNull null
+        val id = obj["provider"].asStringOrNull()?.trim().orEmpty()
+        if (id.isEmpty()) return@mapNotNull null
+        GatewayModelProviderSummary(
+          id = id,
+          displayName = obj["displayName"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: providerDisplayName(id),
+          status = obj["status"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: "unknown",
+          profileCount = ((obj["profiles"] as? JsonArray)?.size ?: 0),
+        )
+      }.orEmpty()
+
+  private fun parseCronJobs(jobs: JsonArray?): List<GatewayCronJobSummary> =
+    jobs
+      ?.mapNotNull { item ->
+        val obj = item.asObjectOrNull() ?: return@mapNotNull null
+        val id = obj["id"].asStringOrNull()?.trim().orEmpty()
+        val name = obj["name"].asStringOrNull()?.trim().orEmpty()
+        if (id.isEmpty() || name.isEmpty()) return@mapNotNull null
+        val schedule = obj["schedule"].asObjectOrNull()
+        val state = obj["state"].asObjectOrNull()
+        val payload = obj["payload"].asObjectOrNull()
+        GatewayCronJobSummary(
+          id = id,
+          name = name,
+          enabled = obj.boolean("enabled"),
+          scheduleLabel = cronScheduleLabel(schedule),
+          promptPreview = cronPayloadPreview(payload),
+          nextRunAtMs = state.long("nextRunAtMs"),
+          lastRunStatus = cronJobLastRunStatus(state),
+        )
+      }.orEmpty()
+
+  private fun parseUsageProviders(providers: JsonArray?): List<GatewayUsageProviderSummary> =
+    providers
+      ?.mapNotNull { item ->
+        val obj = item.asObjectOrNull() ?: return@mapNotNull null
+        val displayName = obj["displayName"].asStringOrNull()?.trim().orEmpty()
+        if (displayName.isEmpty()) return@mapNotNull null
+        GatewayUsageProviderSummary(
+          displayName = displayName,
+          plan = obj["plan"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+          error = obj["error"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+          windows = parseUsageWindows(obj["windows"] as? JsonArray),
+        )
+      }.orEmpty()
+
+  private fun parseUsageWindows(windows: JsonArray?): List<GatewayUsageWindowSummary> =
+    windows
+      ?.mapNotNull { item ->
+        val obj = item.asObjectOrNull() ?: return@mapNotNull null
+        val label = obj["label"].asStringOrNull()?.trim().orEmpty()
+        if (label.isEmpty()) return@mapNotNull null
+        GatewayUsageWindowSummary(
+          label = label,
+          usedPercent = obj.double("usedPercent") ?: 0.0,
+          resetAtMs = obj.long("resetAt"),
+        )
+      }.orEmpty()
+
+  private fun parseSkillSummaries(skills: JsonArray?): List<GatewaySkillSummary> =
+    skills
+      ?.mapNotNull { item ->
+        val obj = item.asObjectOrNull() ?: return@mapNotNull null
+        val name = obj["name"].asStringOrNull()?.trim().orEmpty()
+        if (name.isEmpty()) return@mapNotNull null
+        val missing = obj["missing"].asObjectOrNull()
+        GatewaySkillSummary(
+          name = name,
+          description = obj["description"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+          source = obj["source"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: "unknown",
+          emoji = obj["emoji"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+          disabled = obj.boolean("disabled"),
+          eligible = obj.boolean("eligible"),
+          blockedByAllowlist = obj.boolean("blockedByAllowlist"),
+          bundled = obj.boolean("bundled"),
+          missingCount = skillMissingCount(missing),
+          installCount = (obj["install"] as? JsonArray)?.size ?: 0,
+        )
+      }.orEmpty()
+
+  private fun skillMissingCount(missing: JsonObject?): Int = listOf("bins", "env", "config", "os").sumOf { key -> (missing?.get(key) as? JsonArray)?.size ?: 0 }
+
+  private fun parseGatewayNodes(nodes: JsonArray?): List<GatewayNodeSummary> =
+    nodes
+      ?.mapNotNull { item ->
+        val obj = item.asObjectOrNull() ?: return@mapNotNull null
+        val id = obj["nodeId"].asStringOrNull()?.trim().orEmpty()
+        if (id.isEmpty()) return@mapNotNull null
+        GatewayNodeSummary(
+          id = id,
+          displayName = obj["displayName"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+          remoteIp = obj["remoteIp"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+          version = obj["version"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+          deviceFamily = obj["deviceFamily"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+          paired = obj.boolean("paired"),
+          connected = obj.boolean("connected"),
+          capabilities = parseStringArray(obj["caps"] as? JsonArray),
+          commands = parseStringArray(obj["commands"] as? JsonArray),
+        )
+      }.orEmpty()
+
+  private fun parsePendingDevices(devices: JsonArray?): List<GatewayPendingDeviceSummary> =
+    devices
+      ?.mapNotNull { item ->
+        val obj = item.asObjectOrNull() ?: return@mapNotNull null
+        val requestId = obj["requestId"].asStringOrNull()?.trim().orEmpty()
+        val deviceId = obj["deviceId"].asStringOrNull()?.trim().orEmpty()
+        if (requestId.isEmpty() || deviceId.isEmpty()) return@mapNotNull null
+        GatewayPendingDeviceSummary(
+          requestId = requestId,
+          deviceId = deviceId,
+          displayName = obj["displayName"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+          remoteIp = obj["remoteIp"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+          roles = parseStringArray(obj["roles"] as? JsonArray),
+          scopes = parseStringArray(obj["scopes"] as? JsonArray),
+          requestedAtMs = obj.long("ts"),
+          repair = obj.boolean("isRepair"),
+        )
+      }.orEmpty()
+
+  private fun parsePairedDevices(devices: JsonArray?): List<GatewayPairedDeviceSummary> =
+    devices
+      ?.mapNotNull { item ->
+        val obj = item.asObjectOrNull() ?: return@mapNotNull null
+        val deviceId = obj["deviceId"].asStringOrNull()?.trim().orEmpty()
+        if (deviceId.isEmpty()) return@mapNotNull null
+        GatewayPairedDeviceSummary(
+          deviceId = deviceId,
+          displayName = obj["displayName"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+          remoteIp = obj["remoteIp"].asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() },
+          roles = parseStringArray(obj["roles"] as? JsonArray),
+          scopes = parseStringArray(obj["scopes"] as? JsonArray),
+          tokens = parseDeviceTokens(obj["tokens"] as? JsonArray),
+          approvedAtMs = obj.long("approvedAtMs"),
+        )
+      }.orEmpty()
+
+  private fun parseDeviceTokens(tokens: JsonArray?): List<GatewayDeviceTokenSummary> =
+    tokens
+      ?.mapNotNull { item ->
+        val obj = item.asObjectOrNull() ?: return@mapNotNull null
+        val role = obj["role"].asStringOrNull()?.trim().orEmpty()
+        if (role.isEmpty()) return@mapNotNull null
+        GatewayDeviceTokenSummary(
+          role = role,
+          scopes = parseStringArray(obj["scopes"] as? JsonArray),
+          revoked = obj.long("revokedAtMs") != null,
+          updatedAtMs = obj.long("rotatedAtMs") ?: obj.long("createdAtMs") ?: obj.long("lastUsedAtMs"),
+        )
+      }.orEmpty()
+
+  private fun parseChannelSummaries(root: JsonObject?): List<GatewayChannelSummary> {
+    val order = parseStringArray(root?.get("channelOrder") as? JsonArray)
+    val labels = parseStringMap(root?.get("channelLabels").asObjectOrNull())
+    val channels = root?.get("channels").asObjectOrNull()
+    val accounts = root?.get("channelAccounts").asObjectOrNull()
+    val ids = (order + channels.orEmpty().keys + accounts.orEmpty().keys).distinct()
+    return ids
+      .map { id ->
+        val summary = channels?.get(id).asObjectOrNull()
+        val accountRows = parseChannelAccounts(accounts?.get(id) as? JsonArray)
+        GatewayChannelSummary(
+          id = id,
+          label = labels[id] ?: channelDisplayLabel(id),
+          accountCount = accountRows.size,
+          enabled = summary.boolean("enabled") || accountRows.any { it.enabled },
+          configured = summary.boolean("configured") || accountRows.any { it.configured },
+          linked = summary.boolean("linked") || accountRows.any { it.linked },
+          running = summary.boolean("running") || accountRows.any { it.running },
+          connected = summary.boolean("connected") || accountRows.any { it.connected },
+          error =
+            summary
+              ?.get("lastError")
+              .asStringOrNull()
+              ?.trim()
+              ?.takeIf { it.isNotEmpty() }
+              ?: accountRows.firstNotNullOfOrNull { it.error },
+        )
+      }.sortedWith(compareByDescending<GatewayChannelSummary> { it.enabled || it.configured }.thenBy { it.label.lowercase() })
+  }
+
+  private fun parseChannelAccounts(accounts: JsonArray?): List<GatewayChannelAccountSummary> =
+    accounts
+      ?.mapNotNull { item ->
+        val obj = item.asObjectOrNull() ?: return@mapNotNull null
+        val accountId = obj["accountId"].asStringOrNull()?.trim().orEmpty()
+        if (accountId.isEmpty()) return@mapNotNull null
+        GatewayChannelAccountSummary(
+          enabled = obj.boolean("enabled"),
+          configured = obj.boolean("configured"),
+          linked = obj.boolean("linked"),
+          running = obj.boolean("running"),
+          connected = obj.boolean("connected"),
+          error =
+            obj["lastError"]
+              .asStringOrNull()
+              ?.trim()
+              ?.takeIf { it.isNotEmpty() },
+        )
+      }.orEmpty()
+
+  private fun parseStringMap(map: JsonObject?): Map<String, String> =
+    map
+      ?.mapNotNull { (key, value) ->
+        value
+          .asStringOrNull()
+          ?.trim()
+          ?.takeIf { it.isNotEmpty() }
+          ?.let { key to it }
+      }?.toMap()
+      .orEmpty()
+
+  private fun parseDreamingSummary(
+    dreaming: JsonObject?,
+    diary: JsonObject?,
+  ): GatewayDreamingSummary {
+    val diaryContent = diary?.get("content").asStringOrNull()
+    val entries = if (diary.boolean("found")) parseDreamDiaryEntries(diaryContent) else emptyList()
+    val timezone =
+      dreaming
+        ?.get("timezone")
+        .asStringOrNull()
+        ?.trim()
+        ?.takeIf { it.isNotEmpty() }
+    val storeHealthy =
+      dreaming
+        ?.get("storeError")
+        .asStringOrNull()
+        ?.trim()
+        .isNullOrEmpty()
+    val phaseSignalHealthy =
+      dreaming
+        ?.get("phaseSignalError")
+        .asStringOrNull()
+        ?.trim()
+        .isNullOrEmpty()
+    return GatewayDreamingSummary(
+      enabled = dreaming.boolean("enabled"),
+      timezone = timezone,
+      shortTermCount = dreaming.long("shortTermCount")?.toInt() ?: 0,
+      groundedSignalCount = dreaming.long("groundedSignalCount")?.toInt() ?: 0,
+      totalSignalCount = dreaming.long("totalSignalCount")?.toInt() ?: 0,
+      promotedToday = dreaming.long("promotedToday")?.toInt() ?: 0,
+      promotedTotal = dreaming.long("promotedTotal")?.toInt() ?: 0,
+      nextRunAtMs = dreamingNextRunAtMs(dreaming),
+      storeHealthy = storeHealthy,
+      phaseSignalHealthy = phaseSignalHealthy,
+      diaryFound = diary.boolean("found"),
+      diaryEntries = entries,
+      diaryEntryCount = entries.size,
+    )
+  }
+
+  private fun dreamingNextRunAtMs(dreaming: JsonObject?): Long? {
+    val phases = dreaming?.get("phases").asObjectOrNull()
+    return listOf("light", "deep", "rem")
+      .mapNotNull { phase -> phases?.get(phase).asObjectOrNull().long("nextRunAtMs") }
+      .minOrNull()
+  }
+
+  private fun parseDreamDiaryEntries(content: String?): List<GatewayDreamDiaryEntry> {
+    val raw = content?.trim().orEmpty()
+    if (raw.isEmpty()) return emptyList()
+    val body = raw.substringAfter("<!-- openclaw:dreaming:diary:start -->", raw).substringBefore("<!-- openclaw:dreaming:diary:end -->")
+    return body
+      .split(Regex("\\n---\\n"))
+      .mapNotNull(::parseDreamDiaryEntry)
+      .asReversed()
+      .take(4)
+  }
+
+  private fun parseDreamDiaryEntry(block: String): GatewayDreamDiaryEntry? {
+    val lines = block.trim().lines()
+    val date =
+      lines
+        .firstOrNull { line ->
+          val trimmed = line.trim()
+          trimmed.length > 2 && trimmed.startsWith("*") && trimmed.endsWith("*")
+        }?.trim()
+        ?.trim('*')
+        ?.takeIf { it.isNotEmpty() }
+    val text =
+      lines
+        .map { it.trim() }
+        .filter { line -> line.isNotEmpty() && !line.startsWith("#") && !line.startsWith("<!--") && !(line.startsWith("*") && line.endsWith("*")) }
+        .joinToString(" ")
+        .replace(Regex("\\s+"), " ")
+        .takeIf { it.isNotEmpty() }
+    return text?.let { GatewayDreamDiaryEntry(date = date ?: "Dream", text = it) }
+  }
+
+  private fun parseStringArray(items: JsonArray?): List<String> =
+    items
+      ?.mapNotNull { item -> item.asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } }
+      .orEmpty()
+
+  private fun cronScheduleLabel(schedule: JsonObject?): String =
+    when (schedule?.get("kind").asStringOrNull()) {
+      "at" -> "One time"
+      "every" -> schedule.long("everyMs")?.let(::formatEverySchedule) ?: "Repeating"
+      "cron" ->
+        schedule
+          ?.get("expr")
+          .asStringOrNull()
+          ?.trim()
+          ?.takeIf { it.isNotEmpty() } ?: "Cron"
+      else -> "Scheduled"
+    }
+
+  private fun cronPayloadPreview(payload: JsonObject?): String {
+    val text =
+      when (payload?.get("kind").asStringOrNull()) {
+        "systemEvent" -> payload?.get("text").asStringOrNull()
+        "agentTurn" -> payload?.get("message").asStringOrNull()
+        else -> null
+      }
+    return text?.trim()?.replace(Regex("\\s+"), " ")?.takeIf { it.isNotEmpty() } ?: "No prompt"
+  }
+
+  private fun formatEverySchedule(everyMs: Long): String {
+    val minutes = everyMs / 60_000L
+    val hours = minutes / 60L
+    val days = hours / 24L
+    return when {
+      days >= 1 && hours % 24L == 0L -> "Every ${days}d"
+      hours >= 1 && minutes % 60L == 0L -> "Every ${hours}h"
+      minutes >= 1 -> "Every ${minutes}m"
+      else -> "Repeating"
     }
   }
 
@@ -1608,22 +2413,22 @@ class NodeRuntime(
       val agentId = mainKey.removePrefix("agent:").substringBefore(':').trim()
       if (agentId.isNotEmpty()) return agentId
     }
-    return gatewayDefaultAgentId?.trim().orEmpty()
+    return gatewayDefaultAgentId.value?.trim().orEmpty()
   }
 
   private fun resolveActiveAgentName(activeAgentId: String): String {
     if (activeAgentId.isNotEmpty()) {
-      gatewayAgents.firstOrNull { it.id == activeAgentId }?.let { agent ->
+      gatewayAgents.value.firstOrNull { it.id == activeAgentId }?.let { agent ->
         return normalized(agent.name) ?: agent.id
       }
       return activeAgentId
     }
-    return gatewayAgents.firstOrNull()?.let { normalized(it.name) ?: it.id } ?: "Main"
+    return gatewayAgents.value.firstOrNull()?.let { normalized(it.name) ?: it.id } ?: "Main"
   }
 
   private fun homeCanvasAgents(activeAgentId: String): List<HomeCanvasAgentCard> {
-    val defaultAgentId = gatewayDefaultAgentId?.trim().orEmpty()
-    return gatewayAgents
+    val defaultAgentId = gatewayDefaultAgentId.value?.trim().orEmpty()
+    return gatewayAgents.value
       .map { agent ->
         val isActive = activeAgentId.isNotEmpty() && agent.id == activeAgentId
         val isDefault = defaultAgentId.isNotEmpty() && agent.id == defaultAgentId
@@ -1737,11 +2542,241 @@ private enum class HomeCanvasGatewayState {
   Offline,
 }
 
-private data class GatewayAgentSummary(
+data class GatewayAgentSummary(
   val id: String,
   val name: String?,
   val emoji: String?,
 )
+
+data class GatewayModelSummary(
+  val id: String,
+  val name: String,
+  val provider: String,
+  val supportsVision: Boolean,
+  val supportsAudio: Boolean,
+  val supportsDocuments: Boolean,
+  val supportsReasoning: Boolean,
+  val contextTokens: Long?,
+)
+
+data class GatewayModelProviderSummary(
+  val id: String,
+  val displayName: String,
+  val status: String,
+  val profileCount: Int,
+)
+
+data class GatewayCronStatus(
+  val enabled: Boolean,
+  val jobs: Int,
+  val nextWakeAtMs: Long?,
+)
+
+data class GatewayCronJobSummary(
+  val id: String,
+  val name: String,
+  val enabled: Boolean,
+  val scheduleLabel: String,
+  val promptPreview: String,
+  val nextRunAtMs: Long?,
+  val lastRunStatus: String?,
+)
+
+data class GatewayUsageSummary(
+  val updatedAtMs: Long?,
+  val providers: List<GatewayUsageProviderSummary>,
+)
+
+data class GatewayUsageProviderSummary(
+  val displayName: String,
+  val plan: String?,
+  val error: String?,
+  val windows: List<GatewayUsageWindowSummary>,
+)
+
+data class GatewayUsageWindowSummary(
+  val label: String,
+  val usedPercent: Double,
+  val resetAtMs: Long?,
+)
+
+data class GatewaySkillsSummary(
+  val managedSkillsDirAvailable: Boolean = false,
+  val skills: List<GatewaySkillSummary>,
+)
+
+data class GatewaySkillSummary(
+  val name: String,
+  val description: String?,
+  val source: String,
+  val emoji: String?,
+  val disabled: Boolean,
+  val eligible: Boolean,
+  val blockedByAllowlist: Boolean,
+  val bundled: Boolean,
+  val missingCount: Int,
+  val installCount: Int,
+)
+
+data class GatewayNodesDevicesSummary(
+  val nodes: List<GatewayNodeSummary>,
+  val pendingDevices: List<GatewayPendingDeviceSummary>,
+  val pairedDevices: List<GatewayPairedDeviceSummary>,
+  val devicePairingAvailable: Boolean = true,
+)
+
+data class GatewayNodeSummary(
+  val id: String,
+  val displayName: String?,
+  val remoteIp: String?,
+  val version: String?,
+  val deviceFamily: String?,
+  val paired: Boolean,
+  val connected: Boolean,
+  val capabilities: List<String>,
+  val commands: List<String>,
+)
+
+data class GatewayPendingDeviceSummary(
+  val requestId: String,
+  val deviceId: String,
+  val displayName: String?,
+  val remoteIp: String?,
+  val roles: List<String>,
+  val scopes: List<String>,
+  val requestedAtMs: Long?,
+  val repair: Boolean,
+)
+
+data class GatewayPairedDeviceSummary(
+  val deviceId: String,
+  val displayName: String?,
+  val remoteIp: String?,
+  val roles: List<String>,
+  val scopes: List<String>,
+  val tokens: List<GatewayDeviceTokenSummary>,
+  val approvedAtMs: Long?,
+)
+
+data class GatewayDeviceTokenSummary(
+  val role: String,
+  val scopes: List<String>,
+  val revoked: Boolean,
+  val updatedAtMs: Long?,
+)
+
+data class GatewayChannelsSummary(
+  val updatedAtMs: Long? = null,
+  val partial: Boolean = false,
+  val warnings: List<String> = emptyList(),
+  val channels: List<GatewayChannelSummary>,
+)
+
+data class GatewayChannelSummary(
+  val id: String,
+  val label: String,
+  val accountCount: Int,
+  val enabled: Boolean,
+  val configured: Boolean,
+  val linked: Boolean,
+  val running: Boolean,
+  val connected: Boolean,
+  val error: String?,
+)
+
+private data class GatewayChannelAccountSummary(
+  val enabled: Boolean,
+  val configured: Boolean,
+  val linked: Boolean,
+  val running: Boolean,
+  val connected: Boolean,
+  val error: String?,
+)
+
+data class GatewayDreamingSummary(
+  val enabled: Boolean = false,
+  val timezone: String? = null,
+  val shortTermCount: Int = 0,
+  val groundedSignalCount: Int = 0,
+  val totalSignalCount: Int = 0,
+  val promotedToday: Int = 0,
+  val promotedTotal: Int = 0,
+  val nextRunAtMs: Long? = null,
+  val storeHealthy: Boolean = true,
+  val phaseSignalHealthy: Boolean = true,
+  val diaryFound: Boolean = false,
+  val diaryEntries: List<GatewayDreamDiaryEntry> = emptyList(),
+  val diaryEntryCount: Int = 0,
+)
+
+data class GatewayDreamDiaryEntry(
+  val date: String,
+  val text: String,
+)
+
+data class GatewayHealthLogsSummary(
+  val fileName: String? = null,
+  val cursor: Long? = null,
+  val truncated: Boolean = false,
+  val entries: List<GatewayLogEntry> = emptyList(),
+)
+
+data class GatewayLogEntry(
+  val time: String?,
+  val level: String?,
+  val subsystem: String?,
+  val message: String,
+)
+
+private fun JsonObject?.long(key: String): Long? = (this?.get(key) as? JsonPrimitive)?.content?.trim()?.toLongOrNull()
+
+private fun JsonObject?.double(key: String): Double? = (this?.get(key) as? JsonPrimitive)?.content?.trim()?.toDoubleOrNull()
+
+private fun JsonObject?.boolean(key: String): Boolean = (this?.get(key) as? JsonPrimitive)?.content?.trim() == "true"
+
+internal fun cronJobLastRunStatus(state: JsonObject?): String? =
+  state
+    .cronStatus("lastStatus")
+    ?: state.cronStatus("lastRunStatus")
+
+private fun JsonObject?.cronStatus(key: String): String? =
+  this
+    ?.get(key)
+    .asStringOrNull()
+    ?.trim()
+    ?.takeIf { it.isNotEmpty() }
+
+fun providerDisplayName(provider: String): String =
+  when (provider.trim().lowercase()) {
+    "openai" -> "OpenAI"
+    "openrouter" -> "OpenRouter"
+    "openai-codex", "codex" -> "Codex"
+    "ollama", "ollama-local" -> "Ollama Local"
+    else ->
+      provider
+        .replace('-', ' ')
+        .replace('_', ' ')
+        .split(' ')
+        .filter { it.isNotBlank() }
+        .joinToString(" ") { token -> token.replaceFirstChar { it.uppercase() } }
+        .replace(" Ai", " AI")
+        .ifBlank { "Provider" }
+  }
+
+fun channelDisplayLabel(channel: String): String =
+  when (channel.trim().lowercase()) {
+    "imessage" -> "iMessage"
+    "googlechat" -> "Google Chat"
+    "whatsapp" -> "WhatsApp"
+    else ->
+      channel
+        .replace('-', ' ')
+        .replace('_', ' ')
+        .split(' ')
+        .filter { it.isNotBlank() }
+        .joinToString(" ") { token -> token.replaceFirstChar { it.uppercase() } }
+        .ifBlank { "Channel" }
+  }
 
 @Serializable
 private data class HomeCanvasPayload(

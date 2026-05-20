@@ -606,6 +606,98 @@ describe("msteams monitor handler authz", () => {
     expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).not.toHaveBeenCalled();
   });
 
+  it("marks skipped channel message system events as non-owner", async () => {
+    resetThreadMocks();
+    const { deps, enqueueSystemEvent } = createDeps({
+      channels: {
+        msteams: {
+          groupPolicy: "open",
+          requireMention: true,
+        },
+      },
+    } as OpenClawConfig);
+
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler(
+      createMessageActivity({
+        id: "msg-skip-mention",
+        text: "please run the deployment",
+        from: {
+          id: "member-id",
+          aadObjectId: "member-aad",
+          name: "Member",
+        },
+        conversation: {
+          id: "19:channel@thread.tacv2",
+          conversationType: "channel",
+        },
+        channelData: {
+          team: { id: "team123", name: "Team 123" },
+          channel: { name: "General" },
+        },
+      }),
+    );
+
+    expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).not.toHaveBeenCalled();
+    const systemEventCall = enqueueSystemEvent.mock.calls.find(
+      ([text]) => typeof text === "string" && text.includes("please run the deployment"),
+    );
+    if (!systemEventCall) {
+      throw new Error("expected skipped Teams message system event");
+    }
+    expect(systemEventCall[1]).toMatchObject({
+      forceSenderIsOwnerFalse: true,
+      trusted: false,
+    });
+  });
+
+  it("keeps dispatched primary message system events owner-neutral", async () => {
+    resetThreadMocks();
+    const { deps, enqueueSystemEvent } = createDeps({
+      channels: {
+        msteams: {
+          groupPolicy: "open",
+          requireMention: false,
+        },
+      },
+    } as OpenClawConfig);
+
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler(
+      createMessageActivity({
+        id: "msg-active",
+        text: "please check the build",
+        from: {
+          id: "member-id",
+          aadObjectId: "member-aad",
+          name: "Member",
+        },
+        conversation: {
+          id: "19:channel@thread.tacv2",
+          conversationType: "channel",
+        },
+        channelData: {
+          team: { id: "team123", name: "Team 123" },
+          channel: { name: "General" },
+        },
+      }),
+    );
+
+    expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).toHaveBeenCalled();
+    const systemEventCall = enqueueSystemEvent.mock.calls.find(
+      ([text]) => typeof text === "string" && text.includes("please check the build"),
+    );
+    if (!systemEventCall) {
+      throw new Error("expected active Teams message system event");
+    }
+    expect(systemEventCall[1]).not.toMatchObject({
+      forceSenderIsOwnerFalse: true,
+    });
+    expect(systemEventCall[1]).not.toMatchObject({
+      trusted: false,
+    });
+  });
+
   it("authorizes text control commands from static access groups", async () => {
     resetThreadMocks();
     const hasControlCommand = vi.fn(() => true);

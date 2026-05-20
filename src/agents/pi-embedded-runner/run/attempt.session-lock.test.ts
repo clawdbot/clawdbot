@@ -2,6 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  runWithOwnedSessionTranscriptWriteLock,
+  withOwnedSessionTranscriptWrites,
+} from "../../../config/sessions/transcript-write-context.js";
 import { SessionWriteLockTimeoutError } from "../../session-write-lock-error.js";
 import {
   createEmbeddedAttemptSessionLockController,
@@ -177,6 +181,37 @@ describe("embedded attempt session lock lifecycle", () => {
     await cleanupLock.release();
 
     expect(release).toHaveBeenCalledTimes(2);
+  });
+
+  it("refreshes the prompt fence after an owned transcript mirror append", async () => {
+    const sessionFile = await createTempSessionFile();
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLock = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+    await withOwnedSessionTranscriptWrites(
+      {
+        sessionFile,
+        sessionKey: "agent:main:discord:channel:123",
+        withSessionWriteLock: (operation) => controller.withSessionWriteLock(operation),
+      },
+      async () =>
+        await runWithOwnedSessionTranscriptWriteLock(
+          { sessionFile, sessionKey: "agent:main:discord:channel:123" },
+          async () => {
+            await fs.appendFile(sessionFile, '{"type":"message","id":"delivery-mirror"}\n', "utf8");
+          },
+        ),
+    );
+    await expect(controller.withSessionWriteLock(() => "finalize")).resolves.toBe("finalize");
+
+    expect(controller.hasSessionTakeover()).toBe(false);
+    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(3);
+    expect(release).toHaveBeenCalledTimes(3);
   });
 
   it("returns a no-op cleanup lock after prompt lock reacquisition times out", async () => {

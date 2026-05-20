@@ -163,6 +163,8 @@ export type ReplyPayloadMetadata = {
     idempotencyKey?: string;
   };
   beforeAgentRunBlocked?: boolean;
+  /** Warning synthesized from an observed tool error after the run produced assistant output. */
+  nonTerminalToolErrorWarning?: boolean;
 };
 
 const replyPayloadMetadata = new WeakMap<object, ReplyPayloadMetadata>();

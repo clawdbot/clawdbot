@@ -498,10 +498,15 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       ? `Teams DM from ${senderName}`
       : `Teams message in ${conversationType} from ${senderName}`;
 
-    core.system.enqueueSystemEvent(`${inboundLabel}: ${preview}`, {
-      sessionKey: route.sessionKey,
-      contextKey: `msteams:message:${conversationId}:${activity.id ?? "unknown"}`,
-    });
+    const enqueuePrimaryMessageSystemEvent = (opts?: {
+      forceSenderIsOwnerFalse?: boolean;
+      trusted?: boolean;
+    }) =>
+      core.system.enqueueSystemEvent(`${inboundLabel}: ${preview}`, {
+        sessionKey: route.sessionKey,
+        contextKey: `msteams:message:${conversationId}:${activity.id ?? "unknown"}`,
+        ...opts,
+      });
 
     const channelId = conversationId;
     const { teamConfig, channelConfig } = channelGate;
@@ -536,6 +541,10 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           requireMention,
           mentioned,
         });
+        enqueuePrimaryMessageSystemEvent({
+          forceSenderIsOwnerFalse: true,
+          trusted: false,
+        });
         createChannelHistoryWindow({ historyMap: conversationHistories }).record({
           historyKey: conversationId,
           limit: historyLimit,
@@ -549,6 +558,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         return;
       }
     }
+    enqueuePrimaryMessageSystemEvent();
     let graphConversationId = translateMSTeamsDmConversationIdForGraph({
       isDirectMessage,
       conversationId,
@@ -665,6 +675,8 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           core.system.enqueueSystemEvent(formatParentContextEvent(parentSummary), {
             sessionKey: route.sessionKey,
             contextKey: `msteams:thread-parent:${conversationId}:${activity.replyToId}`,
+            forceSenderIsOwnerFalse: true,
+            trusted: false,
           });
           markParentContextInjected(route.sessionKey, activity.replyToId);
         }

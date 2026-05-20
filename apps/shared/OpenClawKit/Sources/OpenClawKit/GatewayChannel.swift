@@ -601,7 +601,6 @@ public actor GatewayChannelActor {
             let allowedOperatorScopes: Set = [
                 "operator.approvals",
                 "operator.read",
-                "operator.talk.secrets",
                 "operator.write",
             ]
             return Array(Set(scopes.filter { allowedOperatorScopes.contains($0) })).sorted()

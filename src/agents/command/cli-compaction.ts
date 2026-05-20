@@ -8,6 +8,10 @@ import { resolveContextEngine as resolveContextEngineImpl } from "../../context-
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { buildEmbeddedCompactionRuntimeContext } from "../pi-embedded-runner/compaction-runtime-context.js";
+import {
+  compactContextEngineWithSafetyTimeout,
+  resolveCompactionTimeoutMs,
+} from "../pi-embedded-runner/compaction-safety-timeout.js";
 import { runContextEngineMaintenance as runContextEngineMaintenanceImpl } from "../pi-embedded-runner/context-engine-maintenance.js";
 import { shouldPreemptivelyCompactBeforePrompt as shouldPreemptivelyCompactBeforePromptImpl } from "../pi-embedded-runner/run/preemptive-compaction.js";
 import { resolveLiveToolResultMaxChars as resolveLiveToolResultMaxCharsImpl } from "../pi-embedded-runner/tool-result-truncation.js";
@@ -149,16 +153,28 @@ async function compactCliTranscript(params: {
     trigger: "cli_budget",
   };
 
-  const compactResult = await params.contextEngine.compact({
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    sessionFile: params.sessionFile,
-    tokenBudget: params.contextTokenBudget,
-    currentTokenCount: params.currentTokenCount,
-    force: true,
-    compactionTarget: "budget",
-    runtimeContext,
-  });
+  let compactResult: Awaited<ReturnType<typeof params.contextEngine.compact>>;
+  try {
+    compactResult = await compactContextEngineWithSafetyTimeout(
+      params.contextEngine,
+      {
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        sessionFile: params.sessionFile,
+        tokenBudget: params.contextTokenBudget,
+        currentTokenCount: params.currentTokenCount,
+        force: true,
+        compactionTarget: "budget",
+        runtimeContext,
+      },
+      resolveCompactionTimeoutMs(params.cfg),
+    );
+  } catch (error) {
+    log.warn(
+      `CLI transcript compaction failed for ${params.provider}/${params.model}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    return false;
+  }
 
   if (!compactResult.compacted) {
     log.warn(

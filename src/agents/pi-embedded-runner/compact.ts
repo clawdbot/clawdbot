@@ -207,6 +207,7 @@ function prepareCompactionSessionAgent(params: {
     signal: params.signal,
     model: params.effectiveModel,
     resolvedApiKey: params.resolvedApiKey,
+    authProfileId: params.runtimePlan?.auth.forwardedAuthProfileId,
     authStorage: params.authStorage as never,
   });
   const providerTextTransforms = resolveProviderTextTransforms({

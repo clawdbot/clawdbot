@@ -66,6 +66,7 @@ import { filterToolsForVisionInputs } from "./vision-tools.js";
 
 const CODEX_SIDE_DYNAMIC_TOOL_TIMEOUT_MS = 30_000;
 const CODEX_SIDE_DYNAMIC_TOOL_MAX_TIMEOUT_MS = 600_000;
+const CODEX_SIDE_DYNAMIC_IMAGE_GENERATION_TOOL_TIMEOUT_MS = 120_000;
 const CODEX_SIDE_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS = 60_000;
 const SIDE_QUESTION_COMPLETION_TIMEOUT_MS = 600_000;
 const CODEX_SIDE_NATIVE_HOOK_RELAY_MIN_TTL_MS = 30 * 60_000;
@@ -671,7 +672,8 @@ function resolveSideDynamicToolCallTimeoutMs(params: {
   const configured =
     readSideDynamicToolCallTimeoutMs(params.call.arguments) ??
     (params.call.tool === "image_generate"
-      ? readSideImageGenerationModelTimeoutMs(params.config)
+      ? (readSideImageGenerationModelTimeoutMs(params.config) ??
+        CODEX_SIDE_DYNAMIC_IMAGE_GENERATION_TOOL_TIMEOUT_MS)
       : undefined) ??
     (params.call.tool === "image"
       ? (readSideTimeoutSecondsAsMs(params.config?.tools?.media?.image?.timeoutSeconds) ??

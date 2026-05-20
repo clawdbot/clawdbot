@@ -2428,6 +2428,36 @@ describe("CodexAppServerEventProjector", () => {
     });
   });
 
+  it("marks failed completed tool output as error progress", async () => {
+    const onToolResult = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      verboseLevel: "full",
+      onToolResult,
+    });
+
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "dynamicToolCall",
+          id: "tool-1",
+          namespace: null,
+          tool: "bash",
+          arguments: { command: "ls /tmp/missing" },
+          status: "failed",
+          contentItems: [{ type: "inputText", text: "No such file or directory" }],
+          success: false,
+          durationMs: 12,
+        },
+      ]),
+    );
+
+    expect(onToolResult).toHaveBeenNthCalledWith(2, {
+      text: "🛠️ `list files in /tmp/missing`\n```txt\nNo such file or directory\n```",
+      isError: true,
+    });
+  });
+
   it("uses a safe markdown fence for verbose tool output", async () => {
     const onToolResult = vi.fn();
     const projector = await createProjector({

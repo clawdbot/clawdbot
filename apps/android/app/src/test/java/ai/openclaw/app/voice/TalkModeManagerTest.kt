@@ -256,7 +256,7 @@ class TalkModeManagerTest {
         scope = CoroutineScope(sessionJob + Dispatchers.Default),
         identityStore = DeviceIdentityStore(app),
         deviceAuthStore = InMemoryDeviceAuthStore(),
-        onConnected = { _, _, _ -> },
+        onConnected = {},
         onDisconnected = {},
         onEvent = { _, _ -> },
       )

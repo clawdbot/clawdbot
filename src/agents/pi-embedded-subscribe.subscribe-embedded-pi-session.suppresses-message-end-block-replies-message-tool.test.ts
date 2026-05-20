@@ -1,6 +1,7 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import {
+  createSubscribedSessionHarness,
   createStubSessionHarness,
   emitAssistantTextDelta,
   emitAssistantTextEnd,
@@ -93,6 +94,34 @@ describe("subscribeEmbeddedPiSession", () => {
 
     expect(subscription.didSendViaMessagingTool()).toBe(true);
     expect(subscription.getMessagingToolSentMediaUrls()).toEqual(["file:///tmp/render.mp4"]);
+  });
+
+  it("suppresses text-only tool summaries after message-tool-only delivery", async () => {
+    const onToolResult = vi.fn();
+    const { emit } = createSubscribedSessionHarness({
+      runId: "run-message-tool-progress",
+      verboseLevel: "on",
+      sourceReplyDeliveryMode: "message_tool_only",
+      onToolResult,
+    });
+
+    await emitMessageToolLifecycle({
+      emit,
+      toolCallId: "tool-message-final",
+      message: "Final answer sent through the message tool.",
+      result: "ok",
+    });
+    onToolResult.mockClear();
+
+    emit({
+      type: "tool_execution_start",
+      toolName: "exec",
+      toolCallId: "tool-exec-late",
+      args: { command: "false" },
+    });
+    await Promise.resolve();
+
+    expect(onToolResult).not.toHaveBeenCalled();
   });
 
   it("does not suppress message_end replies when message tool reports error", async () => {

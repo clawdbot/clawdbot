@@ -39,16 +39,15 @@ export function isUpdatePackageSwapInProgress(env: NodeJS.ProcessEnv): boolean {
 
 /**
  * True iff configured plugin install repair should be deferred because the
- * updater guarantees a later post-core convergence pass. Shipped writable
- * parents predate the explicit defer marker but still resume after the
- * candidate doctor exits, so the candidate pass must not install payloads
- * that the parent will immediately repair again from stale in-memory records.
+ * updater guarantees a later post-core convergence pass. Older shipped
+ * parents may set only the writable-config marker; they still resume after
+ * the candidate doctor exits, so the candidate must repair payloads before
+ * control returns to that stale process.
  */
 export function shouldDeferConfiguredPluginInstallRepair(env: NodeJS.ProcessEnv): boolean {
   return (
     isUpdatePackageSwapInProgress(env) &&
-    (isTruthyEnvValue(env[UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV]) ||
-      isTruthyEnvValue(env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]))
+    isTruthyEnvValue(env[UPDATE_DEFER_CONFIGURED_PLUGIN_INSTALL_REPAIR_ENV])
   );
 }
 

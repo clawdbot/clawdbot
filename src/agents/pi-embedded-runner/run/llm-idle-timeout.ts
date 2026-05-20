@@ -154,11 +154,18 @@ export function resolveLlmIdleTimeoutMs(params?: {
     Number.isFinite(modelRequestTimeoutMs) &&
     modelRequestTimeoutMs > 0
   ) {
+    // `modelRequestTimeoutMs` is wired from `models.providers.<id>.timeoutSeconds`,
+    // which is an explicit per-provider opt-in. The schema help describes it as
+    // "Use this for slow local or self-hosted model servers instead of changing
+    // global agent timeouts." so we honor it as a deliberate ceiling rather
+    // than clamping it back down to the implicit `DEFAULT_LLM_IDLE_TIMEOUT_MS`
+    // network-silence-as-hang guard. Without this, users hitting #77744 /
+    // #78361 set provider timeoutSeconds to e.g. 600s, observe the value is
+    // accepted and hot-reloaded, yet the idle watchdog still aborts at 120s.
+    // The agent/run timeoutBounds still apply so an explicit shorter run
+    // timeout always wins.
     const boundedTimeoutMs = Math.min(modelRequestTimeoutMs, ...timeoutBounds);
-    if (params?.trigger === "cron" || isLocalProvider) {
-      return clampTimeoutMs(boundedTimeoutMs);
-    }
-    return clampImplicitTimeoutMs(boundedTimeoutMs);
+    return clampTimeoutMs(boundedTimeoutMs);
   }
 
   if (typeof runTimeoutMs === "number" && Number.isFinite(runTimeoutMs) && runTimeoutMs > 0) {

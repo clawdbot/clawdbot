@@ -115,6 +115,10 @@ function sanitizeChatHistoryContentBlock(
     delete entry.thinkingSignature;
     changed = true;
   }
+  if ("openclawReasoningReplay" in entry) {
+    delete entry.openclawReasoningReplay;
+    changed = true;
+  }
   const type = typeof entry.type === "string" ? entry.type : "";
   if (type === "image" && typeof entry.data === "string") {
     const bytes = Buffer.byteLength(entry.data, "utf8");

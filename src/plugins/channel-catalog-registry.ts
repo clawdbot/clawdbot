@@ -1,5 +1,5 @@
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { discoverOpenClawPlugins } from "./discovery.js";
+import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
 import {
@@ -31,14 +31,18 @@ export function listChannelCatalogEntries(
      * Bundled-only callers skip the load to avoid the disk read.
      */
     installRecords?: Record<string, PluginInstallRecord>;
+    discovery?: PluginDiscoveryResult;
   } = {},
 ): PluginChannelCatalogEntry[] {
   const installRecords = resolveInstallRecords(params);
-  return discoverOpenClawPlugins({
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    ...(installRecords && Object.keys(installRecords).length > 0 ? { installRecords } : {}),
-  }).candidates.flatMap((candidate) => {
+  const discovery =
+    params.discovery ??
+    discoverOpenClawPlugins({
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      ...(installRecords && Object.keys(installRecords).length > 0 ? { installRecords } : {}),
+    });
+  return discovery.candidates.flatMap((candidate) => {
     if (params.origin && candidate.origin !== params.origin) {
       return [];
     }

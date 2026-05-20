@@ -8,8 +8,11 @@ installBaseProgramMocks();
 let registerNodesCli: typeof import("./nodes-cli.js").registerNodesCli;
 
 type GatewayCallRequest = {
+  clientName?: string;
   method?: string;
+  mode?: string;
   params?: unknown;
+  scopes?: unknown;
 };
 
 function formatRuntimeLogCallArg(value: unknown): string {
@@ -434,19 +437,103 @@ describe("cli program (nodes basics)", () => {
 
     expectGatewayRequest("node.list", {});
     expectGatewayRequest("node.describe", { nodeId: "ios-node" });
+    const describeRequest = gatewayRequests().find(
+      (candidate) => candidate.method === "node.describe",
+    );
+    expect(describeRequest?.clientName).toBe("cli");
+    expect(describeRequest?.mode).toBe("cli");
 
     const out = getRuntimeOutput();
     expect(out).toContain("Commands");
     expect(out).toContain("canvas.eval");
   });
 
-  it("runs nodes approve and calls node.pair.approve", async () => {
-    callGateway.mockResolvedValue({
-      requestId: "r1",
-      node: { nodeId: "n1", token: "t1" },
+  it("runs nodes approve with the pending request approval scopes", async () => {
+    callGateway.mockImplementation(async (...args: unknown[]) => {
+      const opts = (args[0] ?? {}) as { method?: string };
+      if (opts.method === "node.pair.list") {
+        return {
+          pending: [
+            {
+              requestId: "r1",
+              nodeId: "n1",
+              ts: Date.now(),
+              requiredApproveScopes: ["operator.pairing", "operator.admin"],
+            },
+          ],
+          paired: [],
+        };
+      }
+      if (opts.method === "node.pair.approve") {
+        return {
+          requestId: "r1",
+          node: { nodeId: "n1", token: "t1" },
+        };
+      }
+      return { ok: true };
     });
+
     await runProgram(["nodes", "approve", "r1"]);
+    expectGatewayRequest("node.pair.list", {});
     expectGatewayRequest("node.pair.approve", { requestId: "r1" });
+    const listRequest = gatewayRequests().find(
+      (candidate) => candidate.method === "node.pair.list",
+    );
+    const approveRequest = gatewayRequests().find(
+      (candidate) => candidate.method === "node.pair.approve",
+    );
+    expect(listRequest?.clientName).toBe("gateway-client");
+    expect(listRequest?.mode).toBe("backend");
+    expect(approveRequest?.scopes).toEqual(["operator.pairing", "operator.admin"]);
+    expect(approveRequest?.clientName).toBe("gateway-client");
+    expect(approveRequest?.mode).toBe("backend");
+  });
+
+  it("falls back to command-derived nodes approve scopes", async () => {
+    callGateway.mockImplementation(async (...args: unknown[]) => {
+      const opts = (args[0] ?? {}) as { method?: string };
+      if (opts.method === "node.pair.list") {
+        return {
+          pending: [
+            {
+              requestId: "r1",
+              nodeId: "n1",
+              ts: Date.now(),
+              commands: ["system.run"],
+            },
+          ],
+          paired: [],
+        };
+      }
+      if (opts.method === "node.pair.approve") {
+        return {
+          requestId: "r1",
+          node: { nodeId: "n1", token: "t1" },
+        };
+      }
+      return { ok: true };
+    });
+
+    await runProgram(["nodes", "approve", "r1"]);
+
+    const approveRequest = gatewayRequests().find(
+      (candidate) => candidate.method === "node.pair.approve",
+    );
+    expect(approveRequest?.scopes).toEqual(["operator.pairing", "operator.admin"]);
+  });
+
+  it("rejects unsupported node approval backend methods at runtime", async () => {
+    const { callNodePairApprovalGatewayCliRuntime } = await import("./nodes-cli/rpc.runtime.js");
+
+    await expect(
+      callNodePairApprovalGatewayCliRuntime(
+        "node.invoke" as never,
+        { json: true },
+        {},
+        { scopes: ["operator.admin"] },
+      ),
+    ).rejects.toThrow("unsupported node pair approval gateway method: node.invoke");
+    expect(callGateway).not.toHaveBeenCalled();
   });
 
   it("runs nodes remove and calls node.pair.remove", async () => {
@@ -500,5 +587,8 @@ describe("cli program (nodes basics)", () => {
       timeoutMs: 15000,
       idempotencyKey: "idem-test",
     });
+    const invokeRequest = gatewayRequests().find((candidate) => candidate.method === "node.invoke");
+    expect(invokeRequest?.clientName).toBe("cli");
+    expect(invokeRequest?.mode).toBe("cli");
   });
 });

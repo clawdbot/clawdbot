@@ -101,7 +101,7 @@ function hasExplicitMutatingToolFailureAcknowledgement(text: string): boolean {
 }
 
 function isVerboseToolDetailEnabled(level?: VerboseLevel): boolean {
-  return level === "on" || level === "full";
+  return level === "full";
 }
 
 function resolveRawAssistantAnswerText(lastAssistant: AssistantMessage | undefined): string {
@@ -134,6 +134,10 @@ function shouldIncludeToolErrorDetails(params: {
     params.lastToolError.timedOut === true &&
     (params.isCronTrigger === true || isCronSessionKey(params.sessionKey))
   );
+}
+
+function shouldMarkNonTerminalToolErrorWarning(lastToolError: ToolErrorSummary): boolean {
+  return lastToolError.middlewareError === true;
 }
 
 function resolveToolErrorWarningPolicy(params: {
@@ -221,6 +225,7 @@ export function buildEmbeddedRunPayloads(params: {
     presentation?: ReplyPayload["presentation"];
     interactive?: ReplyPayload["interactive"];
     channelData?: Record<string, unknown>;
+    nonTerminalToolErrorWarning?: boolean;
     sourceReplyMirror?: {
       idempotencyKey?: string;
     };
@@ -509,6 +514,9 @@ export function buildEmbeddedRunPayloads(params: {
         replyItems.push({
           text: warningText,
           isError: true,
+          nonTerminalToolErrorWarning:
+            hasUserFacingAssistantReply &&
+            shouldMarkNonTerminalToolErrorWarning(params.lastToolError),
         });
       }
     }
@@ -529,6 +537,11 @@ export function buildEmbeddedRunPayloads(params: {
       }
       if (item.isError !== undefined) {
         payload.isError = item.isError;
+      }
+      if (item.nonTerminalToolErrorWarning) {
+        setReplyPayloadMetadata(payload, {
+          nonTerminalToolErrorWarning: true,
+        });
       }
       if (item.replyToId) {
         payload.replyToId = item.replyToId;

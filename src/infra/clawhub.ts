@@ -551,7 +551,10 @@ function normalizeCalVerCorrectionForPluginApi(pluginApiVersion: string): string
 }
 
 function buildUrl(params: Pick<ClawHubRequestParams, "baseUrl" | "path" | "search">): URL {
-  const url = new URL(params.path, `${normalizeBaseUrl(params.baseUrl)}/`);
+  const url = new URL(`${normalizeBaseUrl(params.baseUrl)}/`);
+  const basePath = url.pathname.replace(/\/+$/, "");
+  const requestPath = params.path.startsWith("/") ? params.path : `/${params.path}`;
+  url.pathname = `${basePath}${requestPath}`;
   for (const [key, value] of Object.entries(params.search ?? {})) {
     if (!value) {
       continue;

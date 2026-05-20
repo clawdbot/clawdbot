@@ -798,6 +798,13 @@ details.usage-filter-select summary::-webkit-details-marker,
   font-size: 13px;
 }
 
+.context-breakdown-item .mono {
+  max-width: 80%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .usage-list-item:last-child,
 .usage-error-row:last-child,
 .context-breakdown-item:last-child {

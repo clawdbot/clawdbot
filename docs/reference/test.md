@@ -124,6 +124,94 @@ Checked-in fixture:
 - Refresh with `pnpm test:startup:bench:update`
 - Compare current results against the fixture with `pnpm test:startup:bench:check`
 
+## Gateway startup bench
+
+Script: [`scripts/bench-gateway-startup.ts`](https://github.com/openclaw/openclaw/blob/main/scripts/bench-gateway-startup.ts)
+
+The benchmark defaults to the built CLI entry at `dist/entry.js`; run
+`pnpm build` before using the package-script commands. To measure the source
+runner instead, pass `--entry scripts/run-node.mjs` and keep those results
+separate from built-entry baselines.
+
+Usage:
+
+- `pnpm test:startup:gateway -- --runs 5 --warmup 1`
+- `pnpm test:startup:gateway -- --case default --runs 10 --warmup 1`
+- `pnpm test:startup:gateway -- --case skipChannels --case fiftyPlugins --runs 5`
+- `node --import tsx scripts/bench-gateway-startup.ts --case default --runs 5 --output .artifacts/gateway-startup.json`
+- `node --import tsx scripts/bench-gateway-startup.ts --case default --runs 3 --cpu-prof-dir .artifacts/gateway-startup-cpu`
+
+Case ids:
+
+- `default`: normal Gateway startup.
+- `skipChannels`: Gateway startup with channel startup skipped.
+- `oneInternalHook`: one configured internal hook.
+- `allInternalHooks`: all internal hooks.
+- `fiftyPlugins`: 50 manifest plugins.
+- `fiftyStartupLazyPlugins`: 50 startup-lazy manifest plugins.
+
+Output includes first process output, `/healthz`, `/readyz`, HTTP listen log time,
+Gateway ready log time, CPU time, CPU core ratio, max RSS, heap, startup trace
+metrics, event-loop delay, and plugin lookup-table detail metrics. The script
+enables `OPENCLAW_GATEWAY_STARTUP_TRACE=1` in the child Gateway environment.
+
+Read `/healthz` as liveness: the HTTP server can answer. Read `/readyz` as
+usable readiness: startup plugin sidecars, channels, and ready-critical
+post-attach work have settled. Gateway startup hooks are dispatched
+asynchronously and are not part of the readiness guarantee. Ready log time is the
+Gateway's internal ready log timestamp; it is useful for process-side
+attribution but is not a substitute for the external `/readyz` probe.
+
+Use JSON output or `--output` when comparing changes. Use `--cpu-prof-dir` only
+after the trace output points at import, compile, or CPU-bound work that cannot
+be explained from phase timings alone. Do not compare source-runner results with
+built `dist/entry.js` results as the same baseline.
+
+## Gateway restart bench
+
+Script: [`scripts/bench-gateway-restart.ts`](https://github.com/openclaw/openclaw/blob/main/scripts/bench-gateway-restart.ts)
+
+The restart benchmark is supported on macOS and Linux only. It uses SIGUSR1 for
+in-process restarts and fails immediately on Windows.
+
+The benchmark defaults to the built CLI entry at `dist/entry.js`; run
+`pnpm build` before using the package-script commands. To measure the source
+runner instead, pass `--entry scripts/run-node.mjs` and keep those results
+separate from built-entry baselines.
+
+Usage:
+
+- `pnpm test:restart:gateway -- --case skipChannels --runs 1 --restarts 5`
+- `pnpm test:restart:gateway -- --case default --runs 3 --restarts 3 --warmup 1`
+- `pnpm test:restart:gateway -- --case skipChannelsAcpxProbe --case skipChannelsNoAcpxProbe --runs 1 --restarts 5`
+- `node --import tsx scripts/bench-gateway-restart.ts --case fiftyPlugins --runs 1 --restarts 5 --output .artifacts/gateway-restart.json`
+- `node --import tsx scripts/bench-gateway-restart.ts --json`
+
+Case ids:
+
+- `skipChannels`: restart with channels skipped.
+- `skipChannelsAcpxProbe`: restart with channels skipped and ACPX startup probe on.
+- `skipChannelsNoAcpxProbe`: restart with channels skipped and ACPX startup probe off.
+- `default`: normal restart.
+- `fiftyPlugins`: restart with 50 manifest plugins.
+
+Output includes next `/healthz`, next `/readyz`, downtime, restart ready timing,
+CPU, RSS, startup trace metrics for the replacement process, and restart trace
+metrics for signal handling, active-work drain, close phases, next start, ready
+timing, and memory snapshots. The script enables
+`OPENCLAW_GATEWAY_STARTUP_TRACE=1` and `OPENCLAW_GATEWAY_RESTART_TRACE=1` in the
+child Gateway environment.
+
+Use this benchmark when a change touches restart signaling, close handlers,
+startup-after-restart, sidecar shutdown, service handoff, or readiness after
+restart. Start with `skipChannels` when isolating Gateway mechanics from channel
+startup. Use `default` or plugin-heavy cases only after the narrow case explains
+the restart path.
+
+Trace metrics are attribution hints, not verdicts. A restart change should be
+judged from multiple samples, the matching owner span, `/healthz` and `/readyz`
+behavior, and the user-visible restart contract.
+
 ## Onboarding E2E (Docker)
 
 Docker is optional; this is only needed for containerized onboarding smoke tests.

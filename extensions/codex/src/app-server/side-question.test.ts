@@ -1072,6 +1072,20 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(timeoutMs).toBe(123_456);
   });
 
+  it("uses a 120 second default for side-thread image_generate calls", () => {
+    const timeoutMs = testing.resolveSideDynamicToolCallTimeoutMs({
+      call: {
+        threadId: "side-thread",
+        turnId: "turn-1",
+        callId: "tool-1",
+        tool: "image_generate",
+      },
+      config: {} as never,
+    });
+
+    expect(timeoutMs).toBe(120_000);
+  });
+
   it("cleans up notification handlers when side tool setup fails", async () => {
     const client = createFakeClient();
     createOpenClawCodingToolsMock.mockImplementation(() => {

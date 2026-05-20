@@ -70,7 +70,7 @@ import {
   resolveAcpSpawnStreamLogPath,
   startAcpSpawnParentStreamRelay,
 } from "./acp-spawn-parent-stream.js";
-import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
+import { listAgentIds, resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
 import {
   findAcpUnsupportedInheritedToolAllow,
   findAcpUnsupportedInheritedToolDeny,
@@ -447,9 +447,39 @@ function resolveTargetAcpAgentId(params: {
 
 function isExplicitlyAllowedAcpAgent(cfg: OpenClawConfig, agentId: string): boolean {
   return (cfg.acp?.allowedAgents ?? []).some((entry) => {
+    if (entry.trim() === "*") {
+      return true;
+    }
     const normalized = normalizeOptionalAgentId(entry);
-    return normalized === "*" || normalized === agentId;
+    return normalized === agentId;
   });
+}
+
+function resolveConfiguredAcpSubagentTargetIds(cfg: OpenClawConfig): string[] {
+  const ids = new Set<string>(listAgentIds(cfg));
+  for (const agent of cfg.agents?.list ?? []) {
+    if (agent.runtime?.type !== "acp") {
+      continue;
+    }
+    const acpAgent = normalizeOptionalAgentId(agent.runtime.acp?.agent);
+    if (acpAgent) {
+      ids.add(acpAgent);
+    }
+  }
+  const defaultAgent = normalizeOptionalAgentId(cfg.acp?.defaultAgent);
+  if (defaultAgent) {
+    ids.add(defaultAgent);
+  }
+  for (const entry of cfg.acp?.allowedAgents ?? []) {
+    if (entry.trim() === "*") {
+      continue;
+    }
+    const id = normalizeOptionalAgentId(entry);
+    if (id) {
+      ids.add(id);
+    }
+  }
+  return Array.from(ids);
 }
 
 function normalizeOptionalAgentId(value: string | undefined | null): string | undefined {
@@ -801,6 +831,7 @@ function resolveAcpSubagentEnvelopeState(params: {
     allowAgents:
       resolveAgentConfig(params.cfg, requesterAgentId)?.subagents?.allowAgents ??
       params.cfg.agents?.defaults?.subagents?.allowAgents,
+    configuredAgentIds: resolveConfiguredAcpSubagentTargetIds(params.cfg),
   });
   if (!targetPolicy.ok) {
     return {

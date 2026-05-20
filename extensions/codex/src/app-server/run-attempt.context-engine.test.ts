@@ -842,6 +842,99 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(savedBinding?.contextEngine?.projection?.epoch).toBe("epoch-after");
   });
 
+  it("bounds a hung owning context-engine compaction during Codex overflow recovery", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    SessionManager.open(sessionFile).appendMessage(
+      assistantMessage("pre-compaction context", Date.now()) as never,
+    );
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-old",
+      cwd: workspaceDir,
+      dynamicToolsFingerprint: "[]",
+      contextEngine: {
+        schemaVersion: 1,
+        engineId: "lossless-claw",
+        policyFingerprint:
+          '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"contextTokenBudget":400000,"projectionMaxChars":1000000}',
+        projection: {
+          schemaVersion: 1,
+          mode: "thread_bootstrap",
+          epoch: "epoch-before",
+        },
+      },
+    });
+    // Owning-engine compaction that never settles. Without the safety timeout
+    // the awaited compact() would hang the whole Codex overflow-recovery turn;
+    // with it the call is bounded and forced compaction reports failure so the
+    // run still proceeds on a fresh thread.
+    const compact = vi.fn<ContextEngine["compact"]>(() => new Promise(() => {}));
+    const assemble = vi.fn(
+      async ({ messages, prompt }: Parameters<ContextEngine["assemble"]>[0]) => ({
+        messages: [...messages, userMessage(prompt ?? "", 11)],
+        estimatedTokens: 42,
+        systemPromptAddition: "context-engine system",
+        contextProjection: { mode: "thread_bootstrap" as const, epoch: "epoch-before" },
+      }),
+    );
+    const contextEngine = createContextEngine({ assemble, compact });
+    const harness = createStartedThreadHarness(async (method, requestParams) => {
+      const request = requireRecord(requestParams, `${method} params`);
+      if (method === "thread/resume") {
+        return threadStartResult("thread-old");
+      }
+      if (method === "turn/start" && request.threadId === "thread-old") {
+        throw new Error("Codex ran out of room in the model's context window");
+      }
+      if (method === "thread/start") {
+        return threadStartResult("thread-fresh");
+      }
+      if (method === "turn/start" && request.threadId === "thread-fresh") {
+        return turnStartResult("turn-fresh");
+      }
+      return undefined;
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.contextEngine = contextEngine;
+    params.contextTokenBudget = 400_000;
+    // 1 s host-resolved compaction timeout so the hung compact() is bounded
+    // well within the 5 s run timeout used by this harness.
+    params.config = {
+      agents: { defaults: { compaction: { timeoutSeconds: 1 } } },
+    } as EmbeddedRunAttemptParams["config"];
+
+    const run = runCodexAppServerAttempt(params);
+    await vi.waitFor(
+      () =>
+        expect(harness.requests.map((request) => request.method)).toEqual([
+          "thread/resume",
+          "turn/start",
+          "thread/start",
+          "turn/start",
+        ]),
+      { timeout: 4_000 },
+    );
+    await harness.notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-fresh",
+        turnId: "turn-fresh",
+        turn: {
+          id: "turn-fresh",
+          status: "completed",
+          items: [{ type: "agentMessage", id: "msg-1", text: "fresh answer" }],
+        },
+      },
+    });
+    const result = await run;
+
+    expect(result.assistantTexts).toContain("fresh answer");
+    expect(compact).toHaveBeenCalledTimes(1);
+    // The run-level abort signal is threaded into the owning-engine compact()
+    // so a cooperating engine can cancel its own in-flight work.
+    expect(compact.mock.calls[0]?.[0]?.abortSignal).toBeInstanceOf(AbortSignal);
+  });
+
   it("keeps current inbound context at the front of the Codex context-engine prompt", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");

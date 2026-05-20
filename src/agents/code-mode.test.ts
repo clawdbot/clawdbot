@@ -245,6 +245,29 @@ describe("Code Mode", () => {
     expect(language).not.toHaveProperty("oneOf");
   });
 
+  it("describes code-mode runtime constraints in the model-visible exec schema", () => {
+    const { tools } = createCodeModeHarness();
+    const execTool = tools[0];
+    const parameters = execTool.parameters as {
+      properties?: Record<string, Record<string, unknown>>;
+    };
+
+    expect(execTool.description).toContain("Node.js modules");
+    expect(execTool.description).toContain("`require`/`import` are NOT available");
+    expect(execTool.description).toContain("`tools.search(query)`");
+    expect(execTool.description).toContain("enabled catalog tools allowed by policy");
+    expect(execTool.description).toContain("`tools.describe(entry.id)`");
+    expect(execTool.description).toContain("`tools.call(entry.id, args)`");
+    expect(execTool.description).toContain('"javascript" or "typescript"');
+
+    expect(parameters.properties?.code?.description).toContain("`tools` object");
+    expect(parameters.properties?.code?.description).toContain("`ALL_TOOLS`");
+    expect(parameters.properties?.code?.description).toContain("Node built-in modules are not");
+    expect(parameters.properties?.language?.description).toContain(
+      'Must be "javascript" or "typescript"',
+    );
+  });
+
   it("removes legacy Tool Search controls from the visible code mode surface", () => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const compacted = applyCodeModeCatalog({

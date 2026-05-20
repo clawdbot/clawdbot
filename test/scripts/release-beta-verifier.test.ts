@@ -16,6 +16,7 @@ describe("parseReleaseVerifyBetaArgs", () => {
       pluginSelection: [],
       evidenceOut: undefined,
       skipPostpublish: false,
+      skipClawHub: false,
       rerunFailedClawHub: false,
       workflowRuns: {},
     });
@@ -43,6 +44,7 @@ describe("parseReleaseVerifyBetaArgs", () => {
         "--evidence-out",
         ".artifacts/release-evidence.json",
         "--skip-postpublish",
+        "--skip-clawhub",
         "--rerun-failed-clawhub",
       ]),
     ).toEqual({
@@ -55,6 +57,7 @@ describe("parseReleaseVerifyBetaArgs", () => {
       pluginSelection: ["@openclaw/plugin-a", "@openclaw/plugin-b"],
       evidenceOut: ".artifacts/release-evidence.json",
       skipPostpublish: true,
+      skipClawHub: true,
       rerunFailedClawHub: true,
       workflowRuns: {
         fullReleaseValidation: "10",

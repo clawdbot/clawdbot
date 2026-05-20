@@ -649,6 +649,7 @@ type DiagnosticEventsGlobalState = {
 };
 
 const MAX_ASYNC_DIAGNOSTIC_EVENTS = 10_000;
+const MAX_ASYNC_DIAGNOSTIC_EVENTS_PER_TURN = 100;
 const DIAGNOSTIC_EVENTS_STATE_KEY = Symbol.for("openclaw.diagnosticEvents.state.v1");
 const dispatchedTrustedDiagnosticMetadata = new WeakSet<object>();
 const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
@@ -670,6 +671,11 @@ const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
   "harness.run.error",
   "context.assembled",
   "log.record",
+]);
+const PRIORITY_ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
+  "tool.execution.completed",
+  "tool.execution.error",
+  "tool.execution.blocked",
 ]);
 
 function createDiagnosticEventsState(): DiagnosticEventsGlobalState {
@@ -780,6 +786,21 @@ function cloneDiagnosticEventForListener(event: DiagnosticEventPayload): Diagnos
   return deepFreezeDiagnosticValue(structuredClone(event)) as DiagnosticEventPayload;
 }
 
+function isPriorityAsyncDiagnosticEvent(entry: QueuedDiagnosticEvent): boolean {
+  return entry.metadata.trusted && PRIORITY_ASYNC_DIAGNOSTIC_EVENT_TYPES.has(entry.event.type);
+}
+
+function makeRoomForPriorityAsyncDiagnosticEvent(state: DiagnosticEventsGlobalState): void {
+  const nonPriorityIndex = state.asyncQueue.findIndex(
+    (entry) => !isPriorityAsyncDiagnosticEvent(entry),
+  );
+  if (nonPriorityIndex >= 0) {
+    state.asyncQueue.splice(nonPriorityIndex, 1);
+    return;
+  }
+  state.asyncQueue.shift();
+}
+
 function deepFreezeDiagnosticValue(value: unknown, seen = new WeakSet<object>()): unknown {
   if (!value || typeof value !== "object") {
     return value;
@@ -807,7 +828,7 @@ function scheduleAsyncDiagnosticDrain(state: DiagnosticEventsGlobalState): void 
   state.asyncDrainScheduled = true;
   setImmediate(() => {
     state.asyncDrainScheduled = false;
-    const batch = state.asyncQueue.splice(0);
+    const batch = state.asyncQueue.splice(0, MAX_ASYNC_DIAGNOSTIC_EVENTS_PER_TURN);
     for (const entry of batch) {
       dispatchDiagnosticEvent(state, entry.event, entry.metadata);
     }
@@ -815,6 +836,13 @@ function scheduleAsyncDiagnosticDrain(state: DiagnosticEventsGlobalState): void 
       scheduleAsyncDiagnosticDrain(state);
     }
   });
+}
+
+export async function waitForDiagnosticEventsDrained(): Promise<void> {
+  const state = getDiagnosticEventsState();
+  while (state.asyncDrainScheduled || state.asyncQueue.length > 0) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
 }
 
 function enrichDiagnosticEvent(
@@ -846,7 +874,10 @@ function emitDiagnosticEventWithTrust(event: DiagnosticEventInput, trusted: bool
 
   if (ASYNC_DIAGNOSTIC_EVENT_TYPES.has(enriched.type)) {
     if (state.asyncQueue.length >= MAX_ASYNC_DIAGNOSTIC_EVENTS) {
-      return;
+      if (!trusted || !PRIORITY_ASYNC_DIAGNOSTIC_EVENT_TYPES.has(enriched.type)) {
+        return;
+      }
+      makeRoomForPriorityAsyncDiagnosticEvent(state);
     }
     state.asyncQueue.push({ event: enriched, metadata });
     scheduleAsyncDiagnosticDrain(state);
@@ -877,6 +908,24 @@ export function onInternalDiagnosticEvent(listener: DiagnosticEventListener): ()
   return () => {
     state.listeners.delete(listener);
   };
+}
+
+export function hasPendingInternalDiagnosticEvent(
+  predicate: (event: DiagnosticEventPayload, metadata: DiagnosticEventMetadata) => boolean,
+): boolean {
+  const state = getDiagnosticEventsState();
+  for (const entry of state.asyncQueue) {
+    let event: DiagnosticEventPayload;
+    try {
+      event = cloneDiagnosticEventForListener(entry.event);
+    } catch {
+      continue;
+    }
+    if (predicate(event, Object.freeze({ ...entry.metadata }))) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function onDiagnosticEvent(listener: (evt: DiagnosticEventPayload) => void): () => void {

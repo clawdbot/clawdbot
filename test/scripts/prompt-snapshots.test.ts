@@ -160,8 +160,11 @@ describe("happy path prompt snapshots", () => {
     expect(telegram).toContain("### User: Turn Input Text");
     expect(telegram).toContain("OpenClaw runtime context for this turn:");
     expect(telegram).toContain("<SOUL.md contents will be here>");
+    expect(telegram).toContain("<IDENTITY.md contents will be here>");
     expect(telegram).toContain("<TOOLS.md contents will be here>");
-    expect(telegram).toContain("<HEARTBEAT.md contents will be here>");
+    expect(telegram).toContain("<USER.md contents will be here>");
+    expect(telegram).toContain("<MEMORY.md contents will be here>");
+    expect(telegram).not.toContain("<HEARTBEAT.md contents will be here>");
     expect(telegram).toContain("Codex loads AGENTS.md natively");
     expect(telegram).toContain("### Tools: Dynamic Tool Catalog");
   });
@@ -194,6 +197,11 @@ describe("happy path prompt snapshots", () => {
 
     expect(openClawRuntimeInstructions).not.toContain(heartbeatPhrase);
     expect(collaborationModeInstructions).toContain(heartbeatPhrase);
+    expect(collaborationModeInstructions).toContain("HEARTBEAT.md exists");
+    expect(collaborationModeInstructions).toContain(
+      "/tmp/openclaw-happy-path/workspace/HEARTBEAT.md",
+    );
+    expect(collaborationModeInstructions).not.toContain("<HEARTBEAT.md contents will be here>");
     expect(collaborationModeInstructions.split(heartbeatPhrase)).toHaveLength(2);
   });
 

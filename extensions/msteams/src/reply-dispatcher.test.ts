@@ -391,7 +391,7 @@ describe("createMSTeamsReplyDispatcher", () => {
     await dispatcher.replyOptions.onToolStart?.({ name: "exec" });
 
     expect(streamInstances[0]?.sendInformativeUpdate).toHaveBeenCalledWith(
-      "Working\n🔎 Web Search\n🛠️ Exec",
+      "Working\n\n🔎 Web Search\n🛠️ Exec",
     );
   });
 
@@ -529,8 +529,8 @@ describe("createMSTeamsReplyDispatcher", () => {
 
 describe("pickInformativeStatusText", () => {
   it("selects a deterministic status line for a fixed random source", () => {
-    expect(pickInformativeStatusText(() => 0)).toBe("Thinking...");
-    expect(pickInformativeStatusText(() => 0.99)).toBe("Surfacing...");
+    expect(pickInformativeStatusText(() => 0)).toBe("Working");
+    expect(pickInformativeStatusText(() => 0.99)).toBe("Surfacing");
   });
 
   it("honors disabled progress labels", () => {

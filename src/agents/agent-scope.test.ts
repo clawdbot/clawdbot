@@ -126,6 +126,30 @@ describe("resolveAgentConfig", () => {
     });
   });
 
+  it("merges experimental flags from defaults with per-agent overrides", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          experimental: {
+            localModelLean: true,
+          },
+        },
+        list: [
+          {
+            id: "main",
+            experimental: {
+              localModelLean: false,
+            },
+          },
+        ],
+      },
+    };
+
+    expect(resolveAgentConfig(cfg, "main")?.experimental).toEqual({
+      localModelLean: false,
+    });
+  });
+
   it("merges runRetries from defaults with per-agent overrides", () => {
     const cfg: OpenClawConfig = {
       agents: {

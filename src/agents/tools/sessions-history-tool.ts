@@ -81,6 +81,10 @@ function sanitizeHistoryContentBlock(block: unknown): {
       delete entry.thinkingSignature;
       truncated = true;
     }
+    if ("openclawReasoningReplay" in entry) {
+      delete entry.openclawReasoningReplay;
+      truncated = true;
+    }
   }
   if (typeof entry.partialJson === "string") {
     const res = truncateHistoryText(entry.partialJson);

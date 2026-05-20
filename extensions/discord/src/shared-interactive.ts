@@ -60,6 +60,9 @@ export function buildDiscordInteractiveComponents(
                 if (button.url) {
                   spec.url = button.url;
                 }
+                if (button.disabled === true) {
+                  spec.disabled = true;
+                }
                 return spec;
               }),
           });
@@ -153,6 +156,9 @@ function appendDiscordPresentationButtonBlocks(
         }
         if (button.url) {
           component.url = button.url;
+        }
+        if (button.disabled === true) {
+          component.disabled = true;
         }
         return component;
       }),

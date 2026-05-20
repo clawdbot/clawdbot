@@ -34,7 +34,11 @@ import type {
   PluginHookGatewayCronService,
   PluginHookGatewayContext,
 } from "../plugins/hook-types.js";
-import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
+import {
+  normalizeAgentId,
+  resolveEventSessionKey,
+  toAgentStoreSessionKey,
+} from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import {
@@ -228,13 +232,21 @@ export function buildGatewayCronService(params: {
       requestedAgentId ?? derivedAgentId,
     );
     const agentId = resolvedAgentId || undefined;
-    const sessionKey = agentId
+    const resolvedSessionKey = agentId
       ? resolveCronSessionKey({
           runtimeConfig,
           agentId,
           requestedSessionKey,
         })
       : undefined;
+    const sessionKey =
+      resolvedSessionKey && runtimeConfig.session?.scope === "global"
+        ? resolveEventSessionKey(
+            resolvedSessionKey,
+            runtimeConfig.session?.mainKey,
+            runtimeConfig.session?.scope,
+          )
+        : resolvedSessionKey;
     return { runtimeConfig, agentId, sessionKey };
   };
 
@@ -301,6 +313,7 @@ export function buildGatewayCronService(params: {
       enqueueSystemEvent(text, {
         sessionKey,
         contextKey: opts?.contextKey,
+        deliveryContext: opts?.deliveryContext,
         forceSenderIsOwnerFalse: opts?.forceSenderIsOwnerFalse,
         trusted: opts?.forceSenderIsOwnerFalse !== true,
       });

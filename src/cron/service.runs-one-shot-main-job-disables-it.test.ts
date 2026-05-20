@@ -19,6 +19,10 @@ const { makeStorePath } = createCronStoreHarness({
   prefix: "openclaw-cron-runs-one-shot-",
 });
 
+function expectCronRunSessionKey(value: unknown, jobId: string) {
+  expect(value).toMatch(new RegExp(`^agent:main:cron:${jobId}:run:\\d+$`));
+}
+
 function createCronEventHarness() {
   const events: CronEvent[] = [];
   const waiters: Array<{
@@ -202,27 +206,33 @@ async function addMainOneShotHelloJob(
 
 function expectMainSystemEventPosted(
   enqueueSystemEvent: ReturnType<typeof vi.fn>,
-  params: { text: string; jobId: string; sessionKey?: string },
+  params: { text: string; jobId: string },
 ) {
-  expect(enqueueSystemEvent).toHaveBeenCalledWith(params.text, {
+  const matchingCall = enqueueSystemEvent.mock.calls.find(([text]) => text === params.text);
+  if (!matchingCall) {
+    throw new Error(`missing system event ${params.text}`);
+  }
+  const options = matchingCall[1] as Record<string, unknown>;
+  expect(options).toMatchObject({
     agentId: undefined,
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     contextKey: `cron:${params.jobId}`,
   });
+  expectCronRunSessionKey(options.sessionKey, params.jobId);
 }
 
 function expectQueuedCronHeartbeat(
   requestHeartbeat: ReturnType<typeof vi.fn>,
-  params: { jobId: string; sessionKey?: string },
+  params: { jobId: string },
 ) {
-  expect(requestHeartbeat).toHaveBeenCalledWith({
+  const request = requestHeartbeat.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
+  expect(request).toMatchObject({
     source: "cron",
     intent: "immediate",
     reason: `cron:${params.jobId}`,
     agentId: undefined,
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     heartbeat: { target: "last" },
   });
+  expectCronRunSessionKey(request?.sessionKey, params.jobId);
 }
 
 async function stopCronAndCleanup(cron: CronService, store: { cleanup: () => Promise<void> }) {
@@ -403,7 +413,7 @@ describe("CronService", () => {
     await cron.run(job.id, "force");
 
     expect(runHeartbeatOnce).toHaveBeenCalled();
-    expectQueuedCronHeartbeat(requestHeartbeat, { jobId: job.id, sessionKey });
+    expectQueuedCronHeartbeat(requestHeartbeat, { jobId: job.id });
     expect(job.state.lastStatus).toBe("ok");
     expect(job.state.lastError).toBeUndefined();
 
@@ -430,7 +440,7 @@ describe("CronService", () => {
     await cron.run(job.id, "force");
 
     expect(runHeartbeatOnce).toHaveBeenCalledTimes(1);
-    expectQueuedCronHeartbeat(requestHeartbeat, { jobId: job.id, sessionKey });
+    expectQueuedCronHeartbeat(requestHeartbeat, { jobId: job.id });
     expect(job.state.lastStatus).toBe("ok");
     expect(job.state.lastError).toBeUndefined();
 

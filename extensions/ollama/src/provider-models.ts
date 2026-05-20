@@ -255,7 +255,7 @@ export function buildOllamaModelDefinition(
       : capabilities.includes("thinking"));
   const compat =
     capabilities === undefined
-      ? { supportsUsageInStreaming: true }
+      ? { supportsTools: true, supportsUsageInStreaming: true }
       : {
           supportsTools: capabilities.includes("tools"),
           supportsUsageInStreaming: true,

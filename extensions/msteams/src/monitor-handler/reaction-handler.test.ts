@@ -207,6 +207,8 @@ describe("createMSTeamsReactionHandler", () => {
       expect(label).toContain("added");
       expect(meta.sessionKey).toBe("test-session");
       expect(meta.contextKey).toContain("added");
+      expect(meta.forceSenderIsOwnerFalse).toBe(true);
+      expect(meta.trusted).toBe(false);
     });
 
     it("enqueues system event for reactionsRemoved", async () => {

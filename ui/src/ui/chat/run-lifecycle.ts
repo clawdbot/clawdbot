@@ -1,4 +1,5 @@
 import { resetToolStream, type CompactionStatus, type FallbackStatus } from "../app-tool-stream.ts";
+import { isSessionRunActive } from "../session-run-state.ts";
 import type { SessionRunStatus, SessionsListResult } from "../types.ts";
 
 export const CHAT_RUN_STATUS_TOAST_DURATION_MS = 5_000;
@@ -202,7 +203,7 @@ export function reconcileChatRunFromCurrentSessionRow(host: RunLifecycleHost): b
   if (!row) {
     return false;
   }
-  if (row.hasActiveRun === true || row.status === "running") {
+  if (isSessionRunActive(row)) {
     return false;
   }
   const terminalStatus = row.status !== undefined;

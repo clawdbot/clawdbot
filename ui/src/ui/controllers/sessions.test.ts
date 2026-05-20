@@ -367,7 +367,7 @@ describe("loadSessions", () => {
               key: "main",
               kind: "direct",
               updatedAt: 2,
-              hasActiveRun: false,
+              hasActiveRun: true,
               status: "done",
             },
           ],

@@ -35,6 +35,7 @@ Sources/Model/NodeAppModel+WatchNotifyNormalization.swift
 Sources/Model/NodeAppModel.swift
 Sources/Model/WatchReplyCoordinator.swift
 Sources/Motion/MotionService.swift
+Sources/Onboarding/GatewayOnboardingReset.swift
 Sources/Onboarding/GatewayOnboardingView.swift
 Sources/Onboarding/OnboardingStateStore.swift
 Sources/Onboarding/OnboardingWizardView.swift

@@ -110,6 +110,7 @@ describe("probeGatewayStatus", () => {
     }
     expect(result.server?.version).toBe("2026.5.6");
     expect(result.server?.connId).toBe("conn-1");
+    expect(result.version).toBe("2026.5.6");
   });
 
   it("uses a real status RPC when requireRpc is enabled", async () => {
@@ -240,6 +241,69 @@ describe("probeGatewayStatus", () => {
         scopes: [],
         capability: "unknown",
       },
+    });
+  });
+
+  it("uses status.runtimeVersion when read-probe handshake metadata is unavailable", async () => {
+    callGatewayMock.mockReset();
+    probeGatewayMock.mockReset();
+    callGatewayMock.mockResolvedValueOnce({ runtimeVersion: "2026.4.24", status: "ok" });
+    probeGatewayMock.mockRejectedValueOnce(new Error("probe timed out after status"));
+
+    const result = await probeGatewayStatus({
+      url: "ws://127.0.0.1:19191",
+      token: "temp-token",
+      timeoutMs: 5_000,
+      requireRpc: true,
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      kind: "read",
+      capability: "read_only",
+      auth: undefined,
+      version: "2026.4.24",
+    });
+  });
+
+  it("prefers read-probe server metadata over status.runtimeVersion", async () => {
+    callGatewayMock.mockReset();
+    probeGatewayMock.mockReset();
+    callGatewayMock.mockResolvedValueOnce({ runtimeVersion: "2026.4.23", status: "ok" });
+    probeGatewayMock.mockResolvedValueOnce({
+      ok: true,
+      auth: {
+        role: "operator",
+        scopes: ["operator.read"],
+        capability: "read_only",
+      },
+      server: {
+        version: "2026.4.24",
+        connId: "conn-1",
+      },
+    });
+
+    const result = await probeGatewayStatus({
+      url: "ws://127.0.0.1:19191",
+      token: "temp-token",
+      timeoutMs: 5_000,
+      requireRpc: true,
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      kind: "read",
+      capability: "read_only",
+      auth: {
+        role: "operator",
+        scopes: ["operator.read"],
+        capability: "read_only",
+      },
+      server: {
+        version: "2026.4.24",
+        connId: "conn-1",
+      },
+      version: "2026.4.24",
     });
   });
 

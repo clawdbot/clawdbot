@@ -5,6 +5,10 @@ inputs:
     description: pnpm version to activate via corepack.
     required: false
     default: "11.0.8"
+  node-version:
+    description: Expected Node.js version already installed by actions/setup-node.
+    required: false
+    default: "24.x"
   cache-key-suffix:
     description: Suffix appended to the cache key.
     required: false
@@ -41,12 +45,85 @@ runs:
       env:
         COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
         PNPM_VERSION: ${{ inputs.pnpm-version }}
+        REQUESTED_NODE_VERSION: ${{ inputs.node-version }}
       run: |
         set -euo pipefail
         if [[ ! "$PNPM_VERSION" =~ ^[0-9]+(\.[0-9]+){1,2}([.-][0-9A-Za-z.-]+)?$ ]]; then
           echo "::error::Invalid pnpm-version input: '$PNPM_VERSION'"
           exit 2
         fi
+
+        requested_node="${REQUESTED_NODE_VERSION:-${NODE_VERSION:-}}"
+        requested_node="${requested_node#v}"
+
+        node_version_matches() {
+          local actual="$1"
+          local requested="$2"
+          if [[ -z "$requested" ]]; then
+            return 0
+          fi
+          case "$requested" in
+            *x)
+              [[ "${actual%%.*}" == "${requested%%.*}" ]]
+              ;;
+            *.*.*)
+              [[ "$actual" == "$requested" ]]
+              ;;
+            *.*)
+              [[ "$actual" == "$requested".* ]]
+              ;;
+            *)
+              [[ "${actual%%.*}" == "$requested" ]]
+              ;;
+          esac
+        }
+
+        active_node_version="$(node -p 'process.versions.node' 2>/dev/null || true)"
+        if ! node_version_matches "$active_node_version" "$requested_node"; then
+          node_roots=()
+          for root in \
+            "${RUNNER_TOOL_CACHE:-}" \
+            "${AGENT_TOOLSDIRECTORY:-}" \
+            "${ACTIONS_RUNNER_TOOL_CACHE:-}" \
+            "/opt/hostedtoolcache" \
+            "/home/runner/_work/_tool" \
+            "/Users/runner/hostedtoolcache" \
+            "/c/hostedtoolcache/windows"
+          do
+            if [[ -d "$root/node" ]]; then
+              node_roots+=("$root/node")
+            elif [[ "$(basename "$root")" == "node" && -d "$root" ]]; then
+              node_roots+=("$root")
+            fi
+          done
+
+          node_bin=""
+          for node_root in "${node_roots[@]}"; do
+            while IFS= read -r candidate; do
+              candidate_version="$("$candidate" -p 'process.versions.node' 2>/dev/null || true)"
+              if node_version_matches "$candidate_version" "$requested_node"; then
+                node_bin="$candidate"
+                break 2
+              fi
+            done < <(find "$node_root" \( -name node -o -name node.exe \) -type f 2>/dev/null | sort -r)
+          done
+
+          if [[ -n "$node_bin" ]]; then
+            echo "Using Node $("$node_bin" -p 'process.versions.node') from $node_bin"
+            export PATH="$(dirname "$node_bin"):$PATH"
+            hash -r
+          fi
+        fi
+
+        active_node_version="$(node -p 'process.versions.node' 2>/dev/null || true)"
+        if ! node_version_matches "$active_node_version" "$requested_node"; then
+          echo "::error::Expected Node '${requested_node}', but active node is '${active_node_version:-missing}' at $(command -v node || true)"
+          exit 1
+        fi
+
+        node -v
+        command -v node
+        command -v corepack
         corepack enable
         for attempt in 1 2 3; do
           if corepack prepare "pnpm@$PNPM_VERSION" --activate; then

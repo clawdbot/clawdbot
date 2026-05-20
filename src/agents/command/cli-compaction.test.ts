@@ -80,6 +80,8 @@ describe("runCliTurnCompactionLifecycle", () => {
 
   afterEach(async () => {
     resetCliCompactionTestDeps();
+    vi.clearAllTimers();
+    vi.useRealTimers();
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
@@ -228,5 +230,88 @@ describe("runCliTurnCompactionLifecycle", () => {
     });
 
     expect(calls).toEqual(["ensure", "resolve"]);
+  });
+
+  it("bounds a hung CLI context-engine compaction and leaves resume state intact", async () => {
+    const sessionKey = "agent:main:cli";
+    const sessionId = "session-cli-timeout";
+    const sessionFile = path.join(tmpDir, "session-timeout.jsonl");
+    const storePath = path.join(tmpDir, "sessions-timeout.json");
+    await writeSessionFile({ sessionFile, sessionId });
+
+    const sessionEntry: SessionEntry = {
+      sessionId,
+      updatedAt: Date.now(),
+      sessionFile,
+      contextTokens: 1_000,
+      totalTokens: 950,
+      totalTokensFresh: true,
+      cliSessionBindings: {
+        "claude-cli": { sessionId: "claude-session" },
+      },
+      cliSessionIds: {
+        "claude-cli": "claude-session",
+      },
+      claudeCliSessionId: "claude-session",
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+
+    const compactCalls: Array<Parameters<ContextEngine["compact"]>[0]> = [];
+    const maintenance = vi.fn(async () => ({ changed: false, bytesFreed: 0, rewrittenEntries: 0 }));
+    const recordCliCompactionInStore = vi.fn();
+    setCliCompactionTestDeps({
+      resolveContextEngine: async () => ({
+        ...buildContextEngine({ compactCalls }),
+        async compact(compactParams) {
+          compactCalls.push(compactParams);
+          return await new Promise(() => {});
+        },
+      }),
+      createPreparedEmbeddedPiSettingsManager: async () => ({
+        getCompactionReserveTokens: () => 200,
+        getCompactionKeepRecentTokens: () => 0,
+        applyOverrides: () => {},
+      }),
+      shouldPreemptivelyCompactBeforePrompt: () => ({
+        route: "fits",
+        shouldCompact: false,
+        estimatedPromptTokens: 600,
+        promptBudgetBeforeReserve: 800,
+        overflowTokens: 0,
+        toolResultReducibleChars: 0,
+        effectiveReserveTokens: 200,
+      }),
+      resolveLiveToolResultMaxChars: () => 20_000,
+      runContextEngineMaintenance: maintenance,
+      recordCliCompactionInStore,
+    });
+
+    vi.useFakeTimers();
+    const pending = runCliTurnCompactionLifecycle({
+      cfg: { agents: { defaults: { compaction: { timeoutSeconds: 1 } } } } as OpenClawConfig,
+      sessionId,
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+      storePath,
+      sessionAgentId: "main",
+      workspaceDir: tmpDir,
+      agentDir: tmpDir,
+      provider: "claude-cli",
+      model: "opus",
+    });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    const updatedEntry = await pending;
+    vi.useRealTimers();
+
+    expect(compactCalls).toHaveLength(1);
+    expect(compactCalls[0]?.abortSignal).toBeInstanceOf(AbortSignal);
+    expect(compactCalls[0]?.abortSignal?.aborted).toBe(true);
+    expect(maintenance).not.toHaveBeenCalled();
+    expect(recordCliCompactionInStore).not.toHaveBeenCalled();
+    expect(updatedEntry).toBe(sessionEntry);
+    expect(updatedEntry?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe("claude-session");
   });
 });

@@ -826,11 +826,15 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
     name: CODE_MODE_EXEC_TOOL_NAME,
     label: "exec",
     description:
-      "Run JavaScript or TypeScript in OpenClaw code mode. Use ALL_TOOLS and tools.search/describe/call inside the code to discover and call enabled tools.",
+      'Run JavaScript or TypeScript in OpenClaw code mode. Node.js modules and `require`/`import` are NOT available; for any shell, file, network, or external action, use enabled catalog tools allowed by policy from inside your code: `tools.search(query)` to find catalog entries, `tools.describe(entry.id)` for the input schema, then `tools.call(entry.id, args)`. The `language` field accepts only "javascript" or "typescript"; do not pass "bash", "shell", or other values.',
     parameters: Type.Object({
-      code: Type.String({ description: "JavaScript or TypeScript source to run." }),
+      code: Type.String({
+        description:
+          "JavaScript or TypeScript source to run. The `tools` object (search/describe/call) and `ALL_TOOLS` are available in scope; Node built-in modules are not.",
+      }),
       language: optionalStringEnum(["javascript", "typescript"] as const, {
-        description: "Source language. Defaults to javascript.",
+        description:
+          'Source language. Must be "javascript" or "typescript". Defaults to javascript.',
       }),
     }),
     execute: async (
