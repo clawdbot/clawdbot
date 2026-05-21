@@ -591,6 +591,52 @@ describe("config schema", () => {
     expect(result.success).toBe(false);
   });
 
+  it("accepts agent execution backends and profiles", () => {
+    expect(() =>
+      OpenClawSchema.parse({
+        agents: {
+          executionBackends: {
+            local: {
+              type: "process",
+              profiles: {
+                small: {
+                  label: "Small local worker",
+                  resources: {
+                    requests: { cpu: "500m", memory: "1Gi" },
+                  },
+                },
+              },
+            },
+            k8s: {
+              type: "kubernetes",
+              profiles: {
+                "large-build": {
+                  image: "ghcr.io/openclaw/agent-worker:test",
+                  resources: {
+                    requests: { cpu: "4", memory: "8Gi" },
+                  },
+                },
+              },
+            },
+          },
+        },
+      }),
+    ).not.toThrow();
+
+    expect(() =>
+      OpenClawSchema.parse({
+        agents: {
+          executionBackends: {
+            nope: {
+              type: "vmware",
+            },
+          },
+        },
+      }),
+    ).toThrow();
+
+  });
+
   it("merges plugin ui hints", () => {
     const res = buildConfigSchemaCore(pluginUiHintInput);
 

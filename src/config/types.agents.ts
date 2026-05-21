@@ -17,6 +17,18 @@ import type { SkillsLimitsConfig } from "./types.skills.js";
 import type { AgentToolsConfig } from "./types.tools.js";
 import type { TtsConfig } from "./types.tts.js";
 
+export type AgentExecutionBackendType = "process" | "container" | "kubernetes";
+export type AgentExecutionBackendProfileConfig = {
+  label?: string;
+  resources?: Record<string, unknown>;
+  [key: string]: unknown;
+};
+export type AgentExecutionBackendConfig = {
+  type: AgentExecutionBackendType;
+  profiles?: Record<string, AgentExecutionBackendProfileConfig>;
+};
+export type AgentExecutionPlacementConfig = { backend?: string; profile?: string };
+
 export type AgentRuntimeAcpConfig = {
   /** ACP harness adapter id (for example codex, claude). */
   agent?: string;
@@ -174,6 +186,7 @@ export type AgentEntryConfig = Omit<AgentConfig, "id">;
 export type AgentsConfig = {
   ownership?: "explicit";
   defaults?: AgentDefaultsConfig;
+  executionBackends?: Record<string, AgentExecutionBackendConfig>;
   entries?: Record<string, AgentEntryConfig>;
   /** Internal non-serialized projection materialized by validation for ID-based runtime code. */
   list?: AgentConfig[];

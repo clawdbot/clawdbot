@@ -95,6 +95,11 @@ import {
 import { readGatewayRunId } from "./subagent-spawn-gateway.js";
 import { resolveSubagentSpawnOwnership } from "./subagent-spawn-ownership.js";
 import { resolveConfiguredSubagentRunTimeoutSeconds } from "./subagent-spawn-plan.js";
+import {
+  resolveAgentExecutionPlacement,
+  type AgentExecutionPlacement,
+  type AgentExecutionPlacementRequest,
+} from "../../execution-backends.js";
 
 type SpawnAcpMode = "run" | "session";
 type SpawnAcpSandboxMode = "inherit" | "require";
@@ -116,6 +121,7 @@ type SpawnAcpParams = {
   expectsCompletionMessage?: boolean;
   streamTo?: "parent";
   attachments?: AcpTurnAttachment[];
+  execution?: AgentExecutionPlacementRequest;
 };
 
 type SpawnAcpContext = {
@@ -165,6 +171,7 @@ type SpawnAcpResultFields = {
   runTimeoutSeconds?: number;
   inlineDelivery?: boolean;
   note?: string;
+  execution?: AgentExecutionPlacement;
 };
 
 type SpawnAcpAcceptedResult = SpawnAcpResultFields & {
@@ -271,6 +278,15 @@ export async function spawnAcpDirect(
       error: runtimePolicyError,
     });
   }
+  const executionResult = resolveAgentExecutionPlacement({ cfg, request: params.execution });
+  if (!executionResult.ok) {
+    return createAcpSpawnFailure({
+      status: "error",
+      errorCode: "runtime_policy",
+      error: executionResult.error,
+    });
+  }
+  const executionPlacement = executionResult.execution;
   const acpUnsupportedInheritedTool = findAcpUnsupportedInheritedToolDeny(
     ctx.inheritedToolDenylist,
   );
@@ -686,6 +702,7 @@ export async function spawnAcpDirect(
           ? false
           : params.expectsCompletionMessage !== false,
         spawnMode,
+        executionPlacement,
       };
     },
   });
@@ -725,5 +742,6 @@ export async function spawnAcpDirect(
     runTimeoutSeconds,
     ...(pipelineResult.state.deliveryPlan?.useInlineDelivery ? { inlineDelivery: true } : {}),
     note: spawnMode === "session" ? ACP_SPAWN_SESSION_ACCEPTED_NOTE : ACP_SPAWN_ACCEPTED_NOTE,
+    execution: executionPlacement,
   };
 }

@@ -170,6 +170,15 @@ function createSessionsSpawnToolSchema(params: {
           "Working directory for the child. With visible=true, paths outside configured agent workspaces require operator.admin; omit to use the target agent workspace.",
       }),
     ),
+    execution: Type.Optional(
+      Type.Object(
+        {
+          backend: Type.Optional(Type.String({ description: "Execution placement backend id." })),
+          profile: Type.Optional(Type.String({ description: "Optional execution profile id." })),
+        },
+        { description: "Execution placement; only local process is supported in this release." },
+      ),
+    ),
     ...(params.threadAvailable
       ? {
           thread: Type.Optional(
@@ -408,6 +417,13 @@ export function createSessionsSpawnTool(
         params.context === "fork" || params.context === "isolated" ? params.context : undefined;
       const streamTo = runtime === "acp" && params.streamTo === "parent" ? "parent" : undefined;
       const lightContext = params.lightContext === true;
+      const execution =
+        params.execution && typeof params.execution === "object" && !Array.isArray(params.execution)
+          ? {
+              backend: readStringParam(params.execution as Record<string, unknown>, "backend"),
+              profile: readStringParam(params.execution as Record<string, unknown>, "profile"),
+            }
+          : undefined;
       const roleContext = requestedAgentId ? { role: requestedAgentId } : {};
       const deliveryPressure = getSubagentDeliveryBacklogPressure();
       if (deliveryPressure.blocked) {
@@ -524,6 +540,7 @@ export function createSessionsSpawnTool(
             expectsCompletionMessage,
             streamTo,
             attachments: acpAttachments?.attachments,
+            execution,
           },
           withParentExecutionIdentity(
             {
@@ -579,6 +596,7 @@ export function createSessionsSpawnTool(
               ? params[SWARM_CODE_MODE_REQUEST_FINGERPRINT]
               : undefined,
           cwd,
+          execution,
           thread,
           mode,
           cleanup,

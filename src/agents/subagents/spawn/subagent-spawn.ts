@@ -31,6 +31,7 @@ import {
   settleFailedQueuedSubagentLaunch,
   startQueuedSubagentRun,
 } from "../registry/subagent-registry.js";
+import { resolveAgentExecutionPlacement } from "../../execution-backends.js";
 import { activateSwarmRun, removeQueuedSwarmRun } from "../swarm/swarm-scheduler.js";
 import { readParentExecutionIdentity } from "./execution-identity-spawn-context.js";
 import {
@@ -143,6 +144,11 @@ export async function spawnSubagentDirect(
     },
     childIdem,
   } = requestResolution.resolved;
+  const executionResult = resolveAgentExecutionPlacement({ cfg, request: params.execution });
+  if (!executionResult.ok) {
+    return { status: "error", error: executionResult.error };
+  }
+  const executionPlacement = executionResult.execution;
   let modelApplied = false;
   let threadBindingReady = false;
   let hasBoundThreadDeliveryOrigin = false;
@@ -567,6 +573,7 @@ export async function spawnSubagentDirect(
           attachmentsDir: attachmentAbsDir,
           attachmentsRootDir: attachmentRootDir,
           retainAttachmentsOnKeep: retainOnSessionKeep,
+          executionPlacement,
         };
       },
     });
@@ -698,6 +705,7 @@ export async function spawnSubagentDirect(
         : acceptedNote,
       ...resolvedModelMetadata,
       modelApplied: resolvedModel ? modelApplied : undefined,
+      execution: executionPlacement,
       attachments: attachmentsReceipt,
     };
   } finally {

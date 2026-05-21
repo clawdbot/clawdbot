@@ -1,5 +1,9 @@
 import type { FastMode } from "../../../shared/fast-mode.js";
 import type {
+  AgentExecutionPlacement,
+  AgentExecutionPlacementRequest,
+} from "../../execution-backends.js";
+import type {
   SpawnSubagentContextMode,
   SpawnSubagentMode,
   SpawnSubagentSandboxMode,
@@ -36,6 +40,8 @@ export type SpawnSubagentParams = {
     mimeType?: string;
   }>;
   attachMountPath?: string;
+  /** Requested execution placement; currently only local process is executable. */
+  execution?: AgentExecutionPlacementRequest;
 };
 
 export type SpawnSubagentContext = {
@@ -75,6 +81,7 @@ export type SpawnSubagentResult = {
   /** Provider prefix parsed from resolvedModel when the ref includes one. */
   resolvedProvider?: string;
   modelApplied?: boolean;
+  execution?: AgentExecutionPlacement;
   error?: string;
   attachments?: {
     count: number;

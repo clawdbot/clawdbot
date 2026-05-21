@@ -2,6 +2,7 @@ import type { SubagentEndReason } from "../../../context-engine/types.js";
 /** Persisted execution, completion, delivery, and attachment state for child runs. */
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
 import type { AgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
+import type { AgentExecutionPlacement } from "../../execution-backends.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.js";
 import type { SubagentRunOutcome } from "../announce/subagent-announce-output.js";
 import type { SubagentLaunchAuthorization } from "../spawn/subagent-launch-authorization.js";
@@ -240,6 +241,7 @@ export type SubagentRunRecord = {
   cleanup: "delete" | "keep";
   label?: string;
   model?: string;
+  executionPlacement?: AgentExecutionPlacement;
   agentDir?: string;
   workspaceDir?: string;
   runTimeoutSeconds?: number;
@@ -326,6 +328,7 @@ export type SubagentRunReadRecord = Pick<
   | "endedReason"
   | "cleanupCompletedAt"
   | "delivery"
+  | "executionPlacement"
 > & {
   execution: Pick<SubagentExecutionState, "startedAt" | "endedAt" | "outcome">;
 };

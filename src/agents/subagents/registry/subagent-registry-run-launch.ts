@@ -14,6 +14,7 @@ import {
 } from "../../../tasks/detached-task-runtime.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
+import type { AgentExecutionPlacement } from "../../execution-backends.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import { updateSwarmCollectorCompletion } from "../swarm/swarm-collector.js";
 import { normalizeSubagentRunState } from "./subagent-delivery-state.js";
@@ -77,6 +78,7 @@ export type RegisterSubagentRunParams = {
   attachmentsDir?: string;
   attachmentsRootDir?: string;
   retainAttachmentsOnKeep?: boolean;
+  executionPlacement?: AgentExecutionPlacement;
   collect?: boolean;
   swarmRequesterSessionKey?: string;
   swarmLaunchIdempotencyKey?: string;
@@ -140,6 +142,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
       spawnMode,
       label: registerParams.label,
       model: registerParams.model,
+      executionPlacement: registerParams.executionPlacement,
       agentDir: registerParams.agentDir,
       workspaceDir: registerParams.workspaceDir,
       runTimeoutSeconds,

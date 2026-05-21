@@ -113,7 +113,16 @@ describe("sessions_spawn tool", () => {
 
   function requireSchemaProperty(
     properties:
-      | Record<string, { description?: string; enum?: string[]; type?: string } | undefined>
+      | Record<
+          string,
+          | {
+              description?: string;
+              enum?: string[];
+              type?: string;
+              properties?: Record<string, unknown>;
+            }
+          | undefined
+        >
       | undefined,
     name: string,
   ) {
@@ -182,6 +191,7 @@ describe("sessions_spawn tool", () => {
     const schema = tool.parameters as {
       properties?: {
         runtime?: { enum?: string[] };
+        execution?: { properties?: Record<string, unknown> };
         resumeSessionId?: { description?: string };
         streamTo?: { description?: string };
       };
@@ -193,6 +203,8 @@ describe("sessions_spawn tool", () => {
     expect(tool.description).toContain('runtime="acp"');
     expect(tool.description).toContain('unless ACP `streamTo="parent"`');
     expect(schema.properties?.runtime?.enum).toEqual(["subagent", "acp"]);
+    expect(schema.properties?.execution?.properties).toHaveProperty("backend");
+    expect(schema.properties?.execution?.properties).toHaveProperty("profile");
     const resumeSessionId = requireSchemaProperty(schema.properties, "resumeSessionId");
     const streamTo = requireSchemaProperty(schema.properties, "streamTo");
     expect(resumeSessionId.description).toContain("ACP resume id");
@@ -2113,6 +2125,37 @@ describe("sessions_spawn tool", () => {
     expect(spawnArgs.task).toBe("resume prior work");
     expect(spawnArgs.agentId).toBe("codex");
     expect(spawnArgs.resumeSessionId).toBe("7f4a78e0-f6be-43fe-855c-c1c4fd229bc4");
+  });
+
+  it("passes explicit execution placement through to native subagent spawns", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    await tool.execute("call-execution", {
+      task: "run build",
+      execution: { backend: "local", profile: "small" },
+    });
+
+    const spawnArgs = mockCallArg(hoisted.spawnSubagentDirectMock, 0, 0, "spawnSubagentDirect");
+    expect(spawnArgs.execution).toEqual({ backend: "local", profile: "small" });
+  });
+
+  it("passes explicit execution placement through to ACP spawns", async () => {
+    registerAcpBackendForTest();
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    await tool.execute("call-acp-execution", {
+      runtime: "acp",
+      task: "run build",
+      agentId: "codex",
+      execution: { backend: "local", profile: "small" },
+    });
+
+    const spawnArgs = mockCallArg(hoisted.spawnAcpDirectMock, 0, 0, "spawnAcpDirect");
+    expect(spawnArgs.execution).toEqual({ backend: "local", profile: "small" });
   });
 
   it("ignores ACP-only fields for subagent spawns", async () => {
