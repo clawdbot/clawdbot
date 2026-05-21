@@ -221,6 +221,32 @@ describe("openclaw launcher", () => {
     expect(result.stdout).toBe("PRECOMPUTED help\n");
   });
 
+  it.each([
+    { command: "browser", metadataKey: "browserHelpText" },
+    { command: "secrets", metadataKey: "secretsHelpText" },
+    { command: "nodes", metadataKey: "nodesHelpText" },
+  ])("uses precomputed $command help before loading the runtime entry", async (params) => {
+    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "cli-startup-metadata.json"),
+      JSON.stringify({ [params.metadataKey]: `PRECOMPUTED ${params.command} help\n` }),
+      "utf8",
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      [path.join(fixtureRoot, "openclaw.mjs"), params.command, "--help"],
+      {
+        cwd: fixtureRoot,
+        env: launcherEnv(),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe(`PRECOMPUTED ${params.command} help\n`);
+  });
+
   it("defers root help to the runtime entry when plugin config can change help", async () => {
     const fixtureRoot = await makeLauncherFixture(fixtureRoots);
     const configPath = path.join(fixtureRoot, "openclaw.json");
@@ -245,6 +271,40 @@ describe("openclaw launcher", () => {
       env: launcherEnv({ OPENCLAW_CONFIG_PATH: configPath }),
       encoding: "utf8",
     });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("RUNTIME ENTRY\n");
+    expect(result.stdout).not.toContain("PRECOMPUTED");
+  });
+
+  it("defers nodes help to the runtime entry when plugin config can change help", async () => {
+    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+    const configPath = path.join(fixtureRoot, "openclaw.json");
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "cli-startup-metadata.json"),
+      JSON.stringify({ nodesHelpText: "PRECOMPUTED nodes help\n" }),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "entry.js"),
+      "process.stdout.write('RUNTIME ENTRY\\n');\n",
+      "utf8",
+    );
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({ plugins: { entries: { canvas: { enabled: false } } } }),
+      "utf8",
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      [path.join(fixtureRoot, "openclaw.mjs"), "nodes", "--help"],
+      {
+        cwd: fixtureRoot,
+        env: launcherEnv({ OPENCLAW_CONFIG_PATH: configPath }),
+        encoding: "utf8",
+      },
+    );
 
     expect(result.status).toBe(0);
     expect(result.stdout).toBe("RUNTIME ENTRY\n");

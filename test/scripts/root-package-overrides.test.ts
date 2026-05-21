@@ -22,17 +22,26 @@ function readPnpmWorkspaceConfig(): PnpmWorkspaceConfig {
   return YAML.parse(fs.readFileSync(workspacePath, "utf8")) as PnpmWorkspaceConfig;
 }
 
+function readPackageManifest(packagePath: string): RootPackageManifest {
+  return JSON.parse(fs.readFileSync(packagePath, "utf8")) as RootPackageManifest;
+}
+
 describe("root package override guardrails", () => {
   it("keeps Bedrock runtime ownership in the Amazon provider plugin", () => {
     const manifest = readRootManifest();
     const pnpmWorkspace = readPnpmWorkspaceConfig();
     const packageName = "@aws-sdk/client-bedrock-runtime";
+    const bedrockManifest = readPackageManifest(
+      path.resolve(process.cwd(), "extensions", "amazon-bedrock", "package.json"),
+    );
+    const bedrockRuntimeDependency = bedrockManifest.dependencies?.[packageName];
     const npmOverride = manifest.overrides?.[packageName];
-    const pnpmOverride = pnpmWorkspace.overrides?.["@aws-sdk/client-bedrock-runtime"];
+    const pnpmOverride = pnpmWorkspace.overrides?.[packageName];
 
+    expect(bedrockRuntimeDependency).toBeDefined();
     expect(manifest.dependencies).not.toHaveProperty(packageName);
     expect(npmOverride).toBeUndefined();
-    expect(pnpmOverride).toBe("3.1045.0");
+    expect(pnpmOverride).toBe(bedrockRuntimeDependency);
   });
 
   it("pins the node-domexception alias exactly in npm and pnpm overrides", () => {

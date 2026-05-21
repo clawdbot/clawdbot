@@ -1,5 +1,5 @@
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
-import { resolveWebCredsPath } from "./creds-files.js";
+import { assertWebCredsPathRegularFileOrMissing, resolveWebCredsPath } from "./creds-files.js";
 
 const CREDS_FILE_MODE = 0o600;
 const CREDS_SAVE_FLUSH_TIMEOUT_MS = 15_000;
@@ -13,17 +13,31 @@ async function stringifyCreds(creds: unknown): Promise<string> {
   return JSON.stringify(creds, BufferJSON.replacer);
 }
 
-export async function writeCredsJsonAtomically(authDir: string, creds: unknown): Promise<void> {
-  const credsPath = resolveWebCredsPath(authDir);
-  const json = await stringifyCreds(creds);
+export async function writeWebCredsRawAtomically(params: {
+  filePath: string;
+  content: string;
+  tempPrefix: string;
+}): Promise<void> {
+  await assertWebCredsPathRegularFileOrMissing(params.filePath);
   await replaceFileAtomic({
-    filePath: credsPath,
-    content: json,
+    filePath: params.filePath,
+    content: params.content,
     dirMode: 0o700,
     mode: CREDS_FILE_MODE,
-    tempPrefix: ".creds",
+    tempPrefix: params.tempPrefix,
     syncTempFile: true,
     syncParentDir: true,
+    beforeRename: async ({ filePath }) => {
+      await assertWebCredsPathRegularFileOrMissing(filePath);
+    },
+  });
+}
+
+export async function writeCredsJsonAtomically(authDir: string, creds: unknown): Promise<void> {
+  await writeWebCredsRawAtomically({
+    filePath: resolveWebCredsPath(authDir),
+    content: await stringifyCreds(creds),
+    tempPrefix: ".creds",
   });
 }
 

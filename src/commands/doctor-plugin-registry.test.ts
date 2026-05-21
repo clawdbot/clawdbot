@@ -222,6 +222,23 @@ function createCurrentIndexWithNpmRecord(params: {
   };
 }
 
+function createCurrentIndexWithPathRecord(params: {
+  pluginId: string;
+  installPath: string;
+  version?: string;
+}): InstalledPluginIndex {
+  return {
+    ...createCurrentIndex(),
+    installRecords: {
+      [params.pluginId]: {
+        source: "path",
+        installPath: params.installPath,
+        ...(params.version ? { version: params.version } : {}),
+      },
+    },
+  };
+}
+
 function expectedPluginIndexRecord(params: {
   rootDir: string;
   pluginId: string;
@@ -460,6 +477,113 @@ describe("maybeRepairPluginRegistryState", () => {
         packageVersion: "2026.5.3",
       }),
     ]);
+  });
+
+  it("warns about stale local bundled plugin install records that shadow bundled plugins", async () => {
+    const stateDir = makeTempDir();
+    const bundledDir = path.join(stateDir, "current", "dist", "extensions", "discord");
+    const staleDir = path.join(stateDir, "old-checkout", "dist", "extensions", "discord");
+    fs.mkdirSync(bundledDir, { recursive: true });
+    fs.mkdirSync(staleDir, { recursive: true });
+    createCandidate(staleDir, "discord");
+    await writePersistedInstalledPluginIndex(
+      createCurrentIndexWithPathRecord({
+        pluginId: "discord",
+        installPath: staleDir,
+        version: "2026.5.4-beta.3",
+      }),
+      { stateDir },
+    );
+
+    await maybeRepairPluginRegistryState({
+      stateDir,
+      candidates: [
+        createBundledCandidate({
+          rootDir: bundledDir,
+          id: "discord",
+          packageName: "@openclaw/discord",
+          version: "2026.5.20-beta.1",
+        }),
+      ],
+      env: hermeticEnv(),
+      config: {
+        plugins: {
+          allow: ["discord"],
+          entries: {
+            discord: {
+              enabled: true,
+              config: {},
+            },
+          },
+        },
+      },
+      prompter: { shouldRepair: false },
+    });
+
+    const notes = vi.mocked(note).mock.calls.join("\n");
+    expect(notes).toContain("Local bundled plugin install records shadow bundled plugins");
+    expect(notes).toContain("discord");
+    expect(notes).toContain(staleDir);
+    const persisted = await readRequiredPersistedInstalledPluginIndex(stateDir);
+    expect(persisted.installRecords).toHaveProperty("discord");
+  });
+
+  it("removes stale local bundled plugin install records during repair", async () => {
+    const stateDir = makeTempDir();
+    const bundledDir = path.join(stateDir, "current", "dist", "extensions", "discord");
+    const staleDir = path.join(stateDir, "old-checkout", "dist", "extensions", "discord");
+    fs.mkdirSync(bundledDir, { recursive: true });
+    fs.mkdirSync(staleDir, { recursive: true });
+    createCandidate(staleDir, "discord");
+    await writePersistedInstalledPluginIndex(
+      createCurrentIndexWithPathRecord({
+        pluginId: "discord",
+        installPath: staleDir,
+        version: "2026.5.4-beta.3",
+      }),
+      { stateDir },
+    );
+
+    await maybeRepairPluginRegistryState({
+      stateDir,
+      candidates: [
+        createBundledCandidate({
+          rootDir: bundledDir,
+          id: "discord",
+          packageName: "@openclaw/discord",
+          version: "2026.5.20-beta.1",
+        }),
+      ],
+      env: hermeticEnv(),
+      config: {
+        plugins: {
+          allow: ["discord"],
+          entries: {
+            discord: {
+              enabled: true,
+              config: {},
+            },
+          },
+        },
+      },
+      prompter: { shouldRepair: true },
+    });
+
+    const persisted = await readRequiredPersistedInstalledPluginIndex(stateDir);
+    expect(persisted.installRecords).toStrictEqual({});
+    expect(persisted.refreshReason).toBe("migration");
+    expect(persisted.plugins).toStrictEqual([
+      expectedPluginIndexRecord({
+        pluginId: "discord",
+        rootDir: bundledDir,
+        origin: "bundled",
+        packageName: "@openclaw/discord",
+        packageVersion: "2026.5.20-beta.1",
+      }),
+    ]);
+    expect(vi.mocked(note).mock.calls.join("\n")).toContain(
+      "Removed stale local bundled plugin install record",
+    );
   });
 
   it("removes stale managed npm packages from the package lock during repair", async () => {

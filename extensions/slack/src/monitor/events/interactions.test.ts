@@ -934,7 +934,20 @@ describe("registerSlackInteractionEvents", () => {
   });
 
   it("resolves exec approvals from shared interactive Slack actions", async () => {
-    const { ctx, app, getHandler } = createContext({ allowFrom: ["U999"] });
+    const { ctx, app, getHandler } = createContext({
+      allowFrom: ["U999"],
+      cfg: {
+        channels: {
+          slack: {
+            execApprovals: {
+              enabled: true,
+              approvers: ["u123"],
+              target: "both",
+            },
+          },
+        },
+      },
+    });
     registerSlackInteractionEvents({ ctx: ctx as never });
 
     const handler = getHandler();
@@ -997,7 +1010,7 @@ describe("registerSlackInteractionEvents", () => {
           slack: {
             accounts: {
               default: {
-                allowFrom: ["U123OWNER"],
+                allowFrom: ["u123owner"],
                 execApprovals: {
                   enabled: true,
                   approvers: ["U999EXEC"],
@@ -1071,7 +1084,7 @@ describe("registerSlackInteractionEvents", () => {
           slack: {
             accounts: {
               default: {
-                allowFrom: ["U123OWNER"],
+                allowFrom: ["u123owner"],
                 execApprovals: {
                   enabled: true,
                   approvers: ["U999EXEC"],

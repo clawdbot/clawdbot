@@ -428,7 +428,7 @@ describe("configured plugin install release step", () => {
     });
   });
 
-  it("repairs package-manager plugins for writable legacy parents without explicit deferral", async () => {
+  it("defers package-manager plugin release completion for writable legacy parents", async () => {
     mocks.repairMissingPluginInstallsForIds.mockResolvedValue({
       changes: ['Installed missing configured plugin "discord".'],
       warnings: [],
@@ -459,8 +459,8 @@ describe("configured plugin install release step", () => {
     expect(result).toEqual({
       changes: ['Installed missing configured plugin "discord".'],
       warnings: [],
-      completed: true,
-      touchedConfig: true,
+      completed: false,
+      touchedConfig: false,
     });
   });
 

@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CallGatewayOptions } from "../gateway/call.js";
+import {
+  buildAnnounceIdFromChildRun,
+  buildAnnounceIdempotencyKey,
+} from "./announce-idempotency.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -154,6 +158,15 @@ function hasDeliveredTaskStatusUpdate(runId: string): boolean {
   });
 }
 
+function buildExpectedAnnounceIdempotencyKey(entry: SubagentRunRecord): string {
+  return buildAnnounceIdempotencyKey(
+    buildAnnounceIdFromChildRun({
+      childSessionKey: entry.childSessionKey,
+      childRunId: entry.runId,
+    }),
+  );
+}
+
 function createLifecycleController({
   entry,
   runs = new Map([[entry.runId, entry]]),
@@ -182,6 +195,62 @@ function createLifecycleController({
   };
   Object.assign(params, overrides);
   return createSubagentRegistryLifecycleController(params);
+}
+
+async function runNoReplyMirrorScenario(params: {
+  timestamp: number;
+  text?: string;
+  idempotencyKey?: string;
+  idempotencyKeyForEntry?: (entry: SubagentRunRecord) => string;
+}): Promise<SubagentRunRecord> {
+  const entry = createRunEntry({
+    endedAt: 4_000,
+    expectsCompletionMessage: true,
+    retainAttachmentsOnKeep: true,
+  });
+  const text = params.text ?? "final completion reply";
+  const idempotencyKey =
+    params.idempotencyKeyForEntry?.(entry) ??
+    params.idempotencyKey ??
+    `${buildExpectedAnnounceIdempotencyKey(entry)}:internal-source-reply:0`;
+  const runSubagentAnnounceFlow = vi.fn(
+    async (announceParams: {
+      onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
+    }) => {
+      announceParams.onDeliveryResult?.({
+        delivered: false,
+        path: "direct",
+        error: "completion agent did not produce a visible reply",
+      });
+      return false;
+    },
+  );
+  gatewayMocks.callGateway.mockResolvedValueOnce({
+    messages: [
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: text,
+        timestamp: params.timestamp,
+        idempotencyKey,
+      },
+    ],
+  });
+
+  await createLifecycleController({
+    entry,
+    captureSubagentCompletionReply: vi.fn(async () => text),
+    persist: vi.fn(),
+    runSubagentAnnounceFlow,
+  }).completeSubagentRun({
+    runId: entry.runId,
+    endedAt: 4_000,
+    outcome: { status: "ok" },
+    reason: SUBAGENT_ENDED_REASON_COMPLETE,
+    triggerCleanup: true,
+  });
+  return entry;
 }
 
 describe("subagent registry lifecycle hardening", () => {
@@ -918,6 +987,110 @@ describe("subagent registry lifecycle hardening", () => {
     expect(entry.deliverySuspendedReason).toBe("retry-limit");
     expect(entry.cleanupCompletedAt).toBeUndefined();
     expect(persist).toHaveBeenCalled();
+  });
+
+  it("credits only current-run requester delivery mirrors before retrying NO_REPLY", async () => {
+    const entry = await runNoReplyMirrorScenario({ timestamp: 12_345 });
+
+    await vi.waitFor(() => expect(entry.cleanupCompletedAt).toBeTypeOf("number"));
+    expect(gatewayMocks.callGateway).toHaveBeenCalledWith({
+      method: "chat.history",
+      params: { sessionKey: entry.requesterSessionKey, limit: 25, maxChars: 128 * 1024 },
+      timeoutMs: 5_000,
+    });
+    expect(entry.completionDeliveredAt).toBe(12_345);
+    expect(entry.completionAnnouncedAt).toBe(12_345);
+    expect(entry.lastAnnounceDeliveryError).toBeUndefined();
+    expect(entry.pendingFinalDelivery).toBeUndefined();
+    expect(entry.announceRetryCount).toBeUndefined();
+    expect(hasDeliveredTaskStatusUpdate(entry.runId)).toBe(true);
+    expect(helperMocks.logAnnounceGiveUp).not.toHaveBeenCalled();
+
+    vi.clearAllMocks();
+    gatewayMocks.callGateway.mockResolvedValue({});
+    const longMirrorEntry = await runNoReplyMirrorScenario({
+      timestamp: 12_345,
+      text: "long completion reply ".repeat(500),
+    });
+
+    await vi.waitFor(() => expect(longMirrorEntry.cleanupCompletedAt).toBeTypeOf("number"));
+    expect(longMirrorEntry.completionDeliveredAt).toBe(12_345);
+    expect(gatewayMocks.callGateway).toHaveBeenCalledWith({
+      method: "chat.history",
+      params: { sessionKey: longMirrorEntry.requesterSessionKey, limit: 25, maxChars: 128 * 1024 },
+      timeoutMs: 5_000,
+    });
+
+    vi.clearAllMocks();
+    gatewayMocks.callGateway.mockResolvedValue({});
+    const messageToolAnnounceEntry = await runNoReplyMirrorScenario({
+      timestamp: 12_345,
+      idempotencyKeyForEntry: (candidate) =>
+        `${buildExpectedAnnounceIdempotencyKey(candidate)}:message-tool:internal-source-reply:0`,
+    });
+
+    await vi.waitFor(() =>
+      expect(messageToolAnnounceEntry.cleanupCompletedAt).toBeTypeOf("number"),
+    );
+    expect(messageToolAnnounceEntry.completionDeliveredAt).toBe(12_345);
+
+    vi.clearAllMocks();
+    gatewayMocks.callGateway.mockResolvedValue({});
+    const childRunMirrorEntry = await runNoReplyMirrorScenario({
+      timestamp: 12_345,
+      idempotencyKeyForEntry: (candidate) => `${candidate.runId}:message-tool:1`,
+    });
+
+    await vi.waitFor(() => expect(childRunMirrorEntry.cleanupCompletedAt).toBeTypeOf("number"));
+    expect(childRunMirrorEntry.completionDeliveredAt).toBe(12_345);
+
+    vi.clearAllMocks();
+    taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId.mockReset();
+    gatewayMocks.callGateway.mockResolvedValue({});
+    const staleEntry = await runNoReplyMirrorScenario({ timestamp: 1_999 });
+
+    await vi.waitFor(() => expect(staleEntry.deliverySuspendedAt).toBeTypeOf("number"));
+    expect(staleEntry.completionDeliveredAt).toBeUndefined();
+    expect(staleEntry.completionAnnouncedAt).toBeUndefined();
+    expect(staleEntry.lastAnnounceDeliveryError).toBe(
+      "completion agent did not produce a visible reply",
+    );
+    expect(hasDeliveredTaskStatusUpdate(staleEntry.runId)).toBe(false);
+    expectFields(firstCallArg(taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId), {
+      runId: staleEntry.runId,
+      runtime: "subagent",
+      sessionKey: staleEntry.childSessionKey,
+      deliveryStatus: "failed",
+      error: "completion agent did not produce a visible reply",
+    });
+    expect(helperMocks.logAnnounceGiveUp).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: staleEntry.runId,
+        requesterSessionKey: staleEntry.requesterSessionKey,
+      }),
+      "retry-limit",
+    );
+
+    vi.clearAllMocks();
+    taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId.mockReset();
+    gatewayMocks.callGateway.mockResolvedValue({});
+    const sameWindowSiblingEntry = await runNoReplyMirrorScenario({
+      timestamp: 12_345,
+      idempotencyKey: `${buildAnnounceIdempotencyKey(
+        buildAnnounceIdFromChildRun({
+          childSessionKey: "agent:main:subagent:sibling",
+          childRunId: "run-sibling",
+        }),
+      )}:internal-source-reply:0`,
+    });
+
+    await vi.waitFor(() => expect(sameWindowSiblingEntry.deliverySuspendedAt).toBeTypeOf("number"));
+    expect(sameWindowSiblingEntry.completionDeliveredAt).toBeUndefined();
+    expect(sameWindowSiblingEntry.completionAnnouncedAt).toBeUndefined();
+    expect(sameWindowSiblingEntry.lastAnnounceDeliveryError).toBe(
+      "completion agent did not produce a visible reply",
+    );
+    expect(hasDeliveredTaskStatusUpdate(sameWindowSiblingEntry.runId)).toBe(false);
   });
 
   it("skips browser cleanup when steer restart suppresses cleanup flow", async () => {

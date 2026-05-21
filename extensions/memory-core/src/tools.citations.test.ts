@@ -247,7 +247,22 @@ describe("memory tools", () => {
         },
       ]);
 
-      const tool = createMemorySearchToolOrThrow();
+      const tool = createMemorySearchToolOrThrow({
+        config: asOpenClawConfig({
+          agents: { list: [{ id: "main", default: true }] },
+          plugins: {
+            entries: {
+              "memory-core": {
+                config: {
+                  dreaming: {
+                    enabled: true,
+                  },
+                },
+              },
+            },
+          },
+        }),
+      });
       await tool.execute("call_recall_persist", { query: "glacier backup" });
 
       const storePath = path.join(workspaceDir, "memory", ".dreams", "short-term-recall.json");

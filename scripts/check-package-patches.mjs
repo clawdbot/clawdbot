@@ -8,10 +8,10 @@ import YAML from "yaml";
 
 const ALLOWED_PATCHED_DEPENDENCIES = new Map([
   [
-    "@agentclientprotocol/claude-agent-acp@0.33.1",
-    "patches/@agentclientprotocol__claude-agent-acp@0.33.1.patch",
+    "@agentclientprotocol/claude-agent-acp@0.36.1",
+    "patches/@agentclientprotocol__claude-agent-acp@0.36.1.patch",
   ],
-  ["baileys@7.0.0-rc11", "patches/baileys@7.0.0-rc11.patch"],
+  ["baileys@7.0.0-rc12", "patches/baileys@7.0.0-rc12.patch"],
 ]);
 
 const ALLOWED_PATCH_FILES = new Set(["patches/.gitkeep", ...ALLOWED_PATCHED_DEPENDENCIES.values()]);
@@ -91,6 +91,9 @@ function collectPackageJsonPatchViolations(cwd, violations) {
 
 function collectPatchFileViolations(cwd, violations) {
   for (const relativePath of listTrackedFiles(cwd, ["*.patch"])) {
+    if (!fs.existsSync(path.join(cwd, relativePath))) {
+      continue;
+    }
     if (ALLOWED_PATCH_FILES.has(relativePath)) {
       continue;
     }

@@ -62,7 +62,7 @@ export async function readCodexAccountAuthOverview(params: {
     allowKeychainPrompt: false,
     config,
   });
-  const order = resolveDisplayAuthOrder({ config, store });
+  const { order, explicit: explicitOrder } = resolveDisplayAuthOrder({ config, store });
   if (order.length === 0) {
     return undefined;
   }
@@ -71,6 +71,7 @@ export async function readCodexAccountAuthOverview(params: {
   const activeProfileId = resolveActiveProfileId({
     store,
     order,
+    explicitOrder,
     config,
     account: params.account,
     limits: params.limits,
@@ -135,21 +136,45 @@ export async function readCodexAccountAuthOverview(params: {
   };
 }
 
+type DisplayAuthOrder = {
+  readonly order: string[];
+  readonly explicit: boolean;
+};
+
 function resolveDisplayAuthOrder(params: {
   config: AuthProfileOrderConfig;
   store: AuthProfileStore;
-}): string[] {
+}): DisplayAuthOrder {
   const codexOrder =
     resolveOrder(params.store.order, OPENAI_CODEX_PROVIDER_ID) ??
     resolveOrder(params.config?.auth?.order, OPENAI_CODEX_PROVIDER_ID);
   if (codexOrder && codexOrder.length > 0) {
-    return dedupe(codexOrder);
+    return { order: dedupe(codexOrder), explicit: true };
   }
-  return resolveAuthProfileOrder({
+  const order = resolveAuthProfileOrder({
     cfg: params.config,
     store: params.store,
     provider: OPENAI_CODEX_PROVIDER_ID,
   });
+  return { order, explicit: hasExplicitOpenAiAuthOrder(params) };
+}
+
+function hasExplicitOpenAiAuthOrder(params: {
+  config: AuthProfileOrderConfig;
+  store: AuthProfileStore;
+}): boolean {
+  const sources = [params.store.order, params.config?.auth?.order];
+  for (const source of sources) {
+    const codex = resolveOrder(source, OPENAI_CODEX_PROVIDER_ID);
+    if (codex && codex.length > 0) {
+      return true;
+    }
+    const openai = resolveOrder(source, OPENAI_PROVIDER_ID);
+    if (openai && openai.length > 0) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function resolveOrder(
@@ -162,6 +187,7 @@ function resolveOrder(
 function resolveActiveProfileId(params: {
   store: AuthProfileStore;
   order: string[];
+  explicitOrder: boolean;
   config: AuthProfileOrderConfig;
   account: SafeValue<JsonValue | undefined>;
   limits: SafeValue<JsonValue | undefined>;
@@ -174,6 +200,25 @@ function resolveActiveProfileId(params: {
   });
   if (liveProfileId) {
     return liveProfileId;
+  }
+  // Explicit auth order (`models auth order set` or `config.auth.order`) is
+  // authoritative for the status display and overrides `lastGood`/usage
+  // heuristics, matching the core `resolveAuthProfileOrder` precedence so the
+  // display does not silently disagree with the runtime resolver. When no
+  // fully-usable candidate exists return undefined — marking an ineligible
+  // profile as active would misrepresent what the runtime resolver can use.
+  if (params.explicitOrder) {
+    return params.order.find(
+      (profileId) =>
+        isActiveProfileCandidate(params, profileId) &&
+        resolveAuthProfileEligibility({
+          cfg: params.config,
+          store: params.store,
+          provider: OPENAI_CODEX_PROVIDER_ID,
+          profileId,
+          now: params.now,
+        }).eligible,
+    );
   }
   const lastGood = [
     params.store.lastGood?.[OPENAI_PROVIDER_ID],

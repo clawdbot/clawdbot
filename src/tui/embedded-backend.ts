@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { agentCommandFromIngress } from "../agents/agent-command.js";
 import { resolveSessionAgentId } from "../agents/agent-scope.js";
+import { ensureContextWindowCacheLoaded } from "../agents/context.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { buildAllowedModelSet, resolveThinkingDefault } from "../agents/model-selection.js";
 import { createDefaultDeps } from "../cli/deps.js";
@@ -138,6 +139,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       return;
     }
     setEmbeddedMode(true);
+    void ensureContextWindowCacheLoaded();
     // Suppress console output from logError/logInfo that would pollute the TUI.
     // File logger (getLogger()) still captures everything via logger.ts:35.
     this.previousRuntimeLog = defaultRuntime.log;

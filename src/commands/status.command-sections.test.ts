@@ -3,6 +3,7 @@ import type { HealthSummary } from "./health.js";
 import {
   buildStatusFooterLines,
   buildStatusHealthRows,
+  buildStatusModelSelectionLines,
   buildStatusPairingRecoveryLines,
   buildStatusPluginCompatibilityLines,
   buildStatusSecurityAuditLines,
@@ -69,6 +70,9 @@ describe("status.command-sections", () => {
           remainingTokens: null,
           percentUsed: null,
           contextTokens: null,
+          configuredModel: "openai/gpt-5.4",
+          selectedModel: "openai/gpt-5.4",
+          modelSelectionReason: null,
           flags: [],
         },
         {
@@ -83,6 +87,9 @@ describe("status.command-sections", () => {
           remainingTokens: null,
           percentUsed: null,
           contextTokens: null,
+          configuredModel: "openai/gpt-5.5",
+          selectedModel: "openai/gpt-5.5",
+          modelSelectionReason: null,
           flags: [],
         },
       ],
@@ -126,6 +133,42 @@ describe("status.command-sections", () => {
     });
 
     expect(emptyRows).toEqual([]);
+  });
+
+  it("shows configured default and selected session model when they differ", () => {
+    const lines = buildStatusModelSelectionLines({
+      recent: [
+        {
+          key: "agent:main:telegram:chat-1",
+          kind: "direct",
+          updatedAt: 1,
+          age: 5_000,
+          model: "deepseek-v4-flash",
+          configuredModel: "zhipu/glm-4.5-air",
+          selectedModel: "deepseek/deepseek-v4-flash",
+          modelSelectionReason: "session override",
+          runtime: "OpenClaw Pi Default",
+          totalTokens: null,
+          totalTokensFresh: false,
+          remainingTokens: null,
+          percentUsed: null,
+          contextTokens: null,
+          flags: [],
+        },
+      ],
+      shortenText: (value) => value,
+      warn: (value) => `warn(${value})`,
+      muted: (value) => `muted(${value})`,
+    });
+
+    expect(lines).toEqual([
+      "warn(Session agent:main:telegram:chat-1 is pinned to deepseek/deepseek-v4-flash; config primary zhipu/glm-4.5-air will apply to new/unpinned sessions.)",
+      "  Configured default: zhipu/glm-4.5-air",
+      "  Session selected: deepseek/deepseek-v4-flash",
+      "  Reason: session override",
+      "  Clear with: /model zhipu/glm-4.5-air or /reset",
+      "  Docs: https://docs.openclaw.ai/concepts/models#selection-source-and-fallback-behavior",
+    ]);
   });
 
   it("maps health channel detail lines into status rows", () => {

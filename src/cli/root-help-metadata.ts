@@ -2,9 +2,17 @@ import { readCliStartupMetadata } from "./startup-metadata.js";
 
 let precomputedRootHelpText: string | null | undefined;
 let precomputedBrowserHelpText: string | null | undefined;
+let precomputedSecretsHelpText: string | null | undefined;
+let precomputedNodesHelpText: string | null | undefined;
+
+type PrecomputedHelpTextKey =
+  | "rootHelpText"
+  | "browserHelpText"
+  | "secretsHelpText"
+  | "nodesHelpText";
 
 function loadPrecomputedHelpText(
-  key: "rootHelpText" | "browserHelpText",
+  key: PrecomputedHelpTextKey,
   cache: string | null | undefined,
   setCache: (value: string | null) => void,
 ): string | null {
@@ -39,6 +47,18 @@ export function loadPrecomputedBrowserHelpText(): string | null {
   });
 }
 
+export function loadPrecomputedSecretsHelpText(): string | null {
+  return loadPrecomputedHelpText("secretsHelpText", precomputedSecretsHelpText, (value) => {
+    precomputedSecretsHelpText = value;
+  });
+}
+
+export function loadPrecomputedNodesHelpText(): string | null {
+  return loadPrecomputedHelpText("nodesHelpText", precomputedNodesHelpText, (value) => {
+    precomputedNodesHelpText = value;
+  });
+}
+
 export function outputPrecomputedRootHelpText(): boolean {
   const rootHelpText = loadPrecomputedRootHelpText();
   if (!rootHelpText) {
@@ -57,10 +77,30 @@ export function outputPrecomputedBrowserHelpText(): boolean {
   return true;
 }
 
+export function outputPrecomputedSecretsHelpText(): boolean {
+  const secretsHelpText = loadPrecomputedSecretsHelpText();
+  if (!secretsHelpText) {
+    return false;
+  }
+  process.stdout.write(secretsHelpText);
+  return true;
+}
+
+export function outputPrecomputedNodesHelpText(): boolean {
+  const nodesHelpText = loadPrecomputedNodesHelpText();
+  if (!nodesHelpText) {
+    return false;
+  }
+  process.stdout.write(nodesHelpText);
+  return true;
+}
+
 export const testing = {
   resetPrecomputedRootHelpTextForTests(): void {
     precomputedRootHelpText = undefined;
     precomputedBrowserHelpText = undefined;
+    precomputedSecretsHelpText = undefined;
+    precomputedNodesHelpText = undefined;
   },
 };
 export { testing as __testing };

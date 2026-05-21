@@ -36,6 +36,8 @@ export interface HealthFinding {
   readonly line?: number;
   readonly column?: number;
   readonly ocPath?: string;
+  readonly target?: string;
+  readonly requirement?: string;
   readonly fixHint?: string;
 }
 

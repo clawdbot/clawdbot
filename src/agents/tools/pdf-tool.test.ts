@@ -388,7 +388,31 @@ describe("createPdfTool", () => {
       const [loadRef, loadOptions] = firstMockCall(loadSpy, "loadWebMediaRaw");
       expect(loadRef).toBe("http://198.18.0.153/doc.pdf");
       expectFields(loadOptions, {
+        readIdleTimeoutMs: 120_000,
         ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+      });
+    });
+  });
+
+  it("passes the shared remote read idle timeout when loading remote PDFs", async () => {
+    await withTempPdfAgentDir(async (agentDir) => {
+      const { loadSpy } = await stubPdfToolInfra(agentDir, {
+        provider: "anthropic",
+        input: ["text", "document"],
+      });
+      vi.spyOn(pdfNativeProviders, "anthropicAnalyzePdf").mockResolvedValue("native summary");
+      const cfg = withPdfModel(ANTHROPIC_PDF_MODEL);
+      const tool = requirePdfTool((await loadCreatePdfTool())({ config: cfg, agentDir }));
+
+      await tool.execute("t1", {
+        prompt: "summarize",
+        pdf: "https://example.com/stalled.pdf",
+      });
+
+      const [loadRef, loadOptions] = firstMockCall(loadSpy, "loadWebMediaRaw");
+      expect(loadRef).toBe("https://example.com/stalled.pdf");
+      expectFields(loadOptions, {
+        readIdleTimeoutMs: 120_000,
       });
     });
   });

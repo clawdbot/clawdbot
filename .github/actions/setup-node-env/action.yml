@@ -59,14 +59,15 @@ runs:
         if command -v bun &>/dev/null; then bun -v; fi
 
     - name: Capture node path
-      if: inputs.install-deps == 'true'
       shell: bash
       run: |
         node_bin="$(dirname "$(node -p 'process.execPath')")"
         if command -v cygpath >/dev/null 2>&1; then
           node_bin="$(cygpath -u "$node_bin")"
         fi
+        # zizmor: ignore[github-env] node_bin comes from trusted actions/setup-node output in this composite action.
         echo "NODE_BIN=$node_bin" >> "$GITHUB_ENV"
+        echo "$node_bin" >> "$GITHUB_PATH"
 
     - name: Install dependencies
       if: inputs.install-deps == 'true'

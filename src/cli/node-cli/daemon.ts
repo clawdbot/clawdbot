@@ -136,7 +136,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   const tlsFingerprint =
     normalizeOptionalString(opts.tlsFingerprint) || config?.gateway?.tlsFingerprint;
   const tls = Boolean(opts.tls) || Boolean(tlsFingerprint) || Boolean(config?.gateway?.tls);
-  const { programArguments, workingDirectory, environment, description } =
+  const { programArguments, workingDirectory, environment, environmentValueSources, description } =
     await buildNodeInstallPlan({
       env: process.env,
       host,
@@ -168,6 +168,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
         programArguments,
         workingDirectory,
         environment,
+        environmentValueSources,
         description,
       });
     },

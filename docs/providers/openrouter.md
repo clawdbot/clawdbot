@@ -282,8 +282,58 @@ does **not** inject those OpenRouter-specific headers or Anthropic cache markers
   </Accordion>
 
   <Accordion title="Provider routing metadata">
-    If you pass OpenRouter provider routing under model params, OpenClaw forwards
-    it as OpenRouter routing metadata before the shared stream wrappers run.
+    OpenRouter supports a `provider` request object for underlying provider
+    routing. Configure a default policy for all OpenRouter text-model requests
+    with `models.providers.openrouter.params.provider`:
+
+    ```json5
+    {
+      models: {
+        providers: {
+          openrouter: {
+            params: {
+              provider: {
+                sort: "latency",
+                require_parameters: true,
+                data_collection: "deny",
+              },
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    OpenClaw forwards that object to OpenRouter as the request `provider`
+    payload. Use OpenRouter's documented snake_case fields, including `sort`,
+    `only`, `ignore`, `order`, `allow_fallbacks`, `require_parameters`,
+    `data_collection`, `quantizations`, `max_price`, `preferred_max_latency`,
+    `preferred_min_throughput`, `zdr`, and `enforce_distillable_text`.
+
+    Per-model params still override the provider-wide routing object:
+
+    ```json5
+    {
+      agents: {
+        defaults: {
+          models: {
+            "openrouter/anthropic/claude-sonnet-4-6": {
+              params: {
+                provider: {
+                  order: ["anthropic"],
+                  allow_fallbacks: false,
+                },
+              },
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    This only applies on OpenRouter chat-completions routes. Direct Anthropic,
+    Google, OpenAI, or custom provider routes ignore OpenRouter routing params.
+
   </Accordion>
 </AccordionGroup>
 

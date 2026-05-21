@@ -330,20 +330,23 @@ describe("openHttpConnectTunnel", () => {
   });
 
   it("rejects and destroys the proxy socket when CONNECT times out", async () => {
+    vi.useFakeTimers();
     const proxySocket = new FakeSocket();
     setNextNetSocket(proxySocket);
     const { openHttpConnectTunnel } = await import("./http-connect-tunnel.js");
 
-    await expect(
-      openHttpConnectTunnel({
-        proxyUrl: new URL("http://proxy.example:8080"),
-        targetHost: "api.push.apple.com",
-        targetPort: 443,
-        timeoutMs: 1,
-      }),
-    ).rejects.toThrow(
+    const tunnel = openHttpConnectTunnel({
+      proxyUrl: new URL("http://proxy.example:8080"),
+      targetHost: "api.push.apple.com",
+      targetPort: 443,
+      timeoutMs: 1,
+    });
+    const rejected = expect(tunnel).rejects.toThrow(
       "Proxy CONNECT failed via http://proxy.example:8080: Proxy CONNECT timed out after 1ms",
     );
+
+    await vi.advanceTimersByTimeAsync(1);
+    await rejected;
     expect(proxySocket.destroyed).toBe(true);
   });
 });

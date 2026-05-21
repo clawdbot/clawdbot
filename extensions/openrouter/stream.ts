@@ -56,6 +56,11 @@ function shouldPatchDeepSeekV4OpenRouterPayload(model: Parameters<StreamFn>[0]):
   );
 }
 
+function shouldPatchOpenRouterRoutingPayload(model: Parameters<StreamFn>[0]): boolean {
+  const api = readString(model.api);
+  return (api === undefined || api === "openai-completions") && isVerifiedOpenRouterRoute(model);
+}
+
 function assistantMessageHasOpenAIToolCalls(message: Record<string, unknown>): boolean {
   return Array.isArray(message.tool_calls) && message.tool_calls.length > 0;
 }
@@ -145,7 +150,7 @@ function injectOpenRouterRouting(
   if (!providerRouting) {
     return baseStreamFn;
   }
-  return (model, context, options) =>
+  const routedStreamFn: StreamFn = (model, context, options) =>
     (
       baseStreamFn ??
       ((nextModel) => {
@@ -161,6 +166,17 @@ function injectOpenRouterRouting(
       context,
       options,
     );
+  return createPayloadPatchStreamWrapper(
+    routedStreamFn,
+    ({ payload }) => {
+      if (payload.provider === undefined) {
+        payload.provider = providerRouting;
+      }
+    },
+    {
+      shouldPatch: ({ model }) => shouldPatchOpenRouterRoutingPayload(model),
+    },
+  );
 }
 
 function createOpenRouterAnthropicPrefillWrapper(baseStreamFn: StreamFn | undefined): StreamFn {

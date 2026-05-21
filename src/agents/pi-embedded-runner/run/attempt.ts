@@ -389,6 +389,7 @@ import {
 } from "./midturn-precheck.js";
 import {
   PREEMPTIVE_OVERFLOW_ERROR_TEXT,
+  formatPrePromptPrecheckLog,
   shouldPreemptivelyCompactBeforePrompt,
 } from "./preemptive-compaction.js";
 import {
@@ -4010,6 +4011,25 @@ export async function runEmbeddedAttempt(
                   agentId: sessionAgentId,
                 }),
               });
+          if (preemptiveCompaction) {
+            log.debug(
+              formatPrePromptPrecheckLog({
+                result: preemptiveCompaction,
+                provider: params.provider,
+                modelId: params.modelId,
+                messageCount: activeSession.messages.length,
+                contextTokenBudget,
+                reserveTokens,
+                ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+                ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+                ...(contextEnginePromptAuthority === "preassembly_may_overflow" &&
+                unwindowedContextEngineMessagesForPrecheck
+                  ? { unwindowedMessageCount: unwindowedContextEngineMessagesForPrecheck.length }
+                  : {}),
+                ...(params.sessionFile ? { sessionFile: params.sessionFile } : {}),
+              }),
+            );
+          }
           if (preemptiveCompaction?.route === "truncate_tool_results_only") {
             const toolResultMaxChars = resolveLiveToolResultMaxChars({
               contextWindowTokens: contextTokenBudget,

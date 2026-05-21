@@ -78,6 +78,11 @@ on:
         required: false
         default: ""
         type: string
+      codex_plugin_spec:
+        description: Optional Codex plugin install spec for live Docker package checks; blank derives from release_package_spec or packs the selected ref
+        required: false
+        default: ""
+        type: string
 
 concurrency:
   group: openclaw-release-checks-${{ inputs.expected_sha || inputs.ref }}-${{ inputs.rerun_group }}
@@ -112,6 +117,7 @@ jobs:
       qa_live_slack_enabled: ${{ steps.inputs.outputs.qa_live_slack_enabled }}
       release_package_spec: ${{ steps.inputs.outputs.release_package_spec }}
       package_acceptance_package_spec: ${{ steps.inputs.outputs.package_acceptance_package_spec }}
+      codex_plugin_spec: ${{ steps.inputs.outputs.codex_plugin_spec }}
     steps:
       - name: Require trusted workflow ref for release checks
         env:
@@ -262,6 +268,7 @@ jobs:
           RELEASE_QA_SLACK_LIVE_CI_ENABLED: ${{ vars.OPENCLAW_RELEASE_QA_SLACK_LIVE_CI_ENABLED || 'false' }}
           RELEASE_PACKAGE_SPEC_INPUT: ${{ inputs.release_package_spec }}
           RELEASE_PACKAGE_ACCEPTANCE_PACKAGE_SPEC_INPUT: ${{ inputs.package_acceptance_package_spec }}
+          RELEASE_CODEX_PLUGIN_SPEC_INPUT: ${{ inputs.codex_plugin_spec }}
         run: |
           set -euo pipefail
           qa_live_matrix_enabled=true
@@ -306,6 +313,10 @@ jobs:
           esac
           if [[ "$release_profile" == "full" ]]; then
             run_release_soak=true
+          fi
+          codex_plugin_spec="$RELEASE_CODEX_PLUGIN_SPEC_INPUT"
+          if [[ -z "${codex_plugin_spec// }" && "$RELEASE_PACKAGE_SPEC_INPUT" =~ ^openclaw@(.+)$ ]]; then
+            codex_plugin_spec="npm:@openclaw/codex@${BASH_REMATCH[1]}"
           fi
 
           filter="$(printf '%s' "$RELEASE_LIVE_SUITE_FILTER_INPUT" | tr '[:upper:]' '[:lower:]')"
@@ -387,6 +398,7 @@ jobs:
             printf 'qa_live_slack_enabled=%s\n' "$qa_live_slack_enabled"
             printf 'release_package_spec=%s\n' "$RELEASE_PACKAGE_SPEC_INPUT"
             printf 'package_acceptance_package_spec=%s\n' "$RELEASE_PACKAGE_ACCEPTANCE_PACKAGE_SPEC_INPUT"
+            printf 'codex_plugin_spec=%s\n' "$codex_plugin_spec"
           } >> "$GITHUB_OUTPUT"
 
       - name: Summarize validated ref
@@ -403,6 +415,7 @@ jobs:
           RELEASE_CROSS_OS_SUITE_FILTER: ${{ inputs.cross_os_suite_filter }}
           RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
           PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
+          CODEX_PLUGIN_SPEC: ${{ steps.inputs.outputs.codex_plugin_spec }}
         run: |
           {
             echo "## Release checks"
@@ -431,6 +444,11 @@ jobs:
               echo "- Package Acceptance package spec: \`${RELEASE_PACKAGE_SPEC}\`"
             else
               echo "- Package Acceptance package spec: prepared release artifact"
+            fi
+            if [[ -n "${CODEX_PLUGIN_SPEC// }" ]]; then
+              echo "- Codex plugin spec: \`${CODEX_PLUGIN_SPEC}\`"
+            else
+              echo "- Codex plugin spec: packed from selected ref"
             fi
             if [[ "$RUN_RELEASE_SOAK" == "true" ]]; then
               echo "- This run will execute blocking release validation plus exhaustive live/Docker soak coverage."
@@ -640,6 +658,7 @@ jobs:
       include_live_suites: false
       release_test_profile: ${{ needs.resolve_target.outputs.release_profile }}
       package_artifact_name: ${{ needs.prepare_release_package.outputs.artifact_name }}
+      codex_plugin_spec: ${{ needs.resolve_target.outputs.codex_plugin_spec }}
     secrets: *live_e2e_release_secrets
 
   package_acceptance_release_checks:

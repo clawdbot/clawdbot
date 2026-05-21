@@ -4,12 +4,15 @@ import type { ChannelId } from "../channels/plugins/types.public.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig, GatewayBindMode } from "../config/config.js";
 import type { AgentConfig } from "../config/types.agents.js";
-import { hasConfiguredSecretInput } from "../config/types.secrets.js";
+import { hasConfiguredSecretInput, resolveSecretInputRef } from "../config/types.secrets.js";
 import { resolveGatewayAuthTokenSourceConflict } from "../gateway/auth-token-source-conflict.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { isLoopbackHost, resolveGatewayBindHost } from "../gateway/net.js";
 import { resolveExecPolicyScopeSnapshot } from "../infra/exec-approvals-effective.js";
 import { loadExecApprovals, type ExecAsk, type ExecSecurity } from "../infra/exec-approvals.js";
+import { isLikelySensitiveModelProviderHeaderName } from "../secrets/model-provider-header-policy.js";
+import { hasConfiguredPlaintextSecretValue } from "../secrets/secret-value.js";
+import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
 import { collectExecFilesystemPolicyDriftHits } from "../security/exec-filesystem-policy.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
@@ -180,6 +183,51 @@ function collectExecFilesystemPolicyWarnings(cfg: OpenClawConfig): string[] {
   );
 }
 
+function collectPlaintextConfigSecretWarnings(cfg: OpenClawConfig): string[] {
+  const plaintextPaths: string[] = [];
+  const defaults = cfg.secrets?.defaults;
+
+  for (const target of discoverConfigSecretTargets(cfg)) {
+    if (!target.entry.includeInAudit) {
+      continue;
+    }
+    if (
+      target.entry.id === "models.providers.*.headers.*" &&
+      !isLikelySensitiveModelProviderHeaderName(target.pathSegments.at(-1) ?? "")
+    ) {
+      continue;
+    }
+    const { ref } = resolveSecretInputRef({
+      value: target.value,
+      refValue: target.refValue,
+      defaults,
+    });
+    if (ref) {
+      continue;
+    }
+    if (!hasConfiguredPlaintextSecretValue(target.value, target.entry.expectedResolvedValue)) {
+      continue;
+    }
+    plaintextPaths.push(target.path);
+  }
+
+  if (plaintextPaths.length === 0) {
+    return [];
+  }
+
+  const samplePaths = plaintextPaths.slice(0, 5);
+  const extraCount = plaintextPaths.length - samplePaths.length;
+  const pathLine =
+    extraCount > 0 ? `${samplePaths.join(", ")} (+${extraCount} more)` : samplePaths.join(", ");
+
+  return [
+    "- WARNING: openclaw.json contains plaintext secret-bearing config fields.",
+    `  Paths: ${pathLine}`,
+    "  Agents or workspace tools that can read config files may see these API keys/tokens.",
+    `  Migrate them to SecretRefs with ${formatCliCommand("openclaw secrets configure")} or ${formatCliCommand("openclaw secrets apply")}, then verify with ${formatCliCommand("openclaw secrets audit --check")}.`,
+  ];
+}
+
 export async function collectSecurityWarnings(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
@@ -197,6 +245,7 @@ export async function collectSecurityWarnings(
   warnings.push(...collectImplicitHeartbeatDirectPolicyWarnings(cfg));
   warnings.push(...collectExecPolicyConflictWarnings(cfg));
   warnings.push(...collectExecFilesystemPolicyWarnings(cfg));
+  warnings.push(...collectPlaintextConfigSecretWarnings(cfg));
   warnings.push(...collectDurableExecApprovalWarnings(cfg));
 
   // ===========================================

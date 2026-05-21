@@ -159,6 +159,22 @@ function liveOpenAiChatToolsLane() {
   );
 }
 
+function liveCodexNpmPluginLane() {
+  return liveLane(
+    "live-codex-npm-plugin",
+    liveDockerScriptCommand("e2e/codex-npm-plugin-live-docker.sh"),
+    {
+      cacheKey: "codex-npm-plugin",
+      e2eImageKind: "bare",
+      provider: "openai",
+      resources: ["npm"],
+      stateScenario: "empty",
+      timeoutMs: 30 * 60 * 1000,
+      weight: 3,
+    },
+  );
+}
+
 export const mainLanes = [
   liveLane("live-models", liveDockerScriptCommand("test-live-models-docker.sh"), {
     providers: ["claude-cli", "google-gemini-cli"],
@@ -484,19 +500,7 @@ export const tailLanes = [
       weight: 3,
     },
   ),
-  liveLane(
-    "live-codex-npm-plugin",
-    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-codex-npm-plugin",
-    {
-      cacheKey: "codex-npm-plugin",
-      e2eImageKind: "bare",
-      provider: "openai",
-      resources: ["npm"],
-      stateScenario: "empty",
-      timeoutMs: 30 * 60 * 1000,
-      weight: 3,
-    },
-  ),
+  liveCodexNpmPluginLane(),
   livePluginToolLane(),
   liveLane(
     "live-acp-bind-claude",
@@ -633,6 +637,7 @@ const releasePathPackageInstallOpenAiLanes = [
     },
   ),
   liveOpenAiChatToolsLane(),
+  liveCodexNpmPluginLane(),
   npmLane("codex-on-demand", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:codex-on-demand", {
     resources: ["service"],
     stateScenario: "empty",

@@ -28,7 +28,6 @@ import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { getSlashCommands } from "./commands.js";
 import { ChatLog } from "./components/chat-log.js";
 import { CustomEditor } from "./components/custom-editor.js";
-import { EmbeddedTuiBackend } from "./embedded-backend.js";
 import { GatewayChatClient } from "./gateway-chat.js";
 import { editorTheme, theme } from "./theme/theme.js";
 import type { TuiBackend } from "./tui-backend.js";
@@ -443,7 +442,7 @@ export function resolveTuiCtrlCAction(params: {
 
 export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
   const isLocalMode = opts.local === true || opts.backend !== undefined;
-  const config = opts.config ?? getRuntimeConfig();
+  const config = opts.config ?? getRuntimeConfig({ skipPluginValidation: !isLocalMode });
   const initialSessionInput = (opts.session ?? "").trim();
   let sessionScope: SessionScope = (config.session?.scope ?? "per-sender") as SessionScope;
   let sessionMainKey = normalizeMainKey(config.session?.mainKey);
@@ -665,15 +664,19 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
     localBtwRunIds.clear();
   };
 
-  const client: TuiBackend = opts.backend
-    ? opts.backend
-    : opts.local
-      ? new EmbeddedTuiBackend()
-      : await GatewayChatClient.connect({
-          url: opts.url,
-          token: opts.token,
-          password: opts.password,
-        });
+  let client: TuiBackend;
+  if (opts.backend) {
+    client = opts.backend;
+  } else if (opts.local) {
+    const { EmbeddedTuiBackend } = await import("./embedded-backend.js");
+    client = new EmbeddedTuiBackend();
+  } else {
+    client = await GatewayChatClient.connect({
+      url: opts.url,
+      token: opts.token,
+      password: opts.password,
+    });
+  }
   const previousConsoleSubsystemFilter = isLocalMode
     ? loggingState.consoleSubsystemFilter
       ? [...loggingState.consoleSubsystemFilter]

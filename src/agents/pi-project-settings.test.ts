@@ -161,9 +161,8 @@ describe("createPreparedEmbeddedPiSettingsManager", () => {
       });
 
       expect(settingsManager.getShellCommandPrefix()).toBe("echo trusted &&");
-      expect(settingsManager.getRetryEnabled()).toBe(true);
+      expect(settingsManager.getRetryEnabled()).toBe(false);
 
-      settingsManager.setRetryEnabled(false);
       await settingsManager.flush();
 
       const diskSettings = JSON.parse(await fs.readFile(agentSettingsPath, "utf8")) as {

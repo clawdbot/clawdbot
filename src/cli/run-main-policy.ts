@@ -11,6 +11,7 @@ import {
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
+import { hasFlag } from "./argv.js";
 import {
   resolveCliCommandPathPolicy,
   resolveCliNetworkProxyPolicy,
@@ -20,6 +21,7 @@ import { getCoreCliParentDefaultHelpCommands } from "./program/core-command-desc
 import { getSubCliParentDefaultHelpCommands } from "./program/subcli-descriptors.js";
 
 const ROOT_HELP_ALIASES = new Set(["tools"]);
+const SETUP_ONBOARD_CONFIGURE_HELP_COMMANDS = new Set(["setup", "onboard", "configure"]);
 const BARE_PARENT_DEFAULT_HELP_COMMANDS = new Set([
   ...getCoreCliParentDefaultHelpCommands(),
   ...getSubCliParentDefaultHelpCommands(),
@@ -84,6 +86,51 @@ export function shouldUseBrowserHelpFastPath(
   return (
     invocation.commandPath.length === 1 &&
     invocation.commandPath[0] === "browser" &&
+    (hasFlag(argv, "--help") || hasFlag(argv, "-h"))
+  );
+}
+
+export function shouldUseSecretsHelpFastPath(
+  argv: string[],
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH === "1") {
+    return false;
+  }
+  const invocation = resolveCliArgvInvocation(argv);
+  return (
+    invocation.commandPath.length === 1 &&
+    invocation.commandPath[0] === "secrets" &&
+    (hasFlag(argv, "--help") || hasFlag(argv, "-h"))
+  );
+}
+
+export function shouldUseNodesHelpFastPath(
+  argv: string[],
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH === "1") {
+    return false;
+  }
+  const invocation = resolveCliArgvInvocation(argv);
+  return (
+    invocation.commandPath.length === 1 &&
+    invocation.commandPath[0] === "nodes" &&
+    (hasFlag(argv, "--help") || hasFlag(argv, "-h"))
+  );
+}
+
+export function shouldUseSetupOnboardConfigureHelpFastPath(
+  argv: string[],
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH === "1") {
+    return false;
+  }
+  const invocation = resolveCliArgvInvocation(argv);
+  return (
+    invocation.commandPath.length === 1 &&
+    SETUP_ONBOARD_CONFIGURE_HELP_COMMANDS.has(invocation.commandPath[0] ?? "") &&
     invocation.hasHelpOrVersion
   );
 }

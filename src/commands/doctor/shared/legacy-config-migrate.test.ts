@@ -1136,3 +1136,98 @@ describe("legacy migrate controlUi.allowedOrigins seed (issue #29385)", () => {
     expect(res.changes).toStrictEqual(['Normalized gateway.bind "localhost" → "loopback".']);
   });
 });
+
+describe("legacy model compat migrate", () => {
+  it("removes unrecognized model compat thinkingFormat values", () => {
+    const res = migrateLegacyConfigForTest({
+      models: {
+        providers: {
+          bailian: {
+            models: [
+              {
+                id: "qwen-legacy",
+                name: "Qwen Legacy",
+                compat: {
+                  thinkingFormat: "bailian-legacy",
+                  supportsTools: true,
+                },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(res.config?.models?.providers?.bailian?.models?.[0]?.compat).toEqual({
+      supportsTools: true,
+    });
+    expect(res.changes).toStrictEqual([
+      'Removed models.providers.bailian.models.0.compat.thinkingFormat (unrecognized value "bailian-legacy"; runtime default applies).',
+    ]);
+  });
+
+  it("preserves recognized model compat thinkingFormat values", () => {
+    const res = migrateLegacyConfigForTest({
+      models: {
+        providers: {
+          bailian: {
+            models: [
+              {
+                id: "qwen3",
+                name: "Qwen3",
+                compat: {
+                  thinkingFormat: "qwen",
+                },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(res.config).toBeNull();
+    expect(res.changes).toStrictEqual([]);
+  });
+
+  it("selectively removes invalid thinkingFormat values across providers", () => {
+    const res = migrateLegacyConfigForTest({
+      models: {
+        providers: {
+          bailian: {
+            models: [
+              {
+                id: "valid",
+                name: "Valid",
+                compat: { thinkingFormat: "qwen-chat-template" },
+              },
+              {
+                id: "legacy",
+                name: "Legacy",
+                compat: { thinkingFormat: "old-bailian" },
+              },
+            ],
+          },
+          openrouter: {
+            models: [
+              {
+                id: "legacy-router",
+                name: "Legacy Router",
+                compat: { thinkingFormat: "openrouter-v0" },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(res.config?.models?.providers?.bailian?.models?.[0]?.compat).toEqual({
+      thinkingFormat: "qwen-chat-template",
+    });
+    expect(res.config?.models?.providers?.bailian?.models?.[1]?.compat).toEqual({});
+    expect(res.config?.models?.providers?.openrouter?.models?.[0]?.compat).toEqual({});
+    expect(res.changes).toStrictEqual([
+      'Removed models.providers.bailian.models.1.compat.thinkingFormat (unrecognized value "old-bailian"; runtime default applies).',
+      'Removed models.providers.openrouter.models.0.compat.thinkingFormat (unrecognized value "openrouter-v0"; runtime default applies).',
+    ]);
+  });
+});

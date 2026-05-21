@@ -36,17 +36,29 @@ vi.mock("../../commands/agent-via-gateway.js", () => ({
   agentCliCommand: mocks.agentCliCommandMock,
 }));
 
-vi.mock("../../commands/agents.js", () => ({
+vi.mock("../../commands/agents.commands.add.js", () => ({
   agentsAddCommand: mocks.agentsAddCommandMock,
+}));
+
+vi.mock("../../commands/agents.commands.bind.js", () => ({
   agentsBindingsCommand: mocks.agentsBindingsCommandMock,
   agentsBindCommand: mocks.agentsBindCommandMock,
-  agentsDeleteCommand: mocks.agentsDeleteCommandMock,
-  agentsListCommand: mocks.agentsListCommandMock,
-  agentsSetIdentityCommand: mocks.agentsSetIdentityCommandMock,
   agentsUnbindCommand: mocks.agentsUnbindCommandMock,
 }));
 
-vi.mock("../../globals.js", () => ({
+vi.mock("../../commands/agents.commands.delete.js", () => ({
+  agentsDeleteCommand: mocks.agentsDeleteCommandMock,
+}));
+
+vi.mock("../../commands/agents.commands.identity.js", () => ({
+  agentsSetIdentityCommand: mocks.agentsSetIdentityCommandMock,
+}));
+
+vi.mock("../../commands/agents.commands.list.js", () => ({
+  agentsListCommand: mocks.agentsListCommandMock,
+}));
+
+vi.mock("../../global-state.js", () => ({
   setVerbose: mocks.setVerboseMock,
 }));
 

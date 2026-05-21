@@ -223,6 +223,7 @@
   "video-generation-core",
   "reply-history",
   "realtime-transcription",
+  "realtime-bootstrap-context",
   "realtime-voice",
   "media-understanding",
   "media-understanding-runtime",

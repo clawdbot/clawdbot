@@ -1,4 +1,13 @@
-export { getRuntimeConfig } from "./sdk-config.js";
+import { getRuntimeConfig } from "./sdk-config.js";
+
+export { getRuntimeConfig };
+export function resolveRuntimeImageSanitization(): { maxDimensionPx: number } | undefined {
+  const configured = getRuntimeConfig().agents?.defaults?.imageMaxDimensionPx;
+  if (typeof configured !== "number" || !Number.isFinite(configured)) {
+    return undefined;
+  }
+  return { maxDimensionPx: Math.max(1, Math.floor(configured)) };
+}
 export {
   callGatewayTool,
   imageResultFromFile,

@@ -1,4 +1,9 @@
-import { MODEL_APIS, type ModelApi, type ModelCompatConfig } from "../config/types.models.js";
+import {
+  MODEL_APIS,
+  isModelThinkingFormat,
+  type ModelApi,
+  type ModelCompatConfig,
+} from "../config/types.models.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeTrimmedStringList } from "../shared/string-normalization.js";
@@ -220,15 +225,7 @@ function normalizeModelCatalogCompat(value: unknown): ModelCompatConfig | undefi
   }
 
   const thinkingFormat = normalizeOptionalString(value.thinkingFormat) ?? "";
-  if (
-    thinkingFormat === "openai" ||
-    thinkingFormat === "openrouter" ||
-    thinkingFormat === "deepseek" ||
-    thinkingFormat === "together" ||
-    thinkingFormat === "qwen" ||
-    thinkingFormat === "qwen-chat-template" ||
-    thinkingFormat === "zai"
-  ) {
+  if (isModelThinkingFormat(thinkingFormat)) {
     compat.thinkingFormat = thinkingFormat;
   }
 

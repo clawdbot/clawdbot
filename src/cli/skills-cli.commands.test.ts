@@ -81,6 +81,7 @@ const mocks = vi.hoisted(() => {
     ),
     searchSkillsFromClawHubMock: vi.fn(),
     installSkillFromClawHubMock: vi.fn(),
+    installSkillFromSourceMock: vi.fn(),
     updateSkillsFromClawHubMock: vi.fn(),
     readTrackedClawHubSkillSlugsMock: vi.fn(),
     buildWorkspaceSkillStatusMock,
@@ -99,6 +100,7 @@ const {
   resolveAgentWorkspaceDirMock,
   searchSkillsFromClawHubMock,
   installSkillFromClawHubMock,
+  installSkillFromSourceMock,
   updateSkillsFromClawHubMock,
   readTrackedClawHubSkillSlugsMock,
   buildWorkspaceSkillStatusMock,
@@ -178,6 +180,16 @@ vi.mock("../agents/skills-clawhub.js", () => ({
     mocks.readTrackedClawHubSkillSlugsMock(...args),
 }));
 
+vi.mock("../agents/skills-source-install.js", () => ({
+  installSkillFromSource: (...args: unknown[]) => mocks.installSkillFromSourceMock(...args),
+  isSkillSourceInstallSpec: (raw: string) =>
+    raw.startsWith("git:") ||
+    raw.startsWith("./") ||
+    raw.startsWith("../") ||
+    raw.startsWith("~/") ||
+    raw.startsWith("/"),
+}));
+
 vi.mock("../agents/skills-status.js", () => ({
   buildWorkspaceSkillStatus: (workspaceDir: string, options?: unknown) =>
     mocks.buildWorkspaceSkillStatusMock(workspaceDir, options),
@@ -212,6 +224,7 @@ describe("skills cli commands", () => {
     resolveAgentWorkspaceDirMock.mockReset();
     searchSkillsFromClawHubMock.mockReset();
     installSkillFromClawHubMock.mockReset();
+    installSkillFromSourceMock.mockReset();
     updateSkillsFromClawHubMock.mockReset();
     readTrackedClawHubSkillSlugsMock.mockReset();
     buildWorkspaceSkillStatusMock.mockReset();
@@ -224,6 +237,10 @@ describe("skills cli commands", () => {
     installSkillFromClawHubMock.mockResolvedValue({
       ok: false,
       error: "install disabled in test",
+    });
+    installSkillFromSourceMock.mockResolvedValue({
+      ok: false,
+      error: "source install disabled in test",
     });
     updateSkillsFromClawHubMock.mockResolvedValue([]);
     readTrackedClawHubSkillSlugsMock.mockResolvedValue([]);
@@ -295,6 +312,98 @@ describe("skills cli commands", () => {
         line.includes("Installed calendar@1.2.3 -> /tmp/workspace/skills/calendar"),
       ),
     ).toBe(true);
+  });
+
+  it("installs a skill from a git source into the active workspace", async () => {
+    installSkillFromSourceMock.mockResolvedValue({
+      ok: true,
+      slug: "tools",
+      targetDir: "/tmp/workspace/skills/tools",
+      source: "git",
+    });
+
+    await runCommand(["skills", "install", "git:owner/tools"]);
+
+    const installArgs = mockFirstObjectArg(installSkillFromSourceMock);
+    expectObjectFields(installArgs, {
+      workspaceDir: "/tmp/workspace",
+      spec: "git:owner/tools",
+      force: false,
+    });
+    expect(installArgs.slug).toBeUndefined();
+    expectLogger(installArgs.logger);
+    expect(installSkillFromClawHubMock).not.toHaveBeenCalled();
+    expect(
+      runtimeLogs.some((line) =>
+        line.includes("Installed tools from git -> /tmp/workspace/skills/tools"),
+      ),
+    ).toBe(true);
+  });
+
+  it("accepts git refs for skill source installs", async () => {
+    installSkillFromSourceMock.mockResolvedValue({
+      ok: true,
+      slug: "tools",
+      targetDir: "/tmp/workspace/skills/tools",
+      source: "git",
+    });
+
+    await runCommand(["skills", "install", "git:owner/tools@main"]);
+
+    expect(mockFirstObjectArg(installSkillFromSourceMock).spec).toBe("git:owner/tools@main");
+    expect(installSkillFromClawHubMock).not.toHaveBeenCalled();
+  });
+
+  it("installs a skill from a local directory", async () => {
+    installSkillFromSourceMock.mockResolvedValue({
+      ok: true,
+      slug: "local-skill",
+      targetDir: "/tmp/workspace/skills/local-skill",
+      source: "path",
+    });
+
+    await runCommand(["skills", "install", "./local-skill"]);
+
+    const installArgs = mockFirstObjectArg(installSkillFromSourceMock);
+    expectObjectFields(installArgs, {
+      workspaceDir: "/tmp/workspace",
+      spec: "./local-skill",
+      force: false,
+    });
+    expect(installArgs.slug).toBeUndefined();
+    expectLogger(installArgs.logger);
+    expect(installSkillFromClawHubMock).not.toHaveBeenCalled();
+    expect(
+      runtimeLogs.some((line) =>
+        line.includes("Installed local-skill from path -> /tmp/workspace/skills/local-skill"),
+      ),
+    ).toBe(true);
+  });
+
+  it("passes --as as the source install slug override", async () => {
+    installSkillFromSourceMock.mockResolvedValue({
+      ok: true,
+      slug: "custom-name",
+      targetDir: "/tmp/workspace/skills/custom-name",
+      source: "path",
+    });
+
+    await runCommand(["skills", "install", "./local-skill", "--as", "custom-name"]);
+
+    expectObjectFields(mockFirstObjectArg(installSkillFromSourceMock), {
+      spec: "./local-skill",
+      slug: "custom-name",
+    });
+  });
+
+  it("rejects --version for git and local source installs", async () => {
+    await expect(
+      runCommand(["skills", "install", "git:owner/tools", "--version", "1.2.3"]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors).toContain("--version is only supported for ClawHub skill installs.");
+    expect(installSkillFromClawHubMock).not.toHaveBeenCalled();
+    expect(installSkillFromSourceMock).not.toHaveBeenCalled();
   });
 
   it("installs a skill into the cwd-inferred agent workspace", async () => {

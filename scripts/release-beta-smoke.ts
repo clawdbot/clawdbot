@@ -1,6 +1,6 @@
 #!/usr/bin/env -S pnpm tsx
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -169,7 +169,9 @@ export function parseWorkflowRunIdFromOutput(output: string): string | undefined
 
 type WorkflowRunListEntry = {
   createdAt?: string;
+  created_at?: string;
   databaseId?: number | string;
+  id?: number | string;
 };
 
 function normalizeRunId(value: unknown): string | undefined {
@@ -188,35 +190,23 @@ export function selectNewestDispatchedRunId(params: {
 }): string | undefined {
   return params.runs
     .filter((entry) => {
-      const id = normalizeRunId(entry.databaseId);
+      const id = normalizeRunId(entry.databaseId ?? entry.id);
       return id !== undefined && !params.beforeIds.has(id);
     })
-    .toSorted((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""))
-    .map((entry) => normalizeRunId(entry.databaseId))
+    .toSorted((a, b) =>
+      (b.createdAt ?? b.created_at ?? "").localeCompare(a.createdAt ?? a.created_at ?? ""),
+    )
+    .map((entry) => normalizeRunId(entry.databaseId ?? entry.id))
     .find((id): id is string => id !== undefined);
 }
 
 function listWorkflowDispatchRuns(repo: string, workflow: string): WorkflowRunListEntry[] {
-  return JSON.parse(
-    run(
-      "gh",
-      [
-        "run",
-        "list",
-        "--repo",
-        repo,
-        "--workflow",
-        workflow,
-        "--event",
-        "workflow_dispatch",
-        "--limit",
-        "50",
-        "--json",
-        "databaseId,createdAt",
-      ],
-      { capture: true },
-    ),
-  ) as WorkflowRunListEntry[];
+  const encodedWorkflow = encodeURIComponent(workflow);
+  const response = ghJson(
+    repo,
+    `actions/workflows/${encodedWorkflow}/runs?event=workflow_dispatch&per_page=50`,
+  ) as { workflow_runs?: WorkflowRunListEntry[] };
+  return response.workflow_runs ?? [];
 }
 
 async function findDispatchedWorkflowRunId(params: {
@@ -240,7 +230,7 @@ async function findDispatchedWorkflowRunId(params: {
 async function dispatchTelegram(options: Options, packageSpec: string): Promise<string> {
   const beforeIds = new Set(
     listWorkflowDispatchRuns(options.repo, TELEGRAM_BETA_WORKFLOW_FILE)
-      .map((entry) => normalizeRunId(entry.databaseId))
+      .map((entry) => normalizeRunId(entry.databaseId ?? entry.id))
       .filter((id): id is string => id !== undefined),
   );
   const output = run(
@@ -341,25 +331,80 @@ function findFile(root: string, basename: string): string {
   return "";
 }
 
+export function mergeTelegramProofIntoReleaseBody(body: string, telegramLine: string): string {
+  if (body.includes(telegramLine)) {
+    return body;
+  }
+
+  const marker = "### Release verification";
+  const telegramProofPattern = /^- npm Telegram beta E2E: .*$/mu;
+  if (telegramProofPattern.test(body)) {
+    return body.replace(telegramProofPattern, telegramLine);
+  }
+  if (!body.includes(marker)) {
+    return `${body.trimEnd()}\n\n${marker}\n\n${telegramLine}\n`;
+  }
+
+  const markerIndex = body.indexOf(marker);
+  const afterMarkerIndex = markerIndex + marker.length;
+  const nextHeading = /\n#{1,6} /u.exec(body.slice(afterMarkerIndex));
+  const insertionIndex = nextHeading === null ? -1 : afterMarkerIndex + nextHeading.index;
+  if (insertionIndex === -1) {
+    return `${body.trimEnd()}\n${telegramLine}\n`;
+  }
+  return `${body.slice(0, insertionIndex).trimEnd()}\n${telegramLine}\n${body.slice(insertionIndex)}`;
+}
+
+function appendTelegramProofToRelease(repo: string, version: string, runId: string): void {
+  const tag = `v${version}`;
+  const release = ghJson(repo, `releases/tags/${encodeURIComponent(tag)}`) as {
+    body?: string;
+    html_url?: string;
+  };
+  const body = release.body ?? "";
+  const telegramLine = `- npm Telegram beta E2E: https://github.com/${repo}/actions/runs/${runId}`;
+  const notesFile = path.join(
+    "/tmp",
+    `openclaw-${version.replace(/[^a-zA-Z0-9.-]/g, "-")}-release-notes-${process.pid}.md`,
+  );
+  const nextBody = mergeTelegramProofIntoReleaseBody(body, telegramLine);
+  if (nextBody === body) {
+    return;
+  }
+  writeFileSync(notesFile, nextBody);
+  run("gh", ["release", "edit", tag, "--repo", repo, "--notes-file", notesFile]);
+  console.log(
+    `Updated release proof: ${release.html_url ?? `https://github.com/${repo}/releases/tag/${tag}`}`,
+  );
+}
+
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
   const version = resolveBetaVersion(options.beta);
   const packageSpec = `openclaw@${version}`;
   console.log(`Resolved beta target: ${packageSpec}`);
 
+  let telegramRunId: string | undefined;
+  if (!options.skipTelegram) {
+    telegramRunId = await dispatchTelegram(options, packageSpec);
+    console.log(
+      `Dispatched Telegram workflow: https://github.com/${options.repo}/actions/runs/${telegramRunId}`,
+    );
+  }
+
   if (!options.skipParallels) {
     runParallels(options.beta, options.model);
   }
 
-  if (!options.skipTelegram) {
-    const runId = await dispatchTelegram(options, packageSpec);
-    await pollRun(options.repo, runId);
-    const artifactDir = downloadTelegramArtifact(options.repo, runId);
+  if (telegramRunId) {
+    await pollRun(options.repo, telegramRunId);
+    const artifactDir = downloadTelegramArtifact(options.repo, telegramRunId);
     const report = findFile(artifactDir, "telegram-qa-report.md");
     if (report && existsSync(report)) {
       console.log(`\nTelegram report: ${report}\n`);
       console.log(readFileSync(report, "utf8"));
     }
+    appendTelegramProofToRelease(options.repo, version, telegramRunId);
   }
 }
 

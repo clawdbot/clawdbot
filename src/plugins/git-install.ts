@@ -52,16 +52,32 @@ function splitGitSpecRef(input: string): { base: string; ref?: string } {
     };
   }
 
-  const atIndex = input.lastIndexOf("@");
-  const lastSlashIndex = Math.max(input.lastIndexOf("/"), input.lastIndexOf("\\"));
-  if (atIndex > lastSlashIndex && atIndex > 0) {
-    return {
-      base: input.slice(0, atIndex),
-      ref: normalizeOptionalString(input.slice(atIndex + 1)),
-    };
+  for (
+    let atIndex = input.lastIndexOf("@");
+    atIndex > 0;
+    atIndex = input.lastIndexOf("@", atIndex - 1)
+  ) {
+    const base = input.slice(0, atIndex);
+    const ref = normalizeOptionalString(input.slice(atIndex + 1));
+    if (ref && isGitSpecBase(base)) {
+      return { base, ref };
+    }
   }
 
   return { base: input };
+}
+
+function isGitSpecBase(value: string): boolean {
+  return (
+    looksLikeGitHubRepoShorthand(value) ||
+    looksLikeGitHubHostPath(value) ||
+    looksLikeUrlGitSpecBase(value) ||
+    looksLikeScpGitUrl(value) ||
+    value.endsWith(".git") ||
+    value.startsWith("./") ||
+    value.startsWith("../") ||
+    value.startsWith("~/")
+  );
 }
 
 function looksLikeGitHubRepoShorthand(value: string): boolean {
@@ -78,10 +94,27 @@ function isHttpUrl(value: string): boolean {
 
 function isGitUrl(value: string): boolean {
   return (
-    /^(?:ssh|git|file):\/\//i.test(value) ||
-    /^[^@\s]+@[^:\s]+:.+/.test(value) ||
-    value.endsWith(".git")
+    /^(?:ssh|git|file):\/\//i.test(value) || looksLikeScpGitUrl(value) || value.endsWith(".git")
   );
+}
+
+function looksLikeScpGitUrl(value: string): boolean {
+  return /^[^@\s]+@[^:\s]+:.+/.test(value);
+}
+
+function looksLikeUrlGitSpecBase(value: string): boolean {
+  try {
+    const url = new URL(value);
+    if (!["http:", "https:", "ssh:", "git:", "file:"].includes(url.protocol)) {
+      return false;
+    }
+    if (url.protocol === "file:") {
+      return url.pathname.length > 1;
+    }
+    return Boolean(url.hostname) && url.pathname.length > 1;
+  } catch {
+    return false;
+  }
 }
 
 function stripGitSuffix(value: string): string {
@@ -102,10 +135,10 @@ function normalizeGitLabel(value: string): string {
       const url = new URL(value);
       return stripGitSuffix(`${url.hostname}${url.pathname}`).replace(/^\/+/, "");
     } catch {
-      return value;
+      return stripGitSuffix(value);
     }
   }
-  return value;
+  return stripGitSuffix(value);
 }
 
 export function parseGitPluginSpec(raw: string): ParsedGitPluginSpec | null {

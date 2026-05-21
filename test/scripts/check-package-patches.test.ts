@@ -59,8 +59,8 @@ describe("check-package-patches", () => {
       `packages:
   - .
 patchedDependencies:
-  "baileys@7.0.0-rc11": "patches/baileys@7.0.0-rc11.patch"
-  "@agentclientprotocol/claude-agent-acp@0.33.1": "patches/@agentclientprotocol__claude-agent-acp@0.33.1.patch"
+  "baileys@7.0.0-rc12": "patches/baileys@7.0.0-rc12.patch"
+  "@agentclientprotocol/claude-agent-acp@0.36.1": "patches/@agentclientprotocol__claude-agent-acp@0.36.1.patch"
 `,
       "utf8",
     );
@@ -68,14 +68,14 @@ patchedDependencies:
       path.join(dir, "pnpm-lock.yaml"),
       `lockfileVersion: '9.0'
 patchedDependencies:
-  '@agentclientprotocol/claude-agent-acp@0.33.1': 3995624bb834cc60fea1461c7ef33f1fcdd8fb58b8f43f2f1490bc689f6e1be2
-  baileys@7.0.0-rc11: a9aea1790d2c65b1ae543c77faca4119bbfb91ee3b6ca6c38d1cad4f5702ada2
+  '@agentclientprotocol/claude-agent-acp@0.36.1': 3995624bb834cc60fea1461c7ef33f1fcdd8fb58b8f43f2f1490bc689f6e1be2
+  baileys@7.0.0-rc12: a9aea1790d2c65b1ae543c77faca4119bbfb91ee3b6ca6c38d1cad4f5702ada2
 `,
       "utf8",
     );
-    writeFileSync(path.join(dir, "patches", "baileys@7.0.0-rc11.patch"), "diff\n", "utf8");
+    writeFileSync(path.join(dir, "patches", "baileys@7.0.0-rc12.patch"), "diff\n", "utf8");
     writeFileSync(
-      path.join(dir, "patches", "@agentclientprotocol__claude-agent-acp@0.33.1.patch"),
+      path.join(dir, "patches", "@agentclientprotocol__claude-agent-acp@0.36.1.patch"),
       "diff\n",
       "utf8",
     );
@@ -118,6 +118,20 @@ patchedDependencies:
         detail: "new package patch file",
       },
     ]);
+  });
+
+  it("allows deleted legacy patch files during the commit that removes them", () => {
+    const dir = makeRepo();
+    mkdirSync(path.join(dir, "patches"), { recursive: true });
+    writeFileSync(
+      path.join(dir, "patches", "@agentclientprotocol__claude-agent-acp@0.33.1.patch"),
+      "diff\n",
+      "utf8",
+    );
+    git(dir, ["add", "patches"]);
+    rmSync(path.join(dir, "patches", "@agentclientprotocol__claude-agent-acp@0.33.1.patch"));
+
+    expect(collectPackagePatchViolations(dir)).toEqual([]);
   });
 
   it("rejects lockfile-only and package-local patch declarations", () => {

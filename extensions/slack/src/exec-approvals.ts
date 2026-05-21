@@ -8,6 +8,11 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeStringifiedOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveSlackAccount } from "./accounts.js";
 
+function normalizeSlackUserLikeId(value: string): string | undefined {
+  const upper = value.toUpperCase();
+  return /^[UW][A-Z0-9]+$/.test(upper) ? upper : undefined;
+}
+
 export function normalizeSlackApproverId(value: string | number): string | undefined {
   const trimmed = normalizeStringifiedOptionalString(value);
   if (!trimmed) {
@@ -15,13 +20,13 @@ export function normalizeSlackApproverId(value: string | number): string | undef
   }
   const prefixed = trimmed.match(/^(?:slack|user):([A-Z0-9]+)$/i);
   if (prefixed?.[1]) {
-    return prefixed[1];
+    return normalizeSlackUserLikeId(prefixed[1]);
   }
   const mention = trimmed.match(/^<@([A-Z0-9]+)>$/i);
   if (mention?.[1]) {
-    return mention[1];
+    return normalizeSlackUserLikeId(mention[1]);
   }
-  return /^[UW][A-Z0-9]+$/i.test(trimmed) ? trimmed : undefined;
+  return normalizeSlackUserLikeId(trimmed);
 }
 
 function resolveSlackOwnerApprovers(cfg: OpenClawConfig): string[] {

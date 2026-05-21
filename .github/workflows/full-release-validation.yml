@@ -88,6 +88,11 @@ on:
         required: false
         default: ""
         type: string
+      codex_plugin_spec:
+        description: Optional Codex plugin install spec for live Docker package checks; blank derives from release_package_spec or packs the selected ref
+        required: false
+        default: ""
+        type: string
       npm_telegram_provider_mode:
         description: Provider mode for the package Telegram E2E lane
         required: false
@@ -151,6 +156,7 @@ jobs:
           RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
           EVIDENCE_PACKAGE_SPEC: ${{ inputs.evidence_package_spec }}
           PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
+          CODEX_PLUGIN_SPEC: ${{ inputs.codex_plugin_spec }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
           RUN_RELEASE_SOAK: ${{ inputs.run_release_soak || inputs.release_profile == 'full' }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
@@ -208,14 +214,43 @@ jobs:
             else
               echo "- Package Acceptance package spec: SHA-built release artifact"
             fi
+            if [[ -n "${CODEX_PLUGIN_SPEC// }" ]]; then
+              echo "- Codex plugin spec: \`${CODEX_PLUGIN_SPEC}\`"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+  docker_runtime_assets_preflight:
+    name: Verify Docker runtime-assets prune path
+    needs: [resolve_target]
+    if: inputs.rerun_group == 'all'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout target SHA
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve_target.outputs.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify Docker runtime-assets prune path
+        env:
+          DOCKER_BUILDKIT: "1"
+        run: |
+          set -euo pipefail
+          timeout --foreground --kill-after=30s 35m docker build \
+            --target runtime-assets \
+            --build-arg OPENCLAW_EXTENSIONS="matrix" \
+            .
 
   normal_ci:
     name: Run normal full CI
-    needs: [resolve_target]
-    if: contains(fromJSON('["all","ci"]'), inputs.rerun_group)
+    needs: [resolve_target, docker_runtime_assets_preflight]
+    if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["all","ci"]'), inputs.rerun_group) && (inputs.rerun_group != 'all' || needs.docker_runtime_assets_preflight.result == 'success') }}
     runs-on: ubuntu-24.04
-    timeout-minutes: ${{ inputs.release_profile == 'full' && 240 || 60 }}
+    timeout-minutes: ${{ inputs.release_profile != 'minimum' && 240 || 60 }}
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
       url: ${{ steps.dispatch.outputs.url }}
@@ -312,10 +347,10 @@ jobs:
 
   plugin_prerelease:
     name: Run plugin prerelease validation
-    needs: [resolve_target]
-    if: contains(fromJSON('["all","plugin-prerelease"]'), inputs.rerun_group)
+    needs: [resolve_target, docker_runtime_assets_preflight]
+    if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["all","plugin-prerelease"]'), inputs.rerun_group) && (inputs.rerun_group != 'all' || needs.docker_runtime_assets_preflight.result == 'success') }}
     runs-on: ubuntu-24.04
-    timeout-minutes: ${{ inputs.release_profile == 'full' && 300 || 60 }}
+    timeout-minutes: ${{ inputs.release_profile == 'full' && 300 || inputs.release_profile == 'stable' && 240 || 60 }}
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
       url: ${{ steps.dispatch.outputs.url }}
@@ -412,10 +447,10 @@ jobs:
 
   release_checks:
     name: Run release/live/Docker/QA validation
-    needs: [resolve_target]
-    if: contains(fromJSON('["all","release-checks","install-smoke","cross-os","live-e2e","package","qa","qa-parity","qa-live"]'), inputs.rerun_group)
+    needs: [resolve_target, docker_runtime_assets_preflight]
+    if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["all","release-checks","install-smoke","cross-os","live-e2e","package","qa","qa-parity","qa-live"]'), inputs.rerun_group) && (inputs.rerun_group != 'all' || needs.docker_runtime_assets_preflight.result == 'success') }}
     runs-on: ubuntu-24.04
-    timeout-minutes: ${{ inputs.release_profile == 'full' && 240 || 60 }}
+    timeout-minutes: ${{ inputs.release_profile != 'minimum' && 240 || 60 }}
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
       url: ${{ steps.dispatch.outputs.url }}
@@ -437,6 +472,7 @@ jobs:
           CROSS_OS_SUITE_FILTER: ${{ inputs.cross_os_suite_filter }}
           RELEASE_PACKAGE_SPEC: ${{ inputs.release_package_spec }}
           PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ inputs.package_acceptance_package_spec }}
+          CODEX_PLUGIN_SPEC: ${{ inputs.codex_plugin_spec }}
         run: |
           set -euo pipefail
 
@@ -532,6 +568,9 @@ jobs:
             if [[ -n "${PACKAGE_ACCEPTANCE_PACKAGE_SPEC// }" ]]; then
               echo "- Package Acceptance package spec: \`${PACKAGE_ACCEPTANCE_PACKAGE_SPEC}\`"
             fi
+            if [[ -n "${CODEX_PLUGIN_SPEC// }" ]]; then
+              echo "- Codex plugin spec: \`${CODEX_PLUGIN_SPEC}\`"
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
           child_rerun_group="$RERUN_GROUP"
@@ -560,13 +599,16 @@ jobs:
           if [[ -n "${PACKAGE_ACCEPTANCE_PACKAGE_SPEC// }" ]]; then
             args+=(-f package_acceptance_package_spec="$PACKAGE_ACCEPTANCE_PACKAGE_SPEC")
           fi
+          if [[ -n "${CODEX_PLUGIN_SPEC// }" ]]; then
+            args+=(-f codex_plugin_spec="$CODEX_PLUGIN_SPEC")
+          fi
 
           dispatch_and_wait openclaw-release-checks.yml "${args[@]}"
 
   prepare_release_package:
     name: Prepare release package artifact
-    needs: [resolve_target]
-    if: ${{ inputs.npm_telegram_package_spec == '' && inputs.release_package_spec == '' && inputs.rerun_group == 'all' && inputs.release_profile == 'full' }}
+    needs: [resolve_target, docker_runtime_assets_preflight]
+    if: ${{ always() && needs.resolve_target.result == 'success' && inputs.npm_telegram_package_spec == '' && inputs.release_package_spec == '' && inputs.rerun_group == 'all' && inputs.release_profile == 'full' && needs.docker_runtime_assets_preflight.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -735,7 +777,7 @@ jobs:
 
   summary:
     name: Verify full validation
-    needs: [resolve_target, normal_ci, plugin_prerelease, release_checks, npm_telegram]
+    needs: [resolve_target, docker_runtime_assets_preflight, normal_ci, plugin_prerelease, release_checks, npm_telegram]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -751,6 +793,8 @@ jobs:
           PLUGIN_PRERELEASE_RESULT: ${{ needs.plugin_prerelease.result }}
           RELEASE_CHECKS_RESULT: ${{ needs.release_checks.result }}
           NPM_TELEGRAM_RESULT: ${{ needs.npm_telegram.result }}
+          DOCKER_RUNTIME_ASSETS_PREFLIGHT_RESULT: ${{ needs.docker_runtime_assets_preflight.result }}
+          RERUN_GROUP: ${{ inputs.rerun_group }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
           CHILD_WORKFLOW_REF: ${{ github.ref_name }}
         run: |
@@ -798,6 +842,7 @@ jobs:
               echo
               echo "| Child | Result | Minutes | Head SHA | Run |"
               echo "| --- | --- | ---: | --- | --- |"
+              echo "| \`docker_runtime_assets_preflight\` | \`${DOCKER_RUNTIME_ASSETS_PREFLIGHT_RESULT}\` |  | current workflow |  |"
             } >> "$GITHUB_STEP_SUMMARY"
 
             append_child_row() {
@@ -933,23 +978,46 @@ jobs:
           }
 
           failed=0
+          normal_ci_required=0
+          plugin_prerelease_required=0
+          release_checks_required=0
+          if [[ "$RERUN_GROUP" == "all" && "$DOCKER_RUNTIME_ASSETS_PREFLIGHT_RESULT" != "success" ]]; then
+            echo "::error::Docker runtime-assets preflight ended with ${DOCKER_RUNTIME_ASSETS_PREFLIGHT_RESULT}."
+            failed=1
+          elif [[ "$RERUN_GROUP" == "all" ]]; then
+            normal_ci_required=1
+            plugin_prerelease_required=1
+            release_checks_required=1
+          else
+            case "$RERUN_GROUP" in
+              ci)
+                normal_ci_required=1
+                ;;
+              plugin-prerelease)
+                plugin_prerelease_required=1
+                ;;
+              release-checks|install-smoke|cross-os|live-e2e|package|qa|qa-parity|qa-live)
+                release_checks_required=1
+                ;;
+            esac
+          fi
 
           append_child_overview
 
           if [[ "$NORMAL_CI_RESULT" == "skipped" && -z "${NORMAL_CI_RUN_ID// }" ]]; then
-            check_child "normal_ci" "" 0 || failed=1
+            check_child "normal_ci" "" "$normal_ci_required" || failed=1
           else
             check_child "normal_ci" "$NORMAL_CI_RUN_ID" 1 || failed=1
           fi
 
           if [[ "$PLUGIN_PRERELEASE_RESULT" == "skipped" && -z "${PLUGIN_PRERELEASE_RUN_ID// }" ]]; then
-            check_child "plugin_prerelease" "" 0 || failed=1
+            check_child "plugin_prerelease" "" "$plugin_prerelease_required" || failed=1
           else
             check_child "plugin_prerelease" "$PLUGIN_PRERELEASE_RUN_ID" 1 || failed=1
           fi
 
           if [[ "$RELEASE_CHECKS_RESULT" == "skipped" && -z "${RELEASE_CHECKS_RUN_ID// }" ]]; then
-            check_child "release_checks" "" 0 || failed=1
+            check_child "release_checks" "" "$release_checks_required" || failed=1
           else
             check_child "release_checks" "$RELEASE_CHECKS_RUN_ID" 1 || failed=1
           fi

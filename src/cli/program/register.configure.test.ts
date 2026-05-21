@@ -13,8 +13,11 @@ const mocks = vi.hoisted(() => ({
 
 const { configureCommandFromSectionsArgMock, runtime } = mocks;
 
-vi.mock("../../commands/configure.js", () => ({
+vi.mock("../../commands/configure.shared.js", () => ({
   CONFIGURE_WIZARD_SECTIONS: ["auth", "channels", "gateway", "agent"],
+}));
+
+vi.mock("../../commands/configure.commands.js", () => ({
   configureCommandFromSectionsArg: mocks.configureCommandFromSectionsArgMock,
 }));
 

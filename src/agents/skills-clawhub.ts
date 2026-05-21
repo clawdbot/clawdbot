@@ -401,3 +401,13 @@ export async function readTrackedClawHubSkillSlugs(workspaceDir: string): Promis
   const lock = await readClawHubSkillsLockfile(workspaceDir);
   return Object.keys(lock.skills).toSorted();
 }
+
+export async function untrackClawHubSkill(workspaceDir: string, slug: string): Promise<void> {
+  const trackedSlug = normalizeTrackedSkillSlug(slug);
+  const lock = await readClawHubSkillsLockfile(workspaceDir);
+  if (!lock.skills[trackedSlug]) {
+    return;
+  }
+  delete lock.skills[trackedSlug];
+  await writeClawHubSkillsLockfile(workspaceDir, lock);
+}

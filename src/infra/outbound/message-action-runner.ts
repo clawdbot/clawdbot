@@ -997,6 +997,7 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
               agentId,
               text: sendPayload.message,
               mediaUrls: sendPayload.mediaUrls,
+              idempotencyKey: normalizeOptionalString(params.idempotencyKey) ?? undefined,
             }
           : undefined,
       abortSignal,

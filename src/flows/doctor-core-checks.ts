@@ -1,16 +1,13 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { buildWorkspaceSkillStatus, type SkillStatusEntry } from "../agents/skills-status.js";
+import type { SkillStatusEntry } from "../agents/skills-status.js";
 import {
   detectLegacyClawdBrowserProfileResidue,
   maybeArchiveLegacyClawdBrowserProfileResidue,
   type LegacyClawdBrowserProfileResidue,
 } from "../commands/doctor-browser.js";
 import { hasConfiguredCommandOwners } from "../commands/doctor-command-owner.js";
-import {
-  collectUnavailableAgentSkills,
-  disableUnavailableSkillsInConfig,
-} from "../commands/doctor-skills.js";
+import { disableUnavailableSkillsInConfig } from "../commands/doctor-skills-core.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { hasAmbiguousGatewayAuthModeConfig } from "../gateway/auth-mode-policy.js";
@@ -20,6 +17,47 @@ import type { HealthCheck, HealthFinding } from "./health-checks.js";
 
 const BROWSER_CLAWD_PROFILE_RESIDUE_CHECK_ID = "core/doctor/browser-clawd-profile-residue";
 const FINAL_CONFIG_VALIDATION_CHECK_ID = "core/doctor/final-config-validation";
+
+export type CoreHealthCheckDeps = {
+  readonly detectUnavailableSkills: (cfg: OpenClawConfig) => Promise<readonly SkillStatusEntry[]>;
+  readonly collectSecurityWarnings: (cfg: OpenClawConfig) => Promise<readonly string[]>;
+  readonly collectWorkspaceSuggestionNotes: (workspaceDir: string) => Promise<readonly string[]>;
+};
+
+async function detectUnavailableSkillsWithRuntime(
+  cfg: OpenClawConfig,
+): Promise<readonly SkillStatusEntry[]> {
+  const runtime = await import("./doctor-core-checks.runtime.js");
+  return runtime.detectUnavailableSkills(cfg);
+}
+
+async function collectSecurityWarningsWithRuntime(cfg: OpenClawConfig): Promise<readonly string[]> {
+  const { collectSecurityWarnings } = await import("../commands/doctor-security.js");
+  return collectSecurityWarnings(cfg);
+}
+
+async function collectWorkspaceSuggestionNotesWithRuntime(
+  workspaceDir: string,
+): Promise<readonly string[]> {
+  const { collectWorkspaceBackupTip } = await import("../commands/doctor-state-integrity.js");
+  const { MEMORY_SYSTEM_PROMPT, shouldSuggestMemorySystem } =
+    await import("../commands/doctor-workspace.js");
+  const notes: string[] = [];
+  const backupTip = collectWorkspaceBackupTip(workspaceDir);
+  if (backupTip) {
+    notes.push(backupTip);
+  }
+  if (await shouldSuggestMemorySystem(workspaceDir)) {
+    notes.push(MEMORY_SYSTEM_PROMPT);
+  }
+  return notes;
+}
+
+const defaultCoreHealthCheckDeps: CoreHealthCheckDeps = {
+  detectUnavailableSkills: detectUnavailableSkillsWithRuntime,
+  collectSecurityWarnings: collectSecurityWarningsWithRuntime,
+  collectWorkspaceSuggestionNotes: collectWorkspaceSuggestionNotesWithRuntime,
+};
 
 export function configValidationIssuesToHealthFindings(
   issues: readonly ConfigValidationIssue[],
@@ -385,23 +423,24 @@ const claudeCliCheck: HealthCheck = {
   },
 };
 
-const securityCheck: HealthCheck = {
-  id: "core/doctor/security",
-  kind: "core",
-  description: "Security posture checks produce structured findings.",
-  source: "doctor",
-  async detect(ctx) {
-    const { collectSecurityWarnings } = await import("../commands/doctor-security.js");
-    const warnings = await collectSecurityWarnings(ctx.cfg);
-    return warnings.map((warning) =>
-      noteTextToFinding({
-        checkId: "core/doctor/security",
-        severity: warning.includes("CRITICAL") ? "error" : "warning",
-        text: warning,
-      }),
-    );
-  },
-};
+function createSecurityCheck(deps: CoreHealthCheckDeps): HealthCheck {
+  return {
+    id: "core/doctor/security",
+    kind: "core",
+    description: "Security posture checks produce structured findings.",
+    source: "doctor",
+    async detect(ctx) {
+      const warnings = await deps.collectSecurityWarnings(ctx.cfg);
+      return warnings.map((warning) =>
+        noteTextToFinding({
+          checkId: "core/doctor/security",
+          severity: warning.includes("CRITICAL") ? "error" : "warning",
+          text: warning,
+        }),
+      );
+    },
+  };
+}
 
 const openAIOAuthTlsCheck: HealthCheck = {
   id: "core/doctor/oauth-tls",
@@ -513,39 +552,41 @@ const workspaceStatusCheck: HealthCheck = {
   },
 };
 
-const skillsReadinessCheck: HealthCheck = {
-  id: "core/doctor/skills-readiness",
-  kind: "core",
-  description: "Allowed skills are usable in the current runtime environment.",
-  source: "doctor",
-  async detect(ctx, scope) {
-    const unavailable = filterUnavailableSkillsForScope(
-      detectUnavailableSkills(ctx.cfg),
-      scope?.paths,
-    );
-    return unavailable.map(unavailableSkillToFinding);
-  },
-  async repair(ctx, findings) {
-    const unavailable = filterUnavailableSkillsForScope(
-      detectUnavailableSkills(ctx.cfg),
-      findings.map((finding) => finding.path),
-    );
-    if (unavailable.length === 0) {
-      return { changes: [] };
-    }
-    const nextConfig = disableUnavailableSkillsInConfig(ctx.cfg, unavailable);
-    return {
-      config: nextConfig,
-      changes: unavailable.map((skill) => `Disabled unavailable skill ${skill.name}.`),
-      effects: unavailable.map((skill) => ({
-        kind: "config" as const,
-        action: ctx.dryRun === true ? "would-disable-skill" : "disable-skill",
-        target: skillReadinessPath(skill),
-        dryRunSafe: true,
-      })),
-    };
-  },
-};
+function createSkillsReadinessCheck(deps: CoreHealthCheckDeps): HealthCheck {
+  return {
+    id: "core/doctor/skills-readiness",
+    kind: "core",
+    description: "Allowed skills are usable in the current runtime environment.",
+    source: "doctor",
+    async detect(ctx, scope) {
+      const unavailable = filterUnavailableSkillsForScope(
+        await deps.detectUnavailableSkills(ctx.cfg),
+        scope?.paths,
+      );
+      return unavailable.map(unavailableSkillToFinding);
+    },
+    async repair(ctx, findings) {
+      const unavailable = filterUnavailableSkillsForScope(
+        await deps.detectUnavailableSkills(ctx.cfg),
+        findings.map((finding) => finding.path),
+      );
+      if (unavailable.length === 0) {
+        return { changes: [] };
+      }
+      const nextConfig = disableUnavailableSkillsInConfig(ctx.cfg, unavailable);
+      return {
+        config: nextConfig,
+        changes: unavailable.map((skill) => `Disabled unavailable skill ${skill.name}.`),
+        effects: unavailable.map((skill) => ({
+          kind: "config" as const,
+          action: ctx.dryRun === true ? "would-disable-skill" : "disable-skill",
+          target: skillReadinessPath(skill),
+          dryRunSafe: true,
+        })),
+      };
+    },
+  };
+}
 
 function unavailableSkillToFinding(skill: SkillStatusEntry): HealthFinding {
   return {
@@ -674,54 +715,42 @@ const finalConfigValidationCheck: HealthCheck = {
   },
 };
 
-const workspaceSuggestionsCheck: HealthCheck = {
-  id: "core/doctor/workspace-suggestions",
-  kind: "core",
-  description:
-    "Workspace backup and memory-system suggestions are captured as structured findings.",
-  source: "doctor",
-  async detect(ctx) {
-    const { collectWorkspaceBackupTip } = await import("../commands/doctor-state-integrity.js");
-    const { MEMORY_SYSTEM_PROMPT, shouldSuggestMemorySystem } =
-      await import("../commands/doctor-workspace.js");
-    const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
-    const findings: HealthFinding[] = [];
-    const backupTip = collectWorkspaceBackupTip(workspaceDir);
-    if (backupTip) {
-      findings.push(
+function createWorkspaceSuggestionsCheck(deps: CoreHealthCheckDeps): HealthCheck {
+  return {
+    id: "core/doctor/workspace-suggestions",
+    kind: "core",
+    description:
+      "Workspace backup and memory-system suggestions are captured as structured findings.",
+    source: "doctor",
+    async detect(ctx) {
+      const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
+      const notes = await deps.collectWorkspaceSuggestionNotes(workspaceDir);
+      return notes.map((text) =>
         noteTextToFinding({
           checkId: "core/doctor/workspace-suggestions",
           severity: "info",
-          text: backupTip,
+          text,
         }),
       );
-    }
-    if (await shouldSuggestMemorySystem(workspaceDir)) {
-      findings.push(
-        noteTextToFinding({
-          checkId: "core/doctor/workspace-suggestions",
-          severity: "info",
-          text: MEMORY_SYSTEM_PROMPT,
-        }),
-      );
-    }
-    return findings;
-  },
-};
+    },
+  };
+}
 
-const convertedWorkflowChecks: readonly HealthCheck[] = [
-  claudeCliCheck,
-  gatewayAuthCheck,
-  legacyStateCheck,
-  legacyWhatsAppCrontabCheck,
-  gatewayPlatformNotesCheck,
-  securityCheck,
-  browserCheck,
-  openAIOAuthTlsCheck,
-  hooksModelCheck,
-  bootstrapSizeCheck,
-  workspaceSuggestionsCheck,
-];
+function createConvertedWorkflowChecks(deps: CoreHealthCheckDeps): readonly HealthCheck[] {
+  return [
+    claudeCliCheck,
+    gatewayAuthCheck,
+    legacyStateCheck,
+    legacyWhatsAppCrontabCheck,
+    gatewayPlatformNotesCheck,
+    createSecurityCheck(deps),
+    browserCheck,
+    openAIOAuthTlsCheck,
+    hooksModelCheck,
+    bootstrapSizeCheck,
+    createWorkspaceSuggestionsCheck(deps),
+  ];
+}
 
 let registered = false;
 
@@ -729,15 +758,9 @@ export function registerCoreHealthChecks(): void {
   if (registered) {
     return;
   }
-  registerHealthCheck(gatewayConfigCheck);
-  for (const check of convertedWorkflowChecks) {
+  for (const check of CORE_HEALTH_CHECKS) {
     registerHealthCheck(check);
   }
-  registerHealthCheck(commandOwnerCheck);
-  registerHealthCheck(workspaceStatusCheck);
-  registerHealthCheck(skillsReadinessCheck);
-  registerHealthCheck(browserClawdProfileResidueCheck);
-  registerHealthCheck(finalConfigValidationCheck);
   registered = true;
 }
 
@@ -745,25 +768,21 @@ export function resetCoreHealthChecksForTest(): void {
   registered = false;
 }
 
-export const CORE_HEALTH_CHECKS: readonly HealthCheck[] = [
-  gatewayConfigCheck,
-  ...convertedWorkflowChecks,
-  commandOwnerCheck,
-  workspaceStatusCheck,
-  skillsReadinessCheck,
-  browserClawdProfileResidueCheck,
-  finalConfigValidationCheck,
-];
-
-function detectUnavailableSkills(cfg: OpenClawConfig): SkillStatusEntry[] {
-  const agentId = resolveDefaultAgentId(cfg);
-  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-  const report = buildWorkspaceSkillStatus(workspaceDir, {
-    config: cfg,
-    agentId,
-  });
-  return collectUnavailableAgentSkills(report);
+export function createCoreHealthChecks(
+  deps: CoreHealthCheckDeps = defaultCoreHealthCheckDeps,
+): readonly HealthCheck[] {
+  return [
+    gatewayConfigCheck,
+    ...createConvertedWorkflowChecks(deps),
+    commandOwnerCheck,
+    workspaceStatusCheck,
+    createSkillsReadinessCheck(deps),
+    browserClawdProfileResidueCheck,
+    finalConfigValidationCheck,
+  ];
 }
+
+export const CORE_HEALTH_CHECKS: readonly HealthCheck[] = createCoreHealthChecks();
 
 function formatMissingSkillSummary(skill: SkillStatusEntry): string {
   const missing: string[] = [];

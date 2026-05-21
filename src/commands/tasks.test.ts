@@ -11,6 +11,7 @@ import {
   resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
 } from "../tasks/task-registry.js";
+import * as taskRegistryMaintenance from "../tasks/task-registry.maintenance.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { tasksAuditCommand, tasksMaintenanceCommand } from "./tasks.js";
@@ -138,6 +139,148 @@ describe("tasks commands", () => {
           flow: JSON.parse(JSON.stringify(runningFlow)),
         },
       ]);
+    });
+  });
+
+  it("explains stale running tasks retained by backing sessions in maintenance JSON", async () => {
+    await withTaskCommandStateDir(async (state) => {
+      const now = Date.now();
+      vi.useFakeTimers();
+      vi.setSystemTime(now - 45 * 60_000);
+      const childSessionKey = "agent:main:subagent:child-retained";
+      const task = createTaskRecord({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey,
+        runId: "run-retained-child",
+        status: "running",
+        task: "Review retained child session",
+      });
+      vi.setSystemTime(now);
+
+      const sessionsDir = state.sessionsDir("main");
+      await fs.mkdir(sessionsDir, { recursive: true });
+      await fs.writeFile(
+        path.join(sessionsDir, "sessions.json"),
+        JSON.stringify(
+          {
+            [childSessionKey]: {
+              sessionId: "child-retained",
+              updatedAt: now,
+            },
+          },
+          null,
+          2,
+        ),
+        "utf8",
+      );
+
+      const runtime = createRuntime();
+      await tasksMaintenanceCommand({ json: true, apply: false }, runtime);
+
+      const payload = readFirstJsonLog(runtime) as {
+        diagnostics: {
+          staleRunningTasks: Array<{
+            taskId: string;
+            decision: string;
+            reason: string;
+            childSessionKey?: string;
+          }>;
+        };
+      };
+
+      expect(payload.diagnostics.staleRunningTasks).toContainEqual(
+        expect.objectContaining({
+          taskId: task.taskId,
+          decision: "retained",
+          reason: "backing_session_present",
+          childSessionKey,
+        }),
+      );
+    });
+  });
+
+  it("explains task maintenance decisions before applying session registry pruning", async () => {
+    await withTaskCommandStateDir(async (state) => {
+      const now = Date.now();
+      vi.useFakeTimers();
+      vi.setSystemTime(now - 45 * 60_000);
+      const childSessionKey = "agent:main:cron:done-job:run:old-run";
+      const task = createTaskRecord({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey,
+        runId: "run-backed-before-session-sweep",
+        status: "running",
+        task: "Review old cron child session",
+      });
+      vi.setSystemTime(now);
+
+      const sessionsDir = state.sessionsDir("main");
+      const storePath = path.join(sessionsDir, "sessions.json");
+      await fs.mkdir(sessionsDir, { recursive: true });
+      await fs.writeFile(
+        storePath,
+        JSON.stringify(
+          {
+            [childSessionKey]: {
+              sessionId: "old-run",
+              updatedAt: now - 8 * 24 * 60 * 60_000,
+            },
+          },
+          null,
+          2,
+        ),
+        "utf8",
+      );
+
+      const runtime = createRuntime();
+      await tasksMaintenanceCommand({ json: true, apply: true }, runtime);
+
+      const payload = readFirstJsonLog(runtime) as {
+        maintenance: {
+          tasks: { reconciled: number };
+          sessions: { pruned: number };
+        };
+        diagnostics: {
+          staleRunningTasks: Array<{
+            taskId: string;
+            decision: string;
+            reason: string;
+            childSessionKey?: string;
+          }>;
+        };
+      };
+
+      expect(payload.maintenance.tasks.reconciled).toBe(0);
+      expect(payload.maintenance.sessions.pruned).toBe(1);
+      expect(payload.diagnostics.staleRunningTasks).toContainEqual(
+        expect.objectContaining({
+          taskId: task.taskId,
+          decision: "retained",
+          reason: "backing_session_present",
+          childSessionKey,
+        }),
+      );
+
+      const updated = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<string, unknown>;
+      expect(updated[childSessionKey]).toBeUndefined();
+    });
+  });
+
+  it("does not build JSON-only diagnostics for text maintenance output", async () => {
+    await withTaskCommandStateDir(async () => {
+      const diagnosticsSpy = vi.spyOn(
+        taskRegistryMaintenance,
+        "getTaskRegistryMaintenanceDiagnostics",
+      );
+      const runtime = createRuntime();
+
+      await tasksMaintenanceCommand({ json: false, apply: false }, runtime);
+
+      expect(diagnosticsSpy).not.toHaveBeenCalled();
     });
   });
 

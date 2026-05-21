@@ -95,6 +95,32 @@ function readInstallRecords() {
   return index.installRecords || index.records || {};
 }
 
+function normalizePluginSpec(spec) {
+  if (spec.startsWith("npm:")) {
+    return {
+      expectedSpec: spec.slice("npm:".length),
+      source: "npm",
+    };
+  }
+  if (spec.startsWith("npm-pack:")) {
+    return {
+      artifactKind: "npm-pack",
+      source: "npm",
+      sourcePath: spec.slice("npm-pack:".length),
+    };
+  }
+  if (spec.startsWith("git:")) {
+    return {
+      expectedSpec: spec,
+      source: "git",
+    };
+  }
+  return {
+    expectedSpec: spec,
+    source: "npm",
+  };
+}
+
 function assertPlugin() {
   const spec = process.argv[3] || "npm:@openclaw/codex";
   const list = readJson("/tmp/openclaw-codex-plugins-list.json");
@@ -141,15 +167,31 @@ function assertPlugin() {
   }
 
   const record = readInstallRecord();
-  const expectedSpec = spec.replace(/^npm:/u, "");
-  if (record.source !== "npm") {
-    throw new Error(`expected codex npm install record, got source=${record.source}`);
+  const expected = normalizePluginSpec(spec);
+  if (record.source !== expected.source) {
+    throw new Error(
+      `expected codex ${expected.source} install record, got source=${record.source}`,
+    );
   }
-  if (record.spec !== expectedSpec) {
-    throw new Error(`expected codex npm spec ${expectedSpec}, got ${record.spec}`);
+  if (expected.expectedSpec && record.spec !== expected.expectedSpec) {
+    throw new Error(`expected codex install spec ${expected.expectedSpec}, got ${record.spec}`);
   }
-  if (!record.resolvedVersion || !record.resolvedSpec) {
+  if (expected.artifactKind && record.artifactKind !== expected.artifactKind) {
+    throw new Error(
+      `expected codex artifact kind ${expected.artifactKind}, got ${record.artifactKind}`,
+    );
+  }
+  if (
+    expected.sourcePath &&
+    realPathMaybe(record.sourcePath || "") !== realPathMaybe(expected.sourcePath)
+  ) {
+    throw new Error(`expected codex source path ${expected.sourcePath}, got ${record.sourcePath}`);
+  }
+  if (record.source === "npm" && (!record.resolvedVersion || !record.resolvedSpec)) {
     throw new Error(`missing codex npm resolution metadata: ${JSON.stringify(record)}`);
+  }
+  if (record.source === "git" && !record.gitCommit) {
+    throw new Error(`missing codex git resolution metadata: ${JSON.stringify(record)}`);
   }
 }
 
@@ -307,6 +349,12 @@ function assertAgentTurn() {
       `OpenClaw agent reply did not contain ${marker}:\nstdout=${stdout}\nstderr=${stderr}`,
     );
   }
+  const executionTrace = response.meta?.executionTrace;
+  if (!executionTrace || executionTrace.winnerProvider !== "codex") {
+    throw new Error(
+      `expected Codex plugin to win the agent turn, got ${JSON.stringify(executionTrace)}`,
+    );
+  }
 
   const sessionsDir = path.join(stateDir(), "agents", "main", "sessions");
   const storePath = path.join(sessionsDir, "sessions.json");
@@ -333,17 +381,22 @@ function assertAgentTurn() {
   if (binding.model !== modelRef.split("/").slice(1).join("/")) {
     throw new Error(`unexpected Codex binding model: ${binding.model}`);
   }
-  if (binding.modelProvider && binding.modelProvider !== "codex") {
+  if (binding.modelProvider && !["codex", "openai"].includes(binding.modelProvider)) {
     throw new Error(`unexpected Codex binding provider: ${binding.modelProvider}`);
   }
 
-  const codexHome = path.join(stateDir(), "agents", "main", "agent", "codex-home");
-  const nativeHome = path.join(codexHome, "home");
-  if (!fs.existsSync(codexHome) || !fs.existsSync(nativeHome)) {
-    throw new Error(`missing isolated Codex home: ${codexHome}`);
+  const agentDir = path.join(stateDir(), "agents", "main");
+  const codexHomes = [
+    path.join(agentDir, "codex-home"),
+    path.join(agentDir, "agent", "codex-home"),
+    path.join(path.dirname(agentDir), "codex-home"),
+  ].filter((entry, index, entries) => entries.indexOf(entry) === index);
+  const codexHome = codexHomes.find((entry) => fs.existsSync(entry));
+  if (!codexHome) {
+    throw new Error(`missing isolated Codex home; checked ${codexHomes.join(", ")}`);
   }
   const codexSessionRoot = path.join(codexHome, "sessions");
-  const nativeSessionRoot = path.join(nativeHome, ".codex", "sessions");
+  const nativeSessionRoot = path.join(codexHome, "home", ".codex", "sessions");
   assertNativeCodexSessionEvidence({
     codexHome,
     marker,
@@ -387,7 +440,10 @@ function assertAgentError() {
     ? fs.readFileSync("/tmp/openclaw-codex-agent-after-uninstall.err", "utf8")
     : "";
   const combined = `${stdout}\n${stderr}`;
-  if (!combined.includes('Requested agent harness "codex" is not registered')) {
+  if (
+    !combined.includes('Requested agent harness "codex" is not registered') &&
+    !combined.includes("Unknown model: codex/")
+  ) {
     throw new Error(`unexpected post-uninstall agent error:\nstdout=${stdout}\nstderr=${stderr}`);
   }
 }

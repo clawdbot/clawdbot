@@ -1,5 +1,6 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { readConfigFileSnapshot } from "../config/config.js";
+import { registerBundledHealthChecks } from "../flows/bundled-health-checks.js";
 import {
   configValidationIssuesToHealthFindings,
   registerCoreHealthChecks,
@@ -70,6 +71,7 @@ export async function runDoctorLintCli(
     cwd: resolveAgentWorkspaceDir(snapshot.config, resolveDefaultAgentId(snapshot.config)),
     ...(snapshot.path !== undefined ? { configPath: snapshot.path } : {}),
   };
+  registerBundledHealthChecks({ cfg: snapshot.config, cwd: ctx.cwd });
 
   const runOpts: DoctorLintRunOptions = {
     ...(opts.skipIds && opts.skipIds.length > 0 ? { skipIds: opts.skipIds } : {}),
@@ -133,6 +135,8 @@ function toJsonFinding(f: HealthFinding): Record<string, unknown> {
     ...(f.line !== undefined ? { line: f.line } : {}),
     ...(f.column !== undefined ? { column: f.column } : {}),
     ...(f.ocPath !== undefined ? { ocPath: f.ocPath } : {}),
+    ...(f.target !== undefined ? { target: f.target } : {}),
+    ...(f.requirement !== undefined ? { requirement: f.requirement } : {}),
     ...(f.fixHint !== undefined ? { fixHint: f.fixHint } : {}),
   };
 }

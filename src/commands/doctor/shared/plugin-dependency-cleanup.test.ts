@@ -14,6 +14,10 @@ async function expectPathMissing(targetPath: string): Promise<void> {
   throw new Error(`expected path to be missing: ${targetPath}`);
 }
 
+async function expectDirectoryPresent(targetPath: string): Promise<void> {
+  expect((await fs.stat(targetPath)).isDirectory()).toBe(true);
+}
+
 describe("cleanupLegacyPluginDependencyState", () => {
   let tempDir: string;
 
@@ -27,7 +31,7 @@ describe("cleanupLegacyPluginDependencyState", () => {
 
   it("collects and removes legacy plugin dependency state roots", async () => {
     const stateDir = path.join(tempDir, "state");
-    const explicitStageDir = path.join(tempDir, "explicit-stage");
+    const explicitStageDir = path.join(stateDir, ".openclaw-install-stage-explicit");
     const stateDirectory = path.join(tempDir, "systemd-state");
     const packageRoot = path.join(tempDir, "package");
     const legacyRuntimeRoot = path.join(stateDir, "plugin-runtime-deps");
@@ -93,9 +97,177 @@ describe("cleanupLegacyPluginDependencyState", () => {
     await expectPathMissing(legacyExtensionNodeModules);
     await expectPathMissing(legacyExtensionStamp);
     await expectPathMissing(legacyManifest);
-    expect((await fs.stat(thirdPartyNodeModules)).isDirectory()).toBe(true);
+    await expectDirectoryPresent(thirdPartyNodeModules);
     await expectPathMissing(explicitStageDir);
     await expectPathMissing(path.join(stateDirectory, "plugin-runtime-deps"));
+  });
+
+  it("removes configured plugin stage roots outside OpenClaw roots", async () => {
+    const stateDir = path.join(tempDir, "state");
+    const packageRoot = path.join(tempDir, "package");
+    const stageRoot = path.join(tempDir, "stage");
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(packageRoot, { recursive: true });
+    await fs.mkdir(path.join(stageRoot, "node_modules", "ansi-escapes"), { recursive: true });
+    await fs.writeFile(
+      path.join(stageRoot, "node_modules", "ansi-escapes", ".openclaw-rename-tmp"),
+      "corrupt rename residue\n",
+    );
+
+    const result = await cleanupLegacyPluginDependencyState({
+      env: {
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_PLUGIN_STAGE_DIR: stageRoot,
+      },
+      packageRoot,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toContain(`Removed legacy plugin dependency state: ${stageRoot}`);
+    await expectPathMissing(stageRoot);
+  });
+
+  it("refuses arbitrary explicit plugin stage roots outside OpenClaw roots", async () => {
+    const stateDir = path.join(tempDir, "state");
+    const packageRoot = path.join(tempDir, "package");
+    const stageRoot = path.join(tempDir, "stage-without-marker");
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(packageRoot, { recursive: true });
+    await fs.mkdir(path.join(stageRoot, "node_modules", "ansi-escapes"), { recursive: true });
+
+    const result = await cleanupLegacyPluginDependencyState({
+      env: {
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_PLUGIN_STAGE_DIR: stageRoot,
+      },
+      packageRoot,
+    });
+
+    expect(result.changes).toStrictEqual([]);
+    expect(result.warnings).toContain(
+      `Skipped legacy plugin dependency state ${stageRoot}: unexpected path name`,
+    );
+    await expectDirectoryPresent(stageRoot);
+  });
+
+  it("refuses explicit plugin stage paths with parent segments", async () => {
+    const stateDir = path.join(tempDir, "state");
+    const packageRoot = path.join(tempDir, "package");
+    const dotDotStage = `${stateDir}${path.sep}..${path.sep}.openclaw-install-stage-dotdot`;
+    const resolvedDotDotStage = path.resolve(dotDotStage);
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(packageRoot, { recursive: true });
+    await fs.mkdir(resolvedDotDotStage, { recursive: true });
+
+    const result = await cleanupLegacyPluginDependencyState({
+      env: {
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_PLUGIN_STAGE_DIR: dotDotStage,
+      },
+      packageRoot,
+    });
+
+    expect(result.changes).toStrictEqual([]);
+    expect(result.warnings).toContain(
+      `Skipped legacy plugin dependency state ${resolvedDotDotStage}: parent path segments are not allowed`,
+    );
+    await expectDirectoryPresent(resolvedDotDotStage);
+  });
+
+  it("does not follow symlinked extension roots outside OpenClaw roots", async () => {
+    const stateDir = path.join(tempDir, "state");
+    const packageRoot = path.join(tempDir, "package");
+    const extensionsRoot = path.join(packageRoot, "extensions");
+    const linkedPlugin = path.join(extensionsRoot, "linked-plugin");
+    const externalPlugin = path.join(tempDir, "external-plugin");
+    const externalNodeModules = path.join(externalPlugin, "node_modules");
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(extensionsRoot, { recursive: true });
+    await fs.mkdir(externalNodeModules, { recursive: true });
+    await fs.writeFile(path.join(externalPlugin, ".openclaw-runtime-deps.json"), "{}");
+    await fs.symlink(externalPlugin, linkedPlugin, "dir");
+
+    const targets = await testing.collectLegacyPluginDependencyTargets(
+      { OPENCLAW_STATE_DIR: stateDir },
+      { packageRoot },
+    );
+    expect(targets).not.toContain(path.join(linkedPlugin, "node_modules"));
+
+    const result = await cleanupLegacyPluginDependencyState({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+      packageRoot,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    await expectDirectoryPresent(externalNodeModules);
+  });
+
+  it("refuses legacy roots that resolve outside OpenClaw roots", async () => {
+    const stateDir = path.join(tempDir, "state");
+    const packageRoot = path.join(tempDir, "package");
+    const legacyRuntimeRoot = path.join(stateDir, "plugin-runtime-deps");
+    const externalRuntimeRoot = path.join(tempDir, "external-runtime");
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(packageRoot, { recursive: true });
+    await fs.mkdir(externalRuntimeRoot, { recursive: true });
+    await fs.symlink(externalRuntimeRoot, legacyRuntimeRoot, "dir");
+
+    const result = await cleanupLegacyPluginDependencyState({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+      packageRoot,
+    });
+
+    expect(result.changes).toStrictEqual([]);
+    expect(result.warnings).toContain(
+      `Skipped legacy plugin dependency state ${legacyRuntimeRoot}: resolved outside OpenClaw cleanup roots`,
+    );
+    expect((await fs.lstat(legacyRuntimeRoot)).isSymbolicLink()).toBe(true);
+    await expectDirectoryPresent(externalRuntimeRoot);
+  });
+
+  it("does not unlink global runtime symlinks through unsafe cleanup roots", async () => {
+    const stateDir = path.join(tempDir, "state");
+    const packageRoot = path.join(tempDir, "prefix", "lib", "node_modules", "openclaw");
+    const nodeModulesRoot = path.dirname(packageRoot);
+    const legacyRuntimeRoot = path.join(stateDir, "plugin-runtime-deps");
+    const externalRuntimeRoot = path.join(tempDir, "external-runtime");
+    const activeRuntimeTarget = path.join(
+      externalRuntimeRoot,
+      "openclaw-external",
+      "node_modules",
+      "left-pad",
+    );
+    const unsafeRuntimeTarget = path.join(
+      legacyRuntimeRoot,
+      "openclaw-external",
+      "node_modules",
+      "left-pad",
+    );
+    const leftPadLink = path.join(nodeModulesRoot, "left-pad");
+
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(packageRoot, { recursive: true });
+    await fs.mkdir(activeRuntimeTarget, { recursive: true });
+    await fs.symlink(externalRuntimeRoot, legacyRuntimeRoot, "dir");
+    await fs.symlink(unsafeRuntimeTarget, leftPadLink, "dir");
+
+    const result = await cleanupLegacyPluginDependencyState({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+      packageRoot,
+    });
+
+    expect(result.changes).toStrictEqual([]);
+    expect(result.warnings).toContain(
+      `Skipped legacy plugin dependency state ${legacyRuntimeRoot}: resolved outside OpenClaw cleanup roots`,
+    );
+    expect((await fs.lstat(leftPadLink)).isSymbolicLink()).toBe(true);
+    expect((await fs.lstat(legacyRuntimeRoot)).isSymbolicLink()).toBe(true);
+    await expectDirectoryPresent(activeRuntimeTarget);
   });
 
   it("removes dangling global plugin-runtime symlinks that point at legacy runtime deps", async () => {

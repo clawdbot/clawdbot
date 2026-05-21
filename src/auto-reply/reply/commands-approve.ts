@@ -2,10 +2,9 @@ import {
   getChannelPlugin,
   resolveChannelApprovalCapability,
 } from "../../channels/plugins/index.js";
-import { callGateway } from "../../gateway/call.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../gateway/protocol/client-info.js";
 import { logVerbose } from "../../globals.js";
 import { isApprovalNotFoundError } from "../../infra/approval-errors.js";
+import { resolveApprovalOverGateway } from "../../infra/approval-gateway-resolver.js";
 import { resolveApprovalCommandAuthorization } from "../../infra/channel-approval-auth.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
@@ -191,13 +190,14 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
   }
 
   const resolvedBy = buildResolvedByLabel(params);
-  const callApprovalMethod = async (method: string): Promise<void> => {
-    await callGateway({
-      method,
-      params: { id: parsed.id, decision: parsed.decision },
-      clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+  const callApprovalMethod = async (method: ApprovalMethod): Promise<void> => {
+    await resolveApprovalOverGateway({
+      cfg: params.cfg,
+      approvalId: parsed.id,
+      decision: parsed.decision,
+      senderId: params.command.senderId,
+      ...(method === "plugin.approval.resolve" ? { resolveMethod: "plugin" as const } : {}),
       clientDisplayName: `Chat approval (${resolvedBy})`,
-      mode: GATEWAY_CLIENT_MODES.BACKEND,
     });
   };
 
@@ -219,14 +219,11 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
     };
   }
 
-  let lastError: unknown = null;
   for (const [index, method] of methods.entries()) {
     try {
       await callApprovalMethod(method);
-      lastError = null;
       break;
     } catch (error) {
-      lastError = error;
       const isLastMethod = index === methods.length - 1;
       if (!isApprovalNotFoundError(error) || isLastMethod) {
         return {
@@ -235,13 +232,6 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
         };
       }
     }
-  }
-
-  if (lastError) {
-    return {
-      shouldContinue: false,
-      reply: { text: `❌ Failed to submit approval: ${formatApprovalSubmitError(lastError)}` },
-    };
   }
 
   return {

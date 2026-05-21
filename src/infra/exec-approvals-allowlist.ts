@@ -27,7 +27,6 @@ import {
   type ExecCommandAnalysis,
   type ExecCommandSegment,
   type ExecutableResolution,
-  type ShellChainOperator,
 } from "./exec-approvals-analysis.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 import {
@@ -132,13 +131,7 @@ export type ExecAllowlistEvaluation = {
   segmentSatisfiedBy: ExecSegmentSatisfiedBy[];
 };
 
-export type ExecSegmentSatisfiedBy =
-  | "allowlist"
-  | "safeBins"
-  | "inlineChain"
-  | "skills"
-  | "skillPrelude"
-  | null;
+export type ExecSegmentSatisfiedBy = "allowlist" | "safeBins" | "inlineChain" | "skills" | null;
 export type SkillBinTrustEntry = {
   name: string;
   resolvedPath: string;
@@ -230,163 +223,6 @@ function isSkillAutoAllowedSegment(params: {
     return false;
   }
   return Boolean(params.skillBinTrust.get(executableName)?.has(resolvedPath));
-}
-
-function resolveSkillPreludePath(rawPath: string, cwd?: string): string {
-  const expanded = rawPath.startsWith("~") ? expandHomePrefix(rawPath) : rawPath;
-  if (path.isAbsolute(expanded)) {
-    return path.resolve(expanded);
-  }
-  return path.resolve(cwd?.trim() || process.cwd(), expanded);
-}
-
-function isSkillMarkdownPreludePath(filePath: string): boolean {
-  const normalized = filePath.replace(/\\/g, "/");
-  const lowerNormalized = normalizeLowercaseStringOrEmpty(normalized);
-  if (!lowerNormalized.endsWith("/skill.md")) {
-    return false;
-  }
-  const parts = lowerNormalized.split("/").filter(Boolean);
-  if (parts.length < 2) {
-    return false;
-  }
-  for (let index = parts.length - 2; index >= 0; index -= 1) {
-    if (parts[index] !== "skills") {
-      continue;
-    }
-    const segmentsAfterSkills = parts.length - index - 1;
-    if (segmentsAfterSkills === 1 || segmentsAfterSkills === 2) {
-      return true;
-    }
-  }
-  return false;
-}
-
-function resolveSkillMarkdownPreludeId(filePath: string): string | null {
-  const normalized = filePath.replace(/\\/g, "/");
-  const lowerNormalized = normalizeLowercaseStringOrEmpty(normalized);
-  if (!lowerNormalized.endsWith("/skill.md")) {
-    return null;
-  }
-  const parts = lowerNormalized.split("/").filter(Boolean);
-  if (parts.length < 3) {
-    return null;
-  }
-  for (let index = parts.length - 2; index >= 0; index -= 1) {
-    if (parts[index] !== "skills") {
-      continue;
-    }
-    if (parts.length - index - 1 !== 2) {
-      continue;
-    }
-    const skillId = parts[index + 1]?.trim();
-    return skillId || null;
-  }
-  return null;
-}
-
-function isSkillPreludeReadSegment(segment: ExecCommandSegment, cwd?: string): boolean {
-  const execution = resolveExecutionTargetResolution(segment.resolution);
-  if (normalizeLowercaseStringOrEmpty(execution?.executableName) !== "cat") {
-    return false;
-  }
-  // Keep the display-prelude exception narrow: only a plain `cat <...>/SKILL.md`
-  // qualifies, not extra argv forms or arbitrary file reads.
-  if (segment.argv.length !== 2) {
-    return false;
-  }
-  const rawPath = segment.argv[1]?.trim();
-  if (!rawPath) {
-    return false;
-  }
-  return isSkillMarkdownPreludePath(resolveSkillPreludePath(rawPath, cwd));
-}
-
-function isSkillPreludeMarkerSegment(segment: ExecCommandSegment): boolean {
-  const execution = resolveExecutionTargetResolution(segment.resolution);
-  if (normalizeLowercaseStringOrEmpty(execution?.executableName) !== "printf") {
-    return false;
-  }
-  if (segment.argv.length !== 2) {
-    return false;
-  }
-  const marker = segment.argv[1];
-  return marker === "\\n---CMD---\\n" || marker === "\n---CMD---\n";
-}
-
-function isSkillPreludeSegment(segment: ExecCommandSegment, cwd?: string): boolean {
-  return isSkillPreludeReadSegment(segment, cwd) || isSkillPreludeMarkerSegment(segment);
-}
-
-function isSkillPreludeOnlyEvaluation(
-  segments: ExecCommandSegment[],
-  cwd: string | undefined,
-): boolean {
-  return segments.length > 0 && segments.every((segment) => isSkillPreludeSegment(segment, cwd));
-}
-
-function resolveSkillPreludeIds(
-  segments: ExecCommandSegment[],
-  cwd: string | undefined,
-): ReadonlySet<string> {
-  const skillIds = new Set<string>();
-  for (const segment of segments) {
-    if (!isSkillPreludeReadSegment(segment, cwd)) {
-      continue;
-    }
-    const rawPath = segment.argv[1]?.trim();
-    if (!rawPath) {
-      continue;
-    }
-    const skillId = resolveSkillMarkdownPreludeId(resolveSkillPreludePath(rawPath, cwd));
-    if (skillId) {
-      skillIds.add(skillId);
-    }
-  }
-  return skillIds;
-}
-
-function resolveAllowlistedSkillWrapperId(segment: ExecCommandSegment): string | null {
-  const execution = resolveExecutionTargetResolution(segment.resolution);
-  const executableName = normalizeExecutableToken(
-    execution?.executableName ?? segment.argv[0] ?? "",
-  );
-  if (!executableName.endsWith("-wrapper")) {
-    return null;
-  }
-  const skillId = executableName.slice(0, -"-wrapper".length).trim();
-  return skillId || null;
-}
-
-function resolveTrustedSkillExecutionIds(params: {
-  analysis: ExecCommandAnalysis;
-  evaluation: ExecAllowlistEvaluation;
-}): ReadonlySet<string> {
-  const skillIds = new Set<string>();
-  if (!params.evaluation.allowlistSatisfied) {
-    return skillIds;
-  }
-  for (const [index, segment] of params.analysis.segments.entries()) {
-    const satisfiedBy = params.evaluation.segmentSatisfiedBy[index];
-    if (satisfiedBy === "skills") {
-      const execution = resolveExecutionTargetResolution(segment.resolution);
-      const executableName = normalizeExecutableToken(
-        execution?.executableName ?? execution?.rawExecutable ?? segment.argv[0] ?? "",
-      );
-      if (executableName) {
-        skillIds.add(executableName);
-      }
-      continue;
-    }
-    if (satisfiedBy !== "allowlist") {
-      continue;
-    }
-    const wrapperSkillId = resolveAllowlistedSkillWrapperId(segment);
-    if (wrapperSkillId) {
-      skillIds.add(wrapperSkillId);
-    }
-  }
-  return skillIds;
 }
 
 const MAX_SHELL_WRAPPER_INLINE_EVAL_DEPTH = 3;
@@ -1305,7 +1141,7 @@ export function evaluateShellAllowlist(
     };
   }
 
-  const chainEvaluations = chainParts.map(({ part, opToNext }) => {
+  const chainEvaluations = chainParts.map(({ part }) => {
     const analysis = analyzeShellCommand({
       command: part,
       cwd: params.cwd,
@@ -1318,7 +1154,6 @@ export function evaluateShellAllowlist(
     return {
       analysis,
       evaluation: evaluateExecAllowlist({ analysis, ...allowlistContext }),
-      opToNext,
     };
   });
   if (chainEvaluations.some((entry) => entry === null)) {
@@ -1328,60 +1163,18 @@ export function evaluateShellAllowlist(
   const finalizedEvaluations = chainEvaluations as Array<{
     analysis: ExecCommandAnalysis;
     evaluation: ExecAllowlistEvaluation;
-    opToNext: ShellChainOperator | null;
   }>;
-  const allowSkillPreludeAtIndex = new Set<number>();
-  const reachableSkillIds = new Set<string>();
-  // Only allow the `cat SKILL.md && printf ...` display prelude when it sits on a
-  // contiguous `&&` chain that actually reaches a later trusted skill-wrapper execution.
-  for (let index = finalizedEvaluations.length - 1; index >= 0; index -= 1) {
-    const { analysis, evaluation, opToNext } = finalizedEvaluations[index];
-    const trustedSkillIds = resolveTrustedSkillExecutionIds({
-      analysis,
-      evaluation,
-    });
-    if (trustedSkillIds.size > 0) {
-      for (const skillId of trustedSkillIds) {
-        reachableSkillIds.add(skillId);
-      }
-      continue;
-    }
-
-    const isPreludeOnly =
-      !evaluation.allowlistSatisfied && isSkillPreludeOnlyEvaluation(analysis.segments, params.cwd);
-    const preludeSkillIds = isPreludeOnly
-      ? resolveSkillPreludeIds(analysis.segments, params.cwd)
-      : new Set<string>();
-    const reachesTrustedSkillExecution =
-      opToNext === "&&" &&
-      (preludeSkillIds.size === 0
-        ? reachableSkillIds.size > 0
-        : [...preludeSkillIds].some((skillId) => reachableSkillIds.has(skillId)));
-    if (isPreludeOnly && reachesTrustedSkillExecution) {
-      allowSkillPreludeAtIndex.add(index);
-      continue;
-    }
-
-    reachableSkillIds.clear();
-  }
   const allowlistMatches: ExecAllowlistEntry[] = [];
   const segments: ExecCommandSegment[] = [];
   const segmentAllowlistEntries: Array<ExecAllowlistEntry | null> = [];
   const segmentSatisfiedBy: ExecSegmentSatisfiedBy[] = [];
 
-  for (const [index, { analysis, evaluation }] of finalizedEvaluations.entries()) {
-    const effectiveSegmentSatisfiedBy = allowSkillPreludeAtIndex.has(index)
-      ? analysis.segments.map(() => "skillPrelude" as const)
-      : evaluation.segmentSatisfiedBy;
-    const effectiveSegmentAllowlistEntries = allowSkillPreludeAtIndex.has(index)
-      ? analysis.segments.map(() => null)
-      : evaluation.segmentAllowlistEntries;
-
+  for (const { analysis, evaluation } of finalizedEvaluations) {
     segments.push(...analysis.segments);
     allowlistMatches.push(...evaluation.allowlistMatches);
-    segmentAllowlistEntries.push(...effectiveSegmentAllowlistEntries);
-    segmentSatisfiedBy.push(...effectiveSegmentSatisfiedBy);
-    if (!evaluation.allowlistSatisfied && !allowSkillPreludeAtIndex.has(index)) {
+    segmentAllowlistEntries.push(...evaluation.segmentAllowlistEntries);
+    segmentSatisfiedBy.push(...evaluation.segmentSatisfiedBy);
+    if (!evaluation.allowlistSatisfied) {
       return {
         analysisOk: true,
         allowlistSatisfied: false,

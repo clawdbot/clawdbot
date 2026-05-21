@@ -105,7 +105,11 @@ export function normalizeReplyPayload(
 
   let enrichedPayload: ReplyPayload = { ...payload, text };
   if (applyChannelTransforms && opts.transformReplyPayload) {
-    enrichedPayload = opts.transformReplyPayload(enrichedPayload) ?? enrichedPayload;
+    const transformedPayload = opts.transformReplyPayload(enrichedPayload);
+    if (transformedPayload === null) {
+      return null;
+    }
+    enrichedPayload = transformedPayload ?? enrichedPayload;
     text = enrichedPayload.text;
   }
 

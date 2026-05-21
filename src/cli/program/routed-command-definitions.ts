@@ -20,6 +20,7 @@ import {
 type RouteArgParser<TArgs> = (argv: string[]) => TArgs | null;
 
 type ParsedRouteArgs<TParse extends RouteArgParser<unknown>> = Exclude<ReturnType<TParse>, null>;
+type AgentsListCommandModule = typeof import("../../commands/agents.commands.list.js");
 type ConfigCliModule = typeof import("../config-cli.js");
 type ModelsListCommandModule = typeof import("../../commands/models/list.list-command.js");
 type ModelsStatusCommandModule = typeof import("../../commands/models/list.status-command.js");
@@ -41,6 +42,9 @@ function defineRoutedCommand<TParse extends RouteArgParser<unknown>>(
 }
 
 const configCliLoader = createLazyImportLoader<ConfigCliModule>(() => import("../config-cli.js"));
+const agentsListCommandLoader = createLazyImportLoader<AgentsListCommandModule>(
+  () => import("../../commands/agents.commands.list.js"),
+);
 const modelsListCommandLoader = createLazyImportLoader<ModelsListCommandModule>(
   () => import("../../commands/models/list.list-command.js"),
 );
@@ -50,6 +54,10 @@ const modelsStatusCommandLoader = createLazyImportLoader<ModelsStatusCommandModu
 
 function loadConfigCli(): Promise<ConfigCliModule> {
   return configCliLoader.load();
+}
+
+function loadAgentsListCommand(): Promise<AgentsListCommandModule> {
+  return agentsListCommandLoader.load();
 }
 
 function loadModelsListCommand(): Promise<ModelsListCommandModule> {
@@ -105,7 +113,7 @@ export const routedCommandDefinitions = {
   "agents-list": defineRoutedCommand({
     parseArgs: parseAgentsListRouteArgs,
     runParsedArgs: async (args) => {
-      const { agentsListCommand } = await import("../../commands/agents.js");
+      const { agentsListCommand } = await loadAgentsListCommand();
       await agentsListCommand(args, defaultRuntime);
     },
   }),

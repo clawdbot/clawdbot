@@ -1,9 +1,12 @@
-declare module "highlight.js/lib/core.js" {
-  import hljs = require("highlight.js");
+declare module "highlight.js/lib/core" {
+  import hljs from "highlight.js/lib/core";
 
   export default hljs;
 }
 
-declare module "highlight.js/lib/languages/*.js" {
-  export default function language(hljs?: HLJSApi): LanguageDetail;
+declare module "highlight.js/lib/languages/*" {
+  import type { LanguageFn } from "highlight.js";
+
+  const language: LanguageFn;
+  export default language;
 }

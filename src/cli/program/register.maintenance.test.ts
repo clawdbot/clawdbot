@@ -126,6 +126,16 @@ describe("registerMaintenanceCommands doctor action", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
+  it("rejects lint selectors outside doctor lint mode", async () => {
+    await runMaintenanceCli(["doctor", "--fix", "--only", "policy/channels-denied-provider"]);
+
+    expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      "doctor lint options require --lint. Use `openclaw doctor --lint ...`.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(2);
+  });
+
   it("exits with code 2 when doctor lint mode fails before findings are emitted", async () => {
     runDoctorLintCli.mockRejectedValue(new Error("lint failed"));
 

@@ -11,6 +11,12 @@ if (!cssPath) {
 }
 const css = readFileSync(cssPath, "utf8");
 
+function expectSelectorBlockToMatch(selector: string, pattern: RegExp) {
+  const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const blockMatches = [...css.matchAll(new RegExp(`${escapedSelector}\\s*\\{[^}]*\\}`, "gs"))];
+  expect(blockMatches.map((match) => match[0]).some((block) => pattern.test(block))).toBe(true);
+}
+
 describe("config-quick styles", () => {
   it("includes the local user identity quick-settings styles", () => {
     expect(css).toContain(".qs-identity-grid");
@@ -31,13 +37,15 @@ describe("config-quick styles", () => {
     expect(css).toContain(".qs-identity-card__actions");
     expect(css).toContain("grid-template-columns: repeat(12, minmax(0, 1fr));");
     expect(css).toContain("grid-column: 1 / -1;");
-    expect(css).toContain("grid-column: span 4;");
+    expectSelectorBlockToMatch(".qs-side-stack", /grid-column:\s*span\s+3;/);
+    expectSelectorBlockToMatch(".qs-card--personal", /grid-column:\s*span\s+9;/);
     expect(css).toContain("grid-template-columns: repeat(2, minmax(0, 1fr));");
     expect(css).toContain("align-items: stretch;");
     expect(css).toContain("display: contents;");
-    expect(css).toContain(".qs-card--appearance {\n    order: 4;");
+    expectSelectorBlockToMatch(".qs-card--personal", /order:\s*4;/);
+    expectSelectorBlockToMatch(".qs-card--appearance", /order:\s*5;/);
     expect(css).toContain(".qs-card--appearance");
-    expect(css).toContain("order: 4");
+    expect(css).toContain("order: 5");
     expect(css).toContain(".qs-card--automations");
     expect(css).toContain("order: 6");
   });

@@ -164,7 +164,7 @@ Current source-of-truth:
   <Accordion title="Skills, allowlists, approvals">
     - `/skill <name> [input]` runs a skill by name.
     - `/allowlist [list|add|remove] ...` manages allowlist entries. Text-only.
-    - `/approve <id> <decision>` resolves exec approval prompts.
+    - `/approve <id> <decision>` resolves exec or plugin approval prompts.
     - `/btw <question>` asks a side question without changing future session context. Alias: `/side`. See [BTW](/tools/btw).
 
   </Accordion>

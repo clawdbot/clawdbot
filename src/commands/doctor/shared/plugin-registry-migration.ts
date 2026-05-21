@@ -293,9 +293,11 @@ export async function migratePluginRegistryForInstall(
 
   const rawConfig = await readMigrationConfig(params);
   const config = stripShippedPluginInstallConfigRecords(rawConfig) as OpenClawConfig;
+  const durableInstallRecords =
+    params.installRecords ?? (await loadInstalledPluginIndexInstallRecords(params));
   const installRecords = {
     ...extractShippedPluginInstallConfigRecords(rawConfig),
-    ...(await loadInstalledPluginIndexInstallRecords(params)),
+    ...durableInstallRecords,
   };
   const migrationParams = {
     ...params,

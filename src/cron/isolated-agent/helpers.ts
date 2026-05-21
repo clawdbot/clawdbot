@@ -202,6 +202,10 @@ function isCronMessagePresentationWarning(text: string | undefined): boolean {
   );
 }
 
+function isCronToolWarning(text: string | undefined): boolean {
+  return normalizeOptionalString(text)?.startsWith("⚠️ 🛠️ ") === true;
+}
+
 function isNonTerminalToolErrorWarning(payload: object | undefined): boolean {
   return Boolean(payload && getReplyPayloadMetadata(payload)?.nonTerminalToolErrorWarning);
 }
@@ -236,6 +240,7 @@ export function resolveCronPayloadOutcome(params: {
     .toReversed()
     .find((payload) => payload?.isError === true && Boolean(payload?.text?.trim()))
     ?.text?.trim();
+  const errorPayloads = params.payloads.filter((payload) => payload?.isError === true);
   const normalizedFinalAssistantVisibleText = normalizeOptionalString(
     params.finalAssistantVisibleText,
   );
@@ -264,14 +269,23 @@ export function resolveCronPayloadOutcome(params: {
     lastErrorPayloadIndex >= 0 &&
     isCronMessagePresentationWarning(lastErrorPayloadText) &&
     (normalizedFinalAssistantVisibleText !== undefined || hasSuccessfulPayloadBeforeLastError);
+  const hasStructuredDeliveryPayloads = selectedDeliveryPayloads.some((payload) =>
+    payloadHasStructuredDeliveryContent(payload),
+  );
+  const hasRecoveredToolWarning =
+    !params.runLevelError &&
+    params.failureSignal?.fatalForCron !== true &&
+    params.preferFinalAssistantVisibleText === true &&
+    normalizedFinalAssistantVisibleText !== undefined &&
+    !hasStructuredDeliveryPayloads &&
+    errorPayloads.length > 0 &&
+    errorPayloads.every((payload) => isCronToolWarning(payload?.text));
   const hasFatalStructuredErrorPayload =
     hasErrorPayload &&
     !hasSuccessfulPayloadAfterLastError &&
     !hasPendingPresentationWarning &&
-    !hasNonTerminalToolErrorWarning;
-  const hasStructuredDeliveryPayloads = selectedDeliveryPayloads.some((payload) =>
-    payloadHasStructuredDeliveryContent(payload),
-  );
+    !hasNonTerminalToolErrorWarning &&
+    !hasRecoveredToolWarning;
   // Keep structured/media announce payloads intact. Only collapse purely textual
   // cron announce output to the final assistant-visible answer.
   const shouldUseFinalAssistantVisibleText =

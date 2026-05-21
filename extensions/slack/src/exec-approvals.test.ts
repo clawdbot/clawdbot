@@ -69,7 +69,23 @@ describe("slack exec approvals", () => {
 
     expect(getSlackExecApprovalApprovers({ cfg })).toEqual(["U456"]);
     expect(isSlackExecApprovalApprover({ cfg, senderId: "U456" })).toBe(true);
+    expect(isSlackExecApprovalApprover({ cfg, senderId: "u456" })).toBe(true);
     expect(isSlackExecApprovalApprover({ cfg, senderId: "U123" })).toBe(false);
+  });
+
+  it("canonicalizes configured exec approver ids before matching uppercase senders", () => {
+    const explicitCfg = buildConfig({ approvers: ["u456"] });
+    expect(getSlackExecApprovalApprovers({ cfg: explicitCfg })).toEqual(["U456"]);
+    expect(isSlackExecApprovalApprover({ cfg: explicitCfg, senderId: "U456" })).toBe(true);
+
+    const ownerFallbackCfg = {
+      ...buildConfig({ enabled: true }),
+      commands: { ownerAllowFrom: ["slack:u123owner"] },
+    } as OpenClawConfig;
+    expect(getSlackExecApprovalApprovers({ cfg: ownerFallbackCfg })).toEqual(["U123OWNER"]);
+    expect(isSlackExecApprovalApprover({ cfg: ownerFallbackCfg, senderId: "U123OWNER" })).toBe(
+      true,
+    );
   });
 
   it("does not infer approvers from allowFrom or DM default routes", () => {
@@ -115,7 +131,7 @@ describe("slack exec approvals", () => {
           enabled: true,
           mode: "targets",
           targets: [
-            { channel: "slack", to: "user:U123TARGET" },
+            { channel: "slack", to: "user:u123target" },
             { channel: "slack", to: "channel:C123" },
           ],
         },
@@ -123,8 +139,10 @@ describe("slack exec approvals", () => {
     } as OpenClawConfig;
 
     expect(isSlackExecApprovalTargetRecipient({ cfg, senderId: "U123TARGET" })).toBe(true);
+    expect(isSlackExecApprovalTargetRecipient({ cfg, senderId: "u123target" })).toBe(true);
     expect(isSlackExecApprovalTargetRecipient({ cfg, senderId: "U999OTHER" })).toBe(false);
     expect(isSlackExecApprovalAuthorizedSender({ cfg, senderId: "U123TARGET" })).toBe(true);
+    expect(isSlackExecApprovalAuthorizedSender({ cfg, senderId: "u123target" })).toBe(true);
   });
 
   it("keeps the local Slack approval prompt path active", () => {
@@ -154,7 +172,15 @@ describe("slack exec approvals", () => {
 
   it("normalizes wrapped sender ids", () => {
     expect(normalizeSlackApproverId("user:U123OWNER")).toBe("U123OWNER");
+    expect(normalizeSlackApproverId("user:u123owner")).toBe("U123OWNER");
+    expect(normalizeSlackApproverId("slack:u123owner")).toBe("U123OWNER");
     expect(normalizeSlackApproverId("<@U123OWNER>")).toBe("U123OWNER");
+    expect(normalizeSlackApproverId("<@u123owner>")).toBe("U123OWNER");
+    expect(normalizeSlackApproverId("u123owner")).toBe("U123OWNER");
+    expect(normalizeSlackApproverId("C123CHANNEL")).toBeUndefined();
+    expect(normalizeSlackApproverId("slack:C123CHANNEL")).toBeUndefined();
+    expect(normalizeSlackApproverId("user:C123CHANNEL")).toBeUndefined();
+    expect(normalizeSlackApproverId("<@C123CHANNEL>")).toBeUndefined();
   });
 
   it("applies agent and session filters to request handling", () => {

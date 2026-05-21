@@ -2829,6 +2829,7 @@ export const chatHandlers: GatewayRequestHandlers = {
                       sessionFile: latestEntry?.sessionFile,
                       agentId,
                       createIfMissing: true,
+                      idempotencyKey: clientRunId,
                       ttsSupplement: ttsSupplementMarker,
                       cfg,
                     });

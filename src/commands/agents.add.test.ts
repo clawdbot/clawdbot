@@ -78,8 +78,7 @@ vi.mock("../wizard/clack-prompter.js", () => ({
 }));
 
 import { WizardCancelledError } from "../wizard/prompts.js";
-import { testing } from "./agents.commands.add.js";
-import { agentsAddCommand } from "./agents.js";
+import { agentsAddCommand, testing } from "./agents.commands.add.js";
 
 const runtime = createTestRuntime();
 

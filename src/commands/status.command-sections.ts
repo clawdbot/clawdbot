@@ -1,3 +1,4 @@
+import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import {
   buildPairingConnectRecoveryTitle,
   describePairingConnectRequirement,
@@ -342,6 +343,49 @@ export function buildStatusSessionsRows(params: {
       ? { Cache: params.formatPromptCacheCompact(sess) || params.muted("—") }
       : {}),
   }));
+}
+
+export function buildStatusModelSelectionLines(params: {
+  recent: SessionsRecentLike[];
+  limit?: number;
+  shortenText: (value: string, maxLen: number) => string;
+  warn: (value: string) => string;
+  muted: (value: string) => string;
+}) {
+  const mismatches = params.recent.filter((sess) => {
+    if (!sess.configuredModel || !sess.selectedModel || !sess.modelSelectionReason) {
+      return false;
+    }
+    return (
+      sess.configuredModel !== sess.selectedModel &&
+      !areRuntimeModelRefsEquivalent(sess.configuredModel, sess.selectedModel)
+    );
+  });
+  if (mismatches.length === 0) {
+    return [];
+  }
+
+  const limit = params.limit ?? 3;
+  const lines: string[] = [];
+  for (const sess of mismatches.slice(0, limit)) {
+    const key = params.shortenText(sess.key, 48);
+    const configured = sess.configuredModel ?? "unknown";
+    const selected = sess.selectedModel ?? "unknown";
+    lines.push(
+      params.warn(
+        `Session ${key} is pinned to ${selected}; config primary ${configured} will apply to new/unpinned sessions.`,
+      ),
+      `  Configured default: ${configured}`,
+      `  Session selected: ${selected}`,
+      `  Reason: ${sess.modelSelectionReason ?? "session override"}`,
+      `  Clear with: /model ${configured} or /reset`,
+      "  Docs: https://docs.openclaw.ai/concepts/models#selection-source-and-fallback-behavior",
+    );
+  }
+  if (mismatches.length > limit) {
+    lines.push(params.muted(`  … +${mismatches.length - limit} more pinned session(s)`));
+  }
+  return lines;
 }
 
 export function buildStatusFooterLines(params: {

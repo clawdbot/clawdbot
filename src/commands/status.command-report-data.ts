@@ -15,6 +15,7 @@ import type { AgentLocalStatus } from "./status.agent-local.js";
 import {
   buildStatusFooterLines,
   buildStatusHealthRows,
+  buildStatusModelSelectionLines,
   buildStatusPairingRecoveryLines,
   buildStatusPluginCompatibilityLines,
   buildStatusSecurityAuditLines,
@@ -157,6 +158,12 @@ export async function buildStatusCommandReportData(
       warn: params.theme.warn,
       muted: params.theme.muted,
       formatCliCommand: params.formatCliCommand,
+    }),
+    modelSelectionLines: buildStatusModelSelectionLines({
+      recent: params.summary.sessions.recent,
+      shortenText: params.shortenText,
+      warn: params.theme.warn,
+      muted: params.theme.muted,
     }),
     securityAuditLines,
     channelsColumns: statusChannelsTableColumns,

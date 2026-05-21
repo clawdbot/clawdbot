@@ -299,6 +299,40 @@ describe("bundled plugin postinstall", () => {
     });
   });
 
+  it("recognizes Baileys upload helpers with a prepared dispatcher", async () => {
+    const packageRoot = await createTempDirAsync("openclaw-baileys-postinstall-");
+    await writeBaileysMediaFile(
+      packageRoot,
+      [
+        "import { once } from 'events';",
+        "const encryptedStream = async () => {",
+        "        encFileWriteStream.write(mac);",
+        "        const encFinishPromise = once(encFileWriteStream, 'finish');",
+        "        const originalFinishPromise = originalFileStream ? once(originalFileStream, 'finish') : Promise.resolve();",
+        "        encFileWriteStream.end();",
+        "        originalFileStream?.end?.();",
+        "        stream.destroy();",
+        "        await encFinishPromise;",
+        "        await originalFinishPromise;",
+        "        logger?.debug('encrypted data successfully');",
+        "};",
+        "const uploadWithFetch = async ({ url, filePath, headers, timeoutMs, agent }) => {",
+        "    const dispatcher = typeof agent?.dispatch === 'function' ? agent : undefined;",
+        "    const response = await fetch(url, {",
+        "        ...(dispatcher ? { dispatcher } : {}),",
+        "        method: 'POST',",
+        "    });",
+        "};",
+        "",
+      ].join("\n"),
+    );
+
+    expect(applyBaileysEncryptedStreamFinishHotfix({ packageRoot })).toEqual({
+      applied: false,
+      reason: "already_patched",
+    });
+  });
+
   it("does not classify published packages with source files as source checkouts", () => {
     const packageRoot = "/pkg";
     const existingPaths = new Set([

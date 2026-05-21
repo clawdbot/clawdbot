@@ -3549,7 +3549,7 @@ describe("runAgentTurnWithFallback", () => {
     });
   });
 
-  it("does not show a rate-limit countdown for mixed-cause fallback exhaustion", async () => {
+  it("surfaces billing guidance for mixed-cause fallback exhaustion", async () => {
     state.runWithModelFallbackMock.mockRejectedValueOnce(
       Object.assign(
         new Error(
@@ -3593,7 +3593,7 @@ describe("runAgentTurnWithFallback", () => {
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
-      expect(result.payload.text).toBe(GENERIC_RUN_FAILURE_TEXT);
+      expect(result.payload.text).toBe("billing");
       expect(result.payload.text).not.toContain("All models failed");
       expect(result.payload.text).not.toContain("402 (billing)");
       expect(result.payload.text).not.toContain("Rate-limited");

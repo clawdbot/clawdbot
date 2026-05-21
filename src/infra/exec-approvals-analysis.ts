@@ -1104,14 +1104,7 @@ function renderInlineChainSegmentArgv(params: {
 export function buildSafeBinsShellCommand(params: {
   command: string;
   segments: ExecCommandSegment[];
-  segmentSatisfiedBy: (
-    | "allowlist"
-    | "safeBins"
-    | "inlineChain"
-    | "skills"
-    | "skillPrelude"
-    | null
-  )[];
+  segmentSatisfiedBy: ("allowlist" | "safeBins" | "inlineChain" | "skills" | null)[];
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   platform?: string | null;

@@ -210,6 +210,59 @@ describe("doctor-contract-registry module loader", () => {
     ]);
   });
 
+  it("loads multiple bundled CLI route-state owners from doctor contract modules", () => {
+    const anthropicRoot = makeTempDir();
+    const googleRoot = makeTempDir();
+    fs.writeFileSync(
+      path.join(anthropicRoot, "doctor-contract-api.cjs"),
+      "module.exports = { sessionRouteStateOwners: [{ id: 'anthropic', label: 'Anthropic', providerIds: ['anthropic', 'claude-cli'], runtimeIds: ['claude-cli'], cliSessionKeys: ['claude-cli'], authProfilePrefixes: ['anthropic:', 'claude-cli:'] }] };\n",
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(googleRoot, "doctor-contract-api.cjs"),
+      "module.exports = { sessionRouteStateOwners: [{ id: 'google', label: 'Google', providerIds: ['google', 'google-antigravity', 'google-gemini-cli', 'google-vertex'], runtimeIds: ['google-gemini-cli'], cliSessionKeys: ['google-gemini-cli', 'gemini-cli'], authProfilePrefixes: ['google:', 'google-antigravity:', 'google-gemini-cli:', 'google-vertex:', 'gemini-cli:'] }] };\n",
+      "utf-8",
+    );
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        { id: "anthropic", rootDir: anthropicRoot },
+        { id: "google", rootDir: googleRoot },
+      ],
+      diagnostics: [],
+    });
+
+    expect(
+      listPluginDoctorSessionRouteStateOwners({
+        workspaceDir: "/workspace",
+        env: {},
+        pluginIds: ["anthropic", "google"],
+      }),
+    ).toEqual([
+      {
+        id: "anthropic",
+        label: "Anthropic",
+        providerIds: ["anthropic", "claude-cli"],
+        runtimeIds: ["claude-cli"],
+        cliSessionKeys: ["claude-cli"],
+        authProfilePrefixes: ["anthropic:", "claude-cli:"],
+      },
+      {
+        id: "google",
+        label: "Google",
+        providerIds: ["google", "google-antigravity", "google-gemini-cli", "google-vertex"],
+        runtimeIds: ["google-gemini-cli"],
+        cliSessionKeys: ["google-gemini-cli", "gemini-cli"],
+        authProfilePrefixes: [
+          "google:",
+          "google-antigravity:",
+          "google-gemini-cli:",
+          "google-vertex:",
+          "gemini-cli:",
+        ],
+      },
+    ]);
+  });
+
   it("passes active config to manifest registry discovery", () => {
     const pluginRoot = makeTempDir();
     fs.writeFileSync(

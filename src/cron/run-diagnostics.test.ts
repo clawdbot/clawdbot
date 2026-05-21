@@ -179,6 +179,45 @@ describe("cron run diagnostics", () => {
     expect(diagnostics?.summary).toBe("⚠️ Exec failed");
   });
 
+  it("downgrades recovered tool errors for successful runs", () => {
+    const diagnostics = createCronRunDiagnosticsFromAgentResult(
+      {
+        payloads: [
+          {
+            toolName: "exec",
+            text: "⚠️ 🛠️ jq -s '{total:length}' (agent) failed",
+            isError: true,
+            details: {
+              status: "failed",
+              exitCode: 1,
+              aggregated: "jq syntax error",
+            },
+          },
+        ],
+      },
+      { finalStatus: "ok", nowMs: () => 800 },
+    );
+
+    expect(diagnostics?.entries).toEqual([
+      {
+        ts: 800,
+        source: "exec",
+        severity: "warn",
+        message: "jq syntax error",
+        toolName: "exec",
+        exitCode: 1,
+      },
+      {
+        ts: 800,
+        source: "tool",
+        severity: "warn",
+        message: "⚠️ 🛠️ jq -s '{total:length}' (agent) failed",
+        toolName: "exec",
+      },
+    ]);
+    expect(diagnostics?.summary).toBe("⚠️ 🛠️ jq -s '{total:length}' (agent) failed");
+  });
+
   it("captures silent failed exec details with a fallback message", () => {
     const diagnostics = createCronRunDiagnosticsFromAgentResult(
       {

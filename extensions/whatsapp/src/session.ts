@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import fsSync from "node:fs";
 import type { Agent } from "node:https";
 import { HttpsProxyAgent } from "https-proxy-agent";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
@@ -21,10 +20,12 @@ import {
   resolveWebCredsBackupPath,
   resolveWebCredsPath,
 } from "./auth-store.js";
+import { assertWebCredsPathRegularFileOrMissing } from "./creds-files.js";
 import {
   enqueueCredsSave,
   waitForCredsSaveQueueWithTimeout,
   writeCredsJsonAtomically,
+  writeWebCredsRawAtomically,
 } from "./creds-persistence.js";
 import { renderQrTerminal } from "./qr-terminal.js";
 import { getStatusCode } from "./session-errors.js";
@@ -71,6 +72,10 @@ const WHATSAPP_WEBSOCKET_PROXY_TARGET = "https://mmg.whatsapp.net/";
 const CREDS_FLUSH_TIMEOUT_MESSAGE =
   "Queued WhatsApp creds save did not finish before auth bootstrap; skipping repair and continuing with primary creds.";
 
+async function rejectUnsafeWebCredsPath(authDir: string): Promise<void> {
+  await assertWebCredsPathRegularFileOrMissing(resolveWebCredsPath(authDir));
+}
+
 function enqueueSaveCreds(
   authDir: string,
   saveCreds: () => Promise<void> | void,
@@ -99,12 +104,11 @@ async function safeSaveCreds(
     if (raw) {
       try {
         JSON.parse(raw);
-        fsSync.copyFileSync(credsPath, backupPath);
-        try {
-          fsSync.chmodSync(backupPath, 0o600);
-        } catch {
-          // best-effort on platforms that support it
-        }
+        await writeWebCredsRawAtomically({
+          filePath: backupPath,
+          content: raw,
+          tempPrefix: ".creds.backup",
+        });
       } catch {
         // keep existing backup
       }
@@ -144,14 +148,17 @@ export async function createWaSocket(
   );
   const logger = toPinoLikeLogger(baseLogger, verbose ? "info" : "silent");
   const authDir = resolveUserPath(opts.authDir ?? resolveDefaultWebAuthDir());
+  await rejectUnsafeWebCredsPath(authDir);
   await ensureDir(authDir);
   const sessionLogger = getChildLogger({ module: "web-session" });
   const queueResult = await waitForCredsSaveQueueWithTimeout(authDir);
   if (queueResult === "timed_out") {
     sessionLogger.warn({ authDir }, CREDS_FLUSH_TIMEOUT_MESSAGE);
   } else {
+    await rejectUnsafeWebCredsPath(authDir);
     await restoreCredsFromBackupIfNeeded(authDir);
   }
+  await rejectUnsafeWebCredsPath(authDir);
   const { state } = await useMultiFileAuthState(authDir);
   const saveCreds = async () => {
     await writeCredsJsonAtomically(authDir, state.creds);

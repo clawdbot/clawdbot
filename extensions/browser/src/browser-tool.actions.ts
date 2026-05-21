@@ -13,6 +13,7 @@ import {
   readStringValue,
   resolveBrowserConfig,
   resolveProfile,
+  resolveRuntimeImageSanitization,
   wrapExternalContent,
 } from "./browser-tool.runtime.js";
 import { DEFAULT_BROWSER_ACTION_TIMEOUT_MS } from "./browser/constants.js";
@@ -463,6 +464,7 @@ export async function executeSnapshotAction(params: {
         path: snapshot.imagePath,
         extraText: wrappedSnapshot,
         details: safeDetails,
+        imageSanitization: resolveRuntimeImageSanitization(),
       });
     }
     return {

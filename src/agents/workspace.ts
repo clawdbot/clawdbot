@@ -702,6 +702,96 @@ export function filterBootstrapFilesForSession(
   return files.filter((file) => MINIMAL_BOOTSTRAP_ALLOWLIST.has(file.name));
 }
 
+function hasGlobPattern(pattern: string): boolean {
+  // Keep square brackets literal here; workspace paths commonly contain them.
+  return /[?*{}]/u.test(pattern);
+}
+
+function normalizeWorkspacePatternPath(value: string): string {
+  return value
+    .replaceAll(path.sep, "/")
+    .replaceAll("\\", "/")
+    .replace(/^\.\/+/u, "");
+}
+
+function resolveGlobWalkRoot(pattern: string): string {
+  const normalized = normalizeWorkspacePatternPath(pattern);
+  const globIndex = normalized.search(/[?*{}]/u);
+  if (globIndex === -1) {
+    return normalized;
+  }
+  const slashIndex = normalized.lastIndexOf("/", globIndex);
+  return slashIndex === -1 ? "." : normalized.slice(0, slashIndex) || ".";
+}
+
+async function* walkWorkspaceFiles(
+  workspaceDir: string,
+  initialRelativeDir: string,
+): AsyncGenerator<string> {
+  const stack = [initialRelativeDir === "." ? "" : initialRelativeDir];
+  while (stack.length > 0) {
+    const currentRelativeDir = stack.pop() ?? "";
+    const currentDir = path.resolve(workspaceDir, currentRelativeDir);
+    const relativeToWorkspace = path.relative(workspaceDir, currentDir);
+    if (relativeToWorkspace.startsWith("..") || path.isAbsolute(relativeToWorkspace)) {
+      continue;
+    }
+
+    let entries: syncFs.Dirent[];
+    try {
+      entries = await fs.readdir(currentDir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    for (const entry of entries) {
+      const childRelativePath = currentRelativeDir
+        ? path.join(currentRelativeDir, entry.name)
+        : entry.name;
+      if (entry.isDirectory()) {
+        stack.push(childRelativePath);
+        continue;
+      }
+      if (entry.isFile() || entry.isSymbolicLink()) {
+        yield normalizeWorkspacePatternPath(childRelativePath);
+      }
+    }
+  }
+}
+
+async function resolveExtraBootstrapPatternPaths(
+  workspaceDir: string,
+  pattern: string,
+): Promise<string[]> {
+  if (typeof fs.glob === "function") {
+    try {
+      const matches: string[] = [];
+      for await (const match of fs.glob(pattern, { cwd: workspaceDir })) {
+        matches.push(match);
+      }
+      return matches;
+    } catch {
+      // Fall through to the local matcher before treating the pattern as literal.
+    }
+  }
+
+  if (typeof path.matchesGlob !== "function") {
+    return [pattern];
+  }
+
+  const normalizedPattern = normalizeWorkspacePatternPath(pattern);
+  const matches: string[] = [];
+  for await (const candidate of walkWorkspaceFiles(
+    workspaceDir,
+    resolveGlobWalkRoot(normalizedPattern),
+  )) {
+    if (path.matchesGlob(candidate, normalizedPattern)) {
+      matches.push(candidate);
+    }
+  }
+  return matches.length > 0 ? matches : [pattern];
+}
+
 export async function loadExtraBootstrapFiles(
   dir: string,
   extraPatterns: string[],
@@ -725,15 +815,10 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
   // Resolve glob patterns into concrete file paths
   const resolvedPaths = new Set<string>();
   for (const pattern of extraPatterns) {
-    if (pattern.includes("*") || pattern.includes("?") || pattern.includes("{")) {
-      try {
-        const matches = fs.glob(pattern, { cwd: resolvedDir });
-        for await (const m of matches) {
-          resolvedPaths.add(m);
-        }
-      } catch {
-        // glob not available or pattern error — fall back to literal
-        resolvedPaths.add(pattern);
+    if (hasGlobPattern(pattern)) {
+      const matches = await resolveExtraBootstrapPatternPaths(resolvedDir, pattern);
+      for (const match of matches) {
+        resolvedPaths.add(match);
       }
     } else {
       resolvedPaths.add(pattern);

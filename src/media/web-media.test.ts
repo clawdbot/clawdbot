@@ -10,6 +10,7 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plug
 
 let LocalMediaAccessError: typeof import("./web-media.js").LocalMediaAccessError;
 let loadWebMedia: typeof import("./web-media.js").loadWebMedia;
+let loadWebMediaRaw: typeof import("./web-media.js").loadWebMediaRaw;
 let optimizeImageToJpeg: typeof import("./web-media.js").optimizeImageToJpeg;
 
 const TINY_PNG_BASE64 =
@@ -39,7 +40,8 @@ function installCanvasMediaResolver() {
 }
 
 beforeAll(async () => {
-  ({ LocalMediaAccessError, loadWebMedia, optimizeImageToJpeg } = await import("./web-media.js"));
+  ({ LocalMediaAccessError, loadWebMedia, loadWebMediaRaw, optimizeImageToJpeg } =
+    await import("./web-media.js"));
   fixtureRoot = await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), "web-media-core-"));
   tinyPngFile = path.join(fixtureRoot, "tiny.png");
   await fs.writeFile(tinyPngFile, Buffer.from(TINY_PNG_BASE64, "base64"));
@@ -75,6 +77,47 @@ afterAll(async () => {
 });
 
 describe("loadWebMedia", () => {
+  function makeStallingFetch(firstChunk: Uint8Array) {
+    return vi.fn(
+      async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(firstChunk);
+            },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/pdf" },
+          },
+        ),
+    );
+  }
+
+  async function expectWebMediaIdleTimeout(
+    createLoadPromise: () => Promise<unknown>,
+    idleTimeoutMs: number,
+  ) {
+    vi.useFakeTimers();
+    try {
+      const outcome = createLoadPromise().then(
+        () => ({ status: "resolved" as const }),
+        (error: unknown) => ({ status: "rejected" as const, error }),
+      );
+      await vi.advanceTimersByTimeAsync(idleTimeoutMs + 5);
+      await expect(
+        Promise.race([outcome, Promise.resolve({ status: "pending" as const })]),
+      ).resolves.toMatchObject({ status: "rejected" });
+      const result = await outcome;
+      expect(result.status).toBe("rejected");
+      if (result.status === "rejected") {
+        expect(String(result.error)).toMatch(/stalled|no data received/i);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
   function createLocalWebMediaOptions() {
     return {
       maxBytes: 1024 * 1024,
@@ -687,6 +730,43 @@ describe("loadWebMedia", () => {
     } finally {
       await fs.rm(filePath, { force: true });
     }
+  });
+
+  it("applies the shared remote read idle timeout for raw web media loads", async () => {
+    const readIdleTimeoutMs = 20;
+    const fetchImpl = makeStallingFetch(new Uint8Array([0x25, 0x50, 0x44, 0x46]));
+
+    await expectWebMediaIdleTimeout(
+      () =>
+        loadWebMediaRaw("https://example.test/stalled.pdf", {
+          maxBytes: 1024 * 1024,
+          fetchImpl,
+          readIdleTimeoutMs,
+          ssrfPolicy: { allowedHostnames: ["example.test"] },
+        }),
+      readIdleTimeoutMs,
+    );
+  });
+
+  it("loads a valid remote PDF when the raw web media read stays active", async () => {
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(Buffer.from("%PDF-1.4\n%%EOF"), {
+          status: 200,
+          headers: { "content-type": "application/pdf" },
+        }),
+    );
+
+    const result = await loadWebMediaRaw("https://example.test/ok.pdf", {
+      maxBytes: 1024 * 1024,
+      fetchImpl,
+      readIdleTimeoutMs: 20,
+      ssrfPolicy: { allowedHostnames: ["example.test"] },
+    });
+
+    expect(result.kind).toBe("document");
+    expect(result.contentType).toBe("application/pdf");
+    expect(result.buffer.toString()).toContain("%PDF-1.4");
   });
 
   it("rejects unsupported media store URI locations", async () => {

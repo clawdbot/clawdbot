@@ -362,6 +362,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       discordConfig: DiscordAccountConfig;
       entry: VoiceSessionEntry;
       mode: Exclude<DiscordVoiceMode, "stt-tts">;
+      bootstrapContextInstructions?: string;
       runAgentTurn: (params: VoiceRealtimeAgentTurnParams) => Promise<string>;
     },
   ) {
@@ -421,6 +422,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     const instructions = buildDiscordRealtimeInstructions({
       mode: this.params.mode,
       instructions: this.realtimeConfig?.instructions,
+      bootstrapContextInstructions: this.params.bootstrapContextInstructions,
       toolPolicy,
       consultPolicy,
     });
@@ -1333,6 +1335,7 @@ function resolveDiscordRealtimeMinBargeInAudioEndMs(
 function buildDiscordRealtimeInstructions(params: {
   mode: Exclude<DiscordVoiceMode, "stt-tts">;
   instructions?: string;
+  bootstrapContextInstructions?: string;
   toolPolicy: RealtimeVoiceAgentConsultToolPolicy;
   consultPolicy: "auto" | "always";
 }): string {
@@ -1345,6 +1348,7 @@ function buildDiscordRealtimeInstructions(params: {
   if (isDiscordAgentProxyVoiceMode(params.mode)) {
     return [
       base,
+      params.bootstrapContextInstructions?.trim(),
       "Mode: OpenClaw agent proxy.",
       "You are the realtime voice surface for the same OpenClaw agent the user can message directly.",
       "Do not mention a backend, supervisor, helper, or separate system. Present the result as your own work.",
@@ -1360,6 +1364,7 @@ function buildDiscordRealtimeInstructions(params: {
   }
   return [
     base,
+    params.bootstrapContextInstructions?.trim(),
     buildRealtimeVoiceAgentConsultPolicyInstructions({
       toolPolicy: params.toolPolicy,
       consultPolicy: params.consultPolicy,

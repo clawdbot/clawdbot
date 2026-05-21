@@ -27,21 +27,14 @@ function expectAnalyzedShellCommand(
   return res;
 }
 
-function createSkillPreludeFixture(options: { withWrapper?: boolean } = {}) {
+function createSkillWrapperFixture() {
   const skillRoot = makeTempDir();
-  const skillDir = path.join(skillRoot, "skills", "gog");
-  const skillPath = path.join(skillDir, "SKILL.md");
   const wrapperPath = path.join(skillRoot, "bin", "gog-wrapper");
 
-  fs.mkdirSync(skillDir, { recursive: true });
-  fs.writeFileSync(skillPath, "# gog\n");
+  fs.mkdirSync(path.dirname(wrapperPath), { recursive: true });
+  fs.writeFileSync(wrapperPath, "#!/bin/sh\n", { mode: 0o755 });
 
-  if (options.withWrapper) {
-    fs.mkdirSync(path.dirname(wrapperPath), { recursive: true });
-    fs.writeFileSync(wrapperPath, "#!/bin/sh\n", { mode: 0o755 });
-  }
-
-  return { skillRoot, skillPath, wrapperPath };
+  return { skillRoot, wrapperPath };
 }
 
 describe("exec approvals shell analysis", () => {
@@ -613,16 +606,14 @@ describe("exec approvals shell analysis", () => {
       expect(result.allowlistSatisfied).toBe(testCase.expectedAllowlistSatisfied);
     });
 
-    it("allows the skill display prelude when a later skill wrapper is allowlisted", () => {
+    it("allows a direct skill wrapper command when the wrapper is allowlisted", () => {
       if (process.platform === "win32") {
         return;
       }
-      const { skillRoot, skillPath, wrapperPath } = createSkillPreludeFixture({
-        withWrapper: true,
-      });
+      const { skillRoot, wrapperPath } = createSkillWrapperFixture();
 
       const result = evaluateShellAllowlist({
-        command: `cat ${skillPath} && printf '\\n---CMD---\\n' && ${wrapperPath} calendar events primary --today --json`,
+        command: `${wrapperPath} calendar events primary --today --json`,
         allowlist: [{ pattern: wrapperPath }],
         safeBins: new Set(),
         cwd: skillRoot,
@@ -630,55 +621,21 @@ describe("exec approvals shell analysis", () => {
 
       expect(result.analysisOk).toBe(true);
       expect(result.allowlistSatisfied).toBe(true);
-      expect(result.segmentSatisfiedBy).toEqual(["skillPrelude", "skillPrelude", "allowlist"]);
+      expect(result.segmentSatisfiedBy).toEqual(["allowlist"]);
     });
 
-    it("does not treat arbitrary allowlisted binaries as trusted skill wrappers", () => {
+    it("rejects the legacy skill display prelude when only the wrapper is allowlisted", () => {
       if (process.platform === "win32") {
         return;
       }
-      const { skillRoot, skillPath } = createSkillPreludeFixture();
+      const { skillRoot, wrapperPath } = createSkillWrapperFixture();
+      const skillDir = path.join(skillRoot, "skills", "gog");
+      const skillPath = path.join(skillDir, "SKILL.md");
+      fs.mkdirSync(skillDir, { recursive: true });
+      fs.writeFileSync(skillPath, "# gog\n");
 
       const result = evaluateShellAllowlist({
-        command: `cat ${skillPath} && printf '\\n---CMD---\\n' && /bin/echo calendar events primary --today --json`,
-        allowlist: [{ pattern: "/bin/echo" }],
-        safeBins: new Set(),
-        cwd: skillRoot,
-      });
-
-      expect(result.analysisOk).toBe(true);
-      expect(result.allowlistSatisfied).toBe(false);
-      expect(result.segmentSatisfiedBy).toEqual([null]);
-    });
-
-    it("still rejects the skill display prelude when no trusted skill command follows", () => {
-      if (process.platform === "win32") {
-        return;
-      }
-      const { skillRoot, skillPath } = createSkillPreludeFixture();
-
-      const result = evaluateShellAllowlist({
-        command: `cat ${skillPath} && printf '\\n---CMD---\\n'`,
-        allowlist: [],
-        safeBins: new Set(),
-        cwd: skillRoot,
-      });
-
-      expect(result.analysisOk).toBe(true);
-      expect(result.allowlistSatisfied).toBe(false);
-      expect(result.segmentSatisfiedBy).toEqual([null]);
-    });
-
-    it("rejects the skill display prelude when a trusted wrapper is not reachable", () => {
-      if (process.platform === "win32") {
-        return;
-      }
-      const { skillRoot, skillPath, wrapperPath } = createSkillPreludeFixture({
-        withWrapper: true,
-      });
-
-      const result = evaluateShellAllowlist({
-        command: `cat ${skillPath} && printf '\\n---CMD---\\n' && false && ${wrapperPath} calendar events primary --today --json`,
+        command: `cat ${skillPath} && printf '\\n---CMD---\\n' && ${wrapperPath} calendar events primary --today --json`,
         allowlist: [{ pattern: wrapperPath }],
         safeBins: new Set(),
         cwd: skillRoot,
@@ -1011,7 +968,7 @@ describe("exec approvals shell analysis", () => {
           const printfPath = binPath("printf");
           const gogPath = binPath("gog-wrapper");
           const result = evaluateShellAllowlist({
-            command: `${shellPath} -c "cat SKILL.md && printf '---CMD---' && gog-wrapper calendar events"`,
+            command: `${shellPath} -c "cat README.md && printf ready && gog-wrapper calendar events"`,
             allowlist: [{ pattern: catPath }, { pattern: printfPath }, { pattern: gogPath }],
             safeBins: new Set(),
             cwd: dir,
@@ -1036,7 +993,7 @@ describe("exec approvals shell analysis", () => {
           const catPath = binPath("cat");
           const gogPath = binPath("gog-wrapper");
           const result = evaluateShellAllowlist({
-            command: `${shellPath} -c "cat SKILL.md && rm -rf / && gog-wrapper calendar events"`,
+            command: `${shellPath} -c "cat README.md && rm -rf / && gog-wrapper calendar events"`,
             allowlist: [{ pattern: catPath }, { pattern: gogPath }],
             safeBins: new Set(),
             cwd: dir,

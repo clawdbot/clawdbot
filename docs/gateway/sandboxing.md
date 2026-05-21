@@ -100,6 +100,18 @@ If you deploy the OpenClaw Gateway itself as a Docker container, it orchestrates
 - **FS bridge parity (identical volume map)**: The OpenClaw Gateway native process also writes heartbeat and bridge files to the `workspace` directory. Because the Gateway evaluates the exact same string (the host path) from within its own containerized environment, the Gateway deployment MUST include an identical volume map linking the host namespace natively (`-v /home/user/.openclaw:/home/user/.openclaw`).
 - **Codex code mode**: When an OpenClaw sandbox is active, OpenClaw constrains Codex app-server turns to Codex `workspace-write` sandboxing even if the Codex plugin default is `danger-full-access`. The Codex turn network flag follows the OpenClaw sandbox egress setting, so Docker `network: "none"` stays offline and `network: "bridge"` or a custom Docker network allows outbound access. Do not mount the host Docker socket into agent sandbox containers or custom Codex sandboxes.
 
+On Ubuntu/AppArmor hosts, Codex `workspace-write` can fail before shell startup
+when the service user is not allowed to create unprivileged user namespaces.
+When Docker sandbox egress is disabled (`network: "none"`, the default),
+Codex also needs an unprivileged network namespace. Common symptoms are
+`bwrap: setting up uid map: Permission denied` and
+`bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`. Run
+`openclaw doctor`; if it reports a Codex bwrap namespace probe failure, prefer
+an AppArmor profile that grants the required namespaces to the OpenClaw service
+process. `kernel.apparmor_restrict_unprivileged_userns=0` is a host-wide
+fallback with security tradeoffs; use it only when that host posture is
+acceptable.
+
 If you map paths internally without absolute host parity, OpenClaw natively throws an `EACCES` permission error attempting to write its heartbeat inside the container environment because the fully qualified path string doesn't exist natively.
 </Warning>
 

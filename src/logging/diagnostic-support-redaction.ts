@@ -235,7 +235,13 @@ function isSupportAbsolutePath(value: string): boolean {
   return path.isAbsolute(value) || isWindowsAbsolutePath(value);
 }
 
-export function redactPathForSupport(file: string, options: SupportRedactionContext): string {
+export function redactPathForSupport(
+  file: string | null | undefined,
+  options: SupportRedactionContext,
+): string {
+  if (file == null || typeof file !== "string") {
+    return "";
+  }
   if (file.startsWith("$")) {
     return file;
   }

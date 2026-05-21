@@ -37,6 +37,7 @@ export {
   readRegularFileSync,
   resolveRegularFileAppendFlags,
   root,
+  statRegularFile,
   statRegularFileSync,
   writeExternalFileWithinRoot,
   withTimeout,

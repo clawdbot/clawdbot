@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/matrix",
-  "version": "2026.5.19",
+  "version": "2026.5.20",
   "description": "OpenClaw Matrix channel plugin",
   "repository": {
     "type": "git",
@@ -8,11 +8,11 @@
   },
   "type": "module",
   "dependencies": {
-    "@matrix-org/matrix-sdk-crypto-nodejs": "0.5.1",
+    "@matrix-org/matrix-sdk-crypto-nodejs": "0.4.0",
     "@matrix-org/matrix-sdk-crypto-wasm": "18.3.0",
     "fake-indexeddb": "6.2.5",
     "markdown-it": "14.1.1",
-    "matrix-js-sdk": "41.5.0",
+    "matrix-js-sdk": "41.6.0-rc.0",
     "music-metadata": "11.12.3",
     "typebox": "1.1.38",
     "zod": "4.4.3"
@@ -22,7 +22,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.5.19"
+    "openclaw": ">=2026.5.20"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -87,10 +87,10 @@
       "allowInvalidConfigRecovery": true
     },
     "compat": {
-      "pluginApi": ">=2026.5.19"
+      "pluginApi": ">=2026.5.20"
     },
     "build": {
-      "openclawVersion": "2026.5.19"
+      "openclawVersion": "2026.5.20"
     },
     "release": {
       "publishToClawHub": true,

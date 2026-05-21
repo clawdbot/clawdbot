@@ -79,6 +79,7 @@ export function createOpenClawTools(
      */
     runSessionKey?: string;
     agentChannel?: GatewayMessageChannel;
+    runId?: string;
     agentAccountId?: string;
     /** Delivery target for topic/thread routing. */
     agentTo?: string;
@@ -291,6 +292,7 @@ export function createOpenClawTools(
     : createMessageTool({
         agentAccountId: options?.agentAccountId,
         agentSessionKey: options?.agentSessionKey,
+        runId: options?.runId,
         agentId: sessionAgentId,
         sessionId: options?.sessionId,
         config: options?.config,

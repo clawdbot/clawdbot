@@ -242,6 +242,7 @@ async function runStructuredHealthRepairs(ctx: DoctorHealthFlowContext): Promise
     return;
   }
   const { registerCoreHealthChecks } = await import("./doctor-core-checks.js");
+  const { registerBundledHealthChecks } = await import("./bundled-health-checks.js");
   const { runDoctorHealthRepairs } = await import("./doctor-repair-flow.js");
   const { resolveAgentWorkspaceDir, resolveDefaultAgentId } =
     await import("../agents/agent-scope.js");
@@ -249,6 +250,7 @@ async function runStructuredHealthRepairs(ctx: DoctorHealthFlowContext): Promise
 
   registerCoreHealthChecks();
   const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
+  registerBundledHealthChecks({ cfg: ctx.cfg, cwd: workspaceDir });
   const result = await runDoctorHealthRepairs({
     mode: "fix",
     runtime: ctx.runtime,

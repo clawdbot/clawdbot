@@ -26,7 +26,25 @@ describe("slackApprovalAuth", () => {
     expect(
       slackApprovalAuth.authorizeActorAction({
         cfg,
+        senderId: "u123owner",
+        action: "approve",
+        approvalKind: "plugin",
+      }),
+    ).toEqual({ authorized: true });
+
+    expect(
+      slackApprovalAuth.authorizeActorAction({
+        cfg,
         senderId: "U345DEFAULT",
+        action: "approve",
+        approvalKind: "plugin",
+      }),
+    ).toEqual({ authorized: true });
+
+    expect(
+      slackApprovalAuth.authorizeActorAction({
+        cfg,
+        senderId: "u345default",
         action: "approve",
         approvalKind: "plugin",
       }),
@@ -55,5 +73,27 @@ describe("slackApprovalAuth", () => {
       authorized: false,
       reason: "❌ You are not authorized to approve exec requests on Slack.",
     });
+  });
+
+  it("canonicalizes configured plugin approver ids before matching uppercase senders", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          allowFrom: ["slack:u123owner"],
+          defaultTo: "user:u345default",
+        },
+      },
+    };
+
+    for (const senderId of ["U123OWNER", "U345DEFAULT"]) {
+      expect(
+        slackApprovalAuth.authorizeActorAction({
+          cfg,
+          senderId,
+          action: "approve",
+          approvalKind: "plugin",
+        }),
+      ).toEqual({ authorized: true });
+    }
   });
 });

@@ -1,10 +1,10 @@
-import { promises as fs } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import type { SkillStatusEntry } from "../agents/skills-status.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   CORE_HEALTH_CHECKS,
+  createCoreHealthChecks,
+  type CoreHealthCheckDeps,
   registerCoreHealthChecks,
   resetCoreHealthChecksForTest,
 } from "./doctor-core-checks.js";
@@ -14,20 +14,74 @@ import {
   listHealthChecks,
   registerHealthCheck,
 } from "./health-check-registry.js";
+import type { HealthCheck } from "./health-checks.js";
+
+const runtime = { log() {}, error() {}, exit() {} };
+
+function createSkill(overrides: Partial<SkillStatusEntry> = {}): SkillStatusEntry {
+  return {
+    name: "missing-tool",
+    description: "Missing tool",
+    source: "workspace",
+    bundled: false,
+    filePath: "/tmp/openclaw-test-workspace/skills/missing-tool/SKILL.md",
+    baseDir: "/tmp/openclaw-test-workspace/skills/missing-tool",
+    skillKey: "missing-tool",
+    always: false,
+    disabled: false,
+    blockedByAllowlist: false,
+    blockedByAgentFilter: false,
+    eligible: false,
+    modelVisible: false,
+    userInvocable: true,
+    commandVisible: false,
+    requirements: {
+      bins: ["openclaw-test-missing-skill-bin"],
+      anyBins: [],
+      env: [],
+      config: [],
+      os: [],
+    },
+    missing: {
+      bins: ["openclaw-test-missing-skill-bin"],
+      anyBins: [],
+      env: [],
+      config: [],
+      os: [],
+    },
+    configChecks: [],
+    install: [],
+    ...overrides,
+  };
+}
+
+function createDeps(overrides: Partial<CoreHealthCheckDeps> = {}): CoreHealthCheckDeps {
+  return {
+    async detectUnavailableSkills(): Promise<readonly SkillStatusEntry[]> {
+      return [];
+    },
+    async collectSecurityWarnings(): Promise<readonly string[]> {
+      return [];
+    },
+    async collectWorkspaceSuggestionNotes(): Promise<readonly string[]> {
+      return [];
+    },
+    ...overrides,
+  };
+}
+
+function getCheck(checks: readonly HealthCheck[], id: string): HealthCheck {
+  const check = checks.find((entry) => entry.id === id);
+  if (!check) {
+    throw new Error(`Missing health check ${id}`);
+  }
+  return check;
+}
 
 describe("registerCoreHealthChecks", () => {
-  let tmp: string | undefined;
-
   beforeEach(() => {
     clearHealthChecksForTest();
     resetCoreHealthChecksForTest();
-  });
-
-  afterEach(async () => {
-    if (tmp !== undefined) {
-      await fs.rm(tmp, { recursive: true, force: true });
-      tmp = undefined;
-    }
   });
 
   it("registers the built-in health checks once", () => {
@@ -88,39 +142,34 @@ describe("registerCoreHealthChecks", () => {
     ).toBe(false);
   });
 
-  it("shows the repair-capable health check shape with skills readiness", async () => {
-    tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-health-skills-"));
-    const skillDir = join(tmp, "skills", "missing-tool");
-    await fs.mkdir(skillDir, { recursive: true });
-    await fs.writeFile(
-      join(skillDir, "SKILL.md"),
-      `---
-name: missing-tool
-description: Missing tool
-metadata: '{"openclaw":{"requires":{"bins":["openclaw-test-missing-skill-bin"]}}}'
----
-
-# Missing tool
-`,
-      "utf-8",
-    );
+  it("converts unavailable skills into repair-capable health findings", async () => {
+    const unavailableSkill = createSkill();
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
-          workspace: tmp,
+          workspace: "/tmp/openclaw-test-workspace",
           skills: ["missing-tool"],
         },
       },
     };
-    const check = CORE_HEALTH_CHECKS.find((entry) => entry.id === "core/doctor/skills-readiness");
+    const check = getCheck(
+      createCoreHealthChecks(
+        createDeps({
+          async detectUnavailableSkills(): Promise<readonly SkillStatusEntry[]> {
+            return [unavailableSkill];
+          },
+        }),
+      ),
+      "core/doctor/skills-readiness",
+    );
 
-    expect(check?.repair).toBeTypeOf("function");
+    expect(check.repair).toBeTypeOf("function");
 
-    const findings = await check?.detect({
+    const findings = await check.detect({
       mode: "lint",
-      runtime: { log() {}, error() {}, exit() {} },
+      runtime,
       cfg,
-      cwd: tmp,
+      cwd: "/tmp/openclaw-test-workspace",
     });
     expect(findings).toContainEqual(
       expect.objectContaining({
@@ -130,23 +179,23 @@ metadata: '{"openclaw":{"requires":{"bins":["openclaw-test-missing-skill-bin"]}}
       }),
     );
     await expect(
-      check?.detect(
+      check.detect(
         {
           mode: "fix",
-          runtime: { log() {}, error() {}, exit() {} },
+          runtime,
           cfg,
-          cwd: tmp,
+          cwd: "/tmp/openclaw-test-workspace",
         },
         { paths: ["skills.entries.other-tool.enabled"] },
       ),
     ).resolves.toEqual([]);
     await expect(
-      check?.detect(
+      check.detect(
         {
           mode: "fix",
-          runtime: { log() {}, error() {}, exit() {} },
+          runtime,
           cfg,
-          cwd: tmp,
+          cwd: "/tmp/openclaw-test-workspace",
         },
         { paths: ["skills.entries.missing-tool.enabled"] },
       ),
@@ -156,14 +205,14 @@ metadata: '{"openclaw":{"requires":{"bins":["openclaw-test-missing-skill-bin"]}}
       }),
     );
 
-    const repaired = await check?.repair?.(
+    const repaired = await check.repair?.(
       {
         mode: "fix",
-        runtime: { log() {}, error() {}, exit() {} },
+        runtime,
         cfg,
-        cwd: tmp,
+        cwd: "/tmp/openclaw-test-workspace",
       },
-      findings ?? [],
+      findings,
     );
     expect(repaired?.config?.skills?.entries?.["missing-tool"]).toEqual({ enabled: false });
     expect(repaired?.changes).toContain("Disabled unavailable skill missing-tool.");
@@ -177,11 +226,23 @@ metadata: '{"openclaw":{"requires":{"bins":["openclaw-test-missing-skill-bin"]}}
   });
 
   it("converts security doctor warnings into health findings", async () => {
-    const check = CORE_HEALTH_CHECKS.find((entry) => entry.id === "core/doctor/security");
+    const check = getCheck(
+      createCoreHealthChecks(
+        createDeps({
+          async collectSecurityWarnings(): Promise<readonly string[]> {
+            return [
+              '- CRITICAL: Gateway bound to "lan" (0.0.0.0) without authentication.',
+              '- WARNING: Gateway bound to "lan" (0.0.0.0).',
+            ];
+          },
+        }),
+      ),
+      "core/doctor/security",
+    );
 
-    const findings = await check?.detect({
+    const findings = await check.detect({
       mode: "lint",
-      runtime: { log() {}, error() {}, exit() {} },
+      runtime,
       cfg: {
         gateway: {
           bind: "lan",
@@ -199,25 +260,44 @@ metadata: '{"openclaw":{"requires":{"bins":["openclaw-test-missing-skill-bin"]}}
         message: expect.stringContaining("Gateway bound"),
       }),
     );
+    expect(findings).toContainEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/security",
+        severity: "warning",
+        message: expect.stringContaining("Gateway bound"),
+      }),
+    );
   });
 
   it("converts workspace suggestions into info findings", async () => {
-    tmp = await fs.mkdtemp(join(tmpdir(), "openclaw-health-workspace-"));
-    const check = CORE_HEALTH_CHECKS.find(
-      (entry) => entry.id === "core/doctor/workspace-suggestions",
+    const check = getCheck(
+      createCoreHealthChecks(
+        createDeps({
+          async collectWorkspaceSuggestionNotes(): Promise<readonly string[]> {
+            return [
+              [
+                "- Tip: back up the workspace in a private git repo (GitHub or GitLab).",
+                "- Keep ~/.openclaw out of git; it contains credentials and session history.",
+              ].join("\n"),
+              "Memory system not found in workspace.",
+            ];
+          },
+        }),
+      ),
+      "core/doctor/workspace-suggestions",
     );
 
-    const findings = await check?.detect({
+    const findings = await check.detect({
       mode: "lint",
-      runtime: { log() {}, error() {}, exit() {} },
+      runtime,
       cfg: {
         agents: {
           defaults: {
-            workspace: tmp,
+            workspace: "/tmp/openclaw-test-workspace",
           },
         },
       },
-      cwd: tmp,
+      cwd: "/tmp/openclaw-test-workspace",
     });
 
     expect(findings).toContainEqual(

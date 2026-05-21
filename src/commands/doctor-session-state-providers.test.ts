@@ -43,6 +43,16 @@ describe("doctor session state provider routes", () => {
         },
       }),
     ).toBe(true);
+
+    expect(
+      storeMayContainPluginSessionRouteState({
+        "agent:main:telegram:direct:2": {
+          sessionId: "session-claude-cli",
+          updatedAt: 1,
+          agentRuntimeOverride: "claude-cli",
+        },
+      }),
+    ).toBe(true);
   });
 
   it("preserves configured provider CLI runtimes before harness policy normalization", () => {
@@ -135,10 +145,11 @@ describe("doctor session state provider routes", () => {
         ownerId: "codex",
         ownerLabel: "Codex",
         cliSessionKeys: ["codex-cli"],
+        pinnedRuntimeKeys: ["agentHarnessId"],
         reasons: [
           "auto model override",
-          "runtime model state",
           "pinned runtime",
+          "runtime model state",
           "CLI session binding",
           "auto auth profile override",
         ],
@@ -206,7 +217,7 @@ describe("doctor session state provider routes", () => {
     ]);
   });
 
-  it("keeps owner state when owner remains in the configured route", () => {
+  it("clears stale runtime pins while preserving configured owner model state", () => {
     const sessionKey = "agent:main:telegram:direct:3";
     const entry: Record<string, unknown> = {
       sessionId: "sess-configured-codex",
@@ -234,7 +245,28 @@ describe("doctor session state provider routes", () => {
       },
     });
 
-    expect(scan).toEqual({ repairs: [], manualReview: [] });
+    expect(scan.manualReview).toStrictEqual([]);
+    expect(scan.repairs).toEqual([
+      {
+        key: sessionKey,
+        ownerId: "codex",
+        ownerLabel: "Codex",
+        cliSessionKeys: ["codex-cli"],
+        pinnedRuntimeKeys: ["agentHarnessId"],
+        reasons: ["pinned runtime"],
+      },
+    ]);
+
+    expect(applySessionRouteStateRepair({ entry, repair: scan.repairs[0], now: 123 })).toBe(true);
+    expect(entry.updatedAt).toBe(123);
+    expect(entry.providerOverride).toBe("openai-codex");
+    expect(entry.modelOverride).toBe("gpt-5.4");
+    expect(entry.modelProvider).toBe("openai-codex");
+    expect(entry.model).toBe("gpt-5.4");
+    expect(entry.agentHarnessId).toBeUndefined();
+    expect(entry.cliSessionBindings).toStrictEqual({
+      "codex-cli": { sessionId: "codex-session-3" },
+    });
   });
 
   it("keeps owner CLI state when owner runtime is still configured", () => {
@@ -262,5 +294,169 @@ describe("doctor session state provider routes", () => {
     });
 
     expect(scan).toEqual({ repairs: [], manualReview: [] });
+  });
+
+  it("clears stale agentRuntimeOverride-only pins when current route no longer uses the owner", () => {
+    const sessionKey = "agent:main:telegram:direct:5";
+    const entry: Record<string, unknown> = {
+      sessionId: "sess-stale-claude-cli",
+      updatedAt: 1,
+      agentRuntimeOverride: "claude-cli",
+    };
+
+    const scan = scanSessionRouteStateOwners({
+      owners: [
+        {
+          id: "anthropic",
+          label: "Anthropic",
+          providerIds: ["anthropic"],
+          runtimeIds: ["claude-cli"],
+          cliSessionKeys: ["claude-cli"],
+          authProfilePrefixes: ["anthropic:", "claude-cli:"],
+        },
+      ],
+      store: { [sessionKey]: entry },
+      routes: {
+        [sessionKey]: {
+          defaultProvider: "openai",
+          configuredModelRefs: ["openai/gpt-5.5"],
+          runtime: "pi",
+        },
+      },
+    });
+
+    expect(scan.manualReview).toStrictEqual([]);
+    expect(scan.repairs).toEqual([
+      {
+        key: sessionKey,
+        ownerId: "anthropic",
+        ownerLabel: "Anthropic",
+        cliSessionKeys: ["claude-cli"],
+        pinnedRuntimeKeys: ["agentRuntimeOverride"],
+        reasons: ["pinned runtime"],
+      },
+    ]);
+
+    expect(applySessionRouteStateRepair({ entry, repair: scan.repairs[0], now: 123 })).toBe(true);
+    expect(entry.sessionId).toBe("sess-stale-claude-cli");
+    expect(entry.updatedAt).toBe(123);
+    expect(entry.agentRuntimeOverride).toBeUndefined();
+  });
+
+  it("keeps agentRuntimeOverride pins when owner runtime remains configured", () => {
+    const sessionKey = "agent:main:telegram:direct:6";
+    const entry: Record<string, unknown> = {
+      sessionId: "sess-active-claude-cli",
+      updatedAt: 1,
+      agentRuntimeOverride: "claude-cli",
+    };
+
+    const scan = scanSessionRouteStateOwners({
+      owners: [
+        {
+          id: "anthropic",
+          label: "Anthropic",
+          providerIds: ["anthropic"],
+          runtimeIds: ["claude-cli"],
+          cliSessionKeys: ["claude-cli"],
+          authProfilePrefixes: ["anthropic:", "claude-cli:"],
+        },
+      ],
+      store: { [sessionKey]: entry },
+      routes: {
+        [sessionKey]: {
+          defaultProvider: "anthropic",
+          configuredModelRefs: ["anthropic/claude-opus-4.7"],
+          runtime: "claude-cli",
+        },
+      },
+    });
+
+    expect(scan).toEqual({ repairs: [], manualReview: [] });
+  });
+
+  it("clears stale owner runtime pins when owner provider remains configured", () => {
+    const sessionKey = "agent:main:telegram:direct:7";
+    const entry: Record<string, unknown> = {
+      sessionId: "sess-provider-active-runtime-stale",
+      updatedAt: 1,
+      agentRuntimeOverride: "claude-cli",
+    };
+
+    const scan = scanSessionRouteStateOwners({
+      owners: [
+        {
+          id: "anthropic",
+          label: "Anthropic",
+          providerIds: ["anthropic"],
+          runtimeIds: ["claude-cli"],
+          cliSessionKeys: ["claude-cli"],
+          authProfilePrefixes: ["anthropic:", "claude-cli:"],
+        },
+      ],
+      store: { [sessionKey]: entry },
+      routes: {
+        [sessionKey]: {
+          defaultProvider: "anthropic",
+          configuredModelRefs: ["anthropic/claude-opus-4.7"],
+          runtime: "pi",
+        },
+      },
+    });
+
+    expect(scan.manualReview).toStrictEqual([]);
+    expect(scan.repairs).toEqual([
+      {
+        key: sessionKey,
+        ownerId: "anthropic",
+        ownerLabel: "Anthropic",
+        cliSessionKeys: ["claude-cli"],
+        pinnedRuntimeKeys: ["agentRuntimeOverride"],
+        reasons: ["pinned runtime"],
+      },
+    ]);
+
+    expect(applySessionRouteStateRepair({ entry, repair: scan.repairs[0], now: 123 })).toBe(true);
+    expect(entry.updatedAt).toBe(123);
+    expect(entry.agentRuntimeOverride).toBeUndefined();
+  });
+
+  it("preserves non-owner runtime overrides when clearing owner harness pins", () => {
+    const sessionKey = "agent:main:telegram:direct:8";
+    const entry: Record<string, unknown> = {
+      sessionId: "sess-mixed-runtime-pins",
+      updatedAt: 1,
+      agentHarnessId: "codex-cli",
+      agentRuntimeOverride: "claude-cli",
+    };
+
+    const scan = scanSessionRouteStateOwners({
+      owners: [codexOwner],
+      store: { [sessionKey]: entry },
+      routes: {
+        [sessionKey]: {
+          defaultProvider: "openai",
+          configuredModelRefs: ["openai/gpt-5.5"],
+          runtime: "pi",
+        },
+      },
+    });
+
+    expect(scan.manualReview).toStrictEqual([]);
+    expect(scan.repairs).toEqual([
+      {
+        key: sessionKey,
+        ownerId: "codex",
+        ownerLabel: "Codex",
+        cliSessionKeys: ["codex-cli"],
+        pinnedRuntimeKeys: ["agentHarnessId"],
+        reasons: ["pinned runtime"],
+      },
+    ]);
+
+    expect(applySessionRouteStateRepair({ entry, repair: scan.repairs[0], now: 123 })).toBe(true);
+    expect(entry.updatedAt).toBe(123);
+    expect(entry.agentHarnessId).toBeUndefined();
+    expect(entry.agentRuntimeOverride).toBe("claude-cli");
   });
 });

@@ -380,6 +380,13 @@ function buildRateLimitCooldownMessage(err: unknown): string {
   if (codexUsageLimitMessage) {
     return codexUsageLimitMessage;
   }
+  if (isFallbackSummaryError(err) && hasBillingAttemptSummary(err)) {
+    return BILLING_ERROR_USER_MESSAGE;
+  }
+  const message = formatErrorMessage(err);
+  if (isBillingErrorMessage(message)) {
+    return BILLING_ERROR_USER_MESSAGE;
+  }
   if (!isFallbackSummaryError(err)) {
     return "⚠️ All models are temporarily rate-limited. Please try again in a few minutes.";
   }
@@ -448,11 +455,11 @@ function isPureTransientRateLimitSummary(err: unknown): boolean {
   );
 }
 
-function isPureBillingSummary(err: unknown): boolean {
+function hasBillingAttemptSummary(err: unknown): boolean {
   return (
     isFallbackSummaryError(err) &&
     err.attempts.length > 0 &&
-    err.attempts.every((attempt) => attempt.reason === "billing")
+    err.attempts.some((attempt) => attempt.reason === "billing")
   );
 }
 
@@ -625,7 +632,7 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
   const message = formatErrorMessage(params.err);
   const isFallbackSummary = isFallbackSummaryError(params.err);
   const isBilling = isFallbackSummary
-    ? isPureBillingSummary(params.err)
+    ? hasBillingAttemptSummary(params.err)
     : isBillingErrorMessage(message);
   if (isBilling) {
     return markAgentRunFailureReplyPayload({
@@ -2263,7 +2270,7 @@ export async function runAgentTurnWithFallback(params: {
       }
       const message = formatErrorMessage(err);
       const isBilling = isFallbackSummaryError(err)
-        ? isPureBillingSummary(err)
+        ? hasBillingAttemptSummary(err)
         : isBillingErrorMessage(message);
       const isContextOverflow = !isBilling && isLikelyContextOverflowError(message);
       const isCompactionFailure = !isBilling && isCompactionFailureError(message);

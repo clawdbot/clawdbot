@@ -126,6 +126,10 @@ function firstRunMessageActionInput(): RunMessageActionInput | undefined {
   return mocks.runMessageAction.mock.calls[0]?.[0] as RunMessageActionInput | undefined;
 }
 
+function lastRunMessageActionInput(): RunMessageActionInput | undefined {
+  return mocks.runMessageAction.mock.calls.at(-1)?.[0] as RunMessageActionInput | undefined;
+}
+
 function latestSecretResolveCall(): {
   allowedPaths?: Set<string>;
   config?: unknown;
@@ -360,17 +364,18 @@ function createChannelPlugin(params: {
 async function executeSend(params: {
   action: Record<string, unknown>;
   toolOptions?: Partial<Parameters<typeof createMessageTool>[0]>;
+  toolCallId?: string;
 }) {
   const tool = createMessageTool({
     config: {} as never,
     runMessageAction: mocks.runMessageAction as never,
     ...params.toolOptions,
   });
-  await tool.execute("1", {
+  await tool.execute(params.toolCallId ?? "1", {
     action: "send",
     ...params.action,
   });
-  return firstRunMessageActionInput();
+  return lastRunMessageActionInput();
 }
 
 describe("message tool secret scoping", () => {
@@ -423,6 +428,35 @@ describe("message tool secret scoping", () => {
 
     expect(input?.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(input?.toolContext?.currentChannelProvider).toBe("webchat");
+  });
+
+  it("adds a current-run idempotency key when the model omits one", async () => {
+    mockSendResult();
+
+    const input = await executeSend({
+      action: { message: "hi" },
+      toolOptions: { runId: "run-message-tool" },
+    });
+
+    expect(input?.params?.idempotencyKey).toBe("run-message-tool:message-tool:1");
+  });
+
+  it("uses the tool-call id to avoid collisions across reconstructed tool instances", async () => {
+    mockSendResult();
+
+    const first = await executeSend({
+      action: { message: "first" },
+      toolOptions: { runId: "run-message-tool" },
+      toolCallId: "message_111_1",
+    });
+    const second = await executeSend({
+      action: { message: "second" },
+      toolOptions: { runId: "run-message-tool" },
+      toolCallId: "message_222_1",
+    });
+
+    expect(first?.params?.idempotencyKey).toBe("run-message-tool:message-tool:message_111_1");
+    expect(second?.params?.idempotencyKey).toBe("run-message-tool:message-tool:message_222_1");
   });
 
   it("uses a non-webchat session key when ambient current channel drifted to webchat", async () => {

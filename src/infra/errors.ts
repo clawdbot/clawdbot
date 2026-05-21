@@ -72,15 +72,22 @@ export function formatErrorMessage(err: unknown): string {
     // Traverse .cause chain to include nested error messages (e.g. grammY HttpError wraps network errors in .cause)
     let cause: unknown = err.cause;
     const seen = new Set<unknown>([err]);
+    // Skip causes that repeat a message already emitted (e.g. coerceToFailoverError).
+    const seenMessages = new Set<string>([formatted]);
+    const appendCauseMessage = (message: string): void => {
+      if (!message || seenMessages.has(message)) {
+        return;
+      }
+      formatted += ` | ${message}`;
+      seenMessages.add(message);
+    };
     while (cause && !seen.has(cause)) {
       seen.add(cause);
       if (cause instanceof Error) {
-        if (cause.message) {
-          formatted += ` | ${cause.message}`;
-        }
+        appendCauseMessage(cause.message);
         cause = cause.cause;
       } else if (typeof cause === "string") {
-        formatted += ` | ${cause}`;
+        appendCauseMessage(cause);
         break;
       } else {
         break;

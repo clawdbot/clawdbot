@@ -67,9 +67,7 @@ export function shouldSkipAppLintForMissingSwiftlint(options = {}) {
   const env = options.env ?? process.env;
   const platform = options.platform ?? process.platform;
   const swiftlintAvailable = options.swiftlintAvailable ?? executableExistsOnPath("swiftlint", env);
-  return (
-    isTruthyEnvFlag(env.OPENCLAW_TESTBOX_REMOTE_RUN) && platform !== "darwin" && !swiftlintAvailable
-  );
+  return platform !== "darwin" && !swiftlintAvailable;
 }
 
 export function shouldDelegateChangedCheckToCrabbox(argv = [], env = process.env) {
@@ -231,11 +229,11 @@ export function createChangedCheckPlan(result, options = {}) {
   }
   if (lanes.apps && shouldSkipAppLintForMissingSwiftlint({ ...options, env: baseEnv })) {
     addCommand(
-      "lint apps (swiftlint unavailable in Testbox)",
+      "lint apps (swiftlint unavailable on this host)",
       "node",
       [
         "-e",
-        "console.error('[check:changed] Swift app lint skipped: swiftlint is unavailable in this Linux Testbox; macOS CI owns SwiftLint coverage.')",
+        "console.error('[check:changed] Swift app lint skipped: swiftlint is unavailable on this non-macOS host; macOS CI owns SwiftLint coverage.')",
       ],
       baseEnv,
     );

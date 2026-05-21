@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/diffs",
-  "version": "2026.5.19",
+  "version": "2026.5.20",
   "description": "OpenClaw diff viewer plugin",
   "repository": {
     "type": "git",
@@ -8,11 +8,11 @@
   },
   "type": "module",
   "scripts": {
-    "build:viewer": "bun build src/viewer-client.ts --target browser --format esm --minify --outfile assets/viewer-runtime.js"
+    "build:viewer": "bun build src/viewer-client.ts --target browser --format esm --minify --outfile assets/viewer-runtime.js && node -e \"let fs=require('fs'),p='assets/viewer-runtime.js',s=fs.readFileSync(p,'utf8').replace(/[ \\\\t]+$/gm,'');fs.writeFileSync(p,s)\""
   },
   "dependencies": {
-    "@pierre/diffs": "1.1.22",
-    "@pierre/theme": "0.0.29",
+    "@pierre/diffs": "1.2.1",
+    "@pierre/theme": "1.0.3",
     "playwright-core": "1.60.0",
     "typebox": "1.1.38",
     "zod": "4.4.3"
@@ -31,10 +31,10 @@
       "minHostVersion": ">=2026.4.30"
     },
     "compat": {
-      "pluginApi": ">=2026.5.19"
+      "pluginApi": ">=2026.5.20"
     },
     "build": {
-      "openclawVersion": "2026.5.19",
+      "openclawVersion": "2026.5.20",
       "staticAssets": [
         {
           "source": "./assets/viewer-runtime.js",

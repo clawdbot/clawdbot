@@ -1,7 +1,5 @@
-import path from "node:path";
 import {
   DEFAULT_ACCOUNT_ID,
-  pathExists,
   splitSetupEntries,
   createSetupTranslator,
   type DmPolicy,
@@ -14,6 +12,7 @@ import {
   resolveWhatsAppAccount,
   resolveWhatsAppAuthDir,
 } from "./accounts.js";
+import { hasWebCredsSync } from "./creds-files.js";
 import {
   normalizeWhatsAppAllowFromEntries,
   normalizeWhatsAppAllowFromEntry,
@@ -159,8 +158,7 @@ function setWhatsAppSelfChatMode(
 
 async function detectWhatsAppLinked(cfg: OpenClawConfig, accountId: string): Promise<boolean> {
   const { authDir } = resolveWhatsAppAuthDir({ cfg, accountId });
-  const credsPath = path.join(authDir, "creds.json");
-  return await pathExists(credsPath);
+  return hasWebCredsSync(authDir);
 }
 
 async function promptWhatsAppOwnerAllowFrom(params: {

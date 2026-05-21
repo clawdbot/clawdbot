@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { TelegramIngressWorkerMessage } from "./telegram-ingress-worker.js";
 
 const runMock = vi.hoisted(() => vi.fn());
 const createTelegramBotMock = vi.hoisted(() => vi.fn());
@@ -90,6 +91,7 @@ type WorkerPollErrorListener = (message: {
   message: string;
   finishedAt: number;
 }) => void;
+type WorkerMessageListener = (message: TelegramIngressWorkerMessage) => void;
 type AsyncVoidFn = () => Promise<void>;
 type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
 
@@ -176,6 +178,7 @@ function installPollingStallWatchdogHarness(dateNowSequence: readonly number[] =
           break;
         }
         await Promise.resolve();
+        await new Promise<void>((resolve) => setImmediate(resolve));
       }
       expect(watchdog).toBeTypeOf("function");
       return watchdog;
@@ -774,6 +777,142 @@ describe("TelegramPollingSession", () => {
 
     abort.abort();
     await runPromise;
+  });
+
+  it("restarts isolated ingress when worker liveness stalls", async () => {
+    const abort = new AbortController();
+    const log = vi.fn();
+    const bot = {
+      api: {
+        deleteWebhook: vi.fn(async () => true),
+        config: { use: vi.fn() },
+      },
+      init: vi.fn(async () => undefined),
+      handleUpdate: vi.fn(async () => undefined),
+      stop: vi.fn(async () => undefined),
+    };
+    createTelegramBotMock.mockReturnValue(bot);
+
+    let firstWorkerDone: (() => void) | undefined;
+    const firstWorkerTask = new Promise<void>((resolve) => {
+      firstWorkerDone = resolve;
+    });
+    const firstWorkerStop = vi.fn(async () => {
+      firstWorkerDone?.();
+    });
+    let workerCycle = 0;
+    const createWorker = vi.fn(() => {
+      workerCycle += 1;
+      if (workerCycle === 1) {
+        return {
+          onMessage: vi.fn(() => () => undefined),
+          stop: firstWorkerStop,
+          task: vi.fn(async () => {
+            await firstWorkerTask;
+          }),
+        };
+      }
+      return {
+        onMessage: vi.fn(() => () => undefined),
+        stop: vi.fn(async () => undefined),
+        task: vi.fn(async () => {
+          abort.abort();
+        }),
+      };
+    });
+    const watchdogHarness = installPollingStallWatchdogHarness([0]);
+    const session = createPollingSession({
+      abortSignal: abort.signal,
+      log,
+      stallThresholdMs: 30_000,
+      isolatedIngress: {
+        enabled: true,
+        createWorker,
+        drainIntervalMs: 500,
+      },
+    });
+
+    try {
+      const runPromise = session.runUntilAbort();
+      const watchdog = await watchdogHarness.waitForWatchdog();
+      watchdogHarness.setNow(31_000);
+      watchdog?.();
+
+      await vi.waitFor(() => expect(firstWorkerStop).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(createWorker).toHaveBeenCalledTimes(2));
+      await runPromise;
+
+      expectLogIncludes(log, "Polling stall detected");
+      expectLogIncludes(log, "isolated polling ingress finished reason=polling stall detected");
+    } finally {
+      watchdogHarness.restore();
+      abort.abort();
+    }
+  });
+
+  it("keeps isolated ingress alive when spooled messages show worker activity", async () => {
+    const abort = new AbortController();
+    const log = vi.fn();
+    const bot = {
+      api: {
+        deleteWebhook: vi.fn(async () => true),
+        config: { use: vi.fn() },
+      },
+      init: vi.fn(async () => undefined),
+      handleUpdate: vi.fn(async () => undefined),
+      stop: vi.fn(async () => undefined),
+    };
+    createTelegramBotMock.mockReturnValue(bot);
+
+    let onMessage: WorkerMessageListener | undefined;
+    let stopWorker: (() => void) | undefined;
+    const workerDone = new Promise<void>((resolve) => {
+      stopWorker = resolve;
+    });
+    const workerStop = vi.fn(async () => {
+      stopWorker?.();
+    });
+    const createWorker = vi.fn(() => ({
+      onMessage: vi.fn((handler: WorkerMessageListener) => {
+        onMessage = handler;
+        return () => undefined;
+      }),
+      stop: workerStop,
+      task: vi.fn(async () => {
+        await workerDone;
+      }),
+    }));
+    const watchdogHarness = installPollingStallWatchdogHarness([0]);
+    const session = createPollingSession({
+      abortSignal: abort.signal,
+      log,
+      stallThresholdMs: 30_000,
+      isolatedIngress: {
+        enabled: true,
+        createWorker,
+        drainIntervalMs: 500,
+      },
+    });
+
+    try {
+      const runPromise = session.runUntilAbort();
+      const watchdog = await watchdogHarness.waitForWatchdog();
+      onMessage?.({ type: "poll-start", offset: null, startedAt: 0 });
+      watchdogHarness.setNow(31_000);
+      onMessage?.({ type: "spooled", updateId: 42, queued: 1 });
+      watchdogHarness.setNow(45_000);
+      watchdog?.();
+
+      expect(workerStop).not.toHaveBeenCalled();
+      expectLogExcludes(log, "Polling stall detected");
+
+      abort.abort();
+      stopWorker?.();
+      await runPromise;
+    } finally {
+      watchdogHarness.restore();
+      abort.abort();
+    }
   });
 
   it("keeps failed lanes blocked for the rest of the drain pass", async () => {

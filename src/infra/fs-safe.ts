@@ -30,6 +30,7 @@ export {
   readRegularFile,
   readRegularFileSync,
   resolveRegularFileAppendFlags,
+  statRegularFile,
   statRegularFileSync,
 } from "@openclaw/fs-safe/advanced";
 export {

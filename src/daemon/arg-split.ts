@@ -1,13 +1,21 @@
 type ArgSplitEscapeMode = "none" | "backslash" | "backslash-quote-only";
+type ArgSplitQuoteChar = '"' | "'";
+type ArgSplitQuoteStart = "anywhere" | "item-start";
 
 export function splitArgsPreservingQuotes(
   value: string,
-  options?: { escapeMode?: ArgSplitEscapeMode },
+  options?: {
+    escapeMode?: ArgSplitEscapeMode;
+    quoteChars?: readonly ArgSplitQuoteChar[];
+    quoteStart?: ArgSplitQuoteStart;
+  },
 ): string[] {
   const args: string[] = [];
   let current = "";
-  let inQuotes = false;
+  let quoteChar: ArgSplitQuoteChar | null = null;
   const escapeMode = options?.escapeMode ?? "none";
+  const quoteChars = new Set<ArgSplitQuoteChar>(options?.quoteChars ?? ['"']);
+  const quoteStart = options?.quoteStart ?? "anywhere";
 
   for (let i = 0; i < value.length; i++) {
     const char = value[i];
@@ -28,11 +36,18 @@ export function splitArgsPreservingQuotes(
       i++;
       continue;
     }
-    if (char === '"') {
-      inQuotes = !inQuotes;
-      continue;
+    if (quoteChars.has(char as ArgSplitQuoteChar)) {
+      if (quoteChar === char) {
+        quoteChar = null;
+        continue;
+      }
+      const canOpenQuote = quoteStart === "anywhere" || current.length === 0;
+      if (!quoteChar && canOpenQuote) {
+        quoteChar = char as ArgSplitQuoteChar;
+        continue;
+      }
     }
-    if (!inQuotes && /\s/.test(char)) {
+    if (!quoteChar && /\s/.test(char)) {
       if (current) {
         args.push(current);
         current = "";

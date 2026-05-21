@@ -387,9 +387,9 @@ describe("resolveNextcloudTalkAccount", () => {
       },
     } as CoreConfig;
 
-    const account = resolveNextcloudTalkAccount({ cfg });
-    expect(account.secret).toBe("");
-    expect(account.secretSource).toBe("none");
+    expect(() => resolveNextcloudTalkAccount({ cfg })).toThrow(
+      /Nextcloud Talk bot secret file.*must not be a symlink/,
+    );
     fs.rmSync(dir, { recursive: true, force: true });
   });
 

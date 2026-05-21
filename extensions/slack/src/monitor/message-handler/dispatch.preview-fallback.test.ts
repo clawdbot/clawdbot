@@ -74,29 +74,23 @@ let capturedTyping:
       onStopError?: (err: unknown) => void;
     }
   | undefined;
+type TestReplyDispatchKind = "tool" | "block" | "final";
+type TestReplyPayload = {
+  text?: string;
+  isError?: boolean;
+  isReasoning?: boolean;
+  mediaUrl?: string;
+  mediaUrls?: string[];
+  audioAsVoice?: boolean;
+  spokenText?: string;
+  ttsSupplement?: { spokenText: string; visibleTextAlreadyDelivered?: boolean };
+};
+type TestDispatchCounts = Record<TestReplyDispatchKind, number>;
 let mockedDispatchSequence: Array<{
-  kind: "tool" | "block" | "final";
-  payload: {
-    text?: string;
-    isError?: boolean;
-    isReasoning?: boolean;
-    mediaUrl?: string;
-    mediaUrls?: string[];
-    audioAsVoice?: boolean;
-    spokenText?: string;
-    ttsSupplement?: { spokenText: string; visibleTextAlreadyDelivered?: boolean };
-  };
+  kind: TestReplyDispatchKind;
+  payload: TestReplyPayload;
 }> = [];
-
-function countFinalDispatches(): number {
-  let count = 0;
-  for (const entry of mockedDispatchSequence) {
-    if (entry.kind === "final") {
-      count++;
-    }
-  }
-  return count;
-}
+let mockedQueuedDispatchCounts: TestDispatchCounts = { tool: 0, block: 0, final: 0 };
 
 let mockedProgressEvents: string[] = [];
 let mockedReplyOptionEvents: Array<
@@ -305,6 +299,7 @@ vi.mock("openclaw/plugin-sdk/channel-message", async (importOriginal) => {
   return {
     ...actual,
     createChannelMessageReplyPipeline: (params: {
+      transformReplyPayload?: (payload: TestReplyPayload) => TestReplyPayload | null;
       typing?: {
         start: () => Promise<void>;
         stop?: () => Promise<void>;
@@ -323,6 +318,9 @@ vi.mock("openclaw/plugin-sdk/channel-message", async (importOriginal) => {
                 },
               },
             }
+          : {}),
+        ...(params.transformReplyPayload
+          ? { transformReplyPayload: params.transformReplyPayload }
           : {}),
         onModelSelected: undefined,
       };
@@ -592,6 +590,7 @@ vi.mock("openclaw/plugin-sdk/security-runtime", () => ({
 
 vi.mock("openclaw/plugin-sdk/string-coerce-runtime", () => ({
   normalizeOptionalLowercaseString: (value?: string) => value?.toLowerCase(),
+  normalizeOptionalString: (value?: string) => value,
 }));
 
 vi.mock("../../actions.js", () => ({
@@ -684,10 +683,30 @@ vi.mock("../replies.js", () => ({
 
 vi.mock("../reply.runtime.js", () => ({
   createReplyDispatcherWithTyping: (params: {
-    deliver: (payload: unknown, info: { kind: "tool" | "block" | "final" }) => Promise<void>;
+    transformReplyPayload?: (payload: TestReplyPayload) => TestReplyPayload | null;
+    beforeDeliver?: (
+      payload: TestReplyPayload,
+      info: { kind: TestReplyDispatchKind },
+    ) => Promise<TestReplyPayload | null> | TestReplyPayload | null;
+    deliver: (payload: TestReplyPayload, info: { kind: TestReplyDispatchKind }) => Promise<void>;
   }) => ({
     dispatcher: {
-      deliver: params.deliver,
+      deliver: async (payload: TestReplyPayload, info: { kind: TestReplyDispatchKind }) => {
+        const transformed = params.transformReplyPayload
+          ? params.transformReplyPayload(payload)
+          : payload;
+        if (!transformed) {
+          return;
+        }
+        const deliverPayload = params.beforeDeliver
+          ? await params.beforeDeliver(transformed, info)
+          : transformed;
+        if (!deliverPayload) {
+          return;
+        }
+        mockedQueuedDispatchCounts[info.kind] += 1;
+        await params.deliver(deliverPayload, info);
+      },
     },
     replyOptions: {},
     markDispatchIdle: () => {},
@@ -709,19 +728,7 @@ vi.mock("../reply.runtime.js", () => ({
       onPartialReply?: (payload: { text: string }) => Promise<void> | void;
     };
     dispatcher: {
-      deliver: (
-        payload: {
-          text?: string;
-          isError?: boolean;
-          isReasoning?: boolean;
-          mediaUrl?: string;
-          mediaUrls?: string[];
-          audioAsVoice?: boolean;
-          spokenText?: string;
-          ttsSupplement?: { spokenText: string; visibleTextAlreadyDelivered?: boolean };
-        },
-        info: { kind: "tool" | "block" | "final" },
-      ) => Promise<void>;
+      deliver: (payload: TestReplyPayload, info: { kind: TestReplyDispatchKind }) => Promise<void>;
     };
   }) => {
     capturedReplyOptions = params.replyOptions;
@@ -752,9 +759,7 @@ vi.mock("../reply.runtime.js", () => ({
     }
     return {
       queuedFinal: false,
-      counts: {
-        final: countFinalDispatches(),
-      },
+      counts: { ...mockedQueuedDispatchCounts },
     };
   },
 }));
@@ -797,6 +802,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     mockedReplyThreadTsSequence = undefined;
     mockedSlackReplyBlocks = undefined;
     mockedDispatchSequence = [{ kind: "final", payload: { text: FINAL_REPLY_TEXT } }];
+    mockedQueuedDispatchCounts = { tool: 0, block: 0, final: 0 };
     mockedProgressEvents = [];
     mockedReplyOptionEvents = [];
 
@@ -1425,6 +1431,98 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     });
     expect(appendSlackStreamMock).not.toHaveBeenCalled();
     expect(deliverRepliesMock).not.toHaveBeenCalled();
+  });
+
+  it("suppresses reasoning payloads in the non-streaming delivery path", async () => {
+    mockedNativeStreaming = false;
+    mockedDispatchSequence = [
+      { kind: "block", payload: { text: "Reasoning:\n_hidden_", isReasoning: true } },
+      { kind: "final", payload: { text: FINAL_REPLY_TEXT } },
+    ];
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
+  });
+
+  it("does not count suppressed reasoning-only payloads as delivered", async () => {
+    mockedNativeStreaming = false;
+    mockedDispatchSequence = [
+      { kind: "final", payload: { text: "Reasoning:\n_hidden_", isReasoning: true } },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        cfg: {
+          messages: {
+            statusReactions: { enabled: true },
+          },
+        },
+        ackReactionMessageTs: "171234.111",
+        ackReactionPromise: Promise.resolve(true),
+      }),
+    );
+
+    expect(deliverRepliesMock).not.toHaveBeenCalled();
+    expect(statusReactionControllerMock.setDone).not.toHaveBeenCalled();
+    expect(statusReactionControllerMock.restoreInitial).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not consume first-reply delivery state for suppressed reasoning payloads", async () => {
+    mockedNativeStreaming = false;
+    mockedReplyThreadTsSequence = [THREAD_TS, undefined];
+    mockedDispatchSequence = [
+      { kind: "block", payload: { text: "hidden", isReasoning: true } },
+      { kind: "final", payload: { text: FINAL_REPLY_TEXT } },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        replyToMode: "first",
+      }),
+    );
+
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expectDeliverReplyCall(0, FINAL_REPLY_TEXT, { replyThreadTs: THREAD_TS });
+  });
+
+  it("suppresses reasoning payloads in non-streaming delivery when mixed with tool payloads", async () => {
+    mockedNativeStreaming = false;
+    mockedDispatchSequence = [
+      { kind: "tool", payload: { text: "tool result" } },
+      { kind: "block", payload: { text: "Let me think about this...", isReasoning: true } },
+      { kind: "block", payload: { text: "I need to consider...", isReasoning: true } },
+      { kind: "final", payload: { text: FINAL_REPLY_TEXT } },
+    ];
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(2);
+    expectDeliverReplyCall(0, "tool result");
+    expectDeliverReplyCall(1, FINAL_REPLY_TEXT);
+  });
+
+  it("suppresses reasoning payloads via deliverNormally fallback from streaming errors", async () => {
+    mockedNativeStreaming = true;
+    mockedDispatchSequence = [
+      { kind: "block", payload: { text: "Let me analyze...", isReasoning: true } },
+      { kind: "final", payload: { text: FINAL_REPLY_TEXT } },
+    ];
+    startSlackStreamMock.mockRejectedValueOnce(new Error("stream setup failed"));
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    for (const call of deliverRepliesMock.mock.calls) {
+      const params = (call as unknown[])[0] as {
+        replies: Array<{ isReasoning?: boolean }>;
+      };
+      for (const reply of params.replies) {
+        expect(reply.isReasoning).not.toBe(true);
+      }
+    }
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
   });
 
   it("keeps same-content tool and final payloads distinct after preview fallback", async () => {

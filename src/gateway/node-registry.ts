@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
+import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
 export type NodeSession = {
@@ -72,6 +74,7 @@ type PingableSocket = {
 const SERIALIZED_EVENT_PAYLOAD = Symbol("openclaw.serializedEventPayload");
 const AUTHORIZED_SYSTEM_RUN_EVENT_GRACE_MS = 5 * 60 * 1000;
 const WEBSOCKET_OPEN_READY_STATE = 1;
+const SLOW_CONSUMER_CLOSE_CODE = 1008;
 
 export type SerializedEventPayload = {
   readonly json: string;
@@ -657,6 +660,9 @@ export class NodeRegistry {
   }
 
   private sendEventInternal(node: NodeSession, event: string, payload: unknown): boolean {
+    if (this.rejectSlowNodeSocket(node)) {
+      return false;
+    }
     try {
       node.client.socket.send(
         JSON.stringify({
@@ -683,6 +689,9 @@ export class NodeRegistry {
     ) {
       return false;
     }
+    if (this.rejectSlowNodeSocket(node)) {
+      return false;
+    }
     try {
       const payloadFragment = payloadJSON ? `,"payload":${payloadJSON.json}` : "";
       node.client.socket.send(
@@ -696,5 +705,23 @@ export class NodeRegistry {
 
   private sendEventToSession(node: NodeSession, event: string, payload: unknown): boolean {
     return this.sendEventInternal(node, event, payload);
+  }
+
+  private rejectSlowNodeSocket(node: NodeSession): boolean {
+    if (!(node.client.socket.bufferedAmount > MAX_BUFFERED_BYTES)) {
+      return false;
+    }
+    logRejectedLargePayload({
+      surface: "gateway.ws.outbound_buffer",
+      bytes: node.client.socket.bufferedAmount,
+      limitBytes: MAX_BUFFERED_BYTES,
+      reason: "ws_send_buffer_close",
+    });
+    try {
+      node.client.socket.close(SLOW_CONSUMER_CLOSE_CODE, "slow consumer");
+    } catch {
+      /* ignore */
+    }
+    return true;
   }
 }

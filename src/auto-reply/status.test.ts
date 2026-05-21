@@ -1347,6 +1347,89 @@ describe("buildStatusMessage", () => {
     expect(normalizeTestText(text)).toContain("Model: google-antigravity/claude-sonnet-4-6");
   });
 
+  it("warns when the session-selected model differs from the configured default", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "zhipu/glm-4.5-air",
+      },
+      configuredDefaultModelLabel: "zhipu/glm-4.5-air",
+      sessionEntry: {
+        sessionId: "pinned-session",
+        updatedAt: 0,
+        providerOverride: "deepseek",
+        modelOverride: "deepseek-v4-flash",
+        modelOverrideSource: "user",
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Configured default: zhipu/glm-4.5-air");
+    expect(normalized).toContain("Session selected: deepseek/deepseek-v4-flash");
+    expect(normalized).toContain("Reason: session override");
+    expect(normalized).toContain(
+      "This session is pinned to deepseek/deepseek-v4-flash; config primary zhipu/glm-4.5-air will apply to new/unpinned sessions.",
+    );
+    expect(normalized).toContain("Clear with: /model zhipu/glm-4.5-air or /reset");
+    expect(normalized).toContain(
+      "Docs: https://docs.openclaw.ai/concepts/models#selection-source-and-fallback-behavior",
+    );
+  });
+
+  it("does not warn when only the last runtime model differs from the configured default", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "zhipu/glm-4.5-air",
+      },
+      configuredDefaultModelLabel: "zhipu/glm-4.5-air",
+      sessionEntry: {
+        sessionId: "runtime-snapshot-only",
+        updatedAt: 0,
+        modelProvider: "deepseek",
+        model: "deepseek-v4-flash",
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Model: zhipu/glm-4.5-air");
+    expect(normalized).not.toContain("Configured default:");
+    expect(normalized).not.toContain("Reason: session override");
+  });
+
+  it("does not label auto fallback model overrides as pinned selections", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "zhipu/glm-4.5-air",
+      },
+      configuredDefaultModelLabel: "zhipu/glm-4.5-air",
+      sessionEntry: {
+        sessionId: "auto-fallback",
+        updatedAt: 0,
+        providerOverride: "deepseek",
+        modelOverride: "deepseek-v4-flash",
+        modelOverrideSource: "auto",
+        modelOverrideFallbackOriginProvider: "zhipu",
+        modelOverrideFallbackOriginModel: "glm-4.5-air",
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Model: deepseek/deepseek-v4-flash");
+    expect(normalized).not.toContain("Configured default:");
+    expect(normalized).not.toContain("Reason: session override");
+  });
+
   it("handles missing agent config gracefully", () => {
     const text = buildStatusMessage({
       agent: {},

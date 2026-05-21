@@ -28,6 +28,27 @@ describe("resolveCronPayloadOutcome", () => {
     expect(result.summary).toContain("Exec failed");
   });
 
+  it("lets preferred final assistant text recover a plain tool warning", () => {
+    const result = resolveCronPayloadOutcome({
+      payloads: [
+        {
+          text: "⚠️ 🛠️ jq -s '{total:length}' (agent) failed",
+          isError: true,
+        },
+      ],
+      finalAssistantVisibleText: "**Clawsweeper 6h report**\nClosed: 34 total",
+      preferFinalAssistantVisibleText: true,
+    });
+
+    expect(result.hasFatalErrorPayload).toBe(false);
+    expect(result.embeddedRunError).toBeUndefined();
+    expect(result.summary).toBe("**Clawsweeper 6h report**\nClosed: 34 total");
+    expect(result.outputText).toBe("**Clawsweeper 6h report**\nClosed: 34 total");
+    expect(result.deliveryPayloads).toEqual([
+      { text: "**Clawsweeper 6h report**\nClosed: 34 total" },
+    ]);
+  });
+
   it("treats transient error payloads as non-fatal when a later success exists", () => {
     const result = resolveCronPayloadOutcome({
       payloads: [

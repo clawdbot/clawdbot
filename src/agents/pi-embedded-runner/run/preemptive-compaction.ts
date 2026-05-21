@@ -16,6 +16,16 @@ const TRUNCATION_ROUTE_BUFFER_TOKENS = 512;
 
 export type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js";
 
+export type PreemptiveCompactionDecision = {
+  route: PreemptiveCompactionRoute;
+  shouldCompact: boolean;
+  estimatedPromptTokens: number;
+  promptBudgetBeforeReserve: number;
+  overflowTokens: number;
+  toolResultReducibleChars: number;
+  effectiveReserveTokens: number;
+};
+
 export function estimatePrePromptTokens(params: {
   messages: AgentMessage[];
   systemPrompt?: string;
@@ -46,15 +56,7 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   contextTokenBudget: number;
   reserveTokens: number;
   toolResultMaxChars?: number;
-}): {
-  route: PreemptiveCompactionRoute;
-  shouldCompact: boolean;
-  estimatedPromptTokens: number;
-  promptBudgetBeforeReserve: number;
-  overflowTokens: number;
-  toolResultReducibleChars: number;
-  effectiveReserveTokens: number;
-} {
+}): PreemptiveCompactionDecision {
   let messagesForPressure = params.messages;
   let estimatedPromptTokens = estimatePrePromptTokens({
     messages: params.messages,
@@ -116,4 +118,35 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
     toolResultReducibleChars,
     effectiveReserveTokens,
   };
+}
+
+export function formatPrePromptPrecheckLog(params: {
+  result: PreemptiveCompactionDecision;
+  sessionKey?: string;
+  sessionId?: string;
+  provider: string;
+  modelId: string;
+  messageCount: number;
+  unwindowedMessageCount?: number;
+  contextTokenBudget: number;
+  reserveTokens: number;
+  sessionFile?: string;
+}): string {
+  const { result } = params;
+  return (
+    `[context-overflow-precheck] pre-prompt check ` +
+    `sessionKey=${params.sessionKey ?? params.sessionId ?? "unknown"} ` +
+    `provider=${params.provider}/${params.modelId} ` +
+    `route=${result.route} ` +
+    `estimatedPromptTokens=${result.estimatedPromptTokens} ` +
+    `promptBudgetBeforeReserve=${result.promptBudgetBeforeReserve} ` +
+    `overflowTokens=${result.overflowTokens} ` +
+    `toolResultReducibleChars=${result.toolResultReducibleChars} ` +
+    `reserveTokens=${params.reserveTokens} ` +
+    `effectiveReserveTokens=${result.effectiveReserveTokens} ` +
+    `contextTokenBudget=${params.contextTokenBudget} ` +
+    `messages=${params.messageCount} ` +
+    `unwindowedMessages=${params.unwindowedMessageCount ?? params.messageCount} ` +
+    `sessionFile=${params.sessionFile}`
+  );
 }

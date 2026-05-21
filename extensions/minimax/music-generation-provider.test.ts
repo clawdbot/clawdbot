@@ -75,6 +75,9 @@ describe("minimax music generation provider", () => {
     expect(request.url).toBe("https://api.minimax.io/v1/music_generation");
     const body = request.body as Record<string, unknown>;
     expect(body.model).toBe("music-2.6");
+    expect(body.prompt).toBe("upbeat dance-pop with female vocals");
+    expect(body.prompt).not.toContain("Target duration");
+    expect(body).not.toHaveProperty("duration");
     expect(body.lyrics).toBe("our city wakes");
     expect(body.output_format).toBe("url");
     expect(body.audio_setting).toEqual({
@@ -89,6 +92,7 @@ describe("minimax music generation provider", () => {
     expect(result.lyrics).toEqual(["our city wakes"]);
     expect(result.metadata?.taskId).toBe("task-123");
     expect(result.metadata?.audioUrl).toBe("https://example.com/out.mp3");
+    expect(result.metadata).not.toHaveProperty("requestedDurationSeconds");
   });
 
   it("downloads tracks when url output is returned in data.audio", async () => {

@@ -82,6 +82,85 @@ async function isDockerAvailable(): Promise<boolean> {
   }
 }
 
+type CodexBwrapNamespaceProbe =
+  | { ok: true }
+  | { ok: false; kind: "user" | "network"; command: string; reason: string };
+
+function formatNamespaceProbeCommand(args: string[]): string {
+  return ["unshare", ...args].join(" ");
+}
+
+async function runCodexBwrapNamespaceProbe(
+  kind: "user" | "network",
+  args: string[],
+): Promise<CodexBwrapNamespaceProbe> {
+  try {
+    await runExec("unshare", args, {
+      timeoutMs: 5_000,
+    });
+    return { ok: true };
+  } catch (error) {
+    const reason =
+      (error as { stderr?: string } | undefined)?.stderr?.trim() ||
+      (error as { stdout?: string } | undefined)?.stdout?.trim() ||
+      (error instanceof Error ? error.message : String(error));
+    return { ok: false, kind, command: formatNamespaceProbeCommand(args), reason };
+  }
+}
+
+function codexBwrapNeedsNetworkNamespaceProbe(cfg: OpenClawConfig): boolean {
+  const network = cfg.agents?.defaults?.sandbox?.docker?.network?.trim().toLowerCase();
+  return network === undefined || network === "" || network === "none";
+}
+
+async function probeCodexBwrapNamespaces(cfg: OpenClawConfig): Promise<CodexBwrapNamespaceProbe> {
+  if (process.platform !== "linux") {
+    return { ok: true };
+  }
+  const userProbe = await runCodexBwrapNamespaceProbe("user", [
+    "--user",
+    "--map-root-user",
+    "true",
+  ]);
+  if (!userProbe.ok || !codexBwrapNeedsNetworkNamespaceProbe(cfg)) {
+    return userProbe;
+  }
+  return await runCodexBwrapNamespaceProbe("network", [
+    "--user",
+    "--map-root-user",
+    "--net",
+    "true",
+  ]);
+}
+
+async function noteCodexBwrapNamespaceWarning(cfg: OpenClawConfig): Promise<void> {
+  const probe = await probeCodexBwrapNamespaces(cfg);
+  if (probe.ok) {
+    return;
+  }
+  const symptom =
+    probe.kind === "user"
+      ? "  bwrap: setting up uid map: Permission denied"
+      : "  bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted";
+  const networkSentence = codexBwrapNeedsNetworkNamespaceProbe(cfg)
+    ? "With Docker sandbox network egress disabled, it also needs an unprivileged network namespace."
+    : "Docker sandbox network egress is enabled, so doctor only checked the user namespace.";
+  const lines = [
+    `Codex bwrap ${probe.kind} namespace probe failed while Docker sandbox mode is enabled.`,
+    `Codex app-server \`workspace-write\` shell execution needs unprivileged user namespaces. ${networkSentence}`,
+    "On Ubuntu/AppArmor hosts this usually appears as:",
+    symptom,
+    `Probe command: ${probe.command}`,
+    `Probe result: ${probe.reason}`,
+    "",
+    "Fix the host namespace policy for the OpenClaw service user, then restart the gateway.",
+    "Prefer an AppArmor profile that grants the required namespaces to the OpenClaw service process.",
+    "`kernel.apparmor_restrict_unprivileged_userns=0` is a host-wide fallback with security tradeoffs; use it only when that host posture is acceptable.",
+    "Do not add broad Docker container privileges just to satisfy nested bwrap; that weakens the outer sandbox.",
+  ];
+  note(lines.join("\n"), "Sandbox");
+}
+
 async function dockerImageExists(image: string): Promise<boolean> {
   try {
     await runExec("docker", ["image", "inspect", image], { timeoutMs: 5_000 });
@@ -227,6 +306,7 @@ export async function maybeRepairSandboxImages(
     note(lines.join("\n"), "Sandbox");
     return cfg;
   }
+  await noteCodexBwrapNamespaceWarning(cfg);
 
   let next = cfg;
   const changes: string[] = [];

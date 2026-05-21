@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { rm } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import {
   listExplicitlyDisabledChannelIdsForConfig,
@@ -54,6 +54,7 @@ import {
 } from "./configured-runtime-plugin-installs.js";
 import { asObjectRecord } from "./object.js";
 import {
+  isPostCoreConvergencePass,
   isLegacyPackageUpdateDoctorPass,
   shouldDeferConfiguredPluginInstallRepair,
 } from "./update-phase.js";
@@ -786,14 +787,35 @@ async function installCandidate(params: {
   const existingNpmPackagePath = npmInstallSpec
     ? resolveExistingCandidateNpmPackagePath({ candidate, npmDir })
     : null;
+  const existingNpmPackageVersion = existingNpmPackagePath
+    ? await readNpmPackageVersion(existingNpmPackagePath)
+    : undefined;
+  if (
+    existingNpmPackagePath &&
+    existingNpmPackageVersion &&
+    npmInstallSpec &&
+    params.mode !== "update" &&
+    isPostCoreConvergencePass(params.env)
+  ) {
+    return await adoptExistingNpmPackage({
+      candidate,
+      records: params.records,
+      npmInstallSpec,
+      npmRecordSpec: npmSpecs?.recordSpec ?? npmInstallSpec,
+      packagePath: existingNpmPackagePath,
+      version: existingNpmPackageVersion,
+    });
+  }
   const shouldTryClawHub =
     clawhubInstallSpec &&
+    !existingNpmPackagePath &&
     !(params.preferNpm && npmInstallSpec) &&
     candidate.defaultChoice !== "npm";
   if (shouldTryClawHub) {
     const clawhubResult = await installPluginFromClawHub({
       spec: clawhubInstallSpec,
       extensionsDir,
+      env: params.env,
       expectedPluginId: candidate.pluginId,
       mode: params.mode === "update" || existingClawHubPackagePath ? "update" : "install",
     });
@@ -927,6 +949,53 @@ function resolveExistingCandidateClawHubPackagePath(params: {
   } catch {
     return null;
   }
+}
+
+async function readNpmPackageVersion(packagePath: string): Promise<string | undefined> {
+  try {
+    const parsed = JSON.parse(await readFile(path.join(packagePath, "package.json"), "utf-8")) as {
+      version?: unknown;
+    };
+    return typeof parsed.version === "string" && parsed.version.trim()
+      ? parsed.version.trim()
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function adoptExistingNpmPackage(params: {
+  candidate: DownloadableInstallCandidate;
+  records: Record<string, PluginInstallRecord>;
+  npmInstallSpec: string;
+  npmRecordSpec: string;
+  packagePath: string;
+  version: string;
+}): Promise<{
+  records: Record<string, PluginInstallRecord>;
+  changes: string[];
+  warnings: string[];
+}> {
+  const npmName = parseRegistryNpmSpec(params.npmInstallSpec)?.name;
+  return {
+    records: {
+      ...params.records,
+      [params.candidate.pluginId]: {
+        source: "npm",
+        spec: params.npmRecordSpec,
+        installPath: params.packagePath,
+        installedAt: new Date().toISOString(),
+        version: params.version,
+        resolvedVersion: params.version,
+        ...(npmName ? { resolvedName: npmName } : {}),
+        ...(npmName ? { resolvedSpec: `${npmName}@${params.version}` } : {}),
+      },
+    },
+    changes: [
+      `Repaired missing configured plugin "${params.candidate.pluginId}" from existing npm payload ${params.npmInstallSpec}.`,
+    ],
+    warnings: [],
+  };
 }
 
 export type RepairMissingPluginInstallsResult = {

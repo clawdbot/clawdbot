@@ -348,6 +348,7 @@ jobs:
     needs: [resolve_release_target]
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    environment: npm-release
     steps:
       - name: Checkout release SHA
         uses: actions/checkout@v6
@@ -450,7 +451,7 @@ jobs:
 
             pending_json="$(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/pending_deployments" 2>/dev/null || true)"
             if [[ -z "${pending_json}" ]] || ! printf '%s' "${pending_json}" | jq -e 'length > 0' >/dev/null 2>&1; then
-              return 0
+              return 1
             fi
 
             approved=0
@@ -462,13 +463,15 @@ jobs:
               gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/pending_deployments" \
                 -F "environment_ids[]=${env_id}" \
                 -f state=approved \
-                -f comment="Approve release gate from OpenClaw Release Publish wrapper" >/dev/null
+                -f comment="Approve child release gate after parent release approval" >/dev/null
               approved=1
             done < <(printf '%s' "${pending_json}" | jq -r '.[] | select(.current_user_can_approve == true) | [.environment.id, .environment.name] | @tsv')
 
             if [[ "${approved}" == "1" ]]; then
               echo "${workflow}: approved available pending environment gates"
+              return 0
             fi
+            return 1
           }
 
           print_failed_run_summary() {
@@ -511,7 +514,7 @@ jobs:
               if [[ "$state" != "$last_state" ]]; then
                 echo "${workflow} still ${status} (updated ${updated_at}): ${url}"
                 print_pending_deployments "${workflow}" "${run_id}"
-                approve_pending_deployments "${workflow}" "${run_id}"
+                approve_pending_deployments "${workflow}" "${run_id}" || true
                 last_state="$state"
               fi
               sleep 30
@@ -556,6 +559,85 @@ jobs:
               fi
             ) &
             wait_run_pid="$!"
+          }
+
+          wait_for_job_success() {
+            local workflow="$1"
+            local run_id="$2"
+            local job_name="$3"
+            local jobs_json job_json run_status run_conclusion status conclusion url deadline
+
+            deadline=$((SECONDS + 900))
+            while true; do
+              jobs_json="$(gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --json status,conclusion,jobs)"
+              run_status="$(printf '%s' "$jobs_json" | jq -r '.status')"
+              run_conclusion="$(printf '%s' "$jobs_json" | jq -r '.conclusion // ""')"
+              job_json="$(printf '%s' "$jobs_json" | jq -c --arg name "$job_name" '.jobs[]? | select(.name == $name) | {status, conclusion, url}' | head -n 1)"
+              if [[ -n "$job_json" ]]; then
+                status="$(printf '%s' "$job_json" | jq -r '.status')"
+                conclusion="$(printf '%s' "$job_json" | jq -r '.conclusion // ""')"
+                url="$(printf '%s' "$job_json" | jq -r '.url // ""')"
+                if [[ "$status" == "completed" ]]; then
+                  if [[ "$conclusion" == "success" || "$conclusion" == "skipped" ]]; then
+                    echo "${workflow} ${job_name} ${conclusion}: ${url}"
+                    echo "- ${workflow} ${job_name}: ${conclusion} (${url})" >> "$GITHUB_STEP_SUMMARY"
+                    return 0
+                  fi
+                  echo "${workflow} ${job_name} failed: ${conclusion} ${url}" >&2
+                  print_failed_run_summary "${run_id}"
+                  return 1
+                fi
+                echo "${workflow} ${job_name} still ${status}: ${url}"
+              elif [[ "$run_status" == "completed" ]]; then
+                if [[ "$run_conclusion" == "success" ]]; then
+                  echo "${workflow} completed before ${job_name} was needed."
+                  echo "- ${workflow} ${job_name}: not needed" >> "$GITHUB_STEP_SUMMARY"
+                  return 0
+                fi
+                echo "${workflow} completed before ${job_name} with ${run_conclusion}." >&2
+                print_failed_run_summary "${run_id}"
+                return 1
+              else
+                echo "${workflow} waiting for ${job_name} to start: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+              fi
+              if (( SECONDS >= deadline )); then
+                echo "${workflow} ${job_name} did not complete within 15 minutes." >&2
+                return 1
+              fi
+              sleep 10
+            done
+          }
+
+          approve_child_publish_environment() {
+            local workflow="$1"
+            local run_id="$2"
+            local run_json status conclusion deadline
+
+            deadline=$((SECONDS + 900))
+            while true; do
+              if approve_pending_deployments "${workflow}" "${run_id}"; then
+                echo "- ${workflow}: child environment gate approved" >> "$GITHUB_STEP_SUMMARY"
+                return 0
+              fi
+              run_json="$(gh run view --repo "$GITHUB_REPOSITORY" "$run_id" --json status,conclusion,url)"
+              status="$(printf '%s' "$run_json" | jq -r '.status')"
+              conclusion="$(printf '%s' "$run_json" | jq -r '.conclusion // ""')"
+              if [[ "$status" == "completed" ]]; then
+                if [[ "$conclusion" == "success" ]]; then
+                  echo "${workflow}: completed before child environment approval was needed"
+                  return 0
+                fi
+                echo "${workflow}: completed before child environment approval with ${conclusion}" >&2
+                print_failed_run_summary "${run_id}"
+                return 1
+              fi
+              if (( SECONDS >= deadline )); then
+                echo "${workflow}: child environment approval was not available within 15 minutes." >&2
+                print_pending_deployments "${workflow}" "${run_id}"
+                return 1
+              fi
+              sleep 10
+            done
           }
 
           create_or_update_github_release() {
@@ -679,12 +761,81 @@ jobs:
             } >> "$GITHUB_STEP_SUMMARY"
           }
 
+          append_release_proof_to_github_release() {
+            local release_version body_file notes_file tarball integrity telegram_line clawhub_line
+
+            release_version="${RELEASE_TAG#v}"
+            body_file="${RUNNER_TEMP}/release-body.md"
+            notes_file="${RUNNER_TEMP}/release-notes-with-proof.md"
+            tarball="$(npm view "openclaw@${release_version}" dist.tarball --json | jq -r '.')"
+            integrity="$(npm view "openclaw@${release_version}" dist.integrity --json | jq -r '.')"
+            gh release view "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" --json body --jq .body > "${body_file}"
+
+            if [[ -n "${NPM_TELEGRAM_RUN_ID// }" ]]; then
+              telegram_line="- npm Telegram beta E2E: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${NPM_TELEGRAM_RUN_ID}"
+            else
+              telegram_line="- npm Telegram beta E2E: not supplied"
+            fi
+            if [[ "${WAIT_FOR_CLAWHUB}" == "true" ]]; then
+              clawhub_line="- plugin ClawHub publish: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${plugin_clawhub_run_id}"
+            else
+              clawhub_line="- plugin ClawHub publish: dispatched separately, not awaited by this proof: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${plugin_clawhub_run_id}"
+            fi
+
+            RELEASE_BODY_FILE="${body_file}" \
+              RELEASE_NOTES_FILE="${notes_file}" \
+              RELEASE_VERSION="${release_version}" \
+              RELEASE_TAG="${RELEASE_TAG}" \
+              RELEASE_REPO="${GITHUB_REPOSITORY}" \
+              RELEASE_TARBALL="${tarball}" \
+              RELEASE_INTEGRITY="${integrity}" \
+              RELEASE_PUBLISH_RUN_ID="${GITHUB_RUN_ID}" \
+              PREFLIGHT_RUN_ID="${PREFLIGHT_RUN_ID}" \
+              FULL_RELEASE_VALIDATION_RUN_ID="${FULL_RELEASE_VALIDATION_RUN_ID}" \
+              PLUGIN_NPM_RUN_ID="${plugin_npm_run_id}" \
+              OPENCLAW_NPM_RUN_ID="${openclaw_npm_run_id}" \
+              CLAWHUB_LINE="${clawhub_line}" \
+              TELEGRAM_LINE="${telegram_line}" \
+              node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from "node:fs";
+
+          const bodyFile = process.env.RELEASE_BODY_FILE;
+          const notesFile = process.env.RELEASE_NOTES_FILE;
+          if (!bodyFile || !notesFile) {
+            throw new Error("Missing release notes file paths.");
+          }
+
+          const body = readFileSync(bodyFile, "utf8").trimEnd();
+          const section = [
+            "### Release verification",
+            "",
+            `- npm package: https://www.npmjs.com/package/openclaw/v/${process.env.RELEASE_VERSION}`,
+            `- registry tarball: ${process.env.RELEASE_TARBALL}`,
+            `- integrity: \`${process.env.RELEASE_INTEGRITY}\``,
+            `- release publish: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.RELEASE_PUBLISH_RUN_ID}`,
+            `- npm preflight: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.PREFLIGHT_RUN_ID}`,
+            `- full release validation: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.FULL_RELEASE_VALIDATION_RUN_ID}`,
+            `- plugin npm publish: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.PLUGIN_NPM_RUN_ID}`,
+            process.env.CLAWHUB_LINE,
+            `- OpenClaw npm publish: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.OPENCLAW_NPM_RUN_ID}`,
+            process.env.TELEGRAM_LINE,
+          ].join("\n");
+
+          const withoutOldProof = body.replace(/\n?### Release verification\n[\s\S]*?(?=\n### |\n## |$)/, "");
+          writeFileSync(notesFile, `${withoutOldProof.trimEnd()}\n\n${section}\n`);
+          NODE
+
+            gh release edit "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" --notes-file "${notes_file}"
+            echo "- Release proof: appended to GitHub release" >> "$GITHUB_STEP_SUMMARY"
+          }
+
           {
             echo "### Publish sequence"
             echo
             echo "- Workflow ref: \`${CHILD_WORKFLOW_REF}\`"
             echo "- Release tag: \`${RELEASE_TAG}\`"
             echo "- Release SHA: \`${TARGET_SHA}\`"
+            echo "- Release approval: this workflow job"
             echo "- Plugin npm and ClawHub publish: dispatched in parallel"
             if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" ]]; then
               echo "- OpenClaw npm publish: starts after plugin npm succeeds"
@@ -698,8 +849,8 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-          npm_args=(-f publish_scope="${PLUGIN_PUBLISH_SCOPE}" -f ref="${TARGET_SHA}")
-          clawhub_args=(-f publish_scope="${PLUGIN_PUBLISH_SCOPE}" -f ref="${TARGET_SHA}")
+          npm_args=(-f publish_scope="${PLUGIN_PUBLISH_SCOPE}" -f ref="${TARGET_SHA}" -f release_publish_run_id="${GITHUB_RUN_ID}")
+          clawhub_args=(-f publish_scope="${PLUGIN_PUBLISH_SCOPE}" -f ref="${TARGET_SHA}" -f release_publish_run_id="${GITHUB_RUN_ID}")
           if [[ -n "${PLUGINS}" ]]; then
             npm_args+=(-f plugins="${PLUGINS}")
             clawhub_args+=(-f plugins="${PLUGINS}")
@@ -725,6 +876,7 @@ jobs:
               -f preflight_only=false \
               -f preflight_run_id="${PREFLIGHT_RUN_ID}" \
               -f full_release_validation_run_id="${FULL_RELEASE_VALIDATION_RUN_ID}" \
+              -f release_publish_run_id="${GITHUB_RUN_ID}" \
               -f npm_dist_tag="${RELEASE_NPM_DIST_TAG}")"
             echo "- OpenClaw npm run ID: \`${openclaw_npm_run_id}\`" >> "$GITHUB_STEP_SUMMARY"
           else
@@ -739,7 +891,13 @@ jobs:
             wait_for_run_background plugin-clawhub-release.yml "${plugin_clawhub_run_id}" "${clawhub_result}"
             clawhub_pid="${wait_run_pid}"
           else
-            echo "- plugin-clawhub-release.yml: not awaited (${plugin_clawhub_run_id})" >> "$GITHUB_STEP_SUMMARY"
+            wait_for_job_success plugin-clawhub-release.yml "${plugin_clawhub_run_id}" "Validate release publish approval"
+            if approve_child_publish_environment plugin-clawhub-release.yml "${plugin_clawhub_run_id}"; then
+              :
+            else
+              echo "- plugin-clawhub-release.yml: child environment gate not ready; publish was left dispatched (${plugin_clawhub_run_id})" >> "$GITHUB_STEP_SUMMARY"
+            fi
+            echo "- plugin-clawhub-release.yml: publish not awaited (${plugin_clawhub_run_id})" >> "$GITHUB_STEP_SUMMARY"
           fi
 
           openclaw_result=""
@@ -776,6 +934,7 @@ jobs:
 
           if [[ "${failed}" == "0" && -n "${openclaw_npm_run_id}" ]]; then
             verify_published_release
+            append_release_proof_to_github_release
           fi
           if [[ "${failed}" != "0" ]]; then
             exit 1

@@ -7,14 +7,14 @@ packages:
 minimumReleaseAge: 2880
 
 minimumReleaseAgeExclude:
-  - "@openclaw/fs-safe@0.2.4"
+  - "@openclaw/fs-safe@0.2.7"
   - "@openclaw/proxyline@0.3.3"
   - "acpx"
   - "tokenjuice"
   - "@agentclientprotocol/sdk"
   - "axios"
   - "basic-ftp"
-  - "baileys@7.0.0-rc11"
+  - "baileys@7.0.0-rc12"
   - "hono"
   - "libsignal@6.0.0"
   - "openclaw"
@@ -23,6 +23,7 @@ minimumReleaseAgeExclude:
   - "@cloudflare/workers-types"
   - "@hono/node-server"
   - "@mariozechner/*"
+  - "@aws-sdk/core"
   - "@earendil-works/pi-agent-core"
   - "@earendil-works/pi-ai"
   - "@earendil-works/pi-coding-agent"
@@ -35,6 +36,7 @@ minimumReleaseAgeExclude:
   - "@rolldown/*"
   - "@oxlint/*"
   - "@oxfmt/*"
+  - "@oxc-project/types"
   - "oxfmt"
   - "axios@1.15.0"
   - "discord-api-types"
@@ -46,10 +48,10 @@ nodeLinker: hoisted
 blockExoticSubdeps: true
 
 overrides:
-  "@anthropic-ai/sdk": 0.95.1
+  "@anthropic-ai/sdk": 0.97.1
   hono: 4.12.18
   "@hono/node-server": 1.19.14
-  "@aws-sdk/client-bedrock-runtime": 3.1045.0
+  "@aws-sdk/client-bedrock-runtime": 3.1051.0
   axios: 1.16.0
   fast-uri: 3.1.2
   follow-redirects: 1.16.0
@@ -69,7 +71,7 @@ overrides:
   tar: 7.5.15
   tough-cookie: 4.1.3
   yauzl: 3.2.1
-  protobufjs: 7.5.6
+  protobufjs: 8.4.0
   uuid: 14.0.0
 
 allowBuilds:
@@ -102,5 +104,5 @@ peerDependencyRules:
     "prism-media>opusscript": "^0.0.8 || ^0.1.1"
 
 patchedDependencies:
-  "baileys@7.0.0-rc11": "patches/baileys@7.0.0-rc11.patch"
-  "@agentclientprotocol/claude-agent-acp@0.33.1": "patches/@agentclientprotocol__claude-agent-acp@0.33.1.patch"
+  "@agentclientprotocol/claude-agent-acp@0.36.1": "patches/@agentclientprotocol__claude-agent-acp@0.36.1.patch"
+  "baileys@7.0.0-rc12": "patches/baileys@7.0.0-rc12.patch"

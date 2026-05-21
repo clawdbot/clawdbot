@@ -9,6 +9,7 @@ import {
   normalizeSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
 import { coerceSecretRef } from "openclaw/plugin-sdk/secret-input-runtime";
+import { FsSafeError } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   mergeTelegramAccountConfig,
@@ -38,9 +39,21 @@ function inspectTokenFile(pathValue: unknown): {
   if (!tokenFile) {
     return null;
   }
-  const token = tryReadSecretFileSync(tokenFile, "Telegram bot token", {
-    rejectSymlink: true,
-  });
+  let token: string | undefined;
+  try {
+    token = tryReadSecretFileSync(tokenFile, "Telegram bot token", {
+      rejectSymlink: true,
+    });
+  } catch (error) {
+    if (!(error instanceof FsSafeError)) {
+      throw error;
+    }
+    return {
+      token: "",
+      tokenSource: "tokenFile",
+      tokenStatus: "configured_unavailable",
+    };
+  }
   return {
     token: token ?? "",
     tokenSource: "tokenFile",

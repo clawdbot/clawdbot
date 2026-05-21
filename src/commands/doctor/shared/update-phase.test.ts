@@ -36,7 +36,7 @@ describe("update-phase env helpers", () => {
     expect(isPostCoreConvergencePass(env)).toBe(true);
   });
 
-  it("defers configured plugin repair only for explicit update handoffs", () => {
+  it("defers configured plugin repair for post-core handoffs", () => {
     expect(
       shouldDeferConfiguredPluginInstallRepair({
         [UPDATE_IN_PROGRESS_ENV]: "1",
@@ -53,7 +53,7 @@ describe("update-phase env helpers", () => {
         [UPDATE_IN_PROGRESS_ENV]: "1",
         [UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]: "1",
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       shouldDeferConfiguredPluginInstallRepair({
         [UPDATE_IN_PROGRESS_ENV]: "1",
@@ -80,7 +80,7 @@ describe("update-phase env helpers", () => {
         [UPDATE_IN_PROGRESS_ENV]: "1",
         [UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV]: "1",
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       isLegacyPackageUpdateDoctorPass({
         [UPDATE_IN_PROGRESS_ENV]: "1",

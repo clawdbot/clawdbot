@@ -329,4 +329,60 @@ describe("deliverSlackSlashReplies chunking", () => {
       response_type: "in_channel",
     });
   });
+
+  it("suppresses reasoning payloads in slash replies", async () => {
+    const respond = vi.fn(async () => undefined);
+
+    await deliverSlackSlashReplies({
+      replies: [{ text: "Let me think...", isReasoning: true }, { text: "final answer" }],
+      respond,
+      ephemeral: false,
+      textLimit: 8000,
+    });
+
+    expect(respond).toHaveBeenCalledTimes(1);
+    expect(respond).toHaveBeenCalledWith({
+      text: "final answer",
+      response_type: "in_channel",
+    });
+  });
+});
+
+describe("deliverReplies reasoning suppression", () => {
+  beforeAll(async () => {
+    ({ deliverReplies } = await import("./replies.js"));
+  });
+
+  beforeEach(() => {
+    sendMock.mockReset();
+  });
+
+  it("suppresses reasoning payloads and delivers only non-reasoning replies", async () => {
+    sendMock.mockResolvedValue(undefined);
+
+    await deliverReplies(
+      baseParams({
+        replies: [{ text: "Reasoning:\n_hidden_", isReasoning: true }, { text: "visible answer" }],
+      }),
+    );
+
+    expect(sendMock).toHaveBeenCalledOnce();
+    const [, text] = requireSendCall();
+    expect(text).toBe("visible answer");
+  });
+
+  it("delivers nothing when all payloads are reasoning", async () => {
+    sendMock.mockResolvedValue(undefined);
+
+    await deliverReplies(
+      baseParams({
+        replies: [
+          { text: "Let me think about this...", isReasoning: true },
+          { text: "I need to consider...", isReasoning: true },
+        ],
+      }),
+    );
+
+    expect(sendMock).not.toHaveBeenCalled();
+  });
 });

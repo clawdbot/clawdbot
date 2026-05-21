@@ -88,6 +88,14 @@ function stripFormattedReasoningMessage(text: string): string {
   return lines.slice(index).join("\n").trim();
 }
 
+function normalizeToolCallIdForIdempotencyKey(toolCallId: unknown): string | undefined {
+  const value = normalizeOptionalString(toolCallId);
+  if (!value) {
+    return undefined;
+  }
+  return value.replace(/[^A-Za-z0-9._:-]+/gu, "_");
+}
+
 function sanitizePresentationTextFields(value: unknown): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return value;
@@ -553,6 +561,7 @@ const MessageToolSchema = buildMessageToolSchemaFromActions(AllMessageActions, {
 type MessageToolOptions = {
   agentAccountId?: string;
   agentSessionKey?: string;
+  runId?: string;
   sessionId?: string;
   agentId?: string;
   config?: OpenClawConfig;
@@ -881,6 +890,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
   const resolveSecretRefsForTool =
     options?.resolveCommandSecretRefsViaGateway ?? resolveCommandSecretRefsViaGateway;
   const runMessageActionForTool = options?.runMessageAction ?? runMessageAction;
+  let generatedIdempotencyCounter = 0;
   const effectiveCurrentChannel = resolveEffectiveCurrentChannelContext(options);
   const currentThreadTs =
     options?.currentThreadTs ??
@@ -935,7 +945,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
     displaySummary: "Send and manage messages across configured channels.",
     description,
     parameters: schema,
-    execute: async (_toolCallId, args, signal) => {
+    execute: async (toolCallId, args, signal) => {
       // Check if already aborted before doing any work
       if (signal?.aborted) {
         const err = new Error("Message send aborted");
@@ -1041,10 +1051,21 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
             }
           : undefined;
 
+      const actionIdempotencyKey =
+        normalizeOptionalString(params.idempotencyKey) ??
+        (options?.runId
+          ? `${options.runId}:message-tool:${
+              normalizeToolCallIdForIdempotencyKey(toolCallId) ?? ++generatedIdempotencyCounter
+            }`
+          : undefined);
+      const actionParams = actionIdempotencyKey
+        ? { ...params, idempotencyKey: actionIdempotencyKey }
+        : params;
+
       const result = await runMessageActionForTool({
         cfg,
         action,
-        params,
+        params: actionParams,
         defaultAccountId: accountId ?? undefined,
         requesterSenderId: options?.requesterSenderId,
         senderIsOwner: options?.senderIsOwner,

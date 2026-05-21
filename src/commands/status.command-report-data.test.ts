@@ -39,6 +39,7 @@ describe("buildStatusCommandReportData", () => {
     );
     expect(result.pluginCompatibilityLines).toEqual(["  warn(WARN) legacy"]);
     expect(result.pairingRecoveryLines[0]).toBe("warn(Gateway pairing approval required.)");
+    expect(result.modelSelectionLines).toEqual([]);
     expect(result.channelsRows[0]?.Channel).toBe("QuietChat");
     expect(result.sessionsRows[0]?.Cache).toBe("cache ok");
     expect(result.healthRows?.[0]).toEqual({
@@ -93,5 +94,31 @@ describe("buildStatusCommandReportData", () => {
         "warn(warning · optional pricing refresh degraded · OpenRouter pricing fetch failed: TypeError: fetch failed)",
     });
     expect(result.overviewRows[modelPricingIndex + 1]?.Item).toBe("Memory");
+  });
+
+  it("adds pinned-session model selection lines", async () => {
+    const baseParams = createStatusCommandReportDataParams();
+    const result = await buildStatusCommandReportData(
+      createStatusCommandReportDataParams({
+        summary: {
+          ...baseParams.summary,
+          sessions: {
+            ...baseParams.summary.sessions,
+            recent: [
+              {
+                ...baseParams.summary.sessions.recent[0],
+                configuredModel: "zhipu/glm-4.5-air",
+                selectedModel: "deepseek/deepseek-v4-flash",
+                modelSelectionReason: "session override",
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    expect(result.modelSelectionLines).toContain("  Configured default: zhipu/glm-4.5-air");
+    expect(result.modelSelectionLines).toContain("  Session selected: deepseek/deepseek-v4-flash");
+    expect(result.modelSelectionLines).toContain("  Reason: session override");
   });
 });

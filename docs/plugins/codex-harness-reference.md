@@ -154,6 +154,16 @@ from the OpenClaw sandbox egress setting: Docker `network: "none"` stays
 offline, while `network: "bridge"` or a custom Docker network permits outbound
 access.
 
+On Ubuntu/AppArmor hosts, Codex bwrap can fail under `workspace-write` before
+the shell command starts. If you see
+`bwrap: setting up uid map: Permission denied` or
+`bwrap: loopback: Failed RTM_NEWADDR: Operation not permitted`, run
+`openclaw doctor` and fix the reported host namespace policy for the OpenClaw
+service user rather than granting broader Docker container privileges. Prefer
+a scoped AppArmor profile for the service process; the
+`kernel.apparmor_restrict_unprivileged_userns=0` fallback is host-wide and has
+security tradeoffs.
+
 ## Auth and environment isolation
 
 Auth is selected in this order:
@@ -300,17 +310,17 @@ If discovery fails or times out, OpenClaw uses a bundled fallback catalog for:
 - GPT-5.4 mini
 - GPT-5.2
 
-The current bundled harness is `@openai/codex` `0.130.0`. A `model/list` probe
+The current bundled harness is `@openai/codex` `0.132.0`. A `model/list` probe
 against that bundled app-server returned:
 
-| Model id              | Default | Hidden | Input modalities | Reasoning efforts        |
-| --------------------- | ------- | ------ | ---------------- | ------------------------ |
-| `gpt-5.5`             | Yes     | No     | text, image      | low, medium, high, xhigh |
-| `gpt-5.4`             | No      | No     | text, image      | low, medium, high, xhigh |
-| `gpt-5.4-mini`        | No      | No     | text, image      | low, medium, high, xhigh |
-| `gpt-5.3-codex`       | No      | No     | text, image      | low, medium, high, xhigh |
-| `gpt-5.3-codex-spark` | No      | No     | text             | low, medium, high, xhigh |
-| `gpt-5.2`             | No      | No     | text, image      | low, medium, high, xhigh |
+| Model id            | Default | Hidden | Input modalities | Reasoning efforts        |
+| ------------------- | ------- | ------ | ---------------- | ------------------------ |
+| `gpt-5.5`           | Yes     | No     | text, image      | low, medium, high, xhigh |
+| `gpt-5.4`           | No      | No     | text, image      | low, medium, high, xhigh |
+| `gpt-5.4-mini`      | No      | No     | text, image      | low, medium, high, xhigh |
+| `gpt-5.3-codex`     | No      | No     | text, image      | low, medium, high, xhigh |
+| `gpt-5.2`           | No      | No     | text, image      | low, medium, high, xhigh |
+| `codex-auto-review` | No      | Yes    | text, image      | low, medium, high, xhigh |
 
 Hidden models can be returned by the app-server catalog for internal or
 specialized flows, but they are not normal model-picker choices.

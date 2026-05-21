@@ -10,6 +10,10 @@ import {
   searchSkillsFromClawHub,
   updateSkillsFromClawHub,
 } from "../agents/skills-clawhub.js";
+import {
+  installSkillFromSource,
+  isSkillSourceInstallSpec,
+} from "../agents/skills-source-install.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { defaultRuntime } from "../runtime.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
@@ -149,21 +153,61 @@ export function registerSkillsCli(program: Command) {
 
   skills
     .command("install")
-    .description("Install a skill from ClawHub into the active or shared managed directory")
-    .argument("<slug>", "ClawHub skill slug")
+    .description("Install a skill from ClawHub, git, or a local directory")
+    .argument("<slug>", "ClawHub skill slug, git:<repo>, or local skill directory")
     .option("--version <version>", "Install a specific version")
     .option("--force", "Overwrite an existing workspace skill", false)
     .option("--global", "Install into the shared managed skills directory", false)
     .option("--agent <id>", "Target agent workspace (defaults to cwd-inferred, then default agent)")
+    .option("--as <slug>", "Install a git/local skill under this slug")
     .action(
       async (
         slug: string,
-        opts: { version?: string; force?: boolean; global?: boolean; agent?: string },
+        opts: {
+          version?: string;
+          force?: boolean;
+          global?: boolean;
+          agent?: string;
+          as?: string;
+        },
         command: Command,
       ) => {
         try {
           const workspaceDir = resolveClawHubTargetWorkspaceDir(command, opts);
           if (!workspaceDir) {
+            return;
+          }
+          if (isSkillSourceInstallSpec(slug)) {
+            if (opts.version) {
+              defaultRuntime.error("--version is only supported for ClawHub skill installs.");
+              defaultRuntime.exit(1);
+              return;
+            }
+            const result = await installSkillFromSource({
+              workspaceDir,
+              spec: slug,
+              slug: opts.as,
+              force: Boolean(opts.force),
+              logger: {
+                info: (message) => defaultRuntime.log(message),
+                warn: (message) => defaultRuntime.log(theme.warn(message)),
+              },
+            });
+            if (!result.ok) {
+              defaultRuntime.error(result.error);
+              defaultRuntime.exit(1);
+              return;
+            }
+            defaultRuntime.log(
+              `Installed ${result.slug} from ${result.source} -> ${result.targetDir}`,
+            );
+            return;
+          }
+          if (opts.as) {
+            defaultRuntime.error(
+              "--as is only supported for git and local directory skill installs.",
+            );
+            defaultRuntime.exit(1);
             return;
           }
           const result = await installSkillFromClawHub({

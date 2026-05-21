@@ -1042,11 +1042,28 @@ resolve_candidate_version() {
   export OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT
 }
 
+candidate_update_spec() {
+  if [ "$CANDIDATE_KIND" != "tarball" ]; then
+    printf '%s\n' "$CANDIDATE_SPEC"
+    return 0
+  fi
+  case "$CANDIDATE_SPEC" in
+    file:*)
+      printf '%s\n' "$CANDIDATE_SPEC"
+      ;;
+    *)
+      printf 'file:%s\n' "$CANDIDATE_SPEC"
+      ;;
+  esac
+}
+
 update_candidate() {
-  echo "Updating baseline $baseline_spec to candidate $CANDIDATE_KIND:$CANDIDATE_SPEC ($candidate_version)"
+  local update_spec
+  update_spec="$(candidate_update_spec)"
+  echo "Updating baseline $baseline_spec to candidate $CANDIDATE_KIND:$update_spec ($candidate_version)"
   local update_start=""
   local update_end=""
-  local update_args=(update --tag "$CANDIDATE_SPEC" --yes --json)
+  local update_args=(update --tag "$update_spec" --yes --json)
   local update_env=(
     env
     -u OPENCLAW_GATEWAY_TOKEN

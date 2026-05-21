@@ -196,10 +196,9 @@ describe("LINE accounts", () => {
         },
       };
 
-      const account = resolveLineAccount({ cfg });
-      expect(account.channelAccessToken).toBe("");
-      expect(account.channelSecret).toBe("");
-      expect(account.tokenSource).toBe("none");
+      expect(() => resolveLineAccount({ cfg })).toThrow(
+        /LINE credential file.*must not be a symlink/,
+      );
     });
   });
 

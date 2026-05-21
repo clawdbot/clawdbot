@@ -18,6 +18,7 @@ type TsdownLog = {
   message?: string;
   id?: string;
   importer?: string;
+  plugin?: string;
 };
 
 type TsdownOnLog = (
@@ -264,6 +265,38 @@ describe("tsdown config", () => {
     const log = {
       code: "UNRESOLVED_IMPORT",
       message: "Could not resolve 'missing-dependency' in src/index.ts",
+    };
+
+    configured?.("warn", log, (_level, forwardedLog) => handled.push(forwardedLog));
+
+    expect(handled).toEqual([log]);
+  });
+
+  it("suppresses rolldown-plugin-dts CommonJS dts warnings from bundled zod locales", () => {
+    const configured = unifiedDistGraph()?.inputOptions?.({})?.onLog;
+    const handled: TsdownLog[] = [];
+
+    configured?.(
+      "warn",
+      {
+        code: "PLUGIN_WARNING",
+        plugin: "rolldown-plugin-dts:fake-js",
+        message:
+          "/abs/path/node_modules/zod/v4/locales/ur.d.cts uses CommonJS dts syntax. CommonJS dts modules cannot be reliably bundled by rolldown-plugin-dts. Please mark this module as external in your Rolldown config.",
+      },
+      (_level, log) => handled.push(log),
+    );
+
+    expect(handled).toStrictEqual([]);
+  });
+
+  it("keeps other rolldown-plugin-dts warnings visible", () => {
+    const configured = unifiedDistGraph()?.inputOptions?.({})?.onLog;
+    const handled: TsdownLog[] = [];
+    const log = {
+      code: "PLUGIN_WARNING",
+      plugin: "rolldown-plugin-dts:fake-js",
+      message: "some other dts warning that should not be hidden",
     };
 
     configured?.("warn", log, (_level, forwardedLog) => handled.push(forwardedLog));

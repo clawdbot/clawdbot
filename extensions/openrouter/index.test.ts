@@ -202,9 +202,16 @@ describe("openrouter provider hooks", () => {
 
   it("injects provider routing into compat before applying stream wrappers", async () => {
     const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    let capturedPayload: Record<string, unknown> | undefined;
     const baseStreamFn = vi.fn(
-      (..._args: Parameters<import("@earendil-works/pi-agent-core").StreamFn>) =>
-        ({ async *[Symbol.asyncIterator]() {} }) as never,
+      (
+        ...args: Parameters<import("@earendil-works/pi-agent-core").StreamFn>
+      ): ReturnType<import("@earendil-works/pi-agent-core").StreamFn> => {
+        const payload: Record<string, unknown> = {};
+        void args[2]?.onPayload?.(payload, args[0]);
+        capturedPayload = payload;
+        return { async *[Symbol.asyncIterator]() {} } as never;
+      },
     );
 
     const wrapped = provider.wrapStreamFn?.({
@@ -235,6 +242,60 @@ describe("openrouter provider hooks", () => {
     const firstModel = firstCall?.[0];
     const compat = (firstModel as { compat?: { openRouterRouting?: { order?: unknown } } }).compat;
     expect(compat?.openRouterRouting?.order).toEqual(["moonshot"]);
+    expect(capturedPayload?.provider).toEqual({
+      order: ["moonshot"],
+    });
+  });
+
+  it("merges resolved OpenRouter model params into transport params", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    const patch = provider.extraParamsForTransport?.({
+      config: {
+        models: {
+          providers: {
+            openrouter: {
+              params: {
+                provider: {
+                  sort: "price",
+                  data_collection: "deny",
+                },
+              },
+            },
+          },
+        },
+      },
+      provider: "openrouter",
+      modelId: "openai/gpt-5.4",
+      extraParams: {
+        provider: {
+          sort: "latency",
+          require_parameters: true,
+        },
+        temperature: 0.2,
+      },
+      model: {
+        provider: "openrouter",
+        api: "openai-completions",
+        id: "openai/gpt-5.4",
+        params: {
+          responseCache: true,
+          provider: {
+            order: ["openai"],
+            constructor: "ignored",
+          },
+        },
+      },
+      transport: "sse",
+    } as never)?.patch;
+
+    expect(patch?.responseCache).toBe(true);
+    expect(patch?.temperature).toBe(0.2);
+    expect(patch?.provider).toEqual({
+      sort: "latency",
+      data_collection: "deny",
+      order: ["openai"],
+      require_parameters: true,
+    });
   });
 
   it("does not inject OpenRouter reasoning for Hunter Alpha", async () => {

@@ -953,8 +953,8 @@ async function runNativeHookRelayPreToolUse(params: {
     return params.adapter.renderPreToolUseBlockResponse(outcome.reason);
   }
   if (nativeHookRelayParamsWereRewritten(originalToolInputFingerprint, outcome.params)) {
-    // @openai/codex@0.130.0 treats PreToolUse updatedInput as unsupported and
-    // continues with the original params, so rewrites must fail closed here.
+    // Codex app-server may continue with the original params when updatedInput
+    // is unsupported, so rewrites must fail closed here.
     return params.adapter.renderPreToolUseBlockResponse(
       "OpenClaw tool policy rewrote Codex app-server approval params; refusing original request.",
     );

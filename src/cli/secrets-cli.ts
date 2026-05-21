@@ -1,13 +1,8 @@
-import fs from "node:fs";
-import { confirm } from "@clack/prompts";
 import type { Command } from "commander";
 import { danger } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
-import { runSecretsApply } from "../secrets/apply.js";
-import { resolveSecretsAuditExitCode, runSecretsAudit } from "../secrets/audit.js";
-import { runSecretsConfigureInteractive } from "../secrets/configure.js";
-import { isSecretsApplyPlan, type SecretsApplyPlan } from "../secrets/plan.js";
+import type { SecretsApplyPlan } from "../secrets/plan.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { formatCliCommand } from "./command-format.js";
@@ -37,8 +32,12 @@ type SecretsApplyOptions = {
   json?: boolean;
 };
 
-function readPlanFile(pathname: string): SecretsApplyPlan {
-  const raw = fs.readFileSync(pathname, "utf8");
+async function readPlanFile(pathname: string): Promise<SecretsApplyPlan> {
+  const [{ readFileSync }, { isSecretsApplyPlan }] = await Promise.all([
+    import("node:fs"),
+    import("../secrets/plan.js"),
+  ]);
+  const raw = readFileSync(pathname, "utf8");
   const parsed = JSON.parse(raw) as unknown;
   if (!isSecretsApplyPlan(parsed)) {
     throw new Error(
@@ -48,7 +47,7 @@ function readPlanFile(pathname: string): SecretsApplyPlan {
   return parsed;
 }
 
-export function registerSecretsCli(program: Command) {
+export function registerSecretsCli(program: Command): void {
   const secrets = program
     .command("secrets")
     .description("Secrets runtime controls")
@@ -106,6 +105,8 @@ export function registerSecretsCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (opts: SecretsAuditOptions) => {
       try {
+        const { resolveSecretsAuditExitCode, runSecretsAudit } =
+          await import("../secrets/audit.js");
         const report = await runSecretsAudit({
           allowExec: Boolean(opts.allowExec),
         });
@@ -169,6 +170,7 @@ export function registerSecretsCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (opts: SecretsConfigureOptions) => {
       try {
+        const { runSecretsConfigureInteractive } = await import("../secrets/configure.js");
         const configured = await runSecretsConfigureInteractive({
           providersOnly: Boolean(opts.providersOnly),
           skipProviderSetup: Boolean(opts.skipProviderSetup),
@@ -176,7 +178,8 @@ export function registerSecretsCli(program: Command) {
           allowExecInPreflight: Boolean(opts.allowExec),
         });
         if (opts.planOut) {
-          fs.writeFileSync(opts.planOut, `${JSON.stringify(configured.plan, null, 2)}\n`, "utf8");
+          const { writeFileSync } = await import("node:fs");
+          writeFileSync(opts.planOut, `${JSON.stringify(configured.plan, null, 2)}\n`, "utf8");
         }
         if (opts.json) {
           defaultRuntime.writeJson({
@@ -212,6 +215,7 @@ export function registerSecretsCli(program: Command) {
 
         let shouldApply = Boolean(opts.apply);
         if (!shouldApply && !opts.json) {
+          const { confirm } = await import("@clack/prompts");
           const approved = await confirm({
             message: "Apply this plan now?",
             initialValue: true,
@@ -223,6 +227,7 @@ export function registerSecretsCli(program: Command) {
         if (shouldApply) {
           const needsIrreversiblePrompt = Boolean(opts.apply);
           if (needsIrreversiblePrompt && !opts.yes && !opts.json) {
+            const { confirm } = await import("@clack/prompts");
             const confirmed = await confirm({
               message:
                 "This migration is one-way for migrated plaintext values. Continue with apply?",
@@ -233,6 +238,7 @@ export function registerSecretsCli(program: Command) {
               return;
             }
           }
+          const { runSecretsApply } = await import("../secrets/apply.js");
           const result = await runSecretsApply({
             plan: configured.plan,
             write: true,
@@ -267,7 +273,10 @@ export function registerSecretsCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (opts: SecretsApplyOptions) => {
       try {
-        const plan = readPlanFile(opts.from);
+        const [{ runSecretsApply }, plan] = await Promise.all([
+          import("../secrets/apply.js"),
+          readPlanFile(opts.from),
+        ]);
         const result = await runSecretsApply({
           plan,
           write: !opts.dryRun,

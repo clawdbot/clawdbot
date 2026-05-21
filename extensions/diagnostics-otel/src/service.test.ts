@@ -53,6 +53,21 @@ const logShutdown = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const traceExporterCtor = vi.hoisted(() => vi.fn());
 const metricExporterCtor = vi.hoisted(() => vi.fn());
 const logExporterCtor = vi.hoisted(() => vi.fn());
+const unhandledRejectionHandlerState = vi.hoisted(() => {
+  let handlers: Array<(reason: unknown) => boolean> = [];
+  return {
+    getHandlers: () => handlers,
+    register: vi.fn((handler: (reason: unknown) => boolean) => {
+      handlers.push(handler);
+      return () => {
+        handlers = handlers.filter((candidate) => candidate !== handler);
+      };
+    }),
+    reset: () => {
+      handlers = [];
+    },
+  };
+});
 
 vi.mock("@opentelemetry/api", () => ({
   context: {
@@ -97,6 +112,10 @@ vi.mock("@opentelemetry/exporter-logs-otlp-proto", () => ({
   OTLPLogExporter: function OTLPLogExporter(options?: unknown) {
     logExporterCtor(options);
   },
+}));
+
+vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
+  registerUnhandledRejectionHandler: unhandledRejectionHandlerState.register,
 }));
 
 vi.mock("@opentelemetry/sdk-logs", () => ({
@@ -336,6 +355,8 @@ describe("diagnostics-otel service", () => {
     traceExporterCtor.mockClear();
     metricExporterCtor.mockClear();
     logExporterCtor.mockClear();
+    unhandledRejectionHandlerState.reset();
+    unhandledRejectionHandlerState.register.mockClear();
     delete process.env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT;
     delete process.env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT;
     delete process.env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT;
@@ -529,6 +550,54 @@ describe("diagnostics-otel service", () => {
       durationMs: 10,
     });
     expect(telemetryState.tracer.startSpan).not.toHaveBeenCalled();
+  });
+
+  test("registers and removes an OTLP exporter unhandled rejection handler", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true, logs: true });
+
+    await service.start(ctx);
+
+    expect(unhandledRejectionHandlerState.register).toHaveBeenCalledTimes(1);
+    const handler = unhandledRejectionHandlerState.getHandlers()[0];
+    expect(handler).toBeTypeOf("function");
+
+    const errorInstance = Object.assign(new Error("collector gone"), {
+      name: "OTLPExporterError",
+      code: 410,
+    });
+    expect(handler?.(errorInstance)).toBe(true);
+    expect(handler?.({ name: "OTLPExporterError", code: 410, data: "user_stop" })).toBe(true);
+    expect(handler?.([{ name: "OTLPExporterError", code: 410, data: "user_stop" }])).toBe(true);
+    expect(
+      handler?.(
+        new AggregateError(
+          [{ name: "OTLPExporterError", code: 410, data: "user_stop" }],
+          "export failed",
+        ),
+      ),
+    ).toBe(true);
+    expect(handler?.(new Error("other exporter error"))).toBe(false);
+    expect(ctx.logger.warn).toHaveBeenCalledWith(
+      "diagnostics-otel: suppressed OTLP exporter unhandled rejection (code=410)",
+    );
+
+    await service.stop?.(ctx);
+    expect(unhandledRejectionHandlerState.getHandlers()).toHaveLength(0);
+  });
+
+  test("does not retain an OTLP exporter handler when startup setup fails", async () => {
+    const startupError = new Error("trace exporter setup failed");
+    traceExporterCtor.mockImplementationOnce(() => {
+      throw startupError;
+    });
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true });
+
+    await expect(service.start(ctx)).rejects.toBe(startupError);
+
+    expect(unhandledRejectionHandlerState.register).not.toHaveBeenCalled();
+    expect(unhandledRejectionHandlerState.getHandlers()).toHaveLength(0);
   });
 
   test("uses a preloaded OpenTelemetry SDK without dropping diagnostic listeners", async () => {

@@ -929,13 +929,6 @@ Successfully processed 1 files`;
       expectTrustedOnly([aclEntry({ principal: "AUTORIDAD NT\\SYSTEM" })]);
     });
 
-    it("classifies principal with diacritic not in TRUSTED_BASE but matching stripped suffix (line 145)", () => {
-      // "NT Authority\\Syst\u00e9me" has \u00e9 (e-acute) which is not in TRUSTED_BASE directly.
-      // After diacritic stripping: "nt authority\\systeme" which ends with stripped("\\syst\u00e8me") = "\\systeme".
-      // This exercises the classifyPrincipal diacritic-strip fallback at line 145.
-      expectTrustedOnly([aclEntry({ principal: "NT Authority\\Syst\u00e9me" })]);
-    });
-
     it("French Windows full scenario: user + Système only → no untrusted", () => {
       const entries: WindowsAclEntry[] = [
         aclEntry({ principal: "MYPC\\Pierre" }),

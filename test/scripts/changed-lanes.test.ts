@@ -865,12 +865,12 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands.map((command) => command.args[0])).not.toContain("tsgo:all");
   });
 
-  it("keeps app lint explicit when Linux Testbox lacks SwiftLint", () => {
+  it("keeps app lint explicit when non-macOS hosts lack SwiftLint", () => {
     const result = detectChangedLanes([
       "apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift",
     ]);
     const plan = createChangedCheckPlan(result, {
-      env: { OPENCLAW_TESTBOX_REMOTE_RUN: "1", PATH: "/usr/bin" },
+      env: { PATH: "/usr/bin" },
       platform: "linux",
       swiftlintAvailable: false,
     });
@@ -881,7 +881,7 @@ describe("scripts/changed-lanes", () => {
     expect(plan.commands.map((command) => command.args[0])).not.toContain("lint:apps");
     expect(plan.commands).toContainEqual(
       expect.objectContaining({
-        name: "lint apps (swiftlint unavailable in Testbox)",
+        name: "lint apps (swiftlint unavailable on this host)",
         bin: "node",
       }),
     );

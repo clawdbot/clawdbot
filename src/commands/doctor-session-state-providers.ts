@@ -114,6 +114,7 @@ function entryMayContainPluginSessionRouteState(entry: SessionEntry): boolean {
     normalizeString(record.modelProvider) !== undefined ||
     normalizeString(record.model) !== undefined ||
     normalizeString(record.agentHarnessId) !== undefined ||
+    normalizeString(record.agentRuntimeOverride) !== undefined ||
     record.cliSessionBindings !== undefined ||
     record.cliSessionIds !== undefined ||
     normalizeString(record.authProfileOverride) !== undefined ||
@@ -138,6 +139,7 @@ export type DoctorSessionRouteStateRepair = {
   ownerId: string;
   ownerLabel: string;
   reasons: string[];
+  pinnedRuntimeKeys: string[];
   cliSessionKeys: string[];
 };
 
@@ -232,7 +234,11 @@ function scanEntryForOwner(params: {
   const cliSessionKeys = [...normalizeIdSet(params.owner.cliSessionKeys)];
   const authProfilePrefixes = normalizePrefixList(params.owner.authProfilePrefixes);
   const routeAllowsOwner = routeAllowsOwnerState({ owner: params.owner, route: params.route });
+  const routeRuntime = normalizeString(params.route?.runtime);
+  const routeAllowsOwnerRuntime =
+    routeRuntime !== undefined && runtimeIds.has(normalizeProviderId(routeRuntime));
   const reasons: string[] = [];
+  const pinnedRuntimeKeys: string[] = [];
   const directOverride = resolvePersistedOverrideModelRef({
     defaultProvider: params.route?.defaultProvider ?? "",
     overrideProvider: params.entry.providerOverride,
@@ -274,6 +280,18 @@ function scanEntryForOwner(params: {
 
   const explicitOwnedOverride =
     directOverrideIsOwned && directOverrideSource !== undefined && directOverrideSource !== "auto";
+  if (!routeAllowsOwnerRuntime && !explicitOwnedOverride) {
+    const harnessId = normalizeString(params.entry.agentHarnessId);
+    if (harnessId && runtimeIds.has(normalizeProviderId(harnessId))) {
+      addReason(reasons, "pinned runtime");
+      pinnedRuntimeKeys.push("agentHarnessId");
+    }
+    const runtimeOverride = normalizeString(params.entry.agentRuntimeOverride);
+    if (runtimeOverride && runtimeIds.has(normalizeProviderId(runtimeOverride))) {
+      addReason(reasons, "pinned runtime");
+      pinnedRuntimeKeys.push("agentRuntimeOverride");
+    }
+  }
   if (!routeAllowsOwner && !explicitOwnedOverride) {
     const runtimeModel = normalizeString(params.entry.model);
     const runtimeRef = runtimeModel
@@ -283,10 +301,6 @@ function scanEntryForOwner(params: {
       : null;
     if (runtimeRef && providerIds.has(normalizeProviderId(runtimeRef.provider))) {
       addReason(reasons, "runtime model state");
-    }
-    const harnessId = normalizeString(params.entry.agentHarnessId);
-    if (harnessId && runtimeIds.has(normalizeProviderId(harnessId))) {
-      addReason(reasons, "pinned runtime");
     }
     if (hasOwnedCliSession({ entry: params.entry, cliSessionKeys })) {
       addReason(reasons, "CLI session binding");
@@ -308,6 +322,7 @@ function scanEntryForOwner(params: {
       ownerId: params.owner.id,
       ownerLabel: params.owner.label,
       reasons,
+      pinnedRuntimeKeys,
       cliSessionKeys,
     },
   };
@@ -396,7 +411,9 @@ export function applySessionRouteStateRepair(params: {
     clear("fallbackNoticeReason");
   }
   if (params.repair.reasons.includes("pinned runtime")) {
-    clear("agentHarnessId");
+    for (const key of params.repair.pinnedRuntimeKeys) {
+      clear(key);
+    }
   }
   if (params.repair.reasons.includes("CLI session binding")) {
     changed =
