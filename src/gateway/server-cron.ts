@@ -23,6 +23,7 @@ import { resolveCronSessionTargetSessionKey } from "../cron/session-target.js";
 import { resolveCronStorePath } from "../cron/store.js";
 import type { CronJob } from "../cron/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { resolveMainScopedEventSessionKey } from "../infra/event-session-routing.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
@@ -204,7 +205,13 @@ export function buildGatewayCronService(params: {
         });
       }
     }
-    return canonical;
+    return (
+      resolveMainScopedEventSessionKey({
+        cfg: params.runtimeConfig,
+        sessionKey: canonical,
+        agentId: params.agentId,
+      }) ?? canonical
+    );
   };
 
   const resolveCronTarget = (opts?: {

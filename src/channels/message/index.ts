@@ -97,6 +97,7 @@ export type {
   ChannelMessageSendLifecycleAdapter,
   ChannelMessageSendMediaContext,
   ChannelMessageSendPayloadContext,
+  ChannelMessageSendPollContext,
   ChannelMessageSendResult,
   ChannelMessageSendSuccessContext,
   ChannelMessageSendTextContext,

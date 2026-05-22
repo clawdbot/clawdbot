@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import os from "node:os";
 import { isRestartEnabled } from "../../config/commands.flags.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
@@ -33,6 +34,14 @@ function formatUpdateRunErrorMessage(err: unknown): string {
     return err.message || err.name;
   }
   return String(err);
+}
+
+function tryResolveProcessCwd(): string | undefined {
+  try {
+    return process.cwd();
+  } catch {
+    return undefined;
+  }
 }
 
 export const updateHandlers: GatewayRequestHandlers = {
@@ -82,12 +91,15 @@ export const updateHandlers: GatewayRequestHandlers = {
     try {
       const config = context.getRuntimeConfig();
       const configChannel = normalizeUpdateChannel(config.update?.channel);
+      const invocationCwd = tryResolveProcessCwd();
       const root =
         (await resolveOpenClawPackageRoot({
           moduleUrl: import.meta.url,
           argv1: process.argv[1],
-          cwd: process.cwd(),
-        })) ?? process.cwd();
+          ...(invocationCwd ? { cwd: invocationCwd } : {}),
+        })) ??
+        invocationCwd ??
+        os.homedir();
       const installSurface = await resolveUpdateInstallSurface({
         timeoutMs,
         cwd: root,

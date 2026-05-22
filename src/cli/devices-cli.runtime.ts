@@ -61,6 +61,8 @@ type PendingDevice = {
   deviceId: string;
   publicKey?: string;
   displayName?: string;
+  clientId?: string;
+  clientMode?: string;
   role?: string;
   roles?: string[];
   scopes?: string[];
@@ -84,6 +86,11 @@ type PairedDevice = {
 type DevicePairingList = {
   pending?: PendingDevice[];
   paired?: PairedDevice[];
+};
+
+type ApprovePairingGatewayContext = {
+  originalRequest: PendingDevice | null;
+  scopes?: OperatorScope[];
 };
 
 const FALLBACK_NOTICE = "Direct scope access failed; using local fallback.";
@@ -225,7 +232,7 @@ async function approvePairingWithFallback(
   opts: DevicesRpcOpts,
   requestId: string,
 ): Promise<Record<string, unknown> | null> {
-  const scopes = await resolveApprovePairingGatewayScopes(opts, requestId);
+  const { scopes, originalRequest } = await resolveApprovePairingGatewayContext(opts, requestId);
   try {
     return await callGatewayCli(
       "device.pair.approve",
@@ -248,6 +255,53 @@ async function approvePairingWithFallback(
     }
     const gatewayRequestId = normalizeOptionalString(fallback.details.requestId);
     if (gatewayRequestId && gatewayRequestId !== requestId) {
+      const local = await listDevicePairing();
+      const localList = {
+        pending: local.pending as PendingDevice[],
+        paired: local.paired.map((device) => redactLocalPairedDevice(device)),
+      };
+      const replacement = findSameDeviceReplacementRequest({
+        originalRequest,
+        originalRequestId: requestId,
+        gatewayRequestId,
+        pending: localList.pending,
+        paired: localList.paired,
+      });
+      if (replacement) {
+        const approved = await approveDevicePairing(replacement.requestId, {
+          callerScopes: ["operator.admin"],
+        });
+        if (!approved) {
+          return null;
+        }
+        if (approved.status === "forbidden") {
+          throw new Error(formatDevicePairingForbiddenMessage(approved), { cause: error });
+        }
+        if (opts.json !== true) {
+          defaultRuntime.log(
+            theme.warn(
+              `Pending request ${sanitizeForLog(requestId)} was replaced by same-device repair ${sanitizeForLog(replacement.requestId)}; approving latest compatible request.`,
+            ),
+          );
+          defaultRuntime.log(theme.warn(FALLBACK_NOTICE));
+        }
+        return {
+          requestId: replacement.requestId,
+          resolved: {
+            kind: "same-device-replacement",
+            requestedRequestId: requestId,
+            approvedRequestId: replacement.requestId,
+          },
+          device: redactLocalPairedDevice(approved.device),
+        };
+      }
+      const hasOriginalPending = Boolean(findPendingRequestById(localList.pending, requestId));
+      const hasGatewayPending = Boolean(
+        findPendingRequestById(localList.pending, gatewayRequestId),
+      );
+      if (!hasOriginalPending && !hasGatewayPending) {
+        return null;
+      }
       throw buildFallbackStateMismatchError(fallback.details);
     }
     const approved = await approveDevicePairing(requestId, {
@@ -303,6 +357,122 @@ function normalizeOperatorScopes(scopes: string[] | undefined): string[] {
   );
 }
 
+function findPendingRequestById(
+  pending: PendingDevice[] | undefined,
+  requestId: string | null | undefined,
+): PendingDevice | null {
+  const normalizedRequestId = normalizeOptionalString(requestId);
+  if (!normalizedRequestId) {
+    return null;
+  }
+  return (
+    pending?.find(
+      (request) => normalizeOptionalString(request.requestId) === normalizedRequestId,
+    ) ?? null
+  );
+}
+
+function hasExactRoleMatch(original: PendingDevice, replacement: PendingDevice): boolean {
+  const originalRoles = normalizeDeviceRoles(original);
+  const replacementRoles = normalizeDeviceRoles(replacement);
+  if (originalRoles.length !== replacementRoles.length) {
+    return false;
+  }
+  const replacementRoleSet = new Set(replacementRoles);
+  return originalRoles.every((role) => replacementRoleSet.has(role));
+}
+
+function hasCompatibleClientMetadata(original: PendingDevice, replacement: PendingDevice): boolean {
+  const originalClientId = normalizeOptionalString(original.clientId);
+  const replacementClientId = normalizeOptionalString(replacement.clientId);
+  if (originalClientId && replacementClientId && originalClientId !== replacementClientId) {
+    return false;
+  }
+  const originalClientMode = normalizeOptionalString(original.clientMode);
+  const replacementClientMode = normalizeOptionalString(replacement.clientMode);
+  return !(
+    originalClientMode &&
+    replacementClientMode &&
+    originalClientMode !== replacementClientMode
+  );
+}
+
+function resolveOriginalReplacementScopes(
+  original: PendingDevice,
+  paired: PairedDevice | undefined,
+): string[] {
+  const requestedScopes = normalizeDeviceAuthScopes(original.scopes);
+  const inferredOperatorScopes = resolvePendingOperatorApprovalScopes(original, paired);
+  return [...new Set([...requestedScopes, ...inferredOperatorScopes])];
+}
+
+function replacementScopesCoverOriginal(
+  original: PendingDevice,
+  replacement: PendingDevice,
+  paired: PairedDevice | undefined,
+): boolean {
+  const originalScopes = resolveOriginalReplacementScopes(original, paired);
+  const replacementScopes = normalizeDeviceAuthScopes(replacement.scopes);
+  const replacementScopeSet = new Set(replacementScopes);
+  if (!originalScopes.every((scope) => replacementScopeSet.has(scope))) {
+    return false;
+  }
+  // Same-device repair reconnects can supersede a stale request with a combined
+  // request that appends the pairing scope required for the repaired session to
+  // reconnect and complete approval.
+  return replacementScopes.every(
+    (scope) => originalScopes.includes(scope) || scope === PAIRING_SCOPE,
+  );
+}
+
+function findSameDeviceReplacementRequest(params: {
+  originalRequest: PendingDevice | null;
+  originalRequestId: string;
+  gatewayRequestId: string;
+  pending: PendingDevice[] | undefined;
+  paired: PairedDevice[] | undefined;
+}): PendingDevice | null {
+  const originalRequestId = normalizeOptionalString(params.originalRequestId);
+  if (!params.originalRequest || !originalRequestId) {
+    // Without the pre-approve snapshot we cannot prove that the gateway's newer
+    // request is the same-device repair contract the operator intended to approve.
+    return null;
+  }
+  if (normalizeOptionalString(params.originalRequest.requestId) !== originalRequestId) {
+    return null;
+  }
+  const replacement = findPendingRequestById(params.pending, params.gatewayRequestId);
+  if (!replacement) {
+    return null;
+  }
+  const originalDeviceId = normalizeOptionalString(params.originalRequest.deviceId);
+  const replacementDeviceId = normalizeOptionalString(replacement.deviceId);
+  if (!originalDeviceId || originalDeviceId !== replacementDeviceId) {
+    return null;
+  }
+  const originalPublicKey = normalizeOptionalString(params.originalRequest.publicKey);
+  const replacementPublicKey = normalizeOptionalString(replacement.publicKey);
+  if (!originalPublicKey || !replacementPublicKey || originalPublicKey !== replacementPublicKey) {
+    return null;
+  }
+  if (!hasExactRoleMatch(params.originalRequest, replacement)) {
+    return null;
+  }
+  if (!hasCompatibleClientMetadata(params.originalRequest, replacement)) {
+    return null;
+  }
+  const pairedByDeviceId = indexPairedDevices(params.paired);
+  const originalPaired = lookupPairedDevice(pairedByDeviceId, params.originalRequest);
+  const replacementPaired = lookupPairedDevice(pairedByDeviceId, replacement);
+  if (!replacementScopesCoverOriginal(params.originalRequest, replacement, originalPaired)) {
+    return null;
+  }
+  if (replacement.isRepair !== true && (!originalPaired || !replacementPaired)) {
+    return null;
+  }
+  return replacement;
+}
+
 function resolvePairedOperatorScopes(paired: PairedDevice | undefined): string[] {
   const operatorToken = paired?.tokens?.find((token) => {
     const role = normalizeOptionalString(token.role);
@@ -347,22 +517,25 @@ function resolveApprovePairingScopesForRequest(
   return [...out];
 }
 
-async function resolveApprovePairingGatewayScopes(
+async function resolveApprovePairingGatewayContext(
   opts: DevicesRpcOpts,
   requestId: string,
-): Promise<OperatorScope[] | undefined> {
+): Promise<ApprovePairingGatewayContext> {
   try {
     const list = await listPairingWithFallback(opts);
-    const request = list.pending?.find((pending) => pending.requestId === requestId);
+    const request = findPendingRequestById(list.pending, requestId);
     if (!request) {
-      return undefined;
+      return { originalRequest: null, scopes: undefined };
     }
-    return resolveApprovePairingScopesForRequest(
-      request,
-      lookupPairedDevice(indexPairedDevices(list.paired), request),
-    );
+    return {
+      originalRequest: request,
+      scopes: resolveApprovePairingScopesForRequest(
+        request,
+        lookupPairedDevice(indexPairedDevices(list.paired), request),
+      ),
+    };
   } catch {
-    return undefined;
+    return { originalRequest: null, scopes: undefined };
   }
 }
 
@@ -753,9 +926,14 @@ export async function runDevicesApproveCommand(
     defaultRuntime.writeJson(result);
     return;
   }
+  const resultRequestId = (result as { requestId?: unknown })?.requestId;
+  const approvedRequestId =
+    typeof resultRequestId === "string" && resultRequestId.trim().length > 0
+      ? resultRequestId
+      : resolvedRequestId;
   const deviceId = (result as { device?: { deviceId?: string } })?.device?.deviceId;
   defaultRuntime.log(
-    `${theme.success("Approved")} ${theme.command(deviceId ?? "ok")} ${theme.muted(`(${resolvedRequestId})`)}`,
+    `${theme.success("Approved")} ${theme.command(deviceId ?? "ok")} ${theme.muted(`(${approvedRequestId})`)}`,
   );
 }
 

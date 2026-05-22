@@ -221,7 +221,9 @@ describe("gateway hot reload model state", () => {
       nextConfig,
     );
 
-    expect(hoisted.reloadEvents).toEqual([
+    const firstResetIndex = hoisted.reloadEvents.indexOf("reset-model-catalog");
+    expect(firstResetIndex).toBeGreaterThanOrEqual(0);
+    expect(hoisted.reloadEvents.slice(firstResetIndex)).toEqual([
       "reset-model-catalog",
       "clear-provider-auth",
       "reload-plugins",

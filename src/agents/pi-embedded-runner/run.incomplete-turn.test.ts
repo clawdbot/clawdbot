@@ -1235,6 +1235,45 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     ).toBe(false);
   });
 
+  it("surfaces no-visible-answer recovery for app-server interrupted tool-only output", () => {
+    const interruptedToolOnlyAttempt = makeAttemptResult({
+      assistantTexts: [],
+      toolMetas: [{ toolName: "bash", meta: "workspace" }],
+      messagesSnapshot: [
+        {
+          role: "user",
+          content: "check running processes",
+          timestamp: 1,
+        },
+        {
+          role: "toolResult",
+          content: "",
+          isError: false,
+          details: { aggregated: "" },
+          timestamp: 2,
+        } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+      ],
+    });
+
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: interruptedToolOnlyAttempt.assistantTexts.length,
+      aborted: false,
+      timedOut: false,
+      attempt: interruptedToolOnlyAttempt,
+    });
+
+    expect(incompleteTurnText).toContain("couldn't generate a response");
+
+    const explicitCancellationText = resolveIncompleteTurnPayloadText({
+      payloadCount: interruptedToolOnlyAttempt.assistantTexts.length,
+      aborted: true,
+      timedOut: false,
+      attempt: interruptedToolOnlyAttempt,
+    });
+
+    expect(explicitCancellationText).toBeNull();
+  });
+
   it("detects tool-use terminal turn with pre-tool text as incomplete (#76477)", () => {
     // When the last assistant message ended with stopReason=toolUse, pre-tool
     // text alone must not suppress the incomplete-turn guard. The model
@@ -2096,6 +2135,42 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
 
     expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
     expect(DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT).toBe(1);
+  });
+
+  it("surfaces empty Codex app-server replies after successful sparse bash output", () => {
+    const incompleteTurnText = resolveIncompleteTurnPayloadText({
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "bash", meta: "exit=0" }],
+        messagesSnapshot: [
+          {
+            role: "toolResult",
+            content: [{ type: "text", text: "" }],
+            details: { aggregated: "" },
+          } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+          {
+            role: "assistant",
+            stopReason: "stop",
+            provider: "openai-codex",
+            model: "gpt-5.5",
+            content: [{ type: "text", text: "" }],
+          } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+        ],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai-codex",
+          model: "gpt-5.5",
+          content: [{ type: "text", text: "" }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(incompleteTurnText).toContain("couldn't generate a response");
+    expect(incompleteTurnText).toContain("verify before retrying");
   });
 
   it("retries generic empty Bedrock Converse turns without visible text", () => {

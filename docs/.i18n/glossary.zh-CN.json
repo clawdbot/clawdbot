@@ -101,7 +101,7 @@
   },
   {
     "source": "Status",
-    "target": "Status"
+    "target": "状态"
   },
   {
     "source": "Gateway",
@@ -996,7 +996,47 @@
     "target": "ACP Agents 设置"
   },
   {
+    "source": "Policy CLI",
+    "target": "Policy CLI"
+  },
+  {
+    "source": "Doctor lint mode",
+    "target": "Doctor lint mode"
+  },
+  {
     "source": "ds4 (local DeepSeek V4)",
     "target": "ds4（本地 DeepSeek V4）"
+  },
+  {
+    "source": "Dynamic Agent Creation",
+    "target": "动态 Agent 创建"
+  },
+  {
+    "source": "dynamic agent creation",
+    "target": "动态 Agent 创建"
+  },
+  {
+    "source": "multi-user isolation",
+    "target": "多用户隔离"
+  },
+  {
+    "source": "workspaceTemplate",
+    "target": "工作空间模板"
+  },
+  {
+    "source": "agentDirTemplate",
+    "target": "Agent 目录模板"
+  },
+  {
+    "source": "Per-user agent isolation",
+    "target": "每用户 Agent 隔离"
+  },
+  {
+    "source": "Gateway exposure runbook",
+    "target": "Gateway 暴露运行手册"
+  },
+  {
+    "source": "Z.AI (GLM)",
+    "target": "Z.AI (GLM)"
   }
 ]

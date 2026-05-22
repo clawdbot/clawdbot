@@ -1,4 +1,5 @@
 import "./isolated-agent.mocks.js";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
@@ -21,7 +22,7 @@ import * as isolatedAgentRunRuntime from "./isolated-agent/run.runtime.js";
 
 function installThinkingTestProviders() {
   const registry = createTestRegistry();
-  registry.providers = ["anthropic", "openai", "openrouter"].map(
+  registry.providers = ["anthropic", "google", "openai", "openrouter"].map(
     (providerId): PluginProviderRegistration => ({
       pluginId: providerId,
       source: "test",
@@ -29,10 +30,18 @@ function installThinkingTestProviders() {
         id: providerId,
         label: providerId,
         auth: [],
-        resolveThinkingProfile: () => ({
-          levels: BASE_THINKING_LEVELS.map((id) => ({ id })),
-          defaultLevel: "off",
-        }),
+        resolveThinkingProfile: ({ modelId }) =>
+          providerId === "google" && modelId === "gemini-3-flash-preview"
+            ? {
+                levels: (["off", "minimal", "low", "medium", "adaptive", "high"] as const).map(
+                  (id) => ({ id }),
+                ),
+                preserveWhenCatalogReasoningFalse: true,
+              }
+            : {
+                levels: BASE_THINKING_LEVELS.map((id) => ({ id })),
+                defaultLevel: "off",
+              },
       },
     }),
   );
@@ -250,6 +259,40 @@ describe("runCronIsolatedAgentTurn model overrides", () => {
 
       const calls = vi.mocked(runEmbeddedPiAgent).mock.calls;
       const callArgs = calls[calls.length - 1]?.[0];
+      expect(callArgs?.thinkLevel).toBe("low");
+    });
+  });
+
+  it("keeps configured Gemini 3 cron thinking when catalog reasoning metadata is stale", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(isolatedAgentRunRuntime.resolveThinkingDefault).mockReturnValueOnce("low");
+      vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+        {
+          id: "gemini-3-flash-preview",
+          name: "Gemini 3 Flash Preview",
+          provider: "google",
+          reasoning: false,
+        },
+      ]);
+
+      await runCronTurn(home, {
+        cfgOverrides: {
+          agents: {
+            defaults: {
+              model: "google/gemini-3-flash-preview",
+              workspace: path.join(home, "openclaw"),
+              thinkingDefault: "low",
+            },
+          },
+        },
+        jobPayload: DEFAULT_AGENT_TURN_PAYLOAD,
+        mockTexts: ["done"],
+      });
+
+      const calls = vi.mocked(runEmbeddedPiAgent).mock.calls;
+      const callArgs = calls[calls.length - 1]?.[0];
+      expect(callArgs?.provider).toBe("google");
+      expect(callArgs?.model).toBe("gemini-3-flash-preview");
       expect(callArgs?.thinkLevel).toBe("low");
     });
   });

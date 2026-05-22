@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.5.21",
+  "version": "2026.5.22",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -23,6 +23,7 @@
   "files": [
     "CHANGELOG.md",
     "LICENSE",
+    "npm-shrinkwrap.json",
     "openclaw.mjs",
     "pnpm-workspace.yaml",
     "README.md",
@@ -80,6 +81,10 @@
     "docs/",
     "!docs/.generated/**",
     "!docs/channels/qa-channel.md",
+    "!docs/assets/**",
+    "!docs/images/**",
+    "!docs/**/*.jpg",
+    "!docs/**/*.png",
     "scripts/crabbox-wrapper.mjs",
     "patches/",
     "skills/",
@@ -508,9 +513,9 @@
       "types": "./dist/plugin-sdk/codex-mcp-projection.d.ts",
       "default": "./dist/plugin-sdk/codex-mcp-projection.js"
     },
-    "./plugin-sdk/codex-native-task-runtime": {
-      "types": "./dist/plugin-sdk/codex-native-task-runtime.d.ts",
-      "default": "./dist/plugin-sdk/codex-native-task-runtime.js"
+    "./plugin-sdk/agent-harness-task-runtime": {
+      "types": "./dist/plugin-sdk/agent-harness-task-runtime.d.ts",
+      "default": "./dist/plugin-sdk/agent-harness-task-runtime.js"
     },
     "./plugin-sdk/agent-harness": {
       "types": "./dist/plugin-sdk/agent-harness.d.ts",
@@ -1435,11 +1440,16 @@
     "deps:changes:report": "node scripts/dependency-changes-report.mjs",
     "deps:patches:check": "node scripts/check-package-patches.mjs",
     "deps:pins:check": "node scripts/check-dependency-pins.mjs",
+    "deps:shrinkwrap:check": "node scripts/generate-npm-shrinkwrap.mjs --all --check",
+    "deps:shrinkwrap:generate": "node scripts/generate-npm-shrinkwrap.mjs --all",
+    "deps:shrinkwrap:root:check": "node scripts/generate-npm-shrinkwrap.mjs --check",
+    "deps:shrinkwrap:root:generate": "node scripts/generate-npm-shrinkwrap.mjs",
     "deps:ownership-surface:check": "node scripts/dependency-ownership-surface-report.mjs --check",
     "deps:ownership-surface:report": "node scripts/dependency-ownership-surface-report.mjs",
     "deps:transitive-risk:report": "node scripts/transitive-manifest-risk-report.mjs",
     "deps:vuln:gate": "node scripts/dependency-vulnerability-gate.mjs",
     "dev": "node scripts/run-node.mjs",
+    "dev:ui:mock": "node --import tsx scripts/control-ui-mock-dev.ts",
     "docs:bin": "node scripts/build-docs-list.mjs",
     "docs:check-i18n-glossary": "node scripts/check-docs-i18n-glossary.mjs",
     "docs:check-links": "node scripts/docs-link-audit.mjs",
@@ -1616,6 +1626,7 @@
     "test:docker:e2e-build": "bash scripts/e2e/build-image.sh",
     "test:docker:gateway-network": "bash scripts/e2e/gateway-network-docker.sh",
     "test:docker:kitchen-sink-plugin": "bash scripts/e2e/kitchen-sink-plugin-docker.sh",
+    "test:docker:kitchen-sink-rpc": "bash scripts/e2e/kitchen-sink-rpc-docker.sh",
     "test:docker:live-acp-bind": "bash scripts/test-live-acp-bind-docker.sh",
     "test:docker:live-acp-bind:claude": "OPENCLAW_LIVE_ACP_BIND_AGENT=claude bash scripts/test-live-acp-bind-docker.sh",
     "test:docker:live-acp-bind:codex": "OPENCLAW_LIVE_ACP_BIND_AGENT=codex bash scripts/test-live-acp-bind-docker.sh",
@@ -1662,6 +1673,7 @@
     "test:docker:openai-web-search-minimal": "bash scripts/e2e/openai-web-search-minimal-docker.sh",
     "test:docker:openwebui": "bash scripts/e2e/openwebui-docker.sh",
     "test:docker:pi-bundle-mcp-tools": "bash scripts/e2e/pi-bundle-mcp-tools-docker.sh",
+    "test:docker:plugin-binding-command-escape": "bash scripts/e2e/plugin-binding-command-escape-docker.sh",
     "test:docker:plugin-lifecycle-matrix": "bash scripts/e2e/plugin-lifecycle-matrix-docker.sh",
     "test:docker:plugin-update": "bash scripts/e2e/plugin-update-unchanged-docker.sh",
     "test:docker:plugins": "bash scripts/e2e/plugins-docker.sh",
@@ -1677,7 +1689,8 @@
     "test:docker:update-migration": "env OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@2026.4.23} OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-plugin-deps-cleanup} bash scripts/e2e/upgrade-survivor-docker.sh",
     "test:docker:update-restart-auth": "env OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=auto-auth OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT=${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-1500s} bash scripts/e2e/upgrade-survivor-docker.sh",
     "test:docker:upgrade-survivor": "bash scripts/e2e/upgrade-survivor-docker.sh",
-    "test:e2e": "node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts",
+    "test:e2e": "pnpm test:e2e:gateway && pnpm test:ui:e2e",
+    "test:e2e:gateway": "node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts",
     "test:e2e:openshell": "OPENCLAW_E2E_OPENSHELL=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts extensions/openshell/src/backend.e2e.test.ts",
     "test:extension": "node scripts/test-extension.mjs",
     "test:extensions": "node scripts/test-projects.mjs extensions",
@@ -1736,6 +1749,7 @@
     "test:restart:gateway": "node --import tsx scripts/bench-gateway-restart.ts",
     "test:startup:memory": "node scripts/check-cli-startup-memory.mjs",
     "test:ui": "pnpm ui:i18n:check && pnpm lint:ui:no-raw-window-open && pnpm --dir ui test",
+    "test:ui:e2e": "node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner",
     "test:unit": "pnpm test:unit:fast && node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts",
     "test:unit:fast": "node scripts/run-vitest.mjs run --config test/vitest/vitest.unit-fast.config.ts",
     "test:unit:fast:audit": "node scripts/test-unit-fast-audit.mjs",
@@ -1762,6 +1776,10 @@
     "tsgo:test:ui": "node scripts/run-tsgo.mjs -p test/tsconfig/tsconfig.test.ui.json --incremental --tsBuildInfoFile .artifacts/tsgo-cache/test-ui.tsbuildinfo",
     "tui": "node scripts/run-node.mjs tui",
     "tui:dev": "OPENCLAW_PROFILE=dev node scripts/run-node.mjs --dev tui",
+    "tui:pty:test:watch": "node --import tsx scripts/dev/tui-pty-test-watch.ts",
+    "tui:pty:test:watch:all": "node --import tsx scripts/dev/tui-pty-test-watch.ts --mode all",
+    "tui:pty:test:watch:fake": "node --import tsx scripts/dev/tui-pty-test-watch.ts --mode fake",
+    "tui:pty:test:watch:local": "node --import tsx scripts/dev/tui-pty-test-watch.ts --mode local",
     "ui:build": "node scripts/ui.js build",
     "ui:dev": "node scripts/ui.js dev",
     "ui:i18n:check": "node --import tsx scripts/control-ui-i18n.ts check",
@@ -1861,5 +1879,5 @@
   "engines": {
     "node": ">=22.19.0"
   },
-  "packageManager": "pnpm@11.1.0+sha512.0c44e842e5686b2c061a81adda8b2258bd8818e9704b2cf2c63d56b931a7b2e910092e085027003b96ca3911ab56a07f6df5abaed2be9925034cdd686a535b14"
+  "packageManager": "pnpm@11.2.2+sha512.36e6621fad506178936455e70247b8808ef4ec25797a9f437a93281a020484e2607f6a469a22e982987c3dbb8866e3071514ab10a4a1749e06edcd1ec118436f"
 }

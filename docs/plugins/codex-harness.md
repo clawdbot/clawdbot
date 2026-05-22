@@ -28,6 +28,10 @@ OpenClaw dynamic tools continue through the app-server `item/tool/call` bridge.
 Active OpenClaw sandboxing and restricted tool policies disable native code mode
 entirely unless you opt into the experimental sandbox exec-server path.
 
+This Codex-native feature is separate from
+[OpenClaw code mode](/reference/code-mode), which is an opt-in QuickJS-WASI
+runtime for generic OpenClaw runs with a different `exec` input shape.
+
 For the broader model/provider/runtime split, start with
 [Agent runtimes](/concepts/agent-runtimes). The short version is:
 `openai/gpt-5.5` is the model ref, `codex` is the runtime, and Telegram,
@@ -133,6 +137,10 @@ Lossless remains supported as a context engine. Configure it through
 `agents.defaults.compaction.provider`. `openclaw doctor --fix` migrates the old
 `compaction.provider: "lossless-claw"` shape to the Lossless context-engine slot
 when Codex is the active runtime.
+
+The native Codex app-server harness supports context engines that require
+pre-prompt assembly. Generic CLI backends, including `codex-cli`, do not provide
+that host capability.
 
 When the active context engine reports `ownsCompaction: true`, `/compact` runs
 that engine's compaction lifecycle and invalidates the bound Codex app-server

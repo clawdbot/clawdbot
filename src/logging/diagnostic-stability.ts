@@ -59,11 +59,18 @@ export type DiagnosticStabilityEventRecord = {
   ageMs?: number;
   queueDepth?: number;
   queueSize?: number;
+  queueLength?: number;
   waitMs?: number;
   failureKind?: string;
   active?: number;
   waiting?: number;
   queued?: number;
+  droppedEvents?: number;
+  droppedTrustedEvents?: number;
+  droppedUntrustedEvents?: number;
+  droppedPriorityEvents?: number;
+  maxQueueLength?: number;
+  drainBatchSize?: number;
   webhooks?: {
     received: number;
     processed: number;
@@ -500,6 +507,15 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.target = event.signal;
       record.outcome = event.status;
       assignReasonCode(record, event.reason ?? event.errorCategory);
+      break;
+    case "diagnostic.async_queue.dropped":
+      record.droppedEvents = event.droppedEvents;
+      record.droppedTrustedEvents = event.droppedTrustedEvents;
+      record.droppedUntrustedEvents = event.droppedUntrustedEvents;
+      record.droppedPriorityEvents = event.droppedPriorityEvents;
+      record.queueLength = event.queueLength;
+      record.maxQueueLength = event.maxQueueLength;
+      record.drainBatchSize = event.drainBatchSize;
       break;
     case "model.failover":
       record.provider = event.fromProvider;

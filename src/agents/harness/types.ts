@@ -69,6 +69,12 @@ export type AgentHarness = {
   id: string;
   label: string;
   pluginId?: string;
+  /**
+   * Context-engine host capabilities provided by this harness during agent
+   * runs. Harnesses that omit this are unsupported for engines that declare
+   * host requirements.
+   */
+  contextEngineHostCapabilities?: readonly import("../../context-engine/types.js").ContextEngineHostCapability[];
   deliveryDefaults?: AgentHarnessDeliveryDefaults;
   supports(ctx: AgentHarnessSupportContext): AgentHarnessSupport;
   runAttempt(params: AgentHarnessAttemptParams): Promise<AgentHarnessAttemptResult>;

@@ -120,8 +120,11 @@ export type {
   BootstrapResult,
   CompactResult,
   ContextEngine,
+  ContextEngineHostCapability,
+  ContextEngineHostRequirements,
   ContextEngineInfo,
   ContextEngineMaintenanceResult,
+  ContextEngineOperation,
   ContextEngineRuntimeContext,
   IngestBatchResult,
   IngestResult,
@@ -134,6 +137,7 @@ export type {
 
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export { registerContextEngine } from "../context-engine/registry.js";
+export { assertContextEngineHostSupport } from "../context-engine/host-compat.js";
 export {
   buildMemorySystemPromptAddition,
   delegateCompactionToRuntime,

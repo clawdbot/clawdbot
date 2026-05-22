@@ -224,6 +224,19 @@ function liveCodexNpmPluginLane() {
   );
 }
 
+function kitchenSinkRpcLane() {
+  return serviceLane(
+    "kitchen-sink-rpc",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:kitchen-sink-rpc",
+    {
+      resources: ["npm"],
+      stateScenario: "empty",
+      timeoutMs: 15 * 60 * 1000,
+      weight: 3,
+    },
+  );
+}
+
 export const mainLanes = [
   liveLane("live-models", liveDockerScriptCommand("test-live-models-docker.sh"), {
     providers: ["claude-cli", "google-gemini-cli"],
@@ -403,6 +416,7 @@ export const mainLanes = [
     stateScenario: "empty",
     weight: 3,
   }),
+  kitchenSinkRpcLane(),
   ...bundledPluginInstallUninstallLanes,
   lane(
     "plugins-offline",
@@ -447,6 +461,15 @@ export const mainLanes = [
   lane(
     "session-runtime-context",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:session-runtime-context",
+  ),
+  lane(
+    "plugin-binding-command-escape",
+    "OPENCLAW_SKIP_DOCKER_BUILD=0 pnpm test:docker:plugin-binding-command-escape",
+    {
+      e2eImageKind: false,
+      resources: ["npm"],
+      stateScenario: "empty",
+    },
   ),
   lane("commitments-safety", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:commitments-safety", {
     stateScenario: "empty",
@@ -587,6 +610,7 @@ const releasePathPluginRuntimeLanes = [
       weight: 3,
     },
   ),
+  kitchenSinkRpcLane(),
   serviceLane(
     "openai-web-search-minimal",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openai-web-search-minimal",
@@ -613,6 +637,7 @@ const releasePathPluginRuntimeServiceLanes = [
       weight: 3,
     },
   ),
+  kitchenSinkRpcLane(),
   serviceLane(
     "openai-web-search-minimal",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openai-web-search-minimal",
@@ -696,6 +721,15 @@ const primaryReleasePathChunks = {
     lane(
       "session-runtime-context",
       "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:session-runtime-context",
+    ),
+    lane(
+      "plugin-binding-command-escape",
+      "OPENCLAW_SKIP_DOCKER_BUILD=0 pnpm test:docker:plugin-binding-command-escape",
+      {
+        e2eImageKind: false,
+        resources: ["npm"],
+        stateScenario: "empty",
+      },
     ),
     lane("commitments-safety", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:commitments-safety", {
       stateScenario: "empty",

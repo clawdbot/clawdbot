@@ -47,6 +47,7 @@ function createBindingResolverTestPlugin(params: {
   id: ChannelId;
   config: Partial<ChannelPlugin["config"]>;
   resolveBindingAccountId?: NonNullable<ChannelPlugin["setup"]>["resolveBindingAccountId"];
+  forceAccountBinding?: boolean;
 }): BindingResolverTestPlugin {
   return {
     id: params.id,
@@ -56,6 +57,7 @@ function createBindingResolverTestPlugin(params: {
       selectionLabel: params.id,
       docsPath: `/channels/${params.id}`,
       blurb: "test stub.",
+      ...(params.forceAccountBinding ? { forceAccountBinding: true } : {}),
     },
     capabilities: { chatTypes: ["direct"] },
     config: {
@@ -92,6 +94,14 @@ vi.mock("../channels/plugins/bundled.js", () => {
     [
       "telegram",
       createBindingResolverTestPlugin({ id: "telegram", config: { listAccountIds: () => [] } }),
+    ],
+    [
+      "whatsapp",
+      createBindingResolverTestPlugin({
+        id: "whatsapp",
+        config: { listAccountIds: () => ["default", "biz"] },
+        forceAccountBinding: true,
+      }),
     ],
   ]);
   return {
@@ -156,6 +166,22 @@ describe("agents bind/unbind commands", () => {
     const writtenConfig = firstWrittenConfig();
     expect(writtenConfig?.bindings).toStrictEqual([
       { type: "route", agentId: "main", match: { channel: "telegram" } },
+    ]);
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("uses a wildcard account binding for multi-account channels", async () => {
+    readConfigFileSnapshotMock.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {},
+    });
+
+    await agentsBindCommand({ bind: ["whatsapp"] }, runtime);
+
+    expect(writeConfigFileMock).toHaveBeenCalledTimes(1);
+    const writtenConfig = firstWrittenConfig();
+    expect(writtenConfig?.bindings).toStrictEqual([
+      { type: "route", agentId: "main", match: { channel: "whatsapp", accountId: "*" } },
     ]);
     expect(runtime.exit).not.toHaveBeenCalled();
   });

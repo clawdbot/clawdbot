@@ -296,14 +296,29 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   let teamId = "";
   let apiAppId = "";
   const expectedApiAppIdFromAppToken = parseApiAppIdFromAppToken(appToken);
+  let authTestFailed = false;
+  let authTestError: string | undefined;
   try {
     const auth = await app.client.auth.test({ token: botToken });
     botUserId = auth.user_id ?? "";
     botId = (auth as { bot_id?: string }).bot_id ?? "";
     teamId = auth.team_id ?? "";
     apiAppId = (auth as { api_app_id?: string }).api_app_id ?? "";
-  } catch {
-    // auth test failing is non-fatal; message handler falls back to regex mentions.
+    if (!botUserId) {
+      authTestFailed = true;
+      authTestError = "auth.test returned no user_id";
+    }
+  } catch (err) {
+    authTestFailed = true;
+    authTestError = err instanceof Error ? err.message : String(err);
+  }
+  if (authTestFailed) {
+    runtime.log?.(
+      warn(
+        `[${account.accountId}] slack auth.test failed at boot (${authTestError ?? "unknown error"}); ` +
+          "explicit bot-mention detection will be disabled until restart with a valid bot token",
+      ),
+    );
   }
 
   if (apiAppId && expectedApiAppIdFromAppToken && apiAppId !== expectedApiAppIdFromAppToken) {

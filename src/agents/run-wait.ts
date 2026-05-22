@@ -1,6 +1,11 @@
 import { callGateway } from "../gateway/call.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeBlockedLivenessWaitStatus } from "../shared/agent-liveness.js";
+import {
+  normalizeAgentRunTimeoutPhase,
+  normalizeProviderStarted,
+  type AgentRunTimeoutPhase,
+} from "./run-timeout-attribution.js";
 import { extractAssistantText, stripToolMessages } from "./tools/chat-history-text.js";
 
 type GatewayCaller = typeof callGateway;
@@ -26,6 +31,8 @@ export type AgentWaitResult = {
   stopReason?: string;
   livenessState?: string;
   yielded?: boolean;
+  timeoutPhase?: AgentRunTimeoutPhase;
+  providerStarted?: boolean;
 };
 
 export type AgentRunsDrainResult = {
@@ -42,6 +49,8 @@ type RawAgentWaitResponse = {
   stopReason?: unknown;
   livenessState?: unknown;
   yielded?: unknown;
+  timeoutPhase?: unknown;
+  providerStarted?: unknown;
 };
 
 function normalizeAgentWaitResult(
@@ -61,6 +70,8 @@ function normalizeAgentWaitResult(
     stopReason: typeof wait?.stopReason === "string" ? wait.stopReason : undefined,
     livenessState: typeof wait?.livenessState === "string" ? wait.livenessState : undefined,
     yielded: wait?.yielded === true ? true : undefined,
+    timeoutPhase: normalizeAgentRunTimeoutPhase(wait?.timeoutPhase),
+    providerStarted: normalizeProviderStarted(wait?.providerStarted),
   };
 }
 

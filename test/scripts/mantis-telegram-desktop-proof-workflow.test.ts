@@ -48,19 +48,6 @@ type Workflow = {
   permissions?: Record<string, string>;
 };
 
-type PackageJson = {
-  packageManager?: string;
-};
-
-function repositoryPnpmMajor(): string {
-  const packageJson = JSON.parse(readFileSync(PACKAGE_JSON, "utf8")) as PackageJson;
-  const major = packageJson.packageManager?.match(/^pnpm@(\d+)\./)?.[1];
-  if (!major) {
-    throw new Error(`Missing pnpm packageManager pin in ${PACKAGE_JSON}`);
-  }
-  return major;
-}
-
 function workflowStep(name: string): WorkflowStep {
   const workflow = parse(readFileSync(WORKFLOW, "utf8")) as Workflow;
   const steps = workflow.jobs?.run_telegram_desktop_proof?.steps ?? [];
@@ -89,13 +76,12 @@ function filesUnder(root: string): string[] {
 }
 
 describe("Mantis Telegram Desktop proof workflow", () => {
-  it("runs with the repository pnpm major", () => {
+  it("uses repository pnpm setup defaults", () => {
     const workflow = parse(readFileSync(WORKFLOW, "utf8")) as Workflow;
     const liveWorkflow = parse(readFileSync(LIVE_WORKFLOW, "utf8")) as Workflow;
-    const pnpmMajor = repositoryPnpmMajor();
 
-    expect(workflow.env?.PNPM_VERSION?.split(".", 1)[0]).toBe(pnpmMajor);
-    expect(liveWorkflow.env?.PNPM_VERSION?.split(".", 1)[0]).toBe(pnpmMajor);
+    expect(workflow.env?.PNPM_VERSION).toBeUndefined();
+    expect(liveWorkflow.env?.PNPM_VERSION).toBeUndefined();
   });
 
   it("serializes all Mantis Telegram account runs without workflow concurrency cancellation", () => {

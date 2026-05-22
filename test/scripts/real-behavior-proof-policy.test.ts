@@ -85,6 +85,76 @@ describe("real-behavior-proof-policy", () => {
     expect(labelsForRealBehaviorProof(evaluation)).toEqual([PROOF_SUPPLIED_LABEL]);
   });
 
+  it("accepts out-of-scope follow-ups as not-tested proof detail", () => {
+    const body = [
+      "## Real behavior proof",
+      "",
+      "- Behavior addressed: Cron validation keeps Google Gemini 3 low thinking.",
+      "- Real environment tested: Local macOS source checkout, Node 24.",
+      "- Exact steps or command run after this patch:",
+      "  1. Built the local checkout with `node scripts/build-all.mjs`.",
+      "  2. Ran a redacted behavior probe for `provider=google`, `model=gemini-3-flash-preview`, and `catalogReasoning=false`.",
+      '- Evidence after fix: `.artifacts/behavior-85156/after-installed.json` recorded `lowSupported: true` and `fallbackFromLow: "low"`.',
+      "- Observed result after fix:",
+      "  - `levels: off, minimal, low, medium, adaptive, high`",
+      "  - `lowSupported: true`",
+      "  - `fallbackFromLow: low`",
+      "  - `local command version: OpenClaw 2026.5.21`",
+      "",
+      "## Out-of-scope Follow-ups",
+      "- No live systemd cron schedule was tested.",
+      "- No real Google provider request was sent.",
+    ].join("\n");
+    const evaluation = evaluateRealBehaviorProof({
+      pullRequest: externalPr(body),
+    });
+
+    expect(evaluation.status).toBe("passed");
+    expect(evaluation.fields?.notTested).toBe(
+      "- No live systemd cron schedule was tested.\n- No real Google provider request was sent.",
+    );
+    expect(labelsForRealBehaviorProof(evaluation)).toEqual([PROOF_SUPPLIED_LABEL]);
+  });
+
+  it("accepts source PR proof when explicit gaps live in out-of-scope follow-ups", () => {
+    const body = [
+      "## Real behavior proof",
+      "",
+      '- Behavior addressed: Cron/provider thinking validation no longer downgrades `google/gemini-3-flash-preview` `thinkingDefault: "low"` to `"off"` when cached catalog metadata says `reasoning:false` but the Google provider policy says Gemini 3 supports low thinking.',
+      "- Real environment tested: Local macOS source checkout, Node v24.8.0, OpenClaw 2026.5.21 (c8a35c4), local `openclaw` shim pointed at the freshly built checkout. No channel credentials or provider API keys were used.",
+      "- Exact steps or command run after this patch:",
+      "  1. Built the local checkout with `node scripts/build-all.mjs`.",
+      "  2. Updated `/Users/example/.local/bin/openclaw` to run this checkout's `openclaw.mjs` and verified `/Users/example/.local/bin/openclaw --version`.",
+      "  3. Ran a redacted behavior probe for the reported cron validation decision with `provider=google`, `model=gemini-3-flash-preview`, `configuredThinkingDefault=low`, and `catalogReasoning=false`.",
+      '- Evidence after fix: `.artifacts/behavior-85156/after-installed.json` from the local checkout recorded `lowSupported: true` and `fallbackFromLow: "low"`.',
+      "- Observed result after fix:",
+      "  - `levels: off, minimal, low, medium, adaptive, high`",
+      "  - `lowSupported: true`",
+      "  - `fallbackFromLow: low`",
+      "  - `local command version: OpenClaw 2026.5.21 (c8a35c4)`",
+      "",
+      "## Out-of-scope Follow-ups",
+      "- No live systemd cron schedule is added in this PR.",
+      "- No real Google provider request is sent in this PR.",
+      "- No catalog refresh or provider model-list behavior is changed in this PR.",
+      "- No channel, gateway allowlist, credential, or auth-profile behavior is changed in this PR.",
+    ].join("\n");
+    const evaluation = evaluateRealBehaviorProof({
+      pullRequest: externalPr(body),
+    });
+
+    expect(evaluation.status).toBe("passed");
+    expect(evaluation.fields?.notTested).toBe(
+      [
+        "- No live systemd cron schedule is added in this PR.",
+        "- No real Google provider request is sent in this PR.",
+        "- No catalog refresh or provider model-list behavior is changed in this PR.",
+        "- No channel, gateway allowlist, credential, or auth-profile behavior is changed in this PR.",
+      ].join("\n"),
+    );
+    expect(labelsForRealBehaviorProof(evaluation)).toEqual([PROOF_SUPPLIED_LABEL]);
+  });
+
   it("fails external PRs without a real behavior proof section", () => {
     const evaluation = evaluateRealBehaviorProof({
       pullRequest: externalPr("## Summary\n\n- Fixed startup."),
@@ -234,7 +304,7 @@ describe("real-behavior-proof-policy", () => {
     expect(evaluateClawSweeperExactHeadProof({ pullRequest, comments }).passed).toBe(false);
   });
 
-  it("rejects bot-shaped ClawSweeper pass verdict markers without the GitHub App source", () => {
+  it("accepts exact ClawSweeper bot pass verdict markers when GitHub omits the app source", () => {
     const pullRequest = {
       number: 83581,
       head: {
@@ -245,6 +315,48 @@ describe("real-behavior-proof-policy", () => {
       {
         user: {
           login: "clawsweeper[bot]",
+          type: "Bot",
+        },
+        body: "<!-- clawsweeper-verdict:pass item=83581 sha=06ee95df6608d29a395c52ba8ab53fdd93a9dc4f confidence=high -->",
+      },
+    ];
+
+    expect(hasClawSweeperExactHeadProof({ pullRequest, comments })).toBe(true);
+    expect(evaluateClawSweeperExactHeadProof({ pullRequest, comments }).passed).toBe(true);
+  });
+
+  it("accepts exact OpenClaw ClawSweeper bot pass verdict markers when GitHub omits the app source", () => {
+    const pullRequest = {
+      number: 83581,
+      head: {
+        sha: "06ee95df6608d29a395c52ba8ab53fdd93a9dc4f",
+      },
+    };
+    const comments = [
+      {
+        user: {
+          login: "openclaw-clawsweeper[bot]",
+          type: "Bot",
+        },
+        body: "<!-- clawsweeper-verdict:pass item=83581 sha=06ee95df6608d29a395c52ba8ab53fdd93a9dc4f confidence=high -->",
+      },
+    ];
+
+    expect(hasClawSweeperExactHeadProof({ pullRequest, comments })).toBe(true);
+    expect(evaluateClawSweeperExactHeadProof({ pullRequest, comments }).passed).toBe(true);
+  });
+
+  it("rejects bot-shaped pass verdict markers from other bot users", () => {
+    const pullRequest = {
+      number: 83581,
+      head: {
+        sha: "06ee95df6608d29a395c52ba8ab53fdd93a9dc4f",
+      },
+    };
+    const comments = [
+      {
+        user: {
+          login: "not-clawsweeper[bot]",
           type: "Bot",
         },
         body: "<!-- clawsweeper-verdict:pass item=83581 sha=06ee95df6608d29a395c52ba8ab53fdd93a9dc4f confidence=high -->",

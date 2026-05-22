@@ -1,4 +1,8 @@
 import { getRuntimeConfig } from "../../config/config.js";
+import {
+  assertContextEngineHostSupport,
+  buildGenericCliContextEngineHostSupport,
+} from "../../context-engine/host-compat.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import { resolveContextEngine } from "../../context-engine/registry.js";
 import { ensureMcpLoopbackServer } from "../../gateway/mcp-http.js";
@@ -513,6 +517,16 @@ export async function prepareCliRunContext(
     });
     const contextEngine =
       resolvedContextEngine.info.id !== "legacy" ? resolvedContextEngine : undefined;
+    if (contextEngine) {
+      assertContextEngineHostSupport({
+        contextEngine,
+        operation: "agent-run",
+        host: buildGenericCliContextEngineHostSupport({
+          backendId: backendResolved.id,
+          capabilities: backendResolved.contextEngineHostCapabilities,
+        }),
+      });
+    }
     const hadSessionFile = await hasCliSessionTranscript({
       sessionId: params.sessionId,
       sessionFile: params.sessionFile,

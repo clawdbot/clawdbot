@@ -94,7 +94,7 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(args[1]).not.toContain('basename "$service_target"');
   });
 
-  it("bootouts and bootstraps for reload mode", () => {
+  it("polls after bootout and falls back to kickstart on bootstrap failure for reload mode", () => {
     spawnMock.mockReturnValue({ pid: 4242, unref: unrefMock });
 
     scheduleDetachedLaunchdRestartHandoff({
@@ -110,8 +110,12 @@ describe("scheduleDetachedLaunchdRestartHandoff", () => {
     expect(args[1]).toContain("openclaw restart attempt source=launchd-handoff mode=reload");
     expect(args[1]).toContain('launchctl enable "$service_target"');
     expect(args[1]).toContain('launchctl bootout "$service_target"');
+    // polls until launchd finishes the async unload before re-bootstrapping
+    expect(args[1]).toContain("bootout_wait_count=");
+    expect(args[1]).toContain('if ! launchctl print "$service_target" >/dev/null 2>&1; then');
     expect(args[1]).toContain('if launchctl bootstrap "$domain" "$plist_path"; then');
-    expect(args[1]).not.toContain('launchctl kickstart -k "$service_target"');
+    // fallback: kickstart -k on bootstrap failure so service isn't left deregistered
+    expect(args[1]).toContain('launchctl kickstart -k "$service_target"');
   });
 
   it("sanitizes restart helper environment overrides before spawning", () => {

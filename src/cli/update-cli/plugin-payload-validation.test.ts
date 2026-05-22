@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { runPluginPayloadSmokeCheck } from "./plugin-payload-validation.js";
 
 describe("runPluginPayloadSmokeCheck", () => {
@@ -26,6 +27,25 @@ describe("runPluginPayloadSmokeCheck", () => {
       await fs.mkdir(path.dirname(target), { recursive: true });
       await fs.writeFile(target, mainContent, "utf8");
     }
+  }
+
+  function resolveTestHostRoot(): string {
+    const hostRoot = resolveOpenClawPackageRootSync({
+      argv1: process.argv[1],
+      moduleUrl: import.meta.url,
+      cwd: process.cwd(),
+    });
+    expect(hostRoot).toBeTruthy();
+    return hostRoot!;
+  }
+
+  async function linkOpenClawPeerToHost(dir: string): Promise<void> {
+    await fs.mkdir(path.join(dir, "node_modules"), { recursive: true });
+    await fs.symlink(resolveTestHostRoot(), path.join(dir, "node_modules", "openclaw"), "junction");
+  }
+
+  async function resolveRealPath(target: string): Promise<string> {
+    return await fs.realpath(target).catch(() => target);
   }
 
   it("reports ok for a record whose package.json + main file exist", async () => {
@@ -164,6 +184,127 @@ describe("runPluginPayloadSmokeCheck", () => {
       records: { codex: { source: "npm", installPath: dir } },
       env: {},
     });
+    expect(result.failures).toEqual([]);
+  });
+
+  it("reports a failure when an openclaw peer link is missing", async () => {
+    const dir = path.join(tmpRoot, "codex");
+    await writePackage(
+      dir,
+      {
+        name: "@openclaw/codex",
+        main: "dist/index.js",
+        peerDependencies: { openclaw: ">=2026.5.18-beta.1" },
+      },
+      "export default {};\n",
+    );
+
+    const result = await runPluginPayloadSmokeCheck({
+      records: { codex: { source: "npm", installPath: dir } },
+      env: {},
+    });
+
+    expect(result.failures).toStrictEqual([
+      {
+        pluginId: "codex",
+        installPath: dir,
+        reason: "missing-openclaw-peer-link",
+        detail: `Plugin declares peerDependency "openclaw" but peer link audit failed: missing ${path.join(
+          dir,
+          "node_modules",
+          "openclaw",
+        )}.`,
+      },
+    ]);
+  });
+
+  it("reports a failure when an openclaw peer link is a stale real directory", async () => {
+    const dir = path.join(tmpRoot, "codex");
+    await writePackage(
+      dir,
+      {
+        name: "@openclaw/codex",
+        main: "dist/index.js",
+        peerDependencies: { openclaw: ">=2026.5.18-beta.1" },
+      },
+      "export default {};\n",
+    );
+    const stalePeerDir = path.join(dir, "node_modules", "openclaw");
+    await fs.mkdir(stalePeerDir, { recursive: true });
+
+    const result = await runPluginPayloadSmokeCheck({
+      records: { codex: { source: "npm", installPath: dir } },
+      env: {},
+    });
+
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures[0]).toMatchObject({
+      pluginId: "codex",
+      installPath: dir,
+      reason: "missing-openclaw-peer-link",
+    });
+    expect(result.failures[0]?.detail).toContain(`${stalePeerDir} points to`);
+    expect(result.failures[0]?.detail).toContain(
+      `instead of ${await resolveRealPath(resolveTestHostRoot())}`,
+    );
+  });
+
+  it("reports a failure when an openclaw peer link points at the wrong package root", async () => {
+    const dir = path.join(tmpRoot, "codex");
+    await writePackage(
+      dir,
+      {
+        name: "@openclaw/codex",
+        main: "dist/index.js",
+        peerDependencies: { openclaw: ">=2026.5.18-beta.1" },
+      },
+      "export default {};\n",
+    );
+    const wrongHostRoot = path.join(tmpRoot, "old-openclaw");
+    await fs.mkdir(wrongHostRoot, { recursive: true });
+    await fs.mkdir(path.join(dir, "node_modules"), { recursive: true });
+    await fs.symlink(wrongHostRoot, path.join(dir, "node_modules", "openclaw"), "junction");
+
+    const result = await runPluginPayloadSmokeCheck({
+      records: { codex: { source: "npm", installPath: dir } },
+      env: {},
+    });
+
+    expect(result.failures).toHaveLength(1);
+    expect(result.failures[0]).toMatchObject({
+      pluginId: "codex",
+      installPath: dir,
+      reason: "missing-openclaw-peer-link",
+    });
+    expect(result.failures[0]?.detail).toContain(
+      `${path.join(
+        dir,
+        "node_modules",
+        "openclaw",
+      )} points to ${await resolveRealPath(wrongHostRoot)} instead of ${await resolveRealPath(
+        resolveTestHostRoot(),
+      )}`,
+    );
+  });
+
+  it("accepts an openclaw peer link when it resolves to the host package root", async () => {
+    const dir = path.join(tmpRoot, "codex");
+    await writePackage(
+      dir,
+      {
+        name: "@openclaw/codex",
+        main: "dist/index.js",
+        peerDependencies: { openclaw: ">=2026.5.18-beta.1" },
+      },
+      "export default {};\n",
+    );
+    await linkOpenClawPeerToHost(dir);
+
+    const result = await runPluginPayloadSmokeCheck({
+      records: { codex: { source: "npm", installPath: dir } },
+      env: {},
+    });
+
     expect(result.failures).toEqual([]);
   });
 

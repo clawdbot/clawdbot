@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
@@ -97,6 +97,40 @@ function writePublishablePluginPackage(repoDir: string): string {
   return packageDir;
 }
 
+function writeLocalDependencyPackage(
+  packageDir: string,
+  options: { optionalDependencySpec?: string } = {},
+): void {
+  const dependencyDir = join(packageDir, "deps", "local-runtime-dep");
+  mkdirSync(dependencyDir, { recursive: true });
+  writeJsonFile(join(dependencyDir, "package.json"), {
+    name: "local-runtime-dep",
+    version: "1.0.0",
+    main: "index.js",
+    ...(options.optionalDependencySpec
+      ? {
+          optionalDependencies: {
+            "optional-platform-dep": options.optionalDependencySpec,
+          },
+        }
+      : {}),
+  });
+  writeFileText(join(dependencyDir, "index.js"), "module.exports = 1;\n");
+}
+
+function writeOptionalPlatformDependencyPackage(packageDir: string): string {
+  const dependencyDir = join(packageDir, "deps", "optional-platform-dep");
+  mkdirSync(dependencyDir, { recursive: true });
+  writeJsonFile(join(dependencyDir, "package.json"), {
+    name: "optional-platform-dep",
+    version: "1.0.0",
+    main: "index.js",
+    os: [process.platform === "win32" ? "darwin" : "win32"],
+  });
+  writeFileText(join(dependencyDir, "index.js"), "module.exports = 2;\n");
+  return dependencyDir;
+}
+
 describe("plugin npm package manifest staging", () => {
   it("overlays generated channel configs while packing and restores source manifest", () => {
     const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-package-manifest-");
@@ -157,17 +191,37 @@ describe("plugin npm package manifest staging", () => {
     const packageDir = writePublishablePluginPackage(repoDir);
     writeFileText(join(packageDir, "dist", "index.js"), "export {};\n");
     writeFileText(join(packageDir, "dist", "setup-entry.js"), "export {};\n");
+    writeJsonFile(join(packageDir, "npm-shrinkwrap.json"), {
+      name: "@openclaw/diffs",
+      version: "2026.5.3",
+      lockfileVersion: 3,
+      packages: {
+        "": {
+          name: "@openclaw/diffs",
+          version: "2026.5.3",
+        },
+      },
+    });
 
     const resolved = resolveAugmentedPluginNpmPackageJson({
       repoRoot: repoDir,
       packageDir,
+      bundleDependencies: true,
     });
     expect(resolved.changed).toBe(true);
     expect(resolved.packageJson).toEqual({
       name: "@openclaw/diffs",
       version: "2026.5.3",
       type: "module",
-      files: ["dist/**", "openclaw.plugin.json", "README.md", "SKILL.md", "skills/**"],
+      bundledDependencies: [],
+      files: [
+        "dist/**",
+        "openclaw.plugin.json",
+        "npm-shrinkwrap.json",
+        "README.md",
+        "SKILL.md",
+        "skills/**",
+      ],
       peerDependencies: {
         openclaw: ">=2026.4.30",
       },
@@ -191,17 +245,237 @@ describe("plugin npm package manifest staging", () => {
     });
 
     const originalText = readFileSync(join(packageDir, "package.json"), "utf8");
-    withAugmentedPluginNpmManifestForPackage({ repoRoot: repoDir, packageDir }, () => {
-      const stagedPackageJson = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8"));
-      expect(stagedPackageJson.openclaw.extensions).toEqual(["./index.ts"]);
-      expect(stagedPackageJson.openclaw.runtimeExtensions).toEqual(["./dist/index.js"]);
-      expect(stagedPackageJson.openclaw.runtimeSetupEntry).toBe("./dist/setup-entry.js");
-      expect(stagedPackageJson.files).toContain("dist/**");
-      expect(stagedPackageJson.files).toContain("skills/**");
-      expect(stagedPackageJson.peerDependencies.openclaw).toBe(">=2026.4.30");
-      expect(stagedPackageJson.peerDependenciesMeta.openclaw.optional).toBe(true);
-    });
+    withAugmentedPluginNpmManifestForPackage(
+      { repoRoot: repoDir, packageDir, bundleDependencies: true },
+      () => {
+        const stagedPackageJson = JSON.parse(
+          readFileSync(join(packageDir, "package.json"), "utf8"),
+        );
+        expect(stagedPackageJson.openclaw.extensions).toEqual(["./index.ts"]);
+        expect(stagedPackageJson.openclaw.runtimeExtensions).toEqual(["./dist/index.js"]);
+        expect(stagedPackageJson.openclaw.runtimeSetupEntry).toBe("./dist/setup-entry.js");
+        expect(stagedPackageJson.bundledDependencies).toEqual([]);
+        expect(stagedPackageJson.bundleDependencies).toBeUndefined();
+        expect(stagedPackageJson.files).toContain("dist/**");
+        expect(stagedPackageJson.files).toContain("npm-shrinkwrap.json");
+        expect(stagedPackageJson.files).toContain("skills/**");
+        expect(stagedPackageJson.peerDependencies.openclaw).toBe(">=2026.4.30");
+        expect(stagedPackageJson.peerDependenciesMeta.openclaw.optional).toBe(true);
+      },
+    );
     expect(readFileSync(join(packageDir, "package.json"), "utf8")).toBe(originalText);
+  });
+
+  it("installs and cleans package-local bundled dependencies while packing", () => {
+    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-package-bundled-deps-");
+    const packageDir = writePublishablePluginPackage(repoDir);
+    writeFileText(join(packageDir, "dist", "index.js"), "export {};\n");
+    writeFileText(join(packageDir, "dist", "setup-entry.js"), "export {};\n");
+    writeLocalDependencyPackage(packageDir);
+    writeJsonFile(join(packageDir, "package.json"), {
+      name: "@openclaw/diffs",
+      version: "2026.5.3",
+      type: "module",
+      dependencies: {
+        "local-runtime-dep": "file:./deps/local-runtime-dep",
+      },
+      devDependencies: {
+        "@openclaw/plugin-sdk": "workspace:*",
+      },
+      openclaw: {
+        extensions: ["./index.ts"],
+        setupEntry: "./setup-entry.ts",
+        compat: {
+          pluginApi: ">=2026.4.30",
+        },
+        release: {
+          publishToNpm: true,
+        },
+      },
+    });
+    writeJsonFile(join(packageDir, "npm-shrinkwrap.json"), {
+      name: "@openclaw/diffs",
+      version: "2026.5.3",
+      lockfileVersion: 3,
+      requires: true,
+      packages: {
+        "": {
+          name: "@openclaw/diffs",
+          version: "2026.5.3",
+          dependencies: {
+            "local-runtime-dep": "file:./deps/local-runtime-dep",
+          },
+        },
+        "deps/local-runtime-dep": {
+          name: "local-runtime-dep",
+          version: "1.0.0",
+        },
+        "node_modules/local-runtime-dep": {
+          resolved: "deps/local-runtime-dep",
+          link: true,
+        },
+      },
+    });
+
+    const originalText = readFileSync(join(packageDir, "package.json"), "utf8");
+    const nodeModulesPath = join(packageDir, "node_modules");
+    expect(existsSync(nodeModulesPath)).toBe(false);
+
+    withAugmentedPluginNpmManifestForPackage(
+      { repoRoot: repoDir, packageDir, bundleDependencies: true },
+      () => {
+        const stagedPackageJson = JSON.parse(
+          readFileSync(join(packageDir, "package.json"), "utf8"),
+        );
+        expect(stagedPackageJson.bundledDependencies).toEqual(["local-runtime-dep"]);
+        expect(stagedPackageJson.bundleDependencies).toBeUndefined();
+        expect(stagedPackageJson.devDependencies).toBeUndefined();
+        expect(existsSync(join(nodeModulesPath, "local-runtime-dep", "package.json"))).toBe(true);
+      },
+    );
+
+    expect(existsSync(nodeModulesPath)).toBe(false);
+    expect(readFileSync(join(packageDir, "package.json"), "utf8")).toBe(originalText);
+  });
+
+  it("force-installs missing optional bundled dependencies for portable packs", () => {
+    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-package-portable-optional-");
+    const packageDir = writePublishablePluginPackage(repoDir);
+    writeFileText(join(packageDir, "dist", "index.js"), "export {};\n");
+    writeFileText(join(packageDir, "dist", "setup-entry.js"), "export {};\n");
+    writeOptionalPlatformDependencyPackage(packageDir);
+    writeLocalDependencyPackage(packageDir, {
+      optionalDependencySpec: "file:../../deps/optional-platform-dep",
+    });
+    writeJsonFile(join(packageDir, "package.json"), {
+      name: "@openclaw/diffs",
+      version: "2026.5.3",
+      type: "module",
+      dependencies: {
+        "local-runtime-dep": "file:./deps/local-runtime-dep",
+      },
+      openclaw: {
+        extensions: ["./index.ts"],
+        setupEntry: "./setup-entry.ts",
+        compat: {
+          pluginApi: ">=2026.4.30",
+        },
+        release: {
+          publishToNpm: true,
+        },
+      },
+    });
+    writeJsonFile(join(packageDir, "npm-shrinkwrap.json"), {
+      name: "@openclaw/diffs",
+      version: "2026.5.3",
+      lockfileVersion: 3,
+      requires: true,
+      packages: {
+        "": {
+          name: "@openclaw/diffs",
+          version: "2026.5.3",
+          dependencies: {
+            "local-runtime-dep": "file:./deps/local-runtime-dep",
+          },
+        },
+        "deps/local-runtime-dep": {
+          name: "local-runtime-dep",
+          version: "1.0.0",
+          optionalDependencies: {
+            "optional-platform-dep": "file:../../deps/optional-platform-dep",
+          },
+        },
+        "deps/optional-platform-dep": {
+          version: "1.0.0",
+          optional: true,
+          os: [process.platform === "win32" ? "darwin" : "win32"],
+        },
+        "node_modules/local-runtime-dep": {
+          resolved: "deps/local-runtime-dep",
+          link: true,
+        },
+        "node_modules/optional-platform-dep": {
+          resolved: "deps/optional-platform-dep",
+          link: true,
+        },
+      },
+    });
+
+    const nodeModulesPath = join(packageDir, "node_modules");
+    withAugmentedPluginNpmManifestForPackage(
+      { repoRoot: repoDir, packageDir, bundleDependencies: true },
+      () => {
+        expect(existsSync(join(nodeModulesPath, "local-runtime-dep", "package.json"))).toBe(true);
+        expect(existsSync(join(nodeModulesPath, "optional-platform-dep", "package.json"))).toBe(
+          true,
+        );
+      },
+    );
+
+    expect(existsSync(nodeModulesPath)).toBe(false);
+  });
+
+  it("honors plugin package opt-out for bundled runtime dependencies", () => {
+    const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-package-bundle-opt-out-");
+    const packageDir = writePublishablePluginPackage(repoDir);
+    writeFileText(join(packageDir, "dist", "index.js"), "export {};\n");
+    writeFileText(join(packageDir, "dist", "setup-entry.js"), "export {};\n");
+    writeLocalDependencyPackage(packageDir);
+    writeJsonFile(join(packageDir, "package.json"), {
+      name: "@openclaw/diffs",
+      version: "2026.5.3",
+      type: "module",
+      dependencies: {
+        "local-runtime-dep": "file:./deps/local-runtime-dep",
+      },
+      openclaw: {
+        extensions: ["./index.ts"],
+        setupEntry: "./setup-entry.ts",
+        compat: {
+          pluginApi: ">=2026.4.30",
+        },
+        release: {
+          publishToNpm: true,
+          bundleRuntimeDependencies: false,
+        },
+      },
+    });
+    writeJsonFile(join(packageDir, "npm-shrinkwrap.json"), {
+      name: "@openclaw/diffs",
+      version: "2026.5.3",
+      lockfileVersion: 3,
+      requires: true,
+      packages: {
+        "": {
+          name: "@openclaw/diffs",
+          version: "2026.5.3",
+          dependencies: {
+            "local-runtime-dep": "file:./deps/local-runtime-dep",
+          },
+        },
+      },
+    });
+
+    const resolved = resolveAugmentedPluginNpmPackageJson({
+      repoRoot: repoDir,
+      packageDir,
+      bundleDependencies: true,
+    });
+    expect(resolved.bundleDependencies).toBe(false);
+    expect(resolved.packageJson?.bundledDependencies).toBeUndefined();
+    expect(resolved.packageJson?.devDependencies).toBeUndefined();
+
+    const nodeModulesPath = join(packageDir, "node_modules");
+    withAugmentedPluginNpmManifestForPackage(
+      { repoRoot: repoDir, packageDir, bundleDependencies: true },
+      () => {
+        const stagedPackageJson = JSON.parse(
+          readFileSync(join(packageDir, "package.json"), "utf8"),
+        );
+        expect(stagedPackageJson.bundledDependencies).toBeUndefined();
+        expect(existsSync(nodeModulesPath)).toBe(false);
+      },
+    );
   });
 
   it("refuses to pack publishable plugins before package-local runtime files exist", () => {

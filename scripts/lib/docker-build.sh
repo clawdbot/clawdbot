@@ -21,7 +21,7 @@ docker_build_on_missing_enabled() {
 
 docker_build_command() {
   local build_cmd=(docker build)
-  if [ "${OPENCLAW_DOCKER_BUILD_USE_BUILDX:-0}" = "1" ]; then
+  if [ "${OPENCLAW_DOCKER_BUILD_USE_BUILDX:-0}" = "1" ] || docker_build_args_need_buildx "$@"; then
     build_cmd=(docker buildx build --load)
     if [ -n "${OPENCLAW_DOCKER_BUILD_CACHE_FROM:-}" ]; then
       build_cmd+=(--cache-from "${OPENCLAW_DOCKER_BUILD_CACHE_FROM}")
@@ -32,6 +32,17 @@ docker_build_command() {
   fi
 
   printf '%s\0' env DOCKER_BUILDKIT=1 "${build_cmd[@]}" "$@"
+}
+
+docker_build_args_need_buildx() {
+  for arg in "$@"; do
+    case "$arg" in
+      --build-context | --build-context=*)
+        return 0
+        ;;
+    esac
+  done
+  return 1
 }
 
 docker_build_transient_failure() {

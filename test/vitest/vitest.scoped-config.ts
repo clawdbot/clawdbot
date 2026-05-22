@@ -101,6 +101,7 @@ const SCOPED_PROJECT_GROUP_ORDER_BY_NAME = new Map(
     "tooling",
     "tui",
     "ui",
+    "ui-e2e",
     "unit-fast",
     "unit-security",
     "unit-src",

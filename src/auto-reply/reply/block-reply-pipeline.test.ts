@@ -272,6 +272,37 @@ describe("createBlockReplyPipeline content coverage dedup", () => {
     expect(pipeline.hasSentPayload({ text: "First paragraph.\n\nSecond paragraph." })).toBe(false);
   });
 
+  it("keeps status notices out of streamed final-content accounting", async () => {
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async () => {},
+      timeoutMs: 5000,
+    });
+
+    pipeline.enqueue({ text: "1. Inspect\n2. Patch", isStatusNotice: true });
+    await pipeline.flush({ force: true });
+
+    expect(pipeline.didStream()).toBe(false);
+    expect(pipeline.hasSentPayload({ text: "1. Inspect\n2. Patch" })).toBe(false);
+  });
+
+  it("does not let a status notice de-dupe later matching assistant content", async () => {
+    const sent: Array<{ text?: string; isStatusNotice?: boolean }> = [];
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async (payload) => {
+        sent.push({ text: payload.text, isStatusNotice: payload.isStatusNotice });
+      },
+      timeoutMs: 5000,
+    });
+
+    pipeline.enqueue({ text: "same text", isStatusNotice: true });
+    pipeline.enqueue({ text: "same text" });
+    await pipeline.flush({ force: true });
+
+    expect(sent).toEqual([{ text: "same text", isStatusNotice: true }, { text: "same text" }]);
+    expect(pipeline.didStream()).toBe(true);
+    expect(pipeline.hasSentPayload({ text: "same text" })).toBe(true);
+  });
+
   it("does not suppress media payloads through streamed text coverage", async () => {
     const pipeline = createBlockReplyPipeline({
       onBlockReply: async () => {},

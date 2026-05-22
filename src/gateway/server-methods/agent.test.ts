@@ -40,7 +40,13 @@ const mocks = vi.hoisted(() => ({
   loadConfigReturn: {} as Record<string, unknown>,
   loadVoiceWakeRoutingConfig: vi.fn(),
   resolveVoiceWakeRouteByTrigger: vi.fn(),
-  resolveSendPolicy: vi.fn(() => "allow"),
+  resolveSendPolicy: vi.fn((_args?: { entry?: { sendPolicy?: string } }) => "allow"),
+  resolveSessionLifecycleTimestamps: vi.fn(
+    ({ entry }: { entry?: { sessionStartedAt?: number; lastInteractionAt?: number } }) => ({
+      sessionStartedAt: entry?.sessionStartedAt,
+      lastInteractionAt: entry?.lastInteractionAt,
+    }),
+  ),
 }));
 
 vi.mock("../session-utils.js", async () => {
@@ -59,6 +65,7 @@ vi.mock("../../config/sessions.js", async () => {
   return {
     ...actual,
     updateSessionStore: mocks.updateSessionStore,
+    resolveSessionLifecycleTimestamps: mocks.resolveSessionLifecycleTimestamps,
     resolveAgentIdFromSessionKey: (sessionKey: string) => {
       const m = /^agent:([^:]+):/.exec(sessionKey.trim());
       return m?.[1] ?? "main";
@@ -497,6 +504,14 @@ describe("gateway agent handler", () => {
     mocks.resolveBareResetBootstrapFileAccess.mockReset().mockReturnValue(true);
     mocks.listAgentIds.mockReset().mockReturnValue(["main"]);
     mocks.resolveSendPolicy.mockReset().mockReturnValue("allow");
+    mocks.resolveSessionLifecycleTimestamps
+      .mockReset()
+      .mockImplementation(
+        ({ entry }: { entry?: { sessionStartedAt?: number; lastInteractionAt?: number } }) => ({
+          sessionStartedAt: entry?.sessionStartedAt,
+          lastInteractionAt: entry?.lastInteractionAt,
+        }),
+      );
     dateOnlyFakeClockActive = false;
     vi.useRealTimers();
     resetExecApprovalFollowupRuntimeHandoffsForTests();
@@ -1020,6 +1035,344 @@ describe("gateway agent handler", () => {
     const capturedEntry = await runMainAgentAndCaptureEntry("test-idem");
     expect(capturedEntry.cliSessionIds).toEqual(existingCliSessionIds);
     expect(capturedEntry.claudeCliSessionId).toBe(existingClaudeCliSessionId);
+  });
+  // #5369: sessions.patch can write modelOverride to the session store between
+  // when the agent handler reads its cached entry and when updateSessionStore
+  // runs. The handler's loadSessionEntry may return the stale pre-patch entry
+  // (no modelOverride), while the store-load inside updateSessionStore has the
+  // fresh value. If the patch built from the stale entry carries modelOverride:
+  // undefined, the merge {...fresh, ...patch} clobbers the fresh value.
+  it("preserves fresh modelOverride when cached entry is stale (#5369)", async () => {
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: {
+        sessionId: "subagent-session-id",
+        updatedAt: Date.now() - 1000,
+        // modelOverride absent — stale pre-patch view
+      },
+      canonicalKey: "agent:main:subagent:test-uuid",
+    });
+    let capturedEntry: Record<string, unknown> | undefined;
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const freshStore: Record<string, Record<string, unknown>> = {
+        "agent:main:subagent:test-uuid": {
+          sessionId: "subagent-session-id",
+          updatedAt: Date.now(),
+          modelOverride: "qwen3-coder:30b",
+          providerOverride: "ollama",
+        },
+      };
+      const result = await updater(freshStore);
+      capturedEntry = freshStore["agent:main:subagent:test-uuid"];
+      return result;
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+    await invokeAgent(
+      {
+        message: "hi",
+        agentId: "main",
+        sessionKey: "agent:main:subagent:test-uuid",
+        idempotencyKey: "test-5369-race",
+      },
+      { reqId: "race-1" },
+    );
+    expect(capturedEntry?.modelOverride).toBe("qwen3-coder:30b");
+    expect(capturedEntry?.providerOverride).toBe("ollama");
+  });
+  // Broader regression guard for the #5369 stale-writeback class: any field
+  // that the patch blindly carries from the cached entry will clobber a fresh
+  // concurrent write. The fix dropped all such fields from the patch; this
+  // test ensures none get silently re-added. If a future change puts e.g.
+  // `sendPolicy: entry?.sendPolicy` back into the patch, this test fails.
+  it("preserves all fresh session fields when cached entry is stale (#5369 broader)", async () => {
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: {
+        sessionId: "subagent-session-id",
+        updatedAt: Date.now() - 1000,
+        // All fields below absent — stale pre-patch view
+      },
+      canonicalKey: "agent:main:subagent:test-broader",
+    });
+    const freshFields = {
+      sendPolicy: "allow",
+      skillsSnapshot: { tools: ["bash"] },
+      thinkingLevel: "high",
+      fastMode: true,
+      verboseLevel: "detailed",
+      traceLevel: "info",
+      reasoningLevel: "on",
+      systemSent: true,
+      spawnedWorkspaceDir: "/work/fresh",
+      spawnDepth: 2,
+      label: "fresh-label",
+      spawnedBy: "agent:main:main",
+      channel: "telegram",
+      deliveryContext: {
+        channel: "telegram",
+        to: "12345",
+        accountId: "acct-1",
+        threadId: 42,
+      },
+      lastChannel: "telegram",
+      lastTo: "12345",
+      lastAccountId: "acct-1",
+      lastThreadId: 42,
+      cliSessionIds: { "claude-cli": "fresh-cli-id" },
+      cliSessionBindings: { "claude-cli": { sessionId: "fresh-binding" } },
+      claudeCliSessionId: "fresh-cli-id",
+    };
+    let capturedEntry: Record<string, unknown> | undefined;
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const freshStore: Record<string, Record<string, unknown>> = {
+        "agent:main:subagent:test-broader": {
+          sessionId: "subagent-session-id",
+          updatedAt: Date.now(),
+          ...freshFields,
+        },
+      };
+      const result = await updater(freshStore);
+      capturedEntry = freshStore["agent:main:subagent:test-broader"];
+      return result;
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+    await invokeAgent(
+      {
+        message: "hi",
+        agentId: "main",
+        sessionKey: "agent:main:subagent:test-broader",
+        idempotencyKey: "test-5369-broader",
+      },
+      { reqId: "broader-1" },
+    );
+    for (const [field, expected] of Object.entries(freshFields)) {
+      expect(capturedEntry?.[field]).toEqual(expected);
+    }
+  });
+  it("checks delivery sendPolicy against the fresh store entry (#5369)", async () => {
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: {
+        sessionId: "subagent-session-id",
+        updatedAt: Date.now() - 1000,
+        // sendPolicy absent — stale pre-patch view
+      },
+      canonicalKey: "agent:main:subagent:test-policy",
+    });
+    const freshUpdatedAt = Date.now();
+    let capturedEntry: Record<string, unknown> | undefined;
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const freshStore: Record<string, Record<string, unknown>> = {
+        "agent:main:subagent:test-policy": {
+          sessionId: "subagent-session-id",
+          updatedAt: freshUpdatedAt,
+          sendPolicy: "deny",
+          channel: "telegram",
+        },
+      };
+      const result = await updater(freshStore);
+      capturedEntry = freshStore["agent:main:subagent:test-policy"];
+      return result;
+    });
+    mocks.resolveSendPolicy.mockImplementation((args?: { entry?: { sendPolicy?: string } }) =>
+      args?.entry?.sendPolicy === "deny" ? "deny" : "allow",
+    );
+    mocks.agentCommand.mockClear();
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+    const respond = vi.fn();
+    await invokeAgent(
+      {
+        message: "hi",
+        agentId: "main",
+        sessionKey: "agent:main:subagent:test-policy",
+        channel: "telegram",
+        to: "99999",
+        deliver: true,
+        idempotencyKey: "test-5369-policy",
+      },
+      { reqId: "policy-1", respond },
+    );
+    expectRespondError(respond, { message: "send blocked by session policy" });
+    const sendPolicyArgs = expectRecordFields(mockCallArg(mocks.resolveSendPolicy), {
+      sessionKey: "agent:main:subagent:test-policy",
+    });
+    expectRecordFields(sendPolicyArgs.entry, { sendPolicy: "deny" });
+    expectRecordFields(capturedEntry, {
+      sessionId: "subagent-session-id",
+      updatedAt: freshUpdatedAt,
+      sendPolicy: "deny",
+      channel: "telegram",
+      deliveryContext: undefined,
+      lastTo: undefined,
+    });
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+  });
+  it("does not restore a stale session id over a fresh store rotation (#5369)", async () => {
+    mocks.resolveSessionLifecycleTimestamps.mockImplementation(
+      ({ entry }: { entry?: { sessionId?: string; sessionStartedAt?: number } }) => ({
+        sessionStartedAt: entry?.sessionId === "old-session-id" ? 123 : entry?.sessionStartedAt,
+        lastInteractionAt: undefined,
+      }),
+    );
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: {
+        sessionId: "old-session-id",
+        updatedAt: Date.now() - 1000,
+      },
+      canonicalKey: "agent:main:subagent:test-rotation",
+    });
+    let capturedEntry: Record<string, unknown> | undefined;
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const freshStore: Record<string, Record<string, unknown>> = {
+        "agent:main:subagent:test-rotation": {
+          sessionId: "fresh-session-id",
+          updatedAt: Date.now(),
+          status: "running",
+          startedAt: 111,
+          sessionFile: "/tmp/fresh-session.jsonl",
+        },
+      };
+      const result = await updater(freshStore);
+      capturedEntry = freshStore["agent:main:subagent:test-rotation"];
+      return result;
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "hi",
+        agentId: "main",
+        sessionKey: "agent:main:subagent:test-rotation",
+        idempotencyKey: "test-5369-rotation",
+      },
+      { reqId: "rotation-1" },
+    );
+
+    expectRecordFields(capturedEntry, {
+      sessionId: "fresh-session-id",
+      status: "running",
+      startedAt: 111,
+      sessionStartedAt: undefined,
+      sessionFile: "/tmp/fresh-session.jsonl",
+    });
+  });
+  // Upgrade-path self-heal: a legacy session entry may lack sessionStartedAt
+  // because the field was added after the entry was first persisted. The
+  // handler recovers it from the transcript JSONL header and writes it back,
+  // but only when the fresh store still lacks the field — so a concurrent
+  // writer that sets it cannot be clobbered (the #5369 stale-writeback class).
+  it("self-heals missing sessionStartedAt from JSONL when fresh store also lacks it", async () => {
+    // Use a value distinct from `now` but recent enough that
+    // evaluateSessionFreshness — which also calls the mocked
+    // resolveSessionLifecycleTimestamps — keeps this session fresh.
+    const recoveredStartedAt = Date.now() - 5_000;
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: {
+        sessionId: "legacy-session-id",
+        updatedAt: Date.now() - 1000,
+        // sessionStartedAt absent — legacy schema
+      },
+      canonicalKey: "agent:main:subagent:legacy",
+    });
+    mocks.resolveSessionLifecycleTimestamps.mockReturnValue({
+      sessionStartedAt: recoveredStartedAt,
+      lastInteractionAt: undefined,
+    });
+    let capturedEntry: Record<string, unknown> | undefined;
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const freshStore: Record<string, Record<string, unknown>> = {
+        "agent:main:subagent:legacy": {
+          sessionId: "legacy-session-id",
+          updatedAt: Date.now(),
+          // sessionStartedAt absent on disk too — self-heal should fire
+        },
+      };
+      const result = await updater(freshStore);
+      capturedEntry = freshStore["agent:main:subagent:legacy"];
+      return result;
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+    await invokeAgent(
+      {
+        message: "hi",
+        agentId: "main",
+        sessionKey: "agent:main:subagent:legacy",
+        idempotencyKey: "test-selfheal-write",
+      },
+      { reqId: "selfheal-1" },
+    );
+    expect(capturedEntry?.sessionStartedAt).toBe(recoveredStartedAt);
+  });
+  it("does not clobber fresh sessionStartedAt with the recovered candidate", async () => {
+    // See note in the prior test: keep both values recent so freshness
+    // evaluation (which also reads the lifecycle mock) doesn't trip the
+    // idle-reset path and turn this into an isNewSession path.
+    const recoveredStartedAt = Date.now() - 5_000;
+    const freshStartedAt = Date.now() - 2_500;
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: {
+        sessionId: "legacy-session-id",
+        updatedAt: Date.now() - 1000,
+        // sessionStartedAt absent in cached entry — would trigger recovery
+      },
+      canonicalKey: "agent:main:subagent:concurrent",
+    });
+    mocks.resolveSessionLifecycleTimestamps.mockReturnValue({
+      sessionStartedAt: recoveredStartedAt,
+      lastInteractionAt: undefined,
+    });
+    let capturedEntry: Record<string, unknown> | undefined;
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const freshStore: Record<string, Record<string, unknown>> = {
+        "agent:main:subagent:concurrent": {
+          sessionId: "legacy-session-id",
+          updatedAt: Date.now(),
+          // Concurrent writer set sessionStartedAt between cache load and lock
+          sessionStartedAt: freshStartedAt,
+        },
+      };
+      const result = await updater(freshStore);
+      capturedEntry = freshStore["agent:main:subagent:concurrent"];
+      return result;
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+    await invokeAgent(
+      {
+        message: "hi",
+        agentId: "main",
+        sessionKey: "agent:main:subagent:concurrent",
+        idempotencyKey: "test-selfheal-noclobber",
+      },
+      { reqId: "selfheal-2" },
+    );
+    expect(capturedEntry?.sessionStartedAt).toBe(freshStartedAt);
   });
   it("reactivates completed subagent sessions and broadcasts send updates", async () => {
     const childSessionKey = "agent:main:subagent:followup";
@@ -3471,7 +3824,7 @@ describe("gateway agent handler", () => {
       let capturedEntry: Record<string, unknown> | undefined;
       mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
         const store: Record<string, unknown> = {
-          [sessionKey]: { sessionId: "existing-session-id" },
+          [sessionKey]: { sessionId: "existing-session-id", ...entry },
         };
         await updater(store);
         capturedEntry = store[sessionKey] as Record<string, unknown>;
@@ -3685,6 +4038,8 @@ describe("gateway agent handler chat.abort integration", () => {
       status: "timeout",
       summary: "aborted",
       stopReason: "rpc",
+      timeoutPhase: "queue",
+      providerStarted: false,
     });
     const finalResponse = respond.mock.calls.find(
       (call: unknown[]) => (call[1] as { status?: unknown } | undefined)?.status === "timeout",
@@ -3693,6 +4048,8 @@ describe("gateway agent handler chat.abort integration", () => {
       runId,
       status: "timeout",
       stopReason: "rpc",
+      timeoutPhase: "queue",
+      providerStarted: false,
     });
   });
 

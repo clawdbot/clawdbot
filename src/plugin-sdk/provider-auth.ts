@@ -5,7 +5,12 @@ import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { resolveApiKeyForProfile } from "../agents/auth-profiles/oauth.js";
 import { resolveAuthProfileOrder } from "../agents/auth-profiles/order.js";
 import { listProfilesForProvider } from "../agents/auth-profiles/profiles.js";
-import { ensureAuthProfileStore } from "../agents/auth-profiles/store.js";
+import {
+  ensureAuthProfileStore,
+  loadAuthProfileStoreForSecretsRuntime,
+  loadAuthProfileStoreWithoutExternalProfiles,
+} from "../agents/auth-profiles/store.js";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
   COPILOT_INTEGRATION_ID,
   buildCopilotIdeHeaders,
@@ -282,20 +287,11 @@ export function listUsableProviderAuthProfileIds(params: {
   provider: string;
   cfg?: OpenClawConfig;
   agentDir?: string;
+  allowKeychainPrompt?: boolean;
 }): { agentDir: string; profileIds: string[] } {
   try {
-    const agentDir = params.agentDir?.trim() || resolveDefaultAgentDir(params.cfg ?? {});
-    const store = ensureAuthProfileStore(agentDir, {
-      allowKeychainPrompt: false,
-    });
-    return {
-      agentDir,
-      profileIds: resolveAuthProfileOrder({
-        cfg: params.cfg,
-        store,
-        provider: params.provider,
-      }),
-    };
+    const { agentDir, profileIds } = resolveUsableProviderAuthProfiles(params);
+    return { agentDir, profileIds };
   } catch {
     return { agentDir: "", profileIds: [] };
   }
@@ -305,6 +301,7 @@ export function isProviderAuthProfileConfigured(params: {
   provider: string;
   cfg?: OpenClawConfig;
   agentDir?: string;
+  allowKeychainPrompt?: boolean;
 }): boolean {
   return listUsableProviderAuthProfileIds(params).profileIds.length > 0;
 }
@@ -313,14 +310,12 @@ export async function resolveProviderAuthProfileApiKey(params: {
   provider: string;
   cfg?: OpenClawConfig;
   agentDir?: string;
+  allowKeychainPrompt?: boolean;
 }): Promise<string | undefined> {
-  const { agentDir, profileIds } = listUsableProviderAuthProfileIds(params);
+  const { agentDir, profileIds, store } = resolveUsableProviderAuthProfiles(params);
   if (!agentDir || profileIds.length === 0) {
     return undefined;
   }
-  const store = ensureAuthProfileStore(agentDir, {
-    allowKeychainPrompt: false,
-  });
   for (const profileId of profileIds) {
     const resolved = await resolveApiKeyForProfile({
       cfg: params.cfg,
@@ -333,4 +328,36 @@ export async function resolveProviderAuthProfileApiKey(params: {
     }
   }
   return undefined;
+}
+
+function resolveUsableProviderAuthProfiles(params: {
+  provider: string;
+  cfg?: OpenClawConfig;
+  agentDir?: string;
+  allowKeychainPrompt?: boolean;
+}): { agentDir: string; profileIds: string[]; store: AuthProfileStore } {
+  const agentDir = params.agentDir?.trim() || resolveDefaultAgentDir(params.cfg ?? {});
+  const store = loadAuthProfileStoreForSecretsRuntime(agentDir);
+  const profileIds = resolveAuthProfileOrder({
+    cfg: params.cfg,
+    store,
+    provider: params.provider,
+  });
+  if (profileIds.length > 0) {
+    return { agentDir, profileIds, store };
+  }
+
+  const fallbackStore = loadAuthProfileStoreWithoutExternalProfiles(agentDir, {
+    allowKeychainPrompt: params.allowKeychainPrompt ?? false,
+    resolveLegacyOAuthSidecars: true,
+  });
+  return {
+    agentDir,
+    profileIds: resolveAuthProfileOrder({
+      cfg: params.cfg,
+      store: fallbackStore,
+      provider: params.provider,
+    }),
+    store: fallbackStore,
+  };
 }

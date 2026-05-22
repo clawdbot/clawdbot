@@ -1,5 +1,7 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { PI_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
+import type { ContextEngine } from "../../context-engine/types.js";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -7,6 +9,7 @@ import {
   type DiagnosticEventPayload,
 } from "../../infra/diagnostic-events.js";
 import type { EmbeddedRunAttemptResult } from "../pi-embedded-runner/run/types.js";
+import { createPiAgentHarness } from "./builtin-pi.js";
 import type { AgentHarness, AgentHarnessAttemptParams } from "./types.js";
 import type { AgentHarnessV2 } from "./v2.js";
 import { adaptAgentHarnessToV2, runAgentHarnessV2LifecycleAttempt } from "./v2.js";
@@ -63,6 +66,29 @@ function createAttemptResult(): EmbeddedRunAttemptResult {
     cloudCodeAssistFormatError: false,
     replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
     itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
+  };
+}
+
+function createContextEngineRequiringAssembly(): ContextEngine {
+  return {
+    info: {
+      id: "lossless-claw",
+      name: "Lossless",
+      hostRequirements: {
+        "agent-run": {
+          requiredCapabilities: ["assemble-before-prompt"],
+        },
+      },
+    },
+    async ingest() {
+      return { ingested: true };
+    },
+    async assemble({ messages }) {
+      return { messages, estimatedTokens: 0 };
+    },
+    async compact() {
+      return { ok: true, compacted: false };
+    },
   };
 }
 
@@ -148,6 +174,51 @@ describe("AgentHarness V2 compatibility adapter", () => {
       "outcome:started",
       "cleanup:started",
     ]);
+  });
+
+  it("rejects V1-adapted harnesses that do not advertise required context-engine capabilities", async () => {
+    const params = createAttemptParams();
+    params.contextEngine = createContextEngineRequiringAssembly();
+    const runAttempt = vi.fn(async () => createAttemptResult());
+    const harness = adaptAgentHarnessToV2({
+      id: "custom",
+      label: "Custom",
+      supports: () => ({ supported: true }),
+      runAttempt,
+    });
+
+    await expect(runAgentHarnessV2LifecycleAttempt(harness, params)).rejects.toThrow(
+      'Context engine "lossless-claw" cannot run operation "agent-run" on agent harness "custom".',
+    );
+    expect(runAttempt).not.toHaveBeenCalled();
+  });
+
+  it("allows V1-adapted harnesses that advertise required context-engine capabilities", async () => {
+    const params = createAttemptParams();
+    params.contextEngine = createContextEngineRequiringAssembly();
+    const result = createAttemptResult();
+    const runAttempt = vi.fn(async () => result);
+    const harness = adaptAgentHarnessToV2({
+      id: "codex",
+      label: "Codex",
+      contextEngineHostCapabilities: ["assemble-before-prompt"],
+      supports: () => ({ supported: true }),
+      runAttempt,
+    });
+
+    await expect(runAgentHarnessV2LifecycleAttempt(harness, params)).resolves.toEqual({
+      ...result,
+      agentHarnessId: "codex",
+    });
+    expect(runAttempt).toHaveBeenCalledOnce();
+  });
+
+  it("advertises Pi embedded host capabilities through the V1 adapter", async () => {
+    const harness = createPiAgentHarness();
+
+    expect(harness.contextEngineHostCapabilities).toEqual(
+      PI_EMBEDDED_CONTEXT_ENGINE_HOST.capabilities,
+    );
   });
 
   it("emits trusted harness lifecycle diagnostics for successful attempts", async () => {

@@ -166,18 +166,21 @@ export function resolveThinkingProfile(params: {
     modelId: context.modelId,
     reasoning: context.reasoning,
   };
-  if (context.reasoning === false) {
-    return buildOffOnlyThinkingProfile();
-  }
   const pluginProfile = resolveProviderThinkingProfile({
     provider: context.normalizedProvider,
     context: providerContext,
   });
   if (pluginProfile) {
     const normalized = normalizeThinkingProfile(pluginProfile);
-    if (normalized.levels.length > 0) {
+    if (
+      normalized.levels.length > 0 &&
+      (context.reasoning !== false || pluginProfile.preserveWhenCatalogReasoningFalse === true)
+    ) {
       return normalized;
     }
+  }
+  if (context.reasoning === false) {
+    return buildOffOnlyThinkingProfile();
   }
 
   const defaultLevel = resolveProviderDefaultThinkingLevel({

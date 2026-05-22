@@ -699,6 +699,51 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     }
   });
 
+  it("rejects CLI runs for context engines that require pre-prompt assembly", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    const engineId = `cli-unsupported-engine-${Date.now().toString(36)}`;
+    registerContextEngine(engineId, (): ContextEngine => {
+      return {
+        info: {
+          id: engineId,
+          name: "CLI unsupported engine",
+          hostRequirements: {
+            "agent-run": {
+              requiredCapabilities: ["assemble-before-prompt"],
+              unsupportedMessage: "Use the native Codex or Pi embedded runtime.",
+            },
+          },
+        },
+        ingest: vi.fn(async () => ({ ingested: true })),
+        assemble: vi.fn(async ({ messages }) => ({ messages, estimatedTokens: 0 })),
+        compact: vi.fn(async () => ({ ok: true, compacted: false })),
+      };
+    });
+
+    try {
+      await expect(
+        prepareCliRunContext({
+          sessionId: "session-test",
+          sessionFile,
+          workspaceDir: dir,
+          prompt: "latest ask",
+          provider: "test-cli",
+          model: "test-model",
+          timeoutMs: 1_000,
+          runId: "run-test-context-engine-host-compat",
+          config: {
+            ...createCliBackendConfig(),
+            plugins: { slots: { contextEngine: engineId } },
+          },
+        }),
+      ).rejects.toThrow(
+        `Context engine "${engineId}" cannot run operation "agent-run" on CLI backend "test-cli".`,
+      );
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("uses runtime config when resolving the CLI context engine", async () => {
     const { dir, sessionFile } = createSessionFile();
     const engineId = `cli-runtime-config-engine-${Date.now().toString(36)}`;

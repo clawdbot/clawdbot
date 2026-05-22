@@ -44,6 +44,24 @@ export type ContextEngineProjection = {
   fingerprint?: string;
 };
 
+export type ContextEngineOperation = "agent-run" | "manual-compact" | "subagent-spawn";
+
+export type ContextEngineHostCapability =
+  | "bootstrap"
+  | "assemble-before-prompt"
+  | "after-turn"
+  | "maintain"
+  | "compact"
+  | "runtime-llm-complete"
+  | "thread-bootstrap-projection";
+
+export type ContextEngineHostRequirements = {
+  /** Host capabilities required before the engine can safely serve this operation. */
+  requiredCapabilities: ContextEngineHostCapability[];
+  /** Optional engine-authored guidance appended to the host compatibility error. */
+  unsupportedMessage?: string;
+};
+
 export type CompactResult = {
   ok: boolean;
   compacted: boolean;
@@ -93,6 +111,11 @@ export type ContextEngineInfo = {
    * background turn maintenance.
    */
   turnMaintenanceMode?: "foreground" | "background";
+  /**
+   * Host capability requirements for operations where using an unsupported
+   * runtime would silently degrade or corrupt the engine's behavior.
+   */
+  hostRequirements?: Partial<Record<ContextEngineOperation, ContextEngineHostRequirements>>;
 };
 
 export type SubagentSpawnPreparation = {

@@ -633,6 +633,19 @@ describe("browser chrome helpers", () => {
     expect(formatted).not.toContain("supersecret123");
   });
 
+  it("adds a WSL2 portproxy hint for empty HTTP CDP replies", () => {
+    const formatted = formatChromeCdpDiagnostic({
+      ok: false,
+      code: "http_unreachable",
+      cdpUrl: "http://172.30.144.1:9222",
+      message: "fetch failed: other side closed",
+      elapsedMs: 12,
+    });
+
+    expect(formatted).toContain("svchost/iphlpsvc owns the CDP port");
+    expect(formatted).toContain("127.0.0.1:9222 -> 127.0.0.1:9222");
+  });
+
   it("probes direct ws:// CDP URLs (with /devtools/ path) via handshake instead of HTTP", async () => {
     // A direct WS endpoint like ws://host/devtools/browser/<uuid> is already
     // the handshake target — isChromeReachable must NOT hit /json/version.

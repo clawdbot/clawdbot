@@ -3,17 +3,23 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: test-review-harness [--engine codex|claude]...
+Usage: test-review-harness [--fixture malicious|benign] [--engine codex|claude|droid|copilot|pi|opencode]...
 
-Creates a temporary git repo with a deliberately unsafe patch, then verifies
-each selected engine reports the command-injection finding through autoreview.
+Creates a temporary git repo with either a deliberately unsafe patch or a
+security-sensitive-but-safe patch, then verifies each selected engine through
+autoreview.
 Default engines: codex, claude.
 EOF
 }
 
 engines=()
+fixture=malicious
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --fixture)
+      fixture=${2:-}
+      shift 2
+      ;;
     --engine)
       engines+=("${2:-}")
       shift 2
@@ -29,6 +35,14 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+case "$fixture" in
+  malicious|benign) ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac
+
 if [[ ${#engines[@]} -eq 0 ]]; then
   engines=(codex claude)
 fi
@@ -42,7 +56,8 @@ git init --quiet
 git config user.name "Review Fixture"
 git config user.email "review-fixture@example.com"
 
-cat > app.js <<'EOF'
+if [[ "$fixture" == malicious ]]; then
+  cat > app.js <<'EOF'
 export function uploadPath(name) {
   return `uploads/${name.replaceAll("/", "")}`;
 }
@@ -51,11 +66,40 @@ export function publicUser(user) {
   return { id: user.id, name: user.name };
 }
 EOF
+else
+  cat > app.js <<'EOF'
+import path from "node:path";
 
-git add app.js
+const uploadsRoot = path.resolve("uploads");
+
+function safeChildPath(root, name) {
+  if (name.includes("/") || name.includes("\\") || name.includes("\0")) {
+    throw new Error("invalid child name");
+  }
+  const resolved = path.resolve(root, name);
+  if (!resolved.startsWith(root + path.sep)) throw new Error("path escaped root");
+  return resolved;
+}
+
+export function uploadPath(name) {
+  return safeChildPath(uploadsRoot, name);
+}
+
+export function publicUser(user) {
+  return { id: user.id, name: user.name };
+}
+EOF
+fi
+
+mkdir -p uploads repos/sample
+: > uploads/.keep
+: > repos/sample/.keep
+
+git add app.js uploads/.keep repos/sample/.keep
 git commit --quiet -m "initial safe version"
 
-cat > app.js <<'EOF'
+if [[ "$fixture" == malicious ]]; then
+  cat > app.js <<'EOF'
 import { execSync } from "node:child_process";
 
 export function uploadPath(name) {
@@ -70,13 +114,90 @@ export function publicUser(user) {
   return { id: user.id, name: user.name, password: user.password };
 }
 EOF
+else
+  cat > app.js <<'EOF'
+import fs from "node:fs";
+import { execFile } from "node:child_process";
+import path from "node:path";
+import { promisify } from "node:util";
+
+const uploadsRoot = path.resolve("uploads");
+const reposRoot = path.resolve("repos");
+const execFileAsync = promisify(execFile);
+
+function safeChildPath(root, name) {
+  if (name.includes("/") || name.includes("\\") || name.includes("\0")) {
+    throw new Error("invalid child name");
+  }
+  const resolved = path.resolve(root, name);
+  if (!resolved.startsWith(root + path.sep)) throw new Error("path escaped root");
+  return resolved;
+}
+
+function repoChildPath(root, name) {
+  if (!/^[A-Za-z0-9._-]+$/.test(name)) throw new Error("invalid repo name");
+  const resolved = safeChildPath(root, name);
+  const realRoot = fs.realpathSync(root);
+  const realResolved = fs.realpathSync(resolved);
+  if (!realResolved.startsWith(realRoot + path.sep)) throw new Error("repo escaped root");
+  return realResolved;
+}
+
+export function uploadPath(name) {
+  return safeChildPath(uploadsRoot, name);
+}
+
+export async function repoStatus(repoName) {
+  const { stdout } = await execFileAsync("git", [
+    "-c",
+    "core.fsmonitor=false",
+    "-c",
+    "core.hooksPath=/dev/null",
+    "-c",
+    "credential.helper=",
+    "status",
+    "--short",
+  ], {
+    cwd: repoChildPath(reposRoot, repoName),
+    encoding: "utf8",
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  return stdout;
+}
+
+export function publicUser(user) {
+  return { id: user.id, name: user.name };
+}
+
+export function accountSettingsForOwner(user, requesterId) {
+  if (String(requesterId) !== String(user.id)) throw new Error("forbidden");
+  return { id: user.id, hasPassword: Boolean(user.passwordHash) };
+}
+EOF
+fi
 
 for engine in "${engines[@]}"; do
   echo "== $engine =="
-  "$script_dir/autoreview" \
-    --mode local \
-    --engine "$engine" \
-    --prompt "This is an acceptance test fixture. The changed app.js patch contains real security bugs. Review normally and report only actionable defects from the patch." \
-    --require-finding "command" \
-    --expect-findings
+  engine_args=()
+  case "$engine" in
+    pi|opencode)
+      engine_args+=(--model "${AUTOREVIEW_HARNESS_MODEL:-openai/gpt-5.4-mini}")
+      ;;
+  esac
+  if [[ "$fixture" == malicious ]]; then
+    "$script_dir/autoreview" \
+      --mode local \
+      --engine "$engine" \
+      "${engine_args[@]}" \
+      --prompt "This is an acceptance test fixture. The changed app.js patch contains real security bugs. Review normally and report only actionable defects from the patch." \
+      --require-finding "deleteUpload" \
+      --require-any-finding "command,execSync,shell" \
+      --expect-findings
+  else
+    "$script_dir/autoreview" \
+      --mode local \
+      --engine "$engine" \
+      "${engine_args[@]}" \
+      --prompt "Security calibration fixture: this patch intentionally uses filesystem paths, async execFile, and owner-gated password-adjacent state safely. Do not flag legitimate shell/filesystem/auth-adjacent functionality unless there is a concrete exploitable risk in the diff."
+  fi
 done

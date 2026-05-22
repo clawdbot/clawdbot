@@ -1,3 +1,7 @@
+import {
+  assertContextEngineHostSupport,
+  type ContextEngineHostSupport,
+} from "../../context-engine/host-compat.js";
 import { diagnosticErrorCategory } from "../../infra/diagnostic-error-metadata.js";
 import {
   emitTrustedDiagnosticEvent,
@@ -27,6 +31,7 @@ type AgentHarnessV2RunBase = {
   label: string;
   pluginId?: string;
   params: AgentHarnessAttemptParams;
+  contextEngineHost?: ContextEngineHostSupport;
 };
 
 export type AgentHarnessV2PreparedRun = AgentHarnessV2RunBase & {
@@ -81,6 +86,7 @@ export function adaptAgentHarnessToV2(harness: AgentHarness): AgentHarnessV2 {
       label: harness.label,
       pluginId: harness.pluginId,
       params,
+      contextEngineHost: buildAgentHarnessContextEngineHostSupport(harness),
       lifecycleState: "prepared",
     }),
     start: async (prepared) => ({
@@ -88,9 +94,19 @@ export function adaptAgentHarnessToV2(harness: AgentHarness): AgentHarnessV2 {
       label: prepared.label,
       pluginId: prepared.pluginId,
       params: prepared.params,
+      contextEngineHost: prepared.contextEngineHost,
       lifecycleState: "started",
     }),
-    send: async (session) => harness.runAttempt(session.params),
+    send: async (session) => {
+      if (session.params.contextEngine && session.params.contextEngine.info.id !== "legacy") {
+        assertContextEngineHostSupport({
+          contextEngine: session.params.contextEngine,
+          operation: "agent-run",
+          host: session.contextEngineHost ?? buildAgentHarnessContextEngineHostSupport(harness),
+        });
+      }
+      return harness.runAttempt(session.params);
+    },
     resolveOutcome: async (session, result) =>
       applyAgentHarnessResultClassification(harness, result, session.params),
     cleanup: async (_params) => {
@@ -100,6 +116,16 @@ export function adaptAgentHarnessToV2(harness: AgentHarness): AgentHarnessV2 {
     compact: harness.compact ? (params) => harness.compact!(params) : undefined,
     reset: harness.reset ? (params) => harness.reset!(params) : undefined,
     dispose: harness.dispose ? () => harness.dispose!() : undefined,
+  };
+}
+
+function buildAgentHarnessContextEngineHostSupport(
+  harness: AgentHarness,
+): ContextEngineHostSupport {
+  return {
+    id: `agent-harness:${harness.id}`,
+    label: `agent harness "${harness.id}"`,
+    capabilities: harness.contextEngineHostCapabilities ?? [],
   };
 }
 

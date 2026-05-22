@@ -28,6 +28,7 @@ type GatewayRelayEvent = {
       callId?: string;
       name?: string;
       args?: unknown;
+      forced?: boolean;
     }
   | { type?: "error"; message?: string }
   | { type?: "close"; reason?: string }
@@ -243,6 +244,18 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     const abortController = new AbortController();
     this.consultAbortControllers.add(abortController);
     try {
+      if (event.forced) {
+        this.submitToolResult(
+          callId,
+          {
+            status: "working",
+            tool: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+            message:
+              "Tell the person briefly that you are checking, then wait for the final OpenClaw result before answering with the actual result.",
+          },
+          { willContinue: true },
+        );
+      }
       await submitRealtimeTalkConsult({
         ctx: this.ctx,
         callId,
@@ -256,11 +269,16 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     }
   }
 
-  private submitToolResult(callId: string, result: unknown): void {
+  private submitToolResult(
+    callId: string,
+    result: unknown,
+    options?: { suppressResponse?: boolean; willContinue?: boolean },
+  ): void {
     void this.ctx.client.request("talk.session.submitToolResult", {
       sessionId: this.session.relaySessionId,
       callId,
       result,
+      ...(options ? { options } : {}),
     });
   }
 

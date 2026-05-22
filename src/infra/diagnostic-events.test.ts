@@ -636,6 +636,40 @@ describe("diagnostic-events", () => {
     expect(events.filter((event) => event.type === "model.call.started")).toHaveLength(9_998);
   });
 
+  it("emits a bounded summary when async diagnostics are dropped at saturation", async () => {
+    const events: DiagnosticEventPayload[] = [];
+    onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+
+    for (let index = 0; index < 10_001; index += 1) {
+      emitDiagnosticEvent({
+        type: "model.call.started",
+        runId: `drop-run-${index}`,
+        callId: `drop-call-${index}`,
+        provider: "openai",
+        model: "gpt-5.4",
+      });
+    }
+
+    await waitForDiagnosticEventsDrained();
+
+    const dropSummary = events.find(
+      (
+        event,
+      ): event is Extract<DiagnosticEventPayload, { type: "diagnostic.async_queue.dropped" }> =>
+        event.type === "diagnostic.async_queue.dropped",
+    );
+    expect(dropSummary).toMatchObject({
+      type: "diagnostic.async_queue.dropped",
+      droppedEvents: 1,
+      droppedUntrustedEvents: 1,
+      maxQueueLength: 10_000,
+      drainBatchSize: 100,
+    });
+    expect(events.filter((event) => event.type === "model.call.started")).toHaveLength(10_000);
+  });
+
   it("keeps log records off the public diagnostic event stream", async () => {
     const publicEvents: string[] = [];
     const internalEvents: string[] = [];

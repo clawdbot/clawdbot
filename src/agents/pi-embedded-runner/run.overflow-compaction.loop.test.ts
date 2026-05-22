@@ -618,9 +618,13 @@ describe("overflow compaction in run loop", () => {
     ]);
     expect(result.meta?.replayInvalid).toBe(true);
     expect(result.meta?.livenessState).toBe("abandoned");
+    expect(result.meta?.timeoutPhase).toBe("provider");
+    expect(result.meta?.providerStarted).toBe(true);
     expect(setTerminalLifecycleMeta).toHaveBeenCalledWith({
       replayInvalid: true,
       livenessState: "abandoned",
+      timeoutPhase: "provider",
+      providerStarted: true,
     });
   });
 

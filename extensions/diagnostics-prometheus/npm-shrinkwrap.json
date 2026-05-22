@@ -1,0 +1,12 @@
+{
+  "name": "@openclaw/diagnostics-prometheus",
+  "version": "2026.5.22",
+  "lockfileVersion": 3,
+  "requires": true,
+  "packages": {
+    "": {
+      "name": "@openclaw/diagnostics-prometheus",
+      "version": "2026.5.22"
+    }
+  }
+}

@@ -96,13 +96,32 @@ describe("normalizeUsage", () => {
       output_tokens: 30,
       total_tokens: 250,
       input_tokens_details: { cached_tokens: 100 },
+      output_tokens_details: { reasoning_tokens: 17 },
     });
     expect(usage).toEqual({
       input: 20,
       output: 30,
       cacheRead: 100,
       cacheWrite: undefined,
+      reasoningTokens: 17,
       total: 250,
+    });
+  });
+
+  it("handles OpenAI Chat Completions reasoning token details", () => {
+    const usage = normalizeUsage({
+      prompt_tokens: 120,
+      completion_tokens: 30,
+      total_tokens: 150,
+      completion_tokens_details: { reasoning_tokens: 11 },
+    });
+    expect(usage).toEqual({
+      input: 120,
+      output: 30,
+      cacheRead: undefined,
+      cacheWrite: undefined,
+      reasoningTokens: 11,
+      total: 150,
     });
   });
 
@@ -178,6 +197,21 @@ describe("toOpenAiChatCompletionsUsage", () => {
       prompt_tokens: 0,
       completion_tokens: 0,
       total_tokens: 42,
+    });
+  });
+
+  it("preserves reasoning token details", () => {
+    const usage = normalizeUsage({
+      prompt_tokens: 10,
+      completion_tokens: 8,
+      completion_tokens_details: { reasoning_tokens: 6 },
+      total_tokens: 18,
+    });
+    expect(toOpenAiChatCompletionsUsage(usage)).toEqual({
+      prompt_tokens: 10,
+      completion_tokens: 8,
+      completion_tokens_details: { reasoning_tokens: 6 },
+      total_tokens: 18,
     });
   });
 

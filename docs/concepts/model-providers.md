@@ -177,7 +177,7 @@ Anthropic staff told us OpenClaw-style Claude CLI usage is allowed again, so Ope
 ### Other subscription-style hosted options
 
 <CardGroup cols={3}>
-  <Card title="GLM models" href="/providers/glm">
+  <Card title="Z.AI (GLM)" href="/providers/zai">
     Z.AI Coding Plan or general API endpoints.
   </Card>
   <Card title="MiniMax" href="/providers/minimax">

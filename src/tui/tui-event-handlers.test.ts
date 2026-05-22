@@ -8,6 +8,8 @@ type HandlerChatLog = {
   startTool: (...args: unknown[]) => void;
   updateToolResult: (...args: unknown[]) => void;
   addSystem: (...args: unknown[]) => void;
+  addPendingSystem: (...args: unknown[]) => void;
+  dismissPendingSystem: (...args: unknown[]) => void;
   updateAssistant: (...args: unknown[]) => void;
   finalizeAssistant: (...args: unknown[]) => void;
   dropAssistant: (...args: unknown[]) => void;
@@ -21,6 +23,8 @@ type MockChatLog = {
   startTool: MockFn;
   updateToolResult: MockFn;
   addSystem: MockFn;
+  addPendingSystem: MockFn;
+  dismissPendingSystem: MockFn;
   updateAssistant: MockFn;
   finalizeAssistant: MockFn;
   dropAssistant: MockFn;
@@ -36,6 +40,8 @@ function createMockChatLog(): MockChatLog & HandlerChatLog {
     startTool: vi.fn(),
     updateToolResult: vi.fn(),
     addSystem: vi.fn(),
+    addPendingSystem: vi.fn(),
+    dismissPendingSystem: vi.fn(),
     updateAssistant: vi.fn(),
     finalizeAssistant: vi.fn(),
     dropAssistant: vi.fn(),
@@ -1178,7 +1184,7 @@ describe("tui-event-handlers: streaming watchdog", () => {
 
     expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
     expect(state.activeChatRunId).toBeNull();
-    expect(chatLog.addSystem).toHaveBeenCalledWith(expectedTimeoutMessage);
+    expect(chatLog.addPendingSystem).toHaveBeenCalledWith("run-stuck", expectedTimeoutMessage);
 
     handlers.dispose?.();
   });
@@ -1384,7 +1390,7 @@ describe("tui-event-handlers: streaming watchdog", () => {
     expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
     expect(state.activeChatRunId).toBeNull();
     expect(loadHistory).toHaveBeenCalledTimes(1);
-    expect(chatLog.addSystem).not.toHaveBeenCalledWith(expectedTimeoutMessage);
+    expect(chatLog.addPendingSystem).not.toHaveBeenCalled();
 
     handlers.dispose?.();
   });
@@ -1410,8 +1416,8 @@ describe("tui-event-handlers: streaming watchdog", () => {
     vi.advanceTimersByTime(10_000);
 
     const statusCalls = setActivityStatus.mock.calls.map((c) => c[0]);
-    expect(statusCalls.reduce((count, s) => count + (s === "idle" ? 1 : 0), 0)).toBe(1);
-    expect(chatLog.addSystem).not.toHaveBeenCalledWith(expectedTimeoutMessage);
+    expect(statusCalls.filter((s) => s === "idle").length).toBe(1);
+    expect(chatLog.addPendingSystem).not.toHaveBeenCalled();
     expect(state.activeChatRunId).toBeNull();
 
     handlers.dispose?.();
@@ -1432,7 +1438,7 @@ describe("tui-event-handlers: streaming watchdog", () => {
     vi.advanceTimersByTime(60_000);
 
     expect(setActivityStatus).not.toHaveBeenCalledWith("idle");
-    expect(chatLog.addSystem).not.toHaveBeenCalled();
+    expect(chatLog.addPendingSystem).not.toHaveBeenCalled();
     expect(state.activeChatRunId).toBe("run-no-watchdog");
 
     handlers.dispose?.();
@@ -1474,7 +1480,7 @@ describe("tui-event-handlers: streaming watchdog", () => {
 
     expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
     expect(state.activeChatRunId).toBeNull();
-    expect(chatLog.addSystem).toHaveBeenCalledTimes(2);
+    expect(chatLog.addPendingSystem).toHaveBeenCalledTimes(2);
 
     handlers.dispose?.();
   });
@@ -1495,6 +1501,60 @@ describe("tui-event-handlers: streaming watchdog", () => {
     vi.advanceTimersByTime(10_000);
 
     expect(setActivityStatus).not.toHaveBeenCalledWith("idle");
-    expect(chatLog.addSystem).not.toHaveBeenCalled();
+    expect(chatLog.addPendingSystem).not.toHaveBeenCalled();
+  });
+
+  it("dismisses the watchdog notice when a delta arrives after the watchdog fires", () => {
+    const { state, chatLog, handlers } = createHarness({
+      streamingWatchdogMs: 5_000,
+    });
+
+    handlers.handleChatEvent({
+      runId: "run-late",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "starting" },
+    } satisfies ChatEvent);
+
+    vi.advanceTimersByTime(5_001);
+    expect(chatLog.addPendingSystem).toHaveBeenCalledWith("run-late", expectedTimeoutMessage);
+
+    handlers.handleChatEvent({
+      runId: "run-late",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "actually here" },
+    } satisfies ChatEvent);
+
+    expect(chatLog.dismissPendingSystem).toHaveBeenCalledWith("run-late");
+
+    handlers.dispose?.();
+  });
+
+  it("dismisses the watchdog notice when the final arrives after the watchdog fires", () => {
+    const { state, chatLog, handlers } = createHarness({
+      streamingWatchdogMs: 5_000,
+    });
+
+    handlers.handleChatEvent({
+      runId: "run-final-late",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "starting" },
+    } satisfies ChatEvent);
+
+    vi.advanceTimersByTime(5_001);
+    expect(chatLog.addPendingSystem).toHaveBeenCalledWith("run-final-late", expectedTimeoutMessage);
+
+    handlers.handleChatEvent({
+      runId: "run-final-late",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "done" }], stopReason: "stop" },
+    } satisfies ChatEvent);
+
+    expect(chatLog.dismissPendingSystem).toHaveBeenCalledWith("run-final-late");
+
+    handlers.dispose?.();
   });
 });

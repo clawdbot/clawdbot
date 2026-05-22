@@ -28,7 +28,7 @@ import {
   parseThreadSessionSuffix,
 } from "../../routing/session-key.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { stripReasoningTagsFromText } from "../../shared/text/reasoning-tags.js";
+import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { listAllChannelSupportedActions, listChannelSupportedActions } from "../channel-tools.js";
@@ -52,40 +52,6 @@ const EXPLICIT_TARGET_ACTIONS = new Set<ChannelMessageActionName>([
 
 function actionNeedsExplicitTarget(action: ChannelMessageActionName): boolean {
   return EXPLICIT_TARGET_ACTIONS.has(action);
-}
-
-function stripFormattedReasoningMessage(text: string): string {
-  const stripped = stripReasoningTagsFromText(text);
-  const lines = stripped.split(/\r?\n/u);
-  const prefix = lines[0]?.trim();
-  if (prefix !== "Reasoning:" && !/^Thinking\.{0,3}$/u.test(prefix ?? "")) {
-    return stripped;
-  }
-  if (/^Thinking\.{0,3}$/u.test(prefix ?? "")) {
-    const firstBodyLine = lines.slice(1).find((line) => line.trim());
-    const trimmedBodyLine = firstBodyLine?.trim() ?? "";
-    if (
-      !trimmedBodyLine ||
-      !(
-        trimmedBodyLine.startsWith("_") &&
-        trimmedBodyLine.endsWith("_") &&
-        trimmedBodyLine.length >= 2
-      )
-    ) {
-      return stripped;
-    }
-  }
-
-  let index = 1;
-  while (index < lines.length) {
-    const trimmed = lines[index]?.trim() ?? "";
-    if (!trimmed || (trimmed.startsWith("_") && trimmed.endsWith("_") && trimmed.length >= 2)) {
-      index += 1;
-      continue;
-    }
-    break;
-  }
-  return lines.slice(index).join("\n").trim();
 }
 
 function normalizeToolCallIdForIdempotencyKey(toolCallId: unknown): string | undefined {

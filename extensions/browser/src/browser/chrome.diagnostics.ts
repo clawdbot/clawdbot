@@ -57,6 +57,12 @@ function elapsedSince(startedAt: number): number {
 
 export function safeChromeCdpErrorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
+  const cause = error instanceof Error ? error.cause : undefined;
+  const causeMessage =
+    cause instanceof Error ? cause.message : typeof cause === "string" ? cause : undefined;
+  if (message && causeMessage && !message.includes(causeMessage)) {
+    return redactSensitiveText(`${message}: ${causeMessage}`);
+  }
   return redactSensitiveText(message || "unknown error");
 }
 
@@ -247,7 +253,15 @@ export function formatChromeCdpDiagnostic(diagnostic: ChromeCdpDiagnostic): stri
     return `CDP diagnostic: ready after ${diagnostic.elapsedMs}ms; cdp=${redactedCdpUrl}; websocket=${redactedWsUrl}.${browser}`;
   }
   const websocket = redactedWsUrl ? `; websocket=${redactedWsUrl}` : "";
-  return `CDP diagnostic: ${diagnostic.code} after ${diagnostic.elapsedMs}ms; cdp=${redactedCdpUrl}${websocket}; ${diagnostic.message}.`;
+  const wslPortproxyHint =
+    diagnostic.code === "http_unreachable" && isLikelyEmptyHttpReply(diagnostic.message)
+      ? " In WSL2-to-Windows Chrome setups, this can be a stale netsh portproxy self-loop where svchost/iphlpsvc owns the CDP port instead of chrome.exe; verify with tasklist /svc and curl /json/version, then remove any 127.0.0.1:9222 -> 127.0.0.1:9222 portproxy rule."
+      : "";
+  return `CDP diagnostic: ${diagnostic.code} after ${diagnostic.elapsedMs}ms; cdp=${redactedCdpUrl}${websocket}; ${diagnostic.message}.${wslPortproxyHint}`;
+}
+
+function isLikelyEmptyHttpReply(message: string): boolean {
+  return /empty reply|other side closed|socket closed|terminated before response/i.test(message);
 }
 
 export async function diagnoseChromeCdp(

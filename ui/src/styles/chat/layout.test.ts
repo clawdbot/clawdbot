@@ -58,6 +58,15 @@ describe("chat layout styles", () => {
     expect(css).toContain("height: 22px;");
   });
 
+  it("keeps chat session picker search icon buttons fixed size", () => {
+    const css = readLayoutCss();
+
+    expect(css).toContain(".chat-session-picker .chat-session-picker__icon-button.btn--icon {");
+    expect(css).toContain("flex: 0 0 36px;");
+    expect(css).toContain("width: 36px;");
+    expect(css).toContain("min-width: 36px;");
+  });
+
   it("keeps composer controls labeled and large enough without shrinking mobile taps", () => {
     const css = readLayoutCss();
 
@@ -77,5 +86,13 @@ describe("chat layout styles", () => {
     expect(css).toContain("width: min(360px, 70%);");
     expect(css).toContain(".chat-loading-skeleton .chat-bubble");
     expect(css).toContain("width: 100%;");
+  });
+
+  it("lets realtime Talk turns flow in the chat thread", () => {
+    const css = readLayoutCss();
+
+    expect(css).toContain(".agent-chat__voice-turns");
+    expect(css).toContain("background: transparent;");
+    expect(css).not.toContain("max-height: min(28vh, 220px);");
   });
 });

@@ -1793,6 +1793,71 @@ lives on the [Models FAQ](/help/faq-models).
 
   </Accordion>
 
+  <Accordion title="Is OpenClaw less safe because it uses TypeScript/Node instead of Rust/WASM?">
+    Language and runtime matter, but they are not the main risk for a personal
+    agent. The practical OpenClaw risks are gateway exposure, who can message the
+    bot, prompt injection, tool scope, credential handling, browser access, exec
+    access, and third-party skill or plugin trust.
+
+    Rust and WASM can provide stronger isolation for some classes of code, but
+    they do not solve prompt injection, bad allowlists, public gateway exposure,
+    overbroad tools, or a browser profile that is already logged in to sensitive
+    accounts. Treat those as the primary controls:
+
+    - keep the Gateway private or authenticated
+    - use pairing and allowlists for DMs and groups
+    - deny or sandbox risky tools for untrusted inputs
+    - install only trusted plugins and skills
+    - run `openclaw security audit --deep` after config changes
+
+    Details: [Security](/gateway/security), [Sandboxing](/gateway/sandboxing).
+
+  </Accordion>
+
+  <Accordion title="I saw reports about exposed OpenClaw instances. What should I check?">
+    First check your actual deployment:
+
+    ```bash
+    openclaw security audit --deep
+    openclaw gateway status
+    ```
+
+    A safer baseline is:
+
+    - Gateway bound to `loopback`, or exposed only through authenticated private
+      access such as a tailnet, SSH tunnel, token/password auth, or a correctly
+      configured trusted proxy
+    - DMs in `pairing` or `allowlist` mode
+    - groups allowlisted and mention-gated unless every member is trusted
+    - high-risk tools (`exec`, `browser`, `gateway`, `cron`) denied or tightly
+      scoped for agents that read untrusted content
+    - sandboxing enabled where tool execution needs a smaller blast radius
+
+    Public binds without auth, open DMs/groups with tools, and exposed browser
+    control are the findings to fix first. Details:
+    [Security audit checklist](/gateway/security#security-audit-checklist).
+
+  </Accordion>
+
+  <Accordion title="Are ClawHub skills and third-party plugins safe to install?">
+    Treat third-party skills and plugins as code you are choosing to trust.
+    ClawHub skill pages expose scan state before install, and OpenClaw plugin
+    install/update flows run built-in dangerous-code checks, but scans are not a
+    complete security boundary.
+
+    Safer pattern:
+
+    - prefer trusted authors and pinned versions
+    - read the skill or plugin before enabling it
+    - keep plugin and skill allowlists narrow
+    - run untrusted-input workflows in a sandbox with minimal tools
+    - avoid giving third-party code broad filesystem, exec, browser, or secret access
+
+    Details: [Skills](/tools/skills), [Plugins](/tools/plugin),
+    [Security](/gateway/security).
+
+  </Accordion>
+
   <Accordion title="Should my bot have its own email, GitHub account, or phone number?">
     Yes, for most setups. Isolating the bot with separate accounts and phone numbers
     reduces the blast radius if something goes wrong. This also makes it easier to rotate

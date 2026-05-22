@@ -53,9 +53,37 @@ type CodeModeWorkerResult =
   | {
       status: "failed";
       error: string;
-      code: "invalid_input" | "internal_error";
+      code: "invalid_input" | "runtime_unavailable" | "timeout" | "internal_error";
       output: unknown[];
     };
+
+class CodeModeWorkerFailure extends Error {
+  readonly code: Extract<CodeModeWorkerResult, { status: "failed" }>["code"];
+
+  constructor(
+    code: Extract<CodeModeWorkerResult, { status: "failed" }>["code"],
+    message: string,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+    this.name = "CodeModeWorkerFailure";
+    this.code = code;
+  }
+}
+
+class CodeModeGuestError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CodeModeGuestError";
+  }
+}
+
+function isQuickJsInterruptedError(error: unknown): boolean {
+  if (error instanceof CodeModeGuestError) {
+    return false;
+  }
+  return errorMessage(error) === "interrupted";
+}
 
 type VmRun = {
   vm: QuickJS;
@@ -329,7 +357,7 @@ async function readCompletedResult(vm: QuickJS, resultHandle: JSValueHandle): Pr
   const settled = await vm.resolvePromise(resultHandle);
   if ("error" in settled) {
     try {
-      throw new Error(errorMessage(vm.dump(settled.error)));
+      throw new CodeModeGuestError(errorMessage(vm.dump(settled.error)));
     } finally {
       settled.error.dispose();
     }
@@ -391,8 +419,8 @@ async function runExec(input: Extract<CodeModeWorkerInput, { kind: "exec" }>) {
       resultHandle.dispose();
     }
   } catch (error) {
-    if (didTimeout()) {
-      throw new Error("code mode timeout exceeded", { cause: error });
+    if (didTimeout() || isQuickJsInterruptedError(error)) {
+      throw new CodeModeWorkerFailure("timeout", "code mode timeout exceeded", { cause: error });
     }
     throw error;
   } finally {
@@ -448,8 +476,8 @@ async function runResume(input: Extract<CodeModeWorkerInput, { kind: "resume" }>
       resultHandle.dispose();
     }
   } catch (error) {
-    if (didTimeout()) {
-      throw new Error("code mode timeout exceeded", { cause: error });
+    if (didTimeout() || isQuickJsInterruptedError(error)) {
+      throw new CodeModeWorkerFailure("timeout", "code mode timeout exceeded", { cause: error });
     }
     throw error;
   } finally {
@@ -496,7 +524,7 @@ async function main(): Promise<CodeModeWorkerResult> {
     return {
       status: "failed",
       error: errorMessage(error),
-      code: "internal_error",
+      code: error instanceof CodeModeWorkerFailure ? error.code : "internal_error",
       output: [],
     };
   }

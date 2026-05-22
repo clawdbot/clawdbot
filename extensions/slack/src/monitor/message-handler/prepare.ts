@@ -70,7 +70,7 @@ import { resolveSlackMessageContent } from "./prepare-content.js";
 import { resolveSlackDmHistoryContext, resolveSlackDmHistoryLimit } from "./prepare-dm-history.js";
 import { resolveSlackRoutingContext } from "./prepare-routing.js";
 import { resolveSlackThreadContextData } from "./prepare-thread-context.js";
-import { isSlackSubteamMentionForBot } from "./subteam-mentions.js";
+import { isSlackSubteamMentionForBot, normalizeSlackId } from "./subteam-mentions.js";
 import type { PreparedSlackMessage } from "./types.js";
 
 const mentionRegexCache = new WeakMap<SlackMonitorContext, Map<string, RegExp[]>>();
@@ -366,7 +366,7 @@ function collectUniqueSlackMentionIds(text: string, regex: RegExp): string[] {
   const ids: string[] = [];
   regex.lastIndex = 0;
   for (const match of text.matchAll(regex)) {
-    const id = normalizeOptionalString(match[1]);
+    const id = normalizeSlackId(match[1]);
     if (id && !ids.includes(id)) {
       ids.push(id);
     }
@@ -390,8 +390,9 @@ async function resolveSlackExplicitMentionState(params: {
   hasSubteamMention: boolean;
   source: "message" | "app_mention";
 }): Promise<SlackExplicitMentionState> {
+  const normalizedBotUserId = normalizeSlackId(params.ctx.botUserId);
   const explicitlyMentionedBotUser = Boolean(
-    params.ctx.botUserId && params.mentionedUserIds.includes(params.ctx.botUserId),
+    normalizedBotUserId && params.mentionedUserIds.includes(normalizedBotUserId),
   );
   const explicitlyMentionedBotSubteam =
     Boolean(params.ctx.botUserId && params.hasSubteamMention) &&

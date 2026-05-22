@@ -149,6 +149,30 @@ describe("buildGatewayInstallPlan", () => {
     expect(serviceEnvRequest?.extraPathDirs).toStrictEqual(["/custom"]);
   });
 
+  it("adds the active openclaw command bin directory to the managed service PATH", async () => {
+    mockNodeGatewayPlanFixture();
+    const originalArgv = process.argv;
+    const openclawBinPath = path.join(isolatedHome, ".npm-global", "bin", "openclaw");
+    process.argv = ["node", openclawBinPath, "gateway", "install"];
+
+    try {
+      await buildGatewayInstallPlan({
+        env: { HOME: isolatedHome },
+        port: 3000,
+        runtime: "node",
+        nodePath: "/opt/homebrew/opt/node/bin/node",
+        platform: "darwin",
+      });
+    } finally {
+      process.argv = originalArgv;
+    }
+
+    expect(mocks.buildServiceEnvironment).toHaveBeenCalledOnce();
+    expect(
+      firstMockArg(mocks.buildServiceEnvironment, "buildServiceEnvironment").extraPathDirs,
+    ).toStrictEqual(["/opt/homebrew/opt/node/bin", path.dirname(openclawBinPath)]);
+  });
+
   it("does not prepend '.' when nodePath is a bare executable name", async () => {
     mockNodeGatewayPlanFixture();
 

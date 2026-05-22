@@ -80,6 +80,7 @@ describe("plugin npm runtime build planning", () => {
     expect(diffsRuntimePlan.packageFiles).toEqual([
       "dist/**",
       "openclaw.plugin.json",
+      "npm-shrinkwrap.json",
       "README.md",
       "skills/**",
     ]);

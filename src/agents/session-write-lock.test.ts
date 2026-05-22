@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -761,6 +762,35 @@ describe("acquireSessionWriteLock", () => {
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
+  });
+
+  it("retries when a reported stale same-process lock disappears before recovery", async () => {
+    await withTempSessionLockFile(async ({ sessionFile, lockPath }) => {
+      await fs.writeFile(
+        lockPath,
+        JSON.stringify({
+          pid: process.pid,
+          createdAt: new Date().toISOString(),
+          starttime: FAKE_STARTTIME,
+        }),
+        "utf8",
+      );
+      let resolverCalls = 0;
+      testing.setProcessStartTimeResolverForTest((pid) => {
+        if (pid !== process.pid) {
+          return null;
+        }
+        resolverCalls += 1;
+        if (resolverCalls === 1) {
+          fsSync.rmSync(lockPath, { force: true });
+        }
+        return FAKE_STARTTIME;
+      });
+
+      const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
+      await lock.release();
+      expect(resolverCalls).toBeGreaterThan(0);
+    });
   });
 
   it("removes held locks on termination signals", async () => {

@@ -12,13 +12,29 @@ function withTarball(
   files: Record<string, string>,
   testBody: (tarball: string) => void,
   version = "0.0.0",
-  options: { includeControlUi?: boolean } = {},
+  options: { includeControlUi?: boolean; includeShrinkwrap?: boolean } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "openclaw-package-tarball-test-"));
   try {
     const packageRoot = join(root, "package");
     mkdirSync(join(packageRoot, "dist"), { recursive: true });
     writeFileSync(join(packageRoot, "package.json"), JSON.stringify({ name: "openclaw", version }));
+    if (options.includeShrinkwrap !== false) {
+      writeFileSync(
+        join(packageRoot, "npm-shrinkwrap.json"),
+        JSON.stringify({
+          name: "openclaw",
+          version,
+          lockfileVersion: 3,
+          packages: {
+            "": {
+              name: "openclaw",
+              version,
+            },
+          },
+        }),
+      );
+    }
     writeFileSync(
       join(packageRoot, "dist", "postinstall-inventory.json"),
       JSON.stringify(inventory),
@@ -161,6 +177,52 @@ describe("check-openclaw-package-tarball", () => {
       },
       "2026.4.27",
       { includeControlUi: false },
+    );
+  });
+
+  it("allows legacy package tarballs without shrinkwrap", () => {
+    withTarball(
+      ["dist/index.js"],
+      { "dist/index.js": "export {};\n" },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status, result.stderr).toBe(0);
+        expect(result.stderr).toContain("legacy package omits npm-shrinkwrap.json");
+      },
+      "2026.5.20",
+      { includeShrinkwrap: false },
+    );
+  });
+
+  it("rejects new package tarballs without shrinkwrap", () => {
+    withTarball(
+      ["dist/index.js"],
+      { "dist/index.js": "export {};\n" },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("missing required tar entry npm-shrinkwrap.json");
+      },
+      "2026.5.21",
+      { includeShrinkwrap: false },
+    );
+  });
+
+  it("rejects package-lock.json in package tarballs", () => {
+    withTarball(
+      ["dist/index.js"],
+      { "dist/index.js": "export {};\n", "package-lock.json": "{}\n" },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          "package tarball must ship npm-shrinkwrap.json, not package-lock.json",
+        );
+      },
+      "2026.4.27",
     );
   });
 

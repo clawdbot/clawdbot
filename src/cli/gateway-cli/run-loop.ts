@@ -107,6 +107,20 @@ export async function runGatewayLoop(params: {
   waitForHealthyChild?: (port: number, pid?: number, host?: string) => Promise<boolean>;
 }) {
   let startupStartedAt = Date.now();
+  // Eagerly resolve the lifecycle runtime module before installing signal
+  // listeners. Without this, every subsequent lifecycle path (SIGUSR1,
+  // SIGTERM-with-intent, restart iteration hook, stability bundle writer)
+  // depends on a dynamic import() call. After an in-place package upgrade
+  // (e.g. `npm install -g openclaw@latest` triggered via update.run),
+  // dist/ chunk hashes rotate while the process is still running. The next
+  // SIGUSR1 — including the one update.run schedules for itself — would
+  // hit ERR_MODULE_NOT_FOUND from inside its async IIFE, reject silently,
+  // and leave restart.ts's emittedRestartToken permanently unconsumed.
+  // From that point every scheduleGatewaySigusr1Restart() returns
+  // { coalesced: true } and the gateway never restarts. Priming the loader
+  // here pulls the whole re-export graph (lifecycle.runtime.ts is a 36-line
+  // re-export hub) into memory, immune to later disk rotation.
+  const eagerLifecycleRuntime = await loadGatewayLifecycleRuntimeModule();
   let lock = await acquireGatewayLock({ port: params.lockPort });
   let server: Awaited<ReturnType<typeof startGatewayServer>> | null = null;
   let shuttingDown = false;
@@ -702,7 +716,10 @@ export async function runGatewayLoop(params: {
         restartIntent?.reason,
         restartIntent ?? undefined,
       );
-    })();
+    })().catch((err: unknown) => {
+      gatewayLog.error(`failed to handle SIGTERM: ${String(err)}`);
+      request("stop", "SIGTERM");
+    });
   };
   const onSigint = () => {
     gatewayLog.info("signal SIGINT received");
@@ -745,7 +762,20 @@ export async function runGatewayLoop(params: {
       const restartReason = peekGatewaySigusr1RestartReason();
       markGatewaySigusr1RestartHandled();
       request("restart", "SIGUSR1", restartReason);
-    })();
+    })().catch((err) => {
+      // Defense in depth: if anything in the listener body rejects, the
+      // SIGUSR1 emit has already advanced emittedRestartToken but no one
+      // called markGatewaySigusr1RestartHandled. Without unsticking the
+      // token here, every subsequent scheduleGatewaySigusr1Restart() would
+      // silently coalesce into the dead in-flight signal and the gateway
+      // would never restart again until manually kickstarted.
+      gatewayLog.error(`SIGUSR1 handler failed: ${formatErrorMessage(err)}`);
+      try {
+        eagerLifecycleRuntime.markGatewaySigusr1RestartHandled();
+      } catch {
+        // Best-effort: the eager reference itself is the recovery path.
+      }
+    });
   };
 
   process.on("SIGTERM", onSigterm);

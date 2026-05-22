@@ -49,6 +49,7 @@ import {
 } from "../fallback-state.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
 import {
+  isReplyPayloadStatusNotice,
   markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
 } from "../reply-payload.js";
@@ -922,11 +923,7 @@ function buildInlineRawTracePayload(params: {
 function joinCommitmentAssistantText(payloads: ReplyPayload[]): string {
   return payloads
     .filter(
-      (payload) =>
-        !payload.isError &&
-        !payload.isReasoning &&
-        !payload.isCompactionNotice &&
-        !payload.isFallbackNotice,
+      (payload) => !payload.isError && !payload.isReasoning && !isReplyPayloadStatusNotice(payload),
     )
     .map((payload) => payload.text?.trim())
     .filter((text): text is string => Boolean(text))
@@ -1753,7 +1750,7 @@ export async function runReplyAgent(params: {
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
 
     const hasReplyPayloadBeyondFallbackNotice = replyPayloads.some(
-      (payload) => !payload.isFallbackNotice,
+      (payload) => !isReplyPayloadStatusNotice(payload),
     );
     const hasDeliveredBlockStream = Boolean(
       blockReplyPipeline?.didStream() && !blockReplyPipeline.isAborted(),
@@ -1775,7 +1772,7 @@ export async function runReplyAgent(params: {
     const hasReminderCommitment = replyPayloads.some(
       (payload) =>
         !payload.isError &&
-        !payload.isFallbackNotice &&
+        !isReplyPayloadStatusNotice(payload) &&
         typeof payload.text === "string" &&
         hasUnbackedReminderCommitment(payload.text),
     );

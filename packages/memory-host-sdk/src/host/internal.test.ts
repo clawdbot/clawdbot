@@ -97,8 +97,21 @@ describe("memory host SDK package internals", () => {
     const workspaceDir = path.join(os.tmpdir(), "memory-test-workspace");
     const absPath = path.resolve(path.sep, "shared-notes");
     expect(
-      normalizeExtraMemoryPaths(workspaceDir, [" notes ", "./notes", absPath, absPath, ""]),
-    ).toEqual([path.resolve(workspaceDir, "notes"), absPath]);
+      normalizeExtraMemoryPaths(workspaceDir, [
+        " notes ",
+        "./notes",
+        absPath,
+        absPath,
+        "~/shared-notes",
+        "~",
+        "",
+      ]),
+    ).toEqual([
+      path.resolve(workspaceDir, "notes"),
+      absPath,
+      path.join(os.homedir(), "shared-notes"),
+      os.homedir(),
+    ]);
   });
 
   it("lists canonical markdown and enabled multimodal files", async () => {

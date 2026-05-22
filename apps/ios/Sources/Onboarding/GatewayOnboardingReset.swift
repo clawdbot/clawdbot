@@ -3,7 +3,7 @@ import OpenClawKit
 
 enum GatewayOnboardingReset {
     @MainActor
-    static func reset(
+    static func prepareForBootstrapPairing(
         appModel: NodeAppModel,
         instanceId: String,
         defaults: UserDefaults = .standard)
@@ -15,10 +15,24 @@ enum GatewayOnboardingReset {
             GatewaySettingsStore.deleteGatewayCredentials(instanceId: trimmedInstanceId)
         }
 
-        GatewaySettingsStore.clearLastGatewayConnection()
-        GatewaySettingsStore.clearPreferredGatewayStableID()
-        GatewaySettingsStore.clearLastDiscoveredGatewayStableID()
+        let deviceId = DeviceIdentityStore.loadOrCreate().deviceId
+        DeviceAuthStore.clearToken(deviceId: deviceId, role: "node")
+        DeviceAuthStore.clearToken(deviceId: deviceId, role: "operator")
+
+        GatewaySettingsStore.clearLastGatewayConnection(defaults: defaults)
+        GatewaySettingsStore.clearPreferredGatewayStableID(defaults: defaults)
+        GatewaySettingsStore.clearLastDiscoveredGatewayStableID(defaults: defaults)
         GatewayTLSStore.clearAllFingerprints()
+        defaults.set(false, forKey: "gateway.autoconnect")
+    }
+
+    @MainActor
+    static func reset(
+        appModel: NodeAppModel,
+        instanceId: String,
+        defaults: UserDefaults = .standard)
+    {
+        self.prepareForBootstrapPairing(appModel: appModel, instanceId: instanceId, defaults: defaults)
         OnboardingStateStore.reset(defaults: defaults)
 
         defaults.set(false, forKey: "gateway.onboardingComplete")

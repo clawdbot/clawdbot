@@ -47,6 +47,7 @@ describe("talk normalization", () => {
         mode: "realtime",
         transport: "webrtc",
         brain: "agent-consult",
+        consultRouting: "force-agent-consult",
       },
       interruptOnSpeech: true,
     });
@@ -71,6 +72,7 @@ describe("talk normalization", () => {
         mode: "realtime",
         transport: "webrtc",
         brain: "agent-consult",
+        consultRouting: "force-agent-consult",
       },
       interruptOnSpeech: true,
     });

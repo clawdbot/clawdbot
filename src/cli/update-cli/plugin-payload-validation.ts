@@ -3,6 +3,7 @@ import path from "node:path";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { resolvePackageExtensionEntries, type PackageManifest } from "../../plugins/manifest.js";
 import { validatePackageExtensionEntriesForInstall } from "../../plugins/package-entry-resolution.js";
+import { auditOpenClawPeerDependencyLink } from "../../plugins/plugin-peer-link.js";
 import { resolveUserPath } from "../../utils.js";
 
 export type PluginPayloadSmokeFailureReason =
@@ -11,7 +12,8 @@ export type PluginPayloadSmokeFailureReason =
   | "missing-package-json"
   | "invalid-package-json"
   | "missing-main-entry"
-  | "missing-extension-entry";
+  | "missing-extension-entry"
+  | "missing-openclaw-peer-link";
 
 export type PluginPayloadSmokeFailure = {
   pluginId: string;
@@ -100,6 +102,21 @@ export async function runPluginPayloadSmokeCheck(params: {
       continue;
     }
 
+    if (manifestDeclaresOpenClawPeer(manifest)) {
+      const peerIssue = await auditOpenClawPeerDependencyLink({
+        packageDir: installPath,
+        packageName: manifest.name ?? pluginId,
+      });
+      if (peerIssue) {
+        failures.push({
+          pluginId,
+          installPath,
+          reason: "missing-openclaw-peer-link",
+          detail: `Plugin declares peerDependency "openclaw" but peer link audit failed: ${peerIssue.reason}.`,
+        });
+      }
+    }
+
     const extensionResolution = resolvePackageExtensionEntries(manifest);
     if (extensionResolution.status === "invalid" || extensionResolution.status === "empty") {
       failures.push({
@@ -149,6 +166,16 @@ export async function runPluginPayloadSmokeCheck(params: {
   }
 
   return { checked, failures };
+}
+
+function manifestDeclaresOpenClawPeer(manifest: PackageManifest): boolean {
+  const peerDependencies = (manifest as { peerDependencies?: unknown }).peerDependencies;
+  return (
+    typeof peerDependencies === "object" &&
+    peerDependencies !== null &&
+    !Array.isArray(peerDependencies) &&
+    typeof (peerDependencies as Record<string, unknown>).openclaw === "string"
+  );
 }
 
 async function safeStat(target: string): Promise<import("node:fs").Stats | null> {

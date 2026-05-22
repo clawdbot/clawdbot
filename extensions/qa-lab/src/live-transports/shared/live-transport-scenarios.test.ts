@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { __testing as discordTesting } from "../discord/discord-live.runtime.js";
+import { __testing as slackTesting } from "../slack/slack-live.runtime.js";
+import { __testing as telegramTesting } from "../telegram/telegram-live.runtime.js";
+import { __testing as whatsAppTesting } from "../whatsapp/whatsapp-live.runtime.js";
 import {
   LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
+  buildLiveTransportCoverageLaneSummaries,
   collectLiveTransportStandardScenarioCoverage,
   findMissingLiveTransportStandardScenarios,
   selectLiveTransportScenarios,
@@ -72,5 +77,40 @@ describe("live transport scenario helpers", () => {
         expectedStandardScenarioIds: LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
       }),
     ).toEqual(["allowlist-block", "top-level-reply-shape"]);
+  });
+
+  it("summarizes live transport lane membership for coverage reports", () => {
+    const lanes = buildLiveTransportCoverageLaneSummaries();
+
+    expect(lanes.map((lane) => lane.transportId)).toEqual([
+      "discord",
+      "slack",
+      "telegram",
+      "whatsapp",
+    ]);
+    expect(lanes.find((lane) => lane.transportId === "telegram")?.members).toContainEqual({
+      standardId: "canary",
+    });
+    expect(lanes.find((lane) => lane.transportId === "slack")?.members).toContainEqual({
+      standardId: "thread-follow-up",
+      scenarioId: "slack-thread-follow-up",
+    });
+    expect(
+      lanes.find((lane) => lane.transportId === "discord")?.baselineMissingStandardScenarioIds,
+    ).toEqual(["allowlist-block", "top-level-reply-shape", "restart-resume"]);
+  });
+
+  it("keeps coverage report lane summaries aligned with runtime lanes", () => {
+    const lanes = new Map(
+      buildLiveTransportCoverageLaneSummaries().map((lane) => [
+        lane.transportId,
+        lane.standardScenarioIds,
+      ]),
+    );
+
+    expect(lanes.get("discord")).toEqual(discordTesting.DISCORD_QA_STANDARD_SCENARIO_IDS);
+    expect(lanes.get("slack")).toEqual(slackTesting.SLACK_QA_STANDARD_SCENARIO_IDS);
+    expect(lanes.get("telegram")).toEqual(telegramTesting.TELEGRAM_QA_STANDARD_SCENARIO_IDS);
+    expect(lanes.get("whatsapp")).toEqual(whatsAppTesting.WHATSAPP_QA_STANDARD_SCENARIO_IDS);
   });
 });

@@ -100,6 +100,24 @@ describe("resolveBuildAllStep", () => {
     });
   });
 
+  it("can route pnpm script steps through direct node entrypoints", () => {
+    const step = getBuildAllStep("plugins:assets:build");
+
+    const result = resolveBuildAllStep(step, {
+      nodeExecPath: "/custom/node",
+      env: { OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
+    });
+
+    expect(result).toEqual({
+      command: "/custom/node",
+      args: ["scripts/bundled-plugin-assets.mjs", "--phase", "build"],
+      options: {
+        stdio: "inherit",
+        env: { OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
+      },
+    });
+  });
+
   it("adds heap headroom for plugin-sdk dts on Windows", () => {
     const step = getBuildAllStep("build:plugin-sdk:dts");
 

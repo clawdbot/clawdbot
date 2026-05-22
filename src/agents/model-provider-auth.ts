@@ -1,5 +1,6 @@
 import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ProviderAuthEvidence } from "../secrets/provider-env-vars.js";
 import {
   listAgentIds,
   resolveAgentDir,
@@ -14,9 +15,14 @@ import {
   listProfilesForProvider,
   type AuthProfileStore,
 } from "./auth-profiles.js";
+import {
+  resolveProviderEnvApiKeyCandidates,
+  resolveProviderEnvAuthEvidence,
+} from "./model-auth-env-vars.js";
 import { hasRuntimeAvailableProviderAuth } from "./model-auth.js";
 import { loadModelCatalog } from "./model-catalog.js";
 import { normalizeProviderId } from "./model-selection.js";
+import { resolveProviderAuthAliasMap } from "./provider-auth-aliases.js";
 import { resolveDefaultAgentWorkspaceDir } from "./workspace.js";
 
 // Prepared runtime fact: which providers have available auth given the
@@ -29,6 +35,12 @@ type PreparedProviderAuthState = {
   agentId: string;
   configFingerprint: string;
   providers: ReadonlyMap<string, boolean>;
+};
+
+type ProviderEnvAuthLookup = {
+  aliasMap?: Readonly<Record<string, string>>;
+  candidateMap?: Readonly<Record<string, readonly string[]>>;
+  authEvidenceMap?: Readonly<Record<string, readonly ProviderAuthEvidence[]>>;
 };
 
 // One entry per configured agent, keyed by agentId. Populated by
@@ -85,6 +97,7 @@ export async function hasAuthForModelProvider(params: {
   store?: AuthProfileStore;
   allowPluginSyntheticAuth?: boolean;
   discoverExternalCliAuth?: boolean;
+  envAuthLookup?: ProviderEnvAuthLookup;
 }): Promise<boolean> {
   const provider = normalizeProviderId(params.provider);
   // The prepared map is built by warmCurrentProviderAuthState — one entry per
@@ -131,6 +144,7 @@ export async function hasAuthForModelProvider(params: {
       workspaceDir: params.workspaceDir,
       env: params.env,
       allowPluginSyntheticAuth: params.allowPluginSyntheticAuth,
+      envAuthLookup: params.envAuthLookup,
     })
   ) {
     return true;
@@ -181,12 +195,20 @@ export function createProviderAuthChecker(params: {
   };
 }
 
-export async function warmCurrentProviderAuthState(cfg: OpenClawConfig): Promise<void> {
+export async function warmCurrentProviderAuthState(
+  cfg: OpenClawConfig,
+  options: { isCancelled?: () => boolean } = {},
+): Promise<void> {
   // Claim a fresh generation; any concurrent warm or clear bumps this and
   // turns our published state stale.
   currentProviderAuthStateGeneration += 1;
   const ownGeneration = currentProviderAuthStateGeneration;
+  const isWarmStale = () =>
+    options.isCancelled?.() === true || ownGeneration !== currentProviderAuthStateGeneration;
   const catalog = await loadModelCatalog({ config: cfg });
+  if (isWarmStale()) {
+    return;
+  }
   const providers = new Set<string>();
   for (const entry of catalog) {
     providers.add(normalizeProviderId(entry.provider));
@@ -198,8 +220,16 @@ export async function warmCurrentProviderAuthState(cfg: OpenClawConfig): Promise
   // any agentId. The catalog above is shared across agents; the per-agent
   // work is the auth-discovery sweep against that agent's store.
   for (const agentId of listAgentIds(cfg)) {
+    if (isWarmStale()) {
+      return;
+    }
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
     const agentDir = resolveAgentDir(cfg, agentId);
+    const envAuthLookup = {
+      aliasMap: resolveProviderAuthAliasMap({ config: cfg, workspaceDir }),
+      candidateMap: resolveProviderEnvApiKeyCandidates({ config: cfg, workspaceDir }),
+      authEvidenceMap: resolveProviderEnvAuthEvidence({ config: cfg, workspaceDir }),
+    };
     // One AuthProfileStore scoped to every candidate provider; without this
     // the per-provider externalCli discovery rebuilds the store ~N times.
     const store = ensureAuthProfileStore(agentDir, {
@@ -211,12 +241,16 @@ export async function warmCurrentProviderAuthState(cfg: OpenClawConfig): Promise
     });
     const state = new Map<string, boolean>();
     for (const provider of providers) {
+      if (isWarmStale()) {
+        return;
+      }
       const value = await hasAuthForModelProvider({
         provider,
         cfg,
         workspaceDir,
         agentId,
         store,
+        envAuthLookup,
       });
       state.set(provider, value);
     }
@@ -226,7 +260,7 @@ export async function warmCurrentProviderAuthState(cfg: OpenClawConfig): Promise
       providers: state,
     });
   }
-  if (ownGeneration !== currentProviderAuthStateGeneration) {
+  if (options.isCancelled?.() || ownGeneration !== currentProviderAuthStateGeneration) {
     // A newer warm or clear ran while we were building; skip publication so
     // the newer answer wins.
     return;

@@ -14,6 +14,14 @@ OpenClaw supports additive SecretRefs so supported credentials do not need to be
 Plaintext still works. SecretRefs are opt-in per credential.
 </Note>
 
+<Warning>
+Plaintext credentials remain agent-readable if they are stored in files the
+agent can inspect, including `openclaw.json`, `auth-profiles.json`, `.env`, or
+generated `agents/*/agent/models.json` files. SecretRefs reduce that local blast
+radius only after every supported credential has been migrated and
+`openclaw secrets audit --check` reports no plaintext secret residue.
+</Warning>
+
 ## Goals and runtime model
 
 Secrets are resolved into an in-memory runtime snapshot.
@@ -27,6 +35,33 @@ Secrets are resolved into an in-memory runtime snapshot.
 - Outbound delivery paths also read from that active snapshot (for example Discord reply/thread delivery and Telegram action sends); they do not re-resolve SecretRefs on each send.
 
 This keeps secret-provider outages off hot request paths.
+
+## Agent-access boundary
+
+SecretRefs protect credentials from being persisted in supported config and
+generated model surfaces, but they are not a process-isolation boundary. If a
+plaintext credential remains on disk in a path the agent can read, the agent can
+bypass API-level redaction by using file or shell tools to inspect that file.
+
+For production deployments where agent-accessible files are in scope, treat
+SecretRef migration as complete only when all of these are true:
+
+- supported credentials use SecretRefs instead of plaintext values
+- legacy plaintext residue has been scrubbed from `openclaw.json`,
+  `auth-profiles.json`, `.env`, and generated `models.json` files
+- `openclaw secrets audit --check` is clean after the migration
+- any remaining unsupported or rotating credentials are protected by operating
+  system isolation, container isolation, or an external credential proxy
+
+This is why the audit/configure/apply workflow is a security migration gate, not
+just a convenience helper.
+
+<Warning>
+SecretRefs do not make arbitrary readable files safe. Backups, copied configs,
+old generated model catalogs, and unsupported credential classes must be treated
+as production secrets until they are deleted, moved outside the agent trust
+boundary, or protected by a separate isolation layer.
+</Warning>
 
 ## Active-surface filtering
 
@@ -304,6 +339,94 @@ the config fields that accept SecretRefs.
     }
     ```
   </Accordion>
+  <Accordion title="password-store (`pass`)">
+    Use a small resolver wrapper when you want SecretRef ids to map directly to
+    `pass` entries. Save this as an executable in an absolute path that passes
+    your exec-provider path checks, for example
+    `/usr/local/bin/openclaw-pass-resolver`. The `#!/usr/bin/env node` shebang
+    resolves `node` from the resolver process `PATH`, so include `PATH` in
+    `passEnv`. If `pass` is not on that `PATH`, set `PASS_BIN` in the parent
+    environment and include it in `passEnv` too:
+
+    ```js
+    #!/usr/bin/env node
+    const { spawnSync } = require("node:child_process");
+
+    let stdin = "";
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", (chunk) => {
+      stdin += chunk;
+    });
+    process.stdin.on("error", (err) => {
+      process.stderr.write(`${err.message}\n`);
+      process.exit(1);
+    });
+    process.stdin.on("end", () => {
+      let request;
+      try {
+        request = JSON.parse(stdin || "{}");
+      } catch (err) {
+        process.stderr.write(`Failed to parse request: ${err.message}\n`);
+        process.exit(1);
+      }
+
+      const passBin = process.env.PASS_BIN || "pass";
+      const values = {};
+      const errors = {};
+
+      for (const id of request.ids ?? []) {
+        const result = spawnSync(passBin, ["show", id], { encoding: "utf8" });
+        if (result.status === 0) {
+          values[id] = result.stdout.split(/\r?\n/, 1)[0] ?? "";
+        } else {
+          errors[id] = { message: (result.stderr || `pass exited ${result.status}`).trim() };
+        }
+      }
+
+      process.stdout.write(JSON.stringify({ protocolVersion: 1, values, errors }));
+    });
+    ```
+
+    Then configure the exec provider and point `apiKey` at the `pass` entry path:
+
+    ```json5
+    {
+      secrets: {
+        providers: {
+          pass_store: {
+            source: "exec",
+            command: "/usr/local/bin/openclaw-pass-resolver",
+            passEnv: ["PATH", "HOME", "GNUPGHOME", "GPG_TTY", "PASSWORD_STORE_DIR", "PASS_BIN"],
+            jsonOnly: true,
+          },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+            apiKey: {
+              source: "exec",
+              provider: "pass_store",
+              id: "openclaw/providers/openai/apiKey",
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    Keep the secret on the first line of the `pass` entry, or customize the
+    wrapper if you want to return the full `pass show` output instead. After
+    updating config, verify both the static audit and the exec resolver path:
+
+    ```bash
+    openclaw secrets audit --check
+    openclaw secrets audit --allow-exec
+    ```
+
+  </Accordion>
   <Accordion title="sops">
     ```json5
     {
@@ -495,9 +618,9 @@ Default operator flow:
     openclaw secrets audit --check
     ```
   </Step>
-  <Step title="Configure SecretRefs">
+  <Step title="Configure and apply SecretRefs">
     ```bash
-    openclaw secrets configure
+    openclaw secrets configure --apply
     ```
   </Step>
   <Step title="Re-audit">
@@ -506,6 +629,13 @@ Default operator flow:
     ```
   </Step>
 </Steps>
+
+Do not treat the migration as complete until the re-audit is clean. If the audit
+still reports plaintext values at rest, the agent-access risk is still present
+even when runtime APIs return redacted values.
+
+If you save a plan instead of applying during `configure`, apply that saved plan
+with `openclaw secrets apply --from <plan-path>` before the re-audit.
 
 <AccordionGroup>
   <Accordion title="secrets audit">

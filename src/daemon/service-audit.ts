@@ -408,6 +408,7 @@ function auditGatewayServicePath(
   issues: ServiceConfigIssue[],
   env: Record<string, string | undefined>,
   platform: NodeJS.Platform,
+  expectedServicePath?: string,
 ) {
   if (platform === "win32") {
     return;
@@ -422,11 +423,16 @@ function auditGatewayServicePath(
     return;
   }
 
-  const expected = getMinimalServicePathPartsFromEnv({
-    platform,
-    env,
-    includeMissingUserBinDefaults: false,
-  });
+  const expected = expectedServicePath?.trim()
+    ? expectedServicePath
+        .split(getPathModule(platform).delimiter)
+        .map((entry) => entry.trim())
+        .filter(Boolean)
+    : getMinimalServicePathPartsFromEnv({
+        platform,
+        env,
+        includeMissingUserBinDefaults: false,
+      });
   const parts = servicePath
     .split(getPathModule(platform).delimiter)
     .map((entry) => entry.trim())
@@ -551,6 +557,7 @@ export async function auditGatewayServiceConfig(params: {
   platform?: NodeJS.Platform;
   expectedGatewayToken?: string;
   expectedManagedServiceEnvKeys?: Iterable<string>;
+  expectedServicePath?: string;
   expectedPort?: number;
 }): Promise<ServiceConfigAudit> {
   const issues: ServiceConfigIssue[] = [];
@@ -565,7 +572,7 @@ export async function auditGatewayServiceConfig(params: {
   auditManagedServiceEnvironment(params.command, issues, params.expectedManagedServiceEnvKeys);
   auditProxyServiceEnvironment(params.command, issues);
   auditGatewayToken(params.command, issues, params.expectedGatewayToken);
-  auditGatewayServicePath(params.command, issues, params.env, platform);
+  auditGatewayServicePath(params.command, issues, params.env, platform, params.expectedServicePath);
   await auditGatewayRuntime(params.env, params.command, issues, platform);
 
   if (platform === "linux") {

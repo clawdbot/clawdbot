@@ -855,7 +855,7 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
 });
 
 describe("deliverSubagentAnnouncement completion delivery", () => {
-  it("keeps completion announces session-internal while preserving route context for active requesters", async () => {
+  it("uses an active requester queue as the completion handoff when message-tool delivery is not required", async () => {
     const callGateway = createGatewayMock();
     const queueEmbeddedPiMessageWithOutcome = createQueueOutcomeMock(true);
     const result = await deliverSlackThreadAnnouncement({
@@ -883,6 +883,29 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         deliveryTimeoutMs: 120_000,
       },
     );
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("does not also direct-run a queued message-tool-only active completion", async () => {
+    const callGateway = createGatewayMock();
+    const queueEmbeddedPiMessageWithOutcome = createQueueOutcomeMock(true);
+    const result = await deliverSlackThreadAnnouncement({
+      callGateway,
+      sessionId: "requester-session-1",
+      isActive: true,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "announce-harness-task",
+      queueEmbeddedPiMessageWithOutcome,
+      sourceTool: "agent_harness_task",
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "steered",
+      enqueuedAt: 4_100,
+      deliveredAt: 4_200,
+    });
+    expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenCalledTimes(1);
     expect(callGateway).not.toHaveBeenCalled();
   });
 

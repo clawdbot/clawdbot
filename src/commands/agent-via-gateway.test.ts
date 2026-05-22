@@ -167,6 +167,21 @@ function createGatewayClosedError() {
   });
 }
 
+function createGatewayNormalCloseError() {
+  const err = new Error("gateway closed (1000 normal closure): no close reason");
+  err.name = "GatewayTransportError";
+  return Object.assign(err, {
+    kind: "closed",
+    code: 1000,
+    reason: "no close reason",
+    connectionDetails: {
+      url: "ws://127.0.0.1:18789",
+      urlSource: "local loopback",
+      message: "Gateway target: ws://127.0.0.1:18789",
+    },
+  });
+}
+
 vi.mock("../config/config.js", () => ({ getRuntimeConfig: loadConfig, loadConfig }));
 vi.mock("../gateway/call.js", () => ({
   callGateway,
@@ -1021,6 +1036,36 @@ describe("agentCliCommand", () => {
       expect(agentCommand).not.toHaveBeenCalled();
     });
   });
+
+  it("aborts while waiting for a transient gateway retry", async () => {
+    vi.useFakeTimers();
+    try {
+      await withTempStore(async () => {
+        const signals = createSignalProcess();
+        callGateway.mockRejectedValueOnce(createGatewayNormalCloseError());
+
+        const run = agentCliCommand({ message: "hi", to: "+1555" }, runtime, {
+          process: signals.processLike,
+        });
+        for (
+          let attempt = 0;
+          attempt < 10 && mockMessages(runtime.error).length === 0;
+          attempt += 1
+        ) {
+          await Promise.resolve();
+        }
+        signals.emit("SIGTERM");
+
+        await expect(run).resolves.toBeUndefined();
+        expect(callGateway).toHaveBeenCalledTimes(1);
+        expect(agentCommand).not.toHaveBeenCalled();
+        expect(runtime.exit).toHaveBeenCalledWith(143);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("stays silent when the gateway returns an intentional empty reply", async () => {
     await withTempStore(async () => {
       callGateway.mockResolvedValue({
@@ -1171,6 +1216,45 @@ describe("agentCliCommand", () => {
       ).toBe(true);
       expect(runtime.log).toHaveBeenCalledWith("local");
     });
+  });
+
+  it("retries transient normal gateway closes before embedded fallback", async () => {
+    vi.useFakeTimers();
+    try {
+      await withTempStore(async () => {
+        callGateway
+          .mockRejectedValueOnce(createGatewayNormalCloseError())
+          .mockRejectedValueOnce(createGatewayNormalCloseError())
+          .mockResolvedValue({
+            runId: "idem-1",
+            status: "ok",
+            result: {
+              payloads: [{ text: "remote" }],
+              meta: { stub: true },
+            },
+          });
+
+        const command = agentCliCommand({ message: "hi", to: "+1555" }, runtime);
+        await vi.advanceTimersByTimeAsync(1_000);
+        await vi.advanceTimersByTimeAsync(2_000);
+        await command;
+
+        expect(callGateway).toHaveBeenCalledTimes(3);
+        const idempotencyKeys = callGateway.mock.calls.map(
+          ([call]) => (call as { params?: { idempotencyKey?: unknown } }).params?.idempotencyKey,
+        );
+        expect(new Set(idempotencyKeys).size).toBe(1);
+        expect(agentCommand).not.toHaveBeenCalled();
+        expect(
+          mockMessages(runtime.error).filter((message) =>
+            message.includes("Gateway agent connection closed during handshake"),
+          ),
+        ).toHaveLength(2);
+        expect(runtime.log).toHaveBeenCalledWith("remote");
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("preserves explicit session keys for embedded fallback when the gateway closes", async () => {

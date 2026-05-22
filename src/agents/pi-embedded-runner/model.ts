@@ -655,7 +655,7 @@ function applyConfiguredProviderOverrides(params: {
       providerConfig.api ??
       discoveredModel.api ??
       resolveConfiguredProviderDefaultApi(providerConfig),
-    baseUrl: providerConfig.baseUrl ?? discoveredModel.baseUrl,
+    baseUrl: metadataOverrideModel?.baseUrl ?? providerConfig.baseUrl ?? discoveredModel.baseUrl,
     cfg: params.cfg,
     workspaceDir: params.workspaceDir,
     runtimeHooks: params.runtimeHooks,
@@ -913,8 +913,8 @@ function resolveConfiguredFallbackModel(params: {
   }
   const fallbackTransport = resolveProviderTransport({
     provider,
-    api: resolveConfiguredProviderDefaultApi(providerConfig) ?? "openai-responses",
-    baseUrl: providerConfig?.baseUrl,
+    api: normalizeResolvedTransportApi(configuredModel?.api) ?? resolveConfiguredProviderDefaultApi(providerConfig) ?? "openai-responses",
+    baseUrl: configuredModel?.baseUrl ?? providerConfig?.baseUrl,
     cfg,
     workspaceDir,
     runtimeHooks,

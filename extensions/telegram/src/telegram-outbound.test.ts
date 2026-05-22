@@ -29,4 +29,16 @@ describe("telegramPlugin outbound", () => {
       markdownToTelegramHtmlChunks(text, 4000),
     );
   });
+
+  it("passes markdown table mode to the outbound markdown chunker", () => {
+    clearTelegramRuntime();
+    const text = ["| Name | Value |", "|------|-------|", "| A | 1 |"].join("\n");
+
+    const chunks = telegramOutbound.chunker?.(text, 4000, {
+      formatting: { tableMode: "bullets" },
+    });
+
+    expect(chunks?.join("\n")).toContain("Value: 1");
+    expect(chunks?.join("\n")).not.toContain("| Name | Value |");
+  });
 });

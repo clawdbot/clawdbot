@@ -52,6 +52,7 @@ const EMBEDDED_FALLBACK_META = {
   fallbackFrom: "gateway",
 } as const;
 const GATEWAY_TIMEOUT_FALLBACK_SESSION_PREFIX = "gateway-fallback-";
+const GATEWAY_TRANSIENT_CONNECT_RETRY_DELAYS_MS = [1_000, 2_000, 5_000, 10_000, 15_000] as const;
 
 type AgentCliOpts = {
   message: string;
@@ -145,6 +146,15 @@ function isGatewayAgentTimeoutError(err: unknown): boolean {
 
 function isGatewayAgentEmbeddedFallbackError(err: unknown): boolean {
   return isGatewayTransportError(err);
+}
+
+function isTransientGatewayAgentConnectClose(err: unknown): boolean {
+  if (!isGatewayTransportError(err) || err.kind !== "closed") {
+    return false;
+  }
+  const code = typeof err.code === "number" ? err.code : undefined;
+  const reason = normalizeOptionalString(err.reason);
+  return code === 1000 && (!reason || reason === "no close reason");
 }
 
 function validateExplicitSessionKeyForDispatch(
@@ -268,8 +278,28 @@ function resolveAgentCliProcessLike(deps: AgentCliDeps | undefined): AgentCliPro
   return isAgentCliProcessLike(processLike) ? processLike : process;
 }
 
-function delayMs(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function createAbortDelayError(): Error {
+  const err = new Error("gateway agent retry aborted");
+  err.name = "AbortError";
+  return err;
+}
+
+function delayMs(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) {
+    return Promise.reject(createAbortDelayError());
+  }
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      reject(createAbortDelayError());
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }
 
 function isConfirmedChatAbortResponseForRun(value: unknown, runId: string): boolean {
@@ -631,6 +661,34 @@ async function agentViaGatewayCommand(
   return response;
 }
 
+async function agentViaGatewayCommandWithTransientRetries(
+  opts: AgentCliOpts,
+  runtime: RuntimeEnv,
+  signalBridge: ReturnType<typeof createAgentCliSignalBridge>,
+) {
+  for (const [attempt, retryDelayMs] of [
+    ...GATEWAY_TRANSIENT_CONNECT_RETRY_DELAYS_MS,
+    0,
+  ].entries()) {
+    try {
+      return await agentViaGatewayCommand(opts, runtime, signalBridge);
+    } catch (err) {
+      if (isAbortError(err)) {
+        throw err;
+      }
+      const isFinalAttempt = attempt === GATEWAY_TRANSIENT_CONNECT_RETRY_DELAYS_MS.length;
+      if (isFinalAttempt || !isTransientGatewayAgentConnectClose(err)) {
+        throw err;
+      }
+      runtime.error?.(
+        `Gateway agent connection closed during handshake; retrying in ${retryDelayMs}ms before embedded fallback.`,
+      );
+      await delayMs(retryDelayMs, signalBridge.signal);
+    }
+  }
+  throw new Error("Gateway agent retry loop exhausted unexpectedly.");
+}
+
 export async function agentCliCommand(
   opts: AgentCliOpts,
   runtime: RuntimeEnv,
@@ -639,11 +697,14 @@ export async function agentCliCommand(
   protectJsonStdout(opts);
   const dispatchOpts = normalizeSessionKeyOptsForDispatch(opts);
   validateExplicitSessionKeyForDispatch(dispatchOpts);
+  const gatewayDispatchOpts = dispatchOpts.runId
+    ? dispatchOpts
+    : { ...dispatchOpts, runId: randomIdempotencyKey() };
   const signalBridge = createAgentCliSignalBridge(resolveAgentCliProcessLike(deps));
   const localOpts = {
-    ...dispatchOpts,
-    agentId: dispatchOpts.agent,
-    replyAccountId: dispatchOpts.replyAccount,
+    ...gatewayDispatchOpts,
+    agentId: gatewayDispatchOpts.agent,
+    replyAccountId: gatewayDispatchOpts.replyAccount,
     cleanupBundleMcpOnRunEnd: true,
     cleanupCliLiveSessionOnRunEnd: true,
     abortSignal: signalBridge.signal,
@@ -655,7 +716,11 @@ export async function agentCliCommand(
     }
 
     try {
-      const result = await agentViaGatewayCommand(dispatchOpts, runtime, signalBridge);
+      const result = await agentViaGatewayCommandWithTransientRetries(
+        gatewayDispatchOpts,
+        runtime,
+        signalBridge,
+      );
       return returnAfterSignalExit(result, signalBridge.getReceivedSignal(), runtime);
     } catch (err) {
       if (isAbortError(err)) {

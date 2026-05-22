@@ -14,6 +14,8 @@ type EventHandlerChatLog = {
     options?: { partial?: boolean; isError?: boolean },
   ) => void;
   addSystem: (text: string) => void;
+  addPendingSystem: (runId: string, text: string) => void;
+  dismissPendingSystem: (runId: string) => void;
   updateAssistant: (text: string, runId: string) => void;
   finalizeAssistant: (text: string, runId: string) => void;
   dropAssistant: (runId: string) => void;
@@ -132,7 +134,7 @@ export function createEventHandlers(context: EventHandlerContext) {
         return;
       }
       flushPendingHistoryRefreshIfIdle();
-      chatLog.addSystem(STREAMING_WATCHDOG_USER_MESSAGE);
+      chatLog.addPendingSystem(runId, STREAMING_WATCHDOG_USER_MESSAGE);
       tui.requestRender();
     }, streamingWatchdogMs);
     const maybeUnref = (streamingWatchdogTimer as { unref?: () => void }).unref;
@@ -398,6 +400,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     if (reconnectPendingRunId === evt.runId) {
       reconnectPendingRunId = null;
     }
+    chatLog.dismissPendingSystem(evt.runId);
     noteSessionRun(evt.runId);
     if (!state.activeChatRunId && !isLocalBtwRunId?.(evt.runId)) {
       state.activeChatRunId = evt.runId;

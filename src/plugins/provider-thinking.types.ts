@@ -49,4 +49,10 @@ export type ProviderThinkingLevel = {
 export type ProviderThinkingProfile = {
   levels: ProviderThinkingLevel[] | ReadonlyArray<ProviderThinkingLevel>;
   defaultLevel?: ProviderThinkingLevelId | null;
+  /**
+   * Some bundled providers have model-specific thinking contracts that are more
+   * current than cached generic catalog metadata. Keep this opt-in so
+   * `reasoning: false` remains authoritative for ordinary catalog entries.
+   */
+  preserveWhenCatalogReasoningFalse?: boolean;
 };

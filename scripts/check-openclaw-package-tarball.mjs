@@ -82,6 +82,7 @@ const REQUIRED_TARBALL_ENTRIES = ["dist/control-ui/index.html"];
 const REQUIRED_TARBALL_ENTRY_PREFIXES = ["dist/control-ui/assets/"];
 const LEGACY_PACKAGE_ACCEPTANCE_COMPAT_MAX = { year: 2026, month: 4, day: 25 };
 const LEGACY_LOCAL_BUILD_METADATA_COMPAT_MAX = { year: 2026, month: 4, day: 26 };
+const LEGACY_SHRINKWRAP_COMPAT_MAX = { year: 2026, month: 5, day: 20 };
 const FORBIDDEN_LOCAL_BUILD_METADATA_FILES = new Set(LOCAL_BUILD_METADATA_DIST_PATHS);
 
 const LEGACY_OMITTED_PRIVATE_QA_INVENTORY_PREFIXES = [
@@ -144,6 +145,11 @@ function isLegacyLocalBuildMetadataCompatVersion(version) {
   return parsed ? compareCalver(parsed, LEGACY_LOCAL_BUILD_METADATA_COMPAT_MAX) <= 0 : false;
 }
 
+function isLegacyShrinkwrapCompatVersion(version) {
+  const parsed = parseCalver(version);
+  return parsed ? compareCalver(parsed, LEGACY_SHRINKWRAP_COMPAT_MAX) <= 0 : false;
+}
+
 function readTarEntry(entryPath) {
   const candidates = [
     path.join(extractDir, entryPath),
@@ -186,6 +192,52 @@ if (entrySet.has("package.json")) {
     packageVersion = typeof packageJson.version === "string" ? packageJson.version : "";
   } catch {
     packageVersion = "";
+  }
+}
+if (entrySet.has("package-lock.json")) {
+  errors.push("package tarball must ship npm-shrinkwrap.json, not package-lock.json");
+}
+if (!entrySet.has("npm-shrinkwrap.json")) {
+  if (isLegacyShrinkwrapCompatVersion(packageVersion)) {
+    warnings.push("legacy package omits npm-shrinkwrap.json");
+  } else {
+    errors.push("missing required tar entry npm-shrinkwrap.json");
+  }
+} else {
+  try {
+    const shrinkwrap = JSON.parse(readTarEntry("npm-shrinkwrap.json"));
+    const rootPackage = shrinkwrap.packages?.[""];
+    if (shrinkwrap.name !== "openclaw") {
+      errors.push("npm-shrinkwrap.json root name must be openclaw");
+    }
+    if (shrinkwrap.version !== packageVersion) {
+      errors.push(
+        `npm-shrinkwrap.json version ${shrinkwrap.version ?? "<missing>"} does not match package.json version ${packageVersion || "<missing>"}`,
+      );
+    }
+    if (!rootPackage || rootPackage.name !== "openclaw") {
+      errors.push("npm-shrinkwrap.json packages root must name openclaw");
+    }
+    if (rootPackage?.version !== packageVersion) {
+      errors.push(
+        `npm-shrinkwrap.json packages root version ${rootPackage?.version ?? "<missing>"} does not match package.json version ${packageVersion || "<missing>"}`,
+      );
+    }
+    if (rootPackage?.devDependencies) {
+      errors.push("npm-shrinkwrap.json must not lock root devDependencies");
+    }
+    const devLockedPackages = Object.entries(shrinkwrap.packages ?? {})
+      .filter(([, packageMetadata]) => packageMetadata?.dev === true)
+      .map(([packagePath]) => packagePath);
+    if (devLockedPackages.length > 0) {
+      errors.push(
+        `npm-shrinkwrap.json must not lock dev packages: ${devLockedPackages.slice(0, 5).join(", ")}`,
+      );
+    }
+  } catch (error) {
+    errors.push(
+      `unreadable npm-shrinkwrap.json: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
 }
 for (const forbiddenEntry of FORBIDDEN_LOCAL_BUILD_METADATA_FILES) {

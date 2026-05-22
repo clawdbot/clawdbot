@@ -17,6 +17,33 @@ describe("parseExecApprovalResultText", () => {
     });
   });
 
+  it("parses denied results with nested parentheses in metadata", () => {
+    const input =
+      "Exec denied (gateway id=req-1, approval-timeout (allowlist-miss)): source ~/.zprofile && kubectl get pods";
+
+    expect(parseExecApprovalResultText(input)).toEqual({
+      kind: "denied",
+      raw: input,
+      metadata: "gateway id=req-1, approval-timeout (allowlist-miss)",
+      body: "source ~/.zprofile && kubectl get pods",
+    });
+  });
+
+  it("parses denied results with the canonical colon-separated deniedReason", () => {
+    // Producer (src/agents/bash-tools.exec-host-gateway.ts) emits a colon
+    // separator instead of nested parens to keep the (...)-delimited wire
+    // format unambiguous. This is the format real timeouts now produce.
+    const input =
+      "Exec denied (gateway id=req-1, approval-timeout: allowlist-miss): source ~/.zprofile && kubectl get pods";
+
+    expect(parseExecApprovalResultText(input)).toEqual({
+      kind: "denied",
+      raw: input,
+      metadata: "gateway id=req-1, approval-timeout: allowlist-miss",
+      body: "source ~/.zprofile && kubectl get pods",
+    });
+  });
+
   it("parses finished results", () => {
     expect(
       parseExecApprovalResultText("Exec finished (gateway id=req-1, code 0)\nall good"),
@@ -24,6 +51,17 @@ describe("parseExecApprovalResultText", () => {
       kind: "finished",
       raw: "Exec finished (gateway id=req-1, code 0)\nall good",
       metadata: "gateway id=req-1, code 0",
+      body: "all good",
+    });
+  });
+
+  it("parses finished results with nested parentheses in metadata", () => {
+    const input = "Exec finished (gateway id=req-1, note (nested), code 0)\nall good";
+
+    expect(parseExecApprovalResultText(input)).toEqual({
+      kind: "finished",
+      raw: input,
+      metadata: "gateway id=req-1, note (nested), code 0",
       body: "all good",
     });
   });
@@ -42,12 +80,31 @@ describe("parseExecApprovalResultText", () => {
       raw: "some random text",
     });
   });
+
+  it.each([
+    "Exec denied (anything): bar",
+    "Exec denied (just-text): foo",
+    "Exec denied (request-id=abc, denied): cmd",
+    "Exec denied (id=req-1, user-denied): cmd",
+    "Exec finished (anything)\nbody",
+    "Exec finished (status: ok)\nbody",
+  ])(
+    "returns other when metadata is not gateway/node sourced (CWE-841 spoof guard): %s",
+    (input) => {
+      expect(parseExecApprovalResultText(input)).toEqual({
+        kind: "other",
+        raw: input,
+      });
+    },
+  );
 });
 
 describe("isExecDeniedResultText", () => {
   it.each([
     "Exec denied (gateway id=req-1, approval-timeout): uname -a",
     "exec denied (gateway id=req-1, approval-timeout): uname -a",
+    "Exec denied (gateway id=req-1, approval-timeout (allowlist-miss)): uname -a",
+    "Exec denied (gateway id=req-1, approval-timeout: allowlist-miss): uname -a",
   ])("matches denied payloads: %s", (input) => {
     expect(isExecDeniedResultText(input)).toBe(true);
   });
@@ -61,6 +118,14 @@ describe("formatExecDeniedUserMessage", () => {
   it.each([
     [
       "Exec denied (gateway id=req-1, approval-timeout): uname -a",
+      "Command did not run: approval timed out.",
+    ],
+    [
+      "Exec denied (gateway id=req-1, approval-timeout (allowlist-miss)): uname -a",
+      "Command did not run: approval timed out.",
+    ],
+    [
+      "Exec denied (gateway id=req-1, approval-timeout: allowlist-miss): uname -a",
       "Command did not run: approval timed out.",
     ],
     [

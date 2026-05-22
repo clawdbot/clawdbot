@@ -37,6 +37,8 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
+import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
+import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -748,6 +750,17 @@ async function buildSendPayloadParts(params: {
   if (actionParams.pin === true && actionParams.delivery == null) {
     actionParams.delivery = { pin: { enabled: true } };
   }
+  // Models may emit message body under non-canonical aliases.
+  if (typeof actionParams.message !== "string" || !actionParams.message.trim()) {
+    for (const alias of ["SendMessage", "content", "text"] as const) {
+      const value = actionParams[alias];
+      if (typeof value === "string" && value.trim()) {
+        actionParams.message = stripFormattedReasoningMessage(value);
+        console.warn(`[message-tool] normalized alias "${alias}" to "message" for send action`);
+        break;
+      }
+    }
+  }
   const mediaHint =
     readStringParam(actionParams, "media", { trim: false }) ??
     readStringParam(actionParams, "mediaUrl", { trim: false }) ??
@@ -798,7 +811,7 @@ async function buildSendPayloadParts(params: {
   mergedMediaUrls.length = 0;
   mergedMediaUrls.push(...normalizedMediaUrls);
 
-  message = parsed.text;
+  message = stripUnsupportedCitationControlMarkers(parsed.text);
   actionParams.message = message;
   if (!actionParams.replyTo && parsed.replyToId) {
     actionParams.replyTo = parsed.replyToId;

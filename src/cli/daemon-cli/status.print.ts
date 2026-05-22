@@ -320,7 +320,9 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
   }
 
   const systemdUnavailable =
-    process.platform === "linux" && isSystemdUnavailableDetail(service.runtime?.detail);
+    process.platform === "linux" &&
+    rpc?.ok !== true &&
+    isSystemdUnavailableDetail(service.runtime?.detail);
   if (systemdUnavailable) {
     const container = Boolean(
       resolveDaemonContainerContext(service.command?.environment ?? process.env),

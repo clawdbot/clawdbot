@@ -306,6 +306,92 @@ describe("runtime.llm.complete", () => {
     expect(hoisted.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
   });
 
+  it("matches allowlist entries for provider-qualified model ids without doubling the provider prefix", async () => {
+    const runtimeContext = resolveContextEngineCapabilities({
+      config: {
+        ...cfg,
+        plugins: {
+          entries: {
+            "lossless-claw": {
+              llm: {
+                allowModelOverride: true,
+                allowedModels: ["openrouter/gpt-5.4-mini"],
+              },
+            },
+          },
+        },
+      },
+      sessionKey: "agent:main:session:abc",
+      contextEnginePluginId: "lossless-claw",
+      purpose: "context-engine.compaction",
+    });
+
+    hoisted.prepareSimpleCompletionModelForAgent.mockResolvedValue(
+      createPreparedModel("openrouter/gpt-5.4-mini"),
+    );
+    hoisted.resolveSimpleCompletionSelectionForAgent.mockImplementation(
+      (params: { agentId: string }) => ({
+        provider: "openrouter",
+        modelId: "openrouter/gpt-5.4-mini",
+        agentDir: `/tmp/${params.agentId}`,
+      }),
+    );
+
+    await runtimeContext.llm!.complete({
+      agentId: "main",
+      model: "openrouter/gpt-5.4-mini",
+      messages: [{ role: "user", content: "summarize" }],
+    });
+
+    expectSingleCallFirstArg(hoisted.prepareSimpleCompletionModelForAgent, {
+      agentId: "main",
+      modelRef: "openrouter/gpt-5.4-mini",
+    });
+  });
+
+  it("reports denials for provider-qualified model ids without doubling the provider prefix", async () => {
+    const runtimeContext = resolveContextEngineCapabilities({
+      config: {
+        ...cfg,
+        plugins: {
+          entries: {
+            "lossless-claw": {
+              llm: {
+                allowModelOverride: true,
+                allowedModels: ["openrouter/gpt-5.4-mini"],
+              },
+            },
+          },
+        },
+      },
+      sessionKey: "agent:main:session:abc",
+      contextEnginePluginId: "lossless-claw",
+      purpose: "context-engine.compaction",
+    });
+
+    hoisted.resolveSimpleCompletionSelectionForAgent.mockImplementation(
+      (params: { agentId: string }) => ({
+        provider: "openrouter",
+        modelId: "openrouter/gpt-5.5",
+        agentDir: `/tmp/${params.agentId}`,
+      }),
+    );
+
+    let caught: unknown;
+    try {
+      await runtimeContext.llm!.complete({
+        model: "openrouter/gpt-5.5",
+        messages: [{ role: "user", content: "summarize" }],
+      });
+    } catch (error) {
+      caught = error;
+    }
+    const message = caught instanceof Error ? caught.message : String(caught);
+    expect(message).toContain('"openrouter/gpt-5.5"');
+    expect(message).not.toContain("openrouter/openrouter/");
+    expect(hoisted.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+  });
+
   it("keeps context-engine attribution and host-derived policy inside plugin runtime scope", async () => {
     const runtimeContext = resolveContextEngineCapabilities({
       config: {

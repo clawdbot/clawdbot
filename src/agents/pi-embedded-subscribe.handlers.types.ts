@@ -15,6 +15,7 @@ import type {
   BlockReplyChunking,
   SubscribeEmbeddedPiSessionParams,
 } from "./pi-embedded-subscribe.types.js";
+import type { AgentRunTimeoutPhase } from "./run-timeout-attribution.js";
 import type { ToolErrorSummary } from "./tool-error-summary.js";
 import type { NormalizedUsage } from "./usage.js";
 
@@ -93,6 +94,8 @@ export type EmbeddedPiSubscribeState = {
   livenessState?: EmbeddedRunLivenessState;
   terminalStopReason?: string;
   yielded?: boolean;
+  timeoutPhase?: AgentRunTimeoutPhase;
+  providerStarted?: boolean;
   hadDeterministicSideEffect?: boolean;
 
   messagingToolSentTexts: string[];

@@ -66,6 +66,7 @@ const OPTIONAL_LOCAL_EMBEDDING_RUNTIME_PACKAGE = "node-llama-cpp";
 const FS_SAFE_PACKAGE = "@openclaw/fs-safe";
 const MAX_CALVER_DISTANCE_DAYS = 2;
 const REQUIRED_PACKED_PATHS = [
+  "npm-shrinkwrap.json",
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   "dist/control-ui/index.html",
   ...WORKSPACE_TEMPLATE_PACK_PATHS,
@@ -593,6 +594,19 @@ function collectPackedTarballErrors(): string[] {
   ];
 }
 
+function collectNpmShrinkwrapErrors(): string[] {
+  try {
+    execFileSync(process.execPath, ["scripts/generate-npm-shrinkwrap.mjs", "--check"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    return [];
+  } catch (error) {
+    return [`npm-shrinkwrap.json must match package dependencies: ${describeExecFailure(error)}`];
+  }
+}
+
 export function collectForbiddenPackedPathErrors(paths: Iterable<string>): string[] {
   const errors: string[] = [];
   for (const packedPath of paths) {
@@ -667,8 +681,9 @@ async function main(): Promise<number> {
   if (!skipPackValidation) {
     await writePackageDistInventory(process.cwd());
   }
+  const shrinkwrapErrors = skipPackValidation ? [] : collectNpmShrinkwrapErrors();
   const tarballErrors = skipPackValidation ? [] : collectPackedTarballErrors();
-  const errors = [...metadataErrors, ...tagErrors, ...tarballErrors];
+  const errors = [...metadataErrors, ...tagErrors, ...shrinkwrapErrors, ...tarballErrors];
 
   if (errors.length > 0) {
     for (const error of errors) {

@@ -29,6 +29,7 @@ import {
   updateFlowRecordByIdExpectedRevision,
 } from "./task-flow-runtime-internal.js";
 import type { TaskRegistryControlRuntime } from "./task-registry-control.types.js";
+import { getTaskRegistryProcessState } from "./task-registry.process-state.js";
 import {
   getTaskRegistryObservers,
   getTaskRegistryStore,
@@ -54,13 +55,14 @@ import type {
 const log = createSubsystemLogger("tasks/registry");
 const DEFAULT_TASK_RETENTION_MS = 7 * 24 * 60 * 60_000;
 
-const tasks = new Map<string, TaskRecord>();
-const taskDeliveryStates = new Map<string, TaskDeliveryState>();
-const taskIdsByRunId = new Map<string, Set<string>>();
-const taskIdsByOwnerKey = new Map<string, Set<string>>();
-const taskIdsByParentFlowId = new Map<string, Set<string>>();
-const taskIdsByRelatedSessionKey = new Map<string, Set<string>>();
-const tasksWithPendingDelivery = new Set<string>();
+const taskRegistryProcessState = getTaskRegistryProcessState();
+const tasks = taskRegistryProcessState.tasks;
+const taskDeliveryStates = taskRegistryProcessState.taskDeliveryStates;
+const taskIdsByRunId = taskRegistryProcessState.taskIdsByRunId;
+const taskIdsByOwnerKey = taskRegistryProcessState.taskIdsByOwnerKey;
+const taskIdsByParentFlowId = taskRegistryProcessState.taskIdsByParentFlowId;
+const taskIdsByRelatedSessionKey = taskRegistryProcessState.taskIdsByRelatedSessionKey;
+const tasksWithPendingDelivery = taskRegistryProcessState.tasksWithPendingDelivery;
 let listenerStarted = false;
 let listenerStop: (() => void) | null = null;
 let restoreAttempted = false;

@@ -413,6 +413,49 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     transport.stop();
   });
 
+  it("submits an interim working result for forced consult tool calls", async () => {
+    const client = createClient();
+    vi.mocked(client.request).mockImplementation(async (method) => {
+      if (method === "talk.client.toolCall") {
+        return { runId: "run-1" };
+      }
+      return {};
+    });
+    const transport = new GatewayRelayRealtimeTalkTransport(createSession(), {
+      callbacks: {},
+      client,
+      sessionKey: "main",
+    });
+
+    await transport.start();
+    emitGatewayFrame({
+      event: "talk.event",
+      payload: {
+        relaySessionId: "relay-1",
+        type: "toolCall",
+        callId: "call-1",
+        name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+        forced: true,
+        args: { question: "status?" },
+      },
+    });
+
+    await vi.waitFor(() =>
+      expect(client.request).toHaveBeenCalledWith("talk.session.submitToolResult", {
+        sessionId: "relay-1",
+        callId: "call-1",
+        result: {
+          status: "working",
+          tool: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+          message:
+            "Tell the person briefly that you are checking, then wait for the final OpenClaw result before answering with the actual result.",
+        },
+        options: { willContinue: true },
+      }),
+    );
+    transport.stop();
+  });
+
   it("aborts in-flight consults when the relay transport stops", async () => {
     const client = createClient();
     vi.mocked(client.request).mockImplementation(async (method, params) => {

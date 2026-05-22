@@ -89,10 +89,10 @@ jobs:
               per_page: 100,
             });
 
-            const excludedLockfiles = new Set(["pnpm-lock.yaml", "package-lock.json", "yarn.lock", "bun.lockb"]);
+            const excludedLockfiles = new Set(["pnpm-lock.yaml", "package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "bun.lockb"]);
             const totalChangedLines = files.reduce((total, file) => {
               const path = file.filename ?? "";
-              if (path.startsWith("docs/") || excludedLockfiles.has(path)) {
+              if (path.startsWith("docs/") || excludedLockfiles.has(path) || path.endsWith("/package-lock.json") || path.endsWith("/npm-shrinkwrap.json")) {
                 return total;
               }
               return total + (file.additions ?? 0) + (file.deletions ?? 0);
@@ -603,10 +603,10 @@ jobs:
                 per_page: 100,
               });
 
-              const excludedLockfiles = new Set(["pnpm-lock.yaml", "package-lock.json", "yarn.lock", "bun.lockb"]);
+              const excludedLockfiles = new Set(["pnpm-lock.yaml", "package-lock.json", "npm-shrinkwrap.json", "yarn.lock", "bun.lockb"]);
               const totalChangedLines = files.reduce((total, file) => {
                 const path = file.filename ?? "";
-                if (path.startsWith("docs/") || excludedLockfiles.has(path)) {
+                if (path.startsWith("docs/") || excludedLockfiles.has(path) || path.endsWith("/package-lock.json") || path.endsWith("/npm-shrinkwrap.json")) {
                   return total;
                 }
                 return total + (file.additions ?? 0) + (file.deletions ?? 0);

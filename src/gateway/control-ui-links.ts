@@ -12,6 +12,8 @@ export function resolveControlUiLinks(params: {
   basePath?: string;
   tlsEnabled?: boolean;
 }): { httpUrl: string; wsUrl: string } {
+  // Current BYOH truth: lan, tailnet, and custom bind resolve through IPv4-only helpers.
+  // IPv6-only hosts need an IPv4 sidecar or proxy in front of the Gateway.
   const port = params.port;
   const bind = params.bind ?? "loopback";
   const customBindHost = params.customBindHost?.trim();

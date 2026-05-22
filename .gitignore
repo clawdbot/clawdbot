@@ -123,6 +123,8 @@ mantis/
 !.agents/skills/crabbox/**
 !.agents/skills/clawdtributor/
 !.agents/skills/clawdtributor/**
+!.agents/skills/control-ui-e2e/
+!.agents/skills/control-ui-e2e/**
 !.agents/skills/gitcrawl/
 !.agents/skills/gitcrawl/**
 !.agents/skills/openclaw-docs/**

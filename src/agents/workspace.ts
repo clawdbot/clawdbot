@@ -684,7 +684,9 @@ export async function loadWorkspaceBootstrapFiles(dir: string): Promise<Workspac
   return result;
 }
 
-const MINIMAL_BOOTSTRAP_ALLOWLIST = new Set([
+const SUBAGENT_BOOTSTRAP_ALLOWLIST = new Set([DEFAULT_AGENTS_FILENAME, DEFAULT_TOOLS_FILENAME]);
+
+const CRON_BOOTSTRAP_ALLOWLIST = new Set([
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_TOOLS_FILENAME,
   DEFAULT_SOUL_FILENAME,
@@ -696,10 +698,16 @@ export function filterBootstrapFilesForSession(
   files: WorkspaceBootstrapFile[],
   sessionKey?: string,
 ): WorkspaceBootstrapFile[] {
-  if (!sessionKey || (!isSubagentSessionKey(sessionKey) && !isCronSessionKey(sessionKey))) {
+  if (!sessionKey) {
     return files;
   }
-  return files.filter((file) => MINIMAL_BOOTSTRAP_ALLOWLIST.has(file.name));
+  if (isSubagentSessionKey(sessionKey)) {
+    return files.filter((file) => SUBAGENT_BOOTSTRAP_ALLOWLIST.has(file.name));
+  }
+  if (isCronSessionKey(sessionKey)) {
+    return files.filter((file) => CRON_BOOTSTRAP_ALLOWLIST.has(file.name));
+  }
+  return files;
 }
 
 function hasGlobPattern(pattern: string): boolean {

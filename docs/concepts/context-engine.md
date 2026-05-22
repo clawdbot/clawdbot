@@ -224,6 +224,33 @@ Optional members:
 | `onSubagentEnded(params)`      | Method | Clean up after a subagent ends.                                                                                 |
 | `dispose()`                    | Method | Release resources. Called during gateway shutdown or plugin reload - not per-session.                           |
 
+### Host requirements
+
+Context engines can declare host capability requirements on `info.hostRequirements`.
+OpenClaw checks these requirements before starting the operation and fails closed
+with a descriptive error when the selected runtime cannot satisfy them.
+
+For agent runs, declare `assemble-before-prompt` when the engine must control the
+actual model prompt through `assemble()`:
+
+```ts
+info: {
+  id: "my-context-engine",
+  name: "My Context Engine",
+  hostRequirements: {
+    "agent-run": {
+      requiredCapabilities: ["assemble-before-prompt"],
+      unsupportedMessage:
+        "Use the native Codex or Pi embedded runtime, or select the legacy context engine.",
+    },
+  },
+}
+```
+
+Native Codex and Pi embedded agent runs satisfy `assemble-before-prompt`.
+Generic CLI backends do not, so engines that require it are rejected before the
+CLI process starts.
+
 ### ownsCompaction
 
 `ownsCompaction` controls whether Pi's built-in in-attempt auto-compaction stays enabled for the run:

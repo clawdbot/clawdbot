@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
@@ -6,6 +6,7 @@ const PACKAGE_ACCEPTANCE_WORKFLOW = ".github/workflows/package-acceptance.yml";
 const LIVE_E2E_WORKFLOW = ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml";
 const NPM_TELEGRAM_WORKFLOW = ".github/workflows/npm-telegram-beta-e2e.yml";
 const PACKAGE_JSON = "package.json";
+const SETUP_PNPM_STORE_CACHE_ACTION = ".github/actions/setup-pnpm-store-cache/action.yml";
 const RELEASE_CHECKS_WORKFLOW = ".github/workflows/openclaw-release-checks.yml";
 const RELEASE_PUBLISH_WORKFLOW = ".github/workflows/openclaw-release-publish.yml";
 const FULL_RELEASE_VALIDATION_WORKFLOW = ".github/workflows/full-release-validation.yml";
@@ -40,6 +41,12 @@ function readWorkflow(path: string): Workflow {
   return parse(readFileSync(path, "utf8")) as Workflow;
 }
 
+function workflowPaths(): string[] {
+  return readdirSync(".github/workflows")
+    .filter((name) => name.endsWith(".yml"))
+    .map((name) => `.github/workflows/${name}`);
+}
+
 function workflowJob(path: string, jobName: string): WorkflowJob {
   const job = readWorkflow(path).jobs?.[jobName];
   if (!job) {
@@ -66,6 +73,33 @@ function expectTextToIncludeAll(text: string | undefined, snippets: string[]): v
 }
 
 describe("package acceptance workflow", () => {
+  it("keeps pnpm version selection sourced from packageManager", () => {
+    const packageJson = JSON.parse(readFileSync(PACKAGE_JSON, "utf8")) as {
+      packageManager?: string;
+    };
+    const setupPnpmAction = readFileSync(SETUP_PNPM_STORE_CACHE_ACTION, "utf8");
+
+    expect(packageJson.packageManager).toMatch(/^pnpm@\d+\.\d+\.\d+\+sha512\.[a-f0-9]+$/u);
+    expect(setupPnpmAction).toContain("uses: pnpm/action-setup@");
+    expect(setupPnpmAction).toContain("package_json_file: ${{ inputs.package-manager-file }}");
+    expect(setupPnpmAction).toContain("cache: ${{ inputs.use-actions-cache }}");
+    expect(setupPnpmAction).toContain("cache_dependency_path: ${{ inputs.lockfile-path }}");
+    expect(setupPnpmAction).not.toContain("actions/cache");
+    expect(setupPnpmAction).not.toContain("shasum");
+    expect(setupPnpmAction).not.toContain("PNPM_VERSION_INPUT");
+    expect(setupPnpmAction).not.toContain("version: ${{ inputs.pnpm-version }}");
+
+    const setupNodeAction = readFileSync(".github/actions/setup-node-env/action.yml", "utf8");
+    expect(setupNodeAction).toContain("use-actions-cache: ${{ inputs.use-actions-cache }}");
+
+    for (const workflowPath of workflowPaths()) {
+      const workflowText = readFileSync(workflowPath, "utf8");
+      expect(workflowText, workflowPath).not.toContain("PNPM_VERSION");
+      expect(workflowText, workflowPath).not.toContain("pnpm-version:");
+      expect(workflowText, workflowPath).not.toContain("pnpm/action-setup");
+    }
+  });
+
   it("resolves candidate package sources before reusing Docker E2E lanes", () => {
     const workflow = readFileSync(PACKAGE_ACCEPTANCE_WORKFLOW, "utf8");
 
@@ -92,6 +126,13 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain(
       "package_artifact_name: ${{ needs.resolve_package.outputs.package_artifact_name }}",
     );
+    expect(workflow).toContain("package_integrity:");
+    expect(workflow).toContain("name: Package integrity");
+    expect(workflow).toContain(
+      "node scripts/check-openclaw-package-tarball.mjs .artifacts/docker-e2e-package/openclaw-current.tgz",
+    );
+    expect(workflow).toContain("needs: [resolve_package, package_integrity]");
+    expect(workflow).toContain("package_integrity=${PACKAGE_INTEGRITY_RESULT}");
   });
 
   it("offers bounded product profiles and can run Telegram against the resolved artifact", () => {
@@ -615,7 +656,7 @@ describe("package artifact reuse", () => {
     );
     expect(workflow).toContain("suite_profile: custom");
     expect(workflow).toContain(
-      "docker_lanes: doctor-switch update-channel-switch skill-install update-corrupt-plugin upgrade-survivor published-upgrade-survivor root-managed-vps-upgrade update-restart-auth plugins-offline plugin-update",
+      "docker_lanes: doctor-switch update-channel-switch skill-install update-corrupt-plugin upgrade-survivor published-upgrade-survivor root-managed-vps-upgrade update-restart-auth plugins-offline plugin-update plugin-binding-command-escape",
     );
     expect(workflow).toContain(
       "published_upgrade_survivor_baselines: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'last-stable-4 2026.4.23 2026.5.2 2026.4.15' || '' }}",
@@ -638,6 +679,7 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("rerun_group:");
     expect(workflow).toContain("live_suite_filter:");
     expect(workflow).toContain("cross_os_suite_filter:");
+    expect(workflow).toContain("advisory: false");
     expect(workflow).toContain(
       "suite_filter: ${{ needs.resolve_target.outputs.cross_os_suite_filter }}",
     );
@@ -699,7 +741,9 @@ describe("package artifact reuse", () => {
     const workflow = readFileSync(PACKAGE_ACCEPTANCE_WORKFLOW, "utf8");
 
     expect(workflow).toContain("package_telegram:");
-    expect(workflow).toContain("needs: [resolve_package, docker_acceptance, package_telegram]");
+    expect(workflow).toContain(
+      "needs: [resolve_package, package_integrity, docker_acceptance, package_telegram]",
+    );
     expect(workflow).toContain("PACKAGE_TELEGRAM_RESULT:");
     expect(workflow).toContain("package_telegram=${PACKAGE_TELEGRAM_RESULT}");
     expect(workflow).not.toContain("npm_telegram:");
@@ -780,6 +824,12 @@ describe("package artifact reuse", () => {
       'case "$RERUN_GROUP" in',
       "release-checks|install-smoke|cross-os|live-e2e|package|qa|qa-parity|qa-live)",
       "cancel-in-progress: ${{ (inputs.ref == 'main' && inputs.rerun_group == 'all') || startsWith(inputs.ref, 'tideclaw/alpha/') }}",
+      "Verify release checks accepted Tideclaw alpha advisory lanes",
+      "release_checks_advisory_only",
+      "release_check_blocking_job",
+      "is a package-safety Tideclaw alpha release-check lane",
+      "package_acceptance_release_checks) ;;",
+      'check_child "release_checks" "$RELEASE_CHECKS_RUN_ID" 1 1',
       "gh run cancel",
       "NORMAL_CI_RESULT: ${{ needs.normal_ci.result }}",
     ]);
@@ -1027,9 +1077,7 @@ describe("package artifact reuse", () => {
     for (const workflowPath of releaseWorkflowPaths) {
       const workflow = readWorkflow(workflowPath);
       expect(workflow.env?.NODE_VERSION, workflowPath).toBe("24.15.0");
-      if (workflow.env?.PNPM_VERSION !== undefined) {
-        expect(workflow.env.PNPM_VERSION, workflowPath).toBe("11.0.8");
-      }
+      expect(workflow.env?.PNPM_VERSION, workflowPath).toBeUndefined();
     }
 
     expect(fullRelease.jobs?.release_checks?.["timeout-minutes"]).toBe(

@@ -284,11 +284,11 @@ by default, plus git-checkout installs under the same prefix flow.
     Requires PowerShell 5+.
   </Step>
   <Step title="Ensure Node.js 24 by default">
-    If missing, attempts install via winget, then Chocolatey, then Scoop. Node 22 LTS, currently `22.19+`, remains supported for compatibility.
+    If missing, attempts install via winget, then Chocolatey, then Scoop. If no package manager is available, the script downloads the official Node.js Windows zip into `%LOCALAPPDATA%\OpenClaw\deps\portable-node` and adds it to the current process and user PATH. Node 22 LTS, currently `22.19+`, remains supported for compatibility.
   </Step>
   <Step title="Install OpenClaw">
     - `npm` method (default): global npm install using selected `-Tag`, launched from a writable installer temp directory so shells opened in protected folders such as `C:\` still work
-    - `git` method: clone/update repo, install/build with pnpm, and install wrapper at `%USERPROFILE%\.local\bin\openclaw.cmd`
+    - `git` method: clone/update repo, install/build with pnpm, and install wrapper at `%USERPROFILE%\.local\bin\openclaw.cmd`. If Git is missing, the script bootstraps user-local MinGit under `%LOCALAPPDATA%\OpenClaw\deps\portable-git` and adds it to the current process and user PATH.
 
   </Step>
   <Step title="Post-install tasks">
@@ -368,7 +368,7 @@ by default, plus git-checkout installs under the same prefix flow.
 </AccordionGroup>
 
 <Note>
-If `-InstallMethod git` is used and Git is missing, the script exits and prints the Git for Windows link.
+If `-InstallMethod git` is used and Git is missing, the script tries a user-local MinGit bootstrap before printing the Git for Windows link.
 </Note>
 
 ---
@@ -424,7 +424,7 @@ Use non-interactive flags/env vars for predictable runs.
   </Accordion>
 
   <Accordion title='Windows: "npm error spawn git / ENOENT"'>
-    Install Git for Windows, reopen PowerShell, rerun installer.
+    Rerun the installer so it can bootstrap user-local MinGit, or install Git for Windows and reopen PowerShell.
   </Accordion>
 
   <Accordion title='Windows: "openclaw is not recognized"'>

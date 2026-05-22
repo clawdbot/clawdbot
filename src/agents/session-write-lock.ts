@@ -560,6 +560,16 @@ async function removeReportedStaleLockIfStillStale(params: {
 }): Promise<boolean> {
   const nowMs = Date.now();
   const payload = await readLockPayload(params.lockPath);
+  if (payload === null) {
+    try {
+      await fs.access(params.lockPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return true;
+      }
+      throw error;
+    }
+  }
   const inspected = inspectLockPayloadForSession({
     payload,
     staleMs: params.staleMs,

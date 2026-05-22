@@ -17,6 +17,7 @@ export type GatewayServerMutableState = {
   stopGatewayUpdateCheck: () => void;
   tailscaleCleanup: (() => Promise<void>) | null;
   postReadySidecars: GatewayPostReadySidecarHandle[];
+  gatewayLifetimeSidecars: GatewayPostReadySidecarHandle[];
   skillsRefreshTimer: ReturnType<typeof setTimeout> | null;
   skillsRefreshDelayMs: number;
   skillsChangeUnsub: () => void;
@@ -49,6 +50,7 @@ export function createGatewayServerMutableState(): GatewayServerMutableState {
     stopGatewayUpdateCheck: () => {},
     tailscaleCleanup: null as (() => Promise<void>) | null,
     postReadySidecars: [],
+    gatewayLifetimeSidecars: [],
     skillsRefreshTimer: null as ReturnType<typeof setTimeout> | null,
     skillsRefreshDelayMs: 30_000,
     skillsChangeUnsub: () => {},

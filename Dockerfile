@@ -72,8 +72,7 @@ RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/sto
     NODE_OPTIONS=--max-old-space-size=2048 pnpm install --frozen-lockfile \
       --config.supportedArchitectures.os=linux \
       --config.supportedArchitectures.cpu="$(node -p 'process.arch')" \
-      --config.supportedArchitectures.libc=glibc && \
-    pnpm store add source-map@0.6.1
+      --config.supportedArchitectures.libc=glibc
 
 # pnpm v10+ may append peer-resolution hashes to virtual-store folder names; do not hardcode `.pnpm/...`
 # paths. Matrix's native downloader can hit transient release CDN errors while
@@ -122,7 +121,10 @@ RUN pnpm_config_verify_deps_before_run=false pnpm qa:lab:build
 FROM build AS runtime-assets
 ARG OPENCLAW_EXTENSIONS
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR
+# BuildKit cache mounts are not part of cached layers; seed tarballs for the
+# installed prod graph in the same step that runs offline prune.
 RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \
+    pnpm list --prod --depth Infinity --json | node scripts/list-prod-store-packages.mjs | xargs -r pnpm store add && \
     CI=true pnpm prune --prod \
       --config.offline=true \
       --config.supportedArchitectures.os=linux \
@@ -283,10 +285,15 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
 RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
  && chmod 755 /app/openclaw.mjs
 
-# Pre-create the default state dir so first-run Docker named volumes mounted
-# here inherit node ownership instead of root-owned state.
-RUN install -d -m 0700 -o node -g node /home/node/.openclaw && \
-    stat -c '%U:%G %a' /home/node/.openclaw | grep -qx 'node:node 700'
+# Pre-create default named-volume mount points so first-run Docker volumes copy
+# node ownership from the image instead of starting as root-owned directories.
+RUN install -d -m 0700 -o node -g node \
+      /home/node/.openclaw \
+      /home/node/.openclaw/workspace \
+      /home/node/.config/openclaw && \
+    stat -c '%U:%G %a' /home/node/.openclaw | grep -qx 'node:node 700' && \
+    stat -c '%U:%G %a' /home/node/.openclaw/workspace | grep -qx 'node:node 700' && \
+    stat -c '%U:%G %a' /home/node/.config/openclaw | grep -qx 'node:node 700'
 
 ENV NODE_ENV=production
 

@@ -77,6 +77,11 @@ async function expectCompletedWithoutBootstrap(dir: string) {
 
 function expectSubagentAllowedBootstrapNames(files: WorkspaceBootstrapFile[]) {
   const names = files.map((file) => file.name);
+  expect(names).toStrictEqual(["AGENTS.md", "TOOLS.md"]);
+}
+
+function expectCronAllowedBootstrapNames(files: WorkspaceBootstrapFile[]) {
+  const names = files.map((file) => file.name);
   expect(names).toStrictEqual(["AGENTS.md", "SOUL.md", "TOOLS.md", "IDENTITY.md", "USER.md"]);
 }
 
@@ -451,6 +456,6 @@ describe("filterBootstrapFilesForSession", () => {
 
   it("filters to allowlist for cron sessions", () => {
     const result = filterBootstrapFilesForSession(mockFiles, "agent:default:cron:daily-check");
-    expectSubagentAllowedBootstrapNames(result);
+    expectCronAllowedBootstrapNames(result);
   });
 });

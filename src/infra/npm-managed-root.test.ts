@@ -701,6 +701,71 @@ describe("managed npm root", () => {
     });
   });
 
+  it("does not promote nested bundled peer ranges without a root peer package", async () => {
+    const npmRoot = await makeTempRoot();
+    await fs.writeFile(
+      path.join(npmRoot, "package.json"),
+      `${JSON.stringify(
+        {
+          private: true,
+          dependencies: {
+            plugin: "file:./plugin.tgz",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    const runCommand = vi.fn(async (_args: string[], optionsOrTimeout: number | CommandOptions) => {
+      const options = requireCommandOptions(optionsOrTimeout, "npm peer plan");
+      if (!options.cwd) {
+        throw new Error("expected npm peer plan cwd");
+      }
+      await fs.writeFile(
+        path.join(options.cwd, "package-lock.json"),
+        `${JSON.stringify(
+          {
+            lockfileVersion: 3,
+            packages: {
+              "": {
+                dependencies: {
+                  plugin: "file:./plugin.tgz",
+                },
+              },
+              "node_modules/plugin": {
+                version: "1.0.0",
+              },
+              "node_modules/plugin/node_modules/runtime-lib": {
+                peerDependencies: {
+                  zod: "^4.0.0",
+                },
+                version: "1.0.0",
+              },
+              "node_modules/plugin/node_modules/zod": {
+                version: "4.4.3",
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      return successfulSpawn;
+    });
+
+    await expect(syncManagedNpmRootPeerDependencies({ npmRoot, runCommand })).resolves.toBe(false);
+
+    await expect(
+      fs.readFile(path.join(npmRoot, "package.json"), "utf8").then((raw) => JSON.parse(raw)),
+    ).resolves.toEqual({
+      private: true,
+      dependencies: {
+        plugin: "file:./plugin.tgz",
+      },
+    });
+  });
+
   it("removes one managed dependency without dropping unrelated metadata", async () => {
     const npmRoot = await makeTempRoot();
     await fs.writeFile(

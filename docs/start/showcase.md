@@ -13,26 +13,6 @@ OpenClaw projects are not toy demos. People are shipping PR review loops, mobile
 **Want to be featured?** Share your project in [#self-promotion on Discord](https://discord.gg/clawd) or [tag @openclaw on X](https://x.com/openclaw).
 </Info>
 
-## Videos
-
-Start here if you want the shortest path from "what is this?" to "okay, I get it."
-
-<CardGroup cols={3}>
-
-<Card title="Full setup walkthrough" href="https://www.youtube.com/watch?v=SaWSPZoPX34">
-  VelvetShark, 28 minutes. Install, onboard, and get to a first working assistant end to end.
-</Card>
-
-<Card title="Community showcase reel" href="https://www.youtube.com/watch?v=mMSKQvlmFuQ">
-  A faster pass across real projects, surfaces, and workflows built around OpenClaw.
-</Card>
-
-<Card title="Projects in the wild" href="https://www.youtube.com/watch?v=5kkIJNUGFho">
-  Examples from the community, from chat-native coding loops to hardware and personal automation.
-</Card>
-
-</CardGroup>
-
 ## Fresh from Discord
 
 Recent standouts across coding, devtools, mobile, and chat-native product building.

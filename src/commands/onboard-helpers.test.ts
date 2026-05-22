@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import {
+  formatControlUiSshHint,
   handleReset,
   normalizeGatewayTokenInput,
   openUrl,
@@ -147,6 +148,16 @@ describe("resolveBrowserOpenCommand", () => {
       expect(resolved.argv).toEqual([rundll32, "url.dll,FileProtocolHandler"]);
       expect(resolved.command).toBe(rundll32);
     });
+  });
+});
+
+describe("formatControlUiSshHint", () => {
+  it("includes the IPv4-only BYOH note and workaround", () => {
+    const hint = formatControlUiSshHint({ port: 18789 });
+    expect(hint).toContain("BYOH note: lan, tailnet, and custom bind are currently IPv4-only.");
+    expect(hint).toContain(
+      "If your host is IPv6-only, use an IPv4 sidecar or proxy in front of the Gateway.",
+    );
   });
 });
 

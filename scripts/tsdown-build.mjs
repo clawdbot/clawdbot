@@ -257,17 +257,28 @@ export function createTsdownOutputScanner(params = {}) {
 
 export function resolveTsdownBuildInvocation(params = {}) {
   const env = resolveTsdownEnv(params.env ?? process.env);
+  const tsdownArgs = [
+    "--config-loader",
+    "unrun",
+    "--logLevel",
+    logLevel,
+    "--no-clean",
+    ...extraArgs,
+  ];
+  if (env.OPENCLAW_BUILD_ALL_NO_PNPM === "1") {
+    return {
+      command: params.nodeExecPath ?? process.execPath,
+      args: ["node_modules/tsdown/dist/run.mjs", ...tsdownArgs],
+      options: {
+        stdio: ["ignore", "pipe", "pipe"],
+        shell: false,
+        windowsVerbatimArguments: undefined,
+        env,
+      },
+    };
+  }
   const runner = resolvePnpmRunner({
-    pnpmArgs: [
-      "exec",
-      "tsdown",
-      "--config-loader",
-      "unrun",
-      "--logLevel",
-      logLevel,
-      "--no-clean",
-      ...extraArgs,
-    ],
+    pnpmArgs: ["exec", "tsdown", ...tsdownArgs],
     nodeExecPath: params.nodeExecPath ?? process.execPath,
     npmExecPath: params.npmExecPath ?? env.npm_execpath,
     comSpec: params.comSpec ?? env.ComSpec,

@@ -5,6 +5,7 @@ import {
 } from "../../agents/agent-scope.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
+import { loadModelCatalogForBrowse } from "../../agents/model-catalog-browse.js";
 import { resolveVisibleModelCatalog } from "../../agents/model-catalog-visibility.js";
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import { isModelPickerVisibleProvider } from "../../agents/model-picker-visibility.js";
@@ -149,7 +150,11 @@ export async function buildModelsProviderData(
     agentId,
   });
 
-  const catalog = await loadModelCatalog({ config: cfg });
+  const catalog = await loadModelCatalogForBrowse({
+    cfg,
+    view: options.view ?? "default",
+    loadCatalog: ({ readOnly }) => loadModelCatalog({ config: cfg, readOnly }),
+  });
   const visibilityPolicy = createModelVisibilityPolicy({
     cfg,
     catalog,
@@ -168,6 +173,7 @@ export async function buildModelsProviderData(
       (agentId ? resolveAgentWorkspaceDir(cfg, agentId) : undefined) ??
       resolveDefaultAgentWorkspaceDir(),
     view: options.view,
+    runtimeAuthDiscovery: false,
   });
 
   const aliasIndex = buildModelAliasIndex({

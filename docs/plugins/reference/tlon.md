@@ -16,7 +16,7 @@ Adds the Tlon channel surface for sending and receiving OpenClaw messages.
 
 ## Surface
 
-channels: tlon; contracts: tools; skills
+channels: tlon; skills
 
 ## Related docs
 

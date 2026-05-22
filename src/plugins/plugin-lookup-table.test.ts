@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
+import { clearLoadPluginMetadataSnapshotMemo } from "./plugin-metadata-snapshot.js";
 import type { PluginRegistrySnapshot } from "./plugin-registry.js";
 
 const listPotentialConfiguredChannelIds = vi.hoisted(() => vi.fn());
@@ -157,6 +158,7 @@ async function expectStaleMetadataSnapshotRebuild(params: {
 
 describe("loadPluginLookUpTable", () => {
   beforeEach(() => {
+    clearLoadPluginMetadataSnapshotMemo();
     listPotentialConfiguredChannelIds
       .mockReset()
       .mockImplementation((config: OpenClawConfig) => Object.keys(config.channels ?? {}));

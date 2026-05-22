@@ -21,6 +21,28 @@ Local `MEDIA:` attachments can use absolute paths, workspace-relative paths, or
 home-relative `~/` paths. They still pass through the agent file-read policy and
 media type checks before delivery.
 
+<Warning>
+`MEDIA:` is parsed only as plain text. Wrapping the directive in Markdown
+formatting (bold, inline code, fenced code) prevents the parser from
+recognizing it, and the attachment is silently dropped from delivery.
+
+Valid:
+
+```text
+MEDIA:/workspace/image.png
+```
+
+Invalid (parsed as prose, no attachment delivered):
+
+```text
+**MEDIA:/workspace/image.png**
+`MEDIA:/workspace/image.png`
+Here is your image: MEDIA:/workspace/image.png
+```
+
+Keep `MEDIA:` on its own line, in plain text, with no surrounding formatting.
+</Warning>
+
 Plain Markdown image syntax stays text by default. Channels that intentionally
 map Markdown image replies to media attachments opt in at their outbound
 adapter; Telegram does this so `![alt](url)` can still become a media reply.

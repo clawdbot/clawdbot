@@ -60,6 +60,13 @@ function createState(overrides: Partial<AppViewState> = {}) {
     chatModelCatalog: [],
     chatModelOverrides: {},
     chatModelsLoading: false,
+    chatSessionPickerOpen: false,
+    chatSessionPickerSurface: null,
+    chatSessionPickerQuery: "",
+    chatSessionPickerAppliedQuery: "",
+    chatSessionPickerLoading: false,
+    chatSessionPickerError: null,
+    chatSessionPickerResult: null,
     client: { request: vi.fn() },
     ...overrides,
   } as unknown as AppViewState;
@@ -281,14 +288,19 @@ describe("chat header controls (browser)", () => {
 
     const sessionRows = container.querySelectorAll(".chat-controls__session-row");
     expect(sessionRows).toHaveLength(1);
+    const sessionTrigger = requireButton(
+      container.querySelector<HTMLButtonElement>('button[data-chat-session-select="true"]'),
+      "session trigger",
+    );
+    expect(sessionTrigger.dataset.chatSessionSelect).toBe("true");
+
     const selectDatasets = Array.from(container.querySelectorAll("select")).map(
       (select) => select.dataset,
     );
-    expect(selectDatasets).toHaveLength(4);
+    expect(selectDatasets).toHaveLength(3);
     expect(selectDatasets[0]?.chatAgentFilter).toBe("true");
-    expect(selectDatasets[1]?.chatSessionSelect).toBe("true");
-    expect(selectDatasets[2]?.chatModelSelect).toBe("true");
-    expect(selectDatasets[3]?.chatThinkingSelect).toBe("true");
+    expect(selectDatasets[1]?.chatModelSelect).toBe("true");
+    expect(selectDatasets[2]?.chatThinkingSelect).toBe("true");
     const autoScrollToggle = requireButton(
       container.querySelector<HTMLButtonElement>('[data-chat-auto-scroll-toggle="true"]'),
       "auto-scroll toggle",

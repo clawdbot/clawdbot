@@ -391,7 +391,7 @@ describe("gateway auth browser hardening", () => {
     });
   });
 
-  test("does not silently auto-pair control-ui browser clients on loopback", async () => {
+  test("silently auto-pairs control-ui browser clients on loopback with a valid gateway token", async () => {
     const { listDevicePairing } = await import("../infra/device-pairing.js");
     testState.gatewayAuth = { mode: "token", token: "secret" };
 
@@ -414,15 +414,11 @@ describe("gateway auth browser hardening", () => {
           client: CONTROL_UI_CLIENT,
           device,
         });
-        expect(res.ok).toBe(false);
-        expect(res.error?.message ?? "").toContain("pairing required");
+        expect(res.ok).toBe(true);
 
         const pairing = await listDevicePairing();
-        const pending = pairing.pending.find((entry) => entry.deviceId === identity.deviceId);
-        if (!pending) {
-          throw new Error("expected control ui browser client to create pending pairing request");
-        }
-        expect(pending.silent).toBe(false);
+        expect(pairing.pending.some((entry) => entry.deviceId === identity.deviceId)).toBe(false);
+        expect(pairing.paired.some((entry) => entry.deviceId === identity.deviceId)).toBe(true);
       } finally {
         browserWs.close();
       }

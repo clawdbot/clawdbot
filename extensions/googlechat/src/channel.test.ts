@@ -288,6 +288,7 @@ describe("googlechatPlugin outbound sendMedia", () => {
     expect(proofs).toStrictEqual([
       { capability: "text", status: "verified" },
       { capability: "media", status: "verified" },
+      { capability: "poll", status: "not_declared" },
       { capability: "payload", status: "not_declared" },
       { capability: "silent", status: "not_declared" },
       { capability: "replyTo", status: "not_declared" },

@@ -2582,6 +2582,45 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
+  it("logs a warning when failDelivery rejects on bestEffort partial failure (#83113)", async () => {
+    queueMocks.failDelivery.mockRejectedValueOnce(new Error("queue storage down"));
+
+    await runBestEffortPartialFailureDelivery();
+
+    expect(queueMocks.failDelivery).toHaveBeenCalledWith(
+      "mock-queue-id",
+      "partial delivery failure (bestEffort)",
+    );
+    const warnCall = requireMockCall(logMocks.warn, "warn");
+    const warnMessage = String(warnCall[0]);
+    expect(warnMessage).toContain("failed to mark queued delivery");
+    expect(warnMessage).toContain("mock-queue-id");
+    expect(warnMessage).toContain("queue storage down");
+  });
+
+  it("logs a warning when failDelivery rejects in the error handler (#83113)", async () => {
+    const sendMatrix = vi.fn().mockRejectedValue(new Error("native send failed"));
+    queueMocks.failDelivery.mockRejectedValueOnce(new Error("db connection lost"));
+
+    await expect(
+      deliverOutboundPayloads({
+        cfg: {},
+        channel: "matrix",
+        to: "!room:example",
+        payloads: [{ text: "hello" }],
+        deps: { matrix: sendMatrix },
+        queuePolicy: "required",
+      }),
+    ).rejects.toThrow("native send failed");
+
+    expect(queueMocks.failDelivery).toHaveBeenCalledWith("mock-queue-id", expect.any(String));
+    const warnCall = requireMockCall(logMocks.warn, "warn");
+    const warnMessage = String(warnCall[0]);
+    expect(warnMessage).toContain("failed to mark queued delivery");
+    expect(warnMessage).toContain("mock-queue-id");
+    expect(warnMessage).toContain("db connection lost");
+  });
+
   it("writes raw payloads to the queue before normalization", async () => {
     const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m-raw", roomId: "!room:example" });
     const rawPayloads: DeliverOutboundPayload[] = [

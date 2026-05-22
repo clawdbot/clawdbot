@@ -2,9 +2,13 @@ import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { updatePairedDeviceMetadata } from "../infra/device-pairing.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import {
+  resolveEventSessionKeyForPolicy,
+  resolveEventSessionRoutingPolicy,
+  scopedHeartbeatWakeOptionsForPolicy,
+} from "../infra/event-session-routing.js";
 import { updatePairedNodeMetadata } from "../infra/node-pairing.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
-import { resolveEventSessionKey } from "../routing/session-key.js";
 import {
   NODE_PRESENCE_ALIVE_EVENT,
   normalizeNodePresenceAliveReason,
@@ -38,7 +42,6 @@ import {
   resolveSessionAgentId,
   resolveSessionModelRef,
   sanitizeInboundSystemTags,
-  scopedHeartbeatWakeOptions,
   sendDurableMessageBatch,
   updateSessionStore,
 } from "./server-node-events.runtime.js";
@@ -730,7 +733,15 @@ export const handleNodeEvent = async (
           : undefined;
       const timedOut = obj.timedOut === true;
       const output = sanitizeInboundSystemTags(normalizeOptionalString(obj.output) ?? "");
-      const reason = sanitizeInboundSystemTags(normalizeOptionalString(obj.reason) ?? "");
+      // Strip parens from the untrusted RAW reason before sanitizeInboundSystemTags
+      // runs: the `Exec denied (node=..., <reason>): cmd` wire format is parsed by
+      // matching the first balanced `(...)` and stray parens in user-supplied
+      // input would break the metadata/body boundary. We strip pre-sanitize so
+      // that legitimate `[System Message]` style tags can still be converted to
+      // `(System Message)` by sanitizeInboundSystemTags afterward.
+      const reason = sanitizeInboundSystemTags(
+        (normalizeOptionalString(obj.reason) ?? "").replace(/[()]/g, ""),
+      );
 
       let text = "";
       if (evt.event === "exec.started") {
@@ -766,8 +777,9 @@ export const handleNodeEvent = async (
         }
       }
 
+      const eventRouting = resolveEventSessionRoutingPolicy({ cfg, sessionKey });
       const queued = enqueueSystemEvent(text, {
-        sessionKey: resolveEventSessionKey(sessionKey, cfg.session?.mainKey, cfg.session?.scope),
+        sessionKey: resolveEventSessionKeyForPolicy(sessionKey, eventRouting),
         contextKey: runId ? `exec:${runId}` : "exec",
       });
       if (queued) {
@@ -775,7 +787,7 @@ export const handleNodeEvent = async (
         // keys should keep legacy unscoped behavior so enabled non-main heartbeat
         // agents still run when no explicit agent session is provided.
         requestHeartbeat(
-          scopedHeartbeatWakeOptions(
+          scopedHeartbeatWakeOptionsForPolicy(
             sessionKey,
             {
               source: "exec-event",
@@ -783,8 +795,7 @@ export const handleNodeEvent = async (
               reason: "exec-event",
               coalesceMs: 0,
             },
-            cfg.session?.mainKey,
-            cfg.session?.scope,
+            eventRouting,
           ),
         );
       }

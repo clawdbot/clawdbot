@@ -773,6 +773,10 @@ export function markdownToTelegramChunks(
   return renderTelegramChunksWithinHtmlLimit(ir, limit);
 }
 
-export function markdownToTelegramHtmlChunks(markdown: string, limit: number): string[] {
-  return markdownToTelegramChunks(markdown, limit).map((chunk) => chunk.html);
+export function markdownToTelegramHtmlChunks(
+  markdown: string,
+  limit: number,
+  options: { tableMode?: MarkdownTableMode } = {},
+): string[] {
+  return markdownToTelegramChunks(markdown, limit, options).map((chunk) => chunk.html);
 }

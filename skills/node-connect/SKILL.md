@@ -104,7 +104,8 @@ If the app says `pairing required`:
 
 ```bash
 openclaw devices list
-openclaw devices approve --latest
+openclaw devices approve --latest   # preview only; copy the requestId from output
+openclaw devices approve <requestId>
 ```
 
 If the app says `bootstrap token invalid or expired`:

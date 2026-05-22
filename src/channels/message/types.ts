@@ -3,12 +3,14 @@ import type { ReplyToMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OutboundSendDeps } from "../../infra/outbound/send-deps.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
+import type { PollInput } from "../../polls.js";
 
 export type MessageDurabilityPolicy = "required" | "best_effort" | "disabled";
 
 export const durableFinalDeliveryCapabilities = [
   "text",
   "media",
+  "poll",
   "payload",
   "silent",
   "replyTo",
@@ -47,7 +49,14 @@ export type MessageReceiptSourceResult = {
   meta?: Record<string, unknown>;
 };
 
-export type MessageReceiptPartKind = "text" | "media" | "voice" | "card" | "preview" | "unknown";
+export type MessageReceiptPartKind =
+  | "text"
+  | "media"
+  | "voice"
+  | "poll"
+  | "card"
+  | "preview"
+  | "unknown";
 
 export type MessageReceiptPart = {
   platformMessageId: string;
@@ -173,17 +182,27 @@ export type ChannelMessageSendPayloadContext<TConfig = OpenClawConfig> =
     forceDocument?: boolean;
   };
 
+export type ChannelMessageSendPollContext<TConfig = OpenClawConfig> = Omit<
+  ChannelMessageSendTextContext<TConfig>,
+  "text" | "threadId"
+> & {
+  poll: PollInput;
+  threadId?: string | null;
+  isAnonymous?: boolean;
+};
+
 export type ChannelMessageSendResult = {
   receipt: MessageReceipt;
   messageId?: string;
 };
 
-export type ChannelMessageSendAttemptKind = "text" | "media" | "payload";
+export type ChannelMessageSendAttemptKind = "text" | "media" | "payload" | "poll";
 
 export type ChannelMessageSendAttemptContext<TConfig = OpenClawConfig> =
   | (ChannelMessageSendTextContext<TConfig> & { kind: "text" })
   | (ChannelMessageSendMediaContext<TConfig> & { kind: "media" })
-  | (ChannelMessageSendPayloadContext<TConfig> & { kind: "payload" });
+  | (ChannelMessageSendPayloadContext<TConfig> & { kind: "payload" })
+  | (ChannelMessageSendPollContext<TConfig> & { kind: "poll" });
 
 export type ChannelMessageSendSuccessContext<
   TConfig = OpenClawConfig,
@@ -257,6 +276,7 @@ export type ChannelMessageSendAdapter<
   text?: (ctx: ChannelMessageSendTextContext<TConfig>) => Promise<TSendResult>;
   media?: (ctx: ChannelMessageSendMediaContext<TConfig>) => Promise<TSendResult>;
   payload?: (ctx: ChannelMessageSendPayloadContext<TConfig>) => Promise<TSendResult>;
+  poll?: (ctx: ChannelMessageSendPollContext<TConfig>) => Promise<TSendResult>;
   lifecycle?: ChannelMessageSendLifecycleAdapter<TConfig, TSendResult>;
 };
 

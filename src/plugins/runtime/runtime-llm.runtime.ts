@@ -1,4 +1,5 @@
 import type { Api, Message } from "@earendil-works/pi-ai";
+import { modelKey } from "../../agents/model-ref-shared.js";
 import { normalizeModelRef } from "../../agents/model-selection.js";
 import type { NormalizedUsage, UsageLike } from "../../agents/usage.js";
 import { normalizeUsage } from "../../agents/usage.js";
@@ -235,7 +236,7 @@ function normalizeAllowedModelRef(raw: string): string | null {
     return null;
   }
   const normalized = normalizeModelRef(provider, model);
-  return `${normalized.provider}/${normalized.model}`;
+  return modelKey(normalized.provider, normalized.model);
 }
 
 function buildPolicyFromEntry(entry: {
@@ -402,7 +403,7 @@ export function createRuntimeLlm(options: CreateRuntimeLlmOptions = {}): PluginR
           ? normalizeModelRef(selection.provider, selection.modelId)
           : null;
         const resolvedModelRef = normalizedSelection
-          ? `${normalizedSelection.provider}/${normalizedSelection.model}`
+          ? modelKey(normalizedSelection.provider, normalizedSelection.model)
           : null;
         assertAllowedModelOverride({
           resolvedModelRef,

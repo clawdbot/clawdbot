@@ -1631,6 +1631,7 @@ export function createExecTool(
         sessionKey: notifySessionKey,
         mainKey: defaults?.mainKey,
         sessionScope: defaults?.sessionScope,
+        eventRouting: defaults?.eventRouting,
         notifyDeliveryContext,
         timeoutSec: effectiveTimeout,
         onUpdate,

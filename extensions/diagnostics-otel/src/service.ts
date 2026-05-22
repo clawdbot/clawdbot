@@ -1035,6 +1035,13 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         unit: "1",
         description: "Diagnostic memory pressure events",
       });
+      const asyncQueueDroppedCounter = meter.createCounter(
+        "openclaw.diagnostic.async_queue.dropped",
+        {
+          unit: "1",
+          description: "Async diagnostic queue drops by dropped event class",
+        },
+      );
       const livenessWarningCounter = meter.createCounter("openclaw.liveness.warning", {
         unit: "1",
         description: "Diagnostic liveness warning events",
@@ -1799,6 +1806,29 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           });
         }
         span.end(evt.ts);
+      };
+
+      const recordAsyncQueueDropped = (
+        evt: Extract<DiagnosticEventPayload, { type: "diagnostic.async_queue.dropped" }>,
+      ) => {
+        asyncQueueDroppedCounter.add(evt.droppedEvents, {
+          "openclaw.diagnostic.async_queue.drop_class": "total",
+        });
+        if (evt.droppedTrustedEvents !== undefined) {
+          asyncQueueDroppedCounter.add(evt.droppedTrustedEvents, {
+            "openclaw.diagnostic.async_queue.drop_class": "trusted",
+          });
+        }
+        if (evt.droppedUntrustedEvents !== undefined) {
+          asyncQueueDroppedCounter.add(evt.droppedUntrustedEvents, {
+            "openclaw.diagnostic.async_queue.drop_class": "untrusted",
+          });
+        }
+        if (evt.droppedPriorityEvents !== undefined) {
+          asyncQueueDroppedCounter.add(evt.droppedPriorityEvents, {
+            "openclaw.diagnostic.async_queue.drop_class": "priority",
+          });
+        }
       };
 
       const recordRunCompleted = (
@@ -2613,6 +2643,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               return;
             case "diagnostic.memory.pressure":
               recordMemoryPressure(evt);
+              return;
+            case "diagnostic.async_queue.dropped":
+              recordAsyncQueueDropped(evt);
               return;
             case "telemetry.exporter":
               recordTelemetryExporter(evt, metadata);

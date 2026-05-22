@@ -241,6 +241,37 @@ async function logCronDeliveryError(message: string): Promise<void> {
   logError(message);
 }
 
+export async function cleanupDirectCronSession(params: {
+  job: CronJob;
+  agentSessionKey: string;
+  sessionId: string;
+  retireReason: string;
+}): Promise<void> {
+  if (!params.job.deleteAfterRun) {
+    return;
+  }
+  if (!isCronSessionKey(params.agentSessionKey)) {
+    return;
+  }
+  try {
+    const { callGateway } = await loadGatewayCallRuntime();
+    await callGateway({
+      method: "sessions.delete",
+      params: {
+        key: params.agentSessionKey,
+        deleteTranscript: true,
+        emitLifecycleHooks: false,
+      },
+      timeoutMs: 10_000,
+    });
+  } catch {
+    await retireSessionMcpRuntime({
+      sessionId: params.sessionId,
+      reason: params.retireReason,
+    });
+  }
+}
+
 function logCronDeliveryErrorDeferred(message: string): void {
   void loadDeliveryLoggerRuntime().then(({ logError }) => {
     logError(message);
@@ -745,32 +776,16 @@ export async function dispatchCronDelivery(
       ...params.telemetry,
     });
   const cleanupDirectCronSessionIfNeeded = async (): Promise<void> => {
-    if (!params.job.deleteAfterRun || directCronSessionDeleted) {
+    if (directCronSessionDeleted) {
       return;
     }
-    if (!isCronSessionKey(params.agentSessionKey)) {
-      directCronSessionDeleted = true;
-      return;
-    }
-    try {
-      const { callGateway } = await loadGatewayCallRuntime();
-      await callGateway({
-        method: "sessions.delete",
-        params: {
-          key: params.agentSessionKey,
-          deleteTranscript: true,
-          emitLifecycleHooks: false,
-        },
-        timeoutMs: 10_000,
-      });
-      directCronSessionDeleted = true;
-    } catch {
-      await retireSessionMcpRuntime({
-        sessionId: params.sessionId,
-        reason: "cron-delete-after-run-fallback",
-      });
-      // Best-effort; direct delivery result should still be returned.
-    }
+    directCronSessionDeleted = true;
+    await cleanupDirectCronSession({
+      job: params.job,
+      agentSessionKey: params.agentSessionKey,
+      sessionId: params.sessionId,
+      retireReason: "cron-delete-after-run-fallback",
+    });
   };
   const finishSilentReplyDelivery = async (): Promise<RunCronAgentTurnResult> => {
     deliveryAttempted = true;

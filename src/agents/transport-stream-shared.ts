@@ -1,4 +1,6 @@
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
+import { redactSensitiveText } from "../logging/redact.js";
+import { truncateErrorDetail } from "./provider-http-errors.js";
 
 type TransportUsage = {
   input: number;
@@ -17,6 +19,9 @@ export type WritableTransportStream = {
 type TransportOutputShape = {
   stopReason: string;
   errorMessage?: string;
+  errorCode?: string;
+  errorType?: string;
+  errorBody?: string;
 };
 
 const EMPTY_TOOL_RESULT_TEXT = "(no output)";
@@ -120,6 +125,93 @@ export function finalizeTransportStream(params: {
   stream.end();
 }
 
+type TransportErrorDetails = {
+  errorCode?: string;
+  errorType?: string;
+  errorBody?: string;
+};
+
+function readStringLikeProperty(value: unknown, key: string): string | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const raw = (value as Record<string, unknown>)[key];
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    return trimmed || undefined;
+  }
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    return String(raw);
+  }
+  return undefined;
+}
+
+function readObjectProperty(value: unknown, key: string): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const raw = (value as Record<string, unknown>)[key];
+  return raw && typeof raw === "object" && !Array.isArray(raw)
+    ? (raw as Record<string, unknown>)
+    : undefined;
+}
+
+function stringifyErrorBody(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeTransportErrorBody(value: unknown): string | undefined {
+  const text = stringifyErrorBody(value);
+  if (!text?.trim()) {
+    return undefined;
+  }
+  return truncateErrorDetail(redactSensitiveText(text), 500);
+}
+
+export function extractTransportErrorDetails(error: unknown): TransportErrorDetails {
+  const errorObject = error && typeof error === "object" ? error : undefined;
+  const nestedError = readObjectProperty(errorObject, "error");
+  const errorCode =
+    readStringLikeProperty(errorObject, "errorCode") ??
+    readStringLikeProperty(errorObject, "code") ??
+    readStringLikeProperty(nestedError, "code");
+  const errorType =
+    readStringLikeProperty(errorObject, "errorType") ??
+    readStringLikeProperty(errorObject, "type") ??
+    readStringLikeProperty(nestedError, "type");
+  const errorBody =
+    normalizeTransportErrorBody(readStringLikeProperty(errorObject, "errorBody")) ??
+    normalizeTransportErrorBody(readStringLikeProperty(errorObject, "body")) ??
+    normalizeTransportErrorBody(readObjectProperty(errorObject, "body")) ??
+    normalizeTransportErrorBody(nestedError);
+
+  return {
+    ...(errorCode ? { errorCode } : {}),
+    ...(errorType ? { errorType } : {}),
+    ...(errorBody ? { errorBody } : {}),
+  };
+}
+
+export function assignTransportErrorDetails(
+  output: TransportOutputShape,
+  error: unknown,
+  signal?: AbortSignal,
+): void {
+  output.stopReason = signal?.aborted ? "aborted" : "error";
+  output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+  Object.assign(output, extractTransportErrorDetails(error));
+}
+
 export function failTransportStream(params: {
   stream: WritableTransportStream;
   output: TransportOutputShape;
@@ -129,8 +221,7 @@ export function failTransportStream(params: {
 }): void {
   const { stream, output, signal, error, cleanup } = params;
   cleanup?.();
-  output.stopReason = signal?.aborted ? "aborted" : "error";
-  output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+  assignTransportErrorDetails(output, error, signal);
   stream.push({ type: "error", reason: output.stopReason as never, error: output as never });
   stream.end();
 }

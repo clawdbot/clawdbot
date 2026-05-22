@@ -40,6 +40,12 @@ export type AgentRuntimeConfig =
 
 export type AgentBindingMatch = {
   channel: string;
+  /**
+   * Channel account to match.
+   * - Omitted/empty: matches only the channel default account.
+   * - "*": matches every account on the channel.
+   * - Any other string: matches that specific account id.
+   */
   accountId?: string;
   peer?: { kind: ChatType; id: string };
   guildId?: string;

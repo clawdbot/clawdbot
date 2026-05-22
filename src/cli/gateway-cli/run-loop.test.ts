@@ -1401,6 +1401,91 @@ describe("runGatewayLoop", () => {
       await expect(exited).resolves.toBe(0);
     });
   });
+
+  it("catches SIGTERM handler errors, logs them, and falls back to stop (#83131)", async () => {
+    vi.clearAllMocks();
+    consumeGatewayRestartIntentPayloadSync.mockImplementationOnce(() => {
+      throw new Error("dynamic import failed");
+    });
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { close, runtime, exited } = await createSignaledLoopHarness();
+      const sigterm = captureSignal("SIGTERM");
+
+      sigterm();
+
+      await expect(exited).resolves.toBe(0);
+      expect(gatewayLog.error).toHaveBeenCalledWith(
+        "failed to handle SIGTERM: Error: dynamic import failed",
+      );
+      expect(close).toHaveBeenCalledWith({
+        reason: "gateway stopping",
+        restartExpectedMs: null,
+      });
+      expect(runtime.exit).toHaveBeenCalledWith(0);
+    });
+  });
+
+  it("catches SIGUSR1 handler errors even when token cleanup throws (#83131)", async () => {
+    vi.clearAllMocks();
+    consumeGatewayRestartIntentPayloadSync.mockImplementationOnce(() => {
+      throw new Error("lifecycle module corrupted");
+    });
+    markGatewaySigusr1RestartHandled.mockImplementationOnce(() => {
+      throw new Error("recovery import also failed");
+    });
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { close, start, exited } = await createSignaledLoopHarness();
+      const sigusr1 = captureSignal("SIGUSR1");
+      const sigterm = captureSignal("SIGTERM");
+
+      sigusr1();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(gatewayLog.error).toHaveBeenCalledWith(
+        "SIGUSR1 handler failed: lifecycle module corrupted",
+      );
+      expect(markGatewaySigusr1RestartHandled).toHaveBeenCalled();
+      expect(close).not.toHaveBeenCalled();
+      expect(start).toHaveBeenCalledTimes(1);
+
+      sigterm();
+      await expect(exited).resolves.toBe(0);
+    });
+  });
+
+  it("catches SIGUSR1 handler errors, clears restart token, and does not crash (#83131)", async () => {
+    vi.clearAllMocks();
+    consumeGatewayRestartIntentPayloadSync.mockImplementationOnce(() => {
+      throw new Error("sigusr1 lifecycle import failed");
+    });
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { close, start, exited } = await createSignaledLoopHarness();
+      const sigusr1 = captureSignal("SIGUSR1");
+      const sigterm = captureSignal("SIGTERM");
+
+      sigusr1();
+      // The catch handler clears the restart token from the eagerly-loaded
+      // lifecycle runtime, so wait for the async signal body to reject.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(gatewayLog.error).toHaveBeenCalledWith(
+        "SIGUSR1 handler failed: sigusr1 lifecycle import failed",
+      );
+      // Restart token must be cleared so future SIGUSR1 restarts are not
+      // permanently coalesced as "already in-flight".
+      expect(markGatewaySigusr1RestartHandled).toHaveBeenCalled();
+      expect(close).not.toHaveBeenCalled();
+      expect(start).toHaveBeenCalledTimes(1);
+
+      sigterm();
+      await expect(exited).resolves.toBe(0);
+    });
+  });
 });
 
 describe("gateway discover routing helpers", () => {

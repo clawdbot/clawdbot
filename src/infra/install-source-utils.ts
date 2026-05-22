@@ -348,10 +348,13 @@ export async function resolveNpmPackArchiveMetadata(params: {
     return archivePathResult;
   }
   const archivePath = archivePathResult.path;
+  const archiveStat = await fs.stat(archivePath).catch(() => null);
+  const archiveMetadataTimeoutMs =
+    archiveStat && archiveStat.size > 100 * 1024 * 1024 ? 300_000 : 60_000;
   const res = await runCommandWithTimeout(
     ["npm", "pack", archivePath, "--ignore-scripts", "--dry-run", "--json"],
     {
-      timeoutMs: Math.max(params.timeoutMs ?? 60_000, 60_000),
+      timeoutMs: Math.max(params.timeoutMs ?? archiveMetadataTimeoutMs, archiveMetadataTimeoutMs),
       env: createNpmMetadataEnv(),
     },
   );

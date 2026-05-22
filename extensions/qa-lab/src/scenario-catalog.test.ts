@@ -202,6 +202,27 @@ describe("qa scenario catalog", () => {
     expect(readQaScenarioById("long-context-progress-watchdog").gatewayConfigPatch).toBeUndefined();
   });
 
+  it("loads the QA bus tool trace visibility harness scenario", () => {
+    const scenario = readQaScenarioById("qa-bus-tool-trace-visibility");
+    const config = readQaScenarioExecutionConfig(scenario.id) as
+      | {
+          expectedToolName?: string;
+          expectedRedaction?: string;
+          searchQuery?: string;
+        }
+      | undefined;
+
+    expect(scenario.sourcePath).toBe("qa/scenarios/runtime/qa-bus-tool-trace-visibility.md");
+    expect(scenario.coverage?.primary).toContain("harness.tool-trace-visibility");
+    expect(scenario.coverage?.secondary).toContain("runtime.qa-bus");
+    expect(config?.expectedToolName).toBe("exec");
+    expect(config?.expectedRedaction).toBe("[redacted]");
+    expect(config?.searchQuery).toBe("exec");
+    expect(scenario.execution.flow?.steps.map((step) => step.name)).toEqual([
+      "preserves searchable sanitized tool-call traces",
+    ]);
+  });
+
   it("loads the opt-in update.run package self-upgrade sentinel", () => {
     const scenario = readQaScenarioById("update-run-package-self-upgrade");
     const config = readQaScenarioExecutionConfig(scenario.id) as

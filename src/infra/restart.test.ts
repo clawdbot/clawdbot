@@ -166,7 +166,8 @@ describe.runIf(process.platform !== "win32")("cleanStaleGatewayProcessesSync", (
 
     expect(killed).toEqual([stalePid]);
     expect(resolveGatewayPortMock).not.toHaveBeenCalled();
-    expect(spawnSyncMock).toHaveBeenCalledTimes(2);
+    const lsofCalls = spawnSyncMock.mock.calls.filter((call) => call[0] === "/usr/sbin/lsof");
+    expect(lsofCalls).toHaveLength(2);
     const [command, args, options] = requireFirstSpawnSyncCall();
     expect(command).toBe("/usr/sbin/lsof");
     expect(args).toEqual(["-nP", "-iTCP:19999", "-sTCP:LISTEN", "-Fpc"]);

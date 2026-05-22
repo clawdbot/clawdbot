@@ -269,6 +269,56 @@ describe("plugin index install records store", () => {
     });
   });
 
+  it("recovers managed npm metadata when the persisted record points at an older package version", async () => {
+    const stateDir = makeStateDir();
+    const codexDir = writeManagedNpmPlugin({
+      stateDir,
+      packageName: "@openclaw/codex",
+      pluginId: "codex",
+      version: "2026.5.18-beta.1",
+    });
+    const candidate = createPluginCandidate(stateDir, "codex");
+    await writePersistedInstalledPluginIndexInstallRecords(
+      {
+        codex: {
+          source: "npm",
+          spec: "@openclaw/codex@2026.5.16-beta.1",
+          installPath: codexDir,
+          version: "2026.5.16-beta.1",
+          resolvedName: "@openclaw/codex",
+          resolvedVersion: "2026.5.16-beta.1",
+          resolvedSpec: "@openclaw/codex@2026.5.16-beta.1",
+          integrity: "sha512-stale",
+          shasum: "stale",
+          installedAt: "2026-05-16T01:42:54.609Z",
+          resolvedAt: "2026-05-16T01:42:52.981Z",
+        },
+      },
+      { stateDir, candidates: [candidate] },
+    );
+
+    const loaded = await loadInstalledPluginIndexInstallRecords({ stateDir });
+    const record = expectRecordFields(loaded.codex, {
+      source: "npm",
+      spec: "@openclaw/codex@2026.5.18-beta.1",
+      installPath: codexDir,
+      version: "2026.5.18-beta.1",
+      resolvedName: "@openclaw/codex",
+      resolvedVersion: "2026.5.18-beta.1",
+      resolvedSpec: "@openclaw/codex@2026.5.18-beta.1",
+    });
+    expect(record.integrity).toBeUndefined();
+    expect(record.shasum).toBeUndefined();
+    expect(record.installedAt).toBeUndefined();
+    expect(record.resolvedAt).toBeUndefined();
+
+    const loadedSync = loadInstalledPluginIndexInstallRecordsSync({ stateDir });
+    expectRecordFields(loadedSync.codex, {
+      version: "2026.5.18-beta.1",
+      resolvedVersion: "2026.5.18-beta.1",
+    });
+  });
+
   it("preserves git install resolution fields in persisted records", async () => {
     const stateDir = makeStateDir();
     const candidate = createPluginCandidate(stateDir, "git-demo");

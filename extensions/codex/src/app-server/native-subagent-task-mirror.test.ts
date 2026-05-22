@@ -50,12 +50,7 @@ describe("CodexNativeSubagentTaskMirror", () => {
     });
 
     expect(runtime.createRunningTaskRun).toHaveBeenCalledWith({
-      runtime: "subagent",
-      taskKind: "codex-native",
       sourceId: "codex-thread:child-thread",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
       agentId: "main",
       runId: "codex-thread:child-thread",
       label: "Poincare",
@@ -72,7 +67,6 @@ describe("CodexNativeSubagentTaskMirror", () => {
     );
     expect(runtime.recordTaskRunProgressByRunId).toHaveBeenCalledWith({
       runId: "codex-thread:child-thread",
-      runtime: "subagent",
       lastEventAt: 20_000,
       progressSummary: "Codex native subagent is active.",
     });
@@ -170,7 +164,6 @@ describe("CodexNativeSubagentTaskMirror", () => {
 
     expect(runtime.finalizeTaskRunByRunId).toHaveBeenNthCalledWith(1, {
       runId: codexNativeSubagentRunId("child-thread"),
-      runtime: "subagent",
       status: "succeeded",
       endedAt: 30_000,
       lastEventAt: 30_000,
@@ -179,7 +172,6 @@ describe("CodexNativeSubagentTaskMirror", () => {
     });
     expect(runtime.finalizeTaskRunByRunId).toHaveBeenNthCalledWith(2, {
       runId: codexNativeSubagentRunId("failed-child"),
-      runtime: "subagent",
       status: "failed",
       endedAt: 30_000,
       lastEventAt: 30_000,
@@ -237,12 +229,7 @@ describe("CodexNativeSubagentTaskMirror", () => {
     });
 
     expect(runtime.createRunningTaskRun).toHaveBeenCalledWith({
-      runtime: "subagent",
-      taskKind: "codex-native",
       sourceId: "codex-thread:child-thread",
-      requesterSessionKey: "agent:main:main",
-      ownerKey: "agent:main:main",
-      scopeKind: "session",
       runId: "codex-thread:child-thread",
       label: "Codex subagent",
       task: "write the proof file",
@@ -258,19 +245,93 @@ describe("CodexNativeSubagentTaskMirror", () => {
     );
     expect(runtime.recordTaskRunProgressByRunId).toHaveBeenCalledWith({
       runId: "codex-thread:child-thread",
-      runtime: "subagent",
       lastEventAt: 40_000,
       progressSummary: "Codex native subagent is initializing.",
     });
     expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledWith({
       runId: "codex-thread:child-thread",
-      runtime: "subagent",
       status: "succeeded",
       endedAt: 40_000,
       lastEventAt: 40_000,
       progressSummary: "done",
       terminalSummary: "done",
     });
+  });
+
+  it("uses the notification thread id when collab agent items omit sender thread id", () => {
+    const runtime = createRuntime();
+    const mirror = new CodexNativeSubagentTaskMirror(
+      {
+        parentThreadId: "parent-thread",
+        requesterSessionKey: "agent:main:main",
+        now: () => 42_000,
+      },
+      runtime,
+    );
+
+    mirror.handleNotification({
+      method: "item/started",
+      params: {
+        threadId: "parent-thread",
+        item: {
+          type: "collabAgentToolCall",
+          tool: "spawn_agent",
+          receiverThreadIds: ["child-thread"],
+          prompt: "inspect one thing",
+        },
+      },
+    });
+
+    expect(runtime.createRunningTaskRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "codex-thread:child-thread",
+        task: "inspect one thing",
+      }),
+    );
+  });
+
+  it("creates spawn tasks from collab agent states when receiver thread ids are absent", () => {
+    const runtime = createRuntime();
+    const mirror = new CodexNativeSubagentTaskMirror(
+      {
+        parentThreadId: "parent-thread",
+        requesterSessionKey: "agent:main:main",
+        now: () => 43_000,
+      },
+      runtime,
+    );
+
+    mirror.handleNotification({
+      method: "item/completed",
+      params: {
+        threadId: "parent-thread",
+        item: {
+          type: "collabAgentToolCall",
+          tool: "spawn_agent",
+          prompt: "inspect one thing",
+          agentsStates: {
+            "child-thread": {
+              status: "completed",
+              message: "done",
+            },
+          },
+        },
+      },
+    });
+
+    expect(runtime.createRunningTaskRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "codex-thread:child-thread",
+        task: "inspect one thing",
+      }),
+    );
+    expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: "codex-thread:child-thread",
+        status: "succeeded",
+        terminalSummary: "done",
+      }),
+    );
   });
 
   it("finalizes stale collab agent state from the blocked tool call status", () => {
@@ -306,13 +367,11 @@ describe("CodexNativeSubagentTaskMirror", () => {
 
     expect(runtime.recordTaskRunProgressByRunId).not.toHaveBeenCalledWith({
       runId: "codex-thread:child-thread",
-      runtime: "subagent",
       lastEventAt: 45_000,
       progressSummary: "Native hook relay unavailable",
     });
     expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledWith({
       runId: "codex-thread:child-thread",
-      runtime: "subagent",
       status: "succeeded",
       endedAt: 45_000,
       lastEventAt: 45_000,
@@ -355,7 +414,6 @@ describe("CodexNativeSubagentTaskMirror", () => {
 
     expect(runtime.recordTaskRunProgressByRunId).toHaveBeenCalledWith({
       runId: "codex-thread:child-thread",
-      runtime: "subagent",
       lastEventAt: 46_000,
       progressSummary: "Codex native subagent is initializing.",
     });
@@ -394,7 +452,6 @@ describe("CodexNativeSubagentTaskMirror", () => {
 
     expect(runtime.recordTaskRunProgressByRunId).toHaveBeenCalledWith({
       runId: "codex-thread:child-thread",
-      runtime: "subagent",
       lastEventAt: 47_000,
       progressSummary: "wait timed out",
     });
@@ -441,7 +498,6 @@ describe("CodexNativeSubagentTaskMirror", () => {
     expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledTimes(1);
     expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledWith({
       runId: "codex-thread:child-thread",
-      runtime: "subagent",
       status: "succeeded",
       endedAt: 50_000,
       lastEventAt: 50_000,
@@ -490,7 +546,6 @@ describe("CodexNativeSubagentTaskMirror", () => {
 
     expect(runtime.finalizeTaskRunByRunId).toHaveBeenNthCalledWith(1, {
       runId: "codex-thread:child-thread",
-      runtime: "subagent",
       status: "succeeded",
       endedAt: 55_000,
       lastEventAt: 55_000,
@@ -499,7 +554,6 @@ describe("CodexNativeSubagentTaskMirror", () => {
     });
     expect(runtime.finalizeTaskRunByRunId).toHaveBeenNthCalledWith(2, {
       runId: "codex-thread:child-thread",
-      runtime: "subagent",
       status: "failed",
       endedAt: 55_000,
       lastEventAt: 55_000,
@@ -556,13 +610,11 @@ describe("CodexNativeSubagentTaskMirror", () => {
 
     expect(runtime.recordTaskRunProgressByRunId).toHaveBeenCalledWith({
       runId: "codex-thread:child-thread",
-      runtime: "subagent",
       lastEventAt: 60_000,
       progressSummary: "Codex native subagent is initializing.",
     });
     expect(runtime.finalizeTaskRunByRunId).toHaveBeenCalledWith({
       runId: "codex-thread:child-thread",
-      runtime: "subagent",
       status: "succeeded",
       endedAt: 60_000,
       lastEventAt: 60_000,

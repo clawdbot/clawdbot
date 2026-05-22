@@ -597,6 +597,18 @@ final class NodeAppModel {
         }
     }
 
+    func setTalkProviderSelection(_ rawValue: String) {
+        let selection = TalkModeProviderSelection.resolved(rawValue)
+        UserDefaults.standard.set(selection.rawValue, forKey: TalkModeProviderSelection.storageKey)
+        self.talkMode.applyProviderSelectionChanged()
+    }
+
+    func setTalkRealtimeVoiceSelection(_ rawValue: String) {
+        let voice = TalkModeRealtimeVoiceSelection.resolvedOverride(rawValue) ?? ""
+        UserDefaults.standard.set(voice, forKey: TalkModeRealtimeVoiceSelection.storageKey)
+        self.talkMode.applyProviderSelectionChanged()
+    }
+
     func requestLocationPermissions(mode: OpenClawLocationMode) async -> Bool {
         guard mode != .off else { return true }
         let status = await self.locationService.ensureAuthorization(mode: mode)

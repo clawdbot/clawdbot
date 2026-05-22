@@ -709,6 +709,46 @@ describe("resolveModel", () => {
     expect(result.error).toBe("Unknown model: openai/typoed-model");
   });
 
+  it("resolves per-model api and baseUrl override in fallback model", () => {
+    const cfg = {
+      models: {
+        providers: {
+          "my-router": {
+            baseUrl: "http://localhost:8080",
+            api: "ollama",
+            models: [
+              {
+                id: "my-router/claude",
+                name: "Claude via Router",
+                api: "anthropic-messages",
+                input: ["text", "image"],
+                contextWindow: 200_000,
+              },
+              {
+                id: "my-router/gpt",
+                name: "GPT via Router",
+                api: "openai-completions",
+                baseUrl: "http://localhost:8080/v1",
+                input: ["text"],
+                contextWindow: 400_000,
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const claude = resolveModelForTest("my-router", "my-router/claude", "/tmp/agent", cfg);
+    const claudeModel = expectResolvedModel(claude);
+    expect(claudeModel.api).toBe("anthropic-messages");
+    expect(claudeModel.baseUrl).toBe("http://localhost:8080");
+
+    const gpt = resolveModelForTest("my-router", "my-router/gpt", "/tmp/agent", cfg);
+    const gptModel = expectResolvedModel(gpt);
+    expect(gptModel.api).toBe("openai-completions");
+    expect(gptModel.baseUrl).toBe("http://localhost:8080/v1");
+  });
+
   it("defaults baseUrl-only local custom fallback models to chat completions", () => {
     const cfg = {
       agents: {

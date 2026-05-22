@@ -24,7 +24,7 @@ export default defineConfig({
           deps: jsdomOptimizedDeps,
           name: "unit",
           include: ["src/**/*.test.ts"],
-          exclude: ["src/**/*.browser.test.ts", "src/**/*.node.test.ts"],
+          exclude: ["src/**/*.browser.test.ts", "src/**/*.e2e.test.ts", "src/**/*.node.test.ts"],
           environment: "jsdom",
           setupFiles: ["./src/test-helpers/lit-warnings.setup.ts"],
         },

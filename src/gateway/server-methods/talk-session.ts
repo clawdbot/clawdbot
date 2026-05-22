@@ -273,6 +273,8 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           tools: [REALTIME_VOICE_AGENT_CONSULT_TOOL],
           model: launchOptions.model,
           voice: launchOptions.voice,
+          forceAgentConsultOnFinalTranscript:
+            realtimeConfig.consultRouting === "force-agent-consult",
         });
         rememberUnifiedTalkSession(session.relaySessionId, {
           kind: "realtime-relay",

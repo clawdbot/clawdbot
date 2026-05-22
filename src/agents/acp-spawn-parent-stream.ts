@@ -3,10 +3,14 @@ import path from "node:path";
 import { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
 import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../config/sessions/paths.js";
 import { onAgentEvent } from "../infra/agent-events.js";
+import {
+  type EventSessionRoutingPolicy,
+  resolveEventSessionKeyForPolicy,
+  scopedHeartbeatWakeOptionsForPolicy,
+} from "../infra/event-session-routing.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { appendRegularFile } from "../infra/regular-file.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
-import { resolveEventSessionKey, scopedHeartbeatWakeOptions } from "../routing/session-key.js";
 import { normalizeAssistantPhase } from "../shared/chat-message-content.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { recordTaskRunProgressByRunId } from "../tasks/detached-task-runtime.js";
@@ -104,6 +108,7 @@ export function startAcpSpawnParentStreamRelay(params: {
    * Snapshotted with `mainKey` for the same start-time routing reason.
    */
   sessionScope?: "per-sender" | "global";
+  eventRouting?: EventSessionRoutingPolicy;
   logPath?: string;
   deliveryContext?: DeliveryContext;
   surfaceUpdates?: boolean;
@@ -204,20 +209,23 @@ export function startAcpSpawnParentStreamRelay(params: {
     });
   };
   const shouldSurfaceUpdates = params.surfaceUpdates !== false;
+  const eventRouting = params.eventRouting ?? {
+    mainKey: params.mainKey,
+    sessionScope: params.sessionScope,
+  };
   const wake = () => {
     if (!shouldSurfaceUpdates) {
       return;
     }
     requestHeartbeat(
-      scopedHeartbeatWakeOptions(
+      scopedHeartbeatWakeOptionsForPolicy(
         parentSessionKey,
         {
           source: "acp-spawn",
           intent: "event",
           reason: "acp:spawn:stream",
         },
-        params.mainKey,
-        params.sessionScope,
+        eventRouting,
       ),
     );
   };
@@ -231,7 +239,7 @@ export function startAcpSpawnParentStreamRelay(params: {
       return;
     }
     enqueueSystemEvent(cleaned, {
-      sessionKey: resolveEventSessionKey(parentSessionKey, params.mainKey, params.sessionScope),
+      sessionKey: resolveEventSessionKeyForPolicy(parentSessionKey, eventRouting),
       contextKey,
       deliveryContext: params.deliveryContext,
     });

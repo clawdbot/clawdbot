@@ -619,7 +619,10 @@ export async function processGatewayAllowlist(
 
       if (baseDecision.timedOut && askFallback === "allowlist") {
         if (!analysisOk || !allowlistSatisfied) {
-          deniedReason = "approval-timeout (allowlist-miss)";
+          // Use a colon separator rather than nested parens so the
+          // `Exec denied (gateway id=..., <deniedReason>): cmd` wire format
+          // stays unambiguous for parsers that close on the first `):`.
+          deniedReason = "approval-timeout: allowlist-miss";
         } else {
           approvedByAsk = true;
         }

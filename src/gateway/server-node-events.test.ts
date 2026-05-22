@@ -162,6 +162,14 @@ const loadSessionEntryMock = runtimeMocks.loadSessionEntry;
 const registerApnsRegistrationVi = runtimeMocks.registerApnsRegistration;
 const normalizeChannelIdVi = runtimeMocks.normalizeChannelId;
 
+const execEventHeartbeatOptions = (sessionKey?: string) => ({
+  source: "exec-event",
+  intent: "event",
+  reason: "exec-event",
+  coalesceMs: 0,
+  ...(sessionKey ? { sessionKey } : {}),
+});
+
 function buildCtx(
   opts: { authorizeNodeSystemRunEvent?: NodeEventContext["authorizeNodeSystemRunEvent"] } = {},
 ): NodeEventContext {
@@ -289,10 +297,7 @@ describe("node exec events", () => {
         contextKey: "exec:run-1",
       },
     );
-    expect(requestHeartbeatMock).toHaveBeenCalledWith({
-      reason: "exec-event",
-      sessionKey: "agent:main:main",
-    });
+    expect(requestHeartbeatMock).toHaveBeenCalledWith(execEventHeartbeatOptions("agent:main:main"));
   });
 
   it("rejects exec lifecycle events without a pending node run", async () => {
@@ -383,14 +388,14 @@ describe("node exec events", () => {
         contextKey: "exec:run-seq",
       },
     );
-    expect(requestHeartbeatMock).toHaveBeenNthCalledWith(1, {
-      reason: "exec-event",
-      sessionKey: "agent:main:main",
-    });
-    expect(requestHeartbeatMock).toHaveBeenNthCalledWith(2, {
-      reason: "exec-event",
-      sessionKey: "agent:main:main",
-    });
+    expect(requestHeartbeatMock).toHaveBeenNthCalledWith(
+      1,
+      execEventHeartbeatOptions("agent:main:main"),
+    );
+    expect(requestHeartbeatMock).toHaveBeenNthCalledWith(
+      2,
+      execEventHeartbeatOptions("agent:main:main"),
+    );
     expect(
       registry.authorizeSystemRunEvent({
         nodeId: "node-1",
@@ -424,7 +429,7 @@ describe("node exec events", () => {
         contextKey: "exec:run-2",
       },
     );
-    expect(requestHeartbeatMock).toHaveBeenCalledWith({ reason: "exec-event" });
+    expect(requestHeartbeatMock).toHaveBeenCalledWith(execEventHeartbeatOptions());
   });
 
   it("accepts legacy exec.finished events when authorization matches without runId", async () => {
@@ -458,10 +463,7 @@ describe("node exec events", () => {
         contextKey: "exec",
       },
     );
-    expect(requestHeartbeatMock).toHaveBeenCalledWith({
-      reason: "exec-event",
-      sessionKey: "agent:main:main",
-    });
+    expect(requestHeartbeatMock).toHaveBeenCalledWith(execEventHeartbeatOptions("agent:main:main"));
   });
 
   it("dedupes duplicate exec.finished events for the same runId on the same session", async () => {
@@ -518,10 +520,9 @@ describe("node exec events", () => {
         contextKey: "exec:run-2",
       },
     );
-    expect(requestHeartbeatMock).toHaveBeenCalledWith({
-      reason: "exec-event",
-      sessionKey: "agent:main:node-node-2",
-    });
+    expect(requestHeartbeatMock).toHaveBeenCalledWith(
+      execEventHeartbeatOptions("agent:main:node-node-2"),
+    );
   });
 
   it("suppresses noisy exec.finished success events with empty output", async () => {
@@ -557,7 +558,7 @@ describe("node exec events", () => {
     expect(text.startsWith("Exec finished (node=node-2 id=run-long, code 0)\n")).toBe(true);
     expect(text.endsWith("…")).toBe(true);
     expect(text.length).toBeLessThan(280);
-    expect(requestHeartbeatMock).toHaveBeenCalledWith({ reason: "exec-event" });
+    expect(requestHeartbeatMock).toHaveBeenCalledWith(execEventHeartbeatOptions());
   });
 
   it("does not enqueue or wake agent work for exec.denied events", async () => {

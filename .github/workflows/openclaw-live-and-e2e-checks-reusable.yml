@@ -308,7 +308,6 @@ permissions:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.15.0"
-  PNPM_VERSION: "11.0.8"
 
 jobs:
   validate_selected_ref:
@@ -491,7 +490,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Validate live cache credentials
@@ -539,13 +537,15 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Build dist for repo E2E
         env:
           NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build
+
+      - name: Install Playwright Chromium
+        run: pnpm --dir ui exec playwright install --with-deps chromium
 
       - name: Run repo E2E suite
         run: pnpm test:e2e
@@ -581,7 +581,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Build dist for special E2E
@@ -781,7 +780,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Hydrate live auth/profile inputs
@@ -1018,7 +1016,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Hydrate live auth/profile inputs
@@ -1175,7 +1172,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Validate Open WebUI credentials
@@ -1335,7 +1331,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Download current-run OpenClaw Docker E2E package
@@ -1679,7 +1674,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Hydrate live auth/profile inputs
@@ -1798,7 +1792,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Normalize provider allowlist
@@ -2168,7 +2161,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Hydrate live auth/profile inputs
@@ -2386,7 +2378,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Hydrate live auth/profile inputs
@@ -2605,7 +2596,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Hydrate live auth/profile inputs

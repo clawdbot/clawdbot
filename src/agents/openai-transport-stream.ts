@@ -32,6 +32,7 @@ import { resolveProviderTransportTurnStateWithPlugin } from "../plugins/provider
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
 import { createDeepSeekTextFilter } from "./deepseek-text-filter.js";
 import { resolveMaxTokensParam } from "./model-max-tokens-params.js";
+import { supportsModelTools } from "./model-tool-support.js";
 import {
   emitModelTransportDebug,
   resolveModelPayloadDebugMode,
@@ -69,7 +70,11 @@ import {
 import { sanitizeResponsesImagePayload } from "./responses-image-payload-sanitizer.js";
 import { stripSystemPromptCacheBoundary } from "./system-prompt-cache-boundary.js";
 import { transformTransportMessages } from "./transport-message-transform.js";
-import { mergeTransportMetadata, sanitizeTransportPayloadText } from "./transport-stream-shared.js";
+import {
+  assignTransportErrorDetails,
+  mergeTransportMetadata,
+  sanitizeTransportPayloadText,
+} from "./transport-stream-shared.js";
 
 const DEFAULT_AZURE_OPENAI_API_VERSION = "preview";
 const OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT = " ";
@@ -204,6 +209,7 @@ type MutableAssistantOutput = {
     output: number;
     cacheRead: number;
     cacheWrite: number;
+    reasoningTokens?: number;
     totalTokens: number;
     cost: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
   };
@@ -211,6 +217,9 @@ type MutableAssistantOutput = {
   timestamp: number;
   responseId?: string;
   errorMessage?: string;
+  errorCode?: string;
+  errorType?: string;
+  errorBody?: string;
 };
 
 export { sanitizeTransportPayloadText } from "./transport-stream-shared.js";
@@ -1530,6 +1539,7 @@ async function processResponsesStream(
             output_tokens?: number;
             total_tokens?: number;
             input_tokens_details?: { cached_tokens?: number };
+            output_tokens_details?: { reasoning_tokens?: number };
             service_tier?: ResponseCreateParamsStreaming["service_tier"];
             status?: string;
           }
@@ -1538,12 +1548,16 @@ async function processResponsesStream(
         const cachedTokens = usage.input_tokens_details?.cached_tokens || 0;
         const inputTokens = usage.input_tokens || 0;
         const outputTokens = usage.output_tokens || 0;
+        const reasoningTokens = usage.output_tokens_details?.reasoning_tokens;
         const input = Math.max(0, inputTokens - cachedTokens);
         output.usage = {
           input,
           output: outputTokens,
           cacheRead: cachedTokens,
           cacheWrite: 0,
+          ...(typeof reasoningTokens === "number" && Number.isFinite(reasoningTokens)
+            ? { reasoningTokens }
+            : {}),
           totalTokens: input + outputTokens + cachedTokens,
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
         };
@@ -1807,8 +1821,7 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
           `[responses] error provider=${model.provider} api=${model.api} model=${model.id} ` +
             summarizeOpenAITransportError(error),
         );
-        output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-        output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+        assignTransportErrorDetails(output, error, options?.signal);
         stream.push({ type: "error", reason: output.stopReason as never, error: output as never });
         stream.end();
       }
@@ -2211,8 +2224,7 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
           `[responses] error provider=${model.provider} api=${model.api} model=${model.id} ` +
             summarizeOpenAITransportError(error),
         );
-        output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-        output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+        assignTransportErrorDetails(output, error, options?.signal);
         stream.push({ type: "error", reason: output.stopReason as never, error: output as never });
         stream.end();
       }
@@ -2406,8 +2418,7 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
         stream.push({ type: "done", reason: output.stopReason as never, message: output as never });
         stream.end();
       } catch (error) {
-        output.stopReason = options?.signal?.aborted ? "aborted" : "error";
-        output.errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+        assignTransportErrorDetails(output, error, options?.signal);
         stream.push({ type: "error", reason: output.stopReason as never, error: output as never });
         stream.end();
       }
@@ -3372,19 +3383,21 @@ export function buildOpenAICompletionsParams(
   if (options?.responseFormat !== undefined) {
     params.response_format = options.responseFormat;
   }
-  if (context.tools) {
-    params.tools = convertTools(context.tools, compat, model);
-    if (options?.toolChoice) {
-      params.tool_choice = options.toolChoice;
-    } else if (
-      compatDetection.capabilities.usesExplicitProxyLikeEndpoint &&
-      Array.isArray(params.tools) &&
-      params.tools.length > 0
-    ) {
-      params.tool_choice = "auto";
+  if (supportsModelTools(model)) {
+    if (context.tools) {
+      params.tools = convertTools(context.tools, compat, model);
+      if (options?.toolChoice) {
+        params.tool_choice = options.toolChoice;
+      } else if (
+        compatDetection.capabilities.usesExplicitProxyLikeEndpoint &&
+        Array.isArray(params.tools) &&
+        params.tools.length > 0
+      ) {
+        params.tool_choice = "auto";
+      }
+    } else if (hasToolHistory(context.messages)) {
+      params.tools = [];
     }
-  } else if (hasToolHistory(context.messages)) {
-    params.tools = [];
   }
   const completionsReasoningEffort = resolveOpenAICompletionsReasoningEffort(options);
   const resolvedCompletionsReasoningEffort = completionsReasoningEffort
@@ -3436,11 +3449,15 @@ export function parseTransportChunkUsage(
   const promptTokens = rawUsage.prompt_tokens || 0;
   const input = Math.max(0, promptTokens - cachedTokens);
   const outputTokens = rawUsage.completion_tokens || 0;
+  const reasoningTokens = rawUsage.completion_tokens_details?.reasoning_tokens;
   const usage = {
     input,
     output: outputTokens,
     cacheRead: cachedTokens,
     cacheWrite: 0,
+    ...(typeof reasoningTokens === "number" && Number.isFinite(reasoningTokens)
+      ? { reasoningTokens }
+      : {}),
     totalTokens: input + outputTokens + cachedTokens,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };

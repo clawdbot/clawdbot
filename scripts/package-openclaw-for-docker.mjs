@@ -44,6 +44,7 @@ function run(command, args, cwd, options = {}) {
     const child = spawn(command, args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
+      env: options.env ?? process.env,
     });
     let timedOut = false;
     const timeout =
@@ -131,9 +132,13 @@ async function main() {
 
   if (!options.skipBuild) {
     console.error("==> Building OpenClaw package artifacts");
-    await run("pnpm", ["build"], sourceDir);
+    await run("node", ["scripts/build-all.mjs"], sourceDir, {
+      env: { ...process.env, OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
+    });
     console.error("==> Building OpenClaw Control UI artifacts");
-    await run("pnpm", ["ui:build"], sourceDir);
+    await run("node", ["scripts/ui.js", "build"], sourceDir, {
+      env: { ...process.env, OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
+    });
   }
 
   console.error("==> Writing OpenClaw package inventory");

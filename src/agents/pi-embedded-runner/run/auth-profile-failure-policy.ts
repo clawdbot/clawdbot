@@ -4,6 +4,7 @@ import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.typ
 
 export function resolveAuthProfileFailureReason(params: {
   failoverReason: FailoverReason | null;
+  providerStarted?: boolean;
   policy?: AuthProfileFailurePolicy;
 }): AuthProfileFailureReason | null {
   // Helper-local runs, transport/server failures, empty responses, and request-shape ("format") rejections
@@ -18,11 +19,13 @@ export function resolveAuthProfileFailureReason(params: {
   if (
     params.policy === "local" ||
     !params.failoverReason ||
-    params.failoverReason === "timeout" ||
     params.failoverReason === "server_error" ||
     params.failoverReason === "empty_response" ||
     params.failoverReason === "format"
   ) {
+    return null;
+  }
+  if (params.failoverReason === "timeout" && params.providerStarted !== true) {
     return null;
   }
   return params.failoverReason;

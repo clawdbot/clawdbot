@@ -104,6 +104,22 @@ function readParentPidFromProc(pid: number): number | null {
   }
 }
 
+function readParentPidFromPs(pid: number, spawnTimeoutMs: number): number | null {
+  try {
+    const res = spawnSync("ps", ["-o", "ppid=", "-p", String(pid)], {
+      encoding: "utf8",
+      timeout: spawnTimeoutMs,
+    });
+    if (res.error || res.status !== 0 || !res.stdout.trim()) {
+      return null;
+    }
+    const parsed = Number.parseInt(res.stdout.trim(), 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Collect the set of PIDs whose termination would cascade-kill the caller:
  * the current process, its direct parent, and — where the platform permits
@@ -129,24 +145,28 @@ function readParentPidFromProc(pid: number): number | null {
  * install where the gateway spawns a direct-child sidecar.
  *
  * The walk is best-effort. `process.ppid` is provided by Node via a direct
- * syscall and is always available; transitive ancestors are only read on
- * Linux via `/proc`. macOS/Windows stop at ppid, which is sufficient for
- * the direct-child sidecar topology this bug describes; extending those
- * platforms can be done without touching the call sites.
+ * syscall and is always available; transitive ancestors are read on Linux via
+ * `/proc` and on macOS via `ps`. Windows stops at ppid.
  *
- * The function takes no parameters and exposes no hooks. Tests exercise
- * the real walk by stubbing `process.ppid` (and, on Linux, by mocking
- * `node:fs` to inject `/proc/<pid>/status` payloads) — there is no
- * reachable override for runtime callers to mutate.
+ * The function exposes no runtime hooks. Tests exercise the real walk by
+ * stubbing `process.ppid` (and, on Linux, by mocking `node:fs` to inject
+ * `/proc/<pid>/status` payloads) — there is no reachable override for
+ * runtime callers to mutate.
  */
-export function getSelfAndAncestorPidsSync(): Set<number> {
+export function getSelfAndAncestorPidsSync(spawnTimeoutMs = SPAWN_TIMEOUT_MS): Set<number> {
   const pids = new Set<number>([process.pid]);
   const immediateParent = getParentPid();
   if (!Number.isFinite(immediateParent) || immediateParent <= 0) {
     return pids;
   }
   pids.add(immediateParent);
-  if (process.platform !== "linux") {
+  const readTransitiveParent =
+    process.platform === "linux"
+      ? readParentPidFromProc
+      : process.platform === "darwin"
+        ? (pid: number) => readParentPidFromPs(pid, spawnTimeoutMs)
+        : null;
+  if (!readTransitiveParent) {
     return pids;
   }
   // Transitive ancestor walk. Each hop's validity (positive pid, not already
@@ -155,7 +175,7 @@ export function getSelfAndAncestorPidsSync(): Set<number> {
   // parent` after the same check, so no separate top-of-loop guard is needed.
   let current = immediateParent;
   for (let depth = 0; depth < MAX_ANCESTOR_WALK_DEPTH; depth++) {
-    const parent = readParentPidFromProc(current);
+    const parent = readTransitiveParent(current);
     if (parent == null || parent <= 0 || pids.has(parent)) {
       break;
     }
@@ -171,8 +191,9 @@ export function getSelfAndAncestorPidsSync(): Set<number> {
  * rationale). On Linux the ancestor lookup reads up to
  * `MAX_ANCESTOR_WALK_DEPTH` entries from `/proc/<pid>/status`; each read is
  * a virtual-filesystem access (no disk I/O, no external process), wrapped
- * in try/catch and degrades silently. On macOS/Windows the lookup is
- * in-memory via `process.ppid` only.
+ * in try/catch and degrades silently. On macOS the lookup shells out to `ps`
+ * with the caller's spawn timeout. Windows only uses the in-memory direct
+ * parent from `process.ppid`.
  */
 function parseLsofEntries(stdout: string): Array<{ pid: number; cmd?: string }> {
   const entries: Array<{ pid: number; cmd?: string }> = [];
@@ -239,7 +260,7 @@ function parsePidsFromLsofOutput(stdout: string, spawnTimeoutMs: number): number
   // same PID twice. Return each PID at most once to avoid double-killing.
   // Exclude self and ancestors — terminating any ancestor cascade-kills the
   // caller via the supervisor, recreating the #68451 restart loop.
-  const excluded = getSelfAndAncestorPidsSync();
+  const excluded = getSelfAndAncestorPidsSync(spawnTimeoutMs);
   const pids: number[] = [];
   for (const entry of parseLsofEntries(stdout)) {
     if (excluded.has(entry.pid)) {

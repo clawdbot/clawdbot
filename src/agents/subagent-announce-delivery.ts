@@ -64,6 +64,7 @@ import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 const DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS = 120_000;
 const MAX_TIMER_SAFE_TIMEOUT_MS = 2_147_000_000;
 const AGENT_MEDIATED_COMPLETION_TOOLS = new Set([
+  "agent_harness_task",
   "image_generate",
   "music_generate",
   "subagent_announce",
@@ -954,6 +955,17 @@ async function sendSubagentAnnounceDirectly(params: {
 
     const directAnnounceStillPending = isGatewayAgentRunPending(directAnnounceResponse);
     if (directAnnounceStillPending) {
+      if (
+        params.expectsCompletionMessage &&
+        expectedMediaUrls.length === 0 &&
+        !requiresMessageToolDelivery
+      ) {
+        return {
+          delivered: false,
+          path: "direct",
+          error: "completion agent handoff is still pending",
+        };
+      }
       return {
         delivered: true,
         path: "direct",

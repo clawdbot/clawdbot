@@ -473,24 +473,6 @@
     width: 100%;
   }
 
-  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-actions {
-    display: grid;
-    grid-auto-columns: 44px;
-    grid-auto-flow: column;
-    grid-template-columns: minmax(0, 1fr);
-    gap: 8px;
-  }
-
-  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-search {
-    min-width: 0;
-    width: 100%;
-  }
-
-  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-search input {
-    min-height: 44px;
-    font-size: 14px;
-  }
-
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-row--single-agent {
     grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
     grid-template-areas:
@@ -529,6 +511,50 @@
 
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-picker {
     grid-area: session;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px;
+  }
+
+  .chat-mobile-controls-wrapper
+    .chat-controls-dropdown
+    .chat-controls__session-row--session-search-open
+    .chat-controls__session-picker {
+    grid-template-columns: minmax(96px, 0.7fr) minmax(0, 1fr);
+  }
+
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-trigger {
+    min-height: 44px;
+    padding: 10px 12px;
+    font-size: 14px;
+  }
+
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-session-picker {
+    position: static;
+    width: 100%;
+    max-height: min(52vh, 420px);
+    margin-top: 8px;
+    box-shadow: none;
+  }
+
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-search input {
+    min-height: 44px;
+    padding-left: 42px;
+    font-size: 14px;
+  }
+
+  .chat-controls__session-search input {
+    padding-left: 42px;
+  }
+
+  .chat-mobile-controls-wrapper
+    .chat-controls-dropdown
+    .chat-session-picker
+    .chat-session-picker__icon-button.btn--icon {
+    flex: 0 0 44px;
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    padding: 0;
   }
 
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__model {
@@ -554,7 +580,8 @@
     max-width: none;
   }
 
-  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session select {
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session select,
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-trigger {
     width: 100%;
     font-size: 14px;
     min-height: 44px;

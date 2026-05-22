@@ -105,6 +105,8 @@ class TalkModeManager internal constructor(
     private const val chatFinalWaitWithoutSubscribeMs = 6_000L
     private const val maxCachedRunCompletions = 128
     private const val maxConversationEntries = 40
+    private const val realtimePlaybackBufferMs = 240
+    private const val realtimeUserFinalRewriteGraceMs = 1_500L
   }
 
   private val mainHandler = Handler(Looper.getMainLooper())
@@ -165,9 +167,13 @@ class TalkModeManager internal constructor(
   private val pendingRealtimeToolCalls = LinkedHashSet<String>()
   private val pendingRealtimeToolCompletions = LinkedHashMap<String, RealtimeToolCompletion>()
   private var realtimeUserEntryId: String? = null
+  private var realtimeUserEntryAwaitingFinal = false
+  private var realtimeUserEntryAwaitingFinalStartedAtMs: Long? = null
   private var realtimeAssistantEntryId: String? = null
   private val realtimePlaybackLock = Any()
   private var realtimeAudioTrack: AudioTrack? = null
+  private var realtimeAudioQueue: Channel<ByteArray>? = null
+  private var realtimeAudioWriterJob: Job? = null
   private var realtimePlaybackIdleJob: Job? = null
 
   @Volatile
@@ -785,6 +791,7 @@ class TalkModeManager internal constructor(
       }
       "audio" -> {
         if (realtimeOutputSuppressed) return
+        finishRealtimeConversationEntry(VoiceConversationRole.User)
         val audioBase64 = obj["audioBase64"].asStringOrNull() ?: return
         val bytes =
           try {
@@ -799,16 +806,20 @@ class TalkModeManager internal constructor(
       "mark" -> Unit
       "transcript" -> {
         val role = obj["role"].asStringOrNull()
-        val text = obj["text"].asStringOrNull()?.trim().orEmpty()
         val isFinal = obj["final"].asBooleanOrNull() == true
-        if (text.isNotEmpty()) {
+        val text = realtimeTranscriptText(obj["text"].asStringOrNull(), isFinal)
+        var assistantText: String? = null
+        if (text != null) {
           when (role) {
             "user" -> upsertRealtimeConversation(VoiceConversationRole.User, text, isFinal)
-            "assistant" -> upsertRealtimeConversation(VoiceConversationRole.Assistant, text, isFinal)
+            "assistant" -> {
+              finishRealtimeConversationEntry(VoiceConversationRole.User)
+              assistantText = upsertRealtimeConversation(VoiceConversationRole.Assistant, text, isFinal)
+            }
           }
         }
-        if (role == "assistant" && text.isNotEmpty()) {
-          _lastAssistantText.value = text
+        if (assistantText != null) {
+          _lastAssistantText.value = assistantText.trim()
         }
         if (isFinal && role == "user") {
           realtimeOutputSuppressed = false
@@ -824,6 +835,7 @@ class TalkModeManager internal constructor(
           callId = callId,
           name = name,
           args = obj["args"],
+          forced = obj["forced"].asBooleanOrNull() == true,
         )
       }
       "toolResult" -> Unit
@@ -849,6 +861,34 @@ class TalkModeManager internal constructor(
 
   private fun playRealtimeAudio(bytes: ByteArray) {
     if (!playbackEnabled || realtimeOutputSuppressed || bytes.isEmpty()) return
+    val queue = ensureRealtimeAudioQueue()
+    if (!queue.trySend(bytes).isSuccess) {
+      Log.w(tag, "realtime audio queue full")
+    }
+  }
+
+  private fun ensureRealtimeAudioQueue(): Channel<ByteArray> =
+    synchronized(realtimePlaybackLock) {
+      realtimeAudioQueue
+        ?: Channel<ByteArray>(Channel.UNLIMITED).also { queue ->
+          realtimeAudioQueue = queue
+          realtimeAudioWriterJob =
+            scope.launch(Dispatchers.IO) {
+              for (chunk in queue) {
+                if (!playbackEnabled || realtimeOutputSuppressed || realtimeSessionId == null) continue
+                try {
+                  writeRealtimeAudio(chunk)
+                } catch (err: CancellationException) {
+                  throw err
+                } catch (err: Throwable) {
+                  Log.w(tag, "realtime audio playback failed: ${err.message ?: err::class.java.simpleName}")
+                }
+              }
+            }
+        }
+    }
+
+  private fun writeRealtimeAudio(bytes: ByteArray) {
     synchronized(realtimePlaybackLock) {
       val track =
         realtimeAudioTrack ?: run {
@@ -857,6 +897,12 @@ class TalkModeManager internal constructor(
               realtimeSampleRateHz,
               AudioFormat.CHANNEL_OUT_MONO,
               AudioFormat.ENCODING_PCM_16BIT,
+            )
+          val bufferSizeBytes =
+            maxOf(
+              minBuffer * 2,
+              realtimeSampleRateHz * 2 * realtimePlaybackBufferMs / 1000,
+              bytes.size * 4,
             )
           val created =
             AudioTrack
@@ -875,16 +921,27 @@ class TalkModeManager internal constructor(
                   .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
                   .build(),
               ).setTransferMode(AudioTrack.MODE_STREAM)
-              .setBufferSizeInBytes(maxOf(minBuffer, bytes.size * 4))
+              .setBufferSizeInBytes(bufferSizeBytes)
               .build()
-          created.play()
           realtimeAudioTrack = created
           created
         }
+      var writtenBytes = 0
+      while (writtenBytes < bytes.size) {
+        val written = track.write(bytes, writtenBytes, bytes.size - writtenBytes)
+        if (written <= 0) {
+          Log.w(tag, "realtime audio write failed: $written")
+          break
+        }
+        writtenBytes += written
+      }
+      if (writtenBytes <= 0) return
+      if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
+        track.play()
+      }
       _isSpeaking.value = true
       _statusText.value = "Speaking…"
-      track.write(bytes, 0, bytes.size)
-      val durationMs = ((bytes.size / 2.0) / realtimeSampleRateHz * 1000.0).toLong()
+      val durationMs = ((writtenBytes / 2.0) / realtimeSampleRateHz * 1000.0).toLong()
       val now = SystemClock.elapsedRealtime()
       realtimePlaybackEndsAtMs = maxOf(now, realtimePlaybackEndsAtMs) + durationMs
       scheduleRealtimePlaybackIdle()
@@ -910,6 +967,12 @@ class TalkModeManager internal constructor(
   }
 
   private fun stopRealtimePlayback() {
+    val audioQueue = realtimeAudioQueue
+    val audioWriterJob = realtimeAudioWriterJob
+    realtimeAudioQueue = null
+    realtimeAudioWriterJob = null
+    audioQueue?.close()
+    audioWriterJob?.cancel()
     realtimePlaybackIdleJob?.cancel()
     realtimePlaybackIdleJob = null
     realtimePlaybackEndsAtMs = 0L
@@ -953,6 +1016,8 @@ class TalkModeManager internal constructor(
     pendingRealtimeToolCalls.clear()
     pendingRealtimeToolCompletions.clear()
     realtimeUserEntryId = null
+    realtimeUserEntryAwaitingFinal = false
+    realtimeUserEntryAwaitingFinalStartedAtMs = null
     realtimeAssistantEntryId = null
     stopRealtimePlayback()
     if (preserveStatus) {
@@ -981,11 +1046,15 @@ class TalkModeManager internal constructor(
     callId: String,
     name: String,
     args: JsonElement?,
+    forced: Boolean = false,
   ) {
     val relaySessionId = realtimeSessionId ?: return
     pendingRealtimeToolCalls.add(callId)
     scope.launch {
       try {
+        if (forced) {
+          submitRealtimeToolWorking(callId, relaySessionId)
+        }
         val params =
           buildJsonObject {
             put("sessionKey", JsonPrimitive(mainSessionKey.ifBlank { "main" }))
@@ -1086,6 +1155,7 @@ class TalkModeManager internal constructor(
     callId: String,
     result: JsonObject,
     sessionId: String? = realtimeSessionId,
+    options: JsonObject? = null,
   ) {
     val activeSessionId = sessionId ?: return
     val params =
@@ -1093,6 +1163,7 @@ class TalkModeManager internal constructor(
         put("sessionId", JsonPrimitive(activeSessionId))
         put("callId", JsonPrimitive(callId))
         put("result", result)
+        if (options != null) put("options", options)
       }
     try {
       session.request("talk.session.submitToolResult", params.toString(), timeoutMs = 15_000)
@@ -1102,27 +1173,119 @@ class TalkModeManager internal constructor(
     }
   }
 
+  private suspend fun submitRealtimeToolWorking(
+    callId: String,
+    sessionId: String,
+  ) {
+    submitRealtimeToolResult(
+      callId = callId,
+      sessionId = sessionId,
+      result =
+        buildJsonObject {
+          put("status", JsonPrimitive("working"))
+          put("tool", JsonPrimitive("openclaw_agent_consult"))
+          put(
+            "message",
+            JsonPrimitive(
+              "Tell the person briefly that you are checking, then wait for the final OpenClaw result before answering with the actual result.",
+            ),
+          )
+        },
+      options = buildJsonObject { put("willContinue", JsonPrimitive(true)) },
+    )
+  }
+
   private fun upsertRealtimeConversation(
     role: VoiceConversationRole,
     text: String,
     isFinal: Boolean,
-  ) {
-    val entryId =
+  ): String {
+    var entryId =
       when (role) {
         VoiceConversationRole.User -> realtimeUserEntryId
         VoiceConversationRole.Assistant -> realtimeAssistantEntryId
       }
+    if (role == VoiceConversationRole.Assistant) {
+      finishRealtimeConversationEntry(VoiceConversationRole.User)
+    }
+    val shouldStartNewUserEntry =
+      role == VoiceConversationRole.User &&
+        entryId != null &&
+        shouldStartNewRealtimeUserEntry(entryId, text, isFinal)
+    if (
+      role == VoiceConversationRole.User &&
+      (entryId == null || shouldStartNewUserEntry)
+    ) {
+      finishRealtimeConversationEntry(VoiceConversationRole.Assistant)
+    }
+    if (shouldStartNewUserEntry) {
+      finishRealtimeConversationEntry(VoiceConversationRole.User)
+      entryId = null
+      realtimeUserEntryAwaitingFinal = false
+      realtimeUserEntryAwaitingFinalStartedAtMs = null
+    }
+    var resolvedText: String
     val resolvedEntryId =
       if (entryId == null) {
-        appendConversation(role = role, text = text, isStreaming = !isFinal)
+        resolvedText = text.trimStart()
+        appendConversation(role = role, text = resolvedText, isStreaming = !isFinal)
       } else {
-        updateConversationEntry(id = entryId, text = text, isStreaming = !isFinal)
+        resolvedText = updateConversationEntry(id = entryId, text = text, isStreaming = !isFinal)
         entryId
       }
     when (role) {
-      VoiceConversationRole.User -> realtimeUserEntryId = if (isFinal) null else resolvedEntryId
+      VoiceConversationRole.User -> {
+        realtimeUserEntryId = if (isFinal) null else resolvedEntryId
+        realtimeUserEntryAwaitingFinal = false
+        realtimeUserEntryAwaitingFinalStartedAtMs = null
+      }
       VoiceConversationRole.Assistant -> realtimeAssistantEntryId = if (isFinal) null else resolvedEntryId
     }
+    return resolvedText
+  }
+
+  private fun finishRealtimeConversationEntry(role: VoiceConversationRole) {
+    val entryId =
+      when (role) {
+        VoiceConversationRole.User -> realtimeUserEntryId
+        VoiceConversationRole.Assistant -> realtimeAssistantEntryId
+      } ?: return
+    val current = _conversation.value
+    val targetIndex = current.indexOfFirst { it.id == entryId }
+    if (targetIndex >= 0 && current[targetIndex].isStreaming) {
+      val updated = current.toMutableList()
+      updated[targetIndex] = current[targetIndex].copy(isStreaming = false)
+      _conversation.value = updated
+      if (role == VoiceConversationRole.User) {
+        realtimeUserEntryAwaitingFinal = true
+        realtimeUserEntryAwaitingFinalStartedAtMs = SystemClock.elapsedRealtime()
+      }
+    }
+    when (role) {
+      VoiceConversationRole.User -> Unit
+      VoiceConversationRole.Assistant -> realtimeAssistantEntryId = null
+    }
+  }
+
+  private fun shouldStartNewRealtimeUserEntry(
+    entryId: String,
+    incoming: String,
+    isFinal: Boolean,
+  ): Boolean {
+    val entry = _conversation.value.firstOrNull { it.id == entryId } ?: return false
+    if (entry.isStreaming) return false
+    val existing = entry.text
+    if (existing.isBlank() || incoming.isBlank()) return false
+    if (incoming.firstOrNull()?.isWhitespace() == true) return false
+    if (incoming == existing || incoming.startsWith(existing) || existing.endsWith(incoming)) return false
+    if (isFinal && realtimeUserEntryAwaitingFinal) {
+      val elapsedMs =
+        realtimeUserEntryAwaitingFinalStartedAtMs?.let { SystemClock.elapsedRealtime() - it } ?: Long.MAX_VALUE
+      if (elapsedMs <= realtimeUserFinalRewriteGraceMs && looksLikeTranscriptReplacement(existing, incoming)) {
+        return false
+      }
+    }
+    return true
   }
 
   private fun appendConversation(
@@ -1141,7 +1304,7 @@ class TalkModeManager internal constructor(
     id: String,
     text: String,
     isStreaming: Boolean,
-  ) {
+  ): String {
     val current = _conversation.value
     val targetIndex =
       when {
@@ -1149,13 +1312,111 @@ class TalkModeManager internal constructor(
         current[current.lastIndex].id == id -> current.lastIndex
         else -> current.indexOfFirst { it.id == id }
       }
-    if (targetIndex < 0) return
+    if (targetIndex < 0) return text
     val entry = current[targetIndex]
-    if (entry.text == text && entry.isStreaming == isStreaming) return
+    val updatedText = mergeRealtimeTranscriptText(entry.text, text, isFinal = !isStreaming)
+    if (entry.text == updatedText && entry.isStreaming == isStreaming) return entry.text
     val updated = current.toMutableList()
-    updated[targetIndex] = entry.copy(text = text, isStreaming = isStreaming)
+    updated[targetIndex] = entry.copy(text = updatedText, isStreaming = isStreaming)
     _conversation.value = updated
+    return updatedText
   }
+
+  private fun realtimeTranscriptText(
+    rawText: String?,
+    isFinal: Boolean,
+  ): String? {
+    val text = rawText ?: return null
+    return text.takeIf { if (isFinal) it.isNotBlank() else it.isNotEmpty() }
+  }
+
+  private fun mergeRealtimeTranscriptText(
+    existing: String,
+    incoming: String,
+    isFinal: Boolean,
+  ): String {
+    if (existing.isBlank()) return incoming.trimStart()
+    if (incoming.isEmpty()) return existing
+    if (incoming == existing || existing.endsWith(incoming)) return existing
+    if (incoming.startsWith(existing)) return incoming
+    if (incoming.firstOrNull()?.isWhitespace() == true) return existing + incoming
+    if (isFinal && looksLikeTranscriptReplacement(existing, incoming)) return incoming
+    val overlap = findTranscriptTextOverlap(existing, incoming)
+    val suffix = if (overlap > 0) incoming.drop(overlap) else incoming
+    if (suffix.isEmpty()) return existing
+    val separator =
+      if (overlap > 0 || !shouldInsertTranscriptSpace(existing, suffix)) {
+        ""
+      } else {
+        " "
+      }
+    return existing + separator + suffix
+  }
+
+  private fun looksLikeTranscriptReplacement(
+    existing: String,
+    incoming: String,
+  ): Boolean {
+    val existingWords = transcriptWords(existing)
+    val incomingWords = transcriptWords(incoming)
+    if (existingWords.isEmpty() || incomingWords.isEmpty()) return false
+    if (existingWords[0] != incomingWords[0]) return false
+    if (existingWords.size > 1 && incomingWords.size > 1 && existingWords[1] == incomingWords[1]) return true
+    val existingText = normalizeTranscriptText(existing)
+    val incomingText = normalizeTranscriptText(incoming)
+    val commonPrefix = commonPrefixLength(existingText, incomingText)
+    val shortest = minOf(existingText.length, incomingText.length)
+    return commonPrefix >= 6 && commonPrefix.toDouble() / maxOf(1, shortest).toDouble() >= 0.45
+  }
+
+  private fun transcriptWords(value: String): List<String> =
+    Regex("""[\p{L}\p{N}]+""")
+      .findAll(value.lowercase(Locale.ROOT))
+      .map { it.value }
+      .toList()
+
+  private fun normalizeTranscriptText(value: String): String = value.lowercase(Locale.ROOT).replace(Regex("""\s+"""), " ").trim()
+
+  private fun commonPrefixLength(
+    left: String,
+    right: String,
+  ): Int {
+    val max = minOf(left.length, right.length)
+    var index = 0
+    while (index < max && left[index] == right[index]) {
+      index += 1
+    }
+    return index
+  }
+
+  private fun findTranscriptTextOverlap(
+    existing: String,
+    incoming: String,
+  ): Int {
+    val base = existing.lowercase(Locale.ROOT)
+    val next = incoming.lowercase(Locale.ROOT)
+    val max = minOf(base.length, next.length)
+    for (length in max downTo 3) {
+      if (base.endsWith(next.take(length))) {
+        return length
+      }
+    }
+    return 0
+  }
+
+  private fun shouldInsertTranscriptSpace(
+    existing: String,
+    incoming: String,
+  ): Boolean {
+    val last = existing.lastOrNull() ?: return false
+    val first = incoming.firstOrNull() ?: return false
+    if (last.isWhitespace() || first.isWhitespace()) return false
+    return first.isLetterOrDigit() &&
+      (last.isLetterOrDigit() || transcriptSpaceAfterPunctuation.contains(last))
+  }
+
+  private val transcriptSpaceAfterPunctuation =
+    setOf('.', '!', '?', ',', ':', ';', ')', ']', '}', '"', '\'', '’', '”')
 
   private fun startListeningInternal(markListening: Boolean) {
     val r = recognizer ?: return

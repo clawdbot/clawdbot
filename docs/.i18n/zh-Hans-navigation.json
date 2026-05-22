@@ -137,7 +137,18 @@
             "zh-CN/concepts/session",
             "zh-CN/concepts/session-pruning",
             "zh-CN/concepts/session-tool",
-            "zh-CN/concepts/memory",
+            {
+              "group": "记忆",
+              "pages": [
+                "zh-CN/concepts/memory",
+                "zh-CN/concepts/memory-builtin",
+                "zh-CN/concepts/memory-qmd",
+                "zh-CN/concepts/memory-honcho",
+                "zh-CN/concepts/memory-search",
+                "zh-CN/concepts/active-memory",
+                "zh-CN/concepts/dreaming"
+              ]
+            },
             "zh-CN/concepts/compaction"
           ]
         },
@@ -260,7 +271,6 @@
             "zh-CN/providers/claude-max-api-proxy",
             "zh-CN/providers/deepgram",
             "zh-CN/providers/github-copilot",
-            "zh-CN/providers/glm",
             "zh-CN/providers/moonshot",
             "zh-CN/providers/minimax",
             "zh-CN/providers/opencode",

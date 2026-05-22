@@ -99,9 +99,9 @@ export async function handleAssistantFailover(params: {
   if (decision.action === "rotate_profile") {
     const failedProfileId = params.lastProfileId;
     const timeoutFailure = params.timedOut || params.idleTimedOut;
-    const failureReason = timeoutFailure ? "timeout" : params.assistantProfileFailureReason;
+    const failureReason = params.assistantProfileFailureReason;
     const markFailedProfile = async () => {
-      if (!failedProfileId || !failureReason || failureReason === "timeout") {
+      if (!failedProfileId || !failureReason) {
         return;
       }
       try {

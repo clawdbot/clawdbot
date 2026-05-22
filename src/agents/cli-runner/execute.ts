@@ -2,11 +2,15 @@ import crypto from "node:crypto";
 import { shouldLogVerbose } from "../../globals.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
+import {
+  resolveEventSessionKeyForPolicy,
+  resolveEventSessionRoutingPolicy,
+  scopedHeartbeatWakeOptionsForPolicy,
+} from "../../infra/event-session-routing.js";
 import { requestHeartbeat as requestHeartbeatImpl } from "../../infra/heartbeat-wake.js";
 import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
 import { enqueueSystemEvent as enqueueSystemEventImpl } from "../../infra/system-events.js";
 import { getProcessSupervisor as getProcessSupervisorImpl } from "../../process/supervisor/index.js";
-import { resolveEventSessionKey, scopedHeartbeatWakeOptions } from "../../routing/session-key.js";
 import { appendBootstrapPromptWarning } from "../bootstrap-budget.js";
 import {
   createCliJsonlStreamingParser,
@@ -635,25 +639,24 @@ export async function executePreparedCliRun(
                 "It may have been waiting for interactive input or an approval prompt.",
                 "For Claude Code, prefer --permission-mode bypassPermissions --print.",
               ].join(" ");
-              const watchdogMainKey = params.config?.session?.mainKey;
-              const watchdogScope = params.config?.session?.scope;
+              const eventRouting = resolveEventSessionRoutingPolicy({
+                cfg: params.config,
+                sessionKey: params.sessionKey,
+                channel: params.messageProvider,
+                accountId: params.agentAccountId,
+              });
               executeDeps.enqueueSystemEvent(stallNotice, {
-                sessionKey: resolveEventSessionKey(
-                  params.sessionKey,
-                  watchdogMainKey,
-                  watchdogScope,
-                ),
+                sessionKey: resolveEventSessionKeyForPolicy(params.sessionKey, eventRouting),
               });
               executeDeps.requestHeartbeat(
-                scopedHeartbeatWakeOptions(
+                scopedHeartbeatWakeOptionsForPolicy(
                   params.sessionKey,
                   {
                     source: "cli-watchdog",
                     intent: "event",
                     reason: "cli:watchdog:stall",
                   },
-                  watchdogMainKey,
-                  watchdogScope,
+                  eventRouting,
                 ),
               );
             }

@@ -105,15 +105,11 @@ html.dark .nav-tabs-underline {
   gap: 12px;
 }
 
-.showcase-highlight,
-.showcase-video-card {
+.showcase-highlight {
+  padding: 14px;
   border: 1px solid color-mix(in oklab, rgb(var(--primary)) 18%, transparent);
   border-radius: 8px;
   background: color-mix(in oklab, rgb(var(--primary)) 3%, transparent);
-}
-
-.showcase-highlight {
-  padding: 14px;
 }
 
 .showcase-highlight strong {
@@ -122,8 +118,7 @@ html.dark .nav-tabs-underline {
 }
 
 .showcase-highlight span,
-.showcase-section-intro,
-.showcase-video-card p {
+.showcase-section-intro {
   opacity: 0.74;
 }
 
@@ -135,50 +130,8 @@ html.dark .nav-tabs-underline {
   margin: 0 0 16px;
 }
 
-.showcase-video-grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 18px;
-  margin: 0 0 28px;
-}
-
-.showcase-video-card {
-  padding: 14px;
-  box-shadow: 0 18px 44px -32px rgba(0, 0, 0, 0.48);
-}
-
-.showcase-video-card h3 {
-  margin: 0 0 8px;
-}
-
-.showcase-video-card p {
-  margin: 0 0 12px;
-}
-
-.showcase-video-card a {
-  border-bottom: 0;
-}
-
-.showcase-video-shell {
-  position: relative;
-  margin-bottom: 14px;
-  padding-bottom: 56.25%;
-  overflow: hidden;
-  border-radius: 8px;
-  background: #0a0a0a;
-}
-
-.showcase-video-shell iframe {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  border: 0;
-}
-
 @media (max-width: 960px) {
-  .showcase-highlights,
-  .showcase-video-grid {
+  .showcase-highlights {
     grid-template-columns: 1fr;
   }
 }

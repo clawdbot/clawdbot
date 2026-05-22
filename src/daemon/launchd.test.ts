@@ -35,6 +35,7 @@ const state = vi.hoisted(() => ({
   printFailuresRemaining: 0,
   bootstrapError: "",
   bootstrapCode: 1,
+  bootstrapLoadsServiceOnFailure: false,
   kickstartError: "",
   kickstartCode: 1,
   kickstartFailuresRemaining: 0,
@@ -199,6 +200,10 @@ vi.mock("./exec-file.js", () => ({
     }
     if (call[0] === "bootstrap") {
       if (state.bootstrapError) {
+        if (state.bootstrapLoadsServiceOnFailure) {
+          state.serviceLoaded = true;
+          state.serviceRunning = true;
+        }
         return { stdout: "", stderr: state.bootstrapError, code: state.bootstrapCode };
       }
       state.serviceLoaded = true;
@@ -304,6 +309,7 @@ beforeEach(() => {
   state.printFailuresRemaining = 0;
   state.bootstrapError = "";
   state.bootstrapCode = 1;
+  state.bootstrapLoadsServiceOnFailure = false;
   state.kickstartError = "";
   state.kickstartCode = 1;
   state.kickstartFailuresRemaining = 0;
@@ -724,6 +730,63 @@ describe("launchd install", () => {
     expect(command?.environment?.OPENAI_API_KEY).toBe(apiKey);
     expect(command?.environmentValueSources?.TMPDIR).toBe("file");
     expect(command?.environmentValueSources?.OPENAI_API_KEY).toBe("file");
+  });
+
+  it("repairs a mangled label-derived service-env wrapper path on restart", async () => {
+    const callerEnv = createDefaultLaunchdEnv();
+    const serviceEnv = {
+      ...callerEnv,
+      OPENCLAW_STATE_DIR: "/Users/test/service-env/custom-state",
+    };
+    await installLaunchAgent({
+      env: serviceEnv,
+      stdout: new PassThrough(),
+      programArguments: defaultProgramArguments,
+      environment: {
+        OPENCLAW_GATEWAY_PORT: "18789",
+        OPENCLAW_STATE_DIR: serviceEnv.OPENCLAW_STATE_DIR,
+      },
+    });
+
+    const plistPath = resolveLaunchAgentPlistPath(callerEnv);
+    const envFilePath = "/Users/test/service-env/custom-state/service-env/ai.openclaw.gateway.env";
+    const wrapperPath =
+      "/Users/test/service-env/custom-state/service-env/ai.openclaw.gateway-env-wrapper.sh";
+    const callerEnvFilePath = "/Users/test/.openclaw/service-env/ai.openclaw.gateway.env";
+    const callerWrapperPath =
+      "/Users/test/.openclaw/service-env/ai.openclaw.gateway-env-wrapper.sh";
+    const mangledEnvFilePath =
+      "/Users/test/service-env/custom-state/service-env/[ai.openclaw.gateway.env](http:/ai.openclaw.gateway.env)";
+    const mangledWrapperPath =
+      "/Users/test/service-env/custom-state/service-env/[ai.openclaw.gateway-env-wrapper.sh](http:/ai.openclaw.gateway-env-wrapper.sh)";
+    state.files.set(
+      plistPath,
+      (state.files.get(plistPath) ?? "")
+        .replace(wrapperPath, mangledWrapperPath)
+        .replace(envFilePath, mangledEnvFilePath),
+    );
+
+    const command = await readLaunchAgentProgramArguments(callerEnv);
+    expect(command?.programArguments).toEqual(defaultProgramArguments);
+    expect(command?.environment?.OPENCLAW_GATEWAY_PORT).toBe("18789");
+    expect(command?.environment?.OPENCLAW_STATE_DIR).toBe(serviceEnv.OPENCLAW_STATE_DIR);
+    expect(command?.environmentValueSources?.OPENCLAW_GATEWAY_PORT).toBe("file");
+
+    await restartLaunchAgent({
+      env: callerEnv,
+      stdout: new PassThrough(),
+    });
+
+    const rewritten = state.files.get(plistPath) ?? "";
+    expect(rewritten).toContain(`<string>${callerWrapperPath}</string>`);
+    expect(rewritten).toContain(`<string>${callerEnvFilePath}</string>`);
+    expect(rewritten).not.toContain(mangledEnvFilePath);
+    expect(rewritten).not.toContain(mangledWrapperPath);
+    const rewrittenEnv = state.files.get(callerEnvFilePath) ?? "";
+    expect(rewrittenEnv).toContain("export OPENCLAW_GATEWAY_PORT='18789'");
+    expect(rewrittenEnv).toContain(
+      "export OPENCLAW_STATE_DIR='/Users/test/service-env/custom-state'",
+    );
   });
 
   it("creates the LaunchAgent TMPDIR before bootstrap", async () => {
@@ -1201,6 +1264,44 @@ describe("launchd install", () => {
     expect(plist).toContain("<string>/dev/null</string>");
     expect(plist).toContain("<string>/Users/test/Library/Logs/openclaw/gateway.log</string>");
     expect(launchctlCommandNames()).toEqual(["enable", "bootout", "enable", "bootstrap"]);
+    expect(launchctlCommandNames()).not.toContain("kickstart");
+  });
+
+  it("treats a concurrent launchd bootstrap as success when the service is loaded", async () => {
+    const env = {
+      ...createDefaultLaunchdEnv(),
+      OPENCLAW_GATEWAY_PORT: "18789",
+    };
+    const plistPath = resolveLaunchAgentPlistPath(env);
+    state.files.set(
+      plistPath,
+      [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<plist version="1.0">',
+        "  <dict>",
+        "    <key>Label</key>",
+        "    <string>ai.openclaw.gateway</string>",
+        "    <key>ProgramArguments</key>",
+        "    <array>",
+        "      <string>node</string>",
+        "      <string>gateway.js</string>",
+        "    </array>",
+        "    <key>StandardOutPath</key>",
+        "    <string>/Users/test/.openclaw-default/logs/gateway.log</string>",
+        "  </dict>",
+        "</plist>",
+      ].join("\n"),
+    );
+    state.bootstrapError = "Bootstrap failed: 37: Operation already in progress";
+    state.bootstrapCode = 5;
+    state.bootstrapLoadsServiceOnFailure = true;
+
+    await restartLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+    });
+
+    expect(launchctlCommandNames()).toEqual(["enable", "bootout", "enable", "bootstrap", "print"]);
     expect(launchctlCommandNames()).not.toContain("kickstart");
   });
 

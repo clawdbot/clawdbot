@@ -1,12 +1,13 @@
 ---
 name: openclaw-landable-bug-sweep
-description: "Find or repair small high-confidence OpenClaw bugfix PRs until five are landable."
+description: "Find or repair small high-confidence non-SDK-boundary OpenClaw bugfix PRs until five are landable."
 ---
 
 # OpenClaw Landable Bug Sweep
 
 Autonomous maintainer workflow for producing five landable OpenClaw bugfix PR URLs.
 Use for broad issue/PR sweeps where the bar is high and the output is PRs, not notes.
+Do not use for plugin SDK/API boundary work; those need separate architecture review.
 
 ## Target
 
@@ -36,6 +37,7 @@ Accept only when all are true:
 - no new config option
 - no backward-incompatible behavior
 - no security/product/owner-boundary decision needed
+- no plugin SDK, public plugin API, or `src/plugin-sdk/**` boundary change
 - no broad refactor smell
 - focused proof is feasible
 
@@ -49,6 +51,7 @@ Good examples:
 Reject:
 
 - feature requests, new knobs, migrations, release work, workflow policy, support
+- plugin SDK/API boundary changes, including compatibility shims, new SDK methods, SDK exports, or plugin-facing channel/provider seams
 - auth/security boundary changes unless explicitly assigned
 - bugs needing live credentials that are unavailable
 - fixes whose clean shape is a larger architecture move

@@ -62,6 +62,8 @@ export type TalkRealtimeConfig = {
   transport?: "webrtc" | "provider-websocket" | "gateway-relay" | "managed-room";
   /** Tool/agent strategy for realtime sessions. */
   brain?: "agent-consult" | "direct-tools" | "none";
+  /** How Gateway relay handles final user transcripts when the provider skips a consult. */
+  consultRouting?: "provider-direct" | "force-agent-consult";
 };
 
 export type ResolvedTalkConfig = {
@@ -454,14 +456,15 @@ export type GatewayConfig = {
   /**
    * Bind address policy for the Gateway WebSocket + Control UI HTTP server.
    * - auto: Loopback (127.0.0.1) if available, else 0.0.0.0 (fallback to all interfaces)
-   * - lan: 0.0.0.0 (all interfaces, no fallback)
+   * - lan: 0.0.0.0 (all interfaces, no fallback, current BYOH path is IPv4-only)
    * - loopback: 127.0.0.1 (local-only)
    * - tailnet: Tailnet IPv4 if available (100.64.0.0/10), else loopback
-   * - custom: User-specified IP, fallback to 0.0.0.0 if unavailable (requires customBindHost)
+   * - custom: User-specified IPv4 address, fallback to 0.0.0.0 if unavailable (requires customBindHost)
+   * IPv6-only BYOH is not natively supported on this path today. Use an IPv4 sidecar or proxy.
    * Default: loopback (127.0.0.1).
    */
   bind?: GatewayBindMode;
-  /** Custom IP address for bind="custom" mode. Fallback: 0.0.0.0. */
+  /** Custom IPv4 address for bind="custom" mode. IPv6-only BYOH requires an IPv4 sidecar or proxy. */
   customBindHost?: string;
   controlUi?: GatewayControlUiConfig;
   auth?: GatewayAuthConfig;

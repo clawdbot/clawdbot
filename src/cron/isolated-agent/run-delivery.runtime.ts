@@ -1,2 +1,6 @@
 export { resolveDeliveryTarget } from "./delivery-target.js";
-export { dispatchCronDelivery, resolveCronDeliveryBestEffort } from "./delivery-dispatch.js";
+export {
+  cleanupDirectCronSession,
+  dispatchCronDelivery,
+  resolveCronDeliveryBestEffort,
+} from "./delivery-dispatch.js";

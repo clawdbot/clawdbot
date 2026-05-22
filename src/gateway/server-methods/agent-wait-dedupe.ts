@@ -1,3 +1,8 @@
+import {
+  normalizeAgentRunTimeoutPhase,
+  normalizeProviderStarted,
+  type AgentRunTimeoutPhase,
+} from "../../agents/run-timeout-attribution.js";
 import { normalizeBlockedLivenessWaitStatus } from "../../shared/agent-liveness.js";
 import { isNonTerminalAgentRunStatus } from "../../shared/agent-run-status.js";
 import { setSafeTimeout } from "../../utils/timer-delay.js";
@@ -11,6 +16,8 @@ export type AgentWaitTerminalSnapshot = {
   stopReason?: string;
   livenessState?: string;
   yielded?: boolean;
+  timeoutPhase?: AgentRunTimeoutPhase;
+  providerStarted?: boolean;
 };
 
 const AGENT_WAITERS_BY_RUN_ID = new Map<string, Set<() => void>>();
@@ -89,6 +96,8 @@ function readTerminalSnapshotFromDedupeEntry(entry: DedupeEntry): AgentWaitTermi
         stopReason?: unknown;
         livenessState?: unknown;
         yielded?: unknown;
+        timeoutPhase?: unknown;
+        providerStarted?: unknown;
         result?: unknown;
       }
     | undefined;
@@ -103,6 +112,12 @@ function readTerminalSnapshotFromDedupeEntry(entry: DedupeEntry): AgentWaitTermi
   const stopReason = asString(payload?.stopReason) ?? asString(resultMeta?.stopReason);
   const livenessState = asString(payload?.livenessState) ?? asString(resultMeta?.livenessState);
   const yielded = payload?.yielded === true || resultMeta?.yielded === true;
+  const timeoutPhase =
+    normalizeAgentRunTimeoutPhase(payload?.timeoutPhase) ??
+    normalizeAgentRunTimeoutPhase(resultMeta?.timeoutPhase);
+  const providerStarted =
+    normalizeProviderStarted(payload?.providerStarted) ??
+    normalizeProviderStarted(resultMeta?.providerStarted);
   const errorMessage =
     typeof payload?.error === "string"
       ? payload.error
@@ -129,6 +144,8 @@ function readTerminalSnapshotFromDedupeEntry(entry: DedupeEntry): AgentWaitTermi
       stopReason,
       livenessState,
       ...(yielded ? { yielded } : {}),
+      ...(timeoutPhase ? { timeoutPhase } : {}),
+      ...(providerStarted !== undefined ? { providerStarted } : {}),
     };
   }
   if (status === "error" || !entry.ok) {
@@ -140,6 +157,8 @@ function readTerminalSnapshotFromDedupeEntry(entry: DedupeEntry): AgentWaitTermi
       stopReason,
       livenessState,
       ...(yielded ? { yielded } : {}),
+      ...(timeoutPhase ? { timeoutPhase } : {}),
+      ...(providerStarted !== undefined ? { providerStarted } : {}),
     };
   }
   return null;

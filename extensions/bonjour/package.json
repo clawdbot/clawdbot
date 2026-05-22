@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/bonjour",
-  "version": "2026.5.21",
+  "version": "2026.5.22",
   "description": "OpenClaw Bonjour/mDNS gateway discovery",
   "type": "module",
   "dependencies": {

@@ -1,3 +1,8 @@
+import {
+  normalizeAgentRunTimeoutPhase,
+  normalizeProviderStarted,
+  type AgentRunTimeoutPhase,
+} from "../../agents/run-timeout-attribution.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
 import { formatBlockedLivenessError, isBlockedLivenessState } from "../../shared/agent-liveness.js";
 import { setSafeTimeout } from "../../utils/timer-delay.js";
@@ -33,6 +38,8 @@ type AgentRunSnapshot = {
   stopReason?: string;
   livenessState?: string;
   yielded?: boolean;
+  timeoutPhase?: AgentRunTimeoutPhase;
+  providerStarted?: boolean;
   ts: number;
 };
 
@@ -143,6 +150,9 @@ function createSnapshotFromLifecycleEvent(params: {
   const livenessState = typeof data?.livenessState === "string" ? data.livenessState : undefined;
   const blocked = isBlockedLivenessState(livenessState);
   const status = phase === "error" || blocked ? "error" : data?.aborted ? "timeout" : "ok";
+  const timeoutPhase =
+    status === "timeout" ? normalizeAgentRunTimeoutPhase(data?.timeoutPhase) : undefined;
+  const providerStarted = normalizeProviderStarted(data?.providerStarted);
   return {
     runId,
     status,
@@ -152,6 +162,8 @@ function createSnapshotFromLifecycleEvent(params: {
     stopReason,
     livenessState,
     ...(data?.yielded === true ? { yielded: true } : {}),
+    ...(timeoutPhase ? { timeoutPhase } : {}),
+    ...(providerStarted !== undefined ? { providerStarted } : {}),
     ts: Date.now(),
   };
 }

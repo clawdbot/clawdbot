@@ -2245,6 +2245,79 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     expect(prepared.ctxPayload.MentionSource).toBe("implicit_thread");
   });
 
+  it("flags an explicit <@bot> mention as explicit_bot when botUserId is set", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: {
+          slack: {
+            enabled: true,
+            groupPolicy: "open",
+            channels: { C0AGENTS: { requireMention: true } },
+          },
+        },
+      } as OpenClawConfig,
+      defaultRequireMention: true,
+    });
+    slackCtx.resolveChannelName = async () => ({ name: "agents", type: "channel" });
+    slackCtx.resolveUserName = async () => ({ name: "Bek" });
+
+    const prepared = await prepareSlackMessage({
+      ctx: slackCtx,
+      account: createSlackAccount(),
+      message: {
+        type: "message",
+        channel: "C0AGENTS",
+        channel_type: "channel",
+        user: "U_BEK",
+        text: "<@B1> trying again",
+        ts: "1779226598.721349",
+      } as SlackMessageEvent,
+      opts: { source: "message" },
+    });
+
+    assertPrepared(prepared);
+    expect(prepared.ctxPayload.ExplicitlyMentionedBot).toBe(true);
+    expect(prepared.ctxPayload.MentionedUserIds).toEqual(["B1"]);
+    expect(prepared.ctxPayload.MentionSource).toBe("explicit_bot");
+  });
+
+  it("does not flag explicit_bot when botUserId is empty (auth.test failure mode)", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        channels: {
+          slack: {
+            enabled: true,
+            groupPolicy: "open",
+            channels: { C0AGENTS: { requireMention: false } },
+          },
+        },
+      } as OpenClawConfig,
+      defaultRequireMention: false,
+    });
+    (slackCtx as { botUserId: string }).botUserId = "";
+    slackCtx.resolveChannelName = async () => ({ name: "agents", type: "channel" });
+    slackCtx.resolveUserName = async () => ({ name: "Bek" });
+
+    const prepared = await prepareSlackMessage({
+      ctx: slackCtx,
+      account: createSlackAccount(),
+      message: {
+        type: "message",
+        channel: "C0AGENTS",
+        channel_type: "channel",
+        user: "U_BEK",
+        text: "<@B1> trying again",
+        ts: "1779226598.721349",
+      } as SlackMessageEvent,
+      opts: { source: "message" },
+    });
+
+    assertPrepared(prepared);
+    expect(prepared.ctxPayload.ExplicitlyMentionedBot).toBe(false);
+    expect(prepared.ctxPayload.MentionedUserIds).toEqual(["B1"]);
+    expect(prepared.ctxPayload.MentionSource).not.toBe("explicit_bot");
+  });
+
   it("marks authorized implicit thread control-command wakes as command bypass source", async () => {
     const { storePath } = storeFixture.makeTmpStorePath();
     const slackCtx = createInboundSlackCtx({

@@ -1,0 +1,863 @@
+{
+  "name": "@openclaw/tlon",
+  "version": "2026.5.22",
+  "lockfileVersion": 3,
+  "requires": true,
+  "packages": {
+    "": {
+      "name": "@openclaw/tlon",
+      "version": "2026.5.22",
+      "dependencies": {
+        "@aws-sdk/client-s3": "3.1051.0",
+        "@aws-sdk/s3-request-presigner": "3.1051.0",
+        "@tloncorp/tlon-skill": "0.4.0",
+        "@urbit/aura": "3.0.0",
+        "zod": "4.4.3"
+      },
+      "peerDependencies": {
+        "openclaw": ">=2026.5.22"
+      },
+      "peerDependenciesMeta": {
+        "openclaw": {
+          "optional": true
+        }
+      }
+    },
+    "node_modules/@aws-crypto/crc32": {
+      "version": "5.2.0",
+      "resolved": "https://registry.npmjs.org/@aws-crypto/crc32/-/crc32-5.2.0.tgz",
+      "integrity": "sha512-nLbCWqQNgUiwwtFsen1AdzAtvuLRsQS8rYgMuxCrdKf9kOssamGLuPwyTY9wyYblNr9+1XM8v6zoDTPPSIeANg==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "@aws-crypto/util": "^5.2.0",
+        "@aws-sdk/types": "^3.222.0",
+        "tslib": "^2.6.2"
+      },
+      "engines": {
+        "node": ">=16.0.0"
+      }
+    },
+    "node_modules/@aws-crypto/crc32c": {
+      "version": "5.2.0",
+      "resolved": "https://registry.npmjs.org/@aws-crypto/crc32c/-/crc32c-5.2.0.tgz",
+      "integrity": "sha512-+iWb8qaHLYKrNvGRbiYRHSdKRWhto5XlZUEBwDjYNf+ly5SVYG6zEoYIdxvf5R3zyeP16w4PLBn3rH1xc74Rag==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "@aws-crypto/util": "^5.2.0",
+        "@aws-sdk/types": "^3.222.0",
+        "tslib": "^2.6.2"
+      }
+    },
+    "node_modules/@aws-crypto/sha1-browser": {
+      "version": "5.2.0",
+      "resolved": "https://registry.npmjs.org/@aws-crypto/sha1-browser/-/sha1-browser-5.2.0.tgz",
+      "integrity": "sha512-OH6lveCFfcDjX4dbAvCFSYUjJZjDr/3XJ3xHtjn3Oj5b9RjojQo8npoLeA/bNwkOkrSQ0wgrHzXk4tDRxGKJeg==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "@aws-crypto/supports-web-crypto": "^5.2.0",
+        "@aws-crypto/util": "^5.2.0",
+        "@aws-sdk/types": "^3.222.0",
+        "@aws-sdk/util-locate-window": "^3.0.0",
+        "@smithy/util-utf8": "^2.0.0",
+        "tslib": "^2.6.2"
+      }
+    },
+    "node_modules/@aws-crypto/sha256-browser": {
+      "version": "5.2.0",
+      "resolved": "https://registry.npmjs.org/@aws-crypto/sha256-browser/-/sha256-browser-5.2.0.tgz",
+      "integrity": "sha512-AXfN/lGotSQwu6HNcEsIASo7kWXZ5HYWvfOmSNKDsEqC4OashTp8alTmaz+F7TC2L083SFv5RdB+qU3Vs1kZqw==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "@aws-crypto/sha256-js": "^5.2.0",
+        "@aws-crypto/supports-web-crypto": "^5.2.0",
+        "@aws-crypto/util": "^5.2.0",
+        "@aws-sdk/types": "^3.222.0",
+        "@aws-sdk/util-locate-window": "^3.0.0",
+        "@smithy/util-utf8": "^2.0.0",
+        "tslib": "^2.6.2"
+      }
+    },
+    "node_modules/@aws-crypto/sha256-js": {
+      "version": "5.2.0",
+      "resolved": "https://registry.npmjs.org/@aws-crypto/sha256-js/-/sha256-js-5.2.0.tgz",
+      "integrity": "sha512-FFQQyu7edu4ufvIZ+OadFpHHOt+eSTBaYaki44c+akjg7qZg9oOQeLlk77F6tSYqjDAFClrHJk9tMf0HdVyOvA==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "@aws-crypto/util": "^5.2.0",
+        "@aws-sdk/types": "^3.222.0",
+        "tslib": "^2.6.2"
+      },
+      "engines": {
+        "node": ">=16.0.0"
+      }
+    },
+    "node_modules/@aws-crypto/supports-web-crypto": {
+      "version": "5.2.0",
+      "resolved": "https://registry.npmjs.org/@aws-crypto/supports-web-crypto/-/supports-web-crypto-5.2.0.tgz",
+      "integrity": "sha512-iAvUotm021kM33eCdNfwIN//F77/IADDSs58i+MDaOqFrVjZo9bAal0NK7HurRuWLLpF1iLX7gbWrjHjeo+YFg==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "tslib": "^2.6.2"
+      }
+    },
+    "node_modules/@aws-crypto/util": {
+      "version": "5.2.0",
+      "resolved": "https://registry.npmjs.org/@aws-crypto/util/-/util-5.2.0.tgz",
+      "integrity": "sha512-4RkU9EsI6ZpBve5fseQlGNUWKMa1RLPQ1dnjnQoe07ldfIzcsGb5hC5W0Dm7u423KWzawlrpbjXBrXCEv9zazQ==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "@aws-sdk/types": "^3.222.0",
+        "@smithy/util-utf8": "^2.0.0",
+        "tslib": "^2.6.2"
+      }
+    },
+    "node_modules/@aws-sdk/client-s3": {
+      "version": "3.1051.0",
+      "resolved": "https://registry.npmjs.org/@aws-sdk/client-s3/-/client-s3-3.1051.0.tgz",
+      "integrity": "sha512-0Yhq7AMw2te5YtxDHkm2KKpXF8IccOO4nmCsp12EzYB/e3IKQ73NHH4jA2ki8mQwvAQzFGB+1GoycT00U8sZCg==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "@aws-crypto/sha1-browser": "5.2.0",
+        "@aws-crypto/sha256-browser": "5.2.0",
+        "@aws-crypto/sha256-js": "5.2.0",
+        "@aws-sdk/core": "^3.974.12",
+        "@aws-sdk/credential-provider-node": "^3.972.43",
+        "@aws-sdk/middleware-bucket-endpoint": "^3.972.14",
+        "@aws-sdk/middleware-expect-continue": "^3.972.12",
+        "@aws-sdk/middleware-flexible-checksums": "^3.974.20",
+        "@aws-sdk/middleware-location-constraint": "^3.972.10",
+        "@aws-sdk/middleware-sdk-s3": "^3.972.41",
+        "@aws-sdk/middleware-ssec": "^3.972.10",
+        "@aws-sdk/signature-v4-multi-region": "^3.996.27",
+        "@aws-sdk/types": "^3.973.8",
+        "@smithy/core": "^3.24.2",
+        "@smithy/fetch-http-handler": "^5.4.2",
+        "@smithy/node-http-handler": "^4.7.2",
+        "@smithy/types": "^4.14.1",
+        "tslib": "^2.6.2"
+      },
+      "engines": {
+        "node": ">=20.0.0"
+      }
+    },
+    "node_modules/@aws-sdk/core": {
+      "version": "3.974.12",
+      "resolved": "https://registry.npmjs.org/@aws-sdk/core/-/core-3.974.12.tgz",
+      "integrity": "sha512-qrqgioqYFjwR6LatVNS1L2Vk++EwRIxqSQXPKNv5Ofux2D8UNgqMQ1znnMyEImXquVPTtbf71fc128pvmU6y9A==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "@aws-sdk/types": "^3.973.8",
+        "@aws-sdk/xml-builder": "^3.972.24",
+        "@aws/lambda-invoke-store": "^0.2.2",
+        "@smithy/core": "^3.24.2",
+        "@smithy/signature-v4": "^5.4.2",
+        "@smithy/types": "^4.14.1",
+        "bowser": "^2.11.0",
+        "tslib": "^2.6.2"
+      },
+      "engines": {
+        "node": ">=20.0.0"
+      }
+    },
+    "node_modules/@aws-sdk/crc64-nvme": {
+      "version": "3.972.8",
+      "resolved": "https://registry.npmjs.org/@aws-sdk/crc64-nvme/-/crc64-nvme-3.972.8.tgz",
+      "integrity": "sha512-fVfUCL/Xh2zINYMPZvj+iBn6XWouQf0DAnjaWCI9MkmqXzL2Iy5FoQB8O7syFe6gN6AH1ecDDU58T51Ou0kFkA==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "@smithy/types": "^4.14.1",
+        "tslib": "^2.6.2"
+      },
+      "engines": {
+        "node": ">=20.0.0"
+      }
+    },
+    "node_modules/@aws-sdk/credential-provider-env": {
+      "version": "3.972.38",
+      "resolved": "https://registry.npmjs.org/@aws-sdk/credential-provider-env/-/credential-provider-env-3.972.38.tgz",
+      "integrity": "sha512-m3WjZEgPtioMhPmwqUt+DhlTJ2i9ufR6DhfkyXojb9puEvfR+ur2U5shavu5/Cc9WHHsDCvALi6UFHgcqjhQ5w==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "@aws-sdk/core": "^3.974.12",
+        "@aws-sdk/types": "^3.973.8",
+        "@smithy/core": "^3.24.2",
+        "@smithy/types": "^4.14.1",
+        "tslib": "^2.6.2"
+      },
+      "engines": {
+        "node": ">=20.0.0"
+      }
+    },
+    "node_modules/@aws-sdk/credential-provider-http": {
+      "version": "3.972.40",
+      "resolved": "https://registry.npmjs.org/@aws-sdk/credential-provider-http/-/credential-provider-http-3.972.40.tgz",
+      "integrity": "sha512-D78L/m2Dr6cJnnSvWoAudPhQmCwmJ7j6APXsPYmFpPaKfQTfCSu0rdm8j14Np+VmXF9z8Aj8HE3xFpsrwtfgeg==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "@aws-sdk/core": "^3.974.12",
+        "@aws-sdk/types": "^3.973.8",
+        "@smithy/core": "^3.24.2",
+        "@smithy/fetch-http-handler": "^5.4.2",
+        "@smithy/node-http-handler": "^4.7.2",
+        "@smithy/types": "^4.14.1",
+        "tslib": "^2.6.2"
+      },
+      "engines": {
+        "node": ">=20.0.0"
+      }
+    },
+    "node_modules/@aws-sdk/credential-provider-ini": {
+      "version": "3.972.42",
+      "resolved": "https://registry.npmjs.org/@aws-sdk/credential-provider-ini/-/credential-provider-ini-3.972.42.tgz",
+      "integrity": "sha512-Mu5ESvFXeinafVM8jTIvRqcvK2Ehj4kz3auT39yUcHwu1Vfxo6xRlmUafdKLW4tusjAJukQwK09sCSMgOm7OKg==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "@aws-sdk/core": "^3.974.12",
+        "@aws-sdk/credential-provider-env": "^3.972.38",
+        "@aws-sdk/credential-provider-http": "^3.972.40",
+        "@aws-sdk/credential-provider-login": "^3.972.42",
+        "@aws-sdk/credential-provider-process": "^3.972.38",
+        "@aws-sdk/credential-provider-sso": "^3.972.42",
+        "@aws-sdk/credential-provider-web-identity": "^3.972.42",
+        "@aws-sdk/nested-clients": "^3.997.10",
+        "@aws-sdk/types": "^3.973.8",
+        "@smithy/core": "^3.24.2",
+        "@smithy/credential-provider-imds": "^4.3.2",
+        "@smithy/types": "^4.14.1",
+        "tslib": "^2.6.2"
+      },
+      "engines": {
+        "node": ">=20.0.0"
+      }
+    },
+    "node_modules/@aws-sdk/credential-provider-login": {
+      "version": "3.972.42",
+      "resolved": "https://registry.npmjs.org/@aws-sdk/credential-provider-login/-/credential-provider-login-3.972.42.tgz",
+      "integrity": "sha512-O6WkZga3kf0yqyJYd1dbeJqVhEgJx/x1UaLgtbR+XuL/YP+K5y6QTxQKL7ka9z3jnQASESKGAPnRyt4D5hQrxA==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "@aws-sdk/core": "^3.974.12",
+        "@aws-sdk/nested-clients": "^3.997.10",
+        "@aws-sdk/types": "^3.973.8",
+        "@smithy/core": "^3.24.2",
+        "@smithy/types": "^4.14.1",
+        "tslib": "^2.6.2"
+      },
+      "engines": {
+        "node": ">=20.0.0"
+      }
+    },
+    "node_modules/@aws-sdk/credential-provider-node": {
+      "version": "3.972.43",
+      "resolved": "https://registry.npmjs.org/@aws-sdk/credential-provider-node/-/credential-provider-node-3.972.43.tgz",
+      "integrity": "sha512-D/DJmbrWRP5BXEO3FH+ar4el+2n6OlGofiud7dQun2jES+AQEJjczenp1jBb4MBN7CpGpS8nsWGQLtuzc9tQbA==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "@aws-sdk/credential-provider-env": "^3.972.38",
+        "@aws-sdk/credential-provider-http": "^3.972.40",
+        "@aws-sdk/credential-provider-ini": "^3.972.42",
+        "@aws-sdk/credential-provider-process": "^3.972.38",
+        "@aws-sdk/credential-provider-sso": "^3.972.42",
+        "@aws-sdk/credential-provider-web-identity": "^3.972.42",
+        "@aws-sdk/types": "^3.973.8",
+        "@smithy/core": "^3.24.2",
+        "@smithy/credential-provider-imds": "^4.3.2",
+        "@smithy/types": "^4.14.1",
+        "tslib": "^2.6.2"
+      },
+      "engines": {
+        "node": ">=20.0.0"
+      }
+    },
+    "node_modules/@aws-sdk/credential-provider-process": {
+      "version": "3.972.38",
+      "resolved": "https://registry.npmjs.org/@aws-sdk/credential-provider-process/-/credential-provider-process-3.972.38.tgz",
+      "integrity": "sha512-EnbYVajGgbkb24s0K1eo4VNAPV5mHIET7LSvirTaFCwkfrfaOJxtSE+wY/tJdKDS21cEYkZs2ruCaAm+W4iblg==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "@aws-sdk/core": "^3.974.12",
+        "@aws-sdk/types": "^3.973.8",
+        "@smithy/core": "^3.24.2",
+        "@smithy/types": "^4.14.1",
+        "tslib": "^2.6.2"
+      },
+      "engines": {
+        "node": ">=20.0.0"
+      }
+    },
+    "node_modules/@aws-sdk/credential-provider-sso": {
+      "version": "3.972.42",
+      "resolved": "https://registry.npmjs.org/@aws-sdk/credential-provider-sso/-/credential-provider-sso-3.972.42.tgz",
+      "integrity": "sha512-RVV/9NbFwI8ZHEH5dn39lGyFmSbSVj1+orZdr6QsOe1mW9DCglmlen0cFaNZmCcqkqc7erNRHNBduxbeZuHAnw==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "@aws-sdk/core": "^3.974.12",
+        "@aws-sdk/nested-clients": "^3.997.10",
+        "@aws-sdk/token-providers": "3.1049.0",
+        "@aws-sdk/types": "^3.973.8",
+        "@smithy/core": "^3.24.2",
+        "@smithy/types": "^4.14.1",
+        "tslib": "^2.6.2"
+      },
+      "engines": {
+        "node": ">=20.0.0"
+      }
+    },
+    "node_modules/@aws-sdk/credential-provider-web-identity": {
+      "version": "3.972.42",
+      "resolved": "https://registry.npmjs.org/@aws-sdk/credential-provider-web-identity/-/credential-provider-web-identity-3.972.42.tgz",
+      "integrity": "sha512-/67fXX0ddllD4u2Nujc5PvT4byHgpMUfz6+RxIKi/0nFIckeorm7JvXgzBuDyVKw0s58EbofmETDWUf9vTEuHQ==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "@aws-sdk/core": "^3.974.12",
+        "@aws-sdk/nested-clients": "^3.997.10",
+        "@aws-sdk/types": "^3.973.8",
+        "@smithy/core": "^3.24.2",
+        "@smithy/types": "^4.14.1",
+        "tslib": "^2.6.2"
+      },
+      "engines": {
+        "node": ">=20.0.0"
+      }
+    },
+    "node_modules/@aws-sdk/middleware-bucket-endpoint": {
+      "version": "3.972.14",
+      "resolved": "https://registry.npmjs.org/@aws-sdk/middleware-bucket-endpoint/-/middleware-bucket-endpoint-3.972.14.tgz",
+      "integrity": "sha512-Aaj0d+xbo1jJquBWJP0/9V/XZRYukO3LWIRp3dOLHmoFrYKb4YZ0aLefgVHfGcNOVBS2ZTq7L/n5JcrE7DaC+Q==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "@aws-sdk/core": "^3.974.12",
+        "@aws-sdk/types": "^3.973.8",
+        "@smithy/core": "^3.24.2",
+        "@smithy/types": "^4.14.1",
+        "tslib": "^2.6.2"
+      },
+      "engines": {
+        "node": ">=20.0.0"
+      }
+    },
+    "node_modules/@aws-sdk/middleware-expect-continue": {
+      "version": "3.972.12",
+      "resolved": "https://registry.npmjs.org/@aws-sdk/middleware-expect-continue/-/middleware-expect-continue-3.972.12.tgz",
+      "integrity": "sha512-dA5pKTom/Ls9mgeyeaRBNQrRIVOLVjv4AmKOB0/e4yaiXEUy0gSz2d3liP8JHtYoCAEWySU1jWnyzwLOREN+4g==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "@aws-sdk/types": "^3.973.8",
+        "@smithy/core": "^3.24.2",
+        "@smithy/types": "^4.14.1",
+        "tslib": "^2.6.2"
+      },
+      "engines": {
+        "node": ">=20.0.0"
+      }
+    },
+    "node_modules/@aws-sdk/middleware-flexible-checksums": {
+      "version": "3.974.20",
+      "resolved": "https://registry.npmjs.org/@aws-sdk/middleware-flexible-checksums/-/middleware-flexible-checksums-3.974.20.tgz",
+      "integrity": "sha512-NdnMVQCR1YjIcqFAiNLdBiOwr2DyQDB2IiXQrBhzolKOv32ae4d4Ll7IzLMi04eMHiq/o/Y/GjFuVjF9HuG0QA==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "@aws-crypto/crc32": "5.2.0",
+        "@aws-crypto/crc32c": "5.2.0",
+        "@aws-crypto/util": "5.2.0",
+        "@aws-sdk/core": "^3.974.12",
+        "@aws-sdk/crc64-nvme": "^3.972.8",
+        "@aws-sdk/types": "^3.973.8",
+        "@smithy/core": "^3.24.2",
+        "@smithy/types": "^4.14.1",
+        "tslib": "^2.6.2"
+      },
+      "engines": {
+        "node": ">=20.0.0"
+      }
+    },
+    "node_modules/@aws-sdk/middleware-location-constraint": {
+      "version": "3.972.10",
+      "resolved": "https://registry.npmjs.org/@aws-sdk/middleware-location-constraint/-/middleware-location-constraint-3.972.10.tgz",
+      "integrity": "sha512-rI3NZvJcEvjoD0+0PI0iUAwlPw2IlSlhyvgBK/3WkKJQE/YiKFedd9dMN2lVacdNxPNhxL/jzQaKQdrGtQagjQ==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "@aws-sdk/types": "^3.973.8",
+        "@smithy/types": "^4.14.1",
+        "tslib": "^2.6.2"
+      },
+      "engines": {
+        "node": ">=20.0.0"
+      }
+    },
+    "node_modules/@aws-sdk/middleware-sdk-s3": {
+      "version": "3.972.41",
+      "resolved": "https://registry.npmjs.org/@aws-sdk/middleware-sdk-s3/-/middleware-sdk-s3-3.972.41.tgz",
+      "integrity": "sha512-M4T2I2WPuH5WQpU8Tsp+u2bcO29zGRkU14ATzuqb9I4xh8tzsLqtp4hzaJM5aO2dhMZnHDzyQwSFVgc3XbnoGg==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "@aws-sdk/core": "^3.974.12",
+        "@aws-sdk/signature-v4-multi-region": "^3.996.27",
+        "@aws-sdk/types": "^3.973.8",
+        "@smithy/core": "^3.24.2",
+        "@smithy/signature-v4": "^5.4.2",
+        "@smithy/types": "^4.14.1",
+        "tslib": "^2.6.2"
+      },
+      "engines": {
+        "node": ">=20.0.0"
+      }
+    },
+    "node_modules/@aws-sdk/middleware-ssec": {
+      "version": "3.972.10",
+      "resolved": "https://registry.npmjs.org/@aws-sdk/middleware-ssec/-/middleware-ssec-3.972.10.tgz",
+      "integrity": "sha512-Gli9A0u8EVVb+5bFDGS/QbSVg28w/wpEidg1ggVcSj65BDTdGR6punsOcVjqdiu1i42WHWo51MCvARPIIz9juw==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "@aws-sdk/types": "^3.973.8",
+        "@smithy/types": "^4.14.1",
+        "tslib": "^2.6.2"
+      },
+      "engines": {
+        "node": ">=20.0.0"
+      }
+    },
+    "node_modules/@aws-sdk/nested-clients": {
+      "version": "3.997.10",
+      "resolved": "https://registry.npmjs.org/@aws-sdk/nested-clients/-/nested-clients-3.997.10.tgz",
+      "integrity": "sha512-FtQ/Bt327peZJuyo4WZSOLVUTw9ujRxntepiC7L65FxA2P82Xlq0g14T22BuqBUeMjDoxa9nvwiMHjLIfP3eUg==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "@aws-crypto/sha256-browser": "5.2.0",
+        "@aws-crypto/sha256-js": "5.2.0",
+        "@aws-sdk/core": "^3.974.12",
+        "@aws-sdk/signature-v4-multi-region": "^3.996.27",
+        "@aws-sdk/types": "^3.973.8",
+        "@smithy/core": "^3.24.2",
+        "@smithy/fetch-http-handler": "^5.4.2",
+        "@smithy/node-http-handler": "^4.7.2",
+        "@smithy/types": "^4.14.1",
+        "tslib": "^2.6.2"
+      },
+      "engines": {
+        "node": ">=20.0.0"
+      }
+    },
+    "node_modules/@aws-sdk/s3-request-presigner": {
+      "version": "3.1051.0",
+      "resolved": "https://registry.npmjs.org/@aws-sdk/s3-request-presigner/-/s3-request-presigner-3.1051.0.tgz",
+      "integrity": "sha512-9ZULJHf5IAObmqtg2XhiufMmgEl+aM9jlRog2V9qbICeSOgDCHekmlRxF9FuqZKMqrpLzGtJPDbd8gGAHJZv/A==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "@aws-sdk/core": "^3.974.12",
+        "@aws-sdk/signature-v4-multi-region": "^3.996.27",
+        "@aws-sdk/types": "^3.973.8",
+        "@smithy/core": "^3.24.2",
+        "@smithy/types": "^4.14.1",
+        "tslib": "^2.6.2"
+      },
+      "engines": {
+        "node": ">=20.0.0"
+      }
+    },
+    "node_modules/@aws-sdk/signature-v4-multi-region": {
+      "version": "3.996.27",
+      "resolved": "https://registry.npmjs.org/@aws-sdk/signature-v4-multi-region/-/signature-v4-multi-region-3.996.27.tgz",
+      "integrity": "sha512-0Phbz4t6HI3D3skxvG2uI+VWU034/nSIw1T8d+FPzzQG9EQTrw94o9mOKO2Gv3n3Oc8P7JD7RAUxkoneLWv5Eg==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "@aws-sdk/types": "^3.973.8",
+        "@smithy/core": "^3.24.2",
+        "@smithy/signature-v4": "^5.4.2",
+        "@smithy/types": "^4.14.1",
+        "tslib": "^2.6.2"
+      },
+      "engines": {
+        "node": ">=20.0.0"
+      }
+    },
+    "node_modules/@aws-sdk/token-providers": {
+      "version": "3.1049.0",
+      "resolved": "https://registry.npmjs.org/@aws-sdk/token-providers/-/token-providers-3.1049.0.tgz",
+      "integrity": "sha512-r7+d0lQMTHKypkmaF5jRTBYLYHCUHzt3gaVoN9SidLhQeWhCmHk3AKrboDTpPF5b7Pt7vKu3+oeMjznM2Eu1ow==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "@aws-sdk/core": "^3.974.12",
+        "@aws-sdk/nested-clients": "^3.997.10",
+        "@aws-sdk/types": "^3.973.8",
+        "@smithy/core": "^3.24.2",
+        "@smithy/types": "^4.14.1",
+        "tslib": "^2.6.2"
+      },
+      "engines": {
+        "node": ">=20.0.0"
+      }
+    },
+    "node_modules/@aws-sdk/types": {
+      "version": "3.973.8",
+      "resolved": "https://registry.npmjs.org/@aws-sdk/types/-/types-3.973.8.tgz",
+      "integrity": "sha512-gjlAdtHMbtR9X5iIhVUvbVcy55KnznpC6bkDUWW9z915bi0ckdUr5cjf16Kp6xq0bP5HBD2xzgbL9F9Quv5vUw==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "@smithy/types": "^4.14.1",
+        "tslib": "^2.6.2"
+      },
+      "engines": {
+        "node": ">=20.0.0"
+      }
+    },
+    "node_modules/@aws-sdk/util-locate-window": {
+      "version": "3.965.5",
+      "resolved": "https://registry.npmjs.org/@aws-sdk/util-locate-window/-/util-locate-window-3.965.5.tgz",
+      "integrity": "sha512-WhlJNNINQB+9qtLtZJcpQdgZw3SCDCpXdUJP7cToGwHbCWCnRckGlc6Bx/OhWwIYFNAn+FIydY8SZ0QmVu3xTQ==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "tslib": "^2.6.2"
+      },
+      "engines": {
+        "node": ">=20.0.0"
+      }
+    },
+    "node_modules/@aws-sdk/xml-builder": {
+      "version": "3.972.24",
+      "resolved": "https://registry.npmjs.org/@aws-sdk/xml-builder/-/xml-builder-3.972.24.tgz",
+      "integrity": "sha512-V8z5YcDPfsvzrBlj0xR1vhRtocblhYbqdreCJB/voGd4Sr5zjNAeWxexbnqVtskTJe0vFb5KMqbSL++ePl+zRw==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "@nodable/entities": "2.1.0",
+        "@smithy/types": "^4.14.1",
+        "fast-xml-parser": "5.7.3",
+        "tslib": "^2.6.2"
+      },
+      "engines": {
+        "node": ">=20.0.0"
+      }
+    },
+    "node_modules/@aws/lambda-invoke-store": {
+      "version": "0.2.4",
+      "resolved": "https://registry.npmjs.org/@aws/lambda-invoke-store/-/lambda-invoke-store-0.2.4.tgz",
+      "integrity": "sha512-iY8yvjE0y651BixKNPgmv1WrQc+GZ142sb0z4gYnChDDY2YqI4P/jsSopBWrKfAt7LOJAkOXt7rC/hms+WclQQ==",
+      "license": "Apache-2.0",
+      "engines": {
+        "node": ">=18.0.0"
+      }
+    },
+    "node_modules/@nodable/entities": {
+      "version": "2.1.0",
+      "resolved": "https://registry.npmjs.org/@nodable/entities/-/entities-2.1.0.tgz",
+      "integrity": "sha512-nyT7T3nbMyBI/lvr6L5TyWbFJAI9FTgVRakNoBqCD+PmID8DzFrrNdLLtHMwMszOtqZa8PAOV24ZqDnQrhQINA==",
+      "funding": [
+        {
+          "type": "github",
+          "url": "https://github.com/sponsors/nodable"
+        }
+      ],
+      "license": "MIT"
+    },
+    "node_modules/@smithy/core": {
+      "version": "3.24.3",
+      "resolved": "https://registry.npmjs.org/@smithy/core/-/core-3.24.3.tgz",
+      "integrity": "sha512-Ep/7tPamGY8mgESE3LyLKtxJyy6U52WWAqr/3wial47Sj4u3PiIF73AOGI27UyLy9duTkhZbgzodOfLV4TduZg==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "@aws-crypto/crc32": "5.2.0",
+        "@smithy/types": "^4.14.2",
+        "tslib": "^2.6.2"
+      },
+      "engines": {
+        "node": ">=18.0.0"
+      }
+    },
+    "node_modules/@smithy/credential-provider-imds": {
+      "version": "4.3.3",
+      "resolved": "https://registry.npmjs.org/@smithy/credential-provider-imds/-/credential-provider-imds-4.3.3.tgz",
+      "integrity": "sha512-I2Bti0DKFo2IJyN28ijCsx51BAumEYR4/1yZ1FXyBygy9MqbnMqCev4JPth/MbpRfBSRAX35hITSnAdJRo1u5w==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "@smithy/core": "^3.24.3",
+        "@smithy/types": "^4.14.2",
+        "tslib": "^2.6.2"
+      },
+      "engines": {
+        "node": ">=18.0.0"
+      }
+    },
+    "node_modules/@smithy/fetch-http-handler": {
+      "version": "5.4.3",
+      "resolved": "https://registry.npmjs.org/@smithy/fetch-http-handler/-/fetch-http-handler-5.4.3.tgz",
+      "integrity": "sha512-F+DRf8IJazRJgYog2A/yJK7eYVc0rqTlRzO+5ZxjJd4WkZoKz0IJRncf7G6t1pdVT3kryJcwuTFhN1c5m6N47A==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "@smithy/core": "^3.24.3",
+        "@smithy/types": "^4.14.2",
+        "tslib": "^2.6.2"
+      },
+      "engines": {
+        "node": ">=18.0.0"
+      }
+    },
+    "node_modules/@smithy/is-array-buffer": {
+      "version": "2.2.0",
+      "resolved": "https://registry.npmjs.org/@smithy/is-array-buffer/-/is-array-buffer-2.2.0.tgz",
+      "integrity": "sha512-GGP3O9QFD24uGeAXYUjwSTXARoqpZykHadOmA8G5vfJPK0/DC67qa//0qvqrJzL1xc8WQWX7/yc7fwudjPHPhA==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "tslib": "^2.6.2"
+      },
+      "engines": {
+        "node": ">=14.0.0"
+      }
+    },
+    "node_modules/@smithy/node-http-handler": {
+      "version": "4.7.3",
+      "resolved": "https://registry.npmjs.org/@smithy/node-http-handler/-/node-http-handler-4.7.3.tgz",
+      "integrity": "sha512-/jPhevcTFPMVl6KNjbaI47iOg1zxC7IsnX4PQDGVZKMFceOXtB8IEYaB7a9VvkP/3oC60WzTeKocvSI7vLT0vA==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "@smithy/core": "^3.24.3",
+        "@smithy/types": "^4.14.2",
+        "tslib": "^2.6.2"
+      },
+      "engines": {
+        "node": ">=18.0.0"
+      }
+    },
+    "node_modules/@smithy/signature-v4": {
+      "version": "5.4.3",
+      "resolved": "https://registry.npmjs.org/@smithy/signature-v4/-/signature-v4-5.4.3.tgz",
+      "integrity": "sha512-53+75QuPl6DL+ct6vVEB51FDO5oulXr20TPV46VvJZg76lIlXNWfxi8j+G2V/t0I2qxCBOa3vX/8bmjrpFVo9g==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "@smithy/core": "^3.24.3",
+        "@smithy/types": "^4.14.2",
+        "tslib": "^2.6.2"
+      },
+      "engines": {
+        "node": ">=18.0.0"
+      }
+    },
+    "node_modules/@smithy/types": {
+      "version": "4.14.2",
+      "resolved": "https://registry.npmjs.org/@smithy/types/-/types-4.14.2.tgz",
+      "integrity": "sha512-P+otAxbV4CqBybp7EkcJCrig63yE2E7PuNVOmilVMRcx/O+QDzGULTrKsq4DV13gSfak9ObPrWaHl/9bL5YcWw==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "tslib": "^2.6.2"
+      },
+      "engines": {
+        "node": ">=18.0.0"
+      }
+    },
+    "node_modules/@smithy/util-buffer-from": {
+      "version": "2.2.0",
+      "resolved": "https://registry.npmjs.org/@smithy/util-buffer-from/-/util-buffer-from-2.2.0.tgz",
+      "integrity": "sha512-IJdWBbTcMQ6DA0gdNhh/BwrLkDR+ADW5Kr1aZmd4k3DIF6ezMV4R2NIAmT08wQJ3yUK82thHWmC/TnK/wpMMIA==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "@smithy/is-array-buffer": "^2.2.0",
+        "tslib": "^2.6.2"
+      },
+      "engines": {
+        "node": ">=14.0.0"
+      }
+    },
+    "node_modules/@smithy/util-utf8": {
+      "version": "2.3.0",
+      "resolved": "https://registry.npmjs.org/@smithy/util-utf8/-/util-utf8-2.3.0.tgz",
+      "integrity": "sha512-R8Rdn8Hy72KKcebgLiv8jQcQkXoLMOGGv5uI1/k0l+snqkOzQ1R0ChUBCxWMlBsFMekWjq0wRudIweFs7sKT5A==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "@smithy/util-buffer-from": "^2.2.0",
+        "tslib": "^2.6.2"
+      },
+      "engines": {
+        "node": ">=14.0.0"
+      }
+    },
+    "node_modules/@tloncorp/tlon-skill": {
+      "version": "0.4.0",
+      "resolved": "https://registry.npmjs.org/@tloncorp/tlon-skill/-/tlon-skill-0.4.0.tgz",
+      "integrity": "sha512-4CRO7U+F4RrXGclTzHeF/ENa9Y2jZqjrxBtH8bkox0t3HS2xf6vVNcKPwHlViUDkqoT8UDE7z5sxxvI4Ol6ypg==",
+      "hasInstallScript": true,
+      "license": "MIT",
+      "bin": {
+        "tlon": "bin/tlon.js"
+      },
+      "optionalDependencies": {
+        "@tloncorp/tlon-skill-darwin-arm64": "0.4.0",
+        "@tloncorp/tlon-skill-darwin-x64": "0.4.0",
+        "@tloncorp/tlon-skill-linux-arm64": "0.4.0",
+        "@tloncorp/tlon-skill-linux-x64": "0.4.0"
+      }
+    },
+    "node_modules/@tloncorp/tlon-skill-darwin-arm64": {
+      "version": "0.4.0",
+      "resolved": "https://registry.npmjs.org/@tloncorp/tlon-skill-darwin-arm64/-/tlon-skill-darwin-arm64-0.4.0.tgz",
+      "integrity": "sha512-2hpHiKUDOqXkEeoCOu2yk5cBsQZno61wk1iPlDluYj5XXc8YRWwaLTYtAbhWj2giNI9UE4+B81n9eT+4lphF9w==",
+      "cpu": [
+        "arm64"
+      ],
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "darwin"
+      ],
+      "bin": {
+        "tlon": "tlon"
+      }
+    },
+    "node_modules/@tloncorp/tlon-skill-darwin-x64": {
+      "version": "0.4.0",
+      "resolved": "https://registry.npmjs.org/@tloncorp/tlon-skill-darwin-x64/-/tlon-skill-darwin-x64-0.4.0.tgz",
+      "integrity": "sha512-VoYzNgoUufFUHiCjV5jerog/iuEVB+2sD86xkPYHm9WUfbETiAj+cWkKbl0lLSKasqtUtS7qgpslbBJzS0SeZg==",
+      "cpu": [
+        "x64"
+      ],
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "darwin"
+      ],
+      "bin": {
+        "tlon": "tlon"
+      }
+    },
+    "node_modules/@tloncorp/tlon-skill-linux-arm64": {
+      "version": "0.4.0",
+      "resolved": "https://registry.npmjs.org/@tloncorp/tlon-skill-linux-arm64/-/tlon-skill-linux-arm64-0.4.0.tgz",
+      "integrity": "sha512-2GnUO0jgybLE7qONOXGQZY5qrttEPaPN8U9RhgIyjFmViJuA8laQsQyaXu0d1/HVTxQ77tLzVHCIHBg5waT1Bg==",
+      "cpu": [
+        "arm64"
+      ],
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "linux"
+      ],
+      "bin": {
+        "tlon": "tlon"
+      }
+    },
+    "node_modules/@tloncorp/tlon-skill-linux-x64": {
+      "version": "0.4.0",
+      "resolved": "https://registry.npmjs.org/@tloncorp/tlon-skill-linux-x64/-/tlon-skill-linux-x64-0.4.0.tgz",
+      "integrity": "sha512-rdcm64J1+8t36to4IS7CNb0y+THUHqqISSkwKq2EPvuLrOuhL9pvgnIE+oO3qBezvNXJRo36GQPM2G05MosTYg==",
+      "cpu": [
+        "x64"
+      ],
+      "license": "MIT",
+      "optional": true,
+      "os": [
+        "linux"
+      ],
+      "bin": {
+        "tlon": "tlon"
+      }
+    },
+    "node_modules/@urbit/aura": {
+      "version": "3.0.0",
+      "resolved": "https://registry.npmjs.org/@urbit/aura/-/aura-3.0.0.tgz",
+      "integrity": "sha512-N8/FHc/lmlMDCumMuTXyRHCxlov5KZY6unmJ9QR2GOw+OpROZMBsXYGwE+ZMtvN21ql9+Xb8KhGNBj08IrG3Wg==",
+      "license": "MIT",
+      "engines": {
+        "node": ">=16",
+        "npm": ">=8"
+      }
+    },
+    "node_modules/bowser": {
+      "version": "2.14.1",
+      "resolved": "https://registry.npmjs.org/bowser/-/bowser-2.14.1.tgz",
+      "integrity": "sha512-tzPjzCxygAKWFOJP011oxFHs57HzIhOEracIgAePE4pqB3LikALKnSzUyU4MGs9/iCEUuHlAJTjTc5M+u7YEGg==",
+      "license": "MIT"
+    },
+    "node_modules/fast-xml-builder": {
+      "version": "1.2.0",
+      "resolved": "https://registry.npmjs.org/fast-xml-builder/-/fast-xml-builder-1.2.0.tgz",
+      "integrity": "sha512-00aAWieqff+ZJhsXA4g1g7M8k+7AYoMUUHF+/zFb5U6Uv/P0Vl4QZo84/IcufzYalLuEj9928bXN9PbbFzMF0Q==",
+      "funding": [
+        {
+          "type": "github",
+          "url": "https://github.com/sponsors/NaturalIntelligence"
+        }
+      ],
+      "license": "MIT",
+      "dependencies": {
+        "path-expression-matcher": "^1.5.0",
+        "xml-naming": "^0.1.0"
+      }
+    },
+    "node_modules/fast-xml-parser": {
+      "version": "5.7.0",
+      "resolved": "https://registry.npmjs.org/fast-xml-parser/-/fast-xml-parser-5.7.0.tgz",
+      "integrity": "sha512-MTcrUoRQ1GSQ9iG3QJzBGquYYYeA7piZaJoIWbPFGbRn6Jj6z7xgoAyi4DrZX4y2ZIQQBF59gc/zmvvejjgoFQ==",
+      "funding": [
+        {
+          "type": "github",
+          "url": "https://github.com/sponsors/NaturalIntelligence"
+        }
+      ],
+      "license": "MIT",
+      "dependencies": {
+        "@nodable/entities": "^2.1.0",
+        "fast-xml-builder": "^1.1.5",
+        "path-expression-matcher": "^1.5.0",
+        "strnum": "^2.2.3"
+      },
+      "bin": {
+        "fxparser": "src/cli/cli.js"
+      }
+    },
+    "node_modules/path-expression-matcher": {
+      "version": "1.5.0",
+      "resolved": "https://registry.npmjs.org/path-expression-matcher/-/path-expression-matcher-1.5.0.tgz",
+      "integrity": "sha512-cbrerZV+6rvdQrrD+iGMcZFEiiSrbv9Tfdkvnusy6y0x0GKBXREFg/Y65GhIfm0tnLntThhzCnfKwp1WRjeCyQ==",
+      "funding": [
+        {
+          "type": "github",
+          "url": "https://github.com/sponsors/NaturalIntelligence"
+        }
+      ],
+      "license": "MIT",
+      "engines": {
+        "node": ">=14.0.0"
+      }
+    },
+    "node_modules/strnum": {
+      "version": "2.3.0",
+      "resolved": "https://registry.npmjs.org/strnum/-/strnum-2.3.0.tgz",
+      "integrity": "sha512-ums3KNd42PGyx5xaoVTO1mjU1bH3NpY4vsrVlnv9PNGqQj8wd7rJ6nEypLrJ7z5vxK5RP0yMLo6J/Gsm62DI5Q==",
+      "funding": [
+        {
+          "type": "github",
+          "url": "https://github.com/sponsors/NaturalIntelligence"
+        }
+      ],
+      "license": "MIT"
+    },
+    "node_modules/tslib": {
+      "version": "2.8.1",
+      "resolved": "https://registry.npmjs.org/tslib/-/tslib-2.8.1.tgz",
+      "integrity": "sha512-oJFu94HQb+KVduSUQL7wnpmqnfmLsOA/nAh6b6EH0wCEoK0/mPeXU6c3wKDV83MkOuHPRHtSXKKU99IBazS/2w==",
+      "license": "0BSD"
+    },
+    "node_modules/xml-naming": {
+      "version": "0.1.0",
+      "resolved": "https://registry.npmjs.org/xml-naming/-/xml-naming-0.1.0.tgz",
+      "integrity": "sha512-k8KO9hrMyNk6tUWqUfkTEZbezRRpONVOzUTnc97VnCvyj6Tf9lyUR9EDAIeiVLv56jsMcoXEwjW8Kv5yPY52lw==",
+      "funding": [
+        {
+          "type": "github",
+          "url": "https://github.com/sponsors/NaturalIntelligence"
+        }
+      ],
+      "license": "MIT",
+      "engines": {
+        "node": ">=16.0.0"
+      }
+    },
+    "node_modules/zod": {
+      "version": "4.4.3",
+      "resolved": "https://registry.npmjs.org/zod/-/zod-4.4.3.tgz",
+      "integrity": "sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==",
+      "license": "MIT",
+      "funding": {
+        "url": "https://github.com/sponsors/colinhacks"
+      }
+    }
+  }
+}

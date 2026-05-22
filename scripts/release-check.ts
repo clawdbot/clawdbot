@@ -54,6 +54,7 @@ type PackResult = { files?: PackFile[]; filename?: string; unpackedSize?: number
 
 const rootPackageExcludedExtensionDirs = collectRootPackageExcludedExtensionDirs();
 const requiredPathGroups = [
+  "npm-shrinkwrap.json",
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   ["dist/index.js", "dist/index.mjs"],
   ["dist/entry.js", "dist/entry.mjs"],

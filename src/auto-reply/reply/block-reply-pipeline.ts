@@ -3,7 +3,7 @@ import {
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "../../globals.js";
-import { getReplyPayloadMetadata } from "../reply-payload.js";
+import { getReplyPayloadMetadata, isReplyPayloadStatusNotice } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import { createBlockReplyCoalescer } from "./block-reply-coalescer.js";
 import type { BlockStreamingCoalescing } from "./block-streaming.js";
@@ -43,6 +43,7 @@ export function createAudioAsVoiceBuffer(params: {
 export function createBlockReplyPayloadKey(payload: ReplyPayload): string {
   const reply = resolveSendableOutboundReplyParts(payload);
   return JSON.stringify({
+    statusNotice: isReplyPayloadStatusNotice(payload),
     text: reply.trimmedText,
     mediaList: reply.mediaUrls,
     presentation: payload.presentation ?? null,
@@ -161,15 +162,20 @@ export function createBlockReplyPipeline(params: {
           return;
         }
         sentKeys.add(payloadKey);
-        sentContentKeys.add(contentKey);
+        const isStatusNotice = isReplyPayloadStatusNotice(payload);
+        if (!isStatusNotice) {
+          sentContentKeys.add(contentKey);
+        }
         const reply = resolveSendableOutboundReplyParts(payload);
         for (const mediaUrl of reply.mediaUrls) {
           sentMediaUrls.add(mediaUrl);
         }
-        if (!reply.hasMedia && reply.trimmedText) {
+        if (!isStatusNotice && !reply.hasMedia && reply.trimmedText) {
           streamedTextFragments.push(reply.trimmedText);
         }
-        didStream = true;
+        if (!isStatusNotice) {
+          didStream = true;
+        }
       })
       .catch((err) => {
         if (err === timeoutError) {

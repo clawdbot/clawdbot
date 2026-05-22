@@ -1996,6 +1996,40 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
+  test("records async diagnostic queue drop summaries", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { metrics: true });
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "diagnostic.async_queue.dropped",
+      droppedEvents: 4,
+      droppedTrustedEvents: 1,
+      droppedUntrustedEvents: 2,
+      droppedPriorityEvents: 1,
+      queueLength: 0,
+      maxQueueLength: 10_000,
+      drainBatchSize: 100,
+    });
+    await flushDiagnosticEvents();
+
+    const counter = telemetryState.counters.get("openclaw.diagnostic.async_queue.dropped");
+    expect(counter?.add).toHaveBeenCalledWith(4, {
+      "openclaw.diagnostic.async_queue.drop_class": "total",
+    });
+    expect(counter?.add).toHaveBeenCalledWith(1, {
+      "openclaw.diagnostic.async_queue.drop_class": "trusted",
+    });
+    expect(counter?.add).toHaveBeenCalledWith(2, {
+      "openclaw.diagnostic.async_queue.drop_class": "untrusted",
+    });
+    expect(counter?.add).toHaveBeenCalledWith(1, {
+      "openclaw.diagnostic.async_queue.drop_class": "priority",
+    });
+
+    await service.stop?.(ctx);
+  });
+
   test("parents trusted diagnostic lifecycle spans from active started spans", async () => {
     const service = createDiagnosticsOtelService();
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });

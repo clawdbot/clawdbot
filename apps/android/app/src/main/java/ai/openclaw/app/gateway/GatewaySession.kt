@@ -1,12 +1,14 @@
 package ai.openclaw.app.gateway
 
 import android.util.Log
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -384,6 +386,22 @@ class GatewaySession(
     private val client: OkHttpClient = buildClient()
     private var socket: WebSocket? = null
     private val loggerTag = "OpenClawGateway"
+    private val incomingMessages = Channel<String>(Channel.UNLIMITED)
+    private val messagePumpJob =
+      scope.launch(Dispatchers.IO) {
+        for (text in incomingMessages) {
+          try {
+            handleMessage(text)
+          } catch (err: CancellationException) {
+            throw err
+          } catch (err: Throwable) {
+            Log.w(
+              loggerTag,
+              "gateway message handling failed: ${err.message ?: err::class.java.simpleName}",
+            )
+          }
+        }
+      }
 
     val remoteAddress: String = formatGatewayAuthority(endpoint.host, endpoint.port)
 
@@ -475,6 +493,11 @@ class GatewaySession(
 
     fun closeQuietly() {
       if (isClosed.compareAndSet(false, true)) {
+        incomingMessages.close()
+        messagePumpJob.cancel()
+        if (!connectDeferred.isCompleted) {
+          connectDeferred.completeExceptionally(IllegalStateException("Gateway closed"))
+        }
         socket?.close(1000, "bye")
         socket = null
         closedDeferred.complete(Unit)
@@ -519,7 +542,7 @@ class GatewaySession(
         webSocket: WebSocket,
         text: String,
       ) {
-        scope.launch { handleMessage(text) }
+        incomingMessages.trySend(text)
       }
 
       override fun onFailure(
@@ -531,6 +554,7 @@ class GatewaySession(
           connectDeferred.completeExceptionally(t)
         }
         if (isClosed.compareAndSet(false, true)) {
+          incomingMessages.close()
           failPending()
           closedDeferred.complete(Unit)
           onDisconnected("Gateway error: ${t.message ?: t::class.java.simpleName}")
@@ -546,6 +570,7 @@ class GatewaySession(
           connectDeferred.completeExceptionally(IllegalStateException("Gateway closed: $reason"))
         }
         if (isClosed.compareAndSet(false, true)) {
+          incomingMessages.close()
           failPending()
           closedDeferred.complete(Unit)
           onDisconnected("Gateway closed: $reason")

@@ -1,0 +1,82 @@
+import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { loadModelCatalogForBrowse } from "./model-catalog-browse.js";
+import type { ModelCatalogEntry } from "./model-catalog.types.js";
+
+const readOnlyCatalog: ModelCatalogEntry[] = [
+  { id: "gpt-readonly", name: "GPT Readonly", provider: "openai" },
+];
+const fullCatalog: ModelCatalogEntry[] = [{ id: "gpt-full", name: "GPT Full", provider: "openai" }];
+
+function config(params: { providerWildcard?: boolean } = {}): OpenClawConfig {
+  return {
+    agents: params.providerWildcard
+      ? {
+          defaults: {
+            models: {
+              "openai/*": {},
+            },
+          },
+        }
+      : undefined,
+  } as OpenClawConfig;
+}
+
+describe("loadModelCatalogForBrowse", () => {
+  it("uses the read-only catalog for default browse views", async () => {
+    const loadCatalog = vi.fn(async ({ readOnly }: { readOnly: boolean }) =>
+      readOnly ? readOnlyCatalog : fullCatalog,
+    );
+
+    await expect(loadModelCatalogForBrowse({ cfg: config(), loadCatalog })).resolves.toBe(
+      readOnlyCatalog,
+    );
+
+    expect(loadCatalog).toHaveBeenCalledExactlyOnceWith({ readOnly: true });
+  });
+
+  it("uses the full catalog for all views", async () => {
+    const loadCatalog = vi.fn(async ({ readOnly }: { readOnly: boolean }) =>
+      readOnly ? readOnlyCatalog : fullCatalog,
+    );
+
+    await expect(
+      loadModelCatalogForBrowse({ cfg: config(), view: "all", loadCatalog }),
+    ).resolves.toBe(fullCatalog);
+
+    expect(loadCatalog).toHaveBeenCalledExactlyOnceWith({ readOnly: false });
+  });
+
+  it("uses the full catalog when configured visibility has provider wildcards", async () => {
+    const loadCatalog = vi.fn(async ({ readOnly }: { readOnly: boolean }) =>
+      readOnly ? readOnlyCatalog : fullCatalog,
+    );
+
+    await expect(
+      loadModelCatalogForBrowse({ cfg: config({ providerWildcard: true }), loadCatalog }),
+    ).resolves.toBe(fullCatalog);
+
+    expect(loadCatalog).toHaveBeenCalledExactlyOnceWith({ readOnly: false });
+  });
+
+  it("returns an empty catalog when read-only catalog loading times out", async () => {
+    const onTimeout = vi.fn();
+    const loadCatalog = vi.fn(
+      () =>
+        new Promise<ModelCatalogEntry[]>((_, reject) => {
+          setTimeout(() => reject(new Error("late catalog failure")), 10);
+        }),
+    );
+
+    const resultPromise = loadModelCatalogForBrowse({
+      cfg: config(),
+      loadCatalog,
+      timeoutMs: 5,
+      onTimeout,
+    });
+
+    await expect(resultPromise).resolves.toEqual([]);
+    expect(onTimeout).toHaveBeenCalledExactlyOnceWith(5);
+    await new Promise((resolve) => setTimeout(resolve, 15));
+  });
+});

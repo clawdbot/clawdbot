@@ -90,6 +90,7 @@ describe("normalizeUsage", () => {
     expect(hasNonzeroUsage(null)).toBe(false);
     expect(hasNonzeroUsage({})).toBe(false);
     expect(hasNonzeroUsage({ input: 0, output: 0 })).toBe(false);
+    expect(hasNonzeroUsage({ reasoningTokens: 1 })).toBe(true);
     expect(hasNonzeroUsage({ input: 1 })).toBe(true);
     expect(hasNonzeroUsage({ total: 1 })).toBe(true);
   });

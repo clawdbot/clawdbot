@@ -401,7 +401,7 @@ describe("google web search provider", () => {
   });
 
   it("passes freshness to Gemini Google Search grounding as a time range", async () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["Date"] });
     // Use a wall-clock-realistic moment with non-zero milliseconds; the helper
     // must strip them to avoid Gemini's "Granularity of nano is not supported".
     vi.setSystemTime(new Date("2026-04-15T12:00:00.123Z"));
@@ -424,7 +424,7 @@ describe("google web search provider", () => {
       searchConfig: { provider: "gemini" },
     });
 
-    await tool?.execute({ query: "latest ai news", freshness: "week" });
+    await tool?.execute({ query: "latest ai news timestamp precision", freshness: "week" });
 
     const body = parseGeminiFetchBody(mockFetch);
     expect(body.tools?.[0]?.google_search?.timeRangeFilter).toEqual({
@@ -434,7 +434,7 @@ describe("google web search provider", () => {
   });
 
   it("strips sub-second precision from freshness timestamps so Gemini accepts them", async () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["Date"] });
     // "now" with non-zero milliseconds. Without stripping, toISOString() emits
     // "2026-04-15T12:00:00.123Z", which Gemini's google_search.time_range_filter
     // rejects with "Granularity of nano is not supported".

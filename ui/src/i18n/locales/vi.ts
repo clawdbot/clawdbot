@@ -1083,6 +1083,8 @@ export const vi: TranslationMap = {
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
       startTalk: "Start Talk",
+      stillListening: "Vẫn đang nghe",
+      talkTranscript: "Bản chép lời cuộc trò chuyện",
       stopTalk: "Stop Talk",
     },
     selectors: {

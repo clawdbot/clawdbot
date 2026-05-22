@@ -153,6 +153,19 @@ exit "$status"
   if (mode === "reload") {
     // Reloading is required after plist content changes; kickstart alone keeps
     // launchd's already-loaded stdout/stderr/stdin paths.
+    // After bootout we poll until launchd finishes the async unload before
+    // re-bootstrapping to avoid EIO (Bootstrap failed: 5) from the race.
+    // If bootstrap still fails, kickstart -k as a fallback to keep the service
+    // alive rather than leaving it deregistered.
+    const bootoutWaitLoop = `bootout_wait_count="${START_AFTER_EXIT_PRINT_RETRY_COUNT}"
+while [ "$bootout_wait_count" -gt 0 ]; do
+  if ! launchctl print "$service_target" >/dev/null 2>&1; then
+    break
+  fi
+  bootout_wait_count=$((bootout_wait_count - 1))
+  sleep ${START_AFTER_EXIT_PRINT_RETRY_DELAY_SECONDS}
+done
+`;
     return `service_target="$1"
 domain="$2"
 plist_path="$3"
@@ -160,9 +173,12 @@ ${waitForCallerPid}
 status=0
 launchctl enable "$service_target"
 launchctl bootout "$service_target" >/dev/null 2>&1 || true
+${bootoutWaitLoop}
 if launchctl bootstrap "$domain" "$plist_path"; then
   status=0
 else
+  status=$?
+  launchctl kickstart -k "$service_target"
   status=$?
 fi
 if [ "$status" -eq 0 ]; then

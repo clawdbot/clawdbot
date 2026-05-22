@@ -7,6 +7,7 @@ import type {
   MessagingToolSend,
   MessagingToolSourceReplyPayload,
 } from "../pi-embedded-messaging.types.js";
+import type { AgentRunTimeoutPhase } from "../run-timeout-attribution.js";
 
 export type EmbeddedPiAgentMeta = {
   sessionId: string;
@@ -35,6 +36,7 @@ export type EmbeddedPiAgentMeta = {
     output?: number;
     cacheRead?: number;
     cacheWrite?: number;
+    reasoningTokens?: number;
     total?: number;
   };
   /**
@@ -49,6 +51,7 @@ export type EmbeddedPiAgentMeta = {
     output?: number;
     cacheRead?: number;
     cacheWrite?: number;
+    reasoningTokens?: number;
     total?: number;
   };
 };
@@ -135,6 +138,8 @@ export type EmbeddedPiRunMeta = {
   finalAssistantRawText?: string;
   replayInvalid?: boolean;
   livenessState?: EmbeddedRunLivenessState;
+  timeoutPhase?: AgentRunTimeoutPhase;
+  providerStarted?: boolean;
   agentHarnessResultClassification?: "empty" | "reasoning-only" | "planning-only";
   terminalReplyKind?: "silent-empty";
   yielded?: boolean;

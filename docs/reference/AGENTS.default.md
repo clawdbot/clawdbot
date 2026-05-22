@@ -67,6 +67,7 @@ cp docs/reference/AGENTS.default.md ~/.openclaw/workspace/AGENTS.md
 - Long-term memory: `MEMORY.md` for durable facts, preferences, and decisions.
 - Lowercase `memory.md` is legacy repair input only; do not keep both root files on purpose.
 - On session start, read today + yesterday + `MEMORY.md` when present.
+- Before writing memory files, read them first; write only concrete updates, never empty placeholders.
 - Capture: decisions, preferences, constraints, open loops.
 - Avoid secrets unless explicitly requested.
 

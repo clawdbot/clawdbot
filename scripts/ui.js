@@ -186,9 +186,22 @@ export function main(argv = process.argv.slice(2)) {
   }
 
   if (!depsInstalled(action === "test" ? "test" : "build")) {
+    if (process.env.OPENCLAW_BUILD_ALL_NO_PNPM === "1" && action === "build") {
+      run(process.execPath, [
+        path.join(repoRoot, "node_modules/vite/bin/vite.js"),
+        "build",
+        ...rest,
+      ]);
+      return;
+    }
     const installEnv = process.env;
     const installArgs = ["install"];
     runSync(runner.cmd, installArgs, installEnv);
+  }
+
+  if (process.env.OPENCLAW_BUILD_ALL_NO_PNPM === "1" && action === "build") {
+    run(process.execPath, [path.join(repoRoot, "node_modules/vite/bin/vite.js"), "build", ...rest]);
+    return;
   }
 
   run(runner.cmd, ["run", script, ...rest]);

@@ -17,6 +17,7 @@ import {
   applyDoctorConfigMutation,
   type DoctorConfigMutationState,
 } from "./shared/config-mutation-state.js";
+import { maybeRepairContextEngineHostCompatibility } from "./shared/context-engine-host-compat.js";
 import { scanEmptyAllowlistPolicyWarnings } from "./shared/empty-allowlist-scan.js";
 import { maybeRepairExecSafeBinProfiles } from "./shared/exec-safe-bins.js";
 import { maybeRepairInvalidPluginConfig } from "./shared/invalid-plugin-config.js";
@@ -90,6 +91,13 @@ export async function runDoctorRepairSequence(params: {
     changes: codexRouteRepair.changes,
     warnings: codexRouteRepair.warnings,
   });
+  applyMutation(
+    await maybeRepairContextEngineHostCompatibility({
+      cfg: state.candidate,
+      doctorFixCommand: params.doctorFixCommand,
+      env,
+    }),
+  );
   const missingConfiguredPluginInstallRepair = await repairMissingConfiguredPluginInstalls({
     cfg: state.candidate,
     env,

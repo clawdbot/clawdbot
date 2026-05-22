@@ -101,6 +101,8 @@ type CodeModeRunState = {
 
 type CodeModeToolContext = ToolSearchToolContext;
 
+type CodeModeFailureCode = "invalid_input" | "runtime_unavailable" | "timeout" | "internal_error";
+
 type CodeModeWorkerResult =
   | {
       status: "completed";
@@ -116,7 +118,7 @@ type CodeModeWorkerResult =
   | {
       status: "failed";
       error: string;
-      code: "invalid_input" | "internal_error";
+      code: CodeModeFailureCode;
       output: unknown[];
     };
 
@@ -504,13 +506,31 @@ function codeModeWorkerUrl(): URL {
   return resolveCodeModeWorkerUrl(import.meta.url);
 }
 
+function failedCodeModeWorkerResult(
+  error: unknown,
+  code: CodeModeFailureCode,
+): Extract<CodeModeWorkerResult, { status: "failed" }> {
+  return {
+    status: "failed",
+    error: errorMessage(error),
+    code,
+    output: [],
+  };
+}
+
 async function runCodeModeWorker(
   workerData: unknown,
   timeoutMs: number,
+  workerUrl?: URL,
 ): Promise<CodeModeWorkerResult> {
-  const worker = new Worker(codeModeWorkerUrl(), {
-    workerData,
-  });
+  let worker: Worker;
+  try {
+    worker = new Worker(workerUrl ?? codeModeWorkerUrl(), {
+      workerData,
+    });
+  } catch (error) {
+    return failedCodeModeWorkerResult(error, "runtime_unavailable");
+  }
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     return await new Promise<CodeModeWorkerResult>((resolve) => {
@@ -527,7 +547,7 @@ async function runCodeModeWorker(
         finish({
           status: "failed",
           error: "code mode worker timeout exceeded",
-          code: "internal_error",
+          code: "timeout",
           output: [],
         });
       }, timeoutMs);
@@ -545,21 +565,16 @@ async function runCodeModeWorker(
         );
       });
       worker.once("error", (error) => {
-        finish({
-          status: "failed",
-          error: errorMessage(error),
-          code: "internal_error",
-          output: [],
-        });
+        finish(failedCodeModeWorkerResult(error, "runtime_unavailable"));
       });
       worker.once("exit", (code) => {
         if (code !== 0) {
-          finish({
-            status: "failed",
-            error: `code mode worker exited with code ${code}`,
-            code: "internal_error",
-            output: [],
-          });
+          finish(
+            failedCodeModeWorkerResult(
+              new Error(`code mode worker exited with code ${code}`),
+              "runtime_unavailable",
+            ),
+          );
         }
       });
     });
@@ -949,6 +964,7 @@ export const testing = {
   activeRuns,
   resumingRunIds,
   codeModeWorkerUrl,
+  runCodeModeWorker,
   resolveCodeModeWorkerUrl,
   resolveCodeModeConfig,
   getTypescriptRuntimePromise: () => typescriptRuntimePromise,

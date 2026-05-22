@@ -19,6 +19,7 @@ import {
   type ReplyPayloadDelivery,
 } from "../../interactive/payload.js";
 import { type SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
+import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
 
 export type NormalizedOutboundPayload = {
   text: string;
@@ -220,11 +221,14 @@ function createOutboundPayloadPlanEntry(
     explicitMediaUrls,
     explicitMediaUrl ? [explicitMediaUrl] : undefined,
   );
-  const parsedText = parsed.text ?? "";
+  const strippedText = stripUnsupportedCitationControlMarkers(parsed.text ?? "");
+  const strippedParsed =
+    strippedText === (parsed.text ?? "") ? parsed : parseReplyDirectives(strippedText);
+  const parsedText = strippedParsed.text ?? "";
   if (isSuppressedRelayStatusText(parsedText) && mergedMedia.length === 0) {
     return null;
   }
-  const isSilent = parsed.isSilent && mergedMedia.length === 0;
+  const isSilent = strippedParsed.isSilent && mergedMedia.length === 0;
   const hasMultipleMedia = (explicitMediaUrls?.length ?? 0) > 1;
   const resolvedMediaUrl = hasMultipleMedia ? undefined : explicitMediaUrl;
   const normalizedPayload: ReplyPayload = {
@@ -358,16 +362,21 @@ export function summarizeOutboundPayloadForTransport(
   payload: ReplyPayload,
 ): NormalizedOutboundPayload {
   const parts = resolveSendableOutboundReplyParts(payload);
-  const spokenText = payload.spokenText?.trim() ? payload.spokenText : undefined;
+  const text = stripUnsupportedCitationControlMarkers(parts.text);
+  const strippedSpokenText =
+    typeof payload.spokenText === "string"
+      ? stripUnsupportedCitationControlMarkers(payload.spokenText)
+      : undefined;
+  const spokenText = strippedSpokenText?.trim() ? strippedSpokenText : undefined;
   return {
-    text: parts.text,
+    text,
     mediaUrls: parts.mediaUrls,
     audioAsVoice: payload.audioAsVoice === true ? true : undefined,
     presentation: payload.presentation,
     delivery: payload.delivery,
     interactive: payload.interactive,
     channelData: payload.channelData,
-    ...(parts.text || !spokenText ? {} : { hookContent: spokenText }),
+    ...(text || !spokenText ? {} : { hookContent: spokenText }),
   };
 }
 

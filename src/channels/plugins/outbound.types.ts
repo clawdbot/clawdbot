@@ -98,6 +98,7 @@ export type ChannelDeliveryCapabilities = {
   durableFinal?: {
     text?: boolean;
     media?: boolean;
+    poll?: boolean;
     payload?: boolean;
     silent?: boolean;
     replyTo?: boolean;

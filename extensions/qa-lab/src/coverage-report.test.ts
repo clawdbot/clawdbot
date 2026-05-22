@@ -12,6 +12,19 @@ describe("qa coverage report", () => {
     expect(inventory.secondaryCoverageIdCount).toBeGreaterThan(0);
     expect(inventory.overlappingCoverage.length).toBeGreaterThan(0);
     expect(inventory.missingCoverage).toStrictEqual([]);
+    expect(inventory.liveTransportLanes.map((lane) => lane.transportId)).toEqual([
+      "discord",
+      "slack",
+      "telegram",
+      "whatsapp",
+    ]);
+    expect(inventory.scenarioPacks.map((pack) => pack.id)).toEqual(["personal-agent"]);
+    expect(inventory.scenarioPacks[0]?.missingScenarioIds).toStrictEqual([]);
+    expect(inventory.scenarioPacks[0]?.scenarioIds).toContain(
+      "personal-share-safe-diagnostics-artifact",
+    );
+    expect(inventory.scenarioPacks[0]?.coverageIds).toContain("personal.redaction");
+    expect(inventory.scenarioPacks[0]?.coverageIds).toContain("qa.artifact-safety");
     expect(inventory.byTheme.memory.map((feature) => feature.id)).toContain("memory.recall");
     expect(inventory.bySurface.memory.map((feature) => feature.id)).toContain("memory.recall");
   });
@@ -27,5 +40,15 @@ describe("qa coverage report", () => {
     expect(report).toContain("memory.recall");
     expect(report).toContain("primary: memory-recall (qa/scenarios/memory/memory-recall.md)");
     expect(report).toContain("secondary: active-memory-preprompt-recall");
+    expect(report).toContain("## Scenario Packs");
+    expect(report).toContain(
+      "- personal-agent (Personal Agent Benchmark Pack): 10 scenarios; coverage:",
+    );
+    expect(report).toContain("personal-share-safe-diagnostics-artifact");
+    expect(report).toContain("## Live Transport Lanes");
+    expect(report).toContain(
+      "- telegram (telegram): canary: always-on, help-command: telegram-help-command, mention-gating: telegram-mention-gating; missing baseline: allowlist-block, top-level-reply-shape, restart-resume",
+    );
+    expect(report).toContain("thread-follow-up: slack-thread-follow-up");
   });
 });

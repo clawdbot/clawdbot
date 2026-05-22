@@ -76,6 +76,7 @@ Sources/Voice/TalkDefaults.swift
 Sources/Voice/TalkModeGatewayConfig.swift
 Sources/Voice/TalkModeManager.swift
 Sources/Voice/TalkOrbOverlay.swift
+Sources/Voice/RealtimeTalkRelaySession.swift
 Sources/Voice/TalkSpeechLocale.swift
 Sources/Voice/VoiceTab.swift
 Sources/Voice/VoiceWakeManager.swift

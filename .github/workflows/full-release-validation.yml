@@ -119,7 +119,6 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   GH_REPO: ${{ github.repository }}
   NODE_VERSION: "24.15.0"
-  PNPM_VERSION: "11.0.8"
 
 jobs:
   resolve_target:
@@ -480,7 +479,7 @@ jobs:
             local workflow="$1"
             shift
 
-            local before_json dispatch_output run_id status conclusion url poll_count
+            local before_json dispatch_output run_id status conclusion url poll_count run_json
             before_json="$(gh run list --workflow "$workflow" --event workflow_dispatch --limit 100 --json databaseId --jq '[.[].databaseId]')"
 
             dispatch_output="$(gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@" 2>&1)"
@@ -512,6 +511,46 @@ jobs:
             echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
             echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
 
+            release_check_blocking_job() {
+              case "$1" in
+                "resolve_target" | \
+                "Prepare release package artifact" | \
+                "install_smoke_release_checks / "* | \
+                "Run package acceptance" | \
+                "Run package acceptance / "*)
+                  return 0
+                  ;;
+              esac
+              return 1
+            }
+
+            release_checks_advisory_only() {
+              local run_json="$1"
+              local verifier_conclusion name saw_advisory failed
+
+              verifier_conclusion="$(
+                jq -r '.jobs[] | select(.name == "Verify release checks") | .conclusion' <<< "$run_json" |
+                  tail -n 1
+              )"
+              if [[ "$verifier_conclusion" != "success" ]]; then
+                return 1
+              fi
+
+              saw_advisory=0
+              failed=0
+              while IFS= read -r name; do
+                [[ -z "${name// }" ]] && continue
+                if release_check_blocking_job "$name"; then
+                  echo "::error::${name} is a package-safety Tideclaw alpha release-check lane."
+                  failed=1
+                else
+                  saw_advisory=1
+                fi
+              done < <(jq -r '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | .name' <<< "$run_json")
+
+              [[ "$saw_advisory" == "1" && "$failed" == "0" ]]
+            }
+
             cancel_child() {
               if [[ -n "${run_id:-}" ]]; then
                 echo "Cancelling child workflow ${workflow}: ${run_id}" >&2
@@ -535,13 +574,20 @@ jobs:
             done
             trap - EXIT INT TERM
 
-            conclusion="$(gh run view "$run_id" --json conclusion --jq '.conclusion')"
-            url="$(gh run view "$run_id" --json url --jq '.url')"
+            run_json="$(gh run view "$run_id" --json conclusion,url,jobs)"
+            conclusion="$(jq -r '.conclusion' <<< "$run_json")"
+            url="$(jq -r '.url' <<< "$run_json")"
             echo "${workflow} finished with ${conclusion}: ${url}"
             echo "url=${url}" >> "$GITHUB_OUTPUT"
             echo "conclusion=${conclusion}" >> "$GITHUB_OUTPUT"
             if [[ "$conclusion" != "success" ]]; then
-              gh run view "$run_id" --json jobs --jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | {name, conclusion, url}' || true
+              jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | {name, conclusion, url}' <<< "$run_json" || true
+              if [[ "$workflow" == "openclaw-release-checks.yml" && "$CHILD_WORKFLOW_REF" =~ ^tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
+                if release_checks_advisory_only "$run_json"; then
+                  echo "::warning::${workflow} ended with ${conclusion}, but Verify release checks accepted Tideclaw alpha advisory lanes."
+                  return 0
+                fi
+              fi
               exit 1
             fi
           }
@@ -635,7 +681,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
           install-deps: "false"
 
@@ -800,10 +845,51 @@ jobs:
         run: |
           set -euo pipefail
 
+          release_check_blocking_job() {
+            case "$1" in
+              "resolve_target" | \
+              "Prepare release package artifact" | \
+              "install_smoke_release_checks / "* | \
+              "Run package acceptance" | \
+              "Run package acceptance / "*)
+                return 0
+                ;;
+            esac
+            return 1
+          }
+
+          release_checks_advisory_only() {
+            local run_json="$1"
+            local verifier_conclusion name saw_advisory failed
+
+            verifier_conclusion="$(
+              jq -r '.jobs[] | select(.name == "Verify release checks") | .conclusion' <<< "$run_json" |
+                tail -n 1
+            )"
+            if [[ "$verifier_conclusion" != "success" ]]; then
+              return 1
+            fi
+
+            saw_advisory=0
+            failed=0
+            while IFS= read -r name; do
+              [[ -z "${name// }" ]] && continue
+              if release_check_blocking_job "$name"; then
+                echo "::error::${name} is a package-safety Tideclaw alpha release-check lane."
+                failed=1
+              else
+                saw_advisory=1
+              fi
+            done < <(jq -r '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | .name' <<< "$run_json")
+
+            [[ "$saw_advisory" == "1" && "$failed" == "0" ]]
+          }
+
           check_child() {
             local label="$1"
             local run_id="$2"
             local required="$3"
+            local advisory_ok="${4:-0}"
 
             if [[ -z "${run_id// }" ]]; then
               if [[ "$required" == "0" ]]; then
@@ -829,6 +915,12 @@ jobs:
             fi
 
             if [[ "$status" != "completed" || "$conclusion" != "success" ]]; then
+              if [[ "$advisory_ok" == "1" && "$label" == "release_checks" ]]; then
+                if release_checks_advisory_only "$run_json"; then
+                  echo "::warning::${label} child run ended with ${status}/${conclusion}, but Verify release checks accepted Tideclaw alpha advisory lanes: ${url}"
+                  return 0
+                fi
+              fi
               echo "::error::${label} child run ended with ${status}/${conclusion}: ${url}"
               jq '.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | {name, status, conclusion, url}' <<< "$run_json" || true
               return 1
@@ -1018,6 +1110,8 @@ jobs:
 
           if [[ "$RELEASE_CHECKS_RESULT" == "skipped" && -z "${RELEASE_CHECKS_RUN_ID// }" ]]; then
             check_child "release_checks" "" "$release_checks_required" || failed=1
+          elif [[ "$CHILD_WORKFLOW_REF" =~ ^tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
+            check_child "release_checks" "$RELEASE_CHECKS_RUN_ID" 1 1 || failed=1
           else
             check_child "release_checks" "$RELEASE_CHECKS_RUN_ID" 1 || failed=1
           fi

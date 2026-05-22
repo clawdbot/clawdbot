@@ -266,6 +266,10 @@ function resolveBindingAccountId(params: {
     return pluginAccountId.trim();
   }
 
+  if (plugin && plugin.config.listAccountIds(params.config).length > 1) {
+    return "*";
+  }
+
   if (plugin?.meta.forceAccountBinding) {
     return resolveDefaultAccountId(params.config, params.channel);
   }

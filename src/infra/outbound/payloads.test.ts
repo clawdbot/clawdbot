@@ -52,6 +52,27 @@ describe("normalizeReplyPayloadsForDelivery", () => {
     ]);
   });
 
+  it("strips unsupported citation control markers from reply payload text", () => {
+    const payloads: ReplyPayload[] = [{ text: "v2026.5.20 release note citeturn2view0" }];
+
+    expect(normalizeReplyPayloadsForDelivery(payloads)).toMatchObject([
+      { text: "v2026.5.20 release note" },
+    ]);
+    expect(resolveMirrorProjection(payloads).text).toBe("v2026.5.20 release note");
+    expect(normalizeOutboundPayloadsForJson(payloads)).toMatchObject([
+      { text: "v2026.5.20 release note" },
+    ]);
+  });
+
+  it("suppresses silent replies after removing citation control markers", () => {
+    expect(
+      normalizeReplyPayloadsForDelivery([
+        { text: "NO_REPLY citeturn2view0" },
+        { text: '{"action":"NO_REPLY"} citeturn2view0' },
+      ]),
+    ).toStrictEqual([]);
+  });
+
   it("drops silent payloads without media and suppresses reasoning payloads", () => {
     expect(
       normalizeReplyPayloadsForDelivery([
@@ -602,6 +623,14 @@ describe("summarizeOutboundPayloadForTransport", () => {
     expect(summary.hookContent).toBeUndefined();
   });
 
+  it("strips unsupported citation control markers from transport text", () => {
+    const summary = summarizeOutboundPayloadForTransport({
+      text: "v2026.5.20 release note citeturn2view0",
+    });
+
+    expect(summary.text).toBe("v2026.5.20 release note");
+  });
+
   it("surfaces spokenText only as hook content for audio-only payloads", () => {
     const summary = summarizeOutboundPayloadForTransport({
       mediaUrl: "/tmp/reply.opus",
@@ -613,6 +642,17 @@ describe("summarizeOutboundPayloadForTransport", () => {
     expect(summary.hookContent).toBe("Hi Ivy, good morning.");
     expect(summary.mediaUrls).toEqual(["/tmp/reply.opus"]);
     expect(summary.audioAsVoice).toBe(true);
+  });
+
+  it("strips unsupported citation control markers from hook-only spoken text", () => {
+    const summary = summarizeOutboundPayloadForTransport({
+      mediaUrl: "/tmp/reply.opus",
+      audioAsVoice: true,
+      spokenText: "Hi Ivy citeturn2view0",
+    });
+
+    expect(summary.text).toBe("");
+    expect(summary.hookContent).toBe("Hi Ivy");
   });
 
   it("ignores blank spokenText", () => {

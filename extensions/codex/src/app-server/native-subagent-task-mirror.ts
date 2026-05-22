@@ -1,11 +1,5 @@
-import {
-  CODEX_NATIVE_SUBAGENT_RUN_ID_PREFIX,
-  CODEX_NATIVE_SUBAGENT_RUNTIME,
-  CODEX_NATIVE_SUBAGENT_TASK_KIND,
-  createRunningTaskRun,
-  finalizeTaskRunByRunId,
-  recordTaskRunProgressByRunId,
-} from "openclaw/plugin-sdk/codex-native-task-runtime";
+import type { AgentHarnessTaskRuntime } from "openclaw/plugin-sdk/agent-harness-task-runtime";
+import { CODEX_NATIVE_SUBAGENT_RUN_ID_PREFIX } from "./native-subagent-task-ids.js";
 import type {
   CodexServerNotification,
   CodexSessionSource,
@@ -19,23 +13,16 @@ import type {
 } from "./protocol.js";
 import { isJsonObject } from "./protocol.js";
 
-export type TaskLifecycleRuntime = {
-  createRunningTaskRun: typeof createRunningTaskRun;
-  recordTaskRunProgressByRunId: typeof recordTaskRunProgressByRunId;
-  finalizeTaskRunByRunId: typeof finalizeTaskRunByRunId;
-};
+export type TaskLifecycleRuntime = Pick<
+  AgentHarnessTaskRuntime,
+  "createRunningTaskRun" | "recordTaskRunProgressByRunId" | "finalizeTaskRunByRunId"
+>;
 
 export type CodexNativeSubagentTaskMirrorParams = {
   parentThreadId: string;
   requesterSessionKey?: string;
   agentId?: string;
   now?: () => number;
-};
-
-const defaultRuntime: TaskLifecycleRuntime = {
-  createRunningTaskRun,
-  recordTaskRunProgressByRunId,
-  finalizeTaskRunByRunId,
 };
 
 export class CodexNativeSubagentTaskMirror {
@@ -45,7 +32,7 @@ export class CodexNativeSubagentTaskMirror {
 
   constructor(
     private readonly params: CodexNativeSubagentTaskMirrorParams,
-    private readonly runtime: TaskLifecycleRuntime = defaultRuntime,
+    private readonly runtime: TaskLifecycleRuntime,
   ) {
     this.now = params.now ?? Date.now;
   }
@@ -95,16 +82,7 @@ export class CodexNativeSubagentTaskMirror {
       `Codex native subagent${label === "Codex subagent" ? "" : ` ${label}`}`;
     const createdAt = secondsToMillis(thread.createdAt) ?? this.now();
     this.runtime.createRunningTaskRun({
-      runtime: CODEX_NATIVE_SUBAGENT_RUNTIME,
-      taskKind: CODEX_NATIVE_SUBAGENT_TASK_KIND,
       sourceId: runId,
-      requesterSessionKey: this.params.requesterSessionKey,
-      ...(this.params.requesterSessionKey
-        ? {
-            ownerKey: this.params.requesterSessionKey,
-            scopeKind: "session" as const,
-          }
-        : {}),
       agentId: this.params.agentId,
       runId,
       label,
@@ -140,7 +118,6 @@ export class CodexNativeSubagentTaskMirror {
     if (statusType === "active") {
       this.runtime.recordTaskRunProgressByRunId({
         runId,
-        runtime: CODEX_NATIVE_SUBAGENT_RUNTIME,
         lastEventAt: eventAt,
         progressSummary: "Codex native subagent is active.",
       });
@@ -150,7 +127,6 @@ export class CodexNativeSubagentTaskMirror {
       this.terminalRunIds.add(runId);
       this.runtime.finalizeTaskRunByRunId({
         runId,
-        runtime: CODEX_NATIVE_SUBAGENT_RUNTIME,
         status: "succeeded",
         endedAt: eventAt,
         lastEventAt: eventAt,
@@ -163,7 +139,6 @@ export class CodexNativeSubagentTaskMirror {
       this.terminalRunIds.add(runId);
       this.runtime.finalizeTaskRunByRunId({
         runId,
-        runtime: CODEX_NATIVE_SUBAGENT_RUNTIME,
         status: "failed",
         endedAt: eventAt,
         lastEventAt: eventAt,
@@ -176,7 +151,6 @@ export class CodexNativeSubagentTaskMirror {
     if (statusType === "notLoaded") {
       this.runtime.recordTaskRunProgressByRunId({
         runId,
-        runtime: CODEX_NATIVE_SUBAGENT_RUNTIME,
         lastEventAt: eventAt,
         progressSummary: "Codex native subagent is not loaded.",
       });
@@ -188,21 +162,23 @@ export class CodexNativeSubagentTaskMirror {
     if (!item || readString(item, "type") !== "collabAgentToolCall") {
       return;
     }
-    if (readString(item, "senderThreadId") !== this.params.parentThreadId) {
+    const senderThreadId = readString(item, "senderThreadId") ?? readString(params, "threadId");
+    if (senderThreadId !== this.params.parentThreadId) {
       return;
     }
-    const receiverThreadIds = readStringArray(item.receiverThreadIds);
     const isSpawnAgentTool = normalizeToolName(readString(item, "tool")) === "spawnagent";
+    const receiverThreadIds = readStringArray(item.receiverThreadIds);
+    const agentsStates = readAgentsStates(item.agentsStates);
+    const spawnChildThreadIds = new Set([...receiverThreadIds, ...agentsStates.keys()]);
     if (isSpawnAgentTool) {
-      for (const receiverThreadId of receiverThreadIds) {
-        this.createTaskFromCollabSpawnItem(receiverThreadId, item);
+      for (const childThreadId of spawnChildThreadIds) {
+        this.createTaskFromCollabSpawnItem(childThreadId, item);
       }
     }
-    const agentsStates = readAgentsStates(item.agentsStates);
     const toolCallStatus = normalizeCollabToolCallStatus(readString(item, "status"));
     const terminalToolCallThreadIds = new Set<string>();
     if (isSpawnAgentTool && isBlockedOrFailedCollabToolCallStatus(toolCallStatus)) {
-      for (const threadId of receiverThreadIds) {
+      for (const threadId of spawnChildThreadIds) {
         terminalToolCallThreadIds.add(threadId);
       }
       for (const threadId of agentsStates.keys()) {
@@ -244,16 +220,7 @@ export class CodexNativeSubagentTaskMirror {
     const runId = codexNativeSubagentRunId(normalizedThreadId);
     const createdAt = this.now();
     this.runtime.createRunningTaskRun({
-      runtime: CODEX_NATIVE_SUBAGENT_RUNTIME,
-      taskKind: CODEX_NATIVE_SUBAGENT_TASK_KIND,
       sourceId: runId,
-      requesterSessionKey: this.params.requesterSessionKey,
-      ...(this.params.requesterSessionKey
-        ? {
-            ownerKey: this.params.requesterSessionKey,
-            scopeKind: "session" as const,
-          }
-        : {}),
       agentId: this.params.agentId,
       runId,
       label: "Codex subagent",
@@ -284,7 +251,6 @@ export class CodexNativeSubagentTaskMirror {
     if (normalizedStatus === "pendingInit" || normalizedStatus === "running") {
       this.runtime.recordTaskRunProgressByRunId({
         runId,
-        runtime: CODEX_NATIVE_SUBAGENT_RUNTIME,
         lastEventAt: eventAt,
         progressSummary:
           trimOptional(message) ??
@@ -298,7 +264,6 @@ export class CodexNativeSubagentTaskMirror {
       this.terminalRunIds.add(runId);
       this.runtime.finalizeTaskRunByRunId({
         runId,
-        runtime: CODEX_NATIVE_SUBAGENT_RUNTIME,
         status: "succeeded",
         endedAt: eventAt,
         lastEventAt: eventAt,
@@ -311,7 +276,6 @@ export class CodexNativeSubagentTaskMirror {
       this.terminalRunIds.add(runId);
       this.runtime.finalizeTaskRunByRunId({
         runId,
-        runtime: CODEX_NATIVE_SUBAGENT_RUNTIME,
         status: "succeeded",
         endedAt: eventAt,
         lastEventAt: eventAt,
@@ -324,7 +288,6 @@ export class CodexNativeSubagentTaskMirror {
     this.terminalRunIds.add(runId);
     this.runtime.finalizeTaskRunByRunId({
       runId,
-      runtime: CODEX_NATIVE_SUBAGENT_RUNTIME,
       status:
         normalizedStatus === "interrupted" || normalizedStatus === "shutdown"
           ? "cancelled"

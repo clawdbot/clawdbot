@@ -31,6 +31,7 @@ const mockState = vi.hoisted(() => ({
     replyToId?: string;
     replyToCurrent?: boolean;
     isReasoning?: boolean;
+    isError?: boolean;
   } | null,
   dispatchedReplies: [] as Array<{
     kind: "tool" | "block" | "final";
@@ -45,6 +46,7 @@ const mockState = vi.hoisted(() => ({
       replyToId?: string;
       replyToCurrent?: boolean;
       isReasoning?: boolean;
+      isError?: boolean;
     };
   }>,
   dispatchError: null as Error | null,
@@ -151,6 +153,7 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
           replyToId?: string;
           replyToCurrent?: boolean;
           isReasoning?: boolean;
+          isError?: boolean;
         }) => boolean;
         sendBlockReply: (payload: {
           text?: string;
@@ -162,6 +165,7 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
           replyToId?: string;
           replyToCurrent?: boolean;
           isReasoning?: boolean;
+          isError?: boolean;
         }) => boolean;
         sendToolResult: (payload: {
           text?: string;
@@ -173,6 +177,7 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
           replyToId?: string;
           replyToCurrent?: boolean;
           isReasoning?: boolean;
+          isError?: boolean;
         }) => boolean;
         markComplete: () => void;
         waitForIdle: () => Promise<void>;
@@ -963,6 +968,52 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         (entry as { role?: string }).role === "assistant",
     );
     expect(assistantEntries).toStrictEqual([]);
+  });
+
+  it("broadcasts returned agent-run error payloads after an agent starts", async () => {
+    createTranscriptFixture("openclaw-chat-send-agent-returned-error-");
+    const errorMessage = "LLM idle timeout (120s): no response from model";
+    mockState.triggerAgentRunStart = true;
+    mockState.dispatchedReplies = [
+      {
+        kind: "final",
+        payload: {
+          text: errorMessage,
+          isError: true,
+        },
+      },
+    ];
+    const respond = vi.fn();
+    const context = createChatContext();
+
+    const broadcast = await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-agent-returned-error",
+      message: "please keep working",
+    });
+
+    expect(broadcast).toMatchObject({
+      runId: "idem-agent-returned-error",
+      sessionKey: "main",
+      state: "error",
+      errorMessage,
+    });
+    const dedupe = context.dedupe.get("chat:idem-agent-returned-error");
+    expect(dedupe?.ok).toBe(false);
+    expect(dedupe?.payload).toMatchObject({
+      runId: "idem-agent-returned-error",
+      status: "error",
+      summary: errorMessage,
+    });
+    expect(findUserUpdate()).toBeDefined();
+    const assistantUpdates = mockState.emittedTranscriptUpdates.filter(
+      (update) =>
+        typeof update.message === "object" &&
+        update.message !== null &&
+        (update.message as { role?: unknown }).role === "assistant",
+    );
+    expect(assistantUpdates).toStrictEqual([]);
   });
 
   it("keeps visible text on non-agent TTS final media because no model transcript exists", async () => {

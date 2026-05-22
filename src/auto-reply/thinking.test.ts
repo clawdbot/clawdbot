@@ -192,6 +192,38 @@ describe("listThinkingLevels", () => {
     ).toBe("off");
   });
 
+  it("preserves provider-authoritative thinking profiles over stale catalog reasoning", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockReturnValue({
+      levels: [{ id: "off" }, { id: "minimal" }, { id: "low" }, { id: "medium" }],
+      preserveWhenCatalogReasoningFalse: true,
+    });
+    const catalog = [
+      {
+        provider: "google",
+        id: "gemini-3-flash-preview",
+        name: "Gemini 3 Flash Preview",
+        reasoning: false,
+      },
+    ];
+
+    expect(
+      isThinkingLevelSupported({
+        provider: "google",
+        model: "gemini-3-flash-preview",
+        level: "low",
+        catalog,
+      }),
+    ).toBe(true);
+    expect(
+      resolveSupportedThinkingLevel({
+        provider: "google",
+        model: "gemini-3-flash-preview",
+        level: "low",
+        catalog,
+      }),
+    ).toBe("low");
+  });
+
   it("passes catalog reasoning into provider thinking profiles for support checks", () => {
     providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(({ context }) => ({
       levels:

@@ -37,6 +37,7 @@ function resolveTaskName(env: GatewayServiceEnv): string {
 
 function shouldFallbackToStartupEntry(params: { code: number; detail: string }): boolean {
   return (
+    params.code === 1 ||
     /(?:access is denied|acceso denegado)/i.test(params.detail) ||
     params.code === 124 ||
     /schtasks timed out/i.test(params.detail) ||

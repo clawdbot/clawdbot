@@ -279,6 +279,7 @@ const TalkRealtimeSchema = z
     mode: z.enum(["realtime", "stt-tts", "transcription"]).optional(),
     transport: z.enum(["webrtc", "provider-websocket", "gateway-relay", "managed-room"]).optional(),
     brain: z.enum(["agent-consult", "direct-tools", "none"]).optional(),
+    consultRouting: z.enum(["provider-direct", "force-agent-consult"]).optional(),
   })
   .strict()
   .superRefine((realtime, ctx) => {

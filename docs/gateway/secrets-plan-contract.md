@@ -38,6 +38,51 @@ If a target does not match these rules, apply fails before mutating configuratio
 }
 ```
 
+## Provider upserts and deletes
+
+Plans may also include two optional top-level fields that mutate the
+`secrets.providers` map alongside the per-target writes:
+
+- `providerUpserts` — an object keyed by provider alias. Each value is a
+  provider definition (the same shape accepted under
+  `secrets.providers.<alias>` in `openclaw.json`, e.g. an `exec` or `file`
+  provider).
+- `providerDeletes` — an array of provider aliases to remove.
+
+`providerUpserts` runs before `targets`, so a `target.ref.provider` may
+reference a provider alias that the same plan introduces in
+`providerUpserts`. Without this, plans that reference an alias not yet
+configured in `openclaw.json` fail with `provider "<alias>" is not
+configured`.
+
+```json5
+{
+  version: 1,
+  protocolVersion: 1,
+  providerUpserts: {
+    onepassword_anthropic: {
+      source: "exec",
+      command: "/usr/bin/op",
+      args: ["read", "op://Vault/Anthropic/credential"],
+    },
+  },
+  providerDeletes: ["legacy_unused_alias"],
+  targets: [
+    {
+      type: "models.providers.apiKey",
+      path: "models.providers.anthropic.apiKey",
+      pathSegments: ["models", "providers", "anthropic", "apiKey"],
+      providerId: "anthropic",
+      ref: { source: "exec", provider: "onepassword_anthropic", id: "credential" },
+    },
+  ],
+}
+```
+
+Exec providers introduced via `providerUpserts` are still subject to the
+exec consent rules in [Exec provider consent behavior](#exec-provider-consent-behavior):
+plans containing exec providers require `--allow-exec` in write mode.
+
 ## Supported target scope
 
 Plan targets are accepted for supported credential paths in:

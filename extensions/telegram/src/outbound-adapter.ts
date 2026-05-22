@@ -53,7 +53,7 @@ function chunkTelegramOutboundText(
 ): string[] {
   return ctx?.formatting?.parseMode === "HTML"
     ? splitTelegramHtmlChunks(text, limit)
-    : markdownToTelegramHtmlChunks(text, limit);
+    : markdownToTelegramHtmlChunks(text, limit, { tableMode: ctx?.formatting?.tableMode });
 }
 
 async function resolveTelegramSendContext(params: {

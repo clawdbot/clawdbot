@@ -34,6 +34,17 @@ enum GatewaySettingsStore {
         self.ensureLastDiscoveredGatewayStableID()
     }
 
+    static func currentInstanceID(defaults: UserDefaults = .standard) -> String {
+        self.bootstrapPersistence()
+        if let value = defaults.string(forKey: self.instanceIdDefaultsKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+            !value.isEmpty
+        {
+            return value
+        }
+        return self.loadStableInstanceID() ?? ""
+    }
+
     static func loadStableInstanceID() -> String? {
         if let value = KeychainStore.loadString(service: self.nodeService, account: self.instanceIdAccount)?
             .trimmingCharacters(in: .whitespacesAndNewlines),
@@ -110,8 +121,15 @@ enum GatewaySettingsStore {
     }
 
     static func saveGatewayToken(_ token: String, instanceId: String) {
+        let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            _ = KeychainStore.delete(
+                service: self.gatewayService,
+                account: self.gatewayTokenAccount(instanceId: instanceId))
+            return
+        }
         _ = KeychainStore.saveString(
-            token,
+            trimmed,
             service: self.gatewayService,
             account: self.gatewayTokenAccount(instanceId: instanceId))
     }
@@ -125,8 +143,13 @@ enum GatewaySettingsStore {
     }
 
     static func saveGatewayBootstrapToken(_ token: String, instanceId: String) {
+        let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            self.clearGatewayBootstrapToken(instanceId: instanceId)
+            return
+        }
         _ = KeychainStore.saveString(
-            token,
+            trimmed,
             service: self.gatewayService,
             account: self.gatewayBootstrapTokenAccount(instanceId: instanceId))
     }
@@ -145,8 +168,15 @@ enum GatewaySettingsStore {
     }
 
     static func saveGatewayPassword(_ password: String, instanceId: String) {
+        let trimmed = password.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            _ = KeychainStore.delete(
+                service: self.gatewayService,
+                account: self.gatewayPasswordAccount(instanceId: instanceId))
+            return
+        }
         _ = KeychainStore.saveString(
-            password,
+            trimmed,
             service: self.gatewayService,
             account: self.gatewayPasswordAccount(instanceId: instanceId))
     }

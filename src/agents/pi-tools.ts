@@ -7,6 +7,7 @@ import { resolveExecCommandHighlighting } from "../config/exec-command-highlight
 import type { ModelCompatConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
+import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runtime-policy.js";
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
@@ -743,6 +744,12 @@ export function createOpenClawCodingTools(options?: {
         sessionKey: options?.sessionKey,
         mainKey: options?.config?.session?.mainKey,
         sessionScope: options?.config?.session?.scope,
+        eventRouting: resolveEventSessionRoutingPolicy({
+          cfg: options?.config,
+          sessionKey: options?.sessionKey,
+          channel: options?.messageProvider,
+          accountId: options?.agentAccountId,
+        }),
         messageProvider: options?.messageProvider,
         currentChannelId: options?.currentChannelId,
         currentThreadTs: options?.currentThreadTs,

@@ -51,6 +51,8 @@ export type ReplyPayload = {
   isCompactionNotice?: boolean;
   /** Marks this payload as a model-fallback transition/recovery notice. */
   isFallbackNotice?: boolean;
+  /** Marks this payload as transient status, not assistant answer content. */
+  isStatusNotice?: boolean;
   /** Channel-specific payload data (per-channel envelope). */
   channelData?: Record<string, unknown>;
 };
@@ -191,4 +193,10 @@ export function markReplyPayloadForSourceSuppressionDelivery<T extends object>(p
   return setReplyPayloadMetadata(payload, {
     deliverDespiteSourceReplySuppression: true,
   });
+}
+
+export function isReplyPayloadStatusNotice(
+  payload: Pick<ReplyPayload, "isCompactionNotice" | "isFallbackNotice" | "isStatusNotice">,
+): boolean {
+  return Boolean(payload.isCompactionNotice || payload.isFallbackNotice || payload.isStatusNotice);
 }

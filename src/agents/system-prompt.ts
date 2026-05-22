@@ -422,6 +422,7 @@ function buildAssistantOutputDirectivesSection(params: {
   return [
     "## Assistant Output Directives",
     "- Attach media: `MEDIA:<path-or-url>` on its own line.",
+    "  The MEDIA directive must start the line as plain text, outside code fences and without Markdown wrappers. Do not write `**MEDIA:...**`, `` `MEDIA:...` ``, or inline prose like `Here is the file: MEDIA:...`.",
     "- Voice-note audio hint: `[[audio_as_voice]]` when audio is attached.",
     "- Native quote/reply: first token `[[reply_to_current]]`; use `[[reply_to:<id>]]` only with an explicit id.",
     "- Supported directives are stripped before rendering; channel config still decides delivery.",

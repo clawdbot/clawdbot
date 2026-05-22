@@ -404,38 +404,186 @@ See [Get group/user IDs](#get-groupuser-ids) for lookup tips.
 
 ---
 
+## Per-user agent isolation (Dynamic Agent Creation)
+
+Enable `dynamicAgentCreation` to automatically create **isolated agent instances** for each DM user. Each user gets their own:
+
+- Independent workspace directory
+- Separate `USER.md` / `SOUL.md` / `MEMORY.md`
+- Private conversation history
+- Isolated skills and state
+
+This is essential for public bots where you want each user to have their own private AI assistant experience.
+
+<Note>
+**Account limitation**: `dynamicAgentCreation` currently works with the **default Feishu account only**. Named/multi-account setups are not yet fully supported — dynamic bindings are created without `accountId`, so messages to named accounts may still route to `agent:main`. Track progress in [Issue #42837](https://github.com/openclaw/openclaw/issues/42837).
+</Note>
+
+### Quick setup
+
+```json5
+{
+  channels: {
+    feishu: {
+      dmPolicy: "open",
+      allowFrom: ["*"],
+      dynamicAgentCreation: {
+        enabled: true,
+        workspaceTemplate: "~/.openclaw/workspace-{agentId}",
+        agentDirTemplate: "~/.openclaw/agents/{agentId}/agent",
+      },
+    },
+  },
+  session: {
+    // Critical: makes each user's DM their "main session"
+    // Automatically loads USER.md / SOUL.md / MEMORY.md
+    // For stronger isolation, use "per-channel-peer" instead
+    dmScope: "main",
+  },
+}
+```
+
+### How it works
+
+When a new user sends their first DM:
+
+1. The channel generates a unique `agentId` = `feishu-{user_open_id}`
+2. Creates a new workspace at `workspaceTemplate` path
+3. Registers the agent and creates a binding for this user
+4. The workspace helper ensures bootstrap files (`AGENTS.md`, `SOUL.md`, `USER.md`, etc.) on first access
+5. Routes all future messages from this user to their dedicated agent
+
+### Configuration options
+
+| Setting                                                  | Description                                | Default                              |
+| -------------------------------------------------------- | ------------------------------------------ | ------------------------------------ |
+| `channels.feishu.dynamicAgentCreation.enabled`           | Enable automatic per-user agent creation   | `false`                              |
+| `channels.feishu.dynamicAgentCreation.workspaceTemplate` | Path template for dynamic agent workspaces | `~/.openclaw/workspace-{agentId}`    |
+| `channels.feishu.dynamicAgentCreation.agentDirTemplate`  | Agent directory name template              | `~/.openclaw/agents/{agentId}/agent` |
+| `channels.feishu.dynamicAgentCreation.maxAgents`         | Maximum number of dynamic agents to create | unlimited                            |
+
+Template variables:
+
+- `{agentId}` - the generated agent ID (e.g., `feishu-ou_xxxxxx`)
+- `{userId}` - the sender's Feishu open_id (e.g., `ou_xxxxxx`)
+
+### Session scope
+
+`session.dmScope` controls how direct messages are mapped to agent sessions. This is a **global setting** that affects all channels.
+
+| Value                | Behavior                                                  | Best for                                                           |
+| -------------------- | --------------------------------------------------------- | ------------------------------------------------------------------ |
+| `"main"`             | Each user's DM maps to their agent's main session         | Single-user bots where you want `USER.md` / `SOUL.md` to auto-load |
+| `"per-channel-peer"` | Each (channel + user) combination gets a separate session | Public multi-user bots needing stronger isolation                  |
+
+**Tradeoff**: Using `"main"` enables automatic bootstrap file loading (`USER.md`, `SOUL.md`, `MEMORY.md`), but means all DMs across all channels share the same session key pattern. For public multi-user bots where isolation matters more than bootstrap auto-loading, consider `"per-channel-peer"` and manage bootstrap files manually.
+
+<Note>
+`"per-account-channel-peer"` is not recommended with `dynamicAgentCreation` because dynamic bindings are created without `accountId`. Use it only with manual bindings.
+</Note>
+
+```json5
+{
+  session: {
+    // For single-user personal bots: enables auto bootstrap loading
+    dmScope: "main",
+
+    // For public multi-user bots: stronger isolation
+    // dmScope: "per-channel-peer",
+  },
+}
+```
+
+### Typical multi-user deployment
+
+```json5
+{
+  channels: {
+    feishu: {
+      appId: "cli_xxx",
+      appSecret: "xxx",
+      dmPolicy: "open",
+      allowFrom: ["*"],
+      groupPolicy: "open",
+      requireMention: true,
+      dynamicAgentCreation: {
+        enabled: true,
+        workspaceTemplate: "~/.openclaw/workspace-{agentId}",
+        agentDirTemplate: "~/.openclaw/agents/{agentId}/agent",
+      },
+    },
+  },
+  session: {
+    // Choose dmScope based on your isolation needs:
+    // "main" for bootstrap auto-loading, "per-channel-peer" for stronger isolation
+    dmScope: "main",
+  },
+  bindings: [], // Empty - dynamic agents auto-bind
+}
+```
+
+### Verification
+
+Check gateway logs to confirm dynamic creation is working:
+
+```
+feishu: creating dynamic agent "feishu-ou_xxxxxx" for user ou_xxxxxx
+workspace: /Users/you/.openclaw/workspace-feishu-ou_xxxxxx
+feishu: dynamic agent created, new route: agent:feishu-ou_xxxxxx:main
+```
+
+List all created workspaces:
+
+```bash
+ls -la ~/.openclaw/workspace-*
+```
+
+### Notes
+
+- **Workspace isolation**: Each user gets their own workspace directory and agent instance. Users cannot see each other's conversation history or files within the normal messaging flow.
+- **Security boundary**: This is a messaging-context isolation mechanism, not a hostile co-tenant security boundary. The agent process and host environment are shared.
+- **`bindings` should be empty**: Dynamic agents auto-register their own bindings
+- **Upgrade path**: Existing manual bindings continue to work alongside dynamic agents
+- **`session.dmScope` is global**: This affects all channels, not just Feishu
+
+---
+
 ## Configuration reference
 
 Full configuration: [Gateway configuration](/gateway/configuration)
 
-| Setting                                           | Description                                                                      | Default          |
-| ------------------------------------------------- | -------------------------------------------------------------------------------- | ---------------- |
-| `channels.feishu.enabled`                         | Enable/disable the channel                                                       | `true`           |
-| `channels.feishu.domain`                          | API domain (`feishu` or `lark`)                                                  | `feishu`         |
-| `channels.feishu.connectionMode`                  | Event transport (`websocket` or `webhook`)                                       | `websocket`      |
-| `channels.feishu.defaultAccount`                  | Default account for outbound routing                                             | `default`        |
-| `channels.feishu.verificationToken`               | Required for webhook mode                                                        | -                |
-| `channels.feishu.encryptKey`                      | Required for webhook mode                                                        | -                |
-| `channels.feishu.webhookPath`                     | Webhook route path                                                               | `/feishu/events` |
-| `channels.feishu.webhookHost`                     | Webhook bind host                                                                | `127.0.0.1`      |
-| `channels.feishu.webhookPort`                     | Webhook bind port                                                                | `3000`           |
-| `channels.feishu.accounts.<id>.appId`             | App ID                                                                           | -                |
-| `channels.feishu.accounts.<id>.appSecret`         | App Secret                                                                       | -                |
-| `channels.feishu.accounts.<id>.domain`            | Per-account domain override                                                      | `feishu`         |
-| `channels.feishu.accounts.<id>.tts`               | Per-account TTS override                                                         | `messages.tts`   |
-| `channels.feishu.dmPolicy`                        | DM policy                                                                        | `allowlist`      |
-| `channels.feishu.allowFrom`                       | DM allowlist (open_id list)                                                      | [BotOwnerId]     |
-| `channels.feishu.groupPolicy`                     | Group policy                                                                     | `allowlist`      |
-| `channels.feishu.groupAllowFrom`                  | Group allowlist                                                                  | -                |
-| `channels.feishu.requireMention`                  | Require @mention in groups                                                       | `true`           |
-| `channels.feishu.groups.<chat_id>.requireMention` | Per-group @mention override; explicit IDs also admit the group in allowlist mode | inherited        |
-| `channels.feishu.groups.<chat_id>.enabled`        | Enable/disable a specific group                                                  | `true`           |
-| `channels.feishu.textChunkLimit`                  | Message chunk size                                                               | `2000`           |
-| `channels.feishu.mediaMaxMb`                      | Media size limit                                                                 | `30`             |
-| `channels.feishu.streaming`                       | Streaming card output                                                            | `true`           |
-| `channels.feishu.blockStreaming`                  | Completed-block reply streaming                                                  | `false`          |
-| `channels.feishu.typingIndicator`                 | Send typing reactions                                                            | `true`           |
-| `channels.feishu.resolveSenderNames`              | Resolve sender display names                                                     | `true`           |
+| Setting                                                  | Description                                                                      | Default                              |
+| -------------------------------------------------------- | -------------------------------------------------------------------------------- | ------------------------------------ |
+| `channels.feishu.enabled`                                | Enable/disable the channel                                                       | `true`                               |
+| `channels.feishu.domain`                                 | API domain (`feishu` or `lark`)                                                  | `feishu`                             |
+| `channels.feishu.connectionMode`                         | Event transport (`websocket` or `webhook`)                                       | `websocket`                          |
+| `channels.feishu.defaultAccount`                         | Default account for outbound routing                                             | `default`                            |
+| `channels.feishu.verificationToken`                      | Required for webhook mode                                                        | -                                    |
+| `channels.feishu.encryptKey`                             | Required for webhook mode                                                        | -                                    |
+| `channels.feishu.webhookPath`                            | Webhook route path                                                               | `/feishu/events`                     |
+| `channels.feishu.webhookHost`                            | Webhook bind host                                                                | `127.0.0.1`                          |
+| `channels.feishu.webhookPort`                            | Webhook bind port                                                                | `3000`                               |
+| `channels.feishu.accounts.<id>.appId`                    | App ID                                                                           | -                                    |
+| `channels.feishu.accounts.<id>.appSecret`                | App Secret                                                                       | -                                    |
+| `channels.feishu.accounts.<id>.domain`                   | Per-account domain override                                                      | `feishu`                             |
+| `channels.feishu.accounts.<id>.tts`                      | Per-account TTS override                                                         | `messages.tts`                       |
+| `channels.feishu.dmPolicy`                               | DM policy                                                                        | `allowlist`                          |
+| `channels.feishu.allowFrom`                              | DM allowlist (open_id list)                                                      | [BotOwnerId]                         |
+| `channels.feishu.groupPolicy`                            | Group policy                                                                     | `allowlist`                          |
+| `channels.feishu.groupAllowFrom`                         | Group allowlist                                                                  | -                                    |
+| `channels.feishu.requireMention`                         | Require @mention in groups                                                       | `true`                               |
+| `channels.feishu.groups.<chat_id>.requireMention`        | Per-group @mention override; explicit IDs also admit the group in allowlist mode | inherited                            |
+| `channels.feishu.groups.<chat_id>.enabled`               | Enable/disable a specific group                                                  | `true`                               |
+| `channels.feishu.dynamicAgentCreation.enabled`           | Enable automatic per-user agent creation                                         | `false`                              |
+| `channels.feishu.dynamicAgentCreation.workspaceTemplate` | Path template for dynamic agent workspaces                                       | `~/.openclaw/workspace-{agentId}`    |
+| `channels.feishu.dynamicAgentCreation.agentDirTemplate`  | Agent directory name template                                                    | `~/.openclaw/agents/{agentId}/agent` |
+| `channels.feishu.dynamicAgentCreation.maxAgents`         | Maximum number of dynamic agents to create                                       | unlimited                            |
+| `channels.feishu.textChunkLimit`                         | Message chunk size                                                               | `2000`                               |
+| `channels.feishu.mediaMaxMb`                             | Media size limit                                                                 | `30`                                 |
+| `channels.feishu.streaming`                              | Streaming card output                                                            | `true`                               |
+| `channels.feishu.blockStreaming`                         | Completed-block reply streaming                                                  | `false`                              |
+| `channels.feishu.typingIndicator`                        | Send typing reactions                                                            | `true`                               |
+| `channels.feishu.resolveSenderNames`                     | Resolve sender display names                                                     | `true`                               |
 
 ---
 

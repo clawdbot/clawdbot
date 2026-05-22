@@ -26,11 +26,12 @@ import {
   type LoadInstalledPluginIndexParams,
   type RefreshInstalledPluginIndexParams,
 } from "./installed-plugin-index.js";
+import type { PluginRegistrySnapshotSource } from "./plugin-registry-snapshot.types.js";
 
 export type PluginRegistrySnapshot = InstalledPluginIndex;
 export type PluginRegistryRecord = InstalledPluginIndexRecord;
 export type PluginRegistryInspection = InstalledPluginIndexStoreInspection;
-export type PluginRegistrySnapshotSource = "provided" | "persisted" | "derived";
+export type { PluginRegistrySnapshotSource } from "./plugin-registry-snapshot.types.js";
 export type PluginRegistrySnapshotDiagnosticCode =
   | "persisted-registry-disabled"
   | "persisted-registry-missing"

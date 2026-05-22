@@ -25,6 +25,7 @@ export async function startGatewayServerHarness(): Promise<GatewayServerHarness>
   const port = await getFreePort();
   const server = await startGatewayServer(port, {
     auth: { mode: "none" },
+    bind: "loopback",
     controlUiEnabled: false,
   });
 

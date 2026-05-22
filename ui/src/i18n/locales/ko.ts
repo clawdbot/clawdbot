@@ -1084,6 +1084,8 @@ export const ko: TranslationMap = {
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
       startTalk: "Start Talk",
+      stillListening: "계속 듣는 중",
+      talkTranscript: "음성 대화 기록",
       stopTalk: "Stop Talk",
     },
     selectors: {

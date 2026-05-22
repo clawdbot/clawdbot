@@ -120,6 +120,10 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
     const terminalMeta = {
       ...(ctx.state.terminalStopReason ? { stopReason: ctx.state.terminalStopReason } : {}),
       ...(ctx.state.yielded === true ? { yielded: true } : {}),
+      ...(ctx.state.timeoutPhase ? { timeoutPhase: ctx.state.timeoutPhase } : {}),
+      ...(typeof ctx.state.providerStarted === "boolean"
+        ? { providerStarted: ctx.state.providerStarted }
+        : {}),
     };
     if (isError) {
       emitAgentEvent({

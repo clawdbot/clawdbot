@@ -16,6 +16,7 @@ import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
 import MarkdownIt from "markdown-it";
 import markdownItTaskLists from "markdown-it-task-lists";
+import { stripUnsupportedCitationControlMarkers } from "../../../src/shared/text/citation-control-markers.js";
 import { i18n, t } from "../i18n/index.ts";
 import { truncateText } from "./format.ts";
 import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
@@ -576,7 +577,7 @@ md.renderer.rules.code_block = (tokens, idx) => {
 };
 
 export function toSanitizedMarkdownHtml(markdown: string): string {
-  const input = markdown.trim();
+  const input = stripUnsupportedCitationControlMarkers(markdown).trim();
   if (!input) {
     return "";
   }

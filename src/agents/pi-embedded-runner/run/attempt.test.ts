@@ -131,6 +131,18 @@ describe("buildEmbeddedAttemptToolRunContext", () => {
   });
 });
 
+describe("resolveEmbeddedAttemptSessionWriteLockOptions", () => {
+  it("bounds post-prompt session lock max hold to compaction timeout instead of run timeout", () => {
+    const options = attemptTesting.resolveEmbeddedAttemptSessionWriteLockOptions({
+      config: {},
+      compactionTimeoutMs: 600_000,
+      env: {},
+    });
+
+    expect(options.maxHoldMs).toBe(720_000);
+  });
+});
+
 describe("buildCallableToolNamesForEmptyAllowlistCheck", () => {
   it("ignores auto-added Tool Search controls so bad allowlists still fail", () => {
     expect(

@@ -1,4 +1,4 @@
-import type { Command } from "commander";
+import { InvalidArgumentError, type Command } from "commander";
 import type { CaptureQueryPreset } from "../proxy-capture/types.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 
@@ -12,12 +12,32 @@ async function loadProxyCliRuntime(): Promise<ProxyCliRuntime> {
   return await proxyCliRuntimeLoader.load();
 }
 
-function parseOptionalNumber(value: string | undefined): number | undefined {
-  if (!value) {
-    return undefined;
+function parseIntegerOption(value: string | undefined, flag: string): number {
+  const trimmed = value?.trim() ?? "";
+  if (!/^\d+$/u.test(trimmed)) {
+    throw new InvalidArgumentError(`${flag} must be an integer.`);
   }
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : undefined;
+  const parsed = Number(trimmed);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new InvalidArgumentError(`${flag} must be a safe integer.`);
+  }
+  return parsed;
+}
+
+function parsePortOption(value: string | undefined): number {
+  const parsed = parseIntegerOption(value, "--port");
+  if (parsed > 65_535) {
+    throw new InvalidArgumentError("--port must be between 0 and 65535.");
+  }
+  return parsed;
+}
+
+function parsePositiveIntegerOption(value: string | undefined, flag: string): number {
+  const parsed = parseIntegerOption(value, flag);
+  if (parsed <= 0) {
+    throw new InvalidArgumentError(`${flag} must be a positive integer.`);
+  }
+  return parsed;
 }
 
 function collectOption(value: string, previous: string[] | undefined): string[] {
@@ -33,7 +53,7 @@ export function registerProxyCli(program: Command) {
     .command("start")
     .description("Start the local explicit debug proxy")
     .option("--host <host>", "Bind host", "127.0.0.1")
-    .option("--port <port>", "Bind port", parseOptionalNumber)
+    .option("--port <port>", "Bind port", parsePortOption)
     .action(async (opts: { host?: string; port?: number }) => {
       const runtime = await loadProxyCliRuntime();
       await runtime.runDebugProxyStartCommand(opts);
@@ -45,7 +65,7 @@ export function registerProxyCli(program: Command) {
     .allowUnknownOption(true)
     .allowExcessArguments(true)
     .option("--host <host>", "Bind host", "127.0.0.1")
-    .option("--port <port>", "Bind port", parseOptionalNumber)
+    .option("--port <port>", "Bind port", parsePortOption)
     .argument("[cmd...]", "Command to run after --")
     .action(async (cmd: string[], opts: { host?: string; port?: number }) => {
       const runtime = await loadProxyCliRuntime();
@@ -70,7 +90,9 @@ export function registerProxyCli(program: Command) {
     .option("--denied-url <url>", "Destination expected to be blocked by the proxy", collectOption)
     .option("--apns-reachable", "Also verify sandbox APNs HTTP/2 is reachable through the proxy")
     .option("--apns-authority <url>", "APNs authority to probe with --apns-reachable")
-    .option("--timeout-ms <ms>", "Per-request timeout in milliseconds", parseOptionalNumber)
+    .option("--timeout-ms <ms>", "Per-request timeout in milliseconds", (value) =>
+      parsePositiveIntegerOption(value, "--timeout-ms"),
+    )
     .action(
       async (opts: {
         json?: boolean;
@@ -107,7 +129,9 @@ export function registerProxyCli(program: Command) {
   proxy
     .command("sessions")
     .description("List recent capture sessions")
-    .option("--limit <count>", "Maximum sessions to show", parseOptionalNumber)
+    .option("--limit <count>", "Maximum sessions to show", (value) =>
+      parsePositiveIntegerOption(value, "--limit"),
+    )
     .action(async (opts: { limit?: number }) => {
       const runtime = await loadProxyCliRuntime();
       await runtime.runDebugProxySessionsCommand(opts);

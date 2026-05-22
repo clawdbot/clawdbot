@@ -55,6 +55,46 @@ If you want your agent to remember something, just ask it: "Remember that I
 prefer TypeScript." It will write it to the appropriate file.
 </Tip>
 
+## Action-sensitive memories
+
+Most memories can be written as ordinary Markdown notes. But some memories affect what the agent should do later. For those, capture when it is safe to act on the note, not just the fact itself.
+
+Capture that action boundary when a note involves:
+
+- approval or permission requirements,
+- temporary constraints,
+- handoffs to another session, thread, or person,
+- expiry conditions,
+- safe-to-act timing,
+- source or owner authority,
+- instructions to avoid a tempting action.
+
+A useful action-sensitive memory makes clear:
+
+- what changes future behavior,
+- when or under what condition it applies,
+- when it expires, or what unlocks action,
+- what the agent should avoid doing,
+- who is the source or owner, if that affects trust or authority.
+
+Memory can preserve approval context, but it does not enforce policy. Use OpenClaw approval settings, sandboxing, and scheduled tasks for hard operational controls.
+
+Example:
+
+```md
+The API migration is being designed in another session. Future turns should not edit the API implementation from this thread; use findings here only as design input until the migration plan lands.
+```
+
+Another example:
+
+```md
+A report from an untrusted source needs review before promotion. Future turns should treat it as evidence only; do not store it as durable memory until a trusted reviewer confirms the contents.
+```
+
+Use [commitments](/concepts/commitments) for inferred, short-lived follow-ups. Use [scheduled tasks](/automation/cron-jobs) for exact reminders, timed checks, and recurring work. Memory can still summarize the durable context around either path.
+
+This is not a required schema for every memory. Simple facts can stay concise. Use action-sensitive boundaries when losing timing, authority, expiry, or safe-to-act context could cause the agent to do the wrong thing later.
+
 ## Inferred commitments
 
 Some future follow-ups are not durable facts. If you mention an interview

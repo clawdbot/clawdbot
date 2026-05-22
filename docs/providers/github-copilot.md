@@ -99,7 +99,9 @@ back to `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, then `GITHUB_TOKEN`. Use
 
   <Accordion title="Model availability depends on your plan">
     Copilot model availability depends on your GitHub plan. If a model is
-    rejected, try another ID (for example `github-copilot/gpt-4.1`).
+    rejected, try another ID (for example `github-copilot/gpt-4.1`). See
+    GitHub's [supported models per Copilot plan](https://docs.github.com/en/copilot/reference/ai-models/supported-models#supported-ai-models-per-copilot-plan)
+    for the current model list.
   </Accordion>
 
   <Accordion title="Live catalog refresh from the Copilot API">

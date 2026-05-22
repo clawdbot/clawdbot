@@ -12,6 +12,7 @@ type UsageInput = NonNullable<Parameters<typeof mergeUsageIntoAccumulator>[1]>;
 const FIRST_USAGE: UsageInput = {
   input: 100,
   output: 50,
+  reasoningTokens: 12,
   cacheRead: 80_000,
   cacheWrite: 5_000,
   total: 85_150,
@@ -28,6 +29,7 @@ const SECOND_USAGE: UsageInput = {
 const FINAL_USAGE: UsageInput = {
   input: 150,
   output: 40,
+  reasoningTokens: 7,
   cacheRead: 84_000,
   cacheWrite: 0,
   total: 84_190,
@@ -53,6 +55,7 @@ describe("usage-accumulator", () => {
 
       expect(acc.input).toBe(370);
       expect(acc.output).toBe(120);
+      expect(acc.reasoningTokens).toBe(19);
       expect(acc.cacheRead).toBe(246_000);
       expect(acc.cacheWrite).toBe(5_000);
       expect(acc.total).toBe(251_490);
@@ -63,6 +66,7 @@ describe("usage-accumulator", () => {
 
       expect(acc.lastInput).toBe(150);
       expect(acc.lastOutput).toBe(40);
+      expect(acc.lastReasoningTokens).toBe(7);
       expect(acc.lastCacheRead).toBe(84_000);
       expect(acc.lastCacheWrite).toBe(0);
       expect(acc.lastTotal).toBe(84_190);
@@ -100,6 +104,7 @@ describe("usage-accumulator", () => {
       mergeUsageIntoAccumulator(acc, {
         input: 100,
         output: 50,
+        reasoningTokens: 4,
         cacheRead: 80_000,
         cacheWrite: 5_000,
       });
@@ -119,6 +124,7 @@ describe("usage-accumulator", () => {
       expect(toNormalizedUsage(acc)).toEqual({
         input: 370,
         output: 120,
+        reasoningTokens: 4,
         cacheRead: 246_000,
         cacheWrite: 5_000,
         total: 251_490,
@@ -146,6 +152,7 @@ describe("usage-accumulator", () => {
       expect(toLastCallUsage(acc)).toEqual({
         input: 150,
         output: 40,
+        reasoningTokens: 7,
         cacheRead: 84_000,
         cacheWrite: undefined,
         total: 84_190,
@@ -169,6 +176,7 @@ describe("usage-accumulator", () => {
           {
             inputTokens: 99,
             outputTokens: 12,
+            completion_tokens_details: { reasoning_tokens: 8 },
             cache_read_input_tokens: 456,
             cache_creation_input_tokens: 3,
             totalTokens: 570,
@@ -178,6 +186,7 @@ describe("usage-accumulator", () => {
       ).toEqual({
         input: 99,
         output: 12,
+        reasoningTokens: 8,
         cacheRead: 456,
         cacheWrite: 3,
         total: 570,
@@ -190,6 +199,7 @@ describe("usage-accumulator", () => {
       expect(resolveLastCallUsage(undefined, acc)).toEqual({
         input: 150,
         output: 40,
+        reasoningTokens: 7,
         cacheRead: 84_000,
         cacheWrite: undefined,
         total: 84_190,
@@ -202,6 +212,7 @@ describe("usage-accumulator", () => {
       expect(resolveLastCallUsage({ responseId: "abc" } as never, acc)).toEqual({
         input: 150,
         output: 40,
+        reasoningTokens: 7,
         cacheRead: 84_000,
         cacheWrite: undefined,
         total: 84_190,

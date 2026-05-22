@@ -5,7 +5,6 @@ import path from "node:path";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
-import { createPnpmRunnerSpawnSpec } from "../pnpm-runner.mjs";
 
 const PLUGIN_SPEC =
   process.env.OPENCLAW_KITCHEN_SINK_NPM_SPEC || "npm:@openclaw/kitchen-sink@latest";
@@ -130,7 +129,7 @@ function runCommand(command, args, options = {}) {
 }
 
 async function runOpenClaw(runner, args, env, options = {}) {
-  const command = resolveOpenClawCommand(runner, args, env, {
+  const command = await resolveOpenClawCommand(runner, args, env, {
     stdio: ["ignore", "pipe", "pipe"],
   });
   return runCommand(command.command, command.args, {
@@ -140,8 +139,9 @@ async function runOpenClaw(runner, args, env, options = {}) {
   });
 }
 
-function resolveOpenClawCommand(runner, args, env, options = {}) {
+async function resolveOpenClawCommand(runner, args, env, options = {}) {
   if (runner.pnpm) {
+    const { createPnpmRunnerSpawnSpec } = await import("../pnpm-runner.mjs");
     return createPnpmRunnerSpawnSpec({
       env,
       pnpmArgs: [...runner.baseArgs, ...args],
@@ -227,7 +227,7 @@ function unwrapRpcPayload(raw) {
 }
 
 async function rpcCall(method, params, options) {
-  const { callGateway } = await loadCallGatewayModule();
+  const { callGateway } = await loadCallGatewayModule(options.runner);
   const payload = await callGateway({
     config: readJson(options.env.OPENCLAW_CONFIG_PATH),
     configPath: options.env.OPENCLAW_CONFIG_PATH,
@@ -241,11 +241,35 @@ async function rpcCall(method, params, options) {
   return unwrapRpcPayload(payload);
 }
 
-async function loadCallGatewayModule() {
-  callGatewayModulePromise ??= import(
-    pathToFileURL(path.join(process.cwd(), "src/gateway/call.ts"))
-  );
+async function loadCallGatewayModule(runner) {
+  callGatewayModulePromise ??= importCallGatewayModule(runner);
   return callGatewayModulePromise;
+}
+
+async function importCallGatewayModule(runner) {
+  if (!usesPackagedOpenClawEntry(runner)) {
+    return import(pathToFileURL(path.join(process.cwd(), "src/gateway/call.ts")).href);
+  }
+  const distDir = path.join(process.cwd(), "dist");
+  const candidates = fs.existsSync(distDir)
+    ? fs
+        .readdirSync(distDir)
+        .filter((name) => /^call(?:\.runtime)?-[A-Za-z0-9_-]+\.js$/u.test(name))
+        .toSorted((left, right) => left.localeCompare(right))
+    : [];
+  for (const name of candidates) {
+    const module = await import(pathToFileURL(path.join(distDir, name)).href);
+    if (typeof module.callGateway === "function") {
+      return module;
+    }
+  }
+  throw new Error(`unable to find callGateway export in dist (${candidates.join(", ")})`);
+}
+
+function usesPackagedOpenClawEntry(runner) {
+  return Boolean(
+    process.env.OPENCLAW_ENTRY && runner?.baseArgs?.[0] === process.env.OPENCLAW_ENTRY,
+  );
 }
 
 async function retryRpcCall(method, params, options) {
@@ -347,18 +371,11 @@ function configureKitchenSink(env, port) {
   writeJson(configPath, config);
 }
 
-function startGateway(runner, port, env, logPath) {
+async function startGateway(runner, port, env, logPath) {
   const log = fs.openSync(logPath, "w");
-  const command = resolveOpenClawCommand(
+  const command = await resolveOpenClawCommand(
     runner,
-    [
-      "gateway",
-      "--port",
-      String(port),
-      "--bind",
-      "loopback",
-      "--allow-unconfigured",
-    ],
+    ["gateway", "--port", String(port), "--bind", "loopback", "--allow-unconfigured"],
     env,
     {
       stdio: ["ignore", log, log],
@@ -599,7 +616,7 @@ async function main() {
   ];
   assertIncludesAny(inspectProviders, EXPECTED_PROVIDERS, "plugins inspect providers");
 
-  const child = startGateway(runner, port, env, logPath);
+  const child = await startGateway(runner, port, env, logPath);
   try {
     await waitForGatewayReady(child, port, logPath);
     const initialSample = await sampleProcess(child.pid);

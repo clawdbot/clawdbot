@@ -108,7 +108,13 @@ describe("waitForAgentJob", () => {
       emitAgentEvent({
         runId,
         stream: "lifecycle",
-        data: { phase: "end", endedAt: 200, aborted: true },
+        data: {
+          phase: "end",
+          endedAt: 200,
+          aborted: true,
+          timeoutPhase: "provider",
+          providerStarted: true,
+        },
       });
 
       await vi.advanceTimersByTimeAsync(15_000);
@@ -117,6 +123,8 @@ describe("waitForAgentJob", () => {
         status: "timeout",
         startedAt: 100,
         endedAt: 200,
+        timeoutPhase: "provider",
+        providerStarted: true,
       });
     } finally {
       vi.useRealTimers();
@@ -525,6 +533,35 @@ describe("sanitizeChatHistoryMessages", () => {
           },
           { type: "text", text: "Checking." },
         ],
+        timestamp: 1,
+      },
+    ]);
+  });
+
+  it("preserves OpenAI-compatible assistant usage aliases for display context", () => {
+    const result = sanitizeChatHistoryMessages([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "done" }],
+        usage: {
+          prompt_tokens: 11,
+          completion_tokens: 1,
+          total_tokens: 12,
+          provider_payload: "discard",
+        },
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "done" }],
+        usage: {
+          prompt_tokens: 11,
+          completion_tokens: 1,
+          total_tokens: 12,
+        },
         timestamp: 1,
       },
     ]);

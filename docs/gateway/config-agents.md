@@ -1504,6 +1504,7 @@ Defaults for Talk mode (macOS/iOS/Android).
 - `speechLocale` sets the BCP 47 locale id used by iOS/macOS Talk speech recognition. Leave unset to use the device default.
 - `silenceTimeoutMs` controls how long Talk mode waits after user silence before it sends the transcript. Unset keeps the platform default pause window (`700 ms on macOS and Android, 900 ms on iOS`).
 - `realtime.instructions` appends provider-facing system instructions to OpenClaw's built-in realtime prompt, so voice style can be configured without losing default `openclaw_agent_consult` guidance.
+- `realtime.consultRouting` controls Gateway relay fallback when the realtime provider produces a final user transcript without `openclaw_agent_consult`: `provider-direct` preserves direct provider replies, while `force-agent-consult` routes the finalized request through OpenClaw.
 
 ---
 

@@ -5,11 +5,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   repairMissingConfiguredPluginInstalls: vi.fn(),
+  relinkOpenClawPeerDependenciesInManagedNpmRoot: vi.fn(),
   runPluginPayloadSmokeCheck: vi.fn(),
 }));
 
 vi.mock("../../commands/doctor/shared/missing-configured-plugin-install.js", () => ({
   repairMissingConfiguredPluginInstalls: mocks.repairMissingConfiguredPluginInstalls,
+}));
+vi.mock("../../plugins/plugin-peer-link.js", () => ({
+  relinkOpenClawPeerDependenciesInManagedNpmRoot:
+    mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot,
 }));
 vi.mock("./plugin-payload-validation.js", () => ({
   runPluginPayloadSmokeCheck: mocks.runPluginPayloadSmokeCheck,
@@ -32,6 +37,12 @@ describe("runPostCorePluginConvergence", () => {
       changes: [],
       warnings: [],
       records: {},
+    });
+    mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot.mockResolvedValue({
+      checked: 0,
+      attempted: 0,
+      repaired: 0,
+      skipped: 0,
     });
     mocks.runPluginPayloadSmokeCheck.mockResolvedValue({ checked: [], failures: [] });
   });
@@ -135,6 +146,36 @@ describe("runPostCorePluginConvergence", () => {
     expect(result.installRecords).toEqual({
       discord: { source: "npm", installPath: "/p/discord" },
     });
+  });
+
+  it("repairs managed npm openclaw peer links before payload smoke checks", async () => {
+    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
+      changes: [],
+      warnings: [],
+      records: { codex: { source: "npm", installPath: "/p/codex" } },
+    });
+    mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot.mockResolvedValue({
+      checked: 1,
+      attempted: 1,
+      repaired: 1,
+      skipped: 0,
+    });
+
+    const result = await runPostCorePluginConvergence({
+      cfg: { plugins: { entries: { codex: { enabled: true } } } } as unknown as OpenClawConfig,
+      env: { OPENCLAW_STATE_DIR: "/tmp/openclaw-state" },
+    });
+
+    expect(mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot).toHaveBeenCalledWith({
+      npmRoot: "/tmp/openclaw-state/npm",
+      logger: {},
+    });
+    expect(result.changes).toEqual([
+      "Repaired OpenClaw host peer link(s) for 1 managed npm plugin package(s).",
+    ]);
+    expect(
+      mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot.mock.invocationCallOrder[0],
+    ).toBeLessThan(mocks.runPluginPayloadSmokeCheck.mock.invocationCallOrder[0]);
   });
 
   it("forwards baselineInstallRecords to repair so sync/npm in-memory mutations are preserved", async () => {

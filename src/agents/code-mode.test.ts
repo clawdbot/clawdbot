@@ -828,5 +828,68 @@ describe("Code Mode", () => {
     await expect(heartbeat).resolves.toBe("main-event-loop-alive");
     expect(details.status).toBe("failed");
     expect(String(details.error)).toContain("timeout exceeded");
+    expect(details.code).toBe("timeout");
+  });
+
+  it("classifies missing worker runtime as unavailable", async () => {
+    const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
+    const missingWorkerUrl = new URL("./missing-code-mode.worker.js", import.meta.url);
+
+    const result = await testing.runCodeModeWorker(
+      {
+        kind: "exec",
+        source: "return 1;",
+        config,
+        catalog: [],
+      },
+      500,
+      missingWorkerUrl,
+    );
+
+    expect(result.status).toBe("failed");
+    expect(result).toMatchObject({
+      code: "runtime_unavailable",
+    });
+  });
+
+  it("classifies nonzero worker exits as unavailable", async () => {
+    const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
+    const exitingWorkerUrl = new URL("data:text/javascript,process.exit(1)");
+
+    const result = await testing.runCodeModeWorker(
+      {
+        kind: "exec",
+        source: "return 1;",
+        config,
+        catalog: [],
+      },
+      500,
+      exitingWorkerUrl,
+    );
+
+    expect(result.status).toBe("failed");
+    expect(result).toMatchObject({
+      code: "runtime_unavailable",
+    });
+  });
+
+  it("does not classify guest interrupted errors as timeouts", async () => {
+    const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
+
+    const result = await testing.runCodeModeWorker(
+      {
+        kind: "exec",
+        source: 'throw new Error("interrupted");',
+        config,
+        catalog: [],
+      },
+      500,
+    );
+
+    expect(result.status).toBe("failed");
+    expect(result).toMatchObject({
+      code: "internal_error",
+      error: "interrupted",
+    });
   });
 });

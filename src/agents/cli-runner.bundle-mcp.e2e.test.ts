@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
@@ -20,6 +20,7 @@ vi.mock("./cli-runner/helpers.js", async () => {
     // This e2e only validates bundle MCP wiring into the spawned CLI backend.
     // Stub the large prompt-construction path so cold Vitest workers do not
     // time out before the actual MCP roundtrip runs.
+    buildCliAgentSystemPrompt: () => "Bundle MCP e2e test prompt.",
     buildSystemPrompt: () => "Bundle MCP e2e test prompt.",
   };
 });
@@ -73,8 +74,25 @@ async function resetBundleMcpPluginState() {
   clearPluginSetupRegistryCache();
 }
 
+async function restoreCliRunnerPrepareDeps() {
+  const { setCliRunnerPrepareTestDeps } = await import("./cli-runner/prepare.js");
+  const { resolveMcpLoopbackScopedTools } = await import("../gateway/mcp-http.runtime.js");
+  setCliRunnerPrepareTestDeps({ resolveMcpLoopbackScopedTools });
+}
+
+beforeEach(async () => {
+  const { setCliRunnerPrepareTestDeps } = await import("./cli-runner/prepare.js");
+  setCliRunnerPrepareTestDeps({
+    // This test validates downstream bundle MCP config injection. The generic
+    // OpenClaw loopback tool inventory is covered by prepare-level tests and is
+    // expensive under cold Linux container workers.
+    resolveMcpLoopbackScopedTools: () => ({ agentId: "main", tools: [] }),
+  });
+});
+
 afterEach(async () => {
   cliBackendsTesting.resetDepsForTest();
+  await restoreCliRunnerPrepareDeps();
   await resetBundleMcpPluginState();
 });
 
@@ -84,6 +102,7 @@ describe("runCliAgent bundle MCP e2e", () => {
     { timeout: E2E_TIMEOUT_MS },
     async () => {
       const { runCliAgent } = await import("./cli-runner.js");
+      const { closeMcpLoopbackServer } = await import("../gateway/mcp-http.js");
       const { resetGlobalHookRunner } = await import("../plugins/hook-runner-global.js");
       await resetBundleMcpPluginState();
       const envSnapshot = captureEnv([
@@ -138,11 +157,13 @@ describe("runCliAgent bundle MCP e2e", () => {
           model: "test-bundle",
           timeoutMs: 20_000,
           runId: "bundle-mcp-e2e",
+          cleanupBundleMcpOnRunEnd: true,
         });
 
         expect(result.payloads?.[0]?.text).toContain("BUNDLE MCP OK FROM-BUNDLE");
         expect(result.meta.agentMeta?.sessionId.length ?? 0).toBeGreaterThan(0);
       } finally {
+        await closeMcpLoopbackServer();
         resetGlobalHookRunner();
         await fs.rm(tempHome, { recursive: true, force: true });
         envSnapshot.restore();

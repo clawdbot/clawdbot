@@ -26,6 +26,7 @@ import {
 } from "../src/infra/package-dist-inventory.ts";
 
 const REQUIRED_PACKED_PATHS = [
+  "npm-shrinkwrap.json",
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
   ...WORKSPACE_TEMPLATE_PACK_PATHS,
 ] as const;

@@ -132,6 +132,12 @@ function normalizeTalkRealtimeConfig(value: unknown): TalkRealtimeConfig | undef
   ) {
     normalized.brain = source.brain;
   }
+  if (
+    source.consultRouting === "provider-direct" ||
+    source.consultRouting === "force-agent-consult"
+  ) {
+    normalized.consultRouting = source.consultRouting;
+  }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 

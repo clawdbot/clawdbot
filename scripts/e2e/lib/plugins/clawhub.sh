@@ -20,7 +20,7 @@ run_plugins_clawhub_scenario() {
       for _ in $(seq 1 100); do
         if [[ -s "$server_port_file" ]]; then
           export OPENCLAW_CLAWHUB_URL="http://127.0.0.1:$(cat "$server_port_file")"
-          trap 'if [[ -f "'"$server_pid_file"'" ]]; then kill "$(cat "'"$server_pid_file"'")" 2>/dev/null || true; fi' EXIT
+          openclaw_plugins_register_fixture_pid_file "$server_pid_file"
           return 0
         fi
         if ! kill -0 "$server_pid" 2>/dev/null; then

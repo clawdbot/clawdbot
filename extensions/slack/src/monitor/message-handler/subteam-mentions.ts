@@ -12,7 +12,7 @@ type CacheEntry = {
 
 let subteamMemberCache = new WeakMap<WebClient, Map<string, CacheEntry>>();
 
-function normalizeSlackId(value: unknown): string | undefined {
+export function normalizeSlackId(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim().toUpperCase() : undefined;
 }
 

@@ -2691,6 +2691,13 @@ export const chatHandlers: GatewayRequestHandlers = {
         })();
         await userTranscriptUpdatePromise;
       };
+      const emitUserTranscriptUpdateAfterAgentRun = async () => {
+        await emitUserTranscriptUpdate().catch((transcriptErr) => {
+          context.logGateway.warn(
+            `webchat user transcript update failed after agent run: ${formatForLog(transcriptErr)}`,
+          );
+        });
+      };
       let transcriptMediaRewriteDone = false;
       const rewriteUserTranscriptMedia = async () => {
         if (transcriptMediaRewriteDone) {
@@ -2895,6 +2902,16 @@ export const chatHandlers: GatewayRequestHandlers = {
             "gateway.chat_send.post_dispatch",
             async () => {
               await rewriteUserTranscriptMedia();
+              const returnedAgentErrorPayloads = agentRunStarted
+                ? deliveredReplies
+                    .map((entry) => entry.payload)
+                    .filter((payload) => payload.isError)
+                : [];
+              const returnedAgentErrorMessage =
+                returnedAgentErrorPayloads
+                  .map((payload) => payload.text?.trim())
+                  .filter((text): text is string => Boolean(text))
+                  .join(" | ") || undefined;
               // WebChat persistence has two owners. Agent runs persist model-visible turns
               // through Pi's SessionManager; this dispatcher only owns live delivery payloads.
               // Do not blindly mirror agent-run final payloads into JSONL or chat.history can
@@ -3091,21 +3108,42 @@ export const chatHandlers: GatewayRequestHandlers = {
                     message,
                   });
                 }
-              } else if (!hasBeforeAgentRunGate) {
-                await emitUserTranscriptUpdate().catch((transcriptErr) => {
-                  context.logGateway.warn(
-                    `webchat user transcript update failed after agent run: ${formatForLog(transcriptErr)}`,
-                  );
+              } else if (returnedAgentErrorPayloads.length > 0) {
+                if (!hasBeforeAgentRunGate) {
+                  await emitUserTranscriptUpdateAfterAgentRun();
+                }
+                broadcastChatError({
+                  context,
+                  runId: clientRunId,
+                  sessionKey,
+                  errorMessage: returnedAgentErrorMessage,
                 });
+              } else if (!hasBeforeAgentRunGate) {
+                await emitUserTranscriptUpdateAfterAgentRun();
               }
               if (!context.chatAbortedRuns.has(clientRunId)) {
+                const returnedAgentError =
+                  returnedAgentErrorPayloads.length > 0
+                    ? errorShape(
+                        ErrorCodes.UNAVAILABLE,
+                        returnedAgentErrorMessage ?? "agent returned an error payload",
+                      )
+                    : undefined;
                 setGatewayDedupeEntry({
                   dedupe: context.dedupe,
                   key: `chat:${clientRunId}`,
                   entry: {
                     ts: Date.now(),
-                    ok: true,
-                    payload: { runId: clientRunId, status: "ok" as const },
+                    ok: returnedAgentErrorPayloads.length === 0,
+                    payload:
+                      returnedAgentErrorPayloads.length > 0
+                        ? {
+                            runId: clientRunId,
+                            status: "error" as const,
+                            summary: returnedAgentErrorMessage ?? "agent returned an error payload",
+                          }
+                        : { runId: clientRunId, status: "ok" as const },
+                    ...(returnedAgentError ? { error: returnedAgentError } : {}),
                   },
                 });
               }

@@ -924,7 +924,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: "22.19.0"
-          cache-key-suffix: "node22-pnpm11"
           install-bun: "false"
 
       - name: Configure Node test resources
@@ -1004,7 +1003,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: "${{ matrix.node_version || '24.x' }}"
-          cache-key-suffix: "${{ matrix.cache_key_suffix || 'node24-pnpm11' }}"
           install-bun: "false"
 
       - name: Configure Node test resources
@@ -1145,6 +1143,7 @@ jobs:
               pnpm tool-display:check
               pnpm check:host-env-policy:swift
               pnpm dup:check:coverage
+              pnpm deps:shrinkwrap:check
               pnpm deps:patches:check
               pnpm lint:webhook:no-low-level-body-read
               pnpm lint:auth:no-pairing-store-group
@@ -1514,14 +1513,10 @@ jobs:
           node-version: 24.x
           check-latest: false
 
-      - name: Setup pnpm + cache store
-        id: pnpm-cache
+      - name: Setup pnpm
         uses: ./.github/actions/setup-pnpm-store-cache
         with:
-          pnpm-version: "11.0.8"
-          cache-key-suffix: "node24-pnpm11"
-          use-restore-keys: "false"
-          use-actions-cache: "true"
+          node-version: 24.x
 
       - name: Runtime versions
         run: |
@@ -1548,14 +1543,6 @@ jobs:
           # Persist Windows-native postinstall outputs in the pnpm store so restored
           # caches can skip repeated rebuild/download work on later shards/runs.
           pnpm install --frozen-lockfile --prefer-offline --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true || pnpm install --frozen-lockfile --prefer-offline --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true
-
-      - name: Save pnpm store cache
-        if: steps.pnpm-cache.outputs.cache-enabled == 'true' && steps.pnpm-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v5
-        continue-on-error: true
-        with:
-          path: ${{ steps.pnpm-cache.outputs.store-path }}
-          key: ${{ steps.pnpm-cache.outputs.primary-key }}
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         env:

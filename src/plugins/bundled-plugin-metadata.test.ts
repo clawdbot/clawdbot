@@ -46,6 +46,7 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
   "memory-wiki",
   "openshell",
   "phone-control",
+  "policy",
   "skill-workshop",
   "talk-voice",
   "thread-ownership",

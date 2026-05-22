@@ -183,6 +183,33 @@ describe("ChatLog", () => {
     expect(chatLog.countPendingUsers()).toBe(0);
   });
 
+  it("dismisses a pending system notice by runId", () => {
+    const chatLog = new ChatLog(40);
+
+    chatLog.addPendingSystem("run-1", "taking longer than expected");
+    let rendered = chatLog.render(120).join("\n");
+    expect(rendered).toContain("taking longer than expected");
+
+    const dismissed = chatLog.dismissPendingSystem("run-1");
+    expect(dismissed).toBe(true);
+
+    rendered = chatLog.render(120).join("\n");
+    expect(rendered).not.toContain("taking longer than expected");
+    expect(chatLog.dismissPendingSystem("run-1")).toBe(false);
+  });
+
+  it("replaces an existing pending system notice for the same runId", () => {
+    const chatLog = new ChatLog(40);
+
+    chatLog.addPendingSystem("run-1", "first notice");
+    chatLog.addPendingSystem("run-1", "second notice");
+
+    const rendered = chatLog.render(120).join("\n");
+    expect(rendered).not.toContain("first notice");
+    expect(rendered).toContain("second notice");
+    expect(chatLog.children.length).toBe(1);
+  });
+
   it("does not hide a new repeated prompt when only older history matches", () => {
     const chatLog = new ChatLog(40);
 

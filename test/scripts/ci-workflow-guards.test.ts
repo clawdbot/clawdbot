@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 describe("ci workflow guards", () => {
-  it("runs the package patch guard in PR CI preflight", () => {
+  it("runs dependency policy guards in PR CI preflight", () => {
     const workflow = readFileSync(".github/workflows/ci.yml", "utf8");
     const preflightGuards = workflow.slice(
       workflow.indexOf("guards)"),
@@ -10,6 +10,7 @@ describe("ci workflow guards", () => {
     );
 
     expect(workflow).toContain("check-guards");
+    expect(preflightGuards).toContain("pnpm deps:shrinkwrap:check");
     expect(preflightGuards).toContain("pnpm deps:patches:check");
   });
 

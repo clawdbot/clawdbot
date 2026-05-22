@@ -1,0 +1,46 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ModelCatalogEntry } from "./model-catalog.types.js";
+import { parseConfiguredModelVisibilityEntries } from "./model-selection-shared.js";
+
+export const DEFAULT_MODEL_CATALOG_BROWSE_TIMEOUT_MS = 750;
+
+export type ModelCatalogBrowseView = "default" | "configured" | "all";
+
+export async function loadModelCatalogForBrowse(params: {
+  cfg: OpenClawConfig;
+  view?: ModelCatalogBrowseView;
+  loadCatalog: (params: { readOnly: boolean }) => Promise<ModelCatalogEntry[]>;
+  timeoutMs?: number;
+  onTimeout?: (timeoutMs: number) => void;
+}): Promise<ModelCatalogEntry[]> {
+  const view = params.view ?? "default";
+  if (view === "all") {
+    return await params.loadCatalog({ readOnly: false });
+  }
+  if (parseConfiguredModelVisibilityEntries({ cfg: params.cfg }).providerWildcards.size > 0) {
+    return await params.loadCatalog({ readOnly: false });
+  }
+
+  let timeout: NodeJS.Timeout | undefined;
+  const timeoutMs = params.timeoutMs ?? DEFAULT_MODEL_CATALOG_BROWSE_TIMEOUT_MS;
+  const timedOut = Symbol("model-catalog-browse-timeout");
+  const catalogPromise = params.loadCatalog({ readOnly: true });
+  const timeoutPromise = new Promise<typeof timedOut>((resolve) => {
+    timeout = setTimeout(() => resolve(timedOut), timeoutMs);
+    timeout.unref?.();
+  });
+
+  try {
+    const result = await Promise.race([catalogPromise, timeoutPromise]);
+    if (result === timedOut) {
+      catalogPromise.catch(() => undefined);
+      params.onTimeout?.(timeoutMs);
+      return [];
+    }
+    return result;
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}

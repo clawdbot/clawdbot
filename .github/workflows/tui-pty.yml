@@ -1,0 +1,41 @@
+name: TUI PTY
+
+on:
+  pull_request:
+    paths:
+      - "src/tui/**"
+      - "scripts/dev/tui-pty-test-watch.ts"
+      - "scripts/test-projects.test-support.mjs"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "test/scripts/test-projects.test.ts"
+      - "test/vitest/vitest.test-shards.mjs"
+      - "test/vitest/vitest.tui-pty.config.ts"
+      - ".github/workflows/tui-pty.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  tui-pty:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Run TUI PTY tests
+        run: timeout 120s node scripts/run-vitest.mjs run --config test/vitest/vitest.tui-pty.config.ts

@@ -248,6 +248,17 @@ describe("Windows startup fallback", () => {
     });
   });
 
+  it("falls back to a Startup-folder launcher when schtasks create returns localized access denied", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      addStartupFallbackMissingResponses([{ code: 1, stdout: "", stderr: "错误: 拒绝访问。" }]);
+
+      await installGatewayScheduledTask(env);
+
+      await expect(fs.access(resolveStartupEntryPath(env))).resolves.toBeUndefined();
+      expectStartupFallbackSpawn();
+    });
+  });
+
   it("falls back to a Startup-folder launcher when schtasks create hangs", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       addStartupFallbackMissingResponses([

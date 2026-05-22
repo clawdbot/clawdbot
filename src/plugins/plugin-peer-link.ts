@@ -14,7 +14,7 @@ type RelinkManagedNpmRootResult = {
   skipped: number;
 };
 
-type OpenClawPeerLinkAuditIssue = {
+export type OpenClawPeerLinkAuditIssue = {
   packageName: string;
   packageDir: string;
   reason: string;
@@ -110,13 +110,18 @@ function managedPackageNameFromDir(params: { npmRoot: string; packageDir: string
 
 async function auditOpenClawPeerDependency(params: {
   hostRoot: string;
-  npmRoot: string;
   packageDir: string;
+  npmRoot?: string;
+  packageName?: string;
 }): Promise<OpenClawPeerLinkAuditIssue | null> {
-  const packageName = managedPackageNameFromDir({
-    npmRoot: params.npmRoot,
-    packageDir: params.packageDir,
-  });
+  const packageName =
+    params.packageName ??
+    (params.npmRoot
+      ? managedPackageNameFromDir({
+          npmRoot: params.npmRoot,
+          packageDir: params.packageDir,
+        })
+      : path.basename(params.packageDir));
   const nodeModulesDir = path.join(params.packageDir, "node_modules");
   try {
     const existing = await fs.lstat(nodeModulesDir);
@@ -156,6 +161,30 @@ async function auditOpenClawPeerDependency(params: {
     };
   }
   return null;
+}
+
+export async function auditOpenClawPeerDependencyLink(params: {
+  packageDir: string;
+  packageName?: string;
+}): Promise<OpenClawPeerLinkAuditIssue | null> {
+  const packageName = params.packageName ?? path.basename(params.packageDir);
+  const hostRoot = resolveOpenClawPackageRootSync({
+    argv1: process.argv[1],
+    moduleUrl: import.meta.url,
+    cwd: process.cwd(),
+  });
+  if (!hostRoot) {
+    return {
+      packageName,
+      packageDir: params.packageDir,
+      reason: "could not locate openclaw package root",
+    };
+  }
+  return await auditOpenClawPeerDependency({
+    hostRoot,
+    packageDir: params.packageDir,
+    packageName,
+  });
 }
 
 async function ensureRealNodeModulesDir(params: {

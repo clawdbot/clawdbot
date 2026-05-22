@@ -136,14 +136,58 @@ function buildRecoveredManagedNpmInstallRecords(
   return records;
 }
 
+function recordsShareInstallPath(
+  left: PluginInstallRecord | undefined,
+  right: PluginInstallRecord,
+): boolean {
+  if (!left?.installPath || !right.installPath) {
+    return false;
+  }
+  return path.resolve(left.installPath) === path.resolve(right.installPath);
+}
+
+function readInstallRecordVersion(record: PluginInstallRecord | undefined): string | undefined {
+  return record?.resolvedVersion ?? record?.version;
+}
+
+function mergeRecoveredManagedNpmRecord(params: {
+  persisted: PluginInstallRecord | undefined;
+  recovered: PluginInstallRecord;
+}): PluginInstallRecord {
+  const persistedVersion = readInstallRecordVersion(params.persisted);
+  const recoveredVersion = readInstallRecordVersion(params.recovered);
+  if (
+    params.persisted?.source === "npm" &&
+    recordsShareInstallPath(params.persisted, params.recovered) &&
+    recoveredVersion &&
+    persistedVersion !== recoveredVersion
+  ) {
+    const next: PluginInstallRecord = {
+      ...params.persisted,
+      ...params.recovered,
+    };
+    delete next.integrity;
+    delete next.shasum;
+    delete next.resolvedAt;
+    delete next.installedAt;
+    return next;
+  }
+  return params.persisted ?? params.recovered;
+}
+
 function mergeRecoveredManagedNpmInstallRecords(
   persisted: Record<string, PluginInstallRecord> | null,
   options: InstalledPluginIndexStoreOptions,
 ): Record<string, PluginInstallRecord> {
-  return {
-    ...buildRecoveredManagedNpmInstallRecords(options),
-    ...persisted,
-  };
+  const recovered = buildRecoveredManagedNpmInstallRecords(options);
+  const merged: Record<string, PluginInstallRecord> = { ...persisted };
+  for (const [pluginId, record] of Object.entries(recovered)) {
+    merged[pluginId] = mergeRecoveredManagedNpmRecord({
+      persisted: merged[pluginId],
+      recovered: record,
+    });
+  }
+  return merged;
 }
 
 function extractPluginInstallRecordsFromPersistedInstalledPluginIndex(

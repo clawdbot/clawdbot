@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
   setRuntimeConfigSnapshot: vi.fn(),
   loadAuthProfileStoreForRuntime: vi.fn(() => ({ profiles: {}, order: {} })),
   listProfilesForProvider: vi.fn(() => []),
+  resolveAgentDir: vi.fn((_cfg: unknown, agentId: string) => `/tmp/agent-${agentId}`),
   updateAuthProfileStoreWithLock: vi.fn(
     async ({ updater }: { updater: (store: any) => boolean }) => {
       const store = {
@@ -170,7 +171,7 @@ vi.mock("./command-config-resolution.js", () => ({
 
 vi.mock("../agents/agent-scope.js", () => ({
   resolveDefaultAgentId: () => "main",
-  resolveAgentDir: () => "/tmp/agent",
+  resolveAgentDir: mocks.resolveAgentDir,
   resolveAgentConfig: () => ({}),
   resolveAgentEffectiveModelPrimary: () => undefined,
   resolveAgentModelFallbacksOverride: () => [],
@@ -401,6 +402,7 @@ describe("capability cli", () => {
       .mockResolvedValue([{ id: "gpt-5.4", provider: "openai", name: "GPT-5.4" }] as never);
     mocks.loadAuthProfileStoreForRuntime.mockReset().mockReturnValue({ profiles: {}, order: {} });
     mocks.listProfilesForProvider.mockReset().mockReturnValue([]);
+    mocks.resolveAgentDir.mockClear();
     mocks.getRuntimeConfigSourceSnapshot.mockReset().mockReturnValue(null);
     mocks.setRuntimeConfigSnapshot.mockClear();
     mocks.updateAuthProfileStoreWithLock
@@ -2175,6 +2177,37 @@ describe("capability cli", () => {
     expect(mocks.runtime.writeJson).toHaveBeenCalledWith({
       provider: "openai",
       removedProfiles: ["openai:default", "openai:secondary"],
+    });
+    expect(mocks.updateAuthProfileStoreWithLock).toHaveBeenCalledWith(
+      expect.objectContaining({ agentDir: "/tmp/agent-main" }),
+    );
+  });
+
+  it("removes model auth profiles from the selected agent store", async () => {
+    mocks.listProfilesForProvider.mockReturnValue(["openai:default"] as never);
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "model",
+        "auth",
+        "logout",
+        "--provider",
+        "openai",
+        "--agent",
+        "poe",
+        "--json",
+      ],
+    });
+
+    expect(mocks.loadAuthProfileStoreForRuntime).toHaveBeenCalledWith("/tmp/agent-poe");
+    expect(mocks.updateAuthProfileStoreWithLock).toHaveBeenCalledWith(
+      expect.objectContaining({ agentDir: "/tmp/agent-poe" }),
+    );
+    expect(mocks.runtime.writeJson).toHaveBeenCalledWith({
+      provider: "openai",
+      removedProfiles: ["openai:default"],
     });
   });
 

@@ -243,8 +243,8 @@ vi.mock("../../agents/pi-bundle-mcp-tools.js", () => ({
 export function setupGatewaySessionsTestHarness() {
   installGatewayTestHooks({ scope: "suite" });
 
-  let harness: GatewayServerHarness;
-  let sharedSessionStoreDir: string;
+  let harness: GatewayServerHarness | undefined;
+  let sharedSessionStoreDir: string | undefined;
   let sessionStoreCaseSeq = 0;
 
   beforeAll(async () => {
@@ -253,8 +253,10 @@ export function setupGatewaySessionsTestHarness() {
   });
 
   afterAll(async () => {
-    await harness.close();
-    await fs.rm(sharedSessionStoreDir, { recursive: true, force: true });
+    await harness?.close();
+    if (sharedSessionStoreDir) {
+      await fs.rm(sharedSessionStoreDir, { recursive: true, force: true });
+    }
   });
 
   beforeEach(async () => {
@@ -293,11 +295,25 @@ export function setupGatewaySessionsTestHarness() {
     bundleMcpRuntimeMocks.disposeSessionMcpRuntime.mockResolvedValue(undefined);
   });
 
+  const requireHarness = () => {
+    if (!harness) {
+      throw new Error("Gateway sessions test harness was not started");
+    }
+    return harness;
+  };
+
+  const requireSharedSessionStoreDir = () => {
+    if (!sharedSessionStoreDir) {
+      throw new Error("Gateway sessions shared session store dir was not created");
+    }
+    return sharedSessionStoreDir;
+  };
+
   const openClient = async (opts?: Parameters<typeof connectOk>[1]) =>
-    await harness.openClient(opts);
+    await requireHarness().openClient(opts);
 
   async function createSessionStoreDir() {
-    const dir = path.join(sharedSessionStoreDir, `case-${sessionStoreCaseSeq++}`);
+    const dir = path.join(requireSharedSessionStoreDir(), `case-${sessionStoreCaseSeq++}`);
     await fs.mkdir(dir, { recursive: true });
     const storePath = path.join(dir, "sessions.json");
     testState.sessionStorePath = storePath;
@@ -317,7 +333,7 @@ export function setupGatewaySessionsTestHarness() {
 
   return {
     createSessionStoreDir,
-    getHarness: () => harness,
+    getHarness: requireHarness,
     openClient,
     seedActiveMainSession,
   };

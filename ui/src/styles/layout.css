@@ -315,12 +315,13 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 2px 6px;
+  min-height: 22px;
+  padding: 3px 7px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg);
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1;
   color: var(--muted);
 }

@@ -166,6 +166,24 @@ Accounts map to `zalouser` profiles in OpenClaw state. Example:
 }
 ```
 
+## Environment variables
+
+The Zalo Personal plugin can also read profile selection from environment variables:
+
+- `ZALOUSER_PROFILE`: profile name to use when no `profile` is set in channel or account config.
+- `ZCA_PROFILE`: legacy fallback profile name, used only when `ZALOUSER_PROFILE` is not set.
+
+Profile names select the saved Zalo login credentials in OpenClaw state. Resolution order is:
+
+1. Explicit `profile` in config.
+2. `ZALOUSER_PROFILE`.
+3. `ZCA_PROFILE`.
+4. The account id for non-default accounts, or `default` for the default account.
+
+For multi-account setups, prefer setting `profile` on each account in config so
+one environment variable does not make multiple accounts share the same login
+session.
+
 ## Typing, reactions, and delivery acknowledgements
 
 - OpenClaw sends a typing event before dispatching a reply (best-effort).

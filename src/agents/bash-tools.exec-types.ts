@@ -1,3 +1,4 @@
+import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 import type { ExecAsk, ExecHost, ExecSecurity, ExecTarget } from "../infra/exec-approvals.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
@@ -38,6 +39,8 @@ export type ExecToolDefaults = {
    *  so the cron-run remap can route global-scope agents to the "global"
    *  queue instead of agent-main. */
   sessionScope?: "per-sender" | "global";
+  /** Start-time routing policy for detached exec system events. */
+  eventRouting?: EventSessionRoutingPolicy;
   messageProvider?: string;
   currentChannelId?: string;
   currentThreadTs?: string;

@@ -1,4 +1,4 @@
 interface:
   display_name: "OpenClaw Landable Bug Sweep"
-  short_description: "Find five small landable bugfix PRs"
-  default_prompt: "Use $openclaw-landable-bug-sweep to find or repair five small high-confidence OpenClaw bugfix PRs and get them landable."
+  short_description: "Find five small non-SDK landable bugfix PRs"
+  default_prompt: "Use $openclaw-landable-bug-sweep to find or repair five small high-confidence non-SDK-boundary OpenClaw bugfix PRs and get them landable."

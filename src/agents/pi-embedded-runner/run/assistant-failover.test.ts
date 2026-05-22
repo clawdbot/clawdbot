@@ -118,6 +118,29 @@ describe("handleAssistantFailover", () => {
       expect(outcome.action).toBe("retry");
       expect(warn).not.toHaveBeenCalled();
     });
+
+    it("marks provider-started timeout rotations against the failed profile", async () => {
+      const maybeMarkAuthProfileFailure = vi.fn(async () => {});
+
+      const outcome = await handleAssistantFailover(
+        makeParams({
+          initialDecision: { action: "rotate_profile", reason: "timeout" },
+          failoverReason: "timeout",
+          timedOut: true,
+          assistantProfileFailureReason: "timeout",
+          lastProfileId: "profile-timeout",
+          advanceAuthProfile: vi.fn(async () => true),
+          maybeMarkAuthProfileFailure,
+        }),
+      );
+
+      expect(outcome.action).toBe("retry");
+      expect(maybeMarkAuthProfileFailure).toHaveBeenCalledWith({
+        profileId: "profile-timeout",
+        reason: "timeout",
+        modelId: "claude-haiku-4-5-20251001",
+      });
+    });
   });
 
   describe("surface_error branch (openclaw#70124)", () => {

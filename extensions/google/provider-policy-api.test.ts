@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeConfig } from "./provider-policy-api.js";
+import { normalizeConfig, resolveThinkingProfile } from "./provider-policy-api.js";
 
 describe("google provider policy public artifact", () => {
   it("normalizes Google provider config without loading the full provider plugin", () => {
@@ -128,5 +128,74 @@ describe("google provider policy public artifact", () => {
         },
       ],
     });
+  });
+
+  it("preserves Gemini 3 thinking levels when catalog reasoning metadata is stale", () => {
+    expect(
+      resolveThinkingProfile({
+        provider: "google",
+        modelId: "gemini-3-flash-preview",
+        reasoning: false,
+      }),
+    ).toEqual({
+      levels: [
+        { id: "off" },
+        { id: "minimal" },
+        { id: "low" },
+        { id: "medium" },
+        { id: "adaptive" },
+        { id: "high" },
+      ],
+      preserveWhenCatalogReasoningFalse: true,
+    });
+  });
+
+  it("preserves provider-prefixed Gemini 3 thinking levels when catalog reasoning metadata is stale", () => {
+    expect(
+      resolveThinkingProfile({
+        provider: "google",
+        modelId: "google/gemini-3-flash-preview",
+        reasoning: false,
+      }),
+    ).toMatchObject({
+      levels: expect.arrayContaining([{ id: "low" }, { id: "medium" }, { id: "adaptive" }]),
+      preserveWhenCatalogReasoningFalse: true,
+    });
+  });
+
+  it("preserves normalized Gemini 3 aliases when catalog reasoning metadata is stale", () => {
+    expect(
+      resolveThinkingProfile({
+        provider: "google",
+        modelId: "google/gemini-3-pro",
+        reasoning: false,
+      }),
+    ).toEqual({
+      levels: [{ id: "off" }, { id: "low" }, { id: "adaptive" }, { id: "high" }],
+      preserveWhenCatalogReasoningFalse: true,
+    });
+  });
+
+  it("preserves Gemini 3 Pro thinking levels when catalog reasoning metadata is stale", () => {
+    expect(
+      resolveThinkingProfile({
+        provider: "google",
+        modelId: "gemini-3.1-pro-preview",
+        reasoning: false,
+      }),
+    ).toEqual({
+      levels: [{ id: "off" }, { id: "low" }, { id: "adaptive" }, { id: "high" }],
+      preserveWhenCatalogReasoningFalse: true,
+    });
+  });
+
+  it("honors catalog reasoning=false for non-Gemini 3 Google models", () => {
+    expect(
+      resolveThinkingProfile({
+        provider: "google",
+        modelId: "gemma-4-26b-a4b-it",
+        reasoning: false,
+      }),
+    ).toBeUndefined();
   });
 });

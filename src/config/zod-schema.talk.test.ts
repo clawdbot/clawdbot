@@ -37,10 +37,23 @@ describe("OpenClawSchema talk validation", () => {
               },
             },
             instructions: "Speak with crisp diction.",
+            consultRouting: "force-agent-consult",
           },
         },
       }),
     ).not.toThrow();
+  });
+
+  it("rejects invalid realtime Talk consult routing", () => {
+    expect(() =>
+      OpenClawSchema.parse({
+        talk: {
+          realtime: {
+            consultRouting: "always",
+          },
+        },
+      }),
+    ).toThrow(/consultRouting/i);
   });
 
   it.each([

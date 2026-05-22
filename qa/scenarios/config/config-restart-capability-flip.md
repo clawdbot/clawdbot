@@ -66,6 +66,9 @@ steps:
           - ref: env
           - Capability flip
           - ref: sessionKey
+      - set: setupStartIndex
+        value:
+          expr: state.getSnapshot().messages.length
       - try:
           actions:
             - call: patchConfig
@@ -92,6 +95,15 @@ steps:
                     expr: config.setupPrompt
                   timeoutMs:
                     expr: liveTurnTimeoutMs(env, 30000)
+            - call: waitForOutboundMessage
+              args:
+                - ref: state
+                - lambda:
+                    params: [candidate]
+                    expr: "candidate.conversation.id === 'qa-operator' && String(candidate.text ?? '').includes('Protocol note')"
+                - expr: liveTurnTimeoutMs(env, 30000)
+                - sinceIndex:
+                    ref: setupStartIndex
             - call: readEffectiveTools
               saveAs: beforeTools
               args:

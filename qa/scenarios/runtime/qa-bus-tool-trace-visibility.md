@@ -1,0 +1,69 @@
+# QA bus tool trace visibility
+
+```yaml qa-scenario
+id: qa-bus-tool-trace-visibility
+title: QA bus tool trace visibility
+surface: harness
+coverage:
+  primary:
+    - harness.tool-trace-visibility
+  secondary:
+    - runtime.qa-bus
+    - tools.trace
+objective: Verify QA-Lab can assert sanitized tool-call traces directly on bus messages.
+successCriteria:
+  - QA bus messages can carry a toolCalls array.
+  - Readback preserves the tool name while redacting sensitive argument values.
+  - QA bus search can locate the message by tool name.
+docsRefs:
+  - docs/help/testing.md
+  - qa/scenarios/index.md
+codeRefs:
+  - extensions/qa-lab/src/bus-state.ts
+  - extensions/qa-lab/src/bus-queries.ts
+  - extensions/qa-lab/src/runtime-api.ts
+execution:
+  kind: flow
+  summary: Add a synthetic tool-backed bus message and verify sanitized trace assertions.
+  config:
+    expectedToolName: exec
+    expectedRedaction: "[redacted]"
+    searchQuery: exec
+```
+
+```yaml qa-flow
+steps:
+  - name: preserves searchable sanitized tool-call traces
+    actions:
+      - call: reset
+      - call: state.addOutboundMessage
+        saveAs: outbound
+        args:
+          - to: dm:qa-operator
+            text: qa bus tool trace check
+            toolCalls:
+              - name:
+                  expr: config.expectedToolName
+                arguments:
+                  command: pwd
+                  apiToken: qa-secret-token
+      - set: readback
+        value:
+          expr: "state.readMessage({ messageId: outbound.id })"
+      - assert:
+          expr: "readback.toolCalls?.[0]?.name === config.expectedToolName"
+          message:
+            expr: "`expected tool name ${config.expectedToolName}, got ${String(readback.toolCalls?.[0]?.name ?? '')}`"
+      - assert:
+          expr: "readback.toolCalls?.[0]?.arguments?.command === config.expectedRedaction && readback.toolCalls?.[0]?.arguments?.apiToken === config.expectedRedaction"
+          message:
+            expr: "`expected redacted tool arguments, got ${JSON.stringify(readback.toolCalls?.[0]?.arguments ?? null)}`"
+      - set: searchMatches
+        value:
+          expr: "state.searchMessages({ query: config.searchQuery })"
+      - assert:
+          expr: "searchMatches.some((message) => message.id === outbound.id)"
+          message:
+            expr: "`expected search query ${config.searchQuery} to find ${outbound.id}, got ${JSON.stringify(searchMatches.map((message) => message.id))}`"
+    detailsExpr: "`${readback.toolCalls?.[0]?.name}:${String(readback.toolCalls?.[0]?.arguments?.command ?? '')}`"
+```

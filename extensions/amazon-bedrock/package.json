@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/amazon-bedrock-provider",
-  "version": "2026.5.21",
+  "version": "2026.5.22",
   "description": "OpenClaw Amazon Bedrock provider plugin",
   "repository": {
     "type": "git",
@@ -27,10 +27,10 @@
       "minHostVersion": ">=2026.5.12-beta.1"
     },
     "compat": {
-      "pluginApi": ">=2026.5.21"
+      "pluginApi": ">=2026.5.22"
     },
     "build": {
-      "openclawVersion": "2026.5.21",
+      "openclawVersion": "2026.5.22",
       "bundledDist": false
     },
     "release": {

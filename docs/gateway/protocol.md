@@ -757,6 +757,14 @@ rather than the pre-handshake defaults.
   - `gateway.controlUi.dangerouslyDisableDeviceAuth=true` (break-glass, severe security downgrade).
   - direct-loopback `gateway-client` backend RPCs authenticated with the shared
     gateway token/password.
+- Omitting device identity has scope consequences. When a Control UI connection
+  lacks device identity, `shouldClearUnboundScopesForMissingDeviceIdentity`
+  clears self-declared scopes to an empty set for token, password, and
+  trusted-proxy auth. The connection is allowed on explicit trust paths, but
+  scope-gated methods fail. The exception is local Control UI token/password
+  sessions with `allowInsecureAuth`, which preserve scopes. For other cases,
+  set `gateway.controlUi.dangerouslyDisableDeviceAuth=true` only as a
+  break-glass scope-preservation path.
 - All connections must sign the server-provided `connect.challenge` nonce.
 
 ### Device auth migration diagnostics

@@ -608,9 +608,19 @@ Native dependency policy:
   - CI-safe and keyless
   - Narrow lane for stability-regression follow-up, not a substitute for the full Gateway suite
 
-### E2E (gateway smoke)
+### E2E (repo aggregate)
 
 - Command: `pnpm test:e2e`
+- Scope:
+  - Runs the gateway smoke E2E lane
+  - Runs the mocked Control UI browser E2E lane
+- Expectations:
+  - CI-safe and keyless
+  - Requires Playwright Chromium to be installed
+
+### E2E (gateway smoke)
+
+- Command: `pnpm test:e2e:gateway`
 - Config: `vitest.e2e.config.ts`
 - Files: `src/**/*.e2e.test.ts`, `test/**/*.e2e.test.ts`, and bundled-plugin E2E tests under `extensions/`
 - Runtime defaults:
@@ -627,6 +637,20 @@ Native dependency policy:
   - Runs in CI (when enabled in the pipeline)
   - No real keys required
   - More moving parts than unit tests (can be slower)
+
+### E2E (Control UI mocked browser)
+
+- Command: `pnpm test:ui:e2e`
+- Config: `test/vitest/vitest.ui-e2e.config.ts`
+- Files: `ui/src/**/*.e2e.test.ts`
+- Scope:
+  - Starts the Vite Control UI
+  - Drives a real Chromium page through Playwright
+  - Replaces the Gateway WebSocket with deterministic in-browser mocks
+- Expectations:
+  - Runs in CI as part of `pnpm test:e2e`
+  - No real Gateway, agents, or provider keys required
+  - Browser dependency must be present (`pnpm --dir ui exec playwright install chromium`)
 
 ### E2E: OpenShell backend smoke
 

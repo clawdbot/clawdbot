@@ -44,8 +44,8 @@ but new code should not add imports from them: `agent-runtime-test-contracts`,
 
 ### Reserved bundled plugin helper subpaths
 
-These subpaths are plugin-owned compatibility surfaces reserved for their owning
-bundled plugin, not general SDK APIs: `plugin-sdk/codex-mcp-projection` and
+These subpaths are plugin-owned compatibility surfaces for their owning bundled
+plugin, not general SDK APIs: `plugin-sdk/codex-mcp-projection` and
 `plugin-sdk/codex-native-task-runtime`. Cross-owner extension imports are blocked
 by package contract guardrails.
 
@@ -224,8 +224,9 @@ focused channel/runtime subpaths, `config-contracts`, `string-coerce-runtime`,
     | `plugin-sdk/runtime` | Broad runtime/logging/backup/plugin-install helpers |
     | `plugin-sdk/runtime-env` | Narrow runtime env, logger, timeout, retry, and backoff helpers |
     | `plugin-sdk/browser-config` | Supported browser config facade for normalized profile/defaults, CDP URL parsing, and browser-control auth helpers |
+    | `plugin-sdk/agent-harness-task-runtime` | Generic task lifecycle and completion delivery helpers for harness-backed agents using a host-issued task scope |
     | `plugin-sdk/codex-mcp-projection` | Reserved bundled Codex helper for projecting user MCP server config into Codex thread config; not for third-party plugins |
-    | `plugin-sdk/codex-native-task-runtime` | Reserved bundled Codex helper for native task mirror/runtime wiring; not for third-party plugins |
+    | `plugin-sdk/codex-native-task-runtime` | Private bundled Codex helper for native task mirror/runtime wiring; not for third-party plugins |
     | `plugin-sdk/channel-runtime-context` | Generic channel runtime-context registration and lookup helpers |
     | `plugin-sdk/matrix` | Deprecated Matrix compatibility facade for older third-party channel packages; new plugins should import `plugin-sdk/run-command` directly |
     | `plugin-sdk/mattermost` | Deprecated Mattermost compatibility facade for older third-party channel packages; new plugins should import generic SDK subpaths directly |

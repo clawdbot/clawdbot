@@ -1,6 +1,9 @@
 export { asFiniteNumber } from "../shared/number-coercion.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import { normalizeOptionalString as trimToUndefined } from "../shared/string-coerce.js";
 export { normalizeOptionalString as trimToUndefined } from "../shared/string-coerce.js";
+
+const ERROR_BODY_METADATA_LIMIT = 500;
 
 export function asBoolean(value: unknown): boolean | undefined {
   return typeof value === "boolean" ? value : undefined;
@@ -14,6 +17,10 @@ export function asObject(value: unknown): Record<string, unknown> | undefined {
 
 export function truncateErrorDetail(detail: string, limit = 220): string {
   return detail.length <= limit ? detail : `${detail.slice(0, limit - 1)}…`;
+}
+
+export function redactProviderErrorBody(body: string): string {
+  return truncateErrorDetail(redactSensitiveText(body), ERROR_BODY_METADATA_LIMIT);
 }
 
 export async function readResponseTextLimited(
@@ -95,16 +102,65 @@ export function formatProviderErrorPayload(payload: unknown): string | undefined
   return undefined;
 }
 
-export async function extractProviderErrorDetail(response: Response): Promise<string | undefined> {
+type ProviderErrorPayloadMetadata = {
+  detail?: string;
+  code?: string;
+  type?: string;
+};
+
+function extractProviderErrorPayloadMetadata(payload: unknown): ProviderErrorPayloadMetadata {
+  const root = asObject(payload);
+  const detailObject = asObject(root?.detail);
+  const subject = asObject(root?.error) ?? detailObject ?? root;
+  if (!subject) {
+    return {};
+  }
+
+  const detail = formatProviderErrorPayload(payload);
+  const type = trimToUndefined(subject.type);
+  const code = trimToUndefined(subject.code) ?? trimToUndefined(subject.status);
+  return {
+    ...(detail ? { detail: redactSensitiveText(detail) } : {}),
+    ...(code ? { code } : {}),
+    ...(type ? { type } : {}),
+  };
+}
+
+export type ProviderHttpErrorInfo = {
+  detail?: string;
+  code?: string;
+  type?: string;
+  body?: string;
+  requestId?: string;
+};
+
+export async function extractProviderErrorInfo(response: Response): Promise<ProviderHttpErrorInfo> {
   const rawBody = trimToUndefined(await readResponseTextLimited(response));
+  const requestId = extractProviderRequestId(response);
   if (!rawBody) {
-    return undefined;
+    return requestId ? { requestId } : {};
   }
+  const body = redactProviderErrorBody(rawBody);
   try {
-    return formatProviderErrorPayload(JSON.parse(rawBody)) ?? truncateErrorDetail(rawBody);
+    const metadata = extractProviderErrorPayloadMetadata(JSON.parse(rawBody));
+    return {
+      ...(metadata.detail ? { detail: metadata.detail } : { detail: body }),
+      ...(metadata.code ? { code: metadata.code } : {}),
+      ...(metadata.type ? { type: metadata.type } : {}),
+      body,
+      ...(requestId ? { requestId } : {}),
+    };
   } catch {
-    return truncateErrorDetail(rawBody);
+    return {
+      detail: body,
+      body,
+      ...(requestId ? { requestId } : {}),
+    };
   }
+}
+
+export async function extractProviderErrorDetail(response: Response): Promise<string | undefined> {
+  return (await extractProviderErrorInfo(response)).detail;
 }
 
 export function extractProviderRequestId(response: Response): string | undefined {
@@ -112,6 +168,37 @@ export function extractProviderRequestId(response: Response): string | undefined
     trimToUndefined(response.headers.get("x-request-id")) ??
     trimToUndefined(response.headers.get("request-id"))
   );
+}
+
+export class ProviderHttpError extends Error {
+  readonly status: number;
+  readonly statusCode: number;
+  readonly code?: string;
+  readonly errorCode?: string;
+  readonly errorType?: string;
+  readonly errorBody?: string;
+  readonly requestId?: string;
+
+  constructor(
+    message: string,
+    params: {
+      status: number;
+      code?: string;
+      type?: string;
+      body?: string;
+      requestId?: string;
+    },
+  ) {
+    super(message);
+    this.name = "ProviderHttpError";
+    this.status = params.status;
+    this.statusCode = params.status;
+    this.code = params.code;
+    this.errorCode = params.code;
+    this.errorType = params.type;
+    this.errorBody = params.body;
+    this.requestId = params.requestId;
+  }
 }
 
 export function formatProviderHttpErrorMessage(params: {
@@ -134,16 +221,22 @@ export async function createProviderHttpError(
   label: string,
   options?: { statusPrefix?: string },
 ): Promise<Error> {
-  const detail = await extractProviderErrorDetail(response);
-  const requestId = extractProviderRequestId(response);
-  return new Error(
+  const info = await extractProviderErrorInfo(response);
+  return new ProviderHttpError(
     formatProviderHttpErrorMessage({
       label,
       status: response.status,
-      detail,
-      requestId,
+      detail: info.detail,
+      requestId: info.requestId,
       statusPrefix: options?.statusPrefix,
     }),
+    {
+      status: response.status,
+      code: info.code,
+      type: info.type,
+      body: info.body,
+      requestId: info.requestId,
+    },
   );
 }
 

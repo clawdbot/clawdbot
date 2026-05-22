@@ -445,6 +445,16 @@ export async function collectDoctorPreviewWarnings(params: {
   if (hasPluginConfig) {
     const { collectCodexRouteWarnings } = await import("./codex-route-warnings.js");
     warnings.push(...collectCodexRouteWarnings({ cfg: params.cfg, env }));
+
+    const { collectContextEngineHostCompatibilityWarnings } =
+      await import("./context-engine-host-compat.js");
+    warnings.push(
+      ...(await collectContextEngineHostCompatibilityWarnings({
+        cfg: params.cfg,
+        doctorFixCommand: params.doctorFixCommand,
+        env,
+      })),
+    );
   }
   if (hasSubagentAllowlistConfig(params.cfg)) {
     const { collectStaleSubagentAllowlistWarnings, scanStaleSubagentAllowlistReferences } =

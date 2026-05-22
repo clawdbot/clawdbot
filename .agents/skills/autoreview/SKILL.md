@@ -10,6 +10,7 @@ Run the bundled structured review helper as a closeout check. This is code revie
 Codex review is the default when no engine is set. It usually delivers the best review results and should remain the normal final closeout engine.
 
 Use when:
+
 - user asks for Codex review / Claude review / autoreview / second-model review
 - after non-trivial code edits, before final/commit/ship
 - reviewing a local branch or PR branch after fixes
@@ -126,21 +127,24 @@ If installed from `agent-scripts`, path is:
 ```
 
 The helper:
+
 - chooses dirty local changes first
 - otherwise uses current PR base if `gh pr view` works
 - otherwise uses `origin/main` for non-main branches
-- supports `--engine codex` and `--engine claude`; default is `AUTOREVIEW_ENGINE` or `codex`; Codex should remain the default when nothing is set
+- supports `--engine codex`, `claude`, `droid`, `copilot`, `pi`, and `opencode`; default is `AUTOREVIEW_ENGINE` or `codex`; Codex should remain the default when nothing is set
+- `--engine pi` requires an explicit `--model` because the helper isolates Pi's config directory during review
 - use `--mode commit --commit <ref>` for already-committed work, especially clean `main` after landing
 - should be left in `--mode auto` or forced to `--mode branch` for PR/branch work; do not force `--mode local` after committing
 - writes only to stdout unless `--output` or `--json-output` is set
 - supports `--dry-run`, `--parallel-tests`, `--prompt`, `--prompt-file`, `--dataset`, `--no-tools`, `--no-web-search`, and commit refs
-- allows read-only tools and web search by default; forbids nested review in the prompt; Codex is run through `codex exec` with read-only sandbox and structured output
+- allows read-only tools and web search by default where the selected CLI supports them; forbids nested review in the prompt; Codex is run through `codex exec` with read-only sandbox and structured output
 - prints `autoreview clean: no accepted/actionable findings reported` when the selected review command exits 0
 - exits nonzero when accepted/actionable findings are present
 
 ## Final Report
 
 Include:
+
 - review command used
 - tests/proof run
 - findings accepted/rejected, briefly why

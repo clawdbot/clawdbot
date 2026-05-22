@@ -4,7 +4,7 @@ import { normalizeAnyChannelId } from "../../channels/registry.js";
 import type { ReplyToMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
-import { copyReplyPayloadMetadata } from "../reply-payload.js";
+import { copyReplyPayloadMetadata, isReplyPayloadStatusNotice } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload, ReplyThreadingPolicy } from "../types.js";
 import { isSingleUseReplyToMode } from "./reply-reference.js";
@@ -95,7 +95,7 @@ export function createReplyToModeFilter(
 ) {
   let hasThreaded = false;
   return (payload: ReplyPayload): ReplyPayload => {
-    const isStatusNotice = payload.isCompactionNotice || payload.isFallbackNotice;
+    const isStatusNotice = isReplyPayloadStatusNotice(payload);
     if (!payload.replyToId) {
       return payload;
     }

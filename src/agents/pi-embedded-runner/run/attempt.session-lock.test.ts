@@ -89,6 +89,34 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(events).toEqual(["prep-release", "post-write", "post-release"]);
   });
 
+  it("keeps settled compaction hooks on the normal acquire-and-release path", async () => {
+    const events: string[] = [];
+    const acquireSessionWriteLock = vi
+      .fn()
+      .mockResolvedValueOnce({ release: vi.fn(async () => events.push("prep-release")) })
+      .mockResolvedValueOnce({ release: vi.fn(async () => events.push("compact-release")) });
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock,
+      lockOptions,
+    });
+    const session = {
+      compact: vi.fn(async () => {
+        events.push("compact");
+      }),
+    };
+
+    installSessionExternalHookWriteLock({
+      session,
+      withSessionWriteLock: controller.withSessionWriteLock,
+    });
+
+    await controller.releaseForPrompt();
+    await session.compact();
+
+    expect(acquireSessionWriteLock).toHaveBeenCalledTimes(2);
+    expect(events).toEqual(["prep-release", "compact", "compact-release"]);
+  });
+
   it("reuses its active post-prompt lock for nested session writes", async () => {
     const events: string[] = [];
     const sessionFile = await createTempSessionFile();

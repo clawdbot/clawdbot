@@ -46,6 +46,15 @@ describe("chat header responsive mobile styles", () => {
     );
     expect(css).toContain("height: 44px;");
   });
+
+  it("keeps chat session picker search icons from stretching in mobile controls", () => {
+    const css = readMobileCss();
+
+    expect(css).toContain(".chat-session-picker__icon-button.btn--icon {");
+    expect(css).toContain("flex: 0 0 44px;");
+    expect(css).toContain("width: 44px;");
+    expect(css).toContain("min-width: 44px;");
+  });
 });
 
 describe("sidebar menu trigger styles", () => {

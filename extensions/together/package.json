@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/together-provider",
-  "version": "2026.5.21",
+  "version": "2026.5.22",
   "private": true,
   "description": "OpenClaw Together provider plugin",
   "type": "module",

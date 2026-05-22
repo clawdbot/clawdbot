@@ -241,6 +241,8 @@ describe("waitForAgentRun", () => {
       status: "ok",
       startedAt: 100,
       endedAt: 200,
+      timeoutPhase: "provider",
+      providerStarted: true,
     });
 
     const result = await waitForAgentRun({ runId: "run-2", timeoutMs: 500 });
@@ -249,6 +251,8 @@ describe("waitForAgentRun", () => {
       status: "ok",
       startedAt: 100,
       endedAt: 200,
+      timeoutPhase: "provider",
+      providerStarted: true,
     });
   });
 

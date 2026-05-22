@@ -4,11 +4,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import {
   assembleHarnessContextEngine,
+  assertContextEngineHostSupport,
   bootstrapHarnessContextEngine,
   buildAgentHookContextChannelFields,
   buildHarnessContextEngineRuntimeContext,
   buildHarnessContextEngineRuntimeContextFromUsage,
   buildEmbeddedAttemptToolRunContext,
+  CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
   clearActiveEmbeddedRun,
   compactContextEngineWithSafetyTimeout,
   embeddedAgentLog,
@@ -46,7 +48,11 @@ import {
   type NativeHookRelayEvent,
   type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { markAuthProfileBlockedUntil, resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  markAuthProfileBlockedUntil,
+  resolveAgentConfig,
+  resolveAgentDir,
+} from "openclaw/plugin-sdk/agent-runtime";
 import {
   emitTrustedDiagnosticEvent,
   hasPendingInternalDiagnosticEvent,
@@ -114,6 +120,7 @@ import {
   buildCodexNativeHookRelayConfig,
   CODEX_NATIVE_HOOK_RELAY_EVENTS,
 } from "./native-hook-relay.js";
+import { registerCodexNativeSubagentMonitor } from "./native-subagent-monitor.js";
 import {
   describeCodexNotificationCorrelation,
   isCodexNotificationForTurn,
@@ -953,6 +960,7 @@ export async function runCodexAppServerAttempt(
   });
   const sandboxExecServerEnabled = isCodexSandboxExecServerEnabled(pluginConfig);
   const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(params, sandbox, {
+    agentId: sessionAgentId,
     sandboxExecServerEnabled,
   });
   for (const diagnostic of bundleMcpThreadConfig.diagnostics) {
@@ -961,6 +969,13 @@ export async function runCodexAppServerAttempt(
   const activeContextEngine = isActiveHarnessContextEngine(params.contextEngine)
     ? params.contextEngine
     : undefined;
+  if (activeContextEngine) {
+    assertContextEngineHostSupport({
+      contextEngine: activeContextEngine,
+      operation: "agent-run",
+      host: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
+    });
+  }
   const hookChannelId = resolveCodexAppServerHookChannelId(params, sandboxSessionKey);
   let yieldDetected = false;
   const tools = await buildDynamicTools({
@@ -2163,6 +2178,14 @@ export async function runCodexAppServerAttempt(
     return notificationQueue;
   };
 
+  registerCodexNativeSubagentMonitor({
+    client,
+    parentThreadId: thread.threadId,
+    requesterSessionKey: params.sessionKey,
+    taskRuntimeScope: params.agentHarnessTaskRuntimeScope,
+    agentId: params.agentId,
+    codexHome: appServer.start.env?.CODEX_HOME ?? resolveCodexAppServerHomeDir(agentDir),
+  });
   const notificationCleanup = client.addNotificationHandler(enqueueNotification);
   const requestCleanup = client.addRequestHandler(async (request) => {
     let armCompletionWatchOnResponse = false;
@@ -3648,10 +3671,14 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
       input.runAbortController.abort("sessions_yield");
     },
   });
-  const codexFilteredTools = addSandboxShellDynamicToolsIfAvailable(
-    isCodexMemoryFlushRun(params)
-      ? filterCodexMemoryFlushDynamicTools(allTools)
-      : filterCodexDynamicTools(allTools, input.pluginConfig),
+  const codexFilteredTools = addNodeShellDynamicToolsIfNeeded(
+    addSandboxShellDynamicToolsIfAvailable(
+      isCodexMemoryFlushRun(params)
+        ? filterCodexMemoryFlushDynamicTools(allTools)
+        : filterCodexDynamicTools(allTools, input.pluginConfig),
+      allTools,
+      input,
+    ),
     allTools,
     input,
   );
@@ -3695,9 +3722,12 @@ function includeForcedMessageToolAllow(
 function shouldEnableCodexAppServerNativeToolSurface(
   params: EmbeddedRunAttemptParams,
   sandbox?: OpenClawSandboxContext,
-  options: { sandboxExecServerEnabled?: boolean } = {},
+  options: { agentId?: string; sandboxExecServerEnabled?: boolean } = {},
 ): boolean {
   if (isCodexMemoryFlushRun(params)) {
+    return false;
+  }
+  if (isEffectiveExecHostNode(params, options.agentId)) {
     return false;
   }
   const toolsAllow = includeForcedMessageToolAllow(params.toolsAllow, params);
@@ -3710,6 +3740,14 @@ function shouldEnableCodexAppServerNativeToolSurface(
   return (
     hasWildcardCodexToolsAllow(toolsAllow) &&
     canCodexAppServerNativeToolSurfaceHonorSandbox(sandbox, options)
+  );
+}
+
+function isEffectiveExecHostNode(params: EmbeddedRunAttemptParams, agentId?: string): boolean {
+  const agentExec =
+    params.config && agentId ? resolveAgentConfig(params.config, agentId)?.tools?.exec : undefined;
+  return (
+    (params.execOverrides?.host ?? agentExec?.host ?? params.config?.tools?.exec?.host) === "node"
   );
 }
 
@@ -3864,20 +3902,56 @@ function shouldExposeSandboxExecDynamicTool(input: DynamicToolBuildParams): bool
   if (isCodexMemoryFlushRun(input.params)) {
     return false;
   }
+  if (isEffectiveExecHostNode(input.params, input.sessionAgentId)) {
+    return false;
+  }
   const backendId = input.sandbox?.enabled ? input.sandbox.backendId.trim().toLowerCase() : "";
   return Boolean(backendId && input.nativeToolSurfaceEnabled === false);
 }
 
-function isSandboxShellDynamicToolExcluded(config: CodexPluginConfig): boolean {
+function isCodexDynamicToolExcluded(config: CodexPluginConfig, names: string[]): boolean {
+  const normalizedNames = new Set(names.map((name) => normalizeCodexDynamicToolName(name)));
   return (config.codexDynamicToolsExclude ?? []).some((name) => {
     const normalized = normalizeCodexDynamicToolName(name);
-    return (
-      normalized === "exec" ||
-      normalized === "sandbox_exec" ||
-      normalized === "process" ||
-      normalized === "sandbox_process"
-    );
+    return normalizedNames.has(normalized);
   });
+}
+
+function isSandboxShellDynamicToolExcluded(config: CodexPluginConfig): boolean {
+  return isCodexDynamicToolExcluded(config, ["exec", "sandbox_exec", "process", "sandbox_process"]);
+}
+
+function addNodeShellDynamicToolsIfNeeded(
+  filteredTools: OpenClawDynamicTool[],
+  allTools: OpenClawDynamicTool[],
+  input: DynamicToolBuildParams,
+): OpenClawDynamicTool[] {
+  if (
+    isCodexMemoryFlushRun(input.params) ||
+    !isEffectiveExecHostNode(input.params, input.sessionAgentId)
+  ) {
+    return filteredTools;
+  }
+  let next = filteredTools;
+  for (const toolName of ["exec", "process"]) {
+    if (isCodexDynamicToolExcluded(input.pluginConfig, [toolName])) {
+      continue;
+    }
+    if (next.some((tool) => normalizeCodexDynamicToolName(tool.name) === toolName)) {
+      continue;
+    }
+    const tool = allTools.find(
+      (candidate) => normalizeCodexDynamicToolName(candidate.name) === toolName,
+    );
+    if (!tool) {
+      continue;
+    }
+    if (next === filteredTools) {
+      next = [...filteredTools];
+    }
+    next.push(tool);
+  }
+  return next;
 }
 
 function filterCodexDynamicToolsForAllowlist<T extends { name: string }>(

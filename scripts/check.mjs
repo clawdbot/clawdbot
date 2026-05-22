@@ -49,6 +49,7 @@ export async function main(argv = process.argv.slice(2)) {
         { name: "host env policy", args: ["check:host-env-policy:swift"] },
         { name: "opengrep rule metadata", args: ["check:opengrep-rule-metadata"] },
         { name: "duplicate scan target coverage", args: ["dup:check:coverage"] },
+        { name: "npm shrinkwrap guard", args: ["deps:shrinkwrap:check"] },
         { name: "package patch guard", args: ["deps:patches:check"] },
       ],
     },

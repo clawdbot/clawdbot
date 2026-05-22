@@ -34,11 +34,15 @@ jobs:
 
             const isDependencyFile = (filename) =>
               filename === "package.json" ||
+              filename === "package-lock.json" ||
+              filename === "npm-shrinkwrap.json" ||
               filename === "pnpm-lock.yaml" ||
               filename === "pnpm-workspace.yaml" ||
               filename === "ui/package.json" ||
               filename.startsWith("patches/") ||
               /^packages\/[^/]+\/package\.json$/u.test(filename) ||
+              /^extensions\/[^/]+\/package-lock\.json$/u.test(filename) ||
+              /^extensions\/[^/]+\/npm-shrinkwrap\.json$/u.test(filename) ||
               /^extensions\/[^/]+\/package\.json$/u.test(filename);
 
             const sanitizeDisplayValue = (value) =>
@@ -143,7 +147,8 @@ jobs:
               "",
               "Maintainer follow-up:",
               "- Review whether the dependency changes are intentional.",
-              "- Inspect resolved package deltas when lockfile or workspace dependency policy changes are present.",
+              "- Inspect resolved package deltas when lockfile, shrinkwrap, or workspace dependency policy changes are present.",
+              "- Treat `package-lock.json` and `npm-shrinkwrap.json` diffs as security-review surfaces.",
               "- Run `pnpm deps:changes:report -- --base-ref origin/main --markdown /tmp/dependency-changes.md --json /tmp/dependency-changes.json` locally for detailed release-style evidence.",
             ].join("\n");
 

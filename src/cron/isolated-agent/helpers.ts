@@ -19,6 +19,7 @@ export type CronPayloadOutcome = {
   deliveryPayloads: DeliveryPayload[];
   deliveryPayloadHasStructuredContent: boolean;
   hasFatalErrorPayload: boolean;
+  hasFatalStructuredErrorPayload: boolean;
   embeddedRunError?: string;
   pendingPresentationWarningError?: string;
 };
@@ -333,6 +334,7 @@ export function resolveCronPayloadOutcome(params: {
       ? false
       : deliveryPayloadHasStructuredContent,
     hasFatalErrorPayload,
+    hasFatalStructuredErrorPayload,
     embeddedRunError: structuredErrorText
       ? structuredErrorText
       : failureSignal

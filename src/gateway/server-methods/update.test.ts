@@ -416,6 +416,31 @@ describe("update.run restart scheduling", () => {
     );
   });
 
+  it("starts managed package handoff when the gateway cwd is unavailable", async () => {
+    detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
+    resolveUpdateInstallSurfaceMock.mockResolvedValueOnce({
+      kind: "global",
+      mode: "npm",
+      root: "/tmp/openclaw-global",
+      packageRoot: "/tmp/openclaw-global",
+    });
+    const cwdSpy = vi.spyOn(process, "cwd").mockImplementation(() => {
+      throw Object.assign(new Error("uv_cwd"), { code: "ENOENT", syscall: "uv_cwd" });
+    });
+    try {
+      await invokeUpdateRun({});
+    } finally {
+      cwdSpy.mockRestore();
+    }
+
+    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledTimes(1);
+    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        root: "/tmp/openclaw",
+      }),
+    );
+  });
+
   it("keeps git/dev updates on the in-process gateway update path", async () => {
     runGatewayUpdateMock.mockResolvedValueOnce({
       status: "ok",

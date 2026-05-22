@@ -48,7 +48,7 @@ export async function resolveBrowserOpenCommand(): Promise<BrowserOpenCommand> {
     Boolean(process.env.SSH_TTY) ||
     Boolean(process.env.SSH_CONNECTION);
 
-  if (isSsh && !hasDisplay && platform !== "win32") {
+  if (isSsh && !hasDisplay && platform !== "win32" && platform !== "darwin") {
     return { argv: null, reason: "ssh-no-display" };
   }
 

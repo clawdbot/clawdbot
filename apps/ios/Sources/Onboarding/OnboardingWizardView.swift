@@ -71,6 +71,7 @@ struct OnboardingWizardView: View {
     @State private var selectedPhoto: PhotosPickerItem?
     @State private var showGatewayProblemDetails: Bool = false
     @State private var lastPairingAutoResumeAttemptAt: Date?
+    @State private var pendingManualAuthOverride: GatewayConnectionController.ManualAuthOverride?
     private static let pairingAutoResumeTicker = Timer.publish(every: 2.0, on: .main, in: .common).autoconnect()
 
     let allowSkip: Bool
@@ -744,18 +745,20 @@ struct OnboardingWizardView: View {
         self.manualHost = link.host
         self.manualPort = link.port
         self.manualTLS = link.tls
-        let trimmedBootstrapToken = link.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.saveGatewayBootstrapToken(trimmedBootstrapToken)
-        if let token = link.token?.trimmingCharacters(in: .whitespacesAndNewlines), !token.isEmpty {
-            self.gatewayToken = token
-        } else if trimmedBootstrapToken?.isEmpty == false {
-            self.gatewayToken = ""
+        let setupAuth = GatewayConnectionController.ManualAuthOverride.setupAuth(from: link)
+        if setupAuth.hasBootstrapToken {
+            GatewayOnboardingReset.prepareForBootstrapPairing(
+                appModel: self.appModel,
+                instanceId: GatewaySettingsStore.currentInstanceID())
         }
-        if let password = link.password?.trimmingCharacters(in: .whitespacesAndNewlines), !password.isEmpty {
-            self.gatewayPassword = password
-        } else if trimmedBootstrapToken?.isEmpty == false {
-            self.gatewayPassword = ""
+        self.saveGatewayBootstrapToken(setupAuth.bootstrapToken)
+        if setupAuth.shouldApplyTokenField {
+            self.gatewayToken = setupAuth.token
         }
+        if setupAuth.shouldApplyPasswordField {
+            self.gatewayPassword = setupAuth.password
+        }
+        self.pendingManualAuthOverride = setupAuth.manualAuthOverride
         self.saveGatewayCredentials(token: self.gatewayToken, password: self.gatewayPassword)
         self.showQRScanner = false
         self.connectMessage = "Connecting via QR code…"
@@ -937,7 +940,7 @@ struct OnboardingWizardView: View {
     }
 
     private func saveGatewayCredentials(token: String, password: String) {
-        let trimmedInstanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedInstanceId = GatewaySettingsStore.currentInstanceID()
         guard !trimmedInstanceId.isEmpty else { return }
         let trimmedToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
         GatewaySettingsStore.saveGatewayToken(trimmedToken, instanceId: trimmedInstanceId)
@@ -946,7 +949,7 @@ struct OnboardingWizardView: View {
     }
 
     private func saveGatewayBootstrapToken(_ token: String?) {
-        let trimmedInstanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedInstanceId = GatewaySettingsStore.currentInstanceID()
         guard !trimmedInstanceId.isEmpty else { return }
         let trimmedToken = token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         GatewaySettingsStore.saveGatewayBootstrapToken(trimmedToken, instanceId: trimmedInstanceId)
@@ -1001,7 +1004,16 @@ struct OnboardingWizardView: View {
         self.connectMessage = "Connecting to \(host)…"
         self.statusLine = "Connecting to \(host):\(self.manualPort)…"
         defer { self.connectingGatewayID = nil }
-        await self.gatewayController.connectManual(host: host, port: self.manualPort, useTLS: self.manualTLS)
+        let authOverride = GatewayConnectionController.ManualAuthOverride.currentManualInput(
+            token: self.gatewayToken,
+            pendingOverride: self.pendingManualAuthOverride,
+            password: self.gatewayPassword)
+        self.pendingManualAuthOverride = nil
+        await self.gatewayController.connectManual(
+            host: host,
+            port: self.manualPort,
+            useTLS: self.manualTLS,
+            authOverride: authOverride)
     }
 
     private func retryLastAttempt(silent: Bool = false) async {

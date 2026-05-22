@@ -25,6 +25,8 @@ const execFileAsync = promisify(execFile);
 const REQUIRED_REVIEWED_PUBLISHABLE_CRITICAL_FINDINGS = new Set([
   "@openclaw/acpx:dangerous-exec:src/codex-auth-bridge.ts",
   "@openclaw/acpx:dangerous-exec:src/runtime-internals/mcp-proxy.mjs",
+  "@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server/http.ts",
+  "@openclaw/codex:dangerous-exec:src/app-server/sandbox-exec-server/processes.ts",
   "@openclaw/codex:dangerous-exec:src/app-server/transport-stdio.ts",
   "@openclaw/codex:dangerous-exec:src/node-cli-sessions.ts",
   "@openclaw/google-meet:dangerous-exec:src/node-host.ts",

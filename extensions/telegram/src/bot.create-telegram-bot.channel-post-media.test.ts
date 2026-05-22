@@ -1,4 +1,3 @@
-import { useFrozenTime, useRealTime } from "openclaw/plugin-sdk/test-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const harness = await import("./bot.create-telegram-bot.test-harness.js");
@@ -248,7 +247,7 @@ describe("createTelegramBot channel_post media", () => {
   it("coalesces channel_post near-limit text fragments into one message", async () => {
     setOpenChannelPostConfig();
 
-    useFrozenTime("2026-02-20T00:00:00.000Z");
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
       const handler = getChannelPostHandler();
 
@@ -278,14 +277,17 @@ describe("createTelegramBot channel_post media", () => {
       });
 
       expect(replySpy).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(TELEGRAM_TEST_TIMINGS.textFragmentGapMs + 100);
+      await flushChannelPostMediaGroupForDelay(
+        setTimeoutSpy,
+        TELEGRAM_TEST_TIMINGS.textFragmentGapMs,
+      );
 
       expect(replySpy).toHaveBeenCalledTimes(1);
       const payload = replyPayload() as { RawBody?: string };
       expect(payload.RawBody).toContain(part1.slice(0, 32));
       expect(payload.RawBody).toContain(part2.slice(0, 32));
     } finally {
-      useRealTime();
+      setTimeoutSpy.mockRestore();
     }
   });
 

@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { Writable } from "node:stream";
 import { confirm, isCancel } from "@clack/prompts";
 import {
   checkShellCompletionStatus,
@@ -28,7 +29,11 @@ import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materializ
 import { CONFIG_PATH, resolveIncludeRoots } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
-import { GATEWAY_SERVICE_KIND, GATEWAY_SERVICE_MARKER } from "../../daemon/constants.js";
+import {
+  GATEWAY_SERVICE_KIND,
+  GATEWAY_SERVICE_MARKER,
+  GATEWAY_SERVICE_RUNTIME_PID_ENV,
+} from "../../daemon/constants.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { disableCurrentOpenClawUpdateLaunchdJob } from "../../daemon/launchd.js";
 import { resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
@@ -161,6 +166,11 @@ const POST_INSTALL_DOCTOR_SERVICE_ENV_KEYS = [
   "OPENCLAW_PROFILE",
 ] as const;
 const POST_UPDATE_PLUGIN_REPAIR_GUIDANCE = "Run openclaw doctor --fix to attempt automatic repair.";
+const JSON_MODE_SERVICE_STDOUT = new Writable({
+  write(_chunk, _encoding, callback) {
+    callback();
+  },
+});
 
 async function createUpdateConfigSnapshot(): Promise<void> {
   await createPreUpdateConfigSnapshot({
@@ -764,8 +774,40 @@ Gateway PID ${pid} is an ancestor of this process, so this updater cannot safely
 Run \`${replaceCliName(formatCliCommand("openclaw update"), CLI_NAME)}\` from a shell outside the gateway service, or stop the gateway service first and then update.`;
 }
 
-function isGatewayAncestorPid(pid: unknown): pid is number {
-  return typeof pid === "number" && pid > 0 && getSelfAndAncestorPidsSync().has(pid);
+function parsePositivePid(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return Math.floor(value);
+  }
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!/^\d+$/u.test(trimmed)) {
+    return null;
+  }
+  const parsed = Number.parseInt(trimmed, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function isInheritedGatewayRuntimePid(
+  pid: number,
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  if (!isRunningInsideGatewayService(env)) {
+    return false;
+  }
+  return parsePositivePid(env[GATEWAY_SERVICE_RUNTIME_PID_ENV]) === pid;
+}
+
+function isGatewayAncestorPid(
+  pid: unknown,
+  env: Record<string, string | undefined> = process.env,
+): pid is number {
+  const parsed = parsePositivePid(pid);
+  if (parsed === null) {
+    return false;
+  }
+  return isInheritedGatewayRuntimePid(parsed, env) || getSelfAndAncestorPidsSync().has(parsed);
 }
 
 function gatewayAncestryBlockMessage(pid: unknown): string | undefined {
@@ -776,6 +818,10 @@ function gatewayRuntimeAncestryBlockMessage(
   runtime: { pid?: unknown } | null | undefined,
 ): string | undefined {
   return gatewayAncestryBlockMessage(runtime?.pid);
+}
+
+function serviceControlStdoutForMode(jsonMode: boolean): NodeJS.WritableStream {
+  return jsonMode ? JSON_MODE_SERVICE_STDOUT : process.stdout;
 }
 
 async function maybeStopManagedServiceBeforePackageUpdate(params: {
@@ -855,7 +901,10 @@ async function maybeStopManagedServiceBeforePackageUpdate(params: {
   if (!params.jsonMode) {
     defaultRuntime.log(theme.muted("Stopping managed gateway service before package update..."));
   }
-  await service.stop({ env: serviceState.env, stdout: process.stdout });
+  await service.stop({
+    env: serviceState.env,
+    stdout: serviceControlStdoutForMode(params.jsonMode),
+  });
   return {
     stopped: true,
     inspected: true,
@@ -875,7 +924,7 @@ async function maybeRestartServiceAfterFailedPackageUpdate(params: {
   try {
     await resolveGatewayService().restart({
       env: params.prePackageServiceStop.serviceEnv,
-      stdout: process.stdout,
+      stdout: serviceControlStdoutForMode(params.jsonMode),
     });
     if (!params.jsonMode) {
       defaultRuntime.log(theme.muted("Restarted managed gateway service after failed update."));
@@ -1035,6 +1084,7 @@ function stripGatewayServiceMarkerEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv
   const resolvedEnv = { ...env };
   delete resolvedEnv.OPENCLAW_SERVICE_MARKER;
   delete resolvedEnv.OPENCLAW_SERVICE_KIND;
+  delete resolvedEnv[GATEWAY_SERVICE_RUNTIME_PID_ENV];
   return resolvedEnv;
 }
 
@@ -1071,6 +1121,17 @@ export function resolveUpdatedGatewayRestartPort(params: {
   serviceEnv?: NodeJS.ProcessEnv;
 }): number {
   return resolveGatewayPort(params.config, params.serviceEnv ?? params.processEnv ?? process.env);
+}
+
+export function resolvePostUpdateServiceStateReadEnv(params: {
+  updateMode: UpdateRunResult["mode"];
+  processEnv?: NodeJS.ProcessEnv;
+  prePackageServiceEnv?: NodeJS.ProcessEnv;
+}): NodeJS.ProcessEnv {
+  if (isPackageManagerUpdateMode(params.updateMode) && params.prePackageServiceEnv) {
+    return params.prePackageServiceEnv;
+  }
+  return params.processEnv ?? process.env;
 }
 
 type UpdateDryRunPreview = {
@@ -3489,7 +3550,11 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   if (shouldRestart) {
     try {
       const serviceState = await readGatewayServiceState(resolveGatewayService(), {
-        env: process.env,
+        env: resolvePostUpdateServiceStateReadEnv({
+          updateMode: resultWithPostUpdate.mode,
+          processEnv: process.env,
+          prePackageServiceEnv: prePackageServiceStop?.serviceEnv,
+        }),
       });
       if (
         shouldPrepareUpdatedInstallRestart({

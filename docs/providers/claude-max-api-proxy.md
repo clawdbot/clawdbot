@@ -153,12 +153,6 @@ The proxy:
   </Accordion>
 </AccordionGroup>
 
-## Links
-
-- **npm:** [https://www.npmjs.com/package/claude-max-api-proxy](https://www.npmjs.com/package/claude-max-api-proxy)
-- **GitHub:** [https://github.com/atalovesyou/claude-max-api-proxy](https://github.com/atalovesyou/claude-max-api-proxy)
-- **Issues:** [https://github.com/atalovesyou/claude-max-api-proxy/issues](https://github.com/atalovesyou/claude-max-api-proxy/issues)
-
 ## Notes
 
 - This is a **community tool**, not officially supported by Anthropic or OpenClaw

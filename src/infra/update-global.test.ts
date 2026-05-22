@@ -253,18 +253,12 @@ describe("update global helpers", () => {
   it("classifies OpenClaw GitHub source package specs as unsupported package targets", () => {
     expect(isOpenClawSourcePackageInstallSpec("main")).toBe(true);
     expect(isOpenClawSourcePackageInstallSpec("github:openclaw/openclaw#main")).toBe(true);
-    expect(isOpenClawSourcePackageInstallSpec("openclaw@github:openclaw/openclaw#main")).toBe(
-      true,
-    );
-    expect(isOpenClawSourcePackageInstallSpec("OpenClaw@github:openclaw/openclaw#main")).toBe(
-      true,
-    );
+    expect(isOpenClawSourcePackageInstallSpec("openclaw@github:openclaw/openclaw#main")).toBe(true);
+    expect(isOpenClawSourcePackageInstallSpec("OpenClaw@github:openclaw/openclaw#main")).toBe(true);
     expect(
       isOpenClawSourcePackageInstallSpec("git+https://github.com/openclaw/openclaw.git#main"),
     ).toBe(true);
-    expect(isOpenClawSourcePackageInstallSpec("https://example.com/openclaw-main.tgz")).toBe(
-      false,
-    );
+    expect(isOpenClawSourcePackageInstallSpec("https://example.com/openclaw-main.tgz")).toBe(false);
     expect(
       isOpenClawSourcePackageInstallSpec(
         "https://github.com/openclaw/openclaw/releases/download/v2026.5.20/openclaw.tgz",
@@ -531,7 +525,7 @@ describe("update global helpers", () => {
           "--no-fund",
           "--no-audit",
           "--loglevel=error",
-          "--min-release-age=0",
+          expect.stringMatching(/^--before=/),
         ]);
       });
     });

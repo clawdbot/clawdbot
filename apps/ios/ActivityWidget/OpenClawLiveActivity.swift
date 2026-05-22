@@ -52,7 +52,6 @@ struct OpenClawLiveActivity: Widget {
         .padding(.vertical, 8)
     }
 
-    @ViewBuilder
     private func trailingView(state: OpenClawActivityAttributes.ContentState) -> some View {
         self.statusIcon(state: state)
             .font(.system(size: 16, weight: .semibold))
@@ -65,7 +64,6 @@ struct OpenClawLiveActivity: Widget {
             .frame(width: 6, height: 6)
     }
 
-    @ViewBuilder
     private func compactStatusIcon(state: OpenClawActivityAttributes.ContentState) -> some View {
         self.statusIcon(state: state)
             .font(.system(size: 12, weight: .semibold))

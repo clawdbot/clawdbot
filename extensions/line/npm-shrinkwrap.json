@@ -1,0 +1,60 @@
+{
+  "name": "@openclaw/line",
+  "version": "2026.5.22",
+  "lockfileVersion": 3,
+  "requires": true,
+  "packages": {
+    "": {
+      "name": "@openclaw/line",
+      "version": "2026.5.22",
+      "dependencies": {
+        "@line/bot-sdk": "11.0.0",
+        "zod": "4.4.3"
+      },
+      "peerDependencies": {
+        "openclaw": ">=2026.5.22"
+      },
+      "peerDependenciesMeta": {
+        "openclaw": {
+          "optional": true
+        }
+      }
+    },
+    "node_modules/@line/bot-sdk": {
+      "version": "11.0.0",
+      "resolved": "https://registry.npmjs.org/@line/bot-sdk/-/bot-sdk-11.0.0.tgz",
+      "integrity": "sha512-3NZJjeFm2BikwVRgA8osIVbgKhuL0CzphQOdrB8okXIC40qMRE4RRfHFN3G8/qTb/34RtB95mD4J/KW5MD+b8g==",
+      "license": "Apache-2.0",
+      "dependencies": {
+        "@types/node": "^24.0.0"
+      },
+      "engines": {
+        "node": ">=20"
+      }
+    },
+    "node_modules/@types/node": {
+      "version": "24.12.4",
+      "resolved": "https://registry.npmjs.org/@types/node/-/node-24.12.4.tgz",
+      "integrity": "sha512-GUUEShf+PBCGW2KaXwcIt3Yk+e3pkKwWKb9GSyM9WQVE+ep2jzmHdGsHzu4wgcZy5fN9FBdVzjpBQsYlpfpgLA==",
+      "license": "MIT",
+      "dependencies": {
+        "undici-types": "~7.16.0"
+      }
+    },
+    "node_modules/undici-types": {
+      "version": "7.16.0",
+      "resolved": "https://registry.npmjs.org/undici-types/-/undici-types-7.16.0.tgz",
+      "integrity": "sha512-Zz+aZWSj8LE6zoxD+xrjh4VfkIG8Ya6LvYkZqtUQGJPZjYl53ypCaUwWqo7eI0x66KBGeRo+mlBEkMSeSZ38Nw==",
+      "license": "MIT"
+    },
+    "node_modules/zod": {
+      "version": "4.4.3",
+      "resolved": "https://registry.npmjs.org/zod/-/zod-4.4.3.tgz",
+      "integrity": "sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==",
+      "license": "MIT",
+      "funding": {
+        "url": "https://github.com/sponsors/colinhacks"
+      }
+    }
+  }
+}

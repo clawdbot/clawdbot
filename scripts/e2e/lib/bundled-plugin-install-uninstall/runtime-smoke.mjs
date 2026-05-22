@@ -241,23 +241,45 @@ async function httpOk(port, pathName) {
 }
 
 async function assertHttpOk(port, pathName) {
-  const res = await fetch(`http://127.0.0.1:${port}${pathName}`);
-  if (!res.ok) {
-    throw new Error(`${pathName} returned HTTP ${res.status}`);
+  const started = Date.now();
+  let lastError;
+  while (Date.now() - started < RPC_READY_TIMEOUT_MS) {
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}${pathName}`);
+      if (res.ok) {
+        return;
+      }
+      lastError = new Error(`${pathName} returned HTTP ${res.status}`);
+    } catch (error) {
+      lastError = error;
+    }
+    await delay(500);
   }
+  throw lastError ?? new Error(`${pathName} did not return HTTP 200`);
 }
 
 async function assertReadyzProbe(options) {
-  const res = await fetch(`http://127.0.0.1:${options.port}/readyz`);
-  if (res.ok) {
-    return;
+  const started = Date.now();
+  let lastError;
+  while (Date.now() - started < RPC_READY_TIMEOUT_MS) {
+    try {
+      const res = await fetch(`http://127.0.0.1:${options.port}/readyz`);
+      if (res.ok) {
+        return;
+      }
+      if (options.allowDegradedReadyz) {
+        console.log(
+          `Runtime readyz smoke degraded for ${options.pluginId}: /readyz returned HTTP ${res.status}`,
+        );
+        return;
+      }
+      lastError = new Error(`/readyz returned HTTP ${res.status}`);
+    } catch (error) {
+      lastError = error;
+    }
+    await delay(500);
   }
-  if (!options.allowDegradedReadyz) {
-    throw new Error(`/readyz returned HTTP ${res.status}`);
-  }
-  console.log(
-    `Runtime readyz smoke degraded for ${options.pluginId}: /readyz returned HTTP ${res.status}`,
-  );
+  throw lastError ?? new Error("/readyz did not return HTTP 200");
 }
 
 async function rpcCall(method, params, options) {
@@ -365,15 +387,6 @@ async function smokePlugin(pluginId, pluginDir, requiresConfig, pluginIndex) {
   const port =
     readPositiveInt(process.env.OPENCLAW_BUNDLED_PLUGIN_RUNTIME_PORT_BASE, 19000) + pluginIndex * 3;
   const config = ensureGatewayConfig(activateSmokePlugin(readConfig(), pluginId), port);
-  for (const channel of plan.channels) {
-    config.channels = {
-      ...config.channels,
-      [channel]: {
-        ...config.channels?.[channel],
-        enabled: true,
-      },
-    };
-  }
   if (plan.speechProviders[0]) {
     const provider = plan.speechProviders[0];
     config.messages = {

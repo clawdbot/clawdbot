@@ -245,8 +245,9 @@ Bindings are **deterministic** and **most-specific wins**:
 
   </Accordion>
   <Accordion title="Account-scope detail">
-    - A binding that omits `accountId` matches the default account only.
+    - A binding that omits `accountId` matches the default account only. It does not match all accounts.
     - Use `accountId: "*"` for a channel-wide fallback across all accounts.
+    - Use `accountId: "<name>"` to match one account.
     - If you later add the same binding for the same agent with an explicit account id, OpenClaw upgrades the existing channel-only binding to account-scoped instead of duplicating it.
 
   </Accordion>
@@ -457,15 +458,15 @@ Common channels supporting this pattern include:
         ],
       },
       bindings: [
-        { agentId: "chat", match: { channel: "whatsapp" } },
-        { agentId: "opus", match: { channel: "telegram" } },
+        { agentId: "chat", match: { channel: "whatsapp", accountId: "*" } },
+        { agentId: "opus", match: { channel: "telegram", accountId: "*" } },
       ],
     }
     ```
 
     Notes:
 
-    - If you have multiple accounts for a channel, add `accountId` to the binding (for example `{ channel: "whatsapp", accountId: "personal" }`).
+    - These examples use `accountId: "*"` so the bindings keep working if you add accounts later.
     - To route a single DM/group to Opus while keeping the rest on chat, add a `match.peer` binding for that peer; peer matches always win over channel-wide rules.
 
   </Tab>
@@ -493,9 +494,9 @@ Common channels supporting this pattern include:
       bindings: [
         {
           agentId: "opus",
-          match: { channel: "whatsapp", peer: { kind: "direct", id: "+15551234567" } },
+          match: { channel: "whatsapp", accountId: "*", peer: { kind: "direct", id: "+15551234567" } },
         },
-        { agentId: "chat", match: { channel: "whatsapp" } },
+        { agentId: "chat", match: { channel: "whatsapp", accountId: "*" } },
       ],
     }
     ```

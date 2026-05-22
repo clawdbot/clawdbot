@@ -792,9 +792,9 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
   </Accordion>
 
   <Accordion title="Ack reactions">
-    `ackReaction` sends an acknowledgement emoji while OpenClaw is processing an inbound message.
+    `ackReaction` sends an acknowledgement emoji while OpenClaw is processing an inbound message. `ackReactionScope` decides *when* that emoji is actually sent.
 
-    Resolution order:
+    **Emoji (`ackReaction`) resolution order:**
 
     - `channels.telegram.accounts.<accountId>.ackReaction`
     - `channels.telegram.ackReaction`
@@ -805,6 +805,16 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     - Telegram expects unicode emoji (for example "👀").
     - Use `""` to disable the reaction for a channel or account.
+
+    **Scope (`messages.ackReactionScope`):**
+
+    The Telegram provider reads scope from `messages.ackReactionScope` (default `"group-mentions"`). There is no Telegram-account or Telegram-channel-level override today.
+
+    Values: `"all"` (DMs + groups), `"direct"` (DMs only), `"group-all"` (every group message, no DMs), `"group-mentions"` (groups when the bot is mentioned; **no DMs** — this is the default), `"off"` / `"none"` (disabled).
+
+    <Note>
+    The default scope (`"group-mentions"`) does not fire ack reactions in direct messages. To get an ack reaction on inbound Telegram DMs, set `messages.ackReactionScope` to `"direct"` or `"all"`. The value is read at Telegram provider startup, so a gateway restart is needed for the change to take effect.
+    </Note>
 
   </Accordion>
 

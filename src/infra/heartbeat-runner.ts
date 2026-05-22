@@ -91,6 +91,7 @@ import { escapeRegExp } from "../utils.js";
 import { MAX_SAFE_TIMEOUT_DELAY_MS, resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { loadOrCreateDeviceIdentity } from "./device-identity.js";
 import { formatErrorMessage, hasErrnoCode } from "./errors.js";
+import { resolveMainScopedEventSessionKey } from "./event-session-routing.js";
 import { isWithinActiveHours, resolveActiveHoursTimezone } from "./heartbeat-active-hours.js";
 import { recordRunStart, shouldDeferWake, type DeferDecision } from "./heartbeat-cooldown.js";
 import {
@@ -556,11 +557,17 @@ function resolveHeartbeatSession(
       if (forcedCanonical !== "global" && !isSubagentSessionKey(forcedCanonical)) {
         const sessionAgentId = resolveAgentIdFromSessionKey(forcedCanonical);
         if (sessionAgentId === normalizeAgentId(resolvedAgentId)) {
+          const routedSessionKey =
+            resolveMainScopedEventSessionKey({
+              cfg,
+              sessionKey: forcedCanonical,
+              agentId: resolvedAgentId,
+            }) ?? forcedCanonical;
           return {
-            sessionKey: forcedCanonical,
+            sessionKey: routedSessionKey,
             storePath,
             store,
-            entry: store[forcedCanonical],
+            entry: store[routedSessionKey],
             suppressOriginatingContext: false,
           };
         }

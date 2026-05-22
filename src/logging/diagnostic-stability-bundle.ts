@@ -740,10 +740,42 @@ function readStabilityEventRecord(
   assignOptionalNumber(sanitized, "ageMs", record.ageMs, `${label}.ageMs`);
   assignOptionalNumber(sanitized, "queueDepth", record.queueDepth, `${label}.queueDepth`);
   assignOptionalNumber(sanitized, "queueSize", record.queueSize, `${label}.queueSize`);
+  assignOptionalNumber(sanitized, "queueLength", record.queueLength, `${label}.queueLength`);
   assignOptionalNumber(sanitized, "waitMs", record.waitMs, `${label}.waitMs`);
   assignOptionalNumber(sanitized, "active", record.active, `${label}.active`);
   assignOptionalNumber(sanitized, "waiting", record.waiting, `${label}.waiting`);
   assignOptionalNumber(sanitized, "queued", record.queued, `${label}.queued`);
+  assignOptionalNumber(sanitized, "droppedEvents", record.droppedEvents, `${label}.droppedEvents`);
+  assignOptionalNumber(
+    sanitized,
+    "droppedTrustedEvents",
+    record.droppedTrustedEvents,
+    `${label}.droppedTrustedEvents`,
+  );
+  assignOptionalNumber(
+    sanitized,
+    "droppedUntrustedEvents",
+    record.droppedUntrustedEvents,
+    `${label}.droppedUntrustedEvents`,
+  );
+  assignOptionalNumber(
+    sanitized,
+    "droppedPriorityEvents",
+    record.droppedPriorityEvents,
+    `${label}.droppedPriorityEvents`,
+  );
+  assignOptionalNumber(
+    sanitized,
+    "maxQueueLength",
+    record.maxQueueLength,
+    `${label}.maxQueueLength`,
+  );
+  assignOptionalNumber(
+    sanitized,
+    "drainBatchSize",
+    record.drainBatchSize,
+    `${label}.drainBatchSize`,
+  );
 
   if (record.webhooks !== undefined) {
     const webhooks = readObject(record.webhooks, `${label}.webhooks`);

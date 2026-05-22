@@ -63,6 +63,7 @@ import {
   logSessionStateChange,
   markDiagnosticSessionProgress,
 } from "../../logging/diagnostic.js";
+import { matchPluginCommand } from "../../plugins/commands.js";
 import {
   buildPluginBindingDeclinedText,
   buildPluginBindingErrorText,
@@ -94,9 +95,15 @@ import {
   resolveCommandTurnContext,
   resolveCommandTurnTargetSessionKey,
 } from "../command-turn-context.js";
+import {
+  findCommandByNativeName,
+  normalizeCommandBody,
+  resolveTextCommand,
+} from "../commands-registry.js";
 import type { BlockReplyContext } from "../get-reply-options.types.js";
 import {
   getReplyPayloadMetadata,
+  isReplyPayloadStatusNotice,
   markReplyPayloadAsTtsSupplement,
   type ReplyPayload,
 } from "../reply-payload.js";
@@ -212,7 +219,7 @@ function formatSuppressedReplyPayloadForLog(reply: ReplyPayload): string {
 async function maybeApplyTtsToReplyPayload(
   params: Parameters<Awaited<ReturnType<typeof loadTtsRuntime>>["maybeApplyTtsToPayload"]>[0],
 ) {
-  if (params.payload.isCompactionNotice || params.payload.isFallbackNotice) {
+  if (isReplyPayloadStatusNotice(params.payload)) {
     return params.payload;
   }
   if (
@@ -570,6 +577,42 @@ const resolveHarnessSourceVisibleRepliesDefault = (params: {
     return undefined;
   }
 };
+
+function shouldBypassPluginOwnedBindingForCommand(ctx: FinalizedMsgContext): boolean {
+  const commandTurn = resolveCommandTurnContext(ctx);
+  if (!commandTurn.authorized) {
+    return false;
+  }
+  if (isNativeCommandTurn(commandTurn)) {
+    return true;
+  }
+  if (commandTurn.kind !== "text-slash") {
+    return false;
+  }
+  const commandBody = normalizeCommandBody(commandTurn.body ?? "", {
+    botUsername: ctx.BotUsername,
+  });
+  if (!commandBody.startsWith("/")) {
+    return false;
+  }
+  if (resolveTextCommand(commandBody)) {
+    return true;
+  }
+  const provider = normalizeOptionalString(ctx.Provider ?? ctx.Surface);
+  if (
+    commandTurn.commandName &&
+    findCommandByNativeName(commandTurn.commandName, provider, {
+      includeBundledChannelFallback: true,
+    })
+  ) {
+    return true;
+  }
+  return Boolean(
+    matchPluginCommand(commandBody, {
+      channel: normalizeOptionalString(ctx.Surface ?? ctx.Provider),
+    }),
+  );
+}
 
 async function clearPendingFinalDeliveryAfterSuccess(params: {
   storePath?: string;
@@ -1267,7 +1310,11 @@ export async function dispatchReplyFromConfig(
 
   if (pluginOwnedBinding) {
     touchConversationBindingRecord(pluginOwnedBinding.bindingId);
-    if (suppressDelivery) {
+    if (shouldBypassPluginOwnedBindingForCommand(ctx)) {
+      logVerbose(
+        `plugin-bound inbound command escaped plugin binding (plugin=${pluginOwnedBinding.pluginId} session=${sessionKey ?? "unknown"}); falling through to command processing`,
+      );
+    } else if (suppressDelivery) {
       // Plugin-bound inbound handlers typically emit outbound replies we
       // cannot rewind. When automatic delivery is suppressed, skip the plugin
       // claim and fall through to normal suppressed agent processing.
@@ -1627,6 +1674,7 @@ export async function dispatchReplyFromConfig(
 
     const toolStartStatusesSent = new Set<string>();
     let toolStartStatusCount = 0;
+    let didSendPlanStatusNotice = false;
     const normalizeWorkingLabel = (label: string) => {
       const collapsed = label.replace(/\s+/g, " ").trim();
       if (collapsed.length <= 80) {
@@ -1639,14 +1687,10 @@ export async function dispatchReplyFromConfig(
       const steps = (payload.steps ?? [])
         .map((step) => step.replace(/\s+/g, " ").trim())
         .filter(Boolean);
-      const parts: string[] = [];
-      if (explanation) {
-        parts.push(explanation);
-      }
       if (steps.length > 0) {
-        parts.push(steps.map((step, index) => `${index + 1}. ${step}`).join("\n"));
+        return steps.map((step, index) => `${index + 1}. ${step}`).join("\n");
       }
-      return parts.join("\n\n").trim() || "Planning next steps.";
+      return explanation || "Planning next steps.";
     };
     const maybeSendWorkingStatus = async (label: string): Promise<void> => {
       if (shouldSuppressProgressDelivery()) {
@@ -1680,13 +1724,15 @@ export async function dispatchReplyFromConfig(
     }): Promise<void> => {
       if (
         shouldSuppressProgressDelivery() ||
-        !shouldEmitVerboseProgress() ||
-        !shouldSendVerboseProgressMessages
+        !shouldSendVerboseProgressMessages ||
+        didSendPlanStatusNotice
       ) {
         return;
       }
+      didSendPlanStatusNotice = true;
       const replyPayload: ReplyPayload = {
         text: formatPlanUpdateText(payload),
+        isStatusNotice: true,
       };
       if (shouldRouteToOriginating) {
         await sendPayloadAsync(replyPayload, undefined, false);
@@ -2008,7 +2054,7 @@ export async function dispatchReplyFromConfig(
                 // Accumulate block text for TTS generation after streaming.
                 // Exclude status notices — they are informational UI signals
                 // and must not be synthesised into the spoken reply.
-                const isStatusNotice = payload.isCompactionNotice || payload.isFallbackNotice;
+                const isStatusNotice = isReplyPayloadStatusNotice(payload);
                 if (payload.text && !isStatusNotice) {
                   const joinsBufferedTtsDirective =
                     cleanBlockTtsDirectiveText?.hasBufferedDirectiveText() === true;

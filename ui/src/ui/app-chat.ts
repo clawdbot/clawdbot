@@ -70,7 +70,6 @@ export type ChatHost = ChatInputHistoryState & {
   chatModelSwitchPromises?: Record<string, Promise<boolean>>;
   chatModelsLoading: boolean;
   chatModelCatalog: ModelCatalogEntry[];
-  chatSessionSearchAppliedQuery?: string | null;
   sessionsResult?: SessionsListResult | null;
   sessionsShowArchived?: boolean;
   updateComplete?: Promise<unknown>;
@@ -96,22 +95,20 @@ export const CHAT_SESSIONS_ACTIVE_MINUTES = 0;
 export const CHAT_SESSIONS_REFRESH_LIMIT = 50;
 
 export function createChatSessionsLoadOverrides(
-  state: {
-    chatSessionSearchAppliedQuery?: string | null;
-    sessionsShowArchived?: boolean;
-  },
-  options: { offset?: number; append?: boolean } = {},
+  state: { sessionsShowArchived?: boolean },
+  options: { offset?: number; append?: boolean; search?: string | null } = {},
 ): LoadSessionsOverrides {
   const overrides: LoadSessionsOverrides = {
     activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
     limit: CHAT_SESSIONS_REFRESH_LIMIT,
     includeGlobal: true,
     includeUnknown: true,
+    configuredAgentsOnly: true,
   };
   if (typeof state.sessionsShowArchived === "boolean") {
     overrides.showArchived = state.sessionsShowArchived;
   }
-  const search = normalizeOptionalString(state.chatSessionSearchAppliedQuery ?? undefined);
+  const search = normalizeOptionalString(options.search ?? undefined);
   if (search) {
     overrides.search = search;
   }

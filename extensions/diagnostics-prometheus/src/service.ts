@@ -716,6 +716,44 @@ function recordDiagnosticEvent(
         },
       );
       return;
+    case "diagnostic.async_queue.dropped":
+      store.counter(
+        "openclaw_diagnostic_async_queue_dropped_total",
+        "Async diagnostic queue drops by dropped event class.",
+        { drop_class: "total" },
+        numericValue(evt.droppedEvents),
+      );
+      if (evt.droppedTrustedEvents !== undefined) {
+        store.counter(
+          "openclaw_diagnostic_async_queue_dropped_total",
+          "Async diagnostic queue drops by dropped event class.",
+          { drop_class: "trusted" },
+          numericValue(evt.droppedTrustedEvents),
+        );
+      }
+      if (evt.droppedUntrustedEvents !== undefined) {
+        store.counter(
+          "openclaw_diagnostic_async_queue_dropped_total",
+          "Async diagnostic queue drops by dropped event class.",
+          { drop_class: "untrusted" },
+          numericValue(evt.droppedUntrustedEvents),
+        );
+      }
+      if (evt.droppedPriorityEvents !== undefined) {
+        store.counter(
+          "openclaw_diagnostic_async_queue_dropped_total",
+          "Async diagnostic queue drops by dropped event class.",
+          { drop_class: "priority" },
+          numericValue(evt.droppedPriorityEvents),
+        );
+      }
+      store.gauge(
+        "openclaw_diagnostic_async_queue_length",
+        "Latest async diagnostic queue length after a drop summary.",
+        {},
+        numericValue(evt.queueLength),
+      );
+      return;
     case "diagnostic.heartbeat":
     case "diagnostic.liveness.warning":
       return;

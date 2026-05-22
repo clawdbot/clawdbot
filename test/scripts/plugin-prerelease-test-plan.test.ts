@@ -51,6 +51,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       "plugins-offline",
       "plugins",
       "kitchen-sink-plugin",
+      "kitchen-sink-rpc",
       "plugin-update",
       "config-reload",
       "gateway-network",
@@ -160,6 +161,37 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     );
     expect(script).toContain("docker stats --no-stream");
     expect(sweepScript).toContain("scan_logs_for_unexpected_errors");
+  });
+
+  it("keeps kitchen-sink RPC coverage package-backed and resource-guarded", () => {
+    const lane = getDockerLane("kitchen-sink-rpc");
+    const script = readFileSync("scripts/e2e/kitchen-sink-rpc-docker.sh", "utf8");
+    const walkScript = readFileSync("scripts/e2e/kitchen-sink-rpc-walk.mjs", "utf8");
+
+    expect(lane).toEqual({
+      command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:kitchen-sink-rpc",
+      e2eImageKind: "functional",
+      live: false,
+      name: "kitchen-sink-rpc",
+      resources: ["service", "npm"],
+      retryPatterns: [],
+      retries: 0,
+      stateScenario: "empty",
+      timeoutMs: 900000,
+      weight: 3,
+    });
+    expect(script).toContain("OPENCLAW_ENTRY=/app/openclaw.mjs");
+    expect(script).toContain("docker stats --no-stream");
+    expect(script).toContain("node scripts/e2e/kitchen-sink-rpc-walk.mjs");
+    expect(script).not.toContain("--import tsx");
+    expect(walkScript).toContain("commands.list");
+    expect(walkScript).toContain("tools.invoke");
+    expect(walkScript).toContain("tts.providers");
+    expect(walkScript).toContain("plugins.uiDescriptors");
+    expect(walkScript).toContain("loadCallGatewayModule(options.runner)");
+    expect(walkScript).toContain("usesPackagedOpenClawEntry(runner)");
+    expect(walkScript).toContain("src/gateway/call.ts");
+    expect(walkScript).toContain("^call(?:\\.runtime)?");
   });
 
   it("keeps the generic plugin Docker lane as an external install contract canary", () => {

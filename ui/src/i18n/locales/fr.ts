@@ -1104,6 +1104,8 @@ export const fr: TranslationMap = {
       placeholderDisconnected: "Connect to the gateway to start chatting...",
       attachFile: "Attach file",
       startTalk: "Start Talk",
+      stillListening: "Toujours à l’écoute",
+      talkTranscript: "Transcription vocale",
       stopTalk: "Stop Talk",
     },
     selectors: {

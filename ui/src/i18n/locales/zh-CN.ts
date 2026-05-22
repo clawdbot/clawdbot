@@ -1057,6 +1057,8 @@ export const zh_CN: TranslationMap = {
       placeholderDisconnected: "连接到 Gateway 后开始聊天...",
       attachFile: "附加文件",
       startTalk: "开始 Talk",
+      stillListening: "仍在聆听",
+      talkTranscript: "语音转写",
       stopTalk: "停止 Talk",
     },
     selectors: {

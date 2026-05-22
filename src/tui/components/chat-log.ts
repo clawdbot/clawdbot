@@ -27,6 +27,7 @@ export class ChatLog extends Container {
       createdAt: number;
     }
   >();
+  private pendingSystemNotices = new Map<string, Container>();
   private btwMessage: BtwInlineMessage | null = null;
   private toolsExpanded = false;
   private repeatableSystemMessage: RepeatableSystemMessage | null = null;
@@ -50,6 +51,11 @@ export class ChatLog extends Container {
     for (const [runId, entry] of this.pendingUsers.entries()) {
       if (entry.component === component) {
         this.pendingUsers.delete(runId);
+      }
+    }
+    for (const [runId, entry] of this.pendingSystemNotices.entries()) {
+      if (entry === component) {
+        this.pendingSystemNotices.delete(runId);
       }
     }
     if (this.btwMessage === component) {
@@ -85,6 +91,7 @@ export class ChatLog extends Container {
     this.clear();
     this.toolById.clear();
     this.streamingRuns.clear();
+    this.pendingSystemNotices.clear();
     this.btwMessage = null;
     this.repeatableSystemMessage = null;
     if (!opts?.preservePendingUsers) {
@@ -140,6 +147,26 @@ export class ChatLog extends Container {
     const message = this.createSystemMessage(text);
     this.append(message.component);
     this.repeatableSystemMessage = opts?.coalesceConsecutive ? message : null;
+  }
+
+  addPendingSystem(runId: string, text: string) {
+    const existing = this.pendingSystemNotices.get(runId);
+    if (existing) {
+      this.removeChild(existing);
+    }
+    const message = this.createSystemMessage(text);
+    this.pendingSystemNotices.set(runId, message.component);
+    this.append(message.component);
+  }
+
+  dismissPendingSystem(runId: string) {
+    const existing = this.pendingSystemNotices.get(runId);
+    if (!existing) {
+      return false;
+    }
+    this.removeChild(existing);
+    this.pendingSystemNotices.delete(runId);
+    return true;
   }
 
   addUser(text: string) {

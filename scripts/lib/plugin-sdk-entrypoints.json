@@ -103,6 +103,7 @@
   "cli-backend",
   "codex-mcp-projection",
   "codex-native-task-runtime",
+  "agent-harness-task-runtime",
   "agent-harness",
   "agent-harness-runtime",
   "hook-runtime",

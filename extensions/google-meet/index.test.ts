@@ -149,6 +149,44 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+type MockSessionEntry = {
+  sessionId?: string;
+  updatedAt?: number;
+  [key: string]: unknown;
+};
+
+function createMockSessionRuntime(sessionStore: Record<string, unknown>) {
+  return {
+    resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
+    loadSessionStore: vi.fn(() => sessionStore),
+    saveSessionStore: vi.fn(async () => {}),
+    updateSessionStore: vi.fn(async (_storePath, mutator: (store: never) => unknown) =>
+      mutator(sessionStore as never),
+    ),
+    getSessionEntry: vi.fn(
+      ({ sessionKey }: { sessionKey: string }) => sessionStore[sessionKey] as MockSessionEntry,
+    ),
+    patchSessionEntry: vi.fn(
+      async ({
+        sessionKey,
+        fallbackEntry,
+        update,
+      }: {
+        sessionKey: string;
+        fallbackEntry: MockSessionEntry;
+        update: (entry: MockSessionEntry) => Promise<MockSessionEntry> | MockSessionEntry;
+      }) => {
+        const current = (sessionStore[sessionKey] as MockSessionEntry | undefined) ?? fallbackEntry;
+        const patch = await update(current);
+        const next = { ...current, ...patch };
+        sessionStore[sessionKey] = next;
+        return next;
+      },
+    ),
+    resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
+  };
+}
+
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!isRecord(value)) {
     throw new Error(`Expected ${label} to be an object`);
@@ -4077,13 +4115,7 @@ describe("google-meet plugin", () => {
         resolveAgentDir: vi.fn(() => "/tmp/agent"),
         resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
         ensureAgentWorkspace: vi.fn(async () => {}),
-        session: {
-          resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
-          loadSessionStore: vi.fn(() => sessionStore),
-          saveSessionStore: vi.fn(async () => {}),
-          updateSessionStore: vi.fn(async (_storePath, mutator) => mutator(sessionStore as never)),
-          resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
-        },
+        session: createMockSessionRuntime(sessionStore),
         runEmbeddedPiAgent: vi.fn(async () => ({
           payloads: [{ text: "Use the Portugal launch data." }],
           meta: {},
@@ -4245,13 +4277,7 @@ describe("google-meet plugin", () => {
         resolveAgentDir: vi.fn(() => "/tmp/agent"),
         resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
         ensureAgentWorkspace: vi.fn(async () => {}),
-        session: {
-          resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
-          loadSessionStore: vi.fn(() => sessionStore),
-          saveSessionStore: vi.fn(async () => {}),
-          updateSessionStore: vi.fn(async (_storePath, mutator) => mutator(sessionStore as never)),
-          resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
-        },
+        session: createMockSessionRuntime(sessionStore),
         runEmbeddedPiAgent: vi.fn(async (_request: unknown) => ({
           payloads: [{ text: "Use the Portugal launch data." }],
           meta: {},
@@ -4467,13 +4493,7 @@ describe("google-meet plugin", () => {
         resolveAgentDir: vi.fn(() => "/tmp/agent"),
         resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
         ensureAgentWorkspace: vi.fn(async () => {}),
-        session: {
-          resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
-          loadSessionStore: vi.fn(() => sessionStore),
-          saveSessionStore: vi.fn(async () => {}),
-          updateSessionStore: vi.fn(async (_storePath, mutator) => mutator(sessionStore as never)),
-          resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
-        },
+        session: createMockSessionRuntime(sessionStore),
         runEmbeddedPiAgent: vi.fn(async (_request: unknown) => ({
           payloads: [{ text: "The launch is still on track." }],
           meta: {},
@@ -4741,13 +4761,7 @@ describe("google-meet plugin", () => {
         resolveAgentDir: vi.fn(() => "/tmp/agent"),
         resolveAgentWorkspaceDir: vi.fn(() => "/tmp/workspace"),
         ensureAgentWorkspace: vi.fn(async () => {}),
-        session: {
-          resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
-          loadSessionStore: vi.fn(() => sessionStore),
-          saveSessionStore: vi.fn(async () => {}),
-          updateSessionStore: vi.fn(async (_storePath, mutator) => mutator(sessionStore as never)),
-          resolveSessionFilePath: vi.fn(() => "/tmp/session.json"),
-        },
+        session: createMockSessionRuntime(sessionStore),
         runEmbeddedPiAgent: vi.fn(async () => ({
           payloads: [{ text: "Use the launch update." }],
           meta: {},

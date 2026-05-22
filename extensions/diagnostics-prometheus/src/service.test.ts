@@ -94,6 +94,38 @@ describe("diagnostics-prometheus service", () => {
     expect(testApi.renderPrometheusMetrics(store)).toBe("");
   });
 
+  it("records trusted async diagnostic queue drop summaries", () => {
+    const store = testApi.createPrometheusMetricStore();
+
+    testApi.recordDiagnosticEvent(
+      store,
+      {
+        ...baseEvent(),
+        type: "diagnostic.async_queue.dropped",
+        droppedEvents: 3,
+        droppedTrustedEvents: 1,
+        droppedUntrustedEvents: 2,
+        queueLength: 0,
+        maxQueueLength: 10_000,
+        drainBatchSize: 100,
+      },
+      trusted,
+    );
+
+    const rendered = testApi.renderPrometheusMetrics(store);
+
+    expect(rendered).toContain(
+      'openclaw_diagnostic_async_queue_dropped_total{drop_class="total"} 3',
+    );
+    expect(rendered).toContain(
+      'openclaw_diagnostic_async_queue_dropped_total{drop_class="trusted"} 1',
+    );
+    expect(rendered).toContain(
+      'openclaw_diagnostic_async_queue_dropped_total{drop_class="untrusted"} 2',
+    );
+    expect(rendered).toContain("openclaw_diagnostic_async_queue_length 0");
+  });
+
   it("redacts and bounds label values", () => {
     const store = testApi.createPrometheusMetricStore();
 

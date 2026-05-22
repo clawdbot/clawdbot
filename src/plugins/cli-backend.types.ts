@@ -1,5 +1,6 @@
 import type { CliBackendConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ContextEngineHostCapability } from "../context-engine/types.js";
 
 export type PluginTextReplacement = {
   from: string | RegExp;
@@ -74,6 +75,11 @@ export type CliBackendPlugin = {
   id: string;
   /** Default backend config before user overrides from `agents.defaults.cliBackends`. */
   config: CliBackendConfig;
+  /**
+   * Context-engine host capabilities provided by this backend when it is
+   * driven through the generic CLI runner.
+   */
+  contextEngineHostCapabilities?: readonly ContextEngineHostCapability[];
   /**
    * Optional live-smoke metadata owned by the backend plugin.
    *

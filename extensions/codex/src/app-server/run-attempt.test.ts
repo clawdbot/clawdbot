@@ -895,6 +895,44 @@ describe("runCodexAppServerAttempt", () => {
     ]);
   });
 
+  it("keeps OpenClaw shell tools for node-targeted Codex app-server runs", async () => {
+    testing.setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("exec"),
+      createRuntimeDynamicTool("process"),
+      createRuntimeDynamicTool("message"),
+    ]);
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.execOverrides = {
+      host: "node",
+      node: "mac-mini",
+      security: "full",
+      ask: "off",
+    };
+    const sandboxSessionKey = params.sessionKey;
+    if (!sandboxSessionKey) {
+      throw new Error("createParams must provide a sessionKey for Codex dynamic tool tests.");
+    }
+
+    const tools = await testing.buildDynamicTools({
+      params,
+      resolvedWorkspace: workspaceDir,
+      effectiveWorkspace: workspaceDir,
+      sandboxSessionKey,
+      sandbox: { enabled: false, backendId: "docker" } as never,
+      nativeToolSurfaceEnabled: false,
+      runAbortController: new AbortController(),
+      sessionAgentId: "main",
+      pluginConfig: {},
+      onYieldDetected: () => undefined,
+    });
+
+    expect(tools.map((tool) => tool.name)).toEqual(["message", "exec", "process"]);
+  });
+
   it("exposes Docker sandbox shell tools when native Code Mode cannot honor sandbox paths", async () => {
     testing.setOpenClawCodingToolsFactoryForTests(() => [
       createRuntimeDynamicTool("exec"),
@@ -1449,9 +1487,12 @@ describe("runCodexAppServerAttempt", () => {
       details: { status: "running" },
     });
     const processTool = createRuntimeDynamicTool("process");
+    const workspaceDir = path.join(tempDir, "workspace");
     const tools = testing.addSandboxShellDynamicToolsIfAvailable([], [execTool, processTool], {
+      params: createParams(path.join(tempDir, "session.jsonl"), workspaceDir),
       sandbox: { enabled: true, backendId: "ssh" },
       nativeToolSurfaceEnabled: false,
+      sessionAgentId: "main",
       pluginConfig: {},
     } as never);
 
@@ -1851,6 +1892,43 @@ describe("runCodexAppServerAttempt", () => {
 
     params.toolsAllow = ["message"];
     expect(testing.shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
+  });
+
+  it("disables Codex native tool surfaces when the effective exec target is node", () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const sessionParams = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    sessionParams.disableTools = false;
+    sessionParams.execOverrides = {
+      host: "node",
+      node: "mac-mini",
+      security: "full",
+      ask: "off",
+    };
+
+    expect(testing.shouldEnableCodexAppServerNativeToolSurface(sessionParams)).toBe(false);
+
+    sessionParams.toolsAllow = ["*"];
+    expect(testing.shouldEnableCodexAppServerNativeToolSurface(sessionParams)).toBe(false);
+
+    const globalParams = createParams(path.join(tempDir, "global-session.jsonl"), workspaceDir);
+    globalParams.disableTools = false;
+    globalParams.config = { tools: { exec: { host: "node" } } } as never;
+
+    expect(testing.shouldEnableCodexAppServerNativeToolSurface(globalParams)).toBe(false);
+
+    const agentParams = createParams(path.join(tempDir, "agent-session.jsonl"), workspaceDir);
+    agentParams.disableTools = false;
+    agentParams.config = {
+      agents: {
+        list: [{ id: "main", tools: { exec: { host: "node" } } }],
+      },
+    } as never;
+
+    expect(
+      testing.shouldEnableCodexAppServerNativeToolSurface(agentParams, undefined, {
+        agentId: "main",
+      }),
+    ).toBe(false);
   });
 
   it("disables Codex native tool surfaces whenever an OpenClaw sandbox is active", () => {
@@ -7809,6 +7887,33 @@ describe("runCodexAppServerAttempt", () => {
     expect(result.timedOut).toBe(false);
     expect(result.promptError).toBeNull();
     expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
+  });
+
+  it("keeps upstream cancellation aborted when Codex completes the turn as interrupted", async () => {
+    const harness = createStartedThreadHarness();
+    const abortController = new AbortController();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.abortSignal = abortController.signal;
+    const run = runCodexAppServerAttempt(params, { turnTerminalIdleTimeoutMs: 60_000 });
+
+    await harness.waitForMethod("turn/start");
+    abortController.abort("user_cancelled");
+    await harness.notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: { id: "turn-1", status: "interrupted" },
+      },
+    });
+
+    const result = await run;
+    expect(result.aborted).toBe(true);
+    expect(result.timedOut).toBe(false);
+    expect(result.promptError).toBeNull();
   });
 
   it("releases completion when the app-server client closes during an active turn", async () => {

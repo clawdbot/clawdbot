@@ -537,6 +537,37 @@ describe("emitExecSystemEvent", () => {
     expect(requireHeartbeatCall()).not.toHaveProperty("sessionKey");
   });
 
+  it("routes single-owner dmScope=main direct exec events to the agent main session", () => {
+    emitExecSystemEvent("Exec finished", {
+      sessionKey: "agent:main:telegram:default:direct:123",
+      contextKey: "exec:run-dm",
+      deliveryContext: {
+        channel: "telegram",
+        to: "123",
+      },
+      eventRouting: {
+        dmScope: "main",
+        allowFrom: ["123"],
+        channel: "telegram",
+        accountId: "default",
+      },
+    });
+
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith("Exec finished", {
+      sessionKey: "agent:main:main",
+      contextKey: "exec:run-dm",
+      deliveryContext: {
+        channel: "telegram",
+        to: "123",
+      },
+    });
+    expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
+    const heartbeat = requireHeartbeatCall();
+    expect(heartbeat.coalesceMs).toBe(0);
+    expect(heartbeat.reason).toBe("exec-event");
+    expect(heartbeat.sessionKey).toBe("agent:main:main");
+  });
+
   it("keeps wake unscoped for non-agent session keys", () => {
     emitExecSystemEvent("Exec finished", {
       sessionKey: "global",
@@ -727,7 +758,9 @@ describe("runExecProcess POSIX command wrapper", () => {
     const spawnCall = supervisorMock.spawn.mock.calls[0][0];
 
     const commandStr = spawnCall.argv.join(" ");
-    expect(commandStr).toContain('export PATH="${OPENCLAW_PREPEND_PATH}${PATH:+:$PATH}"; unset OPENCLAW_PREPEND_PATH; echo test');
+    expect(commandStr).toContain(
+      'export PATH="${OPENCLAW_PREPEND_PATH}${PATH:+:$PATH}"; unset OPENCLAW_PREPEND_PATH; echo test',
+    );
   });
 
   it("does not wrap command on Windows", async () => {

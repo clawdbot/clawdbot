@@ -193,7 +193,6 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.15.0"
-  PNPM_VERSION: "11.0.8"
   OPENCLAW_REPOSITORY: openclaw/openclaw
   TSX_VERSION: "4.21.0"
   OPENCLAW_CROSS_OS_OPENAI_MODEL: ${{ inputs.openai_model || vars.OPENCLAW_CROSS_OS_OPENAI_MODEL || 'openai/gpt-5.5' }}
@@ -352,18 +351,18 @@ jobs:
           persist-credentials: false
           submodules: recursive
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
-        with:
-          version: ${{ env.PNPM_VERSION }}
-          run_install: false
-
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: pnpm
-          cache-dependency-path: ${{ inputs.candidate_artifact_name == '' && 'source/pnpm-lock.yaml' || 'workflow/pnpm-lock.yaml' }}
+
+      - name: Setup pnpm
+        uses: ./workflow/.github/actions/setup-pnpm-store-cache
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-file: ${{ inputs.candidate_artifact_name == '' && 'source/package.json' || 'workflow/package.json' }}
+          lockfile-path: ${{ inputs.candidate_artifact_name == '' && 'source/pnpm-lock.yaml' || 'workflow/pnpm-lock.yaml' }}
+          use-actions-cache: ${{ inputs.candidate_artifact_name == '' && 'true' || 'false' }}
 
       - name: Ensure pnpm store cache directory exists
         run: mkdir -p "$(pnpm store path --silent)"
@@ -540,16 +539,18 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
-        with:
-          version: ${{ env.PNPM_VERSION }}
-          run_install: false
-
       - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup pnpm
+        uses: ./workflow/.github/actions/setup-pnpm-store-cache
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-file: workflow/package.json
+          lockfile-path: workflow/pnpm-lock.yaml
+          use-actions-cache: "false"
 
       - name: Download candidate artifact
         uses: actions/download-artifact@v8

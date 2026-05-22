@@ -12,6 +12,7 @@ import type {
 import { CONFIG_PATH, resolveGatewayPort, resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasConfiguredSecretInput } from "../../config/types.secrets.js";
+import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../../daemon/constants.js";
 import {
   defaultGatewayBindMode,
   isContainerEnvironment,
@@ -465,6 +466,9 @@ async function maybeWriteGatewayStartupFailureBundle(err: unknown): Promise<void
 
 export async function runGatewayCommand(opts: GatewayRunOpts) {
   installQaParentWatchdog();
+  if (process.env.OPENCLAW_SERVICE_MARKER?.trim()) {
+    process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV] = String(process.pid);
+  }
   const isDevProfile = normalizeOptionalLowercaseString(process.env.OPENCLAW_PROFILE) === "dev";
   const devMode = Boolean(opts.dev) || isDevProfile;
   if (opts.reset && !devMode) {

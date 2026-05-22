@@ -95,7 +95,7 @@ plan](https://support.anthropic.com/en/articles/11845131-using-claude-code-with-
 If you want other subscription-style options in OpenClaw, see [OpenAI
 Codex](/providers/openai), [Qwen Cloud Coding
 Plan](/providers/qwen), [MiniMax Coding Plan](/providers/minimax),
-and [Z.AI / GLM Coding Plan](/providers/glm).
+and [Z.AI / GLM Coding Plan](/providers/zai).
 </Warning>
 
 OpenClaw also exposes Anthropic setup-token as a supported token-auth path, but it now prefers Claude CLI reuse and `claude -p` when available.

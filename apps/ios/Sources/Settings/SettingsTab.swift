@@ -21,6 +21,9 @@ struct SettingsTab: View {
     @AppStorage("node.instanceId") private var instanceId: String = UUID().uuidString
     @AppStorage("voiceWake.enabled") private var voiceWakeEnabled: Bool = false
     @AppStorage("talk.enabled") private var talkEnabled: Bool = false
+    @AppStorage(TalkModeProviderSelection.storageKey) private var talkProviderSelectionRaw: String =
+        TalkModeProviderSelection.gatewayDefault.rawValue
+    @AppStorage(TalkModeRealtimeVoiceSelection.storageKey) private var talkRealtimeVoiceSelectionRaw: String = ""
     @AppStorage(TalkSpeechLocale.storageKey) private var talkSpeechLocale: String = TalkSpeechLocale.automaticID
     @AppStorage("talk.button.enabled") private var talkButtonEnabled: Bool = true
     @AppStorage("talk.background.enabled") private var talkBackgroundEnabled: Bool = false
@@ -54,6 +57,7 @@ struct SettingsTab: View {
     @State private var manualGatewayPortText: String = ""
     @State private var gatewayExpanded: Bool = true
     @State private var selectedAgentPickerId: String = ""
+    @State private var pendingManualAuthOverride: GatewayConnectionController.ManualAuthOverride?
 
     @State private var showResetOnboardingAlert: Bool = false
     @State private var showGatewayProblemDetails: Bool = false
@@ -344,64 +348,7 @@ struct SettingsTab: View {
                             help: "Keeps the screen awake while OpenClaw is open.")
 
                         DisclosureGroup("Advanced") {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text("Talk Voice (Gateway)")
-                                    .font(.footnote.weight(.semibold))
-                                    .foregroundStyle(.secondary)
-                                LabeledContent("Provider", value: "ElevenLabs")
-                                LabeledContent(
-                                    "API Key",
-                                    value: self.appModel.talkMode.gatewayTalkConfigLoaded
-                                        ? (
-                                            self.appModel.talkMode.gatewayTalkApiKeyConfigured
-                                                ? "Configured"
-                                                : "Not configured")
-                                        : "Not loaded")
-                                LabeledContent(
-                                    "Default Model",
-                                    value: self.appModel.talkMode.gatewayTalkDefaultModelId ?? "eleven_v3 (fallback)")
-                                LabeledContent(
-                                    "Default Voice",
-                                    value: self.appModel.talkMode.gatewayTalkDefaultVoiceId ?? "auto (first available)")
-                                Text("Configured on gateway via talk.apiKey, talk.modelId, and talk.voiceId.")
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                            }
-                            self.featureToggle(
-                                "Show Talk Control",
-                                isOn: self.$talkButtonEnabled,
-                                help: "Shows the Talk control in the main toolbar.")
-                            TextField("Default Share Instruction", text: self.$defaultShareInstruction, axis: .vertical)
-                                .lineLimit(2...6)
-                                .textInputAutocapitalization(.sentences)
-                            HStack(spacing: 8) {
-                                Text("Default Share Instruction")
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                                Spacer()
-                                Button {
-                                    self.activeFeatureHelp = FeatureHelp(
-                                        title: "Default Share Instruction",
-                                        message: "Appends this instruction when sharing content "
-                                            + "into OpenClaw from iOS.")
-                                } label: {
-                                    Image(systemName: "info.circle")
-                                        .foregroundStyle(.secondary)
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel("Default Share Instruction info")
-                            }
-
-                            VStack(alignment: .leading, spacing: 8) {
-                                Button {
-                                    Task { await self.appModel.runSharePipelineSelfTest() }
-                                } label: {
-                                    Label("Run Share Self-Test", systemImage: "checkmark.seal")
-                                }
-                                Text(self.appModel.lastShareEventText)
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                            }
+                            self.advancedAppSettingsView()
                         }
                     }
 
@@ -662,6 +609,120 @@ struct SettingsTab: View {
         return trimmed.isEmpty ? "Not connected" : trimmed
     }
 
+    private var shouldShowRealtimeVoicePicker: Bool {
+        let providerSelection = TalkModeProviderSelection.resolved(self.talkProviderSelectionRaw)
+        return providerSelection == .openAIRealtime
+            || self.appModel.talkMode.gatewayTalkUsesRealtimeRelay
+    }
+
+    private func talkVoiceSettingsView() -> AnyView {
+        AnyView(VStack(alignment: .leading, spacing: 8) {
+            Text("Talk Voice (Gateway)")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.secondary)
+            Picker("Provider", selection: self.talkProviderSelectionBinding) {
+                ForEach(TalkModeProviderSelection.allCases) { option in
+                    Text(option.label).tag(option.rawValue)
+                }
+            }
+            if self.shouldShowRealtimeVoicePicker {
+                Picker("Realtime Voice", selection: self.talkRealtimeVoiceSelectionBinding) {
+                    Text("Gateway Default").tag("")
+                    ForEach(TalkModeRealtimeVoiceSelection.voices, id: \.self) { voice in
+                        Text(TalkModeRealtimeVoiceSelection.label(for: voice)).tag(voice)
+                    }
+                }
+            }
+            LabeledContent(
+                "Active Provider",
+                value: self.appModel.talkMode.gatewayTalkProviderLabel)
+            LabeledContent(
+                "Transport",
+                value: self.appModel.talkMode.gatewayTalkTransportLabel)
+            LabeledContent(
+                "API Key",
+                value: self.appModel.talkMode.gatewayTalkConfigLoaded
+                    ? (
+                        self.appModel.talkMode.gatewayTalkApiKeyConfigured
+                            ? "Configured"
+                            : "Not configured")
+                    : "Not loaded")
+            LabeledContent(
+                "Default Model",
+                value: self.appModel.talkMode.gatewayTalkDefaultModelId ?? "eleven_v3 (fallback)")
+            LabeledContent(
+                "Default Voice",
+                value: self.appModel.talkMode.gatewayTalkDefaultVoiceId ?? "auto (first available)")
+            if let realtimeProvider = self.appModel.talkMode.gatewayTalkRealtimeProviderLabel {
+                LabeledContent("Realtime Provider", value: realtimeProvider)
+            }
+            Text("Realtime uses gateway auth via OpenAI API key or OAuth.")
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        })
+    }
+
+    private var talkProviderSelectionBinding: Binding<String> {
+        Binding(
+            get: { self.talkProviderSelectionRaw },
+            set: { newValue in
+                let selection = TalkModeProviderSelection.resolved(newValue)
+                self.talkProviderSelectionRaw = selection.rawValue
+                self.appModel.setTalkProviderSelection(selection.rawValue)
+            })
+    }
+
+    private var talkRealtimeVoiceSelectionBinding: Binding<String> {
+        Binding(
+            get: { self.talkRealtimeVoiceSelectionRaw },
+            set: { newValue in
+                let voice = TalkModeRealtimeVoiceSelection.resolvedOverride(newValue) ?? ""
+                self.talkRealtimeVoiceSelectionRaw = voice
+                self.appModel.setTalkRealtimeVoiceSelection(voice)
+            })
+    }
+
+    private func advancedAppSettingsView() -> AnyView {
+        AnyView(Group {
+            self.talkVoiceSettingsView()
+            self.featureToggle(
+                "Show Talk Control",
+                isOn: self.$talkButtonEnabled,
+                help: "Shows the Talk control in the main toolbar.")
+            TextField("Default Share Instruction", text: self.$defaultShareInstruction, axis: .vertical)
+                .lineLimit(2...6)
+                .textInputAutocapitalization(.sentences)
+            HStack(spacing: 8) {
+                Text("Default Share Instruction")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button {
+                    self.activeFeatureHelp = FeatureHelp(
+                        title: "Default Share Instruction",
+                        message: "Appends this instruction when sharing content "
+                            + "into OpenClaw from iOS.")
+                } label: {
+                    Image(systemName: "info.circle")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Default Share Instruction info")
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Button {
+                    Task { await self.appModel.runSharePipelineSelfTest() }
+                } label: {
+                    Label("Run Share Self-Test", systemImage: "checkmark.seal")
+                }
+                Text(self.appModel.lastShareEventText)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        })
+    }
+
     private func featureToggle(
         _ title: String,
         isOn: Binding<Bool>,
@@ -819,36 +880,29 @@ struct SettingsTab: View {
         self.manualGatewayPortText = String(link.port)
         self.manualGatewayTLS = link.tls
 
-        let trimmedInstanceId = self.instanceId.trimmingCharacters(in: .whitespacesAndNewlines)
-        let trimmedBootstrapToken =
-            link.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let trimmedInstanceId = GatewaySettingsStore.currentInstanceID()
+        let setupAuth = GatewayConnectionController.ManualAuthOverride.setupAuth(from: link)
+        if setupAuth.hasBootstrapToken {
+            GatewayOnboardingReset.prepareForBootstrapPairing(
+                appModel: self.appModel,
+                instanceId: trimmedInstanceId)
+        }
         if !trimmedInstanceId.isEmpty {
-            GatewaySettingsStore.saveGatewayBootstrapToken(trimmedBootstrapToken, instanceId: trimmedInstanceId)
+            GatewaySettingsStore.saveGatewayBootstrapToken(setupAuth.bootstrapToken, instanceId: trimmedInstanceId)
         }
-        if let token = link.token, !token.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let trimmedToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
-            self.gatewayToken = trimmedToken
+        if setupAuth.shouldApplyTokenField {
+            self.gatewayToken = setupAuth.token
             if !trimmedInstanceId.isEmpty {
-                GatewaySettingsStore.saveGatewayToken(trimmedToken, instanceId: trimmedInstanceId)
-            }
-        } else if !trimmedBootstrapToken.isEmpty {
-            self.gatewayToken = ""
-            if !trimmedInstanceId.isEmpty {
-                GatewaySettingsStore.saveGatewayToken("", instanceId: trimmedInstanceId)
+                GatewaySettingsStore.saveGatewayToken(setupAuth.token, instanceId: trimmedInstanceId)
             }
         }
-        if let password = link.password, !password.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let trimmedPassword = password.trimmingCharacters(in: .whitespacesAndNewlines)
-            self.gatewayPassword = trimmedPassword
+        if setupAuth.shouldApplyPasswordField {
+            self.gatewayPassword = setupAuth.password
             if !trimmedInstanceId.isEmpty {
-                GatewaySettingsStore.saveGatewayPassword(trimmedPassword, instanceId: trimmedInstanceId)
-            }
-        } else if !trimmedBootstrapToken.isEmpty {
-            self.gatewayPassword = ""
-            if !trimmedInstanceId.isEmpty {
-                GatewaySettingsStore.saveGatewayPassword("", instanceId: trimmedInstanceId)
+                GatewaySettingsStore.saveGatewayPassword(setupAuth.password, instanceId: trimmedInstanceId)
             }
         }
+        self.pendingManualAuthOverride = setupAuth.manualAuthOverride
     }
 
     private func openGatewayQRScanner() {
@@ -940,10 +994,16 @@ struct SettingsTab: View {
 
         GatewayDiagnostics.log(
             "connect manual host=\(host) port=\(self.manualGatewayPort) tls=\(self.manualGatewayTLS)")
+        let authOverride = GatewayConnectionController.ManualAuthOverride.currentManualInput(
+            token: self.gatewayToken,
+            pendingOverride: self.pendingManualAuthOverride,
+            password: self.gatewayPassword)
+        self.pendingManualAuthOverride = nil
         await self.gatewayController.connectManual(
             host: host,
             port: self.manualGatewayPort,
-            useTLS: self.manualGatewayTLS)
+            useTLS: self.manualGatewayTLS,
+            authOverride: authOverride)
     }
 
     private var setupStatusLine: String? {

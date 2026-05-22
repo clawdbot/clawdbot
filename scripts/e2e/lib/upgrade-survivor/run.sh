@@ -1057,6 +1057,29 @@ candidate_update_spec() {
   esac
 }
 
+assert_update_json_ok() {
+  local file="$1"
+  node -e '
+    const fs = require("node:fs");
+    const file = process.argv[1];
+    const raw = fs.readFileSync(file, "utf8");
+    let result;
+    try {
+      result = JSON.parse(raw);
+    } catch (err) {
+      // Published baselines may emit legacy service-control logs before the JSON payload.
+      const jsonStart = raw.indexOf("{");
+      if (jsonStart === -1) {
+        throw err;
+      }
+      result = JSON.parse(raw.slice(jsonStart));
+    }
+    if (!result || result.status !== "ok") {
+      throw new Error(`update JSON did not report ok status: ${JSON.stringify(result)}`);
+    }
+  ' "$file"
+}
+
 update_candidate() {
   local update_spec
   update_spec="$(candidate_update_spec)"
@@ -1087,14 +1110,7 @@ update_candidate() {
   if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
     update_end="$(node -e "process.stdout.write(String(Date.now()))")"
     update_restart_seconds=$(((update_end - update_start + 999) / 1000))
-    node -e '
-      const fs = require("node:fs");
-      const file = process.argv[1];
-      const result = JSON.parse(fs.readFileSync(file, "utf8"));
-      if (!result || result.status !== "ok") {
-        throw new Error(`update JSON did not report ok status: ${JSON.stringify(result)}`);
-      }
-    ' "$UPDATE_JSON"
+    assert_update_json_ok "$UPDATE_JSON"
   fi
   installed_version="$(read_installed_version)"
 }

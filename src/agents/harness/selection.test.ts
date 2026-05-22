@@ -1,6 +1,7 @@
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { ContextEngine } from "../../context-engine/types.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
@@ -21,6 +22,14 @@ vi.mock("./builtin-pi.js", () => ({
   createPiAgentHarness: (): AgentHarness => ({
     id: "pi",
     label: "PI embedded agent",
+    contextEngineHostCapabilities: [
+      "bootstrap",
+      "assemble-before-prompt",
+      "after-turn",
+      "maintain",
+      "compact",
+      "runtime-llm-complete",
+    ],
     supports: () => ({ supported: true, priority: 0 }),
     runAttempt: piRunAttempt,
   }),
@@ -83,6 +92,29 @@ function createAttemptResult(sessionIdUsed: string): EmbeddedRunAttemptResult {
     cloudCodeAssistFormatError: false,
     replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
     itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
+  };
+}
+
+function createContextEngineRequiringAssembly(): ContextEngine {
+  return {
+    info: {
+      id: "lossless-claw",
+      name: "Lossless",
+      hostRequirements: {
+        "agent-run": {
+          requiredCapabilities: ["assemble-before-prompt"],
+        },
+      },
+    },
+    async ingest() {
+      return { ingested: true };
+    },
+    async assemble({ messages }) {
+      return { messages, estimatedTokens: 0 };
+    },
+    async compact() {
+      return { ok: true, compacted: false };
+    },
   };
 }
 
@@ -198,6 +230,16 @@ describe("runAgentHarnessAttempt", () => {
 
   it("falls back to the PI harness in auto mode when no plugin harness matches", async () => {
     const result = await runAgentHarnessAttempt(createAttemptParams());
+
+    expect(result.sessionIdUsed).toBe("pi");
+    expect(piRunAttempt).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows the selected PI harness to satisfy context-engine pre-prompt assembly", async () => {
+    const result = await runAgentHarnessAttempt({
+      ...createAttemptParams(providerRuntimeConfig("codex", "pi")),
+      contextEngine: createContextEngineRequiringAssembly(),
+    });
 
     expect(result.sessionIdUsed).toBe("pi");
     expect(piRunAttempt).toHaveBeenCalledTimes(1);

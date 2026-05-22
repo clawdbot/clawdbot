@@ -71,7 +71,6 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.15.0"
-  PNPM_VERSION: "11.0.8"
 
 jobs:
   resolve_release_target:
@@ -361,7 +360,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           install-bun: "false"
-          cache-key-suffix: release-publish
 
       - name: Dispatch publish workflows
         env:
