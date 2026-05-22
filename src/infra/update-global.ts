@@ -89,7 +89,30 @@ export function isExplicitPackageInstallSpec(value: string): boolean {
 function stripPrimaryPackageAlias(spec: string): string {
   const normalized = normalizePackageTarget(spec);
   const prefix = `${PRIMARY_PACKAGE_NAME}@`;
-  return normalized.startsWith(prefix) ? normalized.slice(prefix.length).trim() : normalized;
+  return normalized.toLowerCase().startsWith(prefix)
+    ? normalized.slice(prefix.length).trim()
+    : normalized;
+}
+
+export function isOpenClawSourcePackageInstallSpec(value: string): boolean {
+  if (isMainPackageTarget(value)) {
+    return true;
+  }
+  const target = stripPrimaryPackageAlias(value);
+  const normalizedTarget = normalizeLowercaseStringOrEmpty(target);
+  if (!normalizedTarget) {
+    return false;
+  }
+  if (/^github:openclaw\/openclaw(?:$|[#/])/u.test(normalizedTarget)) {
+    return true;
+  }
+  const gitUrl = normalizedTarget.replace(/^git\+/u, "");
+  return (
+    /^https?:\/\/github\.com\/openclaw\/openclaw(?:\.git)?(?:$|[?#])/u.test(gitUrl) ||
+    /^ssh:\/\/git@github\.com[:/]openclaw\/openclaw(?:\.git)?(?:$|[?#])/u.test(gitUrl) ||
+    /^git:\/\/github\.com\/openclaw\/openclaw(?:\.git)?(?:$|[?#])/u.test(gitUrl) ||
+    /^git@github\.com:openclaw\/openclaw(?:\.git)?(?:$|[?#])/u.test(gitUrl)
+  );
 }
 
 function isPnpmOpenClawSourceInstallSpec(spec: string): boolean {

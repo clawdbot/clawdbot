@@ -170,12 +170,23 @@ type DiscordComponentSendOpts = {
 export function registerBuiltDiscordComponentMessage(params: {
   buildResult: DiscordComponentBuildResult;
   messageId: string;
+  ttlMs?: number;
 }): void {
   registerDiscordComponentEntries({
     entries: params.buildResult.entries,
     modals: params.buildResult.modals,
     messageId: params.messageId,
+    ttlMs: params.ttlMs,
   });
+}
+
+function resolveDiscordComponentRegistryTtlMs(
+  accountConfig: { agentComponents?: { ttlMs?: number } } | undefined,
+): number | undefined {
+  const ttlMs = accountConfig?.agentComponents?.ttlMs;
+  return typeof ttlMs === "number" && Number.isFinite(ttlMs) && ttlMs > 0
+    ? Math.floor(ttlMs)
+    : undefined;
 }
 
 async function buildDiscordComponentPayload(params: {
@@ -316,6 +327,7 @@ export async function sendDiscordComponentMessage(
   registerBuiltDiscordComponentMessage({
     buildResult,
     messageId: result.id,
+    ttlMs: resolveDiscordComponentRegistryTtlMs(accountInfo.config),
   });
 
   recordChannelActivity({
@@ -371,6 +383,7 @@ export async function editDiscordComponentMessage(
   registerBuiltDiscordComponentMessage({
     buildResult,
     messageId: result.id ?? messageId,
+    ttlMs: resolveDiscordComponentRegistryTtlMs(accountInfo.config),
   });
 
   recordChannelActivity({

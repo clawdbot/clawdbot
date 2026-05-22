@@ -306,7 +306,7 @@ describe("resolveNpmCommandInvocation", () => {
   });
 
   it("uses the platform npm command when npm_execpath is missing", () => {
-    expect(resolveNpmCommandInvocation({ platform: "win32" })).toEqual({
+    expect(resolveNpmCommandInvocation({ npmExecPath: "", platform: "win32" })).toEqual({
       command: "npm.cmd",
       args: [],
     });

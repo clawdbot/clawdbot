@@ -494,10 +494,10 @@ function resolveOpenShellPluginConfigFromConfig(
   return resolveOpenShellPluginConfig(pluginConfig);
 }
 
-function buildOpenShellSandboxName(scopeKey: string): string {
+export function buildOpenShellSandboxName(scopeKey: string): string {
   const trimmed = scopeKey.trim() || "session";
   const safe = normalizeLowercaseStringOrEmpty(trimmed)
-    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/[^a-z0-9-]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 32);
   const hash = Array.from(trimmed).reduce(

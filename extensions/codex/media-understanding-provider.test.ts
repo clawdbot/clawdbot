@@ -206,6 +206,11 @@ describe("codex media understanding provider", () => {
       serviceName: "OpenClaw",
       developerInstructions:
         "You are OpenClaw's bounded image-understanding worker. Describe only the provided image content. Do not call tools, edit files, or ask follow-up questions.",
+      config: {
+        "features.code_mode": false,
+        "features.code_mode_only": false,
+      },
+      environments: [],
       dynamicTools: [],
       experimentalRawEvents: true,
       ephemeral: true,
@@ -363,6 +368,11 @@ describe("codex media understanding provider", () => {
       serviceName: "OpenClaw",
       developerInstructions:
         "You are OpenClaw's bounded structured-extraction worker. Return only the requested extraction. Do not call tools, edit files, ask follow-up questions, or include secrets.",
+      config: {
+        "features.code_mode": false,
+        "features.code_mode_only": false,
+      },
+      environments: [],
       dynamicTools: [],
       experimentalRawEvents: true,
       ephemeral: true,

@@ -990,11 +990,13 @@ export const en = {
       webSearchEnabled:
         "Web search is enabled, so your agent can look things up online when needed.",
       webSearchGetKey: "Get your key at: {url}",
+      webSearchAuthProfile: "Credential: existing {provider} auth profile.",
       webSearchKeyEnv: "API key: provided via {env} env var.",
       webSearchKeyRef: "API key: configured via secret reference.",
       webSearchKeyStored: "API key: stored in config.",
       webSearchNeedsKey: "web_search will not work until a key is added.",
       webSearchNoKey: "Provider {provider} is selected but no API key was found.",
+      webSearchOAuthProfile: "Credential: existing {provider} OAuth sign-in.",
       webSearchProvider: "Provider: {provider}",
       webSearchProviderUnavailable:
         "Web search provider {provider} is selected but unavailable under the current plugin policy.",

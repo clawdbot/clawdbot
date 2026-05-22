@@ -94,7 +94,7 @@ steps:
       - call: env.gateway.call
         args:
           - wake
-          - mode: next-heartbeat
+          - mode: now
             text: Commitments target none QA wake
           - timeoutMs: 30000
       - call: waitForCondition

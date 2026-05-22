@@ -68,7 +68,6 @@ describe("message action media helpers", () => {
       sessionId: undefined,
       agentId: undefined,
       requesterSenderId: undefined,
-      senderIsOwner: undefined,
     });
   });
 

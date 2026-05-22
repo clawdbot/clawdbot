@@ -9,6 +9,10 @@ type TestSessionEntry = {
   providerOverride?: string;
   modelOverride?: string;
   modelOverrideSource?: string;
+  model?: string;
+  modelProvider?: string;
+  contextTokens?: number;
+  authProfileOverride?: string;
 };
 
 type EmbeddedAgentArgs = {
@@ -30,6 +34,34 @@ function createAgentRuntime(payloads: Array<Record<string, unknown>>) {
   const updateSessionStore = vi.fn(
     async (_storePath: string, mutator: (store: Record<string, TestSessionEntry>) => unknown) => {
       return await mutator(sessionStore);
+    },
+  );
+  const getSessionEntry = vi.fn(
+    (params: { sessionKey: string }) => sessionStore[params.sessionKey],
+  );
+  const patchSessionEntry = vi.fn(
+    async (params: {
+      sessionKey: string;
+      fallbackEntry?: TestSessionEntry;
+      replaceEntry?: boolean;
+      update: (entry: TestSessionEntry) => Partial<TestSessionEntry> | null;
+    }) => {
+      const existing = sessionStore[params.sessionKey] ?? params.fallbackEntry;
+      if (!existing) {
+        return null;
+      }
+      const patch = params.update({ ...existing });
+      if (!patch) {
+        return existing;
+      }
+      const next = params.replaceEntry ? (patch as TestSessionEntry) : { ...existing, ...patch };
+      sessionStore[params.sessionKey] = next;
+      return next;
+    },
+  );
+  const upsertSessionEntry = vi.fn(
+    async (params: { sessionKey: string; entry: TestSessionEntry }) => {
+      sessionStore[params.sessionKey] = { ...params.entry };
     },
   );
   const runEmbeddedPiAgent = vi.fn(async () => ({
@@ -71,6 +103,9 @@ function createAgentRuntime(payloads: Array<Record<string, unknown>>) {
       loadSessionStore: () => sessionStore,
       saveSessionStore,
       updateSessionStore,
+      getSessionEntry,
+      patchSessionEntry,
+      upsertSessionEntry,
       resolveSessionFilePath,
     },
   } as unknown as CoreAgentDeps;
@@ -80,6 +115,7 @@ function createAgentRuntime(payloads: Array<Record<string, unknown>>) {
     runEmbeddedPiAgent,
     saveSessionStore,
     updateSessionStore,
+    patchSessionEntry,
     sessionStore,
     resolveAgentDir,
     resolveAgentWorkspaceDir,
@@ -187,9 +223,17 @@ describe("generateVoiceResponse", () => {
   });
 
   it("pins the voice session to responseModel before running the embedded agent", async () => {
-    const { runtime, runEmbeddedPiAgent, updateSessionStore, sessionStore } = createAgentRuntime([
+    const { runtime, runEmbeddedPiAgent, patchSessionEntry, sessionStore } = createAgentRuntime([
       { text: '{"spoken":"Pinned model works."}' },
     ]);
+    sessionStore["voice:15550001111"] = {
+      sessionId: "existing-session",
+      updatedAt: 100,
+      model: "old-model",
+      modelProvider: "old-provider",
+      contextTokens: 123,
+      authProfileOverride: "old-auth-profile",
+    };
     const voiceConfig = VoiceCallConfigSchema.parse({
       responseModel: "openai/gpt-4.1-nano",
       responseTimeoutMs: 5000,
@@ -210,12 +254,20 @@ describe("generateVoiceResponse", () => {
     expect(pinnedSessionEntry?.providerOverride).toBe("openai");
     expect(pinnedSessionEntry?.modelOverride).toBe("gpt-4.1-nano");
     expect(pinnedSessionEntry?.modelOverrideSource).toBe("auto");
-    const updateSessionStoreCall = requireFirstMockCall(
-      updateSessionStore.mock.calls,
-      "session store update",
+    expect(pinnedSessionEntry?.model).toBeUndefined();
+    expect(pinnedSessionEntry?.modelProvider).toBeUndefined();
+    expect(pinnedSessionEntry?.contextTokens).toBeUndefined();
+    expect(pinnedSessionEntry?.authProfileOverride).toBeUndefined();
+    const patchSessionEntryCall = requireFirstMockCall(
+      patchSessionEntry.mock.calls,
+      "session entry patch",
     );
-    expect(updateSessionStoreCall[0]).toBe("/tmp/openclaw/main/sessions.json");
-    expect(updateSessionStoreCall[1]).toBeTypeOf("function");
+    expect(patchSessionEntryCall[0]).toMatchObject({
+      storePath: "/tmp/openclaw/main/sessions.json",
+      sessionKey: "voice:15550001111",
+      replaceEntry: true,
+    });
+    expect((patchSessionEntryCall[0] as { update?: unknown }).update).toBeTypeOf("function");
     const args = requireEmbeddedAgentArgs(runEmbeddedPiAgent);
     expect(args.provider).toBe("openai");
     expect(args.model).toBe("gpt-4.1-nano");

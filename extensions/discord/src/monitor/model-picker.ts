@@ -14,6 +14,7 @@ export {
   loadDiscordModelPickerData,
   parseDiscordModelPickerCustomId,
   parseDiscordModelPickerData,
+  resolveDiscordModelPickerPageForModel,
 } from "./model-picker.state.js";
 export type {
   DiscordModelPickerAction,

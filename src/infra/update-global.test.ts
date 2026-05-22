@@ -26,6 +26,7 @@ import {
   globalInstallFallbackArgs,
   isExplicitPackageInstallSpec,
   isMainPackageTarget,
+  isOpenClawSourcePackageInstallSpec,
   OPENCLAW_MAIN_PACKAGE_SPEC,
   resolveGlobalInstallCommand,
   resolveGlobalPackageRoot,
@@ -247,6 +248,30 @@ describe("update global helpers", () => {
     expect(canResolveRegistryVersionForPackageTarget("main")).toBe(false);
     expect(canResolveRegistryVersionForPackageTarget("github:openclaw/openclaw#main")).toBe(false);
     expect(canResolveRegistryVersionForPackageTarget("/tmp/openclaw-main.tgz")).toBe(false);
+  });
+
+  it("classifies OpenClaw GitHub source package specs as unsupported package targets", () => {
+    expect(isOpenClawSourcePackageInstallSpec("main")).toBe(true);
+    expect(isOpenClawSourcePackageInstallSpec("github:openclaw/openclaw#main")).toBe(true);
+    expect(isOpenClawSourcePackageInstallSpec("openclaw@github:openclaw/openclaw#main")).toBe(
+      true,
+    );
+    expect(isOpenClawSourcePackageInstallSpec("OpenClaw@github:openclaw/openclaw#main")).toBe(
+      true,
+    );
+    expect(
+      isOpenClawSourcePackageInstallSpec("git+https://github.com/openclaw/openclaw.git#main"),
+    ).toBe(true);
+    expect(isOpenClawSourcePackageInstallSpec("https://example.com/openclaw-main.tgz")).toBe(
+      false,
+    );
+    expect(
+      isOpenClawSourcePackageInstallSpec(
+        "https://github.com/openclaw/openclaw/releases/download/v2026.5.20/openclaw.tgz",
+      ),
+    ).toBe(false);
+    expect(isOpenClawSourcePackageInstallSpec("github:other/openclaw#main")).toBe(false);
+    expect(isOpenClawSourcePackageInstallSpec("beta")).toBe(false);
   });
 
   it("detects install managers from resolved roots and on-disk presence", async () => {

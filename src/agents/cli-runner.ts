@@ -21,6 +21,7 @@ import {
 import { buildAgentHookContext } from "./harness/hook-context.js";
 import { buildAgentHookConversationMessages } from "./harness/hook-history.js";
 import {
+  awaitAgentHarnessAgentEndHook,
   runAgentHarnessAgentEndHook,
   runAgentHarnessLlmInputHook,
   runAgentHarnessLlmOutputHook,
@@ -106,6 +107,23 @@ function buildCliContextEngineAssistantMessage(params: {
   };
 }): AgentMessage {
   return buildCliHookAssistantMessage(params) as AgentMessage;
+}
+
+type CliAgentEndHookParams = Parameters<typeof runAgentHarnessAgentEndHook>[0];
+
+function shouldAwaitCliAgentEndHook(params: RunCliAgentParams): boolean {
+  return !params.messageChannel && !params.messageProvider;
+}
+
+async function runCliAgentEndHook(
+  params: RunCliAgentParams,
+  hookParams: CliAgentEndHookParams,
+): Promise<void> {
+  if (shouldAwaitCliAgentEndHook(params)) {
+    await awaitAgentHarnessAgentEndHook(hookParams);
+    return;
+  }
+  runAgentHarnessAgentEndHook(hookParams);
 }
 
 async function finalizeCliContextEngineTurn(params: {
@@ -564,7 +582,6 @@ export async function runPreparedCliAgent(
             }),
             channelId: hookContext.channelId,
             accountId: params.agentAccountId,
-            senderIsOwner: params.senderIsOwner,
           },
           buildAgentHookContext(hookContext),
         );
@@ -577,7 +594,7 @@ export async function runPreparedCliAgent(
           message: blockMessage,
           pluginId: "before_agent_run",
         });
-        runAgentHarnessAgentEndHook({
+        await runCliAgentEndHook(params, {
           event: buildBlockedAgentEndEvent(blockMessage),
           ctx: hookContext,
           hookRunner,
@@ -594,7 +611,7 @@ export async function runPreparedCliAgent(
           message: blockMessage,
           pluginId: beforeRunResult?.pluginId ?? "unknown",
         });
-        runAgentHarnessAgentEndHook({
+        await runCliAgentEndHook(params, {
           event: buildBlockedAgentEndEvent(blockMessage),
           ctx: hookContext,
           hookRunner,
@@ -620,7 +637,7 @@ export async function runPreparedCliAgent(
         assistantText,
         output,
       });
-      runAgentHarnessAgentEndHook({
+      await runCliAgentEndHook(params, {
         event: {
           messages: buildAgentEndMessages(lastAssistant),
           success: true,
@@ -652,7 +669,7 @@ export async function runPreparedCliAgent(
               assistantText,
               output,
             });
-            runAgentHarnessAgentEndHook({
+            await runCliAgentEndHook(params, {
               event: {
                 messages: buildAgentEndMessages(lastAssistant),
                 success: true,
@@ -664,7 +681,7 @@ export async function runPreparedCliAgent(
             return buildCliRunResult({ output, effectiveCliSessionId });
           } catch (retryErr) {
             const retryMessage = formatErrorMessage(retryErr);
-            runAgentHarnessAgentEndHook({
+            await runCliAgentEndHook(params, {
               event: buildFailedAgentEndEvent(retryMessage),
               ctx: hookContext,
               hookRunner,
@@ -672,7 +689,7 @@ export async function runPreparedCliAgent(
             return toCliRunFailure(retryErr);
           }
         }
-        runAgentHarnessAgentEndHook({
+        await runCliAgentEndHook(params, {
           event: buildFailedAgentEndEvent(formatErrorMessage(err)),
           ctx: hookContext,
           hookRunner,
@@ -680,7 +697,7 @@ export async function runPreparedCliAgent(
         throw err;
       }
       const message = formatErrorMessage(err);
-      runAgentHarnessAgentEndHook({
+      await runCliAgentEndHook(params, {
         event: buildFailedAgentEndEvent(message),
         ctx: hookContext,
         hookRunner,
@@ -725,7 +742,6 @@ export function buildRunClaudeCliAgentParams(params: RunClaudeCliAgentParams): R
     images: params.images,
     messageChannel: params.messageChannel,
     messageProvider: params.messageProvider,
-    senderIsOwner: params.senderIsOwner,
   };
 }
 

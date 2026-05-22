@@ -1434,6 +1434,59 @@ describe("normalizeCompatibilityConfigValues", () => {
     ]);
   });
 
+  it("keeps native Ollama params prototype-safe while setting num_ctx", () => {
+    const providerParams: Record<string, unknown> = { temperature: 0.2 };
+    Object.defineProperty(providerParams, "__proto__", {
+      enumerable: true,
+      value: { think: "high" },
+    });
+    const modelParams: Record<string, unknown> = { top_p: 0.9 };
+    Object.defineProperty(modelParams, "__proto__", {
+      enumerable: true,
+      value: { keep_alive: "forever" },
+    });
+
+    const res = normalizeCompatibilityConfigValues({
+      models: {
+        providers: {
+          ollama: {
+            baseUrl: "http://localhost:11434",
+            api: "ollama",
+            contextWindow: 65536,
+            params: providerParams,
+            models: [
+              ollamaModel({
+                contextWindow: 32768,
+                params: modelParams,
+              }),
+            ],
+          },
+        },
+      },
+    });
+
+    const nextProviderParams = res.config.models?.providers?.ollama?.params as Record<
+      string,
+      unknown
+    >;
+    const nextModelParams = res.config.models?.providers?.ollama?.models?.[0]?.params as Record<
+      string,
+      unknown
+    >;
+    expect(Object.getPrototypeOf(nextProviderParams)).toBe(Object.prototype);
+    expect(Object.getPrototypeOf(nextModelParams)).toBe(Object.prototype);
+    expect(Object.getOwnPropertyDescriptor(nextProviderParams, "__proto__")?.value).toEqual({
+      think: "high",
+    });
+    expect(Object.getOwnPropertyDescriptor(nextModelParams, "__proto__")?.value).toEqual({
+      keep_alive: "forever",
+    });
+    expect(nextProviderParams.think).toBeUndefined();
+    expect(nextModelParams.keep_alive).toBeUndefined();
+    expect(nextProviderParams.num_ctx).toBe(65536);
+    expect(nextModelParams.num_ctx).toBe(32768);
+  });
+
   it("keeps existing provider-level native Ollama params.num_ctx ahead of inherited provider budgets", () => {
     const res = normalizeCompatibilityConfigValues({
       models: {

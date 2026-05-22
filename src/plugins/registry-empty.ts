@@ -12,6 +12,7 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     modelCatalogProviders: [],
     cliBackends: [],
     textTransforms: [],
+    embeddingProviders: [],
     speechProviders: [],
     realtimeTranscriptionProviders: [],
     realtimeVoiceProviders: [],

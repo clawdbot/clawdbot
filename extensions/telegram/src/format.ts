@@ -60,6 +60,13 @@ function buildTelegramLink(link: MarkdownLinkSpan, text: string) {
   };
 }
 
+function buildTelegramCodeBlockOpen(span: { language?: string }): string {
+  if (!span.language) {
+    return "<pre><code>";
+  }
+  return `<pre><code class="language-${escapeHtmlAttr(span.language)}">`;
+}
+
 function renderTelegramHtml(ir: MarkdownIR): string {
   return renderMarkdownWithMarkers(ir, {
     styleMarkers: {
@@ -67,7 +74,7 @@ function renderTelegramHtml(ir: MarkdownIR): string {
       italic: { open: "<i>", close: "</i>" },
       strikethrough: { open: "<s>", close: "</s>" },
       code: { open: "<code>", close: "</code>" },
-      code_block: { open: "<pre><code>", close: "</code></pre>" },
+      code_block: { open: buildTelegramCodeBlockOpen, close: "</code></pre>" },
       spoiler: { open: "<tg-spoiler>", close: "</tg-spoiler>" },
       blockquote: { open: "<blockquote>", close: "</blockquote>" },
     },

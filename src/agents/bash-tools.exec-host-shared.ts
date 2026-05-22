@@ -25,6 +25,7 @@ import {
 import { buildApprovalPendingMessage } from "./bash-tools.exec-runtime.js";
 import { DEFAULT_APPROVAL_TIMEOUT_MS } from "./bash-tools.exec-runtime.js";
 import type { ExecElevatedDefaults, ExecToolDetails } from "./bash-tools.exec-types.js";
+import { isExecDeniedResultText } from "./exec-approval-result.js";
 
 type ResolvedExecApprovals = ReturnType<typeof resolveExecApprovals>;
 export const MAX_EXEC_APPROVAL_FOLLOWUP_FAILURE_LOG_KEYS = 256;
@@ -412,7 +413,7 @@ export async function sendExecApprovalFollowupResult(
   const send = deps.sendExecApprovalFollowup ?? sendExecApprovalFollowup;
   const warn = deps.logWarn ?? logWarn;
   const runtimeHandoff =
-    target.direct === true || !target.sessionKey
+    target.direct === true || !target.sessionKey || isExecDeniedResultText(resultText)
       ? undefined
       : registerExecApprovalFollowupRuntimeHandoff({
           approvalId: target.approvalId,

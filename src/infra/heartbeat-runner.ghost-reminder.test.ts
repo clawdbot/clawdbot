@@ -132,7 +132,6 @@ describe("Ghost reminder bug (issue #13317)", () => {
     SessionKey?: string;
     MessageThreadId?: number;
     Body?: string;
-    ForceSenderIsOwnerFalse?: boolean;
   } => {
     const [ctx] = mockCallAt(replySpy, 0, "heartbeat reply");
     if (!ctx || typeof ctx !== "object") {
@@ -143,7 +142,6 @@ describe("Ghost reminder bug (issue #13317)", () => {
       SessionKey?: string;
       MessageThreadId?: number;
       Body?: string;
-      ForceSenderIsOwnerFalse?: boolean;
     };
   };
 
@@ -170,7 +168,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
   ): Promise<{
     result: Awaited<ReturnType<typeof runHeartbeatOnce>>;
     sendTelegram: ReturnType<typeof vi.fn>;
-    calledCtx: { Provider?: string; Body?: string; ForceSenderIsOwnerFalse?: boolean } | null;
+    calledCtx: { Provider?: string; Body?: string } | null;
   }> => {
     return runHeartbeatCase({
       tmpPrefix,
@@ -194,7 +192,6 @@ describe("Ghost reminder bug (issue #13317)", () => {
       Provider?: string;
       Body?: string;
       SessionKey?: string;
-      ForceSenderIsOwnerFalse?: boolean;
     } | null;
     sessionKey: string;
     replyCallCount: number;
@@ -230,35 +227,6 @@ describe("Ghost reminder bug (issue #13317)", () => {
       },
       { prefix: params.tmpPrefix },
     );
-  };
-
-  const expectUntrustedEventOwnership = async (params: {
-    tmpPrefix: string;
-    reason: "hook:wake" | "interval";
-    isolatedSession?: boolean;
-    forceSenderIsOwnerFalse: boolean;
-  }): Promise<void> => {
-    const { result, sendTelegram, calledCtx } = await runHeartbeatCase({
-      tmpPrefix: params.tmpPrefix,
-      replyText: "Handled internally",
-      reason: params.reason,
-      target: "none",
-      isolatedSession: params.isolatedSession,
-      enqueue: (sessionKey) => {
-        enqueueSystemEvent("GitHub issue opened: untrusted webhook content", {
-          sessionKey,
-          forceSenderIsOwnerFalse: true,
-        });
-      },
-    });
-
-    expect(result.status).toBe("ran");
-    expect(calledCtx?.Provider).toBe("heartbeat");
-    if (params.isolatedSession === true) {
-      expect(calledCtx?.SessionKey).toContain(":heartbeat");
-    }
-    expect(calledCtx?.ForceSenderIsOwnerFalse).toBe(params.forceSenderIsOwnerFalse);
-    expect(sendTelegram).not.toHaveBeenCalled();
   };
 
   it("does not use CRON_EVENT_PROMPT when only a HEARTBEAT_OK event is present", async () => {
@@ -410,7 +378,6 @@ describe("Ghost reminder bug (issue #13317)", () => {
 
     expect(result.status).toBe("ran");
     expect(calledCtx?.Provider).toBe("exec-event");
-    expect(calledCtx?.ForceSenderIsOwnerFalse).toBe(true);
     expect(calledCtx?.Body).toContain("Handle the result internally");
     expect(sendTelegram).not.toHaveBeenCalled();
   });
@@ -427,7 +394,6 @@ describe("Ghost reminder bug (issue #13317)", () => {
 
     expect(result.status).toBe("ran");
     expect(calledCtx?.Provider).toBe("exec-event");
-    expect(calledCtx?.ForceSenderIsOwnerFalse).toBe(true);
     expect(calledCtx?.Body).toContain("exec finished: deploy succeeded");
     expect(sendTelegram).toHaveBeenCalled();
   });
@@ -465,7 +431,6 @@ describe("Ghost reminder bug (issue #13317)", () => {
 
     expect(result.status).toBe("ran");
     expect(calledCtx?.Provider).toBe("exec-event");
-    expect(calledCtx?.ForceSenderIsOwnerFalse).toBe(true);
     expect(calledCtx?.Body).toContain("Handle the result internally");
     expect(sendTelegram).not.toHaveBeenCalled();
   });
@@ -485,42 +450,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
     expect(result.status).toBe("ran");
     expect(calledCtx?.Provider).toBe("heartbeat");
     expect(calledCtx?.SessionKey).toContain(":heartbeat");
-    expect(calledCtx?.ForceSenderIsOwnerFalse).toBe(false);
     expect(sendTelegram).not.toHaveBeenCalled();
-  });
-
-  it("forces owner downgrade for hook:wake system events with downgrade metadata", async () => {
-    await expectUntrustedEventOwnership({
-      tmpPrefix: "openclaw-hook-event-",
-      reason: "hook:wake",
-      forceSenderIsOwnerFalse: true,
-    });
-  });
-
-  it("forces owner downgrade for interval events with downgrade metadata", async () => {
-    await expectUntrustedEventOwnership({
-      tmpPrefix: "openclaw-interval-event-",
-      reason: "interval",
-      forceSenderIsOwnerFalse: true,
-    });
-  });
-
-  it("does not force owner downgrade for base-session hook:wake events with isolated sessions", async () => {
-    await expectUntrustedEventOwnership({
-      tmpPrefix: "openclaw-hook-event-isolated-",
-      reason: "hook:wake",
-      isolatedSession: true,
-      forceSenderIsOwnerFalse: false,
-    });
-  });
-
-  it("does not force owner downgrade for isolated interval runs with only base-session downgrade events", async () => {
-    await expectUntrustedEventOwnership({
-      tmpPrefix: "openclaw-interval-event-isolated-",
-      reason: "interval",
-      isolatedSession: true,
-      forceSenderIsOwnerFalse: false,
-    });
   });
 
   it("routes wake-triggered heartbeat replies using queued system-event delivery context", async () => {

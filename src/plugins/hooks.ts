@@ -160,6 +160,9 @@ export type HookRunnerLogger = {
 };
 
 export type HookFailurePolicy = "fail-open" | "fail-closed";
+export type VoidHookRunOptions = {
+  unrefTimeout?: boolean;
+};
 
 type BeforeAgentFinalizeRetry = NonNullable<PluginHookBeforeAgentFinalizeResult["retry"]>;
 type BeforeAgentFinalizeResultWithRetryCandidates = PluginHookBeforeAgentFinalizeResult & {
@@ -555,6 +558,7 @@ export function createHookRunner(
     hookName: K,
     event: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[0],
     ctx: Parameters<NonNullable<PluginHookRegistration<K>["handler"]>>[1],
+    options: VoidHookRunOptions = {},
   ): Promise<void> {
     const hooks = getHooksForName(registry, hookName);
     if (hooks.length === 0) {
@@ -570,7 +574,7 @@ export function createHookRunner(
         );
         const timeoutMs = getVoidHookTimeoutMs(hookName, hook);
         if (timeoutMs) {
-          await withHookTimeout(promise, timeoutMs, { unref: true });
+          await withHookTimeout(promise, timeoutMs, { unref: options.unrefTimeout ?? true });
         } else {
           await promise;
         }
@@ -879,13 +883,14 @@ export function createHookRunner(
   /**
    * Run agent_end hook.
    * Allows plugins to analyze completed conversations.
-   * Runs in parallel (fire-and-forget).
+   * Runs handlers in parallel.
    */
   async function runAgentEnd(
     event: PluginHookAgentEndEvent,
     ctx: PluginHookAgentContext,
+    options?: VoidHookRunOptions,
   ): Promise<void> {
-    return runVoidHook("agent_end", withAgentRunId(event, ctx), ctx);
+    return runVoidHook("agent_end", withAgentRunId(event, ctx), ctx, options);
   }
 
   /**

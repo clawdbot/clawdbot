@@ -20,10 +20,6 @@ import {
 import { definePluginEntry, type OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { parseAgentSessionKey, parseThreadSessionSuffix } from "openclaw/plugin-sdk/routing";
 import { isPathInside, replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
-import {
-  resolveSessionStoreEntry,
-  updateSessionStore,
-} from "openclaw/plugin-sdk/session-store-runtime";
 import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
@@ -542,20 +538,15 @@ function resolveCanonicalSessionKeyFromSessionId(params: {
     return undefined;
   }
   try {
-    const storePath = params.api.runtime.agent.session.resolveStorePath(
-      params.api.config.session?.store,
-      {
-        agentId: params.agentId,
-      },
-    );
-    const store = params.api.runtime.agent.session.loadSessionStore(storePath, { clone: false });
     let bestMatch:
       | {
           sessionKey: string;
           updatedAt: number;
         }
       | undefined;
-    for (const [sessionKey, entry] of Object.entries(store)) {
+    for (const { sessionKey, entry } of params.api.runtime.agent.session.listSessionEntries({
+      agentId: params.agentId,
+    })) {
       if (!entry || typeof entry !== "object") {
         continue;
       }
@@ -673,17 +664,10 @@ function resolveRecallRunChannelContext(params: {
   }
 
   try {
-    const storePath = params.api.runtime.agent.session.resolveStorePath(
-      params.api.config.session?.store,
-      {
-        agentId: params.agentId,
-      },
-    );
-    const store = params.api.runtime.agent.session.loadSessionStore(storePath, { clone: false });
-    const sessionEntry = resolveSessionStoreEntry({
-      store,
+    const sessionEntry = params.api.runtime.agent.session.getSessionEntry({
+      agentId: params.agentId,
       sessionKey: resolvedSessionKey,
-    }).existing;
+    });
     const rawStrongEntryChannel =
       normalizeOptionalString(sessionEntry?.lastChannel) ??
       normalizeOptionalString(sessionEntry?.channel);
@@ -1594,13 +1578,11 @@ async function persistPluginStatusLines(params: {
     return;
   }
   try {
-    const storePath = params.api.runtime.agent.session.resolveStorePath(
-      params.api.config.session?.store,
-      agentId ? { agentId } : undefined,
-    );
     if (!params.statusLine && !debugLine) {
-      const store = params.api.runtime.agent.session.loadSessionStore(storePath, { clone: false });
-      const existingEntry = resolveSessionStoreEntry({ store, sessionKey }).existing;
+      const existingEntry = params.api.runtime.agent.session.getSessionEntry({
+        agentId,
+        sessionKey,
+      });
       const hasActiveMemoryEntry = Array.isArray(existingEntry?.pluginDebugEntries)
         ? existingEntry.pluginDebugEntries.some((entry) => entry?.pluginId === "active-memory")
         : false;
@@ -1608,39 +1590,38 @@ async function persistPluginStatusLines(params: {
         return;
       }
     }
-    await updateSessionStore(storePath, (store) => {
-      const resolved = resolveSessionStoreEntry({ store, sessionKey });
-      const existing = resolved.existing;
-      if (!existing) {
-        return;
-      }
-      const previousEntries = Array.isArray(existing.pluginDebugEntries)
-        ? existing.pluginDebugEntries
-        : [];
-      const nextEntries = previousEntries.filter(
-        (entry): entry is PluginDebugEntry =>
-          Boolean(entry) &&
-          typeof entry === "object" &&
-          typeof entry.pluginId === "string" &&
-          entry.pluginId !== "active-memory",
-      );
-      const nextLines: string[] = [];
-      if (params.statusLine) {
-        nextLines.push(params.statusLine);
-      }
-      if (debugLine) {
-        nextLines.push(debugLine);
-      }
-      if (nextLines.length > 0) {
-        nextEntries.push({
-          pluginId: "active-memory",
-          lines: nextLines,
-        });
-      }
-      store[resolved.normalizedKey] = {
-        ...existing,
-        pluginDebugEntries: nextEntries.length > 0 ? nextEntries : undefined,
-      };
+    await params.api.runtime.agent.session.patchSessionEntry({
+      agentId,
+      sessionKey,
+      preserveActivity: true,
+      update: (existing) => {
+        const previousEntries = Array.isArray(existing.pluginDebugEntries)
+          ? existing.pluginDebugEntries
+          : [];
+        const nextEntries = previousEntries.filter(
+          (entry): entry is PluginDebugEntry =>
+            Boolean(entry) &&
+            typeof entry === "object" &&
+            typeof entry.pluginId === "string" &&
+            entry.pluginId !== "active-memory",
+        );
+        const nextLines: string[] = [];
+        if (params.statusLine) {
+          nextLines.push(params.statusLine);
+        }
+        if (debugLine) {
+          nextLines.push(debugLine);
+        }
+        if (nextLines.length > 0) {
+          nextEntries.push({
+            pluginId: "active-memory",
+            lines: nextLines,
+          });
+        }
+        return {
+          pluginDebugEntries: nextEntries.length > 0 ? nextEntries : undefined,
+        };
+      },
     });
   } catch (error) {
     params.api.logger.debug?.(

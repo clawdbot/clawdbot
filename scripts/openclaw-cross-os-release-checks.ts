@@ -13,6 +13,7 @@ import {
   readdirSync,
   realpathSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { mkdtempSync } from "node:fs";
@@ -786,78 +787,90 @@ async function runFreshLane(params) {
   const cleanup = [];
   try {
     const env = buildLaneEnv(lane, params.providerConfig, params.providerSecretValue);
-    logLanePhase(lane, "install-candidate");
-    await installTarballPackage({
-      lane,
-      env,
-      tgzPath: params.build.candidateTgz,
-      logPath: join(params.logsDir, "fresh-install.log"),
-      restoreBundledPluginPostinstall: false,
+    await runTimedLanePhase(lane, "install-candidate", async () => {
+      await installTarballPackage({
+        lane,
+        env,
+        tgzPath: params.build.candidateTgz,
+        logPath: join(params.logsDir, "fresh-install.log"),
+        restoreBundledPluginPostinstall: false,
+      });
     });
     const installed = readInstalledMetadata(lane.prefixDir);
     verifyInstalledCandidate(installed, params.build);
-    logLanePhase(lane, "run-bundled-plugin-postinstall");
-    await runBundledPluginPostinstall({
-      lane,
-      env,
-      logPath: join(params.logsDir, "fresh-install.log"),
+    await runTimedLanePhase(lane, "run-bundled-plugin-postinstall", async () => {
+      await runBundledPluginPostinstall({
+        lane,
+        env,
+        logPath: join(params.logsDir, "fresh-install.log"),
+      });
     });
 
     let browserOverrideImportStatus = "skipped";
     if (shouldRunWindowsInstalledBrowserOverrideImportSmoke()) {
-      logLanePhase(lane, "windows-browser-override-import");
-      browserOverrideImportStatus = await runInstalledBrowserOverrideImportSmoke({
+      browserOverrideImportStatus = await runTimedLanePhase(
         lane,
-        env,
-        prefixDir: lane.prefixDir,
-        logPath: join(params.logsDir, "fresh-windows-browser-override-import.log"),
-      });
+        "windows-browser-override-import",
+        async () =>
+          runInstalledBrowserOverrideImportSmoke({
+            lane,
+            env,
+            prefixDir: lane.prefixDir,
+            logPath: join(params.logsDir, "fresh-windows-browser-override-import.log"),
+          }),
+      );
     }
 
-    logLanePhase(lane, "onboard");
-    await runOnboard({
-      lane,
-      env,
-      providerConfig: params.providerConfig,
-      logPath: join(params.logsDir, "fresh-onboard.log"),
+    await runTimedLanePhase(lane, "onboard", async () => {
+      await runOnboard({
+        lane,
+        env,
+        providerConfig: params.providerConfig,
+        logPath: join(params.logsDir, "fresh-onboard.log"),
+      });
     });
 
-    logLanePhase(lane, "models-set");
-    await runModelsSet({
-      lane,
-      env,
-      providerConfig: params.providerConfig,
-      logPath: join(params.logsDir, "fresh-models-set.log"),
+    await runTimedLanePhase(lane, "models-set", async () => {
+      await runModelsSet({
+        lane,
+        env,
+        providerConfig: params.providerConfig,
+        logPath: join(params.logsDir, "fresh-models-set.log"),
+      });
     });
 
-    logLanePhase(lane, "start-gateway");
-    const gateway = await startGateway({
-      lane,
-      env,
-      logPath: join(params.logsDir, "fresh-gateway.log"),
-    });
+    const gateway = await runTimedLanePhase(lane, "start-gateway", async () =>
+      startGateway({
+        lane,
+        env,
+        logPath: join(params.logsDir, "fresh-gateway.log"),
+      }),
+    );
     cleanup.push(() => stopGateway(gateway));
 
-    logLanePhase(lane, "wait-gateway");
-    await waitForGateway({
-      lane,
-      env,
-      logPath: join(params.logsDir, "fresh-gateway-status.log"),
+    await runTimedLanePhase(lane, "wait-gateway", async () => {
+      await waitForGateway({
+        lane,
+        env,
+        logPath: join(params.logsDir, "fresh-gateway-status.log"),
+      });
     });
 
-    logLanePhase(lane, "dashboard");
-    await runDashboardSmoke({
-      lane,
-      logPath: join(params.logsDir, "fresh-dashboard.log"),
+    await runTimedLanePhase(lane, "dashboard", async () => {
+      await runDashboardSmoke({
+        lane,
+        logPath: join(params.logsDir, "fresh-dashboard.log"),
+      });
     });
 
-    logLanePhase(lane, "agent-turn");
-    const agent = await runAgentTurn({
-      lane,
-      env,
-      label: "fresh",
-      logPath: join(params.logsDir, "fresh-agent.log"),
-    });
+    const agent = await runTimedLanePhase(lane, "agent-turn", async () =>
+      runAgentTurn({
+        lane,
+        env,
+        label: "fresh",
+        logPath: join(params.logsDir, "fresh-agent.log"),
+      }),
+    );
 
     return {
       status: "pass",
@@ -867,6 +880,7 @@ async function runFreshLane(params) {
       gatewayPort: lane.gatewayPort,
       browserOverrideImportStatus,
       agentOutput: trimForSummary(agent.stdout),
+      phaseTimings: lane.phaseTimings,
     };
   } finally {
     await runCleanup(cleanup);
@@ -1503,6 +1517,7 @@ export function shouldSkipInstallerDaemonHealthCheck(platform = process.platform
 export function buildRealUpdateEnv(env) {
   const updateEnv = {
     ...env,
+    OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: "1",
     NODE_DISABLE_COMPILE_CACHE: "1",
   };
   delete updateEnv.OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL;
@@ -2202,6 +2217,7 @@ async function runInstalledAgentTurn(params) {
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     const sessionId = `cross-os-release-check-${params.label}-${Date.now()}-${attempt}`;
     try {
+      const logOffset = readLogFileSize(params.logPath);
       const result = await runInstalledCli({
         cliPath: params.cliPath,
         args: buildReleaseAgentTurnArgs(sessionId),
@@ -2210,8 +2226,12 @@ async function runInstalledAgentTurn(params) {
         logPath: params.logPath,
         timeoutMs: (CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS + 60) * 1000,
       });
-      if (!agentOutputHasExpectedOkMarker(result.stdout, { logPath: params.logPath })) {
+      const logText = readLogTextSince(params.logPath, logOffset);
+      if (!agentOutputHasExpectedOkMarker(result.stdout, { logText })) {
         throw new Error("Agent output did not contain the expected OK marker.");
+      }
+      if (agentTurnUsedEmbeddedFallback(result, { logText })) {
+        throw new Error("Agent turn used embedded fallback instead of gateway.");
       }
       return result;
     } catch (error) {
@@ -3014,6 +3034,7 @@ async function runAgentTurn(params) {
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     const sessionId = `cross-os-release-check-${params.label}-${Date.now()}-${attempt}`;
     try {
+      const logOffset = readLogFileSize(params.logPath);
       const result = await runOpenClaw({
         lane: params.lane,
         env: params.env,
@@ -3021,8 +3042,12 @@ async function runAgentTurn(params) {
         logPath: params.logPath,
         timeoutMs: (CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS + 60) * 1000,
       });
-      if (!agentOutputHasExpectedOkMarker(result.stdout, { logPath: params.logPath })) {
+      const logText = readLogTextSince(params.logPath, logOffset);
+      if (!agentOutputHasExpectedOkMarker(result.stdout, { logText })) {
         throw new Error("Agent output did not contain the expected OK marker.");
+      }
+      if (agentTurnUsedEmbeddedFallback(result, { logText })) {
+        throw new Error("Agent turn used embedded fallback instead of gateway.");
       }
       return result;
     } catch (error) {
@@ -3103,15 +3128,29 @@ function buildReleaseAgentTurnArgs(sessionId) {
 
 export function shouldRetryCrossOsAgentTurnError(error) {
   const message = error instanceof Error ? error.message : String(error);
-  return /Agent output did not contain the expected OK marker|model idle timeout|did not produce a response before the model idle timeout|gateway request timeout for agent|Command timed out|timed out and could not be terminated cleanly/u.test(
+  return /Agent output did not contain the expected OK marker|Agent turn used embedded fallback instead of gateway|model idle timeout|did not produce a response before the model idle timeout|gateway request timeout for agent|Command timed out|timed out and could not be terminated cleanly/u.test(
     message,
   );
+}
+
+export function agentTurnUsedEmbeddedFallback(result, options = {}) {
+  const logText =
+    typeof options.logText === "string"
+      ? options.logText
+      : typeof options.logPath === "string"
+        ? safeReadTextFile(options.logPath)
+        : "";
+  return /EMBEDDED FALLBACK:/u.test(`${result.stdout ?? ""}\n${result.stderr ?? ""}\n${logText}`);
 }
 
 export function agentOutputHasExpectedOkMarker(stdout, options = {}) {
   const payloadTexts = parseAgentPayloadTexts(stdout);
   if (payloadTexts.some((text) => text.trim() === "OK")) {
     return true;
+  }
+  if (typeof options.logText === "string") {
+    const logTexts = parseAgentPayloadTexts(options.logText);
+    return logTexts.some((text) => text.trim() === "OK");
   }
   if (typeof options.logPath !== "string") {
     return false;
@@ -3121,6 +3160,30 @@ export function agentOutputHasExpectedOkMarker(stdout, options = {}) {
     return logTexts.some((text) => text.trim() === "OK");
   } catch {
     return false;
+  }
+}
+
+function readLogFileSize(logPath) {
+  try {
+    return statSync(logPath).size;
+  } catch {
+    return 0;
+  }
+}
+
+function readLogTextSince(logPath, offsetBytes) {
+  try {
+    return readFileSync(logPath).subarray(offsetBytes).toString("utf8");
+  } catch {
+    return "";
+  }
+}
+
+function safeReadTextFile(logPath) {
+  try {
+    return readFileSync(logPath, "utf8");
+  } catch {
+    return "";
   }
 }
 

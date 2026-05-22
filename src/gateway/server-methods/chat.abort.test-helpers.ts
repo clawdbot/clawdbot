@@ -27,6 +27,7 @@ type ChatAbortTestContext = Record<string, unknown> & {
   chatDeltaSentAt: Map<string, number>;
   chatDeltaLastBroadcastLen: Map<string, number>;
   chatDeltaLastBroadcastText: Map<string, string>;
+  dedupe: Map<string, unknown>;
   agentDeltaSentAt: Map<string, number>;
   bufferedAgentEvents: Map<string, unknown>;
   chatAbortedRuns: Map<string, number>;
@@ -48,6 +49,7 @@ export function createChatAbortContext(
     chatDeltaSentAt: new Map(),
     chatDeltaLastBroadcastLen: new Map(),
     chatDeltaLastBroadcastText: new Map(),
+    dedupe: new Map(),
     agentDeltaSentAt: new Map(),
     bufferedAgentEvents: new Map(),
     chatAbortedRuns: new Map<string, number>(),

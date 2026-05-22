@@ -1372,6 +1372,29 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
     });
   });
 
+  it("falls back to context-engine compaction when native harness binding is recoverable", async () => {
+    maybeCompactAgentHarnessSessionMock.mockResolvedValueOnce({
+      ok: false,
+      compacted: false,
+      reason: "no codex app-server thread binding",
+      failure: { reason: "missing_thread_binding" },
+    });
+
+    const result = await compactEmbeddedPiSession(
+      wrappedCompactionArgs({
+        provider: "openai-codex",
+        model: "gpt-5.4",
+        agentHarnessId: "codex",
+        currentTokenCount: 333,
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.compacted).toBe(true);
+    expect(maybeCompactAgentHarnessSessionMock).toHaveBeenCalledTimes(1);
+    expect(contextEngineCompactMock).toHaveBeenCalledTimes(1);
+  });
+
   it("does not fire after_compaction when compaction fails", async () => {
     hookRunner.hasHooks.mockReturnValue(true);
     const sync = vi.fn(async () => {});

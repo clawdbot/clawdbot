@@ -1089,6 +1089,9 @@ export const ko: TranslationMap = {
     selectors: {
       agentFilter: "에이전트별로 세션 필터링",
       session: "Chat session",
+      sessionSearch: "세션 검색",
+      clearSessionSearch: "세션 검색 지우기",
+      loadMoreSessions: "세션 더 불러오기",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },

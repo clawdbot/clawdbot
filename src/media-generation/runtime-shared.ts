@@ -60,6 +60,21 @@ export function hasMediaNormalizationEntry<TValue extends MediaNormalizationValu
 
 const IMAGE_RESOLUTION_ORDER = ["1K", "2K", "4K"] as const;
 
+export function resolveMediaProviderDefaultTimeoutMs(
+  timeoutMs: number | undefined,
+): number | undefined {
+  return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
+    ? Math.floor(timeoutMs)
+    : undefined;
+}
+
+export function resolveMediaProviderRequestTimeoutMs(params: {
+  timeoutMs?: number;
+  providerDefaultTimeoutMs?: number;
+}): number | undefined {
+  return params.timeoutMs ?? resolveMediaProviderDefaultTimeoutMs(params.providerDefaultTimeoutMs);
+}
+
 type CapabilityProviderCandidate = {
   id: string;
   aliases?: readonly string[];

@@ -417,6 +417,94 @@ describe("getApiKeyForModel", () => {
     );
   });
 
+  it("uses the config default agent dir when resolving provider profiles", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-auth-agent-dir-",
+        agentEnv: "clear",
+        env: {
+          XAI_API_KEY: undefined,
+        },
+      },
+      async (state) => {
+        await state.writeAuthProfiles(
+          {
+            version: 1,
+            profiles: {
+              "xai:default": {
+                type: "api_key",
+                provider: "xai",
+                key: "process-default-key",
+              },
+            },
+          },
+          "main",
+        );
+        await state.writeAuthProfiles(
+          {
+            version: 1,
+            profiles: {
+              "xai:default": {
+                type: "api_key",
+                provider: "xai",
+                key: "configured-agent-key",
+              },
+            },
+          },
+          "configured",
+        );
+
+        const cfg: OpenClawConfig = {
+          agents: {
+            list: [
+              {
+                id: "configured",
+                default: true,
+                agentDir: state.agentDir("configured"),
+              },
+            ],
+          },
+        };
+
+        const resolved = await resolveApiKeyForProvider({ provider: "xai", cfg });
+        expect(resolved.apiKey).toBe("configured-agent-key");
+        expect(resolved.source).toBe("profile:xai:default");
+      },
+    );
+  });
+
+  it("reports the config default agent dir when provider auth is missing", async () => {
+    await withOpenClawTestState(
+      {
+        layout: "state-only",
+        prefix: "openclaw-auth-missing-agent-dir-",
+        agentEnv: "clear",
+        env: {
+          XAI_API_KEY: undefined,
+        },
+      },
+      async (state) => {
+        const configuredAgentDir = state.agentDir("configured");
+        const cfg: OpenClawConfig = {
+          agents: {
+            list: [
+              {
+                id: "configured",
+                default: true,
+                agentDir: configuredAgentDir,
+              },
+            ],
+          },
+        };
+
+        await expect(resolveApiKeyForProvider({ provider: "xai", cfg })).rejects.toThrow(
+          `agentDir: ${configuredAgentDir}`,
+        );
+      },
+    );
+  });
+
   it("suggests openai-codex when only Codex OAuth is configured", async () => {
     await withOpenClawTestState(
       {
@@ -661,27 +749,27 @@ describe("getApiKeyForModel", () => {
 
     try {
       await withEnvAsync({ WORKSPACE_CLOUD_CREDENTIALS: credentialsPath }, async () => {
-        expect(
+        await expect(
           hasAuthForModelProvider({
             provider: "workspace-cloud",
             cfg: { plugins: { allow: ["workspace-cloud"] } },
             store,
           }),
-        ).toBe(true);
-        expect(
+        ).resolves.toBe(true);
+        await expect(
           hasAuthForModelProvider({
             provider: "workspace-cloud",
             cfg: { plugins: {} },
             store,
           }),
-        ).toBe(false);
+        ).resolves.toBe(false);
       });
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
 
-  it("reuses runtime auth availability for provider auth checks", () => {
+  it("reuses runtime auth availability for provider auth checks", async () => {
     const store = { version: 1 as const, profiles: {} };
     const localNoKeyConfig = {
       models: {
@@ -700,30 +788,30 @@ describe("getApiKeyForModel", () => {
       },
     } as OpenClawConfig;
 
-    expect(
+    await expect(
       hasAuthForModelProvider({
         provider: "amazon-bedrock",
         cfg: {} as OpenClawConfig,
         env: {},
         store,
       }),
-    ).toBe(true);
-    expect(
+    ).resolves.toBe(true);
+    await expect(
       hasAuthForModelProvider({
         provider: "vllm",
         cfg: localNoKeyConfig,
         env: {},
         store,
       }),
-    ).toBe(true);
-    expect(
+    ).resolves.toBe(true);
+    await expect(
       hasAuthForModelProvider({
         provider: "remote",
         cfg: localNoKeyConfig,
         env: {},
         store,
       }),
-    ).toBe(false);
+    ).resolves.toBe(false);
   });
 
   it("hasAvailableAuthForProvider('google') accepts GOOGLE_API_KEY fallback", async () => {

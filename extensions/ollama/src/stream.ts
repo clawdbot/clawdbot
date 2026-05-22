@@ -534,6 +534,7 @@ interface OllamaTool {
 }
 
 interface OllamaToolCall {
+  id?: string;
   function: {
     name: string;
     arguments: Record<string, unknown> | string;
@@ -789,6 +790,10 @@ type OllamaToolCallNameOptions = {
   availableToolNames?: ReadonlySet<string>;
 };
 
+function readOllamaToolCallId(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
 function extractToolCalls(
   content: unknown,
   options: OllamaToolCallNameOptions = {},
@@ -800,14 +805,18 @@ function extractToolCalls(
   const result: OllamaToolCall[] = [];
   for (const part of parts) {
     if (part.type === "toolCall") {
+      const id = readOllamaToolCallId(part.id);
       result.push({
+        ...(id ? { id } : {}),
         function: {
           name: normalizeOllamaToolCallName(part.name, options),
           arguments: ensureArgsObject(part.arguments),
         },
       });
     } else if (part.type === "tool_use") {
+      const id = readOllamaToolCallId(part.id);
       result.push({
+        ...(id ? { id } : {}),
         function: {
           name: normalizeOllamaToolCallName(part.name, options),
           arguments: ensureArgsObject(part.input),
@@ -952,7 +961,7 @@ export function buildAssistantMessage(
     for (const toolCall of toolCalls) {
       content.push({
         type: "toolCall",
-        id: `ollama_call_${randomUUID()}`,
+        id: readOllamaToolCallId(toolCall.id) ?? `ollama_call_${randomUUID()}`,
         name: normalizeOllamaToolCallName(toolCall.function.name, options),
         arguments: normalizeOllamaToolCallArguments(toolCall.function.arguments),
       });

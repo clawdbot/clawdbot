@@ -2,7 +2,7 @@
 summary: "Grok web search via xAI web-grounded responses"
 read_when:
   - You want to use Grok for web_search
-  - You need an XAI_API_KEY for web search
+  - You want to use xAI OAuth or an XAI_API_KEY for web search
 title: "Grok search"
 ---
 
@@ -10,10 +10,11 @@ OpenClaw supports Grok as a `web_search` provider, using xAI web-grounded
 responses to produce AI-synthesized answers backed by live search results
 with citations.
 
-The same xAI API key can also power the built-in `x_search` tool for X
-(formerly Twitter) post search and the `code_execution` tool. If you store the
-key under `plugins.entries.xai.config.webSearch.apiKey`, OpenClaw now reuses it
-as a fallback for the bundled xAI model provider too.
+Grok web search prefers your existing xAI OAuth sign-in when one is available.
+If no OAuth profile exists, the same xAI API key can also power the built-in
+`x_search` tool for X (formerly Twitter) post search and the `code_execution`
+tool. If you store the key under `plugins.entries.xai.config.webSearch.apiKey`,
+OpenClaw reuses it as a fallback for the bundled xAI model provider too.
 
 For post-level X metrics such as reposts, replies, bookmarks, or views, prefer
 `x_search` with the exact post URL or status ID instead of a broad search
@@ -26,8 +27,10 @@ If you choose **Grok** during:
 - `openclaw onboard`
 - `openclaw configure --section web`
 
-OpenClaw can show a separate follow-up step to enable `x_search` with the same
-`XAI_API_KEY`. That follow-up:
+OpenClaw can use an existing xAI OAuth profile without prompting for a separate
+web-search key. If OAuth is not available, it falls back to xAI API-key setup.
+OpenClaw can also show a separate follow-up step to enable `x_search` with the
+same xAI credential. That follow-up:
 
 - only appears after you choose Grok for `web_search`
 - is not a separate top-level web-search provider choice
@@ -35,11 +38,22 @@ OpenClaw can show a separate follow-up step to enable `x_search` with the same
 
 If you skip it, you can enable or change `x_search` later in config.
 
-## Get an API key
+## Sign in or get an API key
 
 <Steps>
-  <Step title="Create a key">
-    Get an API key from [xAI](https://console.x.ai/).
+  <Step title="Use xAI OAuth">
+    If you already signed in with xAI during onboarding or model auth, choose
+    Grok as the `web_search` provider. No separate API key is required:
+
+    ```bash
+    openclaw onboard --auth-choice xai-oauth
+    openclaw config set tools.web.search.provider grok
+    ```
+
+  </Step>
+  <Step title="Use an API key fallback">
+    Get an API key from [xAI](https://console.x.ai/) when OAuth is unavailable
+    or you intentionally want key-backed web-search config.
   </Step>
   <Step title="Store the key">
     Set `XAI_API_KEY` in the Gateway environment, or configure via:
@@ -60,7 +74,7 @@ If you skip it, you can enable or change `x_search` later in config.
       xai: {
         config: {
           webSearch: {
-            apiKey: "xai-...", // optional if XAI_API_KEY is set
+            apiKey: "xai-...", // optional if xAI OAuth or XAI_API_KEY is available
             baseUrl: "https://api.x.ai/v1", // optional Responses API proxy/base URL override
           },
         },
@@ -77,8 +91,10 @@ If you skip it, you can enable or change `x_search` later in config.
 }
 ```
 
-**Environment alternative:** set `XAI_API_KEY` in the Gateway environment.
-For a gateway install, put it in `~/.openclaw/.env`.
+**Credential alternatives:** sign in with `openclaw models auth login
+--provider xai --method oauth`, set `XAI_API_KEY` in the Gateway environment,
+or store `plugins.entries.xai.config.webSearch.apiKey`. For a gateway install,
+put env vars in `~/.openclaw/.env`.
 
 ## How it works
 

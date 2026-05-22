@@ -2,13 +2,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AnyAgentTool } from "./tools/common.js";
 
 const mocks = vi.hoisted(() => {
-  const stubTool = (name: string, ownerOnly = false) =>
+  const stubTool = (name: string) =>
     ({
       name,
       label: name,
       displaySummary: name,
       description: name,
-      ownerOnly,
       parameters: { type: "object", properties: {} },
       execute: vi.fn(),
     }) satisfies AnyAgentTool;
@@ -22,7 +21,7 @@ const mocks = vi.hoisted(() => {
 vi.mock("./openclaw-tools.js", () => ({
   createOpenClawTools: (options: unknown) => {
     mocks.createOpenClawToolsOptions(options);
-    return [mocks.stubTool("cron", true)];
+    return [mocks.stubTool("cron")];
   },
 }));
 
@@ -41,23 +40,20 @@ describe("createOpenClawCodingTools cron scope", () => {
     mocks.createOpenClawToolsOptions.mockClear();
   });
 
-  it("scopes the cron owner-only runtime grant to self-removal", () => {
+  it("scopes cron-triggered jobs to self-removal", () => {
     const tools = createOpenClawCodingTools({
       trigger: "cron",
       jobId: "job-current",
-      senderIsOwner: false,
-      ownerOnlyToolAllowlist: ["cron"],
     });
 
     expect(tools.map((tool) => tool.name)).toContain("cron");
     expect(firstOpenClawToolsOptions()?.cronSelfRemoveOnlyJobId).toBe("job-current");
   });
 
-  it("does not scope ordinary owner cron sessions", () => {
+  it("does not scope non-cron sessions", () => {
     createOpenClawCodingTools({
-      trigger: "cron",
+      trigger: "user",
       jobId: "job-current",
-      senderIsOwner: true,
     });
 
     expect(firstOpenClawToolsOptions()?.cronSelfRemoveOnlyJobId).toBeUndefined();

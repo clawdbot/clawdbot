@@ -1113,27 +1113,6 @@ async function readLastMessagePreviewFromOpenTranscriptAsync(params: {
   return null;
 }
 
-export function readLastMessagePreviewFromTranscript(
-  sessionId: string,
-  storePath: string | undefined,
-  sessionFile?: string,
-  agentId?: string,
-): string | null {
-  const filePath = findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
-  if (!filePath) {
-    return null;
-  }
-
-  return withOpenTranscriptFd(filePath, (fd) => {
-    const stat = fs.fstatSync(fd);
-    const size = stat.size;
-    if (size === 0) {
-      return null;
-    }
-    return readLastMessagePreviewFromOpenTranscript({ fd, size });
-  });
-}
-
 type SessionTranscriptUsageSnapshot = {
   modelProvider?: string;
   model?: string;

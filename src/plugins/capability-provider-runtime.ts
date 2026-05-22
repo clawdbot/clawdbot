@@ -25,6 +25,7 @@ import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js
 import type { PluginRegistry } from "./registry-types.js";
 
 type CapabilityProviderRegistryKey =
+  | "embeddingProviders"
   | "memoryEmbeddingProviders"
   | "speechProviders"
   | "realtimeTranscriptionProviders"
@@ -35,6 +36,7 @@ type CapabilityProviderRegistryKey =
   | "musicGenerationProviders";
 
 type CapabilityContractKey =
+  | "embeddingProviders"
   | "memoryEmbeddingProviders"
   | "speechProviders"
   | "realtimeTranscriptionProviders"
@@ -56,6 +58,7 @@ const capabilityProviderSnapshotCache: ConfigScopedRuntimeCache<CapabilityProvid
   new WeakMap();
 
 const CAPABILITY_CONTRACT_KEY: Record<CapabilityProviderRegistryKey, CapabilityContractKey> = {
+  embeddingProviders: "embeddingProviders",
   memoryEmbeddingProviders: "memoryEmbeddingProviders",
   speechProviders: "speechProviders",
   realtimeTranscriptionProviders: "realtimeTranscriptionProviders",

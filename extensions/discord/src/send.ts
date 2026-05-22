@@ -17,6 +17,7 @@ export {
   createScheduledEventDiscord,
   resolveEventCoverImage,
   fetchChannelInfoDiscord,
+  fetchGuildInfoDiscord,
   fetchMemberInfoDiscord,
   fetchRoleInfoDiscord,
   fetchVoiceStatusDiscord,

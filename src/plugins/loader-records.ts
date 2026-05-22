@@ -56,6 +56,7 @@ export function createPluginRecord(params: {
     channelIds: [...(params.channelIds ?? [])],
     cliBackendIds: [],
     providerIds: [...(params.providerIds ?? [])],
+    embeddingProviderIds: [...(params.contracts?.embeddingProviders ?? [])],
     speechProviderIds: [...(params.contracts?.speechProviders ?? [])],
     realtimeTranscriptionProviderIds: [...(params.contracts?.realtimeTranscriptionProviders ?? [])],
     realtimeVoiceProviderIds: [...(params.contracts?.realtimeVoiceProviders ?? [])],

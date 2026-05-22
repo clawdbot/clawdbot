@@ -56,6 +56,16 @@ const hasKeyInEnv = vi.hoisted(() =>
 const listConfiguredWebSearchProviders = vi.hoisted(() =>
   vi.fn<(params?: { config?: OpenClawConfig }) => PluginWebSearchProviderEntry[]>(() => []),
 );
+const hasAuthProfileForProvider = vi.hoisted(() =>
+  vi.fn<
+    (params: {
+      provider: string;
+      agentDir?: string;
+      includeExternalCli?: boolean;
+      type?: string;
+    }) => boolean
+  >(() => false),
+);
 
 vi.mock("../commands/onboard-helpers.js", () => ({
   detectBrowserOpenSupport: vi.fn(async () => ({ ok: false })),
@@ -97,6 +107,10 @@ vi.mock("../commands/onboard-search.js", () => ({
   hasExistingKey,
   hasKeyInEnv,
   resolveExistingKey,
+}));
+
+vi.mock("../agents/tools/model-config.helpers.js", () => ({
+  hasAuthProfileForProvider,
 }));
 
 vi.mock("../web-search/runtime.js", () => ({
@@ -165,7 +179,14 @@ function createRuntime(): RuntimeEnv {
 function createWebSearchProviderEntry(
   provider: Pick<
     PluginWebSearchProviderEntry,
-    "id" | "label" | "hint" | "envVars" | "placeholder" | "signupUrl" | "credentialPath"
+    | "id"
+    | "label"
+    | "hint"
+    | "envVars"
+    | "authProviderId"
+    | "placeholder"
+    | "signupUrl"
+    | "credentialPath"
   >,
 ): PluginWebSearchProviderEntry {
   return {
@@ -297,6 +318,8 @@ describe("finalizeSetupWizard", () => {
     hasKeyInEnv.mockReturnValue(false);
     listConfiguredWebSearchProviders.mockReset();
     listConfiguredWebSearchProviders.mockReturnValue([]);
+    hasAuthProfileForProvider.mockReset();
+    hasAuthProfileForProvider.mockReturnValue(false);
   });
 
   it("resolves gateway password SecretRef for probe but omits auth from TUI hatch", async () => {
@@ -714,6 +737,67 @@ describe("finalizeSetupWizard", () => {
       prompter,
       "Web search is enabled, so your agent can look things up online when needed.",
       "Web search",
+    );
+  });
+
+  it("reports OAuth-backed web search as enabled without an API key", async () => {
+    listConfiguredWebSearchProviders.mockReturnValue([
+      createWebSearchProviderEntry({
+        id: "grok",
+        label: "Grok (xAI)",
+        hint: "Uses xAI OAuth or API key",
+        envVars: ["XAI_API_KEY"],
+        authProviderId: "xai",
+        placeholder: "xai-...",
+        signupUrl: "https://console.x.ai/",
+        credentialPath: "plugins.entries.xai.config.webSearch.apiKey",
+      }),
+    ]);
+    hasAuthProfileForProvider.mockImplementation(
+      ({ provider, type }) => provider === "xai" && (!type || type === "oauth"),
+    );
+
+    const prompter = createLaterPrompter();
+
+    await finalizeSetupWizard(
+      createAdvancedFinalizeArgs({
+        nextConfig: {
+          tools: {
+            web: {
+              search: {
+                provider: "grok",
+                enabled: true,
+              },
+            },
+          },
+        },
+        prompter,
+      }),
+    );
+
+    expectNoteContains(
+      prompter,
+      "Web search is enabled, so your agent can look things up online when needed.",
+      "Web search",
+    );
+    expectNoteContains(prompter, "Credential: existing xAI OAuth sign-in.", "Web search");
+    expect(
+      vi
+        .mocked(prompter.note)
+        .mock.calls.some(
+          ([message, title]) => title === "Web search" && message.includes("no API key"),
+        ),
+    ).toBe(false);
+    expect(hasAuthProfileForProvider).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "xai",
+      }),
+    );
+    expect(hasAuthProfileForProvider).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "xai",
+        type: "oauth",
+      }),
     );
   });
 

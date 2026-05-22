@@ -1082,8 +1082,6 @@ function queueTaskSystemEvent(task: TaskRecord, text: string) {
     sessionKey: ownerKey,
     contextKey: `task:${task.taskId}`,
     deliveryContext: owner.requesterOrigin,
-    forceSenderIsOwnerFalse: true,
-    trusted: false,
   });
   requestHeartbeat({
     source: "background-task",
@@ -1108,8 +1106,6 @@ function queueBlockedTaskFollowup(task: TaskRecord) {
     sessionKey: ownerKey,
     contextKey: `task:${task.taskId}:blocked-followup`,
     deliveryContext: owner.requesterOrigin,
-    forceSenderIsOwnerFalse: true,
-    trusted: false,
   });
   requestHeartbeat({
     source: "background-task-blocked",
@@ -2089,6 +2085,34 @@ export function listTasksForOwnerKey(ownerKey: string): TaskRecord[] {
   if (!key) {
     return [];
   }
+  return listTasksFromIndex(taskIdsByOwnerKey, key);
+}
+
+export function listFreshTasksForOwnerKey(ownerKey: string): TaskRecord[] {
+  ensureTaskRegistryReady();
+  const key = normalizeOptionalString(ownerKey);
+  if (!key) {
+    return [];
+  }
+  const store = getTaskRegistryStore();
+  if (store.listTasksForOwnerKey) {
+    try {
+      const merged = new Map<string, TaskRecord>();
+      for (const task of store.listTasksForOwnerKey(key)) {
+        merged.set(task.taskId, cloneTaskRecord(normalizeTaskTimestamps(task)));
+      }
+      return [...merged.values()]
+        .map((task, insertionIndex) => Object.assign({}, task, { insertionIndex }))
+        .toSorted(compareTasksNewestFirst)
+        .map(({ insertionIndex: _, ...task }) => task);
+    } catch (error) {
+      log.warn("Failed to read fresh owner task registry records", {
+        ownerKey: key,
+        error,
+      });
+    }
+  }
+
   return listTasksFromIndex(taskIdsByOwnerKey, key);
 }
 

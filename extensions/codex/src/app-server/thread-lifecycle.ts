@@ -29,6 +29,7 @@ import {
   type CodexSandboxPolicy,
   type CodexThreadResumeParams,
   type CodexThreadStartParams,
+  type CodexTurnEnvironmentParams,
   type CodexTurnStartParams,
   type JsonObject,
   type CodexUserInput,
@@ -96,6 +97,7 @@ export async function startOrResumeThread(params: {
   userMcpServersEnabled?: boolean;
   mcpServersFingerprint?: string;
   mcpServersFingerprintEvaluated?: boolean;
+  environmentSelection?: CodexTurnEnvironmentParams[];
   pluginThreadConfig?: CodexPluginThreadConfigProvider;
   contextEngineProjection?: CodexContextEngineThreadBootstrapProjection;
 }): Promise<CodexAppServerThreadLifecycleBinding> {
@@ -111,6 +113,9 @@ export async function startOrResumeThread(params: {
           agentId: params.agentId ?? params.params.agentId,
         });
   const userMcpServersFingerprint = fingerprintUserMcpServersConfigPatch(userMcpServersConfigPatch);
+  const environmentSelectionFingerprint = fingerprintEnvironmentSelection(
+    params.environmentSelection,
+  );
   let binding = await readCodexAppServerBinding(params.params.sessionFile, {
     authProfileStore: params.params.authProfileStore,
     agentDir: params.params.agentDir,
@@ -157,6 +162,19 @@ export async function startOrResumeThread(params: {
     embeddedAgentLog.debug("codex app-server user MCP config changed; starting a new thread", {
       threadId: binding.threadId,
     });
+    await clearCodexAppServerBinding(params.params.sessionFile);
+    binding = undefined;
+  }
+  if (
+    binding?.threadId &&
+    binding.environmentSelectionFingerprint !== environmentSelectionFingerprint
+  ) {
+    embeddedAgentLog.debug(
+      "codex app-server environment selection changed; starting a new thread",
+      {
+        threadId: binding.threadId,
+      },
+    );
     await clearCodexAppServerBinding(params.params.sessionFile);
     binding = undefined;
   }
@@ -296,6 +314,7 @@ export async function startOrResumeThread(params: {
             pluginAppsInputFingerprint: binding.pluginAppsInputFingerprint,
             pluginAppPolicyContext: binding.pluginAppPolicyContext,
             contextEngine: contextEngineBinding,
+            environmentSelectionFingerprint,
             createdAt: binding.createdAt,
           },
           {
@@ -329,6 +348,7 @@ export async function startOrResumeThread(params: {
           pluginAppsInputFingerprint: binding.pluginAppsInputFingerprint,
           pluginAppPolicyContext: binding.pluginAppPolicyContext,
           contextEngine: contextEngineBinding,
+          environmentSelectionFingerprint,
           lifecycle: { action: "resumed" },
         };
       } catch (error) {
@@ -363,6 +383,7 @@ export async function startOrResumeThread(params: {
         config,
         nativeCodeModeEnabled: params.nativeCodeModeEnabled,
         nativeCodeModeOnlyEnabled: params.nativeCodeModeOnlyEnabled,
+        environmentSelection: params.environmentSelection,
       }),
     ),
   );
@@ -392,6 +413,7 @@ export async function startOrResumeThread(params: {
         pluginAppsInputFingerprint: pluginThreadConfig?.inputFingerprint,
         pluginAppPolicyContext: pluginThreadConfig?.policyContext,
         contextEngine: contextEngineBinding,
+        environmentSelectionFingerprint,
         createdAt,
       },
       {
@@ -427,6 +449,7 @@ export async function startOrResumeThread(params: {
     pluginAppsInputFingerprint: pluginThreadConfig?.inputFingerprint,
     pluginAppPolicyContext: pluginThreadConfig?.policyContext,
     contextEngine: contextEngineBinding,
+    environmentSelectionFingerprint,
     createdAt,
     updatedAt: createdAt,
     lifecycle: {
@@ -563,6 +586,7 @@ export function buildThreadStartParams(
     config?: JsonObject;
     nativeCodeModeEnabled?: boolean;
     nativeCodeModeOnlyEnabled?: boolean;
+    environmentSelection?: CodexTurnEnvironmentParams[];
   },
 ): CodexThreadStartParams {
   const modelProvider = resolveCodexAppServerModelProvider({
@@ -585,7 +609,7 @@ export function buildThreadStartParams(
       nativeCodeModeEnabled: options.nativeCodeModeEnabled,
       nativeCodeModeOnlyEnabled: options.nativeCodeModeOnlyEnabled,
     }),
-    ...(options.nativeCodeModeEnabled === false ? { environments: [] } : {}),
+    ...resolveCodexThreadEnvironmentSelection(options),
     developerInstructions:
       options.developerInstructions ??
       buildDeveloperInstructions(params, { dynamicTools: options.dynamicTools }),
@@ -691,6 +715,7 @@ export function buildTurnStartParams(
     appServer: CodexAppServerRuntimeOptions;
     promptText?: string;
     sandboxPolicy?: CodexSandboxPolicy;
+    environmentSelection?: CodexTurnEnvironmentParams[];
     heartbeatCollaborationInstructions?: string;
   },
 ): CodexTurnStartParams {
@@ -705,10 +730,24 @@ export function buildTurnStartParams(
     model: params.modelId,
     ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
     effort: resolveReasoningEffort(params.thinkLevel, params.modelId),
+    ...(options.environmentSelection ? { environments: options.environmentSelection } : {}),
     collaborationMode: buildTurnCollaborationMode(params, {
       heartbeatCollaborationInstructions: options.heartbeatCollaborationInstructions,
     }),
   };
+}
+
+function resolveCodexThreadEnvironmentSelection(options: {
+  nativeCodeModeEnabled?: boolean;
+  environmentSelection?: CodexTurnEnvironmentParams[];
+}): Pick<CodexThreadStartParams, "environments"> {
+  if (options.nativeCodeModeEnabled === false) {
+    return { environments: [] };
+  }
+  if (options.environmentSelection) {
+    return { environments: options.environmentSelection };
+  }
+  return {};
 }
 
 type CodexTurnCollaborationMode = NonNullable<CodexTurnStartParams["collaborationMode"]>;
@@ -785,6 +824,12 @@ function fingerprintUserMcpServersConfigPatch(
   configPatch: JsonObject | undefined,
 ): string | undefined {
   return configPatch ? JSON.stringify(stabilizeJsonValue(configPatch)) : undefined;
+}
+
+function fingerprintEnvironmentSelection(
+  environments: CodexTurnEnvironmentParams[] | undefined,
+): string | undefined {
+  return environments ? JSON.stringify(environments.map(stabilizeJsonValue)) : undefined;
 }
 
 function fingerprintDynamicToolSpec(tool: JsonValue): JsonValue {

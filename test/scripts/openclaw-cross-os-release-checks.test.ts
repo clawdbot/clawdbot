@@ -15,6 +15,7 @@ import { describe, expect, it } from "vitest";
 import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mjs";
 import {
   agentOutputHasExpectedOkMarker,
+  agentTurnUsedEmbeddedFallback,
   buildCrossOsReleaseSmokePluginAllowlist,
   buildPackagedUpgradeUpdateArgs,
   buildReleaseOnboardArgs,
@@ -107,6 +108,18 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(CROSS_OS_COMMAND_HEARTBEAT_SECONDS).toBeLessThanOrEqual(60);
   });
 
+  it("records packaged-fresh phase timings for release-check summaries", () => {
+    const source = readFileSync("scripts/openclaw-cross-os-release-checks.ts", "utf8");
+    const freshLaneSource = source.slice(
+      source.indexOf("async function runFreshLane"),
+      source.indexOf("async function runUpgradeLane"),
+    );
+
+    expect(freshLaneSource).toContain('runTimedLanePhase(lane, "install-candidate"');
+    expect(freshLaneSource).toContain('runTimedLanePhase(lane, "agent-turn"');
+    expect(freshLaneSource).toContain("phaseTimings: lane.phaseTimings");
+  });
+
   it("accepts OK agent output from the captured log when stdout is empty", () => {
     const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-agent-output-"));
     try {
@@ -151,6 +164,40 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         new Error("Command timed out and could not be terminated cleanly"),
       ),
     ).toBe(true);
+    expect(
+      shouldRetryCrossOsAgentTurnError(
+        new Error("Agent turn used embedded fallback instead of gateway."),
+      ),
+    ).toBe(true);
+  });
+
+  it("detects embedded fallback agent turns as non-gateway proof", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-cross-os-agent-fallback-"));
+    const logPath = join(dir, "agent.log");
+    expect(
+      agentTurnUsedEmbeddedFallback({
+        stdout: JSON.stringify({ payloads: [{ text: "OK" }] }),
+        stderr: "EMBEDDED FALLBACK: Gateway agent failed; running embedded agent: gateway closed",
+      }),
+    ).toBe(true);
+    expect(
+      agentTurnUsedEmbeddedFallback({
+        stdout: JSON.stringify({ payloads: [{ text: "OK" }] }),
+        stderr: "",
+      }),
+    ).toBe(false);
+    expect(
+      agentTurnUsedEmbeddedFallback(
+        { stdout: "", stderr: "" },
+        { logText: 'EMBEDDED FALLBACK: Gateway agent failed\n{"payloads":[{"text":"OK"}]}' },
+      ),
+    ).toBe(true);
+    try {
+      writeFileSync(logPath, "EMBEDDED FALLBACK: Gateway agent failed\n");
+      expect(agentTurnUsedEmbeddedFallback({ stdout: "", stderr: "" }, { logPath })).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("skips optional live agent turns only for model availability failures", () => {
@@ -753,6 +800,7 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       }),
     ).toEqual({
       FOO: "bar",
+      OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: "1",
       NODE_DISABLE_COMPILE_CACHE: "1",
     });
   });

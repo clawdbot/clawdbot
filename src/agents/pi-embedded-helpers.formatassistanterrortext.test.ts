@@ -342,10 +342,17 @@ describe("formatAssistantErrorText", () => {
     );
   });
 
+  it("returns re-authentication copy for HTML provider 401 auth failures", () => {
+    const msg = makeAssistantError("401 <!DOCTYPE html><html><body>Unauthorized</body></html>");
+    expect(formatAssistantErrorText(msg)).toBe(
+      "Authentication failed at the provider. Re-authenticate and verify your provider credentials and account access.",
+    );
+  });
+
   it("returns an HTML-403 auth message for HTML provider auth failures", () => {
     const msg = makeAssistantError("403 <!DOCTYPE html><html><body>Access denied</body></html>");
     expect(formatAssistantErrorText(msg)).toBe(
-      "Authentication failed with an HTML 403 response from the provider. Re-authenticate and verify your provider account access.",
+      "Authentication failed at the provider. Re-authenticate and verify your provider credentials and account access.",
     );
   });
 

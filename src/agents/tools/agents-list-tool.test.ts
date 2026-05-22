@@ -75,10 +75,66 @@ describe("agents_list tool", () => {
     });
   });
 
+  it("does not advertise stale allowlist-only targets as spawnable agents", async () => {
+    loadConfigMock.mockReturnValue({
+      agents: {
+        list: [
+          {
+            id: "main",
+            default: true,
+            subagents: { allowAgents: ["stale"] },
+          },
+        ],
+      },
+    } satisfies OpenClawConfig);
+
+    const result = await createAgentsListTool({ agentSessionKey: "agent:main:main" }).execute(
+      "call",
+      {},
+    );
+    const details = result.details as AgentListDetails;
+
+    expect(details).toStrictEqual({
+      requester: "main",
+      allowAny: false,
+      agents: [],
+    });
+  });
+
   it("returns requester as the only target when no subagent allowlist is configured", async () => {
     loadConfigMock.mockReturnValue({
       agents: {
         list: [{ id: "main", default: true }, { id: "codex" }],
+      },
+    } satisfies OpenClawConfig);
+
+    const result = await createAgentsListTool({ agentSessionKey: "agent:main:main" }).execute(
+      "call",
+      {},
+    );
+    const details = result.details as AgentListDetails;
+
+    expect(details).toStrictEqual({
+      requester: "main",
+      allowAny: false,
+      agents: [
+        {
+          id: "main",
+          name: undefined,
+          configured: true,
+          model: undefined,
+          agentRuntime: { id: "codex", source: "implicit" },
+        },
+      ],
+    });
+  });
+
+  it("uses the implicit default agent as a configured target", async () => {
+    loadConfigMock.mockReturnValue({
+      agents: {
+        defaults: {
+          subagents: { allowAgents: ["main"] },
+        },
       },
     } satisfies OpenClawConfig);
 

@@ -1,4 +1,8 @@
 import {
+  readCodexNotificationThreadId,
+  readCodexNotificationTurnId,
+} from "./app-server/notification-correlation.js";
+import {
   isJsonObject,
   type CodexServerNotification,
   type JsonObject,
@@ -51,7 +55,7 @@ export function createCodexConversationTurnCollector(threadId: string) {
 
   const handleNotification = (notification: CodexServerNotification) => {
     const params = isJsonObject(notification.params) ? notification.params : undefined;
-    if (!params || readString(params, "threadId") !== threadId) {
+    if (!params || readCodexNotificationThreadId(params) !== threadId) {
       return;
     }
     if (!turnId) {
@@ -151,7 +155,7 @@ function isNotificationForTurn(
   threadId: string,
   turnId: string | undefined,
 ): boolean {
-  if (readString(params, "threadId") !== threadId) {
+  if (readCodexNotificationThreadId(params) !== threadId) {
     return false;
   }
   if (!turnId) {
@@ -166,7 +170,7 @@ function isNotificationForTurn(
 }
 
 function readNotificationTurnId(params: JsonObject): string | undefined {
-  return readString(params, "turnId") ?? readString(readRecord(params.turn), "id");
+  return readCodexNotificationTurnId(params);
 }
 
 function readRecord(value: unknown): Record<string, unknown> | undefined {

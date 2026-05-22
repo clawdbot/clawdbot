@@ -116,6 +116,8 @@ export function createOpenClawTools(
     allowMediaInvokeCommands?: boolean;
     /** Explicit agent ID override for cron/hook sessions. */
     requesterAgentIdOverride?: string;
+    /** Trusted sender identity bit for channel action auth. */
+    senderIsOwner?: boolean;
     /** Restrict the cron tool to self-removing this active cron job. */
     cronSelfRemoveOnlyJobId?: string;
     /** Require explicit message targets (no implicit last-route sends). */
@@ -143,8 +145,6 @@ export function createOpenClawTools(
     requesterSenderId?: string | null;
     /** Auth profiles already loaded for this run; used for prompt-time tool availability. */
     authProfileStore?: AuthProfileStore;
-    /** Whether the requesting sender is an owner. */
-    senderIsOwner?: boolean;
     /** Ephemeral session UUID — regenerated on /new and /reset. */
     sessionId?: string;
     /**
@@ -231,6 +231,7 @@ export function createOpenClawTools(
         workspaceDir,
         sandbox,
         fsPolicy: options?.fsPolicy,
+        onAsyncTaskStarted: options?.onYield,
       })
     : null;
   options?.recordToolPrepStage?.("openclaw-tools:image-generate-tool");
@@ -244,6 +245,7 @@ export function createOpenClawTools(
         workspaceDir,
         sandbox,
         fsPolicy: options?.fsPolicy,
+        onAsyncTaskStarted: options?.onYield,
       })
     : null;
   options?.recordToolPrepStage?.("openclaw-tools:video-generate-tool");
@@ -257,6 +259,7 @@ export function createOpenClawTools(
         workspaceDir,
         sandbox,
         fsPolicy: options?.fsPolicy,
+        onAsyncTaskStarted: options?.onYield,
       })
     : null;
   options?.recordToolPrepStage?.("openclaw-tools:music-generate-tool");
@@ -275,6 +278,7 @@ export function createOpenClawTools(
   options?.recordToolPrepStage?.("openclaw-tools:pdf-tool");
   const webSearchTool = createWebSearchTool({
     config: options?.config,
+    agentDir: options?.agentDir,
     sandboxed: options?.sandboxed,
     runtimeWebSearch: runtimeWebTools?.search,
     lateBindRuntimeConfig: true,

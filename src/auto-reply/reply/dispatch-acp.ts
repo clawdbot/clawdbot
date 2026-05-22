@@ -386,6 +386,7 @@ export async function tryDispatchAcpReply(params: {
     originatingChannel: params.originatingChannel,
     originatingTo: params.originatingTo,
     onReplyStart: params.onReplyStart,
+    abortSignal: params.abortSignal,
   });
 
   const identityPendingBeforeTurn = isSessionIdentityPending(

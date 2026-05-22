@@ -117,8 +117,8 @@ ENV OPENCLAW_PREFER_PNPM=1
 RUN pnpm_config_verify_deps_before_run=false pnpm ui:build
 RUN pnpm_config_verify_deps_before_run=false pnpm qa:lab:build
 
-# Prune dev dependencies and strip build-only metadata before copying
-# runtime assets into the final image.
+# Prune dev dependencies, omitted plugin runtime packages, and build-only
+# metadata before copying runtime assets into the final image.
 FROM build AS runtime-assets
 ARG OPENCLAW_EXTENSIONS
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR
@@ -128,8 +128,8 @@ RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/sto
       --config.supportedArchitectures.os=linux \
       --config.supportedArchitectures.cpu="$(node -p 'process.arch')" \
       --config.supportedArchitectures.libc=glibc && \
+    OPENCLAW_EXTENSIONS="$OPENCLAW_EXTENSIONS" OPENCLAW_BUNDLED_PLUGIN_DIR="$OPENCLAW_BUNDLED_PLUGIN_DIR" node scripts/prune-docker-plugin-dist.mjs && \
     node scripts/postinstall-bundled-plugins.mjs && \
-    OPENCLAW_EXTENSIONS="$OPENCLAW_EXTENSIONS" node scripts/prune-docker-plugin-dist.mjs && \
     find dist -type f \( -name '*.d.ts' -o -name '*.d.mts' -o -name '*.d.cts' -o -name '*.map' \) -delete && \
     node scripts/check-package-dist-imports.mjs /app
 

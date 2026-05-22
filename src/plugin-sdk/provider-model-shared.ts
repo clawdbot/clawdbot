@@ -26,7 +26,10 @@ import {
   normalizeGooglePreviewModelId,
 } from "./provider-model-id-normalize.js";
 
-export type { ModelApi, ModelProviderConfig } from "../config/types.models.js";
+export type {
+  ModelApi,
+  ModelProviderDeclarationConfig as ModelProviderConfig,
+} from "../config/types.models.js";
 export type {
   UnifiedModelCatalogEntry,
   UnifiedModelCatalogKind,

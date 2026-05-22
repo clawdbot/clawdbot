@@ -4,7 +4,7 @@
     "onStartup": true
   },
   "name": "OpenShell Sandbox",
-  "description": "Sandbox backend powered by OpenShell with mirrored local workspaces and SSH-based command execution.",
+  "description": "Sandbox backend powered by the NVIDIA OpenShell CLI with mirrored local workspaces and SSH-based command execution.",
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -67,7 +67,7 @@
     },
     "command": {
       "label": "OpenShell Command",
-      "help": "Path or command name for the openshell CLI."
+      "help": "Path or command name for the NVIDIA OpenShell CLI."
     },
     "gateway": {
       "label": "Gateway Name",

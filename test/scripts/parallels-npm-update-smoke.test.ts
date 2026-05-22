@@ -33,6 +33,15 @@ describe("parallels npm update smoke", () => {
     expect(script).toContain("freshTargetStatus");
   });
 
+  it("lets callers override the Parallels host IP", () => {
+    const script = readFileSync(SCRIPT_PATH, "utf8");
+
+    expect(script).toContain("--host-ip <ip>");
+    expect(script).toContain("hostIp?: string");
+    expect(script).toContain("options.hostIp = ensureValue");
+    expect(script).toContain('resolveHostIp(this.options.hostIp ?? "")');
+  });
+
   it("prints actionable progress, rerun hints, and markdown summaries", () => {
     const script = readFileSync(SCRIPT_PATH, "utf8");
 

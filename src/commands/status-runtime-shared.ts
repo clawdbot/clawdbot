@@ -102,6 +102,29 @@ export async function resolveStatusGatewayHealthSafe(params: {
   }).catch((err) => ({ error: String(err) }));
 }
 
+export async function resolveStatusGatewayDiagnosticsSafe(params: {
+  config: OpenClawConfig;
+  timeoutMs?: number;
+  gatewayReachable: boolean;
+  callOverrides?: {
+    url: string;
+    token?: string;
+    password?: string;
+  };
+}) {
+  if (!params.gatewayReachable) {
+    return null;
+  }
+  const { callGateway } = await loadGatewayCallModule();
+  return await callGateway<unknown>({
+    method: "diagnostics.stability",
+    params: { limit: 1000 },
+    timeoutMs: params.timeoutMs,
+    config: params.config,
+    ...params.callOverrides,
+  }).catch(() => null);
+}
+
 export async function resolveStatusLastHeartbeat(params: {
   config: OpenClawConfig;
   timeoutMs?: number;

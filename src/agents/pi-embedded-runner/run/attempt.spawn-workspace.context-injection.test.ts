@@ -113,7 +113,7 @@ describe("embedded attempt context injection", () => {
     expect(resolver).toHaveBeenCalledTimes(1);
   });
 
-  it("forwards senderIsOwner into embedded message-action discovery", () => {
+  it("builds embedded message-action discovery routing context", () => {
     const input = buildEmbeddedMessageActionDiscoveryInput({
       cfg: {},
       channel: "matrix",
@@ -125,7 +125,6 @@ describe("embedded attempt context injection", () => {
       sessionId: "session",
       agentId: "main",
       senderId: "@alice:example.org",
-      senderIsOwner: false,
     });
 
     expect(input.channel).toBe("matrix");
@@ -137,7 +136,6 @@ describe("embedded attempt context injection", () => {
     expect(input.sessionId).toBe("session");
     expect(input.agentId).toBe("main");
     expect(input.requesterSenderId).toBe("@alice:example.org");
-    expect(input.senderIsOwner).toBe(false);
   });
 
   it("never skips heartbeat bootstrap filtering", async () => {

@@ -538,6 +538,45 @@ function recordDiagnosticEvent(
         },
       );
       return;
+    case "message.received":
+      store.counter("openclaw_message_received_total", "Inbound messages received by channel.", {
+        channel: lowCardinalityLabel(evt.channel),
+        source: lowCardinalityLabel(evt.source),
+      });
+      return;
+    case "message.dispatch.started":
+      store.counter(
+        "openclaw_message_dispatch_started_total",
+        "Inbound message dispatch attempts started by channel.",
+        {
+          channel: lowCardinalityLabel(evt.channel),
+          source: lowCardinalityLabel(evt.source),
+        },
+      );
+      return;
+    case "message.dispatch.completed":
+      store.counter(
+        "openclaw_message_dispatch_completed_total",
+        "Inbound message dispatch attempts completed by outcome.",
+        {
+          channel: lowCardinalityLabel(evt.channel),
+          outcome: evt.outcome,
+          reason: lowCardinalityLabel(evt.reason, "none"),
+          source: lowCardinalityLabel(evt.source),
+        },
+      );
+      store.histogram(
+        "openclaw_message_dispatch_duration_seconds",
+        "Inbound message dispatch duration in seconds.",
+        {
+          channel: lowCardinalityLabel(evt.channel),
+          outcome: evt.outcome,
+          reason: lowCardinalityLabel(evt.reason, "none"),
+          source: lowCardinalityLabel(evt.source),
+        },
+        seconds(evt.durationMs),
+      );
+      return;
     case "message.delivery.completed":
     case "message.delivery.error":
       store.counter(
@@ -632,6 +671,13 @@ function recordDiagnosticEvent(
           numericValue(evt.queueDepth),
         );
       }
+      return;
+    case "session.turn.created":
+      store.counter("openclaw_session_turn_created_total", "Agent session turns created.", {
+        agent: lowCardinalityLabel(evt.agentId),
+        channel: lowCardinalityLabel(evt.channel),
+        trigger: evt.trigger,
+      });
       return;
     case "diagnostic.memory.sample":
       store.gauge(

@@ -493,6 +493,13 @@ function resolveDirectUserPostChannelId(params: {
   return params.recipient.id;
 }
 
+function resolvePostedMessageChannelId(response: { channel?: unknown }, fallback: string): string {
+  return (
+    (typeof response.channel === "string" ? normalizeOptionalString(response.channel) : null) ??
+    fallback
+  );
+}
+
 async function resolveChannelId(
   client: WebClient,
   recipient: SlackRecipient,
@@ -730,12 +737,13 @@ async function sendMessageSlackQueuedInner(params: {
       unfurl,
     });
     const messageId = response.ts ?? "unknown";
+    const deliveredChannelId = resolvePostedMessageChannelId(response, channelId);
     return {
       messageId,
-      channelId,
+      channelId: deliveredChannelId,
       receipt: createSlackSendReceipt({
         platformMessageIds: [messageId],
-        channelId,
+        channelId: deliveredChannelId,
         kind: "card",
         threadTs: opts.threadTs,
       }),
@@ -766,6 +774,7 @@ async function sendMessageSlackQueuedInner(params: {
 
   const sentMessageIds: string[] = [];
   let lastMessageId = "";
+  let deliveredChannelId = channelId;
   if (opts.mediaUrl) {
     const [firstChunk, ...rest] = resolvedChunks;
     lastMessageId = await uploadSlackFile({
@@ -794,6 +803,7 @@ async function sendMessageSlackQueuedInner(params: {
         unfurl,
       });
       lastMessageId = response.ts ?? lastMessageId;
+      deliveredChannelId = resolvePostedMessageChannelId(response, deliveredChannelId);
       if (response.ts) {
         sentMessageIds.push(response.ts);
       }
@@ -811,6 +821,7 @@ async function sendMessageSlackQueuedInner(params: {
         unfurl,
       });
       lastMessageId = response.ts ?? lastMessageId;
+      deliveredChannelId = resolvePostedMessageChannelId(response, deliveredChannelId);
       if (response.ts) {
         sentMessageIds.push(response.ts);
       }
@@ -820,10 +831,10 @@ async function sendMessageSlackQueuedInner(params: {
   const messageId = lastMessageId || "unknown";
   return {
     messageId,
-    channelId,
+    channelId: deliveredChannelId,
     receipt: createSlackSendReceipt({
       platformMessageIds: sentMessageIds.length ? sentMessageIds : [messageId],
-      channelId,
+      channelId: deliveredChannelId,
       kind: opts.mediaUrl ? "media" : "text",
       threadTs: opts.threadTs,
     }),

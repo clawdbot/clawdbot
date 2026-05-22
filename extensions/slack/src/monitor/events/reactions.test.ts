@@ -230,8 +230,6 @@ describe("registerSlackReactionEvents", () => {
     expect(reactionQueueMock).toHaveBeenCalledWith(expect.any(String), {
       sessionKey: "agent:main:main",
       contextKey: "slack:reaction:added:D1:123.456:U1:thumbsup",
-      forceSenderIsOwnerFalse: true,
-      trusted: false,
     });
   });
 

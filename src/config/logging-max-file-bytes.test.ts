@@ -22,7 +22,7 @@ describe("logging.maxFileBytes config", () => {
       expect(res.issues).toEqual([
         {
           path: "logging.maxFileBytes",
-          message: "Too small: expected number to be >0",
+          message: "Too small: expected number to be >0 (must be greater than 0)",
         },
       ]);
     }

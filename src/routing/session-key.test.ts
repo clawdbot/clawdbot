@@ -14,6 +14,8 @@ import {
   parseAgentSessionKey,
   resolveEventSessionKey,
   scopedHeartbeatWakeOptions,
+  isUnscopedSessionKeySentinel,
+  scopeLegacySessionKeyToAgent,
   toAgentStoreSessionKey,
 } from "./session-key.js";
 
@@ -30,6 +32,47 @@ describe("classifySessionKeyShape", () => {
     { input: "subagent:worker", expected: "legacy_or_alias" },
   ] as const)("classifies %j as $expected", ({ input, expected }) => {
     expect(classifySessionKeyShape(input)).toBe(expected);
+  });
+});
+
+describe("scopeLegacySessionKeyToAgent", () => {
+  it("scopes legacy aliases to the requested agent", () => {
+    expect(scopeLegacySessionKeyToAgent({ agentId: "Ops", sessionKey: "Incident-42" })).toBe(
+      "agent:ops:incident-42",
+    );
+  });
+
+  it("honors configured main-key aliases when scoping legacy keys", () => {
+    expect(
+      scopeLegacySessionKeyToAgent({ agentId: "ops", sessionKey: "main", mainKey: "work" }),
+    ).toBe("agent:ops:work");
+  });
+
+  it("preserves already agent-prefixed keys", () => {
+    expect(
+      scopeLegacySessionKeyToAgent({
+        agentId: "ops",
+        sessionKey: "agent:main:incident-42",
+      }),
+    ).toBe("agent:main:incident-42");
+  });
+
+  it("scopes global and unknown legacy aliases to the requested agent", () => {
+    expect(scopeLegacySessionKeyToAgent({ agentId: "ops", sessionKey: "global" })).toBe(
+      "agent:ops:global",
+    );
+    expect(scopeLegacySessionKeyToAgent({ agentId: "ops", sessionKey: "UNKNOWN" })).toBe(
+      "agent:ops:unknown",
+    );
+  });
+});
+
+describe("isUnscopedSessionKeySentinel", () => {
+  it("recognizes literal global and unknown sentinels", () => {
+    expect(isUnscopedSessionKeySentinel("global")).toBe(true);
+    expect(isUnscopedSessionKeySentinel("UNKNOWN")).toBe(true);
+    expect(isUnscopedSessionKeySentinel("agent:ops:global")).toBe(false);
+    expect(isUnscopedSessionKeySentinel("incident-42")).toBe(false);
   });
 });
 

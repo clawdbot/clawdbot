@@ -51,6 +51,18 @@ function createContext(
   };
 }
 
+function createSandboxedContext(
+  args: string,
+  sessionFile?: string,
+  overrides: Partial<PluginCommandContext> = {},
+): PluginCommandContext {
+  return createContext(args, sessionFile, {
+    config: { agents: { defaults: { sandbox: { mode: "all" } } } },
+    sessionKey: "sandboxed-session",
+    ...overrides,
+  } as Partial<PluginCommandContext>);
+}
+
 function createDeps(overrides: Partial<CodexCommandDeps> = {}): Partial<CodexCommandDeps> {
   return {
     codexControlRequest: vi.fn(),
@@ -329,6 +341,147 @@ describe("codex command", () => {
     });
     expect(codexControlRequest).not.toHaveBeenCalled();
     expect(writeCodexAppServerBinding).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "bind",
+    "resume thread-123",
+    "steer keep going",
+    "steer keep going --help",
+    "model --help",
+    "model gpt-5.5",
+    "fast on",
+    "permissions yolo",
+    "compact",
+    "review",
+  ])("blocks /codex %s in sandboxed sessions before native Codex execution", async (args) => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const codexControlRequest = vi.fn();
+    const startCodexConversationThread = vi.fn();
+    const steerCodexConversationTurn = vi.fn();
+    const setCodexConversationModel = vi.fn();
+    const setCodexConversationFastMode = vi.fn();
+    const setCodexConversationPermissions = vi.fn();
+    const stopCodexConversationTurn = vi.fn();
+
+    const result = await handleCodexCommand(createSandboxedContext(args, sessionFile), {
+      deps: createDeps({
+        codexControlRequest,
+        startCodexConversationThread,
+        steerCodexConversationTurn,
+        setCodexConversationModel,
+        setCodexConversationFastMode,
+        setCodexConversationPermissions,
+        stopCodexConversationTurn,
+      }),
+    });
+
+    expect(result.text).toContain(
+      "Codex-native /codex " +
+        args.split(/\s+/u)[0] +
+        " is unavailable because OpenClaw sandboxing is active for this session.",
+    );
+    expect(codexControlRequest).not.toHaveBeenCalled();
+    expect(startCodexConversationThread).not.toHaveBeenCalled();
+    expect(steerCodexConversationTurn).not.toHaveBeenCalled();
+    expect(setCodexConversationModel).not.toHaveBeenCalled();
+    expect(setCodexConversationFastMode).not.toHaveBeenCalled();
+    expect(setCodexConversationPermissions).not.toHaveBeenCalled();
+    expect(stopCodexConversationTurn).not.toHaveBeenCalled();
+  });
+
+  it("still returns pre-native usage for malformed sandboxed native Codex commands", async () => {
+    const startCodexConversationThread = vi.fn();
+    const setCodexConversationModel = vi.fn();
+
+    await expect(
+      handleCodexCommand(createSandboxedContext("bind --help"), {
+        deps: createDeps({ startCodexConversationThread }),
+      }),
+    ).resolves.toEqual({
+      text: "Usage: /codex bind [thread-id] [--cwd <path>] [--model <model>] [--provider <provider>]",
+    });
+    expect(startCodexConversationThread).not.toHaveBeenCalled();
+
+    await expect(
+      handleCodexCommand(createSandboxedContext("model gpt-5.5 --help"), {
+        deps: createDeps({ setCodexConversationModel }),
+      }),
+    ).resolves.toEqual({
+      text: "Usage: /codex model <model>",
+    });
+    expect(setCodexConversationModel).not.toHaveBeenCalled();
+
+    await expect(
+      handleCodexCommand(createSandboxedContext("resume"), { deps: createDeps() }),
+    ).resolves.toEqual({
+      text: "Usage: /codex resume <thread-id>",
+    });
+
+    const resolveCodexCliSessionForBindingOnNode = vi.fn();
+    await expect(
+      handleCodexCommand(createSandboxedContext("resume cli-1 --host node-1"), {
+        deps: createDeps({ resolveCodexCliSessionForBindingOnNode }),
+      }),
+    ).resolves.toEqual({
+      text: "Usage: /codex resume <session-id> --host <node> --bind here",
+    });
+    expect(resolveCodexCliSessionForBindingOnNode).not.toHaveBeenCalled();
+
+    await expect(
+      handleCodexCommand(createSandboxedContext("resume cli-1 --host node-1 --bind here extra"), {
+        deps: createDeps({ resolveCodexCliSessionForBindingOnNode }),
+      }),
+    ).resolves.toEqual({
+      text: "Usage: /codex resume <thread-id>\nUsage: /codex resume <session-id> --host <node> --bind here",
+    });
+    expect(resolveCodexCliSessionForBindingOnNode).not.toHaveBeenCalled();
+
+    await expect(
+      handleCodexCommand(createSandboxedContext("steer", path.join(tempDir, "session.jsonl")), {
+        deps: createDeps(),
+      }),
+    ).resolves.toEqual({
+      text: "Usage: /codex steer <message>",
+    });
+
+    await expect(
+      handleCodexCommand(createSandboxedContext("stop now"), {
+        deps: createDeps({ stopCodexConversationTurn: vi.fn() }),
+      }),
+    ).resolves.toEqual({
+      text: "Usage: /codex stop",
+    });
+  });
+
+  it("allows local Codex binding status forms in sandboxed sessions", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({
+        schemaVersion: 1,
+        threadId: "thread-status",
+        cwd: tempDir,
+        model: "gpt-5.5",
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
+        serviceTier: "priority",
+      }),
+    );
+
+    await expect(
+      handleCodexCommand(createSandboxedContext("model", sessionFile), { deps: createDeps() }),
+    ).resolves.toEqual({ text: "Codex model: gpt-5.5" });
+    await expect(
+      handleCodexCommand(createSandboxedContext("fast status", sessionFile), {
+        deps: createDeps(),
+      }),
+    ).resolves.toEqual({ text: "Codex fast mode: on." });
+    await expect(
+      handleCodexCommand(createSandboxedContext("permissions status", sessionFile), {
+        deps: createDeps(),
+      }),
+    ).resolves.toEqual({ text: "Codex permissions: full access." });
   });
 
   it("lists Codex CLI sessions from a requested node", async () => {
@@ -3245,6 +3398,26 @@ describe("codex command", () => {
       pluginConfig: undefined,
       agentDir: path.join(tempDir, "agents", "main", "agent"),
       config: {},
+    });
+  });
+
+  it("stops the active bound Codex turn in sandboxed sessions", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const stopCodexConversationTurn = vi.fn(async () => ({
+      stopped: true,
+      message: "Codex stop requested.",
+    }));
+
+    await expect(
+      handleCodexCommand(createSandboxedContext("stop", sessionFile), {
+        deps: createDeps({ stopCodexConversationTurn }),
+      }),
+    ).resolves.toEqual({ text: "Codex stop requested." });
+    expect(stopCodexConversationTurn).toHaveBeenCalledWith({
+      sessionFile,
+      pluginConfig: undefined,
+      agentDir: path.join(tempDir, "agents", "main", "agent"),
+      config: { agents: { defaults: { sandbox: { mode: "all" } } } },
     });
   });
 

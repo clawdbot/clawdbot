@@ -4,6 +4,7 @@ import type { MatrixConfig, MatrixStreamingMode } from "../../types.js";
 import type { MatrixRoomInfo } from "./room-info.js";
 
 type DirectRoomTrackerOptions = {
+  isExplicitlyConfiguredRoom?: (roomId: string) => boolean | Promise<boolean>;
   canPromoteRecentInvite?: (roomId: string) => boolean | Promise<boolean>;
   canPromoteUnmappedStrictRoom?: (roomId: string) => boolean | Promise<boolean>;
   shouldKeepLocallyPromotedDirectRoom?:
@@ -145,7 +146,18 @@ vi.mock("../../runtime-api.js", () => {
     ToolPolicySchema: z.any().optional(),
     addAllowlistUserEntriesFromConfigEntry: vi.fn(),
     buildChannelConfigSchema: (schema: unknown) => schema,
-    buildChannelKeyCandidates: () => [],
+    buildChannelKeyCandidates: (...keys: Array<string | undefined | null>) => {
+      const seen = new Set<string>();
+      return keys
+        .map((key) => (typeof key === "string" ? key.trim() : ""))
+        .filter((key) => {
+          if (!key || seen.has(key)) {
+            return false;
+          }
+          seen.add(key);
+          return true;
+        });
+    },
     buildProbeChannelStatusSummary: (
       snapshot: Record<string, unknown>,
       extra?: Record<string, unknown>,
@@ -959,6 +971,55 @@ describe("monitorMatrixProvider", () => {
     });
 
     await expect(trackerOpts.canPromoteRecentInvite("!room:example.org")).resolves.toBe(false);
+  });
+
+  it("wires exact room config as a direct-room classifier veto", async () => {
+    (hoisted.accountConfig as { rooms?: Record<string, unknown> }).rooms = {
+      "!room:example.org": { requireMention: true },
+      "*": { requireMention: false },
+    };
+
+    await startMonitorAndAbortAfterStartup();
+
+    const trackerOpts = directRoomTrackerOptions();
+    if (!trackerOpts?.isExplicitlyConfiguredRoom) {
+      throw new Error("explicit room config callback was not wired");
+    }
+
+    expect(await trackerOpts.isExplicitlyConfiguredRoom("!room:example.org")).toBe(true);
+    expect(await trackerOpts.isExplicitlyConfiguredRoom("!other:example.org")).toBe(false);
+    expect(hoisted.getRoomInfo).not.toHaveBeenCalled();
+  });
+
+  it("wires alias room config as a direct-room classifier veto", async () => {
+    (hoisted.accountConfig as { rooms?: Record<string, unknown> }).rooms = {
+      "#ops:example.org": { requireMention: true },
+      "*": { requireMention: false },
+    };
+    const { resolveMatrixTargets } = await import("../../resolve-targets.js");
+    vi.mocked(resolveMatrixTargets).mockResolvedValueOnce([
+      {
+        input: "#ops:example.org",
+        resolved: true,
+        id: "!room:example.org",
+      },
+    ]);
+
+    await startMonitorAndAbortAfterStartup();
+
+    const trackerOpts = directRoomTrackerOptions();
+    if (!trackerOpts?.isExplicitlyConfiguredRoom) {
+      throw new Error("explicit room config callback was not wired");
+    }
+
+    hoisted.getRoomInfo.mockResolvedValueOnce({
+      canonicalAlias: "#ops:example.org",
+      altAliases: [],
+      nameResolved: true,
+      aliasesResolved: true,
+    });
+
+    expect(await trackerOpts.isExplicitlyConfiguredRoom("!room:example.org")).toBe(true);
   });
 
   it("wires recent-invite promotion to reject named rooms", async () => {

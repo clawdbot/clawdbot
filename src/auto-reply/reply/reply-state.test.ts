@@ -529,6 +529,34 @@ describe("incrementCompactionCount", () => {
     expect(stored[sessionKey].outputTokens).toBeUndefined();
   });
 
+  it("accepts zero tokensAfter as a fresh post-compaction total", async () => {
+    const entry = {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+      compactionCount: 0,
+      totalTokens: 180_000,
+      inputTokens: 170_000,
+      outputTokens: 10_000,
+      totalTokensFresh: true,
+    } as SessionEntry;
+    const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
+
+    await incrementCompactionCount({
+      sessionEntry: entry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      tokensAfter: 0,
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].compactionCount).toBe(1);
+    expect(stored[sessionKey].totalTokens).toBe(0);
+    expect(stored[sessionKey].totalTokensFresh).toBe(true);
+    expect(stored[sessionKey].inputTokens).toBeUndefined();
+    expect(stored[sessionKey].outputTokens).toBeUndefined();
+  });
+
   it("prefers explicit compactionTokensAfter over last-call usage for run accounting", async () => {
     const entry = {
       sessionId: "s1",
@@ -554,6 +582,34 @@ describe("incrementCompactionCount", () => {
 
     const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(stored[sessionKey].totalTokens).toBe(12_000);
+    expect(stored[sessionKey].totalTokensFresh).toBe(true);
+  });
+
+  it("preserves zero compactionTokensAfter for run accounting", async () => {
+    const entry = {
+      sessionId: "s1",
+      updatedAt: Date.now(),
+      compactionCount: 0,
+      totalTokens: 180_000,
+    } as SessionEntry;
+    const { storePath, sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
+
+    await incrementRunCompactionCount({
+      sessionEntry: entry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      compactionTokensAfter: 0,
+      lastCallUsage: {
+        input: 90_000,
+        output: 1_000,
+        total: 91_000,
+      },
+      contextTokensUsed: 200_000,
+    });
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8"));
+    expect(stored[sessionKey].totalTokens).toBe(0);
     expect(stored[sessionKey].totalTokensFresh).toBe(true);
   });
 

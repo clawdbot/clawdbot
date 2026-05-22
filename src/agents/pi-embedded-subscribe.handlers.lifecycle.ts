@@ -1,9 +1,11 @@
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createInlineCodeState } from "../markdown/code-spans.js";
+import { hasAcceptedSessionSpawn } from "./accepted-session-spawn.js";
 import {
   buildApiErrorObservationFields,
   buildTextObservationFields,
   sanitizeForConsole,
+  shouldSuppressRawErrorConsoleSuffix,
 } from "./pi-embedded-error-observation.js";
 import { classifyFailoverReason, formatAssistantErrorText } from "./pi-embedded-helpers.js";
 import { hasCommittedMessagingToolDeliveryEvidence } from "./pi-embedded-runner/delivery-evidence.js";
@@ -47,6 +49,7 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
   const hadDeterministicSideEffect =
     ctx.state.hadDeterministicSideEffect === true ||
     hasCommittedMessagingToolDeliveryEvidence(ctx.state) ||
+    hasAcceptedSessionSpawn(ctx.state.acceptedSessionSpawns) ||
     (ctx.state.successfulCronAdds ?? 0) > 0;
   const incompleteTerminalAssistant = isIncompleteTerminalAssistantTurn({
     hasAssistantVisibleText,
@@ -92,12 +95,9 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
     const safeModel = sanitizeForConsole(lastAssistant.model) ?? "unknown";
     const safeProvider = sanitizeForConsole(lastAssistant.provider) ?? "unknown";
     const safeRawErrorPreview = sanitizeForConsole(observedError.rawErrorPreview);
-    const shouldSuppressRawErrorConsoleSuffix =
-      observedError.providerRuntimeFailureKind === "auth_html_403" ||
-      observedError.providerRuntimeFailureKind === "auth_scope" ||
-      observedError.providerRuntimeFailureKind === "auth_refresh";
     const rawErrorConsoleSuffix =
-      safeRawErrorPreview && !shouldSuppressRawErrorConsoleSuffix
+      safeRawErrorPreview &&
+      !shouldSuppressRawErrorConsoleSuffix(observedError.providerRuntimeFailureKind)
         ? ` rawError=${safeRawErrorPreview}`
         : "";
     ctx.log.warn("embedded run agent end", {
@@ -146,11 +146,12 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
       });
       return;
     }
+    const successPhase = ctx.params.terminalLifecyclePhase ?? "end";
     emitAgentEvent({
       runId: ctx.params.runId,
       stream: "lifecycle",
       data: {
-        phase: "end",
+        phase: successPhase,
         ...terminalMeta,
         ...(livenessState ? { livenessState } : {}),
         ...(replayInvalid ? { replayInvalid } : {}),
@@ -160,7 +161,7 @@ export function handleAgentEnd(ctx: EmbeddedPiSubscribeContext): void | Promise<
     void ctx.params.onAgentEvent?.({
       stream: "lifecycle",
       data: {
-        phase: "end",
+        phase: successPhase,
         ...terminalMeta,
         ...(livenessState ? { livenessState } : {}),
         ...(replayInvalid ? { replayInvalid } : {}),

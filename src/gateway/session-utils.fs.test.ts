@@ -9,7 +9,6 @@ import { clearSessionTranscriptIndexCache } from "./session-transcript-index.fs.
 import {
   archiveSessionTranscripts,
   readFirstUserMessageFromTranscript,
-  readLastMessagePreviewFromTranscript,
   readLatestSessionUsageFromTranscript,
   readLatestSessionUsageFromTranscriptAsync,
   readLatestRecentSessionUsageFromTranscriptAsync,
@@ -275,176 +274,6 @@ describe("readFirstUserMessageFromTranscript", () => {
   });
 });
 
-describe("readLastMessagePreviewFromTranscript", () => {
-  let tmpDir: string;
-  let storePath: string;
-
-  registerTempSessionStore("openclaw-session-fs-test-", (nextTmpDir, nextStorePath) => {
-    tmpDir = nextTmpDir;
-    storePath = nextStorePath;
-  });
-
-  test("returns null for empty file", () => {
-    const sessionId = "test-last-empty";
-    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
-    fs.writeFileSync(transcriptPath, "", "utf-8");
-
-    const result = readLastMessagePreviewFromTranscript(sessionId, storePath);
-    expect(result).toBeNull();
-  });
-
-  test.each([
-    {
-      sessionId: "test-last-user",
-      lines: [
-        JSON.stringify({ message: { role: "user", content: "First user" } }),
-        JSON.stringify({ message: { role: "assistant", content: "First assistant" } }),
-        JSON.stringify({ message: { role: "user", content: "Last user message" } }),
-      ],
-      expected: "Last user message",
-    },
-    {
-      sessionId: "test-last-assistant",
-      lines: [
-        JSON.stringify({ message: { role: "user", content: "User question" } }),
-        JSON.stringify({ message: { role: "assistant", content: "Final assistant reply" } }),
-      ],
-      expected: "Final assistant reply",
-    },
-  ] as const)(
-    "returns the last user or assistant message from transcript for $sessionId",
-    ({ sessionId, lines, expected }) => {
-      const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
-      fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
-      const result = readLastMessagePreviewFromTranscript(sessionId, storePath);
-      expect(result).toBe(expected);
-    },
-  );
-
-  test("skips system messages to find last user/assistant", () => {
-    const sessionId = "test-last-skip-system";
-    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
-    const lines = [
-      JSON.stringify({ message: { role: "user", content: "Real last" } }),
-      JSON.stringify({ message: { role: "system", content: "System at end" } }),
-    ];
-    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
-
-    const result = readLastMessagePreviewFromTranscript(sessionId, storePath);
-    expect(result).toBe("Real last");
-  });
-
-  test("returns null when no user/assistant messages exist", () => {
-    const sessionId = "test-last-no-match";
-    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
-    const lines = [
-      JSON.stringify({ type: "session", version: 1, id: sessionId }),
-      JSON.stringify({ message: { role: "system", content: "Only system" } }),
-    ];
-    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
-
-    const result = readLastMessagePreviewFromTranscript(sessionId, storePath);
-    expect(result).toBeNull();
-  });
-
-  test("handles malformed JSON lines gracefully (last preview)", () => {
-    const sessionId = "test-last-malformed";
-    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
-    const lines = [
-      JSON.stringify({ message: { role: "user", content: "Valid first" } }),
-      "not valid json at end",
-    ];
-    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
-
-    const result = readLastMessagePreviewFromTranscript(sessionId, storePath);
-    expect(result).toBe("Valid first");
-  });
-
-  test.each([
-    {
-      sessionId: "test-last-array",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Array content response" }],
-      },
-      expected: "Array content response",
-    },
-    {
-      sessionId: "test-last-output-text",
-      message: {
-        role: "assistant",
-        content: [{ type: "output_text", text: "Output text response" }],
-      },
-      expected: "Output text response",
-    },
-  ] as const)(
-    "handles array/output_text content format for $sessionId",
-    ({ sessionId, message, expected }) => {
-      const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
-      fs.writeFileSync(transcriptPath, JSON.stringify({ message }), "utf-8");
-      const result = readLastMessagePreviewFromTranscript(sessionId, storePath);
-      expect(result, sessionId).toBe(expected);
-    },
-  );
-
-  test("skips empty content to find previous message", () => {
-    const sessionId = "test-last-skip-empty";
-    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
-    const lines = [
-      JSON.stringify({ message: { role: "assistant", content: "Has content" } }),
-      JSON.stringify({ message: { role: "user", content: "" } }),
-    ];
-    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
-
-    const result = readLastMessagePreviewFromTranscript(sessionId, storePath);
-    expect(result).toBe("Has content");
-  });
-
-  test("reads from end of large file (16KB window)", () => {
-    const sessionId = "test-last-large";
-    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
-    const padding = JSON.stringify({ message: { role: "user", content: "x".repeat(500) } });
-    const lines: string[] = [];
-    for (let i = 0; i < 30; i++) {
-      lines.push(padding);
-    }
-    lines.push(JSON.stringify({ message: { role: "assistant", content: "Last in large file" } }));
-    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
-
-    const result = readLastMessagePreviewFromTranscript(sessionId, storePath);
-    expect(result).toBe("Last in large file");
-  });
-
-  test("handles valid UTF-8 content", () => {
-    const sessionId = "test-last-utf8";
-    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
-    const validLine = JSON.stringify({
-      message: { role: "user", content: "Valid UTF-8: 你好世界 🌍" },
-    });
-    fs.writeFileSync(transcriptPath, validLine, "utf-8");
-
-    const result = readLastMessagePreviewFromTranscript(sessionId, storePath);
-    expect(result).toBe("Valid UTF-8: 你好世界 🌍");
-  });
-
-  test("strips inline directives from last preview text", () => {
-    const sessionId = "test-last-strip-inline-directives";
-    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
-    const lines = [
-      JSON.stringify({
-        message: {
-          role: "assistant",
-          content: "Hello [[reply_to_current]] world [[audio_as_voice]]",
-        },
-      }),
-    ];
-    fs.writeFileSync(transcriptPath, lines.join("\n"), "utf-8");
-
-    const result = readLastMessagePreviewFromTranscript(sessionId, storePath);
-    expect(result).toBe("Hello  world");
-  });
-});
-
 describe("shared transcript read behaviors", () => {
   let tmpDir: string;
   let storePath: string;
@@ -456,13 +285,11 @@ describe("shared transcript read behaviors", () => {
 
   test("returns null for missing transcript files", () => {
     expect(readFirstUserMessageFromTranscript("missing-session", storePath)).toBeNull();
-    expect(readLastMessagePreviewFromTranscript("missing-session", storePath)).toBeNull();
   });
 
   test("uses sessionFile overrides when provided", () => {
     const sessionId = "test-shared-custom";
     const firstPath = path.join(tmpDir, "custom-first.jsonl");
-    const lastPath = path.join(tmpDir, "custom-last.jsonl");
 
     fs.writeFileSync(
       firstPath,
@@ -472,37 +299,22 @@ describe("shared transcript read behaviors", () => {
       ].join("\n"),
       "utf-8",
     );
-    fs.writeFileSync(
-      lastPath,
-      JSON.stringify({ message: { role: "assistant", content: "Custom file last" } }),
-      "utf-8",
-    );
 
     expect(readFirstUserMessageFromTranscript(sessionId, storePath, firstPath)).toBe(
       "Custom file message",
-    );
-    expect(readLastMessagePreviewFromTranscript(sessionId, storePath, lastPath)).toBe(
-      "Custom file last",
     );
   });
 
   test("trims whitespace in extracted previews", () => {
     const firstSessionId = "test-shared-first-trim";
-    const lastSessionId = "test-shared-last-trim";
 
     fs.writeFileSync(
       path.join(tmpDir, `${firstSessionId}.jsonl`),
       JSON.stringify({ message: { role: "user", content: "  Padded message  " } }),
       "utf-8",
     );
-    fs.writeFileSync(
-      path.join(tmpDir, `${lastSessionId}.jsonl`),
-      JSON.stringify({ message: { role: "assistant", content: "  Padded response  " } }),
-      "utf-8",
-    );
 
     expect(readFirstUserMessageFromTranscript(firstSessionId, storePath)).toBe("Padded message");
-    expect(readLastMessagePreviewFromTranscript(lastSessionId, storePath)).toBe("Padded response");
   });
 });
 

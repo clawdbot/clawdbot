@@ -86,4 +86,5 @@ export {
   markAuthProfileFailure,
   resolveProfilesUnavailableReason,
   resolveProfileUnusableUntilForDisplay,
+  setAuthProfileFailureHook,
 } from "./auth-profiles/usage.js";

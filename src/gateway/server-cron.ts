@@ -314,8 +314,6 @@ export function buildGatewayCronService(params: {
         sessionKey,
         contextKey: opts?.contextKey,
         deliveryContext: opts?.deliveryContext,
-        forceSenderIsOwnerFalse: opts?.forceSenderIsOwnerFalse,
-        trusted: opts?.forceSenderIsOwnerFalse !== true,
       });
     },
     requestHeartbeat: (opts) => {

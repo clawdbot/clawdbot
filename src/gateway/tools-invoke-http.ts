@@ -73,20 +73,15 @@ export async function handleToolsInvokeHttpRequest(
   const accountId = normalizeOptionalString(getHeader(req, "x-openclaw-account-id"));
   const agentTo = normalizeOptionalString(getHeader(req, "x-openclaw-message-to"));
   const agentThreadId = normalizeOptionalString(getHeader(req, "x-openclaw-thread-id"));
-  // Owner semantics intentionally follow the same shared-secret HTTP contract
-  // on this direct tool surface; SECURITY.md documents this as designed-as-is.
-  // Computed before resolveGatewayScopedTools so the message tool is created
-  // with the correct owner context and channel-action gates (e.g. Matrix set-profile)
-  // work correctly for both owner and non-owner callers.
   const senderIsOwner = resolveOpenAiCompatibleHttpSenderIsOwner(req, requestAuth);
   const outcome = await invokeGatewayTool({
     cfg,
     input: body,
-    senderIsOwner,
     messageChannel: messageChannel ?? undefined,
     accountId,
     agentTo,
     agentThreadId,
+    senderIsOwner,
     toolCallIdPrefix: "http",
   });
   if (outcome.ok) {

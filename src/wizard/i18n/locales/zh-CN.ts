@@ -954,11 +954,13 @@ export const zh_CN = {
       webSearchDisabled: "Web search（{provider}）已配置但被禁用。",
       webSearchEnabled: "Web search 已启用，agent 可在需要时在线查询。",
       webSearchGetKey: "获取 key：{url}",
+      webSearchAuthProfile: "凭据：使用已有 {provider} auth profile。",
       webSearchKeyEnv: "API key：通过 {env} 环境变量提供。",
       webSearchKeyRef: "API key：通过 secret reference 配置。",
       webSearchKeyStored: "API key：已存入配置。",
       webSearchNeedsKey: "添加 key 前 web_search 无法工作。",
       webSearchNoKey: "已选择 provider {provider}，但没有找到 API key。",
+      webSearchOAuthProfile: "凭据：使用已有 {provider} OAuth 登录。",
       webSearchProvider: "Provider：{provider}",
       webSearchProviderUnavailable:
         "已选择 Web search provider {provider}，但当前插件策略下不可用。",

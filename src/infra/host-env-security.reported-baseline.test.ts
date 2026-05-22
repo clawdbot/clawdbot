@@ -49,6 +49,13 @@ const INHERITED_ALLOWLIST_RATIONALE: Record<string, string> = {
   SSL_CERT_FILE: "Trusted inherited OpenSSL certificate file path.",
   SYSTEMROOT: "Trusted inherited Windows system root selected by the host OS.",
   WINDIR: "Trusted inherited Windows directory selected by the host OS.",
+  XDG_CACHE_HOME: "Trusted inherited XDG cache root selected by operator runtime.",
+  XDG_CONFIG_DIRS: "Trusted inherited XDG configuration search path.",
+  XDG_CONFIG_HOME: "Trusted inherited XDG configuration root selected by operator runtime.",
+  XDG_DATA_DIRS: "Trusted inherited XDG data search path.",
+  XDG_DATA_HOME: "Trusted inherited XDG data root selected by operator runtime.",
+  XDG_RUNTIME_DIR: "Trusted inherited XDG runtime root selected by operator runtime.",
+  XDG_STATE_HOME: "Trusted inherited XDG state root selected by operator runtime.",
   ZDOTDIR: "Trusted inherited shell startup directory boundary.",
 };
 
@@ -85,7 +92,7 @@ describe("host env reported baseline coverage", () => {
       baseline.reportedDangerousEverywhereKeys.length +
         baseline.reportedDangerousOverrideOnlyKeys.length,
     ).toBe(baseline.expectedTotalReportedEntries);
-    expect(baseline.expectedTotalReportedEntries).toBe(234);
+    expect(baseline.expectedTotalReportedEntries).toBe(239);
     expect(sortUniqueUpper(baseline.reportedDangerousEverywhereKeys)).toEqual(
       baseline.reportedDangerousEverywhereKeys,
     );

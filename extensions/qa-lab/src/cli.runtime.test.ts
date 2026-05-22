@@ -76,6 +76,7 @@ import {
   runQaDockerUpCommand,
   runQaCharacterEvalCommand,
   runQaCoverageReportCommand,
+  runQaJsonlReplayCommand,
   runQaManualLaneCommand,
   runQaParityReportCommand,
   runQaSuiteCommand,
@@ -781,6 +782,7 @@ describe("qa cli runtime", () => {
         "personal-task-followthrough-status",
         "personal-share-safe-diagnostics-artifact",
         "personal-no-fake-progress",
+        "personal-failure-recovery",
       ],
     });
   });
@@ -1082,6 +1084,44 @@ describe("qa cli runtime", () => {
 
     expectWriteContains(stdoutWrite, "# OpenClaw Runtime Tool Coverage");
     expectWriteContains(stdoutWrite, "codex-native-workspace");
+  });
+
+  it("writes a curated mock JSONL replay report and summary", async () => {
+    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-jsonl-replay-cli-"));
+    try {
+      await runQaJsonlReplayCommand({
+        repoRoot,
+        transcripts: path.resolve("qa/scenarios/jsonl-replay"),
+        outputDir: "jsonl-output",
+        runtimePair: "pi,codex",
+      });
+
+      const report = await fs.readFile(
+        path.join(repoRoot, "jsonl-output", "qa-jsonl-replay-report.md"),
+        "utf8",
+      );
+      const summary = JSON.parse(
+        await fs.readFile(
+          path.join(repoRoot, "jsonl-output", "qa-jsonl-replay-summary.json"),
+          "utf8",
+        ),
+      ) as { transcripts?: Array<{ userTurnCount?: number }> };
+
+      expect(report).toContain("# OpenClaw JSONL Replay Report - pi vs codex");
+      expect(report).toContain("| plan-mode-boundaries.jsonl | 3 |  | none, none, none |");
+      expect(summary.transcripts).toHaveLength(7);
+    } finally {
+      await fs.rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps JSONL replay mock-only until real runtime cell replay is wired", async () => {
+    await expect(
+      runQaJsonlReplayCommand({
+        repoRoot: process.cwd(),
+        providerMode: "live-frontier",
+      }),
+    ).rejects.toThrow("qa jsonl-replay currently supports mock-openai curated fixtures only.");
   });
 
   it("exits nonzero when tool coverage summary is missing a required runtime tool call", async () => {

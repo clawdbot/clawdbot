@@ -131,6 +131,31 @@ export function classifySessionKeyShape(sessionKey: string | undefined | null): 
     : "legacy_or_alias";
 }
 
+export function isUnscopedSessionKeySentinel(sessionKey: string | undefined | null): boolean {
+  const lowered = normalizeLowercaseStringOrEmpty(sessionKey);
+  return lowered === "global" || lowered === "unknown";
+}
+
+export function scopeLegacySessionKeyToAgent(params: {
+  agentId?: string | undefined;
+  sessionKey?: string | undefined;
+  mainKey?: string | undefined;
+}): string | undefined {
+  const raw = (params.sessionKey ?? "").trim();
+  if (!raw) {
+    return undefined;
+  }
+  const agentId = params.agentId?.trim();
+  if (!agentId || classifySessionKeyShape(raw) !== "legacy_or_alias") {
+    return raw;
+  }
+  return toAgentStoreSessionKey({
+    agentId,
+    requestKey: raw,
+    mainKey: params.mainKey,
+  });
+}
+
 export function normalizeAgentId(value: string | undefined | null): string {
   const trimmed = (value ?? "").trim();
   if (!trimmed) {

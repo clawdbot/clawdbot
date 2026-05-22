@@ -63,8 +63,9 @@ session:
 2. The provider processes the job in the background (typically 30 seconds to several minutes depending on the provider and resolution; slow queue-backed providers can run up to the configured timeout).
 3. When the video is ready, OpenClaw wakes the same session with an internal completion event.
 4. The agent tells the user and attaches the finished video through the
-   message tool. OpenClaw does not auto-post the video as a fallback if the
-   completion agent writes only a private final reply.
+   message tool. If the requester session is inactive and some generated
+   video is still missing from message-tool delivery, OpenClaw sends an
+   idempotent direct fallback with only the missing video.
 
 While a job is in flight, duplicate `video_generate` calls in the same
 session return the current task status instead of starting another
@@ -223,7 +224,7 @@ dimensions). Providers that do not declare it surface the value via
 </ParamField>
 <ParamField path="model" type="string">Provider/model override (e.g. `runway/gen4.5`).</ParamField>
 <ParamField path="filename" type="string">Output filename hint.</ParamField>
-<ParamField path="timeoutMs" type="number">Optional provider operation timeout in milliseconds. When omitted, OpenClaw uses `agents.defaults.videoGenerationModel.timeoutMs` if configured.</ParamField>
+<ParamField path="timeoutMs" type="number">Optional provider operation timeout in milliseconds. When omitted, OpenClaw uses `agents.defaults.videoGenerationModel.timeoutMs` if configured, otherwise the plugin-authored provider default when one exists.</ParamField>
 <ParamField path="providerOptions" type="object">
   Provider-specific options as a JSON object (e.g. `{"seed": 42, "draft": true}`).
   Providers that declare a typed schema validate the keys and types; unknown

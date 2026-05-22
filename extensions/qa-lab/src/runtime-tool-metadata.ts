@@ -150,7 +150,10 @@ export function readRuntimeToolCoverageMetadata(params: {
   const capabilityLayer = capabilityLayerInput
     ? (capabilityLayerInput as QaRuntimeCapabilityLayer)
     : DEFAULT_CAPABILITY_LAYER_BY_BUCKET[bucket];
-  const required = readBoolean(toolCoverage?.required) ?? bucket !== "optional-profile-or-plugin";
+  const explicitSearchableDynamic = capabilityLayerInput === "openclaw-dynamic-searchable";
+  const required =
+    readBoolean(toolCoverage?.required) ??
+    (bucket !== "optional-profile-or-plugin" && !explicitSearchableDynamic);
   return {
     bucket,
     expectedLayer,

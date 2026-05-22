@@ -250,8 +250,8 @@ export function resolveOpenAiCompatibleHttpSenderIsOwner(
   if (usesSharedSecretGatewayMethod(requestAuth.authMethod)) {
     // Shared-secret HTTP bearer auth also carries owner semantics on the compat
     // APIs and direct /tools/invoke. This is intentional: there is no separate
-    // per-request owner primitive on that shared-secret path, so owner-only
-    // tool policy follows the documented trusted-operator contract.
+    // per-request owner primitive on that shared-secret path, so managed
+    // attachment ownership follows the documented trusted-operator contract.
     return true;
   }
   return resolveHttpSenderIsOwner(req, requestAuth);

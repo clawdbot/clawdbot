@@ -28,7 +28,10 @@ git status --short --branch
 git rev-parse HEAD
 ```
 
-If env lacks keys, use `$one-password` to inject or set them, then rerun the script. The script prints only provider status and HTTP class, never tokens.
+1Password service-account values are the first source for release provider
+preflight. Inject those exact targeted keys first, then run the verifier; use
+ambient env only when it was already intentionally injected for this release.
+The script prints only provider status and HTTP class, never tokens.
 
 ## Dispatch
 

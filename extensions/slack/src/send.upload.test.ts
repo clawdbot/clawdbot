@@ -74,30 +74,26 @@ type MockCalls = {
   mock: { calls: unknown[][] };
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(isRecord(value), `${label} should be an object`).toBe(true);
-  if (!isRecord(value)) {
+  const isObjectRecord = typeof value === "object" && value !== null && !Array.isArray(value);
+  expect(isObjectRecord, `${label} should be an object`).toBe(true);
+  if (!isObjectRecord) {
     throw new Error(`${label} should be an object`);
   }
-  return value;
+  return value as Record<string, unknown>;
 }
 
 function requireArray(value: unknown, label: string): unknown[] {
-  expect(Array.isArray(value), `${label} should be an array`).toBe(true);
-  if (!Array.isArray(value)) {
+  const values = Array.isArray(value) ? value : null;
+  expect(values, `${label} should be an array`).not.toBeNull();
+  if (!values) {
     throw new Error(`${label} should be an array`);
   }
-  return value;
+  return values;
 }
 
 function expectFields(record: Record<string, unknown>, expected: Record<string, unknown>) {
-  for (const [key, value] of Object.entries(expected)) {
-    expect(record[key], key).toEqual(value);
-  }
+  expect(record).toMatchObject(expected);
 }
 
 function expectCallFirstArg(

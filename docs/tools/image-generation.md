@@ -12,8 +12,9 @@ The `image_generate` tool lets the agent create and edit images using your
 configured providers. In chat sessions, image generation runs asynchronously:
 OpenClaw records a background task, returns the task id immediately, and wakes
 the agent when the provider finishes. The completion agent must send generated
-images through the `message` tool; OpenClaw does not auto-post a private final
-reply as a fallback.
+images through the `message` tool. If the requester session is inactive and
+some generated images are still missing from message-tool delivery, OpenClaw
+sends an idempotent direct fallback with only the missing images.
 
 <Note>
 The tool only appears when at least one image-generation provider is
@@ -235,11 +236,12 @@ from each attempt.
   <Accordion title="Timeouts">
     Set `agents.defaults.imageGenerationModel.timeoutMs` for slow image
     backends. A per-call `timeoutMs` tool parameter overrides the configured
-    default. Google, OpenRouter, and xAI hosted image providers use 180 second
-    defaults; Azure OpenAI image generation uses 600 seconds. Codex dynamic-tool
-    calls use a 120 second `image_generate` bridge default and honor the same
-    timeout budget when configured, bounded by OpenClaw's 600000 ms dynamic-tool
-    bridge maximum.
+    default, and configured defaults override plugin-authored provider
+    defaults. Google and OpenRouter hosted image providers use 180 second
+    defaults; xAI and Azure OpenAI image generation use 600 seconds. Codex
+    dynamic-tool calls use a 120 second `image_generate` bridge default and
+    honor the same timeout budget when configured, bounded by OpenClaw's 600000
+    ms dynamic-tool bridge maximum.
   </Accordion>
   <Accordion title="Inspect at runtime">
     Use `action: "list"` to inspect the currently registered providers,

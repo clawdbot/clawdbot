@@ -555,6 +555,49 @@ describe("createOAuthManager", () => {
     });
   });
 
+  it("skips the refresh adapter when the credential has no refresh token", async () => {
+    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "oauth-manager-no-refresh-"));
+    tempDirs.push(tempRoot);
+    process.env.OPENCLAW_STATE_DIR = tempRoot;
+    const agentDir = path.join(tempRoot, "agents", "main", "agent");
+    await fs.mkdir(agentDir, { recursive: true });
+    const profileId = "openai-codex:default";
+    const credential = createCredential({
+      access: "",
+      refresh: "",
+      expires: Date.now() - 60_000,
+    });
+    saveAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          [profileId]: credential,
+        },
+      },
+      agentDir,
+      { filterExternalAuthProfiles: false },
+    );
+    const refreshCredential = vi.fn(async () => null);
+    const manager = createOAuthManager({
+      buildApiKey: async (_provider, value) => value.access,
+      refreshCredential,
+      readBootstrapCredential: () => null,
+      isRefreshTokenReusedError: () => false,
+    });
+
+    const result = await manager.resolveOAuthAccess({
+      store: ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+        allowKeychainPrompt: false,
+      }),
+      profileId,
+      credential,
+      agentDir,
+    });
+
+    expect(result).toBeNull();
+    expect(refreshCredential).not.toHaveBeenCalled();
+  });
+
   it("redacts the external oauth credential attempted during refresh failures", async () => {
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "oauth-manager-refresh-redact-"));
     tempDirs.push(tempRoot);

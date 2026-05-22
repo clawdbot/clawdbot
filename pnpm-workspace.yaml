@@ -14,7 +14,7 @@ minimumReleaseAgeExclude:
   - "@agentclientprotocol/sdk"
   - "axios"
   - "basic-ftp"
-  - "baileys@7.0.0-rc12"
+  - "baileys@7.0.0-rc13"
   - "hono"
   - "libsignal@6.0.0"
   - "openclaw"
@@ -105,4 +105,3 @@ peerDependencyRules:
 
 patchedDependencies:
   "@agentclientprotocol/claude-agent-acp@0.36.1": "patches/@agentclientprotocol__claude-agent-acp@0.36.1.patch"
-  "baileys@7.0.0-rc12": "patches/baileys@7.0.0-rc12.patch"

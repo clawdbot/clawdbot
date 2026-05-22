@@ -93,6 +93,25 @@ function installDiscordRuntime(discord: Record<string, unknown>) {
   } as unknown as PluginRuntime);
 }
 
+async function expectStaleProbeMetadataCleared(statusPatches: Array<Record<string, unknown>>) {
+  await vi.waitFor(() =>
+    expect(
+      statusPatches
+        .filter(
+          (patch) =>
+            "bot" in patch &&
+            "application" in patch &&
+            patch.bot === undefined &&
+            patch.application === undefined,
+        )
+        .map((patch) => ({
+          bot: patch.bot,
+          application: patch.application,
+        })),
+    ).toEqual([{ bot: undefined, application: undefined }]),
+  );
+}
+
 type MockWithCalls = {
   mock: { calls: unknown[][] };
 };
@@ -607,22 +626,7 @@ describe("discordPlugin outbound", () => {
 
     await discordPlugin.gateway!.startAccount!(ctx);
 
-    await vi.waitFor(() =>
-      expect(
-        statusPatches
-          .filter(
-            (patch) =>
-              "bot" in patch &&
-              "application" in patch &&
-              patch.bot === undefined &&
-              patch.application === undefined,
-          )
-          .map((patch) => ({
-            bot: patch.bot,
-            application: patch.application,
-          })),
-      ).toEqual([{ bot: undefined, application: undefined }]),
-    );
+    await expectStaleProbeMetadataCleared(statusPatches);
   });
 
   it("clears stale Discord probe metadata when the async startup probe throws", async () => {
@@ -644,22 +648,7 @@ describe("discordPlugin outbound", () => {
 
     await discordPlugin.gateway!.startAccount!(ctx);
 
-    await vi.waitFor(() =>
-      expect(
-        statusPatches
-          .filter(
-            (patch) =>
-              "bot" in patch &&
-              "application" in patch &&
-              patch.bot === undefined &&
-              patch.application === undefined,
-          )
-          .map((patch) => ({
-            bot: patch.bot,
-            application: patch.application,
-          })),
-      ).toEqual([{ bot: undefined, application: undefined }]),
-    );
+    await expectStaleProbeMetadataCleared(statusPatches);
   });
 
   it("stagger starts later accounts in multi-bot setups", async () => {

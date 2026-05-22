@@ -1,6 +1,7 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { hostname as readHostName } from "node:os";
+import { detectWindowsSpawnCommandInlineArgs } from "openclaw/plugin-sdk/windows-spawn";
 import { z } from "zod";
 import type { CodexSandboxPolicy, CodexServiceTier } from "./protocol.js";
 
@@ -72,6 +73,10 @@ export type CodexPluginsConfig = {
   plugins?: Record<string, CodexPluginEntryConfig>;
 };
 
+export type CodexAppServerExperimentalConfig = {
+  sandboxExecServer?: boolean;
+};
+
 export type ResolvedCodexPluginPolicy = {
   configKey: string;
   marketplaceName: typeof CODEX_PLUGINS_MARKETPLACE_NAME;
@@ -104,6 +109,7 @@ export type CodexAppServerRuntimeOptions = {
   codeModeOnly: boolean;
   requestTimeoutMs: number;
   turnCompletionIdleTimeoutMs: number;
+  postToolRawAssistantCompletionIdleTimeoutMs?: number;
   approvalPolicy: CodexAppServerEffectiveApprovalPolicy;
   sandbox: CodexAppServerSandboxMode;
   approvalsReviewer: CodexAppServerApprovalsReviewer;
@@ -131,11 +137,13 @@ export type CodexPluginConfig = {
     codeModeOnly?: boolean;
     requestTimeoutMs?: number;
     turnCompletionIdleTimeoutMs?: number;
+    postToolRawAssistantCompletionIdleTimeoutMs?: number;
     approvalPolicy?: CodexAppServerApprovalPolicy;
     sandbox?: CodexAppServerSandboxMode;
     approvalsReviewer?: CodexAppServerApprovalsReviewer;
     serviceTier?: CodexServiceTier | null;
     defaultWorkspaceDir?: string;
+    experimental?: CodexAppServerExperimentalConfig;
   };
 };
 
@@ -151,12 +159,16 @@ export const CODEX_APP_SERVER_CONFIG_KEYS = [
   "codeModeOnly",
   "requestTimeoutMs",
   "turnCompletionIdleTimeoutMs",
+  "postToolRawAssistantCompletionIdleTimeoutMs",
   "approvalPolicy",
   "sandbox",
   "approvalsReviewer",
   "serviceTier",
   "defaultWorkspaceDir",
+  "experimental",
 ] as const;
+
+export const CODEX_APP_SERVER_EXPERIMENTAL_CONFIG_KEYS = ["sandboxExecServer"] as const;
 
 export const CODEX_COMPUTER_USE_CONFIG_KEYS = [
   "enabled",
@@ -203,6 +215,11 @@ const codexAppServerServiceTierSchema = z
     z.string().trim().min(1).nullable().optional(),
   )
   .optional();
+const codexAppServerExperimentalSchema = z
+  .object({
+    sandboxExecServer: z.boolean().optional(),
+  })
+  .strict();
 
 const codexPluginEntryConfigSchema = z
   .object({
@@ -259,11 +276,13 @@ const codexPluginConfigSchema = z
         codeModeOnly: z.boolean().optional(),
         requestTimeoutMs: z.number().positive().optional(),
         turnCompletionIdleTimeoutMs: z.number().positive().optional(),
+        postToolRawAssistantCompletionIdleTimeoutMs: z.number().positive().optional(),
         approvalPolicy: codexAppServerApprovalPolicySchema.optional(),
         sandbox: codexAppServerSandboxSchema.optional(),
         approvalsReviewer: codexAppServerApprovalsReviewerSchema.optional(),
         serviceTier: codexAppServerServiceTierSchema,
         defaultWorkspaceDir: z.string().optional(),
+        experimental: codexAppServerExperimentalSchema.optional(),
       })
       .strict()
       .optional(),
@@ -281,6 +300,31 @@ export function readCodexPluginConfig(value: unknown): CodexPluginConfig {
     return config;
   }
   return { ...config, ...(plugins.data ? { codexPlugins: plugins.data } : {}) };
+}
+
+export function isCodexSandboxExecServerEnabled(pluginConfig?: unknown): boolean {
+  return readCodexPluginConfig(pluginConfig).appServer?.experimental?.sandboxExecServer === true;
+}
+
+function assertCodexAppServerCommandHasNoInlineArgs(params: {
+  command: string;
+  source: CodexAppServerCommandSource;
+}): void {
+  const inlineArgs = detectWindowsSpawnCommandInlineArgs(params.command);
+  if (!inlineArgs) {
+    return;
+  }
+  const sourceLabel =
+    params.source === "env"
+      ? "OPENCLAW_CODEX_APP_SERVER_BIN"
+      : "plugins.entries.codex.config.appServer.command";
+  const argsLabel =
+    params.source === "env"
+      ? "OPENCLAW_CODEX_APP_SERVER_ARGS"
+      : "plugins.entries.codex.config.appServer.args";
+  throw new Error(
+    `${sourceLabel} must be only the Codex app-server executable path; "${inlineArgs.executable}" was configured with inline arguments "${inlineArgs.arguments}". Move those arguments to ${argsLabel}, or remove the override to use the managed Codex startup path.`,
+  );
 }
 
 export function resolveCodexPluginsPolicy(pluginConfig?: unknown): ResolvedCodexPluginsPolicy {
@@ -334,6 +378,9 @@ export function resolveCodexAppServerRuntimeOptions(
     : envCommand
       ? "env"
       : "managed";
+  if (commandSource === "config" || commandSource === "env") {
+    assertCodexAppServerCommandHasNoInlineArgs({ command, source: commandSource });
+  }
   const args = resolveArgs(config.args, env.OPENCLAW_CODEX_APP_SERVER_ARGS);
   const headers = normalizeHeaders(config.headers);
   const clearEnv = normalizeStringList(config.clearEnv);
@@ -377,6 +424,14 @@ export function resolveCodexAppServerRuntimeOptions(
       config.turnCompletionIdleTimeoutMs,
       60_000,
     ),
+    ...(config.postToolRawAssistantCompletionIdleTimeoutMs !== undefined
+      ? {
+          postToolRawAssistantCompletionIdleTimeoutMs: normalizePositiveNumber(
+            config.postToolRawAssistantCompletionIdleTimeoutMs,
+            60_000,
+          ),
+        }
+      : {}),
     approvalPolicy:
       resolveApprovalPolicy(config.approvalPolicy) ??
       resolveApprovalPolicy(env.OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY) ??

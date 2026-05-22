@@ -1,3 +1,6 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/web-provider-types.js";
@@ -139,6 +142,7 @@ describe("web search runtime", () => {
   let activateSecretsRuntimeSnapshot: typeof import("../secrets/runtime.js").activateSecretsRuntimeSnapshot;
   let clearSecretsRuntimeSnapshot: typeof import("../secrets/runtime.js").clearSecretsRuntimeSnapshot;
   let setRuntimeConfigSnapshot: typeof import("../config/config.js").setRuntimeConfigSnapshot;
+  const tempDirs: string[] = [];
 
   beforeAll(async () => {
     ({ runWebSearch } = await import("./runtime.js"));
@@ -158,6 +162,9 @@ describe("web search runtime", () => {
 
   afterEach(() => {
     clearSecretsRuntimeSnapshot();
+    for (const tempDir of tempDirs.splice(0)) {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it("executes searches through the active plugin registry", async () => {
@@ -273,6 +280,136 @@ describe("web search runtime", () => {
     ).resolves.toEqual({
       provider: "custom",
       result: { query: "fallback", ok: true },
+    });
+  });
+
+  it("auto-detects a provider from a model-provider auth profile", async () => {
+    const agentDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-web-search-auth-"));
+    tempDirs.push(agentDir);
+    mkdirSync(agentDir, { recursive: true });
+    writeFileSync(
+      path.join(agentDir, "auth-profiles.json"),
+      JSON.stringify({
+        version: 1,
+        profiles: {
+          "xai:default": {
+            type: "oauth",
+            provider: "xai",
+            access: "xai-oauth-access-token",
+            refresh: "xai-oauth-refresh-token",
+            expires: Date.now() + 3_600_000,
+          },
+        },
+      }),
+    );
+
+    const provider = createCustomSearchProvider({
+      pluginId: "xai",
+      id: "grok",
+      authProviderId: "xai",
+      credentialPath: "plugins.entries.xai.config.webSearch.apiKey",
+    });
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([provider]);
+    resolvePluginWebSearchProvidersMock.mockReturnValue([
+      provider,
+      createDuckDuckGoSearchProvider(),
+    ]);
+
+    await expect(
+      runWebSearch({
+        config: {
+          agents: {
+            list: [{ id: "main", agentDir }],
+          },
+        },
+        args: { query: "oauth-backed web search" },
+      }),
+    ).resolves.toEqual({
+      provider: "grok",
+      result: { query: "oauth-backed web search", ok: true },
+    });
+  });
+
+  it("auto-detects a provider from the active agent auth profile", async () => {
+    const defaultAgentDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-web-search-default-"));
+    const activeAgentDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-web-search-active-"));
+    tempDirs.push(defaultAgentDir, activeAgentDir);
+    mkdirSync(defaultAgentDir, { recursive: true });
+    mkdirSync(activeAgentDir, { recursive: true });
+    writeFileSync(
+      path.join(activeAgentDir, "auth-profiles.json"),
+      JSON.stringify({
+        version: 1,
+        profiles: {
+          "xai:active": {
+            type: "oauth",
+            provider: "xai",
+            access: "xai-active-oauth-token",
+            refresh: "xai-active-refresh-token",
+            expires: Date.now() + 3_600_000,
+          },
+        },
+      }),
+    );
+
+    const provider = createCustomSearchProvider({
+      pluginId: "xai",
+      id: "grok",
+      authProviderId: "xai",
+      credentialPath: "plugins.entries.xai.config.webSearch.apiKey",
+    });
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([provider]);
+    resolvePluginWebSearchProvidersMock.mockReturnValue([
+      provider,
+      createDuckDuckGoSearchProvider(),
+    ]);
+
+    await expect(
+      runWebSearch({
+        agentDir: activeAgentDir,
+        config: {
+          agents: {
+            list: [
+              { id: "main", default: true, agentDir: defaultAgentDir },
+              { id: "side", agentDir: activeAgentDir },
+            ],
+          },
+        },
+        args: { query: "active-agent oauth-backed web search" },
+      }),
+    ).resolves.toEqual({
+      provider: "grok",
+      result: { query: "active-agent oauth-backed web search", ok: true },
+    });
+  });
+
+  it("passes the active agentDir into selected provider tools", async () => {
+    const activeAgentDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-web-search-tool-agent-"));
+    tempDirs.push(activeAgentDir);
+    const provider = createCustomSearchProvider({
+      credentialPath: "",
+      requiresCredential: false,
+      createTool: ({ agentDir }) => ({
+        description: "custom",
+        parameters: {},
+        execute: async (args) => ({
+          ...args,
+          agentDir,
+        }),
+      }),
+    });
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([provider]);
+    resolvePluginWebSearchProvidersMock.mockReturnValue([provider]);
+
+    await expect(
+      runWebSearch({
+        agentDir: activeAgentDir,
+        config: {},
+        args: { query: "active-agent tool context" },
+      }),
+    ).resolves.toEqual({
+      provider: "custom",
+      result: { query: "active-agent tool context", agentDir: activeAgentDir },
     });
   });
 

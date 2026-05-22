@@ -1,3 +1,4 @@
+import { normalizeBlockedLivenessWaitStatus } from "../../shared/agent-liveness.js";
 import { isNonTerminalAgentRunStatus } from "../../shared/agent-run-status.js";
 import { setSafeTimeout } from "../../utils/timer-delay.js";
 import type { DedupeEntry } from "../server-shared.js";
@@ -110,11 +111,21 @@ function readTerminalSnapshotFromDedupeEntry(entry: DedupeEntry): AgentWaitTermi
         : entry.error?.message;
 
   if (status === "ok" || status === "timeout") {
-    return {
+    const normalized = normalizeBlockedLivenessWaitStatus({
       status,
+      livenessState,
+      error: errorMessage,
+    });
+    return {
+      status: normalized.status,
       startedAt,
       endedAt,
-      error: status === "timeout" ? errorMessage : undefined,
+      error:
+        normalized.status === "error"
+          ? normalized.error
+          : normalized.status === "timeout"
+            ? errorMessage
+            : undefined,
       stopReason,
       livenessState,
       ...(yielded ? { yielded } : {}),

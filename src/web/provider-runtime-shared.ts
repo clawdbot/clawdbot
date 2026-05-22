@@ -9,6 +9,7 @@ type RuntimeWebProviderMetadata = {
 
 type ProviderWithCredential = {
   envVars: string[];
+  authProviderId?: string;
   requiresCredential?: boolean;
 };
 
@@ -67,6 +68,7 @@ export function hasWebProviderEntryCredential<
     provider: TProvider;
     configuredEnvVarId?: string;
   }) => string | undefined;
+  resolveProviderAuthValue?: (providerId: string) => boolean;
 }): boolean {
   if (!providerRequiresCredential(params.provider)) {
     return true;
@@ -84,6 +86,12 @@ export function hasWebProviderEntryCredential<
   }
   const fromConfig = normalizeSecretInput(normalizeSecretInputString(rawValue));
   if (fromConfig) {
+    return true;
+  }
+  if (
+    params.provider.authProviderId &&
+    params.resolveProviderAuthValue?.(params.provider.authProviderId)
+  ) {
     return true;
   }
   if (

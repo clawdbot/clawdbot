@@ -2,6 +2,7 @@ import { withActivatedPluginIds } from "./activation-context.js";
 import { resolveBundledPluginCompatibleActivationInputs } from "./activation-context.js";
 import { resolveManifestActivationPluginIds } from "./activation-planner.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
+import { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index-install-records.js";
 import {
   getRuntimePluginRegistryForLoadOptions,
   isPluginRegistryLoadInFlight,
@@ -202,6 +203,9 @@ function resolveSetupProviderPluginLoadState(
       workspaceDir: base.workspaceDir,
       env: base.env,
       logger: createPluginRuntimeLoaderLogger(),
+      installRecords: params.pluginMetadataSnapshot
+        ? extractPluginInstallRecordsFromInstalledPluginIndex(params.pluginMetadataSnapshot.index)
+        : undefined,
     },
     {
       onlyPluginIds: setupPluginIds,
@@ -277,6 +281,9 @@ function resolveRuntimeProviderPluginLoadState(
       workspaceDir: base.workspaceDir,
       env: base.env,
       logger: createPluginRuntimeLoaderLogger(),
+      installRecords: params.pluginMetadataSnapshot
+        ? extractPluginInstallRecordsFromInstalledPluginIndex(params.pluginMetadataSnapshot.index)
+        : undefined,
     },
     {
       onlyPluginIds: providerPluginIds,

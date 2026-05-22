@@ -22,7 +22,7 @@ import type {
 
 const DEFAULT_XAI_VIDEO_BASE_URL = "https://api.x.ai/v1";
 const DEFAULT_XAI_VIDEO_MODEL = "grok-imagine-video";
-const DEFAULT_TIMEOUT_MS = 120_000;
+const DEFAULT_TIMEOUT_MS = 600_000;
 const POLL_INTERVAL_MS = 5_000;
 const MAX_POLL_ATTEMPTS = 120;
 const XAI_VIDEO_ASPECT_RATIOS = new Set(["1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3"]);
@@ -369,6 +369,7 @@ export function buildXaiVideoGenerationProvider(): VideoGenerationProvider {
     id: "xai",
     label: "xAI",
     defaultModel: DEFAULT_XAI_VIDEO_MODEL,
+    defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
     models: [DEFAULT_XAI_VIDEO_MODEL],
     isConfigured: ({ agentDir }) =>
       isProviderApiKeyConfigured({

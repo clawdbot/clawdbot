@@ -2383,6 +2383,67 @@ describe("openai transport stream", () => {
     });
   });
 
+  it("drops oversized GitHub Copilot Responses reasoning replay items before send", () => {
+    const model = {
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      api: "openai-responses",
+      provider: "github-copilot",
+      baseUrl: "https://api.githubcopilot.com",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 400000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-responses">;
+    const longReasoningId = `rs_${"x".repeat(380)}`;
+
+    const params = buildOpenAIResponsesParams(
+      model,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            api: "openai-responses",
+            provider: "github-copilot",
+            model: "gpt-5.5",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            timestamp: 1,
+            content: [
+              {
+                type: "thinking",
+                thinking: "Need a tool.",
+                thinkingSignature: JSON.stringify({
+                  type: "reasoning",
+                  id: longReasoningId,
+                  summary: [],
+                }),
+              },
+            ],
+          },
+        ],
+        tools: [],
+      } as never,
+      { sessionId: "session-123" },
+    ) as {
+      input?: Array<{
+        type?: string;
+        id?: string;
+      }>;
+    };
+
+    expect(params.input?.some((item) => item.type === "reasoning")).toBe(false);
+  });
+
   it("strips encrypted reasoning replay when provenance does not match", () => {
     const model = {
       id: "gpt-5.4",

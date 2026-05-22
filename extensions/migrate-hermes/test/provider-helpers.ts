@@ -5,26 +5,25 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 
 const tempRoots = new Set<string>();
+const TEMP_ROOT_PREFIX = "openclaw-migrate-hermes-";
 
-const logger = {
-  info() {},
-  warn() {},
-  error() {},
-  debug() {},
+function noop() {}
+
+const logger: MigrationProviderContext["logger"] = {
+  debug: noop,
+  error: noop,
+  info: noop,
+  warn: noop,
 };
 
 export async function makeTempRoot() {
-  const root = await fs.mkdtemp(
-    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-migrate-hermes-"),
-  );
+  const root = await fs.mkdtemp(path.join(resolvePreferredOpenClawTmpDir(), TEMP_ROOT_PREFIX));
   tempRoots.add(root);
   return root;
 }
 
 export async function cleanupTempRoots() {
-  for (const root of tempRoots) {
-    await fs.rm(root, { force: true, recursive: true });
-  }
+  await Promise.all([...tempRoots].map((root) => fs.rm(root, { force: true, recursive: true })));
   tempRoots.clear();
 }
 
@@ -38,9 +37,7 @@ export function makeConfigRuntime(
   onWrite?: (next: OpenClawConfig) => void,
 ): NonNullable<MigrationProviderContext["runtime"]> {
   const commitConfig = (next: OpenClawConfig) => {
-    for (const key of Object.keys(config) as Array<keyof OpenClawConfig>) {
-      delete config[key];
-    }
+    (Object.keys(config) as Array<keyof OpenClawConfig>).forEach((key) => delete config[key]);
     Object.assign(config, next);
     onWrite?.(next);
   };

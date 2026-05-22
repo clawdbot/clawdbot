@@ -3,11 +3,21 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveRegistryUpdateChannel } from "../../../infra/update-channels.js";
-import { resolveNpmInstallSpecsForUpdateChannel } from "../../../plugins/install-channel-specs.js";
+import {
+  resolveClawHubInstallSpecsForUpdateChannel,
+  resolveNpmInstallSpecsForUpdateChannel,
+} from "../../../plugins/install-channel-specs.js";
 import { VERSION } from "../../../version.js";
 
 function expectedNpmInstallSpec(spec: string): string {
   return resolveNpmInstallSpecsForUpdateChannel({
+    spec,
+    updateChannel: resolveRegistryUpdateChannel({ currentVersion: VERSION }),
+  }).installSpec;
+}
+
+function expectedClawHubInstallSpec(spec: string): string {
+  return resolveClawHubInstallSpecsForUpdateChannel({
     spec,
     updateChannel: resolveRegistryUpdateChannel({ currentVersion: VERSION }),
   }).installSpec;
@@ -1264,7 +1274,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     });
 
     expectRecordFields(mockCallArg(mocks.installPluginFromClawHub), {
-      spec: "clawhub:@openclaw/whatsapp",
+      spec: expectedClawHubInstallSpec("clawhub:@openclaw/whatsapp"),
       env: {
         OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.5.19",
         OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",

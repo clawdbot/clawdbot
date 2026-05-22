@@ -156,7 +156,7 @@ What you set:
   <Accordion title="xAI (Grok) OAuth">
     Browser sign-in for eligible SuperGrok or X Premium accounts. This is the
     recommended xAI path for most users. OpenClaw stores the resulting auth
-    profile for Grok models, `x_search`, and `code_execution`.
+    profile for Grok models, Grok `web_search`, `x_search`, and `code_execution`.
   </Accordion>
   <Accordion title="xAI (Grok) device code">
     Remote-friendly browser sign-in with a short code instead of a localhost

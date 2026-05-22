@@ -263,7 +263,7 @@ export function resolveDiscoveredProviderPluginIds(params: {
 }): string[] {
   const { registry, onlyPluginIdSet } = loadScopedProviderRegistry(params);
   const providerSurfacePluginIds = resolveProviderSurfacePluginIdSet({ ...params, registry });
-  const shouldFilterUntrustedWorkspacePlugins = params.includeUntrustedWorkspacePlugins === false;
+  const shouldFilterUntrustedWorkspacePlugins = params.includeUntrustedWorkspacePlugins !== true;
   const shouldFilterBundledByAllowlist = params.config?.plugins?.bundledDiscovery !== "compat";
   const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry, {
     manifestRegistry: params.manifestRegistry,
@@ -328,7 +328,7 @@ export function resolveDiscoverableProviderOwnerPluginIds(params: {
   manifestRegistry?: PluginManifestRegistry;
   includeUntrustedWorkspacePlugins?: boolean;
 }): string[] {
-  const shouldFilterUntrustedWorkspacePlugins = params.includeUntrustedWorkspacePlugins === false;
+  const shouldFilterUntrustedWorkspacePlugins = params.includeUntrustedWorkspacePlugins !== true;
   const shouldFilterBundledByAllowlist = params.config?.plugins?.bundledDiscovery !== "compat";
   return resolveProviderOwnerPluginIds({
     ...params,

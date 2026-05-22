@@ -176,6 +176,93 @@ describe("diagnostics-prometheus service", () => {
     expect(rendered).not.toContain("progress draft");
   });
 
+  it("records inbound dispatch and session turn telemetry", () => {
+    const store = testApi.createPrometheusMetricStore();
+
+    testApi.recordDiagnosticEvent(
+      store,
+      {
+        ...baseEvent(),
+        type: "message.received",
+        channel: "telegram",
+        source: "webhook",
+      },
+      trusted,
+    );
+    testApi.recordDiagnosticEvent(
+      store,
+      {
+        ...baseEvent(),
+        type: "message.dispatch.started",
+        channel: "telegram",
+        source: "webhook",
+      },
+      trusted,
+    );
+    testApi.recordDiagnosticEvent(
+      store,
+      {
+        ...baseEvent(),
+        type: "message.dispatch.completed",
+        channel: "telegram",
+        source: "webhook",
+        durationMs: 250,
+        outcome: "completed",
+      },
+      trusted,
+    );
+    testApi.recordDiagnosticEvent(
+      store,
+      {
+        ...baseEvent(),
+        type: "message.dispatch.completed",
+        channel: "telegram/custom",
+        source: "webhook with secret sk-test",
+        durationMs: 300,
+        outcome: "completed",
+        reason: "progress draft / message tool 123",
+      },
+      trusted,
+    );
+    testApi.recordDiagnosticEvent(
+      store,
+      {
+        ...baseEvent(),
+        type: "session.turn.created",
+        runId: "run-should-not-export",
+        agentId: "agent.default",
+        channel: "telegram",
+        trigger: "user",
+      },
+      trusted,
+    );
+
+    const rendered = testApi.renderPrometheusMetrics(store);
+
+    expect(rendered).toContain(
+      'openclaw_message_received_total{channel="telegram",source="webhook"} 1',
+    );
+    expect(rendered).toContain(
+      'openclaw_message_dispatch_started_total{channel="telegram",source="webhook"} 1',
+    );
+    expect(rendered).toContain(
+      'openclaw_message_dispatch_completed_total{channel="telegram",outcome="completed",reason="none",source="webhook"} 1',
+    );
+    expect(rendered).toContain(
+      'openclaw_message_dispatch_duration_seconds_sum{channel="telegram",outcome="completed",reason="none",source="webhook"} 0.25',
+    );
+    expect(rendered).toContain(
+      'openclaw_message_dispatch_completed_total{channel="unknown",outcome="completed",reason="none",source="unknown"} 1',
+    );
+    expect(rendered).toContain(
+      'openclaw_message_dispatch_duration_seconds_sum{channel="unknown",outcome="completed",reason="none",source="unknown"} 0.3',
+    );
+    expect(rendered).toContain(
+      'openclaw_session_turn_created_total{agent="agent.default",channel="telegram",trigger="user"} 1',
+    );
+    expect(rendered).not.toContain("run-should-not-export");
+  });
+
   it("records session recovery and talk metrics without exporting raw ids or content", () => {
     const store = testApi.createPrometheusMetricStore();
 

@@ -67,6 +67,8 @@ export function toAgentModelListLike(model?: AgentModelConfig): AgentModelListLi
   return model;
 }
 
+const GOOGLE_PROVIDER_IDS = new Set(["google", "google-gemini-cli", "google-vertex"]);
+
 export function normalizeAgentModelRefForConfig(model: string): string {
   const trimmed = model.trim();
   const slash = trimmed.indexOf("/");
@@ -75,7 +77,11 @@ export function normalizeAgentModelRefForConfig(model: string): string {
   }
 
   const provider = normalizeProviderId(trimmed.slice(0, slash));
-  const normalizedModel = normalizeGooglePreviewModelId(trimmed.slice(slash + 1));
+  const modelSuffix = trimmed.slice(slash + 1);
+  const normalizedModel =
+    GOOGLE_PROVIDER_IDS.has(provider) || modelSuffix.startsWith("google/")
+      ? normalizeGooglePreviewModelId(modelSuffix)
+      : modelSuffix;
   return modelKeyForConfig(provider, normalizedModel);
 }
 

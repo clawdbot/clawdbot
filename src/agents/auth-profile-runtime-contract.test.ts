@@ -197,7 +197,7 @@ async function runAuthContractAttempt(params: {
     resolvedThinkLevel: "medium",
     timeoutMs: 1_000,
     runId: AUTH_PROFILE_RUNTIME_CONTRACT.runId,
-    opts: { senderIsOwner: false } as Parameters<typeof runAgentAttempt>[0]["opts"],
+    opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
     runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
     spawnedBy: undefined,
     messageChannel: undefined,

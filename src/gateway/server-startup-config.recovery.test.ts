@@ -15,26 +15,8 @@ const configMocks = vi.hoisted(() => ({
 }));
 const pluginManifestRegistry = vi.hoisted(() => ({ plugins: [], diagnostics: [] }));
 const pluginMetadataSnapshot = vi.hoisted(
-  (): PluginMetadataSnapshot => ({
-    policyHash: "policy",
-    index: {
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash: "policy",
-      generatedAtMs: 0,
-      installRecords: {},
-      plugins: [],
-      diagnostics: [],
-    },
-    registryDiagnostics: [],
-    manifestRegistry: pluginManifestRegistry,
-    plugins: [],
-    diagnostics: [],
-    byPluginId: new Map(),
-    normalizePluginId: (pluginId) => pluginId,
-    owners: {
+  (): PluginMetadataSnapshot => {
+    const emptyOwners = {
       channels: new Map(),
       channelConfigs: new Map(),
       providers: new Map(),
@@ -43,16 +25,38 @@ const pluginMetadataSnapshot = vi.hoisted(
       setupProviders: new Map(),
       commandAliases: new Map(),
       contracts: new Map(),
-    },
-    metrics: {
+    };
+    const zeroMetrics = {
       registrySnapshotMs: 0,
       manifestRegistryMs: 0,
       ownerMapsMs: 0,
       totalMs: 0,
       indexPluginCount: 0,
       manifestPluginCount: 0,
-    },
-  }),
+    };
+    return {
+      policyHash: "policy",
+      index: {
+        version: 1,
+        hostContractVersion: "test",
+        compatRegistryVersion: "test",
+        migrationVersion: 1,
+        policyHash: "policy",
+        generatedAtMs: 0,
+        installRecords: {},
+        plugins: [],
+        diagnostics: [],
+      },
+      registryDiagnostics: [],
+      manifestRegistry: pluginManifestRegistry,
+      plugins: [],
+      diagnostics: [],
+      byPluginId: new Map(),
+      normalizePluginId: (pluginId) => pluginId,
+      owners: emptyOwners,
+      metrics: zeroMetrics,
+    };
+  },
 );
 vi.mock("../config/io.js", () => ({
   readConfigFileSnapshot: vi.fn(),

@@ -27,6 +27,7 @@ vi.mock("../../config/sessions/paths.js", () => ({
 
 vi.mock("../../config/sessions/store-load.js", () => ({
   loadSessionStore: vi.fn().mockReturnValue({}),
+  readSessionEntry: vi.fn(),
 }));
 
 vi.mock("../../infra/outbound/channel-selection.runtime.js", () => ({
@@ -57,7 +58,7 @@ const mockedModuleIds = [
   "../../pairing/allow-from-store-read.js",
 ];
 
-import { loadSessionStore } from "../../config/sessions/store-load.js";
+import { loadSessionStore, readSessionEntry } from "../../config/sessions/store-load.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.runtime.js";
 import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-id-resolution.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.runtime.js";
@@ -118,6 +119,8 @@ beforeEach(() => {
   vi.mocked(readChannelAllowFromStoreEntriesSync).mockReset();
   vi.mocked(readChannelAllowFromStoreEntriesSync).mockReturnValue([]);
   vi.mocked(resolveOutboundTarget).mockReset();
+  vi.mocked(loadSessionStore).mockReset().mockReturnValue({});
+  vi.mocked(readSessionEntry).mockReset().mockReturnValue(undefined);
   setActivePluginRegistry(
     createTestRegistry([
       {
@@ -194,6 +197,7 @@ type SessionStore = ReturnType<typeof loadSessionStore>;
 
 function setSessionStore(store: SessionStore) {
   vi.mocked(loadSessionStore).mockReturnValue(store);
+  vi.mocked(readSessionEntry).mockImplementation((_storePath, sessionKey) => store[sessionKey]);
 }
 
 function setMainSessionEntry(entry?: SessionStore[string]) {
@@ -242,6 +246,21 @@ async function resolveLastTarget(cfg: OpenClawConfig) {
 }
 
 describe("resolveDeliveryTarget", () => {
+  it("uses session-entry snapshot reads for implicit last delivery lookup", async () => {
+    setLastSessionEntry({
+      sessionId: "sess-w1",
+      lastChannel: "alpha",
+      lastTo: "room-allowed",
+    });
+
+    const result = await resolveLastTarget(makeCfg({ channels: { alpha: { allowFrom: [] } } }));
+
+    expect(result.channel).toBe("alpha");
+    expect(result.to).toBe("room-allowed");
+    expect(readSessionEntry).toHaveBeenCalledWith("/tmp/test-store.json", "agent:test:main");
+    expect(loadSessionStore).not.toHaveBeenCalled();
+  });
+
   it("reroutes implicit delivery to an authorized allowFrom recipient", async () => {
     setLastSessionEntry({
       sessionId: "sess-w1",

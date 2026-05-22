@@ -57,6 +57,27 @@ export function mergePathPrepend(existing: string | undefined, prepend: string[]
   return merged.join(path.delimiter);
 }
 
+export function removePathPrepend(
+  existing: string | undefined,
+  prepend: string[],
+): string | undefined {
+  if (!existing || prepend.length === 0) {
+    return existing;
+  }
+
+  const prependEntries = new Set<string>(
+    prepend.map((part) => part.trim()).filter(Boolean),
+  );
+
+  const remaining: string[] = (existing ?? "")
+    .split(path.delimiter)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .filter((part) => !prependEntries.has(part));
+
+  return remaining.join(path.delimiter);
+}
+
 export function applyPathPrepend(
   env: Record<string, string>,
   prepend: string[] | undefined,

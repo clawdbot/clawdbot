@@ -331,7 +331,6 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
       resolvedVerboseLevel: "off",
       thinkLevel: undefined,
       timeoutMs: 60_000,
-      senderIsOwner: true,
       suppressExecNotifyOnExit: true,
       sourceDelivery: createSourceDeliveryPlan({
         owner: "message_tool_then_direct_fallback",

@@ -110,7 +110,6 @@ type FirstAgentCommandOptions = {
   message?: string;
   messageChannel?: string;
   model?: string;
-  senderIsOwner?: boolean;
   sessionKey?: string;
   streamParams?: {
     maxTokens?: number;
@@ -178,7 +177,6 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         messages: [{ role: "user", content: message }],
       });
       expect(res.status).toBe(200);
-      expect(getFirstAgentCall()?.senderIsOwner).toBe(false);
       return (await res.json()) as Record<string, unknown>;
     };
 
@@ -2192,7 +2190,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     expect(usageChunks).toHaveLength(0);
   });
 
-  it("treats shared-secret bearer callers as owner operators", async () => {
+  it("accepts shared-secret bearer callers", async () => {
     const port = await getFreePort();
     const server = await startTokenServer(port);
     try {
@@ -2213,7 +2211,6 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
       });
 
       expect(res.status).toBe(200);
-      expect(firstAgentCommandOptions()?.senderIsOwner).toBe(true);
       await res.text();
     } finally {
       await server.close({ reason: "openai token auth owner test done" });

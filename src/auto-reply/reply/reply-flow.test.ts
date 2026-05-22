@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../tokens.js";
-import { createReplyDispatcher } from "./reply-dispatcher.js";
+import { createReplyDispatcher, waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import { createReplyToModeFilter } from "./reply-threading.js";
 
 type DeliverPayload = Parameters<Parameters<typeof createReplyDispatcher>[0]["deliver"]>[0];
@@ -214,6 +214,32 @@ describe("createReplyDispatcher", () => {
     expect(deliver).toHaveBeenCalledTimes(2);
 
     vi.useRealTimers();
+  });
+});
+
+describe("waitForReplyDispatcherIdle", () => {
+  it("returns when the abort signal fires before the dispatcher becomes idle", async () => {
+    const controller = new AbortController();
+    const waitForIdle = vi.fn(
+      () =>
+        new Promise<void>(() => {
+          // Keep the dispatcher busy until the abort path wins.
+        }),
+    );
+
+    let settled = false;
+    const waitPromise = waitForReplyDispatcherIdle({ waitForIdle }, controller.signal).then(() => {
+      settled = true;
+    });
+
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    controller.abort();
+    await waitPromise;
+
+    expect(settled).toBe(true);
+    expect(waitForIdle).toHaveBeenCalledTimes(1);
   });
 });
 

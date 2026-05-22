@@ -134,6 +134,16 @@ describe("registerAgentCommands", () => {
     expect(deps).toEqual({ deps: true });
   });
 
+  it("forwards an explicit session key to the agent command", async () => {
+    await runCli(["agent", "--message", "hi", "--session-key", "agent:ops:incident-42"]);
+
+    const [options, callRuntime, deps] = commandCall(agentCliCommandMock);
+    expect((options as { message?: string }).message).toBe("hi");
+    expect((options as { sessionKey?: string }).sessionKey).toBe("agent:ops:incident-42");
+    expect(callRuntime).toBe(runtime);
+    expect(deps).toEqual({ deps: true });
+  });
+
   it("runs agents add and computes hasFlags based on explicit options", async () => {
     await runCli(["agents", "add", "alpha"]);
     const [alphaOptions, alphaRuntime, alphaFlags] = commandCall(agentsAddCommandMock, 0);

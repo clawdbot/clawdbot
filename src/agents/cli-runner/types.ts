@@ -61,6 +61,7 @@ export type RunCliAgentParams = {
   messageChannel?: string;
   messageProvider?: string;
   agentAccountId?: string;
+  /** Trusted sender identity bit for channel action auth. */
   senderIsOwner?: boolean;
   /** Runtime tool allow-list. CLI harnesses fail closed when this is set. */
   toolsAllow?: string[];

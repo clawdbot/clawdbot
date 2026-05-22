@@ -43,8 +43,6 @@ describe("msteams thread parent context injection", () => {
     {
       sessionKey: string;
       contextKey?: string;
-      forceSenderIsOwnerFalse?: boolean;
-      trusted?: boolean;
     },
   ];
 
@@ -102,10 +100,7 @@ describe("msteams thread parent context injection", () => {
     expect(parentCall[0]).toBe("Replying to @Alice: Can someone investigate the latency spike?");
     expect(parentCall[1]?.contextKey).toContain("msteams:thread-parent:");
     expect(parentCall[1]?.contextKey).toContain("thread-root-123");
-    expect(parentCall[1]).toMatchObject({
-      forceSenderIsOwnerFalse: true,
-      trusted: false,
-    });
+    expect(parentCall[1]).toMatchObject({});
   });
 
   it("caches parent fetches across thread replies in the same session", async () => {

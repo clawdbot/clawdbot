@@ -83,6 +83,17 @@ async function runQaCoverageReport(opts: {
   await runtime.runQaCoverageReportCommand(opts);
 }
 
+async function runQaJsonlReplay(opts: {
+  repoRoot?: string;
+  transcripts?: string;
+  outputDir?: string;
+  runtimePair?: string;
+  providerMode?: QaProviderModeInput;
+}) {
+  const runtime = await loadQaLabCliRuntime();
+  await runtime.runQaJsonlReplayCommand(opts);
+}
+
 async function runQaCharacterEval(opts: {
   repoRoot?: string;
   outputDir?: string;
@@ -399,6 +410,33 @@ export function registerQaLabCli(program: Command) {
         summary?: string;
       }) => {
         await runQaCoverageReport(opts);
+      },
+    );
+
+  qa.command("jsonl-replay")
+    .description("Replay curated JSONL transcripts through the runtime parity replay harness")
+    .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
+    .option(
+      "--transcripts <path>",
+      "Directory of curated JSONL transcripts",
+      "qa/scenarios/jsonl-replay",
+    )
+    .option("--runtime-pair <pair>", "Runtime pair label, e.g. pi,codex", "pi,codex")
+    .option(
+      "--provider-mode <mode>",
+      `Provider mode (${formatQaProviderModeHelp()})`,
+      "mock-openai",
+    )
+    .option("--output-dir <path>", "Artifact directory for the JSONL replay report")
+    .action(
+      async (opts: {
+        repoRoot?: string;
+        transcripts?: string;
+        runtimePair?: string;
+        providerMode?: QaProviderModeInput;
+        outputDir?: string;
+      }) => {
+        await runQaJsonlReplay(opts);
       },
     );
 

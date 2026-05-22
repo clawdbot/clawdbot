@@ -789,33 +789,76 @@ describe("session history HTTP endpoints", () => {
       });
       expect(wsHistory.ok).toBe(false);
       expect(wsHistory.error?.message).toBe("missing scope: operator.read");
+    } finally {
+      ws.close();
+      await server.close();
+      envSnapshot.restore();
+    }
+  });
 
+  test("allows HTTP session history reads with shared-secret bearer auth and default scopes", async () => {
+    await seedSession({ text: "bearer allowed history" });
+
+    const started = await startServerWithClient("test-gateway-token-1234567890");
+    const { server, ws, port, envSnapshot } = started;
+    try {
       const httpHistory = await fetch(
-        `http://127.0.0.1:${port}/sessions/${encodeURIComponent("agent:main:main")}/history?limit=1`,
-        {
-          headers: {
-            ...AUTH_HEADER,
-            "x-openclaw-scopes": "operator.approvals",
-          },
-        },
-      );
-      expect(httpHistory.status).toBe(403);
-      expectErrorResponse(await httpHistory.json(), {
-        type: "forbidden",
-        message: "missing scope: operator.read",
-      });
-
-      const httpHistoryWithoutScopes = await fetch(
         `http://127.0.0.1:${port}/sessions/${encodeURIComponent("agent:main:main")}/history?limit=1`,
         {
           headers: AUTH_HEADER,
         },
       );
-      expect(httpHistoryWithoutScopes.status).toBe(403);
-      expectErrorResponse(await httpHistoryWithoutScopes.json(), {
-        type: "forbidden",
-        message: "missing scope: operator.read",
+      expect(httpHistory.status).toBe(200);
+      const body = await httpHistory.json();
+      expect(body.sessionKey).toBe("agent:main:main");
+      expect(body.messages?.[0]?.content?.[0]?.text).toBe("bearer allowed history");
+    } finally {
+      ws.close();
+      await server.close();
+      envSnapshot.restore();
+    }
+  });
+
+  test("maintains HTTP SSE streams with shared-secret bearer auth across transcript updates", async () => {
+    const { storePath } = await seedSession({ text: "bearer allowed history" });
+
+    const started = await startServerWithClient("test-gateway-token-1234567890");
+    const { server, ws, port, envSnapshot } = started;
+    try {
+      const res = await fetch(
+        `http://127.0.0.1:${port}/sessions/${encodeURIComponent("agent:main:main")}/history`,
+        {
+          headers: {
+            ...AUTH_HEADER,
+            Accept: "text/event-stream",
+          },
+        },
+      );
+      expect(res.status).toBe(200);
+      const reader = res.body?.getReader();
+      expect(reader).toBeDefined();
+      const stream = { reader: reader!, streamState: { buffer: "" } };
+
+      await expectHistoryEventTexts(stream, ["bearer allowed history"]);
+
+      const appended = await appendAssistantMessageToSessionTranscript({
+        sessionKey: "agent:main:main",
+        text: "bearer sse update",
+        storePath,
       });
+      expect(appended.ok).toBe(true);
+
+      if (!appended.ok) {
+        throw new Error(`append failed: ${appended.reason}`);
+      }
+
+      await expectMessageEventMatch(stream, {
+        text: "bearer sse update",
+        seq: 2,
+        id: appended.messageId,
+      });
+
+      await stream.reader.cancel();
     } finally {
       ws.close();
       await server.close();

@@ -3,10 +3,15 @@ import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
 import type { SessionEntry } from "./types.js";
 
-const storeState = vi.hoisted(() => ({
-  store: {} as Record<string, SessionEntry>,
-  stores: {} as Record<string, Record<string, SessionEntry>>,
-}));
+const storeState = vi.hoisted(() => {
+  const state = {
+    store: {} as Record<string, SessionEntry>,
+    stores: {} as Record<string, Record<string, SessionEntry>>,
+    loadSessionStore: vi.fn((storePath: string) => state.stores[storePath] ?? state.store),
+    readSessionStoreSnapshot: vi.fn((storePath: string) => state.stores[storePath] ?? state.store),
+  };
+  return state;
+});
 
 vi.mock("../io.js", () => ({
   getRuntimeConfig: () => ({}),
@@ -18,7 +23,8 @@ vi.mock("./paths.js", () => ({
 }));
 
 vi.mock("./store.js", () => ({
-  loadSessionStore: (storePath: string) => storeState.stores[storePath] ?? storeState.store,
+  loadSessionStore: storeState.loadSessionStore,
+  readSessionStoreSnapshot: storeState.readSessionStoreSnapshot,
 }));
 
 vi.mock("./targets.js", () => ({
@@ -46,6 +52,8 @@ beforeEach(() => {
   setActivePluginRegistry(createSessionConversationTestRegistry());
   storeState.store = {};
   storeState.stores = {};
+  storeState.loadSessionStore.mockClear();
+  storeState.readSessionStoreSnapshot.mockClear();
 });
 
 describe("extractDeliveryInfo", () => {
@@ -83,6 +91,21 @@ describe("extractDeliveryInfo", () => {
       baseSessionKey: undefined,
       threadId: undefined,
     });
+  });
+
+  it("uses session-store snapshots for direct session keys", () => {
+    const sessionKey = "agent:main:webchat:dm:user-123";
+    storeState.store[sessionKey] = buildEntry({
+      channel: "webchat",
+      to: "webchat:user-123",
+      accountId: "default",
+    });
+
+    const result = extractDeliveryInfo(sessionKey);
+
+    expect(result.deliveryContext?.to).toBe("webchat:user-123");
+    expect(storeState.readSessionStoreSnapshot).toHaveBeenCalledWith("/tmp/sessions.json");
+    expect(storeState.loadSessionStore).not.toHaveBeenCalled();
   });
 
   it("returns deliveryContext for direct session keys", () => {

@@ -1,7 +1,10 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeProviderId } from "../provider-id.js";
 import { resolveProviderRequestHeaders } from "../provider-request-config.js";
 import { logAuthProfileFailureStateChange } from "./state-observation.js";
+
+const authProfileUsageLog = createSubsystemLogger("agent/embedded");
 import { saveAuthProfileStore, updateAuthProfileStoreWithLock } from "./store.js";
 import type {
   AuthProfileBlockedSource,
@@ -25,6 +28,15 @@ const authProfileUsageDeps = {
   saveAuthProfileStore,
   updateAuthProfileStoreWithLock,
 };
+
+// Invoked once per recorded auth-profile failure. Gateway startup wires this
+// to clearCurrentProviderAuthState so the next model-listing call recomputes
+// against the real auth state.
+let onAuthProfileFailureHook: (() => void) | undefined;
+
+export function setAuthProfileFailureHook(hook: (() => void) | undefined): void {
+  onAuthProfileFailureHook = hook;
+}
 
 export const testing = {
   setDepsForTest(
@@ -717,6 +729,16 @@ export async function markAuthProfileFailure(params: {
         now: updateTime,
       });
     }
+    try {
+      onAuthProfileFailureHook?.();
+    } catch (err) {
+      // Hook errors must not break failure recording; log and continue.
+      authProfileUsageLog.warn("auth profile failure hook threw", {
+        event: "auth_profile_failure_hook_error",
+        tags: ["error_handling", "auth_profiles"],
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
     return;
   }
   if (!store.profiles[profileId]) {
@@ -758,6 +780,16 @@ export async function markAuthProfileFailure(params: {
     next: nextStats,
     now,
   });
+  try {
+    onAuthProfileFailureHook?.();
+  } catch (err) {
+    // Hook errors must not break failure recording; log and continue.
+    authProfileUsageLog.warn("auth profile failure hook threw", {
+      event: "auth_profile_failure_hook_error",
+      tags: ["error_handling", "auth_profiles"],
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 export async function markAuthProfileBlockedUntil(params: {

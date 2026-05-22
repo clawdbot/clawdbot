@@ -70,6 +70,11 @@ export type CodexDynamicToolSpec = JsonObject & {
   inputSchema: JsonValue;
 };
 
+export type CodexTurnEnvironmentParams = JsonObject & {
+  environmentId: string;
+  cwd: string;
+};
+
 export type CodexThreadStartParams = JsonObject & {
   input?: CodexUserInput[];
   cwd?: string;
@@ -77,11 +82,12 @@ export type CodexThreadStartParams = JsonObject & {
   modelProvider?: string | null;
   approvalPolicy?: string | JsonObject;
   approvalsReviewer?: string | null;
-  sandbox?: CodexSandboxPolicy;
+  sandbox?: string;
   serviceTier?: CodexServiceTier | null;
   dynamicTools?: CodexDynamicToolSpec[] | null;
   developerInstructions?: string;
   experimentalRawEvents?: boolean;
+  environments?: CodexTurnEnvironmentParams[] | null;
   persistExtendedHistory?: boolean;
 };
 
@@ -89,6 +95,13 @@ export type CodexThreadResumeParams = JsonObject & {
   threadId: string;
   model?: string;
   modelProvider?: string | null;
+  approvalPolicy?: string | JsonObject;
+  approvalsReviewer?: string | null;
+  sandbox?: string;
+  serviceTier?: CodexServiceTier | null;
+  config?: JsonObject;
+  developerInstructions?: string;
+  persistExtendedHistory?: boolean;
 };
 
 export type CodexThreadStartResponse = {
@@ -137,6 +150,7 @@ export type CodexTurnStartParams = JsonObject & {
   sandboxPolicy?: CodexSandboxPolicy;
   serviceTier?: CodexServiceTier | null;
   effort?: string | null;
+  environments?: CodexTurnEnvironmentParams[] | null;
   collaborationMode?: {
     mode: string;
     settings: JsonObject & {
@@ -256,6 +270,7 @@ export type CodexDynamicToolCallParams = {
 export type CodexDynamicToolCallResponse = {
   contentItems: CodexDynamicToolCallOutputContentItem[];
   diagnosticTerminalType?: CodexDynamicToolDiagnosticTerminalType;
+  sideEffectEvidence?: boolean;
   success: boolean;
 };
 
@@ -475,6 +490,7 @@ export declare namespace v2 {
 }
 
 type CodexAppServerRequestParamsOverride = {
+  "environment/add": { environmentId: string; execServerUrl: string };
   "thread/fork": CodexThreadForkParams;
   "thread/inject_items": CodexThreadInjectItemsParams;
   "thread/start": CodexThreadStartParams;
@@ -488,6 +504,7 @@ type CodexAppServerRequestResultMap = {
   "account/read": CodexGetAccountResponse;
   "app/list": CodexAppsListResponse;
   "config/mcpServer/reload": JsonValue;
+  "environment/add": JsonValue;
   "experimentalFeature/enablement/set": JsonValue;
   "feedback/upload": JsonValue;
   "hooks/list": CodexHooksListResponse;

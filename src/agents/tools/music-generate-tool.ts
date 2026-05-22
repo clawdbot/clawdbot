@@ -30,12 +30,18 @@ import {
   formatGeneratedAttachmentLines,
   type AgentGeneratedAttachment,
 } from "../generated-attachments.js";
+import {
+  buildMediaGenerationRequestKey,
+  recordRecentMediaGenerationTaskStartForSession,
+} from "../media-generation-task-status-shared.js";
 import { ToolInputError, readNumberParam, readStringParam } from "./common.js";
 import { decodeDataUrl } from "./image-tool.helpers.js";
 import {
   buildMediaGenerationStartedToolResult,
   createDefaultMediaGenerateBackgroundScheduler,
+  notifyMediaGenerationAsyncTaskStarted,
   scheduleMediaGenerationTaskCompletion,
+  type MediaGenerateAsyncStartCallback,
   type MediaGenerateBackgroundScheduler,
 } from "./media-generate-background-shared.js";
 import {
@@ -569,6 +575,7 @@ export function createMusicGenerateTool(options?: {
   sandbox?: MusicGenerateSandboxConfig;
   fsPolicy?: ToolFsPolicy;
   scheduleBackgroundWork?: MediaGenerateBackgroundScheduler;
+  onAsyncTaskStarted?: MediaGenerateAsyncStartCallback;
 }): AnyAgentTool | null {
   const cfg: OpenClawConfig = options?.config ?? getRuntimeConfig();
   if (
@@ -627,15 +634,15 @@ export function createMusicGenerateTool(options?: {
       const explicitModelConfig = hasExplicitMusicGenerationModelConfig(cfg);
       const effectiveCfg =
         applyMusicGenerationModelConfigDefaults(cfg, musicGenerationModelConfig) ?? cfg;
+      const prompt = readStringParam(args, "prompt", { required: true });
 
-      const duplicateGuardResult = createMusicGenerateDuplicateGuardResult(
+      const activeDuplicateGuardResult = createMusicGenerateDuplicateGuardResult(
         options?.agentSessionKey,
       );
-      if (duplicateGuardResult) {
-        return duplicateGuardResult;
+      if (activeDuplicateGuardResult) {
+        return activeDuplicateGuardResult;
       }
 
-      const prompt = readStringParam(args, "prompt", { required: true });
       const lyrics = readStringParam(args, "lyrics");
       const instrumental = readBooleanToolParam(args, "instrumental");
       const model = readStringParam(args, "model");
@@ -648,17 +655,45 @@ export function createMusicGenerateTool(options?: {
       const timeout = normalizeMusicGenerationTimeoutMs(musicGenerationModelConfig.timeoutMs);
       const timeoutMs = timeout.timeoutMs;
       const imageInputs = normalizeReferenceImageInputs(args);
-      const selectedModelRef =
-        parseMusicGenerationModelRef(model) ??
-        parseMusicGenerationModelRef(musicGenerationModelConfig.primary);
-      const selectedProvider =
-        imageInputs.length > 0
-          ? resolveSelectedMusicGenerationProvider({
-              config: effectiveCfg,
-              musicGenerationModelConfig,
-              modelOverride: model,
-            })
-          : undefined;
+      const explicitModelRef = parseMusicGenerationModelRef(model);
+      const primaryModelRef = parseMusicGenerationModelRef(musicGenerationModelConfig.primary);
+      const selectedModelRef = explicitModelRef ?? primaryModelRef;
+      const shouldResolveSelectedProvider =
+        imageInputs.length > 0 ||
+        (model !== undefined && !explicitModelRef) ||
+        (model === undefined && !primaryModelRef);
+      const selectedProvider = shouldResolveSelectedProvider
+        ? resolveSelectedMusicGenerationProvider({
+            config: effectiveCfg,
+            musicGenerationModelConfig,
+            modelOverride: model,
+          })
+        : undefined;
+      const selectedProviderId = selectedProvider?.id ?? selectedModelRef?.provider;
+      const requestKey = buildMediaGenerationRequestKey({
+        tool: "music_generate",
+        prompt,
+        provider: selectedProviderId,
+        model:
+          model !== undefined
+            ? (explicitModelRef?.model ?? model)
+            : (primaryModelRef?.model ??
+              musicGenerationModelConfig.primary ??
+              selectedProvider?.defaultModel),
+        lyrics,
+        instrumental,
+        durationSeconds,
+        format,
+        filename,
+        imageInputs,
+      });
+      const duplicateGuardResult = createMusicGenerateDuplicateGuardResult(
+        options?.agentSessionKey,
+        { requestKey },
+      );
+      if (duplicateGuardResult) {
+        return duplicateGuardResult;
+      }
       const remoteMediaSsrfPolicy = resolveRemoteMediaSsrfPolicy(effectiveCfg);
       const loadedReferenceImages = await loadReferenceImages({
         inputs: imageInputs,
@@ -683,7 +718,18 @@ export function createMusicGenerateTool(options?: {
       });
       const shouldDetach = Boolean(taskHandle && options?.agentSessionKey?.trim());
 
-      if (shouldDetach) {
+      if (shouldDetach && taskHandle) {
+        recordRecentMediaGenerationTaskStartForSession({
+          sessionKey: options?.agentSessionKey,
+          taskKind: "music_generation",
+          sourcePrefix: "music_generate",
+          taskId: taskHandle.taskId,
+          runId: taskHandle.runId,
+          taskLabel: prompt,
+          requestKey,
+          providerId: selectedProviderId,
+          progressSummary: "Generating music",
+        });
         scheduleMediaGenerationTaskCompletion({
           lifecycle: musicGenerationTaskLifecycle,
           handle: taskHandle,
@@ -709,6 +755,14 @@ export function createMusicGenerateTool(options?: {
               timeoutMs,
               timeoutNormalization: timeout.normalization,
             }),
+        });
+
+        await notifyMediaGenerationAsyncTaskStarted({
+          callback: options?.onAsyncTaskStarted,
+          message: "Music generation started; wait for the generated music completion event.",
+          toolName: "music_generate",
+          handle: taskHandle,
+          onFailure: (message, meta) => log.warn(message, meta),
         });
 
         return buildMediaGenerationStartedToolResult({

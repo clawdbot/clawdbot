@@ -387,6 +387,33 @@ describe("createInboundDebouncer", () => {
     vi.useRealTimers();
   });
 
+  it("reports buffered items when cancelling a key", async () => {
+    vi.useFakeTimers();
+    const calls: Array<string[]> = [];
+    const canceled: Array<string[]> = [];
+
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
+      debounceMs: 10,
+      buildKey: (item) => item.key,
+      onFlush: async (items) => {
+        calls.push(items.map((entry) => entry.id));
+      },
+      onCancel: (items) => {
+        canceled.push(items.map((entry) => entry.id));
+      },
+    });
+
+    await debouncer.enqueue({ key: "a", id: "1" });
+    await debouncer.enqueue({ key: "a", id: "2" });
+    expect(debouncer.cancelKey("a")).toBe(true);
+    await vi.advanceTimersByTimeAsync(10);
+
+    expect(canceled).toEqual([["1", "2"]]);
+    expect(calls).toEqual([]);
+
+    vi.useRealTimers();
+  });
+
   it("flushes buffered items before non-debounced item", async () => {
     vi.useFakeTimers();
     const calls: Array<string[]> = [];

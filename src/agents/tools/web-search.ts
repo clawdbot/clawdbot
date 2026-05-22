@@ -71,6 +71,7 @@ function isWebSearchDisabled(config?: OpenClawConfig): boolean {
 
 export function createWebSearchTool(options?: {
   config?: OpenClawConfig;
+  agentDir?: string;
   sandboxed?: boolean;
   runtimeWebSearch?: RuntimeWebSearchMetadata;
   lateBindRuntimeConfig?: boolean;
@@ -96,6 +97,7 @@ export function createWebSearchTool(options?: {
       }
       const result = await runWebSearch({
         config,
+        agentDir: options?.agentDir,
         sandboxed: options?.sandboxed,
         runtimeWebSearch,
         preferRuntimeProviders,

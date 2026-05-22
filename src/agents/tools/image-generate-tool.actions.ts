@@ -3,9 +3,13 @@ import { listRuntimeImageGenerationProviders } from "../../image-generation/runt
 import type { ImageGenerationProvider } from "../../image-generation/types.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import {
+  buildImageGenerationTaskStatusListDetails,
+  buildImageGenerationTaskStatusListText,
   buildImageGenerationTaskStatusDetails,
   buildImageGenerationTaskStatusText,
   findActiveImageGenerationTaskForSession,
+  findDuplicateGuardImageGenerationTaskForSession,
+  listActiveImageGenerationTasksForSession,
 } from "../image-generation-task-status.js";
 import {
   createMediaGenerateProviderListActionResult,
@@ -87,30 +91,41 @@ const imageGenerateTaskStatusActions = createMediaGenerateTaskStatusActions({
 export function createImageGenerateStatusActionResult(
   sessionKey?: string,
 ): ImageGenerateActionResult {
+  const activeTasks = listActiveImageGenerationTasksForSession(sessionKey);
+  if (activeTasks.length > 1) {
+    return {
+      content: [{ type: "text", text: buildImageGenerationTaskStatusListText(activeTasks) }],
+      details: {
+        action: "status",
+        ...buildImageGenerationTaskStatusListDetails(activeTasks),
+      },
+    };
+  }
   return imageGenerateTaskStatusActions.createStatusActionResult(sessionKey);
 }
 
 export function createImageGenerateDuplicateGuardResult(
   sessionKey?: string,
-  params?: { prompt?: string },
+  params?: { prompt?: string; requestKey?: string },
 ): ImageGenerateActionResult | undefined {
-  const activeTask = findActiveImageGenerationTaskForSession(sessionKey, {
+  const blockingTask = findDuplicateGuardImageGenerationTaskForSession(sessionKey, {
     prompt: params?.prompt,
+    requestKey: params?.requestKey,
   });
-  if (!activeTask) {
+  if (!blockingTask) {
     return undefined;
   }
   return {
     content: [
       {
         type: "text",
-        text: buildImageGenerationTaskStatusText(activeTask, { duplicateGuard: true }),
+        text: buildImageGenerationTaskStatusText(blockingTask, { duplicateGuard: true }),
       },
     ],
     details: {
       action: "status",
       duplicateGuard: true,
-      ...buildImageGenerationTaskStatusDetails(activeTask),
+      ...buildImageGenerationTaskStatusDetails(blockingTask),
     },
   };
 }

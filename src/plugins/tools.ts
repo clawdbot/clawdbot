@@ -598,9 +598,6 @@ function createCachedDescriptorPluginTool(params: {
   if (params.descriptor.displaySummary) {
     tool.displaySummary = params.descriptor.displaySummary;
   }
-  if (params.descriptor.ownerOnly === true) {
-    tool.ownerOnly = true;
-  }
   setPluginToolMeta(tool, {
     pluginId,
     optional: params.descriptor.optional,

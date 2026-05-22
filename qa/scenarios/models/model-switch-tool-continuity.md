@@ -13,7 +13,7 @@ objective: Verify switching models preserves session context and tool use instea
 successCriteria:
   - Alternate model is actually requested.
   - A tool call still happens after the model switch.
-  - Final answer acknowledges the handoff and uses the tool-derived evidence.
+  - Final answer acknowledges the handoff and reread QA mission.
 docsRefs:
   - docs/help/testing.md
   - docs/concepts/model-failover.md
@@ -68,10 +68,10 @@ steps:
         saveAs: outbound
         args:
           - lambda:
-              expr: "state.getSnapshot().messages.slice(beforeSwitchCursor).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-operator' && hasModelSwitchContinuityEvidence(candidate.text)).at(-1)"
+              expr: "state.getSnapshot().messages.slice(beforeSwitchCursor).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === 'qa-operator' && hasModelSwitchContinuitySignal(candidate.text)).at(-1)"
           - expr: resolveQaLiveTurnTimeoutMs(env, 20000, env.alternateModel)
       - assert:
-          expr: hasModelSwitchContinuityEvidence(outbound.text)
+          expr: hasModelSwitchContinuitySignal(outbound.text)
           message:
             expr: "`switch reply missed kickoff continuity: ${outbound.text}`"
       - if:

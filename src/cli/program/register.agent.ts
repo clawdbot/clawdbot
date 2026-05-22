@@ -68,6 +68,7 @@ export function registerAgentCommands(
     .description("Run an agent turn via the Gateway (use --local for embedded)")
     .requiredOption("-m, --message <text>", "Message body for the agent")
     .option("-t, --to <number>", "Recipient number in E.164 used to derive the session key")
+    .option("--session-key <key>", "Explicit session key (agent:<id>:<key>, or scoped to --agent)")
     .option("--session-id <id>", "Use an explicit session id")
     .option("--agent <id>", "Agent id (overrides routing bindings)")
     .option("--model <id>", "Model override for this run (provider/model or model id)")
@@ -102,6 +103,10 @@ ${theme.heading("Examples:")}
 ${formatHelpExamples([
   ['openclaw agent --to +15555550123 --message "status update"', "Start a new session."],
   ['openclaw agent --agent ops --message "Summarize logs"', "Use a specific agent."],
+  [
+    'openclaw agent --session-key agent:ops:incident-42 --message "Summarize status"',
+    "Target an exact session key.",
+  ],
   [
     'openclaw agent --session-id 1234 --message "Summarize inbox" --thinking medium',
     "Target a session with explicit thinking level.",

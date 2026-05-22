@@ -254,7 +254,7 @@ describe("loadPluginMetadataSnapshot process memo", () => {
     expect(second.byPluginId.get("demo")).toBe(second.plugins[0]);
   });
 
-  it("memoizes policy-stale derived snapshots used by validation callers", () => {
+  it("does not memoize policy-stale derived snapshots", () => {
     const stateDir = tempStateDir();
     touchPersistedIndex(stateDir);
     loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
@@ -272,7 +272,7 @@ describe("loadPluginMetadataSnapshot process memo", () => {
     loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
     loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
 
-    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledOnce();
+    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
   });
 
   it("refreshes policy-stale derived snapshots when derived plugin files change", () => {

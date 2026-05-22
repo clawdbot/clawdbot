@@ -48,6 +48,16 @@ import { readPiModelContextTokens } from "./model-context-tokens.js";
 import { resolveModelAsync } from "./model.js";
 import type { EmbeddedPiCompactResult } from "./types.js";
 
+function shouldFallbackAfterHarnessCompaction(
+  result: EmbeddedPiCompactResult | undefined,
+): boolean {
+  return (
+    result?.ok === false &&
+    (result.failure?.reason === "missing_thread_binding" ||
+      result.failure?.reason === "stale_thread_binding")
+  );
+}
+
 /**
  * Compacts a session with lane queueing (session lane + global lane).
  * Use this from outside a lane context. If already inside a lane, use
@@ -123,8 +133,13 @@ export async function compactEmbeddedPiSession(
     contextEngineRuntimeContext,
   });
   if (harnessResult) {
-    await contextEngine.dispose?.();
-    return harnessResult;
+    if (!shouldFallbackAfterHarnessCompaction(harnessResult)) {
+      await contextEngine.dispose?.();
+      return harnessResult;
+    }
+    log.warn(
+      `native harness compaction could not use its session binding; falling back to context engine: ${harnessResult.reason ?? "unknown"}`,
+    );
   }
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);

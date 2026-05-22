@@ -10,6 +10,7 @@ type CommonWebProviderTestParams = {
   credentialPath: string;
   autoDetectOrder?: number;
   requiresCredential?: boolean;
+  authProviderId?: string;
   getCredentialValue?: (config?: Record<string, unknown>) => unknown;
   getConfiguredCredentialValue?: (config?: OpenClawConfig) => unknown;
   getConfiguredCredentialFallback?:
@@ -39,6 +40,7 @@ function createCommonProviderFields(params: CommonWebProviderTestParams) {
     credentialPath: params.credentialPath,
     autoDetectOrder: params.autoDetectOrder,
     requiresCredential: params.requiresCredential,
+    authProviderId: params.authProviderId,
     getCredentialValue: params.getCredentialValue ?? (() => undefined),
     setCredentialValue: () => {},
     getConfiguredCredentialValue: params.getConfiguredCredentialValue,

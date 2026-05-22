@@ -220,11 +220,10 @@ function expectReplyCall(
 function replyBody(
   replySpy: ReturnType<typeof vi.fn>,
   index = 0,
-): { Body?: string; ForceSenderIsOwnerFalse?: boolean; Provider?: string } {
+): { Body?: string; Provider?: string } {
   const call = replySpy.mock.calls[index];
   return requireRecord(call?.[0], `reply call ${index} body`) as {
     Body?: string;
-    ForceSenderIsOwnerFalse?: boolean;
     Provider?: string;
   };
 }
@@ -1897,7 +1896,6 @@ tasks:
       expect(sendWhatsApp).toHaveBeenCalledTimes(0);
       const calledCtx = replyBody(replySpy);
       expect(calledCtx.Provider).toBe("exec-event");
-      expect(calledCtx.ForceSenderIsOwnerFalse).toBe(true);
       expect(calledCtx.Body).toContain("Handle the result internally");
       expect(calledCtx.Body).not.toContain("Please relay the command output to the user");
     } finally {

@@ -221,6 +221,326 @@ describe("normalizeToolParameterSchema", () => {
     });
   });
 
+  it("inlines local refs in tuple array items", () => {
+    expect(
+      normalizeToolParameterSchema({
+        type: "array",
+        items: [{ $ref: "#/$defs/Foo" }, { $ref: "#/definitions/Bar" }],
+        $defs: {
+          Foo: { type: "string" },
+        },
+        definitions: {
+          Bar: { type: "integer" },
+        },
+      }),
+    ).toEqual({
+      type: "array",
+      items: [{ type: "string" }, { type: "integer" }],
+    });
+  });
+
+  it("keeps Swagger 2 definition refs supported", () => {
+    expect(
+      normalizeToolParameterSchema({
+        type: "object",
+        properties: {
+          pet: { $ref: "#/definitions/Pet" },
+        },
+        definitions: {
+          Pet: {
+            type: "object",
+            properties: {
+              id: { type: "integer" },
+            },
+          },
+        },
+      }),
+    ).toEqual({
+      type: "object",
+      properties: {
+        pet: {
+          type: "object",
+          properties: {
+            id: { type: "integer" },
+          },
+        },
+      },
+    });
+  });
+
+  it("inlines OpenAPI 3 component schema refs", () => {
+    expect(
+      normalizeToolParameterSchema({
+        type: "object",
+        required: ["pet"],
+        properties: {
+          pet: {
+            $ref: "#/components/schemas/Pet",
+            description: "Pet payload",
+          },
+        },
+        components: {
+          schemas: {
+            Pet: {
+              type: "object",
+              required: ["name"],
+              properties: {
+                name: { type: "string" },
+                tag: { type: "string", nullable: true },
+              },
+            },
+          },
+        },
+      }),
+    ).toEqual({
+      type: "object",
+      required: ["pet"],
+      properties: {
+        pet: {
+          description: "Pet payload",
+          type: "object",
+          required: ["name"],
+          properties: {
+            name: { type: "string" },
+            tag: { type: ["string", "null"] },
+          },
+        },
+      },
+    });
+  });
+
+  it("preserves OpenAPI nullable on direct component refs", () => {
+    expect(
+      normalizeToolParameterSchema({
+        type: "object",
+        properties: {
+          pet: {
+            $ref: "#/components/schemas/Pet",
+            nullable: true,
+          },
+        },
+        components: {
+          schemas: {
+            Pet: {
+              type: "object",
+              properties: {
+                name: { type: "string" },
+              },
+            },
+          },
+        },
+      }),
+    ).toEqual({
+      type: "object",
+      properties: {
+        pet: {
+          type: ["object", "null"],
+          properties: {
+            name: { type: "string" },
+          },
+        },
+      },
+    });
+  });
+
+  it("inlines OpenAPI component refs that target nested JSON Pointer paths", () => {
+    expect(
+      normalizeToolParameterSchema({
+        type: "object",
+        properties: {
+          petName: { $ref: "#/components/schemas/Pet/properties/name" },
+        },
+        components: {
+          schemas: {
+            Pet: {
+              type: "object",
+              properties: {
+                name: { type: "string", description: "Pet name" },
+              },
+            },
+          },
+        },
+      }),
+    ).toEqual({
+      type: "object",
+      properties: {
+        petName: { type: "string", description: "Pet name" },
+      },
+    });
+  });
+
+  it("preserves OpenAPI components when a local component ref cannot be resolved", () => {
+    expect(
+      normalizeToolParameterSchema({
+        type: "object",
+        properties: {
+          missing: { $ref: "#/components/schemas/Missing" },
+        },
+        components: {
+          schemas: {
+            Present: {
+              type: "string",
+            },
+          },
+        },
+      }),
+    ).toEqual({
+      type: "object",
+      properties: {
+        missing: { $ref: "#/components/schemas/Missing" },
+      },
+      components: {
+        schemas: {
+          Present: {
+            type: "string",
+          },
+        },
+      },
+    });
+  });
+
+  it("normalizes OpenAPI nullable and schema-only annotations", () => {
+    expect(
+      normalizeToolParameterSchema({
+        type: "object",
+        properties: {
+          status: {
+            type: "string",
+            enum: ["available"],
+            nullable: true,
+            readOnly: true,
+            example: "available",
+          },
+        },
+      }),
+    ).toEqual({
+      type: "object",
+      properties: {
+        status: {
+          type: ["string", "null"],
+          enum: ["available", null],
+        },
+      },
+    });
+  });
+
+  it("preserves schema properties named like OpenAPI annotations", () => {
+    expect(
+      normalizeToolParameterSchema({
+        type: "object",
+        properties: {
+          components: { type: "number" },
+          example: { type: "string", nullable: true },
+          xml: { type: "boolean" },
+        },
+      }),
+    ).toEqual({
+      type: "object",
+      properties: {
+        components: { type: "number" },
+        example: { type: ["string", "null"] },
+        xml: { type: "boolean" },
+      },
+    });
+  });
+
+  it("does not treat object-valued schema literals as OpenAPI schema objects", () => {
+    expect(
+      normalizeToolParameterSchema({
+        type: "object",
+        properties: {
+          payload: {
+            type: "object",
+            default: {
+              example: "kept",
+              nullable: true,
+              readOnly: true,
+              $ref: "#/components/schemas/NotASchema",
+              xml: { name: "payload" },
+            },
+            const: {
+              example: "constant",
+            },
+            enum: [
+              {
+                example: "enum-value",
+                xml: "kept",
+              },
+            ],
+          },
+        },
+      }),
+    ).toEqual({
+      type: "object",
+      properties: {
+        payload: {
+          type: "object",
+          default: {
+            example: "kept",
+            nullable: true,
+            readOnly: true,
+            $ref: "#/components/schemas/NotASchema",
+            xml: { name: "payload" },
+          },
+          const: {
+            example: "constant",
+          },
+          enum: [
+            {
+              example: "enum-value",
+              xml: "kept",
+            },
+          ],
+        },
+      },
+    });
+  });
+
+  it("preserves nullable OpenAPI composed schemas", () => {
+    expect(
+      normalizeToolParameterSchema({
+        type: "object",
+        properties: {
+          pet: {
+            nullable: true,
+            allOf: [{ $ref: "#/components/schemas/Pet" }],
+          },
+        },
+        components: {
+          schemas: {
+            Pet: {
+              type: "object",
+              required: ["name"],
+              properties: {
+                name: { type: "string" },
+              },
+            },
+          },
+        },
+      }),
+    ).toEqual({
+      type: "object",
+      properties: {
+        pet: {
+          anyOf: [
+            {
+              allOf: [
+                {
+                  type: "object",
+                  required: ["name"],
+                  properties: {
+                    name: { type: "string" },
+                  },
+                },
+              ],
+            },
+            { type: "null" },
+          ],
+        },
+      },
+    });
+  });
+
   it("preserves local definitions when a local $ref cannot be resolved", () => {
     expect(
       normalizeToolParameterSchema({

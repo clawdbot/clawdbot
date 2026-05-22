@@ -736,7 +736,8 @@ lives on the [First-run FAQ](/help/faq-first-run).
     `web_fetch` works without an API key. `web_search` depends on your selected
     provider:
 
-    - API-backed providers such as Brave, Exa, Firecrawl, Gemini, Grok, Kimi, MiniMax Search, Perplexity, and Tavily require their normal API key setup.
+    - API-backed providers such as Brave, Exa, Firecrawl, Gemini, Kimi, MiniMax Search, Perplexity, and Tavily require their normal API key setup.
+    - Grok can reuse xAI OAuth from model auth, or fall back to `XAI_API_KEY` / plugin web-search config.
     - Ollama Web Search is key-free, but it uses your configured Ollama host and requires `ollama signin`.
     - DuckDuckGo is key-free, but it is an unofficial HTML-based integration.
     - SearXNG is key-free/self-hosted; configure `SEARXNG_BASE_URL` or `plugins.entries.searxng.config.webSearch.baseUrl`.
@@ -748,7 +749,7 @@ lives on the [First-run FAQ](/help/faq-first-run).
     - Exa: `EXA_API_KEY`
     - Firecrawl: `FIRECRAWL_API_KEY`
     - Gemini: `GEMINI_API_KEY`
-    - Grok: `XAI_API_KEY`
+    - Grok: xAI OAuth, `XAI_API_KEY`
     - Kimi: `KIMI_API_KEY` or `MOONSHOT_API_KEY`
     - MiniMax Search: `MINIMAX_CODE_PLAN_KEY`, `MINIMAX_CODING_API_KEY`, or `MINIMAX_API_KEY`
     - Perplexity: `PERPLEXITY_API_KEY` or `OPENROUTER_API_KEY`
@@ -826,7 +827,7 @@ lives on the [First-run FAQ](/help/faq-first-run).
     - Use `openclaw configure` for interactive edits.
     - Use `config.schema.lookup` first when you are not sure about an exact path or field shape; it returns a shallow schema node plus immediate child summaries for drill-down.
     - Use `config.patch` for partial RPC edits; keep `config.apply` for full-config replacement only.
-    - If you are using the owner-only `gateway` tool from an agent run, it will still reject writes to `tools.exec.ask` / `tools.exec.security` (including legacy `tools.bash.*` aliases that normalize to the same protected exec paths).
+    - If you are using the agent-facing `gateway` tool from an agent run, it will still reject writes to `tools.exec.ask` / `tools.exec.security` (including legacy `tools.bash.*` aliases that normalize to the same protected exec paths).
 
     Docs: [Config](/cli/config), [Configure](/cli/configure), [Gateway troubleshooting](/gateway/troubleshooting#gateway-rejected-invalid-config), [Doctor](/gateway/doctor).
 
@@ -1002,7 +1003,7 @@ lives on the [First-run FAQ](/help/faq-first-run).
     - `config.get`: fetch the current snapshot + hash
     - `config.patch`: safe partial update (preferred for most RPC edits); hot-reloads when possible and restarts when required
     - `config.apply`: validate + replace the full config; hot-reloads when possible and restarts when required
-    - The owner-only `gateway` runtime tool still refuses to rewrite `tools.exec.ask` / `tools.exec.security`; legacy `tools.bash.*` aliases normalize to the same protected exec paths
+    - The agent-facing `gateway` runtime tool still refuses to rewrite `tools.exec.ask` / `tools.exec.security`; legacy `tools.bash.*` aliases normalize to the same protected exec paths
 
   </Accordion>
 

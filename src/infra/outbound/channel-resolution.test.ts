@@ -121,6 +121,22 @@ describe("outbound channel resolution", () => {
     expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
   });
 
+  it("returns a bundled plugin without bootstrapping", async () => {
+    const plugin = { id: "alpha" };
+    getLoadedChannelPluginMock.mockReturnValue(undefined);
+    getChannelPluginMock.mockReturnValue(plugin);
+    const channelResolution = await importChannelResolution("bundled-plugin");
+
+    expect(
+      channelResolution.resolveOutboundChannelPlugin({
+        channel: "alpha",
+        cfg: {} as never,
+        allowBootstrap: true,
+      }),
+    ).toBe(plugin);
+    expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
+  });
+
   it("falls back to the active registry when getChannelPlugin misses", async () => {
     const plugin = { id: "alpha" };
     getChannelPluginMock.mockReturnValue(undefined);

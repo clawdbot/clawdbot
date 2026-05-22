@@ -132,7 +132,6 @@ vi.mock("../agents/openclaw-tools.js", () => {
     },
     {
       name: "nodes",
-      ownerOnly: true,
       parameters: { type: "object", properties: {} },
       execute: async () => ({ ok: true, result: "nodes" }),
     },
@@ -147,10 +146,9 @@ vi.mock("../agents/openclaw-tools.js", () => {
       execute: async () => ({ ok: true, permissionFlow: true }),
     },
     {
-      name: "owner_only_test",
-      ownerOnly: true,
+      name: "write_scoped_test",
       parameters: { type: "object", properties: {} },
-      execute: async () => ({ ok: true, result: "owner-only" }),
+      execute: async () => ({ ok: true, result: "write-scoped" }),
     },
     {
       name: "tools_invoke_test",
@@ -553,28 +551,6 @@ describe("POST /tools/invoke", () => {
     expect(body.result).toEqual({ ok: true, result: [] });
   });
 
-  it("threads senderIsOwner into tool creation before owner-only filtering", async () => {
-    setMainAllowedTools({ allow: ["session_status", "owner_only_test"] });
-
-    const writeRes = await invokeTool({
-      port: sharedPort,
-      headers: gatewayAuthHeaders(),
-      tool: "session_status",
-      sessionKey: "main",
-    });
-    expect(writeRes.status).toBe(200);
-    expect(lastCreateOpenClawToolsContext?.senderIsOwner).toBe(false);
-
-    const adminRes = await invokeTool({
-      port: sharedPort,
-      headers: gatewayAdminHeaders(),
-      tool: "session_status",
-      sessionKey: "main",
-    });
-    expect(adminRes.status).toBe(200);
-    expect(lastCreateOpenClawToolsContext?.senderIsOwner).toBe(true);
-  });
-
   it("uses before_tool_call adjusted params for HTTP tool execution", async () => {
     setMainAllowedTools({ allow: ["tools_invoke_test"] });
     hookMocks.runBeforeToolCallHook.mockImplementationOnce(async () => ({
@@ -887,27 +863,44 @@ describe("POST /tools/invoke", () => {
     expect(body.result).toEqual({ ok: true, result: [] });
   });
 
-  it("applies owner-only tool policy on the HTTP path", async () => {
-    setMainAllowedTools({ allow: ["owner_only_test"] });
+  it("executes tools for write-scoped callers on the HTTP path", async () => {
+    setMainAllowedTools({ allow: ["write_scoped_test"] });
 
-    const deniedRes = await invokeToolAuthed({
-      tool: "owner_only_test",
-      sessionKey: "main",
-    });
-    expect(deniedRes.status).toBe(404);
-
-    const allowedRes = await invokeTool({
-      port: sharedPort,
-      headers: gatewayAdminHeaders(),
-      tool: "owner_only_test",
+    const allowedRes = await invokeToolAuthed({
+      tool: "write_scoped_test",
       sessionKey: "main",
     });
     const allowedBody = await expectOkInvokeResponse(allowedRes);
-    expect(allowedBody.result).toEqual({ ok: true, result: "owner-only" });
+    expect(allowedBody.result).toEqual({ ok: true, result: "write-scoped" });
   });
 
-  it("treats shared-secret bearer auth as owner on /tools/invoke", async () => {
-    setMainAllowedTools({ allow: ["owner_only_test"] });
+  it("derives sender owner identity from HTTP auth instead of caller headers", async () => {
+    setMainAllowedTools({ allow: ["session_status"] });
+
+    const writeRes = await invokeTool({
+      port: sharedPort,
+      headers: {
+        ...gatewayAuthHeaders(),
+        "x-openclaw-sender-is-owner": "true",
+      },
+      tool: "session_status",
+      sessionKey: "main",
+    });
+    expect(writeRes.status).toBe(200);
+    expect(lastCreateOpenClawToolsContext?.senderIsOwner).toBe(false);
+
+    const adminRes = await invokeTool({
+      port: sharedPort,
+      headers: gatewayAdminHeaders(),
+      tool: "session_status",
+      sessionKey: "main",
+    });
+    expect(adminRes.status).toBe(200);
+    expect(lastCreateOpenClawToolsContext?.senderIsOwner).toBe(true);
+  });
+
+  it("treats shared-secret bearer auth as full operator access on /tools/invoke", async () => {
+    setMainAllowedTools({ allow: ["write_scoped_test"] });
     vi.mocked(authorizeHttpGatewayConnect).mockResolvedValueOnce({
       ok: true,
       method: "token",
@@ -919,12 +912,13 @@ describe("POST /tools/invoke", () => {
         authorization: "Bearer secret",
         "x-openclaw-scopes": "operator.approvals",
       },
-      tool: "owner_only_test",
+      tool: "write_scoped_test",
       sessionKey: "main",
     });
 
     const body = await expectOkInvokeResponse(res);
-    expect(body.result).toEqual({ ok: true, result: "owner-only" });
+    expect(body.result).toEqual({ ok: true, result: "write-scoped" });
+    expect(lastCreateOpenClawToolsContext?.senderIsOwner).toBe(true);
   });
 
   it("extends the HTTP deny list to high-risk execution and file tools", async () => {

@@ -29,6 +29,7 @@ import {
   mockedSessionLikelyHasOversizedToolResults,
   mockedTruncateOversizedToolResultsInSession,
   overflowBaseRunParams as baseParams,
+  resetRunOverflowCompactionHarnessMocks,
 } from "./run.overflow-compaction.harness.js";
 
 let runEmbeddedPiAgent: typeof import("./run.js").runEmbeddedPiAgent;
@@ -110,17 +111,7 @@ describe("post-compaction loop guard wired into runEmbeddedPiAgent", () => {
   beforeEach(() => {
     liveToolCallSeq = 0;
     diagnosticSessionStates.clear();
-    mockedRunEmbeddedAttempt.mockReset();
-    mockedCompactDirect.mockReset();
-    mockedSessionLikelyHasOversizedToolResults.mockReset();
-    mockedTruncateOversizedToolResultsInSession.mockReset();
-    mockedContextEngine.info.ownsCompaction = false;
-    mockedLog.debug.mockReset();
-    mockedLog.info.mockReset();
-    mockedLog.warn.mockReset();
-    mockedLog.error.mockReset();
-    mockedLog.isEnabled.mockReset();
-    mockedLog.isEnabled.mockReturnValue(false);
+    resetRunOverflowCompactionHarnessMocks();
     mockedIsCompactionFailureError.mockImplementation((msg?: string) => {
       if (!msg) {
         return false;
@@ -139,17 +130,6 @@ describe("post-compaction loop guard wired into runEmbeddedPiAgent", () => {
         lower.includes("context window exceeded") ||
         lower.includes("prompt too large")
       );
-    });
-    mockedCompactDirect.mockResolvedValue({
-      ok: false,
-      compacted: false,
-      reason: "nothing to compact",
-    });
-    mockedSessionLikelyHasOversizedToolResults.mockReturnValue(false);
-    mockedTruncateOversizedToolResultsInSession.mockResolvedValue({
-      truncated: false,
-      truncatedCount: 0,
-      reason: "no oversized tool results",
     });
   });
 

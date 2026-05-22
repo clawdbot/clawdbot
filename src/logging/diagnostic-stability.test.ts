@@ -137,6 +137,81 @@ describe("diagnostic stability recorder", () => {
     expect(snapshot.events[1]).not.toHaveProperty("reason");
   });
 
+  it("summarizes inbound delivery proof events without message content", () => {
+    startDiagnosticStabilityRecorder();
+
+    emitDiagnosticEvent({
+      type: "message.received",
+      channel: "signal",
+      sessionKey: "agent:main:signal:direct:u1",
+      messageId: "msg-secret",
+      chatId: "chat-secret",
+      source: "dispatchInboundMessage",
+    });
+    emitDiagnosticEvent({
+      type: "message.dispatch.started",
+      channel: "signal",
+      sessionKey: "agent:main:signal:direct:u1",
+      source: "replyResolver",
+    });
+    emitDiagnosticEvent({
+      type: "message.dispatch.completed",
+      channel: "signal",
+      sessionKey: "agent:main:signal:direct:u1",
+      source: "replyResolver",
+      durationMs: 12,
+      outcome: "completed",
+    });
+    emitDiagnosticEvent({
+      type: "session.turn.created",
+      runId: "run-1",
+      sessionKey: "agent:main:signal:direct:u1",
+      sessionId: "session-secret",
+      agentId: "main",
+      channel: "signal",
+      trigger: "user",
+    });
+
+    const snapshot = getDiagnosticStabilitySnapshot({ limit: 10 });
+
+    expect(snapshot.summary.byType).toMatchObject({
+      "message.received": 1,
+      "message.dispatch.started": 1,
+      "message.dispatch.completed": 1,
+      "session.turn.created": 1,
+    });
+    expect(snapshot.events).toEqual([
+      expect.objectContaining({
+        type: "message.received",
+        channel: "signal",
+        source: "dispatchInboundMessage",
+      }),
+      expect.objectContaining({
+        type: "message.dispatch.started",
+        channel: "signal",
+        source: "replyResolver",
+      }),
+      expect.objectContaining({
+        type: "message.dispatch.completed",
+        channel: "signal",
+        source: "replyResolver",
+        outcome: "completed",
+      }),
+      expect.objectContaining({
+        type: "session.turn.created",
+        channel: "signal",
+        source: "main",
+        outcome: "user",
+      }),
+    ]);
+    for (const event of snapshot.events) {
+      expect(event).not.toHaveProperty("messageId");
+      expect(event).not.toHaveProperty("chatId");
+      expect(event).not.toHaveProperty("sessionId");
+      expect(event).not.toHaveProperty("sessionKey");
+    }
+  });
+
   it("summarizes assembled context diagnostics without prompt text", async () => {
     startDiagnosticStabilityRecorder();
 

@@ -192,6 +192,7 @@ function buildPluginRecordFromInstalledIndex(
     channelIds: [...(manifest?.channels ?? [])],
     cliBackendIds: [...(manifest?.cliBackends ?? []), ...(manifest?.setup?.cliBackends ?? [])],
     providerIds: [...(manifest?.providers ?? [])],
+    embeddingProviderIds: [...(manifest?.contracts?.embeddingProviders ?? [])],
     speechProviderIds: [...(manifest?.contracts?.speechProviders ?? [])],
     realtimeTranscriptionProviderIds: [
       ...(manifest?.contracts?.realtimeTranscriptionProviders ?? []),

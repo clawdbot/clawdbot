@@ -173,6 +173,7 @@ describe("sendDiscordComponentMessage", () => {
   it("registers a prebuilt component message against an edited message id", () => {
     registerBuiltDiscordComponentMessage({
       messageId: "msg1",
+      ttlMs: 120_000,
       buildResult: {
         components: [],
         entries: [{ id: "entry-1", kind: "button", label: "Tap" }],
@@ -184,7 +185,44 @@ describe("sendDiscordComponentMessage", () => {
       entries: [{ id: "entry-1", kind: "button", label: "Tap" }],
       modals: [{ id: "modal-1", title: "Modal", fields: [] }],
       messageId: "msg1",
+      ttlMs: 120_000,
     });
+  });
+
+  it("passes configured component TTL when registering sent entries", async () => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({
+      type: ChannelType.DM,
+      recipients: [{ id: "user-1" }],
+    });
+    postMock.mockResolvedValueOnce({ id: "msg1", channel_id: "dm-1" });
+
+    await sendDiscordComponentMessage(
+      "channel:dm-1",
+      {
+        blocks: [{ type: "actions", buttons: [{ label: "Tap" }] }],
+      },
+      {
+        cfg: {
+          channels: {
+            discord: {
+              agentComponents: {
+                ttlMs: 120_000,
+              },
+              accounts: {
+                default: {},
+              },
+            },
+          },
+          session: { dmScope: "main" },
+        },
+        rest,
+        token: "t",
+      },
+    );
+
+    expect(registerMock).toHaveBeenCalledTimes(1);
+    expect(readRecordArg(registerMock, 0, 0).ttlMs).toBe(120_000);
   });
 });
 

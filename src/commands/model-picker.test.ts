@@ -1449,6 +1449,16 @@ describe("applyModelAllowlist", () => {
     });
   });
 
+  it("keeps non-Google provider Gemini-looking refs unchanged while writing selected models", () => {
+    const config = {} as OpenClawConfig;
+
+    const next = applyModelAllowlist(config, ["litellm/gemini-3-flash", "litellm/gemini-3.1-pro"]);
+    expect(next.agents?.defaults?.models).toEqual({
+      "litellm/gemini-3-flash": {},
+      "litellm/gemini-3.1-pro": {},
+    });
+  });
+
   it("preserves entries outside scoped allowlist updates", () => {
     const config = {
       agents: {

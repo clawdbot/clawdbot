@@ -1096,6 +1096,9 @@ export const id: TranslationMap = {
     selectors: {
       agentFilter: "Filter sesi berdasarkan agen",
       session: "Chat session",
+      sessionSearch: "Cari sesi",
+      clearSessionSearch: "Hapus pencarian sesi",
+      loadMoreSessions: "Muat sesi lainnya",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },

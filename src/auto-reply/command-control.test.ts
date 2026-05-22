@@ -347,7 +347,6 @@ describe("resolveCommandAuthorization", () => {
         OriginatingChannel: "telegram",
         From: "owner-123",
         To: "owner-123",
-        ForceSenderIsOwnerFalse: true,
       } as MsgContext,
       cfg,
       commandAuthorized: true,

@@ -647,6 +647,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.imageGenerationModel.timeoutMs": "Image Generation Timeout (ms)",
   "agents.defaults.videoGenerationModel.primary": "Video Generation Model",
   "agents.defaults.videoGenerationModel.fallbacks": "Video Generation Model Fallbacks",
+  "agents.defaults.videoGenerationModel.timeoutMs": "Video Generation Timeout (ms)",
   "agents.defaults.musicGenerationModel.primary": "Music Generation Model",
   "agents.defaults.musicGenerationModel.fallbacks": "Music Generation Model Fallbacks",
   "agents.defaults.mediaGenerationAutoProviderFallback": "Media Generation Auto Provider Fallback",

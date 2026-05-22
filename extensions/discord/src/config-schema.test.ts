@@ -400,6 +400,35 @@ describe("discord config schema", () => {
     expect(res.success).toBe(true);
   });
 
+  it("accepts agentComponents.ttlMs at channel and account scope", () => {
+    const res = DiscordConfigSchema.safeParse({
+      agentComponents: {
+        ttlMs: 86_400_000,
+      },
+      accounts: {
+        work: {
+          agentComponents: {
+            ttlMs: 120_000,
+          },
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+  });
+
+  it("rejects invalid agentComponents.ttlMs values", () => {
+    for (const ttlMs of [0, -1, 1.5, 86_400_001]) {
+      const res = DiscordConfigSchema.safeParse({
+        agentComponents: {
+          ttlMs,
+        },
+      });
+
+      expect(res.success).toBe(false);
+    }
+  });
+
   it("accepts agentComponents.enabled at account scope", () => {
     const res = DiscordConfigSchema.safeParse({
       accounts: {

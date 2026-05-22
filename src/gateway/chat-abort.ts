@@ -14,6 +14,7 @@ export type ChatAbortControllerEntry = {
   ownerDeviceId?: string;
   providerId?: string;
   authProviderId?: string;
+  abortStopReason?: string;
   /**
    * Which RPC owns this registration. Absent (undefined) is treated as
    * `"chat-send"` so pre-existing callers that constructed entries without
@@ -186,6 +187,9 @@ export function abortChatRunById(
   const bufferedText = ops.chatRunBuffers.get(runId);
   const partialText = bufferedText && bufferedText.trim() ? bufferedText : undefined;
   ops.chatAbortedRuns.set(runId, Date.now());
+  if (stopReason) {
+    active.abortStopReason = stopReason;
+  }
   active.controller.abort();
   ops.chatAbortControllers.delete(runId);
   ops.chatRunBuffers.delete(runId);

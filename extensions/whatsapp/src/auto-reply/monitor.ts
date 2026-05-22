@@ -1,7 +1,7 @@
 import { resolveAccountEntry } from "openclaw/plugin-sdk/account-core";
 import { resolveInboundDebounceMs } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
-import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
+import { isControlCommandMessage } from "openclaw/plugin-sdk/command-detection";
 import { drainPendingDeliveries } from "openclaw/plugin-sdk/delivery-queue-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT } from "openclaw/plugin-sdk/reply-history";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -299,7 +299,7 @@ export async function monitorWebChannel(
         if (msg.replyToId || msg.replyToBody) {
           return false;
         }
-        return !hasControlCommand(msg.body, cfg);
+        return !isControlCommandMessage(msg.body, cfg);
       };
 
       let connection;
@@ -521,7 +521,6 @@ export async function monitorWebChannel(
       });
       enqueueSystemEvent(`WhatsApp gateway connected${selfE164 ? ` as ${selfE164}` : ""}.`, {
         sessionKey: connectRoute.sessionKey,
-        trusted: true,
       });
 
       const normalizedAccountId = normalizeReconnectAccountId(account.accountId);
@@ -615,7 +614,6 @@ export async function monitorWebChannel(
         `WhatsApp gateway disconnected (status ${decision.normalized.statusLabel})`,
         {
           sessionKey: connectRoute.sessionKey,
-          trusted: true,
         },
       );
 

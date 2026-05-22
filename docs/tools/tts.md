@@ -964,7 +964,9 @@ WhatsApp sends audio through Baileys as a PTT voice note (`audio` with
 clients do not consistently render captions on voice notes.
 
 The tool accepts optional `channel` and `timeoutMs` fields; `timeoutMs` is a
-per-call provider request timeout in milliseconds.
+per-call provider request timeout in milliseconds. Per-call values override
+`messages.tts.timeoutMs`; configured TTS timeouts override any plugin-authored
+provider default.
 
 ## Gateway RPC
 

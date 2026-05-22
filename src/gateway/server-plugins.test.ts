@@ -88,6 +88,7 @@ const createRegistry = (diagnostics: PluginDiagnostic[]): PluginRegistry => ({
   commands: [],
   providers: [],
   modelCatalogProviders: [],
+  embeddingProviders: [],
   speechProviders: [],
   realtimeTranscriptionProviders: [],
   realtimeVoiceProviders: [],

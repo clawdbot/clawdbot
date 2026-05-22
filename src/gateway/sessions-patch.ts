@@ -10,6 +10,7 @@ import {
   resolveDefaultModelForAgent,
   resolveSubagentConfiguredModelSelection,
 } from "../agents/model-selection.js";
+import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
   formatThinkingLevels,
@@ -68,6 +69,43 @@ function normalizeExecAsk(raw: string): "off" | "on-miss" | "always" | undefined
     return normalized;
   }
   return undefined;
+}
+
+function shouldPreserveSessionAuthProfileOverride(params: {
+  cfg: OpenClawConfig;
+  entry: SessionEntry;
+  currentProvider: string;
+  provider: string;
+}): boolean {
+  const profileOverride = normalizeOptionalString(params.entry.authProfileOverride);
+  if (!profileOverride) {
+    return false;
+  }
+  const provider = normalizeOptionalLowercaseString(params.provider);
+  if (!provider) {
+    return false;
+  }
+  const resolvesToTargetProvider = (rawProvider: string | undefined): boolean => {
+    const candidate = normalizeOptionalLowercaseString(rawProvider);
+    if (!candidate) {
+      return false;
+    }
+    return (
+      resolveProviderIdForAuth(candidate, { config: params.cfg }) ===
+      resolveProviderIdForAuth(provider, { config: params.cfg })
+    );
+  };
+  const delimiterIndex = profileOverride.indexOf(":");
+  if (delimiterIndex < 0) {
+    return resolvesToTargetProvider(params.currentProvider);
+  }
+  const profileProvider = normalizeOptionalLowercaseString(
+    profileOverride.slice(0, delimiterIndex),
+  );
+  if (!profileProvider) {
+    return false;
+  }
+  return resolvesToTargetProvider(profileProvider);
 }
 
 function supportsSpawnLineage(storeKey: string): boolean {
@@ -461,6 +499,12 @@ export async function applySessionsPatchToStore(params: {
           model: resolvedDefault.model,
           isDefault: true,
         },
+        preserveAuthProfileOverride: shouldPreserveSessionAuthProfileOverride({
+          cfg,
+          currentProvider: next.providerOverride ?? next.modelProvider ?? resolvedDefault.provider,
+          entry: next,
+          provider: resolvedDefault.provider,
+        }),
         markLiveSwitchPending: true,
       });
     } else if (raw !== undefined) {
@@ -501,6 +545,12 @@ export async function applySessionsPatchToStore(params: {
           model: resolved.ref.model,
           isDefault,
         },
+        preserveAuthProfileOverride: shouldPreserveSessionAuthProfileOverride({
+          cfg,
+          currentProvider: next.providerOverride ?? next.modelProvider ?? resolvedDefault.provider,
+          entry: next,
+          provider: resolved.ref.provider,
+        }),
         markLiveSwitchPending: true,
       });
     }

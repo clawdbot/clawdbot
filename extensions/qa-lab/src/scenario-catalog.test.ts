@@ -177,6 +177,9 @@ describe("qa scenario catalog", () => {
       "plugin-hook-health-sentinel",
       "plugin-manifest-contract-health",
       "webchat-direct-reply-routing",
+      "long-context-progress-watchdog",
+      "gateway-restart-inflight-run",
+      "streaming-final-integrity",
     ];
 
     for (const scenarioId of scenarioIds) {
@@ -188,6 +191,69 @@ describe("qa scenario catalog", () => {
     expect(readQaScenarioById("webchat-direct-reply-routing").sourcePath).toBe(
       "qa/scenarios/channels/webchat-direct-reply-routing.md",
     );
+    expect(readQaScenarioById("long-context-progress-watchdog").sourcePath).toBe(
+      "qa/scenarios/runtime/long-context-progress-watchdog.md",
+    );
+    expect(readQaScenarioExecutionConfig("long-context-progress-watchdog")).toMatchObject({
+      requiredProviderMode: "live-frontier",
+      harnessRuntime: "codex",
+    });
+    expect(readQaScenarioById("long-context-progress-watchdog").plugins).toBeUndefined();
+    expect(readQaScenarioById("long-context-progress-watchdog").gatewayConfigPatch).toBeUndefined();
+  });
+
+  it("loads the opt-in update.run package self-upgrade sentinel", () => {
+    const scenario = readQaScenarioById("update-run-package-self-upgrade");
+    const config = readQaScenarioExecutionConfig(scenario.id) as
+      | {
+          requiredProviderMode?: string;
+          allowEnv?: string;
+          sourceVersion?: string;
+          targetTag?: string;
+        }
+      | undefined;
+
+    expect(scenario.sourcePath).toBe("qa/scenarios/runtime/update-run-package-self-upgrade.md");
+    expect(scenario.coverage?.primary).toContain("runtime.update-run");
+    expect(scenario.coverage?.secondary).toContain("runtime.package-update");
+    expect(config?.requiredProviderMode).toBe("live-frontier");
+    expect(config?.allowEnv).toBe("OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF");
+    expect(config?.sourceVersion).toBe("2026.4.26");
+    expect(config?.targetTag).toBe("latest");
+    expect(scenario.execution.flow?.steps.map((step) => step.name)).toEqual([
+      "asks the agent to self-update through update.run",
+    ]);
+  });
+
+  it("loads the Codex plugin lifecycle fixture scenarios into the standard runtime tier", () => {
+    const scenarioIds = [
+      "codex-plugin-cold-install",
+      "codex-plugin-install-race",
+      "codex-plugin-pinned-old",
+      "codex-plugin-pinned-new",
+      "auth-profile-codex-mixed-profiles",
+      "auth-profile-doctor-migration-safety",
+    ];
+
+    for (const scenarioId of scenarioIds) {
+      const scenario = readQaScenarioById(scenarioId);
+      expect(scenario.runtimeParityTier).toBe("standard");
+      expect(scenario.coverage?.primary.length).toBeGreaterThan(0);
+      expect(scenario.execution.flow?.steps.length).toBe(1);
+    }
+    expect(readQaScenarioExecutionConfig("codex-plugin-pinned-old")).toMatchObject({
+      pluginVersion: "2026.5.19",
+      hostVersion: "2026.5.21",
+      pluginRelation: "older",
+    });
+    expect(readQaScenarioExecutionConfig("auth-profile-doctor-migration-safety")).toMatchObject({
+      matrixCells: [
+        "oauth-only",
+        "mixed-no-pin",
+        "mixed-defaults-pi-pin",
+        "mixed-main-agent-pi-pin",
+      ],
+    });
   });
 
   it("keeps the character eval scenario natural and task-shaped", () => {

@@ -579,7 +579,7 @@ export type ChannelApprovalDeliveryAdapter = {
     cfg: OpenClawConfig;
     approvalKind: ChannelApprovalKind;
     target: ChannelApprovalForwardTarget;
-    request: ExecApprovalRequest;
+    request: ExecApprovalRequest | PluginApprovalRequest;
   }) => boolean;
 };
 export type ChannelApproveCommandBehavior =

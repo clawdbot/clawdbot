@@ -40,12 +40,12 @@ export function resolveGatewayScopedTools(params: {
   inboundEventKind?: InboundEventKind;
   agentTo?: string;
   agentThreadId?: string;
+  senderIsOwner?: boolean;
   allowGatewaySubagentBinding?: boolean;
   allowMediaInvokeCommands?: boolean;
   surface?: GatewayScopedToolSurface;
   excludeToolNames?: Iterable<string>;
   disablePluginTools?: boolean;
-  senderIsOwner?: boolean;
   gatewayRequestedTools?: string[];
 }) {
   const {
@@ -145,11 +145,11 @@ export function resolveGatewayScopedTools(params: {
     sourceReplyDeliveryMode,
     agentTo: params.agentTo,
     agentThreadId: params.agentThreadId,
+    senderIsOwner: params.senderIsOwner,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
     allowMediaInvokeCommands: params.allowMediaInvokeCommands,
     disablePluginTools: params.disablePluginTools,
     wrapBeforeToolCallHook: false,
-    senderIsOwner: params.senderIsOwner,
     config: params.cfg,
     workspaceDir,
     pluginToolAllowlist: collectExplicitAllowlist([

@@ -15,6 +15,9 @@ describe("isLocalOllamaBaseUrl", () => {
     "http://192.168.1.100:11434",
     "http://gpu-node-1:11434",
     "http://mac-studio.local:11434",
+    "http://docker.orb.internal:11434",
+    "http://host.docker.internal:11434",
+    "http://host.orb.internal:11434",
     "http://[fd00::1]:11434",
     "http://[fe90::1]:11434",
   ])("classifies %s as local", (baseUrl) => {

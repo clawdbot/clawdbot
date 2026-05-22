@@ -22,7 +22,15 @@ export type {
   SandboxBackendHandle,
 } from "./backend-handle.types.js";
 
-const SANDBOX_BACKEND_FACTORIES = new Map<SandboxBackendId, RegisteredSandboxBackend>();
+const SANDBOX_BACKEND_FACTORIES_STATE_KEY = Symbol.for("openclaw.sandboxBackendFactories");
+
+function getSandboxBackendFactories(): Map<SandboxBackendId, RegisteredSandboxBackend> {
+  const globalStore = globalThis as typeof globalThis & {
+    [SANDBOX_BACKEND_FACTORIES_STATE_KEY]?: Map<SandboxBackendId, RegisteredSandboxBackend>;
+  };
+  globalStore[SANDBOX_BACKEND_FACTORIES_STATE_KEY] ??= new Map();
+  return globalStore[SANDBOX_BACKEND_FACTORIES_STATE_KEY];
+}
 
 function normalizeSandboxBackendId(id: string): SandboxBackendId {
   const normalized = normalizeOptionalLowercaseString(id);
@@ -38,23 +46,25 @@ export function registerSandboxBackend(
 ): () => void {
   const normalizedId = normalizeSandboxBackendId(id);
   const resolved = typeof registration === "function" ? { factory: registration } : registration;
-  const previous = SANDBOX_BACKEND_FACTORIES.get(normalizedId);
-  SANDBOX_BACKEND_FACTORIES.set(normalizedId, resolved);
+  const factories = getSandboxBackendFactories();
+  const previous = factories.get(normalizedId);
+  factories.set(normalizedId, resolved);
   return () => {
+    const currentFactories = getSandboxBackendFactories();
     if (previous) {
-      SANDBOX_BACKEND_FACTORIES.set(normalizedId, previous);
+      currentFactories.set(normalizedId, previous);
       return;
     }
-    SANDBOX_BACKEND_FACTORIES.delete(normalizedId);
+    currentFactories.delete(normalizedId);
   };
 }
 
 export function getSandboxBackendFactory(id: string): SandboxBackendFactory | null {
-  return SANDBOX_BACKEND_FACTORIES.get(normalizeSandboxBackendId(id))?.factory ?? null;
+  return getSandboxBackendFactories().get(normalizeSandboxBackendId(id))?.factory ?? null;
 }
 
 export function getSandboxBackendManager(id: string): SandboxBackendManager | null {
-  return SANDBOX_BACKEND_FACTORIES.get(normalizeSandboxBackendId(id))?.manager ?? null;
+  return getSandboxBackendFactories().get(normalizeSandboxBackendId(id))?.manager ?? null;
 }
 
 export function requireSandboxBackendFactory(id: string): SandboxBackendFactory {

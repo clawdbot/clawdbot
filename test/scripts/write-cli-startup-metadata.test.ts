@@ -19,14 +19,27 @@ function writeStartupMetadataSourceSignatureFixture(rootDir: string): void {
     ["extensions/canvas/src/cli-helpers.ts", "export const canvasHelpers = 'canvas';\n"],
     ["extensions/canvas/src/cli.ts", "export const canvasCliHelp = 'canvas';\n"],
     ["src/cli/banner.ts", "export const banner = 'openclaw';\n"],
+    [
+      "src/cli/daemon-cli/register-service-commands.ts",
+      "export const gatewayServiceCommands = 'gateway';\n",
+    ],
+    ["src/cli/gateway-cli.ts", "export const gatewayHelp = 'gateway';\n"],
+    ["src/cli/gateway-cli/register.ts", "export const gatewayRegister = 'gateway';\n"],
+    ["src/cli/gateway-cli/run-command.ts", "export const gatewayRun = 'gateway';\n"],
+    ["src/cli/help-format.ts", "export const helpFormat = 'help';\n"],
+    ["src/cli/models-cli.ts", "export const modelsHelp = 'models';\n"],
     ["src/cli/nodes-cli/register.ts", "export const nodesHelp = 'nodes';\n"],
+    ["src/cli/program/register.maintenance.ts", "export const maintenanceHelp = 'maintenance';\n"],
     ["src/cli/program/context.ts", "export const context = 'context';\n"],
     ["src/cli/program/help.ts", "export const help = 'help';\n"],
+    ["src/cli/plugins-cli.ts", "export const pluginsHelp = 'plugins';\n"],
     [
       "src/plugins/register-plugin-cli-command-groups.ts",
       "export const pluginCommandGroups = 'plugins';\n",
     ],
     ["src/cli/secrets-cli.ts", "export const secretsHelp = 'secrets';\n"],
+    ["src/terminal/links.ts", "export const links = 'links';\n"],
+    ["src/terminal/theme.ts", "export const theme = 'theme';\n"],
   ]);
   for (const [relativePath, contents] of fixtures) {
     writeFixtureFile(rootDir, relativePath, contents);
@@ -69,6 +82,12 @@ describe("write-cli-startup-metadata", () => {
       renderSourceBrowserHelpText: () => "Usage: openclaw browser\n",
       renderSourceSecretsHelpText: () => "Usage: openclaw secrets\n",
       renderSourceNodesHelpText: () => "Usage: openclaw nodes\n",
+      renderSourceSubcommandHelpTextRecord: () => ({
+        doctor: "Usage: openclaw doctor\n",
+        gateway: "Usage: openclaw gateway\n",
+        models: "Usage: openclaw models\n",
+        plugins: "Usage: openclaw plugins\n",
+      }),
     });
 
     const written = JSON.parse(readFileSync(outputPath, "utf8")) as {
@@ -77,6 +96,12 @@ describe("write-cli-startup-metadata", () => {
       nodesHelpText: string;
       rootHelpText: string;
       secretsHelpText: string;
+      subcommandHelpText: {
+        doctor: string;
+        gateway: string;
+        models: string;
+        plugins: string;
+      };
     };
     expect(written.channelOptions).toContain("matrix");
     expect(written.browserHelpText).toContain("Usage:");
@@ -87,6 +112,10 @@ describe("write-cli-startup-metadata", () => {
     expect(written.nodesHelpText).toContain("openclaw nodes");
     expect(written.rootHelpText).toContain("Usage:");
     expect(written.rootHelpText).toContain("openclaw");
+    expect(written.subcommandHelpText.doctor).toContain("openclaw doctor");
+    expect(written.subcommandHelpText.gateway).toContain("openclaw gateway");
+    expect(written.subcommandHelpText.models).toContain("openclaw models");
+    expect(written.subcommandHelpText.plugins).toContain("openclaw plugins");
   });
 
   it("regenerates nodes help when bundled canvas CLI help sources change", async () => {
@@ -112,6 +141,12 @@ describe("write-cli-startup-metadata", () => {
           nodesRenderCount += 1;
           return `Usage: openclaw nodes ${nodesRenderCount}\n`;
         },
+        renderSourceSubcommandHelpTextRecord: () => ({
+          doctor: "Usage: openclaw doctor\n",
+          gateway: "Usage: openclaw gateway\n",
+          models: "Usage: openclaw models\n",
+          plugins: "Usage: openclaw plugins\n",
+        }),
       });
     };
 

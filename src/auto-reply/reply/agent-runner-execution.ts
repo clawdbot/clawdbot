@@ -55,7 +55,9 @@ import { resolveSilentReplyPolicy } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
+import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { logSessionTurnCreated } from "../../logging/diagnostic.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -523,6 +525,21 @@ const CLI_BACKEND_NO_OUTPUT_STALL_RE =
 const CLI_BACKEND_OVERALL_TIMEOUT_RE =
   /\bCLI exceeded timeout\s*\(\s*(\d+)\s*s\s*\)\s+and was terminated\b/iu;
 const CLI_BACKEND_ROUTING_REF_BEFORE_ERROR_RE = /\b([\w.-]+\/[A-Za-z][\w.-]*)\s*:\s*CLI\b/iu;
+const CODEX_APP_SERVER_CLIENT_CLOSED_BEFORE_REPLY_RE =
+  /\bcodex app-server client closed before turn completed\b/iu;
+const CODEX_APP_SERVER_TURN_COMPLETION_IDLE_TIMEOUT_RE =
+  /\bcodex app-server turn idle timed out waiting for turn\/completed\b/iu;
+
+function buildCodexAppServerFailureText(message: string): string | null {
+  const normalizedMessage = collapseRepeatedFailureDetail(message);
+  if (CODEX_APP_SERVER_CLIENT_CLOSED_BEFORE_REPLY_RE.test(normalizedMessage)) {
+    return "⚠️ Codex app-server connection closed before this turn finished. OpenClaw retried once when the stdio turn was still replay-safe; please try again if this keeps happening.";
+  }
+  if (CODEX_APP_SERVER_TURN_COMPLETION_IDLE_TIMEOUT_RE.test(normalizedMessage)) {
+    return "⚠️ Codex app-server stopped before confirming turn completion. OpenClaw did not replay the turn automatically because it may still be active; try again, or use /new if the session stays stuck.";
+  }
+  return null;
+}
 
 function buildCliBackendTimeoutFailureText(message: string): string | null {
   const normalizedMessage = collapseRepeatedFailureDetail(message);
@@ -610,6 +627,10 @@ function buildExternalRunFailureReply(
   const cliBackendTimeoutFailure = buildCliBackendTimeoutFailureText(normalizedMessage);
   if (cliBackendTimeoutFailure) {
     return { text: cliBackendTimeoutFailure, isGenericRunnerFailure: false };
+  }
+  const codexAppServerFailure = buildCodexAppServerFailureText(normalizedMessage);
+  if (codexAppServerFailure) {
+    return { text: codexAppServerFailure, isGenericRunnerFailure: false };
   }
   return {
     text: options?.includeDetails
@@ -745,26 +766,58 @@ function formatContextWindowLabel(tokens: number): string {
   return `${Math.round(tokens / 1024)}k`;
 }
 
+function normalizePositiveContextTokens(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  return Math.floor(value);
+}
+
+function resolveAgentContextTokensForHint(params: {
+  cfg: FollowupRun["run"]["config"];
+  agentId?: string;
+}): number | undefined {
+  const defaultContextTokens = normalizePositiveContextTokens(
+    params.cfg.agents?.defaults?.contextTokens,
+  );
+  const agentId = normalizeLowercaseStringOrEmpty(params.agentId);
+  const agentContextTokens = agentId
+    ? normalizePositiveContextTokens(
+        params.cfg.agents?.list?.find(
+          (entry) => normalizeLowercaseStringOrEmpty(entry?.id) === agentId,
+        )?.contextTokens,
+      )
+    : undefined;
+  return agentContextTokens ?? defaultContextTokens;
+}
+
 function resolveContextWindowForHint(params: {
   cfg: FollowupRun["run"]["config"];
+  agentId?: string;
   ref: ModelRefLike;
   activeSessionEntry?: SessionEntry;
 }) {
-  const activeContextTokens =
-    typeof params.activeSessionEntry?.contextTokens === "number" &&
-    Number.isFinite(params.activeSessionEntry.contextTokens) &&
-    params.activeSessionEntry.contextTokens > 0
-      ? Math.floor(params.activeSessionEntry.contextTokens)
-      : undefined;
-  return (
-    activeContextTokens ??
-    resolveContextTokensForModel({
-      cfg: params.cfg,
-      provider: params.ref.provider,
-      model: params.ref.model,
-      allowAsyncLoad: false,
-    })
+  const sessionContextTokens = normalizePositiveContextTokens(
+    params.activeSessionEntry?.contextTokens,
   );
+  const modelContextTokens = resolveContextTokensForModel({
+    cfg: params.cfg,
+    provider: params.ref.provider,
+    model: params.ref.model,
+    allowAsyncLoad: false,
+  });
+  const contextTokens = modelContextTokens ?? sessionContextTokens;
+  if (contextTokens === undefined) {
+    return undefined;
+  }
+
+  const agentContextTokens = resolveAgentContextTokensForHint({
+    cfg: params.cfg,
+    agentId: params.agentId,
+  });
+  return agentContextTokens !== undefined
+    ? Math.min(agentContextTokens, contextTokens)
+    : contextTokens;
 }
 
 function resolveHeartbeatBleedHint(params: {
@@ -809,14 +862,14 @@ function resolveHeartbeatBleedHint(params: {
 
   const runtimeWindow = resolveContextWindowForHint({
     cfg: params.cfg,
+    agentId: params.agentId,
     ref: runtimeRef,
     activeSessionEntry: params.activeSessionEntry,
   });
-  const primaryWindow = resolveContextTokensForModel({
+  const primaryWindow = resolveContextWindowForHint({
     cfg: params.cfg,
-    provider: primaryRef.provider,
-    model: primaryRef.model,
-    allowAsyncLoad: false,
+    agentId: params.agentId,
+    ref: primaryRef,
   });
   if (
     typeof runtimeWindow === "number" &&
@@ -841,15 +894,18 @@ function resolveHeartbeatBleedHint(params: {
 
 export function buildContextOverflowRecoveryText(params: {
   duringCompaction?: boolean;
+  preserveSessionMapping?: boolean;
   cfg: FollowupRun["run"]["config"];
   agentId?: string;
   primaryProvider?: string;
   primaryModel?: string;
   activeSessionEntry?: SessionEntry;
 }): string {
-  const prefix = params.duringCompaction
-    ? "⚠️ Context limit exceeded during compaction. I've reset our conversation to start fresh - please try again."
-    : "⚠️ Context limit exceeded. I've reset our conversation to start fresh - please try again.";
+  const prefix = params.preserveSessionMapping
+    ? "⚠️ Auto-compaction could not recover this turn. I kept this conversation mapped to the current session. Please try again, use /compact, or use /new to start a fresh session."
+    : params.duringCompaction
+      ? "⚠️ Context limit exceeded during compaction. I've reset our conversation to start fresh - please try again."
+      : "⚠️ Context limit exceeded. I've reset our conversation to start fresh - please try again.";
   return (
     prefix +
     (resolveHeartbeatBleedHint({
@@ -1100,7 +1156,6 @@ export async function runAgentTurnWithFallback(params: {
   shouldEmitToolResult: () => boolean;
   shouldEmitToolOutput: () => boolean;
   pendingToolTasks: Set<Promise<void>>;
-  resetSessionAfterCompactionFailure: (reason: string) => Promise<boolean>;
   resetSessionAfterRoleOrderingConflict: (reason: string) => Promise<boolean>;
   isHeartbeat: boolean;
   sessionKey?: string;
@@ -1169,6 +1224,19 @@ export async function runAgentTurnWithFallback(params: {
   };
 
   const runId = params.opts?.runId ?? crypto.randomUUID();
+  if (isDiagnosticsEnabled(runtimeConfig)) {
+    logSessionTurnCreated({
+      runId,
+      sessionKey: params.sessionKey,
+      sessionId: params.followupRun.run.sessionId,
+      agentId: params.followupRun.run.agentId,
+      channel:
+        params.followupRun.run.messageProvider ??
+        params.sessionCtx.Surface ??
+        params.sessionCtx.Provider,
+      trigger: params.isHeartbeat ? "heartbeat" : "user",
+    });
+  }
   const replyMediaContext =
     params.replyMediaContext ??
     createReplyMediaContext({
@@ -1268,7 +1336,6 @@ export async function runAgentTurnWithFallback(params: {
   let fallbackProvider = params.followupRun.run.provider;
   let fallbackModel = params.followupRun.run.model;
   let fallbackAttempts: RuntimeFallbackAttempt[] = [];
-  let didResetAfterCompactionFailure = false;
   let didRetryTransientHttpError = false;
   let liveModelSwitchRetries = 0;
   let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
@@ -2184,20 +2251,19 @@ export async function runAgentTurnWithFallback(params: {
       });
 
       // Some embedded runs surface context overflow as an error payload instead of throwing.
-      // Treat those as a session-level failure and auto-recover by starting a fresh session.
+      // Preserve the active session mapping and surface explicit guidance instead
+      // of silently rotating the session key to a new session id.
       const embeddedError = runResult.meta?.error;
-      if (
-        embeddedError &&
-        isContextOverflowError(embeddedError.message) &&
-        !didResetAfterCompactionFailure &&
-        (await params.resetSessionAfterCompactionFailure(embeddedError.message))
-      ) {
-        didResetAfterCompactionFailure = true;
+      if (embeddedError && isContextOverflowError(embeddedError.message)) {
+        defaultRuntime.error(
+          `Auto-compaction failed (${embeddedError.message}). Preserving existing session mapping for ${params.sessionKey ?? params.followupRun.run.sessionId}.`,
+        );
         params.replyOperation?.fail("run_failed", embeddedError);
         return {
           kind: "final",
           payload: markAgentRunFailureReplyPayload({
             text: buildContextOverflowRecoveryText({
+              preserveSessionMapping: true,
               cfg: runtimeConfig,
               agentId: params.followupRun.run.agentId,
               primaryProvider: params.followupRun.run.provider,
@@ -2317,18 +2383,17 @@ export async function runAgentTurnWithFallback(params: {
         };
       }
 
-      if (
-        isCompactionFailure &&
-        !didResetAfterCompactionFailure &&
-        (await params.resetSessionAfterCompactionFailure(message))
-      ) {
-        didResetAfterCompactionFailure = true;
+      if (isCompactionFailure) {
+        defaultRuntime.error(
+          `Auto-compaction failed (${message}). Preserving existing session mapping for ${params.sessionKey ?? params.followupRun.run.sessionId}.`,
+        );
         params.replyOperation?.fail("run_failed", err);
         return {
           kind: "final",
           payload: markAgentRunFailureReplyPayload({
             text: buildContextOverflowRecoveryText({
               duringCompaction: true,
+              preserveSessionMapping: true,
               cfg: runtimeConfig,
               agentId: params.followupRun.run.agentId,
               primaryProvider: params.followupRun.run.provider,

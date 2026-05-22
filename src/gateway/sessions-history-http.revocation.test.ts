@@ -43,7 +43,7 @@ vi.mock("./http-utils.js", () => ({
     const value = req.headers[name.toLowerCase()];
     return Array.isArray(value) ? value[0] : value;
   },
-  resolveTrustedHttpOperatorScopes: () => ["operator.read"],
+  resolveSharedSecretHttpOperatorScopes: () => ["operator.read"],
   authorizeScopedGatewayHttpRequestOrReply: async () => ({
     cfg: { gateway: { webchat: { chatHistoryMaxChars: 2000 } } },
     requestAuth: { trustDeclaredOperatorScopes: true },

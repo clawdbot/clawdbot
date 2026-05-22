@@ -7,13 +7,12 @@ import { providerAliasCases } from "../test-helpers/provider-alias-cases.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import { applyFinalEffectiveToolPolicy } from "./effective-tool-policy.js";
 
-function makeTool(name: string, ownerOnly = false): AnyAgentTool {
+function makeTool(name: string): AnyAgentTool {
   return {
     name,
     label: name,
     description: name,
     parameters: { type: "object", properties: {} },
-    ownerOnly,
     execute: async () => ({ content: [{ type: "text", text: "ok" }], details: {} }),
   };
 }
@@ -146,16 +145,6 @@ describe("applyFinalEffectiveToolPolicy", () => {
       },
       messageProvider: "teams",
       senderId: "alice",
-      warn: () => {},
-    });
-
-    expect(filtered.map((tool) => tool.name)).toEqual(["mcp__bundle__read"]);
-  });
-
-  it("applies owner-only filtering to bundled tools", () => {
-    const filtered = applyFinalEffectiveToolPolicy({
-      bundledTools: [makeTool("mcp__bundle__read"), makeTool("mcp__bundle__admin", true)],
-      senderIsOwner: false,
       warn: () => {},
     });
 

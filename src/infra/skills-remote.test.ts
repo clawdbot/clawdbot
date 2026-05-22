@@ -15,6 +15,42 @@ import {
   setSkillsRemoteRegistry,
 } from "./skills-remote.js";
 
+function createRemoteSkillWorkspace(bin: string): { cfg: OpenClawConfig; workspaceDir: string } {
+  const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-remote-skills-"));
+  fs.mkdirSync(path.join(workspaceDir, "remote-skill"), { recursive: true });
+  fs.writeFileSync(
+    path.join(workspaceDir, "remote-skill", "SKILL.md"),
+    [
+      "---",
+      "name: remote-skill",
+      "description: Needs a remote bin",
+      `metadata: { "openclaw": { "os": ["darwin"], "requires": { "bins": ["${bin}"] } } }`,
+      "---",
+      "# Remote Skill",
+      "",
+    ].join("\n"),
+  );
+  return {
+    workspaceDir,
+    cfg: {
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+        },
+      },
+    } satisfies OpenClawConfig,
+  };
+}
+
+function recordRemoteMacWithSystemWhich(nodeId: string): void {
+  recordRemoteNodeInfo({
+    nodeId,
+    displayName: "Remote Mac",
+    platform: "darwin",
+    commands: ["system.run", "system.which"],
+  });
+}
+
 describe("skills-remote", () => {
   afterEach(() => {
     setSkillsRemoteRegistry(null);
@@ -158,30 +194,10 @@ describe("skills-remote", () => {
 
   it("clears stale bins when a connected node probe times out", async () => {
     await resetSkillsRefreshForTest();
-    const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-remote-skills-"));
     const nodeId = `node-${randomUUID()}`;
     const bin = `bin-${randomUUID()}`;
+    const { cfg, workspaceDir } = createRemoteSkillWorkspace(bin);
     try {
-      fs.mkdirSync(path.join(workspaceDir, "remote-skill"), { recursive: true });
-      fs.writeFileSync(
-        path.join(workspaceDir, "remote-skill", "SKILL.md"),
-        [
-          "---",
-          "name: remote-skill",
-          "description: Needs a remote bin",
-          `metadata: { "openclaw": { "os": ["darwin"], "requires": { "bins": ["${bin}"] } } }`,
-          "---",
-          "# Remote Skill",
-          "",
-        ].join("\n"),
-      );
-      const cfg = {
-        agents: {
-          defaults: {
-            workspace: workspaceDir,
-          },
-        },
-      } satisfies OpenClawConfig;
       const invokeCalls: string[] = [];
       setSkillsRemoteRegistry({
         listConnected: () => [],
@@ -194,12 +210,7 @@ describe("skills-remote", () => {
           };
         },
       } as unknown as NodeRegistry);
-      recordRemoteNodeInfo({
-        nodeId,
-        displayName: "Remote Mac",
-        platform: "darwin",
-        commands: ["system.run", "system.which"],
-      });
+      recordRemoteMacWithSystemWhich(nodeId);
       recordRemoteNodeBins(nodeId, [bin]);
       const before = getSkillsSnapshotVersion(workspaceDir);
 
@@ -450,30 +461,10 @@ describe("skills-remote", () => {
 
   it("records bins from system.which object-map responses", async () => {
     await resetSkillsRefreshForTest();
-    const workspaceDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-remote-skills-"));
     const nodeId = `node-${randomUUID()}`;
     const bin = `bin-${randomUUID()}`;
+    const { cfg, workspaceDir } = createRemoteSkillWorkspace(bin);
     try {
-      fs.mkdirSync(path.join(workspaceDir, "remote-skill"), { recursive: true });
-      fs.writeFileSync(
-        path.join(workspaceDir, "remote-skill", "SKILL.md"),
-        [
-          "---",
-          "name: remote-skill",
-          "description: Needs a remote bin",
-          `metadata: { "openclaw": { "os": ["darwin"], "requires": { "bins": ["${bin}"] } } }`,
-          "---",
-          "# Remote Skill",
-          "",
-        ].join("\n"),
-      );
-      const cfg = {
-        agents: {
-          defaults: {
-            workspace: workspaceDir,
-          },
-        },
-      } satisfies OpenClawConfig;
       const invokeCalls: string[] = [];
       setSkillsRemoteRegistry({
         listConnected: () => [],
@@ -487,12 +478,7 @@ describe("skills-remote", () => {
           };
         },
       } as unknown as NodeRegistry);
-      recordRemoteNodeInfo({
-        nodeId,
-        displayName: "Remote Mac",
-        platform: "darwin",
-        commands: ["system.run", "system.which"],
-      });
+      recordRemoteMacWithSystemWhich(nodeId);
       const before = getSkillsSnapshotVersion(workspaceDir);
 
       await refreshRemoteNodeBins({

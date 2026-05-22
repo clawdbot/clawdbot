@@ -35,7 +35,6 @@ packageExtensionsChecksum: sha256-oc/FAHkBR844HBfph1RZWyRMHHBpIFya25tyv5SGf6s=
 
 patchedDependencies:
   '@agentclientprotocol/claude-agent-acp@0.36.1': f4f95d000b8694ca27dbbb969a7ebbfa9e45001e245a927201cb8bc43b6be641
-  baileys@7.0.0-rc12: f2bd4db8403598ce9e4efafe859a27443a41c5ce25d97218de69169b4c03e18c
 
 importers:
 
@@ -1218,9 +1217,6 @@ importers:
 
   extensions/openshell:
     dependencies:
-      openshell:
-        specifier: 0.1.0
-        version: 0.1.0
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -1651,8 +1647,8 @@ importers:
         specifier: 2.2.3
         version: 2.2.3
       baileys:
-        specifier: 7.0.0-rc12
-        version: 7.0.0-rc12(patch_hash=f2bd4db8403598ce9e4efafe859a27443a41c5ce25d97218de69169b4c03e18c)(audio-decode@2.2.3)(jimp@1.6.1)(sharp@0.34.5)
+        specifier: 7.0.0-rc13
+        version: 7.0.0-rc13(audio-decode@2.2.3)(jimp@1.6.1)(sharp@0.34.5)
       https-proxy-agent:
         specifier: 9.0.0
         version: 9.0.0
@@ -4118,9 +4114,6 @@ packages:
   '@swc/helpers@0.5.21':
     resolution: {integrity: sha512-jI/VAmtdjB/RnI8GTnokyX7Ug8c+g+ffD6QRLa6XQewtnGyukKkKSk3wLTM3b5cjt1jNh9x0jfVlagdN2gDKQg==}
 
-  '@telegraf/types@7.1.0':
-    resolution: {integrity: sha512-kGevOIbpMcIlCDeorKGpwZmdH7kHbqlk/Yj6dEpJMKEQw5lk0KVQY0OLXaCswy8GqlIVLd5625OB+rAntP9xVw==}
-
   '@tencent-connect/qqbot-connector@1.1.0':
     resolution: {integrity: sha512-3nQ2mdyzPRKpBHjd3QiKZDwNzw1F7fBN+rSq8Xms2gg+JWZR4SY2Zdf+doqTyXdyVjG4Y0QM7IA4U42zT9xxzw==}
     engines: {node: '>=18.0.0'}
@@ -4615,8 +4608,8 @@ packages:
   bail@2.0.2:
     resolution: {integrity: sha512-0xO6mYd7JB2YesxDKplafRpsiOzPt9V02ddPCLbY1xYGPOX24NTyN50qnUxgCPcSoYMhKpAuBTjQoRZCAkUDRw==}
 
-  baileys@7.0.0-rc12:
-    resolution: {integrity: sha512-kttfToIBUKJb5hn57GspFbtlGaOp8wwhij7F8JRtduIL6vIODL5ze7XnsQKT73QwgFOGdJYXAT01x6rz9NNijg==}
+  baileys@7.0.0-rc13:
+    resolution: {integrity: sha512-v8k74K8B5R7WNYGa26MyJAYEu3Wc4BSuK01QaK8lr30lhE8Nga31nWNu8KN0NDDt+Fsvkq4SQFFI8Q13ghjKmA==}
     engines: {node: '>=20.0.0'}
     peerDependencies:
       audio-decode: ^2.1.3
@@ -4725,17 +4718,8 @@ packages:
   bs58@6.0.0:
     resolution: {integrity: sha512-PD0wEnEYg6ijszw/u8s+iI3H17cTymlrwkKhDhPZq+Sokl3AU4htyBFTjAeNAlCCmg0f53g6ih3jATyCKftTfw==}
 
-  buffer-alloc-unsafe@1.1.0:
-    resolution: {integrity: sha512-TEM2iMIEQdJ2yjPJoSIsldnleVaAk1oW3DBVUykyOLsEsFmEc9kn+SFFPz+gl54KQNxlDnAwCXosOS9Okx2xAg==}
-
-  buffer-alloc@1.2.0:
-    resolution: {integrity: sha512-CFsHQgjtW1UChdXgbyJGtnm+O/uLQeZdtbDo8mfUgYXCHSM1wgrVxXm6bSyrUuErEb+4sYVGCzASBRot7zyrow==}
-
   buffer-equal-constant-time@1.0.1:
     resolution: {integrity: sha512-zRpUiDwd/xk6ADqPMATG8vc9VPrkck7T07OIx0gnjmJAnHnTVXNQG3vfvWNuiZIkwu9KrKdA1iJKfsfTVxE6NA==}
-
-  buffer-fill@1.0.0:
-    resolution: {integrity: sha512-T7zexNBwiiaCOGDg9xNX9PBmjrubblRkENuptryuI64URkXDFum9il/JGL8Lm8wYfAXpredVXXZz7eMHilimiQ==}
 
   buffer-from@1.1.2:
     resolution: {integrity: sha512-E+XQCRwSbaaiChtv6k6Dwgc+bx+Bs6vuKJHHl5kox/BaKbhiXzqQOwK4cO22yElGp2OCmjwVhT3HmxgyPGnJfQ==}
@@ -5020,10 +5004,6 @@ packages:
 
   domutils@3.2.2:
     resolution: {integrity: sha512-6kZKyUajlDuqlHKVX1w7gyslj9MPIXzIFiz/rGu35uC1wMi+kMhQwGhl4lt9unC9Vb9INnY9Z3/ZA3+FhASLaw==}
-
-  dotenv@16.6.1:
-    resolution: {integrity: sha512-uBq4egWHTcTt33a72vpSG0z3HnPuIl6NqYcTrKEg2azoEyl2hpW0zqlxysq2pK9HlDIHyHyakeYaYnSAwd8bow==}
-    engines: {node: '>=12'}
 
   dotenv@17.4.2:
     resolution: {integrity: sha512-nI4U3TottKAcAD9LLud4Cb7b2QztQMUEfHbvhTH09bqXTxnSie8WnjPALV/WMCrJZ6UV/qHJ6L03OqO3LcdYZw==}
@@ -6144,10 +6124,6 @@ packages:
   mpg123-decoder@1.0.3:
     resolution: {integrity: sha512-+fjxnWigodWJm3+4pndi+KUg9TBojgn31DPk85zEsim7C6s0X5Ztc/hQYdytXkwuGXH+aB0/aEkG40Emukv6oQ==}
 
-  mri@1.2.0:
-    resolution: {integrity: sha512-tzzskb3bG8LvYGFF/mDTpq3jpI6Q9wc3LEmBaghu+DdCssd1FakN7Bc0hVNmEyGq1bq3RgfkCb3cmQLpNPOroA==}
-    engines: {node: '>=4'}
-
   mrmime@2.0.1:
     resolution: {integrity: sha512-Y3wQdFg2Va6etvQ5I82yUhGdsKrcYox6p7FfL1LbK2J4V01F9TGlepTIhnK24t7koZibmg82KGglhA1XK5IsLQ==}
     engines: {node: '>=10'}
@@ -6294,11 +6270,6 @@ packages:
       zod:
         optional: true
 
-  openshell@0.1.0:
-    resolution: {integrity: sha512-B7jLewH+d73hraWcrSFgNOjvd+frW5JPejkTpqgj2EJBjX/Yk1Y4blgP5pDl4FwrBxfmwsTKR08Uwgrdo+xpSg==}
-    engines: {node: '>=18'}
-    hasBin: true
-
   opus-decoder@0.7.11:
     resolution: {integrity: sha512-+e+Jz3vGQLxRTBHs8YJQPRPc1Tr+/aC6coV/DlZylriA29BdHQAYXhvNRKtjftof17OFng0+P4wsFIqQu3a48A==}
 
@@ -6360,10 +6331,6 @@ packages:
   p-timeout@3.2.0:
     resolution: {integrity: sha512-rhIwUycgwwKcP9yTOOFK/AKsAopjjCakVqLHePO3CC6Mir1Z99xT+R63jZxAT5lFZLa2inS5h+ZS2GvR99/FBg==}
     engines: {node: '>=8'}
-
-  p-timeout@4.1.0:
-    resolution: {integrity: sha512-+/wmHtzJuWii1sXn3HCuH/FTwGhrp4tmJTxSKJbfS+vkipci6osxXM5mY0jUiRzWKMTgUT8l7HFbeSwZAynqHw==}
-    engines: {node: '>=10'}
 
   p-timeout@7.0.1:
     resolution: {integrity: sha512-AxTM2wDGORHGEkPCt8yqxOTMgpfbEHqF51f/5fJCmwFC3C/zNcGT63SymH2ttOAaiIws2zVg4+izQCjrakcwHg==}
@@ -6763,19 +6730,12 @@ packages:
   safe-buffer@5.2.1:
     resolution: {integrity: sha512-rp3So07KcdmmKbGvgaNxQSJr7bGVSVk5S9Eq1F+ppbRo70+YeaDxkw5Dd8NPN+GD6bjnYm2VuPuCXmpuYvmCXQ==}
 
-  safe-compare@1.1.4:
-    resolution: {integrity: sha512-b9wZ986HHCo/HbKrRpBJb2kqXMK9CEWIE1egeEvZsYn69ay3kdfl9nG3RyOcR+jInTDf7a86WQ1d4VJX7goSSQ==}
-
   safe-stable-stringify@2.5.0:
     resolution: {integrity: sha512-b3rppTKm9T+PsVCBEOUR46GWI7fdOs00VKZ1+9c1EWDaDMvjQc6tUwuFyIprgGgTcWoVHSKrU8H31ZHA2e0RHA==}
     engines: {node: '>=10'}
 
   safer-buffer@2.1.2:
     resolution: {integrity: sha512-YZo3K82SD7Riyi0E1EQPojLz7kpepnSQI9IyPbHHg1XXXevb5dJI7tpyN2ADxGcQbHG7vcyRHk0cbwqcQriUtg==}
-
-  sandwich-stream@2.0.2:
-    resolution: {integrity: sha512-jLYV0DORrzY3xaz/S9ydJL6Iz7essZeAfnAavsJ+zsJGZ1MOnsS52yRjU3uF3pJa/lla7+wisp//fxOwOH8SKQ==}
-    engines: {node: '>= 0.10'}
 
   sax@1.6.0:
     resolution: {integrity: sha512-6R3J5M4AcbtLUdZmRv2SygeVaM7IhrLXu9BmnOGmmACak8fiUtOsYNWUS4uK7upbmHIBbLBeFeI//477BKLBzA==}
@@ -7013,11 +6973,6 @@ packages:
 
   teex@1.0.1:
     resolution: {integrity: sha512-eYE6iEI62Ni1H8oIa7KlDU6uQBtqr4Eajni3wX7rpfXD8ysFx8z0+dri+KWEPWpBsxXfxu58x/0jvTVT1ekOSg==}
-
-  telegraf@4.16.3:
-    resolution: {integrity: sha512-yjEu2NwkHlXu0OARWoNhJlIjX09dRktiMQFsM678BAH/PEPVwctzL67+tvXqLCRQQvm3SDtki2saGO9hLlz68w==}
-    engines: {node: ^12.20.0 || >=14.13.1}
-    hasBin: true
 
   text-decoder@1.2.7:
     resolution: {integrity: sha512-vlLytXkeP4xvEq2otHeJfSQIRyWxo/oZGEbXrtEEF9Hnmrdly59sUbzZ/QgyWuLYHctCHxFF4tRQZNQ9k60ExQ==}
@@ -10068,8 +10023,6 @@ snapshots:
     dependencies:
       tslib: 2.8.1
 
-  '@telegraf/types@7.1.0': {}
-
   '@tencent-connect/qqbot-connector@1.1.0':
     dependencies:
       qrcode-terminal: 0.12.0
@@ -10606,7 +10559,7 @@ snapshots:
 
   bail@2.0.2: {}
 
-  baileys@7.0.0-rc12(patch_hash=f2bd4db8403598ce9e4efafe859a27443a41c5ce25d97218de69169b4c03e18c)(audio-decode@2.2.3)(jimp@1.6.1)(sharp@0.34.5):
+  baileys@7.0.0-rc13(audio-decode@2.2.3)(jimp@1.6.1)(sharp@0.34.5):
     dependencies:
       '@cacheable/node-cache': 1.7.6
       '@hapi/boom': 9.1.4
@@ -10715,16 +10668,7 @@ snapshots:
     dependencies:
       base-x: 5.0.1
 
-  buffer-alloc-unsafe@1.1.0: {}
-
-  buffer-alloc@1.2.0:
-    dependencies:
-      buffer-alloc-unsafe: 1.1.0
-      buffer-fill: 1.0.0
-
   buffer-equal-constant-time@1.0.1: {}
-
-  buffer-fill@1.0.0: {}
 
   buffer-from@1.1.2: {}
 
@@ -10975,8 +10919,6 @@ snapshots:
       dom-serializer: 2.0.0
       domelementtype: 2.3.0
       domhandler: 5.0.3
-
-  dotenv@16.6.1: {}
 
   dotenv@17.4.2: {}
 
@@ -12447,8 +12389,6 @@ snapshots:
     dependencies:
       '@wasm-audio-decoders/common': 9.0.7
 
-  mri@1.2.0: {}
-
   mrmime@2.0.1: {}
 
   ms@2.1.3: {}
@@ -12585,14 +12525,6 @@ snapshots:
       ws: 8.20.1
       zod: 4.4.3
 
-  openshell@0.1.0:
-    dependencies:
-      dotenv: 16.6.1
-      telegraf: 4.16.3
-    transitivePeerDependencies:
-      - encoding
-      - supports-color
-
   opus-decoder@0.7.11:
     dependencies:
       '@wasm-audio-decoders/common': 9.0.7
@@ -12687,8 +12619,6 @@ snapshots:
   p-timeout@3.2.0:
     dependencies:
       p-finally: 1.0.0
-
-  p-timeout@4.1.0: {}
 
   p-timeout@7.0.1: {}
 
@@ -13132,15 +13062,9 @@ snapshots:
 
   safe-buffer@5.2.1: {}
 
-  safe-compare@1.1.4:
-    dependencies:
-      buffer-alloc: 1.2.0
-
   safe-stable-stringify@2.5.0: {}
 
   safer-buffer@2.1.2: {}
-
-  sandwich-stream@2.0.2: {}
 
   sax@1.6.0: {}
 
@@ -13436,20 +13360,6 @@ snapshots:
     transitivePeerDependencies:
       - bare-abort-controller
       - react-native-b4a
-
-  telegraf@4.16.3:
-    dependencies:
-      '@telegraf/types': 7.1.0
-      abort-controller: 3.0.0
-      debug: 4.4.3
-      mri: 1.2.0
-      node-fetch: 2.7.0
-      p-timeout: 4.1.0
-      safe-compare: 1.1.4
-      sandwich-stream: 2.0.2
-    transitivePeerDependencies:
-      - encoding
-      - supports-color
 
   text-decoder@1.2.7:
     dependencies:

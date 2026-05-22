@@ -1,4 +1,5 @@
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { formatBlockedLivenessError, isBlockedLivenessState } from "../shared/agent-liveness.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { wrapPromptDataBlock } from "./sanitize-for-prompt.js";
 import {
@@ -8,7 +9,7 @@ import {
 import {
   callGateway,
   getRuntimeConfig,
-  loadSessionStore,
+  readSessionEntry,
   resolveAgentIdFromSessionKey,
   resolveStorePath,
 } from "./subagent-announce.runtime.js";
@@ -376,7 +377,10 @@ export function applySubagentWaitOutcome(params: {
   }
   const waitError = typeof params.wait?.error === "string" ? params.wait.error : undefined;
   let outcome = next.outcome;
-  if (params.wait?.status === "timeout") {
+  // Capture/announcement callers can pass raw wait snapshots that bypass the primary normalizers.
+  if (isBlockedLivenessState(params.wait?.livenessState)) {
+    outcome = { status: "error", error: formatBlockedLivenessError(waitError) };
+  } else if (params.wait?.status === "timeout") {
     outcome = { status: "timeout" };
   } else if (params.wait?.status === "error") {
     outcome = { status: "error", error: waitError };
@@ -573,7 +577,7 @@ export async function buildCompactAnnounceStatsLine(params: {
   const cfg = subagentAnnounceOutputDeps.getRuntimeConfig();
   const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
-  let entry = loadSessionStore(storePath)[params.sessionKey];
+  let entry = readSessionEntry(storePath, params.sessionKey);
   const tokenWaitAttempts = isFastTestMode() ? 1 : 3;
   for (let attempt = 0; attempt < tokenWaitAttempts; attempt += 1) {
     const hasTokenData =
@@ -586,7 +590,7 @@ export async function buildCompactAnnounceStatsLine(params: {
     if (!isFastTestMode()) {
       await new Promise((resolve) => setTimeout(resolve, 150));
     }
-    entry = loadSessionStore(storePath)[params.sessionKey];
+    entry = readSessionEntry(storePath, params.sessionKey);
   }
 
   const input = typeof entry?.inputTokens === "number" ? entry.inputTokens : 0;

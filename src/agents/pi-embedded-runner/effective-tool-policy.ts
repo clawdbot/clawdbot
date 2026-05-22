@@ -17,11 +17,7 @@ import {
   buildDefaultToolPolicyPipelineSteps,
   type ToolPolicyPipelineStep,
 } from "../tool-policy-pipeline.js";
-import {
-  applyOwnerOnlyToolPolicy,
-  mergeAlsoAllowPolicy,
-  resolveToolProfilePolicy,
-} from "../tool-policy.js";
+import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../tool-policy.js";
 import type { AnyAgentTool } from "../tools/common.js";
 
 /**
@@ -36,7 +32,7 @@ import type { AnyAgentTool } from "../tools/common.js";
  */
 type FinalEffectiveToolPolicyParams = {
   // Tools appended to the core tool set after `createOpenClawCodingTools()`
-  // has already applied owner-only and tool-policy filtering (e.g. bundled
+  // has already applied the shared tool-policy pipeline (e.g. bundled
   // MCP/LSP tools). Only these are filtered here; re-running the pipeline over
   // the already-filtered core tools would drop plugin tools whose WeakMap
   // metadata no longer survives core-tool wrapping/normalization.
@@ -57,8 +53,6 @@ type FinalEffectiveToolPolicyParams = {
   senderName?: string | null;
   senderUsername?: string | null;
   senderE164?: string | null;
-  senderIsOwner?: boolean;
-  ownerOnlyToolAllowlist?: string[];
   warn: (message: string) => void;
 };
 
@@ -144,11 +138,6 @@ export function applyFinalEffectiveToolPolicy(
       store: subagentStore,
     },
   );
-  const ownerFiltered = applyOwnerOnlyToolPolicy(
-    params.bundledTools,
-    params.senderIsOwner === true,
-    params.ownerOnlyToolAllowlist,
-  );
   // Suppress unavailable-core-tool warnings on every step of this pass.
   // `applyToolPolicyPipeline` infers `coreToolNames` from the `tools` array
   // it's filtering, and this pass only sees the bundled MCP/LSP subset.
@@ -180,7 +169,7 @@ export function applyFinalEffectiveToolPolicy(
     { policy: inheritedToolPolicy, label: "inherited tools" },
   ].map((step) => Object.assign({}, step, { suppressUnavailableCoreToolWarning: true }));
   return applyToolPolicyPipeline({
-    tools: ownerFiltered,
+    tools: params.bundledTools,
     toolMeta: (tool) => getPluginToolMeta(tool),
     warn: params.warn,
     steps: pipelineSteps,

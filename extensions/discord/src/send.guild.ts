@@ -1,4 +1,5 @@
 import type {
+  APIGuild,
   APIGuildMember,
   APIGuildScheduledEvent,
   APIRole,
@@ -12,6 +13,7 @@ import {
   createGuildBan,
   createGuildScheduledEvent,
   getChannel,
+  getGuild,
   getGuildMember,
   getGuildVoiceState,
   listGuildChannels,
@@ -66,6 +68,14 @@ export async function fetchChannelInfoDiscord(
 ): Promise<APIChannel> {
   const rest = resolveDiscordRest(opts);
   return await getChannel(rest, channelId);
+}
+
+export async function fetchGuildInfoDiscord(
+  guildId: string,
+  opts: DiscordReactOpts,
+): Promise<APIGuild> {
+  const rest = resolveDiscordRest(opts);
+  return await getGuild(rest, guildId);
 }
 
 export async function listGuildChannelsDiscord(

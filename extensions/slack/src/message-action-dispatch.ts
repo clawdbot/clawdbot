@@ -224,6 +224,7 @@ export async function handleSlackMessageAction(params: {
         accountId,
       },
       cfg,
+      ctx.toolContext,
     );
   }
 

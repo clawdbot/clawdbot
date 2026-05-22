@@ -59,15 +59,21 @@ export async function loadValidConfigOrThrow(): Promise<OpenClawConfig> {
   return snapshot.runtimeConfig ?? snapshot.config;
 }
 
+export type UpdateConfigContext = {
+  runtimeConfig: OpenClawConfig;
+};
+
 export async function updateConfig(
-  mutator: (cfg: OpenClawConfig) => OpenClawConfig,
+  mutator: (cfg: OpenClawConfig, context: UpdateConfigContext) => OpenClawConfig,
 ): Promise<OpenClawConfig> {
   const snapshot = await readConfigFileSnapshot();
   if (!snapshot.valid) {
     const issues = formatConfigIssueLines(snapshot.issues, "-").join("\n");
     throw new Error(`Invalid config at ${snapshot.path}\n${issues}`);
   }
-  const next = mutator(structuredClone(snapshot.sourceConfig ?? snapshot.config));
+  const sourceConfig = structuredClone(snapshot.sourceConfig ?? snapshot.config);
+  const runtimeConfig = structuredClone(snapshot.runtimeConfig ?? snapshot.config);
+  const next = mutator(sourceConfig, { runtimeConfig });
   await replaceConfigFile({
     nextConfig: next,
     baseHash: snapshot.hash,
@@ -92,6 +98,22 @@ export function resolveModelTarget(params: { raw: string; cfg: OpenClawConfig })
     throw new Error(`Invalid model reference: ${params.raw}`);
   }
   return resolved.ref;
+}
+
+function resolveAuthoredModelAliasTarget(params: {
+  raw: string;
+  cfg: OpenClawConfig;
+}): { provider: string; model: string } | undefined {
+  const aliasIndex = buildModelAliasIndex({
+    cfg: params.cfg,
+    defaultProvider: DEFAULT_PROVIDER,
+  });
+  const resolved = resolveModelRefFromString({
+    raw: params.raw,
+    defaultProvider: DEFAULT_PROVIDER,
+    aliasIndex,
+  });
+  return resolved?.alias ? resolved.ref : undefined;
 }
 
 export function resolveModelKeysFromEntries(params: {
@@ -209,10 +231,24 @@ export function mergePrimaryFallbackConfig(
 
 export function applyDefaultModelPrimaryUpdate(params: {
   cfg: OpenClawConfig;
+  resolveCfg?: OpenClawConfig;
   modelRaw: string;
   field: "model" | "imageModel";
 }): OpenClawConfig {
-  const resolved = resolveModelTarget({ raw: params.modelRaw, cfg: params.cfg });
+  const resolved =
+    params.resolveCfg && params.resolveCfg !== params.cfg
+      ? (resolveAuthoredModelAliasTarget({
+          raw: params.modelRaw,
+          cfg: params.cfg,
+        }) ??
+        resolveModelTarget({
+          raw: params.modelRaw,
+          cfg: params.resolveCfg,
+        }))
+      : resolveModelTarget({
+          raw: params.modelRaw,
+          cfg: params.cfg,
+        });
   const nextModels = {
     ...params.cfg.agents?.defaults?.models,
   } as Record<string, AgentModelEntryConfig>;

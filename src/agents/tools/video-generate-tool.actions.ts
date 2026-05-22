@@ -6,6 +6,7 @@ import {
   buildVideoGenerationTaskStatusDetails,
   buildVideoGenerationTaskStatusText,
   findActiveVideoGenerationTaskForSession,
+  findDuplicateGuardVideoGenerationTaskForSession,
 } from "../video-generation-task-status.js";
 import {
   createMediaGenerateProviderListActionResult,
@@ -110,6 +111,26 @@ export function createVideoGenerateStatusActionResult(
 
 export function createVideoGenerateDuplicateGuardResult(
   sessionKey?: string,
+  params?: { prompt?: string; requestKey?: string },
 ): VideoGenerateActionResult | undefined {
-  return videoGenerateTaskStatusActions.createDuplicateGuardResult(sessionKey);
+  const blockingTask = findDuplicateGuardVideoGenerationTaskForSession(sessionKey, {
+    prompt: params?.prompt,
+    requestKey: params?.requestKey,
+  });
+  if (!blockingTask) {
+    return undefined;
+  }
+  return {
+    content: [
+      {
+        type: "text",
+        text: buildVideoGenerationTaskStatusText(blockingTask, { duplicateGuard: true }),
+      },
+    ],
+    details: {
+      action: "status",
+      duplicateGuard: true,
+      ...buildVideoGenerationTaskStatusDetails(blockingTask),
+    },
+  };
 }

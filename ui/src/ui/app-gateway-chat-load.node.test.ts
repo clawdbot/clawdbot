@@ -58,7 +58,8 @@ vi.mock("./gateway.ts", async (importOriginal) => {
 
 vi.mock("./app-chat.ts", () => ({
   CHAT_SESSIONS_ACTIVE_MINUTES: 60,
-  CHAT_SESSIONS_REFRESH_LIMIT: 100,
+  CHAT_SESSIONS_REFRESH_LIMIT: 50,
+  createChatSessionsLoadOverrides: () => ({ activeMinutes: 60, limit: 50 }),
   clearPendingQueueItemsForRun: vi.fn(),
   flushChatQueueForEvent: vi.fn(),
   refreshChatAvatar: refreshChatAvatarMock,

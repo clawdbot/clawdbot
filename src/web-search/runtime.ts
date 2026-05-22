@@ -1,3 +1,5 @@
+import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
+import { hasAuthProfileForProvider } from "../agents/tools/model-config.helpers.js";
 import {
   getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
@@ -81,6 +83,7 @@ function hasEntryCredential(
     PluginWebSearchProviderEntry,
     | "credentialPath"
     | "id"
+    | "authProviderId"
     | "envVars"
     | "getConfiguredCredentialValue"
     | "getConfiguredCredentialFallback"
@@ -89,6 +92,7 @@ function hasEntryCredential(
   >,
   config: OpenClawConfig | undefined,
   search: WebSearchConfig | undefined,
+  agentDir?: string,
 ): boolean {
   return hasWebProviderEntryCredential({
     provider,
@@ -101,6 +105,11 @@ function hasEntryCredential(
     resolveEnvValue: ({ provider: currentProvider, configuredEnvVarId }) =>
       (configuredEnvVarId ? readWebProviderEnvValue([configuredEnvVarId]) : undefined) ??
       readWebProviderEnvValue(currentProvider.envVars),
+    resolveProviderAuthValue: (providerId) =>
+      hasAuthProfileForProvider({
+        provider: providerId,
+        agentDir: agentDir?.trim() || resolveDefaultAgentDir(config ?? {}),
+      }),
   });
 }
 
@@ -109,6 +118,7 @@ export function isWebSearchProviderConfigured(params: {
     PluginWebSearchProviderEntry,
     | "credentialPath"
     | "id"
+    | "authProviderId"
     | "envVars"
     | "getConfiguredCredentialValue"
     | "getConfiguredCredentialFallback"
@@ -144,6 +154,7 @@ export function listConfiguredWebSearchProviders(params?: {
 export function resolveWebSearchProviderId(params: {
   search?: WebSearchConfig;
   config?: OpenClawConfig;
+  agentDir?: string;
   providers?: PluginWebSearchProviderEntry[];
 }): string {
   const config = resolveWebSearchRuntimeConfig({ config: params.config });
@@ -172,11 +183,11 @@ export function resolveWebSearchProviderId(params: {
         keylessFallbackProviderId ||= provider.id;
         continue;
       }
-      if (!hasEntryCredential(provider, config, search)) {
+      if (!hasEntryCredential(provider, config, search, params.agentDir)) {
         continue;
       }
       logVerbose(
-        `web_search: no provider configured, auto-detected "${provider.id}" from available API keys`,
+        `web_search: no provider configured, auto-detected "${provider.id}" from available credentials`,
       );
       return provider.id;
     }
@@ -295,18 +306,21 @@ export function resolveWebSearchDefinition(
     resolveAutoProviderId: ({ config, toolConfig, providers }) =>
       resolveWebSearchProviderId({
         config,
+        agentDir: options?.agentDir,
         search: toolConfig as WebSearchConfig | undefined,
         providers,
       }),
     resolveFallbackProviderId: ({ config, toolConfig, providers }) =>
       resolveWebSearchProviderId({
         config,
+        agentDir: options?.agentDir,
         search: toolConfig as WebSearchConfig | undefined,
         providers,
       }) || providers[0]?.id,
     createTool: ({ provider, config, toolConfig, runtimeMetadata }) =>
       provider.createTool({
         config,
+        agentDir: options?.agentDir,
         searchConfig: toolConfig,
         runtimeMetadata,
       }),
@@ -354,7 +368,7 @@ function resolveWebSearchCandidates(
     options?.providerId,
     runtimeWebSearch?.selectedProvider,
     runtimeWebSearch?.providerConfigured,
-    resolveWebSearchProviderId({ config, search, providers }),
+    resolveWebSearchProviderId({ config, agentDir: options?.agentDir, search, providers }),
   ].filter(
     (value, index, array): value is string => Boolean(value) && array.indexOf(value) === index,
   );
@@ -442,6 +456,7 @@ export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSe
     try {
       const definition = candidate.createTool({
         config,
+        agentDir: params.agentDir,
         searchConfig: search as Record<string, unknown> | undefined,
         runtimeMetadata: runtimeWebSearch,
       });

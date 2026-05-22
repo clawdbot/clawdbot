@@ -21,6 +21,7 @@ const outputPrecomputedRootHelpTextMock = vi.hoisted(() => vi.fn(() => false));
 const outputPrecomputedBrowserHelpTextMock = vi.hoisted(() => vi.fn(() => false));
 const outputPrecomputedSecretsHelpTextMock = vi.hoisted(() => vi.fn(() => false));
 const outputPrecomputedNodesHelpTextMock = vi.hoisted(() => vi.fn(() => false));
+const outputPrecomputedSubcommandHelpTextMock = vi.hoisted(() => vi.fn(() => false));
 const loadRootHelpRenderOptionsForConfigSensitivePluginsMock = vi.hoisted(() =>
   vi.fn<() => Promise<RootHelpRenderOptions | null>>(async () => null),
 );
@@ -175,6 +176,7 @@ vi.mock("./root-help-metadata.js", () => ({
   outputPrecomputedNodesHelpText: outputPrecomputedNodesHelpTextMock,
   outputPrecomputedRootHelpText: outputPrecomputedRootHelpTextMock,
   outputPrecomputedSecretsHelpText: outputPrecomputedSecretsHelpTextMock,
+  outputPrecomputedSubcommandHelpText: outputPrecomputedSubcommandHelpTextMock,
 }));
 
 vi.mock("./root-help-live-config.js", () => ({
@@ -262,6 +264,7 @@ describe("runCli exit behavior", () => {
     outputPrecomputedNodesHelpTextMock.mockReturnValue(false);
     outputPrecomputedRootHelpTextMock.mockReturnValue(false);
     outputPrecomputedSecretsHelpTextMock.mockReturnValue(false);
+    outputPrecomputedSubcommandHelpTextMock.mockReturnValue(false);
     loadRootHelpRenderOptionsForConfigSensitivePluginsMock.mockResolvedValue(null);
     tryOutputSetupOnboardConfigureHelpMock.mockResolvedValue(true);
     hasEnvHttpProxyAgentConfiguredMock.mockReturnValue(false);
@@ -457,6 +460,17 @@ describe("runCli exit behavior", () => {
     expect(outputPrecomputedNodesHelpTextMock).not.toHaveBeenCalled();
     expect(registerSubCliByNameMock.mock.calls).toEqual([[program, "nodes", argv]]);
     expect(parseAsync).toHaveBeenCalledWith(argv);
+  });
+
+  it("renders selected subcommand help from startup metadata without building the full program", async () => {
+    outputPrecomputedSubcommandHelpTextMock.mockReturnValueOnce(true);
+
+    await runCli(["node", "openclaw", "doctor", "--help"]);
+
+    expect(outputPrecomputedSubcommandHelpTextMock).toHaveBeenCalledWith("doctor");
+    expect(tryRouteCliMock).not.toHaveBeenCalled();
+    expect(buildProgramMock).not.toHaveBeenCalled();
+    expect(closeActiveMemorySearchManagersMock).not.toHaveBeenCalled();
   });
 
   it("keeps root help on the precomputed path without proxy bootstrap", async () => {

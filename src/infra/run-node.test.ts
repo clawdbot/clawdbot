@@ -464,6 +464,50 @@ describe("run-node script", () => {
     });
   });
 
+  it("skips DTS generation only for launcher-triggered local builds", async () => {
+    await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
+      await writeRuntimePostBuildScaffold(tmp);
+      const spawnCalls: Array<{
+        args: string[];
+        env: Record<string, string | undefined>;
+      }> = [];
+      const spawn = (_cmd: string, args: string[], options?: unknown) => {
+        const opts = options as { env?: NodeJS.ProcessEnv } | undefined;
+        spawnCalls.push({
+          args,
+          env: { ...opts?.env },
+        });
+        return createExitedProcess(0);
+      };
+
+      const exitCode = await runNodeMain({
+        cwd: tmp,
+        args: ["status"],
+        env: {
+          ...process.env,
+          OPENCLAW_FORCE_BUILD: "1",
+          OPENCLAW_RUNNER_LOG: "0",
+        },
+        spawn,
+        execPath: process.execPath,
+        platform: process.platform,
+      });
+
+      expect(exitCode).toBe(0);
+      expect(spawnCalls).toHaveLength(3);
+      expect(spawnCalls[0]?.args).toEqual([
+        "scripts/bundled-plugin-assets.mjs",
+        "--phase",
+        "build",
+      ]);
+      expect(spawnCalls[1]?.args).toEqual(["scripts/tsdown-build.mjs", "--no-clean"]);
+      expect(spawnCalls[2]?.args).toEqual(["openclaw.mjs", "status"]);
+      expect(spawnCalls[0]?.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBeUndefined();
+      expect(spawnCalls[1]?.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBe("1");
+      expect(spawnCalls[2]?.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBeUndefined();
+    });
+  });
+
   it("tees launcher output into the requested generic output log", async () => {
     await withTempDir({ prefix: "openclaw-run-node-" }, async (tmp) => {
       await setupTrackedProject(tmp);

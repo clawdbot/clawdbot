@@ -590,7 +590,7 @@ export function loadAuthProfileStoreForSecretsRuntime(agentDir?: string): AuthPr
   return loadAuthProfileStoreForRuntime(agentDir, {
     readOnly: true,
     allowKeychainPrompt: false,
-    resolveLegacyOAuthSidecars: false,
+    resolveLegacyOAuthSidecars: true,
   });
 }
 
@@ -604,7 +604,7 @@ export function loadAuthProfileStoreWithoutExternalProfiles(
   const options: LoadAuthProfileStoreOptions = {
     readOnly: true,
     allowKeychainPrompt: loadOptions?.allowKeychainPrompt ?? false,
-    resolveLegacyOAuthSidecars: loadOptions?.resolveLegacyOAuthSidecars ?? false,
+    resolveLegacyOAuthSidecars: loadOptions?.resolveLegacyOAuthSidecars ?? true,
   };
   const store = loadAuthProfileStoreForAgent(agentDir, options);
   const authPath = resolveAuthStorePath(agentDir);
@@ -639,20 +639,24 @@ export function ensureAuthProfileStore(
 
 export function ensureAuthProfileStoreWithoutExternalProfiles(
   agentDir?: string,
-  options?: { allowKeychainPrompt?: boolean },
+  options?: { allowKeychainPrompt?: boolean; resolveLegacyOAuthSidecars?: boolean },
 ): AuthProfileStore {
-  const runtimeStore = resolveRuntimeAuthProfileStore(agentDir, options);
+  const effectiveOptions: LoadAuthProfileStoreOptions = {
+    ...options,
+    resolveLegacyOAuthSidecars: options?.resolveLegacyOAuthSidecars ?? true,
+  };
+  const runtimeStore = resolveRuntimeAuthProfileStore(agentDir, effectiveOptions);
   if (runtimeStore) {
     return runtimeStore;
   }
-  const store = loadAuthProfileStoreForAgent(agentDir, options);
+  const store = loadAuthProfileStoreForAgent(agentDir, effectiveOptions);
   const authPath = resolveAuthStorePath(agentDir);
   const mainAuthPath = resolveAuthStorePath();
   if (!agentDir || authPath === mainAuthPath) {
     return store;
   }
 
-  const mainStore = loadAuthProfileStoreForAgent(undefined, options);
+  const mainStore = loadAuthProfileStoreForAgent(undefined, effectiveOptions);
   return mergeAuthProfileStores(mainStore, store);
 }
 

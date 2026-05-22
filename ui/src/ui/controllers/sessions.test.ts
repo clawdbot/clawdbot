@@ -512,6 +512,96 @@ describe("loadSessions", () => {
     });
   });
 
+  it("forwards search and offset overrides to sessions.list", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`unexpected method: ${method}`);
+      }
+      return {
+        ts: 1,
+        path: "(multiple)",
+        count: 1,
+        totalCount: 3,
+        limitApplied: 1,
+        offset: 2,
+        nextOffset: null,
+        hasMore: false,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [{ key: "agent:main:dashboard:telegram", kind: "direct", updatedAt: 3 }],
+      };
+    });
+    const state = createState(request);
+
+    await loadSessions(state, {
+      activeMinutes: 0,
+      limit: 1,
+      offset: 2,
+      search: "telegram",
+      includeGlobal: true,
+      includeUnknown: true,
+    });
+
+    expect(request).toHaveBeenCalledWith("sessions.list", {
+      limit: 1,
+      offset: 2,
+      search: "telegram",
+      includeGlobal: true,
+      includeUnknown: true,
+      configuredAgentsOnly: true,
+    });
+  });
+
+  it("appends paged session rows without duplicating existing rows", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method !== "sessions.list") {
+        throw new Error(`unexpected method: ${method}`);
+      }
+      return {
+        ts: 2,
+        path: "(multiple)",
+        count: 2,
+        totalCount: 4,
+        limitApplied: 2,
+        offset: 2,
+        nextOffset: null,
+        hasMore: false,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          { key: "agent:main:dashboard:b", kind: "direct", updatedAt: 2 },
+          { key: "agent:main:dashboard:c", kind: "direct", updatedAt: 1 },
+        ],
+      };
+    });
+    const state = createState(request, {
+      sessionsResult: {
+        ts: 1,
+        path: "(multiple)",
+        count: 2,
+        totalCount: 4,
+        limitApplied: 2,
+        nextOffset: 2,
+        hasMore: true,
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [
+          { key: "agent:main:dashboard:a", kind: "direct", updatedAt: 4 },
+          { key: "agent:main:dashboard:b", kind: "direct", updatedAt: 3 },
+        ],
+      },
+    });
+
+    await loadSessions(state, { limit: 2, offset: 2, append: true });
+
+    expect(state.sessionsResult?.sessions.map((session) => session.key)).toEqual([
+      "agent:main:dashboard:a",
+      "agent:main:dashboard:b",
+      "agent:main:dashboard:c",
+    ]);
+    expect(state.sessionsResult?.count).toBe(3);
+    expect(state.sessionsResult?.totalCount).toBe(4);
+    expect(state.sessionsResult?.hasMore).toBe(false);
+    expect(state.sessionsResult?.nextOffset).toBeNull();
+  });
+
   it("coalesces overlapping refreshes instead of dropping the latest request", async () => {
     let resolveFirst: () => void = () => undefined;
     const firstBlocker = new Promise<void>((resolve) => {
@@ -808,6 +898,307 @@ describe("applySessionsChangedEvent", () => {
       status: "done",
       endedAt: 2,
     });
+  });
+
+  it("clears the local chat run when an applied websocket patch makes the current session terminal", () => {
+    const requestUpdate = vi.fn();
+    const state: SessionsState & {
+      sessionKey: string;
+      chatRunId: string | null;
+      chatStream: string | null;
+      chatStreamStartedAt: number | null;
+      requestUpdate: () => void;
+    } = {
+      ...createState(async () => undefined, {
+        sessionsResult: {
+          ts: 1,
+          path: "(multiple)",
+          count: 1,
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [
+            {
+              key: "agent:super:main",
+              kind: "direct",
+              updatedAt: 1,
+              hasActiveRun: true,
+              status: "running",
+            },
+          ],
+        },
+      }),
+      sessionKey: "agent:super:main",
+      chatRunId: "run-1",
+      chatStream: "",
+      chatStreamStartedAt: 1,
+      requestUpdate,
+    };
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:super:main",
+      sessionId: "sess-main",
+      runId: "run-1",
+      status: "done",
+      hasActiveRun: false,
+      endedAt: 2,
+      ts: 2,
+    });
+
+    expect(applied).toEqual({ applied: true, change: "updated", clearedChatRun: true });
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatStream).toBeNull();
+    expect(state.chatStreamStartedAt).toBeNull();
+    expect(requestUpdate).toHaveBeenCalled();
+  });
+
+  it("clears the local chat run when a lifecycle patch maps the client run id", () => {
+    const requestUpdate = vi.fn();
+    const state: SessionsState & {
+      sessionKey: string;
+      chatRunId: string | null;
+      chatStream: string | null;
+      chatStreamStartedAt: number | null;
+      requestUpdate: () => void;
+    } = {
+      ...createState(async () => undefined, {
+        sessionsResult: {
+          ts: 1,
+          path: "(multiple)",
+          count: 1,
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [
+            {
+              key: "agent:super:main",
+              kind: "direct",
+              updatedAt: 1,
+              hasActiveRun: true,
+              status: "running",
+            },
+          ],
+        },
+      }),
+      sessionKey: "agent:super:main",
+      chatRunId: "client-run-1",
+      chatStream: "",
+      chatStreamStartedAt: 1,
+      requestUpdate,
+    };
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:super:main",
+      sessionId: "sess-main",
+      runId: "agent-run-1",
+      clientRunId: "client-run-1",
+      status: "done",
+      hasActiveRun: false,
+      endedAt: 2,
+      ts: 2,
+    });
+
+    expect(applied).toEqual({ applied: true, change: "updated", clearedChatRun: true });
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatStream).toBeNull();
+    expect(state.chatStreamStartedAt).toBeNull();
+    expect(requestUpdate).toHaveBeenCalled();
+  });
+
+  it("does not clear a new local run from a send patch with stale terminal status", () => {
+    const requestUpdate = vi.fn();
+    const state: SessionsState & {
+      sessionKey: string;
+      chatRunId: string | null;
+      chatStream: string | null;
+      chatStreamStartedAt: number | null;
+      requestUpdate: () => void;
+    } = {
+      ...createState(async () => undefined, {
+        sessionsResult: {
+          ts: 1,
+          path: "(multiple)",
+          count: 1,
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [
+            {
+              key: "agent:super:main",
+              kind: "direct",
+              updatedAt: 1,
+              hasActiveRun: false,
+              status: "done",
+            },
+          ],
+        },
+      }),
+      sessionKey: "agent:super:main",
+      chatRunId: "run-new",
+      chatStream: "",
+      chatStreamStartedAt: 3,
+      requestUpdate,
+    };
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:super:main",
+      sessionId: "sess-main",
+      reason: "send",
+      status: "done",
+      hasActiveRun: true,
+      updatedAt: 4,
+      ts: 4,
+    });
+
+    expect(applied).toEqual({ applied: true, change: "updated" });
+    expect(state.chatRunId).toBe("run-new");
+    expect(state.chatStream).toBe("");
+    expect(state.chatStreamStartedAt).toBe(3);
+    expect(requestUpdate).not.toHaveBeenCalled();
+  });
+
+  it("does not clear a newer local run from a runless older terminal patch", () => {
+    const requestUpdate = vi.fn();
+    const state: SessionsState & {
+      sessionKey: string;
+      chatRunId: string | null;
+      chatStream: string | null;
+      chatStreamStartedAt: number | null;
+      requestUpdate: () => void;
+    } = {
+      ...createState(async () => undefined, {
+        sessionsResult: {
+          ts: 10,
+          path: "(multiple)",
+          count: 1,
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [
+            {
+              key: "agent:super:main",
+              kind: "direct",
+              updatedAt: 10,
+              hasActiveRun: true,
+              status: "running",
+            },
+          ],
+        },
+      }),
+      sessionKey: "agent:super:main",
+      chatRunId: "run-new",
+      chatStream: "",
+      chatStreamStartedAt: 20,
+      requestUpdate,
+    };
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:super:main",
+      sessionId: "sess-main",
+      status: "done",
+      hasActiveRun: false,
+      endedAt: 12,
+      updatedAt: 12,
+      ts: 12,
+    });
+
+    expect(applied).toEqual({ applied: true, change: "updated" });
+    expect(state.chatRunId).toBe("run-new");
+    expect(state.chatStream).toBe("");
+    expect(state.chatStreamStartedAt).toBe(20);
+    expect(requestUpdate).not.toHaveBeenCalled();
+  });
+
+  it("does not clear a newer local run from an older terminal websocket patch", () => {
+    const requestUpdate = vi.fn();
+    const state: SessionsState & {
+      sessionKey: string;
+      chatRunId: string | null;
+      chatStream: string | null;
+      chatStreamStartedAt: number | null;
+      requestUpdate: () => void;
+    } = {
+      ...createState(async () => undefined, {
+        sessionsResult: {
+          ts: 1,
+          path: "(multiple)",
+          count: 1,
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [
+            {
+              key: "agent:super:main",
+              kind: "direct",
+              updatedAt: 1,
+              hasActiveRun: true,
+              status: "running",
+            },
+          ],
+        },
+      }),
+      sessionKey: "agent:super:main",
+      chatRunId: "run-new",
+      chatStream: "",
+      chatStreamStartedAt: 3,
+      requestUpdate,
+    };
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:super:main",
+      sessionId: "sess-main",
+      runId: "run-old",
+      status: "done",
+      hasActiveRun: false,
+      endedAt: 2,
+      ts: 2,
+    });
+
+    expect(applied).toEqual({ applied: true, change: "updated" });
+    expect(state.chatRunId).toBe("run-new");
+    expect(state.chatStream).toBe("");
+    expect(state.chatStreamStartedAt).toBe(3);
+    expect(requestUpdate).not.toHaveBeenCalled();
+  });
+
+  it("does not clear a new local run from unrelated session updates", () => {
+    const requestUpdate = vi.fn();
+    const state: SessionsState & {
+      sessionKey: string;
+      chatRunId: string | null;
+      chatStream: string | null;
+      chatStreamStartedAt: number | null;
+      requestUpdate: () => void;
+    } = {
+      ...createState(async () => undefined, {
+        sessionsResult: {
+          ts: 1,
+          path: "(multiple)",
+          count: 1,
+          defaults: { modelProvider: null, model: null, contextTokens: null },
+          sessions: [
+            {
+              key: "agent:super:main",
+              kind: "direct",
+              updatedAt: 1,
+              hasActiveRun: false,
+              status: "done",
+            },
+          ],
+        },
+      }),
+      sessionKey: "agent:super:main",
+      chatRunId: "run-2",
+      chatStream: "",
+      chatStreamStartedAt: 3,
+      requestUpdate,
+    };
+
+    const applied = applySessionsChangedEvent(state, {
+      sessionKey: "agent:super:side",
+      sessionId: "sess-side",
+      kind: "direct",
+      status: "running",
+      hasActiveRun: true,
+      updatedAt: 4,
+      ts: 4,
+    });
+
+    expect(applied).toEqual({ applied: true, change: "inserted" });
+    expect(state.chatRunId).toBe("run-2");
+    expect(state.chatStream).toBe("");
+    expect(state.chatStreamStartedAt).toBe(3);
+    expect(requestUpdate).not.toHaveBeenCalled();
   });
 
   it("updates fresh context usage from websocket event payloads", () => {

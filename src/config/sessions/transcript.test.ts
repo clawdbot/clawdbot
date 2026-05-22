@@ -6,7 +6,10 @@ import type { SessionTranscriptUpdate } from "../../sessions/transcript-events.j
 import { resolveSessionTranscriptPathInDir } from "./paths.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 import { appendSessionTranscriptMessage } from "./transcript-append.js";
-import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
+import {
+  bindOwnedSessionTranscriptWrites,
+  withOwnedSessionTranscriptWrites,
+} from "./transcript-write-context.js";
 import {
   appendAssistantMessageToSessionTranscript,
   appendExactAssistantMessageToSessionTranscript,
@@ -134,6 +137,36 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     );
 
     expect(result.ok).toBe(true);
+    expect(events).toEqual(["lock", "lock", "lock"]);
+  });
+
+  it("keeps matching owned transcript appends locked from bound callbacks", async () => {
+    const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
+    const events: string[] = [];
+    const callback = bindOwnedSessionTranscriptWrites(
+      {
+        sessionFile,
+        sessionKey,
+        withSessionWriteLock: async (run) => {
+          events.push("lock");
+          return await run();
+        },
+      },
+      async () =>
+        await appendSessionTranscriptMessage({
+          transcriptPath: sessionFile,
+          message: {
+            role: "assistant",
+            content: "Hello from bound delivery",
+            timestamp: Date.now(),
+            stopReason: "stop",
+          },
+        }),
+    );
+
+    const result = await callback();
+
+    expect(result.messageId).toBeTruthy();
     expect(events).toEqual(["lock"]);
   });
 

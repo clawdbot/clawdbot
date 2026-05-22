@@ -63,6 +63,9 @@ export function buildDiscordInteractiveComponents(
                 if (button.disabled === true) {
                   spec.disabled = true;
                 }
+                if (button.reusable === true) {
+                  spec.reusable = true;
+                }
                 return spec;
               }),
           });
@@ -159,6 +162,9 @@ function appendDiscordPresentationButtonBlocks(
         }
         if (button.disabled === true) {
           component.disabled = true;
+        }
+        if (button.reusable === true) {
+          component.reusable = true;
         }
         return component;
       }),

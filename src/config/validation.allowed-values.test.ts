@@ -146,3 +146,45 @@ describe("config validation allowed-values metadata", () => {
     }
   });
 });
+
+describe("config validation numeric bound hints", () => {
+  it("appends maximum for inclusive too_big numeric bound", () => {
+    const issue = mapFirstIssue(
+      z.object({ maxPingPongTurns: z.number().int().min(0).max(20).optional() }),
+      { maxPingPongTurns: 50 },
+    );
+    expect(issue.path).toBe("maxPingPongTurns");
+    expect(issue.message).toContain("(maximum: 20)");
+    expect(issue.allowedValues).toBeUndefined();
+  });
+
+  it("appends 'must be less than' for exclusive too_big numeric bound", () => {
+    const issue = mapFirstIssue(z.object({ rate: z.number().lt(5) }), { rate: 5 });
+    expect(issue.path).toBe("rate");
+    expect(issue.message).toContain("(must be less than 5)");
+    expect(issue.message).not.toContain("(maximum: 5)");
+  });
+
+  it("appends 'must be greater than' for exclusive too_small numeric bound (positive/gt)", () => {
+    const issue = mapFirstIssue(z.object({ count: z.number().positive() }), { count: 0 });
+    expect(issue.path).toBe("count");
+    expect(issue.message).toContain("(must be greater than 0)");
+    expect(issue.message).not.toContain("(minimum: 0)");
+  });
+
+  it("appends minimum for inclusive too_small numeric bound", () => {
+    const issue = mapFirstIssue(z.object({ retries: z.number().min(0) }), { retries: -1 });
+    expect(issue.path).toBe("retries");
+    expect(issue.message).toContain("(minimum: 0)");
+  });
+
+  it("does not append numeric bound hints for non-number origins (string)", () => {
+    const issue = mapFirstIssue(z.object({ name: z.string().max(10) }), {
+      name: "abcdefghijklmnop",
+    });
+    expect(issue.path).toBe("name");
+    expect(issue.message).not.toContain("(maximum:");
+    expect(issue.message).not.toContain("(must be less than");
+    expect(issue.allowedValues).toBeUndefined();
+  });
+});

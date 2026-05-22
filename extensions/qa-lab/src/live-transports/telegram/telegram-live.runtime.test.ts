@@ -333,6 +333,23 @@ describe("telegram live qa runtime", () => {
     );
   });
 
+  it("recognizes Telegram observation timeouts with retry details", () => {
+    expect(
+      testing.isTelegramObservedMessageTimeoutError(
+        new Error(
+          "timed out after 8000ms waiting for Telegram message; last polling error: The operation was aborted due to timeout",
+        ),
+        8000,
+      ),
+    ).toBe(true);
+    expect(
+      testing.isTelegramObservedMessageTimeoutError(
+        new Error("timed out after 9000ms waiting for Telegram message"),
+        8000,
+      ),
+    ).toBe(false);
+  });
+
   it("includes mention gating in the Telegram live scenario catalog", () => {
     const scenarios = testing.findScenario([
       "telegram-help-command",

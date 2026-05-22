@@ -551,6 +551,57 @@ describe("subagent registry seam flow", () => {
     expect(replacement?.endedAt).toBeUndefined();
   });
 
+  it("announces blocked agent.wait snapshots as errors instead of success", async () => {
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        return {
+          status: "ok",
+          startedAt: 100,
+          endedAt: 250,
+          livenessState: "blocked",
+          error: "Context overflow: prompt too large for the model.",
+        };
+      }
+      return {};
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-blocked-wait",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "overflow wait",
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+    });
+
+    await waitForFast(() => {
+      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+    });
+    const announceParams = expectRecordFields(
+      getMockCallArg(mocks.runSubagentAnnounceFlow, 0, 0, "blocked wait announce"),
+      { childRunId: "run-blocked-wait" },
+      "blocked wait announce params",
+    );
+    expectRecordFields(
+      announceParams.outcome,
+      {
+        status: "error",
+        error: "Context overflow: prompt too large for the model.",
+        startedAt: 100,
+        endedAt: 250,
+        elapsedMs: 150,
+      },
+      "blocked wait announce outcome",
+    );
+
+    const run = mod
+      .listSubagentRunsForRequester("agent:main:main")
+      .find((entry) => entry.runId === "run-blocked-wait");
+    expect(run?.endedReason).toBe("subagent-error");
+    expect(run?.outcome?.status).toBe("error");
+  });
+
   it("reconciles stale active runs from persisted terminal session state during sweep", async () => {
     mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
       if (request.method === "agent.wait") {
@@ -791,6 +842,79 @@ describe("subagent registry seam flow", () => {
       .listSubagentRunsForRequester("agent:main:main")
       .find((entry) => entry.runId === "run-cleanup-warning");
     expect(run?.cleanupCompletedAt).toBeTypeOf("number");
+  });
+
+  it("announces blocked lifecycle end events as errors instead of success", async () => {
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        return { status: "pending" };
+      }
+      return {};
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-blocked-end",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "overflow task",
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+    });
+
+    const lastOnAgentEventCall = mocks.onAgentEvent.mock.calls[
+      mocks.onAgentEvent.mock.calls.length - 1
+    ] as unknown as
+      | [(evt: { runId: string; stream: string; data: Record<string, unknown> }) => void]
+      | undefined;
+    const lifecycleHandler = lastOnAgentEventCall?.[0];
+    expect(lifecycleHandler).toBeTypeOf("function");
+
+    lifecycleHandler?.({
+      runId: "run-blocked-end",
+      stream: "lifecycle",
+      data: {
+        phase: "start",
+        startedAt: 10,
+      },
+    });
+    lifecycleHandler?.({
+      runId: "run-blocked-end",
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        startedAt: 10,
+        endedAt: 20,
+        livenessState: "blocked",
+        error: "Context overflow: prompt too large for the model.",
+      },
+    });
+
+    await waitForFast(() => {
+      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+    });
+    const announceParams = expectRecordFields(
+      getMockCallArg(mocks.runSubagentAnnounceFlow, 0, 0, "blocked announce"),
+      { childRunId: "run-blocked-end" },
+      "blocked announce params",
+    );
+    expectRecordFields(
+      announceParams.outcome,
+      {
+        status: "error",
+        error: "Context overflow: prompt too large for the model.",
+        startedAt: 10,
+        endedAt: 20,
+        elapsedMs: 10,
+      },
+      "blocked announce outcome",
+    );
+
+    const run = mod
+      .listSubagentRunsForRequester("agent:main:main")
+      .find((entry) => entry.runId === "run-blocked-end");
+    expect(run?.endedReason).toBe("subagent-error");
+    expect(run?.outcome?.status).toBe("error");
   });
 
   it("preserves run-mode keep entries past SESSION_RUN_TTL_MS sweep", async () => {

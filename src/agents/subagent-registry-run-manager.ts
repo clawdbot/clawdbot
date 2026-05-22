@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import { formatBlockedLivenessError, isBlockedLivenessState } from "../shared/agent-liveness.js";
 import { createRunningTaskRun } from "../tasks/detached-task-runtime.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
@@ -187,7 +188,8 @@ export function createSubagentRunManager(params: {
       if (wait.status === "pending") {
         return;
       }
-      if (wait.yielded === true) {
+      const waitBlocked = isBlockedLivenessState(wait.livenessState);
+      if (wait.yielded === true && !waitBlocked) {
         if (
           markSubagentRunPausedAfterYield({
             entry,
@@ -199,11 +201,12 @@ export function createSubagentRunManager(params: {
         }
         return;
       }
-      if (wait.status === "error" && isRecoverableAgentWaitError(wait.error)) {
+      const waitStatus = waitBlocked ? "error" : wait.status;
+      if (waitStatus === "error" && isRecoverableAgentWaitError(wait.error)) {
         scheduleWaitRetry(entry, "subagent wait interrupted; scheduling recovery", wait.error);
         return;
       }
-      if (wait.status === "timeout") {
+      if (waitStatus === "timeout") {
         const isTerminalWaitTimeout =
           typeof wait.endedAt === "number" ||
           typeof wait.stopReason === "string" ||
@@ -261,9 +264,10 @@ export function createSubagentRunManager(params: {
         entry.endedAt = Date.now();
         mutated = true;
       }
-      const waitError = typeof wait.error === "string" ? wait.error : undefined;
+      const rawWaitError = typeof wait.error === "string" ? wait.error : undefined;
+      const waitError = waitBlocked ? formatBlockedLivenessError(rawWaitError) : rawWaitError;
       const baseOutcome: SubagentRunOutcome =
-        wait.status === "error" ? { status: "error", error: waitError } : { status: "ok" };
+        waitStatus === "error" ? { status: "error", error: waitError } : { status: "ok" };
       const outcome = withSubagentOutcomeTiming(baseOutcome, {
         startedAt: entry.startedAt,
         endedAt: entry.endedAt,
@@ -280,7 +284,7 @@ export function createSubagentRunManager(params: {
         endedAt: entry.endedAt,
         outcome,
         reason:
-          wait.status === "error" ? SUBAGENT_ENDED_REASON_ERROR : SUBAGENT_ENDED_REASON_COMPLETE,
+          waitStatus === "error" ? SUBAGENT_ENDED_REASON_ERROR : SUBAGENT_ENDED_REASON_COMPLETE,
         sendFarewell: true,
         accountId: entry.requesterOrigin?.accountId,
         triggerCleanup: true,

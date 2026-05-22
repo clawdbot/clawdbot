@@ -45,6 +45,10 @@ pnpm crabbox:run -- --help | sed -n '1,120p'
   shim can be stale.
 - Check `.crabbox.yaml` for direct-provider defaults. Omitting `--provider`
   means brokered AWS today.
+- The brokered AWS default is a Linux developer image in `eu-west-1`; the repo
+  config pins hot `eu-west-1a/b/c` placement so Fast Snapshot Restore can apply.
+  If warmup drifts well past the minute-scale path, verify image promotion,
+  region/AZ placement, and FSR state before blaming OpenClaw.
 - For broad OpenClaw maintainer `pnpm` gates, prefer the repo wrapper with
   `--provider blacksmith-testbox` or the repo Testbox helpers when the standing
   Testbox policy applies.
@@ -77,6 +81,25 @@ pnpm crabbox:run -- --help | sed -n '1,120p'
 Use these only when the task needs an existing non-Linux host. OpenClaw broad
 Linux validation uses the repo Crabbox config unless a provider is explicitly
 requested.
+
+Native brokered Windows is available for Windows-specific proof. Use the AWS
+developer image in `us-west-2` on demand; it has the expected OpenClaw developer
+toolchain and Docker image cache. Keep broad Linux gates on Linux/Testbox unless
+the bug is Windows-specific:
+
+```sh
+../crabbox/bin/crabbox warmup \
+  --provider aws \
+  --target windows \
+  --windows-mode normal \
+  --region us-west-2 \
+  --market on-demand \
+  --timing-json
+```
+
+The hydrate workflow assumes Docker should already be baked into Linux images
+and only installs it as a fallback. Do not add per-run Docker installs to proof
+commands unless the image probe shows Docker is actually missing.
 
 When the user explicitly asks for brokered macOS runners, use Crabbox AWS
 macOS only after confirming the deployed coordinator supports EC2 Mac host

@@ -174,7 +174,6 @@ describe("tools.effective handler", () => {
     expect(payload?.groups?.[0]?.tools?.[0]?.id).toBe("exec");
     expect(payload?.groups?.[0]?.tools?.[0]?.source).toBe("core");
     const inventoryParams = resolveEffectiveToolInventoryArg();
-    expect(inventoryParams?.senderIsOwner).toBe(false);
     expect(inventoryParams?.currentChannelId).toBe("channel-1");
     expect(inventoryParams?.currentThreadTs).toBe("thread-2");
     expect(inventoryParams?.accountId).toBe("acct-1");
@@ -321,21 +320,6 @@ describe("tools.effective handler", () => {
 
     expect(resolveEffectiveToolInventoryArg()?.currentThreadTs).toBe("42");
     expect(firstRespondCall(respond)?.[0]).toBe(true);
-  });
-
-  it("passes senderIsOwner=true for admin-scoped callers", async () => {
-    const respond = vi.fn();
-    await toolsEffectiveHandlers["tools.effective"]({
-      params: { sessionKey: "main:abc" },
-      respond: respond as never,
-      context: { getRuntimeConfig: () => ({}) } as never,
-      client: {
-        connect: { scopes: ["operator.admin"] },
-      } as never,
-      req: { type: "req", id: "req-1", method: "tools.effective" },
-      isWebchatConnect: () => false,
-    });
-    expect(resolveEffectiveToolInventoryArg()?.senderIsOwner).toBe(true);
   });
 
   it("rejects agent ids that do not match the session agent", async () => {

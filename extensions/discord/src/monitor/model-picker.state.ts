@@ -28,6 +28,7 @@ const PICKER_ACTIONS = [
   "reset",
   "cancel",
   "recents",
+  "nav",
 ] as const;
 const PICKER_VIEWS = ["providers", "models", "recents"] as const;
 
@@ -361,4 +362,28 @@ export function getDiscordModelPickerModelPage(params: {
     ...page,
     provider,
   };
+}
+
+export function resolveDiscordModelPickerPageForModel(params: {
+  data: ModelsProviderData;
+  provider: string;
+  model: string;
+  pageSize?: number;
+}): number {
+  const provider = normalizeProviderId(params.provider);
+  const modelSet = params.data.byProvider.get(provider);
+  if (!modelSet) {
+    return 1;
+  }
+  const sorted = [...modelSet].toSorted();
+  const index = sorted.indexOf(params.model);
+  if (index < 0) {
+    return 1;
+  }
+  const pageSize = clampPageSize(
+    params.pageSize,
+    DISCORD_MODEL_PICKER_MODEL_PAGE_SIZE,
+    DISCORD_MODEL_PICKER_MODEL_PAGE_SIZE,
+  );
+  return Math.floor(index / pageSize) + 1;
 }

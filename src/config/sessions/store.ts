@@ -3,6 +3,7 @@ import path from "node:path";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { writeTextAtomic } from "../../infra/json-files.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import {
   deliveryContextFromChannelRoute,
   deliveryContextFromSession,
@@ -12,18 +13,28 @@ import {
 } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { getFileStatSnapshot } from "../cache-utils.js";
+import { getRuntimeConfig } from "../io.js";
 import { enforceSessionDiskBudget, type SessionDiskBudgetSweepResult } from "./disk-budget.js";
 import { deriveSessionMetaPatch } from "./metadata.js";
+import { resolveStorePath } from "./paths.js";
 import {
+  cloneSessionStoreRecord,
   dropSessionStoreObjectCache,
+  dropSessionStoreSnapshotCache,
   getSerializedSessionStore,
   isSessionStoreCacheEnabled,
   setSerializedSessionStore,
   takeMutableSessionStoreCache,
   writeSessionStoreCache,
+  writeSessionStoreSnapshotCache,
 } from "./store-cache.js";
 import { normalizeStoreSessionKey, resolveSessionStoreEntry } from "./store-entry.js";
-import { loadSessionStore, normalizeSessionStore } from "./store-load.js";
+import {
+  loadSessionStore,
+  normalizeSessionStore,
+  readSessionEntries,
+  readSessionEntry,
+} from "./store-load.js";
 import { collectSessionMaintenancePreserveKeys } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
@@ -49,7 +60,17 @@ export {
   getSessionStoreWriterQueueSizeForTest,
 } from "./store-writer-state.js";
 export { withSessionStoreWriterForTest } from "./store-writer.js";
-export { loadSessionStore } from "./store-load.js";
+export {
+  loadSessionStore,
+  readSessionEntries,
+  readSessionEntry,
+  readSessionStoreSnapshot,
+} from "./store-load.js";
+export type {
+  SessionStoreSnapshot,
+  SessionStoreSnapshotEntries,
+  SessionStoreSnapshotEntry,
+} from "./store-cache.js";
 export { normalizeStoreSessionKey, resolveSessionStoreEntry } from "./store-entry.js";
 
 const log = createSubsystemLogger("sessions/store");
@@ -83,9 +104,7 @@ export function readSessionUpdatedAt(params: {
   sessionKey: string;
 }): number | undefined {
   try {
-    const store = loadSessionStore(params.storePath);
-    const resolved = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey });
-    return resolved.existing?.updatedAt;
+    return readSessionEntry(params.storePath, params.sessionKey)?.updatedAt;
   } catch {
     return undefined;
   }
@@ -133,6 +152,49 @@ type SaveSessionStoreOptions = {
   maintenanceConfig?: ResolvedSessionMaintenanceConfig;
 };
 
+type SessionEntryWorkflowOptions = {
+  agentId?: string;
+  env?: NodeJS.ProcessEnv;
+  storePath?: string;
+};
+
+function cloneSessionEntry(entry: SessionEntry): SessionEntry {
+  return cloneSessionStoreRecord({ entry }).entry;
+}
+
+function resolveSessionWorkflowStorePath(
+  options: SessionEntryWorkflowOptions & { sessionKey?: string },
+): string {
+  if (options.storePath) {
+    return options.storePath;
+  }
+  const agentId = options.agentId ?? resolveAgentIdFromSessionKey(options.sessionKey);
+  return resolveStorePath(getRuntimeConfig().session?.store, {
+    agentId,
+    env: options.env,
+  });
+}
+
+export function getSessionEntry(
+  options: SessionEntryWorkflowOptions & { sessionKey: string },
+): SessionEntry | undefined {
+  const entry = readSessionEntry(resolveSessionWorkflowStorePath(options), options.sessionKey) as
+    | SessionEntry
+    | undefined;
+  return entry ? cloneSessionEntry(entry) : undefined;
+}
+
+export function listSessionEntries(
+  options: SessionEntryWorkflowOptions = {},
+): Array<{ sessionKey: string; entry: SessionEntry }> {
+  return readSessionEntries(resolveSessionWorkflowStorePath(options)).map(
+    ([sessionKey, entry]) => ({
+      sessionKey,
+      entry: cloneSessionEntry(entry as SessionEntry),
+    }),
+  );
+}
+
 function updateSessionStoreWriteCaches(params: {
   storePath: string;
   store: Record<string, SessionEntry>;
@@ -142,6 +204,7 @@ function updateSessionStoreWriteCaches(params: {
   setSerializedSessionStore(params.storePath, params.serialized);
   if (!isSessionStoreCacheEnabled()) {
     dropSessionStoreObjectCache(params.storePath);
+    dropSessionStoreSnapshotCache(params.storePath);
     return;
   }
   writeSessionStoreCache({
@@ -150,6 +213,12 @@ function updateSessionStoreWriteCaches(params: {
     mtimeMs: fileStat?.mtimeMs,
     sizeBytes: fileStat?.sizeBytes,
     serialized: params.serialized,
+  });
+  writeSessionStoreSnapshotCache({
+    storePath: params.storePath,
+    store: params.store,
+    mtimeMs: fileStat?.mtimeMs,
+    sizeBytes: fileStat?.sizeBytes,
   });
 }
 
@@ -567,6 +636,67 @@ export async function updateSessionStoreEntry(params: {
     }
     const next = mergeSessionEntry(existing, patch);
     return await persistResolvedSessionEntry({
+      storePath,
+      store,
+      resolved,
+      next,
+    });
+  });
+}
+
+export async function patchSessionEntry(
+  params: SessionEntryWorkflowOptions & {
+    sessionKey: string;
+    fallbackEntry?: SessionEntry;
+    preserveActivity?: boolean;
+    replaceEntry?: boolean;
+    update: (
+      entry: SessionEntry,
+    ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null;
+  },
+): Promise<SessionEntry | null> {
+  const storePath = resolveSessionWorkflowStorePath(params);
+  return await runExclusiveSessionStoreWrite(storePath, async () => {
+    const store = loadMutableSessionStoreForWriter(storePath);
+    const resolved = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey });
+    const existing = resolved.existing ?? params.fallbackEntry;
+    if (!existing) {
+      return null;
+    }
+    const patch = await params.update(cloneSessionEntry(existing));
+    if (!patch) {
+      return existing;
+    }
+    const next = params.replaceEntry
+      ? cloneSessionEntry(patch as SessionEntry)
+      : params.preserveActivity
+        ? mergeSessionEntryPreserveActivity(existing, patch)
+        : mergeSessionEntry(existing, patch);
+    return await persistResolvedSessionEntry({
+      storePath,
+      store,
+      resolved,
+      next,
+    });
+  });
+}
+
+export async function upsertSessionEntry(
+  params: SessionEntryWorkflowOptions & {
+    sessionKey: string;
+    entry: SessionEntry;
+    allowDropAcpMeta?: boolean;
+  },
+): Promise<void> {
+  const storePath = resolveSessionWorkflowStorePath(params);
+  await runExclusiveSessionStoreWrite(storePath, async () => {
+    const store = loadMutableSessionStoreForWriter(storePath);
+    const resolved = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey });
+    const next = cloneSessionEntry(params.entry);
+    if (!params.allowDropAcpMeta && resolved.existing?.acp && !next.acp) {
+      next.acp = resolved.existing.acp;
+    }
+    await persistResolvedSessionEntry({
       storePath,
       store,
       resolved,

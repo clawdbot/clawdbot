@@ -1,4 +1,4 @@
-import { hasControlCommand } from "../auto-reply/command-detection.js";
+import { isControlCommandMessage } from "../auto-reply/command-detection.js";
 import type { CommandNormalizeOptions } from "../auto-reply/commands-registry.js";
 import {
   createInboundDebouncer,
@@ -25,7 +25,7 @@ export function shouldDebounceTextInbound(params: {
   if (!text) {
     return false;
   }
-  return !hasControlCommand(text, params.cfg, params.commandOptions);
+  return !isControlCommandMessage(text, params.cfg, params.commandOptions);
 }
 
 export function createChannelInboundDebouncer<T>(

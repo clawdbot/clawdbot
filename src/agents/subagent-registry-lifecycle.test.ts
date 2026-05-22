@@ -305,6 +305,175 @@ describe("subagent registry lifecycle hardening", () => {
     });
   });
 
+  it("marks required progress-only completions blocked without failing the task", async () => {
+    const entry = createRunEntry({
+      expectsCompletionMessage: true,
+    });
+
+    const controller = createLifecycleController({
+      entry,
+      captureSubagentCompletionReply: vi.fn(async () => "I'll inspect the repo now."),
+    });
+
+    await controller.completeSubagentRun({
+      runId: entry.runId,
+      endedAt: 4_000,
+      outcome: { status: "ok" },
+      reason: SUBAGENT_ENDED_REASON_COMPLETE,
+      triggerCleanup: false,
+    });
+
+    expectFields(firstCallArg(taskExecutorMocks.completeTaskRunByRunId), {
+      runId: entry.runId,
+      runtime: "subagent",
+      sessionKey: entry.childSessionKey,
+      progressSummary: "I'll inspect the repo now.",
+      terminalOutcome: "blocked",
+      terminalSummary:
+        "Required completion ended with progress-only text, not a final deliverable.",
+    });
+    expect(taskExecutorMocks.failTaskRunByRunId).not.toHaveBeenCalled();
+  });
+
+  it("marks missing required completions blocked while preserving real final reports", async () => {
+    const missingEntry = createRunEntry({
+      expectsCompletionMessage: true,
+    });
+    await createLifecycleController({
+      entry: missingEntry,
+      captureSubagentCompletionReply: vi.fn(async () => undefined),
+    }).completeSubagentRun({
+      runId: missingEntry.runId,
+      endedAt: 4_000,
+      outcome: { status: "ok" },
+      reason: SUBAGENT_ENDED_REASON_COMPLETE,
+      triggerCleanup: false,
+    });
+
+    expectFields(firstCallArg(taskExecutorMocks.completeTaskRunByRunId), {
+      runId: missingEntry.runId,
+      terminalOutcome: "blocked",
+      terminalSummary: "Required completion did not produce a final deliverable.",
+    });
+
+    taskExecutorMocks.completeTaskRunByRunId.mockClear();
+    const finalEntry = createRunEntry({
+      runId: "run-final",
+      expectsCompletionMessage: true,
+    });
+    await createLifecycleController({
+      entry: finalEntry,
+      captureSubagentCompletionReply: vi.fn(
+        async () => "Fixed the crash and verified the regression tests pass.",
+      ),
+    }).completeSubagentRun({
+      runId: finalEntry.runId,
+      endedAt: 5_000,
+      outcome: { status: "ok" },
+      reason: SUBAGENT_ENDED_REASON_COMPLETE,
+      triggerCleanup: false,
+    });
+
+    const finalArg = firstCallArg(taskExecutorMocks.completeTaskRunByRunId);
+    expectFields(finalArg, {
+      runId: finalEntry.runId,
+      runtime: "subagent",
+      sessionKey: finalEntry.childSessionKey,
+      progressSummary: "Fixed the crash and verified the regression tests pass.",
+      terminalSummary: null,
+    });
+    expect(finalArg.terminalOutcome).toBeUndefined();
+  });
+
+  it("keeps required completions successful when final output follows progress text", async () => {
+    const entry = createRunEntry({
+      expectsCompletionMessage: true,
+    });
+
+    await createLifecycleController({
+      entry,
+      captureSubagentCompletionReply: vi.fn(
+        async () => "I'll inspect the repo now. The crash is a missing null check in src/foo.ts.",
+      ),
+    }).completeSubagentRun({
+      runId: entry.runId,
+      endedAt: 4_000,
+      outcome: { status: "ok" },
+      reason: SUBAGENT_ENDED_REASON_COMPLETE,
+      triggerCleanup: false,
+    });
+
+    const finalArg = firstCallArg(taskExecutorMocks.completeTaskRunByRunId);
+    expectFields(finalArg, {
+      runId: entry.runId,
+      runtime: "subagent",
+      sessionKey: entry.childSessionKey,
+      progressSummary:
+        "I'll inspect the repo now. The crash is a missing null check in src/foo.ts.",
+      terminalSummary: null,
+    });
+    expect(finalArg.terminalOutcome).toBeUndefined();
+  });
+
+  it("keeps required completions successful when final output follows a separator", async () => {
+    const entry = createRunEntry({
+      expectsCompletionMessage: true,
+    });
+
+    await createLifecycleController({
+      entry,
+      captureSubagentCompletionReply: vi.fn(
+        async () => "I'll inspect the repo now - the crash is a missing null check in src/foo.ts.",
+      ),
+    }).completeSubagentRun({
+      runId: entry.runId,
+      endedAt: 4_000,
+      outcome: { status: "ok" },
+      reason: SUBAGENT_ENDED_REASON_COMPLETE,
+      triggerCleanup: false,
+    });
+
+    const finalArg = firstCallArg(taskExecutorMocks.completeTaskRunByRunId);
+    expectFields(finalArg, {
+      runId: entry.runId,
+      runtime: "subagent",
+      sessionKey: entry.childSessionKey,
+      progressSummary:
+        "I'll inspect the repo now - the crash is a missing null check in src/foo.ts.",
+      terminalSummary: null,
+    });
+    expect(finalArg.terminalOutcome).toBeUndefined();
+  });
+
+  it("keeps required completions blocked when progress text only adds follow-up planning", async () => {
+    const entry = createRunEntry({
+      expectsCompletionMessage: true,
+    });
+
+    await createLifecycleController({
+      entry,
+      captureSubagentCompletionReply: vi.fn(
+        async () => "I'll inspect the repo now. Then I'll run tests and report back.",
+      ),
+    }).completeSubagentRun({
+      runId: entry.runId,
+      endedAt: 4_000,
+      outcome: { status: "ok" },
+      reason: SUBAGENT_ENDED_REASON_COMPLETE,
+      triggerCleanup: false,
+    });
+
+    expectFields(firstCallArg(taskExecutorMocks.completeTaskRunByRunId), {
+      runId: entry.runId,
+      runtime: "subagent",
+      sessionKey: entry.childSessionKey,
+      progressSummary: "I'll inspect the repo now. Then I'll run tests and report back.",
+      terminalOutcome: "blocked",
+      terminalSummary:
+        "Required completion ended with progress-only text, not a final deliverable.",
+    });
+  });
+
   it("does not reject cleanup give-up when task delivery status update throws", async () => {
     const persist = vi.fn();
     const warn = vi.fn();
@@ -810,6 +979,15 @@ describe("subagent registry lifecycle hardening", () => {
       deliveryStatus: "failed",
       error: "gateway request timeout for agent",
     });
+    expectFields(firstCallArg(taskExecutorMocks.completeTaskRunByRunId), {
+      runId: entry.runId,
+      runtime: "subagent",
+      sessionKey: entry.childSessionKey,
+      progressSummary: "final answer",
+      terminalOutcome: "blocked",
+      terminalSummary:
+        "Required completion delivery failed before reaching the requester: gateway request timeout for agent.",
+    });
     expect(persist).toHaveBeenCalled();
   });
 
@@ -986,6 +1164,20 @@ describe("subagent registry lifecycle hardening", () => {
     expect(entry.deliverySuspendedAt).toBeTypeOf("number");
     expect(entry.deliverySuspendedReason).toBe("retry-limit");
     expect(entry.cleanupCompletedAt).toBeUndefined();
+    expectFields(
+      findCallArg(
+        taskExecutorMocks.completeTaskRunByRunId,
+        (arg) => arg.terminalOutcome === "blocked",
+      ),
+      {
+        runId: entry.runId,
+        runtime: "subagent",
+        sessionKey: entry.childSessionKey,
+        terminalOutcome: "blocked",
+        terminalSummary:
+          "Required completion delivery failed before reaching the requester: UNAVAILABLE: requester wake failed; direct-primary: UNAVAILABLE: requester wake failed.",
+      },
+    );
     expect(persist).toHaveBeenCalled();
   });
 

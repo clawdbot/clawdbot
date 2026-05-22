@@ -186,4 +186,26 @@ describe("buildDiscordInteractiveComponents", () => {
       ],
     });
   });
+
+  it("preserves reusable presentation buttons for Discord action entries", () => {
+    expect(
+      buildDiscordPresentationComponents({
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [{ label: "Refresh", value: "refresh", reusable: true }],
+          },
+        ],
+      }),
+    ).toEqual({
+      blocks: [
+        {
+          type: "actions",
+          buttons: [
+            { label: "Refresh", style: "secondary", callbackData: "refresh", reusable: true },
+          ],
+        },
+      ],
+    });
+  });
 });

@@ -31,6 +31,7 @@ import {
   type JsonObject,
   type JsonValue,
 } from "./src/app-server/protocol.js";
+import { buildCodexRuntimeThreadConfig } from "./src/app-server/thread-lifecycle.js";
 
 const DEFAULT_CODEX_IMAGE_MODEL =
   FALLBACK_CODEX_MODELS.find((model) => model.inputModalities.includes("image"))?.id ??
@@ -158,6 +159,8 @@ async function runBoundedCodexVisionTurn(params: BoundedCodexVisionTurnParams): 
           sandbox: "read-only",
           serviceName: "OpenClaw",
           developerInstructions: params.developerInstructions,
+          config: buildCodexRuntimeThreadConfig(undefined, { nativeCodeModeEnabled: false }),
+          environments: [],
           dynamicTools: [],
           experimentalRawEvents: true,
           persistExtendedHistory: false,

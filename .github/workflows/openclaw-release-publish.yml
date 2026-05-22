@@ -812,6 +812,7 @@ jobs:
             `- npm package: https://www.npmjs.com/package/openclaw/v/${process.env.RELEASE_VERSION}`,
             `- registry tarball: ${process.env.RELEASE_TARBALL}`,
             `- integrity: \`${process.env.RELEASE_INTEGRITY}\``,
+            `- full release CI report: https://github.com/openclaw/releases-private/blob/main/evidence/${process.env.RELEASE_VERSION}/release-evidence.md`,
             `- release publish: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.RELEASE_PUBLISH_RUN_ID}`,
             `- npm preflight: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.PREFLIGHT_RUN_ID}`,
             `- full release validation: https://github.com/${process.env.RELEASE_REPO}/actions/runs/${process.env.FULL_RELEASE_VALIDATION_RUN_ID}`,

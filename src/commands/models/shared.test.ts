@@ -61,4 +61,36 @@ describe("models/shared", () => {
     expect(replaceParams?.nextConfig.update).toEqual({ channel: "beta" });
     expect(replaceParams?.baseHash).toBe("config-1");
   });
+
+  it("updateConfig exposes runtime config without writing runtime defaults", async () => {
+    const sourceConfig = {
+      agents: { defaults: { models: { "anthropic/claude-sonnet-4-6": {} } } },
+    } as unknown as OpenClawConfig;
+    const runtimeConfig = {
+      agents: {
+        defaults: {
+          models: { "anthropic/claude-sonnet-4-6": { alias: "sonnet" } },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      valid: true,
+      hash: "config-2",
+      sourceConfig,
+      runtimeConfig,
+      config: runtimeConfig,
+    });
+    mocks.replaceConfigFile.mockResolvedValue(undefined);
+
+    await updateConfig((current, context) => {
+      expect(current).toEqual(sourceConfig);
+      expect(context.runtimeConfig).toEqual(runtimeConfig);
+      return current;
+    });
+
+    expect(mocks.replaceConfigFile).toHaveBeenCalledOnce();
+    const [replaceParams] = mocks.replaceConfigFile.mock.calls[0] ?? [];
+    expect(replaceParams?.nextConfig).toEqual(sourceConfig);
+    expect(replaceParams?.baseHash).toBe("config-2");
+  });
 });

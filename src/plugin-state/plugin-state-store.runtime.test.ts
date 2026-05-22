@@ -24,6 +24,7 @@ function createPluginRecord(
     channelIds: [],
     cliBackendIds: [],
     providerIds: [],
+    embeddingProviderIds: [],
     speechProviderIds: [],
     realtimeTranscriptionProviderIds: [],
     realtimeVoiceProviderIds: [],

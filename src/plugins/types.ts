@@ -1830,6 +1830,8 @@ export type SpeechProviderPlugin = {
   label: string;
   aliases?: string[];
   autoSelectOrder?: number;
+  /** Default provider operation timeout in milliseconds when caller/config omit timeoutMs. */
+  defaultTimeoutMs?: number;
   models?: readonly string[];
   voices?: readonly string[];
   resolveConfig?: (ctx: SpeechProviderResolveConfigContext) => SpeechProviderConfig;
@@ -2664,6 +2666,10 @@ export type OpenClawPluginApi = {
   registerProvider: (provider: ProviderPlugin) => void;
   /** Register provider-owned model catalog rows for text and media generation. */
   registerModelCatalogProvider: (provider: UnifiedModelCatalogProviderPlugin) => void;
+  /** Register a general embedding provider (embedding capability). */
+  registerEmbeddingProvider: (
+    adapter: import("./embedding-providers.js").EmbeddingProviderAdapter,
+  ) => void;
   /** Register a speech synthesis provider (speech capability). */
   registerSpeechProvider: (provider: SpeechProviderPlugin) => void;
   /** Register a realtime transcription provider (streaming STT capability). */

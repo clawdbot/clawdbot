@@ -147,6 +147,37 @@ describe("video-generation runtime", () => {
     expect(seenTimeoutMs).toBe(300_000);
   });
 
+  it("uses provider default video-generation timeout when the call and config omit timeoutMs", async () => {
+    let seenTimeoutMs: number | undefined;
+    providers = [
+      {
+        id: "video-plugin",
+        defaultTimeoutMs: 600_000,
+        capabilities: {},
+        async generateVideo(req: { timeoutMs?: number }) {
+          seenTimeoutMs = req.timeoutMs;
+          return {
+            videos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
+            model: "vid-v1",
+          };
+        },
+      },
+    ];
+
+    await runGenerateVideo({
+      cfg: {
+        agents: {
+          defaults: {
+            videoGenerationModel: { primary: "video-plugin/vid-v1" },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "animate a cat",
+    });
+
+    expect(seenTimeoutMs).toBe(600_000);
+  });
+
   it("does not list providers when explicit config disables auto provider fallback", async () => {
     const provider: VideoGenerationProvider = {
       id: "video-plugin",

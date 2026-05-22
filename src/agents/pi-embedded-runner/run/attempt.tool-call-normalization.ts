@@ -879,6 +879,20 @@ export function wrapStreamFnTrimToolCallNames(
   };
 }
 
+type ReplayToolCallIdSanitizerDecision = {
+  sanitizeToolCallIds: boolean;
+  toolCallIdMode?: ToolCallIdMode;
+  isOpenAIResponsesApi: boolean;
+};
+
+export function shouldApplyReplayToolCallIdSanitizer(
+  params: ReplayToolCallIdSanitizerDecision,
+): params is ReplayToolCallIdSanitizerDecision & { toolCallIdMode: ToolCallIdMode } {
+  return (
+    params.sanitizeToolCallIds && Boolean(params.toolCallIdMode) && !params.isOpenAIResponsesApi
+  );
+}
+
 export function sanitizeReplayToolCallIdsForStream(params: {
   messages: AgentMessage[];
   mode: ToolCallIdMode;

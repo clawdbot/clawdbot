@@ -59,6 +59,82 @@ describe("boolean config validation", () => {
 });
 
 describe("model provider localService config", () => {
+  it("accepts standalone timeout overlays for bundled model providers", () => {
+    const result = OpenClawSchema.safeParse({
+      models: {
+        providers: {
+          openai: {
+            timeoutSeconds: 600,
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.models?.providers?.openai?.timeoutSeconds).toBe(600);
+    }
+  });
+
+  it("rejects standalone timeout overlays for unknown model providers", () => {
+    const result = OpenClawSchema.safeParse({
+      models: {
+        providers: {
+          anyManifestProvider: {
+            timeoutSeconds: 600,
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const paths = result.error.issues.map((issue) => issue.path.join("."));
+      expect(paths).toEqual(
+        expect.arrayContaining([
+          "models.providers.anyManifestProvider.baseUrl",
+          "models.providers.anyManifestProvider.models",
+        ]),
+      );
+    }
+  });
+
+  it("requires models when a model provider declaration sets baseUrl", () => {
+    const result = OpenClawSchema.safeParse({
+      models: {
+        providers: {
+          custom: {
+            baseUrl: "https://example.test/v1",
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const paths = result.error.issues.map((issue) => issue.path.join("."));
+      expect(paths).toContain("models.providers.custom.models");
+    }
+  });
+
+  it("requires baseUrl when a model provider declaration sets models", () => {
+    const result = OpenClawSchema.safeParse({
+      models: {
+        providers: {
+          custom: {
+            models: [{ id: "custom-model", name: "Custom model", api: "openai-completions" }],
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      const paths = result.error.issues.map((issue) => issue.path.join("."));
+      expect(paths).toContain("models.providers.custom.baseUrl");
+    }
+  });
+
   it("accepts on-demand local provider service settings", () => {
     const result = OpenClawSchema.safeParse({
       models: {

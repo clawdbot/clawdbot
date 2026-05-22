@@ -254,6 +254,30 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
   };
 }
 
+export async function waitForReplyDispatcherIdle(
+  dispatcher: Pick<ReplyDispatcher, "waitForIdle">,
+  abortSignal?: AbortSignal,
+): Promise<void> {
+  if (!abortSignal) {
+    await dispatcher.waitForIdle();
+    return;
+  }
+  if (abortSignal.aborted) {
+    return;
+  }
+  let removeAbortListener: (() => void) | undefined;
+  const aborted = new Promise<void>((resolve) => {
+    const onAbort = () => resolve();
+    abortSignal.addEventListener("abort", onAbort, { once: true });
+    removeAbortListener = () => abortSignal.removeEventListener("abort", onAbort);
+  });
+  try {
+    await Promise.race([dispatcher.waitForIdle(), aborted]);
+  } finally {
+    removeAbortListener?.();
+  }
+}
+
 export function createReplyDispatcherWithTyping(
   options: ReplyDispatcherWithTypingOptions,
 ): ReplyDispatcherWithTypingResult {

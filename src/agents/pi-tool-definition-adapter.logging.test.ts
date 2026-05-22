@@ -110,6 +110,165 @@ describe("pi tool definition adapter logging", () => {
     );
   });
 
+  it("omits raw exec commands and env values from failure logs", async () => {
+    const commandSecret = "issue85049-xai-cleartext-token-ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890";
+    const envSecret = "issue85049-env-cleartext-token-ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890";
+    const baseTool = {
+      name: "exec",
+      label: "exec",
+      description: "runs commands",
+      parameters: Type.Object({
+        command: Type.String(),
+        env: Type.Optional(Type.Record(Type.String(), Type.String())),
+        timeout: Type.Optional(Type.Number()),
+      }),
+      execute: async () => {
+        throw new Error("exec denied: allowlist miss");
+      },
+    } satisfies AgentTool;
+    const [def] = toToolDefinitions([baseTool]);
+    if (!def) {
+      throw new Error("missing tool definition");
+    }
+
+    await def.execute(
+      "call-exec-denied",
+      {
+        command: `export XAI_API_KEY=\\"${commandSecret}\\" && echo blocked`,
+        env: {
+          OPENAI_API_KEY: envSecret,
+        },
+        timeout: 5,
+      },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    const message = String(firstLogErrorMessage());
+    expect(message).toContain("[tools] exec failed: exec denied: allowlist miss");
+    expect(message).toContain('"command":{"omitted":true');
+    expect(message).toContain('"reason":"exec command may contain credentials"');
+    expect(message).toContain('"chars":');
+    expect(message).toMatch(/"sha256":"[a-f0-9]{16}"/u);
+    expect(message).toContain('"env":{"OPENAI_API_KEY":"[omitted exec env value]"}');
+    expect(message).toContain('"timeout":5');
+    expect(message).not.toContain(commandSecret);
+    expect(message).not.toContain(envSecret);
+    expect(message).not.toContain("export XAI_API_KEY");
+  });
+
+  it("omits raw exec commands from JSON-string failure params", async () => {
+    const commandSecret = "issue85049-json-cleartext-token-ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890";
+    const baseTool = {
+      name: "exec",
+      label: "exec",
+      description: "runs commands",
+      parameters: Type.Any(),
+      execute: async () => {
+        throw new Error("exec denied: allowlist miss");
+      },
+    } satisfies AgentTool;
+    const [def] = toToolDefinitions([baseTool]);
+    if (!def) {
+      throw new Error("missing tool definition");
+    }
+
+    await def.execute(
+      "call-exec-denied-json-string",
+      JSON.stringify({
+        command: `export XAI_API_KEY=\\"${commandSecret}\\" && echo blocked`,
+        timeout: 5,
+      }),
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    const message = String(firstLogErrorMessage());
+    expect(message).toContain('"command":{"omitted":true');
+    expect(message).toContain('"reason":"exec command may contain credentials"');
+    expect(message).toContain('"timeout":5');
+    expect(message).not.toContain(commandSecret);
+    expect(message).not.toContain("export XAI_API_KEY");
+  });
+
+  it("omits malformed exec command and env values from failure logs", async () => {
+    const commandSecret =
+      "issue85049-malformed-command-cleartext-token-ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890";
+    const envSecret =
+      "issue85049-malformed-env-cleartext-token-ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890";
+    const baseTool = {
+      name: "exec",
+      label: "exec",
+      description: "runs commands",
+      parameters: Type.Any(),
+      execute: async () => {
+        throw new Error("exec denied: allowlist miss");
+      },
+    } satisfies AgentTool;
+    const [def] = toToolDefinitions([baseTool]);
+    if (!def) {
+      throw new Error("missing tool definition");
+    }
+
+    await def.execute(
+      "call-exec-denied-malformed",
+      {
+        command: [`export XAI_API_KEY=\\"${commandSecret}\\" && echo blocked`],
+        env: `OPENAI_API_KEY=${envSecret}`,
+      },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    const message = String(firstLogErrorMessage());
+    expect(message).toContain('"command":{"omitted":true');
+    expect(message).toContain('"type":"array"');
+    expect(message).toContain('"env":"[omitted exec env]"');
+    expect(message).not.toContain(commandSecret);
+    expect(message).not.toContain(envSecret);
+    expect(message).not.toContain("export XAI_API_KEY");
+  });
+
+  it("omits cmd-style exec payloads from normalized bash failure logs", async () => {
+    const commandSecret =
+      "issue85049-cmd-alias-cleartext-token-ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890";
+    const baseTool = {
+      name: "bash",
+      label: "Bash",
+      description: "runs commands",
+      parameters: Type.Any(),
+      execute: async () => {
+        throw new Error("exec denied: allowlist miss");
+      },
+    } satisfies AgentTool;
+    const [def] = toToolDefinitions([baseTool]);
+    if (!def) {
+      throw new Error("missing tool definition");
+    }
+
+    await def.execute(
+      "call-bash-denied-cmd-alias",
+      {
+        cmd: `export XAI_API_KEY=\\"${commandSecret}\\" && echo blocked`,
+        timeout: 5,
+      },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    const message = String(firstLogErrorMessage());
+    expect(message).toContain("[tools] exec failed: exec denied: allowlist miss");
+    expect(message).toContain('"cmd":{"omitted":true');
+    expect(message).toContain('"reason":"exec command may contain credentials"');
+    expect(message).toContain('"timeout":5');
+    expect(message).not.toContain(commandSecret);
+    expect(message).not.toContain("export XAI_API_KEY");
+  });
+
   it("logs provider AbortError failures when the agent run was not aborted", async () => {
     const baseTool = {
       name: "web_search",

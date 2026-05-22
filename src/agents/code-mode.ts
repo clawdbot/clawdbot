@@ -7,6 +7,12 @@ import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentConfig } from "./agent-scope-config.js";
+import {
+  CODE_MODE_EXEC_TOOL_NAME,
+  CODE_MODE_WAIT_TOOL_NAME,
+  isCodeModeControlTool,
+  markCodeModeControlTool,
+} from "./code-mode-control-tools.js";
 import type { HookContext } from "./pi-tools.before-tool-call.js";
 import { optionalStringEnum } from "./schema/typebox.js";
 import {
@@ -27,11 +33,11 @@ import {
   ToolInputError,
   type AnyAgentTool,
 } from "./tools/common.js";
-
-export const CODE_MODE_EXEC_TOOL_NAME = "exec";
-export const CODE_MODE_WAIT_TOOL_NAME = "wait";
-
-const codeModeControlTools = new WeakSet<AnyAgentTool>();
+export {
+  CODE_MODE_EXEC_TOOL_NAME,
+  CODE_MODE_WAIT_TOOL_NAME,
+  isCodeModeControlTool,
+} from "./code-mode-control-tools.js";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_MEMORY_LIMIT_BYTES = 64 * 1024 * 1024;
@@ -222,15 +228,6 @@ function toToolSearchConfig(config: CodeModeConfig): ToolSearchConfig {
   };
 }
 
-export function isCodeModeControlTool(tool: AnyAgentTool): boolean {
-  return codeModeControlTools.has(tool);
-}
-
-function markCodeModeControlTool<T extends AnyAgentTool>(tool: T): T {
-  codeModeControlTools.add(tool);
-  return tool;
-}
-
 function removeExpiredRuns(now = Date.now()): void {
   for (const [runId, state] of activeRuns) {
     if (state.expiresAt <= now) {
@@ -298,9 +295,18 @@ function enforceResultLimit(params: {
 
 function readCode(args: unknown): { code: string; language?: CodeModeLanguage } {
   const params = asToolParamsRecord(args);
-  const code = params.code;
+  const codeParam = params.code;
+  const commandParam = params.command;
+  if (
+    typeof codeParam === "string" &&
+    typeof commandParam === "string" &&
+    codeParam !== commandParam
+  ) {
+    throw new ToolInputError("code and command must match when both are provided.");
+  }
+  const code = typeof commandParam === "string" ? commandParam : codeParam;
   if (typeof code !== "string" || !code.trim()) {
-    throw new ToolInputError("code must be a non-empty string.");
+    throw new ToolInputError("code or command must be a non-empty string.");
   }
   const language = params.language;
   if (language !== undefined && language !== "javascript" && language !== "typescript") {
@@ -828,10 +834,17 @@ export function createCodeModeTools(ctx: CodeModeToolContext): AnyAgentTool[] {
     description:
       'Run JavaScript or TypeScript in OpenClaw code mode. Node.js modules and `require`/`import` are NOT available; for any shell, file, network, or external action, use enabled catalog tools allowed by policy from inside your code: `tools.search(query)` to find catalog entries, `tools.describe(entry.id)` for the input schema, then `tools.call(entry.id, args)`. The `language` field accepts only "javascript" or "typescript"; do not pass "bash", "shell", or other values.',
     parameters: Type.Object({
-      code: Type.String({
-        description:
-          "JavaScript or TypeScript source to run. The `tools` object (search/describe/call) and `ALL_TOOLS` are available in scope; Node built-in modules are not.",
-      }),
+      code: Type.Optional(
+        Type.String({
+          description:
+            "JavaScript or TypeScript source to run. The `tools` object (search/describe/call) and `ALL_TOOLS` are available in scope; Node built-in modules are not.",
+        }),
+      ),
+      command: Type.Optional(
+        Type.String({
+          description: "Alias for code, provided for exec-compatible hook policies.",
+        }),
+      ),
       language: optionalStringEnum(["javascript", "typescript"] as const, {
         description:
           'Source language. Must be "javascript" or "typescript". Defaults to javascript.',

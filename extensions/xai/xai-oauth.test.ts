@@ -4,17 +4,27 @@ import {
   createTestWizardPrompter,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const waitForLocalOAuthCallbackMock = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
+  waitForLocalOAuthCallback: waitForLocalOAuthCallbackMock,
+}));
+
 import {
   buildXaiOAuthAuthorizationCodeTokenBody,
   buildXaiOAuthAuthorizeUrl,
   fetchXaiOAuthDiscovery,
   isTrustedXaiOAuthEndpoint,
   loginXaiDeviceCode,
+  loginXaiOAuth,
   refreshXaiOAuthCredential,
   XAI_OAUTH_CALLBACK_CORS_ORIGIN_ALLOWLIST,
+  XAI_OAUTH_CALLBACK_HOST,
   XAI_OAUTH_CALLBACK_PORT,
   XAI_OAUTH_CLIENT_ID,
+  XAI_OAUTH_DISCOVERY_URL,
   XAI_OAUTH_REDIRECT_URI,
   XAI_OAUTH_SCOPE,
 } from "./xai-oauth.js";
@@ -40,7 +50,42 @@ function requireStringBody(init: RequestInit | undefined): string {
   return init.body;
 }
 
+function requestUrl(input: RequestInfo | URL): string {
+  if (typeof input === "string") {
+    return input;
+  }
+  if (input instanceof URL) {
+    return input.href;
+  }
+  return input.url;
+}
+
+function stubSuccessfulXaiOAuthNetwork(): void {
+  const fetchImpl = vi.fn<typeof fetch>(async (url, init) => {
+    if (requestUrl(url) === XAI_OAUTH_DISCOVERY_URL) {
+      return jsonResponse({
+        authorization_endpoint: "https://auth.x.ai/oauth2/authorize",
+        token_endpoint: "https://auth.x.ai/oauth2/token",
+      });
+    }
+
+    expect(requestUrl(url)).toBe("https://auth.x.ai/oauth2/token");
+    expect(init?.method).toBe("POST");
+    expect(requireStringBody(init)).toContain("code=AUTHCODE");
+    return jsonResponse({
+      access_token: "access-token",
+      refresh_token: "refresh-token",
+      expires_in: 3600,
+    });
+  });
+  vi.stubGlobal("fetch", fetchImpl);
+}
+
 describe("xAI OAuth", () => {
+  beforeEach(() => {
+    waitForLocalOAuthCallbackMock.mockReset();
+  });
+
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
@@ -163,7 +208,85 @@ describe("xAI OAuth", () => {
     expect(refreshed.access).toBe("access-2");
     expect(refreshed.refresh).toBe("refresh-1");
     expect(refreshed.expires).toBe(121_000);
-    vi.unstubAllEnvs();
+  });
+
+  it("prints the authorize URL through plain prompter output so terminal link detection keeps it whole", async () => {
+    waitForLocalOAuthCallbackMock.mockResolvedValue({ code: "AUTHCODE", state: "state-1" });
+    stubSuccessfulXaiOAuthNetwork();
+
+    const progress = { update: vi.fn(), stop: vi.fn() };
+    const note = vi.fn<(message: string, title?: string) => Promise<void>>(async () => undefined);
+    const plain = vi.fn<(message: string) => Promise<void>>(async () => undefined);
+    const openUrl = vi.fn<(url: string) => Promise<void>>(async () => undefined);
+    const runtimeLog = vi.fn<(message: string) => void>();
+    const ctx = {
+      config: {},
+      isRemote: true,
+      openUrl,
+      prompter: {
+        note,
+        plain,
+        progress: vi.fn(() => progress),
+      },
+      runtime: {
+        log: runtimeLog,
+        error: vi.fn(),
+        exit: vi.fn(),
+      },
+      oauth: { createVpsAwareHandlers: vi.fn() },
+    } as unknown as ProviderAuthContext;
+
+    await loginXaiOAuth(ctx);
+
+    expect(openUrl).not.toHaveBeenCalled();
+    const noteMessage = note.mock.calls[0]?.[0] ?? "";
+    expect(noteMessage).toContain("Open this xAI OAuth URL in your browser:");
+    expect(noteMessage).toContain(
+      `ssh -N -L ${XAI_OAUTH_CALLBACK_PORT}:${XAI_OAUTH_CALLBACK_HOST}:${XAI_OAUTH_CALLBACK_PORT} <host>`,
+    );
+    expect(noteMessage).not.toContain("https://auth.x.ai/oauth2/authorize");
+
+    const plainOutput = plain.mock.calls[0]?.[0] ?? "";
+    expect(plainOutput.trim()).toMatch(/^https:\/\/auth\.x\.ai\/oauth2\/authorize\?/);
+    expect(plainOutput).toContain(`client_id=${encodeURIComponent(XAI_OAUTH_CLIENT_ID)}`);
+    expect(plainOutput).toContain("code_challenge=");
+    expect(runtimeLog).not.toHaveBeenCalled();
+    expect(progress.stop).toHaveBeenCalledWith("xAI OAuth complete");
+  });
+
+  it("keeps the authorize URL visible for prompters without plain output", async () => {
+    waitForLocalOAuthCallbackMock.mockResolvedValue({ code: "AUTHCODE", state: "state-1" });
+    stubSuccessfulXaiOAuthNetwork();
+
+    const progress = { update: vi.fn(), stop: vi.fn() };
+    const note = vi.fn<(message: string, title?: string) => Promise<void>>(async () => undefined);
+    const openUrl = vi.fn<(url: string) => Promise<void>>(async () => undefined);
+    const runtimeLog = vi.fn<(message: string) => void>();
+    const ctx = {
+      config: {},
+      isRemote: false,
+      openUrl,
+      prompter: {
+        note,
+        progress: vi.fn(() => progress),
+      },
+      runtime: {
+        log: runtimeLog,
+        error: vi.fn(),
+        exit: vi.fn(),
+      },
+      oauth: { createVpsAwareHandlers: vi.fn() },
+    } as unknown as ProviderAuthContext;
+
+    await loginXaiOAuth(ctx);
+
+    const authorizeUrl = openUrl.mock.calls[0]?.[0] ?? "";
+    const noteMessage = note.mock.calls[0]?.[0] ?? "";
+    expect(authorizeUrl).toContain("https://auth.x.ai/oauth2/authorize?");
+    expect(noteMessage).toContain("Open this xAI OAuth URL in your browser:");
+    expect(noteMessage).not.toContain(authorizeUrl);
+    expect(runtimeLog.mock.calls[0]?.[0] ?? "").toContain(authorizeUrl);
+    expect(progress.stop).toHaveBeenCalledWith("xAI OAuth complete");
   });
 
   it("logs in with xAI device code without a localhost callback", async () => {

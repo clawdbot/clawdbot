@@ -1,8 +1,16 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const taskRuntimeInternalMocks = vi.hoisted(() => ({
-  listTasksForOwnerKey: vi.fn(),
-}));
+const taskRuntimeInternalMocks = vi.hoisted(() => {
+  const mocks = {
+    listTasksForOwnerKey: vi.fn(),
+    listFreshTasksForOwnerKey: vi.fn(),
+    reloadTaskRegistryFromStore: vi.fn(),
+  };
+  mocks.listFreshTasksForOwnerKey.mockImplementation((ownerKey) =>
+    mocks.listTasksForOwnerKey(ownerKey),
+  );
+  return mocks;
+});
 
 const taskRuntimeMocks = vi.hoisted(() => ({
   createRunningTaskRun: vi.fn(),
@@ -19,6 +27,7 @@ let imageOps: typeof import("../../media/media-services.js");
 let splitMediaFromOutput: typeof import("../../media/parse.js").splitMediaFromOutput;
 let mediaStore: typeof import("../../media/store.js");
 let webMedia: typeof import("../../media/web-media.js");
+let resetRecentMediaGenerationDuplicateGuardsForTests: typeof import("../media-generation-task-status-shared.js").resetRecentMediaGenerationDuplicateGuardsForTests;
 let createImageGenerateTool: typeof import("./image-generate-tool.js").createImageGenerateTool;
 let resolveImageGenerationModelConfigForTool: typeof import("./image-generate-tool.js").resolveImageGenerationModelConfigForTool;
 
@@ -297,6 +306,8 @@ describe("createImageGenerateTool", () => {
     ({ splitMediaFromOutput } = await import("../../media/parse.js"));
     mediaStore = await import("../../media/store.js");
     webMedia = await import("../../media/web-media.js");
+    ({ resetRecentMediaGenerationDuplicateGuardsForTests } =
+      await import("../media-generation-task-status-shared.js"));
     ({ createImageGenerateTool, resolveImageGenerationModelConfigForTool } =
       await import("./image-generate-tool.js"));
   });
@@ -311,6 +322,12 @@ describe("createImageGenerateTool", () => {
     taskRuntimeMocks.failTaskRunByRunId.mockReset();
     taskRuntimeInternalMocks.listTasksForOwnerKey.mockReset();
     taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([]);
+    taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockReset();
+    taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockImplementation((ownerKey) =>
+      taskRuntimeInternalMocks.listTasksForOwnerKey(ownerKey),
+    );
+    taskRuntimeInternalMocks.reloadTaskRegistryFromStore.mockReset();
+    resetRecentMediaGenerationDuplicateGuardsForTests();
   });
 
   afterEach(() => {
@@ -698,6 +715,7 @@ describe("createImageGenerateTool", () => {
       taskId: "task-image-123",
     });
     const scheduled: Array<() => Promise<void>> = [];
+    const onAsyncTaskStarted = vi.fn();
     const tool = requireImageGenerateTool(
       createImageGenerateTool({
         config: {
@@ -718,6 +736,7 @@ describe("createImageGenerateTool", () => {
         scheduleBackgroundWork: (work) => {
           scheduled.push(work);
         },
+        onAsyncTaskStarted,
       }),
     );
 
@@ -728,11 +747,16 @@ describe("createImageGenerateTool", () => {
 
     expect(generateImage).not.toHaveBeenCalled();
     expect(scheduled).toHaveLength(1);
+    expect(onAsyncTaskStarted).toHaveBeenCalledOnce();
+    expect(onAsyncTaskStarted).toHaveBeenCalledWith(
+      "Image generation started; wait for the generated image completion event.",
+    );
     expect(resultText(result)).toContain("Background task started for image generation");
     const details = resultDetails(result);
     expect(details.async).toBe(true);
     expect(details.status).toBe("started");
     expect(details.taskId).toBe("task-image-123");
+    expect((result as { terminate?: boolean }).terminate).toBe(true);
     expect(taskRuntimeMocks.createRunningTaskRun).toHaveBeenCalledWith(
       expect.objectContaining({
         taskKind: "image_generation",
@@ -741,9 +765,21 @@ describe("createImageGenerateTool", () => {
         progressSummary: "Queued image generation",
       }),
     );
+
+    const duplicateResult = await tool.execute("call-async-duplicate", {
+      prompt: "A cat wearing sunglasses",
+      model: "openai/gpt-image-1",
+    });
+
+    expect(scheduled).toHaveLength(1);
+    expect(taskRuntimeMocks.createRunningTaskRun).toHaveBeenCalledTimes(1);
+    expect(resultText(duplicateResult)).toContain(
+      "Image generation task task-image-123 is already running",
+    );
+    expect(resultDetails(duplicateResult).duplicateGuard).toBe(true);
   });
 
-  it("allows a distinct image request while another image generation task is active", async () => {
+  it("starts a distinct image request while another image task is active", async () => {
     stubImageGenerationProviders();
     vi.stubEnv("OPENAI_API_KEY", "openai-test");
     vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
@@ -758,6 +794,9 @@ describe("createImageGenerateTool", () => {
           fileName: "second.png",
         },
       ],
+    });
+    taskRuntimeMocks.createRunningTaskRun.mockReturnValue({
+      taskId: "task-second-image",
     });
     taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
       {
@@ -775,9 +814,6 @@ describe("createImageGenerateTool", () => {
         createdAt: Date.now(),
       },
     ]);
-    taskRuntimeMocks.createRunningTaskRun.mockReturnValue({
-      taskId: "task-second-image",
-    });
     const scheduled: Array<() => Promise<void>> = [];
     const tool = requireImageGenerateTool(
       createImageGenerateTool({
@@ -809,12 +845,80 @@ describe("createImageGenerateTool", () => {
     });
 
     expect(scheduled).toHaveLength(1);
-    expect(resultDetails(result).taskId).toBe("task-second-image");
-    expect(taskRuntimeMocks.createRunningTaskRun).toHaveBeenCalledWith(
-      expect.objectContaining({
+    expect(taskRuntimeMocks.createRunningTaskRun).toHaveBeenCalledTimes(1);
+    expect(resultText(result)).toContain("Background task started for image generation");
+    expect(resultDetails(result).duplicateGuard).toBeUndefined();
+  });
+
+  it("reports every active image task when action=status is requested", async () => {
+    taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
+      {
+        taskId: "task-first-image",
+        runtime: "cli",
+        taskKind: "image_generation",
+        sourceId: "image_generate:openai",
+        requesterSessionKey: "agent:main:discord:direct:123",
+        ownerKey: "agent:main:discord:direct:123",
+        scopeKind: "session",
+        runId: "tool:image_generate:first",
+        task: "First diagram prompt",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+        createdAt: Date.now(),
+        progressSummary: "Generating first image",
+      },
+      {
+        taskId: "task-second-image",
+        runtime: "cli",
+        taskKind: "image_generation",
+        sourceId: "image_generate:google",
+        requesterSessionKey: "agent:main:discord:direct:123",
+        ownerKey: "agent:main:discord:direct:123",
+        scopeKind: "session",
+        runId: "tool:image_generate:second",
         task: "Second diagram prompt",
+        status: "queued",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+        createdAt: Date.now(),
+        progressSummary: "Queued second image",
+      },
+    ]);
+    const tool = requireImageGenerateTool(
+      createImageGenerateTool({
+        config: {
+          agents: {
+            defaults: {
+              imageGenerationModel: {
+                primary: "openai/gpt-image-1",
+              },
+            },
+          },
+        },
+        agentSessionKey: "agent:main:discord:direct:123",
       }),
     );
+
+    const result = await tool.execute("call-status", { action: "status" });
+    const text = resultText(result);
+
+    expect(taskRuntimeMocks.createRunningTaskRun).not.toHaveBeenCalled();
+    expect(text).toContain("2 active image generation tasks are queued or running");
+    expect(text).toContain("Task task-first-image (run tool:image_generate:first) is running");
+    expect(text).toContain("Progress: Generating first image.");
+    expect(text).toContain("Task task-second-image (run tool:image_generate:second) is queued");
+    expect(text).toContain("Progress: Queued second image.");
+    const details = resultDetails(result);
+    expect(details.action).toBe("status");
+    expect(details.active).toBe(true);
+    expect(details.taskCount).toBe(2);
+    const tasks = details.tasks as Array<Record<string, unknown>>;
+    expect(tasks).toHaveLength(2);
+    expect(requireRecord(tasks[0]?.task, "first status task").taskId).toBe("task-first-image");
+    expect(tasks[0]?.progressSummary).toBe("Generating first image");
+    expect(requireRecord(tasks[1]?.task, "second status task").taskId).toBe("task-second-image");
+    expect(tasks[1]?.progressSummary).toBe("Queued second image");
   });
 
   it("returns active status for a duplicate image request with the same prompt", async () => {
@@ -866,6 +970,233 @@ describe("createImageGenerateTool", () => {
     const details = resultDetails(result);
     expect(details.duplicateGuard).toBe(true);
     expect(details.task).toEqual({ taskId: "task-existing-image" });
+  });
+
+  it("returns recent status for a repeated image request after fast task completion", async () => {
+    stubImageGenerationProviders();
+    vi.stubEnv("OPENAI_API_KEY", "openai-test");
+    const now = Date.now();
+    taskRuntimeMocks.createRunningTaskRun.mockReturnValue({
+      taskId: "task-recent-image",
+    });
+    vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "openai",
+      model: "gpt-image-1",
+      attempts: [],
+      ignoredOverrides: [],
+      images: [],
+    });
+    const scheduled: Array<() => Promise<void>> = [];
+    const tool = requireImageGenerateTool(
+      createImageGenerateTool({
+        config: {
+          agents: {
+            defaults: {
+              imageGenerationModel: {
+                primary: "openai/gpt-image-1",
+              },
+            },
+          },
+        },
+        agentDir: "/tmp/agent",
+        agentSessionKey: "agent:main:discord:direct:123",
+        scheduleBackgroundWork: (work) => {
+          scheduled.push(work);
+        },
+      }),
+    );
+
+    await tool.execute("call-recent-start", {
+      prompt: "Already generated proof image",
+      filename: "proof.png",
+    });
+    const createdTask = mockCallArg(
+      taskRuntimeMocks.createRunningTaskRun,
+      0,
+      "createRunningTaskRun",
+    );
+    taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
+      {
+        taskId: "task-recent-image",
+        runId: createdTask.runId,
+        runtime: "cli",
+        taskKind: "image_generation",
+        sourceId: "image_generate:openai",
+        requesterSessionKey: "agent:main:discord:direct:123",
+        ownerKey: "agent:main:discord:direct:123",
+        scopeKind: "session",
+        task: "Already generated proof image",
+        status: "succeeded",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+        createdAt: now - 20_000,
+        endedAt: now - 10_000,
+        progressSummary: "Generated 1 image",
+      },
+    ]);
+
+    const result = await tool.execute("call-recent", {
+      prompt: "Already generated proof image",
+      filename: "proof.png",
+      model: "openai/gpt-image-1",
+    });
+
+    expect(scheduled).toHaveLength(1);
+    expect(taskRuntimeMocks.createRunningTaskRun).toHaveBeenCalledTimes(1);
+    expect(resultText(result)).toContain(
+      "Image generation task task-recent-image recently succeeded",
+    );
+    expect(resultDetails(result).duplicateGuard).toBe(true);
+    expect(resultDetails(result).active).toBe(false);
+  });
+
+  it("dedupes a model-only primary image request repeated with provider-qualified model", async () => {
+    stubImageGenerationProviders();
+    vi.stubEnv("GEMINI_API_KEY", "google-test");
+    const now = Date.now();
+    taskRuntimeMocks.createRunningTaskRun.mockReturnValue({
+      taskId: "task-model-only-image",
+    });
+    const scheduled: Array<() => Promise<void>> = [];
+    const tool = requireImageGenerateTool(
+      createImageGenerateTool({
+        config: {
+          agents: {
+            defaults: {
+              imageGenerationModel: {
+                primary: "gemini-3-pro-image-preview",
+              },
+            },
+          },
+        },
+        agentDir: "/tmp/agent",
+        agentSessionKey: "agent:main:discord:direct:123",
+        scheduleBackgroundWork: (work) => {
+          scheduled.push(work);
+        },
+      }),
+    );
+
+    await tool.execute("call-model-only-start", {
+      prompt: "Already generated proof image",
+      filename: "proof.png",
+    });
+    const createdTask = mockCallArg(
+      taskRuntimeMocks.createRunningTaskRun,
+      0,
+      "createRunningTaskRun",
+    );
+    taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
+      {
+        taskId: "task-model-only-image",
+        runId: createdTask.runId,
+        runtime: "cli",
+        taskKind: "image_generation",
+        sourceId: "image_generate:google",
+        requesterSessionKey: "agent:main:discord:direct:123",
+        ownerKey: "agent:main:discord:direct:123",
+        scopeKind: "session",
+        task: "Already generated proof image",
+        status: "succeeded",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+        createdAt: now - 20_000,
+        endedAt: now - 10_000,
+        progressSummary: "Generated 1 image",
+      },
+    ]);
+
+    const result = await tool.execute("call-provider-qualified-repeat", {
+      prompt: "Already generated proof image",
+      filename: "proof.png",
+      model: "google/gemini-3-pro-image-preview",
+    });
+
+    expect(scheduled).toHaveLength(1);
+    expect(taskRuntimeMocks.createRunningTaskRun).toHaveBeenCalledTimes(1);
+    expect(resultText(result)).toContain(
+      "Image generation task task-model-only-image recently succeeded",
+    );
+    expect(resultDetails(result).duplicateGuard).toBe(true);
+    expect(resultDetails(result).active).toBe(false);
+  });
+
+  it("does not collapse distinct unqualified explicit image models in recent duplicate keys", async () => {
+    stubImageGenerationProviders();
+    vi.stubEnv("GEMINI_API_KEY", "google-test");
+    const now = Date.now();
+    taskRuntimeMocks.createRunningTaskRun
+      .mockReturnValueOnce({
+        taskId: "task-first-google-image",
+      })
+      .mockReturnValueOnce({
+        taskId: "task-second-google-image",
+      });
+    vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "google",
+      model: "gemini-3.1-flash-image-preview",
+      attempts: [],
+      ignoredOverrides: [],
+      images: [],
+    });
+    const scheduled: Array<() => Promise<void>> = [];
+    const tool = requireImageGenerateTool(
+      createImageGenerateTool({
+        config: {
+          agents: {
+            defaults: {
+              imageGenerationModel: {
+                primary: "google/gemini-3.1-flash-image-preview",
+              },
+            },
+          },
+        },
+        agentDir: "/tmp/agent",
+        agentSessionKey: "agent:main:discord:direct:123",
+        scheduleBackgroundWork: (work) => {
+          scheduled.push(work);
+        },
+      }),
+    );
+
+    await tool.execute("call-first-model", {
+      prompt: "Already generated proof image",
+      filename: "proof.png",
+      model: "gemini-3.1-flash-image-preview",
+    });
+    const firstTask = mockCallArg(taskRuntimeMocks.createRunningTaskRun, 0, "createRunningTaskRun");
+    taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
+      {
+        taskId: "task-first-google-image",
+        runId: firstTask.runId,
+        runtime: "cli",
+        taskKind: "image_generation",
+        sourceId: "image_generate:google",
+        requesterSessionKey: "agent:main:discord:direct:123",
+        ownerKey: "agent:main:discord:direct:123",
+        scopeKind: "session",
+        task: "Already generated proof image",
+        status: "succeeded",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+        createdAt: now - 20_000,
+        endedAt: now - 10_000,
+        progressSummary: "Generated 1 image",
+      },
+    ]);
+
+    const result = await tool.execute("call-second-model", {
+      prompt: "Already generated proof image",
+      filename: "proof.png",
+      model: "gemini-3-pro-image-preview",
+    });
+
+    expect(scheduled).toHaveLength(2);
+    expect(taskRuntimeMocks.createRunningTaskRun).toHaveBeenCalledTimes(2);
+    expect(resultText(result)).toContain(
+      "Background task started for image generation (task-second-google-image).",
+    );
+    expect(resultDetails(result).duplicateGuard).toBeUndefined();
   });
 
   it("uses configured timeoutMs for image generation and lets calls override it", async () => {

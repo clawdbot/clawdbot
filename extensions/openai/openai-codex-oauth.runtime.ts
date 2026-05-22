@@ -135,29 +135,29 @@ function formatOpenAIOAuthTlsPreflightFix(
   return lines.join("\n");
 }
 
-function waitForDelayOrLoginSettle(params: {
+function settleAfterDelay(params: {
   delayMs: number;
   waitForLoginToSettle: Promise<void>;
 }): Promise<"delay" | "settled"> {
   return new Promise((resolve) => {
-    let finished = false;
-    const finish = (outcome: "delay" | "settled") => {
-      if (finished) {
+    let done = false;
+    const complete = (outcome: "delay" | "settled") => {
+      if (done) {
         return;
       }
-      finished = true;
-      clearTimeout(timeoutHandle);
+      done = true;
+      clearTimeout(timer);
       resolve(outcome);
     };
-    const timeoutHandle = setTimeout(() => finish("delay"), params.delayMs);
+    const timer = setTimeout(() => complete("delay"), params.delayMs);
     params.waitForLoginToSettle.then(
-      () => finish("settled"),
-      () => finish("settled"),
+      () => complete("settled"),
+      () => complete("settled"),
     );
   });
 }
 
-function createNeverSettlingPromptResult(): Promise<string> {
+function waitForeverForPromptInput(): Promise<string> {
   return new Promise<string>(() => undefined);
 }
 
@@ -166,8 +166,9 @@ function createOpenAICodexOAuthError(
   message: string,
   cause?: unknown,
 ): Error & { code: OpenAICodexOAuthFailureCode } {
-  const error = new Error(`OpenAI Codex OAuth failed (${code}): ${message}`, { cause });
-  return Object.assign(error, { code });
+  return Object.assign(new Error(`OpenAI Codex OAuth failed (${code}): ${message}`, { cause }), {
+    code,
+  });
 }
 
 function rewriteOpenAICodexOAuthError(error: unknown): Error {
@@ -198,53 +199,49 @@ function createManualCodeInputHandler(params: {
   hasBrowserAuthStarted: () => boolean;
 }): (() => Promise<string>) | undefined {
   let manualFallbackPromise: Promise<string> | undefined;
+  const promptForManualCode = () => params.onPrompt({ message: manualInputPromptMessage });
   if (params.isRemote) {
     return async () => {
-      manualFallbackPromise ??= params.onPrompt({
-        message: manualInputPromptMessage,
-      });
+      manualFallbackPromise ??= promptForManualCode();
       return await manualFallbackPromise;
     };
   }
 
+  const switchToManualEntry = async (progressMessage: string, logMessage?: string) => {
+    params.updateProgress(progressMessage);
+    if (logMessage) {
+      params.runtime.log(logMessage);
+    }
+    params.stopProgress("Manual OAuth entry required");
+    return await promptForManualCode();
+  };
+
   const runLocalManualFallback = async () => {
     if (!params.hasBrowserAuthStarted()) {
-      params.updateProgress(
+      return await switchToManualEntry(
         "Local OAuth callback was unavailable. Paste the redirect URL to continue...",
-      );
-      params.runtime.log(
         "OpenAI Codex OAuth local callback did not start; switching to manual entry immediately.",
       );
-      params.stopProgress("Manual OAuth entry required");
-      return await params.onPrompt({
-        message: manualInputPromptMessage,
-      });
     }
 
-    const outcome = await waitForDelayOrLoginSettle({
+    const firstWait = await settleAfterDelay({
       delayMs: localManualFallbackDelayMs,
       waitForLoginToSettle: params.waitForLoginToSettle,
     });
-    if (outcome === "settled") {
-      return await createNeverSettlingPromptResult();
+    if (firstWait === "settled") {
+      return await waitForeverForPromptInput();
     }
-
-    const settledDuringGraceWindow = await waitForDelayOrLoginSettle({
+    const graceWait = await settleAfterDelay({
       delayMs: localManualFallbackGraceMs,
       waitForLoginToSettle: params.waitForLoginToSettle,
     });
-    if (settledDuringGraceWindow === "settled") {
-      return await createNeverSettlingPromptResult();
+    if (graceWait === "settled") {
+      return await waitForeverForPromptInput();
     }
-
-    params.updateProgress("Browser callback did not finish. Paste the redirect URL to continue...");
-    params.runtime.log(
+    return await switchToManualEntry(
+      "Browser callback did not finish. Paste the redirect URL to continue...",
       `OpenAI Codex OAuth callback did not arrive within ${localManualFallbackDelayMs}ms; switching to manual entry (callback_timeout).`,
     );
-    params.stopProgress("Manual OAuth entry required");
-    return await params.onPrompt({
-      message: manualInputPromptMessage,
-    });
   };
 
   return async () => {

@@ -165,6 +165,12 @@ export type ModelProviderConfig = {
   models: ModelDefinitionConfig[];
 };
 
+export type ModelProviderDeclarationConfig = ModelProviderConfig;
+
+export type ModelProviderConfigInput = Omit<Partial<ModelProviderConfig>, "models"> & {
+  models?: ModelDefinitionConfig[];
+};
+
 export type BedrockDiscoveryConfig = {
   enabled?: boolean;
   region?: string;
@@ -206,4 +212,8 @@ export type ModelsConfig = {
    * older configs until migration completes.
    */
   ollamaDiscovery?: DiscoveryToggleConfig;
+};
+
+export type ModelsConfigInput = Omit<ModelsConfig, "providers"> & {
+  providers?: Record<string, ModelProviderConfigInput>;
 };

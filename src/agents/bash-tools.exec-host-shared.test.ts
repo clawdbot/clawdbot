@@ -184,6 +184,31 @@ describe("sendExecApprovalFollowupResult", () => {
     });
   });
 
+  it("does not register elevated runtime handoffs for denied followups", async () => {
+    sendExecApprovalFollowup.mockResolvedValue(false);
+    const bashElevated = {
+      enabled: true,
+      allowed: true,
+      defaultLevel: "on" as const,
+    };
+
+    await sendExecApprovalFollowupResult(
+      {
+        approvalId: "approval-denied-elevated-75832",
+        sessionKey: "agent:main:telegram:direct:123",
+        turnSourceChannel: "telegram",
+        bashElevated,
+      },
+      "Exec denied (gateway id=approval-denied-elevated-75832, user-denied): uname -a",
+      { sendExecApprovalFollowup, logWarn },
+    );
+
+    const call = firstExecApprovalFollowupCall();
+    expect(call).not.toHaveProperty("internalRuntimeHandoffId");
+    expect(call).not.toHaveProperty("idempotencyKey");
+    expect(call).not.toHaveProperty("bashElevated");
+  });
+
   it("keeps non-elevated agent followups on the deterministic idempotency path", async () => {
     sendExecApprovalFollowup.mockResolvedValue(true);
 

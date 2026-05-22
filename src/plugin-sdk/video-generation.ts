@@ -158,6 +158,8 @@ export type VideoGenerationProvider = {
   aliases?: string[];
   label?: string;
   defaultModel?: string;
+  /** Default provider operation timeout in milliseconds when caller/config omit timeoutMs. */
+  defaultTimeoutMs?: number;
   models?: string[];
   capabilities: VideoGenerationProviderCapabilities;
   isConfigured?: (ctx: VideoGenerationProviderConfiguredContext) => boolean;

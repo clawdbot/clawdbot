@@ -333,7 +333,7 @@ See [/providers/kilocode](/providers/kilocode) for setup details.
     Model ids use a `nvidia/<vendor>/<model>` namespace (for example `nvidia/nvidia/nemotron-...` alongside `nvidia/moonshotai/kimi-k2.5`); pickers preserve the literal `<provider>/<model-id>` composition while the canonical key sent to the API stays single-prefixed.
   </Accordion>
   <Accordion title="xAI">
-    Uses the xAI Responses path. The recommended path is SuperGrok/X Premium OAuth; API keys still work via `XAI_API_KEY` or plugin config. `grok-4.3` is the bundled default chat model. `/fast` or `params.fastMode: true` rewrites `grok-3`, `grok-3-mini`, `grok-4`, and `grok-4-0709` to their `*-fast` variants. `tool_stream` defaults on; disable via `agents.defaults.models["xai/<model>"].params.tool_stream=false`.
+    Uses the xAI Responses path. The recommended path is SuperGrok/X Premium OAuth; API keys still work via `XAI_API_KEY` or plugin config, and Grok `web_search` reuses the same auth profile before API-key fallback. `grok-4.3` is the bundled default chat model, and `grok-build-0.1` is selectable for build/coding-focused work. `/fast` or `params.fastMode: true` rewrites `grok-3`, `grok-3-mini`, `grok-4`, and `grok-4-0709` to their `*-fast` variants. `tool_stream` defaults on; disable via `agents.defaults.models["xai/<model>"].params.tool_stream=false`.
   </Accordion>
   <Accordion title="Cerebras">
     Ships as the bundled `cerebras` provider plugin. GLM uses `zai-glm-4.7`; OpenAI-compatible base URL is `https://api.cerebras.ai/v1`.

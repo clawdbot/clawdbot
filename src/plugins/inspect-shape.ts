@@ -4,6 +4,7 @@ import { hasKind } from "./slots.js";
 export type PluginCapabilityKind =
   | "cli-backend"
   | "text-inference"
+  | "embedding"
   | "speech"
   | "realtime-transcription"
   | "realtime-voice"
@@ -41,6 +42,7 @@ function buildPluginCapabilityEntries(
   return [
     { kind: "cli-backend" as const, ids: plugin.cliBackendIds ?? [] },
     { kind: "text-inference" as const, ids: plugin.providerIds },
+    { kind: "embedding" as const, ids: plugin.embeddingProviderIds },
     { kind: "speech" as const, ids: plugin.speechProviderIds },
     { kind: "realtime-transcription" as const, ids: plugin.realtimeTranscriptionProviderIds },
     { kind: "realtime-voice" as const, ids: plugin.realtimeVoiceProviderIds },

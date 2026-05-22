@@ -83,7 +83,7 @@ function createDeps(overrides?: Partial<QaScenarioRuntimeDeps>): QaScenarioRunti
     hasDiscoveryLabels: fn,
     reportsDiscoveryScopeLeak: fn,
     reportsMissingDiscoveryFiles: fn,
-    hasModelSwitchContinuityEvidence: fn,
+    hasModelSwitchContinuitySignal: fn,
     ...overrides,
   };
 }

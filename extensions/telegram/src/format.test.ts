@@ -96,9 +96,9 @@ describe("markdownToTelegramHtml", () => {
     expect(res.match(/<blockquote>/g)).toHaveLength(2);
   });
 
-  it("renders fenced code blocks", () => {
-    const res = markdownToTelegramHtml("```js\nconst x = 1;\n```");
-    expect(res).toBe("<pre><code>const x = 1;\n</code></pre>");
+  it("renders fenced code block languages for Telegram native copy buttons", () => {
+    const res = markdownToTelegramHtml('```bash\necho "hello"\n```');
+    expect(res).toBe('<pre><code class="language-bash">echo "hello"\n</code></pre>');
   });
 
   it("properly nests overlapping bold and autolink (#4071)", () => {

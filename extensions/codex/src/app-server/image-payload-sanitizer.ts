@@ -1,5 +1,42 @@
 const DATA_URL_PREFIX = "data:";
 const IMAGE_OMITTED_TEXT = "omitted image payload: invalid inline image data";
+const IMAGE_SIGNATURES: Array<{
+  mime: string;
+  matches: (buffer: Buffer) => boolean;
+}> = [
+  {
+    mime: "image/png",
+    matches: (buffer) =>
+      buffer.length >= 8 &&
+      buffer[0] === 0x89 &&
+      buffer[1] === 0x50 &&
+      buffer[2] === 0x4e &&
+      buffer[3] === 0x47 &&
+      buffer[4] === 0x0d &&
+      buffer[5] === 0x0a &&
+      buffer[6] === 0x1a &&
+      buffer[7] === 0x0a,
+  },
+  {
+    mime: "image/jpeg",
+    matches: (buffer) =>
+      buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff,
+  },
+  {
+    mime: "image/webp",
+    matches: (buffer) =>
+      buffer.length >= 12 &&
+      buffer.subarray(0, 4).toString("ascii") === "RIFF" &&
+      buffer.subarray(8, 12).toString("ascii") === "WEBP",
+  },
+  {
+    mime: "image/gif",
+    matches: (buffer) =>
+      buffer.length >= 6 &&
+      (buffer.subarray(0, 6).toString("ascii") === "GIF87a" ||
+        buffer.subarray(0, 6).toString("ascii") === "GIF89a"),
+  },
+];
 
 function startsWithDataUrl(value: string): boolean {
   return value.slice(0, DATA_URL_PREFIX.length).toLowerCase() === DATA_URL_PREFIX;
@@ -41,60 +78,51 @@ function canonicalizeBase64(base64: string): string | undefined {
 }
 
 function sniffImageMime(buffer: Buffer): string | undefined {
-  if (
-    buffer.length >= 8 &&
-    buffer[0] === 0x89 &&
-    buffer[1] === 0x50 &&
-    buffer[2] === 0x4e &&
-    buffer[3] === 0x47 &&
-    buffer[4] === 0x0d &&
-    buffer[5] === 0x0a &&
-    buffer[6] === 0x1a &&
-    buffer[7] === 0x0a
-  ) {
-    return "image/png";
-  }
-  if (buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) {
-    return "image/jpeg";
-  }
-  if (
-    buffer.length >= 12 &&
-    buffer.subarray(0, 4).toString("ascii") === "RIFF" &&
-    buffer.subarray(8, 12).toString("ascii") === "WEBP"
-  ) {
-    return "image/webp";
-  }
-  if (
-    buffer.length >= 6 &&
-    (buffer.subarray(0, 6).toString("ascii") === "GIF87a" ||
-      buffer.subarray(0, 6).toString("ascii") === "GIF89a")
-  ) {
-    return "image/gif";
-  }
-  return undefined;
+  return IMAGE_SIGNATURES.find((signature) => signature.matches(buffer))?.mime;
 }
 
-export function sanitizeInlineImageDataUrl(imageUrl: string): string | undefined {
-  if (!startsWithDataUrl(imageUrl)) {
-    return imageUrl;
+function parseImageDataUrl(value: string):
+  | {
+      metadata: string[];
+      payload: string;
+    }
+  | undefined {
+  if (!startsWithDataUrl(value)) {
+    return { metadata: [], payload: value };
   }
-  const commaIndex = imageUrl.indexOf(",");
+  const commaIndex = value.indexOf(",");
   if (commaIndex < 0) {
     return undefined;
   }
+  return {
+    metadata: value
+      .slice(DATA_URL_PREFIX.length, commaIndex)
+      .split(";")
+      .map((part) => part.trim()),
+    payload: value.slice(commaIndex + 1),
+  };
+}
 
-  const metadata = imageUrl.slice(DATA_URL_PREFIX.length, commaIndex);
-  const payload = imageUrl.slice(commaIndex + 1);
-  const metadataParts = metadata.split(";").map((part) => part.trim());
-  const declaredMimeType = metadataParts[0]?.toLowerCase();
-  if (!declaredMimeType?.startsWith("image/")) {
+function metadataAllowsImageBase64(metadata: string[]): boolean {
+  const [mimeType, ...options] = metadata;
+  const isImageMimeType =
+    mimeType !== undefined && mimeType.toLowerCase().startsWith("image/");
+  return isImageMimeType && options.some((part) => part.toLowerCase() === "base64");
+}
+
+export function sanitizeInlineImageDataUrl(imageUrl: string): string | undefined {
+  const parsed = parseImageDataUrl(imageUrl);
+  if (!parsed) {
     return undefined;
   }
-  if (!metadataParts.slice(1).some((part) => part.toLowerCase() === "base64")) {
+  if (parsed.metadata.length === 0) {
+    return imageUrl;
+  }
+  if (!metadataAllowsImageBase64(parsed.metadata)) {
     return undefined;
   }
 
-  const canonicalPayload = canonicalizeBase64(payload);
+  const canonicalPayload = canonicalizeBase64(parsed.payload);
   if (!canonicalPayload) {
     return undefined;
   }

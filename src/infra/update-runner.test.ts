@@ -1742,15 +1742,17 @@ describe("runGatewayUpdate", () => {
     expect(calls).toContain(expectedInstallCommand);
   });
 
-  it("updates global npm installs from the GitHub main package spec", async () => {
+  it("rejects global npm updates from the GitHub main package spec", async () => {
     const { calls, result } = await runNpmGlobalUpdateCase({
       expectedInstallCommand: npmGlobalInstallCommand("github:openclaw/openclaw#main"),
       tag: "main",
     });
 
-    expect(result.status).toBe("ok");
+    expect(result.status).toBe("error");
     expect(result.mode).toBe("npm");
-    expect(calls).toContain(npmGlobalInstallCommand("github:openclaw/openclaw#main"));
+    expect(result.reason).toBe("unsupported-package-target");
+    expect(result.steps[0]?.name).toBe("package target validation");
+    expect(calls).not.toContain(npmGlobalInstallCommand("github:openclaw/openclaw#main"));
   });
 
   it("runs doctor after global npm updates before reporting success", async () => {

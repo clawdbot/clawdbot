@@ -7,6 +7,7 @@ const PERIODIC_USAGE_LIMIT_RE =
 
 const HIGH_CONFIDENCE_AUTH_PERMANENT_PATTERNS = [
   /api[_ ]?key[_ ]?(?:revoked|deactivated|deleted)/i,
+  /deactivated[_ ]workspace/i,
   "key has been disabled",
   "key has been revoked",
   "account has been deactivated",

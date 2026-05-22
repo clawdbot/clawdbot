@@ -5,6 +5,8 @@ import type {
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
   PluginHookToolContext,
+  PluginHookToolInputKind,
+  PluginHookToolKind,
 } from "./hook-types.js";
 import { getPluginSessionExtensionStateSync } from "./host-hook-state.js";
 import type { PluginJsonValue } from "./host-hooks.js";
@@ -22,6 +24,18 @@ function normalizeDerivedEventFields(
     : {};
 }
 
+function normalizeToolIdentity(
+  value:
+    | Pick<PluginHookBeforeToolCallEvent, "toolKind" | "toolInputKind">
+    | Pick<PluginHookToolContext, "toolKind" | "toolInputKind">
+    | undefined,
+): { toolKind?: PluginHookToolKind; toolInputKind?: PluginHookToolInputKind } {
+  return {
+    ...(value?.toolKind && { toolKind: value.toolKind }),
+    ...(value?.toolInputKind && { toolInputKind: value.toolInputKind }),
+  };
+}
+
 export async function runTrustedToolPolicies(
   event: PluginHookBeforeToolCallEvent,
   ctx: PluginHookToolContext,
@@ -30,6 +44,16 @@ export async function runTrustedToolPolicies(
     deriveEvent?: (
       params: Record<string, unknown>,
     ) => Pick<PluginHookBeforeToolCallEvent, "derivedPaths">;
+    normalizeEvent?: (
+      event: PluginHookBeforeToolCallEvent,
+      ctx: PluginHookToolContext,
+    ) =>
+      | {
+          params?: Record<string, unknown>;
+          event?: Pick<PluginHookBeforeToolCallEvent, "toolKind" | "toolInputKind">;
+          ctx?: Pick<PluginHookToolContext, "toolKind" | "toolInputKind">;
+        }
+      | undefined;
   },
 ): Promise<PluginHookBeforeToolCallResult | undefined> {
   const policies = getActivePluginRegistry()?.trustedToolPolicies ?? [];
@@ -50,18 +74,26 @@ export async function runTrustedToolPolicies(
     }
     return resolvedSessionConfig;
   };
-  const { derivedPaths, ...eventWithoutDerivedPaths } = event;
+  const { derivedPaths, toolKind, toolInputKind, ...eventWithoutDerivedPaths } = event;
+  const { toolKind: ctxToolKind, toolInputKind: ctxToolInputKind, ...ctxWithoutToolIdentity } = ctx;
   let currentDerivedEvent = normalizeDerivedEventFields({ derivedPaths });
+  let currentEventToolIdentity = normalizeToolIdentity({ toolKind, toolInputKind });
+  let currentContextToolIdentity = normalizeToolIdentity({
+    toolKind: ctxToolKind,
+    toolInputKind: ctxToolInputKind,
+  });
   const buildEvent = (): PluginHookBeforeToolCallEvent => {
     return {
       ...eventWithoutDerivedPaths,
       params: adjustedParams,
+      ...currentEventToolIdentity,
       ...currentDerivedEvent,
     };
   };
   for (const registration of policies) {
     const policyCtx: PluginHookToolContext = {
-      ...ctx,
+      ...ctxWithoutToolIdentity,
+      ...currentContextToolIdentity,
       // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Plugin callers type JSON reads by namespace.
       getSessionExtension: <T extends PluginJsonValue = PluginJsonValue>(namespace: string) => {
         const normalizedNamespace = namespace.trim();
@@ -109,7 +141,24 @@ export async function runTrustedToolPolicies(
     // approvals are remembered so later trusted policies can still inspect or
     // block the final call.
     if ("params" in decision && isPlainObject(decision.params)) {
-      adjustedParams = decision.params;
+      const normalized = options?.normalizeEvent?.(
+        {
+          ...eventWithoutDerivedPaths,
+          params: decision.params,
+          ...currentEventToolIdentity,
+          ...currentDerivedEvent,
+        },
+        policyCtx,
+      );
+      adjustedParams = normalized?.params ?? decision.params;
+      if (normalized?.event) {
+        currentEventToolIdentity = normalizeToolIdentity(normalized.event);
+      }
+      if (normalized?.ctx) {
+        currentContextToolIdentity = normalizeToolIdentity(normalized.ctx);
+      } else if (normalized?.event) {
+        currentContextToolIdentity = normalizeToolIdentity(normalized.event);
+      }
       hasAdjustedParams = true;
       currentDerivedEvent = normalizeDerivedEventFields(options?.deriveEvent?.(adjustedParams));
     }

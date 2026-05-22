@@ -424,7 +424,6 @@ export const handleNodeEvent = async (
             sourceChannel: "voice",
             sourceTool: "gateway.voice.transcript",
           },
-          senderIsOwner: false,
           allowModelOverride: false,
         },
         defaultRuntime,
@@ -596,7 +595,6 @@ export const handleNodeEvent = async (
           timeout:
             typeof link?.timeoutSeconds === "number" ? link.timeoutSeconds.toString() : undefined,
           messageChannel: "node",
-          senderIsOwner: false,
           allowModelOverride: false,
         },
         defaultRuntime,
@@ -648,8 +646,6 @@ export const handleNodeEvent = async (
       const queued = enqueueSystemEvent(summary, {
         sessionKey,
         contextKey: `notification:${keyRaw}`,
-        forceSenderIsOwnerFalse: true,
-        trusted: false,
       });
       if (queued) {
         requestHeartbeat({
@@ -724,6 +720,9 @@ export const handleNodeEvent = async (
       if (obj.suppressNotifyOnExit === true) {
         return undefined;
       }
+      if (evt.event === "exec.denied") {
+        return undefined;
+      }
       const command = sanitizeInboundSystemTags(normalizeOptionalString(obj.command) ?? "");
       const exitCode =
         typeof obj.exitCode === "number" && Number.isFinite(obj.exitCode)
@@ -770,8 +769,6 @@ export const handleNodeEvent = async (
       const queued = enqueueSystemEvent(text, {
         sessionKey: resolveEventSessionKey(sessionKey, cfg.session?.mainKey, cfg.session?.scope),
         contextKey: runId ? `exec:${runId}` : "exec",
-        forceSenderIsOwnerFalse: true,
-        trusted: false,
       });
       if (queued) {
         // Scope wakes only for canonical agent sessions. Synthetic node-* fallback

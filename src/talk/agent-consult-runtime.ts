@@ -87,7 +87,6 @@ function resolveRealtimeVoiceAgentDeliveryContext(params: {
 }): DeliveryContext | undefined {
   const requesterSessionKey = params.spawnedBy?.trim();
   try {
-    const store = params.agentRuntime.session.loadSessionStore(params.storePath);
     const candidates: string[] = [];
     if (requesterSessionKey) {
       const { baseSessionKey } = parseSessionThreadInfoFast(requesterSessionKey);
@@ -97,7 +96,11 @@ function resolveRealtimeVoiceAgentDeliveryContext(params: {
     }
     candidates.push(params.sessionKey);
     for (const key of candidates) {
-      const context = deliveryContextFromSession(store[key] as SessionEntry | undefined);
+      const entry = params.agentRuntime.session.getSessionEntry({
+        storePath: params.storePath,
+        sessionKey: key,
+      });
+      const context = deliveryContextFromSession(entry);
       if (hasRoutableDeliveryContext(context)) {
         return context;
       }
@@ -119,64 +122,72 @@ async function resolveRealtimeVoiceAgentConsultSessionEntry(params: {
   logger: Pick<RuntimeLogger, "warn">;
 }): Promise<SessionEntry> {
   const now = Date.now();
-  return await params.agentRuntime.session.updateSessionStore(params.storePath, async (store) => {
-    const existing = store[params.sessionKey] as SessionEntry | undefined;
-    const deliveryFields = resolveDeliverySessionFields(params.deliveryContext);
-    if (existing?.sessionId?.trim()) {
-      const next: SessionEntry = { ...existing, ...deliveryFields, updatedAt: now };
-      store[params.sessionKey] = next;
-      return next;
-    }
+  const deliveryFields = resolveDeliverySessionFields(params.deliveryContext);
+  const requesterSessionKey = params.spawnedBy?.trim();
+  const requesterAgentId = parseAgentSessionKey(requesterSessionKey)?.agentId;
+  const shouldFork =
+    params.contextMode === "fork" &&
+    requesterSessionKey &&
+    (!requesterAgentId || requesterAgentId === params.agentId);
+  let forkDecisionWarning: string | undefined;
 
-    const requesterSessionKey = params.spawnedBy?.trim();
-    const requesterAgentId = parseAgentSessionKey(requesterSessionKey)?.agentId;
-    const shouldFork =
-      params.contextMode === "fork" &&
-      requesterSessionKey &&
-      (!requesterAgentId || requesterAgentId === params.agentId);
-
-    if (shouldFork) {
-      const parentEntry = store[requesterSessionKey] as SessionEntry | undefined;
-      if (parentEntry?.sessionId?.trim()) {
-        const decision = await realtimeVoiceAgentConsultDeps.resolveParentForkDecision({
-          parentEntry,
+  const patched = await params.agentRuntime.session.patchSessionEntry({
+    storePath: params.storePath,
+    sessionKey: params.sessionKey,
+    fallbackEntry: {
+      sessionId: "",
+      updatedAt: now,
+    },
+    update: async (entry) => {
+      if (entry.sessionId?.trim()) {
+        return { ...deliveryFields, updatedAt: now };
+      }
+      if (shouldFork) {
+        const parentEntry = params.agentRuntime.session.getSessionEntry({
           storePath: params.storePath,
+          sessionKey: requesterSessionKey,
         });
-        if (decision.status === "fork") {
-          const fork = await realtimeVoiceAgentConsultDeps.forkSessionFromParent({
+        if (parentEntry?.sessionId?.trim()) {
+          const decision = await realtimeVoiceAgentConsultDeps.resolveParentForkDecision({
             parentEntry,
-            agentId: params.agentId,
-            sessionsDir: path.dirname(params.storePath),
+            storePath: params.storePath,
           });
-          if (fork) {
-            const next: SessionEntry = {
-              ...existing,
-              ...deliveryFields,
-              sessionId: fork.sessionId,
-              sessionFile: fork.sessionFile,
-              spawnedBy: requesterSessionKey,
-              forkedFromParent: true,
-              updatedAt: now,
-            };
-            store[params.sessionKey] = next;
-            return next;
+          if (decision.status === "fork") {
+            const fork = await realtimeVoiceAgentConsultDeps.forkSessionFromParent({
+              parentEntry,
+              agentId: params.agentId,
+              sessionsDir: path.dirname(params.storePath),
+            });
+            if (fork) {
+              return {
+                ...deliveryFields,
+                sessionId: fork.sessionId,
+                sessionFile: fork.sessionFile,
+                spawnedBy: requesterSessionKey,
+                forkedFromParent: true,
+                updatedAt: now,
+              };
+            }
+          } else {
+            forkDecisionWarning = decision.message;
           }
-        } else {
-          params.logger.warn(`[talk] ${decision.message}`);
         }
       }
-    }
-
-    const next: SessionEntry = {
-      ...existing,
-      ...deliveryFields,
-      sessionId: realtimeVoiceAgentConsultDeps.randomUUID(),
-      ...(requesterSessionKey ? { spawnedBy: requesterSessionKey } : {}),
-      updatedAt: now,
-    };
-    store[params.sessionKey] = next;
-    return next;
+      return {
+        ...deliveryFields,
+        sessionId: realtimeVoiceAgentConsultDeps.randomUUID(),
+        ...(requesterSessionKey ? { spawnedBy: requesterSessionKey } : {}),
+        updatedAt: now,
+      };
+    },
   });
+  if (forkDecisionWarning) {
+    params.logger.warn(`[talk] ${forkDecisionWarning}`);
+  }
+  if (patched?.sessionId?.trim()) {
+    return patched;
+  }
+  throw new Error("realtime voice agent consult session could not be initialized");
 }
 
 export async function consultRealtimeVoiceAgent(params: {

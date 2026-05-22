@@ -1,4 +1,5 @@
-import { base64ToBytes, bytesToBase64, floatToPcm16, pcm16ToFloat } from "./realtime-talk-audio.ts";
+import { bytesToBase64, floatToPcm16 } from "./realtime-talk-audio.ts";
+import { RealtimeTalkPcmOutputQueue } from "./realtime-talk-pcm-output.ts";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   submitRealtimeTalkConsult,
@@ -43,9 +44,8 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
   private inputSource: MediaStreamAudioSourceNode | null = null;
   private inputProcessor: ScriptProcessorNode | null = null;
   private unsubscribe: (() => void) | null = null;
-  private playhead = 0;
   private closed = false;
-  private readonly sources = new Set<AudioBufferSourceNode>();
+  private readonly outputQueue = new RealtimeTalkPcmOutputQueue();
   private readonly consultAbortControllers = new Set<AbortController>();
   private cancelRequestedForPlayback = false;
   private speechFramesDuringPlayback = 0;
@@ -206,37 +206,11 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
   }
 
   private playPcm16(base64: string): void {
-    if (!this.outputContext) {
-      return;
-    }
-    const samples = pcm16ToFloat(base64ToBytes(base64));
-    if (samples.length === 0) {
-      return;
-    }
-    const buffer = this.outputContext.createBuffer(
-      1,
-      samples.length,
-      this.session.audio.outputSampleRateHz,
-    );
-    buffer.getChannelData(0).set(samples);
-    const source = this.outputContext.createBufferSource();
-    this.sources.add(source);
-    source.addEventListener("ended", () => this.sources.delete(source));
-    source.buffer = buffer;
-    source.connect(this.outputContext.destination);
-    const startAt = Math.max(this.outputContext.currentTime, this.playhead);
-    source.start(startAt);
-    this.playhead = startAt + buffer.duration;
+    this.outputQueue.play(base64, this.outputContext, this.session.audio.outputSampleRateHz);
   }
 
   private stopOutput(): void {
-    for (const source of this.sources) {
-      try {
-        source.stop();
-      } catch {}
-    }
-    this.sources.clear();
-    this.playhead = this.outputContext?.currentTime ?? 0;
+    this.outputQueue.stop(this.outputContext);
     this.speechFramesDuringPlayback = 0;
   }
 
@@ -244,7 +218,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     const delayMs = Math.max(
       0,
       Math.ceil(
-        ((this.playhead || this.outputContext?.currentTime || 0) -
+        ((this.outputQueue.queuedUntil || this.outputContext?.currentTime || 0) -
           (this.outputContext?.currentTime ?? 0)) *
           1000,
       ),
@@ -291,7 +265,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
   }
 
   private cancelOutputForBargeIn(): void {
-    if (this.sources.size === 0 || this.cancelRequestedForPlayback) {
+    if (!this.outputQueue.isPlaying || this.cancelRequestedForPlayback) {
       return;
     }
     this.cancelRequestedForPlayback = true;
@@ -310,7 +284,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
   }
 
   private detectBargeInSpeech(samples: Float32Array): boolean {
-    if (this.sources.size === 0 || this.cancelRequestedForPlayback || samples.length === 0) {
+    if (!this.outputQueue.isPlaying || this.cancelRequestedForPlayback || samples.length === 0) {
       this.speechFramesDuringPlayback = 0;
       return false;
     }

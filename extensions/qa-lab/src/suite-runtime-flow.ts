@@ -21,7 +21,7 @@ import {
 } from "./discovery-eval.js";
 import { extractQaToolPayload } from "./extract-tool-payload.js";
 import { assertNoGatewayLogSentinels, scanGatewayLogSentinels } from "./gateway-log-sentinel.js";
-import { hasModelSwitchContinuityEvidence } from "./model-switch-eval.js";
+import { hasModelSwitchContinuitySignal } from "./model-switch-eval.js";
 import { qaChannelPlugin } from "./runtime-api.js";
 import { runRuntimeToolFixture } from "./runtime-tool-fixture.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
@@ -213,7 +213,7 @@ function createQaSuiteScenarioDeps(params: QaSuiteScenarioDepsParams) {
     hasDiscoveryLabels,
     reportsDiscoveryScopeLeak,
     reportsMissingDiscoveryFiles,
-    hasModelSwitchContinuityEvidence,
+    hasModelSwitchContinuitySignal,
   };
 }
 

@@ -62,17 +62,20 @@ jobs:
           sudo ln -sf "$node_bin/corepack" /usr/local/bin/corepack
           sudo ln -sf "$pnpm_bin" /usr/local/bin/pnpm
 
-      - name: Ensure Docker is available
+      - name: Ensure Docker is running
         shell: bash
         run: |
           set -euo pipefail
 
           if ! command -v docker >/dev/null 2>&1; then
+            echo "docker not found; installing fallback engine"
             curl -fsSL https://get.docker.com | sudo sh
           fi
 
           if command -v systemctl >/dev/null 2>&1; then
-            sudo systemctl start docker
+            sudo systemctl start docker || true
+          elif command -v service >/dev/null 2>&1; then
+            sudo service docker start || true
           fi
 
           if [ -S /var/run/docker.sock ]; then
@@ -81,6 +84,10 @@ jobs:
             # ephemeral runner session access without requiring a relogin.
             sudo chmod 666 /var/run/docker.sock
           fi
+
+          docker version
+          docker buildx version || true
+          docker compose version || true
 
       - name: Hydrate provider env helper
         shell: bash

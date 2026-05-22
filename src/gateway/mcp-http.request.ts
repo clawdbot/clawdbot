@@ -31,7 +31,7 @@ type McpRequestContext = {
   messageProvider: string | undefined;
   accountId: string | undefined;
   inboundEventKind: InboundEventKind | undefined;
-  senderIsOwner: boolean;
+  senderIsOwner: boolean | undefined;
 };
 
 function resolveScopedSessionKey(cfg: OpenClawConfig, rawSessionKey: string | undefined): string {

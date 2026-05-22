@@ -152,6 +152,17 @@ function collectQaSuiteGatewayRuntimeOptions(
   return forwardHostHome ? { forwardHostHome: true } : undefined;
 }
 
+function shouldUseIsolatedQaSuiteScenarioWorkers(params: {
+  scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"];
+  concurrency: number;
+}) {
+  return (
+    params.scenarios.length > 1 &&
+    (params.concurrency > 1 ||
+      params.scenarios.some((scenario) => isQaPlainObject(scenario.gatewayConfigPatch)))
+  );
+}
+
 function scenarioRequiresControlUi(scenario: QaSeedScenario) {
   return normalizeLowercaseStringOrEmpty(scenario.surface) === "control-ui";
 }
@@ -268,5 +279,6 @@ export {
   resolveQaSuiteOutputDir,
   scenarioRequiresControlUi,
   selectQaSuiteScenarios,
+  shouldUseIsolatedQaSuiteScenarioWorkers,
   splitModelRef,
 };

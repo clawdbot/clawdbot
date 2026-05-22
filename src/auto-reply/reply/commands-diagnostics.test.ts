@@ -117,6 +117,7 @@ function createBundledPluginRecord(id: string): PluginRecord {
     channelIds: [],
     cliBackendIds: [],
     providerIds: [],
+    embeddingProviderIds: [],
     speechProviderIds: [],
     realtimeTranscriptionProviderIds: [],
     realtimeVoiceProviderIds: [],

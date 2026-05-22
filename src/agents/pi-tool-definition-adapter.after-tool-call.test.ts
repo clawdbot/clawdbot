@@ -19,6 +19,7 @@ const hookMocks = vi.hoisted(() => ({
   },
   isToolWrappedWithBeforeToolCallHook: vi.fn(() => false),
   consumeAdjustedParamsForToolCall: vi.fn((_: string) => undefined as unknown),
+  recordAdjustedParamsForToolCall: vi.fn(),
   runBeforeToolCallHook: vi.fn(async ({ params }: { params: unknown }) => ({
     blocked: false,
     params,
@@ -36,6 +37,7 @@ vi.mock("./pi-tools.before-tool-call.js", () => ({
     details: { status: "blocked", deniedReason: "plugin-before-tool-call", reason },
   }),
   consumeAdjustedParamsForToolCall: hookMocks.consumeAdjustedParamsForToolCall,
+  recordAdjustedParamsForToolCall: hookMocks.recordAdjustedParamsForToolCall,
   isBeforeToolCallBlockedError: (error: unknown) =>
     error instanceof hookMocks.BeforeToolCallBlockedError,
   isToolWrappedWithBeforeToolCallHook: hookMocks.isToolWrappedWithBeforeToolCallHook,
@@ -64,6 +66,7 @@ describe("pi tool definition adapter after_tool_call", () => {
     hookMocks.isToolWrappedWithBeforeToolCallHook.mockReturnValue(false);
     hookMocks.consumeAdjustedParamsForToolCall.mockClear();
     hookMocks.consumeAdjustedParamsForToolCall.mockReturnValue(undefined);
+    hookMocks.recordAdjustedParamsForToolCall.mockClear();
     hookMocks.runBeforeToolCallHook.mockClear();
     hookMocks.runBeforeToolCallHook.mockImplementation(async ({ params }) => ({
       blocked: false,

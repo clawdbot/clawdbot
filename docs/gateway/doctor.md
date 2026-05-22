@@ -413,6 +413,8 @@ That stages grounded durable candidates into the short-term dreaming store while
     - short cooldowns (rate limits/timeouts/auth failures)
     - longer disables (billing/credit failures)
 
+    Legacy Codex OAuth profiles whose tokens live in macOS Keychain (older onboarding before the file-based sidecar layout) are not picked up by the embedded runtime path — that path runs with `allowKeychainPrompt: false` and cannot trigger a Keychain prompt. Run `openclaw doctor --fix` once to migrate Keychain-backed legacy tokens inline into `auth-profiles.json`; after that, embedded turns (Telegram, cron, sub-agent dispatch) resolve them like any other inline OAuth profile.
+
   </Accordion>
   <Accordion title="6. Hooks model validation">
     If `hooks.gmail.model` is set, doctor validates the model reference against the catalog and allowlist and warns when it won't resolve or is disallowed.

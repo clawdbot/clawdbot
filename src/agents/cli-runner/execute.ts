@@ -206,7 +206,6 @@ function buildCliEnvMcpLog(childEnv: Record<string, string>): string {
     `agentId=${childEnv.OPENCLAW_MCP_AGENT_ID || "<empty>"}`,
     `accountId=${childEnv.OPENCLAW_MCP_ACCOUNT_ID || "<empty>"}`,
     `messageChannel=${childEnv.OPENCLAW_MCP_MESSAGE_CHANNEL || "<empty>"}`,
-    `senderIsOwner=${childEnv.OPENCLAW_MCP_SENDER_IS_OWNER || "<empty>"}`,
   ].join(" ");
 }
 
@@ -427,11 +426,7 @@ export async function executePreparedCliRun(
           });
           cliBackendLog.info(`cli argv: ${backend.command} ${logArgs.join(" ")}`);
           cliBackendLog.info(`cli env auth: ${buildCliEnvAuthLog(env)}`);
-          if (
-            env.OPENCLAW_MCP_TOKEN ||
-            env.OPENCLAW_MCP_SESSION_KEY ||
-            env.OPENCLAW_MCP_SENDER_IS_OWNER
-          ) {
+          if (env.OPENCLAW_MCP_TOKEN || env.OPENCLAW_MCP_SESSION_KEY || env.OPENCLAW_MCP_AGENT_ID) {
             cliBackendLog.info(`cli env mcp: ${buildCliEnvMcpLog(env)}`);
           }
         }

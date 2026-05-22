@@ -36,6 +36,8 @@ export type MediaGenerationTaskHandle = {
 
 export type MediaGenerateBackgroundScheduler = (work: () => Promise<void>) => void;
 
+export type MediaGenerateAsyncStartCallback = (message: string) => Promise<void> | void;
+
 export type MediaGenerationExecutionResult = {
   provider: string;
   model: string;
@@ -88,7 +90,7 @@ type MediaGenerationTaskLifecycle = {
   recordTaskProgress: (params: RecordMediaGenerationTaskProgressParams) => void;
   completeTaskRun: (params: CompleteMediaGenerationTaskRunParams) => void;
   failTaskRun: (params: FailMediaGenerationTaskRunParams) => void;
-  wakeTaskCompletion: (params: WakeMediaGenerationTaskCompletionParams) => Promise<void>;
+  wakeTaskCompletion: (params: WakeMediaGenerationTaskCompletionParams) => Promise<boolean>;
 };
 
 function touchMediaGenerationTaskRunContext(handle: MediaGenerationTaskHandle) {
@@ -319,7 +321,30 @@ export function buildMediaGenerationStartedToolResult(params: {
         : {}),
       ...params.detailExtras,
     },
+    terminate: true,
   };
+}
+
+export async function notifyMediaGenerationAsyncTaskStarted(params: {
+  callback?: MediaGenerateAsyncStartCallback;
+  message: string;
+  toolName: string;
+  handle: MediaGenerationTaskHandle | null;
+  onFailure: (message: string, meta?: Record<string, unknown>) => void;
+}) {
+  if (!params.callback) {
+    return;
+  }
+  try {
+    await params.callback(params.message);
+  } catch (error) {
+    params.onFailure("Media generation async-start callback failed", {
+      toolName: params.toolName,
+      taskId: params.handle?.taskId,
+      runId: params.handle?.runId,
+      error,
+    });
+  }
 }
 
 export function scheduleMediaGenerationTaskCompletion<
@@ -341,15 +366,13 @@ export function scheduleMediaGenerationTaskCompletion<
         progressSummary: params.progressSummary,
         run: params.run,
       });
-      params.lifecycle.completeTaskRun({
+      params.lifecycle.recordTaskProgress({
         handle: params.handle,
-        provider: executed.provider,
-        model: executed.model,
-        count: executed.count,
-        paths: executed.paths,
+        progressSummary: "Generated media; delivering completion",
       });
+      let completionDelivered = false;
       try {
-        await params.lifecycle.wakeTaskCompletion({
+        completionDelivered = await params.lifecycle.wakeTaskCompletion({
           config: params.config,
           handle: params.handle,
           status: "ok",
@@ -368,6 +391,18 @@ export function scheduleMediaGenerationTaskCompletion<
           },
         );
       }
+      if (!completionDelivered) {
+        throw new Error(
+          `${params.toolName} completion delivery failed after successful generation`,
+        );
+      }
+      params.lifecycle.completeTaskRun({
+        handle: params.handle,
+        provider: executed.provider,
+        model: executed.model,
+        count: executed.count,
+        paths: executed.paths,
+      });
     } catch (error) {
       params.lifecycle.failTaskRun({
         handle: params.handle,
@@ -397,9 +432,9 @@ async function wakeMediaGenerationTaskCompletion(params: {
   announceType: string;
   toolName: string;
   completionLabel: string;
-}) {
+}): Promise<boolean> {
   if (!params.handle) {
-    return;
+    return true;
   }
   const announceId = `${params.toolName}:${params.handle.taskId}:${params.status}`;
   const mediaUrls = Array.from(
@@ -452,7 +487,7 @@ async function wakeMediaGenerationTaskCompletion(params: {
     directIdempotencyKey: announceId,
   });
   if (delivery.delivered) {
-    return;
+    return true;
   }
   if (params.status === "error") {
     const delivered = await tryDeliverMediaGenerationFailureDirect({
@@ -463,7 +498,7 @@ async function wakeMediaGenerationTaskCompletion(params: {
       result: params.result,
     });
     if (delivered) {
-      return;
+      return true;
     }
   }
   if (delivery.error) {
@@ -474,6 +509,7 @@ async function wakeMediaGenerationTaskCompletion(params: {
       error: delivery.error,
     });
   }
+  return false;
 }
 
 async function tryDeliverMediaGenerationFailureDirect(params: {
@@ -561,7 +597,7 @@ export function createMediaGenerationTaskLifecycle(params: {
     },
 
     async wakeTaskCompletion(completionParams: WakeMediaGenerationTaskCompletionParams) {
-      await wakeMediaGenerationTaskCompletion({
+      return await wakeMediaGenerationTaskCompletion({
         ...completionParams,
         eventSource: params.eventSource,
         announceType: params.announceType,

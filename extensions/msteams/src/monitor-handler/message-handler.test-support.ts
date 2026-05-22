@@ -12,6 +12,11 @@ type MessageHandlerDepsOptions = {
   recordInboundSession?: ReturnType<typeof vi.fn>;
   resolveAgentRoute?: (params: { peer: { kind: string; id: string } }) => unknown;
   hasControlCommand?: PluginRuntime["channel"]["text"]["hasControlCommand"];
+  isControlCommandMessage?: PluginRuntime["channel"]["commands"]["isControlCommandMessage"];
+  shouldComputeCommandAuthorized?: PluginRuntime["channel"]["commands"]["shouldComputeCommandAuthorized"];
+  shouldHandleTextCommands?: PluginRuntime["channel"]["commands"]["shouldHandleTextCommands"];
+  createInboundDebouncer?: PluginRuntime["channel"]["debounce"]["createInboundDebouncer"];
+  resolveInboundDebounceMs?: PluginRuntime["channel"]["debounce"]["resolveInboundDebounceMs"];
 };
 
 export function createMessageHandlerDeps(
@@ -41,6 +46,11 @@ export function createMessageHandlerDeps(
     recordInboundSession,
     resolveAgentRoute,
     hasControlCommand: options.hasControlCommand,
+    isControlCommandMessage: options.isControlCommandMessage,
+    shouldComputeCommandAuthorized: options.shouldComputeCommandAuthorized,
+    shouldHandleTextCommands: options.shouldHandleTextCommands,
+    createInboundDebouncer: options.createInboundDebouncer,
+    resolveInboundDebounceMs: options.resolveInboundDebounceMs,
     resolveTextChunkLimit: () => 4000,
     resolveStorePath: () => "/tmp/test-store",
   });

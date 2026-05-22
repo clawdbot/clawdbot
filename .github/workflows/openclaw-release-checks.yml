@@ -945,6 +945,20 @@ jobs:
             --runtime-pair pi,codex \
             --output-dir ".artifacts/qa-e2e/runtime-parity-standard"
 
+      - name: Run soak runtime parity tier
+        id: runtime_parity_soak_lane
+        if: ${{ always() && needs.resolve_target.outputs.run_release_soak == 'true' && steps.runtime_parity_lane.outcome != 'skipped' && steps.runtime_parity_lane.outcome != 'cancelled' }}
+        run: |
+          set -euo pipefail
+          pnpm openclaw qa suite \
+            --provider-mode mock-openai \
+            --runtime-parity-tier soak \
+            --concurrency "${QA_PARITY_CONCURRENCY}" \
+            --model "${OPENCLAW_CI_OPENAI_MODEL}" \
+            --alt-model "openai/gpt-5.5-alt" \
+            --runtime-pair pi,codex \
+            --output-dir ".artifacts/qa-e2e/runtime-parity-soak"
+
       - name: Generate runtime parity report
         if: always()
         run: |
@@ -964,6 +978,21 @@ jobs:
             --runtime-axis \
             --summary .artifacts/qa-e2e/runtime-parity-standard/qa-suite-summary.json \
             --output-dir .artifacts/qa-e2e/runtime-parity-standard-report
+
+      - name: Generate soak runtime parity report
+        if: ${{ always() && needs.resolve_target.outputs.run_release_soak == 'true' && steps.runtime_parity_soak_lane.outcome != 'skipped' && steps.runtime_parity_soak_lane.outcome != 'cancelled' }}
+        run: |
+          set -euo pipefail
+          summary=".artifacts/qa-e2e/runtime-parity-soak/qa-suite-summary.json"
+          if [[ ! -f "$summary" ]]; then
+            echo "No soak runtime parity summary was produced."
+            exit 0
+          fi
+          pnpm openclaw qa parity-report \
+            --repo-root . \
+            --runtime-axis \
+            --summary "$summary" \
+            --output-dir .artifacts/qa-e2e/runtime-parity-soak-report
 
       - name: Upload runtime parity artifacts
         if: always()

@@ -11,7 +11,7 @@ export function buildEmbeddedMessageActionDiscoveryInput(params: {
   sessionId?: string | null;
   agentId?: string | null;
   senderId?: string | null;
-  senderIsOwner?: boolean;
+  senderIsOwner?: boolean | null;
 }) {
   return {
     cfg: params.cfg,
@@ -24,6 +24,6 @@ export function buildEmbeddedMessageActionDiscoveryInput(params: {
     sessionId: params.sessionId ?? undefined,
     agentId: params.agentId ?? undefined,
     requesterSenderId: params.senderId ?? undefined,
-    senderIsOwner: params.senderIsOwner,
+    senderIsOwner: params.senderIsOwner ?? undefined,
   };
 }

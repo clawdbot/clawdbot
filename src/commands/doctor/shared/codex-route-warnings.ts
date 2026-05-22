@@ -13,6 +13,7 @@ import { resolveAllAgentSessionStoreTargetsSync } from "../../../config/sessions
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { AgentRuntimePolicyConfig } from "../../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { detectWindowsSpawnCommandInlineArgs } from "../../../plugin-sdk/windows-spawn.js";
 import { normalizeAgentId } from "../../../routing/session-key.js";
 
 type CodexRouteHit = {
@@ -2427,6 +2428,29 @@ function formatDisabledCodexPluginWarning(params: {
   ].join("\n");
 }
 
+function collectCodexAppServerCommandWarnings(cfg: OpenClawConfig): string[] {
+  const plugins = asMutableRecord(cfg.plugins);
+  const entries = asMutableRecord(plugins?.entries);
+  const codex = asMutableRecord(entries?.codex);
+  const config = asMutableRecord(codex?.config);
+  const appServer = asMutableRecord(config?.appServer);
+  const command = typeof appServer?.command === "string" ? appServer.command.trim() : "";
+  if (!command) {
+    return [];
+  }
+  const inlineArgs = detectWindowsSpawnCommandInlineArgs(command);
+  if (!inlineArgs) {
+    return [];
+  }
+  return [
+    [
+      "- Codex app-server command override includes inline arguments.",
+      `- plugins.entries.codex.config.appServer.command: "${command}" starts with "${inlineArgs.executable}" and embeds "${inlineArgs.arguments}". The command field must be only the executable path.`,
+      "- Remove the override to use managed Codex startup, or move script/options to plugins.entries.codex.config.appServer.args.",
+    ].join("\n"),
+  ];
+}
+
 export function collectCodexRouteWarnings(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -2458,6 +2482,7 @@ export function collectCodexRouteWarnings(params: {
       ignoreLegacyAgentRuntimePins,
     });
   const warnings: string[] = [];
+  warnings.push(...collectCodexAppServerCommandWarnings(params.cfg));
   if (hits.length > 0) {
     warnings.push(
       [

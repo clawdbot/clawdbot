@@ -9,6 +9,7 @@ import {
   deleteTaskRecordById,
   findTaskByRunId,
   getTaskRegistrySnapshot,
+  listFreshTasksForOwnerKey,
   markTaskLostById,
   maybeDeliverTaskStateChangeUpdate,
   resetTaskRegistryForTests,
@@ -103,6 +104,28 @@ describe("task-registry store runtime", () => {
     };
     expect(latestSnapshot.tasks.size).toBe(2);
     expect(latestSnapshot.tasks.get("task-restored")?.task).toBe("Restored task");
+  });
+
+  it("uses scoped owner lookups for fresh owner task reads", () => {
+    const storedTask = createStoredTask();
+    const loadSnapshot = vi.fn(() => ({
+      tasks: new Map(),
+      deliveryStates: new Map(),
+    }));
+    const listTasksForOwnerKey = vi.fn(() => [storedTask]);
+    configureTaskRegistryRuntime({
+      store: {
+        loadSnapshot,
+        saveSnapshot: () => {},
+        listTasksForOwnerKey,
+      },
+    });
+
+    const tasks = listFreshTasksForOwnerKey("agent:main:main");
+
+    expect(tasks.map((task) => task.taskId)).toEqual(["task-restored"]);
+    expect(listTasksForOwnerKey).toHaveBeenCalledWith("agent:main:main");
+    expect(loadSnapshot).toHaveBeenCalledTimes(1);
   });
 
   it("emits incremental observer events for restore, mutation, and delete", () => {

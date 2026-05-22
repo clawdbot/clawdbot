@@ -44,7 +44,9 @@ describe("registerBundledHealthChecks", () => {
       dirName: "policy",
       artifactBasename: "api.js",
     });
-    expect(mocks.registerPolicyDoctorChecks).toHaveBeenCalled();
+    expect(mocks.registerPolicyDoctorChecks).toHaveBeenCalledWith({
+      registerHealthCheck: expect.any(Function),
+    });
   });
 
   it("does not use policy.jsonc existence as extension activation", () => {

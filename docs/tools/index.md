@@ -121,7 +121,7 @@ Common plugin-provided tools include:
 Tool policy is enforced before the model call. If policy removes a tool, the
 model does not receive that tool's schema for the turn. A run can lose tools
 because of global config, per-agent config, channel policy, provider
-restrictions, sandbox rules, owner-only gating, or plugin availability.
+restrictions, sandbox rules, channel/runtime policy, or plugin availability.
 
 - [Tools and custom providers](/gateway/config-tools) documents tool profiles,
   allow/deny lists, provider-specific restrictions, loop detection, and

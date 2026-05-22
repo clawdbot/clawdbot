@@ -93,7 +93,7 @@ On Discord, native command specs may include `descriptionLocalizations`, which O
   Enables `/restart` plus gateway restart tool actions.
 </ParamField>
 <ParamField path="commands.ownerAllowFrom" type="string[]">
-  Sets the explicit owner allowlist for owner-only command/tool surfaces. This is the human operator account that can approve dangerous actions and run commands such as `/diagnostics`, `/export-trajectory`, and `/config`. It is separate from `commands.allowFrom` and from DM pairing access.
+  Sets the explicit owner allowlist for owner-only command surfaces and owner-gated channel actions. This is the human operator account that can approve dangerous actions and run commands such as `/diagnostics`, `/export-trajectory`, and `/config`. It is separate from `commands.allowFrom` and from DM pairing access.
 </ParamField>
 <ParamField path="channels.<channel>.commands.enforceOwnerForCommands" type="boolean" default="false">
   Per-channel: makes owner-only commands require **owner identity** to run on that surface. When `true`, the sender must either match a resolved owner candidate (for example an entry in `commands.ownerAllowFrom` or provider-native owner metadata) or hold internal `operator.admin` scope on an internal message channel. A wildcard entry in channel `allowFrom`, or an empty/unresolved owner-candidate list, is **not** sufficient — owner-only commands fail closed on that channel. Leave this off if you want owner-only commands gated only by `ownerAllowFrom` and the standard command allowlists.

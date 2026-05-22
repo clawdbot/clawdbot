@@ -6,6 +6,7 @@ import type {
   CodexAppServerRequestResult,
   JsonValue,
 } from "./protocol.js";
+import { resolveCodexAppServerDirectSandboxBypassBlock } from "./sandbox-guard.js";
 import {
   createIsolatedCodexAppServerClient,
   getSharedCodexAppServerClient,
@@ -20,6 +21,8 @@ export async function requestCodexAppServerJson<M extends CodexAppServerRequestM
   authProfileId?: string | null;
   agentDir?: string;
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
+  sessionKey?: string;
+  sessionId?: string;
   isolated?: boolean;
 }): Promise<CodexAppServerRequestResult<M>>;
 export async function requestCodexAppServerJson<T = JsonValue | undefined>(params: {
@@ -30,6 +33,8 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(param
   authProfileId?: string | null;
   agentDir?: string;
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
+  sessionKey?: string;
+  sessionId?: string;
   isolated?: boolean;
 }): Promise<T>;
 export async function requestCodexAppServerJson<T = JsonValue | undefined>(params: {
@@ -40,8 +45,20 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(param
   authProfileId?: string | null;
   agentDir?: string;
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
+  sessionKey?: string;
+  sessionId?: string;
   isolated?: boolean;
 }): Promise<T> {
+  const sandboxBlock = resolveCodexAppServerDirectSandboxBypassBlock({
+    method: params.method,
+    requestParams: params.requestParams,
+    config: params.config,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+  });
+  if (sandboxBlock) {
+    throw new Error(sandboxBlock);
+  }
   const timeoutMs = params.timeoutMs ?? 60_000;
   return await withTimeout(
     (async () => {

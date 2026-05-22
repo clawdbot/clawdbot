@@ -15,6 +15,39 @@ describe("ChatLog", () => {
     expect(rendered).not.toContain("system-1");
   });
 
+  it("coalesces consecutive repeatable system messages", () => {
+    const chatLog = new ChatLog(20);
+
+    chatLog.addSystem("no active run", { coalesceConsecutive: true });
+    chatLog.addSystem("no active run", { coalesceConsecutive: true });
+    chatLog.addSystem("no active run", { coalesceConsecutive: true });
+
+    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
+    expect(chatLog.children.length).toBe(1);
+    expect(rendered).toContain("no active run x3");
+  });
+
+  it("does not coalesce ordinary system messages", () => {
+    const chatLog = new ChatLog(20);
+
+    chatLog.addSystem("status unchanged");
+    chatLog.addSystem("status unchanged");
+
+    expect(chatLog.children.length).toBe(2);
+  });
+
+  it("starts a new repeatable system message after other chat content", () => {
+    const chatLog = new ChatLog(20);
+
+    chatLog.addSystem("no active run", { coalesceConsecutive: true });
+    chatLog.addUser("hello");
+    chatLog.addSystem("no active run", { coalesceConsecutive: true });
+
+    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
+    expect(chatLog.children.length).toBe(3);
+    expect(rendered).not.toContain("no active run x2");
+  });
+
   it("drops stale streaming references when old components are pruned", () => {
     const chatLog = new ChatLog(20);
     chatLog.startAssistant("first", "run-1");

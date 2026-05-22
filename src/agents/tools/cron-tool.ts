@@ -13,7 +13,6 @@ import { optionalStringEnum, stringEnum } from "../schema/typebox.js";
 import { CRON_TOOL_DISPLAY_SUMMARY } from "../tool-description-presets.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool, readGatewayCallOptions, type GatewayCallOptions } from "./gateway.js";
-import { isOpenClawOwnerOnlyCoreToolName } from "./owner-only-tools.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-helpers.js";
 
 // We spell out job/patch properties so that LLMs know what fields to send.
@@ -492,7 +491,6 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
   return {
     label: "Cron",
     name: "cron",
-    ownerOnly: isOpenClawOwnerOnlyCoreToolName("cron"),
     displaySummary: CRON_TOOL_DISPLAY_SUMMARY,
     description: `Manage Gateway cron jobs and wake events: reminders, check-back-later, delayed follow-ups, recurring work. Do not emulate scheduling with exec sleep/process polling.
 

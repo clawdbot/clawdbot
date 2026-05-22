@@ -36,6 +36,8 @@ function firstWarnDetails(warnSpy: { mock: { calls: unknown[][] } }): {
   consoleMessage?: string;
   model?: string;
   provider?: string;
+  providerRuntimeFailureKind?: string;
+  rawErrorPreview?: string;
   sourceModel?: string;
   sourceProvider?: string;
 } {
@@ -43,6 +45,8 @@ function firstWarnDetails(warnSpy: { mock: { calls: unknown[][] } }): {
     consoleMessage?: string;
     model?: string;
     provider?: string;
+    providerRuntimeFailureKind?: string;
+    rawErrorPreview?: string;
     sourceModel?: string;
     sourceProvider?: string;
   };
@@ -132,5 +136,34 @@ describe("createFailoverDecisionLogger", () => {
 
     expect(firstWarnDetails(warnSpy).consoleMessage).toContain("from=openai/gpt-5.4");
     expect(firstWarnDetails(warnSpy).consoleMessage).not.toContain("to=openai/gpt-5.4");
+  });
+
+  it("omits raw HTML auth bodies from consoleMessage for HTML 401 auth failures", () => {
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const logDecision = createFailoverDecisionLogger({
+      stage: "assistant",
+      runId: "run:auth-html",
+      rawError: "401 <!DOCTYPE html><html><body>Unauthorized</body></html>",
+      failoverReason: "auth",
+      profileFailureReason: "auth",
+      provider: "openai-codex",
+      model: "gpt-5.4",
+      sourceProvider: "openai-codex",
+      sourceModel: "gpt-5.4",
+      profileId: "openai-codex:p1",
+      fallbackConfigured: true,
+      timedOut: false,
+      aborted: false,
+    });
+
+    logDecision("rotate_profile");
+
+    const observation = firstWarnDetails(warnSpy);
+    expect(observation.providerRuntimeFailureKind).toBe("auth_html");
+    expect(observation.rawErrorPreview).toBe(
+      "401 <!DOCTYPE html><html><body>Unauthorized</body></html>",
+    );
+    expect(observation.consoleMessage).not.toContain("rawError=");
+    expect(observation.consoleMessage).not.toContain("<html>");
   });
 });

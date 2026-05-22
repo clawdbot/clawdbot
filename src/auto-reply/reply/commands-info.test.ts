@@ -125,7 +125,7 @@ describe("info command handlers", () => {
     const params = buildInfoParams("/export-trajectory", {
       commands: { text: true },
     } as OpenClawConfig);
-    params.command.senderIsOwner = false;
+    params.command.isAuthorizedSender = false;
 
     const result = await handleExportTrajectoryCommand(params, true);
 

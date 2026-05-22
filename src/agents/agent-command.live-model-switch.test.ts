@@ -242,6 +242,7 @@ vi.mock("../logging/subsystem.js", () => ({
 }));
 
 vi.mock("../routing/session-key.js", () => ({
+  isSubagentSessionKey: () => false,
   normalizeAgentId: (id: string) => id,
   normalizeMainKey: (key?: string | null) => key?.trim() || "main",
 }));
@@ -673,6 +674,18 @@ function setupModelSwitchRetry(switchOptions: ModelSwitchOptions) {
   });
 }
 
+function setupSingleAttemptFallback() {
+  state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+    const result = await params.run(params.provider, params.model);
+    return {
+      result,
+      provider: params.provider,
+      model: params.model,
+      attempts: [],
+    };
+  });
+}
+
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object") {
     throw new Error(`expected ${label} to be an object`);
@@ -706,7 +719,6 @@ async function runBasicAgentCommand() {
   await agentCommand({
     message: "hello",
     to: "+1234567890",
-    senderIsOwner: true,
   });
 }
 
@@ -817,6 +829,98 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       return arg?.stream === "lifecycle" && arg?.data?.phase === "end";
     });
     expect(lifecycleEndCalls.length).toBeGreaterThanOrEqual(1);
+    const lifecycleFinishingCalls = state.emitAgentEventMock.mock.calls.filter(
+      (call: unknown[]) => {
+        const arg = call[0] as { stream?: string; data?: { phase?: string } };
+        return arg?.stream === "lifecycle" && arg?.data?.phase === "finishing";
+      },
+    );
+    expect(lifecycleFinishingCalls.length).toBeGreaterThanOrEqual(1);
+    expectRecordFields(mockCallArg(state.runAgentAttemptMock), {
+      deferTerminalLifecycleEnd: true,
+    });
+    const firstFinishingIndex = state.emitAgentEventMock.mock.calls.findIndex((call: unknown[]) => {
+      const arg = call[0] as { stream?: string; data?: { phase?: string } };
+      return arg?.stream === "lifecycle" && arg?.data?.phase === "finishing";
+    });
+    const lastEndIndex = state.emitAgentEventMock.mock.calls.findLastIndex((call: unknown[]) => {
+      const arg = call[0] as { stream?: string; data?: { phase?: string } };
+      return arg?.stream === "lifecycle" && arg?.data?.phase === "end";
+    });
+    expect(state.deliverAgentCommandResultMock).toHaveBeenCalledTimes(1);
+    const deliveryOrder = state.deliverAgentCommandResultMock.mock.invocationCallOrder[0] ?? 0;
+    expect(
+      state.emitAgentEventMock.mock.invocationCallOrder[firstFinishingIndex] ?? 0,
+    ).toBeLessThan(deliveryOrder);
+    expect(deliveryOrder).toBeLessThan(
+      state.emitAgentEventMock.mock.invocationCallOrder[lastEndIndex] ?? 0,
+    );
+  });
+
+  it("clears stale flag-only pending final delivery when there is no final payload", async () => {
+    setupSingleAttemptFallback();
+    state.runAgentAttemptMock.mockResolvedValue(makeEmptyResult("openai", "gpt-5.4"));
+
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-1",
+      updatedAt: 1,
+      pendingFinalDelivery: true,
+      pendingFinalDeliveryCreatedAt: 2,
+      pendingFinalDeliveryLastAttemptAt: 3,
+      pendingFinalDeliveryAttemptCount: 4,
+      pendingFinalDeliveryLastError: "previous failure",
+      pendingFinalDeliveryContext: { channel: "tui" },
+      pendingFinalDeliveryIntentId: "intent-1",
+    };
+    state.sessionEntryMock = sessionEntry;
+    state.sessionStoreMock = { "agent:main": sessionEntry };
+    state.storePathMock = "/tmp/openclaw-sessions.json";
+    state.deliverAgentCommandResultMock.mockResolvedValue(undefined);
+
+    await agentCommand({
+      message: "hello",
+      to: "+1234567890",
+      deliver: true,
+    });
+
+    const stored = (state.sessionStoreMock as Record<string, SessionEntry>)["agent:main"];
+    expect(stored?.pendingFinalDelivery).toBeUndefined();
+    expect(stored?.pendingFinalDeliveryText).toBeUndefined();
+    expect(stored?.pendingFinalDeliveryCreatedAt).toBeUndefined();
+    expect(stored?.pendingFinalDeliveryLastAttemptAt).toBeUndefined();
+    expect(stored?.pendingFinalDeliveryAttemptCount).toBeUndefined();
+    expect(stored?.pendingFinalDeliveryLastError).toBeUndefined();
+    expect(stored?.pendingFinalDeliveryContext).toBeUndefined();
+    expect(stored?.pendingFinalDeliveryIntentId).toBeUndefined();
+  });
+
+  it("does not duplicate finishing lifecycle when an attempt already emitted finishing", async () => {
+    setupModelSwitchRetry({
+      provider: "openai",
+      model: "gpt-5.4",
+    });
+    state.runAgentAttemptMock.mockImplementation(async (attemptParams: unknown) => {
+      state.emitAgentEventMock({
+        runId: "run-live-switch",
+        stream: "lifecycle",
+        data: { phase: "finishing" },
+      });
+      (attemptParams as { onAgentEvent?: (evt: unknown) => void }).onAgentEvent?.({
+        stream: "lifecycle",
+        data: { phase: "finishing" },
+      });
+      return makeSuccessResult("openai", "gpt-5.4");
+    });
+
+    await runBasicAgentCommand();
+
+    const lifecycleFinishingCalls = state.emitAgentEventMock.mock.calls.filter(
+      (call: unknown[]) => {
+        const arg = call[0] as { stream?: string; data?: { phase?: string } };
+        return arg?.stream === "lifecycle" && arg?.data?.phase === "finishing";
+      },
+    );
+    expect(lifecycleFinishingCalls).toHaveLength(1);
   });
 
   it("validates explicit thinking against configured model compat without an allowlist", async () => {
@@ -855,7 +959,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     await agentCommand({
       message: "hello",
       to: "+1234567890",
-      senderIsOwner: true,
       thinking: "xhigh",
     });
 
@@ -914,7 +1017,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     await agentCommand({
       message: "hello",
       to: "+1234567890",
-      senderIsOwner: true,
       thinking: "xhigh",
     });
 
@@ -1029,7 +1131,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     await agentCommand({
       message: "internal handoff",
       to: "+1234567890",
-      senderIsOwner: true,
       suppressPromptPersistence: true,
     });
 
@@ -1045,7 +1146,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       agentCommand({
         message: "hello",
         to: "+1234567890",
-        senderIsOwner: true,
       }),
     ).rejects.toThrow("provider down");
 
@@ -1372,7 +1472,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         INTERNAL_RUNTIME_CONTEXT_END,
       ].join("\n"),
       sessionKey: "agent:main",
-      senderIsOwner: true,
       internalEvents: [
         {
           type: "task_completion",
@@ -1423,7 +1522,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     await agentCommand({
       message: "bootstrap ACP child",
       sessionKey: "agent:main",
-      senderIsOwner: true,
       acpTurnSource: "manual_spawn",
     });
 
@@ -1448,7 +1546,6 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       agentCommand({
         message: "automatic ACP turn",
         sessionKey: "agent:main",
-        senderIsOwner: true,
       }),
     ).rejects.toThrow("ACP dispatch is disabled");
 

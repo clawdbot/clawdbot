@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import { describeCodexNativeWebSearch } from "../agents/codex-native-web-search.shared.js";
+import { hasAuthProfileForProvider } from "../agents/tools/model-config.helpers.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import {
@@ -597,13 +599,35 @@ export async function finalizeSetupWizard(
     const keyConfigured = entry ? hasExistingKey(nextConfig, webSearchProvider) : false;
     const envAvailable = entry ? hasKeyInEnv(entry) : false;
     const hasKey = keyConfigured || envAvailable;
+    const agentDir = resolveDefaultAgentDir(nextConfig);
+    const authProviderId = entry?.authProviderId?.trim();
+    const authProviderLabel = authProviderId === "xai" ? "xAI" : authProviderId;
+    const providerAuthProfileAvailable = authProviderId
+      ? hasAuthProfileForProvider({
+          provider: authProviderId,
+          agentDir,
+        })
+      : false;
+    const oauthAuthProfileAvailable =
+      authProviderId && providerAuthProfileAvailable
+        ? hasAuthProfileForProvider({
+            provider: authProviderId,
+            agentDir,
+            type: "oauth",
+          })
+        : false;
+    const hasCredential = hasKey || providerAuthProfileAvailable;
     const keySource = storedKey
       ? t("wizard.finalize.webSearchKeyStored")
       : keyConfigured
         ? t("wizard.finalize.webSearchKeyRef")
         : envAvailable
           ? t("wizard.finalize.webSearchKeyEnv", { env: entry?.envVars.join(" / ") ?? "" })
-          : undefined;
+          : oauthAuthProfileAvailable && authProviderLabel
+            ? t("wizard.finalize.webSearchOAuthProfile", { provider: authProviderLabel })
+            : providerAuthProfileAvailable && authProviderLabel
+              ? t("wizard.finalize.webSearchAuthProfile", { provider: authProviderLabel })
+              : undefined;
     if (!entry) {
       await prompter.note(
         [
@@ -615,7 +639,7 @@ export async function finalizeSetupWizard(
         ].join("\n"),
         t("wizard.finalize.webSearchTitle"),
       );
-    } else if (webSearchEnabled !== false && hasKey) {
+    } else if (webSearchEnabled !== false && hasCredential) {
       await prompter.note(
         [
           t("wizard.finalize.webSearchEnabled"),
@@ -626,7 +650,7 @@ export async function finalizeSetupWizard(
         ].join("\n"),
         t("wizard.finalize.webSearchTitle"),
       );
-    } else if (!hasKey) {
+    } else if (!hasCredential) {
       await prompter.note(
         [
           t("wizard.finalize.webSearchNoKey", { provider: label }),

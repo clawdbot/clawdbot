@@ -1175,4 +1175,47 @@ describe("subscribeEmbeddedPiSession", () => {
       replayInvalid: true,
     });
   });
+
+  it("preserves accepted session spawn terminal evidence across compaction retries", () => {
+    const { session, emit } = createStubSessionHarness();
+    const onAgentEvent = vi.fn();
+    const subscription = subscribeEmbeddedPiSession({
+      session,
+      runId: "run-spawn-side-effect-compaction",
+      onAgentEvent,
+      sessionKey: "test-session",
+    });
+
+    emitToolRun({
+      emit,
+      toolName: "sessions_spawn",
+      toolCallId: "spawn-1",
+      args: { prompt: "continue in a child session" },
+      isError: false,
+      result: {
+        details: {
+          status: "accepted",
+          runId: "run-child",
+          childSessionKey: "agent:claude:subagent:child",
+        },
+      },
+    });
+    emit({ type: "compaction_end", willRetry: true, result: { summary: "compacted" } });
+
+    expect(subscription.getAcceptedSessionSpawns()).toEqual([
+      {
+        runId: "run-child",
+        childSessionKey: "agent:claude:subagent:child",
+      },
+    ]);
+
+    emit({ type: "agent_end" });
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expectLifecyclePayload(payloads, {
+      phase: "end",
+      livenessState: "working",
+      replayInvalid: true,
+    });
+  });
 });

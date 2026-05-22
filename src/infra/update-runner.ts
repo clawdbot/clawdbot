@@ -25,6 +25,7 @@ import {
   cleanupGlobalRenameDirs,
   createGlobalInstallEnv,
   detectGlobalInstallManagerForRoot,
+  isOpenClawSourcePackageInstallSpec,
   resolveGlobalInstallTarget,
   resolveGlobalInstallSpec,
   type GlobalInstallManager,
@@ -1453,6 +1454,30 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       tag,
       env: globalInstallEnv,
     });
+    if (isOpenClawSourcePackageInstallSpec(spec)) {
+      const durationMs = Date.now() - startedAt;
+      return {
+        status: "error",
+        mode: globalManager,
+        root: pkgRoot,
+        reason: "unsupported-package-target",
+        before: { version: beforeVersion },
+        after: { version: beforeVersion },
+        steps: [
+          {
+            name: "package target validation",
+            command: `validate package target ${spec}`,
+            cwd: pkgRoot,
+            durationMs,
+            exitCode: 1,
+            stdoutTail: null,
+            stderrTail:
+              "OpenClaw package updates use published npm artifacts or built tarballs; use the dev channel for GitHub main.",
+          },
+        ],
+        durationMs,
+      };
+    }
     const packageUpdate = await runGlobalPackageUpdateSteps({
       installTarget,
       installSpec: spec,

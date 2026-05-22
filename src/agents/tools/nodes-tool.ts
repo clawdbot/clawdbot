@@ -14,7 +14,6 @@ import { callGatewayTool, readGatewayCallOptions } from "./gateway.js";
 import { executeNodeCommandAction, type NodeCommandAction } from "./nodes-tool-commands.js";
 import { executeNodeMediaAction, MEDIA_INVOKE_ACTIONS } from "./nodes-tool-media.js";
 import { resolveNodeId } from "./nodes-utils.js";
-import { isOpenClawOwnerOnlyCoreToolName } from "./owner-only-tools.js";
 
 const NODES_TOOL_ACTIONS = [
   "status",
@@ -136,7 +135,6 @@ export function createNodesTool(options?: {
   return {
     label: "Nodes",
     name: "nodes",
-    ownerOnly: isOpenClawOwnerOnlyCoreToolName("nodes"),
     description:
       "Discover/control paired nodes: status, describe, pairing, notify, camera/photos/screen/location/notifications/invoke. Use file_fetch for files.",
     parameters: NodesToolSchema,

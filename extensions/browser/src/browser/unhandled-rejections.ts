@@ -1,3 +1,4 @@
+import { collectErrorGraphCandidates } from "openclaw/plugin-sdk/error-runtime";
 import { registerUnhandledRejectionHandler } from "openclaw/plugin-sdk/runtime-env";
 
 const PLAYWRIGHT_DIALOG_METHODS = new Set([
@@ -6,47 +7,6 @@ const PLAYWRIGHT_DIALOG_METHODS = new Set([
 ]);
 
 const NO_DIALOG_MESSAGE = "no dialog is showing";
-
-function collectNestedErrorCandidates(err: unknown): unknown[] {
-  const queue: unknown[] = [err];
-  const seen = new Set<unknown>();
-  const candidates: unknown[] = [];
-
-  while (queue.length > 0) {
-    const current = queue.shift();
-    if (current == null || seen.has(current)) {
-      continue;
-    }
-    seen.add(current);
-    candidates.push(current);
-
-    if (!current || typeof current !== "object") {
-      continue;
-    }
-
-    const record = current as Record<string, unknown>;
-    for (const nested of [
-      record.cause,
-      record.reason,
-      record.original,
-      record.error,
-      record.data,
-    ]) {
-      if (nested != null && !seen.has(nested)) {
-        queue.push(nested);
-      }
-    }
-    if (Array.isArray(record.errors)) {
-      for (const nested of record.errors) {
-        if (nested != null && !seen.has(nested)) {
-          queue.push(nested);
-        }
-      }
-    }
-  }
-
-  return candidates;
-}
 
 function readMessage(err: unknown): string {
   if (typeof err === "string") {
@@ -68,7 +28,14 @@ function readPlaywrightMethod(err: unknown): string | undefined {
 }
 
 export function isPlaywrightDialogRaceUnhandledRejection(reason: unknown): boolean {
-  for (const candidate of collectNestedErrorCandidates(reason)) {
+  for (const candidate of collectErrorGraphCandidates(reason, (current) => [
+    current.cause,
+    current.reason,
+    current.original,
+    current.error,
+    current.data,
+    ...(Array.isArray(current.errors) ? current.errors : []),
+  ])) {
     const message = readMessage(candidate);
     const normalizedMessage = message.toLowerCase();
     if (!normalizedMessage.includes(NO_DIALOG_MESSAGE)) {

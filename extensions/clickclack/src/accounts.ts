@@ -126,7 +126,6 @@ export function resolveClickClackAccount(params: {
     systemPrompt: normalizeOptionalString(merged.systemPrompt),
     timeoutSeconds: merged.timeoutSeconds,
     toolsAllow: merged.toolsAllow,
-    senderIsOwner: merged.senderIsOwner === true,
     defaultTo: merged.defaultTo?.trim() || "channel:general",
     allowFrom: merged.allowFrom ?? ["*"],
     reconnectMs: merged.reconnectMs ?? DEFAULT_RECONNECT_MS,

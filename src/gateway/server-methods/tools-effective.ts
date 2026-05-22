@@ -3,7 +3,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logDebug, logWarn } from "../../logger.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { ADMIN_SCOPE } from "../method-scopes.js";
 import {
   ErrorCodes,
   errorShape,
@@ -35,7 +34,6 @@ type TrustedToolsEffectiveContext = {
   cfg: OpenClawConfig;
   agentId: string;
   sessionKey: string;
-  senderIsOwner: boolean;
   modelProvider?: string;
   modelId?: string;
   messageProvider?: string;
@@ -93,7 +91,6 @@ function buildToolsEffectiveCacheKey(params: {
     channelRegistry: getActivePluginChannelRegistryVersion(),
     sessionKey: params.sessionKey,
     agentId: context.agentId,
-    senderIsOwner: context.senderIsOwner,
     modelProvider: optionalCacheString(context.modelProvider),
     modelId: optionalCacheString(context.modelId),
     messageProvider: optionalCacheString(context.messageProvider),
@@ -142,7 +139,6 @@ function scheduleToolsEffectiveRefresh(
           messageProvider: context.messageProvider,
           modelProvider: context.modelProvider,
           modelId: context.modelId,
-          senderIsOwner: context.senderIsOwner,
           currentChannelId: context.currentChannelId,
           currentThreadTs: context.currentThreadTs,
           accountId: context.accountId,
@@ -202,7 +198,6 @@ async function resolveCachedToolsEffective(params: {
 function resolveTrustedToolsEffectiveContext(params: {
   sessionKey: string;
   requestedAgentId?: string;
-  senderIsOwner: boolean;
   respond: RespondFn;
 }) {
   const loaded = loadSessionEntry(params.sessionKey);
@@ -237,7 +232,6 @@ function resolveTrustedToolsEffectiveContext(params: {
     cfg: loaded.cfg,
     agentId: sessionAgentId,
     sessionKey: params.sessionKey,
-    senderIsOwner: params.senderIsOwner,
     modelProvider: resolvedModel.provider,
     modelId: resolvedModel.model,
     messageProvider:
@@ -271,7 +265,7 @@ function resolveTrustedToolsEffectiveContext(params: {
 }
 
 export const toolsEffectiveHandlers: GatewayRequestHandlers = {
-  "tools.effective": async ({ params, respond, client, context }) => {
+  "tools.effective": async ({ params, respond, context }) => {
     if (!validateToolsEffectiveParams(params)) {
       respond(
         false,
@@ -295,9 +289,6 @@ export const toolsEffectiveHandlers: GatewayRequestHandlers = {
     const trustedContext = resolveTrustedToolsEffectiveContext({
       sessionKey: params.sessionKey,
       requestedAgentId,
-      senderIsOwner: Array.isArray(client?.connect?.scopes)
-        ? client.connect.scopes.includes(ADMIN_SCOPE)
-        : false,
       respond,
     });
     if (!trustedContext) {

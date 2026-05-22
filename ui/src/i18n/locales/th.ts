@@ -1066,6 +1066,9 @@ export const th: TranslationMap = {
     selectors: {
       agentFilter: "กรองเซสชันตามเอเจนต์",
       session: "Chat session",
+      sessionSearch: "ค้นหาเซสชัน",
+      clearSessionSearch: "ล้างการค้นหาเซสชัน",
+      loadMoreSessions: "โหลดเซสชันเพิ่มเติม",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },

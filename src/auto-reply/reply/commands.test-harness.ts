@@ -76,6 +76,15 @@ export function configureInMemoryTaskRegistryStoreForTests(): void {
   });
 }
 
+export type ConfigSnapshotMock = {
+  path?: string;
+  hash?: string | null;
+  parsed?: OpenClawConfig | null;
+  sourceConfig?: OpenClawConfig;
+  resolved?: OpenClawConfig;
+  runtimeConfig?: OpenClawConfig;
+};
+
 export function buildPluginsCommandParams(params: {
   commandBodyNormalized: string;
   cfg?: OpenClawConfig;

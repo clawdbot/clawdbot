@@ -7,6 +7,7 @@ import {
   type ProviderAuthMethodNonInteractiveContext,
   type ProviderAuthResult,
   type ProviderCatalogContext,
+  type ProviderReplayPolicy,
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { buildApiKeyCredential } from "openclaw/plugin-sdk/provider-auth";
@@ -64,6 +65,15 @@ function usesOllamaOpenAICompatTransport(model: {
       api: "openai-completions",
     })
   );
+}
+
+function buildNativeOllamaReplayPolicy(): ProviderReplayPolicy {
+  return {
+    ...buildOpenAICompatibleReplayPolicy("openai-completions", {
+      sanitizeToolCallIds: false,
+    }),
+    sanitizeToolCallIds: false,
+  };
 }
 
 const dynamicModelCache = new Map<string, ProviderRuntimeModel[]>();
@@ -245,7 +255,7 @@ export default definePluginEntry({
       ...OPENAI_COMPATIBLE_REPLAY_HOOKS,
       buildReplayPolicy: (ctx) =>
         ctx.modelApi === "ollama"
-          ? buildOpenAICompatibleReplayPolicy("openai-completions")
+          ? buildNativeOllamaReplayPolicy()
           : buildOpenAICompatibleReplayPolicy(ctx.modelApi),
       contributeResolvedModelCompat: ({ model }) =>
         usesOllamaOpenAICompatTransport(model) ? { supportsUsageInStreaming: true } : undefined,

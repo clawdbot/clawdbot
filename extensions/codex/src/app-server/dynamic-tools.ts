@@ -125,8 +125,10 @@ export function createCodexDynamicToolBridge(params: {
       const args = jsonObjectToRecord(call.arguments);
       const startedAt = Date.now();
       const signal = composeAbortSignals(params.signal, options?.signal);
+      let didStartExecution = false;
       try {
         const preparedArgs = tool.prepareArguments ? tool.prepareArguments(args) : args;
+        didStartExecution = true;
         const rawResult = await tool.execute(call.callId, preparedArgs, signal);
         const rawIsError = isToolResultError(rawResult);
         const middlewareResult = await middlewareRunner.applyToolResultMiddleware({
@@ -167,12 +169,16 @@ export function createCodexDynamicToolBridge(params: {
           result,
           startedAt,
         });
-        return withDiagnosticTerminalType(
-          {
-            contentItems: convertToolContents(result.content, toolResultMaxChars),
-            success: !resultIsError,
-          },
-          inferToolResultDiagnosticTerminalType(result, resultIsError),
+        const terminalType = inferToolResultDiagnosticTerminalType(result, resultIsError);
+        return withSideEffectEvidence(
+          withDiagnosticTerminalType(
+            {
+              contentItems: convertToolContents(result.content, toolResultMaxChars),
+              success: !resultIsError,
+            },
+            terminalType,
+          ),
+          terminalType !== "blocked",
         );
       } catch (error) {
         collectToolTelemetry({
@@ -194,17 +200,20 @@ export function createCodexDynamicToolBridge(params: {
           error: error instanceof Error ? error.message : String(error),
           startedAt,
         });
-        return withDiagnosticTerminalType(
-          {
-            contentItems: [
-              {
-                type: "inputText",
-                text: error instanceof Error ? error.message : String(error),
-              },
-            ],
-            success: false,
-          },
-          "error",
+        return withSideEffectEvidence(
+          withDiagnosticTerminalType(
+            {
+              contentItems: [
+                {
+                  type: "inputText",
+                  text: error instanceof Error ? error.message : String(error),
+                },
+              ],
+              success: false,
+            },
+            "error",
+          ),
+          didStartExecution,
         );
       }
     },
@@ -230,7 +239,6 @@ function createCodexDynamicToolSpec(params: {
     deferLoading: true,
   };
 }
-
 function toToolResultHookContext(
   ctx: CodexDynamicToolHookContext | undefined,
 ): CodexToolResultHookContext {
@@ -459,6 +467,21 @@ function withDiagnosticTerminalType<T extends CodexDynamicToolCallResponse>(
     configurable: true,
     enumerable: false,
     value: terminalType,
+  });
+  return response;
+}
+
+function withSideEffectEvidence<T extends CodexDynamicToolCallResponse>(
+  response: T,
+  sideEffectEvidence: boolean,
+): T {
+  if (!sideEffectEvidence) {
+    return response;
+  }
+  Object.defineProperty(response, "sideEffectEvidence", {
+    configurable: true,
+    enumerable: false,
+    value: true,
   });
   return response;
 }

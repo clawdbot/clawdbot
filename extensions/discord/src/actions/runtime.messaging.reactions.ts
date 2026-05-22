@@ -54,6 +54,7 @@ export async function handleDiscordReactionMessagingAction(ctx: DiscordMessaging
         required: true,
       });
       const limit = readNumberParam(ctx.params, "limit");
+      await ctx.assertReadTargetAllowed({ channelId });
       const reactions = await discordMessagingActionRuntime.fetchReactionsDiscord(
         channelId,
         messageId,

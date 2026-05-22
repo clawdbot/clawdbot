@@ -1,6 +1,11 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
+  expectObjectFields,
+  mockCall,
+  mockFirstObjectArg,
+} from "../../test-utils/mock-call-assertions.js";
+import {
   resolveAgentDirMock,
   resolveSessionAgentIdMock,
 } from "./commands-agent-scope.test-support.js";
@@ -21,33 +26,6 @@ function buildParams(commandBody: string) {
     channels: { whatsapp: { allowFrom: ["*"] } },
   } as OpenClawConfig;
   return buildCommandTestParams(commandBody, cfg, undefined, { workspaceDir: "/tmp/workspace" });
-}
-
-function mockCall(mock: unknown, index = 0): Array<unknown> {
-  const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];
-  const call = calls.at(index);
-  if (!call) {
-    throw new Error(`Expected mock call ${index + 1}`);
-  }
-  return call;
-}
-
-function mockFirstObjectArg(mock: unknown): Record<string, unknown> {
-  const [arg] = mockCall(mock);
-  if (!arg || typeof arg !== "object") {
-    throw new Error("expected first mock argument object");
-  }
-  return arg as Record<string, unknown>;
-}
-
-function expectObjectFields(value: unknown, expected: Record<string, unknown>): void {
-  if (!value || typeof value !== "object") {
-    throw new Error("expected object fields");
-  }
-  const record = value as Record<string, unknown>;
-  for (const [key, expectedValue] of Object.entries(expected)) {
-    expect(record[key], key).toEqual(expectedValue);
-  }
 }
 
 describe("handleBtwCommand", () => {

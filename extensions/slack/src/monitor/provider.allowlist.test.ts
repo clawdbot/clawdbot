@@ -1,4 +1,6 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
+import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   flush,
   getSlackHandlerOrThrow,
@@ -15,6 +17,23 @@ const slackTestState = getSlackTestState();
 beforeEach(() => {
   resetSlackTestState();
 });
+
+function createRuntimeContextCapture(): {
+  channelRuntime: ChannelRuntimeSurface;
+  register: ChannelRuntimeSurface["runtimeContexts"]["register"];
+} {
+  const register = vi.fn(() => ({ dispose: vi.fn() }));
+  return {
+    channelRuntime: {
+      runtimeContexts: {
+        register,
+        get: vi.fn(),
+        watch: vi.fn(() => () => {}),
+      },
+    } as unknown as ChannelRuntimeSurface,
+    register,
+  };
+}
 
 function resolveAllowlistCallAt(index: number): { entries?: unknown } {
   const call = slackTestState.resolveSlackUserAllowlistMock.mock.calls[index];
@@ -49,6 +68,49 @@ describe("slack allowlist log formatting", () => {
 });
 
 describe("slack startup user allowlist resolution", () => {
+  it("registers the native approval runtime for plugin-only Slack approvals", async () => {
+    resetSlackTestState({
+      channels: {
+        slack: {
+          enabled: true,
+          allowFrom: ["U123OWNER"],
+          execApprovals: {
+            enabled: false,
+            approvers: ["U999EXEC"],
+            target: "both",
+          },
+        },
+      },
+      approvals: {
+        plugin: {
+          enabled: true,
+          mode: "targets",
+          targets: [{ channel: "slack", to: "U123OWNER" }],
+        },
+      },
+    });
+    const { channelRuntime, register } = createRuntimeContextCapture();
+
+    const monitor = startSlackMonitor(monitorSlackProvider, { channelRuntime });
+    try {
+      await getSlackHandlerOrThrow("message");
+      await flush();
+
+      expect(register).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channelId: "slack",
+          accountId: "default",
+          capability: CHANNEL_APPROVAL_NATIVE_RUNTIME_CONTEXT_CAPABILITY,
+          context: expect.objectContaining({
+            config: expect.objectContaining({ enabled: false }),
+          }),
+        }),
+      );
+    } finally {
+      await stopSlackMonitor(monitor);
+    }
+  });
+
   it("skips user entry resolution when name matching is not enabled", async () => {
     resetSlackTestState({
       messages: {

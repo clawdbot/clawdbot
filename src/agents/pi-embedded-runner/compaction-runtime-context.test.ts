@@ -44,6 +44,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.authProfileId).toBe("openai:p1");
     expect(result.workspaceDir).toBe("/tmp/workspace");
     expect(result.agentDir).toBe("/tmp/agent");
+    expect(result.senderIsOwner).toBe(true);
     expect(result.senderId).toBe("user-123");
     expect(result.provider).toBe("openai-codex");
     expect(result.model).toBe("gpt-5.4");

@@ -15,7 +15,7 @@ programmatic delivery.
 <Steps>
   <Step title="Run a simple agent turn">
     ```bash
-    openclaw agent --message "What is the weather today?"
+    openclaw agent --agent main --message "What is the weather today?"
     ```
 
     This sends the message through the Gateway and prints the reply.
@@ -32,6 +32,9 @@ programmatic delivery.
 
     # Reuse an existing session
     openclaw agent --session-id abc123 --message "Continue the task"
+
+    # Target an exact session key
+    openclaw agent --session-key agent:ops:incident-42 --message "Summarize status"
     ```
 
   </Step>
@@ -55,6 +58,7 @@ programmatic delivery.
 | ----------------------------- | ----------------------------------------------------------- |
 | `--message \<text\>`          | Message to send (required)                                  |
 | `--to \<dest\>`               | Derive session key from a target (phone, chat id)           |
+| `--session-key \<key\>`       | Use an explicit session key                                 |
 | `--agent \<id\>`              | Target a configured agent (uses its `main` session)         |
 | `--session-id \<id\>`         | Reuse an existing session by id                             |
 | `--local`                     | Force local embedded runtime (skip Gateway)                 |
@@ -75,6 +79,14 @@ programmatic delivery.
 - If the Gateway is unreachable, the CLI **falls back** to the local embedded run.
 - Session selection: `--to` derives the session key (group/channel targets
   preserve isolation; direct chats collapse to `main`).
+- `--session-key` selects an explicit key. Agent-prefixed keys must use
+  `agent:<agent-id>:<session-key>`, and `--agent` must match that agent id when
+  both are supplied. Bare non-sentinel keys are scoped to `--agent` when
+  supplied; for example, `--agent ops --session-key incident-42` routes to
+  `agent:ops:incident-42`. Without `--agent`, bare non-sentinel keys are scoped
+  to the configured default agent. Literal `global` and `unknown` remain
+  unscoped only when no `--agent` is supplied; in that case, embedded fallback
+  and store ownership use the configured default agent.
 - Thinking and verbose flags persist into the session store.
 - Output: plain text by default, or `--json` for structured payload + metadata.
 - With `--json --deliver`, the JSON includes delivery status for sent,
@@ -89,6 +101,12 @@ openclaw agent --to +15555550123 --message "Trace logs" --verbose on --json
 
 # Turn with thinking level
 openclaw agent --session-id 1234 --message "Summarize inbox" --thinking medium
+
+# Exact session key
+openclaw agent --session-key agent:ops:incident-42 --message "Summarize status"
+
+# Legacy key scoped to an agent
+openclaw agent --agent ops --session-key incident-42 --message "Summarize status"
 
 # Deliver to a different channel than the session
 openclaw agent --agent ops --message "Alert" --deliver --reply-channel telegram --reply-to "@admin"

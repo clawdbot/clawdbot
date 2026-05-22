@@ -13,15 +13,24 @@ import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import * as videoGenerationRuntime from "../../video-generation/runtime.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
+import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-generation-task-status-shared.js";
 import * as videoGenerateBackground from "./video-generate-background.js";
 import {
   createVideoGenerateTool,
   resolveVideoGenerationModelConfigForTool,
 } from "./video-generate-tool.js";
 
-const taskRuntimeInternalMocks = vi.hoisted(() => ({
-  listTasksForOwnerKey: vi.fn(),
-}));
+const taskRuntimeInternalMocks = vi.hoisted(() => {
+  const mocks = {
+    listTasksForOwnerKey: vi.fn(),
+    listFreshTasksForOwnerKey: vi.fn(),
+    reloadTaskRegistryFromStore: vi.fn(),
+  };
+  mocks.listFreshTasksForOwnerKey.mockImplementation((ownerKey) =>
+    mocks.listTasksForOwnerKey(ownerKey),
+  );
+  return mocks;
+});
 
 const taskExecutorMocks = vi.hoisted(() => ({
   recordTaskRunProgressByRunId: vi.fn(),
@@ -296,6 +305,12 @@ function resetVideoGenerateMocks() {
   vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([]);
   taskRuntimeInternalMocks.listTasksForOwnerKey.mockReset();
   taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([]);
+  taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockReset();
+  taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockImplementation((ownerKey) =>
+    taskRuntimeInternalMocks.listTasksForOwnerKey(ownerKey),
+  );
+  taskRuntimeInternalMocks.reloadTaskRegistryFromStore.mockReset();
+  resetRecentMediaGenerationDuplicateGuardsForTests();
   taskExecutorMocks.createRunningTaskRun.mockReset();
   taskExecutorMocks.completeTaskRunByRunId.mockReset();
   taskExecutorMocks.failTaskRunByRunId.mockReset();
@@ -864,7 +879,7 @@ describe("createVideoGenerateTool", () => {
     });
     const wakeSpy = vi
       .spyOn(videoGenerateBackground.videoGenerationTaskLifecycle, "wakeTaskCompletion")
-      .mockResolvedValue(undefined);
+      .mockResolvedValue(true);
     const saveSpy = vi.spyOn(mediaStore, "saveMediaBuffer");
     vi.spyOn(videoGenerationRuntime, "generateVideo").mockResolvedValue({
       provider: "vydra",
@@ -882,6 +897,7 @@ describe("createVideoGenerateTool", () => {
     });
 
     let scheduledWork: (() => Promise<void>) | undefined;
+    const onAsyncTaskStarted = vi.fn();
     const tool = createVideoGenerateTool({
       config: asConfig({
         agents: {
@@ -898,6 +914,7 @@ describe("createVideoGenerateTool", () => {
       scheduleBackgroundWork: (work) => {
         scheduledWork = work;
       },
+      onAsyncTaskStarted,
     });
     if (!tool) {
       throw new Error("expected video_generate tool");
@@ -908,10 +925,15 @@ describe("createVideoGenerateTool", () => {
 
     expect(text).toContain("Background task started for video generation (task-123).");
     expect(text).toContain("Do not call video_generate again for this request.");
+    expect(onAsyncTaskStarted).toHaveBeenCalledOnce();
+    expect(onAsyncTaskStarted).toHaveBeenCalledWith(
+      "Video generation started; wait for the generated video completion event.",
+    );
     const details = resultDetails(result);
     expect(details.async).toBe(true);
     expect(details.status).toBe("started");
     expect((details.task as { taskId?: string }).taskId).toBe("task-123");
+    expect((result as { terminate?: boolean }).terminate).toBe(true);
     if (!scheduledWork) {
       throw new Error("expected scheduled video generation work");
     }
@@ -968,6 +990,83 @@ describe("createVideoGenerateTool", () => {
       "queue boom",
     );
     expect(taskExecutorMocks.failTaskRunByRunId).not.toHaveBeenCalled();
+  });
+
+  it("dedupes a model-only primary video request repeated with provider-qualified model", async () => {
+    vi.spyOn(videoGenerationRuntime, "listRuntimeVideoGenerationProviders").mockReturnValue([
+      {
+        id: "google",
+        defaultModel: "veo-3.1-fast-generate-preview",
+        models: ["veo-3.1-fast-generate-preview", "veo-3.1-pro-generate-preview"],
+        capabilities: {},
+        generateVideo: vi.fn(async () => {
+          throw new Error("not used");
+        }),
+      },
+    ]);
+    const now = Date.now();
+    taskExecutorMocks.createRunningTaskRun.mockReturnValue({
+      taskId: "task-model-only-video",
+    });
+    const scheduled: Array<() => Promise<void>> = [];
+    const tool = createVideoGenerateTool({
+      config: asConfig({
+        agents: {
+          defaults: {
+            videoGenerationModel: { primary: "veo-3.1-pro-generate-preview" },
+          },
+        },
+      }),
+      agentSessionKey: "agent:main:discord:direct:123",
+      requesterOrigin: {
+        channel: "discord",
+        to: "channel:1",
+      },
+      scheduleBackgroundWork: (work) => {
+        scheduled.push(work);
+      },
+    });
+    if (!tool) {
+      throw new Error("expected video_generate tool");
+    }
+
+    await tool.execute("call-model-only-start", {
+      prompt: "friendly lobster surfing",
+    });
+    const createdTask = firstMockCallArg(taskExecutorMocks.createRunningTaskRun) as {
+      runId: string;
+    };
+    taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
+      {
+        taskId: "task-model-only-video",
+        runId: createdTask.runId,
+        runtime: "cli",
+        taskKind: "video_generation",
+        sourceId: "video_generate:google",
+        requesterSessionKey: "agent:main:discord:direct:123",
+        ownerKey: "agent:main:discord:direct:123",
+        scopeKind: "session",
+        task: "friendly lobster surfing",
+        status: "succeeded",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+        createdAt: now - 20_000,
+        endedAt: now - 10_000,
+        progressSummary: "Generated 1 video",
+      },
+    ]);
+
+    const result = await tool.execute("call-provider-qualified-repeat", {
+      prompt: "friendly lobster surfing",
+      model: "google/veo-3.1-pro-generate-preview",
+    });
+    const text = (result.content?.[0] as { text?: string } | undefined)?.text ?? "";
+
+    expect(scheduled).toHaveLength(1);
+    expect(taskExecutorMocks.createRunningTaskRun).toHaveBeenCalledTimes(1);
+    expect(text).toContain("Video generation task task-model-only-video recently succeeded");
+    expect(resultDetails(result).duplicateGuard).toBe(true);
+    expect(resultDetails(result).active).toBe(false);
   });
 
   it("shows duration normalization details from runtime metadata", async () => {

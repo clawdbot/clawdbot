@@ -47,6 +47,7 @@ function createTestContext(): {
     state: {
       toolMetaById: new Map<string, ToolCallSummary>(),
       toolMetas: [],
+      acceptedSessionSpawns: [],
       toolSummaryById: new Set<string>(),
       itemActiveIds: new Set<string>(),
       itemStartedCount: 0,
@@ -277,6 +278,79 @@ describe("handleToolExecutionEnd cron.add commitment tracking", () => {
     expect(ctx.state.successfulCronAdds).toBe(0);
     expect(ctx.state.itemCompletedCount).toBe(1);
     expect(ctx.state.itemActiveIds.size).toBe(0);
+  });
+});
+
+describe("handleToolExecutionEnd sessions_spawn terminal success tracking", () => {
+  it("records accepted sessions_spawn identifiers", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "sessions_spawn",
+        toolCallId: "tool-spawn-accepted",
+        isError: false,
+        result: {
+          details: {
+            status: "accepted",
+            runId: " run-child ",
+            childSessionKey: " agent:claude:subagent:child ",
+          },
+        },
+      } as never,
+    );
+
+    expect(ctx.state.acceptedSessionSpawns).toEqual([
+      {
+        runId: "run-child",
+        childSessionKey: "agent:claude:subagent:child",
+      },
+    ]);
+    expect(ctx.state.replayState).toEqual({
+      replayInvalid: true,
+      hadPotentialSideEffects: true,
+    });
+  });
+
+  it("does not record failed or malformed sessions_spawn results", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "sessions_spawn",
+        toolCallId: "tool-spawn-failed",
+        isError: false,
+        result: {
+          details: {
+            status: "error",
+            runId: "run-child",
+            childSessionKey: "agent:claude:subagent:child",
+          },
+        },
+      } as never,
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "sessions_spawn",
+        toolCallId: "tool-spawn-malformed",
+        isError: false,
+        result: {
+          details: {
+            status: "accepted",
+            runId: "run-child",
+            childSessionKey: " ",
+          },
+        },
+      } as never,
+    );
+
+    expect(ctx.state.acceptedSessionSpawns).toEqual([]);
   });
 });
 

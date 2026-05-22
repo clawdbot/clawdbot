@@ -11,6 +11,7 @@ import type {
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import type { PluginCompatCode } from "./compat/registry.js";
 import type { PluginActivationSource } from "./config-state.js";
+import type { EmbeddingProviderAdapter } from "./embedding-providers.js";
 import type {
   PluginAgentEventSubscriptionRegistration,
   PluginControlUiDescriptor,
@@ -173,6 +174,8 @@ type PluginOwnedProviderRegistration<T extends { id: string }> = {
 
 export type PluginSpeechProviderRegistration =
   PluginOwnedProviderRegistration<SpeechProviderPlugin>;
+export type PluginEmbeddingProviderRegistration =
+  PluginOwnedProviderRegistration<EmbeddingProviderAdapter>;
 export type PluginRealtimeTranscriptionProviderRegistration =
   PluginOwnedProviderRegistration<RealtimeTranscriptionProviderPlugin>;
 export type PluginRealtimeVoiceProviderRegistration =
@@ -391,6 +394,7 @@ export type PluginRecord = {
   cliBackendIds: string[];
   providerIds: string[];
   syntheticAuthRefs?: string[];
+  embeddingProviderIds: string[];
   speechProviderIds: string[];
   realtimeTranscriptionProviderIds: string[];
   realtimeVoiceProviderIds: string[];
@@ -429,6 +433,7 @@ export type PluginRegistry = {
   modelCatalogProviders: PluginModelCatalogProviderRegistration[];
   cliBackends?: PluginCliBackendRegistration[];
   textTransforms: PluginTextTransformsRegistration[];
+  embeddingProviders: PluginEmbeddingProviderRegistration[];
   speechProviders: PluginSpeechProviderRegistration[];
   realtimeTranscriptionProviders: PluginRealtimeTranscriptionProviderRegistration[];
   realtimeVoiceProviders: PluginRealtimeVoiceProviderRegistration[];

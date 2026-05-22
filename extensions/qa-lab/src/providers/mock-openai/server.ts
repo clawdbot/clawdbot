@@ -1988,6 +1988,49 @@ async function buildResponsesPayload(
       return buildToolCallEventsWithArgs("read", { path: "PROGRESS_EVIDENCE.md" });
     }
   }
+  if (/personal failure recovery check/i.test(allInputText)) {
+    const recoveryEvidenceText = [
+      extractAllToolOutputText(input),
+      extractUserTextAfterLatestToolOutput(input),
+    ]
+      .filter(Boolean)
+      .join("\n");
+    if (/successfully (?:wrote|created|updated|replaced)/i.test(recoveryEvidenceText)) {
+      return buildAssistantEvents(
+        [
+          "Artifact: personal-failure-recovery.txt",
+          "Failed step: external calendar update was not attempted",
+          "Retry boundary: do not retry until approval is given",
+          "PERSONAL-FAILURE-RECOVERY-OK",
+        ].join("\n"),
+      );
+    }
+    if (
+      !recoveryEvidenceText ||
+      (!recoveryEvidenceText.includes("# Failure recovery request") &&
+        !recoveryEvidenceText.includes("# Failure recovery evidence"))
+    ) {
+      return buildToolCallEventsWithArgs("read", { path: "FAILURE_RECOVERY_REQUEST.md" });
+    }
+    if (
+      recoveryEvidenceText.includes("# Failure recovery request") &&
+      recoveryEvidenceText.includes("# Failure recovery evidence")
+    ) {
+      return buildToolCallEventsWithArgs("write", {
+        path: "personal-failure-recovery.txt",
+        content: [
+          "Personal failure recovery",
+          "Completed: request reviewed and local evidence captured",
+          "Failed step: external calendar update was not attempted because explicit approval is missing",
+          "Retry boundary: do not retry the external step until approval is given",
+          "Next step: ask for approval before any external update",
+        ].join("\n"),
+      });
+    }
+    if (recoveryEvidenceText.includes("# Failure recovery request")) {
+      return buildToolCallEventsWithArgs("read", { path: "FAILURE_RECOVERY_EVIDENCE.md" });
+    }
+  }
   if (/lobster invaders/i.test(prompt)) {
     if (!toolOutput) {
       return buildToolCallEventsWithArgs("read", { path: "QA_KICKOFF_TASK.md" });

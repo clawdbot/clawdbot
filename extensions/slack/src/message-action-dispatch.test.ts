@@ -425,6 +425,32 @@ describe("handleSlackMessageAction", () => {
     expectForwardedCfg(invoke, cfg);
   });
 
+  it("forwards tool context for current-channel download-file actions", async () => {
+    const invoke = createInvokeSpy();
+    const cfg = slackConfig();
+    const toolContext = { currentChannelId: "C1" };
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "download-file",
+        cfg,
+        toolContext,
+        params: {
+          fileId: "F123",
+        },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    const action = firstAction(invoke);
+    expect(action.action).toBe("downloadFile");
+    expect(action.fileId).toBe("F123");
+    expect(action.channelId).toBeUndefined();
+    expectForwardedCfg(invoke, cfg);
+    expect(firstInvokeCall(invoke)[2]).toBe(toolContext);
+  });
+
   it("maps download-file target aliases to scope fields", async () => {
     const invoke = createInvokeSpy();
     const cfg = slackConfig();

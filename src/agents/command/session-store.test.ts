@@ -6,7 +6,11 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionStore } from "../../config/sessions.js";
 import type { EmbeddedPiRunResult } from "../pi-embedded.js";
-import { clearCliSessionInStore, updateSessionStoreAfterAgentRun } from "./session-store.js";
+import {
+  clearCliSessionInStore,
+  recordCliCompactionInStore,
+  updateSessionStoreAfterAgentRun,
+} from "./session-store.js";
 import { resolveSession } from "./session.js";
 
 vi.mock("../model-selection.js", () => ({
@@ -118,6 +122,15 @@ vi.mock("../../config/sessions.js", async () => {
         return {};
       }
     },
+    canonicalizeAbsoluteSessionFilePath: (filePath: string) => path.resolve(filePath),
+    rewriteSessionFileForNewSessionId: (params: {
+      sessionFile?: string;
+      previousSessionId: string;
+      nextSessionId: string;
+    }) => params.sessionFile?.replace(params.previousSessionId, params.nextSessionId),
+    resolveSessionFilePathOptions: (params: unknown) => params,
+    resolveSessionFilePath: (sessionId: string, entry?: SessionEntry) =>
+      entry?.sessionFile ?? path.join("/tmp", `${sessionId}.jsonl`),
   };
 });
 
@@ -789,6 +802,49 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
+  it("accepts zero compaction tokensAfter when provider usage is unavailable", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:test-zero-compaction-tokens-after";
+      const sessionId = "test-zero-compaction-tokens-after-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          totalTokens: 12_000,
+          totalTokensFresh: true,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "minimax",
+        defaultModel: "MiniMax-M2.7",
+        result: {
+          meta: {
+            durationMs: 500,
+            agentMeta: {
+              sessionId,
+              provider: "minimax",
+              model: "MiniMax-M2.7",
+              compactionCount: 1,
+              compactionTokensAfter: 0,
+            },
+          },
+        } as EmbeddedPiRunResult,
+      });
+
+      expect(sessionStore[sessionKey]?.totalTokens).toBe(0);
+      expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(true);
+      expect(sessionStore[sessionKey]?.compactionCount).toBe(1);
+    });
+  });
+
   it("ignores non-finite compaction tokensAfter values", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {} as OpenClawConfig;
@@ -1238,6 +1294,130 @@ describe("updateSessionStoreAfterAgentRun", () => {
       expect(sessionStore[sessionKey]?.model).toBe("gpt-5.4");
       expect(sessionStore[sessionKey]?.modelProvider).toBe("openai");
       expect(sessionStore[sessionKey]?.contextTokens).toBe(400_000);
+    });
+  });
+});
+
+describe("recordCliCompactionInStore", () => {
+  it("persists native compaction token counts and clears stale CLI usage breakdown", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const sessionKey = "agent:main:explicit:test-record-cli-compaction";
+      const sessionId = "test-record-cli-compaction-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          totalTokens: 12_000,
+          totalTokensFresh: true,
+          inputTokens: 9_000,
+          outputTokens: 100,
+          cacheRead: 2_900,
+          cacheWrite: 0,
+          cliSessionBindings: {
+            codex: {
+              sessionId: "stale-cli-session",
+            },
+          },
+          cliSessionIds: {
+            codex: "stale-cli-session",
+          },
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      await recordCliCompactionInStore({
+        provider: "codex",
+        sessionKey,
+        sessionStore,
+        storePath,
+        tokensAfter: 0,
+      });
+
+      const persisted = loadSessionStore(storePath);
+      expect(sessionStore[sessionKey]?.compactionCount).toBe(1);
+      expect(sessionStore[sessionKey]?.totalTokens).toBe(0);
+      expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(true);
+      expect(sessionStore[sessionKey]?.inputTokens).toBeUndefined();
+      expect(sessionStore[sessionKey]?.outputTokens).toBeUndefined();
+      expect(sessionStore[sessionKey]?.cacheRead).toBeUndefined();
+      expect(sessionStore[sessionKey]?.cacheWrite).toBeUndefined();
+      expect(sessionStore[sessionKey]?.cliSessionBindings?.codex).toBeUndefined();
+      expect(sessionStore[sessionKey]?.cliSessionIds?.codex).toBeUndefined();
+      expect(persisted[sessionKey]?.totalTokens).toBe(0);
+      expect(persisted[sessionKey]?.totalTokensFresh).toBe(true);
+    });
+  });
+
+  it("marks CLI token counts stale when native compaction returns no token count", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const sessionKey = "agent:main:explicit:test-record-cli-compaction-unknown";
+      const sessionId = "test-record-cli-compaction-unknown-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          totalTokens: 37_000,
+          totalTokensFresh: true,
+          inputTokens: 30_000,
+          outputTokens: 100,
+          cacheRead: 6_900,
+          cacheWrite: 0,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      await recordCliCompactionInStore({
+        provider: "codex",
+        sessionKey,
+        sessionStore,
+        storePath,
+      });
+
+      const persisted = loadSessionStore(storePath);
+      expect(sessionStore[sessionKey]?.compactionCount).toBe(1);
+      expect(sessionStore[sessionKey]?.totalTokens).toBe(37_000);
+      expect(sessionStore[sessionKey]?.totalTokensFresh).toBe(false);
+      expect(sessionStore[sessionKey]?.inputTokens).toBeUndefined();
+      expect(sessionStore[sessionKey]?.outputTokens).toBeUndefined();
+      expect(sessionStore[sessionKey]?.cacheRead).toBeUndefined();
+      expect(sessionStore[sessionKey]?.cacheWrite).toBeUndefined();
+      expect(persisted[sessionKey]?.totalTokens).toBe(37_000);
+      expect(persisted[sessionKey]?.totalTokensFresh).toBe(false);
+    });
+  });
+
+  it("persists successor session handles from native CLI compaction", async () => {
+    await withTempSessionStore(async ({ dir, storePath }) => {
+      const sessionKey = "agent:main:explicit:test-record-cli-compaction-rotate";
+      const sessionId = "test-record-cli-compaction-rotate-session";
+      const nextSessionId = "test-record-cli-compaction-rotate-next";
+      const nextSessionFile = path.join(dir, `${nextSessionId}.jsonl`);
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          sessionFile: path.join(dir, `${sessionId}.jsonl`),
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2));
+
+      await recordCliCompactionInStore({
+        provider: "codex",
+        sessionKey,
+        sessionStore,
+        storePath,
+        newSessionId: nextSessionId,
+        newSessionFile: nextSessionFile,
+      });
+
+      expect(sessionStore[sessionKey]?.sessionId).toBe(nextSessionId);
+      expect(sessionStore[sessionKey]?.sessionFile).toBe(nextSessionFile);
+      expect(sessionStore[sessionKey]?.usageFamilyKey).toBe(sessionKey);
+      expect(sessionStore[sessionKey]?.usageFamilySessionIds).toEqual([sessionId, nextSessionId]);
+
+      const persisted = loadSessionStore(storePath);
+      expect(persisted[sessionKey]?.sessionId).toBe(nextSessionId);
+      expect(persisted[sessionKey]?.sessionFile).toBe(nextSessionFile);
     });
   });
 });

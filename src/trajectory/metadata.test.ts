@@ -104,6 +104,7 @@ describe("trajectory metadata", () => {
       channelIds: ["demo-channel"],
       cliBackendIds: [],
       providerIds: ["demo-provider"],
+      embeddingProviderIds: [],
       speechProviderIds: [],
       realtimeTranscriptionProviderIds: [],
       realtimeVoiceProviderIds: [],

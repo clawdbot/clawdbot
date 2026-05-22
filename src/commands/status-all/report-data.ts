@@ -12,6 +12,7 @@ import {
   type StatusOverviewSurface,
 } from "../status-overview-surface.ts";
 import {
+  resolveStatusGatewayDiagnosticsSafe,
   resolveStatusGatewayHealthSafe,
   type resolveStatusServiceSummaries,
 } from "../status-runtime-shared.ts";
@@ -67,8 +68,10 @@ async function resolveStatusAllLocalDiagnosis(params: {
     pluginCompatibility: ReturnType<typeof buildPluginCompatibilityNotices>;
     channelsStatus: StatusScanOverviewResult["channelsStatus"];
     channelIssues: StatusScanOverviewResult["channelIssues"];
+    agentStatus: StatusScanOverviewResult["agentStatus"];
     gatewayReachable: boolean;
     health: StatusGatewayHealthSafe | undefined;
+    deliveryDiagnostics: unknown;
     nodeOnlyGateway: NodeOnlyGatewayInfo | null;
   };
 }> {
@@ -83,6 +86,14 @@ async function resolveStatusAllLocalDiagnosis(params: {
         timeoutMs: Math.min(8000, params.timeoutMs ?? 10_000),
         gatewayReachable: params.gatewayReachable,
         gatewayProbeError: params.gatewayProbe?.error ?? null,
+        ...(params.gatewayCallOverrides ? { callOverrides: params.gatewayCallOverrides } : {}),
+      });
+  const diagnostics = params.nodeOnlyGateway
+    ? null
+    : await resolveStatusGatewayDiagnosticsSafe({
+        config: overview.cfg,
+        timeoutMs: Math.min(5000, params.timeoutMs ?? 10_000),
+        gatewayReachable: params.gatewayReachable,
         ...(params.gatewayCallOverrides ? { callOverrides: params.gatewayCallOverrides } : {}),
       });
 
@@ -143,8 +154,10 @@ async function resolveStatusAllLocalDiagnosis(params: {
       pluginCompatibility,
       channelsStatus: overview.channelsStatus,
       channelIssues: overview.channelIssues,
+      agentStatus: overview.agentStatus,
       gatewayReachable: params.gatewayReachable,
       health,
+      deliveryDiagnostics: diagnostics,
       nodeOnlyGateway: params.nodeOnlyGateway,
     },
   };

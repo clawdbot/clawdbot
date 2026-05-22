@@ -26,24 +26,23 @@ function dedupeModelCatalogEntries(entries: ModelCatalogEntry[]): ModelCatalogEn
   return next;
 }
 
-export function resolveVisibleModelCatalog(params: {
+export async function resolveVisibleModelCatalog(params: {
   cfg: OpenClawConfig;
   catalog: ModelCatalogEntry[];
   defaultProvider: string;
   defaultModel?: string;
   agentId?: string;
-  agentDir?: string;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   view?: ModelCatalogVisibilityView;
   runtimeAuthDiscovery?: boolean;
-  providerAuthChecker?: (provider: string) => boolean;
-}): ModelCatalogEntry[] {
+  providerAuthChecker?: (provider: string) => Promise<boolean>;
+}): Promise<ModelCatalogEntry[]> {
   if (params.view === "all") {
     return params.catalog;
   }
 
-  const buildDefaultVisibleCatalog = () => {
+  const buildDefaultVisibleCatalog = async () => {
     const configuredCatalog = sortModelCatalogEntries(
       buildConfiguredModelCatalog({ cfg: params.cfg }),
     );
@@ -52,12 +51,17 @@ export function resolveVisibleModelCatalog(params: {
       createProviderAuthChecker({
         cfg: params.cfg,
         workspaceDir: params.workspaceDir,
-        agentDir: params.agentDir,
+        agentId: params.agentId,
         env: params.env,
         allowPluginSyntheticAuth: params.runtimeAuthDiscovery,
         discoverExternalCliAuth: params.runtimeAuthDiscovery,
       });
-    const authBackedCatalog = params.catalog.filter((entry) => hasAuth(entry.provider));
+    const authBackedCatalog: ModelCatalogEntry[] = [];
+    for (const entry of params.catalog) {
+      if (await hasAuth(entry.provider)) {
+        authBackedCatalog.push(entry);
+      }
+    }
     return sortModelCatalogEntries(
       dedupeModelCatalogEntries([...configuredCatalog, ...authBackedCatalog]),
     );
@@ -71,7 +75,7 @@ export function resolveVisibleModelCatalog(params: {
     agentId: params.agentId,
   });
   const defaultVisibleCatalog =
-    policy.allowAny || policy.hasProviderWildcards ? buildDefaultVisibleCatalog() : [];
+    policy.allowAny || policy.hasProviderWildcards ? await buildDefaultVisibleCatalog() : [];
   return sortModelCatalogEntries(
     dedupeModelCatalogEntries(
       policy.visibleCatalog({

@@ -364,6 +364,27 @@ run_pnpm() {
   "${PNPM_CMD[@]}" "$@"
 }
 
+to_lowercase_ascii() {
+  printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]'
+}
+
+is_openclaw_source_package_install_spec() {
+  local value="${1:-}"
+  local normalized_value=""
+  normalized_value="$(to_lowercase_ascii "$value")"
+  normalized_value="${normalized_value#openclaw@}"
+
+  [[ "$normalized_value" == "main" ]] && return 0
+  [[ "$normalized_value" =~ ^github:openclaw/openclaw($|[#/]) ]] && return 0
+
+  normalized_value="${normalized_value#git+}"
+  [[ "$normalized_value" =~ ^https?://github\.com/openclaw/openclaw(\.git)?($|[?#]) ]] && return 0
+  [[ "$normalized_value" =~ ^ssh://git@github\.com[:/]openclaw/openclaw(\.git)?($|[?#]) ]] && return 0
+  [[ "$normalized_value" =~ ^git://github\.com/openclaw/openclaw(\.git)?($|[?#]) ]] && return 0
+  [[ "$normalized_value" =~ ^git@github\.com:openclaw/openclaw(\.git)?($|[?#]) ]] && return 0
+  return 1
+}
+
 resolve_git_openclaw_ref() {
   local requested="${OPENCLAW_VERSION:-latest}"
   local resolved_version=""
@@ -624,6 +645,9 @@ fix_npm_prefix_if_needed() {
 
 install_openclaw() {
   local requested="${OPENCLAW_VERSION:-latest}"
+  if is_openclaw_source_package_install_spec "$requested"; then
+    fail "npm installs do not support OpenClaw GitHub source targets like '${requested}'. Use --install-method git --version main, latest, beta, an exact version, or a built .tgz package."
+  fi
   local freshness_flag="--min-release-age=0"
   local min_release_age=""
   min_release_age="$(env -u NPM_CONFIG_BEFORE -u npm_config_before "$(npm_bin)" config get min-release-age 2>/dev/null || true)"

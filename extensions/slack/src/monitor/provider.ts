@@ -27,8 +27,8 @@ import {
   resolveSlackAccountAllowFrom,
   resolveSlackAccountDmPolicy,
 } from "../accounts.js";
+import { isSlackAnyNativeApprovalClientEnabled } from "../approval-native-gates.js";
 import { resolveSlackWebClientOptions } from "../client-options.js";
-import { isSlackExecApprovalClientEnabled } from "../exec-approvals.js";
 import { normalizeSlackWebhookPath, registerSlackHttpHandler } from "../http/index.js";
 import { SLACK_TEXT_LIMIT } from "../limits.js";
 import { resolveSlackChannelAllowlist } from "../resolve-channels.js";
@@ -360,7 +360,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
 
   const handleSlackMessage = createSlackMessageHandler({ ctx, account, trackEvent });
   if (
-    isSlackExecApprovalClientEnabled({
+    isSlackAnyNativeApprovalClientEnabled({
       cfg,
       accountId: account.accountId,
     })

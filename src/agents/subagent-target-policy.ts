@@ -26,6 +26,20 @@ function normalizeAllowAgents(allowAgents: readonly string[] | undefined): {
   };
 }
 
+function normalizeConfiguredAgentIds(
+  configuredAgentIds: readonly string[] | undefined,
+): Set<string> {
+  return new Set((configuredAgentIds ?? []).map((id) => normalizeAgentId(id)).filter(Boolean));
+}
+
+function filterConfiguredAllowedIds(params: {
+  allowedIds: readonly string[];
+  configuredAgentIds?: readonly string[];
+}): string[] {
+  const configuredIds = normalizeConfiguredAgentIds(params.configuredAgentIds);
+  return params.allowedIds.filter((id) => configuredIds.has(id));
+}
+
 export function resolveSubagentAllowedTargetIds(params: {
   requesterAgentId: string;
   allowAgents?: readonly string[];
@@ -40,10 +54,7 @@ export function resolveSubagentAllowedTargetIds(params: {
     };
   }
   if (policy.allowAny) {
-    const configuredIds = (params.configuredAgentIds ?? [])
-      .map((id) => normalizeAgentId(id))
-      .filter(Boolean);
-    configuredIds.push(...policy.allowedIds);
+    const configuredIds = Array.from(normalizeConfiguredAgentIds(params.configuredAgentIds));
     if (requesterAgentId) {
       configuredIds.push(requesterAgentId);
     }
@@ -54,7 +65,10 @@ export function resolveSubagentAllowedTargetIds(params: {
   }
   return {
     allowAny: false,
-    allowedIds: policy.allowedIds,
+    allowedIds: filterConfiguredAllowedIds({
+      allowedIds: policy.allowedIds,
+      configuredAgentIds: params.configuredAgentIds,
+    }).toSorted((a, b) => a.localeCompare(b)),
   };
 }
 
@@ -80,7 +94,8 @@ export function resolveSubagentTargetPolicy(params: {
     return { ok: true };
   }
   const allowedText = allowed.allowedIds.length > 0 ? allowed.allowedIds.join(", ") : "none";
-  if (allowed.allowAny) {
+  const policy = normalizeAllowAgents(params.allowAgents);
+  if (allowed.allowAny || policy.allowedIds.includes(targetAgentId)) {
     return {
       ok: false,
       allowedText,

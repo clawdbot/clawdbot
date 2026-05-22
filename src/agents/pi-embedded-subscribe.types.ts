@@ -56,6 +56,7 @@ export type SubscribeEmbeddedPiSessionParams = {
     data: Record<string, unknown>;
     sessionKey?: string;
   }) => void | Promise<void>;
+  terminalLifecyclePhase?: "end" | "finishing";
   /** Best-effort hook invoked immediately before the terminal lifecycle event is emitted. */
   onBeforeLifecycleTerminal?: () => void | Promise<void>;
   enforceFinalTag?: boolean;

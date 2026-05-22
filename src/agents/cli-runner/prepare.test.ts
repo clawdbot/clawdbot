@@ -198,6 +198,9 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       getActiveMcpLoopbackRuntime: vi.fn(() => undefined),
       ensureMcpLoopbackServer: vi.fn(createTestMcpLoopbackServer),
       createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
+      resolveMcpLoopbackBearerToken: vi.fn((runtime, senderIsOwner) =>
+        senderIsOwner ? runtime.ownerToken : runtime.nonOwnerToken,
+      ),
       resolveMcpLoopbackScopedTools: vi.fn(() => ({ agentId: "main", tools: [] })),
       resolveOpenClawReferencePaths: vi.fn(async () => ({ docsPath: null, sourcePath: null })),
     });
@@ -955,8 +958,8 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     try {
       const getActiveMcpLoopbackRuntime = vi.fn(() => ({
         port: 31783,
-        ownerToken: "owner-token",
-        nonOwnerToken: "non-owner-token",
+        ownerToken: "loopback-owner-token",
+        nonOwnerToken: "loopback-non-owner-token",
       }));
       const ensureMcpLoopbackServer = vi.fn(createTestMcpLoopbackServer);
       const createMcpLoopbackServerConfig = vi.fn(createTestMcpLoopbackServerConfig);
@@ -1000,8 +1003,8 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       );
       const getActiveMcpLoopbackRuntime = vi.fn(() => ({
         port: 31783,
-        ownerToken: "owner-token",
-        nonOwnerToken: "non-owner-token",
+        ownerToken: "loopback-owner-token",
+        nonOwnerToken: "loopback-non-owner-token",
       }));
       const ensureMcpLoopbackServer = vi.fn(createTestMcpLoopbackServer);
       const createMcpLoopbackServerConfig = vi.fn(createTestMcpLoopbackServerConfig);
@@ -1067,7 +1070,6 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         messageProvider: undefined,
         accountId: undefined,
         inboundEventKind: undefined,
-        senderIsOwner: undefined,
       });
       expect(context.systemPrompt).toContain("## Memory Recall");
       expect(context.systemPrompt).toContain("tools=memory_search");
@@ -1167,8 +1169,8 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     try {
       const getActiveMcpLoopbackRuntime = vi.fn(() => ({
         port: 31783,
-        ownerToken: "owner-token",
-        nonOwnerToken: "non-owner-token",
+        ownerToken: "loopback-owner-token",
+        nonOwnerToken: "loopback-non-owner-token",
       }));
       const ensureMcpLoopbackServer = vi.fn(createTestMcpLoopbackServer);
       const createMcpLoopbackServerConfig = vi.fn(createTestMcpLoopbackServerConfig);
@@ -1225,8 +1227,8 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     try {
       const getActiveMcpLoopbackRuntime = vi.fn(() => ({
         port: 31783,
-        ownerToken: "owner-token",
-        nonOwnerToken: "non-owner-token",
+        ownerToken: "loopback-owner-token",
+        nonOwnerToken: "loopback-non-owner-token",
       }));
       setCliRunnerPrepareTestDeps({
         getActiveMcpLoopbackRuntime,
@@ -1260,8 +1262,8 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     try {
       const getActiveMcpLoopbackRuntime = vi.fn(() => ({
         port: 31783,
-        ownerToken: "owner-token",
-        nonOwnerToken: "non-owner-token",
+        ownerToken: "loopback-owner-token",
+        nonOwnerToken: "loopback-non-owner-token",
       }));
       setCliRunnerPrepareTestDeps({
         getActiveMcpLoopbackRuntime,

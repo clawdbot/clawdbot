@@ -1283,6 +1283,12 @@ function assertTelegramScenarioReply(params: {
   }
 }
 
+function isTelegramObservedMessageTimeoutError(error: unknown, timeoutMs: number) {
+  return formatErrorMessage(error).startsWith(
+    `timed out after ${timeoutMs}ms waiting for Telegram message`,
+  );
+}
+
 function resolveTelegramQaScenarioSteps(run: TelegramQaScenarioRun): TelegramQaScenarioStep[] {
   if (run.steps.length === 0) {
     throw new Error("Telegram QA scenario must include at least one step");
@@ -1341,11 +1347,7 @@ async function runTelegramQaScenarioStep(params: {
       sentMessageId: sent.message_id,
     };
   } catch (error) {
-    if (
-      !params.step.expectReply &&
-      formatErrorMessage(error) ===
-        `timed out after ${stepTimeoutMs}ms waiting for Telegram message`
-    ) {
+    if (!params.step.expectReply && isTelegramObservedMessageTimeoutError(error, stepTimeoutMs)) {
       return {
         matched: undefined,
         requestStartedAt: new Date(requestStartedAtMs).toISOString(),
@@ -2041,6 +2043,7 @@ export const testing = {
   assertTelegramScenarioReply,
   classifyCanaryReply,
   findScenario,
+  isTelegramObservedMessageTimeoutError,
   listTelegramQaScenarioCatalog,
   matchesTelegramScenarioReply,
   normalizeTelegramObservedMessage,

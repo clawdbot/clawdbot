@@ -1,6 +1,7 @@
 export { resolveStorePath } from "../../config/sessions/paths.js";
 export {
   loadSessionStore,
+  readSessionEntry,
   resolveSessionStoreEntry,
   updateSessionStoreEntry,
 } from "../../config/sessions/store.js";

@@ -245,6 +245,36 @@ describe("resolveMessageChannelSelection", () => {
     verify?.(setupResult as never);
   });
 
+  it("allows bootstrap while checking explicit and fallback channels", async () => {
+    const cfg = {} as never;
+    mocks.resolveOutboundChannelPlugin.mockImplementation(({ channel }: { channel: string }) =>
+      channel === "beta" ? { id: "beta" } : undefined,
+    );
+
+    await expect(
+      expectResolvedSelection({
+        cfg,
+        channel: "alpha",
+        fallbackChannel: "beta",
+      }),
+    ).resolves.toEqual({
+      channel: "beta",
+      configured: [],
+      source: "tool-context-fallback",
+    });
+
+    expect(mocks.resolveOutboundChannelPlugin).toHaveBeenNthCalledWith(1, {
+      channel: "alpha",
+      cfg,
+      allowBootstrap: true,
+    });
+    expect(mocks.resolveOutboundChannelPlugin).toHaveBeenNthCalledWith(2, {
+      channel: "beta",
+      cfg,
+      allowBootstrap: true,
+    });
+  });
+
   it.each([
     {
       params: { cfg: {} as never, channel: "channel:C123", fallbackChannel: "not-a-channel" },

@@ -668,6 +668,105 @@ export function logMessageQueued(params: {
   markActivity();
 }
 
+export function logMessageReceived(params: {
+  sessionId?: string;
+  sessionKey?: string;
+  channel?: string;
+  messageId?: number | string;
+  chatId?: number | string;
+  source: string;
+}) {
+  if (!areDiagnosticsEnabledForProcess()) {
+    return;
+  }
+  if (diag.isEnabled("debug")) {
+    diag.debug(
+      `message received: channel=${params.channel ?? "unknown"} chatId=${
+        params.chatId ?? "unknown"
+      } messageId=${params.messageId ?? "unknown"} sessionId=${
+        params.sessionId ?? "unknown"
+      } sessionKey=${params.sessionKey ?? "unknown"} source=${params.source}`,
+    );
+  }
+  emitDiagnosticEvent({
+    type: "message.received",
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    channel: params.channel,
+    messageId: params.messageId,
+    chatId: params.chatId,
+    source: params.source,
+  });
+  markActivity();
+}
+
+export function logMessageDispatchStarted(params: {
+  sessionId?: string;
+  sessionKey?: string;
+  channel?: string;
+  source: string;
+}) {
+  if (!areDiagnosticsEnabledForProcess()) {
+    return;
+  }
+  if (diag.isEnabled("debug")) {
+    diag.debug(
+      `message dispatch started: channel=${params.channel ?? "unknown"} sessionId=${
+        params.sessionId ?? "unknown"
+      } sessionKey=${params.sessionKey ?? "unknown"} source=${params.source}`,
+    );
+  }
+  emitDiagnosticEvent({
+    type: "message.dispatch.started",
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    channel: params.channel,
+    source: params.source,
+  });
+  markActivity();
+}
+
+export function logMessageDispatchCompleted(params: {
+  sessionId?: string;
+  sessionKey?: string;
+  channel?: string;
+  source: string;
+  durationMs: number;
+  outcome: "completed" | "skipped" | "error";
+  reason?: string;
+  error?: string;
+}) {
+  if (!areDiagnosticsEnabledForProcess()) {
+    return;
+  }
+  if (diag.isEnabled(params.outcome === "error" ? "error" : "debug")) {
+    const payload = `message dispatch completed: channel=${params.channel ?? "unknown"} sessionId=${
+      params.sessionId ?? "unknown"
+    } sessionKey=${params.sessionKey ?? "unknown"} source=${params.source} outcome=${
+      params.outcome
+    } duration=${params.durationMs}ms${params.reason ? ` reason=${params.reason}` : ""}${
+      params.error ? ` error="${params.error}"` : ""
+    }`;
+    if (params.outcome === "error") {
+      diag.error(payload);
+    } else {
+      diag.debug(payload);
+    }
+  }
+  emitDiagnosticEvent({
+    type: "message.dispatch.completed",
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    channel: params.channel,
+    source: params.source,
+    durationMs: params.durationMs,
+    outcome: params.outcome,
+    reason: params.reason,
+    error: params.error,
+  });
+  markActivity();
+}
+
 export function logMessageProcessed(params: {
   channel: string;
   messageId?: number | string;
@@ -710,6 +809,38 @@ export function logMessageProcessed(params: {
     outcome: params.outcome,
     reason: params.reason,
     error: params.error,
+  });
+  markActivity();
+}
+
+export function logSessionTurnCreated(params: {
+  runId: string;
+  sessionId?: string;
+  sessionKey?: string;
+  agentId?: string;
+  channel?: string;
+  trigger: "user" | "heartbeat";
+}) {
+  if (!areDiagnosticsEnabledForProcess()) {
+    return;
+  }
+  if (diag.isEnabled("debug")) {
+    diag.debug(
+      `session turn created: runId=${params.runId} sessionId=${
+        params.sessionId ?? "unknown"
+      } sessionKey=${params.sessionKey ?? "unknown"} agentId=${
+        params.agentId ?? "unknown"
+      } channel=${params.channel ?? "unknown"} trigger=${params.trigger}`,
+    );
+  }
+  emitDiagnosticEvent({
+    type: "session.turn.created",
+    runId: params.runId,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+    channel: params.channel,
+    trigger: params.trigger,
   });
   markActivity();
 }

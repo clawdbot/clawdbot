@@ -204,7 +204,6 @@ async function runLocalRuntimePlanner(
           extraSystemPromptStatic: CRESTODIAN_ASSISTANT_SYSTEM_PROMPT,
           messageChannel: "crestodian",
           messageProvider: "crestodian",
-          senderIsOwner: true,
           cleanupCliLiveSessionOnRunEnd: true,
         });
         return extractPlannerResultText(result);
@@ -230,7 +229,6 @@ async function runLocalRuntimePlanner(
           extraSystemPrompt: CRESTODIAN_ASSISTANT_SYSTEM_PROMPT,
           messageChannel: "crestodian",
           messageProvider: "crestodian",
-          senderIsOwner: true,
           cleanupBundleMcpOnRunEnd: true,
         });
         return extractPlannerResultText(result);

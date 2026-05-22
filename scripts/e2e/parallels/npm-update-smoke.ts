@@ -34,6 +34,7 @@ import { ensureVmRunning, resolveUbuntuVmName } from "./parallels-vm.ts";
 interface NpmUpdateOptions {
   betaValidation?: string;
   freshTargetSpec?: string;
+  hostIp?: string;
   packageSpec: string;
   updateTarget: string;
   platforms: Set<Platform>;
@@ -111,6 +112,7 @@ Options:
                              Default: all
   --provider <openai|anthropic|minimax>
   --model <provider/model>    Override the model used for agent-turn smoke checks.
+  --host-ip <ip>             Override Parallels host IP.
   --api-key-env <var>        Host env var name for provider API key.
   --openai-api-key-env <var> Alias for --api-key-env (backward compatible)
   --json                     Print machine-readable JSON summary.
@@ -168,6 +170,10 @@ function parseArgs(argv: string[]): NpmUpdateOptions {
         break;
       case "--model":
         options.modelId = ensureValue(argv, i, arg);
+        i++;
+        break;
+      case "--host-ip":
+        options.hostIp = ensureValue(argv, i, arg);
         i++;
         break;
       case "--api-key-env":
@@ -251,7 +257,7 @@ class NpmUpdateSmoke {
       this.currentHeadShort = run("git", ["rev-parse", "--short=7", "HEAD"], {
         quiet: true,
       }).stdout.trim();
-      this.hostIp = resolveHostIp("");
+      this.hostIp = resolveHostIp(this.options.hostIp ?? "");
       this.configurePublishedTargets();
 
       if (this.options.platforms.has("linux")) {

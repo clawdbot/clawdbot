@@ -6,6 +6,7 @@ import {
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
 import { resolveModelAgentRuntimeMetadata } from "../agent-runtime-metadata.js";
+import { listAgentIds } from "../agent-scope-config.js";
 import { resolveAgentConfig, resolveAgentEffectiveModelPrimary } from "../agent-scope.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
 import { resolveSubagentAllowedTargetIds } from "../subagent-target-policy.js";
@@ -58,7 +59,7 @@ export function createAgentsListTool(opts?: {
         cfg?.agents?.defaults?.subagents?.allowAgents;
 
       const configuredAgents = Array.isArray(cfg.agents?.list) ? cfg.agents?.list : [];
-      const configuredIds = configuredAgents.map((entry) => normalizeAgentId(entry.id));
+      const configuredIds = listAgentIds(cfg);
       const configuredNameMap = new Map<string, string>();
       for (const entry of configuredAgents) {
         const name = entry?.name?.trim() ?? "";

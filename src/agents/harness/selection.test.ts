@@ -597,7 +597,7 @@ describe("selectAgentHarness", () => {
     ).toBe("codex");
   });
 
-  it("does not compact a plugin-pinned session through PI when the plugin has no compactor", async () => {
+  it("ignores stale plugin pins during compaction when the provider no longer matches", async () => {
     registerFailingCodexHarness();
 
     await expect(
@@ -606,14 +606,31 @@ describe("selectAgentHarness", () => {
         sessionKey: "agent:main:main",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp/workspace",
-        provider: "openai",
-        model: "gpt-5.4",
+        provider: "ollama",
+        model: "llama3.3",
+        agentHarnessId: "codex",
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("does not compact a selected plugin harness through PI when the plugin has no compactor", async () => {
+    registerFailingCodexHarness();
+
+    await expect(
+      maybeCompactAgentHarnessSession({
+        sessionId: "session-1",
+        sessionKey: "agent:main:main",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        provider: "codex",
+        model: "gpt-5.5",
         agentHarnessId: "codex",
       }),
     ).resolves.toEqual({
       ok: false,
       compacted: false,
       reason: 'Agent harness "codex" does not support compaction.',
+      failure: { reason: "unsupported_harness_compaction" },
     });
   });
 });

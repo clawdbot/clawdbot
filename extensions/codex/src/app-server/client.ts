@@ -106,6 +106,7 @@ export class CodexAppServerClient {
   private initialized = false;
   private closed = false;
   private closeError: Error | undefined;
+  private serverVersion: string | undefined;
   private stderrTail = "";
   private pendingParse:
     | {
@@ -178,9 +179,13 @@ export class CodexAppServerClient {
         experimentalApi: true,
       },
     } satisfies CodexInitializeParams);
-    assertSupportedCodexAppServerVersion(response);
+    this.serverVersion = assertSupportedCodexAppServerVersion(response);
     this.notify("initialized");
     this.initialized = true;
+  }
+
+  getServerVersion(): string | undefined {
+    return this.serverVersion;
   }
 
   request<M extends CodexAppServerRequestMethod>(
@@ -568,18 +573,19 @@ function timeoutServerRequestResponse(
   };
 }
 
-function assertSupportedCodexAppServerVersion(response: CodexInitializeResponse): void {
+function assertSupportedCodexAppServerVersion(response: CodexInitializeResponse): string {
   const detectedVersion = readCodexVersionFromUserAgent(response.userAgent);
   if (!detectedVersion) {
     throw new Error(
       `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required, but OpenClaw could not determine the running Codex version. Update the configured Codex app-server binary, or remove custom command overrides to use the managed binary.`,
     );
   }
-  if (compareVersions(detectedVersion, MIN_CODEX_APP_SERVER_VERSION) < 0) {
+  if (compareCodexAppServerVersions(detectedVersion, MIN_CODEX_APP_SERVER_VERSION) < 0) {
     throw new Error(
       `Codex app-server ${MIN_CODEX_APP_SERVER_VERSION} or newer is required, but detected ${detectedVersion}. Update the configured Codex app-server binary, or remove custom command overrides to use the managed binary.`,
     );
   }
+  return detectedVersion;
 }
 
 export function readCodexVersionFromUserAgent(userAgent: string | undefined): string | undefined {
@@ -592,7 +598,7 @@ export function readCodexVersionFromUserAgent(userAgent: string | undefined): st
   return match?.[1];
 }
 
-function compareVersions(left: string, right: string): number {
+export function compareCodexAppServerVersions(left: string, right: string): number {
   const leftVersion = parseVersionForComparison(left);
   const rightVersion = parseVersionForComparison(right);
   const leftParts = leftVersion.parts;

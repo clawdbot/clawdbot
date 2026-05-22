@@ -4,6 +4,7 @@
 id: gateway-restart-inflight-run
 title: Gateway restart in-flight recovery
 surface: runtime
+runtimeParityTier: live-only
 coverage:
   primary:
     - runtime.restart-recovery

@@ -127,6 +127,8 @@ export type ImageGenerationProvider = {
   aliases?: string[];
   label?: string;
   defaultModel?: string;
+  /** Default provider operation timeout in milliseconds when caller/config omit timeoutMs. */
+  defaultTimeoutMs?: number;
   models?: string[];
   capabilities: ImageGenerationProviderCapabilities;
   isConfigured?: (ctx: ImageGenerationProviderConfiguredContext) => boolean;

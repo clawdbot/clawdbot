@@ -17,7 +17,6 @@ import {
   buildDefaultToolPolicyPipelineSteps,
 } from "../../agents/tool-policy-pipeline.js";
 import {
-  applyOwnerOnlyToolPolicy,
   collectExplicitDenylist,
   collectExplicitAllowlist,
   hasRestrictiveAllowPolicy,
@@ -49,7 +48,6 @@ export function resolveSkillDispatchTools(params: {
   provider: string;
   model: string;
   senderId?: string;
-  senderIsOwner: boolean;
   currentChannelId?: string;
 }): AnyAgentTool[] {
   const channel =
@@ -154,7 +152,6 @@ export function resolveSkillDispatchTools(params: {
     sandboxed: sandboxRuntime.sandboxed,
     requesterAgentIdOverride: params.agentId,
     requesterSenderId: params.senderId,
-    senderIsOwner: params.senderIsOwner,
     sessionId: params.sessionEntry?.sessionId,
     currentChannelId: params.currentChannelId,
     modelProvider: params.provider,
@@ -189,9 +186,8 @@ export function resolveSkillDispatchTools(params: {
       { policy: inheritedToolPolicy, label: "inherited tools" },
     ],
   });
-  const authorizedTools = applyOwnerOnlyToolPolicy(policyFiltered, params.senderIsOwner);
   if (explicitPolicyList.some(hasRestrictiveAllowPolicy)) {
-    replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, authorizedTools);
+    replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, policyFiltered);
   }
-  return authorizedTools;
+  return policyFiltered;
 }

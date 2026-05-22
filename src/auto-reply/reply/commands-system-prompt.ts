@@ -97,7 +97,6 @@ export async function resolveCommandsSystemPromptBundle(
         senderName: params.ctx.SenderName,
         senderUsername: params.ctx.SenderUsername,
         senderE164: params.ctx.SenderE164,
-        senderIsOwner: params.command.senderIsOwner,
         modelProvider: params.provider,
         modelId: params.model,
       });

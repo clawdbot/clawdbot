@@ -217,7 +217,7 @@ openclaw onboard --non-interactive \
   <Accordion title="Web-search follow-ups">
     Some web-search providers trigger provider-specific follow-up prompts:
 
-    - **Grok** can offer optional `x_search` setup with the same `XAI_API_KEY` and an `x_search` model choice.
+    - **Grok** can offer optional `x_search` setup with the same xAI OAuth profile or API key and an `x_search` model choice.
     - **Kimi** can ask for the Moonshot API region (`api.moonshot.ai` vs `api.moonshot.cn`) and the default Kimi web-search model.
 
   </Accordion>

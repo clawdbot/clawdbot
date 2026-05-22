@@ -259,7 +259,7 @@ export type ProviderRuntimeFailureKind =
   | "refresh_contention"
   | "callback_timeout"
   | "callback_validation"
-  | "auth_html_403"
+  | "auth_html"
   | "upstream_html"
   | "proxy"
   | "rate_limit"
@@ -758,6 +758,8 @@ function classifyFailoverReasonFromCode(raw: string | undefined): FailoverReason
     case "THROTTLINGEXCEPTION":
     case "THROTTLING_EXCEPTION":
       return "rate_limit";
+    case "DEACTIVATED_WORKSPACE":
+      return "auth_permanent";
     case "OVERLOADED":
     case "OVERLOADED_ERROR":
       return "overloaded";
@@ -919,6 +921,10 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
   const messageClassification = signal.message
     ? classifyFailoverClassificationFromMessage(signal.message, signal.provider)
     : null;
+  const codeReason = classifyFailoverReasonFromCode(signal.code);
+  if (codeReason === "auth_permanent") {
+    return toReasonClassification(codeReason);
+  }
   const statusClassification = classifyFailoverClassificationFromHttpStatus(
     inferredStatus,
     signal.message,
@@ -929,7 +935,6 @@ export function classifyFailoverSignal(signal: FailoverSignal): FailoverClassifi
   if (statusClassification) {
     return statusClassification;
   }
-  const codeReason = classifyFailoverReasonFromCode(signal.code);
   if (codeReason) {
     return toReasonClassification(codeReason);
   }
@@ -971,7 +976,7 @@ export function classifyProviderRuntimeFailureKind(
     return "proxy";
   }
   if (message && isHtmlErrorResponse(message, status)) {
-    return status === 403 ? "auth_html_403" : "upstream_html";
+    return status === 401 || status === 403 ? "auth_html" : "upstream_html";
   }
   const failoverClassification = classifyFailoverSignal({
     ...normalizedSignal,
@@ -1085,10 +1090,10 @@ export function formatAssistantErrorText(
     );
   }
 
-  if (providerRuntimeFailureKind === "auth_html_403") {
+  if (providerRuntimeFailureKind === "auth_html") {
     return (
-      "Authentication failed with an HTML 403 response from the provider. " +
-      "Re-authenticate and verify your provider account access."
+      "Authentication failed at the provider. " +
+      "Re-authenticate and verify your provider credentials and account access."
     );
   }
 

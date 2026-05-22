@@ -39,6 +39,7 @@ export type BuildPluginApiParams = {
       | "registerAutoEnableProbe"
       | "registerProvider"
       | "registerModelCatalogProvider"
+      | "registerEmbeddingProvider"
       | "registerSpeechProvider"
       | "registerRealtimeTranscriptionProvider"
       | "registerRealtimeVoiceProvider"
@@ -108,6 +109,7 @@ const noopRegisterAutoEnableProbe: OpenClawPluginApi["registerAutoEnableProbe"] 
 const noopRegisterProvider: OpenClawPluginApi["registerProvider"] = () => {};
 const noopRegisterModelCatalogProvider: OpenClawPluginApi["registerModelCatalogProvider"] =
   () => {};
+const noopRegisterEmbeddingProvider: OpenClawPluginApi["registerEmbeddingProvider"] = () => {};
 const noopRegisterSpeechProvider: OpenClawPluginApi["registerSpeechProvider"] = () => {};
 const noopRegisterRealtimeTranscriptionProvider: OpenClawPluginApi["registerRealtimeTranscriptionProvider"] =
   () => {};
@@ -218,6 +220,7 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     registerProvider: handlers.registerProvider ?? noopRegisterProvider,
     registerModelCatalogProvider:
       handlers.registerModelCatalogProvider ?? noopRegisterModelCatalogProvider,
+    registerEmbeddingProvider: handlers.registerEmbeddingProvider ?? noopRegisterEmbeddingProvider,
     registerSpeechProvider: handlers.registerSpeechProvider ?? noopRegisterSpeechProvider,
     registerRealtimeTranscriptionProvider:
       handlers.registerRealtimeTranscriptionProvider ?? noopRegisterRealtimeTranscriptionProvider,

@@ -23,6 +23,10 @@ import {
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";
 import { CodexNativeSubagentTaskMirror } from "./native-subagent-task-mirror.js";
+import {
+  readCodexNotificationThreadId,
+  readCodexNotificationTurnId,
+} from "./notification-correlation.js";
 import { readCodexTurn } from "./protocol-validators.js";
 import {
   isJsonObject,
@@ -104,13 +108,9 @@ const TRANSCRIPT_PROGRESS_SUPPRESSED_TOOL_NAMES = new Set([
   "typing",
 ]);
 
-export function shouldEmitTranscriptToolProgress(toolName: unknown, args?: unknown): boolean {
+export function shouldEmitTranscriptToolProgress(toolName: unknown, _args?: unknown): boolean {
   const normalized = typeof toolName === "string" ? toolName.trim().toLowerCase() : "";
-  return Boolean(
-    normalized &&
-    !TRANSCRIPT_PROGRESS_SUPPRESSED_TOOL_NAMES.has(normalized) &&
-    !isActivityLogCommandProgress(normalized, args),
-  );
+  return Boolean(normalized && !TRANSCRIPT_PROGRESS_SUPPRESSED_TOOL_NAMES.has(normalized));
 }
 
 type ToolTranscriptCallInput = {
@@ -148,6 +148,8 @@ export class CodexAppServerEventProjector {
   >();
   private readonly toolResultOutputTextByItem = new Map<string, string>();
   private readonly toolMetas = new Map<string, { toolName: string; meta?: string }>();
+  private readonly sideEffectingToolItemIds = new Set<string>();
+  private readonly sideEffectingDynamicToolCallIds = new Set<string>();
   private readonly toolTranscriptMessages: AgentMessage[] = [];
   private readonly toolTranscriptCallIds = new Set<string>();
   private readonly toolTranscriptResultIds = new Set<string>();
@@ -285,9 +287,9 @@ export class CodexAppServerEventProjector {
     //   - Two distinct turns where the user repeats verbatim content →
     //     distinct turnIds → distinct identities → both kept.
     const turnId = this.turnId;
-    const messagesSnapshot: AgentMessage[] = [
-      attachCodexMirrorIdentity(buildCodexUserPromptMessage(this.params), `${turnId}:prompt`),
-    ];
+    const messagesSnapshot: AgentMessage[] = this.params.suppressNextUserMessagePersistence
+      ? []
+      : [attachCodexMirrorIdentity(buildCodexUserPromptMessage(this.params), `${turnId}:prompt`)];
     // Codex owns the canonical thread. These mirror records keep enough local
     // context for OpenClaw history, search, and future harness switching.
     if (reasoningText) {
@@ -322,6 +324,12 @@ export class CodexAppServerEventProjector {
       promptError,
       turnCompleted: Boolean(this.completedTurn),
     });
+    const toolMetas = [...this.toolMetas.values()];
+    const hadPotentialSideEffects =
+      toolTelemetry.didSendViaMessagingTool ||
+      (toolTelemetry.successfulCronAdds ?? 0) > 0 ||
+      this.sideEffectingToolItemIds.size > 0 ||
+      this.sideEffectingDynamicToolCallIds.size > 0;
     return {
       aborted: this.aborted || turnInterrupted,
       externalAbort: false,
@@ -337,7 +345,7 @@ export class CodexAppServerEventProjector {
       bootstrapPromptWarningSignature: this.params.bootstrapPromptWarningSignature,
       messagesSnapshot,
       assistantTexts,
-      toolMetas: [...this.toolMetas.values()],
+      toolMetas,
       lastAssistant,
       ...(this.lastNativeToolError ? { lastToolError: this.lastNativeToolError } : {}),
       didSendViaMessagingTool: toolTelemetry.didSendViaMessagingTool,
@@ -352,8 +360,8 @@ export class CodexAppServerEventProjector {
       cloudCodeAssistFormatError: false,
       attemptUsage: this.tokenUsage,
       replayMetadata: {
-        hadPotentialSideEffects: toolTelemetry.didSendViaMessagingTool,
-        replaySafe: !toolTelemetry.didSendViaMessagingTool,
+        hadPotentialSideEffects,
+        replaySafe: !hadPotentialSideEffects,
       },
       itemLifecycle: {
         startedCount: this.activeItemIds.size + this.completedItemIds.size,
@@ -369,10 +377,11 @@ export class CodexAppServerEventProjector {
   }
 
   recordDynamicToolCall(params: { callId: string; tool: string; arguments?: JsonValue }): void {
+    const args = sanitizeCodexToolArguments(params.arguments);
     this.recordToolTranscriptCall({
       id: params.callId,
       name: params.tool,
-      arguments: sanitizeCodexToolArguments(params.arguments),
+      arguments: args,
     });
   }
 
@@ -380,6 +389,8 @@ export class CodexAppServerEventProjector {
     callId: string;
     tool: string;
     success: boolean;
+    terminalType?: "blocked" | "completed" | "error";
+    sideEffectEvidence?: boolean;
     contentItems: CodexDynamicToolCallOutputContentItem[];
   }): void {
     this.recordToolTranscriptResult({
@@ -388,6 +399,10 @@ export class CodexAppServerEventProjector {
       text: collectDynamicToolContentText(params.contentItems),
       isError: !params.success,
     });
+    const terminalType = params.terminalType ?? (params.success ? "completed" : "error");
+    if (terminalType !== "blocked" && params.sideEffectEvidence === true) {
+      this.sideEffectingDynamicToolCallIds.add(params.callId);
+    }
   }
 
   markTimedOut(): void {
@@ -501,6 +516,7 @@ export class CodexAppServerEventProjector {
         },
       });
     }
+    this.recordToolMeta(item);
     this.emitStandardItemEvent({ phase: "start", item });
     this.emitNormalizedToolItemEvent({ phase: "start", item });
     this.recordNativeToolTranscriptCall(item);
@@ -1214,6 +1230,11 @@ export class CodexAppServerEventProjector {
       toolName,
       ...(meta ? { meta } : {}),
     });
+    if (isSideEffectingNativeToolItem(item)) {
+      this.sideEffectingToolItemIds.add(item.id);
+    } else {
+      this.sideEffectingToolItemIds.delete(item.id);
+    }
   }
 
   private recordNativeToolTranscriptCall(item: CodexThreadItem | undefined): void {
@@ -1502,7 +1523,7 @@ export class CodexAppServerEventProjector {
   }
 
   private isNotificationForTurn(params: JsonObject): boolean {
-    const threadId = readString(params, "threadId");
+    const threadId = readCodexNotificationThreadId(params);
     const turnId = readNotificationTurnId(params);
     return threadId === this.threadId && turnId === this.turnId;
   }
@@ -1519,12 +1540,7 @@ function isHookNotificationMethod(method: string): method is "hook/started" | "h
 }
 
 function readNotificationTurnId(record: JsonObject): string | undefined {
-  return readString(record, "turnId") ?? readNestedTurnId(record);
-}
-
-function readNestedTurnId(record: JsonObject): string | undefined {
-  const turn = record.turn;
-  return isJsonObject(turn) ? readString(turn, "id") : undefined;
+  return readCodexNotificationTurnId(record);
 }
 
 function readString(record: JsonObject, key: string): string | undefined {
@@ -1745,6 +1761,13 @@ function itemName(item: CodexThreadItem): string | undefined {
   return undefined;
 }
 
+function isSideEffectingNativeToolItem(item: CodexThreadItem): boolean {
+  return (
+    itemStatus(item) !== "blocked" &&
+    (isMutatingNativeToolItem(item) || item.type === "mcpToolCall")
+  );
+}
+
 function shouldSynthesizeToolProgressForItem(item: CodexThreadItem): boolean {
   switch (item.type) {
     case "commandExecution":
@@ -1814,7 +1837,7 @@ function itemToolArgs(item: CodexThreadItem): Record<string, unknown> | undefine
   if (item.type === "webSearch" && typeof item.query === "string") {
     return sanitizeCodexAgentEventRecord({ query: item.query });
   }
-  if (item.type === "mcpToolCall") {
+  if (item.type === "dynamicToolCall" || item.type === "mcpToolCall") {
     return sanitizeCodexToolArguments(item.arguments);
   }
   return undefined;
@@ -1948,31 +1971,6 @@ function normalizeToolTranscriptArguments(value: unknown): Record<string, unknow
     return {};
   }
   return value as Record<string, unknown>;
-}
-
-function isActivityLogCommandProgress(toolName: string, args: unknown): boolean {
-  if (toolName !== "bash" && toolName !== "exec" && toolName !== "shell") {
-    return false;
-  }
-  const command = readToolCommandText(args);
-  return Boolean(command && command.includes("log_activity.sh"));
-}
-
-function readToolCommandText(value: unknown): string | undefined {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  const record = value as Record<string, unknown>;
-  for (const key of ["command", "cmd", "shellCommand", "script"]) {
-    const text = record[key];
-    if (typeof text === "string" && text) {
-      return text;
-    }
-  }
-  return undefined;
 }
 
 function collectDynamicToolContentText(contentItems: CodexThreadItem["contentItems"]): string {

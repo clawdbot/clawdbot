@@ -17,7 +17,6 @@ import {
   type CronListJob,
 } from "./live-agent-probes.js";
 import { getActiveMcpLoopbackRuntime } from "./mcp-http.js";
-import { resolveMcpLoopbackBearerToken } from "./mcp-http.loopback-runtime.js";
 import { extractPayloadText } from "./test-helpers.agent-results.js";
 
 // CI Docker live lanes can see repeated cancelled cron tool calls before a job
@@ -168,7 +167,6 @@ function assertLoopbackObjectSchemasHaveProperties(params: {
 
 async function callLoopbackJsonRpc(params: {
   sessionKey: string;
-  senderIsOwner: boolean;
   messageProvider?: string;
   accountId?: string;
   body: Record<string, unknown>;
@@ -178,7 +176,7 @@ async function callLoopbackJsonRpc(params: {
     throw new Error("mcp loopback runtime is not active");
   }
   const headers: Record<string, string> = {
-    Authorization: `Bearer ${resolveMcpLoopbackBearerToken(runtime, params.senderIsOwner)}`,
+    Authorization: `Bearer ${runtime.ownerToken}`,
     "Content-Type": "application/json",
     "x-session-key": params.sessionKey,
   };
@@ -212,7 +210,6 @@ export async function verifyCliCronMcpLoopbackPreflight(params: {
   port: number;
   token: string;
   env: NodeJS.ProcessEnv;
-  senderIsOwner: boolean;
   messageProvider?: string;
   accountId?: string;
   expectedSchemaProbeToolName?: string;
@@ -220,13 +217,11 @@ export async function verifyCliCronMcpLoopbackPreflight(params: {
   const cronProbe = createLiveCronProbeSpec();
   logCliCronProbe("loopback-preflight:start", {
     sessionKey: params.sessionKey,
-    senderIsOwner: params.senderIsOwner,
     jobName: cronProbe.name,
   });
 
   await callLoopbackJsonRpc({
     sessionKey: params.sessionKey,
-    senderIsOwner: params.senderIsOwner,
     messageProvider: params.messageProvider,
     accountId: params.accountId,
     body: {
@@ -238,14 +233,12 @@ export async function verifyCliCronMcpLoopbackPreflight(params: {
   });
   await callLoopbackJsonRpc({
     sessionKey: params.sessionKey,
-    senderIsOwner: params.senderIsOwner,
     messageProvider: params.messageProvider,
     accountId: params.accountId,
     body: { jsonrpc: "2.0", method: "notifications/initialized" },
   });
   const toolsList = await callLoopbackJsonRpc({
     sessionKey: params.sessionKey,
-    senderIsOwner: params.senderIsOwner,
     messageProvider: params.messageProvider,
     accountId: params.accountId,
     body: { jsonrpc: "2.0", id: "tools-list", method: "tools/list" },
@@ -261,19 +254,15 @@ export async function verifyCliCronMcpLoopbackPreflight(params: {
     .map((tool) => (typeof tool.name === "string" ? tool.name : ""))
     .filter(Boolean);
   logCliCronProbe("loopback-preflight:tools", {
-    senderIsOwner: params.senderIsOwner,
     toolCount: toolNames.length,
     cronVisible: toolNames.includes("cron"),
   });
   if (!toolNames.includes("cron")) {
-    throw new Error(
-      `mcp loopback tools/list did not expose cron (senderIsOwner=${String(params.senderIsOwner)})`,
-    );
+    throw new Error("mcp loopback tools/list did not expose cron");
   }
 
   const toolCall = await callLoopbackJsonRpc({
     sessionKey: params.sessionKey,
-    senderIsOwner: params.senderIsOwner,
     messageProvider: params.messageProvider,
     accountId: params.accountId,
     body: {

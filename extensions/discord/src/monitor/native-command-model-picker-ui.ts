@@ -27,6 +27,7 @@ import {
 import {
   loadDiscordModelPickerData,
   renderDiscordModelPickerModelsView,
+  resolveDiscordModelPickerPageForModel,
   toDiscordModelPickerMessagePayload,
   type DiscordModelPickerCommandContext,
 } from "./model-picker.js";
@@ -311,18 +312,26 @@ export async function replyWithDiscordModelPickerProviders(params: {
     allowedModelRefs: buildDiscordModelPickerAllowedModelRefs(data),
     limit: 5,
   });
-  const currentProvider = splitDiscordModelRef(currentModel ?? "")?.provider;
+  const parsedCurrentRef = splitDiscordModelRef(currentModel ?? "");
   const initialProvider =
-    currentProvider && data.byProvider.has(currentProvider)
-      ? currentProvider
+    parsedCurrentRef && data.byProvider.has(parsedCurrentRef.provider)
+      ? parsedCurrentRef.provider
       : (data.providers[0] ?? data.resolvedDefault.provider);
+  const initialPage =
+    parsedCurrentRef && parsedCurrentRef.provider === initialProvider
+      ? resolveDiscordModelPickerPageForModel({
+          data,
+          provider: initialProvider,
+          model: parsedCurrentRef.model,
+        })
+      : 1;
 
   const rendered = renderDiscordModelPickerModelsView({
     command: params.command,
     userId: params.userId,
     data,
     provider: initialProvider,
-    page: 1,
+    page: initialPage,
     providerPage: 1,
     currentModel,
     currentRuntime,

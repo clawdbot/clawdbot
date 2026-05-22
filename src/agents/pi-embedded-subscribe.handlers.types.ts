@@ -5,6 +5,7 @@ import type { ReplyDirectiveParseResult } from "../auto-reply/reply/reply-direct
 import type { ReasoningLevel } from "../auto-reply/thinking.js";
 import type { InlineCodeState } from "../markdown/code-spans.js";
 import type { HookRunner } from "../plugins/hooks.js";
+import type { AcceptedSessionSpawn } from "./accepted-session-spawn.js";
 import type { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
 import type { MessagingToolSend } from "./pi-embedded-messaging.types.js";
 import type { BlockReplyPayload } from "./pi-embedded-payloads.js";
@@ -33,6 +34,7 @@ export type ToolCallSummary = {
 export type EmbeddedPiSubscribeState = {
   assistantTexts: string[];
   toolMetas: Array<{ toolName?: string; meta?: string }>;
+  acceptedSessionSpawns: AcceptedSessionSpawn[];
   toolMetaById: Map<string, ToolCallSummary>;
   toolSummaryById: Set<string>;
   execLiveUpdateStateById?: Map<string, { lastEmittedAtMs: number }>;
@@ -201,6 +203,7 @@ type ToolHandlerState = Pick<
   EmbeddedPiSubscribeState,
   | "toolMetaById"
   | "toolMetas"
+  | "acceptedSessionSpawns"
   | "toolSummaryById"
   | "execLiveUpdateStateById"
   | "itemActiveIds"

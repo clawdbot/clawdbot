@@ -53,7 +53,7 @@ export function mergeDiscordAccountConfig(
       | Record<string, Partial<DiscordAccountConfig>>
       | undefined,
     accountId,
-    nestedObjectKeys: ["botLoopProtection"],
+    nestedObjectKeys: ["agentComponents", "botLoopProtection"],
   });
   return merged;
 }

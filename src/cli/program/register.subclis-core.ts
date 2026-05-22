@@ -127,11 +127,15 @@ const entrySpecs: readonly CommandGroupDescriptorSpec<SubCliRegistrar>[] = [
       loadModule: () => import("../exec-policy-cli.js"),
       exportName: "registerExecPolicyCli",
     },
-    {
-      commandNames: ["nodes"],
-      loadModule: () => import("../nodes-cli.js"),
-      exportName: "registerNodesCli",
+  ]),
+  {
+    commandNames: ["nodes"],
+    register: async (program, argv) => {
+      const mod = await import("../nodes-cli.js");
+      await mod.registerNodesCli(program, argv);
     },
+  },
+  ...defineImportedProgramCommandGroupSpecs([
     {
       commandNames: ["devices"],
       loadModule: () => import("../devices-cli.js"),

@@ -381,7 +381,7 @@ export function runAgentAttempt(params: {
   fastMode?: boolean;
   timeoutMs: number;
   runId: string;
-  opts: AgentCommandOpts & { senderIsOwner: boolean };
+  opts: AgentCommandOpts;
   runContext: ReturnType<typeof resolveAgentRunContext>;
   spawnedBy: string | undefined;
   messageChannel: ReturnType<typeof resolveMessageChannel>;
@@ -393,6 +393,7 @@ export function runAgentAttempt(params: {
     data?: Record<string, unknown>;
     sessionKey?: string;
   }) => void;
+  deferTerminalLifecycleEnd?: boolean;
   authProfileProvider: string;
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
@@ -684,6 +685,7 @@ export function runAgentAttempt(params: {
     promptMode: params.opts.promptMode,
     disableTools: params.opts.modelRun === true,
     onAgentEvent: params.onAgentEvent,
+    deferTerminalLifecycleEnd: params.deferTerminalLifecycleEnd,
     suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
     onUserMessagePersisted: params.onUserMessagePersisted,
     bootstrapPromptWarningSignaturesSeen,

@@ -21,7 +21,7 @@ import type {
   CommandsConfig,
   MessagesConfig,
 } from "./types.messages.js";
-import type { ModelsConfig } from "./types.models.js";
+import type { ModelsConfig, ModelsConfigInput } from "./types.models.js";
 import type { NodeHostConfig } from "./types.node-host.js";
 import type { PluginsConfig } from "./types.plugins.js";
 import type { SecretsConfig } from "./types.secrets.js";
@@ -151,6 +151,10 @@ export type OpenClawConfig = {
   mcp?: McpConfig;
   /** Network-level SSRF protection via an operator-managed forward proxy. */
   proxy?: ProxyConfig;
+};
+
+export type OpenClawConfigInput = Omit<OpenClawConfig, "models"> & {
+  models?: ModelsConfigInput;
 };
 
 declare const openClawConfigStateBrand: unique symbol;

@@ -143,19 +143,17 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
     const runRequest = requireFirstMockArg(runCliAgentMock, "runCliAgentMock") as {
       sessionId?: string;
       sessionKey?: string;
-      senderIsOwner?: boolean;
       bootstrapContextMode?: string;
       bootstrapContextRunKind?: string;
     };
     expect(runRequest.sessionId).toBe("isolated-cli-run-1");
     expect(runRequest.sessionKey).toBe("agent:default:cron:cli-monitor:run:isolated-cli-run-1");
     expect(runRequest.sessionKey).not.toBe("agent:default:cron:cli-monitor");
-    expect(runRequest.senderIsOwner).toBe(true);
     expect(runRequest.bootstrapContextMode).toBe("lightweight");
     expect(runRequest.bootstrapContextRunKind).toBe("cron");
   });
 
-  it("runs externally sourced CLI hook turns without owner tool authority", async () => {
+  it("runs externally sourced CLI hook turns", async () => {
     isCliProviderMock.mockReturnValue(true);
     mockRunCronFallbackPassthrough();
     runCliAgentMock.mockResolvedValue({
@@ -178,9 +176,5 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
 
     expect(result.status).toBe("ok");
     expect(runCliAgentMock).toHaveBeenCalledOnce();
-    const runRequest = requireFirstMockArg(runCliAgentMock, "runCliAgentMock") as {
-      senderIsOwner?: boolean;
-    };
-    expect(runRequest.senderIsOwner).toBe(false);
   });
 });

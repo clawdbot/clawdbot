@@ -50,6 +50,22 @@ describe("attempt trajectory status", () => {
     ).toEqual({ status: "success" });
   });
 
+  it("keeps accepted session spawns as terminal progress", () => {
+    expect(
+      resolveAttemptTrajectoryTerminal(
+        baseParams({
+          acceptedSessionSpawns: [
+            {
+              runId: "run-child",
+              childSessionKey: "agent:claude:subagent:child",
+            },
+          ],
+          lastAssistantStopReason: "toolUse",
+        }),
+      ),
+    ).toEqual({ status: "success" });
+  });
+
   it("does not treat an uncommitted messaging tool attempt as delivery", () => {
     expect(
       resolveAttemptTrajectoryTerminal(

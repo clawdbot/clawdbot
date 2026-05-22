@@ -104,6 +104,16 @@ describe("install.ps1 failure handling", () => {
     );
   });
 
+  it("rejects OpenClaw GitHub source targets for npm installs", () => {
+    const npmInstallBody = extractFunctionBody(source, "Install-OpenClaw");
+    const sourceTargetBody = extractFunctionBody(source, "Test-OpenClawSourcePackageInstallSpec");
+    expect(sourceTargetBody).toContain('$normalizedTag -eq "main"');
+    expect(sourceTargetBody).toContain("^github:openclaw/openclaw");
+    expect(npmInstallBody).toContain("Test-OpenClawSourcePackageInstallSpec -RequestedTag $Tag");
+    expect(npmInstallBody).toContain("npm installs do not support OpenClaw GitHub source targets");
+    expect(npmInstallBody).toContain("-InstallMethod git -Tag main");
+  });
+
   it("cleans legacy git submodules only from the selected git checkout", () => {
     const gitInstallBody = extractFunctionBody(source, "Install-OpenClawFromGit");
     const mainBody = extractFunctionBody(source, "Main");

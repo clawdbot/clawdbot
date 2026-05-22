@@ -258,6 +258,46 @@ export async function handleDiscordModelPickerInteraction(params: {
     return;
   }
 
+  if (parsed.action === "nav" && parsed.view === "providers") {
+    const rendered = renderDiscordModelPickerProvidersView({
+      command: parsed.command,
+      userId: parsed.userId,
+      data: pickerData,
+      page: parsed.page,
+      currentModel: currentModelRef,
+    });
+    await updatePicker(toDiscordModelPickerMessagePayload(rendered));
+    return;
+  }
+
+  if (parsed.action === "nav" && parsed.view === "models") {
+    const provider =
+      parsed.provider ??
+      splitDiscordModelRef(currentModelRef ?? "")?.provider ??
+      pickerData.resolvedDefault.provider;
+    const pendingModel = resolveDiscordModelPickerModelByIndex({
+      data: pickerData,
+      provider,
+      modelIndex: parsed.modelIndex,
+    });
+    const rendered = renderDiscordModelPickerModelsView({
+      command: parsed.command,
+      userId: parsed.userId,
+      data: pickerData,
+      provider,
+      page: parsed.page,
+      providerPage: parsed.providerPage ?? 1,
+      currentModel: currentModelRef,
+      currentRuntime,
+      ...(pendingModel ? { pendingModel: `${provider}/${pendingModel}` } : {}),
+      pendingModelIndex: parsed.modelIndex,
+      pendingRuntime: parsed.runtime,
+      quickModels,
+    });
+    await updatePicker(toDiscordModelPickerMessagePayload(rendered));
+    return;
+  }
+
   if (parsed.action === "back" && parsed.view === "models") {
     const provider =
       parsed.provider ??

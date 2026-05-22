@@ -26,6 +26,7 @@ import { maybeRepairOpenPolicyAllowFrom } from "./shared/open-policy-allowfrom.j
 import { cleanupLegacyPluginDependencyState } from "./shared/plugin-dependency-cleanup.js";
 import { repairStaleOAuthProfileShadows } from "./shared/stale-oauth-profile-shadows.js";
 import { maybeRepairStalePluginConfig } from "./shared/stale-plugin-config.js";
+import { maybeRepairStaleSubagentAllowlists } from "./shared/stale-subagent-allowlist.js";
 import { isUpdatePackageSwapInProgress } from "./shared/update-phase.js";
 
 export async function runDoctorRepairSequence(params: {
@@ -114,6 +115,7 @@ export async function runDoctorRepairSequence(params: {
   applyMutation(await maybeRepairAllowlistPolicyAllowFrom(state.candidate));
   applyMutation(maybeRepairOpenPolicyAllowFrom(state.candidate));
   applyMutation(maybeRepairGroupAllowFromFallback(state.candidate));
+  applyMutation(maybeRepairStaleSubagentAllowlists(state.candidate));
 
   const emptyAllowlistWarnings = scanEmptyAllowlistPolicyWarnings(state.candidate, {
     doctorFixCommand: params.doctorFixCommand,

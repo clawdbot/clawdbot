@@ -1185,6 +1185,64 @@ describe("chat session controls", () => {
     ]);
   });
 
+  it("searches chat sessions through the bounded session list request", () => {
+    const { state } = createChatHeaderState();
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const input = container.querySelector<HTMLInputElement>(
+      'input[data-chat-session-search="true"]',
+    );
+    const submit = container.querySelector<HTMLButtonElement>(
+      'button[data-chat-session-search-submit="true"]',
+    );
+
+    input!.value = " telegram ";
+    input!.dispatchEvent(new Event("input", { bubbles: true }));
+    submit!.click();
+
+    expect(state.chatSessionSearchQuery).toBe(" telegram ");
+    expect(state.chatSessionSearchAppliedQuery).toBe("telegram");
+    expect(loadSessionsMock).toHaveBeenCalledWith(
+      state,
+      expect.objectContaining({
+        limit: 50,
+        includeGlobal: true,
+        includeUnknown: true,
+        search: "telegram",
+      }),
+    );
+  });
+
+  it("loads another chat session page using the server next offset", () => {
+    const { state } = createChatHeaderState();
+    state.chatSessionSearchAppliedQuery = "telegram";
+    state.sessionsResult = {
+      ...state.sessionsResult!,
+      totalCount: 125,
+      limitApplied: 50,
+      nextOffset: 50,
+      hasMore: true,
+    };
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const loadMore = container.querySelector<HTMLButtonElement>(
+      'button[data-chat-session-load-more="true"]',
+    );
+    loadMore!.click();
+
+    expect(loadSessionsMock).toHaveBeenCalledWith(
+      state,
+      expect.objectContaining({
+        limit: 50,
+        offset: 50,
+        append: true,
+        search: "telegram",
+      }),
+    );
+  });
+
   it("shows provider quota in the chat header when usage data is loaded", () => {
     const { state } = createChatHeaderState();
     state.modelAuthStatusResult = {
@@ -1407,7 +1465,7 @@ describe("chat session controls", () => {
     ]);
     expect(
       [...(thinkingSelect?.options ?? [])].map((option) => option.textContent?.trim()),
-    ).toEqual(["Off", "Off", "Adaptive", "Extra high", "Maximum"]);
+    ).toEqual(["Inherited: Off", "Off", "Adaptive", "Extra high", "Maximum"]);
   });
 
   it("labels chat thinking default from the active session row", () => {

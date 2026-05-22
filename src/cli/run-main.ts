@@ -27,6 +27,7 @@ import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
 import { getCoreCliCommandNames } from "./program/core-command-descriptors.js";
 import { getSubCliEntries } from "./program/subcli-descriptors.js";
 import {
+  resolvePrecomputedSubcommandHelpFastPath,
   resolveMissingPluginCommandMessage as resolveMissingPluginCommandMessageFromPolicy,
   rewriteUpdateFlagArgv,
   shouldEnsureCliPath,
@@ -42,6 +43,7 @@ import {
 import { normalizeWindowsArgv } from "./windows-argv.js";
 
 export {
+  resolvePrecomputedSubcommandHelpFastPath,
   rewriteUpdateFlagArgv,
   shouldEnsureCliPath,
   shouldStartCrestodianForBareRoot,
@@ -563,6 +565,14 @@ export async function runCli(argv: string[] = process.argv) {
     if (shouldUseSecretsHelpFastPath(normalizedArgv)) {
       const { outputPrecomputedSecretsHelpText } = await import("./root-help-metadata.js");
       if (outputPrecomputedSecretsHelpText()) {
+        return;
+      }
+    }
+
+    const precomputedSubcommandHelp = resolvePrecomputedSubcommandHelpFastPath(normalizedArgv);
+    if (precomputedSubcommandHelp) {
+      const { outputPrecomputedSubcommandHelpText } = await import("./root-help-metadata.js");
+      if (outputPrecomputedSubcommandHelpText(precomputedSubcommandHelp)) {
         return;
       }
     }

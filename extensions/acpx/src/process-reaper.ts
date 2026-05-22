@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { promisify } from "node:util";
+import { splitCommandParts } from "./command-line.js";
 import { OPENCLAW_ACPX_LEASE_ID_ARG, OPENCLAW_GATEWAY_INSTANCE_ID_ARG } from "./process-lease.js";
 
 const execFileAsync = promisify(execFile);
@@ -107,53 +108,6 @@ function commandsReferToSameRootCommand(liveCommand: string, storedCommand: stri
     return true;
   }
   return normalizePathLike(liveCommand).trim() === normalizePathLike(storedCommand).trim();
-}
-
-function splitCommandParts(value: string): string[] {
-  const parts: string[] = [];
-  let current = "";
-  let quote: "'" | '"' | null = null;
-  let escaping = false;
-
-  for (const ch of value) {
-    if (escaping) {
-      current += ch;
-      escaping = false;
-      continue;
-    }
-    if (ch === "\\" && quote !== "'") {
-      escaping = true;
-      continue;
-    }
-    if (quote) {
-      if (ch === quote) {
-        quote = null;
-      } else {
-        current += ch;
-      }
-      continue;
-    }
-    if (ch === "'" || ch === '"') {
-      quote = ch;
-      continue;
-    }
-    if (/\s/.test(ch)) {
-      if (current) {
-        parts.push(current);
-        current = "";
-      }
-      continue;
-    }
-    current += ch;
-  }
-
-  if (escaping) {
-    current += "\\";
-  }
-  if (current) {
-    parts.push(current);
-  }
-  return parts;
 }
 
 function commandOptionEquals(

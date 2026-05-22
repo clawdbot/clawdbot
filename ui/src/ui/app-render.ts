@@ -3,8 +3,7 @@ import { styleMap } from "lit/directives/style-map.js";
 import { t } from "../i18n/index.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import {
-  CHAT_SESSIONS_ACTIVE_MINUTES,
-  CHAT_SESSIONS_REFRESH_LIMIT,
+  createChatSessionsLoadOverrides,
   hasAbortableSessionRun,
   refreshChat,
 } from "./app-chat.ts";
@@ -2749,10 +2748,7 @@ export function renderApp(state: AppViewState) {
                     state.sessionsExpandedCheckpointKey = state.sessionKey;
                     state.setTab("sessions" as import("./navigation.ts").Tab);
                     void loadSessions(state, {
-                      activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
-                      limit: CHAT_SESSIONS_REFRESH_LIMIT,
-                      includeGlobal: true,
-                      includeUnknown: true,
+                      ...createChatSessionsLoadOverrides(state),
                     });
                   },
                   onToggleRealtimeTalk: () => state.toggleRealtimeTalk(),

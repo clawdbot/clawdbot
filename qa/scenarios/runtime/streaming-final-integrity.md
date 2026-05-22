@@ -4,6 +4,7 @@
 id: streaming-final-integrity
 title: Streaming final integrity
 surface: runtime
+runtimeParityTier: live-only
 coverage:
   primary:
     - channels.streaming

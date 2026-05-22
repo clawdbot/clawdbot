@@ -724,8 +724,6 @@ export async function preflightDiscordMessage(
     enqueueSystemEvent(systemText, {
       sessionKey: effectiveRoute.sessionKey,
       contextKey: `discord:system:${messageChannelId}:${message.id}`,
-      forceSenderIsOwnerFalse: true,
-      trusted: false,
     });
     return null;
   }

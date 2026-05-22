@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { applyMockOpenAiModelConfig } from "../fixtures/mock-openai-config.mjs";
 
 const command = process.argv[2];
 
@@ -41,50 +42,7 @@ function assertOnboard() {
 function configureMockModel() {
   const mockPort = Number(process.argv[3]);
   const cfg = readJson(configPath());
-  const modelRef = "openai/gpt-5.5";
-  const cost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-  cfg.models = {
-    ...cfg.models,
-    mode: "merge",
-    providers: {
-      ...cfg.models?.providers,
-      openai: {
-        ...cfg.models?.providers?.openai,
-        baseUrl: `http://127.0.0.1:${mockPort}/v1`,
-        apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-        api: "openai-responses",
-        request: { ...cfg.models?.providers?.openai?.request, allowPrivateNetwork: true },
-        models: [
-          {
-            id: "gpt-5.5",
-            name: "gpt-5.5",
-            api: "openai-responses",
-            reasoning: false,
-            input: ["text", "image"],
-            cost,
-            contextWindow: 128000,
-            contextTokens: 96000,
-            maxTokens: 4096,
-          },
-        ],
-      },
-    },
-  };
-  cfg.agents = {
-    ...cfg.agents,
-    defaults: {
-      ...cfg.agents?.defaults,
-      model: { primary: modelRef },
-      models: {
-        ...cfg.agents?.defaults?.models,
-        [modelRef]: { params: { transport: "sse", openaiWsWarmup: false } },
-      },
-    },
-  };
-  cfg.plugins = {
-    ...cfg.plugins,
-    enabled: true,
-  };
+  applyMockOpenAiModelConfig(cfg, { mockPort });
   writeConfig(cfg);
 }
 

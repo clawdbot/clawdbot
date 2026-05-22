@@ -293,7 +293,6 @@ export async function handleInlineActions(params: {
         provider,
         model,
         senderId: command.senderId,
-        senderIsOwner: command.senderIsOwner,
         currentChannelId: command.channelId,
       });
 

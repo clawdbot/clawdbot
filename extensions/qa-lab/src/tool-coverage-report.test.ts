@@ -223,6 +223,68 @@ describe("qa tool coverage report", () => {
     );
   });
 
+  it("keeps searchable OpenClaw dynamic tool rows report-only by default", () => {
+    const report = buildQaToolCoverageReport({
+      scenarios: [
+        makeScenario("tool-searchable-web-search", "web-search", {
+          toolName: "web_search",
+          toolCoverage: {
+            bucket: "openclaw-dynamic-integration",
+            expectedLayer: "openclaw-dynamic",
+            capabilityLayer: "openclaw-dynamic-searchable",
+          },
+        }),
+      ],
+      summary: {
+        scenarios: [
+          {
+            name: "tool web_search searchable",
+            status: "fail",
+            runtimeParity: {
+              scenarioId: "tool-searchable-web-search",
+              drift: "tool-call-shape",
+              driftDetails: "searchable discovery was report-only",
+              cells: {
+                pi: {
+                  runtime: "pi",
+                  transcriptBytes: "",
+                  toolCalls: [{ tool: "web_search", argsHash: "a", resultHash: "r" }],
+                  finalText: "",
+                  usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+                  wallClockMs: 1,
+                  bootStateLines: [],
+                },
+                codex: {
+                  runtime: "codex",
+                  transcriptBytes: "",
+                  toolCalls: [],
+                  finalText: "",
+                  usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+                  wallClockMs: 1,
+                  bootStateLines: [],
+                },
+              },
+            },
+          },
+        ],
+      },
+      generatedAt: "2026-05-10T00:00:00.000Z",
+    });
+
+    expect(report.pass).toBe(true);
+    expect(report.failures).toEqual([]);
+    expect(report.reportOnlyTools).toBe(1);
+    expect(report.passingTools).toBe(0);
+    expect(report.searchableDynamicTools).toBe(1);
+    expect(report.rows[0]).toEqual(
+      expect.objectContaining({
+        capabilityLayer: "openclaw-dynamic-searchable",
+        required: false,
+        drift: "tool-call-shape",
+      }),
+    );
+  });
+
   it("passes required OpenClaw dynamic tool coverage when both runtimes exercise the tool", () => {
     const report = buildQaToolCoverageReport({
       scenarios: [

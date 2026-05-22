@@ -439,7 +439,14 @@ describe("Codex app-server elicitation bridge", () => {
     );
   });
 
-  it("does not bridge Computer Use elicitations without an approval form schema", async () => {
+  it("normalizes missing Computer Use schemas to the empty object schema", async () => {
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-computer-use-schema", status: "accepted" })
+      .mockResolvedValueOnce({
+        id: "plugin:approval-computer-use-schema",
+        decision: "allow-once",
+      });
+
     const result = await handleCodexAppServerElicitationRequest({
       requestParams: buildComputerUseApprovalElicitation({
         requestedSchema: "not-a-schema",
@@ -451,8 +458,11 @@ describe("Codex app-server elicitation bridge", () => {
       computerUseMcpServerName: "computer-use",
     });
 
-    expect(result).toBeUndefined();
-    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      action: "accept",
+      content: null,
+      _meta: null,
+    });
   });
 
   it("does not bridge Computer Use elicitations outside form mode", async () => {

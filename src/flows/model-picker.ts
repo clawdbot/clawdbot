@@ -230,7 +230,7 @@ async function resolveLiteralPrefixProviderIds(params: {
   return ids;
 }
 
-function addModelSelectOption(params: {
+async function addModelSelectOption(params: {
   entry: {
     provider: string;
     id: string;
@@ -241,7 +241,7 @@ function addModelSelectOption(params: {
   options: WizardSelectOption[];
   seen: Set<string>;
   aliasIndex: ReturnType<typeof buildModelAliasIndex>;
-  hasAuth: (provider: string) => boolean;
+  hasAuth: (provider: string) => Promise<boolean>;
   literalPrefixProviders: Set<string>;
 }) {
   const normalizedRef = normalizeModelRef(params.entry.provider, params.entry.id);
@@ -271,7 +271,7 @@ function addModelSelectOption(params: {
   if (routeHint) {
     hints.push(routeHint);
   }
-  if (!params.hasAuth(normalizedRef.provider)) {
+  if (!(await params.hasAuth(normalizedRef.provider))) {
     return;
   }
   const label = params.literalPrefixProviders.has(normalizeProviderId(normalizedRef.provider))
@@ -296,12 +296,12 @@ function splitModelKey(key: string): { provider: string; id: string } | undefine
   };
 }
 
-function addModelKeySelectOption(params: {
+async function addModelKeySelectOption(params: {
   key: string;
   options: WizardSelectOption[];
   seen: Set<string>;
   aliasIndex: ReturnType<typeof buildModelAliasIndex>;
-  hasAuth: (provider: string) => boolean;
+  hasAuth: (provider: string) => Promise<boolean>;
   literalPrefixProviders?: Set<string>;
   fallbackHint: string;
 }) {
@@ -310,7 +310,7 @@ function addModelKeySelectOption(params: {
     return;
   }
   const before = params.seen.size;
-  addModelSelectOption({
+  await addModelSelectOption({
     entry,
     options: params.options,
     seen: params.seen,
@@ -725,12 +725,11 @@ export async function promptDefaultModel(
   });
   const models = ignoreAllowlist
     ? catalog
-    : resolveVisibleModelCatalog({
+    : await resolveVisibleModelCatalog({
         cfg,
         catalog,
         defaultProvider: DEFAULT_PROVIDER,
         defaultModel: resolved.model,
-        agentDir: params.agentDir,
         workspaceDir: params.workspaceDir,
         env: params.env,
       });
@@ -771,7 +770,6 @@ export async function promptDefaultModel(
   const hasAuth = createProviderAuthChecker({
     cfg,
     workspaceDir: params.workspaceDir,
-    agentDir: params.agentDir,
     env: params.env,
   });
   const literalPrefixProviders = await resolveCachedLiteralPrefixProviders();
@@ -805,7 +803,7 @@ export async function promptDefaultModel(
 
   const seen = new Set<string>();
   for (const entry of filteredModels) {
-    addModelSelectOption({
+    await addModelSelectOption({
       entry,
       options,
       seen,
@@ -934,12 +932,6 @@ export async function promptModelAllowlist(params: {
     fallbackKeys.length > 0 ||
     (params.initialSelections?.length ?? 0) > 0 ||
     configuredRaw.length > 0;
-  const hasAuth = createProviderAuthChecker({
-    cfg,
-    workspaceDir: params.workspaceDir,
-    agentDir: params.agentDir,
-    env: params.env,
-  });
   const matchesPreferredProvider = preferredProvider
     ? createPreferredProviderMatcher({
         preferredProvider,
@@ -963,8 +955,13 @@ export async function promptModelAllowlist(params: {
     const initialKeys = normalizeModelKeys(initialSeeds.filter((key) => scopeKeySet.has(key)));
     const options: WizardSelectOption[] = [];
     const seen = new Set<string>();
+    const hasAuth = createProviderAuthChecker({
+      cfg,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+    });
     for (const key of scopeKeys) {
-      addModelKeySelectOption({
+      await addModelKeySelectOption({
         key,
         options,
         seen,
@@ -1055,6 +1052,11 @@ export async function promptModelAllowlist(params: {
     preferredProvider && allowedCatalog.some((entry) => matchesPreferredProvider?.(entry.provider))
       ? allowedCatalog.filter((entry) => matchesPreferredProvider?.(entry.provider))
       : allowedCatalog;
+  const hasAuth = createProviderAuthChecker({
+    cfg,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  });
 
   const scopeKeys = allowedKeySet
     ? allowedKeys
@@ -1071,7 +1073,7 @@ export async function promptModelAllowlist(params: {
     : selectableInitialSeeds.filter(isModelPickerVisibleModelRef);
 
   for (const entry of filteredCatalog) {
-    addModelSelectOption({
+    await addModelSelectOption({
       entry,
       options,
       seen,

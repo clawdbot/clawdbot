@@ -429,7 +429,8 @@ export type RegisterTelegramHandlerParams = {
     replyMedia?: TelegramMediaRef[],
     replyChain?: import("./message-cache.js").TelegramReplyChainEntry[],
     promptContext?: import("./bot-message-context.types.js").TelegramPromptContextEntry[],
-  ) => Promise<void>;
+    lifecycle?: import("./bot-message.js").TelegramMessageProcessorLifecycle,
+  ) => Promise<boolean>;
   logger: ReturnType<typeof getChildLogger>;
 };
 

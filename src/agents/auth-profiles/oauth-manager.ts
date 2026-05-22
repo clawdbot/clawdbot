@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { normalizeSecretInputString } from "../../config/types.secrets.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { withFileLock } from "../../infra/file-lock.js";
 import { redactSensitiveText } from "../../logging/redact.js";
@@ -533,6 +534,9 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
             }
           }
 
+          if (normalizeSecretInputString(credentialToRefresh.refresh) === undefined) {
+            return null;
+          }
           const refreshedCredentials = await withRefreshCallTimeout(
             `refreshOAuthCredential(${cred.provider})`,
             OAUTH_REFRESH_CALL_TIMEOUT_MS,

@@ -102,14 +102,14 @@ describe("workspace plugin model auth evidence", () => {
               store,
             }),
           ).resolves.toBe(true);
-          expect(
+          await expect(
             hasAuthForModelProvider({
               provider: "workspace-cloud",
               cfg,
               workspaceDir,
               store,
             }),
-          ).toBe(true);
+          ).resolves.toBe(true);
         },
       );
     } finally {

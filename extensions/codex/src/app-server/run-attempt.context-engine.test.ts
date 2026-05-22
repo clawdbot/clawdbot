@@ -8,6 +8,7 @@ import {
   embeddedAgentLog,
   type HarnessContextEngine as ContextEngine,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { registerSandboxBackend } from "openclaw/plugin-sdk/sandbox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerClientFactory } from "./client-factory.js";
 import type { CodexServerNotification } from "./protocol.js";
@@ -348,6 +349,39 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(openSpy).not.toHaveBeenCalled();
   });
 
+  it("keeps context-engine history bound to the run session when sandbox key differs", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    SessionManager.open(sessionFile).appendMessage(
+      assistantMessage("canonical main context", Date.now()) as never,
+    );
+    const contextEngine = createContextEngine();
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.sessionKey = "agent:main:main";
+    params.sandboxSessionKey = "agent:main:telegram:default:direct:12345";
+    params.contextEngine = contextEngine;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+
+    if (!contextEngine.bootstrap) {
+      throw new Error("expected bootstrap hook");
+    }
+    const bootstrapParams = requireFirstCallArg(contextEngine.bootstrap, "bootstrap") as Parameters<
+      NonNullable<ContextEngine["bootstrap"]>
+    >[0];
+    expect(bootstrapParams.sessionKey).toBe("agent:main:main");
+
+    const assembleParams = requireFirstCallArg(contextEngine.assemble, "assemble") as Parameters<
+      ContextEngine["assemble"]
+    >[0];
+    expect(assembleParams.sessionKey).toBe("agent:main:main");
+
+    await harness.completeTurn();
+    await run;
+  });
+
   it("uses the runtime token budget for large Codex context-engine projections", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -642,6 +676,121 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       },
     });
     await run;
+  });
+
+  it("reprojects thread-bootstrap context for native-disabled transient Codex threads", async () => {
+    const restoreSandboxBackend = registerSandboxBackend(
+      "codex-context-test-sandbox",
+      async () => ({
+        id: "codex-context-test-sandbox",
+        runtimeId: "codex-context-test-runtime",
+        runtimeLabel: "Codex Context Test Sandbox",
+        workdir: "/workspace",
+        buildExecSpec: async () => ({
+          argv: ["true"],
+          env: {},
+          stdinMode: "pipe-closed" as const,
+        }),
+        runShellCommand: async () => ({
+          stdout: Buffer.alloc(0),
+          stderr: Buffer.alloc(0),
+          code: 0,
+        }),
+      }),
+    );
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    try {
+      await writeCodexAppServerBinding(sessionFile, {
+        threadId: "thread-old",
+        cwd: workspaceDir,
+        dynamicToolsFingerprint: "[]",
+        contextEngine: {
+          schemaVersion: 1,
+          engineId: "lossless-claw",
+          policyFingerprint:
+            '{"schemaVersion":1,"engineId":"lossless-claw","ownsCompaction":true,"projectionMaxChars":24000}',
+          projection: {
+            schemaVersion: 1,
+            mode: "thread_bootstrap",
+            epoch: "epoch-1",
+          },
+        },
+      });
+      const contextEngine = createContextEngine({
+        assemble: vi.fn(async ({ prompt }) => ({
+          messages: [
+            assistantMessage("native-disabled context", 10),
+            userMessage(prompt ?? "", 11),
+          ],
+          estimatedTokens: 42,
+          systemPromptAddition: "context-engine system",
+          contextProjection: { mode: "thread_bootstrap" as const, epoch: "epoch-1" },
+        })),
+      });
+      const harness = createStartedThreadHarness(async (method) => {
+        if (method === "thread/start") {
+          return threadStartResult("thread-transient");
+        }
+        if (method === "thread/resume") {
+          throw new Error("native-disabled turns should not resume the previous Codex thread");
+        }
+        return undefined;
+      });
+      const params = createParams(sessionFile, workspaceDir);
+      params.contextEngine = contextEngine;
+      params.config = {
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "all",
+              backend: "codex-context-test-sandbox",
+              scope: "session",
+              workspaceAccess: "rw",
+              prune: { idleHours: 0, maxAgeDays: 0 },
+            },
+          },
+        },
+      } as EmbeddedRunAttemptParams["config"];
+
+      let runError: unknown;
+      const run = runCodexAppServerAttempt(params).catch((error: unknown) => {
+        runError = error;
+        throw error;
+      });
+      await vi.waitFor(
+        () => {
+          if (runError) {
+            throw runError;
+          }
+          expect(harness.requests.map((request) => request.method)).toContain("turn/start");
+        },
+        { interval: 1 },
+      );
+
+      expect(harness.requests.map((request) => request.method)).toEqual([
+        "thread/start",
+        "turn/start",
+      ]);
+      expectRequestInputTextContains(harness, "OpenClaw assembled context for this turn:");
+      expectRequestInputTextContains(harness, "native-disabled context");
+
+      await harness.notify({
+        method: "turn/completed",
+        params: {
+          threadId: "thread-transient",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            items: [{ type: "agentMessage", id: "msg-1", text: "transient answer" }],
+          },
+        },
+      });
+      await run;
+    } finally {
+      restoreSandboxBackend();
+    }
   });
 
   it("starts a fresh Codex thread when thread-bootstrap projection falls back to per-turn projection", async () => {

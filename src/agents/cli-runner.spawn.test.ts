@@ -571,22 +571,6 @@ describe("runCliAgent spawn path", () => {
     expect(JSON.stringify(params)).not.toContain("c9d7b831-1c31-4d22-80b9-1e50ca207d4b");
   });
 
-  it("forwards senderIsOwner through the compat wrapper", () => {
-    const params = buildRunClaudeCliAgentParams({
-      sessionId: "openclaw-session",
-      sessionKey: "agent:main:matrix:room:123",
-      sessionFile: "/tmp/session.jsonl",
-      workspaceDir: "/tmp",
-      prompt: "hi",
-      model: "opus",
-      timeoutMs: 1_000,
-      runId: "run-claude-owner-wrapper",
-      senderIsOwner: false,
-    });
-
-    expect(params.senderIsOwner).toBe(false);
-  });
-
   it("forwards channel context through the compat wrapper", () => {
     const params = buildRunClaudeCliAgentParams({
       sessionId: "openclaw-session",

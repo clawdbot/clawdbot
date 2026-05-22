@@ -262,7 +262,7 @@ export function createFeishuMessageReceiveHandler({
         return false;
       }
       const text = resolveDebounceText(event);
-      return Boolean(text) && !core.channel.text.hasControlCommand(text, cfg);
+      return Boolean(text) && !core.channel.commands.isControlCommandMessage(text, cfg);
     },
     onFlush: async (entries) => {
       const last = entries.at(-1);

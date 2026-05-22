@@ -4,6 +4,7 @@ import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { readJsonFileWithFallback } from "openclaw/plugin-sdk/json-store";
+import { quoteCommandPart, splitCommandParts } from "./command-line.js";
 import {
   extractTrustedCodexProjectPaths,
   renderIsolatedCodexConfig,
@@ -44,57 +45,6 @@ function readManifestDependencyVersion(packageName: string): string {
 
 const CODEX_ACP_PACKAGE_VERSION = readManifestDependencyVersion(CODEX_ACP_PACKAGE);
 const CLAUDE_ACP_PACKAGE_VERSION = readManifestDependencyVersion(CLAUDE_ACP_PACKAGE);
-
-function quoteCommandPart(value: string): string {
-  return JSON.stringify(value);
-}
-
-function splitCommandParts(value: string): string[] {
-  const parts: string[] = [];
-  let current = "";
-  let quote: "'" | '"' | null = null;
-  let escaping = false;
-
-  for (const ch of value) {
-    if (escaping) {
-      current += ch;
-      escaping = false;
-      continue;
-    }
-    if (ch === "\\" && quote !== "'") {
-      escaping = true;
-      continue;
-    }
-    if (quote) {
-      if (ch === quote) {
-        quote = null;
-      } else {
-        current += ch;
-      }
-      continue;
-    }
-    if (ch === "'" || ch === '"') {
-      quote = ch;
-      continue;
-    }
-    if (/\s/.test(ch)) {
-      if (current) {
-        parts.push(current);
-        current = "";
-      }
-      continue;
-    }
-    current += ch;
-  }
-
-  if (escaping) {
-    current += "\\";
-  }
-  if (current) {
-    parts.push(current);
-  }
-  return parts;
-}
 
 function basename(value: string): string {
   return value.split(/[\\/]/).pop() ?? value;

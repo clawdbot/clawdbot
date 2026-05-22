@@ -56,6 +56,7 @@ export function createPluginRecord(
     channelIds: [],
     cliBackendIds: [],
     providerIds: [],
+    embeddingProviderIds: [],
     speechProviderIds: [],
     realtimeTranscriptionProviderIds: [],
     realtimeVoiceProviderIds: [],
@@ -123,6 +124,7 @@ export function createPluginLoadResult(
 ): PluginLoadResult {
   const {
     plugins,
+    embeddingProviders,
     modelCatalogProviders,
     realtimeTranscriptionProviders,
     realtimeVoiceProviders,
@@ -134,6 +136,7 @@ export function createPluginLoadResult(
     channels: [],
     channelSetups: [],
     providers: [],
+    embeddingProviders: embeddingProviders ?? [],
     speechProviders: [],
     mediaUnderstandingProviders: [],
     imageGenerationProviders: [],

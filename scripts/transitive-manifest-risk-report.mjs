@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import YAML from "yaml";
+import { parseReportCliArgs, writeReportArtifact } from "./lib/report-cli-helpers.mjs";
 import {
   collectAllResolvedPackagesFromLockfile,
   createBulkAdvisoryPayload,
@@ -568,44 +569,6 @@ export function renderTransitiveManifestRiskMarkdownReport(report) {
   return `${lines.join("\n")}\n`;
 }
 
-const renderMarkdownReport = renderTransitiveManifestRiskMarkdownReport;
-
-function parseArgs(argv) {
-  const options = {
-    rootDir: process.cwd(),
-    jsonPath: null,
-    markdownPath: null,
-  };
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index];
-    if (arg === "--") {
-      continue;
-    }
-    if (arg === "--root") {
-      options.rootDir = argv[++index];
-      continue;
-    }
-    if (arg === "--json") {
-      options.jsonPath = argv[++index];
-      continue;
-    }
-    if (arg === "--markdown") {
-      options.markdownPath = argv[++index];
-      continue;
-    }
-    throw new Error(`Unsupported argument: ${arg}`);
-  }
-  return options;
-}
-
-async function writeArtifact(filePath, content) {
-  if (!filePath) {
-    return;
-  }
-  await mkdir(path.dirname(filePath), { recursive: true });
-  await writeFile(filePath, content, "utf8");
-}
-
 export async function runTransitiveManifestRiskReport({
   rootDir = process.cwd(),
   fetchImpl = fetch,
@@ -631,12 +594,15 @@ export async function runTransitiveManifestRiskReport({
 }
 
 export async function main(argv = process.argv.slice(2)) {
-  const options = parseArgs(argv);
+  const options = parseReportCliArgs(argv);
   const report = await runTransitiveManifestRiskReport({
     rootDir: options.rootDir,
   });
-  await writeArtifact(options.jsonPath, `${JSON.stringify(report, null, 2)}\n`);
-  await writeArtifact(options.markdownPath, renderMarkdownReport(report));
+  await writeReportArtifact(options.jsonPath, `${JSON.stringify(report, null, 2)}\n`);
+  await writeReportArtifact(
+    options.markdownPath,
+    renderTransitiveManifestRiskMarkdownReport(report),
+  );
   const artifactHint =
     typeof options.markdownPath === "string" ? " See " + options.markdownPath + "." : "";
   process.stdout.write(

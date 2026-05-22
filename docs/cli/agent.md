@@ -13,6 +13,7 @@ Use `--agent <id>` to target a configured agent directly.
 Pass at least one session selector:
 
 - `--to <dest>`
+- `--session-key <key>`
 - `--session-id <id>`
 - `--agent <id>`
 
@@ -24,6 +25,7 @@ Related:
 
 - `-m, --message <text>`: required message body
 - `-t, --to <dest>`: recipient used to derive the session key
+- `--session-key <key>`: explicit session key to use for routing
 - `--session-id <id>`: explicit session id
 - `--agent <id>`: agent id; overrides routing bindings
 - `--model <id>`: model override for this run (`provider/model` or model id)
@@ -44,6 +46,8 @@ Related:
 openclaw agent --to +15555550123 --message "status update" --deliver
 openclaw agent --agent ops --message "Summarize logs"
 openclaw agent --agent ops --model openai/gpt-5.4 --message "Summarize logs"
+openclaw agent --session-key agent:ops:incident-42 --message "Summarize status"
+openclaw agent --agent ops --session-key incident-42 --message "Summarize status"
 openclaw agent --session-id 1234 --message "Summarize inbox" --thinking medium
 openclaw agent --to +15555550123 --message "Trace logs" --verbose on --json
 openclaw agent --agent ops --message "Generate report" --deliver --reply-channel slack --reply-to "#reports"
@@ -57,9 +61,11 @@ openclaw agent --agent ops --message "Run locally" --local
 - `--local` and embedded fallback runs are treated as one-shot runs. Bundled MCP loopback resources and warm Claude stdio sessions opened for that local process are retired after the reply, so scripted invocations do not keep local child processes alive.
 - Gateway-backed runs leave Gateway-owned MCP loopback resources under the running Gateway process; older clients may still send the historical cleanup flag, but the Gateway accepts it as a compatibility no-op.
 - `--channel`, `--reply-channel`, and `--reply-account` affect reply delivery, not session routing.
+- `--session-key` selects an explicit session key. Agent-prefixed keys must use `agent:<agent-id>:<session-key>`, and `--agent` must match the key's agent id when both are provided. Bare non-sentinel keys are scoped to `--agent` when supplied, or to the configured default agent otherwise; for example, `--agent ops --session-key incident-42` routes to `agent:ops:incident-42`. Literal `global` and `unknown` remain unscoped only when no `--agent` is supplied; in that case, embedded fallback and store ownership use the configured default agent.
 - `--json` keeps stdout reserved for the JSON response. Gateway, plugin, and embedded-fallback diagnostics are routed to stderr so scripts can parse stdout directly.
 - Embedded fallback JSON includes `meta.transport: "embedded"` and `meta.fallbackFrom: "gateway"` so scripts can distinguish fallback runs from Gateway runs.
 - If the Gateway accepts an agent run but the CLI times out waiting for the final reply, embedded fallback uses a fresh explicit `gateway-fallback-*` session/run id and reports `meta.fallbackReason: "gateway_timeout"` plus the fallback session fields. This avoids racing the Gateway-owned transcript lock or silently replacing the original routed conversation session.
+- For Gateway-backed runs, `SIGTERM` and `SIGINT` interrupt the waiting CLI request. If the Gateway has already accepted the run, the CLI also sends `chat.abort` for that accepted run id before exiting. Local `--local` runs and embedded fallback runs receive the same abort signal, but do not send `chat.abort`. If a duplicate `--run-id` reaches the Gateway while the original agent run is still active, the duplicate response reports `status: "in_flight"` and the non-JSON CLI prints a stderr diagnostic instead of an empty reply. For external cron/systemd wrappers, keep an outer hard-kill backstop such as `timeout -k 60 600 openclaw agent ...` so the supervisor can still reap the process if shutdown cannot drain.
 - When this command triggers `models.json` regeneration, SecretRef-managed provider credentials are persisted as non-secret markers (for example env var names, `secretref-env:ENV_VAR_NAME`, or `secretref-managed`), not resolved secret plaintext.
 - Marker writes are source-authoritative: OpenClaw persists markers from the active source config snapshot, not from resolved runtime secret values.
 

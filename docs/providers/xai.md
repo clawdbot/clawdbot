@@ -89,9 +89,10 @@ OpenClaw uses the xAI Responses API as the bundled xAI transport. The same
 credential from `openclaw models auth login --provider xai --method oauth`,
 `openclaw models auth login --provider xai --device-code`, or
 `openclaw models auth login --provider xai --method api-key` can also power first-class
-`x_search`, remote `code_execution`, and xAI image/video generation.
+`web_search`, `x_search`, remote `code_execution`, and xAI image/video generation.
 Speech and transcription currently require `XAI_API_KEY` or provider config.
-`XAI_API_KEY` or plugin web-search config can power Grok-backed `web_search` too.
+Grok-backed `web_search` prefers xAI OAuth and falls back to `XAI_API_KEY` or
+plugin web-search config.
 If you store an xAI key under `plugins.entries.xai.config.webSearch.apiKey`,
 the bundled xAI model provider reuses that key as a fallback too.
 Set `plugins.entries.xai.config.webSearch.baseUrl` to route Grok `web_search`
@@ -128,16 +129,18 @@ first in model pickers:
 
 | Family         | Model ids                                                                |
 | -------------- | ------------------------------------------------------------------------ |
+| Grok Build 0.1 | `grok-build-0.1`                                                         |
 | Grok 4.3       | `grok-4.3`                                                               |
 | Grok 4.20 Beta | `grok-4.20-beta-latest-reasoning`, `grok-4.20-beta-latest-non-reasoning` |
 
 The plugin still forward-resolves older Grok 3, Grok 4, Grok 4 Fast, Grok 4.1
-Fast, and Grok Code slugs for existing configs, but OpenClaw no longer shows
-those retired upstream slugs in the selectable catalog.
+Fast, and Grok Code slugs for existing configs. Official Grok Code Fast aliases
+normalize to `grok-build-0.1`; OpenClaw no longer shows the other retired
+upstream slugs in the selectable catalog.
 
 <Tip>
-Use `grok-4.3` for new chat and coding workloads unless you explicitly need a
-Grok 4.20 beta alias.
+Use `grok-4.3` for general chat and `grok-build-0.1` for build/coding-focused
+workloads unless you explicitly need a Grok 4.20 beta alias.
 </Tip>
 
 ## OpenClaw feature coverage
@@ -189,6 +192,9 @@ Legacy aliases still normalize to the canonical bundled ids:
 
 | Legacy alias              | Canonical id                          |
 | ------------------------- | ------------------------------------- |
+| `grok-code-fast-1`        | `grok-build-0.1`                      |
+| `grok-code-fast`          | `grok-build-0.1`                      |
+| `grok-code-fast-1-0825`   | `grok-build-0.1`                      |
 | `grok-4-fast-reasoning`   | `grok-4-fast`                         |
 | `grok-4-1-fast-reasoning` | `grok-4-1-fast`                       |
 | `grok-4.20-reasoning`     | `grok-4.20-beta-latest-reasoning`     |
@@ -198,10 +204,11 @@ Legacy aliases still normalize to the canonical bundled ids:
 
 <AccordionGroup>
   <Accordion title="Web search">
-    The bundled `grok` web-search provider can use `XAI_API_KEY` or a plugin
-    web-search key:
+    The bundled `grok` web-search provider prefers xAI OAuth, then falls back
+    to `XAI_API_KEY` or a plugin web-search key:
 
     ```bash
+    openclaw models auth login --provider xai --method oauth
     openclaw config set tools.web.search.provider grok
     ```
 
@@ -220,6 +227,8 @@ Legacy aliases still normalize to the canonical bundled ids:
       using `reference_image` roles, 2-10 seconds for extension
     - Reference-image generation: set `imageRoles` to `reference_image` for
       every supplied image; xAI accepts up to 7 such images
+    - Default operation timeout: 600 seconds unless `video_generate.timeoutMs`
+      or `agents.defaults.videoGenerationModel.timeoutMs` is set
 
     <Warning>
     Local video buffers are not accepted. Use remote `http(s)` URLs for
@@ -259,6 +268,8 @@ Legacy aliases still normalize to the canonical bundled ids:
     - Aspect ratios: `1:1`, `16:9`, `9:16`, `4:3`, `3:4`, `2:3`, `3:2`
     - Resolutions: `1K`, `2K`
     - Count: up to 4 images
+    - Default operation timeout: 600 seconds unless `image_generate.timeoutMs`
+      or `agents.defaults.imageGenerationModel.timeoutMs` is set
 
     OpenClaw asks xAI for `b64_json` image responses so generated media can be
     stored and delivered through the normal channel attachment path. Local

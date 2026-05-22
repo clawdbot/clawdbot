@@ -45,6 +45,21 @@ describe("redactSensitiveText", () => {
     expect(output).toBe("OPENAI_API_KEY=sk-123…cdef");
   });
 
+  it("masks JSON-escaped quoted env assignments while keeping the key", () => {
+    const xai = "issue85049-xai-cleartext-token-ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890";
+    const brave = "issue85049-brave-cleartext-token-ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890";
+    const input = String.raw`raw_params={"command":"export XAI_API_KEY=\"${xai}\" && export BRAVE_API_KEY=\\\"${brave}\\\" && echo blocked"}`;
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).toContain("XAI_API_KEY=");
+    expect(output).toContain("BRAVE_API_KEY=");
+    expect(output).not.toContain(xai);
+    expect(output).not.toContain(brave);
+    expect(output).toContain("issue8…7890");
+  });
+
   it("masks CLI flags", () => {
     const input = "curl --token abcdef1234567890ghij https://api.test";
     const output = redactSensitiveText(input, {

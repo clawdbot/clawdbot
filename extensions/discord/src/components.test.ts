@@ -354,11 +354,14 @@ describe("discord component registry", () => {
 
   it("falls back to the in-memory registry when persistent state cannot open", async () => {
     const warn = vi.fn();
+    const cause = new TypeError("disk busy");
     const { setDiscordRuntime } = await import("./runtime.js");
     setDiscordRuntime({
       state: {
         openKeyedStore: vi.fn(() => {
-          throw new Error("sqlite unavailable");
+          const error = new Error("sqlite unavailable") as Error & { cause?: unknown };
+          error.cause = cause;
+          throw error;
         }),
       },
       logging: { getChildLogger: () => ({ warn }) },
@@ -375,6 +378,16 @@ describe("discord component registry", () => {
     expect(fallbackEntry?.label).toBe("Fallback");
     expect(typeof fallbackEntry?.createdAt).toBe("number");
     expect(typeof fallbackEntry?.expiresAt).toBe("number");
-    expect(warn).toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      "Discord persistent component registry state failed",
+      expect.objectContaining({
+        error: "Error: sqlite unavailable",
+        errorName: "Error",
+        errorMessage: "sqlite unavailable",
+        errorCause: "TypeError: disk busy",
+        errorCauseName: "TypeError",
+        errorCauseMessage: "disk busy",
+      }),
+    );
   });
 });

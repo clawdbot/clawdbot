@@ -151,7 +151,7 @@ Normal OpenClaw behavior still applies to final calls:
 
 - tool allow and deny policies
 - per-agent and per-sandbox tool restrictions
-- owner-only gating
+- channel/runtime tool policy
 - approval hooks
 - plugin `before_tool_call` hooks
 - session identity, logs, and telemetry

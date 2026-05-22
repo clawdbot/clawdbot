@@ -1081,6 +1081,9 @@ export const ar: TranslationMap = {
     selectors: {
       agentFilter: "تصفية الجلسات حسب الوكيل",
       session: "Chat session",
+      sessionSearch: "البحث في الجلسات",
+      clearSessionSearch: "مسح البحث في الجلسات",
+      loadMoreSessions: "تحميل المزيد من الجلسات",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },

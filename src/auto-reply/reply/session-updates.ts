@@ -204,8 +204,8 @@ function emitCompactionSessionLifecycleHooks(params: {
   }
 }
 
-function resolvePositiveTokenCount(value: number | undefined): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
+function resolveNonNegativeTokenCount(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
     ? Math.floor(value)
     : undefined;
 }
@@ -411,7 +411,7 @@ export async function incrementCompactionCount(params: {
     updates.sessionFile = explicitNewSessionFile;
   }
   // If tokensAfter is provided, update the cached token counts to reflect post-compaction state
-  const tokensAfterCompaction = resolvePositiveTokenCount(tokensAfter);
+  const tokensAfterCompaction = resolveNonNegativeTokenCount(tokensAfter);
   if (tokensAfterCompaction !== undefined) {
     updates.totalTokens = tokensAfterCompaction;
     updates.totalTokensFresh = true;

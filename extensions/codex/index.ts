@@ -114,6 +114,7 @@ export default definePluginEntry({
     );
     api.on("inbound_claim", (event, ctx) =>
       handleCodexConversationInboundClaim(event, ctx, {
+        config: api.runtime.config?.current?.() as OpenClawConfig | undefined,
         pluginConfig: resolveCurrentPluginConfig(),
         resumeCodexCliSessionOnNode: (params) =>
           resumeCodexCliSessionOnNode({ runtime: api.runtime, ...params }),

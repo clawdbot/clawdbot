@@ -40,6 +40,10 @@ const hoisted = vi.hoisted(() => ({
   activeEmbeddedRunSessionKeys: [] as string[],
   markRestartAbortedMainSessions: vi.fn(async (_params: unknown) => ({ marked: 1, skipped: 0 })),
   runtimeConfig: { value: { session: { store: "/tmp/active-sessions.json" } } as OpenClawConfig },
+  reloadEvents: [] as string[],
+  resetModelCatalogCache: vi.fn(() => {}),
+  clearCurrentProviderAuthState: vi.fn(() => {}),
+  warmCurrentProviderAuthState: vi.fn(async (_cfg: OpenClawConfig) => {}),
 }));
 
 vi.mock("../hooks/gmail-watcher.js", () => ({
@@ -95,6 +99,24 @@ vi.mock("../config/config.js", () => ({
   getRuntimeConfig: () => hoisted.runtimeConfig.value,
 }));
 
+vi.mock("../agents/model-catalog.js", () => ({
+  resetModelCatalogCache: () => {
+    hoisted.reloadEvents.push("reset-model-catalog");
+    hoisted.resetModelCatalogCache();
+  },
+}));
+
+vi.mock("../agents/model-provider-auth.js", () => ({
+  clearCurrentProviderAuthState: () => {
+    hoisted.reloadEvents.push("clear-provider-auth");
+    hoisted.clearCurrentProviderAuthState();
+  },
+  warmCurrentProviderAuthState: async (cfg: OpenClawConfig) => {
+    hoisted.reloadEvents.push("warm-provider-auth");
+    await hoisted.warmCurrentProviderAuthState(cfg);
+  },
+}));
+
 function createReloadHandlersForTest(logReload = { info: vi.fn(), warn: vi.fn() }) {
   const cron = { start: vi.fn(async () => {}), stop: vi.fn() };
   const heartbeatRunner = {
@@ -139,6 +161,76 @@ afterEach(() => {
   hoisted.activeEmbeddedRunSessionKeys.length = 0;
   hoisted.markRestartAbortedMainSessions.mockClear();
   hoisted.runtimeConfig.value = { session: { store: "/tmp/active-sessions.json" } };
+  hoisted.reloadEvents.length = 0;
+  hoisted.resetModelCatalogCache.mockClear();
+  hoisted.clearCurrentProviderAuthState.mockClear();
+  hoisted.warmCurrentProviderAuthState.mockClear();
+});
+
+describe("gateway hot reload model state", () => {
+  it("resets prepared model runtime state for every hot reload and rewarms after plugin reload", async () => {
+    const reloadPlugins = vi.fn(async (): Promise<GatewayPluginReloadResult> => {
+      hoisted.reloadEvents.push("reload-plugins");
+      return {
+        restartChannels: new Set(),
+        activeChannels: new Set(),
+      };
+    });
+    const { applyHotReload } = createGatewayReloadHandlers({
+      deps: {} as never,
+      broadcast: vi.fn(),
+      getState: () => ({
+        hooksConfig: {} as never,
+        hookClientIpConfig: {} as never,
+        heartbeatRunner: { stop: vi.fn(), updateConfig: vi.fn() } as never,
+        cronState: {
+          cron: { start: vi.fn(async () => {}), stop: vi.fn() },
+          storePath: "/tmp/cron.json",
+          cronEnabled: false,
+        } as never,
+        channelHealthMonitor: null,
+      }),
+      setState: vi.fn(),
+      startChannel: vi.fn(async () => {}),
+      stopChannel: vi.fn(async () => {}),
+      reloadPlugins,
+      logHooks: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      logChannels: { info: vi.fn(), error: vi.fn() },
+      logCron: { error: vi.fn() },
+      logReload: { info: vi.fn(), warn: vi.fn() },
+      createHealthMonitor: () => null,
+    });
+
+    const nextConfig = { plugins: { enabled: true } } as OpenClawConfig;
+    await applyHotReload(
+      {
+        changedPaths: ["plugins.enabled"],
+        restartGateway: false,
+        restartReasons: [],
+        hotReasons: ["plugins.enabled"],
+        reloadHooks: false,
+        restartGmailWatcher: false,
+        restartCron: false,
+        restartHeartbeat: false,
+        restartHealthMonitor: false,
+        reloadPlugins: true,
+        restartChannels: new Set(),
+        disposeMcpRuntimes: false,
+        noopPaths: [],
+      },
+      nextConfig,
+    );
+
+    expect(hoisted.reloadEvents).toEqual([
+      "reset-model-catalog",
+      "clear-provider-auth",
+      "reload-plugins",
+      "reset-model-catalog",
+      "clear-provider-auth",
+      "warm-provider-auth",
+    ]);
+    expect(hoisted.warmCurrentProviderAuthState).toHaveBeenCalledWith(nextConfig);
+  });
 });
 
 describe("gateway restart deferral preflight", () => {

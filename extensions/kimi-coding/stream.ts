@@ -302,39 +302,54 @@ function rewriteKimiTaggedToolCallsInMessage(message: unknown): void {
   }
 }
 
+function transformKimiStreamEvent(
+  value: unknown,
+  transformMessage: (message: unknown) => void,
+): void {
+  const event =
+    value && typeof value === "object"
+      ? (value as { partial?: unknown; message?: unknown })
+      : undefined;
+  if (!event) {
+    return;
+  }
+  for (const message of [event.partial, event.message]) {
+    transformMessage(message);
+  }
+}
+
 function wrapStreamMessageObjects(
   stream: ReturnType<typeof streamSimple>,
   transformMessage: (message: unknown) => void,
 ): ReturnType<typeof streamSimple> {
-  const originalResult = stream.result.bind(stream);
-  stream.result = async () => {
-    const message = await originalResult();
-    transformMessage(message);
-    return message;
-  };
+  const readFinalMessage = stream.result.bind(stream);
+  Object.assign(stream, {
+    async result() {
+      const message = await readFinalMessage();
+      transformMessage(message);
+      return message;
+    },
+  });
 
-  const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
-  (stream as { [Symbol.asyncIterator]: typeof originalAsyncIterator })[Symbol.asyncIterator] =
-    function () {
-      const iterator = originalAsyncIterator();
-      return {
-        async next() {
-          const result = await iterator.next();
-          if (!result.done && result.value && typeof result.value === "object") {
-            const event = result.value as { partial?: unknown; message?: unknown };
-            transformMessage(event.partial);
-            transformMessage(event.message);
-          }
-          return result;
-        },
-        async return(value?: unknown) {
-          return iterator.return?.(value) ?? { done: true as const, value: undefined };
-        },
-        async throw(error?: unknown) {
-          return iterator.throw?.(error) ?? { done: true as const, value: undefined };
-        },
-      };
+  const createIterator = stream[Symbol.asyncIterator].bind(stream);
+  stream[Symbol.asyncIterator] = () => {
+    const iterator = createIterator();
+    return {
+      async next() {
+        const step = await iterator.next();
+        if (!step.done) {
+          transformKimiStreamEvent(step.value, transformMessage);
+        }
+        return step;
+      },
+      async return(value?: unknown) {
+        return iterator.return?.(value) ?? { done: true as const, value: undefined };
+      },
+      async throw(error?: unknown) {
+        return iterator.throw?.(error) ?? { done: true as const, value: undefined };
+      },
     };
+  };
   return stream;
 }
 

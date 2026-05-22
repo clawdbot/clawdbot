@@ -22,6 +22,11 @@ const OBSERVATION_EXTRA_REDACT_PATTERNS = [
   String.raw`"(?:api[-_]?key|api_key)"\s*:\s*"([^"]+)"`,
   String.raw`(?:\bCookie\b\s*[:=]\s*[^;=\s]+=|;\s*[^;=\s]+=)([^;\s\r\n]+)`,
 ];
+const RAW_ERROR_CONSOLE_SUPPRESSED_FAILURE_KINDS = new Set<ProviderRuntimeFailureKind>([
+  "auth_html",
+  "auth_refresh",
+  "auth_scope",
+]);
 
 function resolveConfiguredRedactPatterns(): string[] {
   const configured = readLoggingConfig()?.redactPatterns;
@@ -74,6 +79,14 @@ function redactObservationText(text: string | undefined): string | undefined {
       ...OBSERVATION_EXTRA_REDACT_PATTERNS,
     ],
   });
+}
+
+export function shouldSuppressRawErrorConsoleSuffix(
+  providerRuntimeFailureKind?: ProviderRuntimeFailureKind,
+): boolean {
+  return providerRuntimeFailureKind
+    ? RAW_ERROR_CONSOLE_SUPPRESSED_FAILURE_KINDS.has(providerRuntimeFailureKind)
+    : false;
 }
 
 function buildObservationFingerprint(params: {

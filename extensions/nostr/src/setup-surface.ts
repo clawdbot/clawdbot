@@ -1,9 +1,8 @@
-import type { ChannelSetupAdapter } from "openclaw/plugin-sdk/channel-setup";
-import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import {
   hasConfiguredSecretInput,
   normalizeSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import type { ChannelSetupDmPolicy, ChannelSetupWizard, DmPolicy } from "openclaw/plugin-sdk/setup";
 import {
   createSetupTranslator,
@@ -14,10 +13,14 @@ import {
   mergeAllowFromEntries,
   parseSetupEntriesWithParser,
   patchTopLevelChannelConfigSection,
-  splitSetupEntries,
 } from "openclaw/plugin-sdk/setup";
 import { DEFAULT_RELAYS } from "./default-relays.js";
 import { getPublicKeyFromPrivate, normalizePubkey } from "./nostr-key-utils.js";
+import {
+  buildNostrSetupPatch,
+  createNostrSetupAdapter,
+  parseRelayUrls,
+} from "./setup-adapter.js";
 import { resolveDefaultNostrAccountId, resolveNostrAccount } from "./types.js";
 
 const t = createSetupTranslator();
@@ -39,30 +42,6 @@ const NOSTR_ALLOW_FROM_HELP_LINES = [
   t("wizard.nostr.multipleEntries"),
   `Docs: ${formatDocsLink("/channels/nostr", "channels/nostr")}`,
 ];
-
-function buildNostrSetupPatch(accountId: string, patch: Record<string, unknown>) {
-  return {
-    ...(accountId !== DEFAULT_ACCOUNT_ID ? { defaultAccount: accountId } : {}),
-    ...patch,
-  };
-}
-
-function parseRelayUrls(raw: string): { relays: string[]; error?: string } {
-  const entries = splitSetupEntries(raw);
-  const relays: string[] = [];
-  for (const entry of entries) {
-    try {
-      const parsed = new URL(entry);
-      if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
-        return { relays: [], error: `Relay must use ws:// or wss:// (${entry})` };
-      }
-    } catch {
-      return { relays: [], error: `Invalid relay URL: ${entry}` };
-    }
-    relays.push(entry);
-  }
-  return { relays: [...new Set(relays)] };
-}
 
 function parseNostrAllowFrom(raw: string): { entries: string[]; error?: string } {
   return parseSetupEntriesWithParser(raw, (entry) => {
@@ -95,57 +74,17 @@ const nostrDmPolicy: ChannelSetupDmPolicy = createTopLevelChannelDmPolicy({
   promptAllowFrom: promptNostrAllowFrom,
 });
 
-export const nostrSetupAdapter: ChannelSetupAdapter = {
-  resolveAccountId: ({ cfg, accountId }) => accountId?.trim() || resolveDefaultNostrAccountId(cfg),
-  applyAccountName: ({ cfg, accountId, name }) =>
-    patchTopLevelChannelConfigSection({
-      cfg,
-      channel,
-      patch: buildNostrSetupPatch(accountId, name?.trim() ? { name: name.trim() } : {}),
-    }),
-  validateInput: ({ input }) => {
-    const typedInput = input as {
-      useEnv?: boolean;
-      privateKey?: string;
-      relayUrls?: string;
-    };
-    if (!typedInput.useEnv) {
-      const privateKey = typedInput.privateKey?.trim();
-      if (!privateKey) {
-        return "Nostr requires --private-key or --use-env.";
-      }
-      try {
-        getPublicKeyFromPrivate(privateKey);
-      } catch {
-        return "Nostr private key must be valid nsec or 64-character hex.";
-      }
+export const nostrSetupAdapter = createNostrSetupAdapter({
+  resolveAccountId: (cfg, accountId) => accountId?.trim() || resolveDefaultNostrAccountId(cfg),
+  validatePrivateKey: (privateKey) => {
+    try {
+      getPublicKeyFromPrivate(privateKey);
+      return true;
+    } catch {
+      return false;
     }
-    if (typedInput.relayUrls?.trim()) {
-      return parseRelayUrls(typedInput.relayUrls).error ?? null;
-    }
-    return null;
   },
-  applyAccountConfig: ({ cfg, accountId, input }) => {
-    const typedInput = input as {
-      useEnv?: boolean;
-      privateKey?: string;
-      relayUrls?: string;
-    };
-    const relayResult = typedInput.relayUrls?.trim()
-      ? parseRelayUrls(typedInput.relayUrls)
-      : { relays: [] };
-    return patchTopLevelChannelConfigSection({
-      cfg,
-      channel,
-      enabled: true,
-      clearFields: typedInput.useEnv ? ["privateKey"] : undefined,
-      patch: buildNostrSetupPatch(accountId, {
-        ...(typedInput.useEnv ? {} : { privateKey: typedInput.privateKey?.trim() }),
-        ...(relayResult.relays.length > 0 ? { relays: relayResult.relays } : {}),
-      }),
-    });
-  },
-};
+});
 
 export const nostrSetupWizard: ChannelSetupWizard = {
   channel,

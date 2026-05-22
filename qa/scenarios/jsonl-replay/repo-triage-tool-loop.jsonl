@@ -1,0 +1,7 @@
+{"message":{"role":"system","content":"Curated JSONL replay fixture: repository triage. Synthetic data only; no private transcript content."}}
+{"message":{"role":"user","content":"Review the QA fixture index and identify one missing runtime coverage row."}}
+{"message":{"role":"assistant","content":[{"type":"tool_use","id":"fixture_tool_1","name":"read","input":{"path":"qa/scenarios/index.md"}}]}}
+{"message":{"role":"tool","toolName":"read","content":"Runtime coverage index includes basic channel and model rows."}}
+{"message":{"role":"assistant","content":"The index has channel and model rows; runtime replay coverage is a good follow-up."}}
+{"message":{"role":"user","content":"Draft the smallest next test without editing production wiring."}}
+{"message":{"role":"assistant","content":"Add a fixture-only replay test and leave CLI wiring for the parent branch."}}

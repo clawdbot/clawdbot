@@ -643,8 +643,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(enqueueSystemEvent).toHaveBeenCalledWith("Redacted cron update.", {
       sessionKey: "agent:main:main",
       contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
-      forceSenderIsOwnerFalse: true,
-      trusted: false,
     });
   });
 
@@ -680,8 +678,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(enqueueSystemEvent).toHaveBeenCalledWith("Morning briefing complete.", {
       sessionKey: "agent:main:main",
       contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
-      forceSenderIsOwnerFalse: true,
-      trusted: false,
     });
   });
 
@@ -710,8 +706,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       {
         sessionKey: "agent:main:main",
         contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
-        forceSenderIsOwnerFalse: true,
-        trusted: false,
       },
     );
   });
@@ -745,8 +739,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(enqueueSystemEvent).toHaveBeenCalledWith("main-chart.png", {
       sessionKey: "agent:main:main",
       contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
-      forceSenderIsOwnerFalse: true,
-      trusted: false,
     });
   });
 
@@ -837,8 +829,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(enqueueSystemEvent).toHaveBeenCalledWith("Custom main session briefing complete.", {
       sessionKey: "agent:main:work",
       contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
-      forceSenderIsOwnerFalse: true,
-      trusted: false,
     });
   });
 
@@ -886,8 +876,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       {
         sessionKey: "agent:main:work",
         contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
-        forceSenderIsOwnerFalse: true,
-        trusted: false,
       },
     );
   });

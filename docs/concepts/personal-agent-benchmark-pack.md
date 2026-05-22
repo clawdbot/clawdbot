@@ -3,7 +3,7 @@ summary: "Local qa-channel scenarios for privacy-preserving personal assistant w
 read_when:
   - Running local personal agent reliability checks
   - Extending the repo-backed QA scenario catalog
-  - Verifying reminder, reply, memory, redaction, safe tool followthrough, task status, share-safe diagnostics, and proof-backed completion claims
+  - Verifying reminder, reply, memory, redaction, safe tool followthrough, task status, share-safe diagnostics, proof-backed completion claims, and failure recovery
 title: "Personal agent benchmark pack"
 ---
 
@@ -25,6 +25,7 @@ The first pack is intentionally narrow:
 - proof-backed task status reporting that keeps pending, blocked, and done separate
 - share-safe diagnostics artifacts that keep useful status while omitting raw personal content
 - proof-backed completion claims that avoid fake progress before local evidence exists
+- failure recovery that reports partial status and keeps retry boundaries clear
 
 ## Scenarios
 

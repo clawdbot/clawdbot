@@ -173,7 +173,14 @@ describe("interactive payload helpers", () => {
         { type: "divider" as const },
         {
           type: "buttons" as const,
-          buttons: [{ label: "Approve", value: "approve", style: "success" as const }],
+          buttons: [
+            {
+              label: "Approve",
+              value: "approve",
+              style: "success" as const,
+              reusable: true,
+            },
+          ],
         },
         {
           type: "select" as const,
@@ -189,7 +196,7 @@ describe("interactive payload helpers", () => {
         { type: "text", text: "Canary is ready." },
         {
           type: "buttons",
-          buttons: [{ label: "Approve", value: "approve", style: "success" }],
+          buttons: [{ label: "Approve", value: "approve", style: "success", reusable: true }],
         },
         {
           type: "select",
@@ -202,7 +209,7 @@ describe("interactive payload helpers", () => {
       blocks: [
         {
           type: "buttons",
-          buttons: [{ label: "Approve", value: "approve", style: "success" }],
+          buttons: [{ label: "Approve", value: "approve", style: "success", reusable: true }],
         },
         {
           type: "select",

@@ -38,6 +38,7 @@ describe("plugin loader records", () => {
       origin: "global",
       enabled: true,
       contracts: {
+        embeddingProviders: ["kitchen-sink-embedding-provider"],
         speechProviders: ["kitchen-sink-speech-provider"],
         realtimeTranscriptionProviders: ["kitchen-sink-transcription-provider"],
         realtimeVoiceProviders: ["kitchen-sink-voice-provider"],
@@ -53,6 +54,7 @@ describe("plugin loader records", () => {
       configSchema: false,
     });
 
+    expect(record.embeddingProviderIds).toEqual(["kitchen-sink-embedding-provider"]);
     expect(record.speechProviderIds).toEqual(["kitchen-sink-speech-provider"]);
     expect(record.realtimeTranscriptionProviderIds).toEqual([
       "kitchen-sink-transcription-provider",

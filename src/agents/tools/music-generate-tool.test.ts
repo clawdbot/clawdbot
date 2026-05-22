@@ -4,12 +4,21 @@ import * as mediaStore from "../../media/store.js";
 import * as webMedia from "../../media/web-media.js";
 import * as musicGenerationRuntime from "../../music-generation/runtime.js";
 import * as fetchTimeout from "../../utils/fetch-timeout.js";
+import { resetRecentMediaGenerationDuplicateGuardsForTests } from "../media-generation-task-status-shared.js";
 import * as musicGenerateBackground from "./music-generate-background.js";
 import { createMusicGenerateTool } from "./music-generate-tool.js";
 
-const taskRuntimeInternalMocks = vi.hoisted(() => ({
-  listTasksForOwnerKey: vi.fn(),
-}));
+const taskRuntimeInternalMocks = vi.hoisted(() => {
+  const mocks = {
+    listTasksForOwnerKey: vi.fn(),
+    listFreshTasksForOwnerKey: vi.fn(),
+    reloadTaskRegistryFromStore: vi.fn(),
+  };
+  mocks.listFreshTasksForOwnerKey.mockImplementation((ownerKey) =>
+    mocks.listTasksForOwnerKey(ownerKey),
+  );
+  return mocks;
+});
 
 const taskExecutorMocks = vi.hoisted(() => ({
   createRunningTaskRun: vi.fn(),
@@ -155,11 +164,19 @@ function resetMusicGenerateMocks() {
   mediaStoreMocks.saveMediaBuffer.mockReset();
   taskRuntimeInternalMocks.listTasksForOwnerKey.mockReset();
   taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([]);
+  taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockReset();
+  taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockImplementation((ownerKey) =>
+    taskRuntimeInternalMocks.listTasksForOwnerKey(ownerKey),
+  );
+  taskRuntimeInternalMocks.reloadTaskRegistryFromStore.mockReset();
+  resetRecentMediaGenerationDuplicateGuardsForTests();
   vi.mocked(fetchTimeout.buildTimeoutAbortSignal).mockClear();
   taskExecutorMocks.createRunningTaskRun.mockReset();
   taskExecutorMocks.completeTaskRunByRunId.mockReset();
   taskExecutorMocks.failTaskRunByRunId.mockReset();
   taskExecutorMocks.recordTaskRunProgressByRunId.mockReset();
+  musicGenerateBackgroundMocks.wakeMusicGenerationTaskCompletion.mockReset();
+  musicGenerateBackgroundMocks.wakeMusicGenerationTaskCompletion.mockResolvedValue(true);
 }
 
 function detailsOf(result: { details?: unknown }): Record<string, unknown> {
@@ -538,7 +555,7 @@ describe("createMusicGenerateTool", () => {
     });
     const wakeSpy = vi
       .spyOn(musicGenerateBackground, "wakeMusicGenerationTaskCompletion")
-      .mockResolvedValue(undefined);
+      .mockResolvedValue(true);
     vi.spyOn(musicGenerationRuntime, "generateMusic").mockResolvedValue({
       provider: "google",
       model: "lyria-3-clip-preview",
@@ -561,6 +578,7 @@ describe("createMusicGenerateTool", () => {
     });
 
     let scheduledWork: (() => Promise<void>) | undefined;
+    const onAsyncTaskStarted = vi.fn();
     const tool = createMusicGenerateTool({
       config: asConfig({
         agents: {
@@ -580,6 +598,7 @@ describe("createMusicGenerateTool", () => {
       scheduleBackgroundWork: (work) => {
         scheduledWork = work;
       },
+      onAsyncTaskStarted,
     });
     if (!tool) {
       throw new Error("expected music_generate tool");
@@ -594,6 +613,10 @@ describe("createMusicGenerateTool", () => {
     expect(text).toContain("Background task started for music generation (task-123).");
     expect(text).toContain("Do not call music_generate again for this request.");
     expect(text).toContain("Timeout normalized: requested 1000ms; used 120000ms.");
+    expect(onAsyncTaskStarted).toHaveBeenCalledOnce();
+    expect(onAsyncTaskStarted).toHaveBeenCalledWith(
+      "Music generation started; wait for the generated music completion event.",
+    );
     const details = detailsOf(result);
     expect(details.async).toBe(true);
     expect(details.status).toBe("started");
@@ -606,6 +629,7 @@ describe("createMusicGenerateTool", () => {
       applied: 120_000,
       minimum: 120_000,
     });
+    expect((result as { terminate?: boolean }).terminate).toBe(true);
     if (!scheduledWork) {
       throw new Error("expected scheduled music generation work");
     }
@@ -630,6 +654,209 @@ describe("createMusicGenerateTool", () => {
         name: "night-drive.mp3",
       },
     ]);
+  });
+
+  it("dedupes a recent default-model music request repeated with explicit or model-only override", async () => {
+    const now = Date.now();
+    vi.spyOn(musicGenerationRuntime, "listRuntimeMusicGenerationProviders").mockReturnValue([
+      {
+        id: "google",
+        defaultModel: "lyria-3-clip-preview",
+        models: ["lyria-3-clip-preview"],
+        capabilities: {
+          generate: {
+            supportsInstrumental: true,
+          },
+        },
+        generateMusic: vi.fn(async () => {
+          throw new Error("not used");
+        }),
+      },
+    ]);
+    taskExecutorMocks.createRunningTaskRun.mockReturnValue({
+      taskId: "task-recent-music",
+      runtime: "cli",
+      requesterSessionKey: "agent:main:discord:direct:123",
+      ownerKey: "agent:main:discord:direct:123",
+      scopeKind: "session",
+      task: "night-drive synthwave",
+      status: "running",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+      createdAt: now - 20_000,
+    });
+    const scheduled: Array<() => Promise<void>> = [];
+    const tool = createMusicGenerateTool({
+      config: asConfig({
+        agents: {
+          defaults: {
+            musicGenerationModel: {
+              primary: "google/lyria-3-clip-preview",
+              timeoutMs: 180_000,
+            },
+          },
+        },
+      }),
+      agentSessionKey: "agent:main:discord:direct:123",
+      requesterOrigin: {
+        channel: "discord",
+        to: "channel:1",
+      },
+      scheduleBackgroundWork: (work) => {
+        scheduled.push(work);
+      },
+    });
+    if (!tool) {
+      throw new Error("expected music_generate tool");
+    }
+
+    await tool.execute("call-start-default", {
+      prompt: "night-drive synthwave",
+      instrumental: true,
+    });
+    taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
+      {
+        taskId: "task-recent-music",
+        runId: "tool:music_generate:test-run",
+        runtime: "cli",
+        taskKind: "music_generation",
+        sourceId: "music_generate:google",
+        requesterSessionKey: "agent:main:discord:direct:123",
+        ownerKey: "agent:main:discord:direct:123",
+        scopeKind: "session",
+        task: "night-drive synthwave",
+        status: "succeeded",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+        createdAt: now - 20_000,
+        endedAt: now - 10_000,
+        progressSummary: "Generated 1 track",
+      },
+    ]);
+
+    const duplicate = await tool.execute("call-repeat-explicit", {
+      prompt: "night-drive synthwave",
+      instrumental: true,
+      model: "google/lyria-3-clip-preview",
+    });
+
+    expect(scheduled).toHaveLength(1);
+    expect(taskExecutorMocks.createRunningTaskRun).toHaveBeenCalledTimes(1);
+    expect((duplicate.content?.[0] as { text?: string } | undefined)?.text).toContain(
+      "Music generation task task-recent-music recently succeeded",
+    );
+    const details = detailsOf(duplicate);
+    expect(details.duplicateGuard).toBe(true);
+    expect(details.active).toBe(false);
+
+    const modelOnlyDuplicate = await tool.execute("call-repeat-model-only", {
+      prompt: "night-drive synthwave",
+      instrumental: true,
+      model: "lyria-3-clip-preview",
+    });
+
+    expect(scheduled).toHaveLength(1);
+    expect(taskExecutorMocks.createRunningTaskRun).toHaveBeenCalledTimes(1);
+    expect((modelOnlyDuplicate.content?.[0] as { text?: string } | undefined)?.text).toContain(
+      "Music generation task task-recent-music recently succeeded",
+    );
+    const modelOnlyDetails = detailsOf(modelOnlyDuplicate);
+    expect(modelOnlyDetails.duplicateGuard).toBe(true);
+    expect(modelOnlyDetails.active).toBe(false);
+  });
+
+  it("dedupes a model-only primary music request repeated with provider-qualified model", async () => {
+    const now = Date.now();
+    vi.spyOn(musicGenerationRuntime, "listRuntimeMusicGenerationProviders").mockReturnValue([
+      {
+        id: "google",
+        defaultModel: "lyria-3-clip-preview",
+        models: ["lyria-3-clip-preview", "lyria-3-pro-preview"],
+        capabilities: {
+          generate: {
+            supportsInstrumental: true,
+          },
+        },
+        generateMusic: vi.fn(async () => {
+          throw new Error("not used");
+        }),
+      },
+    ]);
+    taskExecutorMocks.createRunningTaskRun.mockReturnValue({
+      taskId: "task-model-only-music",
+      runtime: "cli",
+      requesterSessionKey: "agent:main:discord:direct:123",
+      ownerKey: "agent:main:discord:direct:123",
+      scopeKind: "session",
+      task: "night-drive synthwave",
+      status: "running",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+      createdAt: now - 20_000,
+    });
+    const scheduled: Array<() => Promise<void>> = [];
+    const tool = createMusicGenerateTool({
+      config: asConfig({
+        agents: {
+          defaults: {
+            musicGenerationModel: {
+              primary: "lyria-3-pro-preview",
+              timeoutMs: 180_000,
+            },
+          },
+        },
+      }),
+      agentSessionKey: "agent:main:discord:direct:123",
+      requesterOrigin: {
+        channel: "discord",
+        to: "channel:1",
+      },
+      scheduleBackgroundWork: (work) => {
+        scheduled.push(work);
+      },
+    });
+    if (!tool) {
+      throw new Error("expected music_generate tool");
+    }
+
+    await tool.execute("call-model-only-start", {
+      prompt: "night-drive synthwave",
+      instrumental: true,
+    });
+    taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
+      {
+        taskId: "task-model-only-music",
+        runId: "tool:music_generate:test-run",
+        runtime: "cli",
+        taskKind: "music_generation",
+        sourceId: "music_generate:google",
+        requesterSessionKey: "agent:main:discord:direct:123",
+        ownerKey: "agent:main:discord:direct:123",
+        scopeKind: "session",
+        task: "night-drive synthwave",
+        status: "succeeded",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+        createdAt: now - 20_000,
+        endedAt: now - 10_000,
+        progressSummary: "Generated 1 track",
+      },
+    ]);
+
+    const result = await tool.execute("call-provider-qualified-repeat", {
+      prompt: "night-drive synthwave",
+      instrumental: true,
+      model: "google/lyria-3-pro-preview",
+    });
+
+    expect(scheduled).toHaveLength(1);
+    expect(taskExecutorMocks.createRunningTaskRun).toHaveBeenCalledTimes(1);
+    expect((result.content?.[0] as { text?: string } | undefined)?.text).toContain(
+      "Music generation task task-model-only-music recently succeeded",
+    );
+    const details = detailsOf(result);
+    expect(details.duplicateGuard).toBe(true);
+    expect(details.active).toBe(false);
   });
 
   it("lists provider capabilities", async () => {

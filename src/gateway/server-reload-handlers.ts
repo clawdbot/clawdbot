@@ -1,4 +1,8 @@
 import { resetModelCatalogCache } from "../agents/model-catalog.js";
+import {
+  clearCurrentProviderAuthState,
+  warmCurrentProviderAuthState,
+} from "../agents/model-provider-auth.js";
 import { disposeAllSessionMcpRuntimes } from "../agents/pi-bundle-mcp-tools.js";
 import {
   getActiveEmbeddedRunCount,
@@ -85,6 +89,12 @@ export type GatewayPluginReloadResult = {
 const MCP_RUNTIME_RELOAD_DISPOSE_TIMEOUT_MS = 5_000;
 const CHANNEL_RELOAD_DEFERRAL_POLL_MS = 500;
 const CHANNEL_RELOAD_STILL_PENDING_WARN_MS = 30_000;
+
+function resetPreparedModelRuntimeStateForHotReload(): void {
+  resetModelCatalogCache();
+  clearCurrentProviderAuthState();
+  markGatewayModelCatalogStaleForReload();
+}
 
 async function disposeMcpRuntimesWithTimeout(params: {
   dispose: () => Promise<void>;
@@ -302,20 +312,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     const state = params.getState();
     const nextState = { ...state };
 
-    if (
-      plan.changedPaths.some(
-        (path) =>
-          path === "models" ||
-          path.startsWith("models.") ||
-          path === "agents.defaults.model" ||
-          path.startsWith("agents.defaults.model.") ||
-          path === "agents.defaults.models" ||
-          path.startsWith("agents.defaults.models."),
-      )
-    ) {
-      resetModelCatalogCache();
-      markGatewayModelCatalogStaleForReload();
-    }
+    resetPreparedModelRuntimeStateForHotReload();
 
     if (plan.reloadHooks) {
       try {
@@ -401,6 +398,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         channelsToRestart.add(channel);
       }
       activePluginChannelsAfterReload = pluginReloadResult.activeChannels;
+      resetPreparedModelRuntimeStateForHotReload();
     }
 
     if (plan.restartCron) {
@@ -501,6 +499,10 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
 
     applyGatewayLaneConcurrency(nextConfig);
+
+    void warmCurrentProviderAuthState(nextConfig).catch((err) => {
+      params.logReload.warn(`provider auth state rewarm failed: ${String(err)}`);
+    });
 
     if (plan.hotReasons.length > 0) {
       params.logReload.info(`config hot reload applied (${plan.hotReasons.join(", ")})`);

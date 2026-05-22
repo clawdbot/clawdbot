@@ -120,7 +120,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
           methods: messages.map((message) => message.method),
           sessionKey: requestContext.sessionKey,
           inboundEventKind: requestContext.inboundEventKind,
-          senderIsOwner: requestContext.senderIsOwner,
+          senderIsOwner: requestContext.senderIsOwner === true,
           toolCount: scopedTools.toolSchema.length,
           cronVisible: scopedTools.toolSchema.some((tool) => tool.name === "cron"),
         });

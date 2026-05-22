@@ -16,6 +16,7 @@ import {
   requiresExecApproval,
 } from "../infra/exec-approvals.js";
 import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
+import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../utils/message-channel.js";
 import { markBackgrounded, tail } from "./bash-process-registry.js";
 import {
   buildExecApprovalRequesterContext,
@@ -52,6 +53,7 @@ export type ProcessGatewayAllowlistParams = {
   command: string;
   workdir: string;
   env: Record<string, string>;
+  pathPrepend?: string[];
   requestedEnv?: Record<string, string>;
   pty: boolean;
   timeoutSec?: number;
@@ -86,6 +88,7 @@ export type ProcessGatewayAllowlistResult = {
   execCommandOverride?: string;
   allowWithoutEnforcedCommand?: boolean;
   pendingResult?: AgentToolResult<ExecToolDetails>;
+  deniedResult?: AgentToolResult<ExecToolDetails>;
 };
 
 function hasGatewayAllowlistMiss(params: {
@@ -346,6 +349,36 @@ function buildGatewayExecApprovalFollowupSummary(params: {
     : `Exec finished (gateway id=${params.approvalId}, session=${params.sessionId}, ${exitLabel})`;
 }
 
+function shouldAwaitGatewayApprovalInline(params: {
+  turnSourceChannel?: string;
+  approvalFollowupMode?: "agent" | "direct";
+}): boolean {
+  if (params.approvalFollowupMode === "direct") {
+    return false;
+  }
+  return normalizeMessageChannel(params.turnSourceChannel) === INTERNAL_MESSAGE_CHANNEL;
+}
+
+function buildGatewayExecApprovalDeniedToolResult(params: {
+  approvalId: string;
+  deniedReason: string;
+  command: string;
+  cwd: string;
+}): AgentToolResult<ExecToolDetails> {
+  const text = `Exec denied (gateway id=${params.approvalId}, ${params.deniedReason}): ${params.command}`;
+  return {
+    content: [{ type: "text", text }],
+    details: {
+      status: "failed",
+      exitCode: null,
+      durationMs: 0,
+      aggregated: text,
+      timedOut: params.deniedReason.includes("timeout"),
+      cwd: params.cwd,
+    },
+  };
+}
+
 async function resolveGatewayExecApprovalFollowupText(params: {
   approvalFollowup?: ExecApprovalFollowupFactory;
   approvalId: string;
@@ -563,31 +596,14 @@ export async function processGatewayAllowlist(
       allowlistEval.segments[0]?.resolution ?? null,
       params.workdir,
     );
-    const effectiveTimeout =
-      typeof params.timeoutSec === "number" ? params.timeoutSec : params.defaultTimeoutSec;
-    const followupTarget = buildExecApprovalFollowupTarget({
-      approvalId,
-      sessionKey: params.notifySessionKey ?? params.sessionKey,
-      bashElevated: params.bashElevated,
-      turnSourceChannel: params.turnSourceChannel,
-      turnSourceTo: params.turnSourceTo,
-      turnSourceAccountId: params.turnSourceAccountId,
-      turnSourceThreadId: params.turnSourceThreadId,
-      direct: params.approvalFollowupMode === "direct",
-    });
-
-    void (async () => {
+    const resolveApprovalForExecution = async (onFailure: () => void) => {
       const decision = await resolveApprovalDecisionOrUndefined({
         approvalId,
         preResolvedDecision,
-        onFailure: () =>
-          void sendExecApprovalFollowupResult(
-            followupTarget,
-            `Exec denied (gateway id=${approvalId}, approval-request-failed): ${params.command}`,
-          ),
+        onFailure,
       });
       if (decision === undefined) {
-        return;
+        return { deniedReason: "approval-request-failed", requestFailed: true };
       }
 
       const {
@@ -646,10 +662,58 @@ export async function processGatewayAllowlist(
         deniedReason = deniedReason ?? "allowlist-miss";
       }
 
-      if (deniedReason) {
+      return { deniedReason, requestFailed: false };
+    };
+
+    if (unavailableReason === null && shouldAwaitGatewayApprovalInline(params)) {
+      const approvalDecision = await resolveApprovalForExecution(() => undefined);
+      if (approvalDecision.deniedReason) {
+        return {
+          deniedResult: buildGatewayExecApprovalDeniedToolResult({
+            approvalId,
+            deniedReason: approvalDecision.deniedReason,
+            command: params.command,
+            cwd: params.workdir,
+          }),
+        };
+      }
+
+      recordMatchedAllowlistUse(resolvedPath ?? undefined);
+      return {
+        execCommandOverride: enforcedCommand,
+        allowWithoutEnforcedCommand: enforcedCommand === undefined,
+      };
+    }
+
+    const effectiveTimeout =
+      typeof params.timeoutSec === "number" ? params.timeoutSec : params.defaultTimeoutSec;
+    const followupTarget = buildExecApprovalFollowupTarget({
+      approvalId,
+      sessionKey: params.notifySessionKey ?? params.sessionKey,
+      bashElevated: params.bashElevated,
+      turnSourceChannel: params.turnSourceChannel,
+      turnSourceTo: params.turnSourceTo,
+      turnSourceAccountId: params.turnSourceAccountId,
+      turnSourceThreadId: params.turnSourceThreadId,
+      direct: params.approvalFollowupMode === "direct",
+    });
+
+    void (async () => {
+      const approvalDecision = await resolveApprovalForExecution(
+        () =>
+          void sendExecApprovalFollowupResult(
+            followupTarget,
+            `Exec denied (gateway id=${approvalId}, approval-request-failed): ${params.command}`,
+          ),
+      );
+      if (approvalDecision.requestFailed) {
+        return;
+      }
+
+      if (approvalDecision.deniedReason) {
         await sendExecApprovalFollowupResult(
           followupTarget,
-          `Exec denied (gateway id=${approvalId}, ${deniedReason}): ${params.command}`,
+          `Exec denied (gateway id=${approvalId}, ${approvalDecision.deniedReason}): ${params.command}`,
         );
         return;
       }
@@ -663,6 +727,7 @@ export async function processGatewayAllowlist(
           execCommand: enforcedCommand,
           workdir: params.workdir,
           env: params.env,
+          pathPrepend: params.pathPrepend,
           sandbox: undefined,
           containerWorkdir: null,
           usePty: params.pty,

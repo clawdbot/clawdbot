@@ -758,9 +758,60 @@ describe("createCodexDynamicToolBridge", () => {
       success: false,
       contentItems: [{ type: "inputText", text: "failed output" }],
     });
+    expect(result.sideEffectEvidence).toBe(true);
     const event = requireRecord(callArg(handler, 0, 0, "middleware event"), "middleware event");
     expect(event.isError).toBe(true);
     expectContextFields(callArg(handler, 0, 1, "middleware context"), { runtime: "codex" });
+  });
+
+  it("marks executed dynamic tool results as side-effect evidence", async () => {
+    const bridge = createBridgeWithToolResult("exec", textToolResult("done"));
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      namespace: null,
+      tool: "exec",
+      arguments: { command: "pwd" },
+    });
+
+    expect(result).toEqual(expectInputText("done"));
+    expect(result.sideEffectEvidence).toBe(true);
+  });
+
+  it("does not mark pre-execution argument failures as side-effect evidence", async () => {
+    const execute = vi.fn(async () => textToolResult("should not run"));
+    const bridge = createCodexDynamicToolBridge({
+      tools: [
+        createTool({
+          name: "exec",
+          execute,
+          ...({
+            prepareArguments: () => {
+              throw new Error("invalid arguments");
+            },
+          } as { prepareArguments: () => never }),
+        }),
+      ],
+      signal: new AbortController().signal,
+    });
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      namespace: null,
+      tool: "exec",
+      arguments: {},
+    });
+
+    expect(result).toEqual({
+      success: false,
+      contentItems: [{ type: "inputText", text: "invalid arguments" }],
+    });
+    expect(result.sideEffectEvidence).toBeUndefined();
+    expect(execute).not.toHaveBeenCalled();
   });
 
   it("uses raw tool provenance for media trust after middleware rewrites details", async () => {
@@ -1082,6 +1133,7 @@ describe("createCodexDynamicToolBridge", () => {
       success: false,
       contentItems: [{ type: "inputText", text: "blocked by policy" }],
     });
+    expect(result.sideEffectEvidence).toBeUndefined();
     expect(execute).not.toHaveBeenCalled();
     expect(bridge.telemetry.didSendViaMessagingTool).toBe(false);
     await vi.waitFor(() => {

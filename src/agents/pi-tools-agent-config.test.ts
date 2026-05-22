@@ -187,7 +187,6 @@ describe("Agent-specific tool filtering", () => {
       sessionKey: "main",
       workspaceDir: "/tmp/test",
       agentDir: "/tmp/agent-local",
-      senderIsOwner: true,
       modelProvider: "lmstudio",
       modelId: "gemma-4-e4b-it",
     });

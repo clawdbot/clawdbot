@@ -181,6 +181,63 @@ function createPluginMetadataSnapshot(
   };
 }
 
+function configRecordWithRequireMentionSchema() {
+  return {
+    type: "object",
+    additionalProperties: {
+      type: "object",
+      properties: {
+        requireMention: { type: "boolean" },
+      },
+    },
+  };
+}
+
+function configChannelSchemaWithRecord(recordKey: string) {
+  return {
+    type: "object",
+    properties: {
+      [recordKey]: configRecordWithRequireMentionSchema(),
+    },
+  };
+}
+
+function setConfigMutationShapeSchema() {
+  mockReadBestEffortRuntimeConfigSchema.mockResolvedValue({
+    schema: {
+      $schema: "http://json-schema.org/draft-07/schema#",
+      type: "object",
+      properties: {
+        agents: {
+          type: "object",
+          properties: {
+            list: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  id: { type: "string" },
+                  name: { type: "string" },
+                },
+              },
+            },
+          },
+        },
+        channels: {
+          type: "object",
+          properties: {
+            discord: configChannelSchemaWithRecord("guilds"),
+            telegram: configChannelSchemaWithRecord("groups"),
+          },
+        },
+      },
+    },
+    uiHints: {},
+    version: "test",
+    generatedAt: "2026-03-25T00:00:00.000Z",
+  });
+}
+
 function setExternalFeishuSchema() {
   mockLoadPluginMetadataSnapshot.mockReturnValue(
     createPluginMetadataSnapshot({
@@ -1260,6 +1317,83 @@ describe("config cli", () => {
         provider: "default",
         id: "DISCORD_BOT_TOKEN",
       });
+    });
+
+    it("keeps numeric config set path segments as object keys for schema-backed Discord guild records", async () => {
+      setConfigMutationShapeSchema();
+      const resolved: OpenClawConfig = {
+        channels: {
+          discord: {
+            enabled: true,
+          },
+        },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "channels.discord.guilds.1495587801394184362.requireMention",
+        "true",
+        "--strict-json",
+      ]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = firstWrittenConfig() as {
+        channels?: { discord?: { guilds?: unknown } };
+      };
+      expect(written.channels?.discord?.guilds).toEqual({
+        "1495587801394184362": {
+          requireMention: true,
+        },
+      });
+      expect(Array.isArray(written.channels?.discord?.guilds)).toBe(false);
+    });
+
+    it("keeps numeric config set path segments as object keys for other schema-backed records", async () => {
+      setConfigMutationShapeSchema();
+      const resolved: OpenClawConfig = {
+        channels: {
+          telegram: {
+            enabled: true,
+          },
+        },
+      } as unknown as OpenClawConfig;
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "channels.telegram.groups.1495587801394184362.requireMention",
+        "true",
+        "--strict-json",
+      ]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = firstWrittenConfig() as {
+        channels?: { telegram?: { groups?: unknown } };
+      };
+      expect(written.channels?.telegram?.groups).toEqual({
+        "1495587801394184362": {
+          requireMention: true,
+        },
+      });
+      expect(Array.isArray(written.channels?.telegram?.groups)).toBe(false);
+    });
+
+    it("still creates arrays for schema-backed numeric list indexes", async () => {
+      setConfigMutationShapeSchema();
+      const resolved: OpenClawConfig = {};
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand(["config", "set", "agents.list.0.id", '"tech"', "--strict-json"]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = firstWrittenConfig() as {
+        agents?: { list?: unknown };
+      };
+      expect(written.agents?.list).toEqual([{ id: "tech" }]);
+      expect(Array.isArray(written.agents?.list)).toBe(true);
     });
 
     it("fails early when unsupported mutable paths are assigned SecretRef objects (builder mode)", async () => {

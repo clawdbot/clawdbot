@@ -102,6 +102,16 @@ function createWorkspacePluginMetadataSnapshot(params: {
   manifestRegistry: PluginManifestRegistry;
 }): PluginMetadataSnapshot {
   const policyHash = resolveInstalledPluginIndexPolicyHash(params.config);
+  const ownerMaps = {
+    channels: new Map(),
+    channelConfigs: new Map(),
+    providers: new Map(),
+    modelCatalogProviders: new Map(),
+    cliBackends: new Map(),
+    setupProviders: new Map(),
+    commandAliases: new Map(),
+    contracts: new Map(),
+  };
   return {
     policyHash,
     workspaceDir: params.workspaceDir,
@@ -122,16 +132,7 @@ function createWorkspacePluginMetadataSnapshot(params: {
     diagnostics: params.manifestRegistry.diagnostics,
     byPluginId: new Map(params.manifestRegistry.plugins.map((plugin) => [plugin.id, plugin])),
     normalizePluginId: (pluginId) => pluginId,
-    owners: {
-      channels: new Map(),
-      channelConfigs: new Map(),
-      providers: new Map(),
-      modelCatalogProviders: new Map(),
-      cliBackends: new Map(),
-      setupProviders: new Map(),
-      commandAliases: new Map(),
-      contracts: new Map(),
-    },
+    owners: ownerMaps,
     metrics: {
       registrySnapshotMs: 0,
       manifestRegistryMs: 0,

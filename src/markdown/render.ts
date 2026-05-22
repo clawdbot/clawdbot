@@ -1,7 +1,7 @@
 import type { MarkdownIR, MarkdownLinkSpan, MarkdownStyle, MarkdownStyleSpan } from "./ir.js";
 
 export type RenderStyleMarker = {
-  open: string;
+  open: string | ((span: MarkdownStyleSpan) => string);
   close: string;
 };
 
@@ -153,7 +153,7 @@ export function renderMarkdownWithMarkers(ir: MarkdownIR, options: RenderOptions
         }
         openingItems.push({
           end: span.end,
-          open: marker.open,
+          open: typeof marker.open === "function" ? marker.open(span) : marker.open,
           close: marker.close,
           kind: "style",
           style: span.style,

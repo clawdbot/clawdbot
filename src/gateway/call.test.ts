@@ -42,6 +42,20 @@ const eventLoopReadyState = vi.hoisted(() => ({
   },
 }));
 
+const connectAssemblyErrorState = vi.hoisted(() => {
+  const errors = new WeakSet<Error>();
+  return {
+    create(message: string): Error {
+      const error = new Error(message);
+      errors.add(error);
+      return error;
+    },
+    has(value: unknown): value is Error {
+      return value instanceof Error && errors.has(value);
+    },
+  };
+});
+
 let lastClientOptions: {
   url?: string;
   token?: string;
@@ -56,13 +70,19 @@ let lastClientOptions: {
   deviceIdentity?: unknown;
   onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
   onClose?: (code: number, reason: string) => void;
+  onConnectError?: (err: Error) => void;
 } | null = null;
 let lastRequestOptions: {
   method?: string;
   params?: unknown;
-  opts?: { expectFinal?: boolean; timeoutMs?: number | null };
+  opts?: {
+    expectFinal?: boolean;
+    timeoutMs?: number | null;
+    signal?: AbortSignal;
+    onAccepted?: (payload: unknown) => void;
+  };
 } | null = null;
-type StartMode = "hello" | "close" | "silent" | "startup-retry-then-hello";
+type StartMode = "hello" | "close" | "connect-error" | "silent" | "startup-retry-then-hello";
 let startMode: StartMode = "hello";
 let startCalls = 0;
 let closeCode = 1006;
@@ -79,6 +99,7 @@ vi.mock("./client.js", () => ({
     }
     return undefined;
   },
+  isGatewayConnectAssemblyError: (value: unknown) => connectAssemblyErrorState.has(value),
   GatewayClient: class {
     constructor(opts: {
       url?: string;
@@ -92,6 +113,7 @@ vi.mock("./client.js", () => ({
       scopes?: string[];
       onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
       onClose?: (code: number, reason: string) => void;
+      onConnectError?: (err: Error) => void;
     }) {
       lastClientOptions = opts;
     }
@@ -117,6 +139,10 @@ vi.mock("./client.js", () => ({
             methods: helloMethods,
           },
         });
+      } else if (startMode === "connect-error") {
+        lastClientOptions?.onConnectError?.(
+          connectAssemblyErrorState.create("device private key invalid"),
+        );
       } else if (startMode === "close") {
         lastClientOptions?.onClose?.(closeCode, closeReason);
       }
@@ -157,13 +183,19 @@ class StubGatewayClient {
     scopes?: string[];
     onHelloOk?: (hello: { features?: { methods?: string[] } }) => void | Promise<void>;
     onClose?: (code: number, reason: string) => void;
+    onConnectError?: (err: Error) => void;
   }) {
     lastClientOptions = opts;
   }
   async request(
     method: string,
     params: unknown,
-    opts?: { expectFinal?: boolean; timeoutMs?: number | null },
+    opts?: {
+      expectFinal?: boolean;
+      timeoutMs?: number | null;
+      signal?: AbortSignal;
+      onAccepted?: (payload: unknown) => void;
+    },
   ) {
     lastRequestOptions = { method, params, opts };
     return { ok: true };
@@ -182,6 +214,10 @@ class StubGatewayClient {
           methods: helloMethods,
         },
       });
+    } else if (startMode === "connect-error") {
+      lastClientOptions?.onConnectError?.(
+        connectAssemblyErrorState.create("device private key invalid"),
+      );
     } else if (startMode === "close") {
       lastClientOptions?.onClose?.(closeCode, closeReason);
     }
@@ -966,6 +1002,20 @@ describe("callGateway error details", () => {
     expect(lastRequestOptions?.method).toBe("health");
   });
 
+  it("rejects immediately when the client reports a connect error", async () => {
+    startMode = "connect-error";
+    setLocalLoopbackGatewayConfig();
+
+    let err: unknown;
+    await callGateway({ method: "health", timeoutMs: 10_000 }).catch((caught) => {
+      err = caught;
+    });
+
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toBe("device private key invalid");
+    expect(lastRequestOptions).toBeNull();
+  });
+
   it("includes connection details on timeout", async () => {
     startMode = "silent";
     setLocalLoopbackGatewayConfig();
@@ -1153,6 +1203,166 @@ describe("callGateway error details", () => {
 
     expect(lastRequestOptions?.method).toBe("health");
     expect(lastRequestOptions?.opts?.timeoutMs).toBe(45_000);
+  });
+
+  it("forwards caller abort signal and accepted callback to client requests", async () => {
+    setLocalLoopbackGatewayConfig();
+    const controller = new AbortController();
+    const onAccepted = vi.fn();
+
+    await callGateway({
+      method: "agent",
+      expectFinal: true,
+      signal: controller.signal,
+      onAccepted,
+    });
+
+    expect(lastRequestOptions?.method).toBe("agent");
+    expect(lastRequestOptions?.opts?.signal).toBe(controller.signal);
+    expect(lastRequestOptions?.opts?.onAccepted).toBe(onAccepted);
+  });
+
+  it("runs the signal abort hook on the active gateway connection before teardown", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    const controller = new AbortController();
+    const abortRequests: Array<{
+      method: string;
+      params: unknown;
+      opts?: { timeoutMs?: number | null };
+    }> = [];
+    let stopStarted = false;
+
+    testing.setDepsForTests({
+      createGatewayClient: (opts) =>
+        ({
+          async request(
+            method: string,
+            params: unknown,
+            requestOpts?: {
+              expectFinal?: boolean;
+              timeoutMs?: number | null;
+              signal?: AbortSignal;
+            },
+          ) {
+            lastRequestOptions = { method, params, opts: requestOpts };
+            if (method === "agent") {
+              return await new Promise((_, reject) => {
+                requestOpts?.signal?.addEventListener(
+                  "abort",
+                  () => {
+                    const err = new Error("gateway request aborted for agent");
+                    err.name = "AbortError";
+                    reject(err);
+                  },
+                  { once: true },
+                );
+              });
+            }
+            abortRequests.push({ method, params, opts: requestOpts });
+            return { ok: true };
+          },
+          start() {
+            opts.onHelloOk?.({
+              features: {
+                methods: helloMethods ?? [],
+                events: [],
+              },
+            } as unknown as Parameters<NonNullable<typeof opts.onHelloOk>>[0]);
+          },
+          stop() {},
+          async stopAndWait() {
+            stopStarted = true;
+          },
+        }) as never,
+      getRuntimeConfig: getRuntimeConfig as unknown as () => OpenClawConfig,
+      loadOrCreateDeviceIdentity: () => deviceIdentityState.value,
+      resolveGatewayPort: resolveGatewayPort as unknown as (
+        cfg?: OpenClawConfig,
+        env?: NodeJS.ProcessEnv,
+      ) => number,
+    });
+
+    const promise = callGateway({
+      method: "agent",
+      expectFinal: true,
+      signal: controller.signal,
+      onSignalAbort: async (request) => {
+        await request("chat.abort", { sessionKey: "main", runId: "run-1" }, { timeoutMs: 5_000 });
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(lastRequestOptions?.method).toBe("agent");
+    });
+    controller.abort();
+
+    await expect(promise).rejects.toThrow("gateway request aborted for agent");
+    expect(abortRequests).toEqual([
+      {
+        method: "chat.abort",
+        params: { sessionKey: "main", runId: "run-1" },
+        opts: { timeoutMs: 5_000 },
+      },
+    ]);
+    expect(stopStarted).toBe(true);
+  });
+
+  it("skips the signal abort hook before the primary request starts", async () => {
+    setLocalLoopbackGatewayConfig();
+
+    const controller = new AbortController();
+    const onSignalAbort = vi.fn(async () => undefined);
+    let startCalled = false;
+    let stopStarted = false;
+
+    testing.setDepsForTests({
+      createGatewayClient: () =>
+        ({
+          async request(
+            method: string,
+            params: unknown,
+            requestOpts?: {
+              expectFinal?: boolean;
+              timeoutMs?: number | null;
+              signal?: AbortSignal;
+            },
+          ) {
+            lastRequestOptions = { method, params, opts: requestOpts };
+            return { ok: true };
+          },
+          start() {
+            startCalled = true;
+          },
+          stop() {},
+          async stopAndWait() {
+            stopStarted = true;
+          },
+        }) as never,
+      getRuntimeConfig: getRuntimeConfig as unknown as () => OpenClawConfig,
+      loadOrCreateDeviceIdentity: () => deviceIdentityState.value,
+      resolveGatewayPort: resolveGatewayPort as unknown as (
+        cfg?: OpenClawConfig,
+        env?: NodeJS.ProcessEnv,
+      ) => number,
+    });
+
+    const promise = callGateway({
+      method: "agent",
+      expectFinal: true,
+      signal: controller.signal,
+      onSignalAbort,
+    });
+
+    await vi.waitFor(() => {
+      expect(startCalled).toBe(true);
+    });
+    controller.abort();
+
+    await expect(promise).rejects.toThrow("gateway request aborted for agent");
+    expect(onSignalAbort).not.toHaveBeenCalled();
+    expect(lastRequestOptions).toBeNull();
+    expect(stopStarted).toBe(true);
   });
 
   it("passes configured gateway handshake timeout to the client watchdog", async () => {

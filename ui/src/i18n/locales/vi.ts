@@ -1088,6 +1088,9 @@ export const vi: TranslationMap = {
     selectors: {
       agentFilter: "Lọc phiên theo tác nhân",
       session: "Chat session",
+      sessionSearch: "Tìm kiếm phiên",
+      clearSessionSearch: "Xóa tìm kiếm phiên",
+      loadMoreSessions: "Tải thêm phiên",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },

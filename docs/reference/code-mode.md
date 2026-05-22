@@ -266,14 +266,22 @@ Input:
 
 ```typescript
 type CodeModeExecInput = {
-  code: string;
+  code?: string;
+  command?: string;
   language?: "javascript" | "typescript";
 };
 ```
 
 Input rules:
 
-- `code` is required and must be non-empty.
+- One of `code` or `command` must be non-empty.
+- `code` is the documented model-facing field.
+- `command` is accepted as an exec-compatible alias for hook policies and
+  trusted rewrites; when both are present, the values must match.
+- Outer code-mode `exec` hook events include `toolKind: "code_mode_exec"` and
+  include `toolInputKind: "javascript" | "typescript"` when the input language
+  is known, so policies can distinguish code-mode cells from shell-style `exec`
+  calls that share the same tool name.
 - `language` defaults to `"javascript"`.
 - If `language` is `"typescript"`, OpenClaw transpiles before evaluation.
 - `exec` rejects `import`, `require`, dynamic import, and module-loader patterns

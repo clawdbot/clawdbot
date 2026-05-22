@@ -473,6 +473,24 @@
     width: 100%;
   }
 
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-actions {
+    display: grid;
+    grid-auto-columns: 44px;
+    grid-auto-flow: column;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-search {
+    min-width: 0;
+    width: 100%;
+  }
+
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-search input {
+    min-height: 44px;
+    font-size: 14px;
+  }
+
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-row--single-agent {
     grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
     grid-template-areas:

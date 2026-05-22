@@ -39,49 +39,52 @@ type IsolatedRunResult = Awaited<
   ReturnType<NonNullable<ConstructorParameters<typeof CronService>[0]["runIsolatedAgentJob"]>>
 >;
 
+function createManualIsolatedJob(id: string): CronJob {
+  const now = Date.parse("2025-12-13T17:00:00.000Z");
+  return {
+    id,
+    name: id.replaceAll("-", " "),
+    enabled: true,
+    createdAtMs: now - 3_600_000,
+    updatedAtMs: now,
+    schedule: { kind: "cron", expr: "0 18 * * *", tz: "UTC" },
+    sessionTarget: "isolated",
+    wakeMode: "next-heartbeat",
+    payload: { kind: "agentTurn", message: "hi" },
+    delivery: { mode: "none" },
+    state: {
+      nextRunAtMs: now + 3_600_000,
+    },
+  };
+}
+
+async function createManualRunHarness(jobId: string) {
+  const store = await makeStorePath();
+  await writeCronStoreSnapshot({ storePath: store.storePath, jobs: [createManualIsolatedJob(jobId)] });
+
+  const entered = createDeferred<void>();
+  const release = createDeferred<IsolatedRunResult>();
+  const cron = new CronService({
+    storePath: store.storePath,
+    cronEnabled: true,
+    log: logger,
+    enqueueSystemEvent: () => {},
+    requestHeartbeat: () => {},
+    runIsolatedAgentJob: async () => {
+      entered.resolve();
+      return await release.promise;
+    },
+  });
+  return { cron, entered, release, store };
+}
+
 describe("cron activeJobIds — manual-run mark/clear", () => {
   beforeEach(() => {
     resetCronActiveJobsForTests();
   });
 
   it("marks the job active during a manual run and clears it on success", async () => {
-    const store = await makeStorePath();
-    const now = Date.parse("2025-12-13T17:00:00.000Z");
-    const futureNext = now + 3_600_000;
-
-    const jobs: CronJob[] = [
-      {
-        id: "manual-isolated-ok",
-        name: "manual isolated ok",
-        enabled: true,
-        createdAtMs: now - 3_600_000,
-        updatedAtMs: now,
-        schedule: { kind: "cron", expr: "0 18 * * *", tz: "UTC" },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "agentTurn", message: "hi" },
-        delivery: { mode: "none" },
-        state: {
-          nextRunAtMs: futureNext,
-        },
-      },
-    ];
-
-    await writeCronStoreSnapshot({ storePath: store.storePath, jobs });
-
-    const entered = createDeferred<void>();
-    const release = createDeferred<IsolatedRunResult>();
-    const cron = new CronService({
-      storePath: store.storePath,
-      cronEnabled: true,
-      log: logger,
-      enqueueSystemEvent: () => {},
-      requestHeartbeat: () => {},
-      runIsolatedAgentJob: async () => {
-        entered.resolve();
-        return await release.promise;
-      },
-    });
+    const { cron, entered, release, store } = await createManualRunHarness("manual-isolated-ok");
 
     try {
       await cron.start();
@@ -102,43 +105,8 @@ describe("cron activeJobIds — manual-run mark/clear", () => {
   });
 
   it("clears the active marker even when the inner agent run throws", async () => {
-    const store = await makeStorePath();
-    const now = Date.parse("2025-12-13T17:00:00.000Z");
-    const futureNext = now + 3_600_000;
-
-    const jobs: CronJob[] = [
-      {
-        id: "manual-isolated-throw",
-        name: "manual isolated throw",
-        enabled: true,
-        createdAtMs: now - 3_600_000,
-        updatedAtMs: now,
-        schedule: { kind: "cron", expr: "0 18 * * *", tz: "UTC" },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "agentTurn", message: "hi" },
-        delivery: { mode: "none" },
-        state: {
-          nextRunAtMs: futureNext,
-        },
-      },
-    ];
-
-    await writeCronStoreSnapshot({ storePath: store.storePath, jobs });
-
-    const entered = createDeferred<void>();
-    const release = createDeferred<IsolatedRunResult>();
-    const cron = new CronService({
-      storePath: store.storePath,
-      cronEnabled: true,
-      log: logger,
-      enqueueSystemEvent: () => {},
-      requestHeartbeat: () => {},
-      runIsolatedAgentJob: async () => {
-        entered.resolve();
-        return await release.promise;
-      },
-    });
+    const { cron, entered, release, store } =
+      await createManualRunHarness("manual-isolated-throw");
 
     try {
       await cron.start();

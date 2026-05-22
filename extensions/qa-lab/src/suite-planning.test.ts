@@ -13,6 +13,7 @@ import {
   resolveQaSuiteOutputDir,
   scenarioRequiresControlUi,
   selectQaSuiteScenarios,
+  shouldUseIsolatedQaSuiteScenarioWorkers,
 } from "./suite-planning.js";
 import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
 
@@ -300,6 +301,46 @@ describe("qa suite planning helpers", () => {
     expect(collectQaSuiteGatewayRuntimeOptions(scenarios)).toEqual({
       forwardHostHome: true,
     });
+  });
+
+  it("isolates multi-scenario serial runs when a scenario needs startup config", () => {
+    const scenarios = [
+      makeQaSuiteTestScenario("baseline"),
+      makeQaSuiteTestScenario("message-tool-mode", {
+        gatewayConfigPatch: {
+          messages: {
+            groupChat: {
+              visibleReplies: "message_tool",
+            },
+          },
+        },
+      }),
+    ];
+
+    expect(
+      shouldUseIsolatedQaSuiteScenarioWorkers({
+        scenarios,
+        concurrency: 1,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not isolate plain serial scenario runs", () => {
+    expect(
+      shouldUseIsolatedQaSuiteScenarioWorkers({
+        scenarios: [makeQaSuiteTestScenario("first"), makeQaSuiteTestScenario("second")],
+        concurrency: 1,
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps concurrent runs on isolated workers", () => {
+    expect(
+      shouldUseIsolatedQaSuiteScenarioWorkers({
+        scenarios: [makeQaSuiteTestScenario("first"), makeQaSuiteTestScenario("second")],
+        concurrency: 2,
+      }),
+    ).toBe(true);
   });
 
   it("enables Control UI only for Control UI scenario workers", () => {

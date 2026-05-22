@@ -1273,6 +1273,14 @@
   max-width: none;
 }
 
+.chat-controls__session-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+}
+
 .chat-controls__session-row {
   display: grid;
   grid-template-columns:
@@ -1308,6 +1316,50 @@
 
 .chat-controls__session-picker {
   grid-area: session;
+}
+
+.chat-controls__session-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+}
+
+.chat-controls__session-search {
+  position: relative;
+  flex: 1 1 220px;
+  min-width: 160px;
+  max-width: none;
+}
+
+.chat-controls__session-search input {
+  box-sizing: border-box;
+  width: 100%;
+  height: 36px;
+  min-height: 36px;
+  padding: 0 12px 0 34px;
+  border-color: color-mix(in srgb, var(--input) 88%, transparent);
+  border-radius: var(--radius-lg);
+  background-color: color-mix(in srgb, var(--card) 92%, var(--bg-elevated) 8%);
+  font-size: 13px;
+}
+
+.chat-controls__session-search-icon {
+  position: absolute;
+  left: 11px;
+  top: 50%;
+  display: inline-flex;
+  width: 15px;
+  height: 15px;
+  color: var(--muted);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.chat-controls__session-search-icon svg {
+  width: 15px;
+  height: 15px;
 }
 
 .chat-controls__agent {

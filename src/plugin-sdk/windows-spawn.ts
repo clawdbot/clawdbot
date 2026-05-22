@@ -48,6 +48,27 @@ export type ResolveWindowsSpawnProgramCandidateParams = Omit<
   ResolveWindowsSpawnProgramParams,
   "allowShellFallback"
 >;
+export type WindowsSpawnCommandInlineArgs = {
+  executable: string;
+  arguments: string;
+};
+
+const INLINE_ARGUMENT_EXECUTABLES = new Set([
+  "node",
+  "node.exe",
+  "npm",
+  "npm.cmd",
+  "npm.exe",
+  "npx",
+  "npx.cmd",
+  "npx.exe",
+  "pnpm",
+  "pnpm.cmd",
+  "pnpm.exe",
+  "yarn",
+  "yarn.cmd",
+  "yarn.exe",
+]);
 
 function isFilePath(candidate: string): boolean {
   try {
@@ -55,6 +76,49 @@ function isFilePath(candidate: string): boolean {
   } catch {
     return false;
   }
+}
+
+function readCommandToken(command: string): { token: string; rest: string } | null {
+  const trimmed = command.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (trimmed.startsWith('"')) {
+    const closeIndex = trimmed.indexOf('"', 1);
+    if (closeIndex <= 0) {
+      return null;
+    }
+    return {
+      token: trimmed.slice(1, closeIndex),
+      rest: trimmed.slice(closeIndex + 1).trim(),
+    };
+  }
+  const match = trimmed.match(/^(\S+)\s+(.+)$/);
+  if (!match) {
+    return null;
+  }
+  return {
+    token: match[1] ?? "",
+    rest: (match[2] ?? "").trim(),
+  };
+}
+
+export function detectWindowsSpawnCommandInlineArgs(
+  command: string,
+): WindowsSpawnCommandInlineArgs | null {
+  const parsed = readCommandToken(command);
+  if (!parsed?.rest) {
+    return null;
+  }
+  const normalizedToken = parsed.token.replace(/\\/g, "/");
+  const executable = normalizeLowercaseStringOrEmpty(path.posix.basename(normalizedToken));
+  if (!INLINE_ARGUMENT_EXECUTABLES.has(executable)) {
+    return null;
+  }
+  return {
+    executable: parsed.token,
+    arguments: parsed.rest,
+  };
 }
 
 /** Resolve a Windows command name through PATH and PATHEXT so wrapper inspection sees the real file. */
@@ -213,6 +277,12 @@ export function resolveWindowsSpawnProgramCandidate(
       leadingArgv: [],
       resolution: "direct",
     };
+  }
+  const inlineArgs = detectWindowsSpawnCommandInlineArgs(params.command);
+  if (inlineArgs) {
+    throw new Error(
+      `Windows spawn command must be an executable path only; "${inlineArgs.executable}" was configured with inline arguments "${inlineArgs.arguments}". Put arguments in the caller's args array instead.`,
+    );
   }
 
   const resolvedCommand = resolveWindowsExecutablePath(params.command, env);

@@ -548,6 +548,13 @@ describe("sanitizeHostExecEnv", () => {
         AZURE_AUTH_LOCATION: "/tmp/trusted-azure-auth.json",
         SSH_AUTH_SOCK: "/tmp/trusted-ssh-agent.sock",
         DOCKER_CONTEXT: "trusted-remote",
+        XDG_CACHE_HOME: "/tmp/trusted-xdg-cache",
+        XDG_CONFIG_DIRS: "/tmp/trusted-xdg-config-dirs:/etc/xdg",
+        XDG_CONFIG_HOME: "/tmp/trusted-xdg-config",
+        XDG_DATA_DIRS: "/tmp/trusted-xdg-data-dirs:/usr/share",
+        XDG_DATA_HOME: "/tmp/trusted-xdg-data",
+        XDG_RUNTIME_DIR: "/tmp/trusted-xdg-runtime",
+        XDG_STATE_HOME: "/tmp/trusted-xdg-state",
         VIMINIT: ":!touch /tmp/pwned",
         EXINIT: "silent !touch /tmp/pwned",
         LUA_INIT_5_4: "os.execute('touch /tmp/pwned')",
@@ -579,6 +586,13 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.AZURE_AUTH_LOCATION).toBe("/tmp/trusted-azure-auth.json");
     expect(env.SSH_AUTH_SOCK).toBe("/tmp/trusted-ssh-agent.sock");
     expect(env.DOCKER_CONTEXT).toBe("trusted-remote");
+    expect(env.XDG_CACHE_HOME).toBe("/tmp/trusted-xdg-cache");
+    expect(env.XDG_CONFIG_DIRS).toBe("/tmp/trusted-xdg-config-dirs:/etc/xdg");
+    expect(env.XDG_CONFIG_HOME).toBe("/tmp/trusted-xdg-config");
+    expect(env.XDG_DATA_DIRS).toBe("/tmp/trusted-xdg-data-dirs:/usr/share");
+    expect(env.XDG_DATA_HOME).toBe("/tmp/trusted-xdg-data");
+    expect(env.XDG_RUNTIME_DIR).toBe("/tmp/trusted-xdg-runtime");
+    expect(env.XDG_STATE_HOME).toBe("/tmp/trusted-xdg-state");
     expect(env.AWS_CONTAINER_CREDENTIALS_FULL_URI).toBeUndefined();
     expect(env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI).toBeUndefined();
     expect(env.CONFIG_SITE).toBeUndefined();
@@ -607,7 +621,13 @@ describe("sanitizeHostExecEnv", () => {
         TF_PLUGIN_CACHE_DIR: "/tmp/evil-tf-plugin-cache",
         CFLAGS: "-I/attacker/include",
         LDFLAGS: "-L/attacker/lib",
+        XDG_CACHE_HOME: "/tmp/evil-cache",
         XDG_CONFIG_DIRS: "/tmp/evil-config-dirs",
+        XDG_CONFIG_HOME: "/tmp/evil-config",
+        XDG_DATA_DIRS: "/tmp/evil-data-dirs",
+        XDG_DATA_HOME: "/tmp/evil-data",
+        XDG_RUNTIME_DIR: "/tmp/evil-runtime",
+        XDG_STATE_HOME: "/tmp/evil-state",
         TF_VAR_admin_cidr: "10.0.0.0/24",
         GITHUB_TOKEN: "ghp-test",
         DATABASE_URL: "postgres://attacker",
@@ -630,7 +650,13 @@ describe("sanitizeHostExecEnv", () => {
     expect(env.TF_PLUGIN_CACHE_DIR).toBeUndefined();
     expect(env.CFLAGS).toBeUndefined();
     expect(env.LDFLAGS).toBeUndefined();
+    expect(env.XDG_CACHE_HOME).toBeUndefined();
     expect(env.XDG_CONFIG_DIRS).toBeUndefined();
+    expect(env.XDG_CONFIG_HOME).toBeUndefined();
+    expect(env.XDG_DATA_DIRS).toBeUndefined();
+    expect(env.XDG_DATA_HOME).toBeUndefined();
+    expect(env.XDG_RUNTIME_DIR).toBeUndefined();
+    expect(env.XDG_STATE_HOME).toBeUndefined();
     expect(env.TF_VAR_admin_cidr).toBeUndefined();
     expect(env.GITHUB_TOKEN).toBeUndefined();
     expect(env.DATABASE_URL).toBeUndefined();
@@ -830,10 +856,20 @@ describe("isDangerousHostEnvOverrideVarName", () => {
     expect(isDangerousHostEnvOverrideVarName("TF_VAR_admin_cidr")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("CORECLR_PROFILER_PATH")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("coreclr_profiler_path")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("XDG_CACHE_HOME")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("xdg_cache_home")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("XDG_CONFIG_HOME")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("xdg_config_home")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("XDG_CONFIG_DIRS")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("xdg_config_dirs")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("XDG_DATA_DIRS")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("xdg_data_dirs")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("XDG_DATA_HOME")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("xdg_data_home")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("XDG_RUNTIME_DIR")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("xdg_runtime_dir")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("XDG_STATE_HOME")).toBe(true);
+    expect(isDangerousHostEnvOverrideVarName("xdg_state_home")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("AWS_CONFIG_FILE")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("aws_config_file")).toBe(true);
     expect(isDangerousHostEnvOverrideVarName("yarn_rc_filename")).toBe(true);
@@ -861,7 +897,13 @@ describe("isDangerousHostEnvOverrideVarName", () => {
       "TF_PLUGIN_CACHE_DIR",
       "CFLAGS",
       "LDFLAGS",
+      "XDG_CACHE_HOME",
       "XDG_CONFIG_DIRS",
+      "XDG_CONFIG_HOME",
+      "XDG_DATA_DIRS",
+      "XDG_DATA_HOME",
+      "XDG_RUNTIME_DIR",
+      "XDG_STATE_HOME",
       "AWS_SECRET_ACCESS_KEY",
       "AZURE_CLIENT_SECRET",
       "DATABASE_URL",
@@ -1113,7 +1155,13 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
         GITHUB_TOKEN: "ghp-test",
         DATABASE_URL: "postgres://attacker",
         R_PROFILE_USER: "/tmp/evil-Rprofile",
+        XDG_CACHE_HOME: "/tmp/evil-cache",
         XDG_CONFIG_DIRS: "/tmp/evil-config-dirs",
+        XDG_CONFIG_HOME: "/tmp/evil-config",
+        XDG_DATA_DIRS: "/tmp/evil-data-dirs",
+        XDG_DATA_HOME: "/tmp/evil-data",
+        XDG_RUNTIME_DIR: "/tmp/evil-runtime",
+        XDG_STATE_HOME: "/tmp/evil-state",
         TF_VAR_admin_cidr: "10.0.0.0/24",
         SAFE_KEY: "ok",
       },
@@ -1134,7 +1182,13 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
       "TF_PLUGIN_CACHE_DIR",
       "TF_VAR_ADMIN_CIDR",
       "VIMINIT",
+      "XDG_CACHE_HOME",
       "XDG_CONFIG_DIRS",
+      "XDG_CONFIG_HOME",
+      "XDG_DATA_DIRS",
+      "XDG_DATA_HOME",
+      "XDG_RUNTIME_DIR",
+      "XDG_STATE_HOME",
     ]);
     expect(result.rejectedOverrideInvalidKeys).toStrictEqual([]);
     expect(result.env.SAFE_KEY).toBe("ok");
@@ -1149,7 +1203,13 @@ describe("sanitizeHostExecEnvWithDiagnostics", () => {
     expect(result.env.GITHUB_TOKEN).toBeUndefined();
     expect(result.env.DATABASE_URL).toBeUndefined();
     expect(result.env.R_PROFILE_USER).toBeUndefined();
+    expect(result.env.XDG_CACHE_HOME).toBeUndefined();
     expect(result.env.XDG_CONFIG_DIRS).toBeUndefined();
+    expect(result.env.XDG_CONFIG_HOME).toBeUndefined();
+    expect(result.env.XDG_DATA_DIRS).toBeUndefined();
+    expect(result.env.XDG_DATA_HOME).toBeUndefined();
+    expect(result.env.XDG_RUNTIME_DIR).toBeUndefined();
+    expect(result.env.XDG_STATE_HOME).toBeUndefined();
     expect(result.env.TF_VAR_admin_cidr).toBeUndefined();
   });
 

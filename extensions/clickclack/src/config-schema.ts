@@ -16,7 +16,6 @@ const ClickClackAccountConfigSchema = z
     systemPrompt: z.string().optional(),
     timeoutSeconds: z.number().int().min(1).max(3_600).optional(),
     toolsAllow: z.array(z.string()).optional(),
-    senderIsOwner: z.boolean().optional(),
     defaultTo: z.string().optional(),
     allowFrom: z.array(z.string()).optional(),
     reconnectMs: z.number().int().min(100).max(60_000).optional(),

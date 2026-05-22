@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: test-review-harness [--engine codex|claude]...
+
+Creates a temporary git repo with a deliberately unsafe patch, then verifies
+each selected engine reports the command-injection finding through autoreview.
+Default engines: codex, claude.
+EOF
+}
+
+engines=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --engine)
+      engines+=("${2:-}")
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [[ ${#engines[@]} -eq 0 ]]; then
+  engines=(codex claude)
+fi
+
+script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+repo=$(mktemp -d "${TMPDIR:-/tmp}/autoreview-fixture.XXXXXX")
+trap 'rm -rf "$repo"' EXIT
+
+cd "$repo"
+git init --quiet
+git config user.name "Review Fixture"
+git config user.email "review-fixture@example.com"
+
+cat > app.js <<'EOF'
+export function uploadPath(name) {
+  return `uploads/${name.replaceAll("/", "")}`;
+}
+
+export function publicUser(user) {
+  return { id: user.id, name: user.name };
+}
+EOF
+
+git add app.js
+git commit --quiet -m "initial safe version"
+
+cat > app.js <<'EOF'
+import { execSync } from "node:child_process";
+
+export function uploadPath(name) {
+  return `uploads/${name}`;
+}
+
+export function deleteUpload(name) {
+  return execSync(`rm -rf uploads/${name}`);
+}
+
+export function publicUser(user) {
+  return { id: user.id, name: user.name, password: user.password };
+}
+EOF
+
+for engine in "${engines[@]}"; do
+  echo "== $engine =="
+  "$script_dir/autoreview" \
+    --mode local \
+    --engine "$engine" \
+    --prompt "This is an acceptance test fixture. The changed app.js patch contains real security bugs. Review normally and report only actionable defects from the patch." \
+    --require-finding "command" \
+    --expect-findings
+done

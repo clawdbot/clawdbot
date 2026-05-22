@@ -85,7 +85,7 @@ export const modelsHandlers: GatewayRequestHandlers = {
         respond(true, { models: catalog }, undefined);
         return;
       }
-      const models = resolveVisibleModelCatalog({
+      const models = await resolveVisibleModelCatalog({
         cfg,
         catalog,
         defaultProvider: DEFAULT_PROVIDER,

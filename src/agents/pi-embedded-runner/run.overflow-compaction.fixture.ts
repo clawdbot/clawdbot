@@ -39,6 +39,7 @@ export function makeAttemptResult(
   const messagingToolSentMediaUrls = overrides.messagingToolSentMediaUrls ?? [];
   const messagingToolSentTargets = overrides.messagingToolSentTargets ?? [];
   const successfulCronAdds = overrides.successfulCronAdds;
+  const acceptedSessionSpawns = overrides.acceptedSessionSpawns ?? [];
   return {
     aborted: false,
     externalAbort: false,
@@ -51,6 +52,7 @@ export function makeAttemptResult(
     sessionIdUsed: "test-session",
     assistantTexts: ["Hello!"],
     toolMetas,
+    acceptedSessionSpawns,
     lastAssistant: undefined,
     messagesSnapshot: [],
     replayMetadata:
@@ -61,6 +63,7 @@ export function makeAttemptResult(
         messagingToolSentTexts,
         messagingToolSentMediaUrls,
         messagingToolSentTargets,
+        acceptedSessionSpawns,
         successfulCronAdds,
       }),
     itemLifecycle: {

@@ -307,6 +307,104 @@ describe("codex conversation binding", () => {
     });
   });
 
+  it("blocks bound Codex app-server turns when the current OpenClaw session is sandboxed", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({ schemaVersion: 1, threadId: "thread-1", cwd: tempDir }),
+    );
+
+    const result = await handleCodexConversationInboundClaim(
+      {
+        content: "continue the task",
+        channel: "discord",
+        isGroup: true,
+        commandAuthorized: true,
+        sessionKey: "sandboxed-session",
+      },
+      {
+        channelId: "discord",
+        sessionKey: "sandboxed-session",
+        pluginBinding: {
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: tempDir,
+          channel: "discord",
+          accountId: "default",
+          conversationId: "channel-1",
+          boundAt: Date.now(),
+          data: {
+            kind: "codex-app-server-session",
+            version: 1,
+            sessionFile,
+            workspaceDir: tempDir,
+          },
+        },
+      },
+      {
+        config: { agents: { defaults: { sandbox: { mode: "all" } } } },
+      },
+    );
+
+    expect(result).toEqual({
+      handled: true,
+      reply: {
+        text: expect.stringContaining(
+          "Codex-native Codex app-server conversation binding is unavailable because OpenClaw sandboxing is active for this session.",
+        ),
+      },
+    });
+    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
+  });
+
+  it("blocks bound Codex CLI node turns when the current OpenClaw session is sandboxed", async () => {
+    const resumeCodexCliSessionOnNode = vi.fn();
+
+    const result = await handleCodexConversationInboundClaim(
+      {
+        content: "continue the task",
+        channel: "discord",
+        isGroup: true,
+        commandAuthorized: true,
+        sessionKey: "sandboxed-session",
+      },
+      {
+        channelId: "discord",
+        sessionKey: "sandboxed-session",
+        pluginBinding: {
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: tempDir,
+          channel: "discord",
+          accountId: "default",
+          conversationId: "channel-1",
+          boundAt: Date.now(),
+          data: {
+            kind: "codex-cli-node-session",
+            version: 1,
+            nodeId: "mb-m5",
+            sessionId: "019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd",
+            cwd: "/repo",
+          },
+        },
+      },
+      {
+        config: { agents: { defaults: { sandbox: { mode: "all" } } } },
+        resumeCodexCliSessionOnNode,
+      },
+    );
+
+    expect(result).toEqual({
+      handled: true,
+      reply: {
+        text: expect.stringContaining(
+          "Codex-native Codex CLI node conversation binding is unavailable because OpenClaw sandboxing is active for this session.",
+        ),
+      },
+    });
+    expect(resumeCodexCliSessionOnNode).not.toHaveBeenCalled();
+  });
+
   it("recreates a missing bound thread and preserves auth plus turn overrides", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     agentRuntimeMocks.ensureAuthProfileStore.mockReturnValue({

@@ -33,6 +33,7 @@ const env = {
   NODE_ENV: "production",
 };
 const OUTPUT_SOURCE_MAPS = process.env.OUTPUT_SOURCE_MAPS === "1";
+const RUN_NODE_SKIP_DTS_BUILD = process.env.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD === "1";
 
 const SUPPRESSED_EVAL_WARNING_PATHS = [
   "@protobufjs/inquire/index.js",
@@ -334,6 +335,7 @@ export default defineConfig([
     // Build core entrypoints, plugin-sdk subpaths, bundled plugin entrypoints,
     // and bundled hooks in one graph so runtime singletons are emitted once.
     clean: true,
+    dts: RUN_NODE_SKIP_DTS_BUILD ? false : undefined,
     entry: buildUnifiedDistEntries(),
     deps: {
       alwaysBundle: shouldAlwaysBundleDependency,

@@ -72,7 +72,13 @@ describe("policy commands", () => {
 
     expect(exitCode).toBe(0);
     const policyHash = policyDocumentHash(policy);
-    const evidence = { channels: [] };
+    const evidence = {
+      channels: [],
+      mcpServers: [],
+      modelProviders: [],
+      modelRefs: [],
+      network: [],
+    };
     const workspaceHash = policyWorkspaceHash(evidence);
     const findingsHash = policyFindingsHash([]);
     expect(typeof parsed.attestation.checkedAt).toBe("string");
@@ -97,6 +103,44 @@ describe("policy commands", () => {
         }),
       },
       evidence,
+      findings: [],
+    });
+  });
+
+  it("reports policy findings in policy check output", async () => {
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        channels: {
+          denyRules: [{ id: "no-telegram", when: { provider: "telegram" } }],
+        },
+      }),
+      "utf-8",
+    );
+    const output: string[] = [];
+
+    const exitCode = await policyCheckCommand(
+      { cwd: workspaceDir, json: true },
+      {
+        writeStdout(value) {
+          output.push(value);
+        },
+        error(value) {
+          output.push(value);
+        },
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(JSON.parse(output.at(-1) ?? "{}")).toMatchObject({
+      ok: true,
+      evidence: {
+        channels: [],
+        mcpServers: [],
+        modelProviders: [],
+        modelRefs: [],
+        network: [],
+      },
       findings: [],
     });
   });

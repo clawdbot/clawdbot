@@ -22,6 +22,7 @@ const metadataSnapshot = {
 const loadPluginMetadataSnapshotMock = vi.fn(() => metadataSnapshot);
 const getCurrentPluginMetadataSnapshotMock = vi.fn(() => undefined);
 const setCurrentPluginMetadataSnapshotMock = vi.fn();
+const clearCurrentPluginMetadataSnapshotMock = vi.fn();
 
 let resolvePluginRuntimeLoadContext: typeof import("./load-context.js").resolvePluginRuntimeLoadContext;
 let buildPluginRuntimeLoadOptions: typeof import("./load-context.js").buildPluginRuntimeLoadOptions;
@@ -47,7 +48,11 @@ vi.mock("../plugin-metadata-snapshot.js", () => ({
 }));
 
 vi.mock("../current-plugin-metadata-snapshot.js", () => ({
+  clearCurrentPluginMetadataSnapshot: clearCurrentPluginMetadataSnapshotMock,
   getCurrentPluginMetadataSnapshot: getCurrentPluginMetadataSnapshotMock,
+  isReusableCurrentPluginMetadataSnapshot: (
+    snapshot: typeof metadataSnapshot & { registrySource?: "derived" },
+  ) => snapshot.registrySource !== "derived",
   setCurrentPluginMetadataSnapshot: setCurrentPluginMetadataSnapshotMock,
 }));
 
@@ -65,6 +70,7 @@ describe("resolvePluginRuntimeLoadContext", () => {
     loadPluginMetadataSnapshotMock.mockClear();
     getCurrentPluginMetadataSnapshotMock.mockClear();
     setCurrentPluginMetadataSnapshotMock.mockClear();
+    clearCurrentPluginMetadataSnapshotMock.mockClear();
     resolveAgentWorkspaceDirMock.mockClear();
     resolveDefaultAgentIdMock.mockClear();
 
@@ -112,6 +118,7 @@ describe("resolvePluginRuntimeLoadContext", () => {
       env,
       logger: context.logger,
       manifestRegistry,
+      installRecords: {},
     });
     expect(loadPluginMetadataSnapshotMock).toHaveBeenCalledWith({
       config: rawConfig,
@@ -131,6 +138,22 @@ describe("resolvePluginRuntimeLoadContext", () => {
     });
     expect(resolveDefaultAgentIdMock).toHaveBeenCalledWith(resolvedConfig);
     expect(resolveAgentWorkspaceDirMock).toHaveBeenCalledWith(resolvedConfig, "default");
+  });
+
+  it("does not store derived metadata as the reusable runtime snapshot", () => {
+    const derivedSnapshot = { ...metadataSnapshot } as typeof metadataSnapshot & {
+      registrySource: "derived";
+    };
+    derivedSnapshot.registrySource = "derived";
+    loadPluginMetadataSnapshotMock.mockReturnValueOnce(derivedSnapshot);
+
+    resolvePluginRuntimeLoadContext({
+      config: { plugins: {} },
+      env: { HOME: "/tmp/openclaw-home" } as NodeJS.ProcessEnv,
+    });
+
+    expect(setCurrentPluginMetadataSnapshotMock).not.toHaveBeenCalled();
+    expect(clearCurrentPluginMetadataSnapshotMock).toHaveBeenCalledOnce();
   });
 
   it("uses the source runtime snapshot for plugin activation source config", () => {
@@ -155,6 +178,32 @@ describe("resolvePluginRuntimeLoadContext", () => {
     });
   });
 
+  it("threads install records from the metadata snapshot into the context and load options", () => {
+    const snapshotWithRecords = {
+      ...metadataSnapshot,
+      index: {
+        installRecords: {
+          demo: { source: "registry", version: "1.0.0" },
+        },
+        plugins: [],
+        policyHash: "policy",
+      },
+    };
+    loadPluginMetadataSnapshotMock.mockReturnValueOnce(snapshotWithRecords);
+
+    const context = resolvePluginRuntimeLoadContext({
+      config: { plugins: {} },
+      env: { HOME: "/tmp/openclaw-home" } as NodeJS.ProcessEnv,
+    });
+
+    expect(context.installRecords).toEqual({
+      demo: { source: "registry", version: "1.0.0" },
+    });
+    expect(buildPluginRuntimeLoadOptions(context).installRecords).toEqual({
+      demo: { source: "registry", version: "1.0.0" },
+    });
+  });
+
   it("builds plugin load options from the shared runtime context", () => {
     const context = resolvePluginRuntimeLoadContext({
       config: { plugins: {} },
@@ -176,6 +225,7 @@ describe("resolvePluginRuntimeLoadContext", () => {
       env: context.env,
       logger: context.logger,
       manifestRegistry,
+      installRecords: {},
       cache: false,
       activate: false,
       onlyPluginIds: ["demo"],

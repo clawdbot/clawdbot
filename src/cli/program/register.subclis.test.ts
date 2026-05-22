@@ -172,6 +172,12 @@ describe("registerSubCliCommands", () => {
     await program.parseAsync(["nodes", "list"], { from: "user" });
 
     expect(registerNodesCli).toHaveBeenCalledTimes(1);
+    expect(registerNodesCli).toHaveBeenCalledWith(expect.any(Command), [
+      "node",
+      "openclaw",
+      "nodes",
+      "list",
+    ]);
     expect(nodesAction).toHaveBeenCalledTimes(1);
   });
 

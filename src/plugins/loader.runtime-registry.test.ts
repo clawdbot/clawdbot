@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { getCompactionProvider, registerCompactionProvider } from "./compaction-provider.js";
+import { getEmbeddingProvider, registerEmbeddingProvider } from "./embedding-providers.js";
 import {
   testing,
   clearPluginLoaderCache,
@@ -43,6 +44,7 @@ function createLoadedPluginRecord(id: string): PluginRecord {
     channelIds: [],
     cliBackendIds: [],
     providerIds: [],
+    embeddingProviderIds: [],
     speechProviderIds: [],
     realtimeTranscriptionProviderIds: [],
     realtimeVoiceProviderIds: [],
@@ -368,6 +370,9 @@ describe("getCompatibleActivePluginRegistry", () => {
         config: startupOptions.config,
         workspaceDir: "/tmp/workspace-a",
         onlyPluginIds: ["acpx", "telegram"],
+        runtimeOptions: {
+          allowGatewaySubagentBinding: true,
+        },
       }),
     ).toBe(registry);
   });
@@ -501,12 +506,15 @@ describe("getCompatibleActivePluginRegistry", () => {
       { id: "telegram" } as (typeof registry.plugins)[number],
     );
     registry.coreGatewayMethodNames = ["sessions.get", "sessions.list"];
-    const startupOptions = {
-      config: {
-        plugins: {
-          allow: ["acpx", "telegram"],
-        },
+    const config = {
+      plugins: {
+        allow: ["acpx", "telegram"],
       },
+    };
+    const startupOptions = {
+      config,
+      activationSourceConfig: config,
+      autoEnabledReasons: {},
       workspaceDir: "/tmp/workspace-a",
       onlyPluginIds: ["acpx", "telegram"],
       coreGatewayMethodNames: ["sessions.get", "sessions.list"],
@@ -519,11 +527,66 @@ describe("getCompatibleActivePluginRegistry", () => {
 
     expect(
       testing.getCompatibleActivePluginRegistry({
-        config: startupOptions.config,
+        config,
         workspaceDir: "/tmp/workspace-a",
         onlyPluginIds: ["acpx", "telegram"],
       }),
     ).toBe(registry);
+  });
+
+  it("reuses a scoped gateway startup registry when dispatch omits built artifact preference", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push(
+      { id: "acpx" } as (typeof registry.plugins)[number],
+      { id: "telegram" } as (typeof registry.plugins)[number],
+    );
+    registry.coreGatewayMethodNames = ["sessions.get", "sessions.list"];
+    const config = {
+      plugins: {
+        allow: ["acpx", "telegram"],
+      },
+    };
+    const startupOptions = {
+      config,
+      activationSourceConfig: config,
+      autoEnabledReasons: {},
+      workspaceDir: "/tmp/workspace-a",
+      onlyPluginIds: ["acpx", "telegram"],
+      coreGatewayMethodNames: ["sessions.get", "sessions.list"],
+      runtimeOptions: {
+        allowGatewaySubagentBinding: true,
+      },
+      preferBuiltPluginArtifacts: true,
+    };
+    const { cacheKey } = testing.resolvePluginLoadCacheContext(startupOptions);
+    setActivePluginRegistry(registry, cacheKey, "gateway-bindable");
+
+    expect(
+      testing.getCompatibleActivePluginRegistry({
+        config,
+        workspaceDir: "/tmp/workspace-a",
+        onlyPluginIds: ["acpx", "telegram"],
+        runtimeOptions: {
+          allowGatewaySubagentBinding: true,
+        },
+      }),
+    ).toBe(registry);
+
+    expect(
+      testing.getCompatibleActivePluginRegistry({
+        config: {
+          plugins: {
+            allow: ["acpx", "telegram"],
+            load: { paths: ["/tmp/changed.js"] },
+          },
+        },
+        workspaceDir: "/tmp/workspace-a",
+        onlyPluginIds: ["acpx", "telegram"],
+        runtimeOptions: {
+          allowGatewaySubagentBinding: true,
+        },
+      }),
+    ).toBeUndefined();
   });
 });
 
@@ -595,6 +658,10 @@ describe("resolveRuntimePluginRegistry", () => {
 
 describe("clearPluginLoaderCache", () => {
   it("resets registered memory plugin registries", () => {
+    registerEmbeddingProvider({
+      id: "stale-embedding",
+      create: async () => ({ provider: null }),
+    });
     registerMemoryEmbeddingProvider({
       id: "stale",
       create: async () => ({ provider: null }),
@@ -632,10 +699,12 @@ describe("clearPluginLoaderCache", () => {
     expect(
       requireMemoryRuntime().resolveMemoryBackendConfig({ cfg: {} as never, agentId: "main" }),
     ).toEqual({ backend: "builtin" });
+    expect(getEmbeddingProvider("stale-embedding")?.id).toBe("stale-embedding");
     expect(requireMemoryEmbeddingProvider("stale").id).toBe("stale");
 
     clearPluginLoaderCache();
 
+    expect(getEmbeddingProvider("stale-embedding")).toBeUndefined();
     expect(buildMemoryPromptSection({ availableTools: new Set() })).toStrictEqual([]);
     expect(listMemoryCorpusSupplements()).toStrictEqual([]);
     expect(resolveMemoryFlushPlan({})).toBeNull();
@@ -646,6 +715,10 @@ describe("clearPluginLoaderCache", () => {
 
 describe("loadOpenClawPlugins active runtime clearing", () => {
   it("clears plugin-owned global providers before activating a new registry", () => {
+    registerEmbeddingProvider({
+      id: "stale-embedding",
+      create: async () => ({ provider: null }),
+    });
     registerCompactionProvider({
       id: "stale-compaction",
       label: "Stale Compaction",
@@ -658,6 +731,7 @@ describe("loadOpenClawPlugins active runtime clearing", () => {
 
     loadOpenClawPlugins({ onlyPluginIds: [] });
 
+    expect(getEmbeddingProvider("stale-embedding")).toBeUndefined();
     expect(getCompactionProvider("stale-compaction")).toBeUndefined();
     expect(getMemoryEmbeddingProvider("stale-memory")).toBeUndefined();
   });

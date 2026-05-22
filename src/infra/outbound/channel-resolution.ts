@@ -192,8 +192,13 @@ export function resolveOutboundChannelPlugin(params: {
     return directCurrent;
   }
 
+  const bundledCurrent = resolve();
+  if (bundledCurrent) {
+    return bundledCurrent;
+  }
+
   if (params.allowBootstrap !== true) {
-    return resolve();
+    return undefined;
   }
 
   maybeBootstrapChannelPlugin({ channel: normalized, cfg: params.cfg });

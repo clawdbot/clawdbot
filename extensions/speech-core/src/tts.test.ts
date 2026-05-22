@@ -397,6 +397,48 @@ describe("speech-core native voice-note routing", () => {
     expect(providerConfig.apiKey).toBe("resolved-minimax-key");
   });
 
+  it("uses provider default TTS timeout when the call and config omit timeoutMs", async () => {
+    installSpeechProviders([createMockSpeechProvider("mock", { defaultTimeoutMs: 600_000 })]);
+
+    const result = await synthesizeSpeech({
+      text: "Use provider timeout.",
+      cfg: {
+        messages: {
+          tts: {
+            enabled: true,
+            provider: "mock",
+          },
+        },
+      } as OpenClawConfig,
+      disableFallback: true,
+    });
+
+    expect(result.success).toBe(true);
+    const request = requireFirstSynthesisRequest("provider default timeout synthesis request");
+    expect(request.timeoutMs).toBe(600_000);
+  });
+
+  it("keeps explicit TTS config timeout ahead of provider default timeout", async () => {
+    installSpeechProviders([createMockSpeechProvider("mock", { defaultTimeoutMs: 600_000 })]);
+
+    await synthesizeSpeech({
+      text: "Use configured timeout.",
+      cfg: {
+        messages: {
+          tts: {
+            enabled: true,
+            provider: "mock",
+            timeoutMs: 45_000,
+          },
+        },
+      } as OpenClawConfig,
+      disableFallback: true,
+    });
+
+    const request = requireFirstSynthesisRequest("configured timeout synthesis request");
+    expect(request.timeoutMs).toBe(45_000);
+  });
+
   it.each(["feishu", "whatsapp"] as const)(
     "marks %s voice-note TTS for channel-side transcoding when provider returns mp3",
     async (channel) => {

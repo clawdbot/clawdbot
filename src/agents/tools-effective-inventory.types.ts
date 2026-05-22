@@ -41,7 +41,6 @@ export type ResolveEffectiveToolInventoryParams = {
   workspaceDir?: string;
   agentDir?: string;
   messageProvider?: string;
-  senderIsOwner?: boolean;
   senderId?: string | null;
   senderName?: string | null;
   senderUsername?: string | null;

@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   createMockRegistry: () => ({
     plugins: [],
     diagnostics: [],
+    embeddingProviders: [],
     memoryEmbeddingProviders: [],
     speechProviders: [],
     realtimeTranscriptionProviders: [],

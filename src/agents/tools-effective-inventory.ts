@@ -216,7 +216,6 @@ export function resolveEffectiveToolInventory(
     modelId: params.modelId,
     modelCompat,
     messageProvider: params.messageProvider,
-    senderIsOwner: params.senderIsOwner,
     senderId: params.senderId,
     senderName: params.senderName ?? undefined,
     senderUsername: params.senderUsername ?? undefined,

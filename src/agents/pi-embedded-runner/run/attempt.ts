@@ -15,7 +15,10 @@ import {
   runQuotaSuspensionMaintenance,
   updateSessionStoreEntry,
 } from "../../../config/sessions/store.js";
-import { withOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
+import {
+  bindOwnedSessionTranscriptWrites,
+  withOwnedSessionTranscriptWrites,
+} from "../../../config/sessions/transcript-write-context.js";
 import { resolveContextEngineOwnerPluginId } from "../../../context-engine/registry.js";
 import type { AssembleResult } from "../../../context-engine/types.js";
 import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
@@ -355,6 +358,7 @@ import {
   wrapStreamFnRepairMalformedToolCallArguments,
 } from "./attempt.tool-call-argument-repair.js";
 import {
+  shouldApplyReplayToolCallIdSanitizer,
   sanitizeReplayToolCallIdsForStream,
   wrapStreamFnSanitizeMalformedToolCalls,
   wrapStreamFnTrimToolCallNames,
@@ -1393,7 +1397,6 @@ export async function runEmbeddedAttempt(
             senderUsername: params.senderUsername,
             senderE164: params.senderE164,
             senderIsOwner: params.senderIsOwner,
-            ownerOnlyToolAllowlist: params.ownerOnlyToolAllowlist,
             allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
             sessionKey: sandboxSessionKey,
             // When sandboxSessionKey differs from the real run session key (e.g. Telegram
@@ -1684,8 +1687,6 @@ export async function runEmbeddedAttempt(
       senderName: params.senderName,
       senderUsername: params.senderUsername,
       senderE164: params.senderE164,
-      senderIsOwner: params.senderIsOwner,
-      ownerOnlyToolAllowlist: params.ownerOnlyToolAllowlist,
       warn: (message) => log.warn(message),
     });
     const normalizedBundledTools =
@@ -2118,6 +2119,9 @@ export async function runEmbeddedAttempt(
         suppressTranscriptOnlyAssistantPersistence:
           params.suppressTranscriptOnlyAssistantPersistence,
         suppressAssistantErrorPersistence: params.suppressAssistantErrorPersistence,
+        onMessagePersisted: () => {
+          sessionLockController.refreshAfterOwnedSessionWrite();
+        },
         onUserMessagePersisted: (message) => {
           params.onUserMessagePersisted?.(message);
         },
@@ -2779,13 +2783,14 @@ export async function runEmbeddedAttempt(
         params.model.api === "azure-openai-responses" ||
         params.model.api === "openai-codex-responses";
 
-      if (
-        transcriptPolicy.sanitizeToolCallIds &&
-        transcriptPolicy.toolCallIdMode &&
-        !isOpenAIResponsesApi
-      ) {
+      const replayToolCallIdSanitizerDecision = {
+        sanitizeToolCallIds: transcriptPolicy.sanitizeToolCallIds,
+        toolCallIdMode: transcriptPolicy.toolCallIdMode,
+        isOpenAIResponsesApi,
+      };
+      if (shouldApplyReplayToolCallIdSanitizer(replayToolCallIdSanitizerDecision)) {
         const inner = activeSession.agent.streamFn;
-        const mode = transcriptPolicy.toolCallIdMode;
+        const mode = replayToolCallIdSanitizerDecision.toolCallIdMode;
         activeSession.agent.streamFn = (model, context, options) => {
           const ctx = context as unknown as { messages?: unknown };
           const messages = ctx?.messages;
@@ -3174,19 +3179,27 @@ export async function runEmbeddedAttempt(
       };
       const abortable = <T>(promise: Promise<T>): Promise<T> =>
         abortableWithSignal(runAbortController.signal, promise);
+      const ownedTranscriptWriteContext = {
+        sessionFile: params.sessionFile,
+        sessionKey: params.sessionKey,
+        withSessionWriteLock: <T>(
+          operation: () => Promise<T> | T,
+          options?: { publishOwnedWrite?: boolean },
+        ) => sessionLockController.withSessionWriteLock(operation, options),
+      };
       const promptActiveSession = (
         prompt: string,
         options?: Parameters<typeof activeSession.prompt>[1],
       ): Promise<void> =>
-        withOwnedSessionTranscriptWrites(
-          {
-            sessionFile: params.sessionFile,
-            sessionKey: params.sessionKey,
-            withSessionWriteLock: (operation) =>
-              sessionLockController.withSessionWriteLock(operation),
-          },
-          async () => abortable(trackPromptSettlePromise(activeSession.prompt(prompt, options))),
+        withOwnedSessionTranscriptWrites(ownedTranscriptWriteContext, async () =>
+          abortable(trackPromptSettlePromise(activeSession.prompt(prompt, options))),
         );
+      const onBlockReply = params.onBlockReply
+        ? bindOwnedSessionTranscriptWrites(ownedTranscriptWriteContext, params.onBlockReply)
+        : undefined;
+      const onBlockReplyFlush = params.onBlockReplyFlush
+        ? bindOwnedSessionTranscriptWrites(ownedTranscriptWriteContext, params.onBlockReplyFlush)
+        : undefined;
 
       const subscription = subscribeEmbeddedPiSession(
         buildEmbeddedSubscriptionParams({
@@ -3204,14 +3217,15 @@ export async function runEmbeddedAttempt(
           onToolResult: params.onToolResult,
           onReasoningStream: params.onReasoningStream,
           onReasoningEnd: params.onReasoningEnd,
-          onBlockReply: params.onBlockReply,
-          onBlockReplyFlush: params.onBlockReplyFlush,
+          onBlockReply,
+          onBlockReplyFlush,
           blockReplyBreak: params.blockReplyBreak,
           blockReplyChunking: params.blockReplyChunking,
           onPartialReply: params.onPartialReply,
           onAssistantMessageStart: params.onAssistantMessageStart,
           onExecutionPhase: params.onExecutionPhase,
           onAgentEvent: params.onAgentEvent,
+          terminalLifecyclePhase: params.deferTerminalLifecycleEnd ? "finishing" : "end",
           onBeforeLifecycleTerminal: () => {
             // Clear embedded-run activity before emitting terminal lifecycle events so
             // post-completion cleanup does not observe a logically finished run as active.
@@ -3231,6 +3245,7 @@ export async function runEmbeddedAttempt(
       const {
         assistantTexts,
         toolMetas,
+        getAcceptedSessionSpawns,
         runToolLifecycle,
         unsubscribe,
         waitForCompactionRetry,
@@ -3832,6 +3847,10 @@ export async function runEmbeddedAttempt(
               waitForSessionEvents: (sessionToDrain) =>
                 sessionLockController.waitForSessionEvents(sessionToDrain),
               releaseForPrompt: () => sessionLockController.releaseForPrompt(),
+              reacquireAfterPrompt: () => sessionLockController.reacquireAfterPrompt(),
+              sessionKey: params.sessionKey,
+              sessionFile: params.sessionFile,
+              withSessionWriteLock: (run) => sessionLockController.withSessionWriteLock(run),
             });
           }
 
@@ -4205,8 +4224,8 @@ export async function runEmbeddedAttempt(
           // user receives the assistant response immediately.  Without this,
           // coalesced/buffered blocks stay in the pipeline until compaction
           // finishes — which can take minutes on large contexts (#35074).
-          if (params.onBlockReplyFlush) {
-            await params.onBlockReplyFlush();
+          if (onBlockReplyFlush) {
+            await onBlockReplyFlush();
           }
 
           // Skip compaction wait when yield aborted the run — the signal is
@@ -4623,11 +4642,13 @@ export async function runEmbeddedAttempt(
           });
       }
 
+      const acceptedSessionSpawns = getAcceptedSessionSpawns();
       const observedReplayMetadata = buildAttemptReplayMetadata({
         toolMetas: toolMetasNormalized,
         didSendViaMessagingTool: didSendViaMessagingTool(),
         messagingToolSentTexts: getMessagingToolSentTexts(),
         messagingToolSentMediaUrls: getMessagingToolSentMediaUrls(),
+        acceptedSessionSpawns,
         successfulCronAdds: getSuccessfulCronAdds(),
       });
       const pendingToolMediaReply = getPendingToolMediaReply();
@@ -4686,6 +4707,7 @@ export async function runEmbeddedAttempt(
           messagingToolSentTexts: getMessagingToolSentTexts(),
           messagingToolSentMediaUrls: getMessagingToolSentMediaUrls(),
           messagingToolSentTargets: getMessagingToolSentTargets(),
+          acceptedSessionSpawns,
           lastToolError,
           lastAssistant,
           replayMetadata,
@@ -4711,6 +4733,7 @@ export async function runEmbeddedAttempt(
         messagingToolSentTargets: getMessagingToolSentTargets(),
         successfulCronAdds: getSuccessfulCronAdds(),
         synthesizedPayloadCount,
+        acceptedSessionSpawns,
         heartbeatToolResponse,
         clientToolCalls: completedClientToolCalls,
         yieldDetected,
@@ -4800,6 +4823,7 @@ export async function runEmbeddedAttempt(
         messagesSnapshot,
         assistantTexts,
         toolMetas: toolMetasNormalized,
+        acceptedSessionSpawns,
         lastAssistant,
         currentAttemptAssistant,
         lastToolError,

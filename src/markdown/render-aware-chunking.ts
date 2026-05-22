@@ -215,7 +215,12 @@ function mergeAdjacentStyleSpans(styles: MarkdownStyleSpan[]): MarkdownStyleSpan
   const merged: MarkdownStyleSpan[] = [];
   for (const span of styles) {
     const last = merged.at(-1);
-    if (last && last.style === span.style && span.start <= last.end) {
+    if (
+      last &&
+      last.style === span.style &&
+      last.language === span.language &&
+      span.start <= last.end
+    ) {
       last.end = Math.max(last.end, span.end);
       continue;
     }

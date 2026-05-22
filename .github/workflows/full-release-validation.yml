@@ -1062,9 +1062,17 @@ jobs:
             exit 0
           fi
 
+          evidence_package_spec="$PACKAGE_SPEC"
+          if [[ -z "${evidence_package_spec// }" ]]; then
+            tag_ref="${TARGET_REF#refs/tags/}"
+            if [[ "$tag_ref" =~ ^v([0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*((-(alpha|beta)\.[1-9][0-9]*)|(-[1-9][0-9]*))?)$ ]]; then
+              evidence_package_spec="openclaw@${BASH_REMATCH[1]}"
+            fi
+          fi
+
           release_id="${TARGET_REF#refs/tags/}"
           release_id="${release_id#v}"
-          if [[ "$PACKAGE_SPEC" =~ ^openclaw@(.+)$ ]]; then
+          if [[ "$evidence_package_spec" =~ ^openclaw@(.+)$ ]]; then
             release_id="${BASH_REMATCH[1]}"
           fi
           release_id="$(printf '%s' "$release_id" | tr '/:@ ' '----' | tr -cd 'A-Za-z0-9._-')"
@@ -1078,7 +1086,7 @@ jobs:
               --arg full_validation_run_id "$GITHUB_RUN_ID_VALUE" \
               --arg release_id "$release_id" \
               --arg release_ref "$TARGET_REF" \
-              --arg package_spec "$PACKAGE_SPEC" \
+              --arg package_spec "$evidence_package_spec" \
               --arg notes "Automatically requested by Full Release Validation ${GITHUB_RUN_ID_VALUE} after child workflows completed; the parent summary re-checks current child run conclusions." \
               '{
                 event_type: "openclaw_full_release_validation_completed",
@@ -1100,6 +1108,15 @@ jobs:
             https://api.github.com/repos/openclaw/releases-private/dispatches \
             -d "$payload"; then
             echo "::warning::Automatic private release evidence dispatch failed; child workflow validation remains authoritative."
+            {
+              echo "### Private release evidence dispatch failed"
+              echo
+              echo "Child workflow validation remains authoritative. Backfill durable evidence from \`openclaw/releases-private\`:"
+              echo
+              echo "\`\`\`bash"
+              echo "gh workflow run openclaw-release-evidence-from-full-validation.yml --repo openclaw/releases-private --ref main -f full_validation_run_id=${GITHUB_RUN_ID_VALUE} -f release_id=${release_id} -f release_ref=${TARGET_REF} -f package_spec=${evidence_package_spec}"
+              echo "\`\`\`"
+            } >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Write release validation manifest

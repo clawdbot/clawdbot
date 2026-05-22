@@ -63,6 +63,7 @@ function createHarness(params?: {
   isConnected?: boolean;
   activeChatRunId?: string | null;
   pendingOptimisticUserMessage?: boolean;
+  activityStatus?: string;
   opts?: { local?: boolean };
   currentSessionId?: string | null;
 }) {
@@ -98,6 +99,7 @@ function createHarness(params?: {
     activeChatRunId: params?.activeChatRunId ?? null,
     pendingOptimisticUserMessage: params?.pendingOptimisticUserMessage ?? false,
     pendingChatRunId: null as string | null,
+    activityStatus: params?.activityStatus ?? "idle",
     isConnected: params?.isConnected ?? true,
     sessionInfo: {},
   };
@@ -505,6 +507,37 @@ describe("tui command handlers", () => {
     );
     expect(requestRender).toHaveBeenCalled();
     expect(state.activeChatRunId).toBe("run-active");
+  });
+
+  it("allows local sends to queue while the current run is finishing", async () => {
+    const { handleCommand, sendChat, addUser, addSystem } = createHarness({
+      opts: { local: true },
+      activeChatRunId: "run-active",
+      activityStatus: "finishing context",
+    });
+
+    await handleCommand("/context detail");
+
+    expect(sendChat).toHaveBeenCalledTimes(1);
+    expect(addUser).toHaveBeenCalledWith("/context detail");
+    expect(addSystem).not.toHaveBeenCalledWith(
+      "agent is busy — press Esc to abort before sending a new message",
+    );
+  });
+
+  it("rejects gateway sends while the current run is finishing", async () => {
+    const { handleCommand, sendChat, addUser, addSystem } = createHarness({
+      activeChatRunId: "run-active",
+      activityStatus: "finishing context",
+    });
+
+    await handleCommand("/context detail");
+
+    expect(sendChat).not.toHaveBeenCalled();
+    expect(addUser).not.toHaveBeenCalled();
+    expect(addSystem).toHaveBeenCalledWith(
+      "agent is busy — press Esc to abort before sending a new message",
+    );
   });
 
   it("runs /auth through the local auth flow and refreshes session info", async () => {

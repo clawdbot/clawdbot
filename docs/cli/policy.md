@@ -17,10 +17,13 @@ report drift through `doctor --lint`. The final conformance signal is a clean
 `doctor --lint` run; policy contributes findings to that shared lint surface
 instead of creating a separate health gate.
 
-Policy currently manages configured channels and governed tool declarations.
-For example, IT or a workspace operator can record that Telegram is not an
-approved channel provider, require governed tools to carry risk and sensitivity
-metadata, then use `doctor --lint` as the shared conformance gate.
+Policy currently manages configured channels, MCP servers, model providers,
+network SSRF posture, and governed tool declarations. For example, IT or a
+workspace operator can record that Telegram is not an approved channel
+provider, restrict MCP servers and model refs to approved entries, require
+private-network fetch/browser access to remain disabled, require governed tools
+to carry risk and sensitivity metadata, then use `doctor --lint` as the shared
+conformance gate.
 
 Use policy when a workspace needs a durable statement such as "these channels
 must not be enabled" or "governed tools must declare approval metadata" and a
@@ -41,7 +44,8 @@ arbitrary plugins. The plugin remains enabled if `policy.jsonc` is missing, so
 doctor can report the missing artifact.
 
 Policy is authored, not generated from the user's current settings. A minimal
-policy for channels and tool metadata looks like this:
+policy for channels, MCP servers, model providers, network posture, and tool
+metadata looks like this:
 
 ```jsonc
 {
@@ -54,6 +58,23 @@ policy for channels and tool metadata looks like this:
       },
     ],
   },
+  "mcp": {
+    "servers": {
+      "allow": ["docs"],
+      "deny": ["untrusted"],
+    },
+  },
+  "models": {
+    "providers": {
+      "allow": ["openai", "anthropic"],
+      "deny": ["openrouter"],
+    },
+  },
+  "network": {
+    "privateNetwork": {
+      "allow": false,
+    },
+  },
   "tools": {
     "requireMetadata": ["risk", "sensitivity", "owner"],
   },
@@ -62,8 +83,9 @@ policy for channels and tool metadata looks like this:
 
 The rules are the authority. A category block is only a namespace; checks run
 when a concrete rule is present. OpenClaw reads current `channels.*` settings
-and `TOOLS.md` declarations as evidence, then reports observed state that does
-not conform.
+`mcp.servers.*`, `models.providers.*`, selected agent model refs, network SSRF
+settings, and `TOOLS.md` declarations as evidence, then reports observed state
+that does not conform.
 
 Run policy-only checks during authoring:
 
@@ -167,6 +189,35 @@ Example JSON output:
         "enabled": false
       }
     ],
+    "mcpServers": [
+      {
+        "id": "docs",
+        "transport": "stdio",
+        "source": "oc://openclaw.config/mcp/servers/docs",
+        "command": "npx"
+      }
+    ],
+    "modelProviders": [
+      {
+        "id": "openai",
+        "source": "oc://openclaw.config/models/providers/openai"
+      }
+    ],
+    "modelRefs": [
+      {
+        "ref": "openai/gpt-5.5",
+        "provider": "openai",
+        "model": "gpt-5.5",
+        "source": "oc://openclaw.config/agents/defaults/model"
+      }
+    ],
+    "network": [
+      {
+        "id": "browser-private-network",
+        "source": "oc://openclaw.config/browser/ssrfPolicy/dangerouslyAllowPrivateNetwork",
+        "value": false
+      }
+    ],
     "tools": [
       {
         "id": "deploy",
@@ -178,7 +229,7 @@ Example JSON output:
       }
     ]
   },
-  "checksRun": 6,
+  "checksRun": 15,
   "checksSkipped": 0,
   "findings": []
 }
@@ -226,18 +277,23 @@ choose a different interval.
 
 Policy currently verifies:
 
-| Check id                                 | Finding                                                             |
-| ---------------------------------------- | ------------------------------------------------------------------- |
-| `policy/policy-jsonc-missing`            | Policy is enabled but `policy.jsonc` is missing.                    |
-| `policy/policy-jsonc-invalid`            | Policy cannot be parsed or has malformed rules.                     |
-| `policy/policy-hash-mismatch`            | Policy does not match configured `expectedHash`.                    |
-| `policy/attestation-hash-mismatch`       | Current policy evidence no longer matches the accepted attestation. |
-| `policy/channels-denied-provider`        | An enabled channel matches a channel deny rule.                     |
-| `policy/tools-missing-owner`             | A governed tool declaration is missing owner metadata.              |
-| `policy/tools-missing-risk-level`        | A governed tool declaration is missing risk metadata.               |
-| `policy/tools-missing-sensitivity-token` | A governed tool declaration is missing sensitivity metadata.        |
-| `policy/tools-unknown-risk-level`        | A governed tool declaration uses an unknown risk value.             |
-| `policy/tools-unknown-sensitivity-token` | A governed tool declaration uses an unknown sensitivity value.      |
+| Check id                                 | Finding                                                               |
+| ---------------------------------------- | --------------------------------------------------------------------- |
+| `policy/policy-jsonc-missing`            | Policy is enabled but `policy.jsonc` is missing.                      |
+| `policy/policy-jsonc-invalid`            | Policy cannot be parsed or contains malformed rule entries.           |
+| `policy/policy-hash-mismatch`            | Policy does not match configured `expectedHash`.                      |
+| `policy/attestation-hash-mismatch`       | Current policy evidence no longer matches the accepted attestation.   |
+| `policy/channels-denied-provider`        | An enabled channel matches a channel deny rule.                       |
+| `policy/mcp-denied-server`               | A configured MCP server is denied by policy.                          |
+| `policy/mcp-unapproved-server`           | A configured MCP server is outside the allowlist.                     |
+| `policy/models-denied-provider`          | A configured model provider or model ref uses a denied provider.      |
+| `policy/models-unapproved-provider`      | A configured model provider or model ref is outside the allowlist.    |
+| `policy/network-private-access-enabled`  | A private-network SSRF escape hatch is enabled when policy denies it. |
+| `policy/tools-missing-risk-level`        | A governed tool declaration is missing risk metadata.                 |
+| `policy/tools-unknown-risk-level`        | A governed tool declaration uses an unknown risk value.               |
+| `policy/tools-missing-sensitivity-token` | A governed tool declaration is missing sensitivity metadata.          |
+| `policy/tools-missing-owner`             | A governed tool declaration is missing owner metadata.                |
+| `policy/tools-unknown-sensitivity-token` | A governed tool declaration uses an unknown sensitivity value.        |
 
 Policy findings can include both `target` and `requirement`. `target` is the
 observed workspace thing that does not conform. `requirement` is the authored
@@ -274,6 +330,51 @@ Example tool finding:
   "ocPath": "oc://TOOLS.md/tools/deploy",
   "target": "oc://TOOLS.md/tools/deploy",
   "requirement": "oc://policy.jsonc/tools/requireMetadata"
+}
+```
+
+Example MCP finding:
+
+```json
+{
+  "checkId": "policy/mcp-unapproved-server",
+  "severity": "error",
+  "message": "MCP server 'remote' is not in the policy allowlist.",
+  "source": "policy",
+  "path": "openclaw config",
+  "ocPath": "oc://openclaw.config/mcp/servers/remote",
+  "target": "oc://openclaw.config/mcp/servers/remote",
+  "requirement": "oc://policy.jsonc/mcp/servers/allow"
+}
+```
+
+Example model-provider finding:
+
+```json
+{
+  "checkId": "policy/models-unapproved-provider",
+  "severity": "error",
+  "message": "Model ref 'anthropic/claude-sonnet-4.7' uses unapproved provider 'anthropic'.",
+  "source": "policy",
+  "path": "openclaw config",
+  "ocPath": "oc://openclaw.config/agents/defaults/model/fallbacks/#0",
+  "target": "oc://openclaw.config/agents/defaults/model/fallbacks/#0",
+  "requirement": "oc://policy.jsonc/models/providers/allow"
+}
+```
+
+Example network finding:
+
+```json
+{
+  "checkId": "policy/network-private-access-enabled",
+  "severity": "error",
+  "message": "Network setting 'browser-private-network' allows private-network access.",
+  "source": "policy",
+  "path": "openclaw config",
+  "ocPath": "oc://openclaw.config/browser/ssrfPolicy/dangerouslyAllowPrivateNetwork",
+  "target": "oc://openclaw.config/browser/ssrfPolicy/dangerouslyAllowPrivateNetwork",
+  "requirement": "oc://policy.jsonc/network/privateNetwork/allow"
 }
 ```
 

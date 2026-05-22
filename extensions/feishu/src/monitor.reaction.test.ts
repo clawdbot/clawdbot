@@ -2,7 +2,7 @@ import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
 } from "openclaw/plugin-sdk/channel-inbound-debounce";
-import { hasControlCommand } from "openclaw/plugin-sdk/command-detection";
+import { hasControlCommand, isControlCommandMessage } from "openclaw/plugin-sdk/command-detection";
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
@@ -255,10 +255,14 @@ function mentionOpenIds(event: FeishuMessageEvent): string[] {
 function createFeishuMonitorRuntime(params?: {
   createInboundDebouncer?: PluginRuntime["channel"]["debounce"]["createInboundDebouncer"];
   resolveInboundDebounceMs?: PluginRuntime["channel"]["debounce"]["resolveInboundDebounceMs"];
+  isControlCommandMessage?: PluginRuntime["channel"]["commands"]["isControlCommandMessage"];
   hasControlCommand?: PluginRuntime["channel"]["text"]["hasControlCommand"];
 }): PluginRuntime {
   return {
     channel: {
+      commands: {
+        isControlCommandMessage: params?.isControlCommandMessage ?? isControlCommandMessage,
+      },
       debounce: {
         createInboundDebouncer: params?.createInboundDebouncer ?? createInboundDebouncer,
         resolveInboundDebounceMs: params?.resolveInboundDebounceMs ?? resolveInboundDebounceMs,
@@ -531,6 +535,32 @@ describe("Feishu inbound debounce regressions", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it("releases pending text before a bare abort trigger instead of debouncing it", async () => {
+    setDedupPassThroughMocks();
+    const onMessage = await setupDebounceMonitor();
+
+    await enqueueDebouncedMessage(onMessage, createTextEvent({ messageId: "om_1", text: "first" }));
+    expect(handleFeishuMessageMock).not.toHaveBeenCalled();
+
+    await enqueueDebouncedMessage(
+      onMessage,
+      createTextEvent({ messageId: "om_stop", text: "stop" }),
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(handleFeishuMessageMock).toHaveBeenCalledTimes(2);
+    const first = getFirstDispatchedEvent();
+    const secondCall = mockCallAt(handleFeishuMessageMock, 1, "Feishu stop dispatch")[0] as
+      | { event?: FeishuMessageEvent }
+      | undefined;
+    const second = secondCall?.event;
+    expect(JSON.parse(first.message.content)).toEqual({ text: "first" });
+    expect(second?.message.message_id).toBe("om_stop");
+    expect(JSON.parse(second?.message.content ?? "{}")).toEqual({ text: "stop" });
   });
 
   it("keeps bot mention when per-message mention keys collide across non-forward messages", async () => {

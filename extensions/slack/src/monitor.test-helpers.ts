@@ -1,3 +1,4 @@
+import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import { Mock, vi } from "vitest";
 import { clearSlackInboundDeliveryStateForTest } from "./monitor/inbound-delivery-state.js";
 
@@ -8,6 +9,7 @@ type SlackProviderMonitor = (params: {
   appToken: string;
   abortSignal: AbortSignal;
   config?: Record<string, unknown>;
+  channelRuntime?: ChannelRuntimeSurface;
 }) => Promise<unknown>;
 
 type SlackTestState = {
@@ -127,7 +129,7 @@ async function waitForSlackEvent(name: string) {
 
 export function startSlackMonitor(
   monitorSlackProvider: SlackProviderMonitor,
-  opts?: { botToken?: string; appToken?: string },
+  opts?: { botToken?: string; appToken?: string; channelRuntime?: ChannelRuntimeSurface },
 ) {
   const controller = new AbortController();
   const run = monitorSlackProvider({
@@ -135,6 +137,7 @@ export function startSlackMonitor(
     appToken: opts?.appToken ?? "app-token",
     abortSignal: controller.signal,
     config: slackTestState.config,
+    channelRuntime: opts?.channelRuntime,
   });
   return { controller, run };
 }

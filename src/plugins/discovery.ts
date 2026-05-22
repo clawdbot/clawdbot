@@ -550,7 +550,9 @@ function deriveIdHint(params: {
   const normalizedPackageId =
     unscoped.endsWith("-provider") && unscoped.length > "-provider".length
       ? unscoped.slice(0, -"-provider".length)
-      : unscoped;
+      : unscoped.endsWith("-plugin") && unscoped.length > "-plugin".length
+        ? unscoped.slice(0, -"-plugin".length)
+        : unscoped;
 
   if (!params.hasMultipleExtensions) {
     return normalizedPackageId;

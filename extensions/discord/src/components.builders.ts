@@ -95,6 +95,7 @@ function createButtonComponent(params: {
       label: params.spec.label,
       callbackData: params.spec.callbackData,
       modalId: params.modalId,
+      reusable: params.spec.reusable,
       allowedUsers: params.spec.allowedUsers,
     },
   };

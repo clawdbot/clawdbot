@@ -576,7 +576,7 @@ EOF`,
     expect(requireBuildFollowupTargetInput(0).sessionKey).toBe("agent:main:telegram:direct:123");
   });
 
-  it("formats diagnostics approvals as direct pasteable followups", async () => {
+  it("keeps webchat diagnostics approvals as direct pasteable followups", async () => {
     resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-once");
     createExecApprovalDecisionStateMock.mockReturnValue({
       baseDecision: { timedOut: false },
@@ -624,13 +624,15 @@ EOF`,
       ].join("\n"),
     );
 
-    await runGatewayAllowlist({
+    const result = await runGatewayAllowlist({
       command: "openclaw gateway diagnostics export --json",
       trigger: "diagnostics",
       approvalFollowupMode: "direct",
       approvalFollowup,
+      turnSourceChannel: "webchat",
     });
 
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
     await vi.waitFor(() => {
       expect(sendExecApprovalFollowupResultMock).toHaveBeenCalledTimes(1);
     });
@@ -651,6 +653,51 @@ EOF`,
     expect(approvalInput?.trigger).toBe("diagnostics");
     expect(approvalInput?.outcome?.status).toBe("completed");
     expect(approvalInput?.outcome?.exitCode).toBe(0);
+  });
+
+  it("waits inline for webchat approval so the exec tool can return real output to the model", async () => {
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-once");
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: false },
+      approvedByAsk: true,
+      deniedReason: null,
+    });
+
+    const result = await runGatewayAllowlist({
+      command: "pwd && df -h",
+      turnSourceChannel: "webchat",
+    });
+
+    expect(result.pendingResult).toBeUndefined();
+    expect(result.deniedResult).toBeUndefined();
+    expect(result.allowWithoutEnforcedCommand).toBe(true);
+    expect(runExecProcessMock).not.toHaveBeenCalled();
+    expect(buildExecApprovalFollowupTargetMock).not.toHaveBeenCalled();
+    expect(sendExecApprovalFollowupResultMock).not.toHaveBeenCalled();
+  });
+
+  it("returns webchat approval denials as the foreground tool result", async () => {
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("deny");
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: false },
+      approvedByAsk: false,
+      deniedReason: "user-denied",
+    });
+
+    const result = await runGatewayAllowlist({
+      command: "pwd && df -h",
+      turnSourceChannel: "webchat",
+    });
+
+    expect(result.pendingResult).toBeUndefined();
+    expect(result.deniedResult?.details.status).toBe("failed");
+    expect(result.deniedResult?.content[0]).toEqual(
+      expect.objectContaining({
+        text: "Exec denied (gateway id=req-1, user-denied): pwd && df -h",
+      }),
+    );
+    expect(runExecProcessMock).not.toHaveBeenCalled();
+    expect(sendExecApprovalFollowupResultMock).not.toHaveBeenCalled();
   });
 
   it("denies timed-out inline-eval requests instead of auto-running them", async () => {

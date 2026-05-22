@@ -63,12 +63,15 @@ Legacy allowlist enforcement lived in `src/gateway/server-bridge.ts` (removed).
 
 ## Exec lifecycle events
 
-Nodes can emit `exec.finished` or `exec.denied` events to surface system.run activity.
+Nodes can emit `exec.finished` events to surface completed `system.run` activity.
 These are mapped to system events in the gateway. (Legacy nodes may still emit `exec.started`.)
+Nodes may emit `exec.denied` for denied `system.run` attempts; the gateway accepts
+the event as a terminal denial and does not enqueue a system event or wake agent work.
 
 Payload fields (all optional unless noted):
 
-- `sessionKey` (required): agent session to receive the system event.
+- `sessionKey` (required): agent session for event correlation and, for
+  `exec.finished`, system event delivery.
 - `runId`: unique exec id for grouping.
 - `command`: raw or formatted command string.
 - `exitCode`, `timedOut`, `success`, `output`: completion details (finished only).

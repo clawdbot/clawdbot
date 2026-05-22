@@ -126,7 +126,7 @@ describe("agents_list", () => {
     expect(agents?.map((agent) => agent.id)).toEqual(["main", "coder", "research"]);
   });
 
-  it("marks allowlisted-but-unconfigured agents", async () => {
+  it("omits allowlisted-but-unconfigured agents", async () => {
     setConfigWithAgentList([
       {
         id: "main",
@@ -139,8 +139,6 @@ describe("agents_list", () => {
     const tool = createTool();
     const result = await tool.execute("call4", {});
     const agents = readAgentList(result);
-    expect(agents?.map((agent) => agent.id)).toEqual(["research"]);
-    const research = agents?.find((agent) => agent.id === "research");
-    expect(research?.configured).toBe(false);
+    expect(agents?.map((agent) => agent.id)).toEqual([]);
   });
 });

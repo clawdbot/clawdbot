@@ -1,3 +1,5 @@
+import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
+import { hasAuthProfileForProvider } from "../agents/tools/model-config.helpers.js";
 import type { SecretInputMode } from "../commands/onboard-types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -154,11 +156,27 @@ function providerNeedsCredential(
   return entry.requiresCredential !== false;
 }
 
+function formatAuthProviderLabel(providerId: string): string {
+  return providerId === "xai" ? "xAI" : providerId;
+}
+
 function providerIsReady(
   config: OpenClawConfig,
-  entry: Pick<PluginWebSearchProviderEntry, "id" | "envVars" | "requiresCredential">,
+  entry: Pick<
+    PluginWebSearchProviderEntry,
+    "id" | "authProviderId" | "envVars" | "requiresCredential"
+  >,
 ): boolean {
   if (!providerNeedsCredential(entry)) {
+    return true;
+  }
+  if (
+    entry.authProviderId &&
+    hasAuthProfileForProvider({
+      provider: entry.authProviderId,
+      agentDir: resolveDefaultAgentDir(config),
+    })
+  ) {
     return true;
   }
   return hasExistingKey(config, entry.id) || hasKeyInEnv(entry);
@@ -460,9 +478,22 @@ export async function runSearchSetupFlow(
   const existingKey = resolveExistingKey(config, choice);
   const keyConfigured = hasExistingKey(config, choice);
   const envAvailable = hasKeyInEnv(entry);
+  const agentDir = resolveDefaultAgentDir(config);
+  const authProviderId = entry.authProviderId;
+  const providerAuthProfileAvailable = authProviderId
+    ? hasAuthProfileForProvider({ provider: authProviderId, agentDir })
+    : false;
+  const oauthAuthProfileAvailable =
+    authProviderId && providerAuthProfileAvailable
+      ? hasAuthProfileForProvider({
+          provider: authProviderId,
+          agentDir,
+          type: "oauth",
+        })
+      : false;
   const needsCredential = providerNeedsCredential(entry);
 
-  if (opts?.quickstartDefaults && (keyConfigured || envAvailable)) {
+  if (opts?.quickstartDefaults && (providerAuthProfileAvailable || keyConfigured || envAvailable)) {
     const result = existingKey
       ? applySearchKey(config, choice, existingKey)
       : applySearchProviderSelection(config, choice);
@@ -497,6 +528,46 @@ export async function runSearchSetupFlow(
 
   if (entry.credentialNote) {
     await prompter.note(entry.credentialNote, entry.label);
+  }
+
+  if (oauthAuthProfileAvailable && authProviderId) {
+    const authProviderLabel = formatAuthProviderLabel(authProviderId);
+    await prompter.note(
+      [
+        `${entry.label} can use your existing ${authProviderLabel} OAuth sign-in for web_search.`,
+        "No separate API key is required; API-key auth remains available as a fallback.",
+        `Docs: ${entry.docsUrl ?? WEB_SEARCH_DOCS_URL}`,
+      ].join("\n"),
+      "Web search",
+    );
+    return await finalizeSearchProviderSetup({
+      originalConfig: config,
+      nextConfig: applySearchProviderSelection(config, choice),
+      entry,
+      runtime,
+      prompter,
+      opts,
+    });
+  }
+
+  if (providerAuthProfileAvailable && authProviderId) {
+    const authProviderLabel = formatAuthProviderLabel(authProviderId);
+    await prompter.note(
+      [
+        `${entry.label} can use your existing ${authProviderLabel} auth profile for web_search.`,
+        "No separate web-search key is required; API-key auth remains available as a fallback.",
+        `Docs: ${entry.docsUrl ?? WEB_SEARCH_DOCS_URL}`,
+      ].join("\n"),
+      "Web search",
+    );
+    return await finalizeSearchProviderSetup({
+      originalConfig: config,
+      nextConfig: applySearchProviderSelection(config, choice),
+      entry,
+      runtime,
+      prompter,
+      opts,
+    });
   }
 
   const useSecretRefMode = opts?.secretInputMode === "ref"; // pragma: allowlist secret

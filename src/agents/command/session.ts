@@ -24,6 +24,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   buildAgentMainSessionKey,
   DEFAULT_AGENT_ID,
+  isUnscopedSessionKeySentinel,
   normalizeAgentId,
   normalizeMainKey,
 } from "../../routing/session-key.js";
@@ -218,7 +219,9 @@ export function resolveSessionKeyForRequest(opts: {
         })
       : undefined);
   const storeAgentId = explicitSessionKey
-    ? resolveAgentIdFromSessionKey(explicitSessionKey)
+    ? isUnscopedSessionKeySentinel(explicitSessionKey)
+      ? (requestedAgentId ?? defaultAgentId)
+      : resolveAgentIdFromSessionKey(explicitSessionKey)
     : (requestedAgentId ?? defaultAgentId);
   const storePath = resolveStorePath(sessionCfg?.store, {
     agentId: storeAgentId,

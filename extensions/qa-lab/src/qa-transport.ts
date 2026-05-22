@@ -30,6 +30,7 @@ export type QaTransportReportParams = {
   alternateModel: string;
   fastMode: boolean;
   concurrency: number;
+  isolatedWorkers?: boolean;
 };
 
 export type QaTransportGatewayConfig = Pick<OpenClawConfig, "channels" | "messages">;

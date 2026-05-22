@@ -210,6 +210,7 @@ export {
   runAgentHarnessBeforeMessageWriteHook,
 } from "../agents/harness/hook-helpers.js";
 export {
+  awaitAgentHarnessAgentEndHook,
   runAgentHarnessBeforeAgentFinalizeHook,
   runAgentHarnessAgentEndHook,
   runAgentHarnessLlmInputHook,

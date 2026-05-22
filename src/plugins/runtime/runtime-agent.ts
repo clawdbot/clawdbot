@@ -11,10 +11,14 @@ import { normalizeThinkLevel, resolveThinkingProfile } from "../../auto-reply/th
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveSessionFilePath, resolveStorePath } from "../../config/sessions/paths.js";
 import {
+  getSessionEntry,
+  listSessionEntries,
   loadSessionStore,
+  patchSessionEntry,
   saveSessionStore,
   updateSessionStore,
   updateSessionStoreEntry,
+  upsertSessionEntry,
 } from "../../config/sessions/store.js";
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { defineCachedValue } from "./runtime-cache.js";
@@ -71,6 +75,10 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
   );
   defineCachedValue(agentRuntime, "session", () => ({
     resolveStorePath,
+    getSessionEntry,
+    listSessionEntries,
+    patchSessionEntry,
+    upsertSessionEntry,
     loadSessionStore,
     saveSessionStore,
     updateSessionStore,

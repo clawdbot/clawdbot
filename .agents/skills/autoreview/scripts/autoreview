@@ -1,707 +1,561 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/usr/bin/env python3
+from __future__ import annotations
 
-usage() {
-  cat <<'EOF'
-Usage: autoreview [options]
+import argparse
+import json
+import os
+import subprocess
+import sys
+import tempfile
+import textwrap
+import time
+from pathlib import Path
+from typing import Any
 
-Options:
-  --mode auto|local|branch|commit
-                              Target selection. Default: auto.
-  --base REF                 Base ref for branch review. Default: PR base or origin/main.
-  --commit REF               Commit ref for commit review. Default: HEAD.
-  --reviewer codex|claude|pi|opencode|droid|copilot|auto
-                              Review engine. Default: Codex with configured fallback on error.
-  --fallback-reviewer auto|claude|pi|opencode|droid|copilot|none
-                              Fallback when Codex is unavailable or exits nonzero. Default: auto.
-  --codex-bin PATH           Codex binary. Default: codex.
-  --claude-bin PATH          Claude binary. Default: claude.
-  --pi-bin PATH              Pi binary. Default: pi.
-  --opencode-bin PATH        OpenCode binary. Default: opencode.
-  --droid-bin PATH           Droid binary. Default: droid.
-  --copilot-bin PATH         GitHub Copilot binary. Default: copilot.
-  --full-access              Keep yolo/full-access mode enabled. Default.
-  --no-yolo                  Run nested Codex review with normal sandbox/approval prompts.
-  --output FILE              Also save output to file.
-  --parallel-tests CMD       Run review and test command concurrently.
-                              Default: PNPM_CONFIG_PM_ON_FAIL=ignore PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false PNPM_CONFIG_OFFLINE=true pnpm run check when available.
-  --dry-run                  Print selected commands, do not run.
-  -h, --help                 Show help.
 
-Environment:
-  OPENCLAW_TESTBOX=1 or AUTOREVIEW_OPENCLAW_MAINTAINER_VALIDATION=1
-                              Enable maintainer-only OpenClaw Crabbox/Testbox validation policy.
-
-Modes:
-  local   codex review --uncommitted
-  branch  codex review --base <base>
-  commit  codex review --commit <commit>
-  auto    dirty tree -> local, else PR/current branch -> branch
-EOF
+SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": [
+        "findings",
+        "overall_correctness",
+        "overall_explanation",
+        "overall_confidence",
+    ],
+    "properties": {
+        "findings": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": [
+                    "title",
+                    "body",
+                    "priority",
+                    "confidence",
+                    "category",
+                    "code_location",
+                ],
+                "properties": {
+                    "title": {"type": "string", "minLength": 1, "maxLength": 140},
+                    "body": {"type": "string", "minLength": 1, "maxLength": 2000},
+                    "priority": {"type": "string", "enum": ["P0", "P1", "P2", "P3"]},
+                    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                    "category": {
+                        "type": "string",
+                        "enum": ["bug", "security", "regression", "test_gap", "maintainability"],
+                    },
+                    "code_location": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": ["file_path", "line"],
+                        "properties": {
+                            "file_path": {"type": "string", "minLength": 1},
+                            "line": {"type": "integer", "minimum": 1},
+                        },
+                    },
+                },
+            },
+        },
+        "overall_correctness": {
+            "type": "string",
+            "enum": ["patch is correct", "patch is incorrect"],
+        },
+        "overall_explanation": {"type": "string", "minLength": 1, "maxLength": 3000},
+        "overall_confidence": {"type": "number", "minimum": 0, "maximum": 1},
+    },
 }
 
-mode=auto
-base_ref=
-commit_ref=HEAD
-reviewer=${AUTOREVIEW_REVIEWER:-${CODEX_REVIEW_REVIEWER:-auto}}
-fallback_reviewer=${AUTOREVIEW_FALLBACK_REVIEWER:-${CODEX_REVIEW_FALLBACK_REVIEWER:-auto}}
-codex_bin=${CODEX_BIN:-codex}
-claude_bin=${CLAUDE_BIN:-claude}
-pi_bin=${PI_BIN:-pi}
-opencode_bin=${OPENCODE_BIN:-opencode}
-droid_bin=${DROID_BIN:-droid}
-copilot_bin=${COPILOT_BIN:-copilot}
-codex_args=()
-yolo=${AUTOREVIEW_YOLO:-${CODEX_REVIEW_YOLO:-1}}
-output=${AUTOREVIEW_OUTPUT:-${CODEX_REVIEW_OUTPUT:-}}
-parallel_tests=
-parallel_tests_auto=false
-dry_run=false
-codex_review_prompt=
-codex_review_stdin_prompt=false
-codex_review_prompt_file=false
-openclaw_maintainer_validation=${AUTOREVIEW_OPENCLAW_MAINTAINER_VALIDATION:-${OPENCLAW_TESTBOX:-0}}
 
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --mode)
-      mode=${2:-}
-      shift 2
-      ;;
-    --base)
-      base_ref=${2:-}
-      shift 2
-      ;;
-    --commit)
-      commit_ref=${2:-}
-      shift 2
-      ;;
-    --reviewer)
-      reviewer=${2:-}
-      shift 2
-      ;;
-    --fallback-reviewer)
-      fallback_reviewer=${2:-}
-      shift 2
-      ;;
-    --codex-bin)
-      codex_bin=${2:-}
-      shift 2
-      ;;
-    --claude-bin)
-      claude_bin=${2:-}
-      shift 2
-      ;;
-    --pi-bin)
-      pi_bin=${2:-}
-      shift 2
-      ;;
-    --opencode-bin)
-      opencode_bin=${2:-}
-      shift 2
-      ;;
-    --droid-bin)
-      droid_bin=${2:-}
-      shift 2
-      ;;
-    --copilot-bin)
-      copilot_bin=${2:-}
-      shift 2
-      ;;
-    --full-access)
-      yolo=1
-      shift
-      ;;
-    --no-yolo)
-      yolo=0
-      shift
-      ;;
-    --output)
-      output=${2:-}
-      shift 2
-      ;;
-    --parallel-tests)
-      parallel_tests=${2:-}
-      shift 2
-      ;;
-    --dry-run)
-      dry_run=true
-      shift
-      ;;
-    -h|--help)
-      usage
-      exit 0
-      ;;
-    *)
-      usage >&2
-      exit 2
-      ;;
-  esac
-done
+def run(args: list[str], cwd: Path, *, input_text: str | None = None, check: bool = True) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(
+        args,
+        cwd=cwd,
+        input=input_text,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if check and result.returncode != 0:
+        cmd = " ".join(args)
+        raise SystemExit(f"command failed ({result.returncode}): {cmd}\n{result.stderr or result.stdout}")
+    return result
 
-case "$yolo" in
-  0|false|False|FALSE|no|No|NO|off|Off|OFF) ;;
-  *) codex_args+=(--dangerously-bypass-approvals-and-sandbox --sandbox danger-full-access) ;;
-esac
 
-case "$mode" in
-  auto|local|branch|commit) ;;
-  *)
-    echo "invalid --mode: $mode" >&2
-    exit 2
-    ;;
-esac
+def git(repo: Path, *args: str, check: bool = True) -> str:
+    return run(["git", *args], repo, check=check).stdout
 
-case "$reviewer" in
-  auto|codex|claude|pi|opencode|droid|copilot) ;;
-  *)
-    echo "invalid --reviewer: $reviewer" >&2
-    exit 2
-    ;;
-esac
 
-case "$fallback_reviewer" in
-  auto|claude|pi|opencode|droid|copilot|none) ;;
-  *)
-    echo "invalid --fallback-reviewer: $fallback_reviewer" >&2
-    exit 2
-    ;;
-esac
+def repo_root() -> Path:
+    result = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    if result.returncode != 0:
+        raise SystemExit("autoreview must run inside a git repository")
+    return Path(result.stdout.strip()).resolve()
 
-repo_root=$(git rev-parse --show-toplevel)
-printf -v quoted_repo_root '%q' "$repo_root"
 
-has_package_check_script() {
-  command -v node >/dev/null 2>&1 || return 1
-  node -e 'const { readFileSync } = require("node:fs"); const p = JSON.parse(readFileSync(process.argv[1], "utf8")); process.exit(p.scripts?.check ? 0 : 1)' \
-    "$repo_root/package.json" \
-    >/dev/null 2>&1
-}
+def current_branch(repo: Path) -> str:
+    return git(repo, "branch", "--show-current", check=False).strip() or "detached"
 
-auto_tests_disabled() {
-  case "${AUTOREVIEW_AUTO_TESTS:-${CODEX_REVIEW_AUTO_TESTS:-1}}" in
-    0|false|False|FALSE|no|No|NO|off|Off|OFF) return 0 ;;
-    *) return 1 ;;
-  esac
-}
 
-current_branch=$(git branch --show-current 2>/dev/null || true)
-dirty=false
-if [[ -n "$(git status --porcelain)" ]]; then
-  dirty=true
-fi
+def is_dirty(repo: Path) -> bool:
+    return bool(git(repo, "status", "--porcelain").strip())
 
-pr_url=
-if [[ -z "$base_ref" && "$mode" != local ]] && command -v gh >/dev/null 2>&1; then
-  if pr_lines=$(gh pr view --json baseRefName,url --jq '[.baseRefName, .url] | @tsv' 2>/dev/null); then
-    base_name=${pr_lines%%$'\t'*}
-    pr_url=${pr_lines#*$'\t'}
-    if [[ -n "$base_name" ]]; then
-      base_ref="origin/$base_name"
-    fi
-  fi
-fi
 
-if [[ -z "$base_ref" ]]; then
-  base_ref=origin/main
-fi
+def choose_target(repo: Path, mode: str, base_ref: str | None) -> tuple[str, str | None]:
+    branch = current_branch(repo)
+    if mode == "local" or (mode == "auto" and is_dirty(repo)):
+        return "local", None
+    if mode == "commit":
+        return "commit", None
+    if mode == "branch" or (mode == "auto" and branch != "main"):
+        return "branch", base_ref or detect_pr_base(repo) or "origin/main"
+    raise SystemExit("no review target: clean main checkout and no forced mode")
 
-review_kind=
-if [[ "$mode" == local || ( "$mode" == auto && "$dirty" == true ) ]]; then
-  review_kind=local
-elif [[ "$mode" == commit ]]; then
-  review_kind=commit
-elif [[ "$mode" == branch || ( "$mode" == auto && -n "$current_branch" && "$current_branch" != "main" ) ]]; then
-  review_kind=branch
-else
-  echo "no review target: clean main checkout and no forced mode" >&2
-  exit 1
-fi
 
-if [[ "$review_kind" == local ]]; then
-  review_cmd=("$codex_bin" "${codex_args[@]}" review --uncommitted)
-elif [[ "$review_kind" == commit ]]; then
-  review_cmd=("$codex_bin" "${codex_args[@]}" review --commit "$commit_ref")
-else
-  review_cmd=("$codex_bin" "${codex_args[@]}" review --base "$base_ref")
-fi
+def detect_pr_base(repo: Path) -> str | None:
+    if not shutil_which("gh"):
+        return None
+    result = run(["gh", "pr", "view", "--json", "baseRefName", "--jq", ".baseRefName"], repo, check=False)
+    base = result.stdout.strip()
+    return f"origin/{base}" if result.returncode == 0 and base else None
 
-repo_url=$(git -C "$repo_root" config --get remote.origin.url 2>/dev/null || true)
-case "$openclaw_maintainer_validation" in
-  1|true|True|TRUE|yes|Yes|YES|on|On|ON) openclaw_maintainer_validation=1 ;;
-  *) openclaw_maintainer_validation=0 ;;
-esac
-if [[ -z "$parallel_tests" && "$openclaw_maintainer_validation" != 1 ]] &&
-  ! auto_tests_disabled; then
-  if [[ -f "$repo_root/package.json" && -f "$repo_root/pnpm-lock.yaml" && -d "$repo_root/node_modules" ]] &&
-    command -v pnpm >/dev/null 2>&1 &&
-    has_package_check_script; then
-    parallel_tests="cd $quoted_repo_root && PNPM_CONFIG_PM_ON_FAIL=ignore PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN=false PNPM_CONFIG_OFFLINE=true pnpm run check"
-    parallel_tests_auto=true
-  fi
-fi
-if [[ "$repo_url" == *"openclaw/openclaw"* && "$openclaw_maintainer_validation" == 1 ]]; then
-  codex_review_prompt=$(cat <<'EOF'
-OpenClaw maintainer autoreview validation policy:
-- Review the diff by reading code, tests, and dependency contracts.
-- Do not run local memory-heavy Node validation from review mode. This includes local pnpm checks/tests, Vitest, tsgo, npm test, and node scripts/run-vitest.mjs.
-- If runtime proof is needed, use existing proof or route validation through Crabbox / Blacksmith Testbox and report the exact provider and id.
-- If remote validation is not necessary for the finding, state the targeted proof that should be run instead of starting local tests.
-EOF
-)
-  if [[ "$review_kind" == local ]]; then
-    review_cmd+=(-)
-    codex_review_stdin_prompt=true
-  else
-    review_cmd=("$codex_bin" "${codex_args[@]}" review -)
-    codex_review_prompt_file=true
-  fi
-fi
 
-printf 'autoreview target: %s\n' "$review_kind"
-printf 'branch: %s\n' "${current_branch:-detached}"
-if [[ -n "$pr_url" ]]; then
-  printf 'pr: %s\n' "$pr_url"
-fi
-if [[ "$reviewer" == auto ]]; then
-  printf 'reviewer: codex\n'
-else
-  printf 'reviewer: %s\n' "$reviewer"
-fi
-case "$reviewer" in
-  codex|auto) ;;
-  *)
-    printf 'note: Codex native review mode is the recommended and best-supported review path; %s uses a generated diff prompt.\n' "$reviewer"
-    ;;
-esac
-if [[ "$reviewer" == auto || "$reviewer" == codex ]]; then
-  printf 'review:'
-  printf ' %q' "${review_cmd[@]}"
-  printf '\n'
-  if [[ "$codex_review_stdin_prompt" == true || "$codex_review_prompt_file" == true ]]; then
-    printf 'review policy: OpenClaw maintainer Crabbox/Testbox-aware validation prompt injected\n'
-  fi
-else
-  printf 'review: %s prompt review\n' "$reviewer"
-fi
-if [[ -n "$parallel_tests" ]]; then
-  printf 'tests: %s' "$parallel_tests"
-  if [[ "$parallel_tests_auto" == true ]]; then
-    printf ' (auto)'
-  fi
-  printf '\n'
-fi
-if [[ "$review_kind" == branch ]]; then
-  printf 'fetch: git fetch origin --quiet\n'
-fi
-if [[ -n "$output" ]]; then
-  printf 'output: %s\n' "$output"
-fi
+def shutil_which(name: str) -> str | None:
+    for part in os.environ.get("PATH", "").split(os.pathsep):
+        candidate = Path(part) / name
+        if candidate.exists() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return None
 
-if [[ "$dry_run" == true ]]; then
-  exit 0
-fi
 
-if [[ "$review_kind" == branch ]]; then
-  git fetch origin --quiet || {
-    echo "warning: git fetch origin failed; reviewing with existing refs" >&2
-  }
-fi
+def bounded(text: str, limit: int = 180_000) -> str:
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f"\n\n[truncated at {limit} characters]\n"
 
-review_output=$output
-review_output_is_temp=false
-if [[ -z "$review_output" ]]; then
-  review_output=$(mktemp)
-  review_output_is_temp=true
-fi
-mkdir -p "$(dirname "$review_output")"
-: > "$review_output"
 
-cleanup() {
-  if [[ "${review_output_is_temp:-false}" == true && -n "${review_output:-}" ]]; then
-    rm -f "$review_output"
-  fi
-  if [[ -n "${prompt_file:-}" ]]; then
-    rm -f "$prompt_file"
-  fi
-}
-trap cleanup EXIT
+def read_text(path: Path, limit: int = 40_000) -> str:
+    try:
+        data = path.read_bytes()
+    except OSError as exc:
+        return f"[unreadable: {exc}]"
+    if b"\0" in data:
+        return "[binary file omitted]"
+    text = data.decode("utf-8", errors="replace")
+    return bounded(text, limit)
 
-run_review() {
-  local status=0
-  mkdir -p "$(dirname "$review_output")"
-  if [[ "$codex_review_prompt_file" == true ]]; then
-    build_prompt_file || return
-    "${review_cmd[@]}" < "$prompt_file" 2>&1 | tee "$review_output"
-    status=${PIPESTATUS[0]}
-    rm -f "$prompt_file"
-    prompt_file=
-    return "$status"
-  elif [[ "$codex_review_stdin_prompt" == true ]]; then
-    printf '%s\n' "$codex_review_prompt" | "${review_cmd[@]}" 2>&1 | tee "$review_output"
-  else
-    "${review_cmd[@]}" 2>&1 | tee "$review_output"
-  fi
-}
 
-diff_for_review() {
-  case "$review_kind" in
-    local)
-      git -C "$repo_root" diff --stat
-      git -C "$repo_root" diff --cached --stat
-      git -C "$repo_root" diff --find-renames
-      git -C "$repo_root" diff --cached --find-renames
-      while IFS= read -r untracked_file; do
-        [[ -n "$untracked_file" ]] || continue
-        git -C "$repo_root" diff --no-index -- /dev/null "$untracked_file" || true
-      done < <(git -C "$repo_root" ls-files --others --exclude-standard)
-      ;;
-    commit)
-      git -C "$repo_root" show --find-renames --stat --format=fuller "$commit_ref"
-      git -C "$repo_root" show --find-renames --format=medium "$commit_ref"
-      ;;
-    branch)
-      git -C "$repo_root" diff --find-renames --stat "$base_ref"...HEAD
-      git -C "$repo_root" diff --find-renames "$base_ref"...HEAD
-      ;;
-  esac
-}
+def local_bundle(repo: Path) -> str:
+    parts = [
+        "# Git Status",
+        git(repo, "status", "--short"),
+        "# Staged Diff",
+        git(repo, "diff", "--cached", "--stat"),
+        bounded(git(repo, "diff", "--cached", "--patch", "--find-renames")),
+        "# Unstaged Diff",
+        git(repo, "diff", "--stat"),
+        bounded(git(repo, "diff", "--patch", "--find-renames")),
+    ]
+    untracked = [line for line in git(repo, "ls-files", "--others", "--exclude-standard").splitlines() if line]
+    if untracked:
+        parts.append("# Untracked Files")
+        for rel in untracked:
+            path = repo / rel
+            parts.append(f"## {rel}\n{read_text(path)}")
+    return "\n\n".join(parts)
 
-build_prompt_file() {
-  prompt_file=$(mktemp)
-  {
-    cat <<EOF
-You are performing a closeout code review for the current repository.
 
-Review target: $review_kind
-Branch: ${current_branch:-detached}
-Base: ${base_ref:-}
-Commit: ${commit_ref:-}
+def branch_bundle(repo: Path, base_ref: str) -> str:
+    git(repo, "fetch", "origin", "--quiet", check=False)
+    return "\n\n".join(
+        [
+            "# Branch Diff",
+            f"base: {base_ref}",
+            git(repo, "diff", "--stat", f"{base_ref}...HEAD"),
+            bounded(git(repo, "diff", "--patch", "--find-renames", f"{base_ref}...HEAD")),
+        ]
+    )
 
-Rules:
-- Review the proposed code change as a closeout reviewer.
-- Focus on the diff below. If your CLI exposes read-only repository tools, inspect surrounding code and tests to verify findings; never modify files.
-- Do not modify files.
-${codex_review_prompt}
-- Report only discrete, actionable issues introduced by this change.
-- Prioritize correctness, regressions, security, data loss, performance cliffs, and missing tests that would catch a real bug.
-- Do not report pre-existing issues, speculative risks, broad rewrites, style nits, changelog gaps, or findings that depend on unstated assumptions.
-- Identify the concrete scenario where the issue appears, and keep the line reference as small as possible.
-- A finding should overlap changed code or clearly cite changed code as the cause.
-- For each accepted/actionable finding, use exactly this format:
-  [P<0-3>] Short title
-  File: path:line
-  Why: one sentence
-  Fix: one sentence
-- If no accepted/actionable findings, output exactly:
-  autoreview clean: no accepted/actionable findings reported
 
-Diff:
-EOF
-    diff_for_review
-  } > "$prompt_file" || return
-}
+def commit_bundle(repo: Path, commit_ref: str) -> str:
+    return "\n\n".join(
+        [
+            "# Commit Diff",
+            f"commit: {commit_ref}",
+            git(repo, "show", "--stat", "--format=fuller", commit_ref),
+            bounded(git(repo, "show", "--patch", "--find-renames", "--format=fuller", commit_ref)),
+        ]
+    )
 
-reviewer_output_has_clean_marker() {
-  local path=$1
-  grep -Eq '^[^[:alnum:]]*autoreview clean: no accepted/actionable findings reported[[:space:]]*$' "$path"
-}
 
-run_prompt_reviewer() {
-  local selected=$1
-  local copilot_prompt=
-  local prompt_bytes=0
-  local reviewer_output
-  local status=0
+def review_paths(repo: Path, target: str, target_ref: str | None, commit_ref: str) -> set[str]:
+    names: set[str] = set()
+    if target == "local":
+        sources = [
+            git(repo, "diff", "--name-only", "--cached"),
+            git(repo, "diff", "--name-only"),
+            git(repo, "ls-files", "--others", "--exclude-standard"),
+        ]
+    elif target == "branch":
+        assert target_ref
+        sources = [git(repo, "diff", "--name-only", f"{target_ref}...HEAD")]
+    else:
+        sources = [git(repo, "show", "--name-only", "--format=", commit_ref)]
+    for source in sources:
+        for line in source.splitlines():
+            path = line.strip()
+            if path:
+                names.add(path)
+    return names
 
-  if ! build_prompt_file; then
-    rm -f "${prompt_file:-}"
-    prompt_file=
-    return 1
-  fi
-  reviewer_output=$(mktemp)
-  mkdir -p "$(dirname "$review_output")"
 
-  case "$selected" in
-    claude)
-      if ! command -v "$claude_bin" >/dev/null 2>&1; then
-        echo "fallback reviewer unavailable: $claude_bin" >&2
-        status=127
-      elif printf 'fallback: claude -p\n' | tee -a "$review_output"; then
-        "$claude_bin" --tools "" --no-session-persistence -p < "$prompt_file" 2>&1 | tee -a "$review_output" "$reviewer_output"
-        status=$?
-      else
-        status=$?
-      fi
-      ;;
-    pi)
-      if ! command -v "$pi_bin" >/dev/null 2>&1; then
-        echo "fallback reviewer unavailable: $pi_bin" >&2
-        status=127
-      elif printf 'fallback: pi -p\n' | tee -a "$review_output"; then
-        "$pi_bin" --no-tools --no-session -p < "$prompt_file" 2>&1 | tee -a "$review_output" "$reviewer_output"
-        status=$?
-      else
-        status=$?
-      fi
-      ;;
-    opencode)
-      if ! command -v "$opencode_bin" >/dev/null 2>&1; then
-        echo "fallback reviewer unavailable: $opencode_bin" >&2
-        status=127
-      elif printf 'fallback: opencode run\n' | tee -a "$review_output"; then
-        "$opencode_bin" run --pure --dir "$repo_root" \
-          "Review the attached prompt file. Do not modify files." \
-          --file "$prompt_file" 2>&1 | tee -a "$review_output" "$reviewer_output"
-        status=$?
-      else
-        status=$?
-      fi
-      ;;
-    droid)
-      if ! command -v "$droid_bin" >/dev/null 2>&1; then
-        echo "fallback reviewer unavailable: $droid_bin" >&2
-        status=127
-      elif printf 'fallback: droid exec\n' | tee -a "$review_output"; then
-        "$droid_bin" exec --cwd "$repo_root" -f "$prompt_file" 2>&1 | tee -a "$review_output" "$reviewer_output"
-        status=$?
-      else
-        status=$?
-      fi
-      ;;
-    copilot)
-      if ! command -v "$copilot_bin" >/dev/null 2>&1; then
-        echo "fallback reviewer unavailable: $copilot_bin" >&2
-        status=127
-      elif printf 'fallback: copilot\n' | tee -a "$review_output"; then
-        prompt_bytes=$(wc -c < "$prompt_file" | tr -d '[:space:]')
-        if (( prompt_bytes > 120000 )); then
-          echo "copilot reviewer unavailable: generated prompt is too large for copilot -p; use codex, droid, or another file/stdin-capable reviewer" \
-            2>&1 | tee -a "$review_output" "$reviewer_output"
-          status=1
-        else
-          copilot_prompt=$(< "$prompt_file")
-          "$copilot_bin" -C "$repo_root" --available-tools=none --stream off --output-format text --silent \
-            -p "$copilot_prompt" \
-            2>&1 | tee -a "$review_output" "$reviewer_output"
-          status=$?
-        fi
-      else
-        status=$?
-      fi
-      ;;
-    *)
-      echo "unsupported prompt reviewer: $selected" >&2
-      status=2
-      ;;
-  esac
-  if [[ "$status" == 0 ]]; then
-    if grep -Eq '\[P[0-3]\]' "$reviewer_output"; then
-      status=1
-    elif ! grep -q '[^[:space:]]' "$reviewer_output"; then
-      status=1
-    elif ! reviewer_output_has_clean_marker "$reviewer_output"; then
-      status=1
-    fi
-  fi
-  rm -f "$reviewer_output"
-  rm -f "$prompt_file"
-  prompt_file=
-  return "$status"
-}
+def load_extra_prompt(args: argparse.Namespace) -> str:
+    chunks: list[str] = []
+    for value in args.prompt or []:
+        chunks.append(value)
+    for path in args.prompt_file or []:
+        chunks.append(Path(path).read_text())
+    return "\n\n".join(chunks)
 
-run_selected_review() {
-  local selected=$1
-  case "$selected" in
-    codex)
-      if ! command -v "$codex_bin" >/dev/null 2>&1; then
-        echo "codex reviewer unavailable: $codex_bin" >&2
-        return 127
-      fi
-      run_review
-      ;;
-    claude|pi|opencode|droid|copilot)
-      run_prompt_reviewer "$selected"
-      ;;
-    *)
-      echo "unsupported reviewer: $selected" >&2
-      return 2
-      ;;
-  esac
-}
 
-fallback_reviewer_is_available() {
-  local selected=$1
-  case "$selected" in
-    claude) command -v "$claude_bin" >/dev/null 2>&1 ;;
-    pi) command -v "$pi_bin" >/dev/null 2>&1 ;;
-    opencode) command -v "$opencode_bin" >/dev/null 2>&1 ;;
-    droid) command -v "$droid_bin" >/dev/null 2>&1 ;;
-    copilot) command -v "$copilot_bin" >/dev/null 2>&1 ;;
-    *) return 1 ;;
-  esac
-}
+def load_datasets(args: argparse.Namespace) -> str:
+    chunks: list[str] = []
+    for spec in args.dataset or []:
+        path = Path(spec)
+        if path.is_dir():
+            raise SystemExit(f"--dataset must be a file, got directory: {path}")
+        chunks.append(f"# Dataset: {path}\n{read_text(path)}")
+    return "\n\n".join(chunks)
 
-run_auto_fallback_review() {
-  local selected
-  if [[ "$fallback_reviewer" != auto ]]; then
-    run_selected_review "$fallback_reviewer"
-    return $?
-  fi
 
-  for selected in claude pi opencode droid copilot; do
-    if fallback_reviewer_is_available "$selected"; then
-      run_selected_review "$selected"
-      return $?
-    fi
-  done
+def build_prompt(repo: Path, target: str, target_ref: str | None, bundle: str, extra_prompt: str, datasets: str) -> str:
+    target_line = f"{target} {target_ref}" if target_ref else target
+    return textwrap.dedent(
+        f"""
+        You are a senior code reviewer. Review the provided git change bundle only.
 
-  echo "fallback reviewer unavailable: no configured fallback CLI found" >&2
-  return 127
-}
+        Hard rules:
+        - Return JSON only, matching the supplied schema exactly.
+        - Do not modify files.
+        - Do not invoke nested reviewers or review tools.
+        - Forbidden nested review commands include: codex review, autoreview, claude review, oracle review.
+        - You may use read-only tools and web search to inspect files, dependency contracts, upstream docs, current behavior, and security implications.
+        - Shell commands, if available, must be read-only inspection commands. Do not run tests, formatters, package installs, generators, network mutation commands, git mutation commands, or commands that write files.
+        - Report only actionable defects introduced or exposed by this change.
+        - Prefer high-signal findings over style feedback.
+        - Include security findings: injection, secret leaks, authz/authn bypass, path traversal, unsafe deserialization, unsafe filesystem or shell use, privacy leaks, and credential handling.
+        - Do not reject legitimate functionality merely because it touches shell, filesystem, network, auth, or sensitive data. Report a security finding only when the patch creates a concrete exploitable risk, removes an important safety check, or lacks validation at a trust boundary.
+        - For each finding, use the smallest file/line location that demonstrates the issue.
+        - If there are no actionable findings, return an empty findings array and mark the patch correct.
 
-run_auto_review() {
-  run_selected_review codex
-  local status=$?
-  if [[ "$status" == 0 ]]; then
-    return 0
-  fi
-  if (( status > 128 && status < 192 )); then
-    return "$status"
-  fi
-  if review_output_has_findings; then
-    return "$status"
-  fi
-  if [[ "$fallback_reviewer" == none ]]; then
-    return "$status"
-  fi
-  if [[ "$fallback_reviewer" == auto ]]; then
-    printf 'autoreview warning: codex exited %s; trying configured fallback reviewers\n' "$status" >&2
-  else
-    printf 'autoreview warning: codex exited %s; falling back to %s\n' "$status" "$fallback_reviewer" >&2
-  fi
-  run_auto_fallback_review
-}
+        Review target: {target_line}
+        Repository: {repo}
 
-elapsed_since() {
-  local started_at=$1
-  local finished_at
-  finished_at=$(date +%s)
-  printf '%s\n' "$((finished_at - started_at))"
-}
+        {extra_prompt}
 
-format_elapsed() {
-  local seconds=$1
-  if (( seconds < 60 )); then
-    printf '%ss\n' "$seconds"
-  else
-    printf '%sm%ss\n' "$((seconds / 60))" "$((seconds % 60))"
-  fi
-}
+        {datasets}
 
-review_output_empty() {
-  [[ ! -s "$review_output" ]] || ! grep -q '[^[:space:]]' "$review_output"
-}
+        # Change Bundle
+        {bundle}
+        """
+    ).strip()
 
-review_findings_text() {
-  if grep -Fxq 'codex' "$review_output"; then
-    awk '
-      $0 == "codex" {
-        capture = 1
-        output = $0 ORS
-        next
-      }
-      capture {
-        output = output $0 ORS
-      }
-      END {
-        printf "%s", output
-      }
-    ' "$review_output"
-    return
-  fi
-  cat "$review_output"
-}
 
-review_output_has_findings() {
-  review_findings_text | grep -Eq '\[P[0-3]\]'
-}
+def write_json_temp(data: dict[str, Any]) -> Path:
+    handle = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False)
+    with handle:
+        json.dump(data, handle)
+    return Path(handle.name)
 
-report_clean_review_or_fail() {
-  local elapsed_text
-  elapsed_text=$(format_elapsed "${review_elapsed_seconds:-0}")
 
-  if review_output_has_findings; then
-    printf 'autoreview complete after %s\n' "$elapsed_text"
-    printf 'autoreview findings: accepted/actionable findings reported\n'
-    return 1
-  fi
-  if review_output_empty; then
-    printf 'autoreview complete after %s; no output\n' "$elapsed_text"
-    return 1
-  fi
-  printf 'autoreview complete after %s\n' "$elapsed_text"
-  printf 'autoreview clean: no accepted/actionable findings reported\n'
-}
+def run_codex(args: argparse.Namespace, repo: Path, prompt: str) -> str:
+    if not args.tools:
+        raise SystemExit("--no-tools is not supported by the Codex engine; use --engine claude --no-tools for a no-tools run")
+    schema_path = write_json_temp(SCHEMA)
+    output_path = Path(tempfile.NamedTemporaryFile("w", suffix=".json", delete=False).name)
+    cmd = [args.codex_bin, "--ask-for-approval", "never"]
+    if args.web_search:
+        cmd.append("--search")
+    if args.model:
+        cmd.extend(["--model", args.model])
+    cmd.extend(
+        [
+            "exec",
+            "--ephemeral",
+            "-C",
+            str(repo),
+            "-s",
+            "read-only",
+            "--output-schema",
+            str(schema_path),
+            "--output-last-message",
+            str(output_path),
+            "-",
+        ]
+    )
+    result = run(cmd, repo, input_text=prompt, check=False)
+    try:
+        output = output_path.read_text()
+    finally:
+        schema_path.unlink(missing_ok=True)
+        output_path.unlink(missing_ok=True)
+    if result.returncode != 0:
+        raise SystemExit(f"codex engine failed ({result.returncode})\n{result.stderr or result.stdout}")
+    return output or result.stdout
 
-if [[ -z "$parallel_tests" ]]; then
-  review_started_at=$(date +%s)
-  set +e
-  if [[ "$reviewer" == auto ]]; then
-    run_auto_review
-  else
-    run_selected_review "$reviewer"
-  fi
-  review_status=$?
-  review_elapsed_seconds=$(elapsed_since "$review_started_at")
-  set -e
-  if [[ "$review_status" == 0 ]]; then
-    report_clean_review_or_fail
-    exit $?
-  fi
-  exit "$review_status"
-fi
 
-review_status_file=$(mktemp)
-review_elapsed_file=$(mktemp)
-tests_status_file=$(mktemp)
+def run_claude(args: argparse.Namespace, repo: Path, prompt: str) -> str:
+    cmd = [
+        args.claude_bin,
+        "--print",
+        "--no-session-persistence",
+        "--output-format",
+        "json",
+        "--json-schema",
+        json.dumps(SCHEMA),
+    ]
+    if args.tools:
+        cmd.extend(["--allowedTools", claude_allowed_tools(args)])
+    else:
+        cmd.extend(["--tools", ""])
+    if args.model:
+        cmd.extend(["--model", args.model])
+    result = run(cmd, repo, input_text=prompt, check=False)
+    if result.returncode != 0:
+        raise SystemExit(f"claude engine failed ({result.returncode})\n{result.stderr or result.stdout}")
+    return result.stdout
 
-(
-  set +e
-  review_started_at=$(date +%s)
-  if [[ "$reviewer" == auto ]]; then
-    run_auto_review
-  else
-    run_selected_review "$reviewer"
-  fi
-  status=$?
-  elapsed=$(elapsed_since "$review_started_at")
-  printf '%s\n' "$status" > "$review_status_file"
-  printf '%s\n' "$elapsed" > "$review_elapsed_file"
-) &
-review_pid=$!
 
-(
-  set +e
-  bash -lc "$parallel_tests"
-  status=$?
-  printf '%s\n' "$status" > "$tests_status_file"
-) &
-tests_pid=$!
+def claude_allowed_tools(args: argparse.Namespace) -> str:
+    tools = [tool.strip() for tool in args.claude_allowed_tools.split(",") if tool.strip()]
+    if not args.web_search:
+        tools = [tool for tool in tools if tool not in {"WebSearch", "WebFetch"}]
+    return ",".join(tools)
 
-wait "$review_pid" || true
-wait "$tests_pid" || true
 
-review_status=$(cat "$review_status_file")
-review_elapsed_seconds=$(cat "$review_elapsed_file")
-tests_status=$(cat "$tests_status_file")
-rm -f "$review_status_file" "$review_elapsed_file" "$tests_status_file"
+def extract_json(text: str) -> dict[str, Any]:
+    stripped = text.strip()
+    if not stripped:
+        raise SystemExit("review engine returned empty output")
+    try:
+        parsed = json.loads(stripped)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"review engine returned non-JSON output: {exc}\n{stripped[:2000]}")
+    if isinstance(parsed, dict) and "findings" in parsed:
+        return parsed
+    if isinstance(parsed, dict) and isinstance(parsed.get("structured_output"), dict):
+        return parsed["structured_output"]
+    if isinstance(parsed, dict) and isinstance(parsed.get("result"), str):
+        try:
+            result_json = json.loads(parsed["result"])
+        except json.JSONDecodeError as exc:
+            raise SystemExit(f"review engine result was not structured JSON: {exc}\n{parsed['result'][:2000]}")
+        if isinstance(result_json, dict) and "findings" in result_json:
+            return result_json
+    raise SystemExit(f"review engine returned unexpected JSON shape:\n{json.dumps(parsed)[:2000]}")
 
-printf 'autoreview exit: %s\n' "$review_status"
-printf 'tests exit: %s\n' "$tests_status"
 
-if [[ "$review_status" != 0 || "$tests_status" != 0 ]]; then
-  exit 1
-fi
+def validate_report(report: dict[str, Any], repo: Path, changed_paths: set[str], required: list[str]) -> None:
+    allowed_top = {"findings", "overall_correctness", "overall_explanation", "overall_confidence"}
+    extra_top = set(report) - allowed_top
+    if extra_top:
+        raise SystemExit(f"review JSON has unexpected top-level keys: {sorted(extra_top)}")
+    for key in SCHEMA["required"]:
+        if key not in report:
+            raise SystemExit(f"review JSON missing required key: {key}")
+    if not isinstance(report["findings"], list):
+        raise SystemExit("review JSON findings must be an array")
+    if report.get("overall_correctness") not in {"patch is correct", "patch is incorrect"}:
+        raise SystemExit(f"review JSON has invalid overall_correctness: {report.get('overall_correctness')}")
+    if not isinstance(report.get("overall_explanation"), str) or not report["overall_explanation"]:
+        raise SystemExit("review JSON overall_explanation must be a non-empty string")
+    if len(report["overall_explanation"]) > 3000:
+        raise SystemExit("review JSON overall_explanation is too long")
+    if not number_in_range(report.get("overall_confidence")):
+        raise SystemExit("review JSON overall_confidence must be numeric")
+    finding_text = ""
+    for index, finding in enumerate(report["findings"]):
+        if not isinstance(finding, dict):
+            raise SystemExit(f"finding {index} must be an object")
+        allowed_finding = {"title", "body", "priority", "confidence", "category", "code_location"}
+        extra_finding = set(finding) - allowed_finding
+        if extra_finding:
+            raise SystemExit(f"finding {index} has unexpected keys: {sorted(extra_finding)}")
+        for key in allowed_finding:
+            if key not in finding:
+                raise SystemExit(f"finding {index} missing required key: {key}")
+        title = finding.get("title")
+        if not isinstance(title, str) or not title or len(title) > 140:
+            raise SystemExit(f"finding {index} has invalid title")
+        body = finding.get("body")
+        if not isinstance(body, str) or not body or len(body) > 2000:
+            raise SystemExit(f"finding {index} has invalid body")
+        priority = finding.get("priority")
+        if priority not in {"P0", "P1", "P2", "P3"}:
+            raise SystemExit(f"finding {index} has invalid priority: {priority}")
+        if not number_in_range(finding.get("confidence")):
+            raise SystemExit(f"finding {index} has invalid confidence")
+        category = finding.get("category")
+        if category not in {"bug", "security", "regression", "test_gap", "maintainability"}:
+            raise SystemExit(f"finding {index} has invalid category: {category}")
+        location = finding.get("code_location")
+        if not isinstance(location, dict):
+            raise SystemExit(f"finding {index} missing code_location")
+        rel = str(location.get("file_path", "")).strip()
+        line = location.get("line")
+        if not rel or not isinstance(line, int) or line < 1:
+            raise SystemExit(f"finding {index} has invalid location: {location}")
+        if Path(rel).is_absolute() or ".." in Path(rel).parts:
+            raise SystemExit(f"finding {index} uses invalid file path: {rel}")
+        if rel not in changed_paths:
+            raise SystemExit(f"finding {index} points to a file outside the reviewed change: {rel}")
+        finding_text += "\n" + json.dumps(finding, sort_keys=True)
+    haystack = finding_text.lower()
+    for needle in required:
+        if needle.lower() not in haystack:
+            raise SystemExit(f"required finding text not found: {needle}")
 
-report_clean_review_or_fail
+
+def number_in_range(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and 0 <= value <= 1
+
+
+def print_report(report: dict[str, Any]) -> None:
+    findings = report["findings"]
+    if findings:
+        print(f"autoreview findings: {len(findings)}")
+    elif report["overall_correctness"] == "patch is incorrect":
+        print("autoreview verdict: patch is incorrect without discrete findings")
+    else:
+        print("autoreview clean: no accepted/actionable findings reported")
+    for finding in findings:
+        loc = finding["code_location"]
+        print(f"[{finding['priority']}] {finding['title']}")
+        print(f"{loc['file_path']}:{loc['line']}")
+        print(f"{finding['body']}")
+        print()
+    print(f"overall: {report['overall_correctness']} ({report['overall_confidence']})")
+    print(report["overall_explanation"])
+
+
+def start_parallel_tests(command: str, repo: Path) -> tuple[subprocess.Popen, float]:
+    print(f"tests: {command}")
+    return subprocess.Popen(command, cwd=repo, shell=True), time.time()
+
+
+def finish_parallel_tests(proc: subprocess.Popen, started: float) -> int:
+    proc.wait()
+    print(f"tests exit: {proc.returncode} after {int(time.time() - started)}s")
+    return int(proc.returncode or 0)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Bundle-driven AI code review.")
+    parser.add_argument("--mode", choices=["auto", "local", "branch", "commit"], default="auto")
+    parser.add_argument("--base")
+    parser.add_argument("--commit", default="HEAD")
+    parser.add_argument("--engine", choices=["codex", "claude"], default=os.environ.get("AUTOREVIEW_ENGINE", "codex"))
+    parser.add_argument("--model")
+    parser.add_argument("--codex-bin", default=os.environ.get("CODEX_BIN", "codex"))
+    parser.add_argument("--claude-bin", default=os.environ.get("CLAUDE_BIN", "claude"))
+    parser.add_argument("--no-tools", dest="tools", action="store_false", default=True, help="Disable tools for engines that support it. Codex requires tools for review.")
+    parser.add_argument("--no-web-search", dest="web_search", action="store_false", default=True)
+    parser.add_argument(
+        "--claude-allowed-tools",
+        default=os.environ.get(
+            "AUTOREVIEW_CLAUDE_TOOLS",
+            "Read,Grep,Glob,WebSearch,WebFetch",
+        ),
+    )
+    parser.add_argument("--prompt", action="append", help="Additional review instruction text.")
+    parser.add_argument("--prompt-file", action="append", help="Additional review instruction file.")
+    parser.add_argument("--dataset", action="append", help="Extra evidence file to include in the review bundle.")
+    parser.add_argument("--output", help="Write human output to a file as well as stdout.")
+    parser.add_argument("--json-output", help="Write validated structured review JSON.")
+    parser.add_argument("--parallel-tests", help="Run a test command concurrently with review; failure fails the helper.")
+    parser.add_argument("--require-finding", action="append", default=[], help="Require finding text to contain this substring.")
+    parser.add_argument("--expect-findings", action="store_true", help="Treat findings as success; for harness acceptance tests.")
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args()
+    if args.engine not in {"codex", "claude"}:
+        raise SystemExit(f"invalid --engine/AUTOREVIEW_ENGINE: {args.engine}")
+    return args
+
+
+def main() -> int:
+    args = parse_args()
+    repo = repo_root()
+    target, target_ref = choose_target(repo, args.mode, args.base)
+    print(f"autoreview target: {target}")
+    print(f"branch: {current_branch(repo)}")
+    print(f"engine: {args.engine}")
+    print(f"tools: {'on' if args.tools else 'off'}")
+    print(f"web_search: {'on' if args.web_search else 'off'}")
+    display_ref = args.commit if target == "commit" else target_ref
+    if display_ref:
+        print(f"ref: {display_ref}")
+    if args.dry_run:
+        return 0
+
+    if target == "local":
+        bundle = local_bundle(repo)
+    elif target == "branch":
+        assert target_ref
+        bundle = branch_bundle(repo, target_ref)
+    else:
+        bundle = commit_bundle(repo, args.commit)
+        target_ref = args.commit
+    prompt = build_prompt(repo, target, target_ref, bundle, load_extra_prompt(args), load_datasets(args))
+    changed_paths = review_paths(repo, target, target_ref, args.commit)
+    print(f"bundle: {len(prompt)} chars")
+
+    tests_proc: tuple[subprocess.Popen, float] | None = None
+    if args.parallel_tests:
+        tests_proc = start_parallel_tests(args.parallel_tests, repo)
+    try:
+        raw = run_codex(args, repo, prompt) if args.engine == "codex" else run_claude(args, repo, prompt)
+        report = extract_json(raw)
+        validate_report(report, repo, changed_paths, args.require_finding)
+        if args.json_output:
+            Path(args.json_output).write_text(json.dumps(report, indent=2) + "\n")
+
+        if args.output:
+            original_stdout = sys.stdout
+            with Path(args.output).open("w") as handle:
+                sys.stdout = Tee(original_stdout, handle)
+                print_report(report)
+                sys.stdout = original_stdout
+        else:
+            print_report(report)
+    finally:
+        tests_status = finish_parallel_tests(*tests_proc) if tests_proc else 0
+
+    has_findings = bool(report["findings"])
+    overall_incorrect = report["overall_correctness"] == "patch is incorrect"
+    if tests_status != 0:
+        return 1
+    if args.expect_findings:
+        return 0 if has_findings else 1
+    return 1 if has_findings or overall_incorrect else 0
+
+
+class Tee:
+    def __init__(self, *streams: Any) -> None:
+        self.streams = streams
+
+    def write(self, data: str) -> None:
+        for stream in self.streams:
+            stream.write(data)
+
+    def flush(self) -> None:
+        for stream in self.streams:
+            stream.flush()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

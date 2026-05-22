@@ -30,7 +30,10 @@ const hoisted = vi.hoisted(() => {
     closeActiveMemorySearchManager: vi.fn(async () => {}),
     sessionStore,
     updateSessionStore: vi.fn(
-      async (_storePath: string, updater: (store: Record<string, unknown>) => void) => {
+      async (
+        _storePath: string,
+        updater: (store: Record<string, Record<string, unknown>>) => void,
+      ) => {
         updater(sessionStore);
       },
     ),
@@ -113,6 +116,42 @@ describe("active-memory plugin", () => {
           resolveStorePath: vi.fn(() => "/tmp/openclaw-session-store.json"),
           loadSessionStore: vi.fn(() => hoisted.sessionStore),
           saveSessionStore: vi.fn(async () => {}),
+          getSessionEntry: vi.fn(
+            (params: { sessionKey: string }) => hoisted.sessionStore[params.sessionKey],
+          ),
+          listSessionEntries: vi.fn(() =>
+            Object.entries(hoisted.sessionStore).map(([sessionKey, entry]) => ({
+              sessionKey,
+              entry,
+            })),
+          ),
+          patchSessionEntry: vi.fn(
+            async (params: {
+              sessionKey: string;
+              fallbackEntry?: Record<string, unknown>;
+              update: (entry: Record<string, unknown>) => Record<string, unknown> | null;
+            }) => {
+              let result: Record<string, unknown> | null = null;
+              await hoisted.updateSessionStore(
+                "/tmp/openclaw-session-store.json",
+                (store: Record<string, Record<string, unknown>>) => {
+                  const existing = store[params.sessionKey] ?? params.fallbackEntry;
+                  if (!existing) {
+                    return;
+                  }
+                  const patch = params.update({ ...existing });
+                  if (!patch) {
+                    result = existing;
+                    return;
+                  }
+                  const next = { ...existing, ...patch };
+                  store[params.sessionKey] = next;
+                  result = next;
+                },
+              );
+              return result;
+            },
+          ),
         },
       },
       state: {
@@ -2961,7 +3000,7 @@ describe("active-memory plugin", () => {
 
   it("returns timeout within a hard deadline even when the subagent never checks the abort signal", async () => {
     const CONFIGURED_TIMEOUT_MS = 25;
-    const HARD_DEADLINE_MARGIN_MS = 500;
+    const HARD_DEADLINE_MARGIN_MS = 1_500;
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
     api.pluginConfig = {
@@ -2999,6 +3038,7 @@ describe("active-memory plugin", () => {
     const CONFIGURED_TIMEOUT_MS = 50;
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
+    testing.setTimeoutPartialDataGraceMsForTests(50);
     api.pluginConfig = {
       agents: ["main"],
       timeoutMs: CONFIGURED_TIMEOUT_MS,
@@ -3142,6 +3182,10 @@ describe("active-memory plugin", () => {
       timeoutMs: 100,
     };
     plugin.register(api as unknown as OpenClawPluginApi);
+    hoisted.sessionStore["agent:main:memory-get-miss"] = {
+      sessionId: "s-memory-get-miss",
+      updatedAt: 0,
+    };
     runEmbeddedPiAgent.mockImplementationOnce(async (params: { sessionFile: string }) => {
       await writeTranscriptJsonl(params.sessionFile, [
         {

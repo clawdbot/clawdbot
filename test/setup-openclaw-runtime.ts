@@ -136,6 +136,7 @@ function createTestRegistryForSetup(
       enabled: true,
     })),
     providers: [],
+    embeddingProviders: [],
     speechProviders: [],
     realtimeTranscriptionProviders: [],
     realtimeVoiceProviders: [],

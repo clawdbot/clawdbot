@@ -56,6 +56,7 @@ export const SessionsListParamsSchema = Type.Object(
      * to keep large session stores from monopolizing the event loop.
      */
     limit: Type.Optional(Type.Integer({ minimum: 1 })),
+    offset: Type.Optional(Type.Integer({ minimum: 0 })),
     activeMinutes: Type.Optional(Type.Integer({ minimum: 1 })),
     includeGlobal: Type.Optional(Type.Boolean()),
     includeUnknown: Type.Optional(Type.Boolean()),

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type {
   AgentTool,
   AgentToolResult,
@@ -7,6 +8,11 @@ import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { logDebug, logError } from "../logger.js";
 import { redactToolDetail } from "../logging/redact.js";
 import { isPlainObject } from "../utils.js";
+import {
+  getCodeModeExecBeforeHookMetadata,
+  normalizeCodeModeExecBeforeHookParams,
+  reconcileCodeModeExecBeforeHookParams,
+} from "./code-mode-control-tools.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
 import type { ClientToolDefinition } from "./pi-embedded-runner/run/params.js";
 import type { HookContext } from "./pi-tools.before-tool-call.js";
@@ -14,6 +20,7 @@ import {
   buildBlockedToolResult,
   isToolWrappedWithBeforeToolCallHook,
   isBeforeToolCallBlockedError,
+  recordAdjustedParamsForToolCall,
   runBeforeToolCallHook,
 } from "./pi-tools.before-tool-call.js";
 import { normalizeToolName } from "./tool-policy.js";
@@ -40,6 +47,9 @@ type ToolExecuteArgs = ToolDefinition["execute"] extends (...args: infer P) => u
   : ToolExecuteArgsCurrent;
 type ToolExecuteArgsAny = ToolExecuteArgs | ToolExecuteArgsLegacy | ToolExecuteArgsCurrent;
 const TOOL_ERROR_PARAM_PREVIEW_MAX_CHARS = 600;
+const TOOL_ERROR_EXEC_COMMAND_HASH_CHARS = 16;
+const SENSITIVE_EXEC_ENV_VALUE = "[omitted exec env value]";
+const EXEC_COMMAND_PARAM_KEYS = new Set(["command", "cmd"]);
 
 export type ClientToolCallRecorder =
   | ((toolName: string, params: Record<string, unknown>) => void)
@@ -112,15 +122,99 @@ function formatToolParamPreview(label: string, value: unknown): string {
   return `${label}=${preview}`;
 }
 
+function kindForLog(value: unknown): string {
+  if (Array.isArray(value)) {
+    return "array";
+  }
+  if (value === null) {
+    return "null";
+  }
+  return typeof value;
+}
+
+function summarizeSensitiveValueForLog(params: {
+  value: unknown;
+  reason: string;
+}): Record<string, unknown> {
+  const serialized = serializeToolParams(params.value);
+  return {
+    omitted: true,
+    reason: params.reason,
+    type: kindForLog(params.value),
+    chars: serialized.length,
+    sha256: createHash("sha256")
+      .update(serialized)
+      .digest("hex")
+      .slice(0, TOOL_ERROR_EXEC_COMMAND_HASH_CHARS),
+  };
+}
+
+function summarizeExecCommandForLog(command: unknown): Record<string, unknown> {
+  return summarizeSensitiveValueForLog({
+    value: command,
+    reason: "exec command may contain credentials",
+  });
+}
+
+function sanitizeExecEnvForLog(value: unknown): unknown {
+  if (!isPlainObject(value)) {
+    return value === undefined ? undefined : "[omitted exec env]";
+  }
+  return Object.fromEntries(
+    Object.keys(value)
+      .toSorted()
+      .map((key) => [key, SENSITIVE_EXEC_ENV_VALUE]),
+  );
+}
+
+function sanitizeExecFailureParamsForLog(value: unknown): unknown {
+  if (typeof value === "string") {
+    try {
+      const parsed: unknown = JSON.parse(value);
+      if (isPlainObject(parsed)) {
+        return sanitizeExecFailureParamsForLog(parsed);
+      }
+    } catch {
+      // Non-JSON exec params can still be a raw model-supplied command payload.
+    }
+  }
+  if (!isPlainObject(value)) {
+    return summarizeSensitiveValueForLog({
+      value,
+      reason: "exec params may contain command credentials",
+    });
+  }
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, field] of Object.entries(value)) {
+    if (EXEC_COMMAND_PARAM_KEYS.has(key)) {
+      sanitized[key] = summarizeExecCommandForLog(field);
+      continue;
+    }
+    if (key === "env") {
+      sanitized[key] = sanitizeExecEnvForLog(field);
+      continue;
+    }
+    sanitized[key] = field;
+  }
+  return sanitized;
+}
+
+function sanitizeToolFailureParamsForLog(toolName: string, value: unknown): unknown {
+  return toolName === "exec" ? sanitizeExecFailureParamsForLog(value) : value;
+}
+
 function describeToolFailureInputs(params: {
+  toolName: string;
   rawParams: unknown;
   effectiveParams: unknown;
 }): string {
-  const parts = [formatToolParamPreview("raw_params", params.rawParams)];
-  const rawSerialized = serializeToolParams(params.rawParams);
-  const effectiveSerialized = serializeToolParams(params.effectiveParams);
+  const rawParams = sanitizeToolFailureParamsForLog(params.toolName, params.rawParams);
+  const effectiveParams = sanitizeToolFailureParamsForLog(params.toolName, params.effectiveParams);
+  const parts = [formatToolParamPreview("raw_params", rawParams)];
+  const rawSerialized = serializeToolParams(rawParams);
+  const effectiveSerialized = serializeToolParams(effectiveParams);
   if (effectiveSerialized !== rawSerialized) {
-    parts.push(formatToolParamPreview("effective_params", params.effectiveParams));
+    parts.push(formatToolParamPreview("effective_params", effectiveParams));
   }
   return parts.join(" ");
 }
@@ -241,9 +335,12 @@ export function toToolDefinitions(
         let executeParams = params;
         try {
           if (!beforeHookWrapped) {
+            const hookParams = normalizeCodeModeExecBeforeHookParams({ tool, params });
+            const hookMetadata = getCodeModeExecBeforeHookMetadata({ tool, params });
             const hookOutcome = await runBeforeToolCallHook({
               toolName: name,
-              params,
+              params: hookParams,
+              ...hookMetadata,
               toolCallId,
               ctx: hookContext,
             });
@@ -256,7 +353,13 @@ export function toToolDefinitions(
               }
               throw new Error(hookOutcome.reason);
             }
-            executeParams = hookOutcome.params;
+            executeParams = reconcileCodeModeExecBeforeHookParams({
+              tool,
+              originalParams: params,
+              hookParams,
+              adjustedParams: hookOutcome.params,
+            });
+            recordAdjustedParamsForToolCall(toolCallId, executeParams, hookContext?.runId);
           }
           const rawResult = await tool.execute(toolCallId, executeParams, signal, onUpdate);
           const result = normalizeToolExecutionResult({
@@ -279,6 +382,7 @@ export function toToolDefinitions(
             logDebug(`tools: ${normalizedName} failed stack:\n${described.stack}`);
           }
           const inputPreview = describeToolFailureInputs({
+            toolName: normalizedName,
             rawParams: params,
             effectiveParams: executeParams,
           });

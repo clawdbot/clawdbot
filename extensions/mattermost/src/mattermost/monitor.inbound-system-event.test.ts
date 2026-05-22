@@ -1,3 +1,4 @@
+import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { monitorMattermostProvider } from "./monitor.js";
 import type { OpenClawConfig, RuntimeEnv } from "./runtime-api.js";
@@ -148,6 +149,14 @@ function createRuntimeCore(
     mainSessionKey?: string;
     sessionKey?: string;
   },
+  overrides: {
+    inboundDebounceMs?: number;
+    isControlCommandMessage?: (text?: string) => boolean;
+    shouldComputeCommandAuthorized?: (text?: string) => boolean;
+    shouldHandleTextCommands?: () => boolean;
+    textHasControlCommand?: (text?: string) => boolean;
+    createInboundDebouncer?: typeof createInboundDebouncer;
+  } = {},
 ) {
   const runPrepared = vi.fn(
     async (turn: {
@@ -230,20 +239,23 @@ function createRuntimeCore(
         record: vi.fn(),
       },
       commands: {
-        shouldHandleTextCommands: () => false,
+        isControlCommandMessage: overrides.isControlCommandMessage ?? (() => false),
+        shouldComputeCommandAuthorized: overrides.shouldComputeCommandAuthorized ?? (() => false),
+        shouldHandleTextCommands: overrides.shouldHandleTextCommands ?? (() => false),
       },
       debounce: {
-        resolveInboundDebounceMs: () => 0,
-        createInboundDebouncer: <T>(params: {
-          onFlush: (entries: T[]) => Promise<void> | void;
-        }) => ({
-          enqueue: async (entry: T) => {
-            await params.onFlush([entry]);
-          },
-        }),
+        resolveInboundDebounceMs: () => overrides.inboundDebounceMs ?? 0,
+        createInboundDebouncer:
+          overrides.createInboundDebouncer ??
+          (<T>(params: { onFlush: (entries: T[]) => Promise<void> | void }) => ({
+            enqueue: async (entry: T) => {
+              await params.onFlush([entry]);
+            },
+          })),
       },
       groups: {
-        resolveRequireMention: () => false,
+        resolveRequireMention: (params: { requireMentionOverride?: boolean }) =>
+          params.requireMentionOverride ?? false,
       },
       media: {
         readRemoteMediaBuffer: vi.fn(),
@@ -316,7 +328,7 @@ function createRuntimeCore(
       text: {
         chunkMarkdownTextWithMode: (text: string) => [text],
         convertMarkdownTables: (text: string) => text,
-        hasControlCommand: () => false,
+        hasControlCommand: overrides.textHasControlCommand ?? (() => false),
         resolveChunkMode: () => "off",
         resolveMarkdownTableMode: () => "off",
         resolveTextChunkLimit: () => 4000,
@@ -432,6 +444,73 @@ describe("mattermost inbound user posts", () => {
     expect(ctx?.Provider).toBe("mattermost");
   });
 
+  it("does not drop inline command-looking group text from non-command-authorized senders", async () => {
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+    const inlineCommandConfig: OpenClawConfig = {
+      commands: { useAccessGroups: true },
+      channels: {
+        mattermost: {
+          enabled: true,
+          baseUrl: "https://mattermost.example.com",
+          botToken: "bot-token",
+          chatmode: "onmessage",
+          dmPolicy: "open",
+          groupPolicy: "open",
+        },
+      },
+    };
+    const isControlCommandMessage = vi.fn(() => false);
+    const shouldComputeCommandAuthorized = vi.fn(() => true);
+    mockState.runtimeCore = createRuntimeCore(inlineCommandConfig, undefined, {
+      isControlCommandMessage,
+      shouldComputeCommandAuthorized,
+      shouldHandleTextCommands: () => true,
+    });
+
+    const monitor = monitorMattermostProvider({
+      config: inlineCommandConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+
+    await socket.emitMessage({
+      event: "posted",
+      data: {
+        channel_id: "chan-1",
+        channel_name: "town-square",
+        channel_display_name: "Town Square",
+        sender_name: "alice",
+        post: JSON.stringify({
+          id: "post-inline-command",
+          channel_id: "chan-1",
+          user_id: "user-1",
+          message: "hello /status",
+          create_at: 1_714_000_000_000,
+        }),
+      },
+      broadcast: {
+        channel_id: "chan-1",
+        user_id: "user-1",
+      },
+    });
+    socket.emitClose(1000);
+    await monitor;
+
+    expect(isControlCommandMessage).toHaveBeenCalledWith("hello /status", inlineCommandConfig);
+    expect(mockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    const ctx = mockState.dispatchReplyFromConfig.mock.calls.at(0)?.[0].ctx;
+    expect(ctx?.BodyForAgent).toBe("hello /status");
+    expect(ctx?.CommandAuthorized).toBe(false);
+  });
+
   it("uses websocket channel type when REST channel lookup fails", async () => {
     const socket = new FakeWebSocket();
     const abortController = new AbortController();
@@ -541,6 +620,98 @@ describe("mattermost inbound user posts", () => {
 
     expect(mockState.dispatchReplyFromConfig).not.toHaveBeenCalled();
     expect(runtimeCore.channel.session.recordInboundSession).not.toHaveBeenCalled();
+  });
+
+  it("flushes pending group text before authorizing a bare abort without a mention", async () => {
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+    const mentionConfig: OpenClawConfig = {
+      commands: { useAccessGroups: false },
+      messages: { inbound: { debounceMs: 60_000 } },
+      channels: {
+        mattermost: {
+          enabled: true,
+          baseUrl: "https://mattermost.example.com",
+          botToken: "bot-token",
+          chatmode: "oncall",
+          dmPolicy: "open",
+          groupPolicy: "open",
+        },
+      },
+    };
+    const isBareAbort = (text?: string) => ["abort", "stop"].includes(text?.trim() ?? "");
+    const runtimeCore = createRuntimeCore(mentionConfig, undefined, {
+      inboundDebounceMs: 60_000,
+      createInboundDebouncer,
+      isControlCommandMessage: isBareAbort,
+      shouldComputeCommandAuthorized: isBareAbort,
+      shouldHandleTextCommands: () => true,
+      textHasControlCommand: () => false,
+    });
+    mockState.runtimeCore = runtimeCore;
+
+    const monitor = monitorMattermostProvider({
+      config: mentionConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+
+    await socket.emitMessage({
+      event: "posted",
+      data: {
+        channel_id: "chan-1",
+        channel_name: "town-square",
+        channel_display_name: "Town Square",
+        sender_name: "alice",
+        post: JSON.stringify({
+          id: "post-pending",
+          channel_id: "chan-1",
+          user_id: "user-1",
+          message: "pending text",
+          create_at: 1_714_000_000_000,
+        }),
+      },
+      broadcast: {
+        channel_id: "chan-1",
+        user_id: "user-1",
+      },
+    });
+    expect(mockState.dispatchReplyFromConfig).not.toHaveBeenCalled();
+
+    await socket.emitMessage({
+      event: "posted",
+      data: {
+        channel_id: "chan-1",
+        channel_name: "town-square",
+        channel_display_name: "Town Square",
+        sender_name: "alice",
+        post: JSON.stringify({
+          id: "post-abort",
+          channel_id: "chan-1",
+          user_id: "user-1",
+          message: "abort",
+          create_at: 1_714_000_000_100,
+        }),
+      },
+      broadcast: {
+        channel_id: "chan-1",
+        user_id: "user-1",
+      },
+    });
+    socket.emitClose(1000);
+    await monitor;
+
+    expect(mockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    const ctx = mockState.dispatchReplyFromConfig.mock.calls.at(0)?.[0].ctx;
+    expect(ctx?.BodyForAgent).toBe("abort");
+    expect(ctx?.CommandAuthorized).toBe(true);
   });
 
   it("pins direct-message main route updates to the configured owner", async () => {

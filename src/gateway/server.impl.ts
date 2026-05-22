@@ -586,8 +586,6 @@ export async function startGatewayServer(
     enqueueSystemEvent(`[${code}] ${message}`, {
       sessionKey: resolveMainSessionKey(cfg),
       contextKey: code,
-      forceSenderIsOwnerFalse: true,
-      trusted: false,
     });
   };
   const { createRuntimeSecretsActivator } = await startupConfigModulePromise;

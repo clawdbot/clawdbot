@@ -1,4 +1,5 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   PluginConversationBindingResolvedEvent,
   PluginHookInboundClaimContext,
@@ -20,6 +21,7 @@ import {
   type CodexTurnStartResponse,
   type JsonValue,
 } from "./app-server/protocol.js";
+import { resolveCodexNativeSandboxBlock } from "./app-server/sandbox-guard.js";
 import {
   clearCodexAppServerBinding,
   isCodexAppServerNativeAuthProfile,
@@ -52,6 +54,7 @@ export {
 
 type CodexConversationRunOptions = {
   pluginConfig?: unknown;
+  config?: OpenClawConfig;
   timeoutMs?: number;
   resumeCodexCliSessionOnNode?: ResumeCodexCliSessionOnNodeFn;
 };
@@ -159,6 +162,17 @@ export async function handleCodexConversationInboundClaim(
   const prompt = event.bodyForAgent?.trim() || event.content?.trim() || "";
   if (!prompt) {
     return { handled: true };
+  }
+  const sandboxBlock = resolveCodexNativeSandboxBlock({
+    config: options.config,
+    sessionKey: event.sessionKey ?? ctx.sessionKey,
+    surface:
+      data.kind === "codex-cli-node-session"
+        ? "Codex CLI node conversation binding"
+        : "Codex app-server conversation binding",
+  });
+  if (sandboxBlock) {
+    return { handled: true, reply: { text: sandboxBlock } };
   }
   if (data.kind === "codex-cli-node-session") {
     const resume = options.resumeCodexCliSessionOnNode;

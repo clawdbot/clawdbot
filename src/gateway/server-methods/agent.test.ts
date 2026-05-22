@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   registerExecApprovalFollowupRuntimeHandoff,
   resetExecApprovalFollowupRuntimeHandoffsForTests,
@@ -91,6 +91,15 @@ vi.mock("../../config/config.js", async () => {
 vi.mock("../../agents/agent-scope.js", () => ({
   listAgentIds: mocks.listAgentIds,
   resolveDefaultAgentId: () => "main",
+  resolveSessionAgentId: ({
+    sessionKey,
+  }: {
+    sessionKey?: string | null;
+    config?: Record<string, unknown>;
+  }) => {
+    const m = /^agent:([^:]+):/.exec((sessionKey ?? "").trim());
+    return m?.[1] ?? "main";
+  },
   resolveAgentConfig: (cfg: { agents?: { list?: Array<{ id?: string }> } }, agentId: string) =>
     cfg.agents?.list?.find((agent) => agent.id === agentId),
   resolveAgentWorkspaceDir: (cfg: { agents?: { defaults?: { workspace?: string } } }) =>
@@ -996,7 +1005,6 @@ describe("gateway agent handler", () => {
     expectRecordFields(await waitForAgentCommandCall(), {
       provider: "anthropic",
       model: "claude-haiku-4-5",
-      senderIsOwner: false,
     });
   });
 
@@ -1385,43 +1393,6 @@ describe("gateway agent handler", () => {
     expect(callArgs.message).not.toContain("[Inter-session message]");
 
     resetTimeConfig();
-  });
-
-  it.each([
-    {
-      name: "passes senderIsOwner=false for write-scoped gateway callers",
-      scopes: ["operator.write"],
-      idempotencyKey: "test-sender-owner-write",
-      senderIsOwner: false,
-    },
-    {
-      name: "passes senderIsOwner=true for admin-scoped gateway callers",
-      scopes: ["operator.admin"],
-      idempotencyKey: "test-sender-owner-admin",
-      senderIsOwner: true,
-    },
-  ])("$name", async ({ scopes, idempotencyKey, senderIsOwner }) => {
-    primeMainAgentRun();
-
-    await invokeAgent(
-      {
-        message: "owner-tools check",
-        sessionKey: "agent:main:main",
-        idempotencyKey,
-      },
-      {
-        client: {
-          connect: {
-            role: "operator",
-            scopes,
-            client: { id: "test-client", mode: "gateway" },
-          },
-        } as unknown as AgentHandlerArgs["client"],
-      },
-    );
-
-    const callArgs = await waitForAgentCommandCall<{ senderIsOwner?: boolean }>();
-    expect(callArgs.senderIsOwner).toBe(senderIsOwner);
   });
 
   it("respects explicit bestEffortDeliver=false for main session runs", async () => {
@@ -1885,7 +1856,10 @@ describe("gateway agent handler", () => {
     await flushScheduledDispatchStep();
 
     expect(mocks.agentCommand).toHaveBeenCalledTimes(agentCommandCallsBefore + 1);
-    expect(mockCallArg(secondRespond, 0, 3)).toEqual({ cached: true });
+    expect(mockCallArg(secondRespond, 0, 3)).toEqual({
+      cached: true,
+      runId: firstRegistration.idempotencyKey,
+    });
   });
 
   it("reserves exec approval followup dedupe before awaited session work", async () => {
@@ -1970,9 +1944,12 @@ describe("gateway agent handler", () => {
     expect(sessionWriteCalls).toBe(1);
     expect(mockCallArg(secondRespond, 0, 1)).toMatchObject({
       runId: firstRegistration.idempotencyKey,
-      status: "accepted",
+      status: "in_flight",
     });
-    expect(mockCallArg(secondRespond, 0, 3)).toEqual({ cached: true });
+    expect(mockCallArg(secondRespond, 0, 3)).toEqual({
+      cached: true,
+      runId: firstRegistration.idempotencyKey,
+    });
 
     releaseFirstSessionWrite?.();
     await first;
@@ -3546,10 +3523,38 @@ describe("gateway agent handler", () => {
 });
 
 describe("gateway agent handler chat.abort integration", () => {
-  afterEach(() => {
+  function resetIntegrationState() {
+    if (ORIGINAL_STATE_DIR === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
+    }
+    resetDetachedTaskLifecycleRuntimeForTests();
+    resetTaskRegistryForTests();
     mocks.agentCommand.mockReset();
+    mocks.loadConfigReturn = {};
+    mocks.loadGatewaySessionRow.mockReset();
+    mocks.loadSessionEntry.mockReset();
+    mocks.updateSessionStore.mockReset();
     mocks.getLatestSubagentRunByChildSessionKey.mockReset();
     mocks.replaceSubagentRunAfterSteer.mockReset();
+    mocks.resolveExplicitAgentSessionKey.mockReset().mockReturnValue(undefined);
+    mocks.resolveBareResetBootstrapFileAccess.mockReset().mockReturnValue(true);
+    mocks.listAgentIds.mockReset().mockReturnValue(["main"]);
+    mocks.loadVoiceWakeRoutingConfig.mockReset();
+    mocks.resolveVoiceWakeRouteByTrigger.mockReset();
+    mocks.resolveSendPolicy.mockReset().mockReturnValue("allow");
+    dateOnlyFakeClockActive = false;
+    vi.useRealTimers();
+    resetExecApprovalFollowupRuntimeHandoffsForTests();
+  }
+
+  beforeEach(() => {
+    resetIntegrationState();
+  });
+
+  afterEach(() => {
+    resetIntegrationState();
   });
 
   function prime(sessionId = "existing-session-id", cfg: Record<string, unknown> = {}) {
@@ -3591,6 +3596,7 @@ describe("gateway agent handler chat.abort integration", () => {
     prime();
     mocks.agentCommand.mockReturnValueOnce(new Promise(() => {}));
 
+    const context = makeContext();
     const respond = vi.fn();
     const runId = "idem-yield-before-dispatch";
     const pending = invokeAgent(
@@ -3600,16 +3606,24 @@ describe("gateway agent handler chat.abort integration", () => {
         sessionKey: "agent:main:main",
         idempotencyKey: runId,
       },
-      { respond, reqId: runId, flushDispatch: false },
+      { context, respond, reqId: runId, flushDispatch: false },
     );
 
     await Promise.resolve();
     await Promise.resolve();
 
     expect(mockCallArg(respond)).toBe(true);
-    expectRecordFields(mockCallArg(respond, 0, 1), {
+    const acceptedPayload = expectRecordFields(mockCallArg(respond, 0, 1), {
       runId,
       status: "accepted",
+    });
+    expect(acceptedPayload).not.toHaveProperty("dedupeKeys");
+    expect(acceptedPayload).not.toHaveProperty("ownerConnId");
+    expect(acceptedPayload).not.toHaveProperty("ownerDeviceId");
+    expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, {
+      runId,
+      status: "accepted",
+      dedupeKeys: [`agent:${runId}`],
     });
     expect(mockCallArg(respond, 0, 2)).toBeUndefined();
     expect(mockCallArg(respond, 0, 3)).toEqual({ runId });
@@ -3623,11 +3637,732 @@ describe("gateway agent handler chat.abort integration", () => {
     expect(mocks.agentCommand).toHaveBeenCalledTimes(1);
   });
 
-  it("uses the explicit no-timeout agent expiry instead of the chat 24h cap", async () => {
+  it("does not dispatch when chat.abort lands during the accepted ack yield", async () => {
     prime();
     mocks.agentCommand.mockReturnValueOnce(new Promise(() => {}));
 
     const context = makeContext();
+    const respond = vi.fn();
+    const runId = "idem-abort-before-dispatch";
+    await invokeAgent(
+      {
+        message: "hi",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: runId,
+      },
+      { context, respond, reqId: runId, flushDispatch: false },
+    );
+
+    expectRecordFields(mockCallArg(respond, 0, 1), {
+      runId,
+      sessionKey: "agent:main:main",
+      status: "accepted",
+    });
+    expect(context.chatAbortControllers.has(runId)).toBe(true);
+
+    const abortRespond = vi.fn();
+    await chatHandlers["chat.abort"]({
+      params: { sessionKey: "agent:main:main", runId },
+      respond: abortRespond as never,
+      context,
+      req: { type: "req", id: "abort-req", method: "chat.abort" },
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expectRecordFields(mockCallArg(abortRespond, 0, 1), {
+      aborted: true,
+      runIds: [runId],
+    });
+    expect(context.chatAbortControllers.has(runId)).toBe(false);
+
+    await flushScheduledDispatchStep();
+
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, {
+      runId,
+      status: "timeout",
+      summary: "aborted",
+      stopReason: "rpc",
+    });
+    const finalResponse = respond.mock.calls.find(
+      (call: unknown[]) => (call[1] as { status?: unknown } | undefined)?.status === "timeout",
+    );
+    expectRecordFields(requireValue(finalResponse, "terminal response missing")[1], {
+      runId,
+      status: "timeout",
+      stopReason: "rpc",
+    });
+  });
+
+  it("preserves stop-command reason when /stop lands during the accepted ack yield", async () => {
+    prime();
+    mocks.agentCommand.mockReturnValueOnce(new Promise(() => {}));
+
+    const context = makeContext();
+    const respond = vi.fn();
+    const runId = "idem-stop-before-dispatch";
+    await invokeAgent(
+      {
+        message: "hi",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: runId,
+      },
+      { context, respond, reqId: runId, flushDispatch: false },
+    );
+
+    expectRecordFields(mockCallArg(respond, 0, 1), {
+      runId,
+      sessionKey: "agent:main:main",
+      status: "accepted",
+    });
+    expect(context.chatAbortControllers.has(runId)).toBe(true);
+
+    const stopRespond = vi.fn();
+    await chatHandlers["chat.send"]({
+      params: {
+        sessionKey: "agent:main:main",
+        message: "/stop",
+        idempotencyKey: "idem-stop-command-before-dispatch",
+      },
+      respond: stopRespond as never,
+      context,
+      req: { type: "req", id: "stop-req", method: "chat.send" },
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expectRecordFields(mockCallArg(stopRespond, 0, 1), {
+      aborted: true,
+      runIds: [runId],
+    });
+    expect(context.chatAbortControllers.has(runId)).toBe(false);
+
+    await flushScheduledDispatchStep();
+
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, {
+      runId,
+      status: "timeout",
+      summary: "aborted",
+      stopReason: "stop",
+    });
+    const finalResponse = respond.mock.calls.find(
+      (call: unknown[]) => (call[1] as { status?: unknown } | undefined)?.status === "timeout",
+    );
+    expectRecordFields(requireValue(finalResponse, "terminal response missing")[1], {
+      runId,
+      status: "timeout",
+      stopReason: "stop",
+    });
+  });
+
+  it("does not dispatch when chat.abort lands during pre-accept setup", async () => {
+    prime();
+    const requestedSessionKey = "agent:main:legacy-main";
+    let releaseSessionWrite: (() => void) | undefined;
+    let sessionWriteCalls = 0;
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      sessionWriteCalls += 1;
+      if (sessionWriteCalls === 1) {
+        await new Promise<void>((resolve) => {
+          releaseSessionWrite = resolve;
+        });
+      }
+      const store = {
+        "agent:main:main": buildExistingMainStoreEntry(),
+      };
+      return await updater(store);
+    });
+    mocks.agentCommand.mockReturnValueOnce(new Promise(() => {}));
+
+    const context = makeContext();
+    const respond = vi.fn();
+    const runId = "idem-abort-before-registration";
+    const pending = invokeAgent(
+      {
+        message: "hi",
+        agentId: "main",
+        sessionKey: requestedSessionKey,
+        idempotencyKey: runId,
+      },
+      { context, respond, reqId: runId, flushDispatch: false },
+    );
+    await waitForAssertion(() => expect(sessionWriteCalls).toBe(1));
+    expect(context.chatAbortControllers.has(runId)).toBe(false);
+    expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, {
+      runId,
+      sessionKey: requestedSessionKey,
+      status: "accepted",
+    });
+
+    const abortRespond = vi.fn();
+    await chatHandlers["chat.abort"]({
+      params: { sessionKey: requestedSessionKey, runId },
+      respond: abortRespond as never,
+      context,
+      req: { type: "req", id: "abort-req", method: "chat.abort" },
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expectRecordFields(mockCallArg(abortRespond, 0, 1), {
+      aborted: true,
+      runIds: [runId],
+    });
+    expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, {
+      runId,
+      sessionKey: requestedSessionKey,
+      status: "timeout",
+      summary: "aborted",
+      stopReason: "rpc",
+    });
+
+    releaseSessionWrite?.();
+    await pending;
+    await flushScheduledDispatchStep();
+
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(context.chatAbortControllers.has(runId)).toBe(false);
+    const finalResponse = respond.mock.calls.find(
+      (call: unknown[]) => (call[1] as { status?: unknown } | undefined)?.status === "timeout",
+    );
+    expectRecordFields(requireValue(finalResponse, "terminal response missing")[1], {
+      runId,
+      status: "timeout",
+      stopReason: "rpc",
+    });
+  });
+
+  it("does not dispatch when a stop command lands during pre-accept setup", async () => {
+    prime();
+    const requestedSessionKey = "agent:main:legacy-main";
+    let releaseSessionWrite: (() => void) | undefined;
+    let sessionWriteCalls = 0;
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      sessionWriteCalls += 1;
+      if (sessionWriteCalls === 1) {
+        await new Promise<void>((resolve) => {
+          releaseSessionWrite = resolve;
+        });
+      }
+      const store = {
+        "agent:main:main": buildExistingMainStoreEntry(),
+      };
+      return await updater(store);
+    });
+    mocks.agentCommand.mockReturnValueOnce(new Promise(() => {}));
+
+    const context = makeContext();
+    const respond = vi.fn();
+    const runId = "idem-stop-before-registration";
+    const pending = invokeAgent(
+      {
+        message: "hi",
+        agentId: "main",
+        sessionKey: requestedSessionKey,
+        idempotencyKey: runId,
+      },
+      { context, respond, reqId: runId, flushDispatch: false },
+    );
+    await waitForAssertion(() => expect(sessionWriteCalls).toBe(1));
+    expect(context.chatAbortControllers.has(runId)).toBe(false);
+    expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, {
+      runId,
+      sessionKey: requestedSessionKey,
+      status: "accepted",
+    });
+
+    const stopRespond = vi.fn();
+    await chatHandlers["chat.send"]({
+      params: {
+        sessionKey: requestedSessionKey,
+        message: "/stop",
+        idempotencyKey: "idem-stop-command-before-registration",
+      },
+      respond: stopRespond as never,
+      context,
+      req: { type: "req", id: "stop-req", method: "chat.send" },
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expectRecordFields(mockCallArg(stopRespond, 0, 1), {
+      aborted: true,
+      runIds: [runId],
+    });
+    expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, {
+      runId,
+      sessionKey: requestedSessionKey,
+      status: "timeout",
+      summary: "aborted",
+      stopReason: "stop",
+    });
+
+    releaseSessionWrite?.();
+    await pending;
+    await flushScheduledDispatchStep();
+
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(context.chatAbortControllers.has(runId)).toBe(false);
+    const finalResponse = respond.mock.calls.find(
+      (call: unknown[]) => (call[1] as { status?: unknown } | undefined)?.status === "timeout",
+    );
+    expectRecordFields(requireValue(finalResponse, "terminal response missing")[1], {
+      runId,
+      status: "timeout",
+      stopReason: "stop",
+    });
+  });
+
+  it("does not dispatch when session-level chat.abort lands during pre-accept setup", async () => {
+    prime();
+    let releaseSessionWrite: (() => void) | undefined;
+    let sessionWriteCalls = 0;
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      sessionWriteCalls += 1;
+      if (sessionWriteCalls === 1) {
+        await new Promise<void>((resolve) => {
+          releaseSessionWrite = resolve;
+        });
+      }
+      const store = {
+        "agent:main:main": buildExistingMainStoreEntry(),
+      };
+      return await updater(store);
+    });
+    mocks.agentCommand.mockReturnValueOnce(new Promise(() => {}));
+
+    const context = makeContext();
+    const respond = vi.fn();
+    const runId = "idem-session-level-abort-before-registration";
+    const pending = invokeAgent(
+      {
+        message: "hi",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: runId,
+      },
+      { context, respond, reqId: runId, flushDispatch: false },
+    );
+    await waitForAssertion(() => expect(sessionWriteCalls).toBe(1));
+    expect(context.chatAbortControllers.has(runId)).toBe(false);
+
+    const abortRespond = vi.fn();
+    await chatHandlers["chat.abort"]({
+      params: { sessionKey: "agent:main:main" },
+      respond: abortRespond as never,
+      context,
+      req: { type: "req", id: "abort-req", method: "chat.abort" },
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expectRecordFields(mockCallArg(abortRespond, 0, 1), {
+      aborted: true,
+      runIds: [runId],
+    });
+    expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, {
+      runId,
+      sessionKey: "agent:main:main",
+      status: "timeout",
+      summary: "aborted",
+      stopReason: "rpc",
+    });
+
+    releaseSessionWrite?.();
+    await pending;
+    await flushScheduledDispatchStep();
+
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(context.chatAbortControllers.has(runId)).toBe(false);
+    const finalResponse = respond.mock.calls.find(
+      (call: unknown[]) => (call[1] as { status?: unknown } | undefined)?.status === "timeout",
+    );
+    expectRecordFields(requireValue(finalResponse, "terminal response missing")[1], {
+      runId,
+      status: "timeout",
+      stopReason: "rpc",
+    });
+  });
+
+  it("does not dispatch when chat.abort lands during slow attachment setup", async () => {
+    mockMainSessionEntry({
+      sessionId: "existing-session-id",
+      model: "vision-model",
+      modelProvider: "test",
+    });
+    mocks.updateSessionStore.mockResolvedValue(undefined);
+    mocks.agentCommand.mockReturnValueOnce(new Promise(() => {}));
+
+    let releaseCatalog: (() => void) | undefined;
+    const context = {
+      ...makeContext(),
+      loadGatewayModelCatalog: vi.fn(
+        async () =>
+          await new Promise((resolve) => {
+            releaseCatalog = () =>
+              resolve([
+                {
+                  id: "vision-model",
+                  name: "vision-model",
+                  provider: "test",
+                  input: ["image"],
+                },
+              ]);
+          }),
+      ),
+    } as unknown as GatewayRequestContext;
+    const respond = vi.fn();
+    const runId = "idem-abort-during-attachment-setup";
+    const pending = invokeAgent(
+      {
+        message: "inspect this",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: runId,
+        attachments: [
+          {
+            type: "file",
+            mimeType: "image/png",
+            fileName: "pixel.png",
+            content: Buffer.from("not really a png").toString("base64"),
+          },
+        ],
+      },
+      { context, respond, reqId: runId, flushDispatch: false },
+    );
+
+    await waitForAssertion(() =>
+      expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, {
+        runId,
+        sessionKey: "agent:main:main",
+        status: "accepted",
+      }),
+    );
+    expect(context.chatAbortControllers.has(runId)).toBe(false);
+
+    const abortRespond = vi.fn();
+    await chatHandlers["chat.abort"]({
+      params: { sessionKey: "agent:main:main", runId },
+      respond: abortRespond as never,
+      context,
+      req: { type: "req", id: "abort-req", method: "chat.abort" },
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expectRecordFields(mockCallArg(abortRespond, 0, 1), {
+      aborted: true,
+      runIds: [runId],
+    });
+    expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, {
+      runId,
+      sessionKey: "agent:main:main",
+      status: "timeout",
+      summary: "aborted",
+      stopReason: "rpc",
+    });
+
+    releaseCatalog?.();
+    await pending;
+    await flushScheduledDispatchStep();
+
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(context.chatAbortControllers.has(runId)).toBe(false);
+    const finalResponse = respond.mock.calls.find(
+      (call: unknown[]) => (call[1] as { status?: unknown } | undefined)?.status === "timeout",
+    );
+    expectRecordFields(requireValue(finalResponse, "terminal response missing")[1], {
+      runId,
+      status: "timeout",
+      stopReason: "rpc",
+    });
+  });
+
+  it("does not dispatch when chat.abort lands before voice wake reroutes the session", async () => {
+    let releaseRouting: (() => void) | undefined;
+    mocks.loadVoiceWakeRoutingConfig.mockImplementation(
+      async () =>
+        await new Promise((resolve) => {
+          releaseRouting = () =>
+            resolve({
+              version: 1,
+              defaultTarget: { mode: "current" },
+              routes: [],
+              updatedAtMs: 0,
+            });
+        }),
+    );
+    mocks.resolveVoiceWakeRouteByTrigger.mockReturnValue({ sessionKey: "agent:main:voice" });
+    mocks.loadSessionEntry.mockImplementation((sessionKey: string) => ({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: {
+        sessionId: sessionKey === "agent:main:voice" ? "voice-session-id" : "main-session-id",
+        updatedAt: Date.now(),
+      },
+      canonicalKey: sessionKey === "agent:main:voice" ? "agent:main:voice" : "agent:main:main",
+    }));
+    mocks.updateSessionStore.mockResolvedValue(undefined);
+    mocks.agentCommand.mockReturnValueOnce(new Promise(() => {}));
+
+    const context = makeContext();
+    const respond = vi.fn();
+    const runId = "idem-abort-before-voice-route";
+    const pending = invokeAgent(
+      {
+        message: "wake up",
+        sessionKey: "agent:main:main",
+        voiceWakeTrigger: "robot wake",
+        idempotencyKey: runId,
+      },
+      { context, respond, reqId: runId, flushDispatch: false },
+    );
+
+    await waitForAssertion(() =>
+      expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, {
+        runId,
+        sessionKey: "agent:main:main",
+        status: "accepted",
+      }),
+    );
+    expect(context.chatAbortControllers.has(runId)).toBe(false);
+
+    const abortRespond = vi.fn();
+    await chatHandlers["chat.abort"]({
+      params: { sessionKey: "agent:main:main", runId },
+      respond: abortRespond as never,
+      context,
+      req: { type: "req", id: "abort-req", method: "chat.abort" },
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expectRecordFields(mockCallArg(abortRespond, 0, 1), {
+      aborted: true,
+      runIds: [runId],
+    });
+    expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, {
+      runId,
+      sessionKey: "agent:main:main",
+      status: "timeout",
+      summary: "aborted",
+      stopReason: "rpc",
+    });
+
+    releaseRouting?.();
+    await pending;
+    await flushScheduledDispatchStep();
+
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(context.chatAbortControllers.has(runId)).toBe(false);
+    const finalResponse = respond.mock.calls.find(
+      (call: unknown[]) => (call[1] as { status?: unknown } | undefined)?.status === "timeout",
+    );
+    expectRecordFields(requireValue(finalResponse, "terminal response missing")[1], {
+      runId,
+      status: "timeout",
+      stopReason: "rpc",
+    });
+  });
+
+  it("rejects unauthorized chat.abort during pre-accept setup", async () => {
+    prime();
+    let releaseSessionWrite: (() => void) | undefined;
+    let sessionWriteCalls = 0;
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      sessionWriteCalls += 1;
+      if (sessionWriteCalls === 1) {
+        await new Promise<void>((resolve) => {
+          releaseSessionWrite = resolve;
+        });
+      }
+      const store = {
+        "agent:main:main": buildExistingMainStoreEntry(),
+      };
+      return await updater(store);
+    });
+    mocks.agentCommand.mockReturnValueOnce(new Promise(() => {}));
+
+    const context = makeContext();
+    const respond = vi.fn();
+    const runId = "idem-abort-before-registration-unauthorized";
+    const pending = invokeAgent(
+      {
+        message: "hi",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: runId,
+      },
+      {
+        context,
+        respond,
+        reqId: runId,
+        flushDispatch: false,
+        client: { connId: "owner-conn" } as AgentHandlerArgs["client"],
+      },
+    );
+    await waitForAssertion(() => expect(sessionWriteCalls).toBe(1));
+    expect(context.chatAbortControllers.has(runId)).toBe(false);
+
+    const abortRespond = vi.fn();
+    await chatHandlers["chat.abort"]({
+      params: { sessionKey: "agent:main:main", runId },
+      respond: abortRespond as never,
+      context,
+      req: { type: "req", id: "abort-req", method: "chat.abort" },
+      client: { connId: "other-conn" } as AgentHandlerArgs["client"],
+      isWebchatConnect: () => false,
+    });
+
+    expect(mockCallArg(abortRespond, 0, 0)).toBe(false);
+    expectRecordFields(mockCallArg(abortRespond, 0, 2), {
+      code: "INVALID_REQUEST",
+      message: "unauthorized",
+    });
+    expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, {
+      runId,
+      sessionKey: "agent:main:main",
+      status: "accepted",
+    });
+
+    releaseSessionWrite?.();
+    await pending;
+    await flushScheduledDispatchStep();
+
+    expect(mocks.agentCommand).toHaveBeenCalledTimes(1);
+    expect(context.chatAbortControllers.has(runId)).toBe(true);
+  });
+
+  it("updates exec approval followup aliases when chat.abort lands during pre-accept setup", async () => {
+    const bashElevated = {
+      enabled: true,
+      allowed: true,
+      defaultLevel: "on" as const,
+    };
+    const firstRegistration = registerExecApprovalFollowupRuntimeHandoff({
+      approvalId: "req-elevated-preaccept-abort",
+      sessionKey: "agent:main:telegram:direct:123",
+      bashElevated,
+    });
+    const secondRegistration = registerExecApprovalFollowupRuntimeHandoff({
+      approvalId: "req-elevated-preaccept-abort",
+      sessionKey: "agent:main:telegram:direct:123",
+      bashElevated,
+    });
+    if (!firstRegistration || !secondRegistration) {
+      throw new Error("expected runtime handoff ids");
+    }
+    mockMainSessionEntry({
+      sessionId: "existing-session-id",
+      lastChannel: "telegram",
+      lastTo: "123",
+    });
+    let releaseSessionWrite: (() => void) | undefined;
+    let sessionWriteCalls = 0;
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      sessionWriteCalls += 1;
+      if (sessionWriteCalls === 1) {
+        await new Promise<void>((resolve) => {
+          releaseSessionWrite = resolve;
+        });
+      }
+      const store = {
+        "agent:main:main": buildExistingMainStoreEntry({
+          lastChannel: "telegram",
+          lastTo: "123",
+        }),
+      };
+      return await updater(store);
+    });
+    mocks.agentCommand.mockImplementation(() => new Promise(() => {}));
+    const context = makeContext();
+    const runId = firstRegistration.idempotencyKey;
+    const aliasKey = "agent:exec-approval-followup:req-elevated-preaccept-abort";
+
+    const pending = invokeAgent(
+      {
+        message: "exec followup",
+        sessionKey: "agent:main:telegram:direct:123",
+        channel: "telegram",
+        idempotencyKey: runId,
+        internalRuntimeHandoffId: firstRegistration.handoffId,
+      },
+      {
+        reqId: "exec-followup-preaccept-abort-1",
+        client: backendGatewayClient(),
+        context,
+        flushDispatch: false,
+      },
+    );
+    await waitForAssertion(() => expect(sessionWriteCalls).toBe(1));
+    expectRecordFields(context.dedupe.get(aliasKey)?.payload, {
+      runId,
+      sessionKey: "agent:main:telegram:direct:123",
+      status: "accepted",
+    });
+
+    const abortRespond = vi.fn();
+    await chatHandlers["chat.abort"]({
+      params: { sessionKey: "agent:main:telegram:direct:123", runId },
+      respond: abortRespond as never,
+      context,
+      req: { type: "req", id: "abort-req", method: "chat.abort" },
+      client: backendGatewayClient(),
+      isWebchatConnect: () => false,
+    });
+
+    expectRecordFields(mockCallArg(abortRespond, 0, 1), {
+      aborted: true,
+      runIds: [runId],
+    });
+    expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, {
+      runId,
+      status: "timeout",
+      stopReason: "rpc",
+    });
+    expectRecordFields(context.dedupe.get(aliasKey)?.payload, {
+      runId,
+      status: "timeout",
+      stopReason: "rpc",
+    });
+
+    releaseSessionWrite?.();
+    await pending;
+
+    const retryRespond = await invokeAgent(
+      {
+        message: "exec followup duplicate",
+        sessionKey: "agent:main:telegram:direct:123",
+        channel: "telegram",
+        idempotencyKey: secondRegistration.idempotencyKey,
+        internalRuntimeHandoffId: secondRegistration.handoffId,
+      },
+      {
+        reqId: "exec-followup-preaccept-abort-2",
+        client: backendGatewayClient(),
+        context,
+        flushDispatch: false,
+      },
+    );
+
+    expect(mockCallArg(retryRespond, 0, 1)).toMatchObject({
+      runId,
+      status: "timeout",
+      stopReason: "rpc",
+    });
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+  });
+
+  it("uses the explicit no-timeout agent expiry instead of the chat 24h cap", async () => {
+    prime();
+    mocks.agentCommand.mockImplementation(() => new Promise(() => {}));
+
+    const context = makeContext();
+    const respond = vi.fn();
     const runId = "idem-abort-no-timeout";
     await invokeAgent(
       {
@@ -3637,7 +4372,7 @@ describe("gateway agent handler chat.abort integration", () => {
         idempotencyKey: runId,
         timeout: 0,
       },
-      { context, reqId: runId },
+      { context, respond, reqId: runId },
     );
 
     const entry = context.chatAbortControllers.get(runId);
@@ -3708,6 +4443,56 @@ describe("gateway agent handler chat.abort integration", () => {
       context,
       req: { type: "req", id: "abort-req", method: "chat.abort" },
       client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(mockCallArg(abortRespond)).toBe(true);
+    expectRecordFields(mockCallArg(abortRespond, 0, 1), {
+      aborted: true,
+      runIds: [runId],
+    });
+    expect(capturedSignal?.aborted).toBe(true);
+    expect(context.chatAbortControllers.has(runId)).toBe(false);
+  });
+
+  it("chat.abort by runId allows the owner connection to use a stale session key", async () => {
+    prime();
+    const pending = new Promise(() => {});
+    let capturedSignal: AbortSignal | undefined;
+    mocks.agentCommand.mockImplementationOnce((opts: { abortSignal?: AbortSignal }) => {
+      capturedSignal = opts.abortSignal;
+      return pending;
+    });
+
+    const context = makeContext();
+    const runId = "idem-abort-stale-session-key";
+    await invokeAgent(
+      {
+        message: "hi",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: runId,
+      },
+      {
+        context,
+        reqId: runId,
+        client: { connId: "owner-conn" } as AgentHandlerArgs["client"],
+      },
+    );
+
+    const active = requireValue(context.chatAbortControllers.get(runId), "active run missing");
+    context.chatAbortControllers.set(runId, {
+      ...active,
+      sessionKey: "agent:main:canonical",
+    });
+
+    const abortRespond = vi.fn();
+    await chatHandlers["chat.abort"]({
+      params: { sessionKey: "agent:main:main", runId },
+      respond: abortRespond as never,
+      context,
+      req: { type: "req", id: "abort-req", method: "chat.abort" },
+      client: { connId: "owner-conn" } as AgentHandlerArgs["client"],
       isWebchatConnect: () => false,
     });
 
@@ -3939,10 +4724,61 @@ describe("gateway agent handler chat.abort integration", () => {
     );
 
     expect(context.chatAbortControllers.get(runId)).toBe(preExisting);
+    expect(context.dedupe.has(`agent:${runId}`)).toBe(false);
     expect(mocks.agentCommand).not.toHaveBeenCalled();
     expect(respond).toHaveBeenCalledWith(true, { runId, status: "in_flight" }, undefined, {
       cached: true,
       runId,
     });
+  });
+
+  it("returns in_flight instead of replaying cached accepted agent replies", async () => {
+    prime();
+    mocks.agentCommand.mockImplementationOnce(
+      () =>
+        new Promise(() => {
+          // Keep the first run pending so the dedupe entry remains accepted.
+        }),
+    );
+
+    const context = makeContext();
+    const runId = "idem-cached-accepted";
+    await invokeAgent(
+      {
+        message: "hi",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: runId,
+      },
+      { context, reqId: runId, flushDispatch: false },
+    );
+
+    expectRecordFields(context.dedupe.get(`agent:${runId}`)?.payload, {
+      runId,
+      status: "accepted",
+      sessionKey: "agent:main:main",
+    });
+
+    const duplicateRespond = vi.fn();
+    await invokeAgent(
+      {
+        message: "hi again",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        idempotencyKey: runId,
+      },
+      { context, reqId: `${runId}-duplicate`, respond: duplicateRespond },
+    );
+
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(duplicateRespond).toHaveBeenCalledWith(
+      true,
+      { runId, status: "in_flight", sessionKey: "agent:main:main" },
+      undefined,
+      {
+        cached: true,
+        runId,
+      },
+    );
   });
 });

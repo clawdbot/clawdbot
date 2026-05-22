@@ -88,6 +88,8 @@ describe("isAuthPermanentErrorMessage", () => {
         "OAuth authentication is currently not allowed for this organization",
         "API_KEY_REVOKED",
         "api_key_deleted",
+        "deactivated_workspace",
+        "deactivated workspace",
       ],
       expected: true,
     },
@@ -1508,7 +1510,15 @@ describe("classifyProviderRuntimeFailureKind", () => {
       classifyProviderRuntimeFailureKind(
         "403 <!DOCTYPE html><html><body>Access denied</body></html>",
       ),
-    ).toBe("auth_html_403");
+    ).toBe("auth_html");
+  });
+
+  it("classifies HTML 401 auth failures", () => {
+    expect(
+      classifyProviderRuntimeFailureKind(
+        "401 <!DOCTYPE html><html><body>Unauthorized</body></html>",
+      ),
+    ).toBe("auth_html");
   });
 
   it("classifies proxy, dns, timeout, schema, sandbox, and replay failures", () => {

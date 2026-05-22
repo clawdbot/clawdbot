@@ -557,6 +557,7 @@ export function installSessionToolResultGuard(
     onUserMessagePersisted?: (
       message: Extract<AgentMessage, { role: "user" }>,
     ) => void | Promise<void>;
+    onMessagePersisted?: (message: AgentMessage) => void | Promise<void>;
     onAssistantErrorMessagePersisted?: (
       message: Extract<AgentMessage, { role: "assistant" }>,
     ) => void | Promise<void>;
@@ -598,6 +599,7 @@ export function installSessionToolResultGuard(
   ): { entryId: string; messageSeq?: number; sessionFile?: string | null } => {
     const parentEntryId = sessionManager.getLeafId();
     const entryId = originalAppend(message as never);
+    void opts?.onMessagePersisted?.(message);
     const sessionFile = getSessionFile();
     if (!sessionFile) {
       return { entryId, sessionFile };

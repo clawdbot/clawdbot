@@ -325,6 +325,8 @@ describe("microsoft-foundry plugin", () => {
       models: {
         providers: {
           "microsoft-foundry": {
+            baseUrl: "",
+            models: [],
             timeoutSeconds: 120,
           },
         },
@@ -338,7 +340,7 @@ describe("microsoft-foundry plugin", () => {
       agentDir: defaultFoundryAgentDir,
     });
 
-    expect(config.models?.providers?.["microsoft-foundry"]?.models?.[0]?.id).toBe("gpt-5.4");
+    expect(config.models?.providers?.["microsoft-foundry"]?.models).toEqual([]);
     expect(config.models?.providers?.["microsoft-foundry"]?.timeoutSeconds).toBe(120);
   });
 

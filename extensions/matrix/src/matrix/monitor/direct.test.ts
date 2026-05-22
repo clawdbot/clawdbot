@@ -97,6 +97,40 @@ describe("createDirectRoomTracker", () => {
     expect(client.getJoinedRoomMembers).toHaveBeenCalledWith("!room:example.org");
   });
 
+  it("lets explicit room config veto stale m.direct classifications", async () => {
+    const client = createMockClient({ isDm: true });
+    const tracker = createDirectRoomTracker(client, {
+      isExplicitlyConfiguredRoom: (roomId) => roomId === "!room:example.org",
+    });
+
+    await expect(
+      tracker.isDirectMessage({
+        roomId: "!room:example.org",
+        senderId: "@alice:example.org",
+      }),
+    ).resolves.toBe(false);
+
+    expect(client.dms.update).not.toHaveBeenCalled();
+    expect(client.getJoinedRoomMembers).not.toHaveBeenCalled();
+  });
+
+  it("lets explicit room config veto strict two-member fallback before dm cache seed", async () => {
+    const client = createMockClient({ isDm: false, dmCacheAvailable: false });
+    const tracker = createDirectRoomTracker(client, {
+      isExplicitlyConfiguredRoom: (roomId) => roomId === "!room:example.org",
+    });
+
+    await expect(
+      tracker.isDirectMessage({
+        roomId: "!room:example.org",
+        senderId: "@alice:example.org",
+      }),
+    ).resolves.toBe(false);
+
+    expect(client.dms.update).not.toHaveBeenCalled();
+    expect(client.getJoinedRoomMembers).not.toHaveBeenCalled();
+  });
+
   it("does not trust stale m.direct classifications for shared rooms", async () => {
     const client = createMockClient({
       isDm: true,

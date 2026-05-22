@@ -63,6 +63,11 @@ import {
   registerCompactionProvider,
 } from "./compaction-provider.js";
 import { getPluginCompatRecord } from "./compat/registry.js";
+import {
+  getRegisteredEmbeddingProvider,
+  registerEmbeddingProvider,
+  type EmbeddingProviderAdapter,
+} from "./embedding-providers.js";
 import { sendPluginSessionAttachment } from "./host-hook-attachments.js";
 import {
   clearPluginRunContext,
@@ -1108,6 +1113,66 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       source: record.source,
       rootDir: record.rootDir,
     });
+  };
+
+  const registerEmbeddingProviderForPlugin = (
+    record: PluginRecord,
+    adapter: EmbeddingProviderAdapter,
+  ) => {
+    const id = adapter.id.trim();
+    if (!id) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "embedding provider registration missing id",
+      });
+      return;
+    }
+    if (!(record.contracts?.embeddingProviders ?? []).includes(id)) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `plugin must declare contracts.embeddingProviders for adapter: ${id}`,
+      });
+      return;
+    }
+    const existing =
+      registryParams.activateGlobalSideEffects === false
+        ? registry.embeddingProviders.find((entry) => entry.provider.id === id)
+        : getRegisteredEmbeddingProvider(id);
+    if (existing) {
+      const ownerPluginId =
+        "ownerPluginId" in existing
+          ? existing.ownerPluginId
+          : "pluginId" in existing
+            ? existing.pluginId
+            : undefined;
+      const ownerDetail = ownerPluginId ? ` (owner: ${ownerPluginId})` : "";
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `embedding provider already registered: ${id}${ownerDetail}`,
+      });
+      return;
+    }
+    if (registryParams.activateGlobalSideEffects !== false) {
+      registerEmbeddingProvider(adapter, {
+        ownerPluginId: record.id,
+      });
+    }
+    registry.embeddingProviders.push({
+      pluginId: record.id,
+      pluginName: record.name,
+      provider: adapter,
+      source: record.source,
+      rootDir: record.rootDir,
+    });
+    if (!record.embeddingProviderIds.includes(id)) {
+      record.embeddingProviderIds.push(id);
+    }
   };
 
   const registerUniqueProviderLike = <T extends { id: string }>(params: {
@@ -2520,6 +2585,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
               registerProvider: (provider) => registerProvider(record, provider),
               registerModelCatalogProvider: (provider) =>
                 registerModelCatalogProvider(record, provider),
+              registerEmbeddingProvider: (provider) =>
+                registerEmbeddingProviderForPlugin(record, provider),
               registerAgentHarness: (harness) => registerAgentHarness(record, harness),
               registerDetachedTaskRuntime: (runtime) => {
                 const existing = getDetachedTaskLifecycleRuntimeRegistration();
@@ -2999,6 +3066,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerAgentHarness,
     registerCliBackend,
     registerTextTransforms,
+    registerEmbeddingProvider: registerEmbeddingProviderForPlugin,
     registerSpeechProvider,
     registerRealtimeTranscriptionProvider,
     registerRealtimeVoiceProvider,

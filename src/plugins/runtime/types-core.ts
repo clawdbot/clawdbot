@@ -203,6 +203,15 @@ export type PluginRuntimeCore = {
     ensureAgentWorkspace: typeof import("../../agents/workspace.js").ensureAgentWorkspace;
     session: {
       resolveStorePath: typeof import("../../config/sessions/paths.js").resolveStorePath;
+      getSessionEntry: typeof import("../../config/sessions/store.js").getSessionEntry;
+      listSessionEntries: typeof import("../../config/sessions/store.js").listSessionEntries;
+      patchSessionEntry: typeof import("../../config/sessions/store.js").patchSessionEntry;
+      upsertSessionEntry: typeof import("../../config/sessions/store.js").upsertSessionEntry;
+      /**
+       * @deprecated Use getSessionEntry/listSessionEntries for reads and
+       * patchSessionEntry/upsertSessionEntry for writes. This keeps the legacy
+       * mutable whole-store compatibility shape.
+       */
       loadSessionStore: typeof import("../../config/sessions/store-load.js").loadSessionStore;
       saveSessionStore: import("../../config/sessions/runtime-types.js").SaveSessionStore;
       updateSessionStore: typeof import("../../config/sessions/store.js").updateSessionStore;

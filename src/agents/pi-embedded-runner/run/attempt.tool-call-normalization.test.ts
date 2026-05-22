@@ -1,6 +1,9 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { describe, expect, it } from "vitest";
-import { sanitizeReplayToolCallIdsForStream } from "./attempt.tool-call-normalization.js";
+import {
+  sanitizeReplayToolCallIdsForStream,
+  shouldApplyReplayToolCallIdSanitizer,
+} from "./attempt.tool-call-normalization.js";
 
 type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
 type ToolResultMessage = Extract<AgentMessage, { role: "toolResult" }>;
@@ -47,6 +50,29 @@ function toolResultSummary(message: AgentMessage | undefined) {
 }
 
 describe("sanitizeReplayToolCallIdsForStream", () => {
+  it("skips strict stream id sanitization when provider policy opts out", () => {
+    expect(
+      shouldApplyReplayToolCallIdSanitizer({
+        sanitizeToolCallIds: false,
+        isOpenAIResponsesApi: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldApplyReplayToolCallIdSanitizer({
+        sanitizeToolCallIds: true,
+        toolCallIdMode: "strict",
+        isOpenAIResponsesApi: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldApplyReplayToolCallIdSanitizer({
+        sanitizeToolCallIds: true,
+        toolCallIdMode: "strict",
+        isOpenAIResponsesApi: true,
+      }),
+    ).toBe(false);
+  });
+
   it("drops orphaned tool results after strict id sanitization", () => {
     const messages: AgentMessage[] = [
       {

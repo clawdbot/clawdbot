@@ -180,6 +180,45 @@ describe("image-generation runtime", () => {
     expect(seenTimeoutMs).toBe(180_000);
   });
 
+  it("uses provider default image-generation timeout when the call and config omit timeoutMs", async () => {
+    let seenTimeoutMs: number | undefined;
+    const provider: ImageGenerationProvider = {
+      id: "image-plugin",
+      defaultTimeoutMs: 600_000,
+      capabilities: {
+        generate: {},
+        edit: { enabled: false },
+      },
+      async generateImage(req: { timeoutMs?: number }) {
+        seenTimeoutMs = req.timeoutMs;
+        return {
+          images: [
+            {
+              buffer: Buffer.from("png-bytes"),
+              mimeType: "image/png",
+              fileName: "sample.png",
+            },
+          ],
+          model: "img-v1",
+        };
+      },
+    };
+    providers = [provider];
+
+    await runGenerateImage({
+      cfg: {
+        agents: {
+          defaults: {
+            imageGenerationModel: { primary: "image-plugin/img-v1" },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "draw a cat",
+    });
+
+    expect(seenTimeoutMs).toBe(600_000);
+  });
+
   it("auto-detects and falls through to another configured image-generation provider by default", async () => {
     providers = [
       {

@@ -3,65 +3,22 @@
 import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
+import {
+  getRenderedModalDialog,
+  installDialogPolyfill,
+} from "../../test-helpers/modal-dialog.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import type { AppViewState } from "../app-view-state.ts";
-import { type OpenClawModalDialog } from "../components/modal-dialog.ts";
 import type { ExecApprovalRequest } from "../controllers/exec-approval.ts";
 import { renderDreamingRestartConfirmation } from "./dreaming-restart-confirmation.ts";
 import { renderExecApprovalPrompt } from "./exec-approval.ts";
 import { renderGatewayUrlConfirmation } from "./gateway-url-confirmation.ts";
 
 let container: HTMLDivElement;
-
-const showModalDescriptor = Object.getOwnPropertyDescriptor(
-  HTMLDialogElement.prototype,
-  "showModal",
-);
-const closeDescriptor = Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, "close");
-
-function nextFrame() {
-  return new Promise<void>((resolve) => {
-    requestAnimationFrame(() => resolve());
-  });
-}
-
-function installDialogPolyfill() {
-  Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
-    configurable: true,
-    value(this: HTMLDialogElement) {
-      this.setAttribute("open", "");
-    },
-  });
-  Object.defineProperty(HTMLDialogElement.prototype, "close", {
-    configurable: true,
-    value(this: HTMLDialogElement) {
-      this.removeAttribute("open");
-    },
-  });
-}
-
-function restoreDescriptor(name: "showModal" | "close", descriptor?: PropertyDescriptor) {
-  if (descriptor) {
-    Object.defineProperty(HTMLDialogElement.prototype, name, descriptor);
-    return;
-  }
-  delete (HTMLDialogElement.prototype as Partial<HTMLDialogElement>)[name];
-}
+let restoreDialogPolyfill: () => void;
 
 async function getRenderedDialog() {
-  const modal = container.querySelector<OpenClawModalDialog>("openclaw-modal-dialog");
-  expect(modal).toBeInstanceOf(HTMLElement);
-  if (!modal) {
-    throw new Error("Expected openclaw-modal-dialog");
-  }
-  await modal.updateComplete;
-  await nextFrame();
-  const dialog = modal.shadowRoot?.querySelector("dialog");
-  expect(dialog).toBeInstanceOf(HTMLDialogElement);
-  if (!(dialog instanceof HTMLDialogElement)) {
-    throw new Error("Expected rendered dialog");
-  }
-  return { modal, dialog };
+  return await getRenderedModalDialog(container);
 }
 
 function dispatchEscape(target: EventTarget) {
@@ -110,7 +67,7 @@ function createExecState(
 
 describe("approval and confirmation modals", () => {
   beforeEach(async () => {
-    installDialogPolyfill();
+    restoreDialogPolyfill = installDialogPolyfill();
     vi.stubGlobal("localStorage", createStorageMock());
     await i18n.setLocale("en");
     container = document.createElement("div");
@@ -121,8 +78,7 @@ describe("approval and confirmation modals", () => {
     render(nothing, container);
     container.remove();
     await i18n.setLocale("en");
-    restoreDescriptor("showModal", showModalDescriptor);
-    restoreDescriptor("close", closeDescriptor);
+    restoreDialogPolyfill();
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();

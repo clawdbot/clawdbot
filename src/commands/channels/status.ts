@@ -103,11 +103,19 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
         typeof account.lastOutboundAt === "number" && Number.isFinite(account.lastOutboundAt)
           ? account.lastOutboundAt
           : null;
+      const transportAt =
+        typeof account.lastTransportActivityAt === "number" &&
+        Number.isFinite(account.lastTransportActivityAt)
+          ? account.lastTransportActivityAt
+          : null;
       if (inboundAt) {
         bits.push(`in:${formatTimeAgo(Date.now() - inboundAt)}`);
       }
       if (outboundAt) {
         bits.push(`out:${formatTimeAgo(Date.now() - outboundAt)}`);
+      }
+      if (transportAt) {
+        bits.push(`transport:${formatTimeAgo(Date.now() - transportAt)}`);
       }
       appendModeBit(bits, account);
       const botUsername = (() => {

@@ -10,7 +10,7 @@ import {
 } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CodexServerNotification, RpcRequest } from "./protocol.js";
+import type { CodexServerNotification, JsonObject, RpcRequest } from "./protocol.js";
 
 const readCodexAppServerBindingMock = vi.fn();
 const isCodexAppServerNativeAuthProfileMock = vi.fn();
@@ -277,6 +277,16 @@ function turnCompleted(threadId: string, turnId: string, text: string): CodexSer
   };
 }
 
+function turnCompletedWithNestedThread(
+  threadId: string,
+  turnId: string,
+  text: string,
+): CodexServerNotification {
+  const notification = turnCompleted(threadId, turnId, text);
+  const turn = (notification.params as JsonObject).turn;
+  return { method: notification.method, params: { threadId: "parent-thread", turn } };
+}
+
 function sideParams(overrides: Partial<Parameters<typeof runCodexAppServerSideQuestion>[0]> = {}) {
   return {
     cfg: {} as never,
@@ -456,6 +466,48 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(toolOptions).toHaveProperty("messageProvider", "discord-voice");
     expect(toolOptions).toHaveProperty("currentChannelId", "voice-room");
     expect(toolOptions).toHaveProperty("requireExplicitMessageTarget", true);
+  });
+
+  it("returns side-thread completions scoped by nested turn thread id", async () => {
+    const client = createFakeClient();
+    client.request.mockImplementation(async (method: string) => {
+      if (method === "thread/fork") {
+        return threadResult("side-thread");
+      }
+      if (method === "thread/inject_items") {
+        return {};
+      }
+      if (method === "turn/start") {
+        queueMicrotask(() =>
+          client.emit(turnCompletedWithNestedThread("side-thread", "turn-1", "Nested answer.")),
+        );
+        return turnStartResult("turn-1");
+      }
+      if (method === "thread/unsubscribe" || method === "turn/interrupt") {
+        return {};
+      }
+      throw new Error(`unexpected request: ${method}`);
+    });
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+
+    const result = await runCodexAppServerSideQuestion(sideParams());
+
+    expect(result).toEqual({ text: "Nested answer." });
+  });
+
+  it("rejects /btw before forking when the current OpenClaw session is sandboxed", async () => {
+    await expect(
+      runCodexAppServerSideQuestion(
+        sideParams({
+          cfg: { agents: { defaults: { sandbox: { mode: "all" } } } } as never,
+          sessionKey: "sandboxed-session",
+        }),
+      ),
+    ).rejects.toThrow(
+      "Codex-native /btw side-question mode is unavailable because OpenClaw sandboxing is active for this session.",
+    );
+
+    expect(getSharedCodexAppServerClientMock).not.toHaveBeenCalled();
   });
 
   it("installs native hook relay config for opted-in side threads", async () => {

@@ -32,6 +32,8 @@ export type SessionsListResultBase<TDefaults, TRow> = {
   count: number;
   totalCount?: number;
   limitApplied?: number;
+  offset?: number;
+  nextOffset?: number | null;
   hasMore?: boolean;
   defaults: TDefaults;
   sessions: TRow[];

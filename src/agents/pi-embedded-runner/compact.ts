@@ -742,7 +742,6 @@ async function compactEmbeddedPiSessionDirectOnce(
       senderName: params.senderName,
       senderUsername: params.senderUsername,
       senderE164: params.senderE164,
-      senderIsOwner: params.senderIsOwner,
       allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
       agentDir,
       workspaceDir: effectiveWorkspace,
@@ -809,7 +808,6 @@ async function compactEmbeddedPiSessionDirectOnce(
       senderName: params.senderName,
       senderUsername: params.senderUsername,
       senderE164: params.senderE164,
-      senderIsOwner: params.senderIsOwner,
       warn: (message) => log.warn(message),
     });
     const normalizedBundledTools =
@@ -852,7 +850,6 @@ async function compactEmbeddedPiSessionDirectOnce(
             sessionId: params.sessionId,
             agentId: sessionAgentId,
             senderId: params.senderId,
-            senderIsOwner: params.senderIsOwner,
           }),
         )
       : undefined;

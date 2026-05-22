@@ -402,6 +402,7 @@ export type PluginManifestContracts = {
    * plugin instead of every provider plugin.
    */
   externalAuthProviders?: string[];
+  embeddingProviders?: string[];
   memoryEmbeddingProviders?: string[];
   speechProviders?: string[];
   realtimeTranscriptionProviders?: string[];
@@ -799,6 +800,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
   const embeddedExtensionFactories = normalizeTrimmedStringList(value.embeddedExtensionFactories);
   const agentToolResultMiddleware = normalizeTrimmedStringList(value.agentToolResultMiddleware);
   const externalAuthProviders = normalizeTrimmedStringList(value.externalAuthProviders);
+  const embeddingProviders = normalizeTrimmedStringList(value.embeddingProviders);
   const memoryEmbeddingProviders = normalizeTrimmedStringList(value.memoryEmbeddingProviders);
   const speechProviders = normalizeTrimmedStringList(value.speechProviders);
   const realtimeTranscriptionProviders = normalizeTrimmedStringList(
@@ -820,6 +822,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
     ...(embeddedExtensionFactories.length > 0 ? { embeddedExtensionFactories } : {}),
     ...(agentToolResultMiddleware.length > 0 ? { agentToolResultMiddleware } : {}),
     ...(externalAuthProviders.length > 0 ? { externalAuthProviders } : {}),
+    ...(embeddingProviders.length > 0 ? { embeddingProviders } : {}),
     ...(memoryEmbeddingProviders.length > 0 ? { memoryEmbeddingProviders } : {}),
     ...(speechProviders.length > 0 ? { speechProviders } : {}),
     ...(realtimeTranscriptionProviders.length > 0 ? { realtimeTranscriptionProviders } : {}),

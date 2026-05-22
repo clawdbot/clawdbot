@@ -251,6 +251,26 @@ describe("waitForAgentRun", () => {
       endedAt: 200,
     });
   });
+
+  it("normalizes blocked ok waits to errors", async () => {
+    callGatewayMock.mockResolvedValue({
+      status: "ok",
+      startedAt: 100,
+      endedAt: 200,
+      livenessState: "blocked",
+      error: "Context overflow: prompt too large for the model.",
+    });
+
+    const result = await waitForAgentRun({ runId: "run-blocked", timeoutMs: 500 });
+
+    expect(result).toEqual({
+      status: "error",
+      error: "Context overflow: prompt too large for the model.",
+      startedAt: 100,
+      endedAt: 200,
+      livenessState: "blocked",
+    });
+  });
 });
 
 describe("waitForAgentRunAndReadUpdatedAssistantReply", () => {

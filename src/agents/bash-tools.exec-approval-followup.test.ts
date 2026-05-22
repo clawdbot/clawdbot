@@ -103,6 +103,20 @@ describe("exec approval followup", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("suppresses denied followups for normal sessions", async () => {
+    await expect(
+      sendExecApprovalFollowup({
+        approvalId: "req-denied-main",
+        sessionKey: "agent:main:main",
+        turnSourceChannel: "webchat",
+        resultText: "Exec denied (gateway id=req-denied-main, user-denied): uname -a",
+      }),
+    ).resolves.toBe(false);
+
+    expect(callGatewayTool).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it.each([
     {
       channel: "slack",
@@ -263,9 +277,7 @@ describe("exec approval followup", () => {
     });
   });
 
-  it("uses safe denied copy when session resume fails", async () => {
-    vi.mocked(callGatewayTool).mockRejectedValueOnce(new Error("session missing"));
-
+  it("uses safe direct denied copy without resuming the session", async () => {
     await sendExecApprovalFollowup({
       approvalId: "req-denied-resume-failed",
       sessionKey: "agent:main:telegram:-100123",
@@ -277,10 +289,10 @@ describe("exec approval followup", () => {
     });
 
     expectDirectSend({
-      content:
-        "Automatic session resume failed, so sending the status directly.\n\nCommand did not run: approval timed out.",
+      content: "Command did not run: approval timed out.",
       idempotencyKey: "exec-approval-followup:req-denied-resume-failed",
     });
+    expect(callGatewayTool).not.toHaveBeenCalled();
   });
 
   it("suppresses denied followups for subagent sessions", async () => {

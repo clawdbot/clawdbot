@@ -307,6 +307,90 @@ describe("GatewayClient", () => {
     }
   });
 
+  test("notifies accepted expectFinal requests while continuing to wait for final", async () => {
+    const client = new GatewayClient({
+      requestTimeoutMs: 25,
+    });
+    const send = vi.fn();
+    (
+      client as unknown as {
+        ws: WebSocket | { readyState: number; send: (data: string) => void; close: () => void };
+      }
+    ).ws = {
+      readyState: WebSocket.OPEN,
+      send,
+      close: vi.fn(),
+    };
+
+    const onAccepted = vi.fn();
+    const requestPromise = client.request<{ status: string }>("agent", undefined, {
+      expectFinal: true,
+      onAccepted,
+    });
+    const frame = JSON.parse(String(send.mock.calls[0]?.[0])) as { id: string };
+
+    (
+      client as unknown as {
+        handleMessage: (raw: string) => void;
+      }
+    ).handleMessage(
+      JSON.stringify({
+        type: "res",
+        id: frame.id,
+        ok: true,
+        payload: { status: "accepted", runId: "run-1" },
+      }),
+    );
+
+    expect(onAccepted).toHaveBeenCalledWith({ status: "accepted", runId: "run-1" });
+    expect((client as unknown as { pending: Map<string, unknown> }).pending.size).toBe(1);
+
+    (
+      client as unknown as {
+        handleMessage: (raw: string) => void;
+      }
+    ).handleMessage(
+      JSON.stringify({
+        type: "res",
+        id: frame.id,
+        ok: true,
+        payload: { status: "ok" },
+      }),
+    );
+
+    await expect(requestPromise).resolves.toEqual({ status: "ok" });
+    expect((client as unknown as { pending: Map<string, unknown> }).pending.size).toBe(0);
+  });
+
+  test("aborts in-flight requests from caller AbortSignal", async () => {
+    const client = new GatewayClient({
+      requestTimeoutMs: 25,
+    });
+    const send = vi.fn();
+    (
+      client as unknown as {
+        ws: WebSocket | { readyState: number; send: () => void; close: () => void };
+      }
+    ).ws = {
+      readyState: WebSocket.OPEN,
+      send,
+      close: vi.fn(),
+    };
+
+    const controller = new AbortController();
+    const requestPromise = client.request("status", undefined, {
+      signal: controller.signal,
+      timeoutMs: null,
+    });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect((client as unknown as { pending: Map<string, unknown> }).pending.size).toBe(1);
+
+    controller.abort();
+
+    await expect(requestPromise).rejects.toThrow("gateway request aborted for status");
+    expect((client as unknown as { pending: Map<string, unknown> }).pending.size).toBe(0);
+  });
+
   test("clamps oversized explicit request timeouts before scheduling", async () => {
     vi.useFakeTimers();
     try {

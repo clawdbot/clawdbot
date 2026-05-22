@@ -114,6 +114,8 @@ export type AppViewState = {
   chatModelCatalog: ModelCatalogEntry[];
   sessionSwitchNotice: { id: number; text: string } | null;
   sessionSwitchFlashKey: string | null;
+  chatSessionSearchQuery: string;
+  chatSessionSearchAppliedQuery: string;
   announceSessionSwitch?: (sessionKey: string, label: string) => void;
   chatQueue: ChatQueueItem[];
   chatQueueBySession: Record<string, ChatQueueItem[]>;

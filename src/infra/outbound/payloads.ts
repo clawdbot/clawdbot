@@ -12,6 +12,8 @@ import {
   hasMessagePresentationBlocks,
   hasReplyChannelData,
   hasReplyPayloadContent,
+  normalizeInteractiveReply,
+  normalizeMessagePresentation,
   type InteractiveReply,
   type MessagePresentation,
   type ReplyPayloadDelivery,
@@ -62,6 +64,86 @@ export type OutboundPayloadMirror = {
   text: string;
   mediaUrls: string[];
 };
+
+function collectPresentationMirrorText(presentation: MessagePresentation | undefined): string[] {
+  if (!presentation) {
+    return [];
+  }
+  const lines: string[] = [];
+  if (presentation.title?.trim()) {
+    lines.push(presentation.title.trim());
+  }
+  for (const block of presentation.blocks) {
+    if ((block.type === "text" || block.type === "context") && block.text.trim()) {
+      lines.push(block.text.trim());
+      continue;
+    }
+    if (block.type === "buttons") {
+      for (const button of block.buttons) {
+        if (button.label.trim()) {
+          lines.push(button.label.trim());
+        }
+      }
+      continue;
+    }
+    if (block.type === "select") {
+      if (block.placeholder?.trim()) {
+        lines.push(block.placeholder.trim());
+      }
+      for (const option of block.options) {
+        if (option.label.trim()) {
+          lines.push(option.label.trim());
+        }
+      }
+    }
+  }
+  return lines;
+}
+
+function collectInteractiveMirrorText(interactive: InteractiveReply | undefined): string[] {
+  if (!interactive) {
+    return [];
+  }
+  const lines: string[] = [];
+  for (const block of interactive.blocks) {
+    if (block.type === "text" && block.text.trim()) {
+      lines.push(block.text.trim());
+      continue;
+    }
+    if (block.type === "buttons") {
+      for (const button of block.buttons) {
+        if (button.label.trim()) {
+          lines.push(button.label.trim());
+        }
+      }
+      continue;
+    }
+    if (block.type === "select") {
+      if (block.placeholder?.trim()) {
+        lines.push(block.placeholder.trim());
+      }
+      for (const option of block.options) {
+        if (option.label.trim()) {
+          lines.push(option.label.trim());
+        }
+      }
+    }
+  }
+  return lines;
+}
+
+function resolveOutboundMirrorText(entry: OutboundPayloadPlan): string {
+  const text = entry.parts.text.trim() ? entry.parts.text : entry.payload.text;
+  if (text?.trim()) {
+    return text;
+  }
+  const presentation = normalizeMessagePresentation(entry.payload.presentation);
+  const interactive = normalizeInteractiveReply(entry.payload.interactive);
+  return [
+    ...collectPresentationMirrorText(presentation),
+    ...collectInteractiveMirrorText(interactive),
+  ].join("\n");
+}
 
 function isSuppressedRelayStatusText(text: string): boolean {
   const normalized = text.trim();
@@ -265,7 +347,7 @@ export function projectOutboundPayloadPlanForMirror(
 ): OutboundPayloadMirror {
   return {
     text: plan
-      .map((entry) => entry.payload.text)
+      .map(resolveOutboundMirrorText)
       .filter((text): text is string => Boolean(text))
       .join("\n"),
     mediaUrls: plan.flatMap((entry) => entry.parts.mediaUrls),

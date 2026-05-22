@@ -15,6 +15,10 @@ import {
   removeProviderAuthProfilesWithLock,
   resolvePersistedAuthProfileOwnerAgentDir,
 } from "../../agents/auth-profiles.js";
+import {
+  clearCurrentProviderAuthState,
+  warmCurrentProviderAuthState,
+} from "../../agents/model-provider-auth.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { normalizeProviderId } from "../../agents/provider-id.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -89,6 +93,12 @@ let cached: { ts: number; result: ModelAuthStatusResult } | null = null;
  */
 export function invalidateModelAuthStatusCache(): void {
   cached = null;
+  // The prepared provider-auth map (model-provider-auth.ts) was built from
+  // the pre-mutation auth state, so it must be invalidated alongside this
+  // cache whenever an auth-profile mutation lands (logout, login, token
+  // rotation, etc.). Without this, `/models` and pickers keep advertising
+  // providers the running gateway can no longer authenticate.
+  clearCurrentProviderAuthState();
 }
 
 function readProviderParam(params: Record<string, unknown>): string | null {
@@ -380,6 +390,10 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       }
       await refreshActiveSecretsRuntimeSnapshot();
       invalidateModelAuthStatusCache();
+      clearCurrentProviderAuthState();
+      void warmCurrentProviderAuthState(context.getRuntimeConfig()).catch((err) => {
+        log.warn(`provider auth state rewarm after logout failed: ${formatForLog(err)}`);
+      });
       const { runIds: abortedRunIds } = abortChatRunsForProvider(
         createAuthLogoutAbortOps(context),
         {

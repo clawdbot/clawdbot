@@ -768,18 +768,7 @@ function canMemoizePluginMetadataSnapshotResult(result: {
   registrySource: PluginRegistrySnapshotSource;
   snapshot: PluginMetadataSnapshot;
 }): boolean {
-  if (result.snapshot.index.plugins.length === 0) {
-    return false;
-  }
-  if (result.registrySource !== "derived") {
-    return true;
-  }
-  return (
-    result.snapshot.registryDiagnostics.length > 0 &&
-    result.snapshot.registryDiagnostics.every(
-      (diagnostic) => diagnostic.code === "persisted-registry-stale-policy",
-    )
-  );
+  return result.registrySource !== "derived" && result.snapshot.index.plugins.length > 0;
 }
 
 function loadPluginMetadataSnapshotImpl(params: LoadPluginMetadataSnapshotParams): {
@@ -831,6 +820,7 @@ function loadPluginMetadataSnapshotImpl(params: LoadPluginMetadataSnapshotParams
     registrySource: registryResult.source,
     snapshot: {
       policyHash: index.policyHash,
+      registrySource: registryResult.source,
       configFingerprint: resolvePluginMetadataControlPlaneFingerprint({
         config: params.config,
         env: params.env,

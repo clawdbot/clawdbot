@@ -1,4 +1,3 @@
-import { applyOwnerOnlyToolPolicy } from "../agents/tool-policy.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -39,7 +38,7 @@ export function resolveMcpLoopbackScopedTools(params: {
   });
   return {
     agentId: scoped.agentId,
-    tools: applyOwnerOnlyToolPolicy(scoped.tools, params.senderIsOwner === true),
+    tools: scoped.tools,
   };
 }
 

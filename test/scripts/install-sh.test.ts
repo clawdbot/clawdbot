@@ -41,6 +41,24 @@ describe("install.sh", () => {
     expect(script).toContain('cmd+=(--no-fund --no-audit "$freshness_flag" install -g "$spec")');
   });
 
+  it("rejects OpenClaw GitHub source targets for npm installs", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      set +e
+      OPENCLAW_VERSION=main
+      USE_BETA=0
+      install_openclaw
+      status=$?
+      printf 'status=%s\\n' "$status"
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("status=1");
+    expect(result.stdout).toContain("npm installs do not support OpenClaw GitHub source targets");
+    expect(result.stdout).toContain("--install-method git --version main");
+  });
+
   it("exports noninteractive apt env during Linux startup", () => {
     expect(script).toMatch(
       /detect_os_or_die\s+if \[\[ "\$OS" == "linux" \]\]; then\s+export DEBIAN_FRONTEND="\$\{DEBIAN_FRONTEND:-noninteractive\}"\s+export NEEDRESTART_MODE="\$\{NEEDRESTART_MODE:-a\}"\s+fi/m,
@@ -430,6 +448,19 @@ describe("install.sh", () => {
     expect(script).toContain("activate_repo_pnpm_version()");
     expect(script).toContain('corepack prepare "pnpm@${version}" --activate');
     expect(script).toContain('activate_repo_pnpm_version "$repo_dir"');
+  });
+
+  it("does not treat /dev/tty permissions as a controlling terminal", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      if has_controlling_tty; then echo "has_tty=1"; else echo "has_tty=0"; fi
+      if is_promptable; then echo "promptable=1"; else echo "promptable=0"; fi
+    `);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain("has_tty=0");
+    expect(result.stdout).toContain("promptable=0");
   });
 });
 

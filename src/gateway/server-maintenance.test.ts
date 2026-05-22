@@ -306,6 +306,43 @@ describe("startGatewayMaintenanceTimers", () => {
     stopMaintenanceTimers(timers);
   });
 
+  it("keeps pending accepted agent dedupe entries until their run expiry", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const deps = createMaintenanceTimerDeps();
+    const now = Date.now();
+    deps.dedupe.set("agent:pending-agent", {
+      ts: now - DEDUPE_TTL_MS - 1,
+      ok: true,
+      payload: {
+        runId: "pending-agent",
+        sessionKey: "agent:main:main",
+        status: "accepted",
+        expiresAtMs: now + 120_000,
+      },
+    });
+    deps.dedupe.set("agent:expired-pending-agent", {
+      ts: now - DEDUPE_TTL_MS - 1,
+      ok: true,
+      payload: {
+        runId: "expired-pending-agent",
+        sessionKey: "agent:main:main",
+        status: "accepted",
+        expiresAtMs: now - 1,
+      },
+    });
+
+    const timers = startGatewayMaintenanceTimers(deps);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(deps.dedupe.has("agent:pending-agent")).toBe(true);
+    expect(deps.dedupe.has("agent:expired-pending-agent")).toBe(false);
+
+    stopMaintenanceTimers(timers);
+  });
+
   it("keeps active exec approval dedupe aliases past the normal ttl", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-22T00:00:00Z"));

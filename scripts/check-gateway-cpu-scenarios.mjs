@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { collectGatewayCpuObservations } from "./lib/plugin-gateway-gauntlet.mjs";
 
 const DEFAULT_STARTUP_CASES = ["default", "oneInternalHook", "allInternalHooks"];
 const DEFAULT_QA_SCENARIOS = [
@@ -159,43 +160,6 @@ function toRepoRelativePath(absolutePath) {
   return relativePath;
 }
 
-function collectObservations(params) {
-  const observations = [];
-  for (const result of params.startup?.results ?? []) {
-    const cpuCoreMax = result.summary?.cpuCoreRatio?.max;
-    const wallMax = result.summary?.readyzMs?.max ?? result.summary?.healthzMs?.max;
-    if (
-      typeof cpuCoreMax === "number" &&
-      typeof wallMax === "number" &&
-      cpuCoreMax >= params.cpuCoreWarn &&
-      wallMax >= params.hotWallWarnMs
-    ) {
-      observations.push({
-        kind: "startup-cpu-hot",
-        id: result.id,
-        cpuCoreRatioMax: cpuCoreMax,
-        wallMsMax: wallMax,
-      });
-    }
-  }
-  const qaCpuCoreRatio = params.qa?.metrics?.gatewayCpuCoreRatio;
-  const qaWallMs = params.qa?.metrics?.wallMs;
-  if (
-    typeof qaCpuCoreRatio === "number" &&
-    typeof qaWallMs === "number" &&
-    qaCpuCoreRatio >= params.cpuCoreWarn &&
-    qaWallMs >= params.hotWallWarnMs
-  ) {
-    observations.push({
-      kind: "qa-cpu-hot",
-      id: "qa-suite",
-      cpuCoreRatio: qaCpuCoreRatio,
-      wallMs: qaWallMs,
-    });
-  }
-  return observations;
-}
-
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   fs.mkdirSync(options.outputDir, { recursive: true });
@@ -241,7 +205,7 @@ async function main() {
 
   const startup = readJsonIfExists(startupOutput);
   const qa = readJsonIfExists(path.join(qaOutputDir, "qa-suite-summary.json"));
-  const observations = collectObservations({
+  const observations = collectGatewayCpuObservations({
     startup,
     qa,
     cpuCoreWarn: options.cpuCoreWarn,

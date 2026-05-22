@@ -31,7 +31,6 @@ type ChannelMessageActionDiscoveryParams = {
   sessionId?: string | null;
   agentId?: string | null;
   requesterSenderId?: string | null;
-  senderIsOwner?: boolean;
 };
 
 const channelAgentToolMeta = new WeakMap<ChannelAgentTool, ChannelAgentToolMeta>();

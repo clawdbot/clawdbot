@@ -1100,6 +1100,9 @@ export const ja_JP: TranslationMap = {
     selectors: {
       agentFilter: "エージェントでセッションを絞り込む",
       session: "Chat session",
+      sessionSearch: "セッションを検索",
+      clearSessionSearch: "セッション検索をクリア",
+      loadMoreSessions: "さらにセッションを読み込む",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },

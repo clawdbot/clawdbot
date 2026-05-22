@@ -16,6 +16,12 @@ import { buildQaCoverageInventory, renderQaCoverageMarkdownReport } from "./cove
 import { buildQaDockerHarnessImage, writeQaDockerHarnessFiles } from "./docker-harness.js";
 import { runQaDockerUp } from "./docker-up.runtime.js";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
+import {
+  createMockJsonlReplayCellRunner,
+  renderJsonlReplayMarkdownReport,
+  runJsonlReplay,
+  type JsonlReplayInput,
+} from "./jsonl-replay.js";
 import { startQaLabServer } from "./lab-server.js";
 import { runQaManualLane } from "./manual-lane.runtime.js";
 import { runQaMultipass } from "./multipass.runtime.js";
@@ -818,6 +824,50 @@ export async function runQaCoverageReportCommand(opts: {
   }
 
   process.stdout.write(body);
+}
+
+export async function runQaJsonlReplayCommand(opts: {
+  repoRoot?: string;
+  transcripts?: string;
+  outputDir?: string;
+  runtimePair?: string;
+  providerMode?: QaProviderModeInput;
+}) {
+  const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
+  const runtimePair = parseQaRuntimePair(opts.runtimePair) ?? ["pi", "codex"];
+  if (runtimePair[0] !== "pi" || runtimePair[1] !== "codex") {
+    throw new Error('--runtime-pair for jsonl-replay must be "pi,codex".');
+  }
+  const providerMode = normalizeQaProviderMode(opts.providerMode ?? "mock-openai");
+  if (providerMode !== "mock-openai") {
+    throw new Error("qa jsonl-replay currently supports mock-openai curated fixtures only.");
+  }
+  const transcriptDir = path.resolve(repoRoot, opts.transcripts ?? "qa/scenarios/jsonl-replay");
+  const outputDir =
+    resolveRepoRelativeOutputDir(repoRoot, opts.outputDir) ??
+    path.join(repoRoot, ".artifacts", "qa-e2e", `jsonl-replay-${Date.now().toString(36)}`);
+  await fs.mkdir(outputDir, { recursive: true });
+  const result = await runJsonlReplay(
+    {
+      directory: transcriptDir,
+      runtimePair: runtimePair as JsonlReplayInput["runtimePair"],
+      providerMode,
+    },
+    { runCell: createMockJsonlReplayCellRunner() },
+  );
+  const reportPayload = {
+    generatedAt: new Date().toISOString(),
+    providerMode,
+    runtimePair: runtimePair as JsonlReplayInput["runtimePair"],
+    transcripts: result.transcripts,
+  };
+  const report = renderJsonlReplayMarkdownReport(reportPayload);
+  const reportPath = path.join(outputDir, "qa-jsonl-replay-report.md");
+  const summaryPath = path.join(outputDir, "qa-jsonl-replay-summary.json");
+  await fs.writeFile(reportPath, report, "utf8");
+  await fs.writeFile(summaryPath, `${JSON.stringify(result, null, 2)}\n`, "utf8");
+  process.stdout.write(`QA JSONL replay report: ${reportPath}\n`);
+  process.stdout.write(`QA JSONL replay summary: ${summaryPath}\n`);
 }
 
 export async function runQaCharacterEvalCommand(opts: {

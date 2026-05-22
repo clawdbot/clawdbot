@@ -229,9 +229,11 @@ describe("refreshChat", () => {
       "sessions.list",
       "sessions list payload",
     );
-    expect(sessionsListPayload.agentId).toBe("main");
+    expect(sessionsListPayload).not.toHaveProperty("activeMinutes");
+    expect(sessionsListPayload).not.toHaveProperty("agentId");
     expect(sessionsListPayload.includeGlobal).toBe(true);
     expect(sessionsListPayload.includeUnknown).toBe(true);
+    expect(sessionsListPayload.limit).toBe(50);
     expect(request).toHaveBeenCalledWith("commands.list", {
       agentId: "main",
       includeArgs: true,
@@ -578,11 +580,11 @@ describe("refreshChat", () => {
         "sessions.list",
         "sessions list payload",
       );
-      expect(sessionsListPayload.activeMinutes).toBe(120);
-      expect(sessionsListPayload.agentId).toBe("main");
+      expect(sessionsListPayload).not.toHaveProperty("activeMinutes");
+      expect(sessionsListPayload).not.toHaveProperty("agentId");
       expect(sessionsListPayload.includeGlobal).toBe(true);
       expect(sessionsListPayload.includeUnknown).toBe(true);
-      expect(sessionsListPayload.limit).toBe(100);
+      expect(sessionsListPayload.limit).toBe(50);
       expect(request).toHaveBeenCalledWith("models.list", { view: "configured" });
       const commandsListPayload = findRequestPayload(
         request as unknown as MockCallSource,

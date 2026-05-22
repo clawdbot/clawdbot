@@ -95,7 +95,7 @@ export type QaScenarioRuntimeDeps = {
   hasDiscoveryLabels: QaScenarioRuntimeFunction;
   reportsDiscoveryScopeLeak: QaScenarioRuntimeFunction;
   reportsMissingDiscoveryFiles: QaScenarioRuntimeFunction;
-  hasModelSwitchContinuityEvidence: QaScenarioRuntimeFunction;
+  hasModelSwitchContinuitySignal: QaScenarioRuntimeFunction;
 };
 
 export type QaScenarioRuntimeConstants = {
@@ -186,7 +186,7 @@ type QaScenarioRuntimeApi<
   hasDiscoveryLabels: TDeps["hasDiscoveryLabels"];
   reportsDiscoveryScopeLeak: TDeps["reportsDiscoveryScopeLeak"];
   reportsMissingDiscoveryFiles: TDeps["reportsMissingDiscoveryFiles"];
-  hasModelSwitchContinuityEvidence: TDeps["hasModelSwitchContinuityEvidence"];
+  hasModelSwitchContinuitySignal: TDeps["hasModelSwitchContinuitySignal"];
   imageUnderstandingPngBase64: string;
   imageUnderstandingLargePngBase64: string;
   imageUnderstandingValidPngBase64: string;
@@ -292,7 +292,7 @@ export function createQaScenarioRuntimeApi<
     hasDiscoveryLabels: params.deps.hasDiscoveryLabels,
     reportsDiscoveryScopeLeak: params.deps.reportsDiscoveryScopeLeak,
     reportsMissingDiscoveryFiles: params.deps.reportsMissingDiscoveryFiles,
-    hasModelSwitchContinuityEvidence: params.deps.hasModelSwitchContinuityEvidence,
+    hasModelSwitchContinuitySignal: params.deps.hasModelSwitchContinuitySignal,
     imageUnderstandingPngBase64: params.constants.imageUnderstandingPngBase64,
     imageUnderstandingLargePngBase64: params.constants.imageUnderstandingLargePngBase64,
     imageUnderstandingValidPngBase64: params.constants.imageUnderstandingValidPngBase64,

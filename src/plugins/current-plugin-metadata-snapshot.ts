@@ -23,6 +23,12 @@ export function resolvePluginMetadataControlPlaneFingerprint(
   });
 }
 
+export function isReusableCurrentPluginMetadataSnapshot(
+  snapshot: PluginMetadataSnapshot,
+): boolean {
+  return snapshot.registrySource !== "derived";
+}
+
 // Single-slot Gateway-owned handoff. Replace or clear it at lifecycle boundaries;
 // never accumulate historical metadata snapshots here.
 export function setCurrentPluginMetadataSnapshot(
@@ -34,6 +40,10 @@ export function setCurrentPluginMetadataSnapshot(
     workspaceDir?: string;
   } = {},
 ): void {
+  if (snapshot && !isReusableCurrentPluginMetadataSnapshot(snapshot)) {
+    clearCurrentPluginMetadataSnapshotState();
+    return;
+  }
   const compatiblePolicyHashes = snapshot
     ? options.compatibleConfigs?.map((config) => resolveInstalledPluginIndexPolicyHash(config))
     : undefined;

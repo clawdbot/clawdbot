@@ -700,9 +700,7 @@ export function resolveCommandAuthorization(params: {
     Array.isArray(ctx.GatewayClientScopes) &&
     ctx.GatewayClientScopes.includes("operator.admin");
   const ownerAllowlistConfigured = ownerState.ownerAllowAll || ownerState.explicitOwners.length > 0;
-  const senderIsOwner = ctx.ForceSenderIsOwnerFalse
-    ? false
-    : senderIsOwnerByIdentity || senderIsOwnerByScope || ownerState.ownerAllowAll;
+  const senderIsOwner = senderIsOwnerByIdentity || senderIsOwnerByScope || ownerState.ownerAllowAll;
   const requireOwner = enforceOwner || ownerAllowlistConfigured;
   const isOwnerForCommands = !requireOwner
     ? true

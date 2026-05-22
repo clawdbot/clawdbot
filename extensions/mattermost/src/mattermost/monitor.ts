@@ -1318,8 +1318,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           cfg,
           surface: "mattermost",
         });
-        const hasControlCommand = core.channel.text.hasControlCommand(rawText, cfg);
-        const isControlCommand = allowTextCommands && hasControlCommand;
+        const isControlCommand =
+          allowTextCommands && core.channel.commands.isControlCommandMessage(rawText, cfg);
         const accessDecision = await resolveMattermostMonitorInboundAccess({
           account,
           cfg,
@@ -1330,7 +1330,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           groupPolicy,
           readStoreAllowFrom: pairing.readAllowFromStore,
           allowTextCommands,
-          hasControlCommand,
+          hasControlCommand: isControlCommand,
           eventKind: "message",
           mayPair: true,
         });
@@ -2090,7 +2090,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       if (!text) {
         return false;
       }
-      return !core.channel.text.hasControlCommand(text, cfg);
+      return !core.channel.commands.isControlCommandMessage(text, cfg);
     },
     onFlush: async (entries) => {
       const last = entries.at(-1);

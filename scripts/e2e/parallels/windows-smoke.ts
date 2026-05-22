@@ -143,79 +143,81 @@ Options:
 
 function parseArgs(argv: string[]): WindowsOptions {
   const options = defaultOptions();
+  const valueHandlers: Record<string, (value: string) => void> = {
+    "--api-key-env": (value) => {
+      options.apiKeyEnv = value;
+    },
+    "--host-ip": (value) => {
+      options.hostIp = value;
+    },
+    "--host-port": (value) => {
+      options.hostPort = Number(value);
+      options.hostPortExplicit = true;
+    },
+    "--install-url": (value) => {
+      options.installUrl = value;
+    },
+    "--install-version": (value) => {
+      options.installVersion = value;
+    },
+    "--latest-version": (value) => {
+      options.latestVersion = value;
+    },
+    "--model": (value) => {
+      options.modelId = value;
+    },
+    "--openai-api-key-env": (value) => {
+      options.apiKeyEnv = value;
+    },
+    "--provider": (value) => {
+      options.provider = parseProvider(value);
+    },
+    "--snapshot-hint": (value) => {
+      options.snapshotHint = value;
+    },
+    "--target-package-spec": (value) => {
+      options.targetPackageSpec = value;
+    },
+    "--vm": (value) => {
+      options.vmName = value;
+    },
+    "--mode": (value) => {
+      options.mode = parseMode(value);
+    },
+  };
+  const flagHandlers: Record<string, () => void> = {
+    "--json": () => {
+      options.json = true;
+    },
+    "--keep-server": () => {
+      options.keepServer = true;
+    },
+    "--skip-latest-ref-check": () => {
+      options.skipLatestRefCheck = true;
+    },
+    "--upgrade-from-packed-main": () => {
+      options.upgradeFromPackedMain = true;
+    },
+  };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    switch (arg) {
-      case "--":
-        break;
-      case "--vm":
-        options.vmName = ensureValue(argv, i, arg);
-        i++;
-        break;
-      case "--snapshot-hint":
-        options.snapshotHint = ensureValue(argv, i, arg);
-        i++;
-        break;
-      case "--mode":
-        options.mode = parseMode(ensureValue(argv, i, arg));
-        i++;
-        break;
-      case "--provider":
-        options.provider = parseProvider(ensureValue(argv, i, arg));
-        i++;
-        break;
-      case "--model":
-        options.modelId = ensureValue(argv, i, arg);
-        i++;
-        break;
-      case "--api-key-env":
-      case "--openai-api-key-env":
-        options.apiKeyEnv = ensureValue(argv, i, arg);
-        i++;
-        break;
-      case "--install-url":
-        options.installUrl = ensureValue(argv, i, arg);
-        i++;
-        break;
-      case "--host-port":
-        options.hostPort = Number(ensureValue(argv, i, arg));
-        options.hostPortExplicit = true;
-        i++;
-        break;
-      case "--host-ip":
-        options.hostIp = ensureValue(argv, i, arg);
-        i++;
-        break;
-      case "--latest-version":
-        options.latestVersion = ensureValue(argv, i, arg);
-        i++;
-        break;
-      case "--install-version":
-        options.installVersion = ensureValue(argv, i, arg);
-        i++;
-        break;
-      case "--upgrade-from-packed-main":
-        options.upgradeFromPackedMain = true;
-        break;
-      case "--target-package-spec":
-        options.targetPackageSpec = ensureValue(argv, i, arg);
-        i++;
-        break;
-      case "--skip-latest-ref-check":
-        options.skipLatestRefCheck = true;
-        break;
-      case "--keep-server":
-        options.keepServer = true;
-        break;
-      case "--json":
-        options.json = true;
-        break;
-      case "-h":
-      case "--help":
-        process.stdout.write(usage());
-        process.exit(0);
-      default:
-        die(`unknown arg: ${arg}`);
+    const valueHandler = valueHandlers[arg];
+    if (valueHandler) {
+      valueHandler(ensureValue(argv, i, arg));
+      i++;
+      continue;
+    }
+    const flagHandler = flagHandlers[arg];
+    if (flagHandler) {
+      flagHandler();
+      continue;
+    }
+    if (arg === "-h" || arg === "--help") {
+      process.stdout.write(usage());
+      process.exit(0);
+    }
+    if (arg !== "--") {
+      die(`unknown arg: ${arg}`);
     }
   }
   return options;

@@ -489,8 +489,6 @@ describe("emitExecSystemEvent", () => {
         to: "telegram:-100123:topic:47",
         threadId: 47,
       },
-      forceSenderIsOwnerFalse: true,
-      trusted: false,
     });
     const heartbeat = requireHeartbeatCall();
     expect(heartbeat.coalesceMs).toBe(0);
@@ -508,8 +506,6 @@ describe("emitExecSystemEvent", () => {
     expect(enqueueSystemEventMock).toHaveBeenCalledWith("Exec finished", {
       sessionKey: "agent:ops:primary",
       contextKey: "exec:run-cron",
-      forceSenderIsOwnerFalse: true,
-      trusted: false,
     });
     expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
     const [[heartbeatParams]] = requestHeartbeatMock.mock.calls as unknown as Array<
@@ -530,8 +526,6 @@ describe("emitExecSystemEvent", () => {
     expect(enqueueSystemEventMock).toHaveBeenCalledWith("Exec finished", {
       sessionKey: "global",
       contextKey: "exec:run-global",
-      forceSenderIsOwnerFalse: true,
-      trusted: false,
     });
     expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
     const [[heartbeatParams]] = requestHeartbeatMock.mock.calls as unknown as Array<
@@ -552,8 +546,6 @@ describe("emitExecSystemEvent", () => {
     expect(enqueueSystemEventMock).toHaveBeenCalledWith("Exec finished", {
       sessionKey: "global",
       contextKey: "exec:run-global",
-      forceSenderIsOwnerFalse: true,
-      trusted: false,
     });
     const heartbeat = requireHeartbeatCall();
     expect(heartbeat.coalesceMs).toBe(0);
@@ -580,8 +572,6 @@ describe("emitExecSystemEvent", () => {
       sessionKey: "agent:main:subagent:abc-123",
       contextKey: "exec:run-sub",
       deliveryContext: undefined,
-      forceSenderIsOwnerFalse: true,
-      trusted: false,
     });
     expect(requestHeartbeatMock).not.toHaveBeenCalled();
   });
@@ -695,5 +685,90 @@ describe("buildExecExitOutcome", () => {
     expect(outcome.timedOut).toBe(true);
     expect(outcome.reason).toContain("background=true");
     expect(outcome.reason).toContain("Do not rely on shell backgrounding");
+  });
+});
+
+describe("runExecProcess POSIX command wrapper", () => {
+  it("wraps command with PATH export if OPENCLAW_PREPEND_PATH is present", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    supervisorMock.spawn.mockResolvedValueOnce({
+      runId: "mock-run",
+      startedAtMs: Date.now(),
+      wait: async () => ({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 0,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+      cancel: vi.fn(),
+    });
+
+    const run = await runExecProcess({
+      command: "echo test",
+      workdir: "/tmp",
+      env: { PATH: "/usr/bin" },
+      pathPrepend: ["/custom/bin", "/opt/bin"],
+      usePty: false,
+      warnings: [],
+      maxOutput: 1000,
+      pendingMaxOutput: 1000,
+      notifyOnExit: false,
+      timeoutSec: null,
+    });
+
+    expect(supervisorMock.spawn).toHaveBeenCalledTimes(1);
+    const spawnCall = supervisorMock.spawn.mock.calls[0][0];
+
+    const commandStr = spawnCall.argv.join(" ");
+    expect(commandStr).toContain('export PATH="${OPENCLAW_PREPEND_PATH}${PATH:+:$PATH}"; unset OPENCLAW_PREPEND_PATH; echo test');
+  });
+
+  it("does not wrap command on Windows", async () => {
+    if (process.platform !== "win32") {
+      return;
+    }
+
+    supervisorMock.spawn.mockResolvedValueOnce({
+      runId: "mock-run",
+      startedAtMs: Date.now(),
+      wait: async () => ({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 0,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+      cancel: vi.fn(),
+    });
+
+    const run = await runExecProcess({
+      command: "echo test",
+      workdir: "C:\\tmp",
+      env: { Path: "C:\\Windows\\System32" },
+      pathPrepend: ["C:\\custom\\bin"],
+      usePty: false,
+      warnings: [],
+      maxOutput: 1000,
+      pendingMaxOutput: 1000,
+      notifyOnExit: false,
+      timeoutSec: null,
+    });
+
+    expect(supervisorMock.spawn).toHaveBeenCalledTimes(1);
+    const spawnCall = supervisorMock.spawn.mock.calls[0][0];
+
+    const commandStr = spawnCall.argv.join(" ");
+    expect(commandStr).not.toContain("export PATH=");
+    expect(commandStr).toContain("echo test");
   });
 });

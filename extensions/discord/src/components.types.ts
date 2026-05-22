@@ -25,6 +25,8 @@ export type DiscordComponentButtonSpec = {
     animated?: boolean;
   };
   disabled?: boolean;
+  /** Keep this action available after a successful interaction. */
+  reusable?: boolean;
   /** Optional allowlist of users who can interact with this button (ids or names). */
   allowedUsers?: string[];
 };

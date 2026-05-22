@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.5.20",
+  "version": "2026.5.21",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -407,6 +407,10 @@
     "./plugin-sdk/media-mime": {
       "types": "./dist/plugin-sdk/media-mime.d.ts",
       "default": "./dist/plugin-sdk/media-mime.js"
+    },
+    "./plugin-sdk/embedding-providers": {
+      "types": "./dist/plugin-sdk/embedding-providers.d.ts",
+      "default": "./dist/plugin-sdk/embedding-providers.js"
     },
     "./plugin-sdk/media-generation-runtime": {
       "types": "./dist/plugin-sdk/media-generation-runtime.d.ts",

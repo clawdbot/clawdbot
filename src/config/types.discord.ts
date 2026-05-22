@@ -229,6 +229,8 @@ export type DiscordExecApprovalConfig = {
 export type DiscordAgentComponentsConfig = {
   /** Enable agent-controlled interactive components (buttons, select menus). Default: true. */
   enabled?: boolean;
+  /** Time in milliseconds before sent Discord component callbacks expire. Default: 1800000. */
+  ttlMs?: number;
 };
 
 export type DiscordUiComponentsConfig = {

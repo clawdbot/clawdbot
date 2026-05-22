@@ -4,15 +4,15 @@ import { resolveVisibleModelCatalog } from "./model-catalog-visibility.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 
 describe("resolveVisibleModelCatalog", () => {
-  it("can use static auth checks for gateway read-only model lists", () => {
-    const authChecker = vi.fn((provider: string) => provider === "openai");
+  it("can use static auth checks for gateway read-only model lists", async () => {
+    const authChecker = vi.fn(async (provider: string) => provider === "openai");
     const catalog: ModelCatalogEntry[] = [
       { provider: "anthropic", id: "claude-test", name: "Claude Test" },
       { provider: "openai", id: "gpt-test", name: "GPT Test" },
     ];
     const cfg = {} as OpenClawConfig;
 
-    const result = resolveVisibleModelCatalog({
+    const result = await resolveVisibleModelCatalog({
       cfg,
       catalog,
       defaultProvider: "openai",
@@ -26,8 +26,8 @@ describe("resolveVisibleModelCatalog", () => {
     expect(result).toEqual([{ provider: "openai", id: "gpt-test", name: "GPT Test" }]);
   });
 
-  it("limits visible catalog to provider wildcard entries after default discovery", () => {
-    const authChecker = vi.fn((provider: string) => provider !== "blocked");
+  it("limits visible catalog to provider wildcard entries after default discovery", async () => {
+    const authChecker = vi.fn(async (provider: string) => provider !== "blocked");
     const catalog: ModelCatalogEntry[] = [
       { provider: "anthropic", id: "claude-test", name: "Claude Test" },
       { provider: "openai-codex", id: "gpt-codex-test", name: "GPT Codex Test" },
@@ -47,7 +47,7 @@ describe("resolveVisibleModelCatalog", () => {
       },
     } as OpenClawConfig;
 
-    const result = resolveVisibleModelCatalog({
+    const result = await resolveVisibleModelCatalog({
       cfg,
       catalog,
       defaultProvider: "anthropic",
@@ -66,8 +66,8 @@ describe("resolveVisibleModelCatalog", () => {
     ]);
   });
 
-  it("does not broaden visibility when selected providers have no catalog rows", () => {
-    const authChecker = vi.fn(() => true);
+  it("does not broaden visibility when selected providers have no catalog rows", async () => {
+    const authChecker = vi.fn(async () => true);
 
     const cfg = {
       agents: {
@@ -79,7 +79,7 @@ describe("resolveVisibleModelCatalog", () => {
       },
     } as OpenClawConfig;
 
-    const result = resolveVisibleModelCatalog({
+    const result = await resolveVisibleModelCatalog({
       cfg,
       catalog: [{ provider: "anthropic", id: "claude-test", name: "Claude Test" }],
       defaultProvider: "anthropic",

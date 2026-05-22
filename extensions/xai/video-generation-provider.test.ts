@@ -99,7 +99,8 @@ describe("xai video generation provider", () => {
     const pollRequest = requireFetchInitCall(0);
     expect(pollRequest.url).toBe("https://api.x.ai/v1/videos/req_123");
     expect(pollRequest.init?.method).toBe("GET");
-    expect(pollRequest.timeoutMs).toBe(120000);
+    expect(provider.defaultTimeoutMs).toBe(600_000);
+    expect(pollRequest.timeoutMs).toBe(600_000);
     expect(result.videos[0]?.mimeType).toBe("video/webm");
     expect(result.videos[0]?.fileName).toBe("video-1.webm");
     expect(result.metadata?.requestId).toBe("req_123");

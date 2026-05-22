@@ -437,7 +437,7 @@ describe("resolvePermissionRequest", () => {
       },
     },
   ] as const)(
-    "prompts for shared owner-only backstop tools: $toolName",
+    "prompts for shared backstop tools: $toolName",
     async ({ toolName, title, rawInput }) => {
       const prompt = vi.fn(async () => true);
       const res = await resolvePermissionRequest(

@@ -1,5 +1,6 @@
 import { basename, isAbsolute, resolve } from "node:path";
 import JSON5 from "json5";
+import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   registerHealthCheck as registerPluginHealthCheck,
   type HealthCheck,
@@ -19,6 +20,11 @@ const CHECK_IDS = {
   policyHashMismatch: "policy/policy-hash-mismatch",
   policyInvalidFile: "policy/policy-jsonc-invalid",
   policyMissingFile: "policy/policy-jsonc-missing",
+  policyDeniedMcpServer: "policy/mcp-denied-server",
+  policyUnapprovedMcpServer: "policy/mcp-unapproved-server",
+  policyDeniedModelProvider: "policy/models-denied-provider",
+  policyUnapprovedModelProvider: "policy/models-unapproved-provider",
+  policyPrivateNetworkAccess: "policy/network-private-access-enabled",
   policyMissingToolOwner: "policy/tools-missing-owner",
   policyMissingToolRisk: "policy/tools-missing-risk-level",
   policyMissingToolSensitivity: "policy/tools-missing-sensitivity-token",
@@ -32,6 +38,11 @@ export const POLICY_CHECK_IDS = [
   CHECK_IDS.policyHashMismatch,
   CHECK_IDS.policyAttestationMismatch,
   CHECK_IDS.policyDeniedChannelProvider,
+  CHECK_IDS.policyDeniedMcpServer,
+  CHECK_IDS.policyUnapprovedMcpServer,
+  CHECK_IDS.policyDeniedModelProvider,
+  CHECK_IDS.policyUnapprovedModelProvider,
+  CHECK_IDS.policyPrivateNetworkAccess,
   CHECK_IDS.policyMissingToolRisk,
   CHECK_IDS.policyUnknownToolRisk,
   CHECK_IDS.policyMissingToolSensitivity,
@@ -72,6 +83,11 @@ export function registerPolicyDoctorChecks(host?: PolicyDoctorRegistrationHost):
   registerHealthCheck(policyHashMismatchCheck);
   registerHealthCheck(policyAttestationMismatchCheck);
   registerHealthCheck(policyChannelsDeniedProviderCheck);
+  registerHealthCheck(policyMcpDeniedServerCheck);
+  registerHealthCheck(policyMcpUnapprovedServerCheck);
+  registerHealthCheck(policyModelsDeniedProviderCheck);
+  registerHealthCheck(policyModelsUnapprovedProviderCheck);
+  registerHealthCheck(policyNetworkPrivateAccessCheck);
   registerHealthCheck(policyToolsMissingRiskCheck);
   registerHealthCheck(policyToolsUnknownRiskCheck);
   registerHealthCheck(policyToolsMissingSensitivityCheck);
@@ -166,6 +182,56 @@ const policyChannelsDeniedProviderCheck: HealthCheck = {
       config: next.config,
       changes: next.changed.map((id) => `Disabled channels.${id}.enabled for policy conformance.`),
     };
+  },
+};
+
+const policyMcpDeniedServerCheck: HealthCheck = {
+  id: CHECK_IDS.policyDeniedMcpServer,
+  kind: "plugin",
+  description: "Configured MCP servers do not match policy deny rules.",
+  source: "policy",
+  async detect(ctx) {
+    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyDeniedMcpServer);
+  },
+};
+
+const policyMcpUnapprovedServerCheck: HealthCheck = {
+  id: CHECK_IDS.policyUnapprovedMcpServer,
+  kind: "plugin",
+  description: "Configured MCP servers do not match policy allow rules.",
+  source: "policy",
+  async detect(ctx) {
+    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyUnapprovedMcpServer);
+  },
+};
+
+const policyModelsDeniedProviderCheck: HealthCheck = {
+  id: CHECK_IDS.policyDeniedModelProvider,
+  kind: "plugin",
+  description: "Configured model providers do not match policy deny rules.",
+  source: "policy",
+  async detect(ctx) {
+    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyDeniedModelProvider);
+  },
+};
+
+const policyModelsUnapprovedProviderCheck: HealthCheck = {
+  id: CHECK_IDS.policyUnapprovedModelProvider,
+  kind: "plugin",
+  description: "Configured model providers do not match policy allow rules.",
+  source: "policy",
+  async detect(ctx) {
+    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyUnapprovedModelProvider);
+  },
+};
+
+const policyNetworkPrivateAccessCheck: HealthCheck = {
+  id: CHECK_IDS.policyPrivateNetworkAccess,
+  kind: "plugin",
+  description: "Network SSRF policy settings match private-network requirements.",
+  source: "policy",
+  async detect(ctx) {
+    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyPrivateNetworkAccess);
   },
 };
 
@@ -310,6 +376,9 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
   const policyFindings: HealthFinding[] = [
     ...policyContainerShapeFindings(policy, policyFile.displayName, policyFile.ocDocName),
     ...channelFindings(policy, policyFile.displayName, policyFile.ocDocName, evidence),
+    ...mcpServerFindings(policy, policyFile.ocDocName, evidence),
+    ...modelProviderFindings(policy, policyFile.ocDocName, evidence),
+    ...networkFindings(policy, policyFile.ocDocName, evidence),
     ...metadataRequirementFindings,
   ];
   if (requiredMetadata.has("risk")) {
@@ -567,7 +636,137 @@ function policyContainerShapeFindings(
       ),
     ];
   }
+  if (policy.mcp !== undefined && !isRecord(policy.mcp)) {
+    return [
+      policyShapeFinding(
+        policyPath,
+        `oc://${policyDocName}/mcp`,
+        `${policyPath} mcp must be an object.`,
+        `Fix ${policyPath} so mcp is an object.`,
+      ),
+    ];
+  }
+  if (isRecord(policy.mcp)) {
+    const finding = policyStringArrayShapeFinding(policy.mcp.servers, {
+      property: "mcp.servers",
+      policyDocName,
+      policyPath,
+      target: "mcp/servers",
+      valueName: "MCP server id",
+    });
+    if (finding !== undefined) {
+      return [finding];
+    }
+  }
+  if (policy.models !== undefined && !isRecord(policy.models)) {
+    return [
+      policyShapeFinding(
+        policyPath,
+        `oc://${policyDocName}/models`,
+        `${policyPath} models must be an object.`,
+        `Fix ${policyPath} so models is an object.`,
+      ),
+    ];
+  }
+  if (isRecord(policy.models)) {
+    const finding = policyStringArrayShapeFinding(policy.models.providers, {
+      property: "models.providers",
+      policyDocName,
+      policyPath,
+      target: "models/providers",
+      valueName: "model provider id",
+    });
+    if (finding !== undefined) {
+      return [finding];
+    }
+  }
+  if (policy.network !== undefined && !isRecord(policy.network)) {
+    return [
+      policyShapeFinding(
+        policyPath,
+        `oc://${policyDocName}/network`,
+        `${policyPath} network must be an object.`,
+        `Fix ${policyPath} so network is an object.`,
+      ),
+    ];
+  }
+  if (isRecord(policy.network)) {
+    if (policy.network.privateNetwork !== undefined && !isRecord(policy.network.privateNetwork)) {
+      return [
+        policyShapeFinding(
+          policyPath,
+          `oc://${policyDocName}/network/privateNetwork`,
+          `${policyPath} network.privateNetwork must be an object.`,
+          `Fix ${policyPath} so network.privateNetwork is an object.`,
+        ),
+      ];
+    }
+    if (
+      isRecord(policy.network.privateNetwork) &&
+      policy.network.privateNetwork.allow !== undefined &&
+      typeof policy.network.privateNetwork.allow !== "boolean"
+    ) {
+      return [
+        policyShapeFinding(
+          policyPath,
+          `oc://${policyDocName}/network/privateNetwork/allow`,
+          `${policyPath} network.privateNetwork.allow must be a boolean.`,
+          `Fix ${policyPath} so network.privateNetwork.allow is true or false.`,
+        ),
+      ];
+    }
+  }
   return [];
+}
+
+function policyStringArrayShapeFinding(
+  value: unknown,
+  params: {
+    readonly property: string;
+    readonly policyDocName: string;
+    readonly policyPath: string;
+    readonly target: string;
+    readonly valueName: string;
+  },
+): HealthFinding | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!isRecord(value)) {
+    return policyShapeFinding(
+      params.policyPath,
+      `oc://${params.policyDocName}/${params.target}`,
+      `${params.policyPath} ${params.property} must be an object.`,
+      `Fix ${params.policyPath} so ${params.property} is an object.`,
+    );
+  }
+  for (const key of ["allow", "deny"] as const) {
+    const entries = value[key];
+    if (entries === undefined) {
+      continue;
+    }
+    const target = `oc://${params.policyDocName}/${params.target}/${key}`;
+    if (!Array.isArray(entries)) {
+      return policyShapeFinding(
+        params.policyPath,
+        target,
+        `${params.policyPath} ${params.property}.${key} must be an array.`,
+        `Fix ${params.policyPath} so ${params.property}.${key} is an array of ${params.valueName}s.`,
+      );
+    }
+    const invalidIndex = entries.findIndex(
+      (entry) => typeof entry !== "string" || entry.trim() === "",
+    );
+    if (invalidIndex >= 0) {
+      return policyShapeFinding(
+        params.policyPath,
+        `${target}/#${invalidIndex}`,
+        `${params.policyPath} ${params.property}.${key}[${invalidIndex}] must be a non-empty string.`,
+        `Fix ${params.policyPath} so each ${params.property}.${key} entry is a ${params.valueName}.`,
+      );
+    }
+  }
+  return undefined;
 }
 
 function policyShapeFinding(
@@ -623,6 +822,171 @@ function invalidChannelDenyRuleFindings(
       fixHint: `Fix ${policyPath} so each channel deny rule has a provider match.`,
     },
   ];
+}
+
+function mcpServerFindings(
+  policy: unknown,
+  policyDocName: string,
+  evidence: PolicyEvidence,
+): readonly HealthFinding[] {
+  const denied = new Set(readStringList(policy, ["mcp", "servers", "deny"], { lowercase: false }));
+  const allowed = readStringList(policy, ["mcp", "servers", "allow"], { lowercase: false });
+  const allowedSet = new Set(allowed);
+  const findings: HealthFinding[] = [];
+
+  for (const server of evidence.mcpServers) {
+    if (denied.has(server.id)) {
+      findings.push({
+        checkId: CHECK_IDS.policyDeniedMcpServer,
+        severity: "error",
+        message: `MCP server '${server.id}' is denied by policy.`,
+        source: "policy",
+        path: "openclaw config",
+        ocPath: server.source,
+        target: server.source,
+        requirement: `oc://${policyDocName}/mcp/servers/deny`,
+        fixHint: "Remove this configured MCP server or update the policy after review.",
+      });
+      continue;
+    }
+    if (allowedSet.size > 0 && !allowedSet.has(server.id)) {
+      findings.push({
+        checkId: CHECK_IDS.policyUnapprovedMcpServer,
+        severity: "error",
+        message: `MCP server '${server.id}' is not in the policy allowlist.`,
+        source: "policy",
+        path: "openclaw config",
+        ocPath: server.source,
+        target: server.source,
+        requirement: `oc://${policyDocName}/mcp/servers/allow`,
+        fixHint: "Use an approved MCP server or update the policy after review.",
+      });
+    }
+  }
+
+  return findings;
+}
+
+function modelProviderFindings(
+  policy: unknown,
+  policyDocName: string,
+  evidence: PolicyEvidence,
+): readonly HealthFinding[] {
+  const denied = new Set(readModelProviderPolicyList(policy, ["models", "providers", "deny"]));
+  const allowed = readModelProviderPolicyList(policy, ["models", "providers", "allow"]);
+  const allowedSet = new Set(allowed);
+  const findings: HealthFinding[] = [];
+
+  for (const provider of evidence.modelProviders) {
+    findings.push(...modelProviderConformanceFindings(provider, denied, allowedSet, policyDocName));
+  }
+  for (const modelRef of evidence.modelRefs) {
+    findings.push(...modelRefConformanceFindings(modelRef, denied, allowedSet, policyDocName));
+  }
+
+  return findings;
+}
+
+function readModelProviderPolicyList(policy: unknown, path: readonly string[]): readonly string[] {
+  return readStringList(policy, path).map((provider) => normalizeProviderId(provider));
+}
+
+function modelProviderConformanceFindings(
+  provider: PolicyEvidence["modelProviders"][number],
+  denied: ReadonlySet<string>,
+  allowed: ReadonlySet<string>,
+  policyDocName: string,
+): readonly HealthFinding[] {
+  const findings: HealthFinding[] = [];
+  if (denied.has(provider.id)) {
+    findings.push({
+      checkId: CHECK_IDS.policyDeniedModelProvider,
+      severity: "error",
+      message: `Model provider '${provider.id}' is denied by policy.`,
+      source: "policy",
+      path: "openclaw config",
+      ocPath: provider.source,
+      target: provider.source,
+      requirement: `oc://${policyDocName}/models/providers/deny`,
+      fixHint: "Remove this configured provider or update the policy after review.",
+    });
+  }
+  if (!denied.has(provider.id) && allowed.size > 0 && !allowed.has(provider.id)) {
+    findings.push({
+      checkId: CHECK_IDS.policyUnapprovedModelProvider,
+      severity: "error",
+      message: `Model provider '${provider.id}' is not in the policy allowlist.`,
+      source: "policy",
+      path: "openclaw config",
+      ocPath: provider.source,
+      target: provider.source,
+      requirement: `oc://${policyDocName}/models/providers/allow`,
+      fixHint: "Use an approved model provider or update the policy after review.",
+    });
+  }
+  return findings;
+}
+
+function modelRefConformanceFindings(
+  modelRef: PolicyEvidence["modelRefs"][number],
+  denied: ReadonlySet<string>,
+  allowed: ReadonlySet<string>,
+  policyDocName: string,
+): readonly HealthFinding[] {
+  const findings: HealthFinding[] = [];
+  if (denied.has(modelRef.provider)) {
+    findings.push({
+      checkId: CHECK_IDS.policyDeniedModelProvider,
+      severity: "error",
+      message: `Model ref '${modelRef.ref}' uses denied provider '${modelRef.provider}'.`,
+      source: "policy",
+      path: "openclaw config",
+      ocPath: modelRef.source,
+      target: modelRef.source,
+      requirement: `oc://${policyDocName}/models/providers/deny`,
+      fixHint: "Select an approved model provider or update the policy after review.",
+    });
+  }
+  if (!denied.has(modelRef.provider) && allowed.size > 0 && !allowed.has(modelRef.provider)) {
+    findings.push({
+      checkId: CHECK_IDS.policyUnapprovedModelProvider,
+      severity: "error",
+      message: `Model ref '${modelRef.ref}' uses unapproved provider '${modelRef.provider}'.`,
+      source: "policy",
+      path: "openclaw config",
+      ocPath: modelRef.source,
+      target: modelRef.source,
+      requirement: `oc://${policyDocName}/models/providers/allow`,
+      fixHint: "Select an approved model provider or update the policy after review.",
+    });
+  }
+  return findings;
+}
+
+function networkFindings(
+  policy: unknown,
+  policyDocName: string,
+  evidence: PolicyEvidence,
+): readonly HealthFinding[] {
+  const allowPrivateNetwork = readPolicyBoolean(policy, ["network", "privateNetwork", "allow"]);
+  if (allowPrivateNetwork !== false) {
+    return [];
+  }
+  return evidence.network
+    .filter((setting) => setting.value)
+    .map((setting): HealthFinding => {
+      return {
+        checkId: CHECK_IDS.policyPrivateNetworkAccess,
+        severity: "error",
+        message: `Network setting '${setting.id}' allows private-network access.`,
+        source: "policy",
+        path: "openclaw config",
+        ocPath: setting.source,
+        target: setting.source,
+        requirement: `oc://${policyDocName}/network/privateNetwork/allow`,
+        fixHint: "Disable this private-network access setting or update policy after review.",
+      };
+    });
 }
 
 function toolRiskFindings(
@@ -954,6 +1318,7 @@ function requiredToolMetadata(policy: unknown): ReadonlySet<string> {
 function readPolicyStringArray(
   policy: unknown,
   path: readonly string[],
+  options: { readonly lowercase?: boolean } = {},
 ): readonly string[] | undefined {
   let current: unknown = policy;
   for (const part of path) {
@@ -965,7 +1330,32 @@ function readPolicyStringArray(
   if (!Array.isArray(current) || !current.every((entry) => typeof entry === "string")) {
     return undefined;
   }
-  return current.map((entry) => entry.trim().toLowerCase()).filter(Boolean);
+  const lowercase = options.lowercase ?? true;
+  return current
+    .map((entry) => {
+      const trimmed = entry.trim();
+      return lowercase ? trimmed.toLowerCase() : trimmed;
+    })
+    .filter(Boolean);
+}
+
+function readStringList(
+  policy: unknown,
+  path: readonly string[],
+  options?: { readonly lowercase?: boolean },
+): readonly string[] {
+  return readPolicyStringArray(policy, path, options) ?? [];
+}
+
+function readPolicyBoolean(policy: unknown, path: readonly string[]): boolean | undefined {
+  let current: unknown = policy;
+  for (const part of path) {
+    if (!isRecord(current)) {
+      return undefined;
+    }
+    current = current[part];
+  }
+  return typeof current === "boolean" ? current : undefined;
 }
 function policyPathSetting(ctx: HealthCheckContext): string {
   const configured = policySettings(ctx).path;

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { onDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import type { ReplyDispatcher } from "./reply/reply-dispatcher.js";
 import { buildTestCtx } from "./reply/test-ctx.js";
 
@@ -152,6 +153,41 @@ describe("withReplyDispatcher", () => {
     });
 
     expect(order).toEqual(["sendFinalReply", "markComplete", "waitForIdle"]);
+  });
+
+  it("emits message.received diagnostics before dispatch", async () => {
+    const events: Array<{ type: string; channel?: string; sessionKey?: string; source?: string }> =
+      [];
+    const stop = onDiagnosticEvent((event) => events.push(event));
+    const dispatcher = createDispatcher([]);
+    hoisted.dispatchReplyFromConfigMock.mockResolvedValueOnce({
+      queuedFinal: false,
+      counts: { tool: 0, block: 0, final: 0 },
+    });
+
+    try {
+      await dispatchInboundMessage({
+        ctx: buildTestCtx({
+          Provider: "signal",
+          Surface: "signal",
+          SessionKey: "agent:main:signal:direct:u1",
+        }),
+        cfg: {} as OpenClawConfig,
+        dispatcher,
+      });
+    } finally {
+      stop();
+      resetDiagnosticEventsForTest();
+    }
+
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "message.received",
+        channel: "signal",
+        sessionKey: "agent:main:signal:direct:u1",
+        source: "dispatchInboundMessage",
+      }),
+    );
   });
 
   it("always marks complete and waits for idle after success", async () => {

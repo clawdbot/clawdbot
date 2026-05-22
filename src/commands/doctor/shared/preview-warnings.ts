@@ -47,6 +47,16 @@ function hasPluginLoadPaths(cfg: OpenClawConfig): boolean {
   return hasRecord(load) && Array.isArray(load.paths) && load.paths.length > 0;
 }
 
+function hasSubagentAllowlistConfig(cfg: OpenClawConfig): boolean {
+  if (Array.isArray(cfg.agents?.defaults?.subagents?.allowAgents)) {
+    return true;
+  }
+  return listAgentRecords(cfg).some((agent) => {
+    const subagents = hasRecord(agent.subagents) ? agent.subagents : undefined;
+    return Array.isArray(subagents?.allowAgents);
+  });
+}
+
 function hasExplicitChannelPluginBlockerConfig(cfg: OpenClawConfig): boolean {
   if (cfg.plugins?.enabled === false) {
     return true;
@@ -435,6 +445,19 @@ export async function collectDoctorPreviewWarnings(params: {
   if (hasPluginConfig) {
     const { collectCodexRouteWarnings } = await import("./codex-route-warnings.js");
     warnings.push(...collectCodexRouteWarnings({ cfg: params.cfg, env }));
+  }
+  if (hasSubagentAllowlistConfig(params.cfg)) {
+    const { collectStaleSubagentAllowlistWarnings, scanStaleSubagentAllowlistReferences } =
+      await import("./stale-subagent-allowlist.js");
+    const staleSubagentAllowlistHits = scanStaleSubagentAllowlistReferences(params.cfg);
+    if (staleSubagentAllowlistHits.length > 0) {
+      warnings.push(
+        collectStaleSubagentAllowlistWarnings({
+          hits: staleSubagentAllowlistHits,
+          doctorFixCommand: params.doctorFixCommand,
+        }).join("\n"),
+      );
+    }
   }
   const { collectCodexNativeAssetWarnings } = await import("./codex-native-assets.js");
   warnings.push(...(await collectCodexNativeAssetWarnings({ cfg: params.cfg, env })));

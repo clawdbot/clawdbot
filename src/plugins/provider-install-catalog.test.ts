@@ -8,6 +8,9 @@ type ResolveManifestProviderAuthChoices =
 type ListOfficialExternalProviderCatalogEntries =
   typeof import("./official-external-plugin-catalog.js").listOfficialExternalProviderCatalogEntries;
 type PluginInstallSourceInfo = import("./install-source-info.js").PluginInstallSourceInfo;
+type InstalledPluginInstallRecordInfo =
+  import("./installed-plugin-index.js").InstalledPluginInstallRecordInfo;
+type InstalledPluginIndexRecord = import("./installed-plugin-index.js").InstalledPluginIndexRecord;
 
 const loadOpenClawProviderIndex = vi.hoisted(() =>
   vi.fn<LoadOpenClawProviderIndex>(() => ({ version: 1, providers: {} })),
@@ -63,6 +66,69 @@ import {
   resolveProviderInstallCatalogEntries,
   resolveProviderInstallCatalogEntry,
 } from "./provider-install-catalog.js";
+
+function registrySnapshot(
+  overrides: {
+    installRecords?: Record<string, InstalledPluginInstallRecordInfo>;
+    plugins?: InstalledPluginIndexRecord[];
+  } = {},
+) {
+  return {
+    version: 1 as const,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1 as const,
+    policyHash: "test",
+    generatedAtMs: 0,
+    installRecords: overrides.installRecords ?? {},
+    plugins: overrides.plugins ?? [],
+    diagnostics: [],
+  };
+}
+
+function vllmPluginWithPackageInstall(): InstalledPluginIndexRecord {
+  return {
+    pluginId: "vllm",
+    origin: "global",
+    manifestPath: "/Users/test/.openclaw/plugins/vllm/openclaw.plugin.json",
+    manifestHash: "hash",
+    rootDir: "/Users/test/.openclaw/plugins/vllm",
+    enabled: true,
+    startup: {
+      sidecar: false,
+      memory: false,
+      deferConfiguredChannelFullLoadUntilAfterListen: false,
+      agentHarnesses: [],
+    },
+    compat: [],
+    packageName: "@openclaw/vllm",
+    packageInstall: {
+      npm: {
+        spec: "@openclaw/vllm-fork@1.0.0",
+        packageName: "@openclaw/vllm-fork",
+        selector: "1.0.0",
+        selectorKind: "exact-version",
+        exactVersion: true,
+        expectedIntegrity: "sha512-old",
+        pinState: "exact-with-integrity",
+      },
+      warnings: [],
+    },
+  };
+}
+
+function mockVllmAuthChoice() {
+  resolveManifestProviderAuthChoices.mockReturnValue([
+    {
+      pluginId: "vllm",
+      providerId: "vllm",
+      methodId: "server",
+      choiceId: "vllm",
+      choiceLabel: "vLLM",
+      groupLabel: "vLLM",
+    },
+  ]);
+}
 
 describe("provider install catalog", () => {
   beforeEach(() => {
@@ -178,63 +244,20 @@ describe("provider install catalog", () => {
   });
 
   it("prefers durable install records over package-authored install intent", () => {
-    loadPluginRegistrySnapshot.mockReturnValue({
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash: "test",
-      generatedAtMs: 0,
-      installRecords: {
-        vllm: {
-          source: "npm",
-          spec: "@openclaw/vllm",
-          resolvedSpec: "@openclaw/vllm@2.0.0",
-          integrity: "sha512-vllm",
-        },
-      },
-      plugins: [
-        {
-          pluginId: "vllm",
-          origin: "global",
-          manifestPath: "/Users/test/.openclaw/plugins/vllm/openclaw.plugin.json",
-          manifestHash: "hash",
-          rootDir: "/Users/test/.openclaw/plugins/vllm",
-          enabled: true,
-          startup: {
-            sidecar: false,
-            memory: false,
-            deferConfiguredChannelFullLoadUntilAfterListen: false,
-            agentHarnesses: [],
-          },
-          compat: [],
-          packageName: "@openclaw/vllm",
-          packageInstall: {
-            npm: {
-              spec: "@openclaw/vllm-fork@1.0.0",
-              packageName: "@openclaw/vllm-fork",
-              selector: "1.0.0",
-              selectorKind: "exact-version",
-              exactVersion: true,
-              expectedIntegrity: "sha512-old",
-              pinState: "exact-with-integrity",
-            },
-            warnings: [],
+    loadPluginRegistrySnapshot.mockReturnValue(
+      registrySnapshot({
+        installRecords: {
+          vllm: {
+            source: "npm",
+            spec: "@openclaw/vllm",
+            resolvedSpec: "@openclaw/vllm@2.0.0",
+            integrity: "sha512-vllm",
           },
         },
-      ],
-      diagnostics: [],
-    });
-    resolveManifestProviderAuthChoices.mockReturnValue([
-      {
-        pluginId: "vllm",
-        providerId: "vllm",
-        methodId: "server",
-        choiceId: "vllm",
-        choiceLabel: "vLLM",
-        groupLabel: "vLLM",
-      },
-    ]);
+        plugins: [vllmPluginWithPackageInstall()],
+      }),
+    );
+    mockVllmAuthChoice();
 
     expect(resolveProviderInstallCatalogEntry("vllm")).toEqual({
       pluginId: "vllm",
@@ -267,63 +290,20 @@ describe("provider install catalog", () => {
   });
 
   it("preserves durable ClawHub install records for provider setup reinstall hints", () => {
-    loadPluginRegistrySnapshot.mockReturnValue({
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash: "test",
-      generatedAtMs: 0,
-      installRecords: {
-        vllm: {
-          source: "clawhub",
-          spec: "clawhub:openclaw/vllm@2026.5.2",
-          integrity: "sha256-clawpack",
-          clawhubPackage: "openclaw/vllm",
-        },
-      },
-      plugins: [
-        {
-          pluginId: "vllm",
-          origin: "global",
-          manifestPath: "/Users/test/.openclaw/plugins/vllm/openclaw.plugin.json",
-          manifestHash: "hash",
-          rootDir: "/Users/test/.openclaw/plugins/vllm",
-          enabled: true,
-          startup: {
-            sidecar: false,
-            memory: false,
-            deferConfiguredChannelFullLoadUntilAfterListen: false,
-            agentHarnesses: [],
-          },
-          compat: [],
-          packageName: "@openclaw/vllm",
-          packageInstall: {
-            npm: {
-              spec: "@openclaw/vllm-fork@1.0.0",
-              packageName: "@openclaw/vllm-fork",
-              selector: "1.0.0",
-              selectorKind: "exact-version",
-              exactVersion: true,
-              expectedIntegrity: "sha512-old",
-              pinState: "exact-with-integrity",
-            },
-            warnings: [],
+    loadPluginRegistrySnapshot.mockReturnValue(
+      registrySnapshot({
+        installRecords: {
+          vllm: {
+            source: "clawhub",
+            spec: "clawhub:openclaw/vllm@2026.5.2",
+            integrity: "sha256-clawpack",
+            clawhubPackage: "openclaw/vllm",
           },
         },
-      ],
-      diagnostics: [],
-    });
-    resolveManifestProviderAuthChoices.mockReturnValue([
-      {
-        pluginId: "vllm",
-        providerId: "vllm",
-        methodId: "server",
-        choiceId: "vllm",
-        choiceLabel: "vLLM",
-        groupLabel: "vLLM",
-      },
-    ]);
+        plugins: [vllmPluginWithPackageInstall()],
+      }),
+    );
+    mockVllmAuthChoice();
 
     expect(resolveProviderInstallCatalogEntry("vllm")).toEqual({
       pluginId: "vllm",

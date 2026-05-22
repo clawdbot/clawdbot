@@ -228,6 +228,8 @@ export class OpenClawApp extends LitElement {
   @state() chatModelCatalog: ModelCatalogEntry[] = [];
   @state() sessionSwitchNotice: { id: number; text: string } | null = null;
   @state() sessionSwitchFlashKey: string | null = null;
+  @state() chatSessionSearchQuery = "";
+  @state() chatSessionSearchAppliedQuery = "";
   private sessionSwitchNoticeSeq = 0;
   private sessionSwitchNoticeTimer: number | null = null;
   private sessionSwitchFlashTimer: number | null = null;

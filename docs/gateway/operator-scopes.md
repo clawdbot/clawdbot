@@ -102,9 +102,9 @@ own `system.run` exec approval policy.
 ## Shared-secret auth
 
 Shared gateway token/password auth is treated as trusted operator access for
-that Gateway. OpenAI-compatible HTTP surfaces and `/tools/invoke` restore the
-normal full operator default scope set for shared-secret bearer auth, even if a
-caller sends narrower declared scopes.
+that Gateway. OpenAI-compatible HTTP surfaces, `/tools/invoke`, and HTTP session
+history endpoints restore the normal full operator default scope set for
+shared-secret bearer auth, even if a caller sends narrower declared scopes.
 
 Identity-bearing modes, such as trusted proxy auth or private-ingress `none`,
 can still honor explicit declared scopes. Use separate Gateways for real trust

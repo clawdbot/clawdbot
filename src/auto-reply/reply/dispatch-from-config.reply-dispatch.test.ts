@@ -83,6 +83,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     sessionBindingMocks.touch.mockReset();
     sessionStoreMocks.currentEntry = undefined;
     sessionStoreMocks.loadSessionStore.mockReset().mockReturnValue({});
+    sessionStoreMocks.readSessionEntry.mockReset().mockReturnValue(undefined);
     sessionStoreMocks.resolveStorePath.mockReset().mockReturnValue("/tmp/mock-sessions.json");
     sessionStoreMocks.resolveSessionStoreEntry.mockReset().mockReturnValue({ existing: undefined });
     sessionStoreMocks.updateSessionStoreEntry.mockClear();

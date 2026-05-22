@@ -49,9 +49,19 @@ function resolveAvailableKnownChannel(params: {
   if (!normalized) {
     return undefined;
   }
+  // Pass `allowBootstrap: true` so the in-agent message tool path can resolve
+  // outbound channels in processes where external channel adapters have not
+  // been eagerly loaded (e.g. `openclaw agent --local`). Already-loaded and
+  // bundled plugins still resolve through side-effect-free fast paths first.
+  // Without the bootstrap fallback, official external channels can surface as
+  // the recurring "Channel is unavailable" error on `--local`-routed
+  // dispatches that the CLI send-path could deliver to.
+  // Adjacent to #77254 (cron-announce / final-reply paths); this closes the
+  // remaining in-agent caller in the same family.
   return resolveOutboundChannelPlugin({
     channel: normalized,
     cfg: params.cfg,
+    allowBootstrap: true,
   })
     ? normalized
     : undefined;

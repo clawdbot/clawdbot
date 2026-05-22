@@ -10,6 +10,7 @@ const DEFAULT_SECRET_PROVIDER_ALIAS = "default";
 const ENV_SECRET_REF_ID_RE = /^[A-Z][A-Z0-9_]{0,127}$/;
 const LEGACY_SECRETREF_ENV_MARKER_PREFIX = "secretref-env:";
 const ENV_SECRET_TEMPLATE_RE = /^\$\{([A-Z][A-Z0-9_]{0,127})\}$/;
+const SECRET_REF_SOURCES = new Set<SecretRefSource>(["env", "file", "exec"]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -23,19 +24,24 @@ function normalizeSecretInputString(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+function hasSecretRefSource(value: unknown): value is SecretRefSource {
+  return typeof value === "string" && SECRET_REF_SOURCES.has(value as SecretRefSource);
+}
+
+function hasNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
 function isSecretRef(value: unknown): value is SecretRef {
   if (!isRecord(value)) {
     return false;
   }
-  if (Object.keys(value).length !== 3) {
-    return false;
-  }
+  const keys = Object.keys(value);
   return (
-    (value.source === "env" || value.source === "file" || value.source === "exec") &&
-    typeof value.provider === "string" &&
-    value.provider.trim().length > 0 &&
-    typeof value.id === "string" &&
-    value.id.trim().length > 0
+    keys.length === 3 &&
+    hasSecretRefSource(value.source) &&
+    hasNonEmptyString(value.provider) &&
+    hasNonEmptyString(value.id)
   );
 }
 
@@ -46,9 +52,8 @@ function isLegacySecretRefWithoutProvider(
     return false;
   }
   return (
-    (value.source === "env" || value.source === "file" || value.source === "exec") &&
-    typeof value.id === "string" &&
-    value.id.trim().length > 0 &&
+    hasSecretRefSource(value.source) &&
+    hasNonEmptyString(value.id) &&
     value.provider === undefined
   );
 }

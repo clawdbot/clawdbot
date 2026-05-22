@@ -205,8 +205,7 @@ async function callSubagentGateway(
   // complete interactively, causing close(1008) "pairing required" (#59428).
   //
   // Only admin-only methods are pinned to ADMIN_SCOPE; other methods (e.g.
-  // "agent" → write) keep their least-privilege scope so that the gateway does
-  // not treat the caller as owner (senderIsOwner) and expose owner-only tools.
+  // "agent" -> write) keep their least-privilege scope.
   const scopes = params.scopes ?? (isAdminOnlyMethod(params.method) ? [ADMIN_SCOPE] : undefined);
   return await subagentSpawnDeps.callGateway({
     ...params,

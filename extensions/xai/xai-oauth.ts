@@ -511,7 +511,7 @@ function readCredentialString<TKey extends string>(
 }
 
 async function noteXaiOAuthUrl(ctx: ProviderAuthContext, authorizeUrl: string): Promise<void> {
-  const lines = ["Open this xAI OAuth URL in your browser:", authorizeUrl];
+  const lines = ["Open this xAI OAuth URL in your browser:"];
   if (ctx.isRemote) {
     lines.push(
       "",
@@ -520,6 +520,11 @@ async function noteXaiOAuthUrl(ctx: ProviderAuthContext, authorizeUrl: string): 
     );
   }
   await ctx.prompter.note(lines.join("\n"), "xAI OAuth");
+  if (ctx.prompter.plain) {
+    await ctx.prompter.plain(`\n${authorizeUrl}\n`);
+    return;
+  }
+  ctx.runtime.log(`\n${authorizeUrl}\n`);
 }
 
 export async function loginXaiOAuth(ctx: ProviderAuthContext): Promise<ProviderAuthResult> {

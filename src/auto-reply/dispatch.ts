@@ -4,10 +4,12 @@ import {
   deriveInboundMessageHookContext,
   toPluginMessageContext,
 } from "../hooks/message-hook-mappers.js";
+import { isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
 import {
   measureDiagnosticsTimelineSpan,
   measureDiagnosticsTimelineSpanSync,
 } from "../infra/diagnostics-timeline.js";
+import { logMessageReceived } from "../logging/diagnostic.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { SilentReplyConversationType } from "../shared/silent-reply-policy.js";
 import {
@@ -257,6 +259,15 @@ export async function dispatchInboundMessage(params: {
       attributes: buildDispatchTimelineAttributes(params.ctx),
     },
   );
+  if (isDiagnosticsEnabled(params.cfg)) {
+    logMessageReceived({
+      sessionKey: finalized.SessionKey,
+      channel: finalized.Surface ?? finalized.Provider,
+      chatId: finalized.To ?? finalized.From,
+      messageId: finalized.MessageSid ?? finalized.MessageSidFirst ?? finalized.MessageSidLast,
+      source: "dispatchInboundMessage",
+    });
+  }
   const result = await withReplyDispatcher({
     dispatcher: params.dispatcher,
     run: () =>

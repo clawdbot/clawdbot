@@ -192,8 +192,6 @@ enum HostEnvSecurityPolicy {
         "VIRTUAL_ENV",
         "VISUAL",
         "WGETRC",
-        "XDG_CONFIG_DIRS",
-        "XDG_CONFIG_HOME",
         "YARN_RC_FILENAME"
     ]
 
@@ -437,8 +435,13 @@ enum HostEnvSecurityPolicy {
         "VISUAL",
         "WGETRC",
         "WINDIR",
+        "XDG_CACHE_HOME",
         "XDG_CONFIG_DIRS",
         "XDG_CONFIG_HOME",
+        "XDG_DATA_DIRS",
+        "XDG_DATA_HOME",
+        "XDG_RUNTIME_DIR",
+        "XDG_STATE_HOME",
         "YARN_RC_FILENAME",
         "ZDOTDIR"
     ]

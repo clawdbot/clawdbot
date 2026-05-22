@@ -15,6 +15,11 @@ type MSTeamsTestRuntimeOptions = {
   recordInboundSession?: ReturnType<typeof vi.fn>;
   resolveAgentRoute?: (params: RuntimeRoutePeer) => unknown;
   hasControlCommand?: PluginRuntime["channel"]["text"]["hasControlCommand"];
+  isControlCommandMessage?: PluginRuntime["channel"]["commands"]["isControlCommandMessage"];
+  shouldComputeCommandAuthorized?: PluginRuntime["channel"]["commands"]["shouldComputeCommandAuthorized"];
+  shouldHandleTextCommands?: PluginRuntime["channel"]["commands"]["shouldHandleTextCommands"];
+  createInboundDebouncer?: PluginRuntime["channel"]["debounce"]["createInboundDebouncer"];
+  resolveInboundDebounceMs?: PluginRuntime["channel"]["debounce"]["resolveInboundDebounceMs"];
   resolveTextChunkLimit?: () => number;
   resolveStorePath?: () => string;
 };
@@ -66,18 +71,29 @@ export function installMSTeamsTestRuntime(options: MSTeamsTestRuntimeOptions = {
     system: { enqueueSystemEvent: options.enqueueSystemEvent ?? vi.fn() },
     channel: {
       debounce: {
-        resolveInboundDebounceMs: () => 0,
-        createInboundDebouncer: <T>(params: {
-          onFlush: (entries: T[]) => Promise<void>;
-        }): { enqueue: (entry: T) => Promise<void> } => ({
-          enqueue: async (entry: T) => {
-            await params.onFlush([entry]);
-          },
-        }),
+        resolveInboundDebounceMs:
+          options.resolveInboundDebounceMs ??
+          ((() => 0) as PluginRuntime["channel"]["debounce"]["resolveInboundDebounceMs"]),
+        createInboundDebouncer:
+          options.createInboundDebouncer ??
+          (<T>(params: {
+            onFlush: (entries: T[]) => Promise<void>;
+          }): { enqueue: (entry: T) => Promise<void> } => ({
+            enqueue: async (entry: T) => {
+              await params.onFlush([entry]);
+            },
+          })),
       },
       pairing: {
         readAllowFromStore: options.readAllowFromStore ?? vi.fn(async () => []),
         upsertPairingRequest: options.upsertPairingRequest ?? vi.fn(async () => null),
+      },
+      commands: {
+        isControlCommandMessage:
+          options.isControlCommandMessage ?? options.hasControlCommand ?? (() => false),
+        shouldComputeCommandAuthorized:
+          options.shouldComputeCommandAuthorized ?? options.hasControlCommand ?? (() => false),
+        shouldHandleTextCommands: options.shouldHandleTextCommands ?? (() => true),
       },
       text: {
         hasControlCommand: options.hasControlCommand ?? (() => false),

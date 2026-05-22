@@ -130,6 +130,7 @@ describe("gateway session utils", () => {
     expect(listed.count).toBe(100);
     expect(listed.totalCount).toBe(101);
     expect(listed.limitApplied).toBe(100);
+    expect(listed.nextOffset).toBe(100);
     expect(listed.hasMore).toBe(true);
     expect(listed.sessions[0]?.key).toBe("session-0");
     expect(listed.sessions.at(-1)?.key).toBe("session-99");
@@ -162,7 +163,63 @@ describe("gateway session utils", () => {
     expect(listed.count).toBe(3);
     expect(listed.totalCount).toBe(5);
     expect(listed.limitApplied).toBe(3);
+    expect(listed.nextOffset).toBe(3);
     expect(listed.hasMore).toBe(true);
+  });
+
+  test("session lists page from an offset after filtering and sorting", () => {
+    const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
+    const store = Object.fromEntries(
+      Array.from({ length: 6 }, (_value, index) => [
+        `session-${index}`,
+        {
+          sessionId: `session-${index}`,
+          updatedAt: 1_000 - index,
+          displayName: index === 5 ? "Different project" : `Project Alpha ${index}`,
+        } satisfies SessionEntry,
+      ]),
+    );
+
+    const listed = listSessionsFromStore({
+      cfg,
+      storePath: "",
+      store,
+      opts: { search: "alpha", limit: 2, offset: 2 },
+    });
+
+    expect(listed.sessions.map((session) => session.key)).toEqual(["session-2", "session-3"]);
+    expect(listed.count).toBe(2);
+    expect(listed.totalCount).toBe(5);
+    expect(listed.limitApplied).toBe(2);
+    expect(listed.offset).toBe(2);
+    expect(listed.nextOffset).toBe(4);
+    expect(listed.hasMore).toBe(true);
+  });
+
+  test("session lists mark the final offset page without hasMore", () => {
+    const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
+    const store = Object.fromEntries(
+      Array.from({ length: 5 }, (_value, index) => [
+        `session-${index}`,
+        {
+          sessionId: `session-${index}`,
+          updatedAt: 1_000 - index,
+        } satisfies SessionEntry,
+      ]),
+    );
+
+    const listed = listSessionsFromStore({
+      cfg,
+      storePath: "",
+      store,
+      opts: { limit: 2, offset: 4 },
+    });
+
+    expect(listed.sessions.map((session) => session.key)).toEqual(["session-4"]);
+    expect(listed.totalCount).toBe(5);
+    expect(listed.offset).toBe(4);
+    expect(listed.nextOffset).toBeNull();
+    expect(listed.hasMore).toBe(false);
   });
 
   test("parseGroupKey handles group keys", () => {

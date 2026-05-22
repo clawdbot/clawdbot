@@ -279,9 +279,6 @@ describe("chat abort transcript persistence", () => {
       chatDeltaSentAt: new Map([["run-stop-1", Date.now()]]),
       removeChatRun: vi.fn().mockReturnValue({ sessionKey: "main", clientRunId: "client-stop-1" }),
       agentRunSeq: new Map<string, number>([["run-stop-1", 1]]),
-      dedupe: {
-        get: vi.fn(),
-      },
     });
 
     await chatHandlers["chat.send"]({
@@ -321,9 +318,6 @@ describe("chat abort transcript persistence", () => {
         sessionKey: "main",
         clientRunId: "run-stop-canonical",
       }),
-      dedupe: {
-        get: vi.fn(),
-      },
     });
 
     await chatHandlers["chat.send"]({
@@ -356,9 +350,6 @@ describe("chat abort transcript persistence", () => {
         sessionKey: "alias-main",
         clientRunId: "run-stop-raw-alias",
       }),
-      dedupe: {
-        get: vi.fn(),
-      },
     });
 
     await chatHandlers["chat.send"]({
@@ -387,9 +378,6 @@ describe("chat abort transcript persistence", () => {
     const active = createActiveRun("third-session", { sessionId });
     const context = createChatAbortContext({
       chatAbortControllers: new Map([["run-stop-client-session", active]]),
-      dedupe: {
-        get: vi.fn(),
-      },
     });
 
     await chatHandlers["chat.send"]({

@@ -269,7 +269,6 @@ describe("before_agent_run hook", () => {
         messages: [{ role: "user", content: "hello" }],
         channelId: "discord",
         senderId: "user-123",
-        senderIsOwner: true,
       },
       ctx,
     );
@@ -277,7 +276,6 @@ describe("before_agent_run hook", () => {
     expect(event.prompt).toBe("hello world");
     expect(event.channelId).toBe("discord");
     expect(event.senderId).toBe("user-123");
-    expect(event.senderIsOwner).toBe(true);
   });
 });
 

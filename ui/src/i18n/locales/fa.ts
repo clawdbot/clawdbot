@@ -1098,6 +1098,9 @@ export const fa: TranslationMap = {
     selectors: {
       agentFilter: "فیلتر کردن نشست‌ها بر اساس عامل",
       session: "Chat session",
+      sessionSearch: "جستجوی نشست‌ها",
+      clearSessionSearch: "پاک کردن جستجوی نشست",
+      loadMoreSessions: "بارگذاری نشست‌های بیشتر",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },

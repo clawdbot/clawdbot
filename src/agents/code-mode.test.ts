@@ -293,6 +293,45 @@ describe("Code Mode", () => {
     expect(compacted.catalogToolCount).toBe(1);
   });
 
+  it("accepts command as an exec-compatible code alias", async () => {
+    const { config, catalogRef, tools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...tools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+    const result = resultDetails(
+      await tools[0].execute("code-call-command-alias", {
+        command: "return 7;",
+      }),
+    );
+
+    expect(result.status).toBe("completed");
+    expect(result.value).toBe(7);
+  });
+
+  it("rejects divergent code and command aliases", async () => {
+    const { config, catalogRef, tools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: [...tools, pluginTool("fake_noop", "Noop")],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    await expect(
+      tools[0].execute("code-call-divergent-alias", {
+        code: "return 1;",
+        command: "return 2;",
+      }),
+    ).rejects.toThrow("code and command must match when both are provided");
+  });
+
   it("runs JavaScript through QuickJS-WASI and resumes nested tool calls with wait", async () => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const ticket = pluginTool("fake_create_ticket", "Create a fake ticket");

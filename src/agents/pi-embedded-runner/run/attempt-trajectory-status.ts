@@ -1,3 +1,8 @@
+import {
+  hasAcceptedSessionSpawn,
+  type AcceptedSessionSpawn,
+} from "../../accepted-session-spawn.js";
+
 export type AttemptTrajectoryTerminalStatus = "success" | "error" | "interrupted";
 
 export const NON_DELIVERABLE_TERMINAL_TURN_REASON = "non_deliverable_terminal_turn";
@@ -20,6 +25,7 @@ export type ResolveAttemptTrajectoryTerminalParams = {
   messagingToolSentTargets: unknown[];
   successfulCronAdds: number;
   synthesizedPayloadCount: number;
+  acceptedSessionSpawns?: readonly AcceptedSessionSpawn[];
   heartbeatToolResponse?: unknown;
   clientToolCalls?: Array<unknown>;
   yieldDetected?: boolean;
@@ -80,6 +86,7 @@ export function resolveAttemptTrajectoryTerminal(
     params.emptyAssistantReplyIsSilent === true ||
     params.didSendDeterministicApprovalPrompt ||
     hasCommittedMessagingDeliveryEvidence(params) ||
+    hasAcceptedSessionSpawn(params.acceptedSessionSpawns) ||
     params.synthesizedPayloadCount > 0 ||
     params.heartbeatToolResponse !== undefined ||
     (params.clientToolCalls?.length ?? 0) > 0 ||

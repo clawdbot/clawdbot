@@ -167,6 +167,25 @@ type ChatAbortRequester = {
   isAdmin: boolean;
 };
 
+type PreRegisteredAgentDedupePayload = {
+  dedupeKeys?: unknown;
+  ownerConnId?: unknown;
+  ownerDeviceId?: unknown;
+  runId?: unknown;
+  sessionKey?: unknown;
+  status?: unknown;
+};
+
+type PreRegisteredAgentRun = {
+  runId: string;
+  sessionKey: string;
+  payload: PreRegisteredAgentDedupePayload;
+};
+
+function normalizeUnknownText(value: unknown): string | undefined {
+  return typeof value === "string" ? normalizeOptionalText(value) : undefined;
+}
+
 /** True when a reply payload carries at least one media reference (mediaUrl or mediaUrls). */
 function isMediaBearingPayload(payload: ReplyPayload): boolean {
   if (payload.isReasoning === true) {
@@ -1642,6 +1661,153 @@ function canRequesterAbortChatRun(
   return false;
 }
 
+function canRequesterAbortChatRunWithoutSessionMatch(
+  entry: ChatAbortControllerEntry,
+  requester: ChatAbortRequester,
+): boolean {
+  if (requester.isAdmin) {
+    return true;
+  }
+  const ownerDeviceId = normalizeOptionalText(entry.ownerDeviceId);
+  const ownerConnId = normalizeOptionalText(entry.ownerConnId);
+  return Boolean(
+    (ownerDeviceId && requester.deviceId && ownerDeviceId === requester.deviceId) ||
+    (ownerConnId && requester.connId && ownerConnId === requester.connId),
+  );
+}
+
+function readPreRegisteredAgentDedupePayloadForSession(params: {
+  entry: GatewayRequestContext["dedupe"] extends Map<string, infer T> ? T | undefined : never;
+  runId: string;
+  sessionKey: string;
+}): PreRegisteredAgentDedupePayload | undefined {
+  if (!params.entry?.ok) {
+    return undefined;
+  }
+  const payload = params.entry.payload as PreRegisteredAgentDedupePayload | undefined;
+  if (payload?.status !== "accepted") {
+    return undefined;
+  }
+  const payloadRunId = normalizeUnknownText(payload.runId);
+  if (payloadRunId && payloadRunId !== params.runId) {
+    return undefined;
+  }
+  return normalizeUnknownText(payload.sessionKey) === params.sessionKey ? payload : undefined;
+}
+
+function readPreRegisteredAgentRun(params: {
+  key: string;
+  entry: GatewayRequestContext["dedupe"] extends Map<string, infer T> ? T | undefined : never;
+}): PreRegisteredAgentRun | undefined {
+  if (!params.key.startsWith("agent:") || !params.entry?.ok) {
+    return undefined;
+  }
+  const payload = params.entry.payload as PreRegisteredAgentDedupePayload | undefined;
+  if (payload?.status !== "accepted") {
+    return undefined;
+  }
+  const runId = normalizeUnknownText(payload.runId) ?? normalizeOptionalText(params.key.slice(6));
+  const sessionKey = normalizeUnknownText(payload.sessionKey);
+  if (!runId || !sessionKey) {
+    return undefined;
+  }
+  return { runId, sessionKey, payload };
+}
+
+function canRequesterAbortPreRegisteredAgentRun(
+  payload: PreRegisteredAgentDedupePayload,
+  requester: ChatAbortRequester,
+): boolean {
+  return canRequesterAbortChatRun(
+    {
+      controller: new AbortController(),
+      sessionId: "",
+      sessionKey: normalizeUnknownText(payload.sessionKey) ?? "",
+      startedAtMs: 0,
+      expiresAtMs: 0,
+      ownerConnId: normalizeUnknownText(payload.ownerConnId),
+      ownerDeviceId: normalizeUnknownText(payload.ownerDeviceId),
+      kind: "agent",
+    },
+    requester,
+  );
+}
+
+function resolvePreRegisteredAgentDedupeKeys(
+  payload: PreRegisteredAgentDedupePayload,
+  runId: string,
+): string[] {
+  const keys = [`agent:${runId}`];
+  const payloadKeys = Array.isArray(payload.dedupeKeys) ? payload.dedupeKeys : [];
+  for (const key of payloadKeys) {
+    const normalized = normalizeUnknownText(key);
+    if (normalized?.startsWith("agent:")) {
+      keys.push(normalized);
+    }
+  }
+  return [...new Set(keys)];
+}
+
+function writePreRegisteredAgentAbort(params: {
+  context: GatewayRequestContext;
+  runId: string;
+  sessionKey: string;
+  payload: PreRegisteredAgentDedupePayload;
+  stopReason: string;
+  endedAt?: number;
+}) {
+  const endedAt = params.endedAt ?? Date.now();
+  for (const key of resolvePreRegisteredAgentDedupeKeys(params.payload, params.runId)) {
+    setGatewayDedupeEntry({
+      dedupe: params.context.dedupe,
+      key,
+      entry: {
+        ts: endedAt,
+        ok: true,
+        payload: {
+          runId: params.runId,
+          sessionKey: params.sessionKey,
+          status: "timeout" as const,
+          summary: "aborted",
+          stopReason: params.stopReason,
+          endedAt,
+        },
+      },
+    });
+  }
+}
+
+function resolveAuthorizedPreRegisteredAgentRunsForSessionKeys(params: {
+  context: GatewayRequestContext;
+  sessionKeys: Iterable<string>;
+  requester: ChatAbortRequester;
+}) {
+  const sessionKeys = new Set(
+    Array.from(params.sessionKeys, (sessionKey) => normalizeOptionalText(sessionKey)).filter(
+      (sessionKey): sessionKey is string => Boolean(sessionKey),
+    ),
+  );
+  const authorizedByRunId = new Map<string, PreRegisteredAgentRun>();
+  let matchedSessionRuns = 0;
+  for (const [key, entry] of params.context.dedupe) {
+    const run = readPreRegisteredAgentRun({ key, entry });
+    if (!run || !sessionKeys.has(run.sessionKey)) {
+      continue;
+    }
+    if (params.context.chatAbortControllers.has(run.runId)) {
+      continue;
+    }
+    matchedSessionRuns += 1;
+    if (canRequesterAbortPreRegisteredAgentRun(run.payload, params.requester)) {
+      authorizedByRunId.set(run.runId, run);
+    }
+  }
+  return {
+    matchedSessionRuns,
+    authorizedRuns: [...authorizedByRunId.values()],
+  };
+}
+
 function resolveAuthorizedRunsForSessionKeys(params: {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   sessionKeys: Iterable<string>;
@@ -1686,17 +1852,26 @@ async function abortChatRunsForSessionKeyWithPartials(params: {
   stopReason?: string;
   requester: ChatAbortRequester;
 }): Promise<{ aborted: boolean; runIds: string[]; unauthorized: boolean }> {
+  const sessionKeys = [params.sessionKey, ...(params.sessionKeyAliases ?? [])];
   const { matchedSessionRuns, authorizedRuns } = resolveAuthorizedRunsForSessionKeys({
     chatAbortControllers: params.context.chatAbortControllers,
-    sessionKeys: [params.sessionKey, ...(params.sessionKeyAliases ?? [])],
+    sessionKeys,
     sessionIds: [params.sessionId],
     requester: params.requester,
   });
-  if (authorizedRuns.length === 0) {
+  const {
+    matchedSessionRuns: matchedPendingAgentRuns,
+    authorizedRuns: authorizedPendingAgentRuns,
+  } = resolveAuthorizedPreRegisteredAgentRunsForSessionKeys({
+    context: params.context,
+    sessionKeys,
+    requester: params.requester,
+  });
+  if (authorizedRuns.length === 0 && authorizedPendingAgentRuns.length === 0) {
     return {
       aborted: false,
       runIds: [],
-      unauthorized: matchedSessionRuns > 0,
+      unauthorized: matchedSessionRuns > 0 || matchedPendingAgentRuns > 0,
     };
   }
   const authorizedRunIdSet = new Set(authorizedRuns.map((run) => run.runId));
@@ -1716,6 +1891,19 @@ async function abortChatRunsForSessionKeyWithPartials(params: {
     if (res.aborted) {
       runIds.push(runId);
     }
+  }
+  const endedAt = Date.now();
+  const stopReason = params.stopReason ?? "rpc";
+  for (const { runId, sessionKey, payload } of authorizedPendingAgentRuns) {
+    writePreRegisteredAgentAbort({
+      context: params.context,
+      runId,
+      sessionKey,
+      payload,
+      stopReason,
+      endedAt,
+    });
+    runIds.push(runId);
   }
   const res = { aborted: runIds.length > 0, runIds, unauthorized: false };
   if (res.aborted) {
@@ -1926,10 +2114,34 @@ export const chatHandlers: GatewayRequestHandlers = {
 
     const active = context.chatAbortControllers.get(runId);
     if (!active) {
+      const pendingAgentEntry = context.dedupe.get(`agent:${runId}`);
+      const pendingAgentPayload = readPreRegisteredAgentDedupePayloadForSession({
+        entry: pendingAgentEntry,
+        runId,
+        sessionKey: rawSessionKey,
+      });
+      if (pendingAgentPayload) {
+        if (!canRequesterAbortPreRegisteredAgentRun(pendingAgentPayload, requester)) {
+          respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"));
+          return;
+        }
+        writePreRegisteredAgentAbort({
+          context,
+          runId,
+          sessionKey: rawSessionKey,
+          payload: pendingAgentPayload,
+          stopReason: "rpc",
+        });
+        respond(true, { ok: true, aborted: true, runIds: [runId] });
+        return;
+      }
       respond(true, { ok: true, aborted: false, runIds: [] });
       return;
     }
-    if (active.sessionKey !== rawSessionKey) {
+    if (
+      active.sessionKey !== rawSessionKey &&
+      !canRequesterAbortChatRunWithoutSessionMatch(active, requester)
+    ) {
       respond(
         false,
         undefined,
@@ -1945,13 +2157,13 @@ export const chatHandlers: GatewayRequestHandlers = {
     const partialText = context.chatRunBuffers.get(runId);
     const res = abortChatRunById(ops, {
       runId,
-      sessionKey: rawSessionKey,
+      sessionKey: active.sessionKey,
       stopReason: "rpc",
     });
     if (res.aborted && partialText && partialText.trim()) {
       await persistAbortedPartials({
         context,
-        sessionKey: rawSessionKey,
+        sessionKey: active.sessionKey,
         snapshots: [
           {
             runId,

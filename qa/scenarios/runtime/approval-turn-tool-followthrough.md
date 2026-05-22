@@ -13,7 +13,7 @@ objective: Verify a short approval like "ok do it" triggers immediate tool use i
 successCriteria:
   - Agent can keep the pre-action turn brief.
   - The short approval leads to a real tool call on the next turn.
-  - Final answer uses tool-derived evidence instead of placeholder progress text.
+  - Final answer cites the actual file read instead of placeholder progress text.
 docsRefs:
   - docs/help/testing.md
   - docs/channels/qa-channel.md

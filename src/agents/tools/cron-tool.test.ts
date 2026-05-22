@@ -171,11 +171,6 @@ describe("cron tool", () => {
     extractDeliveryInfoMock.mockReturnValue({ deliveryContext: undefined, threadId: undefined });
   });
 
-  it("marks cron as owner-only", () => {
-    const tool = createTestCronTool();
-    expect(tool.ownerOnly).toBe(true);
-  });
-
   it("allows scoped isolated cron runs to remove the current job", async () => {
     const tool = createTestCronTool({ selfRemoveOnlyJobId: "job-current" });
 

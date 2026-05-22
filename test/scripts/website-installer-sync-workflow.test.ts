@@ -23,7 +23,8 @@ describe("website installer sync workflow", () => {
   it("verifies installers on Linux Docker plus native macOS and Windows runners", () => {
     expect(workflow).toContain("linux-docker:");
     expect(workflow).toContain("docker run --rm");
-    expect(workflow).toContain("bash /tmp/install.sh --no-prompt --no-onboard");
+    expect(workflow).toContain("bash /tmp/install.sh --version latest && openclaw --version");
+    expect(workflow).not.toContain("bash /tmp/install.sh --no-prompt --no-onboard");
     expect(workflow).toContain("bash /tmp/install-cli.sh --prefix /tmp/openclaw");
     expect(workflow).toContain("macos-installer:");
     expect(workflow).toContain("runs-on: macos-latest");

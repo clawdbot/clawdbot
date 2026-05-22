@@ -1,10 +1,16 @@
+import path from "node:path";
 import {
+  canonicalizeAbsoluteSessionFilePath,
   mergeSessionEntry,
+  resolveSessionFilePath,
+  resolveSessionFilePathOptions,
   setSessionRuntimeModel,
   type SessionEntry,
   updateSessionStore,
+  rewriteSessionFileForNewSessionId,
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { clearCliSession, setCliSessionBinding, setCliSessionId } from "../cli-session.js";
@@ -87,7 +93,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
   const compactionTokensAfter =
     typeof result.meta.agentMeta?.compactionTokensAfter === "number" &&
     Number.isFinite(result.meta.agentMeta.compactionTokensAfter) &&
-    result.meta.agentMeta.compactionTokensAfter > 0
+    result.meta.agentMeta.compactionTokensAfter >= 0
       ? Math.floor(result.meta.agentMeta.compactionTokensAfter)
       : undefined;
   const compactionsThisRun = Math.max(0, result.meta.agentMeta?.compactionCount ?? 0);
@@ -271,6 +277,9 @@ export async function recordCliCompactionInStore(params: {
   sessionKey: string;
   sessionStore: Record<string, SessionEntry>;
   storePath: string;
+  tokensAfter?: number;
+  newSessionId?: string;
+  newSessionFile?: string;
 }): Promise<SessionEntry | undefined> {
   const { provider, sessionKey, sessionStore, storePath } = params;
   const entry = sessionStore[sessionKey];
@@ -282,6 +291,44 @@ export async function recordCliCompactionInStore(params: {
   clearCliSession(next, provider);
   next.compactionCount = (entry.compactionCount ?? 0) + 1;
   next.updatedAt = Date.now();
+  const newSessionId = normalizeOptionalString(params.newSessionId);
+  const explicitNewSessionFile = normalizeOptionalString(params.newSessionFile);
+  const sessionIdChanged = Boolean(newSessionId && newSessionId !== entry.sessionId);
+  const sessionFileChanged = Boolean(
+    explicitNewSessionFile && explicitNewSessionFile !== entry.sessionFile,
+  );
+  if (sessionIdChanged && newSessionId) {
+    next.sessionId = newSessionId;
+    next.sessionFile =
+      explicitNewSessionFile ??
+      resolveCompactionSessionFile({
+        entry,
+        sessionKey,
+        storePath,
+        newSessionId,
+      });
+    next.usageFamilyKey = entry.usageFamilyKey ?? sessionKey;
+    next.usageFamilySessionIds = Array.from(
+      new Set([...(entry.usageFamilySessionIds ?? []), entry.sessionId, newSessionId]),
+    );
+  } else if (sessionFileChanged && explicitNewSessionFile) {
+    next.sessionFile = explicitNewSessionFile;
+  }
+  const tokensAfterCompaction = resolveNonNegativeNumber(params.tokensAfter);
+  if (tokensAfterCompaction !== undefined) {
+    next.totalTokens = Math.floor(tokensAfterCompaction);
+    next.totalTokensFresh = true;
+    next.inputTokens = undefined;
+    next.outputTokens = undefined;
+    next.cacheRead = undefined;
+    next.cacheWrite = undefined;
+  } else {
+    next.totalTokensFresh = false;
+    next.inputTokens = undefined;
+    next.outputTokens = undefined;
+    next.cacheRead = undefined;
+    next.cacheWrite = undefined;
+  }
 
   const persisted = await updateSessionStore(storePath, (store) => {
     const merged = mergeSessionEntry(store[sessionKey], next);
@@ -290,4 +337,31 @@ export async function recordCliCompactionInStore(params: {
   });
   sessionStore[sessionKey] = persisted;
   return persisted;
+}
+
+function resolveCompactionSessionFile(params: {
+  entry: SessionEntry;
+  sessionKey: string;
+  storePath?: string;
+  newSessionId: string;
+}): string {
+  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
+  const pathOpts = resolveSessionFilePathOptions({
+    agentId,
+    storePath: params.storePath,
+  });
+  const rewrittenSessionFile = rewriteSessionFileForNewSessionId({
+    sessionFile: params.entry.sessionFile,
+    previousSessionId: params.entry.sessionId,
+    nextSessionId: params.newSessionId,
+  });
+  const normalizedRewrittenSessionFile =
+    rewrittenSessionFile && path.isAbsolute(rewrittenSessionFile)
+      ? canonicalizeAbsoluteSessionFilePath(rewrittenSessionFile)
+      : rewrittenSessionFile;
+  return resolveSessionFilePath(
+    params.newSessionId,
+    normalizedRewrittenSessionFile ? { sessionFile: normalizedRewrittenSessionFile } : undefined,
+    pathOpts,
+  );
 }

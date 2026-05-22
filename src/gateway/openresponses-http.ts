@@ -44,7 +44,6 @@ import {
   resolveGatewayRequestContext,
   resolveOpenAiCompatModelOverride,
   resolveOpenAiCompatibleHttpOperatorScopes,
-  resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
 import { normalizeInputHostnameAllowlist } from "./input-allowlist.js";
 import {
@@ -401,7 +400,6 @@ async function runResponsesAgentCommand(params: {
   sessionKey: string;
   runId: string;
   messageChannel: string;
-  senderIsOwner: boolean;
   deps: CliDeps;
   abortSignal?: AbortSignal;
 }) {
@@ -418,7 +416,6 @@ async function runResponsesAgentCommand(params: {
       deliver: false,
       messageChannel: params.messageChannel,
       bestEffortDeliver: false,
-      senderIsOwner: params.senderIsOwner,
       allowModelOverride: true,
       abortSignal: params.abortSignal,
     },
@@ -456,10 +453,6 @@ export async function handleOpenResponsesHttpRequest(
   if (!handled) {
     return true;
   }
-  // On the compat surface, shared-secret bearer auth is also treated as an
-  // owner sender so owner-only tool policy matches the documented contract.
-  const senderIsOwner = resolveOpenAiCompatibleHttpSenderIsOwner(req, handled.requestAuth);
-
   // Validate request body with Zod
   const parseResult = CreateResponseBodySchema.safeParse(handled.body);
   if (!parseResult.success) {
@@ -701,7 +694,6 @@ export async function handleOpenResponsesHttpRequest(
         sessionKey,
         runId: responseId,
         messageChannel,
-        senderIsOwner,
         deps,
         abortSignal: abortController.signal,
       });
@@ -1008,7 +1000,6 @@ export async function handleOpenResponsesHttpRequest(
         sessionKey,
         runId: responseId,
         messageChannel,
-        senderIsOwner,
         deps,
         abortSignal: abortController.signal,
       });

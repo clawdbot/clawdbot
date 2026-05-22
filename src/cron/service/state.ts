@@ -84,7 +84,6 @@ export type CronServiceDeps = {
       sessionKey?: string;
       contextKey?: string;
       deliveryContext?: DeliveryContext;
-      forceSenderIsOwnerFalse?: boolean;
     },
   ) => void;
   requestHeartbeat: (opts: HeartbeatWakeRequest) => void;

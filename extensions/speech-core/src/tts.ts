@@ -44,6 +44,7 @@ import {
   type ResolvedTtsModelOverrides,
   scheduleCleanup,
   summarizeText,
+  type SpeechProviderPlugin,
   type SpeechProviderConfig,
   type SpeechProviderOverrides,
   type SpeechVoiceOption,
@@ -63,6 +64,26 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_TTS_MAX_LENGTH = 1500;
 const DEFAULT_TTS_SUMMARIZE = true;
 const DEFAULT_MAX_TEXT_LENGTH = 4096;
+
+function resolvePositiveTimeoutMs(timeoutMs: number | undefined): number | undefined {
+  return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
+    ? Math.floor(timeoutMs)
+    : undefined;
+}
+
+function resolveSpeechProviderTimeoutMs(params: {
+  timeoutMs?: number;
+  config: ResolvedTtsConfig;
+  provider: Pick<SpeechProviderPlugin, "defaultTimeoutMs">;
+}): number {
+  if (params.timeoutMs !== undefined) {
+    return params.timeoutMs;
+  }
+  if (params.config.timeoutMsSource !== "default") {
+    return params.config.timeoutMs;
+  }
+  return resolvePositiveTimeoutMs(params.provider.defaultTimeoutMs) ?? params.config.timeoutMs;
+}
 
 type TtsUserPrefs = {
   tts?: {
@@ -387,7 +408,7 @@ function resolveLazyProviderConfig(
             ...(config.rawConfig as Record<string, unknown> | undefined),
             providers: asProviderConfigMap(config.rawConfig?.providers),
           },
-          timeoutMs: config.timeoutMs,
+          timeoutMs: resolveSpeechProviderTimeoutMs({ config, provider: resolvedProvider }),
         })
       : rawConfig;
   config.providerConfigs[canonical] = next;
@@ -449,6 +470,7 @@ export function resolveTtsConfig(
   const raw: TtsConfig = resolveEffectiveTtsConfig(cfg, contextOrAgentId);
   const providerSource = raw.provider ? "config" : "default";
   const timeoutMs = raw.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const timeoutMsSource = raw.timeoutMs === undefined ? "default" : "config";
   const auto = resolveConfiguredTtsAutoMode(raw);
   const persona = normalizeTtsPersonaId(raw.persona);
   return {
@@ -466,6 +488,7 @@ export function resolveTtsConfig(
     prefsPath: raw.prefsPath,
     maxTextLength: raw.maxTextLength ?? DEFAULT_MAX_TEXT_LENGTH,
     timeoutMs,
+    timeoutMsSource,
     rawConfig: raw,
     sourceConfig: cfg,
   };
@@ -632,7 +655,7 @@ export function getTtsProvider(config: ResolvedTtsConfig, prefsPath: string): Tt
       provider.isConfigured({
         cfg: effectiveCfg,
         providerConfig: config.providerConfigs[provider.id] ?? {},
-        timeoutMs: config.timeoutMs,
+        timeoutMs: resolveSpeechProviderTimeoutMs({ config, provider }),
       })
     ) {
       return provider.id;
@@ -861,7 +884,7 @@ export function isTtsProviderConfigured(
     resolvedProvider.isConfigured({
       cfg: effectiveCfg,
       providerConfig: getResolvedSpeechProviderConfig(config, resolvedProvider.id, effectiveCfg),
-      timeoutMs: config.timeoutMs,
+      timeoutMs: resolveSpeechProviderTimeoutMs({ config, provider: resolvedProvider }),
     }) ?? false
   );
 }
@@ -953,7 +976,10 @@ function resolveReadySpeechProvider(params: {
     !resolvedProvider.isConfigured({
       cfg: params.cfg,
       providerConfig: merged.providerConfig,
-      timeoutMs: params.config.timeoutMs,
+      timeoutMs: resolveSpeechProviderTimeoutMs({
+        config: params.config,
+        provider: resolvedProvider,
+      }),
     })
   ) {
     return {
@@ -1235,7 +1261,6 @@ export async function synthesizeSpeech(params: {
   }
 
   const { cfg, config, persona, providers } = setup;
-  const timeoutMs = params.timeoutMs ?? config.timeoutMs;
   const target = resolveTtsSynthesisTarget(params.channel);
 
   const errors: string[] = [];
@@ -1271,6 +1296,11 @@ export async function synthesizeSpeech(params: {
         logVerbose(`TTS: provider ${provider} skipped (${resolvedProvider.message})`);
         continue;
       }
+      const timeoutMs = resolveSpeechProviderTimeoutMs({
+        timeoutMs: params.timeoutMs,
+        config,
+        provider: resolvedProvider.provider,
+      });
       const prepared = await prepareSpeechSynthesis({
         provider: resolvedProvider.provider,
         text: params.text,
@@ -1375,7 +1405,6 @@ export async function streamSpeech(params: {
   }
 
   const { cfg, config, persona, providers } = setup;
-  const timeoutMs = params.timeoutMs ?? config.timeoutMs;
   const target = resolveTtsSynthesisTarget(params.channel);
   const errors: string[] = [];
   const attemptedProviders: string[] = [];
@@ -1424,6 +1453,11 @@ export async function streamSpeech(params: {
         logVerbose(`TTS stream: provider ${provider} skipped (${message})`);
         continue;
       }
+      const timeoutMs = resolveSpeechProviderTimeoutMs({
+        timeoutMs: params.timeoutMs,
+        config,
+        provider: resolvedProvider.provider,
+      });
       const prepared = await prepareSpeechSynthesis({
         provider: resolvedProvider.provider,
         text: params.text,
@@ -1578,6 +1612,10 @@ export async function textToSpeechTelephony(params: {
         logVerbose(`TTS telephony: provider ${provider} skipped (${resolvedProvider.message})`);
         continue;
       }
+      const timeoutMs = resolveSpeechProviderTimeoutMs({
+        config,
+        provider: resolvedProvider.provider,
+      });
       const synthesizeTelephony = resolvedProvider.provider.synthesizeTelephony as NonNullable<
         typeof resolvedProvider.provider.synthesizeTelephony
       >;
@@ -1590,14 +1628,14 @@ export async function textToSpeechTelephony(params: {
         persona: resolvedProvider.synthesisPersona,
         personaProviderConfig: resolvedProvider.personaProviderConfig,
         target: "telephony",
-        timeoutMs: config.timeoutMs,
+        timeoutMs,
       });
       const synthesis = await synthesizeTelephony({
         text: prepared.text,
         cfg,
         providerConfig: prepared.providerConfig,
         providerOverrides: prepared.providerOverrides,
-        timeoutMs: config.timeoutMs,
+        timeoutMs,
       });
       const latencyMs = Date.now() - providerStart;
       attempts.push({

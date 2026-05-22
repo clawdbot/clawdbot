@@ -9,10 +9,11 @@ export function createXaiWebSearchProvider(): WebSearchProviderPlugin {
   return {
     id: "grok",
     label: "Grok (xAI)",
-    hint: "Requires xAI API key · xAI web-grounded responses",
+    hint: "Uses xAI OAuth or API key · xAI web-grounded responses",
     onboardingScopes: ["text-inference"],
     credentialLabel: "xAI API key",
     envVars: ["XAI_API_KEY"],
+    authProviderId: "xai",
     placeholder: "xai-...",
     signupUrl: "https://console.x.ai/",
     docsUrl: "https://docs.openclaw.ai/tools/web",

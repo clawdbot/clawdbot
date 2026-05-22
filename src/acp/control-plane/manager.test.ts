@@ -2731,6 +2731,385 @@ describe("AcpSessionManager", () => {
     });
   });
 
+  it("keeps parented ACP turns successful when final output follows progress text", async () => {
+    await withAcpManagerTaskStateDir(async () => {
+      const runtimeState = createRuntime();
+      runtimeState.runtime.startTurn = vi.fn((input) => ({
+        requestId: input.requestId,
+        events: (async function* () {
+          yield {
+            type: "text_delta" as const,
+            stream: "output" as const,
+            text: "I'll inspect the repo now. ",
+          };
+          yield {
+            type: "text_delta" as const,
+            stream: "output" as const,
+            text: "The crash is a missing null check in src/foo.ts.",
+          };
+        })(),
+        result: Promise.resolve({
+          status: "completed" as const,
+          stopReason: "end_turn",
+        }),
+        cancel: vi.fn(async () => {}),
+        closeStream: vi.fn(async () => {}),
+      }));
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeState.runtime,
+      });
+      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey;
+        if (sessionKey === "agent:codex:acp:child-1") {
+          return {
+            sessionKey,
+            storeSessionKey: sessionKey,
+            entry: {
+              sessionId: "child-1",
+              updatedAt: Date.now(),
+              spawnedBy: "agent:quant:telegram:quant:direct:822430204",
+              label: "Progress then final",
+            },
+            acp: readySessionMeta(),
+          };
+        }
+        if (sessionKey === "agent:quant:telegram:quant:direct:822430204") {
+          return {
+            sessionKey,
+            storeSessionKey: sessionKey,
+            entry: {
+              sessionId: "parent-1",
+              updatedAt: Date.now(),
+            },
+          };
+        }
+        return null;
+      });
+
+      const manager = new AcpSessionManager();
+      await manager.runTurn({
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:child-1",
+        text: "Inspect and report back",
+        mode: "prompt",
+        requestId: "direct-parented-progress-then-final-run",
+      });
+
+      const record = requireTaskByRunId("direct-parented-progress-then-final-run");
+      expectRecordFields(record, {
+        runtime: "acp",
+        ownerKey: "agent:quant:telegram:quant:direct:822430204",
+        scopeKind: "session",
+        childSessionKey: "agent:codex:acp:child-1",
+        status: "succeeded",
+        progressSummary:
+          "I'll inspect the repo now. The crash is a missing null check in src/foo.ts.",
+      });
+      expect(record.terminalOutcome).toBeUndefined();
+      expect(record.terminalSummary).toBeUndefined();
+    });
+  });
+
+  it("keeps parented ACP turns successful when final output follows a separator", async () => {
+    await withAcpManagerTaskStateDir(async () => {
+      const runtimeState = createRuntime();
+      runtimeState.runtime.startTurn = vi.fn((input) => ({
+        requestId: input.requestId,
+        events: (async function* () {
+          yield {
+            type: "text_delta" as const,
+            stream: "output" as const,
+            text: "I'll inspect the repo now: the crash is a missing null check in src/foo.ts.",
+          };
+        })(),
+        result: Promise.resolve({
+          status: "completed" as const,
+          stopReason: "end_turn",
+        }),
+        cancel: vi.fn(async () => {}),
+        closeStream: vi.fn(async () => {}),
+      }));
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeState.runtime,
+      });
+      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey;
+        if (sessionKey === "agent:codex:acp:child-1") {
+          return {
+            sessionKey,
+            storeSessionKey: sessionKey,
+            entry: {
+              sessionId: "child-1",
+              updatedAt: Date.now(),
+              spawnedBy: "agent:quant:telegram:quant:direct:822430204",
+              label: "Separator final",
+            },
+            acp: readySessionMeta(),
+          };
+        }
+        if (sessionKey === "agent:quant:telegram:quant:direct:822430204") {
+          return {
+            sessionKey,
+            storeSessionKey: sessionKey,
+            entry: {
+              sessionId: "parent-1",
+              updatedAt: Date.now(),
+            },
+          };
+        }
+        return null;
+      });
+
+      const manager = new AcpSessionManager();
+      await manager.runTurn({
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:child-1",
+        text: "Inspect and report back",
+        mode: "prompt",
+        requestId: "direct-parented-separator-final-run",
+      });
+
+      const record = requireTaskByRunId("direct-parented-separator-final-run");
+      expectRecordFields(record, {
+        runtime: "acp",
+        ownerKey: "agent:quant:telegram:quant:direct:822430204",
+        scopeKind: "session",
+        childSessionKey: "agent:codex:acp:child-1",
+        status: "succeeded",
+        progressSummary:
+          "I'll inspect the repo now: the crash is a missing null check in src/foo.ts.",
+      });
+      expect(record.terminalOutcome).toBeUndefined();
+      expect(record.terminalSummary).toBeUndefined();
+    });
+  });
+
+  it("keeps parented ACP turns blocked when progress text only adds follow-up planning", async () => {
+    await withAcpManagerTaskStateDir(async () => {
+      const runtimeState = createRuntime();
+      runtimeState.runtime.startTurn = vi.fn((input) => ({
+        requestId: input.requestId,
+        events: (async function* () {
+          yield {
+            type: "text_delta" as const,
+            stream: "output" as const,
+            text: "I'll inspect the repo now. Then I'll run tests and report back.",
+          };
+        })(),
+        result: Promise.resolve({
+          status: "completed" as const,
+          stopReason: "end_turn",
+        }),
+        cancel: vi.fn(async () => {}),
+        closeStream: vi.fn(async () => {}),
+      }));
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeState.runtime,
+      });
+      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey;
+        if (sessionKey === "agent:codex:acp:child-1") {
+          return {
+            sessionKey,
+            storeSessionKey: sessionKey,
+            entry: {
+              sessionId: "child-1",
+              updatedAt: Date.now(),
+              spawnedBy: "agent:quant:telegram:quant:direct:822430204",
+              label: "Follow-up planning",
+            },
+            acp: readySessionMeta(),
+          };
+        }
+        if (sessionKey === "agent:quant:telegram:quant:direct:822430204") {
+          return {
+            sessionKey,
+            storeSessionKey: sessionKey,
+            entry: {
+              sessionId: "parent-1",
+              updatedAt: Date.now(),
+            },
+          };
+        }
+        return null;
+      });
+
+      const manager = new AcpSessionManager();
+      await manager.runTurn({
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:child-1",
+        text: "Inspect and report back",
+        mode: "prompt",
+        requestId: "direct-parented-followup-planning-run",
+      });
+
+      expectRecordFields(requireTaskByRunId("direct-parented-followup-planning-run"), {
+        runtime: "acp",
+        ownerKey: "agent:quant:telegram:quant:direct:822430204",
+        scopeKind: "session",
+        childSessionKey: "agent:codex:acp:child-1",
+        status: "succeeded",
+        progressSummary: "I'll inspect the repo now. Then I'll run tests and report back.",
+        terminalOutcome: "blocked",
+        terminalSummary:
+          "Required completion ended with progress-only text, not a final deliverable.",
+      });
+    });
+  });
+
+  it("marks completed parented ACP turns blocked when they only contain progress text", async () => {
+    await withAcpManagerTaskStateDir(async () => {
+      const runtimeState = createRuntime();
+      runtimeState.runtime.startTurn = vi.fn((input) => ({
+        requestId: input.requestId,
+        events: (async function* () {
+          yield {
+            type: "text_delta" as const,
+            stream: "output" as const,
+            text: "I'll inspect the repo now.",
+          };
+        })(),
+        result: Promise.resolve({
+          status: "completed" as const,
+          stopReason: "end_turn",
+        }),
+        cancel: vi.fn(async () => {}),
+        closeStream: vi.fn(async () => {}),
+      }));
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeState.runtime,
+      });
+      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey;
+        if (sessionKey === "agent:codex:acp:child-1") {
+          return {
+            sessionKey,
+            storeSessionKey: sessionKey,
+            entry: {
+              sessionId: "child-1",
+              updatedAt: Date.now(),
+              spawnedBy: "agent:quant:telegram:quant:direct:822430204",
+              label: "Progress only",
+            },
+            acp: readySessionMeta(),
+          };
+        }
+        if (sessionKey === "agent:quant:telegram:quant:direct:822430204") {
+          return {
+            sessionKey,
+            storeSessionKey: sessionKey,
+            entry: {
+              sessionId: "parent-1",
+              updatedAt: Date.now(),
+            },
+          };
+        }
+        return null;
+      });
+
+      const events: string[] = [];
+      const manager = new AcpSessionManager();
+      await manager.runTurn({
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:child-1",
+        text: "Inspect and report back",
+        mode: "prompt",
+        requestId: "direct-parented-progress-completed-run",
+        onEvent: (event) => {
+          events.push(event.type);
+        },
+      });
+
+      expect(events).toEqual(["text_delta", "done"]);
+      expectRecordFields(requireTaskByRunId("direct-parented-progress-completed-run"), {
+        runtime: "acp",
+        ownerKey: "agent:quant:telegram:quant:direct:822430204",
+        scopeKind: "session",
+        childSessionKey: "agent:codex:acp:child-1",
+        status: "succeeded",
+        progressSummary: "I'll inspect the repo now.",
+        terminalOutcome: "blocked",
+        terminalSummary:
+          "Required completion ended with progress-only text, not a final deliverable.",
+      });
+    });
+  });
+
+  it("marks completed parented ACP turns blocked when final output is missing", async () => {
+    await withAcpManagerTaskStateDir(async () => {
+      const runtimeState = createRuntime();
+      runtimeState.runtime.startTurn = vi.fn((input) => ({
+        requestId: input.requestId,
+        events: (async function* () {})(),
+        result: Promise.resolve({
+          status: "completed" as const,
+          stopReason: "end_turn",
+        }),
+        cancel: vi.fn(async () => {}),
+        closeStream: vi.fn(async () => {}),
+      }));
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeState.runtime,
+      });
+      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey;
+        if (sessionKey === "agent:codex:acp:child-1") {
+          return {
+            sessionKey,
+            storeSessionKey: sessionKey,
+            entry: {
+              sessionId: "child-1",
+              updatedAt: Date.now(),
+              spawnedBy: "agent:quant:telegram:quant:direct:822430204",
+              label: "Missing final",
+            },
+            acp: readySessionMeta(),
+          };
+        }
+        if (sessionKey === "agent:quant:telegram:quant:direct:822430204") {
+          return {
+            sessionKey,
+            storeSessionKey: sessionKey,
+            entry: {
+              sessionId: "parent-1",
+              updatedAt: Date.now(),
+            },
+          };
+        }
+        return null;
+      });
+
+      const events: string[] = [];
+      const manager = new AcpSessionManager();
+      await manager.runTurn({
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:child-1",
+        text: "Produce a final result",
+        mode: "prompt",
+        requestId: "direct-parented-empty-completed-run",
+        onEvent: (event) => {
+          events.push(event.type);
+        },
+      });
+
+      expect(events).toEqual(["done"]);
+      expectRecordFields(requireTaskByRunId("direct-parented-empty-completed-run"), {
+        runtime: "acp",
+        ownerKey: "agent:quant:telegram:quant:direct:822430204",
+        scopeKind: "session",
+        childSessionKey: "agent:codex:acp:child-1",
+        status: "succeeded",
+        terminalOutcome: "blocked",
+        terminalSummary: "Required completion did not produce a final deliverable.",
+      });
+    });
+  });
+
   it("closes completed startTurn streams after draining queued output", async () => {
     await withAcpManagerTaskStateDir(async () => {
       const runtimeState = createRuntime();

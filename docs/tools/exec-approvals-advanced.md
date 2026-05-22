@@ -160,8 +160,9 @@ Approval-backed interpreter/runtime runs are intentionally conservative:
   allowlist/full workflow where the operator accepts the broader runtime semantics.
 
 When approvals are required, the exec tool returns immediately with an approval id. Use that id to
-correlate later system events (`Exec finished` / `Exec denied`). If no decision arrives before the
-timeout, the request is treated as an approval timeout and surfaced as a denial reason.
+correlate later approved-run system events (`Exec finished`, and `Exec running` when configured).
+If no decision arrives before the timeout, the request is treated as an approval timeout and
+surfaced as a terminal denial rather than an agent-waking system event.
 
 ### Followup delivery behavior
 
@@ -275,6 +276,9 @@ Generic model:
 - host exec policy still decides whether exec approval is required
 - `approvals.exec` controls forwarding approval prompts to other chat destinations
 - `channels.<channel>.execApprovals` controls whether that channel acts as a native approval client
+- Slack plugin approvals can use Slack's native approval client when the request comes from Slack
+  and Slack plugin approvers resolve; `approvals.plugin` can also route plugin approvals to Slack
+  sessions or targets even when Slack exec approvals are disabled
 
 Native approval clients auto-enable DM-first delivery when all of these are true:
 
@@ -305,6 +309,8 @@ Shared behavior:
 - Discord approvers can be explicit (`execApprovals.approvers`) or inferred from `commands.ownerAllowFrom`
 - Telegram approvers can be explicit (`execApprovals.approvers`) or inferred from `commands.ownerAllowFrom`
 - Slack approvers can be explicit (`execApprovals.approvers`) or inferred from `commands.ownerAllowFrom`
+- Slack plugin approval DMs use Slack plugin approvers from `allowFrom` and account default
+  routing, not Slack exec approvers
 - Slack native buttons preserve approval id kind, so `plugin:` ids can resolve plugin approvals
   without a second Slack-local fallback layer
 - Matrix native DM/channel routing and reaction shortcuts handle both exec and plugin approvals;

@@ -74,7 +74,6 @@ export async function runAgentStep(params: {
       runId: stepIdem,
       extraSystemPrompt: params.extraSystemPrompt,
       inputProvenance,
-      senderIsOwner: false,
       allowModelOverride: false,
     });
     await retireSessionMcpRuntimeForSessionKey({

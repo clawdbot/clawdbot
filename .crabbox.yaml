@@ -6,6 +6,10 @@ capacity:
   strategy: most-available
   fallback: on-demand-after-120s
   hints: true
+  availabilityZones:
+    - eu-west-1a
+    - eu-west-1b
+    - eu-west-1c
   regions:
     - eu-west-1
     - eu-west-2

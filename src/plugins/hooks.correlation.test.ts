@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createHookRunner } from "./hooks.js";
 import { addTestHook, TEST_PLUGIN_AGENT_CTX } from "./hooks.test-helpers.js";
@@ -83,6 +84,58 @@ describe("hook correlation fields", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("keeps one-shot agent_end runs alive until a ref'd timeout fires", () => {
+    const script = `
+      import { createHookRunner } from "./src/plugins/hooks.ts";
+      const registry = {
+        typedHooks: [{
+          pluginId: "plugin-a",
+          hookName: "agent_end",
+          handler: () => new Promise(() => {}),
+          priority: 0,
+          source: "test",
+        }],
+      };
+      const logger = {
+        error: (message) => console.error(message),
+        warn: (message) => console.warn(message),
+      };
+      const runner = createHookRunner(registry, {
+        logger,
+        voidHookTimeoutMsByHook: { agent_end: 20 },
+      });
+      await runner.runAgentEnd(
+        { messages: [], success: true },
+        {
+          runId: "test-run-id",
+          agentId: "test-agent",
+          sessionKey: "test-session",
+          sessionId: "test-session-id",
+          workspaceDir: "/tmp/openclaw-test",
+          messageProvider: "test",
+        },
+        { unrefTimeout: false },
+      );
+      console.log("settled-after-timeout");
+    `;
+
+    const child = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "--input-type=module", "-e", script],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        timeout: 3_000,
+      },
+    );
+
+    expect(child.status).toBe(0);
+    expect(child.stderr).toContain(
+      "[hooks] agent_end handler from plugin-a failed: timed out after 20ms",
+    );
+    expect(child.stdout).toContain("settled-after-timeout");
   });
 
   it("honors per-hook registration timeouts over the default void hook timeout", async () => {

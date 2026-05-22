@@ -97,8 +97,8 @@ describe("matrixMessageActions account propagation", () => {
     await matrixMessageActions.handleAction?.(
       createContext({
         action: profileAction,
-        senderIsOwner: true,
         accountId: "ops",
+        senderIsOwner: true,
         params: {
           displayName: "Ops Bot",
           avatarUrl: "mxc://example/avatar",
@@ -115,53 +115,46 @@ describe("matrixMessageActions account propagation", () => {
     expect(call.options).toEqual({ mediaLocalRoots: undefined });
   });
 
-  it("rejects self-profile updates for non-owner callers", async () => {
-    try {
-      await matrixMessageActions.handleAction?.(
+  it("rejects self-profile updates without sender owner context", async () => {
+    await expect(
+      matrixMessageActions.handleAction?.(
         createContext({
           action: profileAction,
-          senderIsOwner: false,
           accountId: "ops",
           params: {
             displayName: "Ops Bot",
           },
         }),
-      );
-      throw new Error("expected non-owner self-profile update to reject");
-    } catch (error) {
-      expect((error as Error).name).toBe("ToolAuthorizationError");
-      expect((error as Error).message).toBe("Matrix profile updates require owner access.");
-    }
-
-    expect(mocks.handleMatrixAction).not.toHaveBeenCalled();
+      ),
+    ).rejects.toThrow("Matrix profile updates require owner access.");
   });
 
-  it("rejects self-profile updates when owner status is unknown", async () => {
-    try {
-      await matrixMessageActions.handleAction?.(
-        createContext({
-          action: profileAction,
-          accountId: "ops",
-          params: {
-            displayName: "Ops Bot",
-          },
-        }),
-      );
-      throw new Error("expected unknown-owner self-profile update to reject");
-    } catch (error) {
-      expect((error as Error).name).toBe("ToolAuthorizationError");
-      expect((error as Error).message).toBe("Matrix profile updates require owner access.");
-    }
+  it("dispatches self-profile updates with sender owner context", async () => {
+    await matrixMessageActions.handleAction?.(
+      createContext({
+        action: profileAction,
+        accountId: "ops",
+        senderIsOwner: true,
+        params: {
+          displayName: "Ops Bot",
+        },
+      }),
+    );
 
-    expect(mocks.handleMatrixAction).not.toHaveBeenCalled();
+    const call = matrixActionCall();
+    expect(call.input).toMatchObject({
+      action: "setProfile",
+      accountId: "ops",
+      displayName: "Ops Bot",
+    });
   });
 
   it("forwards local avatar paths for self-profile updates", async () => {
     await matrixMessageActions.handleAction?.(
       createContext({
         action: profileAction,
-        senderIsOwner: true,
         accountId: "ops",
+        senderIsOwner: true,
         params: {
           path: "/tmp/avatar.jpg",
         },

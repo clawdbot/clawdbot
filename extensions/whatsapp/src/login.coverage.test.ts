@@ -123,9 +123,6 @@ describe("loginWeb coverage", () => {
 
     const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
     const pendingLogin = loginWeb(false, waitForWaConnectionMock as never, runtime);
-    await flushTasks();
-
-    expect(createWaSocketMock).toHaveBeenCalledTimes(2);
     await pendingLogin;
 
     expect(createWaSocketMock).toHaveBeenCalledTimes(2);

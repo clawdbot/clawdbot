@@ -4,6 +4,15 @@
  * config-mutation, and runtime-config-snapshot.
  */
 
+import { loadSessionStore as loadSessionStoreImpl } from "../config/sessions/store-load.js";
+
+/**
+ * @deprecated Use getSessionEntry/listSessionEntries for reads and
+ * patchSessionEntry/upsertSessionEntry for writes. loadSessionStore keeps the
+ * legacy mutable whole-store shape and will remain a compatibility escape hatch.
+ */
+export const loadSessionStore = loadSessionStoreImpl;
+
 export { resolveDefaultAgentId } from "../agents/agent-scope.js";
 export {
   requireRuntimeConfig,
@@ -132,13 +141,16 @@ export type {
 } from "../config/types.js";
 export {
   clearSessionStoreCacheForTest,
-  loadSessionStore,
+  getSessionEntry,
+  listSessionEntries,
+  patchSessionEntry,
   readSessionUpdatedAt,
   recordSessionMetaFromInbound,
   saveSessionStore,
   updateLastRoute,
   updateSessionStore,
   updateSessionStoreEntry,
+  upsertSessionEntry,
   resolveSessionStoreEntry,
 } from "../config/sessions/store.js";
 export { resolveSessionKey } from "../config/sessions/session-key.js";

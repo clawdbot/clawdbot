@@ -41,6 +41,7 @@ describe("subagent target policy", () => {
       targetAgentId: "task-manager",
       requestedAgentId: "task-manager",
       allowAgents: ["planner", "checker"],
+      configuredAgentIds: ["task-manager", "planner", "checker"],
     });
     expect(result.ok).toBe(false);
     if (result.ok) {
@@ -63,6 +64,35 @@ describe("subagent target policy", () => {
       allowAny: false,
       allowedIds: ["planner"],
     });
+  });
+
+  it("filters explicit allowlists to configured target ids", () => {
+    expect(
+      resolveSubagentAllowedTargetIds({
+        requesterAgentId: "main",
+        allowAgents: ["planner", "stale"],
+        configuredAgentIds: ["main", "planner"],
+      }),
+    ).toEqual({
+      allowAny: false,
+      allowedIds: ["planner"],
+    });
+
+    const result = resolveSubagentTargetPolicy({
+      requesterAgentId: "main",
+      targetAgentId: "stale",
+      requestedAgentId: "stale",
+      allowAgents: ["planner", "stale"],
+      configuredAgentIds: ["main", "planner"],
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("Expected target policy to reject stale explicit target");
+    }
+    expect(result.allowedText).toBe("planner");
+    expect(result.error).toBe(
+      'agentId "stale" is not in the configured agent registry (allowed: planner)',
+    );
   });
 
   it("limits wildcard allowlists to configured agents plus the requester", () => {
@@ -97,7 +127,7 @@ describe("subagent target policy", () => {
     );
   });
 
-  it("preserves explicit targets when wildcard allowlists are mixed", () => {
+  it("filters explicit targets when wildcard allowlists are mixed", () => {
     expect(
       resolveSubagentAllowedTargetIds({
         requesterAgentId: "main",
@@ -106,17 +136,22 @@ describe("subagent target policy", () => {
       }),
     ).toEqual({
       allowAny: true,
-      allowedIds: ["beta", "main", "planner"],
+      allowedIds: ["main", "planner"],
     });
 
-    expect(
-      resolveSubagentTargetPolicy({
-        requesterAgentId: "main",
-        targetAgentId: "beta",
-        requestedAgentId: "beta",
-        allowAgents: ["*", "beta"],
-        configuredAgentIds: ["main", "planner"],
-      }),
-    ).toEqual({ ok: true });
+    const result = resolveSubagentTargetPolicy({
+      requesterAgentId: "main",
+      targetAgentId: "beta",
+      requestedAgentId: "beta",
+      allowAgents: ["*", "beta"],
+      configuredAgentIds: ["main", "planner"],
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("Expected target policy to reject stale mixed explicit target");
+    }
+    expect(result.error).toBe(
+      'agentId "beta" is not in the configured agent registry (allowed: main, planner)',
+    );
   });
 });

@@ -1,7 +1,7 @@
 import { html } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { t } from "../../i18n/index.ts";
-import { CHAT_SESSIONS_ACTIVE_MINUTES, CHAT_SESSIONS_REFRESH_LIMIT } from "../app-chat.ts";
+import { createChatSessionsLoadOverrides } from "../app-chat.ts";
 import type { AppViewState } from "../app-view-state.ts";
 import { createChatModelOverride } from "../chat-model-ref.ts";
 import {
@@ -10,6 +10,7 @@ import {
 } from "../chat-model-select-state.ts";
 import { refreshVisibleToolsEffectiveForCurrentSession } from "../controllers/agents.ts";
 import { loadSessions } from "../controllers/sessions.ts";
+import { icons } from "../icons.ts";
 import { isMonitoredAuthProvider } from "../model-auth-helpers.ts";
 import { pathForTab } from "../navigation.ts";
 import { collectQuotaWindowsFromAuthStatus, formatQuotaReset } from "../provider-quota-summary.ts";
@@ -47,6 +48,7 @@ export function renderChatSessionSelect(
   const modelSelect = renderChatModelSelect(state);
   const thinkingSelect = renderChatThinkingSelect(state);
   const quotaPill = renderChatQuotaPill(state);
+  const sessionActions = renderChatSessionSearchControls(state);
   const selectedSessionLabel =
     sessionGroups.flatMap((group) => group.options).find((entry) => entry.key === state.sessionKey)
       ?.label ?? state.sessionKey;
@@ -60,48 +62,159 @@ export function renderChatSessionSelect(
     .filter(Boolean)
     .join(" ");
   return html`
-    <div class=${rowClass}>
-      ${agentSelect}
-      <label class="field chat-controls__session chat-controls__session-picker">
-        <select
-          data-chat-session-select="true"
-          aria-label=${t("chat.selectors.session")}
-          .value=${state.sessionKey}
-          title=${selectedSessionLabel}
-          ?disabled=${!state.connected || sessionGroups.length === 0}
-          @change=${(e: Event) => {
-            const next = (e.target as HTMLSelectElement).value;
-            if (state.sessionKey === next) {
-              return;
-            }
-            onSwitchSession(state, next);
-          }}
-        >
-          ${repeat(
-            sessionGroups,
-            (group) => group.id,
-            (group) =>
-              html`<optgroup label=${group.label}>
-                ${repeat(
-                  group.options,
-                  (entry) => entry.key,
-                  (entry) =>
-                    html`<option
-                      value=${entry.key}
-                      title=${entry.title}
-                      ?selected=${entry.key === state.sessionKey}
-                    >
-                      ${entry.label}
-                    </option>`,
-                )}
-              </optgroup>`,
-          )}
-        </select>
-      </label>
-      ${modelSelect} ${thinkingSelect} ${quotaPill}
+    <div class="chat-controls__session-stack">
+      <div class=${rowClass}>
+        ${agentSelect}
+        <label class="field chat-controls__session chat-controls__session-picker">
+          <select
+            data-chat-session-select="true"
+            aria-label=${t("chat.selectors.session")}
+            .value=${state.sessionKey}
+            title=${selectedSessionLabel}
+            ?disabled=${!state.connected || sessionGroups.length === 0}
+            @change=${(e: Event) => {
+              const next = (e.target as HTMLSelectElement).value;
+              if (state.sessionKey === next) {
+                return;
+              }
+              onSwitchSession(state, next);
+            }}
+          >
+            ${repeat(
+              sessionGroups,
+              (group) => group.id,
+              (group) =>
+                html`<optgroup label=${group.label}>
+                  ${repeat(
+                    group.options,
+                    (entry) => entry.key,
+                    (entry) =>
+                      html`<option
+                        value=${entry.key}
+                        title=${entry.title}
+                        ?selected=${entry.key === state.sessionKey}
+                      >
+                        ${entry.label}
+                      </option>`,
+                  )}
+                </optgroup>`,
+            )}
+          </select>
+        </label>
+        ${modelSelect} ${thinkingSelect} ${quotaPill}
+      </div>
+      ${sessionActions}
     </div>
     <div class="chat-controls__session-notice" role="status" aria-live="polite">
       ${state.sessionSwitchNotice?.text ?? ""}
+    </div>
+  `;
+}
+
+function resolveNextChatSessionOffset(sessions: SessionsListResult | null): number | null {
+  if (!sessions?.hasMore) {
+    return null;
+  }
+  if (typeof sessions.nextOffset === "number" && Number.isFinite(sessions.nextOffset)) {
+    return Math.max(0, Math.floor(sessions.nextOffset));
+  }
+  return sessions.sessions.length;
+}
+
+async function refreshSessionOptions(
+  state: AppViewState,
+  options: { offset?: number; append?: boolean } = {},
+) {
+  await loadSessions(state as unknown as Parameters<typeof loadSessions>[0], {
+    ...createChatSessionsLoadOverrides(state, options),
+  });
+}
+
+async function applyChatSessionSearch(state: AppViewState) {
+  state.chatSessionSearchAppliedQuery = normalizeOptionalString(state.chatSessionSearchQuery) ?? "";
+  await refreshSessionOptions(state);
+}
+
+async function clearChatSessionSearch(state: AppViewState) {
+  state.chatSessionSearchQuery = "";
+  state.chatSessionSearchAppliedQuery = "";
+  await refreshSessionOptions(state);
+}
+
+async function loadMoreChatSessions(state: AppViewState) {
+  const offset = resolveNextChatSessionOffset(state.sessionsResult);
+  if (offset === null) {
+    return;
+  }
+  await refreshSessionOptions(state, { offset, append: true });
+}
+
+function renderChatSessionSearchControls(state: AppViewState) {
+  const draft = state.chatSessionSearchQuery ?? "";
+  const applied = state.chatSessionSearchAppliedQuery ?? "";
+  const hasQuery = draft.trim() !== "" || applied.trim() !== "";
+  const disabled = !state.connected || !state.client || state.sessionsLoading;
+  const loadMoreOffset = resolveNextChatSessionOffset(state.sessionsResult);
+  return html`
+    <div class="chat-controls__session-actions">
+      <label class="field chat-controls__session-search">
+        <span class="chat-controls__session-search-icon" aria-hidden="true">${icons.search}</span>
+        <input
+          data-chat-session-search="true"
+          type="search"
+          placeholder=${t("chat.selectors.sessionSearch")}
+          aria-label=${t("chat.selectors.sessionSearch")}
+          .value=${draft}
+          ?disabled=${disabled}
+          @input=${(event: Event) => {
+            state.chatSessionSearchQuery = (event.target as HTMLInputElement).value;
+          }}
+          @keydown=${(event: KeyboardEvent) => {
+            if (event.key !== "Enter") {
+              return;
+            }
+            event.preventDefault();
+            void applyChatSessionSearch(state);
+          }}
+        />
+      </label>
+      <button
+        class="btn btn--ghost btn--icon"
+        data-chat-session-search-submit="true"
+        type="button"
+        title=${t("common.search")}
+        aria-label=${t("common.search")}
+        ?disabled=${disabled}
+        @click=${() => void applyChatSessionSearch(state)}
+      >
+        ${icons.search}
+      </button>
+      ${hasQuery
+        ? html`<button
+            class="btn btn--ghost btn--icon"
+            data-chat-session-search-clear="true"
+            type="button"
+            title=${t("chat.selectors.clearSessionSearch")}
+            aria-label=${t("chat.selectors.clearSessionSearch")}
+            ?disabled=${disabled}
+            @click=${() => void clearChatSessionSearch(state)}
+          >
+            ${icons.x}
+          </button>`
+        : ""}
+      ${loadMoreOffset !== null
+        ? html`<button
+            class="btn btn--ghost btn--icon"
+            data-chat-session-load-more="true"
+            type="button"
+            title=${t("chat.selectors.loadMoreSessions")}
+            aria-label=${t("chat.selectors.loadMoreSessions")}
+            ?disabled=${disabled}
+            @click=${() => void loadMoreChatSessions(state)}
+          >
+            ${icons.arrowDown}
+          </button>`
+        : ""}
     </div>
   `;
 }
@@ -193,23 +306,6 @@ function renderChatAgentSelect(
       </select>
     </label>
   `;
-}
-
-async function refreshSessionOptions(state: AppViewState) {
-  await loadSessions(state as unknown as Parameters<typeof loadSessions>[0], {
-    activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
-    limit: CHAT_SESSIONS_REFRESH_LIMIT,
-    includeGlobal: true,
-    includeUnknown: true,
-    showArchived: state.sessionsShowArchived,
-    agentId: resolveSessionOptionsAgentId(state),
-  });
-}
-
-function resolveSessionOptionsAgentId(state: AppViewState): string {
-  return (
-    parseAgentSessionKey(state.sessionKey)?.agentId ?? normalizeAgentId(state.agentsList?.defaultId)
-  );
 }
 
 async function refreshVisibleToolsEffectiveForCurrentSessionLazy(state: AppViewState) {
@@ -526,10 +622,6 @@ function isSessionKeyTiedToAgent(key: string, agentId: string, defaultAgentId: s
   return agentId === defaultAgentId;
 }
 
-function isAgentMainSessionKey(key: string): boolean {
-  return parseAgentSessionKey(key)?.rest === "main";
-}
-
 function resolvePreferredSessionForAgent(state: AppViewState, agentId: string): string {
   const normalizedAgentId = normalizeAgentId(agentId);
   if (resolveChatAgentFilterId(state, state.sessionKey) === normalizedAgentId) {
@@ -659,7 +751,7 @@ export function resolveSessionOptionGroups(
   }
   if (byKey.has(sessionKey)) {
     addOption(sessionKey);
-  } else if (isAgentMainSessionKey(sessionKey) || isSubagentSessionKey(sessionKey)) {
+  } else if (sessionKey) {
     addOption(sessionKey);
   }
 

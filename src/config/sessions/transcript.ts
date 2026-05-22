@@ -22,7 +22,10 @@ import {
   streamSessionTranscriptLines,
   streamSessionTranscriptLinesReverse,
 } from "./transcript-stream.js";
-import { runWithOwnedSessionTranscriptWriteLock } from "./transcript-write-context.js";
+import {
+  runWithOwnedSessionTranscriptWriteLock,
+  runWithOwnedSessionTranscriptWritePublication,
+} from "./transcript-write-context.js";
 import type { SessionEntry } from "./types.js";
 
 let piCodingAgentModulePromise: Promise<typeof import("@earendil-works/pi-coding-agent")> | null =
@@ -317,8 +320,6 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   return await runWithOwnedSessionTranscriptWriteLock(
     { sessionFile, sessionKey: resolved.normalizedKey },
     async () => {
-      await ensureSessionHeader({ sessionFile, sessionId: entry.sessionId });
-
       const explicitIdempotencyKey =
         params.idempotencyKey ??
         ((params.message as { idempotencyKey?: unknown }).idempotencyKey as string | undefined);
@@ -344,11 +345,18 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
         ...params.message,
         ...(explicitIdempotencyKey ? { idempotencyKey: explicitIdempotencyKey } : {}),
       } as Parameters<SessionManager["appendMessage"]>[0];
-      const { messageId, message: appendedMessage } = await appendSessionTranscriptMessage({
-        transcriptPath: sessionFile,
-        message,
-        config: params.config,
-      });
+      const { messageId, message: appendedMessage } =
+        await runWithOwnedSessionTranscriptWritePublication(
+          { sessionFile, sessionKey: resolved.normalizedKey },
+          async () => {
+            await ensureSessionHeader({ sessionFile, sessionId: entry.sessionId });
+            return await appendSessionTranscriptMessage({
+              transcriptPath: sessionFile,
+              message,
+              config: params.config,
+            });
+          },
+        );
 
       switch (params.updateMode ?? "inline") {
         case "inline":

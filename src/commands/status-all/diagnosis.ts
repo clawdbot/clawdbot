@@ -6,6 +6,7 @@ import {
   resolveGatewaySupervisorLogPaths,
 } from "../../daemon/restart-logs.js";
 import {
+  classifyPortListener,
   formatPortDiagnostics,
   isDualStackLoopbackGatewayListeners,
   isExpectedGatewayListeners,
@@ -59,6 +60,75 @@ type ChannelIssueLike = {
   fix?: string;
 };
 
+type DeliveryDiagnosticsLike = {
+  summary?: {
+    byType?: Record<string, number>;
+  };
+  events?: Array<{
+    type?: string;
+    ts?: number;
+    channel?: string;
+    outcome?: string;
+    reason?: string;
+  }>;
+};
+
+type AgentStatusLike = {
+  totalSessions: number;
+  agents: Array<{
+    id: string;
+    lastActiveAgeMs?: number | null;
+  }>;
+};
+
+const AGENT_ACTIVITY_SOFT_WARNING_MS = 30 * 60_000;
+
+function countRecentAgentSessions(agentStatus: AgentStatusLike, thresholdMs: number): number {
+  return agentStatus.agents.filter(
+    (agent) => agent.lastActiveAgeMs != null && agent.lastActiveAgeMs <= thresholdMs,
+  ).length;
+}
+
+function countGatewayListenerPids(portUsage: PortUsageLike): number {
+  const pids = new Set<number>();
+  for (const listener of portUsage.listeners) {
+    if (classifyPortListener(listener, portUsage.port) !== "gateway") {
+      continue;
+    }
+    if (typeof listener.pid === "number" && Number.isFinite(listener.pid)) {
+      pids.add(listener.pid);
+    }
+  }
+  return pids.size;
+}
+
+function isDeliveryDiagnosticsLike(value: unknown): value is DeliveryDiagnosticsLike {
+  return Boolean(value && typeof value === "object");
+}
+
+function countDeliveryEvent(snapshot: DeliveryDiagnosticsLike, type: string): number {
+  const value = snapshot.summary?.byType?.[type];
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function latestDeliveryEventAgeMs(snapshot: DeliveryDiagnosticsLike): number | null {
+  const latestTs = (snapshot.events ?? [])
+    .filter((event) =>
+      [
+        "message.received",
+        "message.dispatch.started",
+        "message.dispatch.completed",
+        "session.turn.created",
+        "message.processed",
+      ].includes(event.type ?? ""),
+    )
+    .reduce((max, event) => {
+      const ts = event.ts;
+      return typeof ts === "number" && Number.isFinite(ts) ? Math.max(max, ts) : max;
+    }, 0);
+  return latestTs > 0 ? Date.now() - latestTs : null;
+}
+
 export async function appendStatusAllDiagnosis(params: {
   lines: string[];
   progress: ProgressReporter;
@@ -81,6 +151,8 @@ export async function appendStatusAllDiagnosis(params: {
   pluginCompatibility: PluginCompatibilityNotice[];
   channelsStatus: unknown;
   channelIssues: ChannelIssueLike[];
+  deliveryDiagnostics: unknown;
+  agentStatus?: AgentStatusLike;
   gatewayReachable: boolean;
   health: unknown;
   nodeOnlyGateway: NodeOnlyGatewayInfo | null;
@@ -175,6 +247,12 @@ export async function appendStatusAllDiagnosis(params: {
     const portOk = params.portUsage.listeners.length === 0 || expectedGatewayListeners;
     emitCheck(`Port ${params.port}`, portOk ? "ok" : "warn");
     if (!portOk) {
+      const gatewayPidCount = countGatewayListenerPids(params.portUsage);
+      if (gatewayPidCount > 1) {
+        lines.push(
+          `  ${muted(`${gatewayPidCount} OpenClaw gateway processes appear to be listening on port ${params.port}; stop stale gateway processes before trusting channel health.`)}`,
+        );
+      }
       for (const line of formatPortDiagnostics(params.portUsage)) {
         lines.push(`  ${muted(line)}`);
       }
@@ -230,6 +308,72 @@ export async function appendStatusAllDiagnosis(params: {
   }
   if (params.pluginCompatibility.length > 12) {
     lines.push(`  ${muted(`… +${params.pluginCompatibility.length - 12} more`)}`);
+  }
+
+  if (params.agentStatus) {
+    const recentSessions = countRecentAgentSessions(
+      params.agentStatus,
+      AGENT_ACTIVITY_SOFT_WARNING_MS,
+    );
+    const hasKnownSessions = params.agentStatus.totalSessions > 0;
+    const shouldWarn = hasKnownSessions && recentSessions === 0;
+    emitCheck(
+      `Agent activity: ${recentSessions} active in 30m · ${params.agentStatus.totalSessions} sessions`,
+      shouldWarn ? "warn" : "ok",
+    );
+    if (shouldWarn) {
+      lines.push(
+        `  ${muted("No agent session was updated in the last 30m; if channels received messages, verify inbound dispatch and turn creation.")}`,
+      );
+    }
+  }
+
+  if (params.deliveryDiagnostics != null) {
+    if (isDeliveryDiagnosticsLike(params.deliveryDiagnostics)) {
+      const received = countDeliveryEvent(params.deliveryDiagnostics, "message.received");
+      const dispatchStarted = countDeliveryEvent(
+        params.deliveryDiagnostics,
+        "message.dispatch.started",
+      );
+      const dispatchCompleted = countDeliveryEvent(
+        params.deliveryDiagnostics,
+        "message.dispatch.completed",
+      );
+      const turnsCreated = countDeliveryEvent(params.deliveryDiagnostics, "session.turn.created");
+      const processed = countDeliveryEvent(params.deliveryDiagnostics, "message.processed");
+      const hasReceivedWithoutDispatch = received > 0 && dispatchStarted === 0 && processed === 0;
+      const hasDispatchWithoutTurn =
+        dispatchStarted > 0 && turnsCreated === 0 && processed < dispatchStarted;
+      const dispatchGap = dispatchStarted - dispatchCompleted;
+      const hasDispatchGap = dispatchGap >= 2;
+      const latestAgeMs = latestDeliveryEventAgeMs(params.deliveryDiagnostics);
+      emitCheck(
+        `Inbound delivery telemetry: received ${received} · dispatch ${dispatchStarted}/${dispatchCompleted} · turns ${turnsCreated} · processed ${processed}`,
+        hasReceivedWithoutDispatch || hasDispatchWithoutTurn || hasDispatchGap ? "warn" : "ok",
+      );
+      if (latestAgeMs != null) {
+        lines.push(`  ${muted(`latest delivery event: ${formatTimeAgo(latestAgeMs)}`)}`);
+      }
+      if (hasReceivedWithoutDispatch) {
+        lines.push(
+          `  ${muted("Messages were received, but no gateway dispatch started; inspect inbound routing and dispatch handoff.")}`,
+        );
+      }
+      if (hasDispatchWithoutTurn) {
+        lines.push(
+          `  ${muted("Gateway dispatch started, but no agent turn was created; inspect reply resolver and session creation.")}`,
+        );
+      }
+      if (hasDispatchGap) {
+        lines.push(
+          `  ${muted("Multiple gateway dispatches have not completed yet; if this persists, inspect stuck sessions or model runs.")}`,
+        );
+      }
+    } else {
+      emitCheck("Inbound delivery telemetry: unavailable", "warn");
+    }
+  } else if (params.gatewayReachable && !params.nodeOnlyGateway) {
+    emitCheck("Inbound delivery telemetry: unavailable", "warn");
   }
 
   params.progress.setLabel("Reading logs…");

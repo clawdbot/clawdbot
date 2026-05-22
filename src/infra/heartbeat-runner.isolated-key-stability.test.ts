@@ -23,7 +23,6 @@ afterEach(() => {
 
 type HeartbeatReplyContext = {
   Body?: string;
-  ForceSenderIsOwnerFalse?: boolean;
   Provider?: string;
   SessionKey?: string;
 };
@@ -333,7 +332,6 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
       const calledCtx = replyCall(replySpy);
       expect(calledCtx.SessionKey).toBe(isolatedSessionKey);
       expect(calledCtx.Provider).toBe("exec-event");
-      expect(calledCtx.ForceSenderIsOwnerFalse).toBe(true);
     });
   });
 

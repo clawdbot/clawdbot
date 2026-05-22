@@ -42,6 +42,9 @@ vi.mock("../../agents/model-provider-auth.js", () => ({
   createProviderAuthChecker: modelProviderAuthMocks.createProviderAuthChecker,
   hasAuthForModelProvider: ({ provider }: { provider: string }) =>
     modelProviderAuthMocks.authenticatedProviders.has(provider),
+  getCurrentProviderAuthState: () => null,
+  clearCurrentProviderAuthState: () => undefined,
+  warmCurrentProviderAuthState: async () => undefined,
 }));
 
 const telegramModelsTestPlugin: ChannelPlugin = {

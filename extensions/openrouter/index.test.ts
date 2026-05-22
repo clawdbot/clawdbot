@@ -541,6 +541,51 @@ describe("openrouter provider hooks", () => {
     expect(baseStreamFn).toHaveBeenCalledOnce();
   });
 
+  it("keeps OpenRouter-routed Anthropic tool-use assistant messages when reasoning is enabled", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    let capturedPayload: Record<string, unknown> | undefined;
+    const messages = [
+      { role: "user", content: "Use the tool." },
+      {
+        role: "assistant",
+        content: [{ type: "tool_use", id: "toolu_1", name: "lookup", input: {} }],
+      },
+    ];
+    const baseStreamFn = vi.fn(
+      (
+        ...args: Parameters<import("@earendil-works/pi-agent-core").StreamFn>
+      ): ReturnType<import("@earendil-works/pi-agent-core").StreamFn> => {
+        const payload = { messages: [...messages] };
+        void args[2]?.onPayload?.(payload, args[0]);
+        capturedPayload = payload;
+        return { async *[Symbol.asyncIterator]() {} } as never;
+      },
+    );
+
+    const wrapped = provider.wrapStreamFn?.({
+      provider: "openrouter",
+      modelId: "anthropic/claude-opus-4.6",
+      streamFn: baseStreamFn,
+      thinkingLevel: "high",
+    } as never);
+
+    void wrapped?.(
+      {
+        provider: "openrouter",
+        api: "openai-completions",
+        id: "anthropic/claude-opus-4.6",
+        baseUrl: "https://openrouter.ai/api/v1",
+        compat: {},
+      } as never,
+      { messages: [] } as never,
+      {},
+    );
+
+    expect(capturedPayload?.messages).toEqual(messages);
+    expect(capturedPayload?.reasoning).toEqual({ effort: "high" });
+    expect(baseStreamFn).toHaveBeenCalledOnce();
+  });
+
   it("keeps OpenRouter Anthropic prefill when reasoning is disabled or the route is custom", async () => {
     const provider = await registerSingleProviderPlugin(openrouterPlugin);
     const payloads: Array<Record<string, unknown>> = [];

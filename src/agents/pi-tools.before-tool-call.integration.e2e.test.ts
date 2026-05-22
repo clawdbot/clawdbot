@@ -13,6 +13,9 @@ import { patchPluginSessionExtension } from "../plugins/host-hook-state.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { PluginHookRegistration } from "../plugins/types.js";
+import { markCodeModeControlTool } from "./code-mode-control-tools.js";
+import { CODE_MODE_EXEC_TOOL_NAME, createCodeModeTools } from "./code-mode.js";
+import { splitSdkTools } from "./pi-embedded-runner.js";
 import { toClientToolDefinitions, toToolDefinitions } from "./pi-tool-definition-adapter.js";
 import { wrapToolWithAbortSignal } from "./pi-tools.abort.js";
 import {
@@ -287,6 +290,624 @@ describe("before_tool_call hook deduplication (#15502)", () => {
     );
 
     expect(beforeToolCallHook).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes agent context to outer code-mode exec hooks through Pi custom tools", async () => {
+    beforeToolCallHook = installBeforeToolCallHook({
+      runBeforeToolCallImpl: async () => ({
+        block: true,
+        blockReason: "blocked before code-mode execution",
+      }),
+    });
+    const abortController = new AbortController();
+    const codeModeTools = createCodeModeTools({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      sessionId: "session-main",
+      runId: "run-main",
+      abortSignal: abortController.signal,
+      executeTool: async () => {
+        throw new Error("catalog tool execution should not be reached");
+      },
+    });
+    const execTool = codeModeTools.find((tool) => tool.name === CODE_MODE_EXEC_TOOL_NAME);
+    if (!execTool) {
+      throw new Error("missing code-mode exec tool");
+    }
+    const { customTools } = splitSdkTools({
+      tools: [execTool],
+      sandboxEnabled: false,
+      toolHookContext: {
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        sessionId: "session-main",
+        runId: "run-main",
+      },
+    });
+    const [def] = customTools;
+    if (!def) {
+      throw new Error("missing custom tool definition");
+    }
+    const extensionContext = {} as Parameters<typeof def.execute>[4];
+
+    const result = await def.execute(
+      "call-code-mode-exec",
+      { code: "return 1;" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(result.details).toMatchObject({
+      status: "blocked",
+      reason: "blocked before code-mode execution",
+    });
+    expect(beforeToolCallHook).toHaveBeenCalledWith(
+      {
+        toolName: "exec",
+        params: { code: "return 1;", command: "return 1;" },
+        toolKind: "code_mode_exec",
+        toolInputKind: "javascript",
+        runId: "run-main",
+        toolCallId: "call-code-mode-exec",
+      },
+      {
+        toolName: "exec",
+        toolKind: "code_mode_exec",
+        toolInputKind: "javascript",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        sessionId: "session-main",
+        runId: "run-main",
+        toolCallId: "call-code-mode-exec",
+      },
+    );
+
+    beforeToolCallHook.mockClear();
+    const commandOnlyResult = await def.execute(
+      "call-code-mode-exec-command",
+      { command: "return 2;" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(commandOnlyResult.details).toMatchObject({
+      status: "blocked",
+      reason: "blocked before code-mode execution",
+    });
+    expect(beforeToolCallHook).toHaveBeenCalledWith(
+      {
+        toolName: "exec",
+        params: { code: "return 2;", command: "return 2;" },
+        toolKind: "code_mode_exec",
+        toolInputKind: "javascript",
+        runId: "run-main",
+        toolCallId: "call-code-mode-exec-command",
+      },
+      {
+        toolName: "exec",
+        toolKind: "code_mode_exec",
+        toolInputKind: "javascript",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        sessionId: "session-main",
+        runId: "run-main",
+        toolCallId: "call-code-mode-exec-command",
+      },
+    );
+
+    beforeToolCallHook.mockClear();
+    const typescriptResult = await def.execute(
+      "call-code-mode-exec-typescript",
+      {
+        code: "const value: number = 5;",
+        language: "typescript",
+      },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(typescriptResult.details).toMatchObject({
+      status: "blocked",
+      reason: "blocked before code-mode execution",
+    });
+    expect(beforeToolCallHook).toHaveBeenCalledWith(
+      {
+        toolName: "exec",
+        params: {
+          code: "const value: number = 5;",
+          command: "const value: number = 5;",
+          language: "typescript",
+        },
+        toolKind: "code_mode_exec",
+        toolInputKind: "typescript",
+        runId: "run-main",
+        toolCallId: "call-code-mode-exec-typescript",
+      },
+      {
+        toolName: "exec",
+        toolKind: "code_mode_exec",
+        toolInputKind: "typescript",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        sessionId: "session-main",
+        runId: "run-main",
+        toolCallId: "call-code-mode-exec-typescript",
+      },
+    );
+
+    beforeToolCallHook.mockClear();
+    const malformedAliasResult = await def.execute(
+      "call-code-mode-exec-null-command",
+      { code: "return 4;", command: null },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(malformedAliasResult.details).toMatchObject({
+      status: "blocked",
+      reason: "blocked before code-mode execution",
+    });
+    expect(beforeToolCallHook).toHaveBeenCalledWith(
+      {
+        toolName: "exec",
+        params: { code: "return 4;", command: "return 4;" },
+        toolKind: "code_mode_exec",
+        toolInputKind: "javascript",
+        runId: "run-main",
+        toolCallId: "call-code-mode-exec-null-command",
+      },
+      {
+        toolName: "exec",
+        toolKind: "code_mode_exec",
+        toolInputKind: "javascript",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        sessionId: "session-main",
+        runId: "run-main",
+        toolCallId: "call-code-mode-exec-null-command",
+      },
+    );
+  });
+
+  it("marks code-mode exec without marking plain exec hooks", async () => {
+    const observed: Array<{
+      event: Record<string, unknown>;
+      ctx: Record<string, unknown>;
+    }> = [];
+    beforeToolCallHook = installBeforeToolCallHook({
+      runBeforeToolCallImpl: async (event, ctx) => {
+        observed.push({
+          event: event as Record<string, unknown>,
+          ctx: ctx as Record<string, unknown>,
+        });
+        if ((event as Record<string, unknown>).toolKind === "code_mode_exec") {
+          return { block: true, blockReason: "blocked before code-mode execution" };
+        }
+        return { params: (event as { params: Record<string, unknown> }).params };
+      },
+    });
+    const plainExecute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    const [plainExecDef] = toToolDefinitions(
+      [{ name: "exec", execute: plainExecute, description: "Plain exec", parameters: {} } as any],
+      {
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        sessionId: "session-main",
+        runId: "run-main",
+      },
+    );
+    const codeModeTools = createCodeModeTools({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      sessionId: "session-main",
+      runId: "run-main",
+      abortSignal: new AbortController().signal,
+      executeTool: async () => {
+        throw new Error("catalog tool execution should not be reached");
+      },
+    });
+    const codeModeExec = codeModeTools.find((tool) => tool.name === CODE_MODE_EXEC_TOOL_NAME);
+    if (!plainExecDef || !codeModeExec) {
+      throw new Error("missing exec definitions");
+    }
+    const [codeModeExecDef] = toToolDefinitions([codeModeExec], {
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      sessionId: "session-main",
+      runId: "run-main",
+    });
+    if (!codeModeExecDef) {
+      throw new Error("missing code-mode exec definition");
+    }
+    const extensionContext = {} as Parameters<typeof plainExecDef.execute>[4];
+
+    await plainExecDef.execute(
+      "call-plain-exec",
+      { command: "echo hi" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+    const codeModeResult = await codeModeExecDef.execute(
+      "call-code-mode-exec",
+      { code: "return 1;" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(plainExecute).toHaveBeenCalledWith(
+      "call-plain-exec",
+      { command: "echo hi" },
+      undefined,
+      undefined,
+    );
+    expect(codeModeResult.details).toMatchObject({
+      status: "blocked",
+      reason: "blocked before code-mode execution",
+    });
+    expect(observed[0]?.event).toMatchObject({
+      toolName: "exec",
+      params: { command: "echo hi" },
+    });
+    expect(observed[0]?.event).not.toHaveProperty("toolKind");
+    expect(observed[1]?.event).toMatchObject({
+      toolName: "exec",
+      params: { code: "return 1;", command: "return 1;" },
+      toolKind: "code_mode_exec",
+      toolInputKind: "javascript",
+    });
+    expect(observed[1]?.ctx).toMatchObject({
+      toolName: "exec",
+      toolKind: "code_mode_exec",
+      toolInputKind: "javascript",
+    });
+  });
+
+  it("normalizes outer code-mode exec hook params when a wrapper owns the hook", async () => {
+    beforeToolCallHook = installBeforeToolCallHook({
+      runBeforeToolCallImpl: async () => ({
+        block: true,
+        blockReason: "blocked before code-mode execution",
+      }),
+    });
+    const codeModeTools = createCodeModeTools({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      sessionId: "session-main",
+      runId: "run-main",
+      abortSignal: new AbortController().signal,
+      executeTool: async () => {
+        throw new Error("catalog tool execution should not be reached");
+      },
+    });
+    const execTool = codeModeTools.find((tool) => tool.name === CODE_MODE_EXEC_TOOL_NAME);
+    if (!execTool) {
+      throw new Error("missing code-mode exec tool");
+    }
+    const wrapped = wrapToolWithAbortSignal(
+      wrapToolWithBeforeToolCallHook(execTool, {
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        sessionId: "session-main",
+        runId: "run-main",
+      }),
+      new AbortController().signal,
+    );
+    const [def] = toToolDefinitions([wrapped]);
+    if (!def) {
+      throw new Error("missing custom tool definition");
+    }
+    const extensionContext = {} as Parameters<typeof def.execute>[4];
+
+    const result = await def.execute(
+      "call-wrapped-code-mode-exec",
+      { command: "return 3;" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(result.details).toMatchObject({
+      status: "blocked",
+      reason: "blocked before code-mode execution",
+    });
+    expect(beforeToolCallHook).toHaveBeenCalledTimes(1);
+    expect(beforeToolCallHook).toHaveBeenCalledWith(
+      {
+        toolName: "exec",
+        params: { command: "return 3;", code: "return 3;" },
+        toolKind: "code_mode_exec",
+        toolInputKind: "javascript",
+        runId: "run-main",
+        toolCallId: "call-wrapped-code-mode-exec",
+      },
+      {
+        toolName: "exec",
+        toolKind: "code_mode_exec",
+        toolInputKind: "javascript",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        sessionId: "session-main",
+        runId: "run-main",
+        toolCallId: "call-wrapped-code-mode-exec",
+      },
+    );
+  });
+
+  it("mirrors single-alias hook rewrites for code-mode exec aliases", async () => {
+    beforeToolCallHook = installBeforeToolCallHook({
+      runBeforeToolCallImpl: async () => ({ params: { command: "return 2;" } }),
+    });
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    const tool = markCodeModeControlTool({
+      name: CODE_MODE_EXEC_TOOL_NAME,
+      execute,
+      description: "exec",
+      parameters: {},
+    } as any);
+    const [def] = toToolDefinitions([tool], {
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      sessionId: "session-main",
+      runId: "run-main",
+    });
+    if (!def) {
+      throw new Error("missing custom tool definition");
+    }
+    const extensionContext = {} as Parameters<typeof def.execute>[4];
+
+    await def.execute(
+      "call-code-mode-exec-rewrite",
+      { code: "return 1;", command: "return 1;" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(execute).toHaveBeenCalledWith(
+      "call-code-mode-exec-rewrite",
+      { code: "return 2;", command: "return 2;" },
+      undefined,
+      undefined,
+    );
+    expect(beforeToolCallHook).toHaveBeenCalledWith(
+      {
+        toolName: "exec",
+        params: { code: "return 1;", command: "return 1;" },
+        toolKind: "code_mode_exec",
+        toolInputKind: "javascript",
+        runId: "run-main",
+        toolCallId: "call-code-mode-exec-rewrite",
+      },
+      {
+        toolName: "exec",
+        toolKind: "code_mode_exec",
+        toolInputKind: "javascript",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        sessionId: "session-main",
+        runId: "run-main",
+        toolCallId: "call-code-mode-exec-rewrite",
+      },
+    );
+    expect(consumeAdjustedParamsForToolCall("call-code-mode-exec-rewrite", "run-main")).toEqual({
+      code: "return 2;",
+      command: "return 2;",
+    });
+  });
+
+  it("renormalizes trusted policy rewrites before code-mode exec hooks observe params", async () => {
+    resetGlobalHookRunner();
+    const normalHook = vi.fn(async () => undefined);
+    const trustedObserver = vi.fn(async () => undefined);
+    const registry = createEmptyPluginRegistry();
+    addTestHook({
+      registry,
+      pluginId: "normal-plugin",
+      hookName: "before_tool_call",
+      handler: normalHook as PluginHookRegistration["handler"],
+    });
+    registry.trustedToolPolicies = [
+      {
+        pluginId: "trusted-plugin",
+        pluginName: "Trusted Plugin",
+        source: "test",
+        policy: {
+          id: "code-mode-rewrite-policy",
+          description: "rewrite code-mode exec params",
+          evaluate(eventValue) {
+            if (eventValue.toolCallId === "call-code-mode-trusted-command") {
+              return { params: { command: "return 2;" } };
+            }
+            if (eventValue.toolCallId === "call-code-mode-trusted-language") {
+              return {
+                params: {
+                  code: "const value: number = 3;",
+                  command: "const value: number = 3;",
+                  language: "typescript",
+                },
+              };
+            }
+            return undefined;
+          },
+        },
+      },
+      {
+        pluginId: "trusted-observer",
+        pluginName: "Trusted Observer",
+        source: "test",
+        policy: {
+          id: "code-mode-observer-policy",
+          description: "observe rewritten code-mode exec params",
+          evaluate: trustedObserver,
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+    initializeGlobalHookRunner(registry);
+    try {
+      const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+      const tool = markCodeModeControlTool({
+        name: CODE_MODE_EXEC_TOOL_NAME,
+        execute,
+        description: "exec",
+        parameters: {},
+      } as any);
+      const [def] = toToolDefinitions([tool], {
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        sessionId: "session-main",
+        runId: "run-main",
+      });
+      if (!def) {
+        throw new Error("missing custom tool definition");
+      }
+      const extensionContext = {} as Parameters<typeof def.execute>[4];
+
+      await def.execute(
+        "call-code-mode-trusted-command",
+        { code: "return 1;", command: "return 1;" },
+        undefined,
+        undefined,
+        extensionContext,
+      );
+      await def.execute(
+        "call-code-mode-trusted-language",
+        { code: "return 3;", command: "return 3;", language: "javascript" },
+        undefined,
+        undefined,
+        extensionContext,
+      );
+
+      expect(normalHook).toHaveBeenNthCalledWith(
+        1,
+        {
+          toolName: "exec",
+          params: { command: "return 2;", code: "return 2;" },
+          toolKind: "code_mode_exec",
+          toolInputKind: "javascript",
+          runId: "run-main",
+          toolCallId: "call-code-mode-trusted-command",
+        },
+        expect.objectContaining({
+          toolName: "exec",
+          toolKind: "code_mode_exec",
+          toolInputKind: "javascript",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          sessionId: "session-main",
+          runId: "run-main",
+          toolCallId: "call-code-mode-trusted-command",
+        }),
+      );
+      expect(trustedObserver).toHaveBeenNthCalledWith(
+        1,
+        {
+          toolName: "exec",
+          params: { command: "return 2;", code: "return 2;" },
+          toolKind: "code_mode_exec",
+          toolInputKind: "javascript",
+          runId: "run-main",
+          toolCallId: "call-code-mode-trusted-command",
+        },
+        expect.objectContaining({
+          toolName: "exec",
+          toolKind: "code_mode_exec",
+          toolInputKind: "javascript",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          sessionId: "session-main",
+          runId: "run-main",
+          toolCallId: "call-code-mode-trusted-command",
+        }),
+      );
+      expect(normalHook).toHaveBeenNthCalledWith(
+        2,
+        {
+          toolName: "exec",
+          params: {
+            code: "const value: number = 3;",
+            command: "const value: number = 3;",
+            language: "typescript",
+          },
+          toolKind: "code_mode_exec",
+          toolInputKind: "typescript",
+          runId: "run-main",
+          toolCallId: "call-code-mode-trusted-language",
+        },
+        expect.objectContaining({
+          toolName: "exec",
+          toolKind: "code_mode_exec",
+          toolInputKind: "typescript",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          sessionId: "session-main",
+          runId: "run-main",
+          toolCallId: "call-code-mode-trusted-language",
+        }),
+      );
+      expect(trustedObserver).toHaveBeenNthCalledWith(
+        2,
+        {
+          toolName: "exec",
+          params: {
+            code: "const value: number = 3;",
+            command: "const value: number = 3;",
+            language: "typescript",
+          },
+          toolKind: "code_mode_exec",
+          toolInputKind: "typescript",
+          runId: "run-main",
+          toolCallId: "call-code-mode-trusted-language",
+        },
+        expect.objectContaining({
+          toolName: "exec",
+          toolKind: "code_mode_exec",
+          toolInputKind: "typescript",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          sessionId: "session-main",
+          runId: "run-main",
+          toolCallId: "call-code-mode-trusted-language",
+        }),
+      );
+      expect(execute).toHaveBeenNthCalledWith(
+        1,
+        "call-code-mode-trusted-command",
+        { command: "return 2;", code: "return 2;" },
+        undefined,
+        undefined,
+      );
+      expect(execute).toHaveBeenNthCalledWith(
+        2,
+        "call-code-mode-trusted-language",
+        {
+          code: "const value: number = 3;",
+          command: "const value: number = 3;",
+          language: "typescript",
+        },
+        undefined,
+        undefined,
+      );
+      expect(
+        consumeAdjustedParamsForToolCall("call-code-mode-trusted-command", "run-main"),
+      ).toEqual({ command: "return 2;", code: "return 2;" });
+      expect(
+        consumeAdjustedParamsForToolCall("call-code-mode-trusted-language", "run-main"),
+      ).toEqual({
+        code: "const value: number = 3;",
+        command: "const value: number = 3;",
+        language: "typescript",
+      });
+    } finally {
+      setActivePluginRegistry(createEmptyPluginRegistry());
+      resetGlobalHookRunner();
+    }
   });
 
   it("fires hook exactly once when tool goes through wrap + abort + toToolDefinitions", async () => {

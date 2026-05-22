@@ -10,12 +10,10 @@ describe("openclaw plugin tool context", () => {
       options: {
         config: {} as never,
         requesterSenderId: "trusted-sender",
-        senderIsOwner: true,
       },
     });
 
     expect(result.context.requesterSenderId).toBe("trusted-sender");
-    expect(result.context.senderIsOwner).toBe(true);
   });
 
   it("forwards fs policy for plugin tool sandbox enforcement", () => {

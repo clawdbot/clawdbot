@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/skill-workshop",
-  "version": "2026.5.20",
+  "version": "2026.5.21",
   "private": true,
   "description": "OpenClaw skill workshop plugin",
   "type": "module",

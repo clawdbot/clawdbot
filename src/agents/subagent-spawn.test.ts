@@ -352,8 +352,7 @@ describe("spawnSubagentDirect seam flow", () => {
         // Admin-only methods must be pinned to operator.admin.
         expect(call.scopes).toEqual(["operator.admin"]);
       } else {
-        // Non-admin methods (e.g. "agent") must NOT be forced to admin scope
-        // so the gateway preserves least-privilege and senderIsOwner stays false.
+        // Non-admin methods (e.g. "agent") must NOT be forced to admin scope.
         expect(call.scopes).toBeUndefined();
       }
     }

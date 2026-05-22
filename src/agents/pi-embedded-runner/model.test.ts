@@ -146,7 +146,7 @@ vi.mock("./openrouter-model-capabilities.js", () => ({
     mockLoadOpenRouterModelCapabilities(modelId),
 }));
 
-import type { OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig, OpenClawConfigInput } from "../../config/config.js";
 import { COPILOT_INTEGRATION_ID, buildCopilotIdeHeaders } from "../copilot-dynamic-headers.js";
 import { getModelProviderLocalService } from "../provider-local-service.js";
 import { getModelProviderRequestTransport } from "../provider-request-config.js";
@@ -593,10 +593,11 @@ describe("resolveModel", () => {
   });
 
   it("defaults missing model cost before handing models to PI", () => {
-    const cfg = {
+    const cfg: OpenClawConfig = {
       models: {
         providers: {
           openai: {
+            baseUrl: "",
             api: "openai-responses",
             models: [
               {
@@ -605,6 +606,7 @@ describe("resolveModel", () => {
                 api: "openai-responses",
                 reasoning: true,
                 input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                 contextWindow: 400_000,
                 maxTokens: 128_000,
               },
@@ -612,7 +614,7 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    };
 
     const result = resolveModelForTest("openai", "gpt-5.5", "/tmp/agent", cfg);
 
@@ -661,6 +663,50 @@ describe("resolveModel", () => {
 
     expect(result.model).toBeUndefined();
     expect(result.error).toBe("Unknown model: openai/typo-model");
+  });
+
+  it("does not create fallback models from provider overlays alone", () => {
+    const cfg = {
+      models: {
+        providers: {
+          typoProvider: {
+            timeoutSeconds: 600,
+          },
+        },
+      },
+    } satisfies OpenClawConfigInput;
+
+    const result = resolveModelForTest(
+      "typoProvider",
+      "typoed-model",
+      "/tmp/agent",
+      cfg as unknown as OpenClawConfig,
+    );
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe("Unknown model: typoProvider/typoed-model");
+  });
+
+  it("does not create fallback models from built-in provider api overlays", () => {
+    const cfg = {
+      models: {
+        providers: {
+          openai: {
+            api: "openai-responses",
+          },
+        },
+      },
+    } satisfies OpenClawConfigInput;
+
+    const result = resolveModelForTest(
+      "openai",
+      "typoed-model",
+      "/tmp/agent",
+      cfg as unknown as OpenClawConfig,
+    );
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe("Unknown model: openai/typoed-model");
   });
 
   it("defaults baseUrl-only local custom fallback models to chat completions", () => {
@@ -1174,9 +1220,14 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    } satisfies OpenClawConfigInput;
 
-    const result = resolveModelForTest("openai", "gpt-5.5", "/tmp/agent", cfg);
+    const result = resolveModelForTest(
+      "openai",
+      "gpt-5.5",
+      "/tmp/agent",
+      cfg as unknown as OpenClawConfig,
+    );
 
     expect(result.error).toBeUndefined();
     expect((result.model as { requestTimeoutMs?: number } | undefined)?.requestTimeoutMs).toBe(

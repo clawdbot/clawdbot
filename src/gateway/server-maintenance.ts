@@ -106,6 +106,20 @@ export function startGatewayMaintenanceTimers(params: {
           : undefined
         : undefined;
     };
+    const isPendingAcceptedAgentDedupeKey = (key: string, dedupeEntry: DedupeEntry) => {
+      if (!key.startsWith("agent:")) {
+        return false;
+      }
+      const payload = dedupeEntry.payload;
+      if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+        return false;
+      }
+      if ((payload as { status?: unknown }).status !== "accepted") {
+        return false;
+      }
+      const expiresAtMs = (payload as { expiresAtMs?: unknown }).expiresAtMs;
+      return typeof expiresAtMs === "number" && Number.isFinite(expiresAtMs) && expiresAtMs > now;
+    };
     const isActiveRunDedupeKey = (key: string, dedupeEntry: DedupeEntry) => {
       if (!key.startsWith("agent:") && !key.startsWith("chat:")) {
         return false;
@@ -118,7 +132,7 @@ export function startGatewayMaintenanceTimers(params: {
       return key.startsWith("agent:") ? entry.kind === "agent" : entry.kind !== "agent";
     };
     for (const [k, v] of params.dedupe) {
-      if (isActiveRunDedupeKey(k, v)) {
+      if (isActiveRunDedupeKey(k, v) || isPendingAcceptedAgentDedupeKey(k, v)) {
         continue;
       }
       if (now - v.ts > DEDUPE_TTL_MS) {
@@ -128,7 +142,10 @@ export function startGatewayMaintenanceTimers(params: {
     if (params.dedupe.size > DEDUPE_MAX) {
       const excess = params.dedupe.size - DEDUPE_MAX;
       const oldestKeys = [...params.dedupe.entries()]
-        .filter(([key, entry]) => !isActiveRunDedupeKey(key, entry))
+        .filter(
+          ([key, entry]) =>
+            !isActiveRunDedupeKey(key, entry) && !isPendingAcceptedAgentDedupeKey(key, entry),
+        )
         .toSorted(([, left], [, right]) => left.ts - right.ts)
         .slice(0, excess)
         .map(([key]) => key);

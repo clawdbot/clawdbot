@@ -169,7 +169,7 @@ describe("handleToolsCommand", () => {
     expect(result?.reply?.text).toContain("docs_lookup (docs)");
     expect(result?.reply?.text).not.toContain("unavailable right now");
     const toolsArg = resolveToolsArg(resolveToolsMock);
-    expect(toolsArg.senderIsOwner).toBe(false);
+    expect(toolsArg).not.toHaveProperty("senderIsOwner");
     expect(toolsArg.senderId).toBeUndefined();
     expect(toolsArg.senderName).toBe("User Name");
     expect(toolsArg.senderUsername).toBe("user_name");

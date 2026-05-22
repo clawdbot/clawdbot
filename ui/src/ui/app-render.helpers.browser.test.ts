@@ -1,7 +1,12 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { t } from "../i18n/index.ts";
-import { renderChatControls, renderChatMobileToggle, renderTab } from "./app-render.helpers.ts";
+import {
+  renderChatControls,
+  renderChatMobileToggle,
+  renderTab,
+  renderTopbarThemeModeToggle,
+} from "./app-render.helpers.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import type { SessionsListResult } from "./types.ts";
 
@@ -49,6 +54,7 @@ function createState(overrides: Partial<AppViewState> = {}) {
       chatAutoScroll: "near-bottom",
     },
     applySettings: () => undefined,
+    setThemeMode: () => undefined,
     chatMobileControlsOpen: false,
     setChatMobileControlsOpen: () => undefined,
     chatModelCatalog: [],
@@ -134,6 +140,31 @@ describe("chat header controls (browser)", () => {
       expect(button.getAttribute("title")).toBe(button.getAttribute("data-tooltip"));
       expect(button.getAttribute("aria-label")).toBe(button.getAttribute("data-tooltip"));
     }
+  });
+
+  it("renders explicit hover tooltip metadata for the color mode buttons", async () => {
+    const container = document.createElement("div");
+    render(renderTopbarThemeModeToggle(createState({ themeMode: "system" })), container);
+    await Promise.resolve();
+
+    const buttons = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(".topbar-theme-mode__btn[data-tooltip]"),
+    );
+
+    expect(buttons).toHaveLength(3);
+
+    const labels = buttons.map((button) => button.getAttribute("data-tooltip"));
+    expect(labels).toEqual([
+      t("common.colorModeOption", { mode: t("common.system") }),
+      t("common.colorModeOption", { mode: t("common.light") }),
+      t("common.colorModeOption", { mode: t("common.dark") }),
+    ]);
+
+    for (const button of buttons) {
+      expect(button.getAttribute("title")).toBe(button.getAttribute("data-tooltip"));
+      expect(button.getAttribute("aria-label")).toBe(button.getAttribute("data-tooltip"));
+    }
+    expect(buttons[0]?.classList.contains("topbar-theme-mode__btn--active")).toBe(true);
   });
 
   it.each([

@@ -3,6 +3,7 @@ import type { AuthProfileFailureReason } from "../../auth-profiles.js";
 import {
   buildApiErrorObservationFields,
   sanitizeForConsole,
+  shouldSuppressRawErrorConsoleSuffix,
 } from "../../pi-embedded-error-observation.js";
 import type { FailoverReason } from "../../pi-embedded-helpers.js";
 import { log } from "../logger.js";
@@ -58,12 +59,9 @@ export function createFailoverDecisionLogger(
   return (decision, extra) => {
     const observedError = buildApiErrorObservationFields(normalizedBase.rawError);
     const safeRawErrorPreview = sanitizeForConsole(observedError.rawErrorPreview);
-    const shouldSuppressRawErrorConsoleSuffix =
-      observedError.providerRuntimeFailureKind === "auth_html_403" ||
-      observedError.providerRuntimeFailureKind === "auth_scope" ||
-      observedError.providerRuntimeFailureKind === "auth_refresh";
     const rawErrorConsoleSuffix =
-      safeRawErrorPreview && !shouldSuppressRawErrorConsoleSuffix
+      safeRawErrorPreview &&
+      !shouldSuppressRawErrorConsoleSuffix(observedError.providerRuntimeFailureKind)
         ? ` rawError=${safeRawErrorPreview}`
         : "";
     log.warn("embedded run failover decision", {

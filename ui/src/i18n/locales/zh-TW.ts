@@ -1064,6 +1064,9 @@ export const zh_TW: TranslationMap = {
     selectors: {
       agentFilter: "按代理篩選會話",
       session: "Chat session",
+      sessionSearch: "搜尋工作階段",
+      clearSessionSearch: "清除工作階段搜尋",
+      loadMoreSessions: "載入更多工作階段",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },

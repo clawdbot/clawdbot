@@ -41,10 +41,10 @@ export type OutboundSendContext = {
   requesterSenderName?: string;
   requesterSenderUsername?: string;
   requesterSenderE164?: string;
+  senderIsOwner?: boolean;
   mediaAccess?: OutboundMediaAccess;
   mediaReadFile?: OutboundMediaReadFile;
   accountId?: string | null;
-  senderIsOwner?: boolean;
   sessionId?: string;
   inboundEventKind?: InboundEventKind;
   gateway?: OutboundGatewayContext;

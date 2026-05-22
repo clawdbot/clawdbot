@@ -617,6 +617,7 @@ const RUN_NODE_FILTER_SYNC_IO_STDERR_ENV = "OPENCLAW_RUN_NODE_FILTER_SYNC_IO_STD
 const RUN_NODE_BUILD_LOCK_TIMEOUT_ENV = "OPENCLAW_RUN_NODE_BUILD_LOCK_TIMEOUT_MS";
 const RUN_NODE_BUILD_LOCK_POLL_ENV = "OPENCLAW_RUN_NODE_BUILD_LOCK_POLL_MS";
 const RUN_NODE_BUILD_LOCK_STALE_ENV = "OPENCLAW_RUN_NODE_BUILD_LOCK_STALE_MS";
+const RUN_NODE_SKIP_DTS_BUILD_ENV = "OPENCLAW_RUN_NODE_SKIP_DTS_BUILD";
 const DEFAULT_BUILD_LOCK_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_BUILD_LOCK_POLL_MS = 100;
 const DEFAULT_BUILD_LOCK_STALE_MS = 10 * 60 * 1000;
@@ -1354,7 +1355,10 @@ export async function runNodeMain(params = {}) {
 
           const build = deps.spawn(buildCmd, compilerArgs, {
             cwd: deps.cwd,
-            env: deps.env,
+            env: {
+              ...deps.env,
+              [RUN_NODE_SKIP_DTS_BUILD_ENV]: deps.env[RUN_NODE_SKIP_DTS_BUILD_ENV] ?? "1",
+            },
             stdio: shouldPipeSpawnedOutput(deps) ? ["inherit", "pipe", "pipe"] : "inherit",
           });
           pipeSpawnedOutput(build, deps);

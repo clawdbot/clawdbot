@@ -2,11 +2,11 @@ import { describe, expect, it } from "vitest";
 import { applyDeferredFollowupToolDescriptions } from "./pi-tools.deferred-followup.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 
-function findToolDescription(toolName: string, senderIsOwner: boolean) {
+function findToolDescription(toolName: string, includeCron: boolean) {
   const tools = applyDeferredFollowupToolDescriptions([
     { name: "exec", description: "exec base" },
     { name: "process", description: "process base" },
-    ...(senderIsOwner ? [{ name: "cron", description: "cron base" }] : []),
+    ...(includeCron ? [{ name: "cron", description: "cron base" }] : []),
   ] as AnyAgentTool[]);
   const tool = tools.find((entry) => entry.name === toolName);
   return {

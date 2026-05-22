@@ -108,20 +108,7 @@ describe("matrixMessageActions", () => {
     expect(properties.avatarPath).toHaveProperty("type", "string");
   });
 
-  it("hides self-profile updates for non-owner discovery", () => {
-    const discovery = matrixMessageActions.describeMessageTool({
-      cfg: createConfiguredMatrixConfig(),
-      senderIsOwner: false,
-    } as never);
-    if (!discovery) {
-      throw new Error("describeMessageTool returned null");
-    }
-
-    expect(discovery.actions).not.toContain(profileAction);
-    expect(discovery.schema).toBeNull();
-  });
-
-  it("hides self-profile updates when owner status is unknown", () => {
+  it("hides self-profile updates without owner identity context", () => {
     const discovery = matrixMessageActions.describeMessageTool({
       cfg: createConfiguredMatrixConfig(),
     } as never);
@@ -130,7 +117,6 @@ describe("matrixMessageActions", () => {
     }
 
     expect(discovery.actions).not.toContain(profileAction);
-    expect(discovery.schema).toBeNull();
   });
 
   it("hides gated actions when the default Matrix account disables them", () => {

@@ -119,9 +119,9 @@ The script exits with code `2` for invalid method selection or invalid `--instal
     curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --install-method git
     ```
   </Tab>
-  <Tab title="GitHub main via npm">
+  <Tab title="GitHub main checkout">
     ```bash
-    curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --version main
+    curl -fsSL --proto '=https' --tlsv1.2 https://openclaw.ai/install.sh | bash -s -- --install-method git --version main
     ```
   </Tab>
   <Tab title="Dry run">
@@ -154,19 +154,19 @@ The script exits with code `2` for invalid method selection or invalid `--instal
 
   <Accordion title="Environment variables reference">
 
-| Variable                                                | Description                                   |
-| ------------------------------------------------------- | --------------------------------------------- |
-| `OPENCLAW_INSTALL_METHOD=git\|npm`                      | Install method                                |
-| `OPENCLAW_VERSION=latest\|next\|main\|<semver>\|<spec>` | npm version, dist-tag, or package spec        |
-| `OPENCLAW_BETA=0\|1`                                    | Use beta if available                         |
-| `OPENCLAW_GIT_DIR=<path>`                               | Checkout directory                            |
-| `OPENCLAW_GIT_UPDATE=0\|1`                              | Toggle git updates                            |
-| `OPENCLAW_NO_PROMPT=1`                                  | Disable prompts                               |
-| `OPENCLAW_NO_ONBOARD=1`                                 | Skip onboarding                               |
-| `OPENCLAW_DRY_RUN=1`                                    | Dry run mode                                  |
-| `OPENCLAW_VERBOSE=1`                                    | Debug mode                                    |
-| `OPENCLAW_NPM_LOGLEVEL=error\|warn\|notice`             | npm log level                                 |
-| `SHARP_IGNORE_GLOBAL_LIBVIPS=0\|1`                      | Control sharp/libvips behavior (default: `1`) |
+| Variable                                          | Description                                   |
+| ------------------------------------------------- | --------------------------------------------- |
+| `OPENCLAW_INSTALL_METHOD=git\|npm`                | Install method                                |
+| `OPENCLAW_VERSION=latest\|next\|<semver>\|<spec>` | npm version, dist-tag, or package spec        |
+| `OPENCLAW_BETA=0\|1`                              | Use beta if available                         |
+| `OPENCLAW_GIT_DIR=<path>`                         | Checkout directory                            |
+| `OPENCLAW_GIT_UPDATE=0\|1`                        | Toggle git updates                            |
+| `OPENCLAW_NO_PROMPT=1`                            | Disable prompts                               |
+| `OPENCLAW_NO_ONBOARD=1`                           | Skip onboarding                               |
+| `OPENCLAW_DRY_RUN=1`                              | Dry run mode                                  |
+| `OPENCLAW_VERBOSE=1`                              | Debug mode                                    |
+| `OPENCLAW_NPM_LOGLEVEL=error\|warn\|notice`       | npm log level                                 |
+| `SHARP_IGNORE_GLOBAL_LIBVIPS=0\|1`                | Control sharp/libvips behavior (default: `1`) |
 
   </Accordion>
 </AccordionGroup>
@@ -315,9 +315,9 @@ by default, plus git-checkout installs under the same prefix flow.
     & ([scriptblock]::Create((iwr -useb https://openclaw.ai/install.ps1))) -InstallMethod git
     ```
   </Tab>
-  <Tab title="GitHub main via npm">
+  <Tab title="GitHub main checkout">
     ```powershell
-    & ([scriptblock]::Create((iwr -useb https://openclaw.ai/install.ps1))) -Tag main
+    & ([scriptblock]::Create((iwr -useb https://openclaw.ai/install.ps1))) -InstallMethod git -Tag main
     ```
   </Tab>
   <Tab title="Custom git directory">

@@ -270,6 +270,106 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(tui.requestRender).toHaveBeenCalled();
   });
 
+  it("shows finishing context for a pending run before chat registration", () => {
+    const { state, tui, setActivityStatus, handleAgentEvent, isLocalRunId } = createHandlersHarness(
+      {
+        localMode: true,
+        state: {
+          activeChatRunId: null,
+          pendingChatRunId: "run-pending",
+          pendingOptimisticUserMessage: true,
+        },
+      },
+    );
+
+    handleAgentEvent({
+      runId: "run-pending",
+      stream: "lifecycle",
+      data: { phase: "finishing" },
+    });
+
+    expect(state.activeChatRunId).toBe("run-pending");
+    expect(state.pendingChatRunId).toBeNull();
+    expect(state.pendingOptimisticUserMessage).toBe(false);
+    expect(isLocalRunId("run-pending")).toBe(true);
+    expect(setActivityStatus).toHaveBeenCalledWith("finishing context");
+    expect(tui.requestRender).toHaveBeenCalled();
+  });
+
+  it("shows finishing context for a known run after assistant final", () => {
+    const { state, tui, setActivityStatus, handleChatEvent, handleAgentEvent } =
+      createHandlersHarness({
+        state: { activeChatRunId: null },
+      });
+
+    handleChatEvent({
+      runId: "run-final",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "done" }] },
+    });
+    setActivityStatus.mockClear();
+    tui.requestRender.mockClear();
+
+    handleAgentEvent({
+      runId: "run-final",
+      stream: "lifecycle",
+      data: { phase: "finishing" },
+    });
+
+    expect(setActivityStatus).toHaveBeenCalledWith("finishing context");
+    expect(tui.requestRender).toHaveBeenCalled();
+
+    setActivityStatus.mockClear();
+    tui.requestRender.mockClear();
+
+    handleAgentEvent({
+      runId: "run-final",
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
+
+    expect(setActivityStatus).toHaveBeenCalledWith("idle");
+    expect(tui.requestRender).toHaveBeenCalled();
+  });
+
+  it("does not let delayed finalized-run lifecycle clobber a newer active run", () => {
+    const { state, tui, setActivityStatus, handleChatEvent, handleAgentEvent } =
+      createHandlersHarness({
+        state: { activeChatRunId: null },
+      });
+
+    handleChatEvent({
+      runId: "run-old",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "old done" }] },
+    });
+    handleChatEvent({
+      runId: "run-new",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      message: { content: "new running" },
+    });
+    setActivityStatus.mockClear();
+    tui.requestRender.mockClear();
+
+    handleAgentEvent({
+      runId: "run-old",
+      stream: "lifecycle",
+      data: { phase: "finishing" },
+    });
+    handleAgentEvent({
+      runId: "run-old",
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
+
+    expect(state.activeChatRunId).toBe("run-new");
+    expect(setActivityStatus).not.toHaveBeenCalled();
+    expect(tui.requestRender).not.toHaveBeenCalled();
+  });
+
   it("ignores fallback model updates for unrelated runs", () => {
     const { state, tui, handleAgentEvent } = createHandlersHarness({
       state: {

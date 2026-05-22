@@ -3,9 +3,7 @@ import {
   setConfiguredMcpServer,
   unsetConfiguredMcpServer,
 } from "../../config/mcp-config.js";
-import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import {
-  rejectNonOwnerCommand,
   rejectUnauthorizedCommand,
   requireCommandFlagEnabled,
   requireGatewayClientScope,
@@ -28,12 +26,6 @@ export const handleMcpCommand: CommandHandler = async (params, allowTextCommands
   const unauthorized = rejectUnauthorizedCommand(params, "/mcp");
   if (unauthorized) {
     return unauthorized;
-  }
-  const allowInternalReadOnlyShow =
-    mcpCommand.action === "show" && isInternalMessageChannel(params.command.channel);
-  const nonOwner = allowInternalReadOnlyShow ? null : rejectNonOwnerCommand(params, "/mcp");
-  if (nonOwner) {
-    return nonOwner;
   }
   const disabled = requireCommandFlagEnabled(params.cfg, {
     label: "/mcp",

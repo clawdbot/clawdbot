@@ -12,6 +12,17 @@ import {
 } from "./server-startup-config.js";
 import { buildTestConfigSnapshot } from "./test-helpers.config-snapshots.js";
 
+type PrepareRuntimeSecretsSnapshotForTest =
+  typeof import("../secrets/runtime.js").prepareSecretsRuntimeSnapshot;
+type ActivateRuntimeSecretsSnapshotForTest =
+  typeof import("../secrets/runtime.js").activateSecretsRuntimeSnapshot;
+
+type GatewayStartupSecretsRuntimeMock = {
+  runtimeImport: () => void;
+  prepareRuntimeSecretsSnapshot: PrepareRuntimeSecretsSnapshotForTest;
+  activateRuntimeSecretsSnapshot: ActivateRuntimeSecretsSnapshotForTest;
+};
+
 function gatewayTokenConfig(config: OpenClawConfig): OpenClawConfig {
   return {
     ...config,
@@ -70,6 +81,77 @@ function callArg<T>(mock: { mock: { calls: unknown[][] } }, index = 0, _type?: (
     throw new Error(`Expected mock call ${index}`);
   }
   return call[0] as T;
+}
+
+function gatewaySecretRefSnapshot(): ConfigFileSnapshot {
+  return buildSnapshot({
+    secrets: {
+      providers: {
+        default: { source: "env" },
+      },
+    },
+    gateway: {
+      auth: {
+        mode: "token",
+        token: { source: "env", provider: "default", id: "GATEWAY_TOKEN_REF" },
+      },
+    },
+  });
+}
+
+function runtimeSecretsActivatorForTest(params: {
+  prepareRuntimeSecretsSnapshot: PrepareRuntimeSecretsSnapshotForTest;
+  activateRuntimeSecretsSnapshot: ActivateRuntimeSecretsSnapshotForTest;
+}) {
+  return createRuntimeSecretsActivator({
+    logSecrets: {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    },
+    emitStateEvent: vi.fn(),
+    prepareRuntimeSecretsSnapshot: params.prepareRuntimeSecretsSnapshot,
+    activateRuntimeSecretsSnapshot: params.activateRuntimeSecretsSnapshot,
+  });
+}
+
+function installGatewayStartupSecretsRuntimeMock(state: GatewayStartupSecretsRuntimeMock) {
+  (
+    globalThis as typeof globalThis & {
+      __gatewayStartupSecretsRuntimeMock?: typeof state;
+    }
+  )["__gatewayStartupSecretsRuntimeMock"] = state;
+  vi.doMock("../agents/auth-profiles.js", () => ({
+    loadAuthProfileStoreWithoutExternalProfiles: vi.fn(() => ({
+      version: 1,
+      profiles: {},
+    })),
+  }));
+  vi.doMock("../secrets/runtime.js", () => {
+    const runtimeState = (
+      globalThis as typeof globalThis & {
+        __gatewayStartupSecretsRuntimeMock?: typeof state;
+      }
+    )["__gatewayStartupSecretsRuntimeMock"];
+    if (!runtimeState) {
+      throw new Error("missing gateway startup secrets runtime mock");
+    }
+    runtimeState.runtimeImport();
+    return {
+      prepareSecretsRuntimeSnapshot: runtimeState.prepareRuntimeSecretsSnapshot,
+      activateSecretsRuntimeSnapshot: runtimeState.activateRuntimeSecretsSnapshot,
+    };
+  });
+}
+
+function cleanupGatewayStartupSecretsRuntimeMock(): void {
+  vi.doUnmock("../agents/auth-profiles.js");
+  vi.doUnmock("../secrets/runtime.js");
+  delete (
+    globalThis as typeof globalThis & {
+      __gatewayStartupSecretsRuntimeMock?: unknown;
+    }
+  )["__gatewayStartupSecretsRuntimeMock"];
 }
 
 describe("gateway startup config secret preflight", () => {
@@ -405,26 +487,8 @@ describe("gateway startup config secret preflight", () => {
     const activateRuntimeSecretsSnapshot = vi.fn();
 
     const result = await prepareGatewayStartupConfig({
-      configSnapshot: buildSnapshot({
-        secrets: {
-          providers: {
-            default: { source: "env" },
-          },
-        },
-        gateway: {
-          auth: {
-            mode: "token",
-            token: { source: "env", provider: "default", id: "GATEWAY_TOKEN_REF" },
-          },
-        },
-      }),
-      activateRuntimeSecrets: createRuntimeSecretsActivator({
-        logSecrets: {
-          info: vi.fn(),
-          warn: vi.fn(),
-          error: vi.fn(),
-        },
-        emitStateEvent: vi.fn(),
+      configSnapshot: gatewaySecretRefSnapshot(),
+      activateRuntimeSecrets: runtimeSecretsActivatorForTest({
         prepareRuntimeSecretsSnapshot,
         activateRuntimeSecretsSnapshot,
       }),
@@ -474,26 +538,8 @@ describe("gateway startup config secret preflight", () => {
     const activateRuntimeSecretsSnapshot = vi.fn();
 
     const result = await prepareGatewayStartupConfig({
-      configSnapshot: buildSnapshot({
-        secrets: {
-          providers: {
-            default: { source: "env" },
-          },
-        },
-        gateway: {
-          auth: {
-            mode: "token",
-            token: { source: "env", provider: "default", id: "GATEWAY_TOKEN_REF" },
-          },
-        },
-      }),
-      activateRuntimeSecrets: createRuntimeSecretsActivator({
-        logSecrets: {
-          info: vi.fn(),
-          warn: vi.fn(),
-          error: vi.fn(),
-        },
-        emitStateEvent: vi.fn(),
+      configSnapshot: gatewaySecretRefSnapshot(),
+      activateRuntimeSecrets: runtimeSecretsActivatorForTest({
         prepareRuntimeSecretsSnapshot,
         activateRuntimeSecretsSnapshot,
       }),
@@ -624,43 +670,10 @@ describe("gateway startup config secret preflight", () => {
     const runtimeImport = vi.fn();
     const prepareRuntimeSecretsSnapshot = vi.fn(async ({ config }) => preparedSnapshot(config));
     const activateRuntimeSecretsSnapshot = vi.fn();
-    (
-      globalThis as typeof globalThis & {
-        __gatewayStartupSecretsRuntimeMock?: {
-          runtimeImport: typeof runtimeImport;
-          prepareRuntimeSecretsSnapshot: typeof prepareRuntimeSecretsSnapshot;
-          activateRuntimeSecretsSnapshot: typeof activateRuntimeSecretsSnapshot;
-        };
-      }
-    )["__gatewayStartupSecretsRuntimeMock"] = {
+    installGatewayStartupSecretsRuntimeMock({
       runtimeImport,
       prepareRuntimeSecretsSnapshot,
       activateRuntimeSecretsSnapshot,
-    };
-    vi.doMock("../agents/auth-profiles.js", () => ({
-      loadAuthProfileStoreWithoutExternalProfiles: vi.fn(() => ({
-        version: 1,
-        profiles: {},
-      })),
-    }));
-    vi.doMock("../secrets/runtime.js", () => {
-      const state = (
-        globalThis as typeof globalThis & {
-          __gatewayStartupSecretsRuntimeMock?: {
-            runtimeImport: typeof runtimeImport;
-            prepareRuntimeSecretsSnapshot: typeof prepareRuntimeSecretsSnapshot;
-            activateRuntimeSecretsSnapshot: typeof activateRuntimeSecretsSnapshot;
-          };
-        }
-      )["__gatewayStartupSecretsRuntimeMock"];
-      if (!state) {
-        throw new Error("missing gateway startup secrets runtime mock");
-      }
-      state.runtimeImport();
-      return {
-        prepareSecretsRuntimeSnapshot: state.prepareRuntimeSecretsSnapshot,
-        activateSecretsRuntimeSnapshot: state.activateRuntimeSecretsSnapshot,
-      };
     });
 
     try {
@@ -699,13 +712,7 @@ describe("gateway startup config secret preflight", () => {
       expect(prepareRuntimeSecretsSnapshot).toHaveBeenCalledTimes(1);
       expect(activateRuntimeSecretsSnapshot).toHaveBeenCalledTimes(1);
     } finally {
-      vi.doUnmock("../agents/auth-profiles.js");
-      vi.doUnmock("../secrets/runtime.js");
-      delete (
-        globalThis as typeof globalThis & {
-          __gatewayStartupSecretsRuntimeMock?: unknown;
-        }
-      )["__gatewayStartupSecretsRuntimeMock"];
+      cleanupGatewayStartupSecretsRuntimeMock();
       rmSync(agentDir, { recursive: true, force: true });
       vi.resetModules();
     }
@@ -730,43 +737,10 @@ describe("gateway startup config secret preflight", () => {
     const runtimeImport = vi.fn();
     const prepareRuntimeSecretsSnapshot = vi.fn(async ({ config }) => preparedSnapshot(config));
     const activateRuntimeSecretsSnapshot = vi.fn();
-    (
-      globalThis as typeof globalThis & {
-        __gatewayStartupSecretsRuntimeMock?: {
-          runtimeImport: typeof runtimeImport;
-          prepareRuntimeSecretsSnapshot: typeof prepareRuntimeSecretsSnapshot;
-          activateRuntimeSecretsSnapshot: typeof activateRuntimeSecretsSnapshot;
-        };
-      }
-    )["__gatewayStartupSecretsRuntimeMock"] = {
+    installGatewayStartupSecretsRuntimeMock({
       runtimeImport,
       prepareRuntimeSecretsSnapshot,
       activateRuntimeSecretsSnapshot,
-    };
-    vi.doMock("../agents/auth-profiles.js", () => ({
-      loadAuthProfileStoreWithoutExternalProfiles: vi.fn(() => ({
-        version: 1,
-        profiles: {},
-      })),
-    }));
-    vi.doMock("../secrets/runtime.js", () => {
-      const state = (
-        globalThis as typeof globalThis & {
-          __gatewayStartupSecretsRuntimeMock?: {
-            runtimeImport: typeof runtimeImport;
-            prepareRuntimeSecretsSnapshot: typeof prepareRuntimeSecretsSnapshot;
-            activateRuntimeSecretsSnapshot: typeof activateRuntimeSecretsSnapshot;
-          };
-        }
-      )["__gatewayStartupSecretsRuntimeMock"];
-      if (!state) {
-        throw new Error("missing gateway startup secrets runtime mock");
-      }
-      state.runtimeImport();
-      return {
-        prepareSecretsRuntimeSnapshot: state.prepareRuntimeSecretsSnapshot,
-        activateSecretsRuntimeSnapshot: state.activateRuntimeSecretsSnapshot,
-      };
     });
 
     try {
@@ -797,13 +771,7 @@ describe("gateway startup config secret preflight", () => {
       expect(prepareRuntimeSecretsSnapshot).toHaveBeenCalledTimes(1);
       expect(activateRuntimeSecretsSnapshot).toHaveBeenCalledTimes(1);
     } finally {
-      vi.doUnmock("../agents/auth-profiles.js");
-      vi.doUnmock("../secrets/runtime.js");
-      delete (
-        globalThis as typeof globalThis & {
-          __gatewayStartupSecretsRuntimeMock?: unknown;
-        }
-      )["__gatewayStartupSecretsRuntimeMock"];
+      cleanupGatewayStartupSecretsRuntimeMock();
       rmSync(agentDir, { recursive: true, force: true });
       vi.resetModules();
     }

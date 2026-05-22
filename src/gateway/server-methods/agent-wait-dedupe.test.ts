@@ -109,6 +109,42 @@ describe("agent wait dedupe helper", () => {
     });
   });
 
+  it("normalizes blocked ok agent snapshots to errors", () => {
+    const dedupe = new Map();
+    const runId = "run-blocked-agent";
+
+    setRunEntry({
+      dedupe,
+      kind: "agent",
+      runId,
+      payload: {
+        runId,
+        status: "ok",
+        startedAt: 100,
+        endedAt: 200,
+        error: "Context overflow: prompt too large for the model.",
+        result: {
+          meta: {
+            livenessState: "blocked",
+          },
+        },
+      },
+    });
+
+    expect(
+      readTerminalSnapshotFromGatewayDedupe({
+        dedupe,
+        runId,
+      }),
+    ).toEqual({
+      status: "error",
+      startedAt: 100,
+      endedAt: 200,
+      error: "Context overflow: prompt too large for the model.",
+      livenessState: "blocked",
+    });
+  });
+
   it("keeps stale chat dedupe blocked while agent dedupe is in-flight", async () => {
     const dedupe = new Map();
     const runId = "run-stale-chat";

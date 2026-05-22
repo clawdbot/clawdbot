@@ -5,8 +5,13 @@ import { repairCodexRuntimePluginInstallForModelSelection } from "../codex-runti
 import { applyDefaultModelPrimaryUpdate, updateConfig } from "./shared.js";
 
 export async function modelsSetCommand(modelRaw: string, runtime: RuntimeEnv) {
-  const updated = await updateConfig((cfg) => {
-    return applyDefaultModelPrimaryUpdate({ cfg, modelRaw, field: "model" });
+  const updated = await updateConfig((cfg, context) => {
+    return applyDefaultModelPrimaryUpdate({
+      cfg,
+      resolveCfg: context.runtimeConfig,
+      modelRaw,
+      field: "model",
+    });
   });
   const repaired = await repairCodexRuntimePluginInstallForModelSelection({
     cfg: updated,

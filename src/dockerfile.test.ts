@@ -162,7 +162,7 @@ describe("Dockerfile", () => {
     expect(dockerfile).toContain("pnpm_config_verify_deps_before_run=false pnpm qa:lab:build");
   });
 
-  it("prunes runtime dependencies after the build stage", async () => {
+  it("prunes runtime dependencies and omitted plugin packages after the build stage", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     expect(dockerfile).toContain("FROM build AS runtime-assets");
     expect(dockerfile).toContain("ARG OPENCLAW_EXTENSIONS");
@@ -180,16 +180,23 @@ describe("Dockerfile", () => {
     expect(dockerfile).toContain(
       "COPY --from=workspace-deps /out/${OPENCLAW_BUNDLED_PLUGIN_DIR}/ ./${OPENCLAW_BUNDLED_PLUGIN_DIR}/",
     );
+    expect(dockerfile).toContain(
+      'OPENCLAW_EXTENSIONS="$OPENCLAW_EXTENSIONS" OPENCLAW_BUNDLED_PLUGIN_DIR="$OPENCLAW_BUNDLED_PLUGIN_DIR" node scripts/prune-docker-plugin-dist.mjs',
+    );
     expect(dockerfile).toContain("CI=true pnpm prune --prod \\");
+    expect(
+      dockerfile.indexOf("CI=true pnpm prune --prod \\"),
+    ).toBeLessThan(
+      dockerfile.indexOf(
+        'OPENCLAW_EXTENSIONS="$OPENCLAW_EXTENSIONS" OPENCLAW_BUNDLED_PLUGIN_DIR="$OPENCLAW_BUNDLED_PLUGIN_DIR" node scripts/prune-docker-plugin-dist.mjs',
+      ),
+    );
     expect(dockerfile).toContain("--config.offline=true");
     expect(dockerfile).toContain("--config.supportedArchitectures.os=linux");
     expect(dockerfile).toContain(
       "--config.supportedArchitectures.cpu=\"$(node -p 'process.arch')\"",
     );
     expect(dockerfile).toContain("--config.supportedArchitectures.libc=glibc");
-    expect(dockerfile).toContain(
-      'OPENCLAW_EXTENSIONS="$OPENCLAW_EXTENSIONS" node scripts/prune-docker-plugin-dist.mjs',
-    );
     expect(dockerfile).not.toContain("pnpm-workspace.runtime.yaml");
     expect(dockerfile).not.toContain("write-runtime-pnpm-workspace");
     expect(dockerfile).not.toContain(

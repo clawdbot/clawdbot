@@ -6,6 +6,7 @@ import type {
 import { normalizeAgentToolResultMiddlewareRuntimes } from "./agent-tool-result-middleware.js";
 import { buildPluginApi } from "./api-builder.js";
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
+import type { EmbeddingProviderAdapter } from "./embedding-providers.js";
 import type {
   PluginAgentEventSubscriptionRegistration,
   PluginControlUiDescriptor,
@@ -57,6 +58,7 @@ export type CapturedPluginRegistration = {
   textTransforms: PluginTextTransformRegistration[];
   codexAppServerExtensionFactories: CodexAppServerExtensionFactory[];
   agentToolResultMiddlewares: PluginAgentToolResultMiddlewareRegistration[];
+  embeddingProviders: EmbeddingProviderAdapter[];
   speechProviders: SpeechProviderPlugin[];
   realtimeTranscriptionProviders: RealtimeTranscriptionProviderPlugin[];
   realtimeVoiceProviders: RealtimeVoiceProviderPlugin[];
@@ -94,6 +96,7 @@ export function createCapturedPluginRegistration(params?: {
   const textTransforms: PluginTextTransformRegistration[] = [];
   const codexAppServerExtensionFactories: CodexAppServerExtensionFactory[] = [];
   const agentToolResultMiddlewares: PluginAgentToolResultMiddlewareRegistration[] = [];
+  const embeddingProviders: EmbeddingProviderAdapter[] = [];
   const speechProviders: SpeechProviderPlugin[] = [];
   const realtimeTranscriptionProviders: RealtimeTranscriptionProviderPlugin[] = [];
   const realtimeVoiceProviders: RealtimeVoiceProviderPlugin[] = [];
@@ -134,6 +137,7 @@ export function createCapturedPluginRegistration(params?: {
     textTransforms,
     codexAppServerExtensionFactories,
     agentToolResultMiddlewares,
+    embeddingProviders,
     speechProviders,
     realtimeTranscriptionProviders,
     realtimeVoiceProviders,
@@ -223,6 +227,9 @@ export function createCapturedPluginRegistration(params?: {
         },
         registerTextTransforms(transforms: PluginTextTransformRegistration) {
           textTransforms.push(transforms);
+        },
+        registerEmbeddingProvider(provider: EmbeddingProviderAdapter) {
+          embeddingProviders.push(provider);
         },
         registerSpeechProvider(provider: SpeechProviderPlugin) {
           speechProviders.push(provider);

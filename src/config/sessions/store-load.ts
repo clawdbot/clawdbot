@@ -11,12 +11,20 @@ import {
 import { getFileStatSnapshot } from "../cache-utils.js";
 import {
   cloneSessionStoreRecord,
+  cloneSessionStoreSnapshot,
+  internSessionEntryLargeStrings,
   isSessionStoreCacheEnabled,
   readSessionStoreCache,
+  readSessionStoreSnapshotCache,
   setSerializedSessionStore,
   writeSessionStoreCache,
+  writeSessionStoreSnapshotCache,
+  type SessionStoreSnapshot,
+  type SessionStoreSnapshotEntries,
+  type SessionStoreSnapshotEntry,
 } from "./store-cache.js";
 import { normalizePersistedSessionEntryShape } from "./store-entry-shape.js";
+import { resolveSessionStoreEntry } from "./store-entry.js";
 import { collectSessionMaintenancePreserveKeys } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
@@ -335,6 +343,7 @@ export function normalizeSessionStore(store: Record<string, SessionEntry>): bool
         ),
       ),
     );
+    internSessionEntryLargeStrings(normalized);
     if (normalized !== entry) {
       store[key] = normalized;
       changed = true;
@@ -380,8 +389,9 @@ export function loadSessionStore(
         store = parsed;
         serializedFromDisk = raw;
       }
-      fileStat = getFileStatSnapshot(storePath) ?? fileStat;
-      mtimeMs = fileStat?.mtimeMs;
+      // Cache with the stat observed before this read. If another process
+      // writes the file after readFileSync returns, a post-read stat could tag
+      // stale content as current and make future cache hits return old data.
       break;
     } catch {
       if (attempt < maxReadAttempts - 1) {
@@ -445,4 +455,45 @@ export function loadSessionStore(
   }
 
   return opts.clone === false ? store : cloneSessionStoreRecord(store, serializedFromDisk);
+}
+
+export function readSessionStoreSnapshot(storePath: string): SessionStoreSnapshot {
+  const currentFileStat = getFileStatSnapshot(storePath);
+  if (isSessionStoreCacheEnabled()) {
+    const cached = readSessionStoreSnapshotCache({
+      storePath,
+      mtimeMs: currentFileStat?.mtimeMs,
+      sizeBytes: currentFileStat?.sizeBytes,
+    });
+    if (cached) {
+      return cached;
+    }
+  }
+
+  const store = loadSessionStore(storePath);
+  if (!isSessionStoreCacheEnabled()) {
+    return cloneSessionStoreSnapshot(store);
+  }
+  return writeSessionStoreSnapshotCache({
+    storePath,
+    store,
+    mtimeMs: currentFileStat?.mtimeMs,
+    sizeBytes: currentFileStat?.sizeBytes,
+  });
+}
+
+export function readSessionEntry(
+  storePath: string,
+  sessionKey: string,
+): SessionStoreSnapshotEntry | undefined {
+  const snapshot = readSessionStoreSnapshot(storePath);
+  const resolved = resolveSessionStoreEntry({
+    store: snapshot as Record<string, SessionEntry>,
+    sessionKey,
+  });
+  return resolved.existing as SessionStoreSnapshotEntry | undefined;
+}
+
+export function readSessionEntries(storePath: string): SessionStoreSnapshotEntries {
+  return Object.entries(readSessionStoreSnapshot(storePath)) as SessionStoreSnapshotEntries;
 }

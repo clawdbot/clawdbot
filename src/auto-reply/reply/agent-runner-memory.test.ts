@@ -22,6 +22,7 @@ const runEmbeddedPiAgentMock = vi.fn();
 const refreshQueuedFollowupSessionMock = vi.fn();
 const incrementCompactionCountMock = vi.fn();
 const ensureSelectedAgentHarnessPluginMock = vi.fn();
+const ensureMemoryFlushTargetFileMock = vi.fn();
 
 function registerMemoryFlushPlanResolverForTest(resolver: MemoryFlushPlanResolver): void {
   registerMemoryCapability("memory-core", { flushPlanResolver: resolver });
@@ -141,6 +142,7 @@ describe("runMemoryFlushIfNeeded", () => {
     });
     runEmbeddedPiAgentMock.mockReset().mockResolvedValue({ payloads: [], meta: {} });
     refreshQueuedFollowupSessionMock.mockReset();
+    ensureMemoryFlushTargetFileMock.mockReset().mockResolvedValue(undefined);
     ensureSelectedAgentHarnessPluginMock.mockReset().mockResolvedValue(undefined);
     incrementCompactionCountMock.mockReset().mockImplementation(async (params) => {
       const sessionKey = String(params.sessionKey ?? "");
@@ -174,6 +176,7 @@ describe("runMemoryFlushIfNeeded", () => {
       compactEmbeddedPiSession: compactEmbeddedPiSessionMock as never,
       runWithModelFallback: runWithModelFallbackMock as never,
       runEmbeddedPiAgent: runEmbeddedPiAgentMock as never,
+      ensureMemoryFlushTargetFile: ensureMemoryFlushTargetFileMock as never,
       refreshQueuedFollowupSession: refreshQueuedFollowupSessionMock as never,
       incrementCompactionCount: incrementCompactionCountMock as never,
       ensureSelectedAgentHarnessPlugin: ensureSelectedAgentHarnessPluginMock as never,
@@ -246,6 +249,13 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(flushCall.prompt).not.toBe(flushCall.transcriptPrompt);
     expect(flushCall.memoryFlushWritePath).toMatch(/^memory\/\d{4}-\d{2}-\d{2}\.md$/);
     expect(flushCall.silentExpected).toBe(true);
+    expect(ensureMemoryFlushTargetFileMock).toHaveBeenCalledWith({
+      workspaceDir: followupRun.run.workspaceDir,
+      relativePath: flushCall.memoryFlushWritePath,
+    });
+    expect(ensureMemoryFlushTargetFileMock.mock.invocationCallOrder[0]).toBeLessThan(
+      runEmbeddedPiAgentMock.mock.invocationCallOrder[0] ?? 0,
+    );
     expect(refreshQueuedFollowupSessionMock).toHaveBeenCalledTimes(1);
     const refreshCall = requireRefreshQueuedFollowupSessionCall();
     expect(refreshCall.key).toBe(sessionKey);
@@ -822,6 +832,53 @@ describe("runMemoryFlushIfNeeded", () => {
       updatedAt: Date.now(),
       totalTokens: 347_000,
       totalTokensFresh: false,
+      agentHarnessId: "codex",
+    };
+
+    await runPreflightCompactionIfNeeded({
+      cfg: {
+        models: {
+          providers: {
+            openai: { models: [{ id: "gpt-5.5", contextWindow: 1_000_000 }] },
+            "openai-codex": { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
+          },
+        },
+        agents: { defaults: { compaction: { memoryFlush: {} } } },
+      } as never,
+      followupRun: createTestFollowupRun({
+        provider: "openai",
+        model: "gpt-5.5",
+        sessionId: "session",
+        sessionKey: "main",
+      }),
+      defaultModel: "gpt-5.5",
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(compactEmbeddedPiSessionMock).toHaveBeenCalledTimes(1);
+    const compactCall = requireCompactEmbeddedPiSessionCall();
+    expect(compactCall.currentTokenCount).toBe(347_000);
+  });
+
+  it("still compacts when a fresh persisted token total is over the threshold", async () => {
+    registerMemoryFlushPlanResolverForTest(() => ({
+      softThresholdTokens: 4_000,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      reserveTokensFloor: 0,
+      prompt: "Pre-compaction memory flush.\nNO_REPLY",
+      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+      relativePath: "memory/2023-11-14.md",
+    }));
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      totalTokens: 347_000,
+      totalTokensFresh: true,
       agentHarnessId: "codex",
     };
 

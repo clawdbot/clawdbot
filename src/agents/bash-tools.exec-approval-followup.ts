@@ -245,17 +245,19 @@ async function sendDirectFollowupFallback(params: {
   deliveryTarget: ExternalBestEffortDeliveryTarget;
   resultText: string;
   sessionError: unknown;
+  allowDenied?: boolean;
 }): Promise<boolean> {
   const directText = formatDirectExecApprovalFollowupText(params.resultText, {
-    allowDenied: canDirectSendDeniedFollowup(params.sessionError),
+    allowDenied: params.allowDenied ?? canDirectSendDeniedFollowup(params.sessionError),
   });
   if (!params.deliveryTarget.deliver || !directText) {
     return false;
   }
 
-  const prefix = shouldPrefixDirectFollowupWithSessionResumeFailure(params)
-    ? buildSessionResumeFallbackPrefix()
-    : "";
+  const prefix =
+    !params.allowDenied && shouldPrefixDirectFollowupWithSessionResumeFailure(params)
+      ? buildSessionResumeFallbackPrefix()
+      : "";
   await sendMessage({
     channel: params.deliveryTarget.channel,
     to: params.deliveryTarget.to ?? "",
@@ -277,9 +279,6 @@ export async function sendExecApprovalFollowup(
     return false;
   }
   const isDenied = isExecDeniedResultText(resultText);
-  if (isDenied && shouldSuppressExecDeniedFollowup(sessionKey)) {
-    return false;
-  }
 
   const deliveryTarget = resolveExternalBestEffortDeliveryTarget({
     channel: params.turnSourceChannel,
@@ -292,6 +291,19 @@ export async function sendExecApprovalFollowup(
     normalizedTurnSourceChannel && isGatewayMessageChannel(normalizedTurnSourceChannel)
       ? normalizedTurnSourceChannel
       : undefined;
+
+  if (isDenied) {
+    if (!sessionKey || shouldSuppressExecDeniedFollowup(sessionKey)) {
+      return false;
+    }
+    return await sendDirectFollowupFallback({
+      approvalId: params.approvalId,
+      deliveryTarget,
+      resultText,
+      sessionError: null,
+      allowDenied: true,
+    });
+  }
 
   let sessionError: unknown = null;
 
