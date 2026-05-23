@@ -20,6 +20,10 @@ type SessionListOptions = {
   totalCount: number;
 };
 
+const SESSION_PAGE_SIZE = 50;
+const TOTAL_MOCK_SESSIONS = 650;
+const TOTAL_TELEGRAM_SESSIONS = 180;
+
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const uiRoot = path.join(repoRoot, "ui");
 
@@ -45,7 +49,12 @@ function parsePort(value: string | undefined, fallback: number): number {
   return Number.isInteger(parsed) && parsed > 0 && parsed < 65_536 ? parsed : fallback;
 }
 
-function sessionRow(key: string, label: string, updatedAt: number) {
+function sessionRow(
+  key: string,
+  label: string,
+  updatedAt: number,
+  options: { model?: string; modelProvider?: string } = {},
+) {
   return {
     contextTokens: null,
     displayName: label,
@@ -53,8 +62,8 @@ function sessionRow(key: string, label: string, updatedAt: number) {
     key,
     kind: "direct",
     label,
-    model: "gpt-5.5",
-    modelProvider: "openai",
+    model: options.model ?? "gpt-5.5",
+    modelProvider: options.modelProvider ?? "openai",
     status: "done",
     totalTokens: 0,
     updatedAt,
@@ -80,61 +89,152 @@ function sessionsListResponse(sessions: unknown[], options: SessionListOptions) 
   };
 }
 
+function pagedSessionsListResponse(sessions: unknown[], offset: number) {
+  const normalizedOffset = Math.max(0, Math.floor(offset));
+  const page = sessions.slice(normalizedOffset, normalizedOffset + SESSION_PAGE_SIZE);
+  const nextOffset = normalizedOffset + SESSION_PAGE_SIZE;
+  return sessionsListResponse(page, {
+    hasMore: nextOffset < sessions.length,
+    nextOffset: nextOffset < sessions.length ? nextOffset : null,
+    offset: normalizedOffset,
+    totalCount: sessions.length,
+  });
+}
+
+function buildSessionRows(params: {
+  baseTime: number;
+  count: number;
+  keyPrefix: string;
+  labelPrefix: string;
+  model?: string;
+  modelProvider?: string;
+}) {
+  return Array.from({ length: params.count }, (_value, index) => {
+    const ordinal = index + 1;
+    const padded = String(ordinal).padStart(3, "0");
+    return sessionRow(
+      `agent:${params.keyPrefix}-${padded}`,
+      `${params.labelPrefix} ${padded}`,
+      params.baseTime - ordinal * 60_000,
+      { model: params.model, modelProvider: params.modelProvider },
+    );
+  });
+}
+
+function buildSessionListCases(
+  sessions: unknown[],
+  matchBase: Record<string, unknown> = {},
+): Array<{ match: Record<string, unknown>; response: unknown }> {
+  const cases: Array<{ match: Record<string, unknown>; response: unknown }> = [];
+  for (let offset = SESSION_PAGE_SIZE; offset < sessions.length; offset += SESSION_PAGE_SIZE) {
+    cases.push({
+      match: { ...matchBase, offset },
+      response: pagedSessionsListResponse(sessions, offset),
+    });
+  }
+  cases.push({
+    match: matchBase,
+    response: pagedSessionsListResponse(sessions, 0),
+  });
+  return cases;
+}
+
+function buildSearchSessionListCases(
+  sessions: unknown[],
+  searchTerms: string[],
+): Array<{ match: Record<string, unknown>; response: unknown }> {
+  return searchTerms.flatMap((search) => buildSessionListCases(sessions, { search }));
+}
+
+function chatHistoryMessage(role: "assistant" | "user", text: string, timestamp: number) {
+  return {
+    content: [{ text, type: "text" }],
+    role,
+    timestamp,
+  };
+}
+
+function buildScrollableChatHistory(baseTime: number): unknown[] {
+  const messages: unknown[] = [
+    chatHistoryMessage(
+      "assistant",
+      `Mock Control UI is running with ${TOTAL_MOCK_SESSIONS} sessions. Open the chat picker, search for "telegram" or "claude", then use Load more repeatedly.`,
+      baseTime,
+    ),
+  ];
+
+  for (let index = 1; index <= 36; index += 1) {
+    const timestamp = baseTime + index * 60_000;
+    messages.push(
+      chatHistoryMessage(
+        "user",
+        `Mock scroll request ${index}: add enough transcript content to exercise the chat scroll container in focused mode.`,
+        timestamp,
+      ),
+      chatHistoryMessage(
+        "assistant",
+        `Mock scroll response ${index}: this deterministic history keeps the mock chat long enough to scroll while testing focus mode, header collapse, and composer anchoring. `.repeat(
+          2,
+        ),
+        timestamp + 30_000,
+      ),
+    );
+  }
+
+  return messages;
+}
+
+function searchPrefixes(term: string): string[] {
+  return Array.from({ length: term.length }, (_value, index) => term.slice(0, index + 1));
+}
+
 function createChatPickerScenario(): ControlUiMockGatewayScenario {
   const baseTime = Date.parse("2026-05-22T09:00:00.000Z");
+  const sessions = [
+    sessionRow("agent:alpha", "Alpha planning", baseTime - 1_000),
+    ...buildSessionRows({
+      baseTime: baseTime - 60_000,
+      count: TOTAL_MOCK_SESSIONS - 1,
+      keyPrefix: "history",
+      labelPrefix: "Long running session",
+    }),
+  ];
+  const telegramSessions = buildSessionRows({
+    baseTime: baseTime - 30_000,
+    count: TOTAL_TELEGRAM_SESSIONS,
+    keyPrefix: "telegram",
+    labelPrefix: "Telegram investigation",
+  });
+  const claudeSessions = buildSessionRows({
+    baseTime: baseTime - 45_000,
+    count: 75,
+    keyPrefix: "model-claude",
+    labelPrefix: "Model search result",
+    model: "claude-sonnet-4-6",
+    modelProvider: "anthropic",
+  });
   return {
     assistantAgentId: "openclaw-mock",
     assistantName: "OpenClaw mock",
     defaultAgentId: "openclaw-mock",
-    historyMessages: [
-      {
-        content: [
-          {
-            text: 'Mock Control UI is running. Open the chat picker, search for "telegram", then use Load more.',
-            type: "text",
-          },
-        ],
-        role: "assistant",
-        timestamp: baseTime,
-      },
-    ],
+    historyMessages: buildScrollableChatHistory(baseTime),
     methodResponses: {
       "sessions.list": {
         cases: [
-          {
-            match: { offset: 50, search: "telegram" },
-            response: sessionsListResponse(
-              [
-                sessionRow("agent:telegram-51", "Telegram archive page 51", baseTime - 180_000),
-                sessionRow("agent:telegram-52", "Telegram archive page 52", baseTime - 240_000),
-              ],
-              { hasMore: false, nextOffset: null, offset: 50, totalCount: 4 },
-            ),
-          },
-          {
-            match: { search: "telegram" },
-            response: sessionsListResponse(
-              [
-                sessionRow("agent:telegram", "Telegram follow-up", baseTime - 60_000),
-                sessionRow("agent:telegram-mobile", "Telegram mobile handoff", baseTime - 120_000),
-              ],
-              { hasMore: true, nextOffset: 50, totalCount: 4 },
-            ),
-          },
-          {
-            match: {},
-            response: sessionsListResponse(
-              [
-                sessionRow("agent:alpha", "Alpha planning", baseTime - 1_000),
-                sessionRow("agent:design", "Design review", baseTime - 30_000),
-              ],
-              { hasMore: true, nextOffset: 50, totalCount: 125 },
-            ),
-          },
+          ...buildSearchSessionListCases(telegramSessions, searchPrefixes("telegram")),
+          ...buildSearchSessionListCases(claudeSessions, [
+            ...searchPrefixes("claude"),
+            ...searchPrefixes("claude-sonnet-4-6"),
+            ...searchPrefixes("anthropic"),
+          ]),
+          ...buildSessionListCases(sessions),
         ],
       },
     },
-    models: [{ id: "gpt-5.5", name: "gpt-5.5", provider: "openai" }],
+    models: [
+      { id: "gpt-5.5", name: "gpt-5.5", provider: "openai" },
+      { id: "claude-sonnet-4-6", name: "claude-sonnet-4-6", provider: "anthropic" },
+    ],
     sessionKey: "agent:alpha",
   };
 }

@@ -12,8 +12,10 @@ import {
   buildChangedCheckCrabboxArgs,
   createChangedCheckChildEnv,
   createChangedCheckPlan,
+  createPnpmManagedCommand,
   shouldDelegateChangedCheckToCrabbox,
   shouldRunShrinkwrapGuard,
+  createShrinkwrapGuardCommand,
 } from "../../scripts/check-changed.mjs";
 import { cleanupTempDirs, makeTempRepoRoot } from "../helpers/temp-repo.js";
 
@@ -279,6 +281,38 @@ describe("scripts/changed-lanes", () => {
     });
   });
 
+  it("runs remote Testbox changed-check children through Corepack pnpm", () => {
+    const command = createPnpmManagedCommand(
+      { name: "conflict markers", args: ["check:no-conflict-markers"] },
+      { OPENCLAW_TESTBOX_REMOTE_RUN: "1", PATH: "/usr/bin" },
+    );
+
+    expect(command.bin).toBe("corepack");
+    expect(command.args).toEqual(["pnpm", "check:no-conflict-markers"]);
+    expect(command.env?.PATH).not.toBe("/usr/bin");
+    expect(command.env?.PATH).toContain("/usr/bin");
+  });
+
+  it("runs CI changed-check children through Corepack pnpm", () => {
+    const command = createPnpmManagedCommand(
+      { name: "conflict markers", args: ["check:no-conflict-markers"] },
+      { CI: "1", PATH: "/usr/bin" },
+    );
+
+    expect(command.bin).toBe("corepack");
+    expect(command.args).toEqual(["pnpm", "check:no-conflict-markers"]);
+  });
+
+  it("keeps local changed-check children on the repo pnpm shim", () => {
+    const command = createPnpmManagedCommand(
+      { name: "conflict markers", args: ["check:no-conflict-markers"] },
+      { PATH: "/usr/bin" },
+    );
+
+    expect(command.bin).toBe("pnpm");
+    expect(command.args).toEqual(["check:no-conflict-markers"]);
+  });
+
   it("delegates local Testbox-mode changed gates before running locally", () => {
     expect(
       shouldDelegateChangedCheckToCrabbox(["--base", "origin/main"], {
@@ -313,6 +347,7 @@ describe("scripts/changed-lanes", () => {
       "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000",
       "OPENCLAW_TESTBOX=1",
       "OPENCLAW_TESTBOX_REMOTE_RUN=1",
+      "corepack",
       "pnpm",
       "check:changed",
       "--base",
@@ -794,7 +829,7 @@ describe("scripts/changed-lanes", () => {
       "lint:extensions:no-plugin-sdk-wildcard-reexports",
       "dup:check:coverage",
       "deps:pins:check",
-      "deps:shrinkwrap:check",
+      "scripts/generate-npm-shrinkwrap.mjs",
       "deps:patches:check",
       "release-metadata:check",
       "ios:version:check",
@@ -827,8 +862,11 @@ describe("scripts/changed-lanes", () => {
 
     const result = detectChangedLanes(["extensions/slack/package.json"]);
     const plan = createChangedCheckPlan(result);
+    const shrinkwrapGuard = createShrinkwrapGuardCommand(["extensions/slack/package.json"]);
 
-    expect(plan.commands.map((command) => command.args[0])).toContain("deps:shrinkwrap:check");
+    expect(shrinkwrapGuard?.args.some((arg) => arg.endsWith("extensions/slack"))).toBe(true);
+    expect(plan.commands.map((command) => command.name)).toContain("npm shrinkwrap guard");
+    expect(plan.commands.map((command) => command.args[0])).not.toContain("deps:shrinkwrap:check");
   });
 
   it("guards release metadata package changes to the top-level version field", () => {

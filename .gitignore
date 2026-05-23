@@ -108,6 +108,7 @@ USER.md
 .vscode/
 
 # local tooling
+.antigravitycli/
 .serena/
 .crabbox/
 

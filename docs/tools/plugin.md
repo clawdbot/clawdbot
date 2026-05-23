@@ -195,6 +195,30 @@ Both formats appear in `openclaw plugins list`, `openclaw plugins inspect`,
 [Plugin bundles](/plugins/bundles) for the bundle compatibility boundary and
 [Building plugins](/plugins/building-plugins) for native plugin authoring.
 
+## Plugin hooks
+
+Plugins can register hooks at runtime, but there are two different APIs with
+different jobs.
+
+- Use typed hooks via `api.on(...)` for runtime lifecycle hooks. This is the
+  preferred surface for middleware, policy, message rewriting, prompt shaping,
+  and tool control.
+- Use `api.registerHook(...)` only when you want to participate in the internal
+  hook system described in [Hooks](/automation/hooks). This is mainly for coarse
+  command/lifecycle side effects and compatibility with existing HOOK-style
+  automation.
+
+Quick rule:
+
+- If the handler needs priority, merge semantics, or block/cancel behavior, use
+  typed plugin hooks.
+- If the handler just reacts to `command:new`, `command:reset`, `message:sent`,
+  or similar coarse events, `api.registerHook(...)` is fine.
+
+Plugin-managed internal hooks show up in `openclaw hooks list` with
+`plugin:<id>`. You cannot enable or disable them through `openclaw hooks`;
+enable or disable the plugin instead.
+
 ## Verify the active Gateway
 
 `openclaw plugins list` and plain `openclaw plugins inspect` read cold config,

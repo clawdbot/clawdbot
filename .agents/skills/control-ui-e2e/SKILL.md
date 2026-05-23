@@ -39,6 +39,7 @@ When running mocked Control UI/dashboard validation for a user-facing feature, p
 - Drive Chromium with Playwright against the local mock URL and capture a video plus screenshots for each meaningful state: initial view, interaction input, result state, and final/paginated/selected state.
 - Use `browser.newContext({ recordVideo: { dir, size }, viewport })`, `page.screenshot({ path })`, and close the context before reporting the video path.
 - Put artifacts under `.artifacts/control-ui-e2e/<short-feature-name>/` or another clearly named local temp directory, and report the absolute paths in the final answer.
+- Treat recording as validation, not only demo capture. If the recorder fails or shows surprising behavior, stop, fix the behavior, add or update a regression test, then rerecord.
 - If visual proof is blocked, state the exact blocker and still report the textual E2E evidence.
 
 ## Mock Pattern
@@ -62,3 +63,12 @@ await page.getByText("Done.").waitFor();
 ```
 
 Extend `installMockGateway` with typed scenario options or method responses when a new flow needs more Gateway surface.
+
+## Standalone Recording
+
+When recording an already-running mocked Control UI URL, use a temporary Playwright script or `playwright test` spec and keep the recording flow focused:
+
+- Open the mock URL, interact through stable `data-*` selectors or user-facing role selectors, and wait on asserted states instead of relying on fixed sleeps.
+- Assert both visible UI state and mocked Gateway traffic for request-driven flows. For example, verify the expected count/row is visible and that `sessions.list` was called with the expected `search`, `offset`, and `limit`.
+- Use short sleeps only after assertions to make the captured video readable.
+- Store the generated video under `.artifacts/control-ui-e2e/<feature>/`; do not commit it.

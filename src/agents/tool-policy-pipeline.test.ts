@@ -1,10 +1,20 @@
-import { beforeEach, describe, expect, test } from "vitest";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 import {
   applyToolPolicyPipeline,
   buildDefaultToolPolicyPipelineSteps,
   resetToolPolicyWarningCacheForTest,
 } from "./tool-policy-pipeline.js";
 import { resolveToolProfilePolicy } from "./tool-policy.js";
+
+const { toolPolicyAuditInfo } = vi.hoisted(() => ({
+  toolPolicyAuditInfo: vi.fn(),
+}));
+
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => ({
+    info: toolPolicyAuditInfo,
+  }),
+}));
 
 type DummyTool = { name: string };
 
@@ -39,6 +49,7 @@ function runAllowlistWarningStep(params: {
 describe("tool-policy-pipeline", () => {
   beforeEach(() => {
     resetToolPolicyWarningCacheForTest();
+    toolPolicyAuditInfo.mockClear();
   });
 
   test("preserves plugin-only allowlists instead of silently stripping them", () => {
@@ -275,5 +286,152 @@ describe("tool-policy-pipeline", () => {
       ],
     });
     expect(filtered.map((t) => (t as unknown as DummyTool).name)).toEqual(["exec"]);
+  });
+
+  test("audits the policy rule that removes tools", () => {
+    const tools = [
+      { name: "exec" },
+      { name: "browser" },
+      { name: "write" },
+      { name: "read" },
+    ] as unknown as DummyTool[];
+
+    applyToolPolicyPipeline({
+      tools: tools as any,
+      toolMeta: () => undefined,
+      warn: () => {},
+      steps: [
+        {
+          policy: { allow: ["exec", "read"] },
+          label: "agent tools.allow",
+        },
+      ],
+    });
+
+    expect(toolPolicyAuditInfo).toHaveBeenCalledWith(
+      "tool policy removed 2 tool(s) via agent tools.allow: browser, write",
+      {
+        rule: "agent tools.allow",
+        ruleKind: "allow",
+        removedToolCount: 2,
+        removedTools: ["browser", "write"],
+        removedToolsTruncated: false,
+      },
+    );
+  });
+
+  test("audits deny removals with the deny config key", () => {
+    const tools = [{ name: "exec" }, { name: "browser" }] as unknown as DummyTool[];
+
+    applyToolPolicyPipeline({
+      tools: tools as any,
+      toolMeta: () => undefined,
+      warn: () => {},
+      steps: [
+        {
+          policy: { deny: ["browser"] },
+          label: "tools.allow",
+        },
+      ],
+    });
+
+    expect(toolPolicyAuditInfo).toHaveBeenCalledWith(
+      "tool policy removed 1 tool(s) via tools.deny: browser; matched browser",
+      {
+        rule: "tools.deny",
+        ruleKind: "deny",
+        matchedRules: ["browser"],
+        removedToolCount: 1,
+        removedTools: ["browser"],
+        removedToolsTruncated: false,
+      },
+    );
+  });
+
+  test("splits mixed allow and deny policy audit entries by cause", () => {
+    const tools = [
+      { name: "exec" },
+      { name: "browser" },
+      { name: "write" },
+    ] as unknown as DummyTool[];
+
+    applyToolPolicyPipeline({
+      tools: tools as any,
+      toolMeta: () => undefined,
+      warn: () => {},
+      steps: [
+        {
+          policy: { allow: ["exec"], deny: ["browser"] },
+          label: "agents.worker.tools.allow",
+        },
+      ],
+    });
+
+    expect(toolPolicyAuditInfo).toHaveBeenCalledWith(
+      "tool policy removed 1 tool(s) via agents.worker.tools.deny: browser; matched browser",
+      {
+        rule: "agents.worker.tools.deny",
+        ruleKind: "deny",
+        matchedRules: ["browser"],
+        removedToolCount: 1,
+        removedTools: ["browser"],
+        removedToolsTruncated: false,
+      },
+    );
+    expect(toolPolicyAuditInfo).toHaveBeenCalledWith(
+      "tool policy removed 1 tool(s) via agents.worker.tools.allow: write",
+      {
+        rule: "agents.worker.tools.allow",
+        ruleKind: "allow",
+        removedToolCount: 1,
+        removedTools: ["write"],
+        removedToolsTruncated: false,
+      },
+    );
+  });
+
+  test("does not audit policy steps that leave the tool surface unchanged", () => {
+    const tools = [{ name: "exec" }] as unknown as DummyTool[];
+
+    applyToolPolicyPipeline({
+      tools: tools as any,
+      toolMeta: () => undefined,
+      warn: () => {},
+      steps: [
+        {
+          policy: { allow: ["exec"] },
+          label: "tools.allow",
+        },
+      ],
+    });
+
+    expect(toolPolicyAuditInfo).not.toHaveBeenCalled();
+  });
+
+  test("sanitizes audit labels and tool names before logging", () => {
+    const tools = [{ name: "exec\nbad" }] as unknown as DummyTool[];
+
+    applyToolPolicyPipeline({
+      tools: tools as any,
+      toolMeta: () => undefined,
+      warn: () => {},
+      steps: [
+        {
+          policy: { allow: ["read"] },
+          label: "agents.worker\nbad.tools.allow",
+        },
+      ],
+    });
+
+    expect(toolPolicyAuditInfo).toHaveBeenCalledWith(
+      "tool policy removed 1 tool(s) via agents.worker\\nbad.tools.allow: exec\\nbad",
+      {
+        rule: "agents.worker\\nbad.tools.allow",
+        ruleKind: "allow",
+        removedToolCount: 1,
+        removedTools: ["exec\\nbad"],
+        removedToolsTruncated: false,
+      },
+    );
   });
 });

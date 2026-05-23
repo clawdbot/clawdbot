@@ -48,10 +48,14 @@ export type SkillCommandDispatchSpec = {
   argMode?: "raw";
 };
 
+export type SkillTelemetrySource = "bundled" | "unknown" | "workspace";
+
 export type SkillCommandSpec = {
   name: string;
   skillName: string;
   description: string;
+  /** Bounded source label used for diagnostics. */
+  skillSource?: SkillTelemetrySource;
   /** Localized descriptions for native command surfaces that support them. */
   descriptionLocalizations?: Record<string, string>;
   /** Optional deterministic dispatch behavior for this command. */

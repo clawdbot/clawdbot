@@ -22,7 +22,7 @@ function makeFakeCrabbox(helpText: string): string {
     `  process.stdout.write(${JSON.stringify(helpText)});`,
     "  process.exit(0);",
     "}",
-    "console.log(JSON.stringify(args));",
+    "console.log(JSON.stringify({ args, cwd: process.cwd() }));",
   ].join("\n");
   writeFileSync(crabboxPath, `${script}\n`, "utf8");
   writeFileSync(
@@ -34,16 +34,52 @@ function makeFakeCrabbox(helpText: string): string {
   return binDir;
 }
 
-function runWrapper(helpText: string, args: string[]) {
+function makeFakeGit(responses: Record<string, { status?: number; stdout?: string; stderr?: string }>): string {
+  const binDir = mkdtempSync(path.join(tmpdir(), "openclaw-fake-git-"));
+  tempDirs.push(binDir);
+  const gitPath = path.join(binDir, "git");
+  const script = [
+    "#!/usr/bin/env node",
+    "const fs = require('node:fs');",
+    "const responses = new Map(Object.entries(JSON.parse(process.env.OPENCLAW_FAKE_GIT_RESPONSES || '{}')));",
+    "const args = process.argv.slice(2);",
+    "if (args[0] === 'worktree' && args[1] === 'add') { fs.mkdirSync(args[3], { recursive: true }); process.exit(0); }",
+    "if (args[0] === '-C' && args[2] === 'sparse-checkout' && args[3] === 'disable') { process.exit(0); }",
+    "if (args[0] === 'worktree' && args[1] === 'remove') { process.exit(0); }",
+    "const key = args.join('\\u0000');",
+    "const response = responses.get(key);",
+    "if (!response) { process.exit(1); }",
+    "if (response.stdout) process.stdout.write(response.stdout);",
+    "if (response.stderr) process.stderr.write(response.stderr);",
+    "process.exit(response.status ?? 0);",
+  ].join("\n");
+  writeFileSync(gitPath, `${script}\n`, "utf8");
+  chmodSync(gitPath, 0o755);
+  return binDir;
+}
+
+function runWrapper(
+  helpText: string,
+  args: string[],
+  options: { gitResponses?: Record<string, { status?: number; stdout?: string; stderr?: string }> } = {},
+) {
   const binDir = makeFakeCrabbox(helpText);
+  const gitBinDir = options.gitResponses ? makeFakeGit(options.gitResponses) : "";
   return spawnSync(process.execPath, ["scripts/crabbox-wrapper.mjs", ...args], {
     cwd: repoRoot,
     encoding: "utf8",
     env: {
       ...process.env,
-      PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      PATH: [binDir, gitBinDir, process.env.PATH ?? ""].filter(Boolean).join(path.delimiter),
+      ...(options.gitResponses
+        ? { OPENCLAW_FAKE_GIT_RESPONSES: JSON.stringify(options.gitResponses) }
+        : {}),
     },
   });
+}
+
+function parseFakeCrabboxOutput(result: ReturnType<typeof runWrapper>): { args: string[]; cwd: string } {
+  return JSON.parse(result.stdout.trim()) as { args: string[]; cwd: string };
 }
 
 afterEach(() => {
@@ -150,5 +186,125 @@ describe("scripts/crabbox-wrapper", () => {
     expect(result.stderr).toContain(
       "providers=hetzner,aws,local-container,blacksmith-testbox,cloudflare",
     );
+  });
+
+  it("uses a temporary full checkout for clean sparse Blacksmith syncs", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      [
+        "run",
+        "--provider",
+        "blacksmith-testbox",
+        "--blacksmith-ref",
+        "feature-branch",
+        "--",
+        "corepack",
+        "pnpm",
+        "check:changed",
+      ],
+      {
+        gitResponses: {
+          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
+          ["status\u0000--porcelain=v1"]: { stdout: "" },
+        },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).not.toContain('"--no-sync"');
+    expect(result.stderr).toContain("syncing from temporary full checkout");
+    expect(parseFakeCrabboxOutput(result).cwd).toContain("openclaw-crabbox-sync-");
+  });
+
+  it("uses a temporary full checkout when clean sparse branches differ from the Blacksmith ref", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "blacksmith-testbox", "--blacksmith-ref", "main", "--", "echo ok"],
+      {
+        gitResponses: {
+          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
+          ["status\u0000--porcelain=v1"]: { stdout: "" },
+        },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).not.toContain('"--no-sync"');
+    expect(result.stderr).toContain("syncing from temporary full checkout");
+    expect(parseFakeCrabboxOutput(result).cwd).toContain("openclaw-crabbox-sync-");
+  });
+
+  it("keeps sparse dirty worktrees on the original checkout", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      ["run", "--provider", "blacksmith-testbox", "--blacksmith-ref", "main", "--", "echo ok"],
+      {
+        gitResponses: {
+          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
+          ["status\u0000--porcelain=v1"]: { stdout: " M scripts/crabbox-wrapper.mjs\n" },
+        },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).not.toContain("syncing from temporary full checkout");
+    expect(parseFakeCrabboxOutput(result).cwd).toBe(repoRoot);
+  });
+
+  it("keeps local artifact paths rooted at the original checkout", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      [
+        "run",
+        "--provider",
+        "blacksmith-testbox",
+        "--blacksmith-ref",
+        "main",
+        "--capture-stdout=.artifacts/stdout.log",
+        "--capture-stderr",
+        ".artifacts/stderr.log",
+        "--download",
+        "/tmp/proof=.artifacts/proof",
+        "--",
+        "echo ok",
+      ],
+      {
+        gitResponses: {
+          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
+          ["status\u0000--porcelain=v1"]: { stdout: "" },
+        },
+      },
+    );
+
+    const output = parseFakeCrabboxOutput(result);
+    expect(result.status).toBe(0);
+    expect(output.cwd).toContain("openclaw-crabbox-sync-");
+    expect(output.args).toContain(`--capture-stdout=${path.join(repoRoot, ".artifacts/stdout.log")}`);
+    expect(output.args).toContain(path.join(repoRoot, ".artifacts/stderr.log"));
+    expect(output.args).toContain(`/tmp/proof=${path.join(repoRoot, ".artifacts/proof")}`);
+  });
+
+  it("uses the temporary full checkout for sparse sync-only runs", () => {
+    const result = runWrapper(
+      "provider: hetzner, aws, local-container, blacksmith-testbox, or cloudflare\n",
+      [
+        "run",
+        "--provider",
+        "blacksmith-testbox",
+        "--blacksmith-ref",
+        "feature-branch",
+        "--sync-only",
+      ],
+      {
+        gitResponses: {
+          ["config\u0000--bool\u0000core.sparseCheckout"]: { stdout: "true\n" },
+          ["status\u0000--porcelain=v1"]: { stdout: "" },
+        },
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("syncing from temporary full checkout");
+    expect(parseFakeCrabboxOutput(result).cwd).toContain("openclaw-crabbox-sync-");
   });
 });

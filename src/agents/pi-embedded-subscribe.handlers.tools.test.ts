@@ -63,6 +63,7 @@ function createTestContext(): {
       messagingToolSentTexts: [],
       messagingToolSentTextsNormalized: [],
       messagingToolSentMediaUrls: [],
+      messagingToolSourceReplyPayloads: [],
       messagingToolSentTargets: [],
       successfulCronAdds: 0,
       deterministicApprovalPromptSent: false,
@@ -1405,6 +1406,95 @@ describe("messaging tool media URL tracking", () => {
       text: "track ready",
       mediaUrls: ["/tmp/generated-song.mp3", "/tmp/generated-cover.png"],
     });
+  });
+
+  it("commits internal-ui source replies from successful message sends", async () => {
+    const { ctx } = createTestContext();
+
+    const startEvt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-internal-source-reply",
+      args: { action: "send", message: "visible in tui" },
+    };
+    await handleToolExecutionStart(ctx, startEvt);
+
+    const endEvt: ToolExecutionEndEvent = {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-internal-source-reply",
+      isError: false,
+      result: {
+        details: {
+          status: "ok",
+          deliveryStatus: "sent",
+          sourceReplySink: "internal-ui",
+          idempotencyKey: "stable-source-reply",
+          sourceReply: {
+            text: "visible in tui",
+            mediaUrls: ["file:///tmp/reply.png"],
+            channelData: { source: "tui" },
+          },
+        },
+      },
+    };
+    await handleToolExecutionEnd(ctx, endEvt);
+
+    expect(ctx.state.messagingToolSourceReplyPayloads).toEqual([
+      {
+        text: "visible in tui",
+        mediaUrls: ["file:///tmp/reply.png"],
+        channelData: { source: "tui" },
+        idempotencyKey: "stable-source-reply",
+      },
+    ]);
+  });
+
+  it("does not commit dry-run or external message sends as internal-ui source replies", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-dry-run-source-reply",
+      args: { action: "send", message: "preview" },
+    });
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-dry-run-source-reply",
+      isError: false,
+      result: {
+        details: {
+          status: "ok",
+          deliveryStatus: "dry_run",
+          sourceReplySink: "internal-ui",
+          sourceReply: { text: "preview" },
+        },
+      },
+    });
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-external-source-reply",
+      args: { action: "send", to: "channel:123", message: "sent externally" },
+    });
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-external-source-reply",
+      isError: false,
+      result: {
+        details: {
+          status: "ok",
+          deliveryStatus: "sent",
+          sourceReply: { text: "sent externally" },
+        },
+      },
+    });
+
+    expect(ctx.state.messagingToolSourceReplyPayloads).toHaveLength(0);
   });
 
   it("commits sendAttachment args as message delivery evidence", async () => {

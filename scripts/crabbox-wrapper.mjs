@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, relative, resolve } from "node:path";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -26,6 +27,19 @@ function checkedOutput(command, commandArgs) {
   return {
     status: result.status ?? 1,
     text: `${result.stdout ?? ""}${result.stderr ?? ""}`.trim(),
+  };
+}
+
+function gitOutput(commandArgs) {
+  const result = spawnSync("git", commandArgs, {
+    cwd: repoRoot,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  return {
+    status: result.status ?? 1,
+    text: `${result.stdout ?? ""}${result.stderr ?? ""}`.trim(),
+    stdout: (result.stdout ?? "").trim(),
   };
 }
 
@@ -257,6 +271,64 @@ function hasOption(commandArgs, name) {
   return false;
 }
 
+const localPathRunOptions = new Set([
+  "capture-stderr",
+  "capture-stdout",
+  "emit-proof",
+  "env-from-profile",
+  "script",
+]);
+
+function repoRelativePath(value) {
+  if (!value || value === "-" || isAbsolute(value)) {
+    return value;
+  }
+  return resolve(repoRoot, value);
+}
+
+function repoRelativeDownload(value) {
+  const split = value.indexOf("=");
+  if (split < 0) {
+    return value;
+  }
+  const remote = value.slice(0, split + 1);
+  const local = value.slice(split + 1);
+  return `${remote}${repoRelativePath(local)}`;
+}
+
+function absolutizeLocalRunPaths(commandArgs) {
+  if (commandArgs[0] !== "run") {
+    return commandArgs;
+  }
+
+  const normalizedArgs = [...commandArgs];
+  const { optionEnd } = runCommandBounds(normalizedArgs);
+  for (let index = 1; index < optionEnd; index += 1) {
+    const arg = normalizedArgs[index];
+    if (!arg.startsWith("-")) {
+      continue;
+    }
+
+    const optionName = runOptionName(arg);
+    const absolutize = optionName === "download" ? repoRelativeDownload : repoRelativePath;
+    if (localPathRunOptions.has(optionName) || optionName === "download") {
+      const equals = arg.indexOf("=");
+      if (equals >= 0) {
+        normalizedArgs[index] = `${arg.slice(0, equals + 1)}${absolutize(arg.slice(equals + 1))}`;
+      } else if (index + 1 < optionEnd) {
+        normalizedArgs[index + 1] = absolutize(normalizedArgs[index + 1]);
+        index += 1;
+      }
+      continue;
+    }
+
+    if (!arg.includes("=") && currentRunValueOptions().has(optionName)) {
+      index += 1;
+    }
+  }
+  return normalizedArgs;
+}
+
 function isLocalContainerProvider(providerName) {
   return ["local-container", "docker", "container", "local-docker"].includes(providerName);
 }
@@ -282,6 +354,69 @@ function commandRuntimeEntrypoint(commandArgs) {
     .split("/")
     .pop();
   return ["pnpm", "npm", "npx", "corepack", "node", "yarn", "bun"].includes(first) ? first : "";
+}
+
+function isSparseCheckout() {
+  const config = gitOutput(["config", "--bool", "core.sparseCheckout"]);
+  if (config.status === 0 && config.stdout === "true") {
+    return true;
+  }
+  const patterns = gitOutput(["sparse-checkout", "list"]);
+  return patterns.status === 0 && patterns.stdout.length > 0;
+}
+
+function isWorktreeClean() {
+  return gitOutput(["status", "--porcelain=v1"]).stdout === "";
+}
+
+function shouldUseFullCheckoutForCleanSparseBlacksmithSync(commandArgs, providerName) {
+  if (commandArgs[0] !== "run" || providerName !== "blacksmith-testbox") {
+    return false;
+  }
+  if (
+    hasOption(commandArgs, "--no-sync") ||
+    hasOption(commandArgs, "--id")
+  ) {
+    return false;
+  }
+
+  return isSparseCheckout() && isWorktreeClean();
+}
+
+function prepareFullCheckoutForSync() {
+  const dir = mkdtempSync(resolve(tmpdir(), "openclaw-crabbox-sync-"));
+  let active = false;
+  const add = gitOutput(["worktree", "add", "--detach", dir, "HEAD"]);
+  if (add.status !== 0) {
+    rmSync(dir, { recursive: true, force: true });
+    throw new Error(`git worktree add failed: ${add.text}`);
+  }
+  active = true;
+
+  const disableSparse = gitOutput(["-C", dir, "sparse-checkout", "disable"]);
+  if (disableSparse.status !== 0) {
+    cleanupFullCheckout(dir, active);
+    throw new Error(`git sparse-checkout disable failed: ${disableSparse.text}`);
+  }
+
+  return {
+    dir,
+    cleanup() {
+      cleanupFullCheckout(dir, active);
+      active = false;
+    },
+  };
+}
+
+function cleanupFullCheckout(dir, active) {
+  if (active) {
+    const remove = gitOutput(["worktree", "remove", "--force", dir]);
+    if (remove.status === 0) {
+      return;
+    }
+    console.error(`[crabbox] warning: git worktree remove failed for ${dir}: ${remove.text}`);
+  }
+  rmSync(dir, { recursive: true, force: true });
 }
 
 const version = checkedOutput(binary, ["--version"]);
@@ -419,6 +554,26 @@ if (provider === "blacksmith-testbox") {
   );
 }
 
+let childCwd = repoRoot;
+let cleanupChildCwd = () => {};
+let cleanupDone = false;
+if (shouldUseFullCheckoutForCleanSparseBlacksmithSync(args, provider)) {
+  const checkout = prepareFullCheckoutForSync();
+  childCwd = checkout.dir;
+  cleanupChildCwd = () => checkout.cleanup();
+  console.error(
+    `[crabbox] sparse clean checkout detected; syncing from temporary full checkout ${checkout.dir}`,
+  );
+}
+
+function cleanupOnce() {
+  if (cleanupDone) {
+    return;
+  }
+  cleanupDone = true;
+  cleanupChildCwd();
+}
+
 const runtimeEntrypoint = commandRuntimeEntrypoint(runCommandArgs(args));
 if (args[0] === "run" && provider === "aws" && runtimeEntrypoint) {
   const id = optionValue(args, "--id");
@@ -453,21 +608,40 @@ if (
   );
 }
 
-const child = spawn(binary, args, {
-  cwd: repoRoot,
+const childArgs = childCwd === repoRoot ? args : absolutizeLocalRunPaths(args);
+const child = spawn(binary, childArgs, {
+  cwd: childCwd,
   stdio: "inherit",
   env: childEnv,
 });
 
+const signalExitCodes = new Map([
+  ["SIGHUP", 129],
+  ["SIGINT", 130],
+  ["SIGTERM", 143],
+]);
+for (const signal of signalExitCodes.keys()) {
+  process.once(signal, () => {
+    if (!child.killed) {
+      child.kill(signal);
+    }
+    cleanupOnce();
+    process.exit(signalExitCodes.get(signal) ?? 1);
+  });
+}
+process.once("exit", cleanupOnce);
+
 child.on("exit", (code, signal) => {
+  cleanupOnce();
   if (signal) {
-    process.kill(process.pid, signal);
+    process.exit(signalExitCodes.get(signal) ?? 1);
     return;
   }
   process.exit(code ?? 1);
 });
 
 child.on("error", (error) => {
+  cleanupOnce();
   console.error(`[crabbox] failed to execute ${displayBinary}: ${error.message}`);
   process.exit(2);
 });

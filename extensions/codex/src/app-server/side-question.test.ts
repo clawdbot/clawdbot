@@ -510,6 +510,21 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(getSharedCodexAppServerClientMock).not.toHaveBeenCalled();
   });
 
+  it("rejects /btw before forking when exec host=node is active", async () => {
+    await expect(
+      runCodexAppServerSideQuestion(
+        sideParams({
+          cfg: { tools: { exec: { host: "node", node: "worker-1" } } } as never,
+          sessionKey: "node-session",
+        }),
+      ),
+    ).rejects.toThrow(
+      "Codex-native /btw side-question mode is unavailable because OpenClaw exec host=node is active for this session.",
+    );
+
+    expect(getSharedCodexAppServerClientMock).not.toHaveBeenCalled();
+  });
+
   it("installs native hook relay config for opted-in side threads", async () => {
     const client = createFakeClient();
     let relayIdDuringFork: string | undefined;

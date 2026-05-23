@@ -6,7 +6,12 @@ import { createScriptTestHarness } from "./test-helpers";
 
 const SCRIPT_PATH = "scripts/install.ps1";
 const ENTRYPOINT_RE =
-  /\r?\n\$mainResults = @\(Main\)\r?\n\$installSucceeded = \$mainResults\.Count -gt 0 -and \$mainResults\[-1\] -eq \$true\r?\nComplete-Install -Succeeded:\$installSucceeded\s*$/m;
+  /\r?\n\$mainResults = @\(Main\)\r?\n\$installSucceeded = Test-BooleanSuccessResult -Results \$mainResults\r?\nComplete-Install -Succeeded:\$installSucceeded\s*$/m;
+const ENTRYPOINT_LINES = [
+  "$mainResults = @(Main)",
+  "$installSucceeded = Test-BooleanSuccessResult -Results $mainResults",
+  "Complete-Install -Succeeded:$installSucceeded",
+];
 
 function extractFunctionBody(source: string, name: string): string {
   const match = source.match(
@@ -50,9 +55,7 @@ function createFailingNodeFixture(source: string): string {
     "function Check-Node { return $false }",
     "function Install-Node { return $false }",
     "",
-    "$mainResults = @(Main)",
-    "$installSucceeded = $mainResults.Count -gt 0 -and $mainResults[-1] -eq $true",
-    "Complete-Install -Succeeded:$installSucceeded",
+    ...ENTRYPOINT_LINES,
     "",
   ].join("\n");
 }
@@ -77,9 +80,12 @@ describe("install.ps1 failure handling", () => {
 
   it("keeps failure termination in the top-level completion handler", () => {
     const completeInstallBody = extractFunctionBody(source, "Complete-Install");
+    const booleanSuccessBody = extractFunctionBody(source, "Test-BooleanSuccessResult");
     expect(completeInstallBody).toMatch(/\$PSCommandPath/);
     expect(completeInstallBody).toMatch(/\bexit \$script:InstallExitCode\b/);
     expect(completeInstallBody).toMatch(/\bthrow "OpenClaw installation failed with exit code/);
+    expect(booleanSuccessBody).toContain("$Results.Count -gt 0");
+    expect(source).toContain("$installSucceeded = Test-BooleanSuccessResult -Results $mainResults");
   });
 
   it("runs npm install through the resolved command with quiet CI defaults", () => {
@@ -227,6 +233,7 @@ describe("install.ps1 failure handling", () => {
     const pnpmVersionMatchBody = extractFunctionBody(source, "Test-PnpmCommandMatchesVersion");
     const ensurePnpmBody = extractFunctionBody(source, "Ensure-Pnpm");
     const gitInstallBody = extractFunctionBody(source, "Install-OpenClawFromGit");
+    const mainBody = extractFunctionBody(source, "Main");
 
     expect(pnpmVersionBody).toContain("package.json");
     expect(pnpmVersionBody).toContain("$packageJson.packageManager -match '^pnpm@(?<version>[^+]+)'");
@@ -247,9 +254,31 @@ describe("install.ps1 failure handling", () => {
     expect(gitInstallBody.indexOf("git -C $RepoDir pull --rebase")).toBeLessThan(
       gitInstallBody.indexOf("Ensure-Pnpm -RepoDir $RepoDir"),
     );
+    expect(mainBody).toContain("$gitInstallResults = @(Install-OpenClawFromGit");
+    expect(mainBody).toContain(
+      "Test-BooleanSuccessResult -Results $gitInstallResults",
+    );
+    expect(mainBody).toContain("$npmInstallResults = @(Install-OpenClaw)");
+    expect(mainBody).toContain(
+      "Test-BooleanSuccessResult -Results $npmInstallResults",
+    );
     expect(gitInstallBody).toContain("Push-Location -LiteralPath $RepoDir");
     expect(gitInstallBody).toContain("& $pnpmCommand install");
+    expect(gitInstallBody).toContain(
+      'Write-Host "[!] pnpm install failed for the Git checkout"',
+    );
+    expect(gitInstallBody).toContain("& $pnpmCommand build");
+    expect(gitInstallBody).toContain(
+      'Write-Host "[!] pnpm build failed for the Git checkout"',
+    );
+    expect(gitInstallBody).toContain('$entryPath = Join-Path $RepoDir "dist\\\\entry.js"');
+    expect(gitInstallBody).toContain("Test-Path $entryPath");
+    expect(gitInstallBody).toContain(
+      'Write-Host "[!] OpenClaw build did not produce $entryPath"',
+    );
+    expect(gitInstallBody).toContain('node ""$entryPath"" %*');
     expect(gitInstallBody).not.toContain("& $pnpmCommand -C $RepoDir install");
+    expect(gitInstallBody).not.toContain('node ""$RepoDir\\\\dist\\\\entry.js"" %*');
   });
 
   it("cleans legacy git submodules only from the selected git checkout", () => {
@@ -307,6 +336,42 @@ describe("install.ps1 failure handling", () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("caught=OpenClaw installation failed with exit code 1.");
     expect(result.stdout).toContain("alive-after-install");
+  });
+
+  runIfPowerShell("treats noisy Git install false as failure", () => {
+    const tempDir = harness.createTempDir("openclaw-install-ps1-");
+    const scriptPath = join(tempDir, "install.ps1");
+    const scriptWithoutEntryPoint = source.replace(ENTRYPOINT_RE, "");
+    writeFileSync(
+      scriptPath,
+      [
+        scriptWithoutEntryPoint,
+        "",
+        "function Write-Banner { }",
+        "function Ensure-ExecutionPolicy { return $true }",
+        "function Check-Node { return $true }",
+        "function Check-ExistingOpenClaw { return $false }",
+        "function Get-NpmCommandPath { return $null }",
+        "function Install-OpenClawFromGit {",
+        "  Write-Output 'pnpm stdout before failure'",
+        "  return $false",
+        "}",
+        "function Ensure-OpenClawOnPath { throw 'should not continue after failed git install' }",
+        "$InstallMethod = 'git'",
+        "$GitDir = 'C:\\\\openclaw-test'",
+        "$NoOnboard = $true",
+        "$result = Main",
+        'if ($result -ne $false) { throw "Main returned $result" }',
+        'if ($script:InstallExitCode -ne 1) { throw "InstallExitCode=$script:InstallExitCode" }',
+        "",
+      ].join("\n"),
+    );
+    chmodSync(scriptPath, 0o755);
+
+    const result = runPowerShell(["-NoLogo", "-NoProfile", "-Command", `. ${toPowerShellSingleQuotedLiteral(scriptPath)}`]);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
   });
 
   runIfPowerShell("keeps npm chatter out of Main's success return value", () => {
@@ -371,9 +436,7 @@ describe("install.ps1 failure handling", () => {
         "function Refresh-GatewayServiceIfLoaded { }",
         "function Invoke-OpenClawCommand { return 'OpenClaw test-version' }",
         "$NoOnboard = $true",
-        "$mainResults = @(Main)",
-        "$installSucceeded = $mainResults.Count -gt 0 -and $mainResults[-1] -eq $true",
-        "Complete-Install -Succeeded:$installSucceeded",
+        ...ENTRYPOINT_LINES,
         "",
       ].join("\n"),
     );

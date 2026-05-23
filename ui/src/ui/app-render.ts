@@ -910,6 +910,7 @@ export function renderApp(state: AppViewState) {
   const chatDisabledReason = state.connected ? null : t("chat.disconnected");
   const isChat = state.tab === "chat";
   const chatFocus = isChat && (state.settings.chatFocusMode || state.onboarding);
+  const chatHeaderHidden = isChat && (chatFocus || state.chatHeaderControlsHidden);
   const navDrawerOpen = state.navDrawerOpen && !chatFocus && !state.onboarding;
   const navCollapsed = state.settings.navCollapsed && !navDrawerOpen;
   const dashboardHeaderContext = resolveDashboardHeaderContext(state);
@@ -1678,7 +1679,7 @@ export function renderApp(state: AppViewState) {
           state.navDrawerOpen = false;
         }}
       ></button>
-      <header class="topbar">
+      <header class="topbar" ?inert=${chatFocus} aria-hidden=${chatFocus ? "true" : nothing}>
         <div class="topnav-shell">
           <button
             type="button"
@@ -1871,11 +1872,11 @@ export function renderApp(state: AppViewState) {
         ${state.tab === "config"
           ? nothing
           : html`<section
-              class=${isChat && state.chatHeaderControlsHidden
+              class=${chatHeaderHidden
                 ? "content-header content-header--chat-hidden"
                 : "content-header"}
-              ?inert=${isChat && state.chatHeaderControlsHidden}
-              aria-hidden=${isChat && state.chatHeaderControlsHidden ? "true" : nothing}
+              ?inert=${chatHeaderHidden}
+              aria-hidden=${chatHeaderHidden ? "true" : nothing}
             >
               <div>
                 ${isChat

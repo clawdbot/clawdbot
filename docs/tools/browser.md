@@ -442,6 +442,10 @@ CDP URL shapes and picks the right connection strategy automatically:
   providers can still use their root WebSocket endpoint when their discovery
   endpoint advertises a short-lived URL that is not suitable for Playwright CDP.
 
+`openclaw browser doctor` uses the same discovery-first, WebSocket-fallback
+logic as runtime attach, so a bare-root URL that connects successfully is not
+reported as unreachable by diagnostics.
+
 ### Browserbase
 
 [Browserbase](https://www.browserbase.com) is a cloud platform for running

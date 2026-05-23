@@ -36,6 +36,11 @@ function createScrollHost(
     overflowY,
   } as unknown as CSSStyleDeclaration);
 
+  const settings: { chatAutoScroll?: ChatAutoScrollMode; chatFocusMode?: boolean } = {};
+  if (chatAutoScroll) {
+    settings.chatAutoScroll = chatAutoScroll;
+  }
+
   const host = {
     updateComplete: Promise.resolve(),
     querySelector: vi.fn().mockReturnValue(container),
@@ -49,7 +54,7 @@ function createScrollHost(
     chatNewMessagesBelow: false,
     chatIsProgrammaticScroll: false,
     chatProgrammaticScrollTarget: 0,
-    settings: chatAutoScroll ? { chatAutoScroll } : undefined,
+    settings,
     logsScrollFrame: null as number | null,
     logsAtBottom: true,
     topbarObserver: null as ResizeObserver | null,
@@ -140,6 +145,25 @@ describe("handleChatScroll", () => {
     handleChatScroll(host, event);
 
     expect(host.chatHeaderControlsHidden).toBe(false);
+  });
+
+  it("does not toggle header controls while focus mode handles hidden chrome", () => {
+    const { host } = createScrollHost({});
+    host.settings = { ...host.settings, chatFocusMode: true };
+    host.chatLastScrollTop = 100;
+    host.chatHeaderControlsHidden = false;
+
+    handleChatScroll(host, createScrollEvent(3000, 260, 500));
+
+    expect(host.chatHeaderControlsHidden).toBe(false);
+    expect(host.chatUserNearBottom).toBe(false);
+
+    host.chatHeaderControlsHidden = true;
+    host.chatLastScrollTop = 800;
+
+    handleChatScroll(host, createScrollEvent(3000, 700, 500));
+
+    expect(host.chatHeaderControlsHidden).toBe(true);
   });
 });
 

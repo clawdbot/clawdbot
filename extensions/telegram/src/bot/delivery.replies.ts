@@ -331,6 +331,7 @@ async function deliverMediaReply(params: {
   thread?: TelegramThreadSpec | null;
   tableMode?: MarkdownTableMode;
   mediaLocalRoots?: readonly string[];
+  mediaMaxBytes?: number;
   chunkText: ChunkTextFn;
   mediaLoader: typeof loadWebMedia;
   onVoiceRecording?: () => Promise<void> | void;
@@ -353,7 +354,10 @@ async function deliverMediaReply(params: {
     const isFirstMedia = first;
     const media = await params.mediaLoader(
       mediaUrl,
-      buildOutboundMediaLoadOptions({ mediaLocalRoots: params.mediaLocalRoots }),
+      buildOutboundMediaLoadOptions({
+        mediaLocalRoots: params.mediaLocalRoots,
+        maxBytes: params.mediaMaxBytes,
+      }),
     );
     const kind = kindFromMime(media.contentType ?? undefined);
     const isGif = isGifMedia({
@@ -693,6 +697,7 @@ export async function deliverReplies(params: {
   runtime: RuntimeEnv;
   bot: Bot;
   mediaLocalRoots?: readonly string[];
+  mediaMaxBytes?: number;
   replyToMode: ReplyToMode;
   textLimit: number;
   thread?: TelegramThreadSpec | null;
@@ -879,6 +884,7 @@ export async function deliverReplies(params: {
           thread: params.thread,
           tableMode: params.tableMode,
           mediaLocalRoots: params.mediaLocalRoots,
+          mediaMaxBytes: params.mediaMaxBytes,
           chunkText,
           mediaLoader,
           onVoiceRecording: params.onVoiceRecording,

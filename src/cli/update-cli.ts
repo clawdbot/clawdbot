@@ -58,6 +58,7 @@ export function registerUpdateCli(program: Command) {
         ["openclaw update --channel beta", "Switch to beta channel (git + npm)"],
         ["openclaw update --channel dev", "Switch to dev channel (git + npm)"],
         ["openclaw update --tag beta", "One-off update to a dist-tag or version"],
+        ["openclaw update --tag main", "One-off package update from GitHub main"],
         ["openclaw update --dry-run", "Preview actions without changing anything"],
         ["openclaw update --no-restart", "Update without restarting the service"],
         ["openclaw update --json", "Output result as JSON"],
@@ -77,7 +78,7 @@ ${theme.heading("Switch channels:")}
   - Use --channel stable|beta|dev to persist the update channel in config
   - Run openclaw update status to see the active channel and source
   - Use --tag <dist-tag|version|spec> for a one-off package update without persisting
-  - Use --channel dev, not --tag main, for the moving GitHub main checkout
+  - Use --tag main for a one-off package update from GitHub main
 
 ${theme.heading("Non-interactive:")}
   - Use --yes to accept downgrade prompts

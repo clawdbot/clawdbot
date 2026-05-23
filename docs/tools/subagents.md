@@ -110,6 +110,7 @@ requester chat when the run finishes.
     - `--model` and `--thinking` override defaults for that specific run.
     - Use `info`/`log` to inspect details and output after completion.
     - `/subagents spawn` is one-shot mode (`mode: "run"`). For persistent thread-bound sessions, use `sessions_spawn` with `thread: true` and `mode: "session"`.
+    - If the requester channel does not support thread bindings, use `mode: "run"` instead of retrying impossible thread-bound combinations.
     - For ACP harness sessions (Claude Code, Gemini CLI, OpenCode, or explicit Codex ACP/acpx), use `sessions_spawn` with `runtime: "acp"` when the tool advertises that runtime. See [ACP delivery model](/tools/acp-agents#delivery-model) when debugging completions or agent-to-agent loops. When the `codex` plugin is enabled, Codex chat/thread control should prefer `/codex ...` over ACP unless the user explicitly asks for ACP/acpx.
     - OpenClaw hides `runtime: "acp"` until ACP is enabled, the requester is not sandboxed, and a backend plugin such as `acpx` is loaded. `runtime: "acp"` expects an external ACP harness id, or an `agents.list[]` entry with `runtime.type="acp"`; use the default sub-agent runtime for normal OpenClaw config agents from `agents_list`.
 
@@ -215,6 +216,7 @@ Per-agent overrides use `agents.list[].subagents.delegationMode`.
 </ParamField>
 <ParamField path="mode" type='"run" | "session"' default="run">
   If `thread: true` and `mode` omitted, default becomes `session`. `mode: "session"` requires `thread: true`.
+  If thread binding is unavailable for the requester channel, use `mode: "run"` instead.
 </ParamField>
 <ParamField path="cleanup" type='"delete" | "keep"' default="keep">
   `"delete"` archives immediately after announce (still keeps the transcript via rename).

@@ -1,5 +1,10 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { resolveSpawnCall, shouldUseCmdExeForCommand } from "../../scripts/ui.js";
+import {
+  isDirectScriptExecution,
+  resolveSpawnCall,
+  shouldUseCmdExeForCommand,
+} from "../../scripts/ui.js";
 
 describe("scripts/ui windows spawn behavior", () => {
   it("wraps Windows command launchers with cmd.exe without enabling shell mode", () => {
@@ -87,5 +92,13 @@ describe("scripts/ui windows spawn behavior", () => {
         shell: false,
       },
     });
+  });
+
+  it("detects direct execution through a junctioned script path", () => {
+    const realScriptPath = path.resolve("repo/openclaw/scripts/ui.js");
+    const junctionScriptPath = path.resolve("linked/openclaw/scripts/ui.js");
+    const realpath = (entry: string) => (entry === junctionScriptPath ? realScriptPath : entry);
+
+    expect(isDirectScriptExecution(junctionScriptPath, realScriptPath, realpath)).toBe(true);
   });
 });

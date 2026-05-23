@@ -1,10 +1,28 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../../shared/assistant-error-format.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import { formatAssistantErrorText } from "./errors.js";
 
+const { toolPolicyAuditInfo } = vi.hoisted(() => ({
+  toolPolicyAuditInfo: vi.fn(),
+}));
+
+vi.mock("../../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => ({
+    debug: vi.fn(),
+    error: vi.fn(),
+    info: toolPolicyAuditInfo,
+    warn: vi.fn(),
+  }),
+}));
+
 describe("formatAssistantErrorText streaming JSON parse classification", () => {
+  beforeEach(() => {
+    toolPolicyAuditInfo.mockClear();
+  });
+
   const makeAssistantError = (errorMessage: string): AssistantMessage =>
     makeAssistantMessageFixture({
       errorMessage,
@@ -33,6 +51,44 @@ describe("formatAssistantErrorText streaming JSON parse classification", () => {
     );
     expect(formatAssistantErrorText(msg)).toBe(
       "LLM request rejected: Expected value in JSON at position 12 for messages.0.content",
+    );
+  });
+
+  it("audits a sandbox tool-policy block once per assistant error", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          sandbox: { mode: "non-main", scope: "agent" },
+        },
+      },
+      tools: {
+        sandbox: {
+          tools: {
+            deny: ["browser"],
+          },
+        },
+      },
+    };
+    const msg = makeAssistantError("unknown tool: browser");
+
+    expect(
+      formatAssistantErrorText(msg, { cfg, sessionKey: "agent:main:mobilechat:g1" }),
+    ).toContain('Tool "browser" blocked by sandbox tool policy');
+    expect(
+      formatAssistantErrorText(msg, { cfg, sessionKey: "agent:main:mobilechat:g1" }),
+    ).toContain('Tool "browser" blocked by sandbox tool policy');
+
+    expect(toolPolicyAuditInfo).toHaveBeenCalledTimes(1);
+    expect(toolPolicyAuditInfo).toHaveBeenCalledWith(
+      "sandbox tool policy blocked browser via tools.sandbox.tools.deny; matched browser",
+      {
+        tool: "browser",
+        ruleKind: "deny",
+        ruleSource: "global",
+        configKey: "tools.sandbox.tools.deny",
+        matchedRule: "browser",
+        sandboxMode: "non-main",
+      },
     );
   });
 });

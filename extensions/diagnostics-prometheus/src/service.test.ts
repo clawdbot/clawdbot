@@ -144,10 +144,104 @@ describe("diagnostics-prometheus service", () => {
     const rendered = testApi.renderPrometheusMetrics(store);
 
     expect(rendered).toContain(
-      'openclaw_tool_execution_total{error_category="other",outcome="error",params_kind="unknown",tool="tool"} 1',
+      'openclaw_tool_execution_total{error_category="other",outcome="error",params_kind="unknown",tool="tool",tool_owner="none",tool_source="core"} 1',
     );
     expect(rendered).not.toContain("Bearer");
     expect(rendered).not.toContain("sk-secret");
+  });
+
+  it("drops session-shaped agent labels", () => {
+    const store = testApi.createPrometheusMetricStore();
+
+    testApi.recordDiagnosticEvent(
+      store,
+      {
+        ...baseEvent(),
+        type: "model.usage",
+        agentId: "Agent:qa:otel-trace-smoke",
+        provider: "openai",
+        model: "gpt-5.4",
+        usage: { input: 12 },
+      },
+      trusted,
+    );
+
+    const rendered = testApi.renderPrometheusMetrics(store);
+
+    expect(rendered).toContain(
+      'openclaw_model_tokens_total{agent="unknown",channel="unknown",model="gpt-5.4",provider="openai",token_type="input"} 12',
+    );
+    expect(rendered).not.toContain("Agent:qa:otel-trace-smoke");
+  });
+
+  it("drops session-shaped queue lane labels", () => {
+    const store = testApi.createPrometheusMetricStore();
+
+    testApi.recordDiagnosticEvent(
+      store,
+      {
+        ...baseEvent(),
+        type: "queue.lane.enqueue",
+        lane: "session:Agent:qa:otel-trace-smoke",
+        queueSize: 2,
+      },
+      trusted,
+    );
+
+    const rendered = testApi.renderPrometheusMetrics(store);
+
+    expect(rendered).toContain('openclaw_queue_lane_size{lane="session"} 2');
+    expect(rendered).not.toContain("Agent:qa:otel-trace-smoke");
+  });
+
+  it("keeps only the bounded prefix from scoped queue lane labels", () => {
+    const store = testApi.createPrometheusMetricStore();
+
+    testApi.recordDiagnosticEvent(
+      store,
+      {
+        ...baseEvent(),
+        type: "queue.lane.enqueue",
+        lane: "dreaming-narrative:session-main",
+        queueSize: 2,
+      },
+      trusted,
+    );
+
+    const rendered = testApi.renderPrometheusMetrics(store);
+
+    expect(rendered).toContain('openclaw_queue_lane_size{lane="dreaming-narrative"} 2');
+    expect(rendered).not.toContain("session-main");
+  });
+
+  it("records skill usage metrics without raw paths or session identifiers", () => {
+    const store = testApi.createPrometheusMetricStore();
+
+    testApi.recordDiagnosticEvent(
+      store,
+      {
+        ...baseEvent(),
+        type: "skill.used",
+        agentId: "main",
+        runId: "run-should-not-export",
+        sessionKey: "session-should-not-export",
+        skillName: "tiny-llm-brainstorm",
+        skillSource: "workspace",
+        activation: "read",
+        toolName: "read",
+      },
+      trusted,
+    );
+
+    const rendered = testApi.renderPrometheusMetrics(store);
+
+    expect(rendered).toContain("# TYPE openclaw_skill_used_total counter");
+    expect(rendered).toContain(
+      'openclaw_skill_used_total{activation="read",agent="main",skill="tiny-llm-brainstorm",source="workspace"} 1',
+    );
+    expect(rendered).not.toContain("run-should-not-export");
+    expect(rendered).not.toContain("session-should-not-export");
+    expect(rendered).not.toContain("SKILL.md");
   });
 
   it("bounds messaging labels without exporting raw chat identifiers", () => {

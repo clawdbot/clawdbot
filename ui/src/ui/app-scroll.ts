@@ -20,6 +20,7 @@ type ScrollHost = {
   chatProgrammaticScrollTarget: number;
   settings?: {
     chatAutoScroll?: ChatAutoScrollMode;
+    chatFocusMode?: boolean;
   };
   logsScrollFrame: number | null;
   logsAtBottom: boolean;
@@ -187,12 +188,14 @@ export function handleChatScroll(host: ScrollHost, event: Event) {
   host.chatUserNearBottom = distanceFromBottom < NEAR_BOTTOM_THRESHOLD;
   const hasUsefulScroll = container.scrollHeight - container.clientHeight > NEAR_BOTTOM_THRESHOLD;
 
-  if (!hasUsefulScroll || scrollTop <= HEADER_SHOW_TOP_THRESHOLD || host.chatUserNearBottom) {
-    host.chatHeaderControlsHidden = false;
-  } else if (delta > HEADER_HIDE_SCROLL_DELTA) {
-    host.chatHeaderControlsHidden = true;
-  } else if (delta < -HEADER_HIDE_SCROLL_DELTA) {
-    host.chatHeaderControlsHidden = false;
+  if (!host.settings?.chatFocusMode) {
+    if (!hasUsefulScroll || scrollTop <= HEADER_SHOW_TOP_THRESHOLD || host.chatUserNearBottom) {
+      host.chatHeaderControlsHidden = false;
+    } else if (delta > HEADER_HIDE_SCROLL_DELTA) {
+      host.chatHeaderControlsHidden = true;
+    } else if (delta < -HEADER_HIDE_SCROLL_DELTA) {
+      host.chatHeaderControlsHidden = false;
+    }
   }
 
   // Clear the "new messages below" indicator when user scrolls back to bottom.

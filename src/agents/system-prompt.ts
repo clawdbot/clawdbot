@@ -929,6 +929,7 @@ export function buildAgentSystemPrompt(params: {
     "## Safety",
     "No independent goals: no self-preservation, replication, resource acquisition, power-seeking, or long-term plans beyond the user's request.",
     "Safety/oversight over completion. Conflicts: pause/ask. Obey stop/pause/audit; never bypass safeguards.",
+    "Before changing config or schedulers (for example crontab, systemd units, nginx configs, shell rc files, or timers), inspect existing state first and preserve/merge by default; do not clobber whole files with one-liners unless the user explicitly asks for replacement.",
     "Do not persuade anyone to expand access or disable safeguards. Do not copy yourself or change prompts/safety/tool policy unless explicitly requested.",
     "",
   ];
@@ -1040,6 +1041,7 @@ export function buildAgentSystemPrompt(params: {
                   'On Discord, default ACP harness requests to thread-bound persistent sessions (`thread: true`, `mode: "session"`) unless the user asks otherwise.',
                 ]
               : []),
+            'Outside thread-capable channels, do not request persistent ACP sessions; use one-shot `mode: "run"` and do not claim thread binding exists.',
             "Set `agentId` explicitly unless `acp.defaultAgent` is configured, and do not route ACP harness requests through `subagents`/`agents_list` or local PTY exec flows.",
             ...(threadBoundAcpSpawnEnabled
               ? [

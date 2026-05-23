@@ -19,7 +19,7 @@ const MAX_RENDERED_CONTEXT_CHARS = 1_000_000;
 const DEFAULT_TEXT_PART_CHARS = 6_000;
 const MAX_TEXT_PART_CHARS = 128_000;
 const APPROX_RENDERED_CHARS_PER_TOKEN = 4;
-const DEFAULT_PROJECTION_RESERVE_TOKENS = 20_000;
+export const DEFAULT_CODEX_PROJECTION_RESERVE_TOKENS = 20_000;
 const MIN_PROMPT_BUDGET_RATIO = 0.5;
 const MIN_PROMPT_BUDGET_TOKENS = 8_000;
 
@@ -94,7 +94,7 @@ export function resolveCodexContextEngineProjectionReserveTokens(params: {
   if (configuredReserveTokens !== undefined) {
     return Math.max(
       configuredReserveTokens,
-      configuredReserveTokensFloor ?? DEFAULT_PROJECTION_RESERVE_TOKENS,
+      configuredReserveTokensFloor ?? DEFAULT_CODEX_PROJECTION_RESERVE_TOKENS,
     );
   }
   if (configuredReserveTokensFloor !== undefined) {
@@ -112,7 +112,7 @@ function resolveProjectionPromptBudgetTokens(params: {
     Number.isFinite(params.reserveTokens) &&
     params.reserveTokens >= 0
       ? Math.floor(params.reserveTokens)
-      : DEFAULT_PROJECTION_RESERVE_TOKENS;
+      : DEFAULT_CODEX_PROJECTION_RESERVE_TOKENS;
   const minPromptBudget = Math.min(
     MIN_PROMPT_BUDGET_TOKENS,
     Math.max(1, Math.floor(params.contextTokenBudget * MIN_PROMPT_BUDGET_RATIO)),

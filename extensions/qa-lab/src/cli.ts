@@ -272,7 +272,10 @@ export function registerQaLabCli(program: Command) {
       "CLI backend auth mode for live Claude CLI runs: auto, api-key, or subscription",
     )
     .option("--parity-pack <name>", 'Preset scenario pack; currently only "agentic" is supported')
-    .option("--pack <id>", 'Scenario pack id; currently only "personal-agent" is supported')
+    .option(
+      "--pack <id>",
+      'Scenario pack id; currently "personal-agent" and "observability" are supported',
+    )
     .option("--scenario <id>", "Run only the named QA scenario (repeatable)", collectString, [])
     .option(
       "--enable-plugin <id>",

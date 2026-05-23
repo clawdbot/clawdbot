@@ -82,7 +82,7 @@ openclaw_e2e_wait_mock_openai "$MOCK_PORT"
 
 input_fifo="$(mktemp -u "/tmp/openclaw-release-typed-onboarding.XXXXXX")"
 mkfifo "$input_fifo"
-script -q -f -c "node \"$entry\" onboard --flow quickstart --mode local --auth-choice skip --gateway-port \"$PORT\" --gateway-bind loopback --skip-daemon --skip-ui --skip-channels --skip-skills --skip-health" /tmp/openclaw-release-typed-onboarding.log <"$input_fifo" >/dev/null 2>&1 &
+openclaw_e2e_run_script_with_pty "node \"$entry\" onboard --flow quickstart --mode local --auth-choice skip --gateway-port \"$PORT\" --gateway-bind loopback --skip-daemon --skip-ui --skip-channels --skip-skills --skip-health" /tmp/openclaw-release-typed-onboarding.log <"$input_fifo" >/dev/null 2>&1 &
 wizard_pid="$!"
 exec 3>"$input_fifo"
 

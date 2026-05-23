@@ -401,6 +401,26 @@ export function registerModelsCli(program: Command) {
     });
 
   auth
+    .command("paste-api-key")
+    .description("Paste an API key into auth-profiles.json and update config")
+    .requiredOption("--provider <name>", "Provider id (e.g. openai-codex)")
+    .option("--profile-id <id>", "Auth profile id (default: <provider>:manual)")
+    .action(async (opts, command) => {
+      await withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {
+        const agent = resolveModelAgentOption(command);
+        const { modelsAuthPasteApiKeyCommand } = await import("../commands/models/auth.js");
+        await modelsAuthPasteApiKeyCommand(
+          {
+            provider: opts.provider as string | undefined,
+            profileId: opts.profileId as string | undefined,
+            agent,
+          },
+          defaultRuntime,
+        );
+      });
+    });
+
+  auth
     .command("login-github-copilot")
     .description("Login to GitHub Copilot via GitHub device flow (TTY required)")
     .option("--yes", "Overwrite existing profile without prompting", false)

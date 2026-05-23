@@ -63,6 +63,18 @@ function createSandboxedContext(
   } as Partial<PluginCommandContext>);
 }
 
+function createNodeExecContext(
+  args: string,
+  sessionFile?: string,
+  overrides: Partial<PluginCommandContext> = {},
+): PluginCommandContext {
+  return createContext(args, sessionFile, {
+    config: { tools: { exec: { host: "node", node: "worker-1" } } },
+    sessionKey: "node-session",
+    ...overrides,
+  } as Partial<PluginCommandContext>);
+}
+
 function createDeps(overrides: Partial<CodexCommandDeps> = {}): Partial<CodexCommandDeps> {
   return {
     codexControlRequest: vi.fn(),
@@ -390,6 +402,71 @@ describe("codex command", () => {
     expect(stopCodexConversationTurn).not.toHaveBeenCalled();
   });
 
+  it.each([
+    "bind",
+    "resume thread-123",
+    "steer keep going",
+    "model gpt-5.5",
+    "fast on",
+    "permissions yolo",
+    "compact",
+    "review",
+  ])("blocks /codex %s when exec host=node is active", async (args) => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const codexControlRequest = vi.fn();
+    const startCodexConversationThread = vi.fn();
+    const steerCodexConversationTurn = vi.fn();
+    const setCodexConversationModel = vi.fn();
+    const setCodexConversationFastMode = vi.fn();
+    const setCodexConversationPermissions = vi.fn();
+    const stopCodexConversationTurn = vi.fn();
+
+    const result = await handleCodexCommand(createNodeExecContext(args, sessionFile), {
+      deps: createDeps({
+        codexControlRequest,
+        startCodexConversationThread,
+        steerCodexConversationTurn,
+        setCodexConversationModel,
+        setCodexConversationFastMode,
+        setCodexConversationPermissions,
+        stopCodexConversationTurn,
+      }),
+    });
+
+    expect(result.text).toContain(
+      "Codex-native /codex " +
+        args.split(/\s+/u)[0] +
+        " is unavailable because OpenClaw exec host=node is active for this session.",
+    );
+    expect(codexControlRequest).not.toHaveBeenCalled();
+    expect(startCodexConversationThread).not.toHaveBeenCalled();
+    expect(steerCodexConversationTurn).not.toHaveBeenCalled();
+    expect(setCodexConversationModel).not.toHaveBeenCalled();
+    expect(setCodexConversationFastMode).not.toHaveBeenCalled();
+    expect(setCodexConversationPermissions).not.toHaveBeenCalled();
+    expect(stopCodexConversationTurn).not.toHaveBeenCalled();
+  });
+
+  it("blocks config-level exec host=node without a session key", async () => {
+    const startCodexConversationThread = vi.fn();
+
+    const result = await handleCodexCommand(
+      createContext("bind", path.join(tempDir, "session.jsonl"), {
+        config: { tools: { exec: { host: "node", node: "worker-1" } } },
+      }),
+      {
+        deps: createDeps({
+          startCodexConversationThread,
+        }),
+      },
+    );
+
+    expect(result.text).toContain(
+      "Codex-native /codex bind is unavailable because OpenClaw exec host=node is active for this session.",
+    );
+    expect(startCodexConversationThread).not.toHaveBeenCalled();
+  });
+
   it("still returns pre-native usage for malformed sandboxed native Codex commands", async () => {
     const startCodexConversationThread = vi.fn();
     const setCodexConversationModel = vi.fn();
@@ -541,7 +618,7 @@ describe("codex command", () => {
 
     await expect(
       handleCodexCommand(
-        createContext(
+        createNodeExecContext(
           "resume 019e2007-1f7e-7eb1-a42b-8c01f4b9b5cd --host mb-m5 --bind here",
           undefined,
           { requestConversationBinding },

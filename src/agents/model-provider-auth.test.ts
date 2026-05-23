@@ -7,24 +7,23 @@ const modelCatalogMocks = vi.hoisted(() => ({
 }));
 
 const modelAuthMocks = vi.hoisted(() => ({
+  createRuntimeProviderAuthLookup: vi.fn(() => ({
+    envApiKey: {
+      aliasMap: {},
+      candidateMap: {},
+      authEvidenceMap: {},
+    },
+    syntheticAuthProviderRefs: [],
+  })),
   hasRuntimeAvailableProviderAuth:
     vi.fn<
       (params: {
         provider: string;
         cfg?: OpenClawConfig;
         workspaceDir?: string;
-        envAuthLookup?: unknown;
+        runtimeLookup?: unknown;
       }) => boolean
     >(),
-}));
-
-const providerAuthAliasMocks = vi.hoisted(() => ({
-  resolveProviderAuthAliasMap: vi.fn(() => ({ openai: "openai" })),
-}));
-
-const modelAuthEnvVarMocks = vi.hoisted(() => ({
-  resolveProviderEnvApiKeyCandidates: vi.fn(() => ({ openai: ["OPENAI_API_KEY"] })),
-  resolveProviderEnvAuthEvidence: vi.fn(() => ({})),
 }));
 
 const authProfilesMocks = vi.hoisted(() => ({
@@ -40,16 +39,8 @@ vi.mock("./model-catalog.js", () => ({
 }));
 
 vi.mock("./model-auth.js", () => ({
+  createRuntimeProviderAuthLookup: modelAuthMocks.createRuntimeProviderAuthLookup,
   hasRuntimeAvailableProviderAuth: modelAuthMocks.hasRuntimeAvailableProviderAuth,
-}));
-
-vi.mock("./provider-auth-aliases.js", () => ({
-  resolveProviderAuthAliasMap: providerAuthAliasMocks.resolveProviderAuthAliasMap,
-}));
-
-vi.mock("./model-auth-env-vars.js", () => ({
-  resolveProviderEnvApiKeyCandidates: modelAuthEnvVarMocks.resolveProviderEnvApiKeyCandidates,
-  resolveProviderEnvAuthEvidence: modelAuthEnvVarMocks.resolveProviderEnvAuthEvidence,
 }));
 
 vi.mock("./auth-profiles.js", () => ({
@@ -81,7 +72,7 @@ describe("prepared provider auth state", () => {
     vi.clearAllMocks();
   });
 
-  it("reuses prepared env auth lookup data while warming providers", async () => {
+  it("reuses prepared runtime auth lookup data while warming providers", async () => {
     const cfg = {} as OpenClawConfig;
     modelCatalogMocks.loadModelCatalog.mockResolvedValue([
       { id: "gpt", name: "gpt", provider: "openai" },
@@ -91,13 +82,11 @@ describe("prepared provider auth state", () => {
 
     await warmCurrentProviderAuthState(cfg);
 
-    expect(providerAuthAliasMocks.resolveProviderAuthAliasMap).toHaveBeenCalledTimes(1);
-    expect(modelAuthEnvVarMocks.resolveProviderEnvApiKeyCandidates).toHaveBeenCalledTimes(1);
-    expect(modelAuthEnvVarMocks.resolveProviderEnvAuthEvidence).toHaveBeenCalledTimes(1);
+    expect(modelAuthMocks.createRuntimeProviderAuthLookup).toHaveBeenCalledTimes(1);
     const firstLookup =
-      modelAuthMocks.hasRuntimeAvailableProviderAuth.mock.calls[0]?.[0].envAuthLookup;
+      modelAuthMocks.hasRuntimeAvailableProviderAuth.mock.calls[0]?.[0].runtimeLookup;
     const secondLookup =
-      modelAuthMocks.hasRuntimeAvailableProviderAuth.mock.calls[1]?.[0].envAuthLookup;
+      modelAuthMocks.hasRuntimeAvailableProviderAuth.mock.calls[1]?.[0].runtimeLookup;
     expect(firstLookup).toBe(secondLookup);
   });
 

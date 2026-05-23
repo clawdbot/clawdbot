@@ -859,7 +859,9 @@ describe("qa cli runtime", () => {
         repoRoot: "/tmp/openclaw-repo",
         pack: "personal-admin",
       }),
-    ).rejects.toThrow('--pack must be one of personal-agent, got "personal-admin"');
+    ).rejects.toThrow(
+      '--pack must be one of personal-agent, observability, got "personal-admin"',
+    );
   });
 
   it("rejects unknown suite CLI auth modes", async () => {

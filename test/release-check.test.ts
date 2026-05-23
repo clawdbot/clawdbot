@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { bundledDistPluginFile, bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
@@ -17,6 +17,7 @@ import {
   collectForbiddenPackContentPaths,
   collectForbiddenPackPaths,
   collectMissingPackPaths,
+  collectSkillShellScriptExecutableErrors,
   collectPackUnpackedSizeErrors,
   collectPackedInstalledPackageVerificationErrors,
   createPackedCompletionSmokeEnv,
@@ -334,6 +335,41 @@ describe("bundled plugin package dependency checks", () => {
       ]);
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+// This suite exists both as regression coverage and as an intentional CI touchpoint for executable-bit fixes.
+// Windows doesn't support Unix permission bits; chmod 0o755 is a no-op and
+// statSync().mode never reports execute bits, so these tests are meaningless there.
+describe.skipIf(process.platform === "win32")("collectSkillShellScriptExecutableErrors", () => {
+  it("flags non-executable shell scripts under skills/*/scripts", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-release-check-"));
+    const scriptPath = join(root, "skills", "openai-whisper-api", "scripts", "transcribe.sh");
+    mkdirSync(join(root, "skills", "openai-whisper-api", "scripts"), { recursive: true });
+    writeFileSync(scriptPath, "#!/usr/bin/env bash\necho test\n", "utf8");
+    chmodSync(scriptPath, 0o644);
+
+    try {
+      expect(collectSkillShellScriptExecutableErrors(root)).toEqual([
+        "skill shell script is not executable: skills/openai-whisper-api/scripts/transcribe.sh",
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts executable shell scripts", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-release-check-"));
+    const scriptPath = join(root, "skills", "openai-whisper-api", "scripts", "transcribe.sh");
+    mkdirSync(join(root, "skills", "openai-whisper-api", "scripts"), { recursive: true });
+    writeFileSync(scriptPath, "#!/usr/bin/env bash\necho test\n", "utf8");
+    chmodSync(scriptPath, 0o755);
+
+    try {
+      expect(collectSkillShellScriptExecutableErrors(root)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });

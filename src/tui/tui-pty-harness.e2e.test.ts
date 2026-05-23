@@ -201,10 +201,22 @@ function objectFieldEquals(entry: FixtureLogEntry, field: string, value: unknown
 async function writeTuiPtyFixtureScript(dir: string) {
   const scriptPath = path.join(dir, "run-tui-pty-fixture.ts");
   const tuiModuleUrl = pathToFileURL(path.join(process.cwd(), "src/tui/tui.ts")).href;
+  const payloadsModuleUrl = pathToFileURL(
+    path.join(process.cwd(), "src/agents/pi-embedded-runner/run/payloads.ts"),
+  ).href;
+  const replyPayloadModuleUrl = pathToFileURL(
+    path.join(process.cwd(), "src/auto-reply/reply-payload.ts"),
+  ).href;
+  const outboundPayloadsModuleUrl = pathToFileURL(
+    path.join(process.cwd(), "src/infra/outbound/payloads.ts"),
+  ).href;
   await writeFile(
     scriptPath,
     `
       import { appendFileSync } from "node:fs";
+      import { buildEmbeddedRunPayloads } from ${JSON.stringify(payloadsModuleUrl)};
+      import { getReplyPayloadMetadata } from ${JSON.stringify(replyPayloadModuleUrl)};
+      import { normalizeReplyPayloadsForDelivery } from ${JSON.stringify(outboundPayloadsModuleUrl)};
       import type { TuiBackend } from ${JSON.stringify(tuiModuleUrl.replace("/tui.ts", "/tui-backend.ts"))};
       import { runTui } from ${JSON.stringify(tuiModuleUrl)};
 
@@ -232,6 +244,32 @@ async function writeTuiPtyFixtureScript(dir: string) {
         };
       }
 
+      function assistantMessageFromSourceReplyPayloads(payloads: ReturnType<typeof buildEmbeddedRunPayloads>) {
+        if (payloads.length === 0) {
+          throw new Error("expected source reply payload");
+        }
+        for (const payload of payloads) {
+          const metadata = getReplyPayloadMetadata(payload);
+          if (!metadata?.sourceReplyTranscriptMirror) {
+            throw new Error("expected source reply transcript mirror metadata");
+          }
+          record("sourceReplyMetadata", metadata.sourceReplyTranscriptMirror);
+        }
+        const normalized = normalizeReplyPayloadsForDelivery(payloads);
+        const content = normalized.flatMap((payload) => {
+          const text = payload.text?.trim();
+          return text ? [{ type: "text", text }] : [];
+        });
+        if (content.length === 0) {
+          throw new Error("expected displayable source reply content");
+        }
+        return {
+          role: "assistant",
+          content,
+          timestamp: Date.now(),
+        };
+      }
+
       class FixtureBackend implements TuiBackend {
         connection = { url: "pty-fixture://local" };
         onEvent?: TuiBackend["onEvent"];
@@ -254,18 +292,38 @@ async function writeTuiPtyFixtureScript(dir: string) {
           });
           const runId = opts.runId ?? "run-pty-fixture";
           const responseDelayMs = opts.message === "slow prompt" ? 500 : 20;
+          const isSourceReplyProof = opts.message === "message tool only source reply proof";
           setTimeout(() => {
+            const sourceReplyPayloads = isSourceReplyProof
+              ? buildEmbeddedRunPayloads({
+                  assistantTexts: [],
+                  toolMetas: [],
+                  lastAssistant: undefined,
+                  inlineToolResultsAllowed: false,
+                  sessionKey: opts.sessionKey,
+                  sourceReplyDeliveryMode: "message_tool_only",
+                  messagingToolSourceReplyPayloads: [
+                    {
+                      text: "VISIBLE_TUI_SOURCE_REPLY_PROOF",
+                    },
+                  ],
+                  runId,
+                })
+              : [];
+            const message = isSourceReplyProof
+              ? assistantMessageFromSourceReplyPayloads(sourceReplyPayloads)
+              : {
+                  role: "assistant",
+                  content: [{ type: "text", text: "PTY_RESPONSE: " + opts.message }],
+                  timestamp: Date.now(),
+                };
             this.onEvent?.({
               event: "chat",
               payload: {
                 runId,
                 sessionKey: opts.sessionKey,
                 state: "final",
-                message: {
-                  role: "assistant",
-                  content: [{ type: "text", text: "PTY_RESPONSE: " + opts.message }],
-                  timestamp: Date.now(),
-                },
+                message,
               },
             });
           }, responseDelayMs);
@@ -434,6 +492,25 @@ describe.sequential("TUI PTY harness", () => {
       await fixture.waitForLogEntry(
         (entry) =>
           entry.method === "sendChat" && objectFieldEquals(entry, "message", "second prompt"),
+      );
+    },
+    TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "renders message-tool-only internal ui source replies in the terminal",
+    async () => {
+      await fixture.run.write("message tool only source reply proof\r");
+      await fixture.run.waitForOutput("VISIBLE_TUI_SOURCE_REPLY_PROOF");
+      await fixture.waitForLogEntry(
+        (entry) =>
+          entry.method === "sendChat" &&
+          objectFieldEquals(entry, "message", "message tool only source reply proof"),
+      );
+      await fixture.waitForLogEntry(
+        (entry) =>
+          entry.method === "sourceReplyMetadata" &&
+          objectFieldEquals(entry, "text", "VISIBLE_TUI_SOURCE_REPLY_PROOF"),
       );
     },
     TEST_TIMEOUT_MS,

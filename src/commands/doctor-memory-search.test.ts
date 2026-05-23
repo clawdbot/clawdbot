@@ -55,6 +55,7 @@ vi.mock("../plugins/memory-runtime.js", () => ({
 
 vi.mock("../memory-host-sdk/engine-qmd.js", () => ({
   checkQmdBinaryAvailability,
+  resolveQmdBinaryUnavailableReason: (result: { reason?: string }) => result.reason ?? "binary",
 }));
 
 vi.mock("../plugin-sdk/memory-core-engine-runtime.js", () => ({
@@ -431,6 +432,7 @@ describe("noteMemorySearchHealth", () => {
     const qmdCfg = { memory: { backend: "qmd", qmd: { command: "qmd" } } } as OpenClawConfig;
     checkQmdBinaryAvailability.mockResolvedValueOnce({
       available: false,
+      reason: "binary",
       error: "spawn qmd ENOENT",
     });
     resolveMemorySearchConfig.mockReturnValue({
@@ -447,6 +449,51 @@ describe("noteMemorySearchHealth", () => {
     expect(message).toContain("spawn qmd ENOENT");
     expect(message).toContain("npm install -g @tobilu/qmd");
     expect(message).toContain("bun install -g @tobilu/qmd");
+  });
+
+  it("treats legacy QMD unavailable results without a reason as binary failures", async () => {
+    const qmdCfg = { memory: { backend: "qmd", qmd: { command: "qmd" } } } as OpenClawConfig;
+    checkQmdBinaryAvailability.mockResolvedValueOnce({
+      available: false,
+      error: "spawn qmd ENOENT",
+    });
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "auto",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(qmdCfg, {});
+
+    expect(note).toHaveBeenCalledTimes(1);
+    const message = firstNoteMessage();
+    expect(message).toContain("qmd binary could not be started");
+    expect(message).toContain("spawn qmd ENOENT");
+    expect(message).toContain("npm install -g @tobilu/qmd");
+    expect(message).not.toContain("agent workspace directory could not be used");
+  });
+
+  it("warns with a workspace-specific fix when the QMD probe cwd is missing", async () => {
+    const qmdCfg = { memory: { backend: "qmd", qmd: { command: "qmd" } } } as OpenClawConfig;
+    checkQmdBinaryAvailability.mockResolvedValueOnce({
+      available: false,
+      reason: "workspace-cwd",
+      error: "workspace directory missing: /tmp/agent-default/workspace",
+    });
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "auto",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(qmdCfg, {});
+
+    expect(note).toHaveBeenCalledTimes(1);
+    const message = String(note.mock.calls[0]?.[0] ?? "");
+    expect(message).toContain("agent workspace directory could not be used");
+    expect(message).toContain("workspace directory missing: /tmp/agent-default/workspace");
+    expect(message).toContain("Create the missing workspace directory");
+    expect(message).not.toContain("npm install -g @tobilu/qmd");
   });
 
   it("does not warn when remote apiKey is configured for explicit provider", async () => {

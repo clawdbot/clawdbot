@@ -78,6 +78,20 @@ quiet window in `steer` mode:
 
 Defaults: `debounceMs: 500`, `cap: 20`, `drop: summarize`.
 
+## Steer and streaming
+
+When channel streaming is `partial` or `block`, steering can look like several
+short visible replies while the active run reaches runtime boundaries:
+
+- `partial`: the preview may finalize early, then a new preview starts after
+  steering is accepted.
+- `block`: draft-sized blocks can create the same sequential appearance.
+- Without streaming, steering falls back to a followup after the active run when
+  the runtime cannot accept same-turn steering.
+
+`steer` does not abort in-flight tools. Use `/queue interrupt` when the newest
+message should abort the current run.
+
 ## Precedence
 
 For mode selection, OpenClaw resolves:

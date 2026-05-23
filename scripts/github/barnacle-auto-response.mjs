@@ -833,6 +833,15 @@ function shouldRemoveProofSufficientLabel(
   return true;
 }
 
+const negativeProofLabels = new Set([NEEDS_REAL_BEHAVIOR_PROOF_LABEL, MOCK_ONLY_PROOF_LABEL]);
+
+function shouldPreserveClawSweeperProofJudgment(context, labelSet) {
+  return (
+    labelSet.has(PROOF_SUFFICIENT_LABEL) &&
+    !["edited", "synchronize"].includes(context.payload.action)
+  );
+}
+
 async function applyPullRequestCandidateLabels(github, context, core, pullRequest, labelSet) {
   const files = await listPullRequestFiles(github, context, pullRequest);
   const hasExactHeadClawSweeperProof =
@@ -854,8 +863,11 @@ async function applyPullRequestCandidateLabels(github, context, core, pullReques
     },
     files,
   );
+  const candidateLabelsToApply = shouldPreserveClawSweeperProofJudgment(context, labelSet)
+    ? classifiedLabels.filter((label) => !negativeProofLabels.has(label))
+    : classifiedLabels;
   const staleProofLabels = structuralProofLabelValues.filter(
-    (label) => labelSet.has(label) && !classifiedLabels.includes(label),
+    (label) => labelSet.has(label) && !candidateLabelsToApply.includes(label),
   );
   if (
     labelSet.has(PROOF_SUFFICIENT_LABEL) &&
@@ -870,7 +882,14 @@ async function applyPullRequestCandidateLabels(github, context, core, pullReques
     staleProofLabels.push(PROOF_SUFFICIENT_LABEL);
   }
   await removeLabels(github, context, pullRequest.number, staleProofLabels, labelSet);
-  await addMissingLabels(github, context, core, pullRequest.number, classifiedLabels, labelSet);
+  await addMissingLabels(
+    github,
+    context,
+    core,
+    pullRequest.number,
+    candidateLabelsToApply,
+    labelSet,
+  );
 }
 
 function isAutomationUser(user, fallbackLogin = "") {

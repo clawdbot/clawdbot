@@ -552,7 +552,7 @@ request. Plugin dependencies are expected to be present before runtime load.
   - Current declared-but-skipped `videoToVideo` providers in the shared sweep:
     - `alibaba`, `qwen`, `xai` because those paths currently require remote `http(s)` / MP4 reference URLs
     - `google` because the current shared Gemini/Veo lane uses local buffer-backed input and that path is not accepted in the shared sweep
-    - `openai` because the current shared lane lacks org-specific video inpaint/remix access guarantees
+    - `openai` because the current shared lane lacks org-specific video edit access guarantees
 - Optional narrowing:
   - `OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS="deepinfra,google,openai,runway"`
   - `OPENCLAW_LIVE_VIDEO_GENERATION_MODELS="google/veo-3.1-fast-generate-preview,openai/sora-2,runway/gen4_aleph"`

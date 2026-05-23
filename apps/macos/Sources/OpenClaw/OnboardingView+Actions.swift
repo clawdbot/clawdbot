@@ -31,11 +31,7 @@ extension OnboardingView {
     }
 
     func openSettings(tab: SettingsTab) {
-        SettingsTabRouter.request(tab)
-        self.openSettings()
-        DispatchQueue.main.async {
-            NotificationCenter.default.post(name: .openclawSelectSettingsTab, object: tab)
-        }
+        AppNavigationActions.openSettings(tab: tab)
     }
 
     func handleBack() {

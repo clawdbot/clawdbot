@@ -2497,26 +2497,21 @@ export async function runEmbeddedAttempt(
       const onMidTurnPrecheck = (request: MidTurnPrecheckRequest) => {
         pendingMidTurnPrecheckRequest = request;
       };
-      if (!activeContextEngine || activeContextEngine.info.ownsCompaction !== true) {
-        removeToolResultContextGuard = installToolResultContextGuard({
-          agent: activeSession.agent,
-          contextWindowTokens: contextTokenBudgetForGuard,
-          ...(midTurnPrecheckEnabled
-            ? {
-                midTurnPrecheck: {
-                  enabled: true,
-                  contextTokenBudget: contextTokenBudgetForGuard,
-                  reserveTokens: () => settingsManager.getCompactionReserveTokens(),
-                  toolResultMaxChars: toolResultMaxCharsForGuard,
-                  getSystemPrompt: () => systemPromptText,
-                  getPrePromptMessageCount: () => prePromptMessageCount,
-                  onMidTurnPrecheck,
-                },
-              }
-            : {}),
-        });
-      } else {
-        removeToolResultContextGuard = installContextEngineLoopHook({
+      const midTurnPrecheckOptions = midTurnPrecheckEnabled
+        ? {
+            midTurnPrecheck: {
+              enabled: true,
+              contextTokenBudget: contextTokenBudgetForGuard,
+              reserveTokens: () => settingsManager.getCompactionReserveTokens(),
+              toolResultMaxChars: toolResultMaxCharsForGuard,
+              getSystemPrompt: () => systemPromptText,
+              getPrePromptMessageCount: () => prePromptMessageCount,
+              onMidTurnPrecheck,
+            },
+          }
+        : {};
+      if (activeContextEngine?.info.ownsCompaction === true) {
+        const removeContextEngineLoopHook = installContextEngineLoopHook({
           agent: activeSession.agent,
           contextEngine: activeContextEngine,
           sessionId: params.sessionId,
@@ -2546,6 +2541,21 @@ export async function runEmbeddedAttempt(
                   }),
                 }),
             }),
+        });
+        const removeGuard = installToolResultContextGuard({
+          agent: activeSession.agent,
+          contextWindowTokens: contextTokenBudgetForGuard,
+          ...midTurnPrecheckOptions,
+        });
+        removeToolResultContextGuard = () => {
+          removeGuard();
+          removeContextEngineLoopHook();
+        };
+      } else {
+        removeToolResultContextGuard = installToolResultContextGuard({
+          agent: activeSession.agent,
+          contextWindowTokens: contextTokenBudgetForGuard,
+          ...midTurnPrecheckOptions,
         });
       }
       const removeLoopContextGuard = removeToolResultContextGuard;
@@ -3278,6 +3288,7 @@ export async function runEmbeddedAttempt(
         getMessagingToolSentTexts,
         getMessagingToolSentMediaUrls,
         getMessagingToolSentTargets,
+        getMessagingToolSourceReplyPayloads,
         getHeartbeatToolResponse,
         getPendingToolMediaReply,
         getVisibleBlockReplyCount,
@@ -4694,6 +4705,7 @@ export async function runEmbeddedAttempt(
       const didSendDeterministicApprovalPromptNow = didSendDeterministicApprovalPrompt();
       const lastToolError = getLastToolError?.();
       const heartbeatToolResponse = getHeartbeatToolResponse();
+      const messagingToolSourceReplyPayloads = getMessagingToolSourceReplyPayloads();
       const pendingToolMediaPayloadCount = hasVisiblePendingToolMediaReply(pendingToolMediaReply)
         ? 1
         : 0;
@@ -4715,6 +4727,7 @@ export async function runEmbeddedAttempt(
       const synthesizedPayloadCount =
         visibleBlockReplyCount +
         pendingToolMediaPayloadCount +
+        messagingToolSourceReplyPayloads.length +
         (silentToolResultReplyPayload ? 1 : 0);
       const emptyAssistantReplyIsSilent = shouldTreatEmptyAssistantReplyAsSilent({
         allowEmptyAssistantReplyAsSilent: params.allowEmptyAssistantReplyAsSilent,
@@ -4856,6 +4869,7 @@ export async function runEmbeddedAttempt(
         messagingToolSentTexts: getMessagingToolSentTexts(),
         messagingToolSentMediaUrls: getMessagingToolSentMediaUrls(),
         messagingToolSentTargets: getMessagingToolSentTargets(),
+        messagingToolSourceReplyPayloads,
         heartbeatToolResponse,
         toolMediaUrls: pendingToolMediaReply?.mediaUrls,
         toolAudioAsVoice: pendingToolMediaReply?.audioAsVoice,

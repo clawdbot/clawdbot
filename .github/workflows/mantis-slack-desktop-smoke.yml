@@ -17,6 +17,11 @@ on:
         required: true
         default: slack-canary
         type: string
+      approval_checkpoints:
+        description: Run native Slack approval checkpoint mode instead of gateway setup
+        required: false
+        default: false
+        type: boolean
       keep_vm:
         description: Keep the desktop lease open after a passing run
         required: false
@@ -30,6 +35,14 @@ on:
         options:
           - aws
           - hetzner
+      crabbox_market:
+        description: Crabbox capacity market for AWS leases
+        required: false
+        default: on-demand
+        type: choice
+        options:
+          - on-demand
+          - spot
       crabbox_lease_id:
         description: Optional existing Crabbox desktop/browser lease id or slug to reuse
         required: false
@@ -227,9 +240,11 @@ jobs:
           CRABBOX_ACCESS_CLIENT_SECRET: ${{ secrets.CRABBOX_ACCESS_CLIENT_SECRET }}
           CRABBOX_LEASE_ID: ${{ inputs.crabbox_lease_id }}
           CRABBOX_PROVIDER: ${{ inputs.crabbox_provider }}
+          CRABBOX_MARKET: ${{ inputs.crabbox_market }}
           KEEP_VM: ${{ inputs.keep_vm }}
           HYDRATE_MODE: ${{ inputs.hydrate_mode }}
           SCENARIO_ID: ${{ inputs.scenario_id }}
+          APPROVAL_CHECKPOINTS: ${{ inputs.approval_checkpoints }}
         shell: bash
         run: |
           set -euo pipefail
@@ -250,6 +265,15 @@ jobs:
           require_var OPENCLAW_QA_CONVEX_SITE_URL
           require_var OPENCLAW_QA_CONVEX_SECRET_CI
           require_var CRABBOX_COORDINATOR_TOKEN
+          if [[ -z "${CRABBOX_LEASE_ID:-}" && "$CRABBOX_PROVIDER" == "aws" ]]; then
+            runner_ip="$(curl -fsS https://checkip.amazonaws.com | tr -d '[:space:]')"
+            if [[ -z "$runner_ip" ]]; then
+              echo "Could not resolve GitHub runner public IPv4 for AWS SSH ingress." >&2
+              exit 1
+            fi
+            export CRABBOX_AWS_SSH_CIDRS="${runner_ip}/32"
+            echo "Using AWS SSH CIDR ${CRABBOX_AWS_SSH_CIDRS}"
+          fi
 
           candidate_repo="$(pwd)/.artifacts/qa-e2e/mantis/slack-desktop-smoke-worktrees/candidate"
           output_rel=".artifacts/qa-e2e/mantis/slack-desktop-smoke"
@@ -265,6 +289,22 @@ jobs:
           else
             keep_args=(--no-keep-lease)
           fi
+          market_args=()
+          if [[ -n "${CRABBOX_MARKET:-}" ]]; then
+            market_args=(--market "$CRABBOX_MARKET")
+          fi
+          gateway_args=(--gateway-setup)
+          approval_args=()
+          scenario_args=(--scenario "$SCENARIO_ID")
+          scenario_label="$SCENARIO_ID"
+          if [[ "$APPROVAL_CHECKPOINTS" == "true" ]]; then
+            approval_args=(--approval-checkpoints)
+            gateway_args=()
+            if [[ -z "${SCENARIO_ID:-}" || "$SCENARIO_ID" == "slack-canary" || "$SCENARIO_ID" == "approval-checkpoints" ]]; then
+              scenario_args=()
+              scenario_label="approval-checkpoints"
+            fi
+          fi
 
           set +e
           pnpm openclaw qa mantis slack-desktop-smoke \
@@ -274,7 +314,7 @@ jobs:
             --class standard \
             --idle-timeout 45m \
             --ttl 120m \
-            --gateway-setup \
+            "${gateway_args[@]}" \
             --credential-source convex \
             --credential-role ci \
             --provider-mode live-frontier \
@@ -282,7 +322,9 @@ jobs:
             --model openai/gpt-5.5 \
             --alt-model openai/gpt-5.5 \
             --fast \
-            --scenario "$SCENARIO_ID" \
+            "${scenario_args[@]}" \
+            "${approval_args[@]}" \
+            "${market_args[@]}" \
             "${keep_args[@]}" \
             "${lease_args[@]}"
           mantis_exit=$?
@@ -312,27 +354,81 @@ jobs:
 
           status="$(jq -r '.status' "$root/mantis-slack-desktop-smoke-summary.json")"
           screenshot_required=false
+          desktop_capture_inline=true
           if [[ "$status" == "pass" ]]; then
             screenshot_required=true
+          fi
+          evidence_summary="Mantis ran Slack QA inside a Crabbox Linux VNC desktop, started an OpenClaw Slack gateway in that VM, opened Slack Web in the visible browser, and captured screenshot/video evidence."
+          expected_result="Slack QA and VM gateway setup pass"
+          checkpoint_artifacts='[]'
+          checkpoint_required=false
+          if [[ "$APPROVAL_CHECKPOINTS" == "true" ]]; then
+            evidence_summary="Mantis ran Slack native approval QA inside a Crabbox Linux VNC desktop, rendered pending/resolved approval checkpoints from the Slack API messages, and stored Slack QA artifacts."
+            expected_result="Slack native exec and plugin approval checkpoints pass"
+            screenshot_required=false
+            desktop_capture_inline=false
+            if [[ "$status" == "pass" ]]; then
+              checkpoint_required=true
+            fi
+            checkpoint_scenarios=()
+            if [[ "$scenario_label" == "approval-checkpoints" ]]; then
+              checkpoint_scenarios=("slack-approval-exec-native" "slack-approval-plugin-native")
+            else
+              checkpoint_scenarios=("$scenario_label")
+            fi
+            checkpoint_scenarios_json="$(printf '%s\n' "${checkpoint_scenarios[@]}" | jq -R . | jq -s .)"
+            checkpoint_artifacts="$(
+              jq -n \
+                --argjson checkpoint_required "$checkpoint_required" \
+                --argjson scenario_ids "$checkpoint_scenarios_json" \
+                '
+                  def scenario_kind($id):
+                    if $id == "slack-approval-exec-native" then "exec"
+                    elif $id == "slack-approval-plugin-native" then "plugin"
+                    else error("unsupported approval checkpoint scenario: \($id)")
+                    end;
+                  def scenario_title($id):
+                    if scenario_kind($id) == "exec" then "Exec" else "Plugin" end;
+                  [
+                    $scenario_ids[] as $id
+                    | ["pending", "resolved"][] as $state
+                    | {
+                        kind: "desktopScreenshot",
+                        lane: "candidate",
+                        label: "\(scenario_title($id)) approval \($state) checkpoint",
+                        path: "approval-checkpoints/\($id)-\($state).png",
+                        targetPath: "approval-checkpoints/\($id)-\($state).png",
+                        alt: "Rendered Slack \(scenario_kind($id)) approval \($state) checkpoint",
+                        width: 720,
+                        inline: true,
+                        required: $checkpoint_required
+                      }
+                  ]
+                '
+            )"
           fi
           jq -n \
             --arg status "$status" \
             --arg candidate_sha "${{ needs.validate_ref.outputs.candidate_revision }}" \
-            --arg scenario "$SCENARIO_ID" \
+            --arg scenario "$scenario_label" \
+            --arg summary "$evidence_summary" \
+            --arg expected "$expected_result" \
+            --argjson checkpoint_artifacts "$checkpoint_artifacts" \
             --argjson screenshot_required "$screenshot_required" \
+            --argjson desktop_capture_inline "$desktop_capture_inline" \
             '{
               schemaVersion: 1,
               id: "slack-desktop-smoke",
               title: "Mantis Slack Desktop Smoke QA",
-              summary: "Mantis ran Slack QA inside a Crabbox Linux VNC desktop, started an OpenClaw Slack gateway in that VM, opened Slack Web in the visible browser, and captured screenshot/video evidence.",
+              summary: $summary,
               scenario: $scenario,
               comparison: {
-                candidate: { sha: $candidate_sha, expected: "Slack QA and VM gateway setup pass", status: $status, fixed: ($status == "pass") },
+                candidate: { sha: $candidate_sha, expected: $expected, status: $status, fixed: ($status == "pass") },
                 pass: ($status == "pass")
               },
-              artifacts: [
-                { kind: "desktopScreenshot", lane: "candidate", label: "Slack desktop/VNC browser", path: "slack-desktop-smoke.png", targetPath: "slack-desktop.png", alt: "Slack Web desktop screenshot from the Mantis VM", width: 720, inline: true, required: $screenshot_required },
-                { kind: "motionPreview", lane: "candidate", label: "Slack motion preview", path: "slack-desktop-smoke-preview.gif", targetPath: "slack-desktop-preview.gif", alt: "Animated Slack desktop preview", width: 720, inline: true, required: false },
+              artifacts: ([
+                { kind: "desktopScreenshot", lane: "candidate", label: "Slack desktop/VNC browser", path: "slack-desktop-smoke.png", targetPath: "slack-desktop.png", alt: "Slack Web desktop screenshot from the Mantis VM", width: 720, inline: $desktop_capture_inline, required: $screenshot_required },
+                { kind: "motionPreview", lane: "candidate", label: "Slack motion preview", path: "slack-desktop-smoke-preview.gif", targetPath: "slack-desktop-preview.gif", alt: "Animated Slack desktop preview", width: 720, inline: $desktop_capture_inline, required: false },
                 { kind: "motionClip", lane: "candidate", label: "Slack change MP4", path: "slack-desktop-smoke-change.mp4", targetPath: "slack-desktop-change.mp4", required: false },
                 { kind: "fullVideo", lane: "candidate", label: "Slack desktop MP4", path: "slack-desktop-smoke.mp4", targetPath: "slack-desktop.mp4", required: false },
                 { kind: "metadata", lane: "run", label: "Slack desktop summary", path: "mantis-slack-desktop-smoke-summary.json", targetPath: "summary.json" },
@@ -340,7 +436,7 @@ jobs:
                 { kind: "metadata", lane: "run", label: "Slack command log", path: "slack-desktop-command.log", targetPath: "slack-desktop-command.log", required: false },
                 { kind: "metadata", lane: "run", label: "Slack preview metadata", path: "slack-desktop-smoke-preview.json", targetPath: "slack-desktop-preview.json", required: false },
                 { kind: "metadata", lane: "run", label: "Slack error", path: "error.txt", targetPath: "error.txt", required: false }
-              ]
+              ] + $checkpoint_artifacts)
             }' > "$root/mantis-evidence.json"
 
           cat "$root/mantis-slack-desktop-smoke-report.md" >> "$GITHUB_STEP_SUMMARY"

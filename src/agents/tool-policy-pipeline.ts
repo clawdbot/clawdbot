@@ -1,6 +1,7 @@
 import { filterToolsByPolicy } from "./pi-tools.policy.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 import { isKnownCoreToolId } from "./tool-catalog.js";
+import { auditToolPolicyFilter } from "./tool-policy-audit.js";
 import {
   analyzeAllowlistByToolType,
   buildPluginToolGroups,
@@ -180,7 +181,17 @@ export function applyToolPolicyPipeline(params: {
     }
 
     const expanded = expandPolicyWithPluginGroups(policy, pluginGroups);
-    filtered = expanded ? filterToolsByPolicy(filtered, expanded) : filtered;
+    if (!expanded) {
+      continue;
+    }
+    const before = filtered;
+    filtered = filterToolsByPolicy(before, expanded);
+    auditToolPolicyFilter({
+      stepLabel: step.label,
+      policy: expanded,
+      before,
+      after: filtered,
+    });
   }
   return filtered;
 }

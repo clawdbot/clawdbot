@@ -105,17 +105,20 @@ type MantisDesktopBrowserSmokeCommanderOptions = {
 
 type MantisSlackDesktopSmokeCommanderOptions = {
   altModel?: string;
+  approvalCheckpoints?: boolean;
   class?: string;
   crabboxBin?: string;
   credentialRole?: string;
   credentialSource?: string;
   fast?: boolean;
+  freshPr?: string;
   gatewaySetup?: boolean;
   hydrateMode?: MantisSlackDesktopHydrateMode;
   idleTimeout?: string;
   keepLease?: boolean;
   leaseId?: string;
   machineClass?: string;
+  market?: string;
   model?: string;
   outputDir?: string;
   provider?: string;
@@ -316,12 +319,18 @@ export function registerMantisCli(qa: Command) {
     .option("--provider <provider>", "Crabbox provider")
     .option("--machine-class <class>", "Crabbox machine class")
     .option("--class <class>", "Alias for --machine-class")
+    .option("--market <market>", "Crabbox capacity market: spot or on-demand")
     .option("--lease-id <id>", "Reuse an existing Crabbox lease")
+    .option("--fresh-pr <spec>", "Use Crabbox fresh PR checkout instead of syncing the local tree")
     .option("--idle-timeout <duration>", "Crabbox idle timeout")
     .option("--ttl <duration>", "Crabbox maximum lease lifetime")
     .option("--keep-lease", "Keep a lease created by this run after a passing smoke")
     .option("--no-keep-lease", "Stop a lease created by this run after a passing smoke")
     .option("--gateway-setup", "Start a persistent OpenClaw Slack gateway inside the VNC VM")
+    .option(
+      "--approval-checkpoints",
+      "Run Slack approval scenarios with visual checkpoint screenshot acknowledgements",
+    )
     .option("--slack-url <url>", "Slack web URL to open in the visible browser")
     .option("--slack-channel-id <id>", "Slack channel id for gateway setup allowlist")
     .option("--provider-mode <mode>", "QA provider mode")
@@ -338,18 +347,24 @@ export function registerMantisCli(qa: Command) {
     .option("--credential-role <role>", "Credential role for convex auth")
     .option("--fast", "Enable provider fast mode where supported")
     .action(async (opts: MantisSlackDesktopSmokeCommanderOptions) => {
+      if (opts.approvalCheckpoints && opts.gatewaySetup) {
+        throw new Error("--approval-checkpoints cannot be used with --gateway-setup.");
+      }
       await runSlackDesktopSmoke({
         alternateModel: opts.altModel,
+        approvalCheckpoints: opts.approvalCheckpoints,
         crabboxBin: opts.crabboxBin,
         credentialRole: opts.credentialRole,
         credentialSource: opts.credentialSource,
         fastMode: opts.fast,
+        freshPr: opts.freshPr,
         gatewaySetup: opts.gatewaySetup,
         hydrateMode: opts.hydrateMode,
         idleTimeout: opts.idleTimeout,
         keepLease: opts.keepLease,
         leaseId: opts.leaseId,
         machineClass: opts.machineClass ?? opts.class,
+        market: opts.market,
         outputDir: opts.outputDir,
         primaryModel: opts.model,
         provider: opts.provider,

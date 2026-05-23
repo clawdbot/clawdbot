@@ -1076,6 +1076,8 @@ export function createOpenClawCodingTools(options?: {
         agentId,
         ...(options?.config ? { config: options.config } : {}),
         cwd: sandboxRoot ?? workspaceRoot,
+        workspaceDir: workspaceRoot,
+        ...(options?.skillsSnapshot ? { skillsSnapshot: options.skillsSnapshot } : {}),
         ...(sandboxRoot && allowWorkspaceWrites
           ? { sandbox: { root: sandboxRoot, bridge: sandboxFsBridge! } }
           : {}),

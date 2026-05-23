@@ -20,6 +20,7 @@ const HASHED_ROOT_JS_RE = /^(?<base>.+)-[A-Za-z0-9_-]+\.js$/u;
 const DEFAULT_CAPTURE_BYTES = 8 * 1024 * 1024;
 const DEFAULT_HEARTBEAT_MS = 30_000;
 const DEFAULT_TSDOWN_NODE_OPTIONS = "--max-old-space-size=6144";
+const DEFAULT_TSDOWN_MAX_OLD_SPACE_MB = 6144;
 const TERMINATION_GRACE_MS = 5_000;
 const TSDOWN_OUTPUT_ROOTS = ["dist", "dist-runtime"];
 const GENERATED_SOURCE_DECLARATION_PATHSPEC = ":(glob)extensions/**/*.d.ts";
@@ -200,16 +201,50 @@ function parseNonNegativeInteger(value) {
   return Math.trunc(parsed);
 }
 
+function normalizeTsdownNodeOptions(nodeOptions) {
+  const parts = nodeOptions.trim().split(/\s+/u).filter(Boolean);
+  const normalized = [];
+  let foundMaxOldSpaceSize = false;
+
+  for (let index = 0; index < parts.length; index += 1) {
+    const part = parts[index];
+    const inlineMatch = part.match(/^--max-old-space-size=(\d+)$/u);
+    if (inlineMatch) {
+      foundMaxOldSpaceSize = true;
+      const value = Math.max(Number(inlineMatch[1]), DEFAULT_TSDOWN_MAX_OLD_SPACE_MB);
+      normalized.push(`--max-old-space-size=${value}`);
+      continue;
+    }
+
+    if (part === "--max-old-space-size") {
+      foundMaxOldSpaceSize = true;
+      const next = parts[index + 1];
+      const parsed = next === undefined ? Number.NaN : Number(next);
+      const value = Number.isFinite(parsed)
+        ? Math.max(Math.trunc(parsed), DEFAULT_TSDOWN_MAX_OLD_SPACE_MB)
+        : DEFAULT_TSDOWN_MAX_OLD_SPACE_MB;
+      normalized.push(`--max-old-space-size=${value}`);
+      if (next !== undefined) {
+        index += 1;
+      }
+      continue;
+    }
+
+    normalized.push(part);
+  }
+
+  if (!foundMaxOldSpaceSize) {
+    normalized.push(DEFAULT_TSDOWN_NODE_OPTIONS);
+  }
+
+  return normalized.join(" ");
+}
+
 function resolveTsdownEnv(env) {
   const nodeOptions = env.NODE_OPTIONS?.trim() ?? "";
-  if (/(?:^|\s)--max-old-space-size(?:=|\s+)/u.test(nodeOptions)) {
-    return env;
-  }
   return {
     ...env,
-    NODE_OPTIONS: nodeOptions
-      ? `${nodeOptions} ${DEFAULT_TSDOWN_NODE_OPTIONS}`
-      : DEFAULT_TSDOWN_NODE_OPTIONS,
+    NODE_OPTIONS: normalizeTsdownNodeOptions(nodeOptions),
   };
 }
 

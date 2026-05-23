@@ -846,6 +846,12 @@ export async function initSessionState(params: {
       sessionFile: previousSessionEntry.sessionFile,
       agentId,
       reason: "reset",
+      onArchiveError: (error, sourcePath) => {
+        log.warn(
+          `failed to archive previous session transcript ${sourcePath} for session ${previousSessionEntry.sessionId}`,
+          { error: String(error) },
+        );
+      },
     });
     previousSessionTranscript = resolveStableSessionEndTranscript({
       sessionId: previousSessionEntry.sessionId,

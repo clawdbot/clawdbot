@@ -96,6 +96,29 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(subscription.getMessagingToolSentMediaUrls()).toEqual(["file:///tmp/render.mp4"]);
   });
 
+  it("tracks internal-ui source replies for message-tool-only final payloads", async () => {
+    const { emit, subscription } = createBlockReplyHarness("message_end");
+
+    await emitMessageToolLifecycle({
+      emit,
+      toolCallId: "tool-message-source-reply",
+      message: "Visible terminal answer.",
+      result: {
+        details: {
+          status: "ok",
+          deliveryStatus: "sent",
+          sourceReplySink: "internal-ui",
+          sourceReply: { text: "Visible terminal answer." },
+        },
+      },
+    });
+    await Promise.resolve();
+
+    expect(subscription.getMessagingToolSourceReplyPayloads()).toEqual([
+      { text: "Visible terminal answer." },
+    ]);
+  });
+
   it("suppresses text-only tool summaries after message-tool-only delivery", async () => {
     const onToolResult = vi.fn();
     const { emit } = createSubscribedSessionHarness({

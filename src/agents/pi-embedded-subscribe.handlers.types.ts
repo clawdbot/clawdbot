@@ -7,7 +7,10 @@ import type { InlineCodeState } from "../markdown/code-spans.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import type { AcceptedSessionSpawn } from "./accepted-session-spawn.js";
 import type { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
-import type { MessagingToolSend } from "./pi-embedded-messaging.types.js";
+import type {
+  MessagingToolSend,
+  MessagingToolSourceReplyPayload,
+} from "./pi-embedded-messaging.types.js";
 import type { BlockReplyPayload } from "./pi-embedded-payloads.js";
 import type { EmbeddedRunReplayState } from "./pi-embedded-runner/replay-state.js";
 import type { EmbeddedRunLivenessState } from "./pi-embedded-runner/types.js";
@@ -103,6 +106,7 @@ export type EmbeddedPiSubscribeState = {
   messagingToolSentTargets: MessagingToolSend[];
   heartbeatToolResponse?: HeartbeatToolResponse;
   messagingToolSentMediaUrls: string[];
+  messagingToolSourceReplyPayloads: MessagingToolSourceReplyPayload[];
   pendingMessagingTexts: Map<string, string>;
   pendingMessagingTargets: Map<string, MessagingToolSend>;
   successfulCronAdds: number;
@@ -224,6 +228,7 @@ type ToolHandlerState = Pick<
   | "messagingToolSentTexts"
   | "messagingToolSentTextsNormalized"
   | "messagingToolSentMediaUrls"
+  | "messagingToolSourceReplyPayloads"
   | "messagingToolSentTargets"
   | "heartbeatToolResponse"
   | "successfulCronAdds"

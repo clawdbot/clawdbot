@@ -1,5 +1,5 @@
 ---
-summary: "Task Flow flow orchestration layer above background tasks"
+summary: "Task Flow orchestration layer above background tasks"
 read_when:
   - You want to understand how Task Flow relates to background tasks
   - You encounter Task Flow or openclaw tasks flow in release notes or docs

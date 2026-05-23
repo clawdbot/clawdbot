@@ -81,6 +81,14 @@ vi.mock("../../agents/model-auth.js", () => {
   const hasWorkspaceCredential = (env: NodeJS.ProcessEnv = process.env) =>
     Boolean(env.WORKSPACE_MODEL_LIST_CREDENTIALS || env.WORKSPACE_MODEL_CREDENTIALS);
   return {
+    createRuntimeProviderAuthLookup: () => ({
+      envApiKey: {
+        aliasMap: {},
+        candidateMap: {},
+        authEvidenceMap: {},
+      },
+      syntheticAuthProviderRefs: [],
+    }),
     ensureAuthProfileStore: store,
     hasRuntimeAvailableProviderAuth: ({
       provider,

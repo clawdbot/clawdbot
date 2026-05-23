@@ -286,9 +286,18 @@ describe("runGatewayUpdate", () => {
     return { nodeModules, pkgRoot };
   }
 
+  type InstallCommandExpectation = string | ((argv: string[]) => boolean);
+
   const npmFreshnessArg = "--min-release-age=0";
   const normalizeNpmFreshnessArgs = (argv: string[]) =>
     argv.map((arg) => (/^--before=\d{4}-\d{2}-\d{2}T/u.test(arg) ? npmFreshnessArg : arg));
+
+  const installCommandMatches = (expected: InstallCommandExpectation, argv: string[]) => {
+    const normalizedArgv = normalizeNpmFreshnessArgs(argv);
+    return typeof expected === "string"
+      ? normalizedArgv.join(" ") === expected
+      : expected(normalizedArgv);
+  };
 
   const npmGlobalInstallCommand = (spec: string, extraArgs: string[] = []) =>
     [
@@ -1655,7 +1664,7 @@ describe("runGatewayUpdate", () => {
   });
 
   async function runNpmGlobalUpdateCase(params: {
-    expectedInstallCommand: string;
+    expectedInstallCommand: InstallCommandExpectation;
     channel?: "stable" | "beta";
     tag?: string;
   }): Promise<{ calls: string[]; result: Awaited<ReturnType<typeof runGatewayUpdate>> }> {
@@ -1689,7 +1698,7 @@ describe("runGatewayUpdate", () => {
     pkgRoot: string;
     npmRootOutput?: string;
     pnpmRootOutput?: string;
-    installCommand: string;
+    installCommand: InstallCommandExpectation;
     gitRootMode?: "not-git" | "missing";
     onInstall?: (options?: {
       env?: NodeJS.ProcessEnv;
@@ -1719,7 +1728,19 @@ describe("runGatewayUpdate", () => {
         }
         return { stdout: "", stderr: "", code: 1 };
       }
-      if (key === params.installCommand) {
+      if (argv[0] === "npm" && argv[1] === "pack") {
+        const destination = argv[argv.indexOf("--pack-destination") + 1];
+        if (!destination) {
+          return { stdout: "", stderr: "missing pack destination", code: 1 };
+        }
+        await fs.writeFile(path.join(destination, "openclaw-2.0.0.tgz"), "packed\n", "utf-8");
+        return {
+          stdout: JSON.stringify([{ filename: "openclaw-2.0.0.tgz" }]),
+          stderr: "",
+          code: 0,
+        };
+      }
+      if (installCommandMatches(params.installCommand, argv)) {
         await params.onInstall?.(options);
         return { stdout: "ok", stderr: "", code: 0 };
       }
@@ -1729,8 +1750,8 @@ describe("runGatewayUpdate", () => {
         const normalizedInstallCommand = normalizeNpmFreshnessArgs([
           ...argv.slice(0, prefixIndex),
           ...argv.slice(prefixIndex + 2),
-        ]).join(" ");
-        if (normalizedInstallCommand === params.installCommand) {
+        ]);
+        if (installCommandMatches(params.installCommand, normalizedInstallCommand)) {
           const packageRoot =
             process.platform === "win32"
               ? path.join(installPrefix, "node_modules", "openclaw")
@@ -1777,17 +1798,27 @@ describe("runGatewayUpdate", () => {
     expect(calls).toContain(expectedInstallCommand);
   });
 
-  it("rejects global npm updates from the GitHub main package spec", async () => {
+  it("updates global npm installs from the GitHub main package spec", async () => {
+    const sourceSpec = "github:openclaw/openclaw#main";
     const { calls, result } = await runNpmGlobalUpdateCase({
-      expectedInstallCommand: npmGlobalInstallCommand("github:openclaw/openclaw#main"),
+      expectedInstallCommand: (argv) =>
+        argv[0] === "npm" &&
+        argv[1] === "i" &&
+        argv[2] === "-g" &&
+        path.basename(argv[3] ?? "") === "openclaw-2.0.0.tgz" &&
+        argv.slice(4).join(" ") === "--no-fund --no-audit --loglevel=error --min-release-age=0",
       tag: "main",
     });
 
-    expect(result.status).toBe("error");
+    expect(result.status).toBe("ok");
     expect(result.mode).toBe("npm");
-    expect(result.reason).toBe("unsupported-package-target");
-    expect(result.steps[0]?.name).toBe("package target validation");
-    expect(calls).not.toContain(npmGlobalInstallCommand("github:openclaw/openclaw#main"));
+    expect(result.steps.map((step) => step.name)).toContain("global update pack");
+    expect(
+      calls.some((call) => call.startsWith(`npm pack ${sourceSpec} --pack-destination `)),
+    ).toBe(true);
+    const installCall = calls.find((call) => call.includes("openclaw-2.0.0.tgz"));
+    expect(installCall).toContain("--no-fund --no-audit --loglevel=error --min-release-age=0");
+    expect(installCall).not.toContain(sourceSpec);
   });
 
   it("runs doctor after global npm updates before reporting success", async () => {

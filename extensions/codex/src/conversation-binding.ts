@@ -21,7 +21,10 @@ import {
   type CodexTurnStartResponse,
   type JsonValue,
 } from "./app-server/protocol.js";
-import { resolveCodexNativeSandboxBlock } from "./app-server/sandbox-guard.js";
+import {
+  resolveCodexNativeExecutionBlock,
+  resolveCodexNativeSandboxBlock,
+} from "./app-server/sandbox-guard.js";
 import {
   clearCodexAppServerBinding,
   isCodexAppServerNativeAuthProfile,
@@ -163,16 +166,20 @@ export async function handleCodexConversationInboundClaim(
   if (!prompt) {
     return { handled: true };
   }
-  const sandboxBlock = resolveCodexNativeSandboxBlock({
-    config: options.config,
-    sessionKey: event.sessionKey ?? ctx.sessionKey,
-    surface:
-      data.kind === "codex-cli-node-session"
-        ? "Codex CLI node conversation binding"
-        : "Codex app-server conversation binding",
-  });
-  if (sandboxBlock) {
-    return { handled: true, reply: { text: sandboxBlock } };
+  const nativeExecutionBlock =
+    data.kind === "codex-cli-node-session"
+      ? resolveCodexNativeSandboxBlock({
+          config: options.config,
+          sessionKey: event.sessionKey ?? ctx.sessionKey,
+          surface: "Codex CLI node conversation binding",
+        })
+      : resolveCodexNativeExecutionBlock({
+          config: options.config,
+          sessionKey: event.sessionKey ?? ctx.sessionKey,
+          surface: "Codex app-server conversation binding",
+        });
+  if (nativeExecutionBlock) {
+    return { handled: true, reply: { text: nativeExecutionBlock } };
   }
   if (data.kind === "codex-cli-node-session") {
     const resume = options.resumeCodexCliSessionOnNode;

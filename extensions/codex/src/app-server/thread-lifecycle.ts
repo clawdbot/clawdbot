@@ -840,7 +840,9 @@ function fingerprintDynamicToolSpec(tool: JsonValue): JsonValue {
   for (const [key, child] of Object.entries(tool).toSorted(([left], [right]) =>
     left.localeCompare(right),
   )) {
-    if (key === "description") {
+    // Tool-search presentation can change per turn without changing the
+    // durable app-server execution contract for an existing thread.
+    if (key === "description" || key === "deferLoading" || key === "namespace") {
       continue;
     }
     stable[key] = stabilizeJsonValue(child);

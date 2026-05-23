@@ -931,6 +931,35 @@ describe("runCodexAppServerAttempt", () => {
     });
 
     expect(tools.map((tool) => tool.name)).toEqual(["message", "exec", "process"]);
+
+    const runtimePolicySessionFile = path.join(tempDir, "runtime-policy-session.jsonl");
+    const runtimePolicyParams = createParams(runtimePolicySessionFile, workspaceDir);
+    runtimePolicyParams.disableTools = false;
+    runtimePolicyParams.runtimePlan = createCodexRuntimePlanFixture();
+    runtimePolicyParams.sessionKey = "agent:main:session-1";
+    runtimePolicyParams.sandboxSessionKey = "agent:policy:session-1";
+    runtimePolicyParams.config = {
+      agents: {
+        list: [
+          { id: "main", tools: { exec: { host: "gateway" } } },
+          { id: "policy", tools: { exec: { host: "node", node: "worker-1" } } },
+        ],
+      },
+    } as never;
+    const runtimePolicyTools = await testing.buildDynamicTools({
+      params: runtimePolicyParams,
+      resolvedWorkspace: workspaceDir,
+      effectiveWorkspace: workspaceDir,
+      sandboxSessionKey: "agent:policy:session-1",
+      sandbox: { enabled: false, backendId: "docker" } as never,
+      nativeToolSurfaceEnabled: false,
+      runAbortController: new AbortController(),
+      sessionAgentId: "policy",
+      pluginConfig: {},
+      onYieldDetected: () => undefined,
+    });
+
+    expect(runtimePolicyTools.map((tool) => tool.name)).toEqual(["message", "exec", "process"]);
   });
 
   it("exposes Docker sandbox shell tools when native Code Mode cannot honor sandbox paths", async () => {
@@ -1916,6 +1945,16 @@ describe("runCodexAppServerAttempt", () => {
 
     expect(testing.shouldEnableCodexAppServerNativeToolSurface(globalParams)).toBe(false);
 
+    const autoOverrideParams = createParams(
+      path.join(tempDir, "auto-override-session.jsonl"),
+      workspaceDir,
+    );
+    autoOverrideParams.disableTools = false;
+    autoOverrideParams.config = { tools: { exec: { host: "node" } } } as never;
+    autoOverrideParams.execOverrides = { host: "auto" };
+
+    expect(testing.shouldEnableCodexAppServerNativeToolSurface(autoOverrideParams)).toBe(true);
+
     const agentParams = createParams(path.join(tempDir, "agent-session.jsonl"), workspaceDir);
     agentParams.disableTools = false;
     agentParams.config = {
@@ -1929,6 +1968,24 @@ describe("runCodexAppServerAttempt", () => {
         agentId: "main",
       }),
     ).toBe(false);
+
+    const runtimePolicyParams = createParams(
+      path.join(tempDir, "runtime-policy-session.jsonl"),
+      workspaceDir,
+    );
+    runtimePolicyParams.disableTools = false;
+    runtimePolicyParams.sessionKey = "agent:main:session-1";
+    runtimePolicyParams.sandboxSessionKey = "agent:policy:session-1";
+    runtimePolicyParams.config = {
+      agents: {
+        list: [
+          { id: "main", tools: { exec: { host: "gateway" } } },
+          { id: "policy", tools: { exec: { host: "node", node: "worker-1" } } },
+        ],
+      },
+    } as never;
+
+    expect(testing.shouldEnableCodexAppServerNativeToolSurface(runtimePolicyParams)).toBe(false);
   });
 
   it("disables Codex native tool surfaces whenever an OpenClaw sandbox is active", () => {
@@ -2251,9 +2308,12 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("keeps forced message dynamic tool when toolsAllow is empty", async () => {
-    testing.setOpenClawCodingToolsFactoryForTests(() => [
+    testing.setOpenClawCodingToolsFactoryForTests((options) => [
       createRuntimeDynamicTool("message"),
       createRuntimeDynamicTool("music_generate"),
+      ...(options?.forceHeartbeatTool === true
+        ? [createRuntimeDynamicTool("heartbeat_respond")]
+        : []),
     ]);
     const harness = createStartedThreadHarness();
     const params = createParams(
@@ -2264,6 +2324,38 @@ describe("runCodexAppServerAttempt", () => {
     params.runtimePlan = createCodexRuntimePlanFixture();
     params.sourceReplyDeliveryMode = "message_tool_only";
     params.toolsAllow = [];
+
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: { appServer: { mode: "yolo" } },
+    });
+    await harness.waitForMethod("turn/start", 120_000);
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+
+    const startRequest = harness.requests.find((entry) => entry.method === "thread/start");
+    const dynamicToolNames =
+      (
+        startRequest?.params as { dynamicTools?: Array<{ name?: string }> } | undefined
+      )?.dynamicTools?.map((tool) => tool.name) ?? [];
+
+    expect(dynamicToolNames).toEqual(["message"]);
+  });
+
+  it("keeps forced heartbeat registration inside narrow toolsAllow policy", async () => {
+    testing.setOpenClawCodingToolsFactoryForTests((options) => [
+      createRuntimeDynamicTool("message"),
+      ...(options?.forceHeartbeatTool === true
+        ? [createRuntimeDynamicTool("heartbeat_respond")]
+        : []),
+    ]);
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.toolsAllow = ["message"];
 
     const run = runCodexAppServerAttempt(params, {
       pluginConfig: { appServer: { mode: "yolo" } },
@@ -2329,6 +2421,158 @@ describe("runCodexAppServerAttempt", () => {
     expect(sessionsYield).not.toHaveProperty("deferLoading");
     expect(startConfig?.["features.code_mode"]).toBe(true);
     expect(startConfig?.["features.code_mode_only"]).toBe(true);
+  });
+
+  it("registers heartbeat response durably without advertising it on normal turns", async () => {
+    testing.setOpenClawCodingToolsFactoryForTests((options) => [
+      createRuntimeDynamicTool("message"),
+      ...(options?.enableHeartbeatTool === true
+        ? [createRuntimeDynamicTool("heartbeat_respond")]
+        : []),
+    ]);
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "thread/resume") {
+        return threadStartResult("thread-1");
+      }
+      return undefined;
+    });
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const createRunParams = (trigger?: EmbeddedRunAttemptParams["trigger"]) => {
+      const params = createParams(sessionFile, workspaceDir);
+      params.disableTools = false;
+      params.runtimePlan = createCodexRuntimePlanFixture();
+      if (trigger) {
+        params.trigger = trigger;
+      }
+      if (trigger === "heartbeat") {
+        params.sourceReplyDeliveryMode = "message_tool_only";
+      }
+      return params;
+    };
+
+    const normalRun = runCodexAppServerAttempt(createRunParams(), {
+      pluginConfig: { appServer: { mode: "yolo" } },
+    });
+    await harness.waitForMethod("turn/start", 120_000);
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await normalRun;
+
+    const startRequest = harness.requests.find((entry) => entry.method === "thread/start");
+    const startParams = startRequest?.params as
+      | { dynamicTools?: Array<{ name?: string }>; developerInstructions?: string }
+      | undefined;
+    const registeredToolNames = startParams?.dynamicTools?.map((tool) => tool.name) ?? [];
+
+    expect(registeredToolNames).toContain("message");
+    expect(registeredToolNames).toContain("heartbeat_respond");
+    expect(startParams?.developerInstructions).toContain(
+      "Deferred searchable OpenClaw dynamic tools available: message.",
+    );
+    expect(startParams?.developerInstructions).not.toContain(
+      "Deferred searchable OpenClaw dynamic tools available: heartbeat_respond",
+    );
+
+    const heartbeatRun = runCodexAppServerAttempt(createRunParams("heartbeat"), {
+      pluginConfig: { appServer: { mode: "yolo" } },
+    });
+    await vi.waitFor(
+      () => {
+        expect(harness.requests.filter((entry) => entry.method === "turn/start")).toHaveLength(2);
+      },
+      { interval: 1, timeout: 120_000 },
+    );
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await heartbeatRun;
+
+    const nextNormalRun = runCodexAppServerAttempt(createRunParams(), {
+      pluginConfig: { appServer: { mode: "yolo" } },
+    });
+    await vi.waitFor(
+      () => {
+        expect(harness.requests.filter((entry) => entry.method === "turn/start")).toHaveLength(3);
+      },
+      { interval: 1, timeout: 120_000 },
+    );
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await nextNormalRun;
+
+    expect(harness.requests.filter((entry) => entry.method === "thread/start")).toHaveLength(1);
+    expect(harness.requests.filter((entry) => entry.method === "thread/resume")).toHaveLength(2);
+  });
+
+  it("keeps the persistent dynamic schema stable across heartbeat-only turns", async () => {
+    testing.setOpenClawCodingToolsFactoryForTests((options) => [
+      createRuntimeDynamicTool("message"),
+      createRuntimeDynamicTool("web_search"),
+      ...(options?.enableHeartbeatTool === true
+        ? [createRuntimeDynamicTool("heartbeat_respond")]
+        : []),
+    ]);
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "thread/resume") {
+        return threadStartResult("thread-1");
+      }
+      return undefined;
+    });
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const createRunParams = (trigger?: EmbeddedRunAttemptParams["trigger"]) => {
+      const params = createParams(sessionFile, workspaceDir);
+      params.disableTools = false;
+      const runtimePlan = createCodexRuntimePlanFixture();
+      params.runtimePlan = {
+        ...runtimePlan,
+        tools: {
+          normalize: (tools: Array<{ name: string }>) =>
+            trigger === "heartbeat"
+              ? tools.filter((tool) => tool.name === "heartbeat_respond")
+              : tools,
+          logDiagnostics: () => undefined,
+        },
+      } as unknown as NonNullable<EmbeddedRunAttemptParams["runtimePlan"]>;
+      if (trigger) {
+        params.trigger = trigger;
+      }
+      return params;
+    };
+
+    const normalRun = runCodexAppServerAttempt(createRunParams(), {
+      pluginConfig: { appServer: { mode: "yolo" } },
+    });
+    await harness.waitForMethod("turn/start", 120_000);
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await normalRun;
+
+    const heartbeatRun = runCodexAppServerAttempt(createRunParams("heartbeat"), {
+      pluginConfig: { appServer: { mode: "yolo" } },
+    });
+    await vi.waitFor(
+      () => {
+        expect(harness.requests.filter((entry) => entry.method === "turn/start")).toHaveLength(2);
+      },
+      { interval: 1, timeout: 120_000 },
+    );
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await heartbeatRun;
+
+    const nextNormalRun = runCodexAppServerAttempt(createRunParams(), {
+      pluginConfig: { appServer: { mode: "yolo" } },
+    });
+    await vi.waitFor(
+      () => {
+        expect(harness.requests.filter((entry) => entry.method === "turn/start")).toHaveLength(3);
+      },
+      { interval: 1, timeout: 120_000 },
+    );
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await nextNormalRun;
+
+    expect(
+      harness.requests
+        .map((entry) => entry.method)
+        .filter((method) => method === "thread/start" || method === "thread/resume"),
+    ).toEqual(["thread/start", "thread/resume", "thread/resume"]);
   });
 
   it("disables Codex native tool surfaces when runtime toolsAllow is empty", async () => {
@@ -3022,6 +3266,450 @@ describe("runCodexAppServerAttempt", () => {
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
+  });
+
+  it("releases the turn after terminal dynamic tool responses", async () => {
+    const harness = createStartedThreadHarness();
+    testing.setOpenClawCodingToolsFactoryForTests((options) => [
+      {
+        ...createRuntimeDynamicTool("image_generate"),
+        execute: vi.fn(async () => {
+          await options?.onYield?.("Image generation started; wait for completion.");
+          return {
+            content: [{ type: "text" as const, text: "Background task started." }],
+            details: { async: true, status: "started", taskId: "task-1" },
+            terminate: true,
+          };
+        }),
+      },
+    ]);
+
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+
+    const toolResult = (await harness.handleServerRequest({
+      id: "request-image-generate",
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-image-1",
+        namespace: null,
+        tool: "image_generate",
+        arguments: { prompt: "lighthouse" },
+      },
+    })) as {
+      contentItems?: Array<{ text?: string; type?: string }>;
+      success?: boolean;
+    };
+
+    expect(toolResult).toEqual({
+      success: true,
+      contentItems: [{ type: "inputText", text: "Background task started." }],
+    });
+    expect(harness.requests.some((request) => request.method === "turn/interrupt")).toBe(false);
+    const result = await run;
+
+    expect(result.timedOut).toBe(false);
+    expect(result.promptError).toBeNull();
+    expect(result.yieldDetected).toBe(true);
+    expect(result.messagesSnapshot.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+    ]);
+    expect(
+      harness.requests.some(
+        (request) =>
+          request.method === "turn/interrupt" &&
+          (request.params as { turnId?: string } | undefined)?.turnId === "turn-1",
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps mixed dynamic tool batches running after one terminal result", async () => {
+    const harness = createStartedThreadHarness();
+    let markEchoStarted: (() => void) | undefined;
+    const echoStarted = new Promise<void>((resolve) => {
+      markEchoStarted = resolve;
+    });
+    let releaseEcho: (() => void) | undefined;
+    const echoBlocked = new Promise<void>((resolve) => {
+      releaseEcho = resolve;
+    });
+    testing.setOpenClawCodingToolsFactoryForTests(() => [
+      {
+        ...createRuntimeDynamicTool("image_generate"),
+        execute: vi.fn(async () => ({
+          content: [{ type: "text" as const, text: "Background task started." }],
+          details: { async: true, status: "started", taskId: "task-1" },
+          terminate: true,
+        })),
+      },
+      {
+        ...createRuntimeDynamicTool("echo"),
+        execute: vi.fn(async () => {
+          markEchoStarted?.();
+          await echoBlocked;
+          return {
+            content: [{ type: "text" as const, text: "echo done" }],
+            details: {},
+          };
+        }),
+      },
+    ]);
+
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+
+    const echoRequest = harness.handleServerRequest({
+      id: "request-echo",
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-echo-1",
+        namespace: null,
+        tool: "echo",
+        arguments: {},
+      },
+    });
+    await echoStarted;
+
+    const imageResult = await harness.handleServerRequest({
+      id: "request-image-generate",
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-image-1",
+        namespace: null,
+        tool: "image_generate",
+        arguments: { prompt: "lighthouse" },
+      },
+    });
+    expect(imageResult).toEqual({
+      success: true,
+      contentItems: [{ type: "inputText", text: "Background task started." }],
+    });
+    expect(harness.requests.some((request) => request.method === "turn/interrupt")).toBe(false);
+
+    releaseEcho?.();
+    await expect(echoRequest).resolves.toEqual({
+      success: true,
+      contentItems: [{ type: "inputText", text: "echo done" }],
+    });
+    expect(harness.requests.some((request) => request.method === "turn/interrupt")).toBe(false);
+
+    await harness.notify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        completedAtMs: Date.now(),
+        item: {
+          type: "dynamicToolCall",
+          id: "call-echo-1",
+          namespace: null,
+          tool: "echo",
+          arguments: {},
+          status: "completed",
+          contentItems: [{ type: "inputText", text: "echo done" }],
+          success: true,
+          durationMs: 1,
+        },
+      },
+    });
+
+    expect(harness.requests.some((request) => request.method === "turn/interrupt")).toBe(false);
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    const result = await run;
+    expect(result.timedOut).toBe(false);
+    expect(harness.requests.some((request) => request.method === "turn/interrupt")).toBe(false);
+  });
+
+  it("does not terminal-release when a parallel non-terminal dynamic tool finished first", async () => {
+    const harness = createStartedThreadHarness();
+    let markImageStarted: (() => void) | undefined;
+    const imageStarted = new Promise<void>((resolve) => {
+      markImageStarted = resolve;
+    });
+    let releaseImage: (() => void) | undefined;
+    const imageBlocked = new Promise<void>((resolve) => {
+      releaseImage = resolve;
+    });
+    testing.setOpenClawCodingToolsFactoryForTests(() => [
+      {
+        ...createRuntimeDynamicTool("echo"),
+        execute: vi.fn(async () => ({
+          content: [{ type: "text" as const, text: "echo done" }],
+          details: {},
+        })),
+      },
+      {
+        ...createRuntimeDynamicTool("image_generate"),
+        execute: vi.fn(async () => {
+          markImageStarted?.();
+          await imageBlocked;
+          return {
+            content: [{ type: "text" as const, text: "Background task started." }],
+            details: { async: true, status: "started", taskId: "task-1" },
+            terminate: true,
+          };
+        }),
+      },
+    ]);
+
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+
+    const imageRequest = harness.handleServerRequest({
+      id: "request-image-generate",
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-image-1",
+        namespace: null,
+        tool: "image_generate",
+        arguments: { prompt: "lighthouse" },
+      },
+    });
+    await imageStarted;
+    await expect(
+      harness.handleServerRequest({
+        id: "request-echo",
+        method: "item/tool/call",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-echo-1",
+          namespace: null,
+          tool: "echo",
+          arguments: {},
+        },
+      }),
+    ).resolves.toEqual({
+      success: true,
+      contentItems: [{ type: "inputText", text: "echo done" }],
+    });
+    await harness.notify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        completedAtMs: Date.now(),
+        item: {
+          type: "dynamicToolCall",
+          id: "call-echo-1",
+          namespace: null,
+          tool: "echo",
+          arguments: {},
+          status: "completed",
+          contentItems: [{ type: "inputText", text: "echo done" }],
+          success: true,
+          durationMs: 1,
+        },
+      },
+    });
+    releaseImage?.();
+    await expect(imageRequest).resolves.toEqual({
+      success: true,
+      contentItems: [{ type: "inputText", text: "Background task started." }],
+    });
+    expect(harness.requests.some((request) => request.method === "turn/interrupt")).toBe(false);
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    const result = await run;
+    expect(result.timedOut).toBe(false);
+    expect(harness.requests.some((request) => request.method === "turn/interrupt")).toBe(false);
+  });
+
+  it("terminal-releases after a prior non-terminal dynamic tool batch is closed", async () => {
+    const harness = createStartedThreadHarness();
+    testing.setOpenClawCodingToolsFactoryForTests(() => [
+      {
+        ...createRuntimeDynamicTool("echo"),
+        execute: vi.fn(async () => ({
+          content: [{ type: "text" as const, text: "echo done" }],
+          details: {},
+        })),
+      },
+      {
+        ...createRuntimeDynamicTool("image_generate"),
+        execute: vi.fn(async () => ({
+          content: [{ type: "text" as const, text: "Background task started." }],
+          details: { async: true, status: "started", taskId: "task-1" },
+          terminate: true,
+        })),
+      },
+    ]);
+
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+
+    await expect(
+      harness.handleServerRequest({
+        id: "request-echo",
+        method: "item/tool/call",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-echo-1",
+          namespace: null,
+          tool: "echo",
+          arguments: {},
+        },
+      }),
+    ).resolves.toEqual({
+      success: true,
+      contentItems: [{ type: "inputText", text: "echo done" }],
+    });
+    await harness.notify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        completedAtMs: Date.now(),
+        item: {
+          type: "dynamicToolCall",
+          id: "call-echo-1",
+          namespace: null,
+          tool: "echo",
+          arguments: {},
+          status: "completed",
+          contentItems: [{ type: "inputText", text: "echo done" }],
+          success: true,
+          durationMs: 1,
+        },
+      },
+    });
+    await expect(
+      harness.handleServerRequest({
+        id: "request-image-generate",
+        method: "item/tool/call",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-image-1",
+          namespace: null,
+          tool: "image_generate",
+          arguments: { prompt: "lighthouse" },
+        },
+      }),
+    ).resolves.toEqual({
+      success: true,
+      contentItems: [{ type: "inputText", text: "Background task started." }],
+    });
+
+    const result = await run;
+    expect(result.timedOut).toBe(false);
+    expect(
+      harness.requests.some(
+        (request) =>
+          request.method === "turn/interrupt" &&
+          (request.params as { turnId?: string } | undefined)?.turnId === "turn-1",
+      ),
+    ).toBe(true);
+  });
+
+  it("waits for active native items before terminal dynamic tool release", async () => {
+    const harness = createStartedThreadHarness();
+    testing.setOpenClawCodingToolsFactoryForTests(() => [
+      {
+        ...createRuntimeDynamicTool("image_generate"),
+        execute: vi.fn(async () => ({
+          content: [{ type: "text" as const, text: "Background task started." }],
+          details: { async: true, status: "started", taskId: "task-1" },
+          terminate: true,
+        })),
+      },
+    ]);
+
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: { type: "commandExecution", id: "cmd-1", status: "inProgress" },
+      },
+    });
+
+    await expect(
+      harness.handleServerRequest({
+        id: "request-image-generate",
+        method: "item/tool/call",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-image-1",
+          namespace: null,
+          tool: "image_generate",
+          arguments: { prompt: "lighthouse" },
+        },
+      }),
+    ).resolves.toEqual({
+      success: true,
+      contentItems: [{ type: "inputText", text: "Background task started." }],
+    });
+    expect(harness.requests.some((request) => request.method === "turn/interrupt")).toBe(false);
+
+    await harness.notify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: { type: "commandExecution", id: "cmd-1", status: "completed" },
+      },
+    });
+
+    const result = await run;
+    expect(result.timedOut).toBe(false);
+    expect(
+      harness.requests.some(
+        (request) =>
+          request.method === "turn/interrupt" &&
+          (request.params as { turnId?: string } | undefined)?.turnId === "turn-1",
+      ),
+    ).toBe(true);
   });
 
   it("emits request-boundary terminal diagnostics when a wrapped dynamic tool does not", async () => {

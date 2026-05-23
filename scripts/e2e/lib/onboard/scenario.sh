@@ -90,7 +90,7 @@ run_wizard_cmd() {
   WIZARD_LOG_PATH="$log_path"
   export WIZARD_LOG_PATH
   # Run under script to keep an interactive TTY for clack prompts.
-  script -q -f -c "$command" "$log_path" <"$input_fifo" >/dev/null 2>&1 &
+  openclaw_e2e_run_script_with_pty "$command" "$log_path" <"$input_fifo" >/dev/null 2>&1 &
   wizard_pid=$!
   exec 3>"$input_fifo"
 

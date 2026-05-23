@@ -12,7 +12,7 @@ import {
   resolveConfiguredImageModelRefs,
   resolveProviderVisionModelFromConfig,
 } from "./image-tool.helpers.js";
-import { hasAuthForProvider, resolveDefaultModelRef } from "./model-config.helpers.js";
+import { hasProviderAuthForTool, resolveDefaultModelRef } from "./model-config.helpers.js";
 import { coercePdfModelConfig } from "./pdf-tool.helpers.js";
 
 function resolveImageCandidateRefs(params: {
@@ -29,8 +29,10 @@ function resolveImageCandidateRefs(params: {
   })
     .filter((providerId) => !params.filter || params.filter(providerId))
     .filter((providerId) =>
-      hasAuthForProvider({
+      hasProviderAuthForTool({
         provider: providerId,
+        cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
         agentDir: params.agentDir,
         authStore: params.authStore,
       }),
@@ -76,8 +78,10 @@ export function resolvePdfModelConfigForTool(params: {
   }
 
   const primary = resolveDefaultModelRef(params.cfg);
-  const googleOk = hasAuthForProvider({
+  const googleOk = hasProviderAuthForTool({
     provider: "google",
+    cfg: params.cfg,
+    workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     authStore: params.authStore,
   });
@@ -92,8 +96,10 @@ export function resolvePdfModelConfigForTool(params: {
 
   let preferred: string | null = null;
 
-  const providerOk = hasAuthForProvider({
+  const providerOk = hasProviderAuthForTool({
     provider: primary.provider,
+    cfg: params.cfg,
+    workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     authStore: params.authStore,
   });
@@ -140,8 +146,10 @@ export function resolvePdfModelConfigForTool(params: {
       if (
         !providerId ||
         isMinimaxVlmProvider(providerId) ||
-        !hasAuthForProvider({
+        !hasProviderAuthForTool({
           provider: providerId,
+          cfg: params.cfg,
+          workspaceDir: params.workspaceDir,
           agentDir: params.agentDir,
           authStore: params.authStore,
         })

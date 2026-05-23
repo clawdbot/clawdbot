@@ -18,7 +18,11 @@ vi.mock("./model-config.helpers.js", () => ({
       ...(objectModel?.fallbacks?.length ? { fallbacks: objectModel.fallbacks } : {}),
     };
   },
-  hasAuthForProvider: ({ provider }: { provider: string }) => {
+  hasProviderAuthForTool: ({ provider, cfg }: { provider: string; cfg?: OpenClawConfig }) => {
+    const providerCfg = cfg?.models?.providers?.[provider] as { apiKey?: string } | undefined;
+    if (providerCfg?.apiKey?.trim()) {
+      return true;
+    }
     if (provider === "anthropic") {
       return Boolean(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_OAUTH_TOKEN);
     }
@@ -135,6 +139,35 @@ describe("resolvePdfModelConfigForTool", () => {
 
     expect(resolvePdfModelConfigForTool({ cfg, agentDir: TEST_AGENT_DIR })).toEqual({
       primary: "minimax/MiniMax-VL-01",
+    });
+  });
+
+  it("uses a config-authenticated custom provider image model as a PDF fallback", () => {
+    const cfg = {
+      ...withDefaultModel("hatchery/text-1"),
+      models: {
+        providers: {
+          hatchery: {
+            baseUrl: "https://example.com/v1",
+            apiKey: "sk-configured", // pragma: allowlist secret
+            models: [
+              {
+                id: "vision-1",
+                name: "Vision 1",
+                reasoning: false,
+                input: ["text", "image"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 32_000,
+                maxTokens: 4_096,
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolvePdfModelConfigForTool({ cfg, agentDir: TEST_AGENT_DIR })).toEqual({
+      primary: "hatchery/vision-1",
     });
   });
 });

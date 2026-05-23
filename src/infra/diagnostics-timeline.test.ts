@@ -208,6 +208,30 @@ describe("diagnostics timeline", () => {
     expect(errorEvent.errorMessage).toBe("bad plugin");
   });
 
+  it("can omit sensitive span error messages", async () => {
+    const { env, path } = await createTimelineEnv();
+
+    await expect(
+      measureDiagnosticsTimelineSpan(
+        "secrets.prepare",
+        () => {
+          throw new Error('Secret provider "prod" failed for ref "TOKEN_ID"');
+        },
+        { env, omitErrorMessage: true, phase: "startup" },
+      ),
+    ).rejects.toThrow("TOKEN_ID");
+
+    const events = await readTimeline(path);
+    expect(events).toHaveLength(2);
+    const errorEvent = eventRecord(events, 1);
+    expect(errorEvent.type).toBe("span.error");
+    expect(errorEvent.name).toBe("secrets.prepare");
+    expect(errorEvent.errorName).toBe("Error");
+    expect(errorEvent.errorMessage).toBeUndefined();
+    expect(JSON.stringify(events)).not.toContain("TOKEN_ID");
+    expect(JSON.stringify(events)).not.toContain("prod");
+  });
+
   it("records synchronous spans", async () => {
     const { env, path } = await createTimelineEnv();
 

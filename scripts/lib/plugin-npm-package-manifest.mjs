@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import JSON5 from "json5";
+import { packageJsonForShrinkwrap, readShrinkwrapOverrides } from "../generate-npm-shrinkwrap.mjs";
 import {
   listPluginNpmRuntimeBuildOutputs,
   resolvePluginNpmRuntimeBuildPlan,
@@ -351,32 +352,43 @@ function installPackageLocalBundledDependencies(params) {
   }
 
   console.error(`[plugin-npm-publish] installing bundled dependencies for ${params.pluginDir}`);
-  const result = spawnNpmSync(
-    [
-      "ci",
-      "--omit=dev",
-      "--omit=peer",
-      "--legacy-peer-deps",
-      "--ignore-scripts",
-      "--no-audit",
-      "--no-fund",
-      "--loglevel=error",
-    ],
-    {
-      cwd: params.packageDir,
-      env: process.env,
-      stdio: ["ignore", "ignore", "inherit"],
-    },
-  );
-  if (result.error) {
-    throw result.error;
-  }
-  if ((result.status ?? 1) !== 0) {
-    throw new Error(
-      `package-local bundled dependency install failed for ${params.pluginDir} with exit ${result.status ?? 1}`,
+  const packageJsonPath = resolvePackageJsonPath(params.packageDir);
+  const publishPackageJsonText = fs.readFileSync(packageJsonPath, "utf8");
+  try {
+    const installPackageJson = packageJsonForShrinkwrap(packageJson, readShrinkwrapOverrides());
+    const installPackageJsonText = `${JSON.stringify(installPackageJson, null, 2)}\n`;
+    if (installPackageJsonText !== publishPackageJsonText) {
+      fs.writeFileSync(packageJsonPath, installPackageJsonText, "utf8");
+    }
+    const result = spawnNpmSync(
+      [
+        "ci",
+        "--omit=dev",
+        "--omit=peer",
+        "--legacy-peer-deps",
+        "--ignore-scripts",
+        "--no-audit",
+        "--no-fund",
+        "--loglevel=error",
+      ],
+      {
+        cwd: params.packageDir,
+        env: process.env,
+        stdio: ["ignore", "ignore", "inherit"],
+      },
     );
+    if (result.error) {
+      throw result.error;
+    }
+    if ((result.status ?? 1) !== 0) {
+      throw new Error(
+        `package-local bundled dependency install failed for ${params.pluginDir} with exit ${result.status ?? 1}`,
+      );
+    }
+    installMissingOptionalBundledDependencies(params);
+  } finally {
+    fs.writeFileSync(packageJsonPath, publishPackageJsonText, "utf8");
   }
-  installMissingOptionalBundledDependencies(params);
   return () => {
     fs.rmSync(nodeModulesPath, { recursive: true, force: true });
   };

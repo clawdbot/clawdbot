@@ -90,6 +90,23 @@ function userMessage(text: string, timestamp: number): AgentMessage {
   } as AgentMessage;
 }
 
+function toolResultMessage(payload: unknown, timestamp: number): AgentMessage {
+  return {
+    role: "toolResult",
+    toolCallId: `call-${timestamp}`,
+    toolName: "bulk_context_probe",
+    content: [
+      {
+        type: "toolResult",
+        toolUseId: `call-${timestamp}`,
+        output: payload,
+      },
+    ],
+    isError: false,
+    timestamp,
+  } as unknown as AgentMessage;
+}
+
 function threadStartResult(threadId = "thread-1") {
   return {
     thread: {
@@ -989,6 +1006,61 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(savedBinding?.threadId).toBe("thread-fresh");
     expect(savedBinding?.contextEngine?.engineId).toBe("lossless-claw");
     expect(savedBinding?.contextEngine?.projection?.epoch).toBe("epoch-after");
+  });
+
+  it("compacts over-budget rendered context-engine prompts before Codex turn/start", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    SessionManager.open(sessionFile).appendMessage(
+      assistantMessage("pre-compaction context", Date.now()) as never,
+    );
+    const hugePayload = {
+      rows: Array.from({ length: 10 }, (_, index) => ({
+        id: index,
+        body: "0123456789abcdef".repeat(4000),
+      })),
+    };
+    const compact = vi.fn<ContextEngine["compact"]>(async () => ({
+      ok: true,
+      compacted: true,
+      result: { summary: "summary", firstKeptEntryId: "entry-1", tokensBefore: 100_000 },
+    }));
+    const assemble = vi
+      .fn<ContextEngine["assemble"]>()
+      .mockResolvedValueOnce({
+        messages: Array.from({ length: 8 }, (_, index) =>
+          toolResultMessage(hugePayload, index + 1),
+        ),
+        estimatedTokens: 100_000,
+        contextProjection: { mode: "thread_bootstrap", epoch: "epoch-before" },
+      })
+      .mockResolvedValueOnce({
+        messages: [assistantMessage("successor compacted context", 2) as never],
+        estimatedTokens: 100,
+        contextProjection: { mode: "thread_bootstrap", epoch: "epoch-after" },
+      });
+    const contextEngine = createContextEngine({ assemble, compact });
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.contextEngine = contextEngine;
+    params.contextTokenBudget = 16_000;
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+
+    expect(compact).toHaveBeenCalledTimes(1);
+    expect(assemble).toHaveBeenCalledTimes(2);
+    expect(harness.requests.map((request) => request.method)).toEqual([
+      "thread/start",
+      "turn/start",
+    ]);
+    const inputText = getRequestInputText(harness);
+    expect(inputText).toContain("successor compacted context");
+    expect(inputText).not.toContain("0123456789abcdef");
+
+    await harness.completeTurn();
+    const result = await run;
+    expect(result.assistantTexts).toContain("final answer");
   });
 
   it("bounds a hung owning context-engine compaction during Codex overflow recovery", async () => {

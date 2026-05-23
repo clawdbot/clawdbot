@@ -187,4 +187,12 @@ peekaboo type "Line 1\nLine 2" --delay 10
 Notes
 
 - Requires Screen Recording + Accessibility permissions.
+- In OpenClaw subprocesses, use the default Bridge path. Do not pass
+  `--no-remote` unless the calling process has its own Screen Recording grant.
+- Diagnose subprocess capture failures with `peekaboo bridge status --json`,
+  then `peekaboo permissions status --json`, then a normal Bridge-routed
+  capture such as `peekaboo image --mode screen --json`.
+- On macOS 15+, the "bypass private window picker" prompt is separate from the
+  base Screen Recording grant; it can appear even when Bridge permissions are
+  otherwise correct.
 - Use `peekaboo see --annotate` to identify targets before clicking.

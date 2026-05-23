@@ -83,7 +83,18 @@ const hasRuntimeAvailableProviderAuth = vi.hoisted(() =>
     },
   ),
 );
+const createRuntimeProviderAuthLookup = vi.hoisted(() =>
+  vi.fn(() => ({
+    envApiKey: {
+      aliasMap: {},
+      candidateMap: {},
+      authEvidenceMap: {},
+    },
+    syntheticAuthProviderRefs: [],
+  })),
+);
 vi.mock("../agents/model-auth.js", () => ({
+  createRuntimeProviderAuthLookup,
   resolveEnvApiKey,
   hasUsableCustomProviderApiKey,
   hasRuntimeAvailableProviderAuth,

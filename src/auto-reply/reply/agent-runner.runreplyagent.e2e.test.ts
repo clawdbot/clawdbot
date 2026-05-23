@@ -1973,7 +1973,8 @@ describe("runReplyAgent typing (heartbeat)", () => {
     if (!payload) {
       throw new Error("expected payload");
     }
-    expect(payload.text).toContain("conversation is too large");
+    expect(payload.text).toContain("Auto-compaction could not recover this turn");
+    expect(payload.text).toContain("reserveTokensFloor");
     expect(payload.text).toContain("/new");
   });
 
@@ -1995,7 +1996,8 @@ describe("runReplyAgent typing (heartbeat)", () => {
     if (!payload) {
       throw new Error("expected payload");
     }
-    expect(payload.text).toContain("conversation is too large");
+    expect(payload.text).toContain("Auto-compaction could not recover this turn");
+    expect(payload.text).toContain("reserveTokensFloor");
     expect(payload.text).toContain("/new");
   });
 

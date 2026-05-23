@@ -11,7 +11,10 @@ import { isCodexFastServiceTier, type CodexComputerUseConfig } from "./app-serve
 import { listAllCodexAppServerModels } from "./app-server/models.js";
 import { isJsonObject, type JsonValue } from "./app-server/protocol.js";
 import { rememberCodexRateLimits } from "./app-server/rate-limit-cache.js";
-import { resolveCodexNativeSandboxBlock } from "./app-server/sandbox-guard.js";
+import {
+  resolveCodexNativeExecutionBlock,
+  resolveCodexNativeSandboxBlock,
+} from "./app-server/sandbox-guard.js";
 import {
   clearCodexAppServerBinding,
   readCodexAppServerBinding,
@@ -427,7 +430,15 @@ function resolveCodexNativeCommandSandboxBlock(
   if (returnsBeforeNativeCodexExecution(subcommand, args)) {
     return undefined;
   }
-  return resolveCodexNativeSandboxBlock({
+  if (isCodexCliNodeResumeBind(subcommand, args)) {
+    return resolveCodexNativeSandboxBlock({
+      config: ctx.config,
+      sessionKey: ctx.sessionKey,
+      sessionId: ctx.sessionId,
+      surface: `/${["codex", subcommand].join(" ")}`,
+    });
+  }
+  return resolveCodexNativeExecutionBlock({
     config: ctx.config,
     sessionKey: ctx.sessionKey,
     sessionId: ctx.sessionId,
@@ -458,6 +469,14 @@ function returnsBeforeNativeCodexExecution(subcommand: string, args: readonly st
     default:
       return false;
   }
+}
+
+function isCodexCliNodeResumeBind(subcommand: string, args: readonly string[]): boolean {
+  if (subcommand !== "resume") {
+    return false;
+  }
+  const parsed = parseResumeArgs([...args]);
+  return Boolean(parsed.host && parsed.threadId && parsed.bindHere === true && !parsed.help);
 }
 
 function returnsBeforeNativeCodexResume(args: readonly string[]): boolean {

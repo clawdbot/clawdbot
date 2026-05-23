@@ -1362,41 +1362,9 @@
   grid-template-areas: "session model thinking quota";
 }
 
-.chat-controls__session-row--session-search-open {
-  grid-template-columns:
-    minmax(116px, 5fr) minmax(300px, 9fr) minmax(124px, 4fr)
-    minmax(120px, 3fr);
-}
-
-.chat-controls__session-row--single-agent.chat-controls__session-row--session-search-open {
-  grid-template-columns: minmax(300px, 9fr) minmax(124px, 4fr) minmax(120px, 3fr);
-}
-
-.chat-controls__session-row--has-quota.chat-controls__session-row--session-search-open {
-  grid-template-columns:
-    minmax(116px, 5fr) minmax(300px, 9fr) minmax(124px, 4fr)
-    minmax(120px, 3fr) minmax(104px, auto);
-}
-
-.chat-controls__session-row--single-agent.chat-controls__session-row--has-quota.chat-controls__session-row--session-search-open {
-  grid-template-columns: minmax(300px, 9fr) minmax(124px, 4fr) minmax(120px, 3fr) minmax(
-      104px,
-      auto
-    );
-}
-
 .chat-controls__session-picker {
   grid-area: session;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
   position: relative;
-}
-
-.chat-controls__session-row--session-search-open .chat-controls__session-picker {
-  grid-template-columns: minmax(92px, 0.68fr) minmax(180px, 1fr);
 }
 
 .chat-controls__session-trigger {
@@ -1450,59 +1418,9 @@
 .chat-controls__session-trigger-icon svg {
   width: 16px;
   height: 16px;
-}
-
-.chat-controls__session-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: auto;
-  min-width: 0;
-}
-
-.chat-controls__session-search {
-  position: relative;
-  flex: 1 1 220px;
-  min-width: 160px;
-  max-width: none;
-}
-
-.field.chat-controls__session-search input {
-  box-sizing: border-box;
-  width: 100%;
-  height: 36px;
-  min-height: 36px;
-  padding: 0 12px 0 42px;
-  border-color: color-mix(in srgb, var(--input) 88%, transparent);
-  border-radius: var(--radius-lg);
-  background-color: color-mix(in srgb, var(--card) 92%, var(--bg-elevated) 8%);
-  font-size: 13px;
-}
-
-.chat-controls__session-search-icon {
-  position: absolute;
-  left: 14px;
-  top: 50%;
-  display: inline-flex;
-  width: 15px;
-  height: 15px;
-  color: var(--muted);
-  transform: translateY(-50%);
-  pointer-events: none;
-}
-
-.chat-controls__session-search-icon svg {
-  width: 15px;
-  height: 15px;
   stroke: currentColor;
   fill: none;
   stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
-.chat-controls__session-search-toggle {
-  flex: 0 0 auto;
 }
 
 .chat-session-picker {
@@ -1521,6 +1439,25 @@
   background: var(--card);
   box-shadow: 0 18px 48px rgba(0, 0, 0, 0.34);
   overflow: hidden;
+}
+
+.chat-session-picker__search-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.chat-session-picker__search {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.chat-session-picker__search input {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 36px;
+  padding: 0 12px;
+  font-size: 13px;
 }
 
 .chat-session-picker .chat-session-picker__icon-button.btn--icon {
@@ -1608,6 +1545,9 @@
 .chat-session-picker__option-check svg {
   width: 16px;
   height: 16px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
 }
 
 .chat-session-picker__status {

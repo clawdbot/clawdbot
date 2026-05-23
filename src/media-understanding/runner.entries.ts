@@ -144,6 +144,11 @@ function commandBase(command: string): string {
   return path.parse(command).name;
 }
 
+function isAntigravityCliCommand(command: string): boolean {
+  const commandId = commandBase(command);
+  return commandId === "agy" || commandId === "antigravity";
+}
+
 function findArgValue(args: string[], keys: string[]): string | undefined {
   for (let i = 0; i < args.length; i += 1) {
     if (keys.includes(args[i] ?? "")) {
@@ -808,6 +813,7 @@ export async function runCliEntry(params: {
     const { stdout } = await runExec(argv[0], argv.slice(1), {
       timeoutMs,
       maxBuffer: CLI_OUTPUT_MAX_BUFFER,
+      cwd: isAntigravityCliCommand(command) ? path.dirname(mediaPath) : undefined,
     });
     const resolved = await resolveCliOutput({
       command,

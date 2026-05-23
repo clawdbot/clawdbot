@@ -9,8 +9,10 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
+import type { Dirent } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -144,6 +146,47 @@ export const PACKED_COMPLETION_SMOKE_ARGS = [
   "zsh",
 ] as const;
 
+export function collectSkillShellScriptExecutableErrors(rootDir = resolve(".")): string[] {
+  if (process.platform === "win32") {
+    return [];
+  }
+
+  const skillsDir = join(rootDir, "skills");
+  const errors: string[] = [];
+  let entries: Dirent[];
+  try {
+    entries = readdirSync(skillsDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    const scriptsDir = join(skillsDir, entry.name, "scripts");
+    let scriptEntries: Dirent[];
+    try {
+      scriptEntries = readdirSync(scriptsDir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const scriptEntry of scriptEntries) {
+      if (!scriptEntry.isFile() || !scriptEntry.name.endsWith(".sh")) {
+        continue;
+      }
+      const scriptPath = join(scriptsDir, scriptEntry.name);
+      if ((statSync(scriptPath).mode & 0o111) === 0) {
+        errors.push(
+          `skill shell script is not executable: skills/${entry.name}/scripts/${scriptEntry.name}`,
+        );
+      }
+    }
+  }
+
+  return errors;
+}
+
 function collectBundledExtensions(): BundledExtension[] {
   const extensionsDir = resolve("extensions");
   const entries = readdirSync(extensionsDir, { withFileTypes: true }).filter((entry) =>
@@ -182,6 +225,17 @@ function checkBundledExtensionMetadata() {
   const errors = [...manifestErrors, ...dependencyConflictErrors];
   if (errors.length > 0) {
     console.error("release-check: bundled extension manifest validation failed:");
+    for (const error of errors) {
+      console.error(`  - ${error}`);
+    }
+    process.exit(1);
+  }
+}
+
+function checkSkillShellScriptsExecutable() {
+  const errors = collectSkillShellScriptExecutableErrors();
+  if (errors.length > 0) {
+    console.error("release-check: skill shell script permission validation failed:");
     for (const error of errors) {
       console.error(`  - ${error}`);
     }
@@ -865,6 +919,7 @@ function runCriticalPluginSdkEntrypointImportSmoke() {
 
 async function main() {
   checkAppcastSparkleVersions();
+  checkSkillShellScriptsExecutable();
   checkCliBootstrapExternalImports({
     logger: {
       error: (message: string) => console.error(`release-check: ${message}`),

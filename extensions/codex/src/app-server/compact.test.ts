@@ -66,6 +66,16 @@ function startSandboxedCompaction(sessionFile: string) {
   });
 }
 
+function startNodeExecCompaction(sessionFile: string) {
+  return maybeCompactCodexAppServerSession({
+    sessionId: "session-1",
+    sessionKey: "agent:main:session-1",
+    sessionFile,
+    workspaceDir: tempDir,
+    config: { tools: { exec: { host: "node", node: "worker-1" } } },
+  });
+}
+
 type CompactResult = NonNullable<Awaited<ReturnType<typeof maybeCompactCodexAppServerSession>>>;
 
 function requireCompactResult(result: CompactResult | undefined): CompactResult {
@@ -146,6 +156,21 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(result.compacted).toBe(false);
     expect(result.reason).toContain(
       "Codex-native native compaction is unavailable because OpenClaw sandboxing is active for this session.",
+    );
+    expect(fake.request).not.toHaveBeenCalled();
+  });
+
+  it("blocks native app-server compaction when exec host=node is active", async () => {
+    const fake = createFakeCodexClient();
+    setCodexAppServerClientFactoryForTest(async () => fake.client);
+    const sessionFile = await writeTestBinding();
+
+    const result = requireCompactResult(await startNodeExecCompaction(sessionFile));
+
+    expect(result.ok).toBe(false);
+    expect(result.compacted).toBe(false);
+    expect(result.reason).toContain(
+      "Codex-native native compaction is unavailable because OpenClaw exec host=node is active for this session.",
     );
     expect(fake.request).not.toHaveBeenCalled();
   });
@@ -328,6 +353,89 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(result.reason).toBe("thread not found: thread-1");
     expect(result.failure?.reason).toBe("stale_thread_binding");
     expect(result.result).toBeUndefined();
+  });
+
+  it("restarts the Codex app-server and retries when native compaction times out", async () => {
+    const previousTimeout = process.env.OPENCLAW_CODEX_COMPACTION_WAIT_TIMEOUT_MS;
+    process.env.OPENCLAW_CODEX_COMPACTION_WAIT_TIMEOUT_MS = "100";
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    try {
+      const first = createFakeCodexClient();
+      const second = createFakeCodexClient();
+      let factoryCalls = 0;
+      const factory = vi.fn(async () => {
+        factoryCalls += 1;
+        if (factoryCalls === 1) {
+          return first.client;
+        }
+        return second.client;
+      });
+      setCodexAppServerClientFactoryForTest(factory);
+      const sessionFile = await writeTestBinding();
+
+      const pendingResult = startCompaction(sessionFile, { currentTokenCount: 456 });
+      await vi.waitFor(() => {
+        expect(first.request).toHaveBeenCalledWith("thread/compact/start", {
+          threadId: "thread-1",
+        });
+      });
+
+      await vi.waitFor(() => {
+        expect(first.close).toHaveBeenCalledTimes(1);
+        expect(second.request).toHaveBeenCalledWith("thread/compact/start", {
+          threadId: "thread-1",
+        });
+      });
+      second.emit({
+        method: "thread/tokenUsage/updated",
+        params: {
+          threadId: "thread-1",
+          tokenUsage: {
+            last_token_usage: {
+              total_tokens: 12_345,
+            },
+          },
+        },
+      });
+      second.emit({
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-2",
+          item: { type: "contextCompaction", id: "compact-2" },
+        },
+      });
+
+      const result = requireCompactResult(await pendingResult);
+      expect(result.ok).toBe(true);
+      expect(result.compacted).toBe(true);
+      expect(result.result?.tokensAfter).toBe(12_345);
+      expect(factory).toHaveBeenCalledTimes(2);
+      expect(second.close).not.toHaveBeenCalled();
+      expect(await readCodexAppServerBinding(sessionFile)).toBeDefined();
+      const details = compactDetails(result);
+      expect(details.signal).toBe("item/completed");
+      expect(details.itemId).toBe("compact-2");
+      expect(details.compactionAttempts).toBe(2);
+      expect(details.recoveredAfterAppServerRestart).toBe(true);
+      expect(warn).toHaveBeenCalledWith(
+        "codex app-server compaction timed out; restarting app-server",
+        expect.objectContaining({
+          sessionId: "session-1",
+          sessionKey: "agent:main:session-1",
+          threadId: "thread-1",
+          attempt: 1,
+          maxAttempts: 2,
+        }),
+      );
+    } finally {
+      if (previousTimeout === undefined) {
+        delete process.env.OPENCLAW_CODEX_COMPACTION_WAIT_TIMEOUT_MS;
+      } else {
+        process.env.OPENCLAW_CODEX_COMPACTION_WAIT_TIMEOUT_MS = previousTimeout;
+      }
+      warn.mockRestore();
+    }
   });
 
   it("warns when stale OpenClaw compaction overrides are ignored", async () => {
@@ -1007,19 +1115,23 @@ describe("maybeCompactCodexAppServerSession", () => {
 function createFakeCodexClient(): {
   client: CodexAppServerClient;
   request: ReturnType<typeof vi.fn>;
+  close: ReturnType<typeof vi.fn>;
   emit: (notification: CodexServerNotification) => void;
 } {
   const handlers = new Set<(notification: CodexServerNotification) => void>();
   const request = vi.fn(async () => ({}));
+  const close = vi.fn();
   return {
     client: {
       request,
+      close,
       addNotificationHandler(handler: (notification: CodexServerNotification) => void) {
         handlers.add(handler);
         return () => handlers.delete(handler);
       },
     } as unknown as CodexAppServerClient,
     request,
+    close,
     emit(notification: CodexServerNotification): void {
       for (const handler of handlers) {
         handler(notification);

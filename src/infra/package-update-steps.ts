@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { pathExists } from "./fs-safe.js";
 import { readPackageVersion } from "./package-json.js";
@@ -50,6 +51,8 @@ type NpmBinShimBackup = {
     hadExisting: boolean;
   }>;
 };
+
+const NPM_PACK_QUIET_FLAGS = ["--json", "--loglevel=error"] as const;
 
 function formatError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -111,6 +114,53 @@ function resolveStagedNpmTargetLayout(
   return null;
 }
 
+function stripPackageAlias(spec: string, packageName: string): string {
+  const trimmed = spec.trim();
+  const prefix = `${packageName.trim()}@`;
+  return trimmed.toLowerCase().startsWith(prefix.toLowerCase())
+    ? trimmed.slice(prefix.length).trim()
+    : trimmed;
+}
+
+function isHttpGitUrlSpec(spec: string): boolean {
+  try {
+    const url = new URL(spec);
+    if (url.protocol !== "https:" && url.protocol !== "http:") {
+      return false;
+    }
+    const pathname = url.pathname.replace(/\/+$/u, "");
+    if (pathname.endsWith(".git")) {
+      return true;
+    }
+    const parts = pathname.split("/").filter(Boolean);
+    return url.hostname.toLowerCase() === "github.com" && parts.length === 2;
+  } catch {
+    return false;
+  }
+}
+
+function isGitHubShorthandSpec(spec: string): boolean {
+  const [repo] = spec.split("#", 1);
+  if (!repo || repo.startsWith(".") || repo.startsWith("/") || repo.startsWith("@")) {
+    return false;
+  }
+  const parts = repo.split("/");
+  return parts.length === 2 && parts.every((part) => /^[^\s/:@]+$/u.test(part));
+}
+
+function isNpmGitSourceInstallSpec(spec: string, packageName: string): boolean {
+  const target = stripPackageAlias(spec, packageName);
+  return (
+    /^github:/i.test(target) ||
+    /^git\+(?:ssh|https|http|file):/i.test(target) ||
+    /^git:/i.test(target) ||
+    /^ssh:\/\//i.test(target) ||
+    /^[^@\s]+@[^:\s]+:[^#\s]+(?:#.*)?$/u.test(target) ||
+    isHttpGitUrlSpec(target) ||
+    isGitHubShorthandSpec(target)
+  );
+}
+
 async function createStagedNpmInstall(
   installTarget: ResolvedGlobalInstallTarget,
   packageName: string,
@@ -133,6 +183,87 @@ async function createStagedNpmInstall(
       globalRoot: layout.globalRoot,
       packageRoot: path.join(layout.globalRoot, packageName),
     },
+  };
+}
+
+async function findPackedTarball(packDir: string): Promise<string | null> {
+  const entries = await fs.readdir(packDir).catch((): string[] => []);
+  const tarballs = entries.filter((entry) => entry.endsWith(".tgz"));
+  if (tarballs.length !== 1) {
+    return null;
+  }
+  return path.join(packDir, tarballs[0] ?? "");
+}
+
+async function prepareNpmGitSourceInstallSpec(params: {
+  installTarget: ResolvedGlobalInstallTarget;
+  installSpec: string;
+  packageName: string;
+  runStep: PackageUpdateStepRunner;
+  timeoutMs: number;
+  env?: NodeJS.ProcessEnv;
+  installCwd?: string;
+}): Promise<{
+  installSpec: string;
+  packDir: string | null;
+  steps: PackageUpdateStepResult[];
+  failedStep: PackageUpdateStepResult | null;
+}> {
+  if (
+    params.installTarget.manager !== "npm" ||
+    !isNpmGitSourceInstallSpec(params.installSpec, params.packageName)
+  ) {
+    return { installSpec: params.installSpec, packDir: null, steps: [], failedStep: null };
+  }
+
+  const packDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-pack-"));
+  const packStep = await params.runStep({
+    name: "global update pack",
+    argv: [
+      params.installTarget.command,
+      "pack",
+      params.installSpec,
+      "--pack-destination",
+      packDir,
+      ...NPM_PACK_QUIET_FLAGS,
+    ],
+    cwd: params.installCwd,
+    env: params.env,
+    timeoutMs: params.timeoutMs,
+  });
+  if (packStep.exitCode !== 0) {
+    return {
+      installSpec: params.installSpec,
+      packDir,
+      steps: [packStep],
+      failedStep: packStep,
+    };
+  }
+
+  const tarball = await findPackedTarball(packDir);
+  if (!tarball) {
+    const failedStep: PackageUpdateStepResult = {
+      name: "global update pack verify",
+      command: `find packed tarball in ${packDir}`,
+      cwd: packDir,
+      durationMs: 0,
+      exitCode: 1,
+      stdoutTail: null,
+      stderrTail: `expected exactly one .tgz from npm pack ${params.installSpec}`,
+    };
+    return {
+      installSpec: params.installSpec,
+      packDir,
+      steps: [packStep, failedStep],
+      failedStep,
+    };
+  }
+
+  return {
+    installSpec: tarball,
+    packDir,
+    steps: [packStep],
+    failedStep: null,
   };
 }
 
@@ -367,6 +498,7 @@ export async function runGlobalPackageUpdateSteps(params: {
   const installCwd = params.installCwd === undefined ? {} : { cwd: params.installCwd };
   const installEnv = params.env === undefined ? {} : { env: params.env };
   let stagedInstall: StagedNpmInstall | null = null;
+  let packedInstallDir: string | null = null;
 
   try {
     const preparedInstall = await prepareStagedNpmInstall(params.installTarget, params.packageName);
@@ -380,7 +512,28 @@ export async function runGlobalPackageUpdateSteps(params: {
       };
     }
 
+    const steps: PackageUpdateStepResult[] = [];
     const installCommandTarget = stagedInstall?.installTarget ?? params.installTarget;
+    const preparedSpec = await prepareNpmGitSourceInstallSpec({
+      installTarget: installCommandTarget,
+      installSpec: params.installSpec,
+      packageName: params.packageName,
+      runStep: params.runStep,
+      timeoutMs: params.timeoutMs,
+      env: params.env,
+      installCwd: params.installCwd,
+    });
+    packedInstallDir = preparedSpec.packDir;
+    steps.push(...preparedSpec.steps);
+    if (preparedSpec.failedStep) {
+      return {
+        steps,
+        verifiedPackageRoot: params.packageRoot ?? null,
+        afterVersion: null,
+        failedStep: preparedSpec.failedStep,
+      };
+    }
+
     const installLocation =
       stagedInstall?.prefix ??
       (installCommandTarget.manager === "pnpm"
@@ -388,13 +541,18 @@ export async function runGlobalPackageUpdateSteps(params: {
         : null);
     const updateStep = await params.runStep({
       name: "global update",
-      argv: globalInstallArgs(installCommandTarget, params.installSpec, undefined, installLocation),
+      argv: globalInstallArgs(
+        installCommandTarget,
+        preparedSpec.installSpec,
+        undefined,
+        installLocation,
+      ),
       ...installCwd,
       ...installEnv,
       timeoutMs: params.timeoutMs,
     });
 
-    const steps = [updateStep];
+    steps.push(updateStep);
     let finalInstallStep = updateStep;
     if (updateStep.exitCode !== 0) {
       await cleanupStagedNpmInstall(stagedInstall);
@@ -416,7 +574,7 @@ export async function runGlobalPackageUpdateSteps(params: {
 
       const fallbackArgv = globalInstallFallbackArgs(
         stagedInstall?.installTarget ?? params.installTarget,
-        params.installSpec,
+        preparedSpec.installSpec,
         undefined,
         stagedInstall?.prefix,
       );
@@ -520,5 +678,8 @@ export async function runGlobalPackageUpdateSteps(params: {
     };
   } finally {
     await cleanupStagedNpmInstall(stagedInstall);
+    if (packedInstallDir) {
+      await removePathBestEffort(packedInstallDir);
+    }
   }
 }

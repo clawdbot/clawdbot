@@ -244,6 +244,7 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
     expect(longCmd?.description.endsWith("…")).toBe(true);
     expect(shortCmd?.description).toBe("Short description");
     expect(cmd?.dispatch).toEqual({ kind: "tool", toolName: "sessions_send", argMode: "raw" });
+    expect(cmd?.skillSource).toBe("workspace");
   });
 
   it("inherits agents.defaults.skills when agentId is provided", async () => {

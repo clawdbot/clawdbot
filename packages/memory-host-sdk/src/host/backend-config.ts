@@ -20,6 +20,10 @@ import {
 import { isPathInside } from "./fs-utils.js";
 import { normalizeLowercaseStringOrEmpty } from "./string-utils.js";
 
+function escapeQmdExactFilePattern(fileName: string): string {
+  return fileName.replace(/[\\*?[\]{}()!+@]/g, "\\$&");
+}
+
 export type ResolvedMemoryBackendConfig = {
   backend: MemoryBackend;
   citations: MemoryCitationsMode;
@@ -291,26 +295,40 @@ function resolveCustomPaths(
       return;
     }
     let resolved: string;
+    let collectionPath: string;
     try {
       resolved = resolvePath(trimmedPath, workspaceDir);
     } catch {
       return;
     }
-    const pattern = entry.pattern?.trim() || "**/*.md";
-    const dedupeKey = `${resolved}\u0000${pattern}`;
+    collectionPath = resolved;
+    let pattern = entry.pattern?.trim() || "**/*.md";
+    try {
+      const stat = fs.statSync(resolved);
+      if (stat.isFile()) {
+        // When the configured path points directly to a file, normalize into a
+        // parent-directory collection with an exact-filename pattern, regardless
+        // of any user-supplied glob (a glob does not apply to a single file).
+        collectionPath = path.dirname(resolved);
+        pattern = escapeQmdExactFilePattern(path.basename(resolved));
+      }
+    } catch {
+      // not a file or can't stat, use as-is
+    }
+    const dedupeKey = `${collectionPath}\u0000${pattern}`;
     if (seenRoots.has(dedupeKey)) {
       return;
     }
     seenRoots.add(dedupeKey);
     const explicitName = entry.name?.trim();
     const baseName =
-      explicitName && !isPathInsideRoot(resolved, workspaceDir)
+      explicitName && !isPathInsideRoot(collectionPath, workspaceDir)
         ? explicitName
         : scopeCollectionBase(explicitName || `custom-${index + 1}`, agentId);
     const name = ensureUniqueName(baseName, existing);
     collections.push({
       name,
-      path: resolved,
+      path: collectionPath,
       pattern,
       kind: "custom",
     });

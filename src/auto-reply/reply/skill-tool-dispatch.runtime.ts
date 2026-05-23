@@ -8,6 +8,7 @@ import {
 import type { AnyAgentTool } from "../../agents/pi-tools.types.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { resolveSenderToolPolicy } from "../../agents/sender-tool-policy.js";
+import type { SkillCommandSpec } from "../../agents/skills.js";
 import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
@@ -49,6 +50,9 @@ export function resolveSkillDispatchTools(params: {
   model: string;
   senderId?: string;
   currentChannelId?: string;
+  skillCommand?: Pick<SkillCommandSpec, "name" | "skillName" | "skillSource"> & {
+    toolName?: string;
+  };
 }): AnyAgentTool[] {
   const channel =
     resolveGatewayMessageChannel(params.ctx.Surface) ??
@@ -135,6 +139,21 @@ export function resolveSkillDispatchTools(params: {
     inheritedToolPolicy,
   ];
   const inheritedToolAllowlist: string[] = [];
+  const beforeToolCallHookContext = params.skillCommand
+    ? {
+        cwd: params.workspaceDir,
+        workspaceDir: params.workspaceDir,
+        ...(params.sessionEntry?.skillsSnapshot
+          ? { skillsSnapshot: params.sessionEntry.skillsSnapshot }
+          : {}),
+        skillCommand: {
+          commandName: params.skillCommand.name,
+          skillName: params.skillCommand.skillName,
+          skillSource: params.skillCommand.skillSource ?? "unknown",
+          ...(params.skillCommand.toolName ? { toolName: params.skillCommand.toolName } : {}),
+        },
+      }
+    : undefined;
   const tools = createOpenClawTools({
     agentSessionKey: params.sessionKey,
     agentChannel: channel,
@@ -154,6 +173,7 @@ export function resolveSkillDispatchTools(params: {
     requesterSenderId: params.senderId,
     sessionId: params.sessionEntry?.sessionId,
     currentChannelId: params.currentChannelId,
+    ...(beforeToolCallHookContext ? { beforeToolCallHookContext } : {}),
     modelProvider: params.provider,
     modelId: params.model,
     pluginToolAllowlist: collectExplicitAllowlist(explicitPolicyList),

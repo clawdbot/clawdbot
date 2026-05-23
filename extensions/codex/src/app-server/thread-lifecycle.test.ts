@@ -5,6 +5,7 @@ import {
   buildTurnStartParams,
   buildThreadResumeParams,
   buildThreadStartParams,
+  codexDynamicToolsFingerprint,
   resolveReasoningEffort,
 } from "./thread-lifecycle.js";
 
@@ -112,6 +113,35 @@ describe("Codex app-server native code mode config", () => {
     });
 
     expect(instructions).not.toContain("Deferred searchable OpenClaw dynamic tools available");
+  });
+
+  it("keeps durable dynamic tool fingerprints independent from presentation mode", () => {
+    const inputSchema = {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        text: { type: "string" },
+      },
+      required: ["text"],
+    };
+    const directFingerprint = codexDynamicToolsFingerprint([
+      {
+        name: "message",
+        description: "Send a visible message",
+        inputSchema,
+      },
+    ]);
+    const searchableFingerprint = codexDynamicToolsFingerprint([
+      {
+        name: "message",
+        description: "Load and send a visible message",
+        inputSchema,
+        namespace: "openclaw",
+        deferLoading: true,
+      },
+    ]);
+
+    expect(searchableFingerprint).toBe(directFingerprint);
   });
 
   it("keeps OpenClaw skill catalogs out of developer instructions", () => {

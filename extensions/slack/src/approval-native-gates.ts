@@ -87,6 +87,7 @@ function hasSlackPluginForwardingTarget(params: {
 }
 
 function requestHasSlackOriginOrSession(params: {
+  cfg: OpenClawConfig;
   request: SlackNativeApprovalRequest;
   accountId?: string | null;
 }): boolean {
@@ -106,7 +107,13 @@ function requestHasSlackOriginOrSession(params: {
       request: params.request,
       channel: "slack",
       bundledFallback: false,
-    }) !== null
+    }) !== null &&
+    doesApprovalRequestMatchChannelAccount({
+      cfg: params.cfg,
+      request: params.request,
+      channel: "slack",
+      accountId: params.accountId,
+    })
   );
 }
 
@@ -135,6 +142,7 @@ function canPluginForwardingRouteToSlack(params: {
   if (
     modeIncludesSession(mode) &&
     requestHasSlackOriginOrSession({
+      cfg: params.cfg,
       request: params.request,
       accountId: params.accountId,
     })

@@ -18,7 +18,6 @@ struct MenuContent: View {
     private let nodesStore = NodesStore.shared
     @Bindable private var pairingPrompter = NodePairingApprovalPrompter.shared
     @Bindable private var devicePairingPrompter = DevicePairingApprovalPrompter.shared
-    @Environment(\.openSettings) private var openSettings
     @State private var availableMics: [AudioInputDevice] = []
     @State private var loadingMics = false
     @State private var micObserver = AudioInputDeviceObserver()
@@ -172,9 +171,6 @@ struct MenuContent: View {
             self.micRefreshTask?.cancel()
             self.micRefreshTask = nil
             self.micObserver.stop()
-        }
-        .task { @MainActor in
-            SettingsWindowOpener.shared.register(openSettings: self.openSettings)
         }
     }
 

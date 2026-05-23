@@ -79,9 +79,9 @@ export type StatusReactionsEmojiConfig = {
 export type StatusReactionsTimingConfig = {
   /** Debounce interval for intermediate states (ms). Default: 700. */
   debounceMs?: number;
-  /** Soft stall warning timeout (ms). Default: 25000. */
+  /** Soft stall warning timeout (ms). Default: 10000. */
   stallSoftMs?: number;
-  /** Hard stall warning timeout (ms). Default: 60000. */
+  /** Hard stall warning timeout (ms). Default: 30000. */
   stallHardMs?: number;
   /** How long to hold done emoji before cleanup (ms). Default: 1500. */
   doneHoldMs?: number;

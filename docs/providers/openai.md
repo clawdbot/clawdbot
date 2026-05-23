@@ -516,8 +516,12 @@ The bundled `openai` plugin registers video generation through the `video_genera
 | Default model    | `openai/sora-2`                                                                   |
 | Modes            | Text-to-video, image-to-video, single-video edit                                  |
 | Reference inputs | 1 image or 1 video                                                                |
-| Size overrides   | Supported                                                                         |
+| Size overrides   | Supported for text-to-video and image-to-video                                    |
 | Other overrides  | `aspectRatio`, `resolution`, `audio`, `watermark` are ignored with a tool warning |
+
+OpenAI image-to-video requests use `POST /v1/videos` with an image
+`input_reference`. Single-video edits use `POST /v1/videos/edits` with the
+uploaded video in the `video` field.
 
 ```json5
 {

@@ -1,7 +1,10 @@
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
+  collectDoctorPreviewNotes,
   collectChannelBoundMessageToolPolicyWarnings,
   collectDoctorPreviewWarnings,
   collectVisibleReplyToolPolicyWarnings,
@@ -26,6 +29,8 @@ const manifestState = vi.hoisted(
 const staleOAuthShadowState = vi.hoisted(() => ({
   warnings: [] as string[],
 }));
+
+const tempRoots = new Set<string>();
 
 vi.mock("../channel-capabilities.js", () => {
   const fallback = {
@@ -216,6 +221,43 @@ describe("doctor preview warnings", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  afterEach(async () => {
+    for (const root of tempRoots) {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+    tempRoots.clear();
+  });
+
+  it("routes personal Codex asset notices to info instead of warnings", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-preview-codex-assets-"));
+    tempRoots.add(root);
+    const codexHome = path.join(root, ".codex");
+    await fs.mkdir(path.join(root, ".agents", "skills", "agent-helper"), { recursive: true });
+    await fs.writeFile(path.join(root, ".agents", "skills", "agent-helper", "SKILL.md"), "");
+
+    const notes = await collectDoctorPreviewNotes({
+      cfg: {
+        plugins: {
+          entries: {
+            codex: { enabled: true },
+          },
+        },
+        agents: {
+          defaults: {
+            agentRuntime: {
+              id: "codex",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      doctorFixCommand: "openclaw doctor --fix",
+      env: { CODEX_HOME: codexHome, HOME: root },
+    });
+
+    expect(notes.infoNotes.join("\n")).toContain("Personal Codex CLI assets were found");
+    expect(notes.warningNotes.join("\n")).not.toContain("Personal Codex CLI assets were found");
   });
 
   it("collects provider and shared preview warnings", async () => {

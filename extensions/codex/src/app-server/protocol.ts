@@ -272,6 +272,7 @@ export type CodexDynamicToolCallResponse = {
   diagnosticTerminalType?: CodexDynamicToolDiagnosticTerminalType;
   sideEffectEvidence?: boolean;
   success: boolean;
+  terminate?: boolean;
 };
 
 export type CodexDynamicToolDiagnosticTerminalType = "blocked" | "completed" | "error";

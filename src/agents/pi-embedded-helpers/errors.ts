@@ -68,6 +68,7 @@ export {
 } from "./failover-matches.js";
 
 const log = createSubsystemLogger("errors");
+const sandboxToolPolicyAuditMessages = new WeakSet<AssistantMessage>();
 
 export function isReasoningConstraintErrorMessage(raw: string): boolean {
   if (!raw) {
@@ -1036,12 +1037,17 @@ export function formatAssistantErrorText(
     raw.match(/unknown tool[:\s]+["']?([a-z0-9_-]+)["']?/i) ??
     raw.match(/tool\s+["']?([a-z0-9_-]+)["']?\s+(?:not found|is not available)/i);
   if (unknownTool?.[1]) {
+    const audit = !sandboxToolPolicyAuditMessages.has(msg);
     const rewritten = formatSandboxToolPolicyBlockedMessage({
       cfg: opts?.cfg,
       sessionKey: opts?.sessionKey,
       toolName: unknownTool[1],
+      audit,
     });
     if (rewritten) {
+      if (audit) {
+        sandboxToolPolicyAuditMessages.add(msg);
+      }
       return rewritten;
     }
   }

@@ -394,6 +394,61 @@ describe("slack native approval adapter", () => {
     ).toBe(true);
   });
 
+  it("does not route plugin session fallback across Slack accounts", async () => {
+    writeStore({
+      "agent:main:slack:channel:c999": {
+        sessionId: "sess",
+        updatedAt: Date.now(),
+        lastChannel: "slack",
+        lastAccountId: "work",
+      },
+    });
+
+    const cfg = {
+      ...buildConfig({ allowFrom: ["U123OWNER"] }),
+      session: { store: STORE_PATH },
+      approvals: {
+        plugin: {
+          enabled: true,
+          mode: "session",
+        },
+      },
+    } as OpenClawConfig;
+    const request = {
+      id: "plugin:req-account-bound",
+      request: {
+        title: "Plugin approval",
+        description: "Allow access",
+        sessionKey: "agent:main:slack:channel:c999",
+      },
+      createdAtMs: 0,
+      expiresAtMs: 1000,
+    };
+
+    expect(
+      slackApprovalCapability.nativeRuntime?.availability.shouldHandle({
+        cfg,
+        accountId: "default",
+        request,
+      }),
+    ).toBe(false);
+    expect(
+      await slackNativeApprovalAdapter.native?.resolveApproverDmTargets?.({
+        cfg,
+        accountId: "default",
+        approvalKind: "plugin",
+        request,
+      }),
+    ).toEqual([]);
+    expect(
+      slackApprovalCapability.nativeRuntime?.availability.shouldHandle({
+        cfg,
+        accountId: "work",
+        request,
+      }),
+    ).toBe(true);
+  });
+
   it("falls back to the session-bound origin target for plugin approvals", async () => {
     writeStore({
       "agent:main:slack:channel:c123": {

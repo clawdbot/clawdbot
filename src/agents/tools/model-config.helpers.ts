@@ -14,7 +14,7 @@ import {
 } from "../auth-profiles.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../auth-profiles/types.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
-import { resolveEnvApiKey } from "../model-auth.js";
+import { hasUsableCustomProviderApiKey, resolveEnvApiKey } from "../model-auth.js";
 import { resolveConfiguredModelRef } from "../model-selection.js";
 
 export type ToolModelConfig = { primary?: string; fallbacks?: string[]; timeoutMs?: number };
@@ -79,6 +79,25 @@ export function hasAuthProfileForProvider(params: {
   return profileIds.some((profileId) => store.profiles[profileId]?.type === params.type);
 }
 
+export function hasProviderAuthForTool(params: {
+  provider: string;
+  cfg?: OpenClawConfig;
+  workspaceDir?: string;
+  agentDir?: string;
+  authStore?: AuthProfileStore;
+}): boolean {
+  if (
+    hasAuthForProvider({
+      provider: params.provider,
+      agentDir: params.agentDir,
+      authStore: params.authStore,
+    })
+  ) {
+    return true;
+  }
+  return hasUsableCustomProviderApiKey(params.cfg, params.provider);
+}
+
 export function coerceToolModelConfig(model?: AgentToolModelConfig): ToolModelConfig {
   const primary = resolveAgentModelPrimaryValue(model);
   const fallbacks = resolveAgentModelFallbackValues(model);
@@ -92,6 +111,8 @@ export function coerceToolModelConfig(model?: AgentToolModelConfig): ToolModelCo
 
 export function buildToolModelConfigFromCandidates(params: {
   explicit: ToolModelConfig;
+  cfg?: OpenClawConfig;
+  workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
   candidates: Array<string | null | undefined>;
@@ -110,8 +131,10 @@ export function buildToolModelConfigFromCandidates(params: {
     const provider = trimmed.slice(0, trimmed.indexOf("/")).trim();
     const providerConfigured =
       params.isProviderConfigured?.(provider) ??
-      hasAuthForProvider({
+      hasProviderAuthForTool({
         provider,
+        cfg: params.cfg,
+        workspaceDir: params.workspaceDir,
         agentDir: params.agentDir,
         authStore: params.authStore,
       });

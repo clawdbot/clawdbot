@@ -23,13 +23,19 @@ const FAST_TEST_RETRY_INTERVAL_MS = 8;
 type SubagentAnnounceOutputDeps = {
   callGateway: typeof callGateway;
   getRuntimeConfig: typeof getRuntimeConfig;
+  readSessionEntry: typeof readSessionEntry;
   readLatestAssistantReply: typeof readLatestAssistantReply;
+  resolveAgentIdFromSessionKey: typeof resolveAgentIdFromSessionKey;
+  resolveStorePath: typeof resolveStorePath;
 };
 
 const defaultSubagentAnnounceOutputDeps: SubagentAnnounceOutputDeps = {
   callGateway,
   getRuntimeConfig,
+  readSessionEntry,
   readLatestAssistantReply,
+  resolveAgentIdFromSessionKey,
+  resolveStorePath,
 };
 
 let subagentAnnounceOutputDeps: SubagentAnnounceOutputDeps = defaultSubagentAnnounceOutputDeps;
@@ -575,9 +581,9 @@ export async function buildCompactAnnounceStatsLine(params: {
   endedAt?: number;
 }) {
   const cfg = subagentAnnounceOutputDeps.getRuntimeConfig();
-  const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
-  const storePath = resolveStorePath(cfg.session?.store, { agentId });
-  let entry = readSessionEntry(storePath, params.sessionKey);
+  const agentId = subagentAnnounceOutputDeps.resolveAgentIdFromSessionKey(params.sessionKey);
+  const storePath = subagentAnnounceOutputDeps.resolveStorePath(cfg.session?.store, { agentId });
+  let entry = subagentAnnounceOutputDeps.readSessionEntry(storePath, params.sessionKey);
   const tokenWaitAttempts = isFastTestMode() ? 1 : 3;
   for (let attempt = 0; attempt < tokenWaitAttempts; attempt += 1) {
     const hasTokenData =
@@ -590,7 +596,7 @@ export async function buildCompactAnnounceStatsLine(params: {
     if (!isFastTestMode()) {
       await new Promise((resolve) => setTimeout(resolve, 150));
     }
-    entry = readSessionEntry(storePath, params.sessionKey);
+    entry = subagentAnnounceOutputDeps.readSessionEntry(storePath, params.sessionKey);
   }
 
   const input = typeof entry?.inputTokens === "number" ? entry.inputTokens : 0;

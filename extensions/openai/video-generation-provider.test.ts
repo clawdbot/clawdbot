@@ -5,8 +5,17 @@ import {
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
-const { postJsonRequestMock, fetchWithTimeoutMock, resolveProviderHttpRequestConfigMock } =
-  getProviderHttpMocks();
+const {
+  postJsonRequestMock,
+  postMultipartRequestMock,
+  fetchWithTimeoutMock,
+  fetchWithTimeoutGuardedMock,
+  pollProviderOperationJsonMock,
+  assertOkOrThrowHttpErrorMock,
+  executeProviderOperationWithRetryMock,
+  resolveProviderHttpRequestConfigMock,
+  sanitizeConfiguredModelProviderRequestMock,
+} = getProviderHttpMocks();
 
 let buildOpenAIVideoGenerationProvider: typeof import("./video-generation-provider.js").buildOpenAIVideoGenerationProvider;
 
@@ -24,6 +33,16 @@ function postJsonRequest(index = 0): Record<string, unknown> {
   return request;
 }
 
+function postMultipartRequest(index = 0): Record<string, unknown> {
+  const request = postMultipartRequestMock.mock.calls[index]?.[0] as
+    | Record<string, unknown>
+    | undefined;
+  if (!request) {
+    throw new Error(`expected postMultipartRequest call ${index}`);
+  }
+  return request;
+}
+
 function fetchWithTimeoutCall(index: number): [string, RequestInit | undefined, number, unknown] {
   const call = fetchWithTimeoutMock.mock.calls[index] as
     | [string, RequestInit | undefined, number, unknown]
@@ -32,6 +51,28 @@ function fetchWithTimeoutCall(index: number): [string, RequestInit | undefined, 
     throw new Error(`expected fetchWithTimeout call ${index}`);
   }
   return call;
+}
+
+function fetchWithTimeoutGuardedCall(
+  index = 0,
+): [string, RequestInit | undefined, number, unknown, Record<string, unknown> | undefined] {
+  const call = fetchWithTimeoutGuardedMock.mock.calls[index] as
+    | [string, RequestInit | undefined, number, unknown, Record<string, unknown> | undefined]
+    | undefined;
+  if (!call) {
+    throw new Error(`expected fetchWithTimeoutGuarded call ${index}`);
+  }
+  return call;
+}
+
+function pollProviderOperationRequest(index = 0): Record<string, unknown> {
+  const request = pollProviderOperationJsonMock.mock.calls[index]?.[0] as
+    | Record<string, unknown>
+    | undefined;
+  if (!request) {
+    throw new Error(`expected pollProviderOperationJson call ${index}`);
+  }
+  return request;
 }
 
 function providerHttpConfigRequest(): Record<string, unknown> {
@@ -55,6 +96,16 @@ describe("openai video generation provider", () => {
 
   it("declares explicit mode capabilities", () => {
     expectExplicitVideoGenerationCapabilities(buildOpenAIVideoGenerationProvider());
+  });
+
+  it("does not claim size or duration controls for OpenAI video edits", () => {
+    const provider = buildOpenAIVideoGenerationProvider();
+
+    expect(provider.capabilities.videoToVideo).toEqual({
+      enabled: true,
+      maxVideos: 1,
+      maxInputVideos: 1,
+    });
   });
 
   it("uses JSON for text-only Sora requests", async () => {
@@ -150,7 +201,7 @@ describe("openai video generation provider", () => {
     expect(pollFetch).toBe(fetch);
   });
 
-  it("honors configured baseUrl for video requests", async () => {
+  it("keeps configured local baseUrl private-network blocked unless explicitly enabled", async () => {
     postJsonRequestMock.mockResolvedValue({
       response: {
         json: async () => ({
@@ -192,12 +243,214 @@ describe("openai video generation provider", () => {
     });
 
     expect(providerHttpConfigRequest().baseUrl).toBe("http://127.0.0.1:44080/v1");
+    expect(providerHttpConfigRequest().request).toBeUndefined();
     const createRequest = postJsonRequest();
     expect(createRequest.url).toBe("http://127.0.0.1:44080/v1/videos");
     expect(createRequest.allowPrivateNetwork).toBe(false);
   });
 
-  it("uses multipart input_reference for video-to-video uploads", async () => {
+  it("honors configured request allowPrivateNetwork for local video providers", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          id: "vid_local",
+          model: "sora-2",
+          status: "queued",
+        }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce({
+        json: async () => ({
+          id: "vid_local",
+          model: "sora-2",
+          status: "completed",
+        }),
+      })
+      .mockResolvedValueOnce({
+        headers: new Headers({ "content-type": "video/mp4" }),
+        arrayBuffer: async () => Buffer.from("mp4-bytes"),
+      });
+
+    const provider = buildOpenAIVideoGenerationProvider();
+    await provider.generateVideo({
+      provider: "openai",
+      model: "sora-2",
+      prompt: "Render via local relay",
+      cfg: {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "http://127.0.0.1:44080/v1",
+              request: { allowPrivateNetwork: true },
+              models: [],
+            },
+          },
+        },
+      },
+    });
+
+    expect(sanitizeConfiguredModelProviderRequestMock).toHaveBeenCalledWith({
+      allowPrivateNetwork: true,
+    });
+    expect(providerHttpConfigRequest().baseUrl).toBe("http://127.0.0.1:44080/v1");
+    expect(providerHttpConfigRequest().request).toEqual({ allowPrivateNetwork: true });
+    const createRequest = postJsonRequest();
+    expect(createRequest.url).toBe("http://127.0.0.1:44080/v1/videos");
+    expect(createRequest.allowPrivateNetwork).toBe(true);
+    const statusRequest = pollProviderOperationRequest();
+    expect(statusRequest.url).toBe("http://127.0.0.1:44080/v1/videos/vid_local");
+    expect(statusRequest.allowPrivateNetwork).toBe(true);
+    expect(statusRequest.auditContext).toBe("openai-video-status");
+    const [downloadUrl, downloadInit, downloadTimeout, downloadFetch, downloadOptions] =
+      fetchWithTimeoutGuardedCall();
+    expect(downloadUrl).toBe("http://127.0.0.1:44080/v1/videos/vid_local/content?variant=video");
+    expect(downloadInit?.method).toBe("GET");
+    expect(downloadTimeout).toBe(120000);
+    expect(downloadFetch).toBe(fetch);
+    expect(downloadOptions).toEqual({
+      ssrfPolicy: { allowPrivateNetwork: true },
+      auditContext: "openai-video-download",
+    });
+  });
+
+  it("retries guarded local video downloads after transient HTTP errors", async () => {
+    const firstRelease = vi.fn(async () => {});
+    const secondRelease = vi.fn(async () => {});
+    assertOkOrThrowHttpErrorMock
+      .mockImplementationOnce(async () => {})
+      .mockImplementationOnce(async () => {})
+      .mockImplementationOnce(async (_response, label) => {
+        throw new Error(label);
+      })
+      .mockImplementationOnce(async () => {});
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          id: "vid_local",
+          model: "sora-2",
+          status: "queued",
+        }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock.mockResolvedValueOnce({
+      json: async () => ({
+        id: "vid_local",
+        model: "sora-2",
+        status: "completed",
+      }),
+    });
+    fetchWithTimeoutGuardedMock
+      .mockResolvedValueOnce({
+        response: new Response("busy", { status: 503, statusText: "Service Unavailable" }),
+        finalUrl: "http://127.0.0.1:44080/v1/videos/vid_local/content?variant=video",
+        release: firstRelease,
+      })
+      .mockResolvedValueOnce({
+        response: {
+          headers: new Headers({ "content-type": "video/mp4" }),
+          arrayBuffer: async () => Buffer.from("mp4-bytes"),
+        },
+        finalUrl: "http://127.0.0.1:44080/v1/videos/vid_local/content?variant=video",
+        release: secondRelease,
+      });
+
+    const provider = buildOpenAIVideoGenerationProvider();
+    const result = await provider.generateVideo({
+      provider: "openai",
+      model: "sora-2",
+      prompt: "Render via local relay",
+      cfg: {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "http://127.0.0.1:44080/v1",
+              request: { allowPrivateNetwork: true },
+              models: [],
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.videos[0]?.buffer?.toString()).toBe("mp4-bytes");
+    expect(executeProviderOperationWithRetryMock).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "openai", stage: "download" }),
+    );
+    expect(fetchWithTimeoutGuardedMock).toHaveBeenCalledTimes(2);
+    expect(firstRelease).toHaveBeenCalledTimes(1);
+    expect(secondRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases guarded local video download requests when HTTP errors throw", async () => {
+    const firstRelease = vi.fn(async () => {});
+    const secondRelease = vi.fn(async () => {});
+    assertOkOrThrowHttpErrorMock
+      .mockImplementationOnce(async () => {})
+      .mockImplementationOnce(async () => {})
+      .mockImplementationOnce(async (_response, label) => {
+        throw new Error(label);
+      })
+      .mockImplementationOnce(async (_response, label) => {
+        throw new Error(label);
+      });
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          id: "vid_local",
+          model: "sora-2",
+          status: "queued",
+        }),
+      },
+      release: vi.fn(async () => {}),
+    });
+    fetchWithTimeoutMock.mockResolvedValueOnce({
+      json: async () => ({
+        id: "vid_local",
+        model: "sora-2",
+        status: "completed",
+      }),
+    });
+    fetchWithTimeoutGuardedMock
+      .mockResolvedValueOnce({
+        response: new Response("busy", { status: 503, statusText: "Service Unavailable" }),
+        finalUrl: "http://127.0.0.1:44080/v1/videos/vid_local/content?variant=video",
+        release: firstRelease,
+      })
+      .mockResolvedValueOnce({
+        response: new Response("busy", { status: 503, statusText: "Service Unavailable" }),
+        finalUrl: "http://127.0.0.1:44080/v1/videos/vid_local/content?variant=video",
+        release: secondRelease,
+      });
+
+    const provider = buildOpenAIVideoGenerationProvider();
+    await expect(
+      provider.generateVideo({
+        provider: "openai",
+        model: "sora-2",
+        prompt: "Render via local relay",
+        cfg: {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "http://127.0.0.1:44080/v1",
+                request: { allowPrivateNetwork: true },
+                models: [],
+              },
+            },
+          },
+        },
+      }),
+    ).rejects.toThrow("OpenAI video download failed");
+
+    expect(fetchWithTimeoutGuardedMock).toHaveBeenCalledTimes(2);
+    expect(firstRelease).toHaveBeenCalledTimes(1);
+    expect(secondRelease).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the video edits endpoint for video-to-video uploads", async () => {
     fetchWithTimeoutMock
       .mockResolvedValueOnce({
         ok: true,
@@ -229,12 +482,70 @@ describe("openai video generation provider", () => {
     });
 
     expect(postJsonRequestMock).not.toHaveBeenCalled();
-    const [createUrl, createInit, createTimeout, createFetch] = fetchWithTimeoutCall(0);
-    expect(createUrl).toBe("https://api.openai.com/v1/videos");
-    expect(createInit?.method).toBe("POST");
-    expect(createInit?.body).toBeInstanceOf(FormData);
-    expect(createTimeout).toBe(120000);
-    expect(createFetch).toBe(fetch);
+    const createRequest = postMultipartRequest();
+    expect(createRequest.url).toBe("https://api.openai.com/v1/videos/edits");
+    expect(createRequest.body).toBeInstanceOf(FormData);
+    const form = createRequest.body as FormData;
+    expect(form.get("prompt")).toBe("Remix this clip");
+    expect(form.get("model")).toBe("sora-2");
+    expect(form.get("video")).toBeInstanceOf(File);
+    expect(form.get("input_reference")).toBeNull();
+    expect(createRequest.timeoutMs).toBe(120000);
+    expect(createRequest.fetchFn).toBe(fetch);
+    expect(createRequest.allowPrivateNetwork).toBe(false);
+  });
+
+  it("honors configured request allowPrivateNetwork for multipart video uploads", async () => {
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: "vid_789",
+          model: "sora-2",
+          status: "queued",
+        }),
+      })
+      .mockResolvedValueOnce({
+        json: async () => ({
+          id: "vid_789",
+          model: "sora-2",
+          status: "completed",
+        }),
+      })
+      .mockResolvedValueOnce({
+        headers: new Headers({ "content-type": "video/mp4" }),
+        arrayBuffer: async () => Buffer.from("mp4-bytes"),
+      });
+
+    const provider = buildOpenAIVideoGenerationProvider();
+    await provider.generateVideo({
+      provider: "openai",
+      model: "sora-2",
+      prompt: "Remix this clip",
+      cfg: {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "http://127.0.0.1:44080/v1",
+              request: { allowPrivateNetwork: true },
+              models: [],
+            },
+          },
+        },
+      },
+      inputVideos: [{ buffer: Buffer.from("mp4-bytes"), mimeType: "video/mp4" }],
+    });
+
+    expect(postJsonRequestMock).not.toHaveBeenCalled();
+    const createRequest = postMultipartRequest();
+    expect(createRequest.url).toBe("http://127.0.0.1:44080/v1/videos/edits");
+    expect(createRequest.body).toBeInstanceOf(FormData);
+    expect(createRequest.allowPrivateNetwork).toBe(true);
+    expect(pollProviderOperationRequest().allowPrivateNetwork).toBe(true);
+    expect(fetchWithTimeoutGuardedCall()[4]).toEqual({
+      ssrfPolicy: { allowPrivateNetwork: true },
+      auditContext: "openai-video-download",
+    });
   });
 
   it("rejects multiple reference assets", async () => {

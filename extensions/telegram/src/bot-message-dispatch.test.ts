@@ -1790,6 +1790,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
   it("keeps streamed final text in place when late media arrives", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    const mediaMaxBytes = 50 * 1024 * 1024;
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
         await replyOptions?.onPartialReply?.({ text: "Photo" });
@@ -1801,10 +1802,14 @@ describe("dispatchTelegramMessage draft streaming", () => {
       },
     );
 
-    await dispatchWithContext({ context: createContext() });
+    await dispatchWithContext({
+      context: createContext(),
+      telegramCfg: { mediaMaxMb: 50 },
+    });
 
     expect(answerDraftStream.clear).not.toHaveBeenCalled();
     expect(answerDraftStream.update).toHaveBeenCalledWith("Photo");
+    expectDeliverRepliesParams({ mediaMaxBytes });
     expectDeliveredReply(0, { text: undefined, mediaUrl: "https://example.com/a.png" });
   });
 

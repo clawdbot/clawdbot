@@ -824,6 +824,93 @@ describe("openai codex provider", () => {
     });
   });
 
+  it("restores [text,image] input on stale gpt-5.5 rows that omit the input field", () => {
+    // Regression: persisted/configured catalog rows can omit the `input` field
+    // for openai-codex models. When that row wins the catalog merge,
+    // `modelSupportsInput(entry, "image")` returns false and the gateway routes
+    // inbound images down the claim-check offload path (`media://inbound/<id>`)
+    // instead of inlining them. Mirror of the Anthropic precedent set by
+    // upstream #83756.
+    const provider = buildOpenAICodexProviderPlugin();
+
+    const model = provider.normalizeResolvedModel?.({
+      provider: "openai-codex",
+      modelId: "gpt-5.5",
+      model: {
+        id: "gpt-5.5",
+        name: "gpt-5.5",
+        provider: "openai-codex",
+        api: "openai-codex-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        reasoning: true,
+        // No `input` field at all — the stale persisted/configured row shape.
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_050_000,
+        contextTokens: 272_000,
+        maxTokens: 128_000,
+      },
+    } as never);
+
+    expect(model?.input).toEqual(["text", "image"]);
+  });
+
+  it("preserves [text,image] input on rows that already declare image capability", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    const model = provider.normalizeResolvedModel?.({
+      provider: "openai-codex",
+      modelId: "gpt-5.5",
+      model: {
+        id: "gpt-5.5",
+        name: "gpt-5.5",
+        provider: "openai-codex",
+        api: "openai-codex-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_050_000,
+        contextTokens: 272_000,
+        maxTokens: 128_000,
+      },
+    } as never);
+
+    // Existing image capability untouched; transport is already canonical so
+    // normalizeResolvedModel may return undefined (no-op).
+    if (model) {
+      expect(model.input).toEqual(["text", "image"]);
+    }
+  });
+
+  it("leaves codex-suffix and legacy model rows text-only (not vision-capable)", () => {
+    const provider = buildOpenAICodexProviderPlugin();
+
+    const model = provider.normalizeResolvedModel?.({
+      provider: "openai-codex",
+      modelId: "gpt-5.3-codex",
+      model: {
+        id: "gpt-5.3-codex",
+        name: "gpt-5.3-codex",
+        provider: "openai-codex",
+        api: "openai-codex-responses",
+        baseUrl: "https://chatgpt.com/backend-api/codex",
+        reasoning: true,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 400_000,
+        contextTokens: 272_000,
+        maxTokens: 128_000,
+      },
+    } as never);
+
+    // No image capability should be added — gpt-5.X-codex models are
+    // Codex CLI / agent-mode only and not in the documented vision list.
+    // normalizeResolvedModel may return undefined (no transport change) or a
+    // model with the existing input array; either way `image` must not appear.
+    if (model?.input) {
+      expect(model.input).not.toContain("image");
+    }
+  });
+
   it("normalizes transport metadata for stale /backend-api/v1 codex routes", () => {
     const provider = buildOpenAICodexProviderPlugin();
 

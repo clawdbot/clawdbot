@@ -42,6 +42,7 @@ cp docs/reference/AGENTS.default.md ~/.openclaw/workspace/AGENTS.md
 
 - Don't dump directories or secrets into chat.
 - Don't run destructive commands unless explicitly asked.
+- Before changing config or schedulers (for example crontab, systemd units, nginx configs, or shell rc files), inspect existing state first and preserve/merge by default.
 - Don't send partial/streaming replies to external messaging surfaces (only final replies).
 
 ## Session start (required)

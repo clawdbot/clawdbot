@@ -6,6 +6,7 @@ import {
   normalizeOptionalLowercaseString,
 } from "../../shared/string-coerce.js";
 import { resolveEffectiveAgentSkillFilter } from "./agent-filter.js";
+import { resolveSkillTelemetrySource } from "./source.js";
 import type { SkillEligibilityContext, SkillCommandSpec, SkillEntry } from "./types.js";
 import {
   filterWorkspaceSkillEntriesWithOptions,
@@ -157,6 +158,7 @@ export function buildWorkspaceSkillCommandSpecs(
       name: unique,
       skillName: rawName,
       description,
+      skillSource: resolveSkillTelemetrySource(entry.skill),
       ...(dispatch ? { dispatch } : {}),
     });
   }

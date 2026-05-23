@@ -94,27 +94,6 @@ function stripPrimaryPackageAlias(spec: string): string {
     : normalized;
 }
 
-export function isOpenClawSourcePackageInstallSpec(value: string): boolean {
-  if (isMainPackageTarget(value)) {
-    return true;
-  }
-  const target = stripPrimaryPackageAlias(value);
-  const normalizedTarget = normalizeLowercaseStringOrEmpty(target);
-  if (!normalizedTarget) {
-    return false;
-  }
-  if (/^github:openclaw\/openclaw(?:$|[#/])/u.test(normalizedTarget)) {
-    return true;
-  }
-  const gitUrl = normalizedTarget.replace(/^git\+/u, "");
-  return (
-    /^https?:\/\/github\.com\/openclaw\/openclaw(?:\.git)?(?:$|[?#])/u.test(gitUrl) ||
-    /^ssh:\/\/git@github\.com[:/]openclaw\/openclaw(?:\.git)?(?:$|[?#])/u.test(gitUrl) ||
-    /^git:\/\/github\.com\/openclaw\/openclaw(?:\.git)?(?:$|[?#])/u.test(gitUrl) ||
-    /^git@github\.com:openclaw\/openclaw(?:\.git)?(?:$|[?#])/u.test(gitUrl)
-  );
-}
-
 function isPnpmOpenClawSourceInstallSpec(spec: string): boolean {
   const target = stripPrimaryPackageAlias(spec);
   return (

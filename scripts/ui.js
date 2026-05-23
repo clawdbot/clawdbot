@@ -207,10 +207,29 @@ export function main(argv = process.argv.slice(2)) {
   run(runner.cmd, ["run", script, ...rest]);
 }
 
-const isDirectExecution = (() => {
-  const entry = process.argv[1];
-  return Boolean(entry && path.resolve(entry) === fileURLToPath(import.meta.url));
-})();
+export function resolveDirectExecutionPath(entry, realpath = fs.realpathSync.native) {
+  const resolved = path.resolve(entry);
+  try {
+    return realpath(resolved);
+  } catch {
+    return resolved;
+  }
+}
+
+export function isDirectScriptExecution(
+  entry = process.argv[1],
+  scriptPath = fileURLToPath(import.meta.url),
+  realpath = fs.realpathSync.native,
+) {
+  if (!entry) {
+    return false;
+  }
+  return (
+    resolveDirectExecutionPath(entry, realpath) === resolveDirectExecutionPath(scriptPath, realpath)
+  );
+}
+
+const isDirectExecution = isDirectScriptExecution();
 
 if (isDirectExecution) {
   main();

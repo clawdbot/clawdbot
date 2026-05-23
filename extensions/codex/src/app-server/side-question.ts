@@ -59,7 +59,7 @@ import {
 } from "./protocol.js";
 import { rememberCodexRateLimits, readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import { formatCodexUsageLimitErrorMessage } from "./rate-limits.js";
-import { resolveCodexNativeSandboxBlock } from "./sandbox-guard.js";
+import { resolveCodexNativeExecutionBlock } from "./sandbox-guard.js";
 import { readCodexAppServerBinding } from "./session-binding.js";
 import { getSharedCodexAppServerClient } from "./shared-client.js";
 import {
@@ -126,14 +126,14 @@ export async function runCodexAppServerSideQuestion(
       "Codex /btw needs an active Codex thread. Send a normal message first, then try /btw again.",
     );
   }
-  const sandboxBlock = resolveCodexNativeSandboxBlock({
+  const nativeExecutionBlock = resolveCodexNativeExecutionBlock({
     config: params.cfg,
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
     surface: "/btw side-question mode",
   });
-  if (sandboxBlock) {
-    throw new Error(sandboxBlock);
+  if (nativeExecutionBlock) {
+    throw new Error(nativeExecutionBlock);
   }
 
   const pluginConfig = readCodexPluginConfig(options.pluginConfig);

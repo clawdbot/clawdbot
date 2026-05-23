@@ -66,7 +66,6 @@ final class OnboardingController {
 }
 
 struct OnboardingView: View {
-    @Environment(\.openSettings) var openSettings
     @State var currentPage = 0
     @State var isRequesting = false
     @State var installingCLI = false

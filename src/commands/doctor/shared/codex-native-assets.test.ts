@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { collectCodexNativeAssetWarnings, scanCodexNativeAssets } from "./codex-native-assets.js";
+import { collectCodexNativeAssetInfoNotes, scanCodexNativeAssets } from "./codex-native-assets.js";
 
 const tempRoots = new Set<string>();
 
@@ -107,24 +107,36 @@ describe("scanCodexNativeAssets", () => {
   });
 });
 
-describe("collectCodexNativeAssetWarnings", () => {
-  it("points users at explicit Codex migration instead of auto-copying native assets", async () => {
+describe("collectCodexNativeAssetInfoNotes", () => {
+  it("points users at explicit Codex migration planning", async () => {
     const root = await makeTempRoot();
     const codexHome = path.join(root, ".codex");
     await writeFile(path.join(root, ".agents", "skills", "agent-helper", "SKILL.md"));
 
-    const warnings = await collectCodexNativeAssetWarnings({
+    const notes = await collectCodexNativeAssetInfoNotes({
       cfg: codexConfig(),
       env: { CODEX_HOME: codexHome, HOME: root },
     });
 
-    expect(warnings).toStrictEqual([
+    expect(notes).toStrictEqual([
       [
         "- Personal Codex CLI assets were found, but native Codex-mode OpenClaw agents use isolated per-agent Codex homes.",
         `- Sources: ${codexHome} and ${path.join(root, ".agents", "skills")} (1 skill, 0 plugins, 0 config files, 0 hook files).`,
         "- These assets will not be loaded by the Codex app-server child unless you intentionally promote them.",
-        "- Run `openclaw migrate plan codex` to inventory them. Applying that migration copies skills into the current OpenClaw agent workspace; Codex plugins, hooks, and config stay manual-review only.",
+        "- If the Codex plugin is not installed, run `openclaw plugins install npm:@openclaw/codex` first. Then run `openclaw migrate plan codex` to inventory them. Applying that migration copies skills into the current OpenClaw agent workspace; Codex plugins, hooks, and config stay manual-review only.",
       ].join("\n"),
     ]);
+  });
+
+  it("returns empty when no Codex assets are found", async () => {
+    const root = await makeTempRoot();
+    const codexHome = path.join(root, ".codex");
+
+    const notes = await collectCodexNativeAssetInfoNotes({
+      cfg: codexConfig(),
+      env: { CODEX_HOME: codexHome, HOME: root },
+    });
+
+    expect(notes).toStrictEqual([]);
   });
 });

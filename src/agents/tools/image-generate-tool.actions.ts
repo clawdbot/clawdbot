@@ -64,6 +64,7 @@ export function summarizeImageGenerationCapabilities(provider: ImageGenerationPr
 
 export function createImageGenerateListActionResult(params: {
   cfg?: OpenClawConfig;
+  workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
 }): ImageGenerateActionResult {
@@ -73,6 +74,7 @@ export function createImageGenerateListActionResult(params: {
     providers,
     emptyText: "No image-generation providers are registered.",
     cfg: params.cfg,
+    workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     authStore: params.authStore,
     listModes: listSupportedImageGenerationModes,

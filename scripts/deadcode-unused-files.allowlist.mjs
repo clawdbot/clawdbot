@@ -38,7 +38,7 @@ export const KNIP_UNUSED_FILE_ALLOWLIST = [
 // only reachable through test-only import graphs. Ignore these when reported,
 // but do not require them to be reported.
 export const KNIP_OPTIONAL_UNUSED_FILE_ALLOWLIST = [
-  "extensions/qa-lab/src/auth-profile-fixture.ts",
-  "extensions/qa-lab/src/codex-plugin-fixture.ts",
+  "extensions/qa-lab/src/auth-profile.fixture.ts",
+  "extensions/qa-lab/src/codex-plugin.fixture.ts",
   "src/gateway/test/server-sessions-helpers.ts",
 ];

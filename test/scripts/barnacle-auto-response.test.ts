@@ -1011,6 +1011,57 @@ describe("barnacle-auto-response", () => {
     });
 
     expect(calls.removeLabel).toEqual([]);
+    expect(calls.addLabels.flatMap((call) => call.labels)).not.toContain(
+      candidateLabels.needsRealBehaviorProof,
+    );
+  });
+
+  it("does not re-add negative proof labels while sufficient proof is present", async () => {
+    const { calls, github } = barnacleGithub([file("src/gateway/server.ts")]);
+
+    await runBarnacleAutoResponse({
+      github,
+      context: barnacleContext({}, [PROOF_SUFFICIENT_LABEL], {
+        action: "unlabeled",
+        label: { name: candidateLabels.needsRealBehaviorProof },
+        sender: { login: "maintainer", type: "User" },
+      }),
+      core: {
+        info: () => undefined,
+      },
+    });
+
+    expect(calls.removeLabel).toEqual([]);
+    expect(calls.addLabels.flatMap((call) => call.labels)).not.toContain(
+      candidateLabels.needsRealBehaviorProof,
+    );
+  });
+
+  it("removes negative proof labels when sufficient proof is already present", async () => {
+    const { calls, github } = barnacleGithub([file("src/gateway/server.ts")]);
+
+    await runBarnacleAutoResponse({
+      github,
+      context: barnacleContext(
+        {},
+        [PROOF_SUFFICIENT_LABEL, candidateLabels.needsRealBehaviorProof],
+        {
+          action: "labeled",
+          label: { name: "status: ready for maintainer look" },
+          sender: { login: "openclaw-clawsweeper[bot]", type: "Bot" },
+        },
+      ),
+      core: {
+        info: () => undefined,
+      },
+    });
+
+    expect(calls.removeLabel).toEqual([
+      expectedRemoveLabel(123, candidateLabels.needsRealBehaviorProof),
+    ]);
+    expect(calls.addLabels.flatMap((call) => call.labels)).not.toContain(
+      candidateLabels.needsRealBehaviorProof,
+    );
   });
 
   it("does not let Barnacle veto ClawSweeper's sufficient proof label add", async () => {

@@ -18,13 +18,25 @@ describe("qa coverage report", () => {
       "telegram",
       "whatsapp",
     ]);
-    expect(inventory.scenarioPacks.map((pack) => pack.id)).toEqual(["personal-agent"]);
-    expect(inventory.scenarioPacks[0]?.missingScenarioIds).toStrictEqual([]);
-    expect(inventory.scenarioPacks[0]?.scenarioIds).toContain(
+    expect(inventory.scenarioPacks.map((pack) => pack.id)).toEqual([
+      "observability",
+      "personal-agent",
+    ]);
+    const personalPack = inventory.scenarioPacks.find((pack) => pack.id === "personal-agent");
+    const observabilityPack = inventory.scenarioPacks.find((pack) => pack.id === "observability");
+    expect(personalPack?.missingScenarioIds).toStrictEqual([]);
+    expect(personalPack?.scenarioIds).toContain(
       "personal-share-safe-diagnostics-artifact",
     );
-    expect(inventory.scenarioPacks[0]?.coverageIds).toContain("personal.redaction");
-    expect(inventory.scenarioPacks[0]?.coverageIds).toContain("qa.artifact-safety");
+    expect(personalPack?.coverageIds).toContain("personal.redaction");
+    expect(personalPack?.coverageIds).toContain("qa.artifact-safety");
+    expect(observabilityPack?.missingScenarioIds).toStrictEqual([]);
+    expect(observabilityPack?.scenarioIds).toEqual([
+      "otel-trace-smoke",
+      "docker-prometheus-smoke",
+    ]);
+    expect(observabilityPack?.coverageIds).toContain("telemetry.otel");
+    expect(observabilityPack?.coverageIds).toContain("telemetry.prometheus");
     expect(inventory.byTheme.memory.map((feature) => feature.id)).toContain("memory.recall");
     expect(inventory.bySurface.memory.map((feature) => feature.id)).toContain("memory.recall");
   });
@@ -44,6 +56,10 @@ describe("qa coverage report", () => {
     expect(report).toContain(
       "- personal-agent (Personal Agent Benchmark Pack): 10 scenarios; coverage:",
     );
+    expect(report).toContain(
+      "- observability (Observability Smoke Pack): 2 scenarios; coverage:",
+    );
+    expect(report).toContain("otel-trace-smoke, docker-prometheus-smoke");
     expect(report).toContain("personal-share-safe-diagnostics-artifact");
     expect(report).toContain("## Live Transport Lanes");
     expect(report).toContain(

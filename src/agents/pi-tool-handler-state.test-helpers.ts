@@ -22,6 +22,7 @@ export function createBaseToolHandlerState() {
     messagingToolSentTexts: [] as string[],
     messagingToolSentTextsNormalized: [] as string[],
     messagingToolSentMediaUrls: [] as string[],
+    messagingToolSourceReplyPayloads: [],
     messagingToolSentTargets: [] as unknown[],
     deterministicApprovalPromptSent: false,
     blockBuffer: "",

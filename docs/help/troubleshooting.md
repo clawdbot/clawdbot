@@ -34,6 +34,31 @@ Good output in one line:
   gateway is unreachable, the command falls back to config-only summaries.
 - `openclaw logs --follow` → steady activity, no repeating fatal errors.
 
+## Assistant feels limited or missing tools
+
+If the assistant cannot inspect files, run commands, use browser automation, or
+see expected tools, check the effective tool profile first:
+
+```bash
+openclaw status
+openclaw status --all
+openclaw doctor
+```
+
+Common causes:
+
+- `tools.profile: "messaging"` is intentionally narrow for chat-only agents.
+- `tools.profile: "coding"` is the usual profile for repository, file, shell,
+  and runtime workflows.
+- `tools.profile: "full"` exposes the broadest tool set and should be limited
+  to trusted operator-controlled agents.
+- Per-agent `agents.list[].tools` overrides can narrow or expand the root
+  profile for one agent.
+
+Change the root or per-agent tool profile, then restart or reload the Gateway
+and run `openclaw status --all` again. See [Tools](/tools) for the profile
+model and allow/deny overrides.
+
 ## Anthropic long context 429
 
 If you see:

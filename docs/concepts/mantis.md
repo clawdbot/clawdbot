@@ -202,6 +202,10 @@ Useful Slack desktop flags:
 - `--credential-source convex --credential-role ci` uses the shared credential pool instead of direct Slack env tokens.
 - `--provider-mode`, `--model`, `--alt-model`, and `--fast` pass through to the Slack live lane.
 
+Approval checkpoint runs render Slack API message snapshots into checkpoint PNGs
+for CI-safe visual proof. `slack-desktop-smoke.png` is only proof of Slack Web
+when the lease uses a warm browser profile that is already logged in.
+
 The GitHub smoke workflow is `Mantis Discord Smoke`. The before and after GitHub
 workflow for the first real scenario is `Mantis Discord Status Reactions`. It
 accepts:

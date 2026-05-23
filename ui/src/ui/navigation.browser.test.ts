@@ -466,7 +466,9 @@ describe("control UI routing", () => {
 
     expect([...section.classList]).toContain("nav-section--collapsed");
     expect(
-      section.querySelector<HTMLButtonElement>(".nav-section__label")?.getAttribute("aria-expanded"),
+      section
+        .querySelector<HTMLButtonElement>(".nav-section__label")
+        ?.getAttribute("aria-expanded"),
     ).toBe("false");
   });
 
@@ -609,19 +611,34 @@ describe("control UI routing", () => {
     expect(window.location.search).toBe("?session=agent%3Amain%3Asubagent%3Atask-123");
 
     const shell = expectElement(app, ".shell", HTMLElement);
+    const topbar = expectElement(app, ".topbar", HTMLElement);
+    const contentHeader = expectElement(app, ".content-header", HTMLElement);
     expect([...shell.classList]).toEqual(["shell", "shell--chat"]);
+    expect(topbar.hasAttribute("inert")).toBe(false);
+    expect(topbar.hasAttribute("aria-hidden")).toBe(false);
+    expect(contentHeader.hasAttribute("inert")).toBe(false);
+    expect(contentHeader.hasAttribute("aria-hidden")).toBe(false);
 
     const toggle = expectElement(app, 'button[title^="Toggle focus mode"]', HTMLButtonElement);
     toggle.click();
 
     await app.updateComplete;
     expect([...shell.classList]).toEqual(["shell", "shell--chat", "shell--chat-focus"]);
+    expect(topbar.hasAttribute("inert")).toBe(true);
+    expect(topbar.getAttribute("aria-hidden")).toBe("true");
+    expect(contentHeader.hasAttribute("inert")).toBe(true);
+    expect(contentHeader.getAttribute("aria-hidden")).toBe("true");
 
     app.setTab("channels");
 
     await app.updateComplete;
     expect(app.tab).toBe("channels");
     expect([...shell.classList]).toEqual(["shell"]);
+    expect(topbar.hasAttribute("inert")).toBe(false);
+    expect(topbar.hasAttribute("aria-hidden")).toBe(false);
+    const channelsContentHeader = expectElement(app, ".content-header", HTMLElement);
+    expect(channelsContentHeader.hasAttribute("inert")).toBe(false);
+    expect(channelsContentHeader.hasAttribute("aria-hidden")).toBe(false);
 
     const chatLink = expectElement(app, 'a.nav-item[href="/chat"]', HTMLAnchorElement);
     chatLink.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
@@ -629,6 +646,11 @@ describe("control UI routing", () => {
     await app.updateComplete;
     expect(app.tab).toBe("chat");
     expect([...shell.classList]).toEqual(["shell", "shell--chat", "shell--chat-focus"]);
+    expect(topbar.hasAttribute("inert")).toBe(true);
+    expect(topbar.getAttribute("aria-hidden")).toBe("true");
+    const focusedContentHeader = expectElement(app, ".content-header", HTMLElement);
+    expect(focusedContentHeader.hasAttribute("inert")).toBe(true);
+    expect(focusedContentHeader.getAttribute("aria-hidden")).toBe("true");
   });
 
   it("auto-scrolls chat history to the latest message", async () => {

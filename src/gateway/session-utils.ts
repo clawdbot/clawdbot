@@ -1977,6 +1977,69 @@ function resolveSessionListSearchDisplayName(
   });
 }
 
+function addSessionListSearchModelFields(
+  fields: Array<string | undefined>,
+  identity: { provider?: string; model?: string },
+) {
+  const provider = normalizeOptionalString(identity.provider);
+  const model = normalizeOptionalString(identity.model);
+  fields.push(provider, model);
+  if (provider && model) {
+    fields.push(`${provider}/${model}`);
+  }
+}
+
+function resolveSessionListSearchModelFields(params: {
+  cfg: OpenClawConfig;
+  key: string;
+  entry?: SessionEntry;
+  rowContext?: SessionListRowContext;
+}): Array<string | undefined> {
+  const parsedAgent = parseAgentSessionKey(params.key);
+  const agentId = normalizeAgentId(parsedAgent?.agentId ?? resolveDefaultAgentId(params.cfg));
+  const subagentRun = params.rowContext
+    ? params.rowContext.subagentRuns.getDisplaySubagentRun(params.key)
+    : getSessionDisplaySubagentRunByChildSessionKey(params.key);
+  const selectedModel = resolveSessionSelectedModelRef({
+    cfg: params.cfg,
+    entry: params.entry,
+    agentId,
+    rowContext: params.rowContext,
+    allowPluginNormalization: false,
+  });
+  const resolvedModel = resolveSessionModelIdentityRef(
+    params.cfg,
+    params.entry,
+    agentId,
+    subagentRun?.model,
+    { allowPluginNormalization: false },
+  );
+  const modelIdentity = {
+    provider: resolvedModel.provider,
+    model: resolvedModel.model ?? DEFAULT_MODEL,
+  };
+  const selectedOrRuntimeModelProvider = selectedModel?.provider ?? modelIdentity.provider;
+  const selectedOrRuntimeModel = selectedModel?.model ?? modelIdentity.model;
+  const displayModelIdentity = resolveSessionDisplayModelIdentityRefCached({
+    cfg: params.cfg,
+    agentId,
+    provider: selectedOrRuntimeModelProvider,
+    model: selectedOrRuntimeModel,
+    rowContext: params.rowContext,
+  });
+  const fields: Array<string | undefined> = [];
+  addSessionListSearchModelFields(fields, {
+    provider: params.entry?.modelProvider,
+    model: params.entry?.model,
+  });
+  addSessionListSearchModelFields(fields, resolvedModel);
+  if (selectedModel) {
+    addSessionListSearchModelFields(fields, selectedModel);
+  }
+  addSessionListSearchModelFields(fields, displayModelIdentity);
+  return fields;
+}
+
 export function loadGatewaySessionRow(
   sessionKey: string,
   options?: {
@@ -2084,12 +2147,13 @@ function sortAndLimitSessionEntries(
 }
 
 function filterSessionEntries(params: {
+  cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;
   opts: import("./protocol/index.js").SessionsListParams;
   now: number;
   rowContext?: SessionListRowContext;
 }): SessionEntryPair[] {
-  const { store, opts, now } = params;
+  const { cfg, store, opts, now } = params;
   const rowContext = params.rowContext;
   const includeGlobal = opts.includeGlobal === true;
   const includeUnknown = opts.includeUnknown === true;
@@ -2169,6 +2233,12 @@ function filterSessionEntries(params: {
         entry?.subject,
         entry?.sessionId,
         key,
+        ...resolveSessionListSearchModelFields({
+          cfg,
+          key,
+          entry,
+          rowContext,
+        }),
       ];
       return fields.some(
         (f) => typeof f === "string" && normalizeLowercaseStringOrEmpty(f).includes(search),
@@ -2185,6 +2255,7 @@ function filterSessionEntries(params: {
 }
 
 function selectSessionEntries(params: {
+  cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;
   opts: import("./protocol/index.js").SessionsListParams;
   now: number;
@@ -2211,6 +2282,7 @@ function selectSessionEntries(params: {
 }
 
 export function filterAndSortSessionEntries(params: {
+  cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;
   opts: import("./protocol/index.js").SessionsListParams;
   now: number;
@@ -2240,10 +2312,14 @@ export function listSessionsFromStore(params: {
   const hasSpawnedByFilter = typeof opts.spawnedBy === "string" && opts.spawnedBy.length > 0;
 
   const selection = selectSessionEntries({
+    cfg,
     store,
     opts,
     now,
-    rowContext: hasSpawnedByFilter ? getRowContext() : undefined,
+    rowContext:
+      hasSpawnedByFilter || Boolean(normalizeOptionalString(opts.search))
+        ? getRowContext()
+        : undefined,
     defaultLimit: SESSIONS_LIST_DEFAULT_LIMIT,
   });
   const { entries, totalCount, limitApplied, offset, nextOffset, hasMore } = selection;
@@ -2311,10 +2387,14 @@ export async function listSessionsFromStoreAsync(params: {
   const hasSpawnedByFilter = typeof opts.spawnedBy === "string" && opts.spawnedBy.length > 0;
 
   const selection = selectSessionEntries({
+    cfg,
     store,
     opts,
     now,
-    rowContext: hasSpawnedByFilter ? getRowContext() : undefined,
+    rowContext:
+      hasSpawnedByFilter || Boolean(normalizeOptionalString(opts.search))
+        ? getRowContext()
+        : undefined,
     defaultLimit: SESSIONS_LIST_DEFAULT_LIMIT,
   });
   const { entries, totalCount, limitApplied, offset, nextOffset, hasMore } = selection;

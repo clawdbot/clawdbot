@@ -297,10 +297,13 @@ function histogramCreateOptions(name: string) {
 
 async function emitAndCaptureLog(
   event: Omit<Extract<Parameters<typeof emitDiagnosticEvent>[0], { type: "log.record" }>, "type">,
-  options: { trusted?: boolean } = {},
+  options: { captureContent?: OtelContextFlags["captureContent"]; trusted?: boolean } = {},
 ) {
   const service = createDiagnosticsOtelService();
-  const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { logs: true });
+  const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
+    logs: true,
+    ...(options.captureContent !== undefined ? { captureContent: options.captureContent } : {}),
+  });
   await service.start(ctx);
   const emit = options.trusted ? emitTrustedDiagnosticEvent : emitDiagnosticEvent;
   emit({
@@ -1060,11 +1063,32 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
-  test("redacts sensitive data from log messages before export", async () => {
+  test("omits log message bodies from OTLP logs unless broad content capture is enabled", async () => {
+    const emitCall = await emitAndCaptureLog({
+      level: "INFO",
+      message: "model replied OTEL-QA-OK",
+    });
+
+    expect(emitCall?.body).toBe("log");
+  });
+
+  test("keeps granular content capture from enabling OTLP log bodies", async () => {
+    const emitCall = await emitAndCaptureLog(
+      {
+        level: "INFO",
+        message: "model replied OTEL-QA-OK",
+      },
+      { captureContent: { enabled: true, inputMessages: true } },
+    );
+
+    expect(emitCall?.body).toBe("log");
+  });
+
+  test("redacts sensitive data from log messages before export when broad content capture is enabled", async () => {
     const emitCall = await emitAndCaptureLog({
       level: "INFO",
       message: "Using API key sk-1234567890abcdef1234567890abcdef",
-    });
+    }, { captureContent: true });
 
     expect(emitCall?.body).not.toContain("sk-1234567890abcdef1234567890abcdef");
     expect(emitCall?.body).toContain("sk-123");
@@ -1332,6 +1356,81 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
+  test("drops session-shaped agent identifiers from model usage metric attributes", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { metrics: true });
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "model.usage",
+      agentId: "Agent:qa:otel-trace-smoke",
+      provider: "openai",
+      model: "gpt-5.4",
+      usage: { input: 2 },
+    });
+    await flushDiagnosticEvents();
+
+    expect(telemetryState.counters.get("openclaw.tokens")?.add).toHaveBeenCalledWith(2, {
+      "openclaw.channel": "unknown",
+      "openclaw.agent": "unknown",
+      "openclaw.provider": "openai",
+      "openclaw.model": "gpt-5.4",
+      "openclaw.token": "input",
+    });
+    expect(
+      JSON.stringify(telemetryState.counters.get("openclaw.tokens")?.add.mock.calls),
+    ).not.toContain("Agent:qa:otel-trace-smoke");
+    await service.stop?.(ctx);
+  });
+
+  test("drops session-shaped queue lane metric attributes", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { metrics: true });
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "queue.lane.enqueue",
+      lane: "session:Agent:qa:otel-trace-smoke",
+      queueSize: 2,
+    });
+    await flushDiagnosticEvents();
+
+    expect(telemetryState.counters.get("openclaw.queue.lane.enqueue")?.add).toHaveBeenCalledWith(
+      1,
+      {
+        "openclaw.lane": "session",
+      },
+    );
+    expect(
+      JSON.stringify(telemetryState.counters.get("openclaw.queue.lane.enqueue")?.add.mock.calls),
+    ).not.toContain("Agent:qa:otel-trace-smoke");
+    await service.stop?.(ctx);
+  });
+
+  test("keeps only the bounded prefix from scoped queue lane metric attributes", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { metrics: true });
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "queue.lane.enqueue",
+      lane: "dreaming-narrative:session-main",
+      queueSize: 2,
+    });
+    await flushDiagnosticEvents();
+
+    expect(telemetryState.counters.get("openclaw.queue.lane.enqueue")?.add).toHaveBeenCalledWith(
+      1,
+      {
+        "openclaw.lane": "dreaming-narrative",
+      },
+    );
+    expect(
+      JSON.stringify(telemetryState.counters.get("openclaw.queue.lane.enqueue")?.add.mock.calls),
+    ).not.toContain("session-main");
+    await service.stop?.(ctx);
+  });
+
   test("keeps GenAI token usage metric model attribute present when model is unavailable", async () => {
     const service = createDiagnosticsOtelService();
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { metrics: true });
@@ -1450,6 +1549,49 @@ describe("diagnostics-otel service", () => {
     });
     expect(JSON.stringify(genAiOperationDuration?.record.mock.calls)).not.toContain("session-key");
     expect(JSON.stringify(genAiOperationDuration?.record.mock.calls)).not.toContain("run-1");
+    await service.stop?.(ctx);
+  });
+
+  test("exports skill usage counter and span without raw identifiers", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true });
+    await service.start(ctx);
+
+    emitTrustedDiagnosticEvent({
+      type: "skill.used",
+      agentId: "main",
+      runId: "run-should-not-export",
+      sessionKey: "session-should-not-export",
+      skillName: "tiny-llm-brainstorm",
+      skillSource: "workspace",
+      activation: "read",
+      toolName: "read",
+      trace: {
+        traceId: TRACE_ID,
+        spanId: TOOL_SPAN_ID,
+        parentSpanId: CHILD_SPAN_ID,
+        traceFlags: "01",
+      },
+    });
+    await flushDiagnosticEvents();
+
+    const expectedAttrs = {
+      "openclaw.agent": "main",
+      "openclaw.skill.activation": "read",
+      "openclaw.skill.name": "tiny-llm-brainstorm",
+      "openclaw.skill.source": "workspace",
+      "openclaw.toolName": "read",
+    };
+    expect(telemetryState.counters.get("openclaw.skill.used")?.add).toHaveBeenCalledWith(
+      1,
+      expectedAttrs,
+    );
+    const skillSpanCall = telemetryState.tracer.startSpan.mock.calls.find(
+      (call) => call[0] === "openclaw.skill.used",
+    );
+    expect(skillSpanCall?.[1]).toMatchObject({ attributes: expectedAttrs });
+    expect(JSON.stringify(skillSpanCall)).not.toContain("run-should-not-export");
+    expect(JSON.stringify(skillSpanCall)).not.toContain("session-should-not-export");
     await service.stop?.(ctx);
   });
 
@@ -1587,6 +1729,7 @@ describe("diagnostics-otel service", () => {
     const toolCall = startedSpanCall("openclaw.tool.execution");
     const toolOptions = toolCall?.[1];
     expect(toolOptions?.attributes?.["openclaw.toolName"]).toBe("read");
+    expect(toolOptions?.attributes?.["openclaw.tool.source"]).toBe("core");
     expect(toolOptions?.attributes?.["openclaw.errorCategory"]).toBe("TypeError");
     expect(toolOptions?.attributes?.["openclaw.errorCode"]).toBe("429");
     expect(toolOptions?.attributes?.["openclaw.tool.params.kind"]).toBe("object");
@@ -1629,6 +1772,7 @@ describe("diagnostics-otel service", () => {
     expect(Object.hasOwn(harnessDuration?.[1] ?? {}, "openclaw.sessionKey")).toBe(false);
     const toolDuration = lastHistogramRecord("openclaw.tool.execution.duration_ms");
     expect(toolDuration?.[0]).toBe(20);
+    expect(toolDuration?.[1]?.["openclaw.tool.source"]).toBe("core");
     expect(Object.hasOwn(toolDuration?.[1] ?? {}, "openclaw.errorCode")).toBe(false);
     expect(Object.hasOwn(toolDuration?.[1] ?? {}, "openclaw.runId")).toBe(false);
 
@@ -1674,6 +1818,26 @@ describe("diagnostics-otel service", () => {
     expect(Object.hasOwn(failoverOptions?.attributes ?? {}, "openclaw.sessionKey")).toBe(false);
     expect(failoverOptions?.startTime).toBeTypeOf("number");
     expect(firstSpanEndTime("openclaw.model.failover")).toBeTypeOf("number");
+    await service.stop?.(ctx);
+  });
+
+  test("drops session-shaped queue lanes from model failover spans", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true });
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "model.failover",
+      lane: "session:Agent:qa:otel-trace-smoke",
+      reason: "overloaded",
+      fromProvider: "anthropic",
+      fromModel: "claude-opus-4-6",
+    });
+    await flushDiagnosticEvents();
+
+    const failoverOptions = startedSpanOptions("openclaw.model.failover");
+    expect(failoverOptions?.attributes?.["openclaw.lane"]).toBe("session");
+    expect(JSON.stringify(failoverOptions?.attributes)).not.toContain("Agent:qa:otel-trace-smoke");
     await service.stop?.(ctx);
   });
 

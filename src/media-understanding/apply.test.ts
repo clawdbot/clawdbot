@@ -193,6 +193,7 @@ async function withMediaAutoDetectEnv<T>(
       GROQ_API_KEY: undefined,
       DEEPGRAM_API_KEY: undefined,
       GEMINI_API_KEY: undefined,
+      OPENCLAW_ANTIGRAVITY_CLI: undefined,
       OPENCLAW_AGENT_DIR: undefined,
       PI_CODING_AGENT_DIR: undefined,
       ...env,
@@ -934,6 +935,93 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Transcript).toBeUndefined();
     expect(ctx.Body).toBe("<media:audio>");
     expect(mockedRunExec).not.toHaveBeenCalled();
+  });
+
+  it("does not probe Gemini CLI during media auto-detect", async () => {
+    clearMediaUnderstandingBinaryCacheForTests();
+    const binDir = await createTempMediaDir();
+    const isolatedAgentDir = await createTempMediaDir();
+    await createMockExecutable(binDir, "gemini");
+    const ctx = await createAudioCtx({
+      fileName: "sample.wav",
+      mediaType: "audio/wav",
+      content: createSafeAudioFixtureBuffer(2048),
+    });
+    const cfg: OpenClawConfig = { tools: { media: { audio: {} } } };
+    mockedResolveApiKey.mockResolvedValue({
+      source: "none",
+      mode: "api-key",
+    });
+
+    await withMediaAutoDetectEnv(
+      {
+        PATH: binDir,
+        OPENCLAW_AGENT_DIR: isolatedAgentDir,
+        PI_CODING_AGENT_DIR: isolatedAgentDir,
+      },
+      async () => {
+        const result = await applyMediaUnderstanding({ ctx, cfg });
+        expect(result.appliedAudio).toBe(false);
+      },
+    );
+
+    expect(ctx.Transcript).toBeUndefined();
+    expect(ctx.Body).toBe("<media:audio>");
+    expect(mockedRunExec).not.toHaveBeenCalled();
+  });
+
+  it("uses Antigravity CLI as the last auto image fallback", async () => {
+    clearMediaUnderstandingBinaryCacheForTests();
+    const binDir = await createTempMediaDir();
+    await createMockExecutable(binDir, "agy");
+    const imagePath = await createTempMediaFile({
+      fileName: "photo.jpg",
+      content: "image-bytes",
+    });
+    const ctx: MsgContext = {
+      Body: "<media:image>",
+      MediaPath: imagePath,
+      MediaType: "image/jpeg",
+    };
+    const cfg: OpenClawConfig = { tools: { media: { image: {} } } };
+    mockedResolveApiKey.mockResolvedValue({
+      source: "none",
+      mode: "api-key",
+    });
+    mockedRunExec.mockImplementation(async (_command, args) => {
+      if (Array.isArray(args) && args.includes("--help")) {
+        return { stdout: "--print\n--add-dir\n--sandbox\n", stderr: "" };
+      }
+      return { stdout: "antigravity image description\n", stderr: "" };
+    });
+
+    await withMediaAutoDetectEnv({ PATH: binDir }, async () => {
+      const result = await applyMediaUnderstanding({ ctx, cfg });
+      expect(result.appliedImage).toBe(true);
+    });
+
+    expect(ctx.Body).toBe("[Image]\nDescription:\nantigravity image description");
+    expect(mockedRunExec).toHaveBeenCalledTimes(2);
+    const realImagePath = await fs.realpath(imagePath);
+    const [_probeCommand, _probeArgs, probeOptions] = getRunExecCall(0);
+    expect(probeOptions).toEqual({
+      timeoutMs: 3000,
+      cwd: expect.stringContaining("openclaw-antigravity-probe-"),
+    });
+    const [command, args, options] = getRunExecCall(1);
+    expect(command).toBe(path.join(binDir, "agy"));
+    expect(args).toEqual([
+      "--sandbox",
+      "--add-dir",
+      path.dirname(realImagePath),
+      "--print",
+      expect.stringContaining(realImagePath),
+    ]);
+    expect(options).toEqual({
+      timeoutMs: 60_000,
+      maxBuffer: CLI_OUTPUT_MAX_BUFFER,
+      cwd: path.dirname(realImagePath),
+    });
   });
 
   it("uses CLI image understanding and preserves caption for commands", async () => {

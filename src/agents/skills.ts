@@ -25,6 +25,7 @@ export type {
   SkillEntry,
   SkillInstallSpec,
   SkillSnapshot,
+  SkillTelemetrySource,
   SkillsInstallPreferences,
 } from "./skills/types.js";
 export {

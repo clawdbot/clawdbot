@@ -83,25 +83,46 @@ pnpm qa:lab:watch
 rebuilds that bundle on change, and the browser auto-reloads when the QA Lab
 asset hash changes.
 
-For a local OpenTelemetry trace smoke, run:
+For a local OpenTelemetry signal smoke, run:
 
 ```bash
 pnpm qa:otel:smoke
 ```
 
-That script starts a local OTLP/HTTP trace receiver, runs the
-`otel-trace-smoke` QA scenario with the `diagnostics-otel` plugin enabled, then
-decodes the exported protobuf spans and asserts the release-critical shape:
+That script starts a local OTLP/HTTP receiver, runs the `otel-trace-smoke` QA
+scenario with the `diagnostics-otel` plugin enabled, then asserts traces,
+metrics, and logs are exported. It decodes the exported protobuf trace spans
+and checks the release-critical shape:
 `openclaw.run`, `openclaw.harness.run`, `openclaw.model.call`,
 `openclaw.context.assembled`, and `openclaw.message.delivery` must be present;
 model calls must not export `StreamAbandoned` on successful turns; raw diagnostic IDs and
-`openclaw.content.*` attributes must stay out of the trace. It writes
-`otel-smoke-summary.json` next to the QA suite artifacts.
+`openclaw.content.*` attributes must stay out of the trace. The raw OTLP
+payloads must not contain the prompt sentinel, response sentinel, or QA session
+key. It writes `otel-smoke-summary.json` next to the QA suite artifacts.
+
+For the protected Prometheus scrape smoke, run:
+
+```bash
+pnpm qa:prometheus:smoke
+```
+
+That alias runs the `docker-prometheus-smoke` QA scenario with
+`diagnostics-prometheus` enabled, verifies unauthenticated scrapes are rejected,
+then checks the authenticated scrape includes release-critical metric families
+without prompt content, response content, raw diagnostic identifiers, auth
+tokens, or local paths.
+
+To run both observability smokes back to back, use:
+
+```bash
+pnpm qa:observability:smoke
+```
 
 Observability QA stays source-checkout only. The npm tarball intentionally omits
 QA Lab, so package Docker release lanes do not run `qa` commands. Use
-`pnpm qa:otel:smoke` from a built source checkout when changing diagnostics
-instrumentation.
+`pnpm qa:otel:smoke`, `pnpm qa:prometheus:smoke`, or
+`pnpm qa:observability:smoke` from a built source checkout when changing
+diagnostics instrumentation.
 
 For a transport-real Matrix smoke lane, run:
 
@@ -164,6 +185,25 @@ expensive install/build step and fails closed when the workspace is not ready.
 With `--gateway-setup`, Mantis leaves a persistent OpenClaw Slack gateway
 running inside the VM on port `38973`; without it, the command runs the normal
 bot-to-bot Slack QA lane and exits after artifact capture.
+
+To prove native Slack approval UI with desktop evidence, run the Mantis approval
+checkpoint mode:
+
+```bash
+pnpm openclaw qa mantis slack-desktop-smoke \
+  --approval-checkpoints \
+  --credential-source convex \
+  --credential-role maintainer
+```
+
+This mode is mutually exclusive with `--gateway-setup`. It runs the Slack
+approval scenarios, rejects non-approval scenario ids, waits at each pending and
+resolved approval state, renders the observed Slack API message into
+`approval-checkpoints/<scenario>-pending.png` and
+`approval-checkpoints/<scenario>-resolved.png`, then fails if any checkpoint,
+message evidence, acknowledgement, or rendered screenshot is missing or empty.
+Cold CI leases may still show Slack sign-in in `slack-desktop-smoke.png`; the
+approval checkpoint images are the visual proof for this lane.
 
 The operator checklist, GitHub workflow dispatch command, evidence-comment
 contract, hydrate-mode decision table, timing interpretation, and failure
@@ -234,6 +274,9 @@ the worker count, or `--concurrency 1` for serial execution.
 Use `--pack personal-agent` to run the personal assistant benchmark pack. The
 pack selector is additive with repeated `--scenario` flags: explicit scenarios
 run first, then pack scenarios run in pack order with duplicates removed.
+Use `--pack observability` when a custom QA runner already supplies the
+OpenTelemetry collector setup and wants the OpenTelemetry and Prometheus
+diagnostics smoke scenarios selected together.
 The command exits non-zero when any scenario fails. Use `--allow-failures` when
 you want artifacts without a failing exit code.
 Live runs forward the supported QA auth inputs that are practical for the
@@ -400,8 +443,13 @@ Required env when `--credential-source env`:
 Optional:
 
 - `OPENCLAW_QA_SLACK_CAPTURE_CONTENT=1` keeps message bodies in observed-message artifacts.
+- `OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_DIR` enables visual approval
+  checkpoints for Mantis. The runner writes `<scenario>.pending.json` and
+  `<scenario>.resolved.json`, then waits for matching `.ack.json` files.
+- `OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_TIMEOUT_MS` overrides the checkpoint
+  acknowledgement timeout. The default is `120000`.
 
-Scenarios (`extensions/qa-lab/src/live-transports/slack/slack-live.runtime.ts:39`):
+Scenarios (`extensions/qa-lab/src/live-transports/slack/slack-live.runtime.ts`):
 
 - `slack-canary`
 - `slack-mention-gating`
@@ -410,12 +458,22 @@ Scenarios (`extensions/qa-lab/src/live-transports/slack/slack-live.runtime.ts:39
 - `slack-restart-resume`
 - `slack-thread-follow-up`
 - `slack-thread-isolation`
+- `slack-approval-exec-native` - opt-in native Slack exec approval scenario.
+  Requests an exec approval through the gateway, verifies the Slack message has
+  native approval buttons, resolves it, and verifies the resolved Slack update.
+- `slack-approval-plugin-native` - opt-in native Slack plugin approval scenario.
+  Enables exec and plugin approval forwarding together so plugin events are not
+  suppressed by exec approval routing, then verifies the same pending/resolved
+  native Slack UI path.
 
 Output artifacts:
 
 - `slack-qa-report.md`
 - `slack-qa-summary.json`
 - `slack-qa-observed-messages.json` - bodies redacted unless `OPENCLAW_QA_SLACK_CAPTURE_CONTENT=1`.
+- `approval-checkpoints/` - only when Mantis sets
+  `OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_DIR`; contains checkpoint JSON,
+  acknowledgement JSON, and pending/resolved screenshots.
 
 #### Setting up the Slack workspace
 

@@ -45,6 +45,7 @@ export function createMediaGenerateProviderListActionResult<
   providers: TProvider[];
   emptyText: string;
   cfg?: OpenClawConfig;
+  workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
   listModes: (provider: TProvider) => string[];
@@ -72,6 +73,7 @@ export function createMediaGenerateProviderListActionResult<
           providers: params.providers,
           provider,
           cfg: params.cfg,
+          workspaceDir: params.workspaceDir,
           agentDir: params.agentDir,
           authStore: params.authStore,
         }),

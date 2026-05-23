@@ -975,6 +975,121 @@ describe("TelegramPollingSession", () => {
     });
   });
 
+  it("dead-letters missing harness failures so later same-lane updates can drain", async () => {
+    await withTempSpool(async (tempDir) => {
+      const abort = new AbortController();
+      const log = vi.fn();
+      const events: string[] = [];
+      await writeSpooledTestUpdates(tempDir, [
+        topicUpdate(42, 10, "missing harness turn"),
+        topicUpdate(43, 11, "other topic turn"),
+        topicUpdate(44, 10, "same topic after missing harness"),
+      ]);
+
+      const { runPromise, stopWorker } = startIsolatedIngressSession({
+        abort,
+        spoolDir: tempDir,
+        log,
+        drainIntervalMs: 10,
+        handleUpdate: async (update) => {
+          if (update.update_id === 42) {
+            events.push("topic10:first");
+            const err = new Error(
+              'Requested agent harness "missing-harness-85470" is not registered.',
+            );
+            err.name = "MissingAgentHarnessError";
+            throw err;
+          }
+          if (update.update_id === 43) {
+            events.push("topic11");
+            return;
+          }
+          if (update.update_id === 44) {
+            events.push("topic10:second");
+            abort.abort();
+          }
+        },
+      });
+
+      await vi.waitFor(() =>
+        expect(events).toEqual(["topic10:first", "topic11", "topic10:second"]),
+      );
+      await vi.waitFor(async () => expect(await pendingUpdateIds(tempDir, "all")).toEqual([]));
+      expect(await failedUpdateIds(tempDir)).toEqual([42]);
+      expectLogIncludes(log, "spooled update 42 failed with non-retryable missing-agent-harness");
+      expectLogIncludes(log, "dead-lettered");
+      expectLogExcludes(log, "spooled update 42 failed; keeping for retry");
+      stopWorker();
+      await runPromise;
+    });
+  });
+
+  it("dead-letters wrapped missing harness failures", async () => {
+    await withTempSpool(async (tempDir) => {
+      const abort = new AbortController();
+      const log = vi.fn();
+      await writeSpooledTestUpdates(tempDir, [topicUpdate(42, 10, "wrapped missing harness")]);
+
+      const { runPromise, stopWorker } = startIsolatedIngressSession({
+        abort,
+        spoolDir: tempDir,
+        log,
+        drainIntervalMs: 10,
+        handleUpdate: async () => {
+          const cause = new Error(
+            'Requested agent harness "missing-harness-85470" is not registered.',
+          );
+          const err = new Error("Agent turn failed", { cause });
+          throw err;
+        },
+      });
+
+      await vi.waitFor(async () => expect(await failedUpdateIds(tempDir)).toEqual([42]));
+      expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
+      expectLogIncludes(log, "spooled update 42 failed with non-retryable missing-agent-harness");
+      expectLogExcludes(log, "spooled update 42 failed; keeping for retry");
+      abort.abort();
+      stopWorker();
+      await runPromise;
+    });
+  });
+
+  it("dead-letters grammY BotError-wrapped missing harness failures", async () => {
+    await withTempSpool(async (tempDir) => {
+      const abort = new AbortController();
+      const log = vi.fn();
+      await writeSpooledTestUpdates(tempDir, [
+        topicUpdate(42, 10, "bot error wrapped missing harness"),
+      ]);
+
+      const { runPromise, stopWorker } = startIsolatedIngressSession({
+        abort,
+        spoolDir: tempDir,
+        log,
+        drainIntervalMs: 10,
+        handleUpdate: async () => {
+          const cause = new Error(
+            'Requested agent harness "missing-harness-85470" is not registered.',
+          );
+          const middlewareError = new Error("Agent turn failed", { cause });
+          const botError = Object.assign(new Error("Error in middleware: Agent turn failed"), {
+            name: "BotError",
+            error: middlewareError,
+          });
+          throw botError;
+        },
+      });
+
+      await vi.waitFor(async () => expect(await failedUpdateIds(tempDir)).toEqual([42]));
+      expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
+      expectLogIncludes(log, "spooled update 42 failed with non-retryable missing-agent-harness");
+      expectLogExcludes(log, "spooled update 42 failed; keeping for retry");
+      abort.abort();
+      stopWorker();
+      await runPromise;
+    });
+  });
+
   it("recovers restart processing claims before draining later same-lane updates", async () => {
     await withTempSpool(async (tempDir) => {
       const abort = new AbortController();

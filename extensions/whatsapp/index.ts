@@ -10,7 +10,7 @@ export default defineBundledChannelEntry({
     exportName: "whatsappPlugin",
   },
   runtime: {
-    specifier: "./runtime-api.js",
+    specifier: "./runtime-setter-api.js",
     exportName: "setWhatsAppRuntime",
   },
 });

@@ -55,7 +55,25 @@ function lowCardinalityLabel(value: string | undefined, fallback = "unknown"): s
     return fallback;
   }
   const redacted = redactSensitiveText(value.trim());
+  const redactedLower = redacted.toLowerCase();
+  if (redactedLower.startsWith("agent:") || redactedLower.includes(":agent:")) {
+    return fallback;
+  }
   return LOW_CARDINALITY_VALUE_RE.test(redacted) ? redacted : fallback;
+}
+
+function lowCardinalityQueueLaneLabel(value: string | undefined, fallback = "unknown"): string {
+  if (!value) {
+    return fallback;
+  }
+  const redacted = redactSensitiveText(value.trim());
+  const redactedLower = redacted.toLowerCase();
+  if (redactedLower.startsWith("agent:")) {
+    return fallback;
+  }
+  const scopedLaneIndex = redacted.indexOf(":");
+  const lane = scopedLaneIndex >= 0 ? redacted.slice(0, scopedLaneIndex) : redacted;
+  return LOW_CARDINALITY_VALUE_RE.test(lane) ? lane : fallback;
 }
 
 function numericValue(value: number | undefined): number | undefined {
@@ -316,6 +334,8 @@ function toolExecutionLabels(evt: {
   errorCategory?: string;
   paramsSummary?: { kind: string };
   toolName: string;
+  toolOwner?: string;
+  toolSource?: string;
   type: string;
 }): LabelSet {
   return {
@@ -326,6 +346,22 @@ function toolExecutionLabels(evt: {
     outcome: evt.type === "tool.execution.error" ? "error" : "completed",
     params_kind: lowCardinalityLabel(evt.paramsSummary?.kind),
     tool: lowCardinalityLabel(evt.toolName, "tool"),
+    tool_owner: lowCardinalityLabel(evt.toolOwner, "none"),
+    tool_source: lowCardinalityLabel(evt.toolSource, "core"),
+  };
+}
+
+function skillLabels(evt: {
+  activation: string;
+  agentId?: string;
+  skillName: string;
+  skillSource?: string;
+}): LabelSet {
+  return {
+    activation: lowCardinalityLabel(evt.activation, "unknown"),
+    agent: lowCardinalityLabel(evt.agentId),
+    skill: lowCardinalityLabel(evt.skillName, "skill"),
+    source: lowCardinalityLabel(evt.skillSource),
   };
 }
 
@@ -497,6 +533,9 @@ function recordDiagnosticEvent(
         toolExecutionLabels(evt),
       );
       return;
+    case "skill.used":
+      store.counter("openclaw_skill_used_total", "Skills used by agent runs.", skillLabels(evt));
+      return;
     case "harness.run.completed":
     case "harness.run.error":
       store.histogram(
@@ -643,7 +682,7 @@ function recordDiagnosticEvent(
         "openclaw_queue_lane_size",
         "Current diagnostic queue lane size.",
         {
-          lane: lowCardinalityLabel(evt.lane),
+          lane: lowCardinalityQueueLaneLabel(evt.lane),
         },
         numericValue(evt.queueSize),
       );
@@ -651,7 +690,7 @@ function recordDiagnosticEvent(
         store.histogram(
           "openclaw_queue_lane_wait_seconds",
           "Queue lane wait time in seconds.",
-          { lane: lowCardinalityLabel(evt.lane) },
+          { lane: lowCardinalityQueueLaneLabel(evt.lane) },
           seconds(evt.waitMs),
         );
       }

@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { statSync } from "node:fs";
 import { materializeWindowsSpawnProgram, resolveWindowsSpawnProgram } from "./windows-spawn.js";
 
 export type CliSpawnInvocation = {
@@ -8,10 +9,25 @@ export type CliSpawnInvocation = {
   windowsHide?: boolean;
 };
 
-export type QmdBinaryAvailability = {
-  available: boolean;
-  error?: string;
+export type QmdBinaryUnavailableReason = "binary" | "workspace-cwd";
+
+export type QmdBinaryUnavailable = {
+  available: false;
+  /**
+   * Optional for source compatibility with older plugin SDK callers that
+   * returned only `{ available: false, error }`.
+   */
+  reason?: QmdBinaryUnavailableReason;
+  error: string;
 };
+
+export type QmdBinaryAvailability = { available: true } | QmdBinaryUnavailable;
+
+export function resolveQmdBinaryUnavailableReason(
+  result: QmdBinaryUnavailable,
+): QmdBinaryUnavailableReason {
+  return result.reason ?? "binary";
+}
 
 export function resolveCliSpawnInvocation(params: {
   command: string;
@@ -45,7 +61,13 @@ export async function checkQmdBinaryAvailability(params: {
       packageName: "qmd",
     });
   } catch (err) {
-    return { available: false, error: formatQmdAvailabilityError(err) };
+    return { available: false, reason: "binary", error: formatQmdAvailabilityError(err) };
+  }
+
+  const cwd = params.cwd ?? process.cwd();
+  const cwdError = validateQmdProbeCwd(cwd);
+  if (cwdError) {
+    return cwdError;
   }
 
   return await new Promise((resolve) => {
@@ -64,7 +86,7 @@ export async function checkQmdBinaryAvailability(params: {
 
     const child = spawn(spawnInvocation.command, spawnInvocation.argv, {
       env: params.env,
-      cwd: params.cwd ?? process.cwd(),
+      cwd,
       shell: spawnInvocation.shell,
       windowsHide: spawnInvocation.windowsHide,
       stdio: "ignore",
@@ -73,12 +95,13 @@ export async function checkQmdBinaryAvailability(params: {
       child.kill("SIGKILL");
       finish({
         available: false,
+        reason: "binary",
         error: `spawn ${params.command} timed out after ${params.timeoutMs ?? 2_000}ms`,
       });
     }, params.timeoutMs ?? 2_000);
 
     child.once("error", (err) => {
-      finish({ available: false, error: formatQmdAvailabilityError(err) });
+      finish({ available: false, reason: "binary", error: formatQmdAvailabilityError(err) });
     });
     child.once("spawn", () => {
       didSpawn = true;
@@ -92,6 +115,33 @@ export async function checkQmdBinaryAvailability(params: {
       finish({ available: true });
     });
   });
+}
+
+function validateQmdProbeCwd(cwd: string): QmdBinaryAvailability | null {
+  try {
+    const stat = statSync(cwd);
+    if (!stat.isDirectory()) {
+      return {
+        available: false,
+        reason: "workspace-cwd",
+        error: `workspace directory is not a directory: ${cwd}`,
+      };
+    }
+    return null;
+  } catch (err) {
+    if (typeof err === "object" && err && "code" in err && err.code === "ENOENT") {
+      return {
+        available: false,
+        reason: "workspace-cwd",
+        error: `workspace directory missing: ${cwd}`,
+      };
+    }
+    return {
+      available: false,
+      reason: "workspace-cwd",
+      error: `workspace directory unavailable: ${cwd} (${formatQmdAvailabilityError(err)})`,
+    };
+  }
 }
 
 export async function runCliCommand(params: {

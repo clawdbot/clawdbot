@@ -30,6 +30,7 @@ Native companion apps for Windows are also planned; the Gateway is recommended v
 - GCP (Compute Engine): [GCP](/install/gcp)
 - Azure (Linux VM): [Azure](/install/azure)
 - exe.dev (VM + HTTPS proxy): [exe.dev](/install/exe-dev)
+- EasyRunner (Podman + Caddy): [EasyRunner](/platforms/easyrunner)
 
 ## Common links
 

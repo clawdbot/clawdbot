@@ -121,6 +121,11 @@ vi.mock("../auth-profiles.js", () => ({
 }));
 
 vi.mock("../model-auth.js", () => ({
+  hasUsableCustomProviderApiKey: (cfg?: OpenClawConfig, provider?: string) => {
+    const providerConfig = cfg?.models?.providers?.[provider ?? ""];
+    const apiKey = providerConfig?.apiKey;
+    return typeof apiKey === "string" && apiKey.trim().length > 0;
+  },
   resolveEnvApiKey: (provider: string) => {
     const envVarByProvider: Record<string, string[]> = {
       anthropic: ["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"],
@@ -1055,6 +1060,30 @@ describe("image tool implicit imageModel config", () => {
       };
       expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
         primary: "acme/vision-1",
+      });
+      expect(typeof createImageTool({ config: cfg, agentDir })?.execute).toBe("function");
+    });
+  });
+
+  it("pairs a custom provider when config declares its api key", async () => {
+    await withTempAgentDir(async (agentDir) => {
+      const cfg: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "hatchery-qwen3.6-plus/text-1" } } },
+        models: {
+          providers: {
+            "hatchery-qwen3.6-plus": {
+              baseUrl: "https://example.com",
+              apiKey: "sk-configured", // pragma: allowlist secret
+              models: [
+                makeModelDefinition("text-1", ["text"]),
+                makeModelDefinition("qwen3.6-plus", ["text", "image"]),
+              ],
+            },
+          },
+        },
+      };
+      expect(resolveImageModelConfigForTool({ cfg, agentDir })).toEqual({
+        primary: "hatchery-qwen3.6-plus/qwen3.6-plus",
       });
       expect(typeof createImageTool({ config: cfg, agentDir })?.execute).toBe("function");
     });

@@ -14,7 +14,10 @@ import {
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { checkQmdBinaryAvailability } from "../memory-host-sdk/engine-qmd.js";
+import {
+  checkQmdBinaryAvailability,
+  resolveQmdBinaryUnavailableReason,
+} from "../memory-host-sdk/engine-qmd.js";
 import { DEFAULT_LOCAL_MODEL } from "../memory-host-sdk/host/embedding-defaults.js";
 import { hasConfiguredMemorySecretInput } from "../memory-host-sdk/secret.js";
 import {
@@ -379,14 +382,22 @@ export async function noteMemorySearchHealth(
       cwd: resolveAgentWorkspaceDir(cfg, agentId),
     });
     if (!qmdCheck.available) {
+      const workspaceProbeFailed = resolveQmdBinaryUnavailableReason(qmdCheck) === "workspace-cwd";
+      const probeError = qmdCheck.error.trim();
       note(
         [
-          `QMD memory backend is configured, but the qmd binary could not be started (${backendConfig.qmd?.command ?? "qmd"}).`,
-          qmdCheck.error ? `Probe error: ${qmdCheck.error}` : null,
+          workspaceProbeFailed
+            ? "QMD memory backend is configured, but the agent workspace directory could not be used for the QMD startup probe."
+            : `QMD memory backend is configured, but the qmd binary could not be started (${backendConfig.qmd?.command ?? "qmd"}).`,
+          probeError ? `Probe error: ${probeError}` : null,
           "",
           "Fix (pick one):",
-          "- Install the supported QMD package: npm install -g @tobilu/qmd (or bun install -g @tobilu/qmd)",
-          `- Set an explicit binary path: ${formatCliCommand("openclaw config set memory.qmd.command /absolute/path/to/qmd")}`,
+          workspaceProbeFailed
+            ? "- Create the missing workspace directory or update the agent workspace path to an existing directory."
+            : "- Install the supported QMD package: npm install -g @tobilu/qmd (or bun install -g @tobilu/qmd)",
+          workspaceProbeFailed
+            ? "- Verify the resolved workspace path for the affected agent before retrying."
+            : `- Set an explicit binary path: ${formatCliCommand("openclaw config set memory.qmd.command /absolute/path/to/qmd")}`,
           `- Or switch back to builtin memory: ${formatCliCommand("openclaw config set memory.backend builtin")}`,
           "",
           `Verify: ${formatCliCommand("openclaw memory status --deep")}`,

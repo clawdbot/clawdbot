@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   collectOverrideViolations,
@@ -8,6 +9,7 @@ import {
   normalizeNpmVersionDrift,
   parsePnpmPackageKey,
   parseLockPackagePath,
+  shrinkwrapPackageDirsForChangedPaths,
 } from "../../scripts/generate-npm-shrinkwrap.mjs";
 
 describe("generate-npm-shrinkwrap", () => {
@@ -143,5 +145,34 @@ describe("generate-npm-shrinkwrap", () => {
         },
       },
     });
+  });
+
+  it("targets changed publishable plugin shrinkwraps", () => {
+    expect(
+      shrinkwrapPackageDirsForChangedPaths([
+        "extensions/acpx/package.json",
+        "extensions/acpx/npm-shrinkwrap.json",
+      ]).map((packageDir) => path.relative(process.cwd(), packageDir)),
+    ).toEqual(["extensions/acpx"]);
+  });
+
+  it("falls back to every shrinkwrap when lockfile ownership is ambiguous", () => {
+    const packageDirs = shrinkwrapPackageDirsForChangedPaths(["pnpm-lock.yaml"]).map((packageDir) =>
+      path.relative(process.cwd(), packageDir),
+    );
+
+    expect(packageDirs).toContain("");
+    expect(packageDirs).toContain("extensions/acpx");
+  });
+
+  it("falls back to every shrinkwrap when mixed lockfile changes do not map to packages", () => {
+    const packageDirs = shrinkwrapPackageDirsForChangedPaths([
+      "extensions/acpx/package.json",
+      "pnpm-lock.yaml",
+    ]).map((packageDir) => path.relative(process.cwd(), packageDir));
+
+    expect(packageDirs).toContain("");
+    expect(packageDirs).toContain("extensions/acpx");
+    expect(packageDirs.length).toBeGreaterThan(1);
   });
 });

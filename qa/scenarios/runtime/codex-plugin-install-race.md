@@ -40,7 +40,7 @@ steps:
           expr: plugin.createCodexPluginInstallGate()
       - set: turn
         value:
-          expr: "gate.runFirstTurnAfterInstall({ inputTokens: 17, run: () => config.expectedText })"
+          expr: "({ promise: gate.runFirstTurnAfterInstall({ inputTokens: 17, run: () => config.expectedText }) })"
       - assert:
           expr: "JSON.stringify(gate.events) === JSON.stringify(['agent-turn:waiting-for-codex-plugin'])"
           message:
@@ -48,7 +48,7 @@ steps:
       - call: gate.markInstalled
       - set: completed
         value:
-          expr: await turn
+          expr: await turn.promise
       - assert:
           expr: "completed.text === config.expectedText && completed.responseCount === config.expectedResponseCount && completed.inputTokens === 17"
           message:

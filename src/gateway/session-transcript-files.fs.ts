@@ -152,6 +152,7 @@ export function archiveSessionTranscripts(opts: {
    * This prevents maintenance operations from mutating paths outside the agent sessions dir.
    */
   restrictToStoreDir?: boolean;
+  onArchiveError?: (err: unknown, sourcePath: string) => void;
 }): string[] {
   return archiveSessionTranscriptsDetailed(opts).map((entry) => entry.archivedPath);
 }
@@ -167,6 +168,11 @@ export function archiveSessionTranscriptsDetailed(opts: {
    * This prevents maintenance operations from mutating paths outside the agent sessions dir.
    */
   restrictToStoreDir?: boolean;
+  /**
+   * Invoked when an individual transcript candidate fails to archive. The
+   * caller decides whether to log, warn-deliver, or escalate.
+   */
+  onArchiveError?: (err: unknown, sourcePath: string) => void;
 }): ArchivedSessionTranscript[] {
   const archived: ArchivedSessionTranscript[] = [];
   const storeDir =
@@ -194,8 +200,8 @@ export function archiveSessionTranscriptsDetailed(opts: {
         sourcePath: candidatePath,
         archivedPath: archiveFileOnDisk(candidatePath, opts.reason),
       });
-    } catch {
-      // Best-effort.
+    } catch (err) {
+      opts.onArchiveError?.(err, candidatePath);
     }
   }
   return archived;

@@ -5,13 +5,14 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
+import { listChangedPathsFromGit, listStagedChangedPaths } from "./changed-lanes.mjs";
 
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const EXACT_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/u;
 
 function usage() {
   return [
-    "Usage: node scripts/generate-npm-shrinkwrap.mjs [--check] [--all|--plugins|--package-dir <dir>]",
+    "Usage: node scripts/generate-npm-shrinkwrap.mjs [--check] [--all|--plugins|--changed|--package-dir <dir>] [--base <ref>] [--head <ref>] [--staged]",
     "  default: root package only",
   ].join("\n");
 }
@@ -81,11 +82,10 @@ function readPnpmLockPackages() {
   );
 }
 
-function readPnpmLockSingleVersionOverrides() {
-  const lockfile = parseYaml(readFileSync(path.join(ROOT_DIR, "pnpm-lock.yaml"), "utf8"));
+function collectPnpmLockPackageVersions(lockfile) {
   const packages = lockfile?.packages;
   if (!packages || typeof packages !== "object" || Array.isArray(packages)) {
-    throw new Error("pnpm-lock.yaml is missing package resolution data.");
+    return new Map();
   }
   const versionsByName = new Map();
   for (const packageKey of Object.keys(packages)) {
@@ -97,12 +97,25 @@ function readPnpmLockSingleVersionOverrides() {
     versions.add(parsed.version);
     versionsByName.set(parsed.name, versions);
   }
+  return versionsByName;
+}
+
+function readPnpmLockSingleVersionOverrides() {
+  const lockfile = parseYaml(readFileSync(path.join(ROOT_DIR, "pnpm-lock.yaml"), "utf8"));
+  const versionsByName = collectPnpmLockPackageVersions(lockfile);
+  if (versionsByName.size === 0) {
+    throw new Error("pnpm-lock.yaml is missing package resolution data.");
+  }
   return Object.fromEntries(
     [...versionsByName.entries()]
       .filter(([, versions]) => versions.size === 1)
       .map(([name, versions]) => [name, [...versions][0]])
       .toSorted(([left], [right]) => left.localeCompare(right)),
   );
+}
+
+function setKey(values) {
+  return [...values].toSorted((left, right) => left.localeCompare(right)).join("\0");
 }
 
 function mergeOverrides(packageOverrides, workspaceOverrides, pnpmLockOverrides) {
@@ -113,9 +126,7 @@ function mergeOverrides(packageOverrides, workspaceOverrides, pnpmLockOverrides)
   ]) {
     const current = merged[name];
     if (current !== undefined && JSON.stringify(current) !== JSON.stringify(spec)) {
-      throw new Error(
-        `package.json overrides.${name} conflicts with pnpm lock policy for ${name}`,
-      );
+      throw new Error(`package.json overrides.${name} conflicts with pnpm lock policy for ${name}`);
     }
     merged[name] = spec;
   }
@@ -394,21 +405,86 @@ function listPublishablePluginPackageDirs() {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+function shrinkwrapPackageDirsForChangedPaths(changedPaths) {
+  const packageDirs = new Set();
+  const publishablePluginPackageDirs = new Set(listPublishablePluginPackageDirs());
+  let hasAmbiguousDependencyPolicyChange = false;
+  let hasLockfileChange = false;
+
+  for (const rawPath of changedPaths) {
+    const changedPath = String(rawPath ?? "")
+      .trim()
+      .replaceAll("\\", "/")
+      .replace(/^\.\/+/u, "");
+    if (!changedPath) {
+      continue;
+    }
+    if (changedPath === "package.json" || changedPath === "npm-shrinkwrap.json") {
+      packageDirs.add(ROOT_DIR);
+      continue;
+    }
+    const extensionMatch = changedPath.match(
+      /^(extensions\/[^/]+)\/(?:package\.json|npm-shrinkwrap\.json)$/u,
+    );
+    if (extensionMatch && publishablePluginPackageDirs.has(extensionMatch[1])) {
+      packageDirs.add(path.resolve(ROOT_DIR, extensionMatch[1]));
+      continue;
+    }
+    if (changedPath === "pnpm-lock.yaml") {
+      hasLockfileChange = true;
+      continue;
+    }
+    if (
+      changedPath === "pnpm-workspace.yaml" ||
+      changedPath === "scripts/generate-npm-shrinkwrap.mjs"
+    ) {
+      hasAmbiguousDependencyPolicyChange = true;
+    }
+  }
+
+  if (hasAmbiguousDependencyPolicyChange) {
+    return [
+      ROOT_DIR,
+      ...listPublishablePluginPackageDirs().map((dir) => path.resolve(ROOT_DIR, dir)),
+    ];
+  }
+
+  if (hasLockfileChange) {
+    return [
+      ROOT_DIR,
+      ...listPublishablePluginPackageDirs().map((dir) => path.resolve(ROOT_DIR, dir)),
+    ];
+  }
+  return [...packageDirs].toSorted((left, right) =>
+    packageLabel(left).localeCompare(packageLabel(right)),
+  );
+}
+
 function resolvePackageDirs(args) {
   const packageDirs = [];
   const check = args.includes("--check");
   const all = args.includes("--all");
   const plugins = args.includes("--plugins");
+  const changed = args.includes("--changed");
+  const staged = args.includes("--staged");
   const packageDirIndex = args.indexOf("--package-dir");
-  if (packageDirIndex !== -1 && (all || plugins)) {
-    throw new Error("--package-dir cannot be combined with --all or --plugins.");
+  const baseIndex = args.indexOf("--base");
+  const headIndex = args.indexOf("--head");
+  if (packageDirIndex !== -1 && (all || plugins || changed)) {
+    throw new Error("--package-dir cannot be combined with --all, --plugins, or --changed.");
   }
-  if (all && plugins) {
-    throw new Error("--all cannot be combined with --plugins.");
+  if ([all, plugins, changed].filter(Boolean).length > 1) {
+    throw new Error("--all, --plugins, and --changed cannot be combined.");
   }
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
-    if (arg === "--check" || arg === "--all" || arg === "--plugins") {
+    if (
+      arg === "--check" ||
+      arg === "--all" ||
+      arg === "--plugins" ||
+      arg === "--changed" ||
+      arg === "--staged"
+    ) {
       continue;
     }
     if (arg === "--package-dir") {
@@ -420,7 +496,19 @@ function resolvePackageDirs(args) {
       index += 1;
       continue;
     }
+    if (arg === "--base" || arg === "--head") {
+      const value = args[index + 1];
+      if (!value || value.startsWith("--")) {
+        throw new Error(`${arg} requires a git ref.`);
+      }
+      index += 1;
+      continue;
+    }
     throw new Error(usage());
+  }
+
+  if (!changed && (baseIndex !== -1 || headIndex !== -1 || staged)) {
+    throw new Error("--base, --head, and --staged require --changed.");
   }
 
   if (all) {
@@ -436,6 +524,20 @@ function resolvePackageDirs(args) {
     return {
       check,
       packageDirs: listPublishablePluginPackageDirs().map((dir) => path.resolve(ROOT_DIR, dir)),
+    };
+  }
+  if (changed) {
+    const base = baseIndex === -1 ? "origin/main" : args[baseIndex + 1];
+    const head = headIndex === -1 ? "HEAD" : args[headIndex + 1];
+    const changedPaths = staged
+      ? listStagedChangedPaths()
+      : listChangedPathsFromGit({
+          base,
+          head,
+        });
+    return {
+      check,
+      packageDirs: shrinkwrapPackageDirsForChangedPaths(changedPaths),
     };
   }
   return { check, packageDirs: packageDirs.length > 0 ? packageDirs : [ROOT_DIR] };
@@ -469,6 +571,10 @@ function updateOrCheckPackage(packageDir, check) {
 
 function main() {
   const { check, packageDirs } = resolvePackageDirs(process.argv.slice(2));
+  if (packageDirs.length === 0) {
+    process.stdout.write("No shrinkwrap-managed package changes detected.\n");
+    return;
+  }
   for (const packageDir of packageDirs) {
     updateOrCheckPackage(packageDir, check);
   }
@@ -492,4 +598,7 @@ export {
   normalizeNpmVersionDrift,
   parsePnpmPackageKey,
   parseLockPackagePath,
+  packageJsonForShrinkwrap,
+  readShrinkwrapOverrides,
+  shrinkwrapPackageDirsForChangedPaths,
 };

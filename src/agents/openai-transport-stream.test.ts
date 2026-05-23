@@ -5722,6 +5722,105 @@ describe("openai transport stream", () => {
     ).toStrictEqual([]);
   });
 
+  it("accumulates arguments for parallel tool calls with split indices", async () => {
+    const model = {
+      id: "kimi-for-coding",
+      name: "Kimi for Coding",
+      api: "openai-completions",
+      provider: "kimi-code",
+      baseUrl: "https://api.moonshot.cn",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    const output = createAssistantOutput(model);
+
+    const mockChunks = [
+      {
+        id: "chatcmpl-parallel",
+        object: "chat.completion.chunk" as const,
+        created: 1,
+        model: model.id,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "call_0",
+                  type: "function",
+                  function: { name: "exec", arguments: "" },
+                },
+                {
+                  index: 1,
+                  id: "call_1",
+                  type: "function",
+                  function: { name: "read", arguments: "" },
+                },
+              ],
+            },
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-parallel",
+        object: "chat.completion.chunk" as const,
+        created: 1,
+        model: model.id,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [{ index: 0, function: { arguments: '{"command":"ls"}' } }],
+            },
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-parallel",
+        object: "chat.completion.chunk" as const,
+        created: 1,
+        model: model.id,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [{ index: 1, function: { arguments: '{"path":"/tmp"}' } }],
+            },
+            logprobs: null,
+            finish_reason: "tool_calls" as const,
+          },
+        ],
+      },
+    ] as const;
+
+    await testing.processOpenAICompletionsStream(streamChunks(mockChunks), output, model, {
+      push() {},
+    });
+
+    expect(output.content).toHaveLength(2);
+    expectRecordFields(output.content[0], {
+      type: "toolCall",
+      id: "call_0",
+      name: "exec",
+      arguments: { command: "ls" },
+    });
+    expectRecordFields(output.content[1], {
+      type: "toolCall",
+      id: "call_1",
+      name: "read",
+      arguments: { path: "/tmp" },
+    });
+  });
+
   it("handles reasoning_details from OpenRouter/Qwen3 in completions stream", async () => {
     const model = {
       id: "openrouter/qwen/qwen3-235b-a22b",

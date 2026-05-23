@@ -64,7 +64,7 @@ export function buildStatusAgentsValue(params: {
   const pending =
     params.agentStatus.bootstrapPendingCount > 0
       ? `${params.agentStatus.bootstrapPendingCount} bootstrap file${params.agentStatus.bootstrapPendingCount === 1 ? "" : "s"} present`
-      : "no bootstrap files";
+      : "no workspaces bootstrapping";
   const def = params.agentStatus.agents.find((a) => a.id === params.agentStatus.defaultId);
   const defActive =
     def?.lastActiveAgeMs != null ? params.formatTimeAgo(def.lastActiveAgeMs) : "unknown";

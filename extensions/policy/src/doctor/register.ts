@@ -34,6 +34,8 @@ const CHECK_IDS = {
   policyGatewayRemoteEnabled: "policy/gateway-remote-enabled",
   policyGatewayHttpEndpointEnabled: "policy/gateway-http-endpoint-enabled",
   policyGatewayHttpUrlFetchUnrestricted: "policy/gateway-http-url-fetch-unrestricted",
+  policyAgentsWorkspaceAccessDenied: "policy/agents-workspace-access-denied",
+  policyAgentsToolNotDenied: "policy/agents-tool-not-denied",
   policySecretsUnmanagedProvider: "policy/secrets-unmanaged-provider",
   policySecretsDeniedProviderSource: "policy/secrets-denied-provider-source",
   policySecretsInsecureProvider: "policy/secrets-insecure-provider",
@@ -65,6 +67,8 @@ export const POLICY_CHECK_IDS = [
   CHECK_IDS.policyGatewayRemoteEnabled,
   CHECK_IDS.policyGatewayHttpEndpointEnabled,
   CHECK_IDS.policyGatewayHttpUrlFetchUnrestricted,
+  CHECK_IDS.policyAgentsWorkspaceAccessDenied,
+  CHECK_IDS.policyAgentsToolNotDenied,
   CHECK_IDS.policySecretsUnmanagedProvider,
   CHECK_IDS.policySecretsDeniedProviderSource,
   CHECK_IDS.policySecretsInsecureProvider,
@@ -83,6 +87,13 @@ const SUPPORTED_TOOL_METADATA = ["risk", "sensitivity", "owner"] as const;
 const SUPPORTED_AUTH_PROFILE_METADATA = ["provider", "mode"] as const;
 const SUPPORTED_AUTH_PROFILE_MODES = ["api_key", "aws-sdk", "oauth", "token"] as const;
 const SUPPORTED_GATEWAY_HTTP_ENDPOINTS = ["chatCompletions", "responses"] as const;
+const SUPPORTED_AGENT_WORKSPACE_DENY_TOOLS = [
+  "exec",
+  "process",
+  "write",
+  "edit",
+  "apply_patch",
+] as const;
 
 let registered = false;
 const policyEvaluationCache = new WeakMap<HealthCheckContext, Promise<PolicyEvaluation>>();
@@ -126,6 +137,8 @@ export function registerPolicyDoctorChecks(host?: PolicyDoctorRegistrationHost):
   registerHealthCheck(policyGatewayRemoteEnabledCheck);
   registerHealthCheck(policyGatewayHttpEndpointEnabledCheck);
   registerHealthCheck(policyGatewayHttpUrlFetchUnrestrictedCheck);
+  registerHealthCheck(policyAgentsWorkspaceAccessDeniedCheck);
+  registerHealthCheck(policyAgentsToolNotDeniedCheck);
   registerHealthCheck(policySecretsUnmanagedProviderCheck);
   registerHealthCheck(policySecretsDeniedProviderSourceCheck);
   registerHealthCheck(policySecretsInsecureProviderCheck);
@@ -361,6 +374,26 @@ const policyGatewayHttpUrlFetchUnrestrictedCheck: HealthCheck = {
   },
 };
 
+const policyAgentsWorkspaceAccessDeniedCheck: HealthCheck = {
+  id: CHECK_IDS.policyAgentsWorkspaceAccessDenied,
+  kind: "plugin",
+  description: "Agent sandbox workspace access matches policy.",
+  source: "policy",
+  async detect(ctx) {
+    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyAgentsWorkspaceAccessDenied);
+  },
+};
+
+const policyAgentsToolNotDeniedCheck: HealthCheck = {
+  id: CHECK_IDS.policyAgentsToolNotDenied,
+  kind: "plugin",
+  description: "Agent workspace mutation/runtime tools are denied when policy requires it.",
+  source: "policy",
+  async detect(ctx) {
+    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyAgentsToolNotDenied);
+  },
+};
+
 const policySecretsUnmanagedProviderCheck: HealthCheck = {
   id: CHECK_IDS.policySecretsUnmanagedProvider,
   kind: "plugin",
@@ -469,6 +502,7 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
   const policyPath = policyDisplayName(ctx);
   let evidence: PolicyEvidence = collectPolicyEvidence(ctx.cfg as Record<string, unknown>, {
     includeGatewayExposure: false,
+    includeAgentWorkspace: false,
     includeSecrets: false,
     includeAuthProfiles: false,
   });
@@ -558,17 +592,20 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
   const includeSecrets = policyHasSecretRules(policy);
   const includeAuthProfiles = policyHasAuthProfileRules(policy);
   const includeGatewayExposure = policyHasGatewayRules(policy);
+  const includeAgentWorkspace = policyHasAgentWorkspaceRules(policy);
   if (requiredMetadata.size > 0) {
     const toolsFile = await readWorkspaceFile(ctx, "TOOLS.md");
     evidence = await collectPolicyEvidence(ctx.cfg as Record<string, unknown>, {
       toolsRaw: toolsFile?.raw ?? "",
       includeGatewayExposure,
+      includeAgentWorkspace,
       includeSecrets,
       includeAuthProfiles,
     });
   } else {
     evidence = collectPolicyEvidence(ctx.cfg as Record<string, unknown>, {
       includeGatewayExposure,
+      includeAgentWorkspace,
       includeSecrets,
       includeAuthProfiles,
     });
@@ -579,8 +616,9 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
     ...mcpServerFindings(policy, policyFile.ocDocName, evidence),
     ...modelProviderFindings(policy, policyFile.ocDocName, evidence),
     ...networkFindings(policy, policyFile.ocDocName, evidence),
-    ...secretAuthProvenanceFindings(policy, policyFile.displayName, policyFile.ocDocName, evidence),
     ...gatewayExposureFindings(policy, policyFile.ocDocName, evidence),
+    ...agentWorkspaceFindings(policy, policyFile.displayName, policyFile.ocDocName, evidence),
+    ...secretAuthProvenanceFindings(policy, policyFile.displayName, policyFile.ocDocName, evidence),
     ...authMetadataRequirementFindings,
     ...metadataRequirementFindings,
   ];
@@ -960,7 +998,92 @@ function policyContainerShapeFindings(
   if (gatewayFinding !== undefined) {
     return [gatewayFinding];
   }
+  const agentsFinding = agentsPolicyShapeFinding(policy.agents, {
+    policyDocName,
+    policyPath,
+  });
+  if (agentsFinding !== undefined) {
+    return [agentsFinding];
+  }
   return [];
+}
+
+function agentsPolicyShapeFinding(
+  value: unknown,
+  params: {
+    readonly policyDocName: string;
+    readonly policyPath: string;
+  },
+): HealthFinding | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!isRecord(value)) {
+    return policyShapeFinding(
+      params.policyPath,
+      `oc://${params.policyDocName}/agents`,
+      `${params.policyPath} agents must be an object.`,
+      `Fix ${params.policyPath} so agents is an object.`,
+    );
+  }
+  if (value.workspace !== undefined && !isRecord(value.workspace)) {
+    return policyShapeFinding(
+      params.policyPath,
+      `oc://${params.policyDocName}/agents/workspace`,
+      `${params.policyPath} agents.workspace must be an object.`,
+      `Fix ${params.policyPath} so agents.workspace is an object.`,
+    );
+  }
+  const workspace = isRecord(value.workspace) ? value.workspace : {};
+  const allowedAccess = workspace.allowedAccess;
+  if (allowedAccess !== undefined && !Array.isArray(allowedAccess)) {
+    return policyShapeFinding(
+      params.policyPath,
+      `oc://${params.policyDocName}/agents/workspace/allowedAccess`,
+      `${params.policyPath} agents.workspace.allowedAccess must be an array.`,
+      'Use workspace access values such as ["none", "ro"].',
+    );
+  }
+  if (Array.isArray(allowedAccess)) {
+    const invalidIndex = allowedAccess.findIndex(
+      (entry) => entry !== "none" && entry !== "ro" && entry !== "rw",
+    );
+    if (invalidIndex >= 0) {
+      return policyShapeFinding(
+        params.policyPath,
+        `oc://${params.policyDocName}/agents/workspace/allowedAccess/#${invalidIndex}`,
+        `${params.policyPath} agents.workspace.allowedAccess[${invalidIndex}] must be none, ro, or rw.`,
+        'Use workspace access values such as ["none", "ro"].',
+      );
+    }
+  }
+  const denyTools = workspace.denyTools;
+  if (denyTools !== undefined && !Array.isArray(denyTools)) {
+    return policyShapeFinding(
+      params.policyPath,
+      `oc://${params.policyDocName}/agents/workspace/denyTools`,
+      `${params.policyPath} agents.workspace.denyTools must be an array.`,
+      'Use tool ids such as ["exec", "process", "write", "edit", "apply_patch"].',
+    );
+  }
+  if (Array.isArray(denyTools)) {
+    const invalidIndex = denyTools.findIndex(
+      (entry) =>
+        typeof entry !== "string" ||
+        !SUPPORTED_AGENT_WORKSPACE_DENY_TOOLS.includes(
+          entry.trim() as (typeof SUPPORTED_AGENT_WORKSPACE_DENY_TOOLS)[number],
+        ),
+    );
+    if (invalidIndex >= 0) {
+      return policyShapeFinding(
+        params.policyPath,
+        `oc://${params.policyDocName}/agents/workspace/denyTools/#${invalidIndex}`,
+        `${params.policyPath} agents.workspace.denyTools[${invalidIndex}] must be a supported agent workspace tool id.`,
+        `Use supported tool ids: ${SUPPORTED_AGENT_WORKSPACE_DENY_TOOLS.join(", ")}.`,
+      );
+    }
+  }
+  return undefined;
 }
 
 function gatewayPolicyShapeFinding(
@@ -1615,6 +1738,97 @@ function gatewayHttpUrlFetchFindings(
     });
 }
 
+function agentWorkspaceFindings(
+  policy: unknown,
+  policyPath: string,
+  policyDocName: string,
+  evidence: PolicyEvidence,
+): readonly HealthFinding[] {
+  if (
+    agentsPolicyShapeFinding(isRecord(policy) ? policy.agents : undefined, {
+      policyDocName,
+      policyPath,
+    }) !== undefined
+  ) {
+    return [];
+  }
+  return [
+    ...agentWorkspaceAccessFindings(policy, policyDocName, evidence),
+    ...agentWorkspaceToolDenyFindings(policy, policyDocName, evidence),
+  ];
+}
+
+function agentWorkspaceAccessFindings(
+  policy: unknown,
+  policyDocName: string,
+  evidence: PolicyEvidence,
+): readonly HealthFinding[] {
+  const allowed = new Set(readStringList(policy, ["agents", "workspace", "allowedAccess"]));
+  if (allowed.size === 0) {
+    return [];
+  }
+  return (evidence.agentWorkspace ?? [])
+    .filter(
+      (entry) =>
+        entry.kind === "workspaceAccess" &&
+        entry.value !== undefined &&
+        (entry.sandboxEnabled !== true || !allowed.has(entry.value)),
+    )
+    .map((entry): HealthFinding => {
+      const label = entry.agentId === undefined ? "agents.defaults" : `agent '${entry.agentId}'`;
+      const sandboxDisabled = entry.sandboxEnabled !== true;
+      const observed = sandboxDisabled
+        ? `sandbox mode '${entry.sandboxMode ?? "off"}'`
+        : `sandbox workspaceAccess '${entry.value ?? ""}'`;
+      const ocPath = sandboxDisabled ? (entry.sandboxModeSource ?? entry.source) : entry.source;
+      return {
+        checkId: CHECK_IDS.policyAgentsWorkspaceAccessDenied,
+        severity: "error",
+        message: `${label} ${observed} is not allowed by policy.`,
+        source: "policy",
+        path: "openclaw config",
+        ocPath,
+        target: ocPath,
+        requirement: `oc://${policyDocName}/agents/workspace/allowedAccess`,
+        fixHint: "Enable sandbox mode with workspaceAccess none/ro or update policy after review.",
+      };
+    });
+}
+
+function agentWorkspaceToolDenyFindings(
+  policy: unknown,
+  policyDocName: string,
+  evidence: PolicyEvidence,
+): readonly HealthFinding[] {
+  const requiredDeniedTools = new Set(readStringList(policy, ["agents", "workspace", "denyTools"]));
+  if (requiredDeniedTools.size === 0) {
+    return [];
+  }
+  return (evidence.agentWorkspace ?? [])
+    .filter(
+      (entry) =>
+        entry.kind === "toolDeny" &&
+        entry.tool !== undefined &&
+        requiredDeniedTools.has(entry.tool) &&
+        entry.denied !== true,
+    )
+    .map((entry): HealthFinding => {
+      const label = entry.agentId === undefined ? "agents.defaults" : `agent '${entry.agentId}'`;
+      return {
+        checkId: CHECK_IDS.policyAgentsToolNotDenied,
+        severity: "error",
+        message: `${label} does not deny required tool '${entry.tool ?? ""}'.`,
+        source: "policy",
+        path: "openclaw config",
+        ocPath: entry.source,
+        target: entry.source,
+        requirement: `oc://${policyDocName}/agents/workspace/denyTools`,
+        fixHint:
+          "Add the tool to tools.deny or agents.list[].tools.deny, or update policy after review.",
+      };
+    });
+}
+
 function secretAuthProvenanceFindings(
   policy: unknown,
   policyPath: string,
@@ -1677,6 +1891,16 @@ function policyHasGatewayRules(policy: unknown): boolean {
     (isRecord(gateway.remote) && gateway.remote.allow !== undefined) ||
     (isRecord(gateway.http) &&
       (gateway.http.denyEndpoints !== undefined || gateway.http.requireUrlAllowlists !== undefined))
+  );
+}
+
+function policyHasAgentWorkspaceRules(policy: unknown): boolean {
+  return (
+    isRecord(policy) &&
+    isRecord(policy.agents) &&
+    isRecord(policy.agents.workspace) &&
+    (policy.agents.workspace.allowedAccess !== undefined ||
+      policy.agents.workspace.denyTools !== undefined)
   );
 }
 

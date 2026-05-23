@@ -1,3 +1,4 @@
+import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -11,10 +12,12 @@ import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-sessio
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { setPluginToolMeta } from "../plugins/tools.js";
 import {
   runBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./pi-tools.before-tool-call.js";
+import { createCanonicalFixtureSkill } from "./skills.test-helpers.js";
 import { CRITICAL_THRESHOLD } from "./tool-loop-detection.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -98,6 +101,21 @@ describe("before_tool_call loop detection behavior", () => {
       if (evt.type.startsWith("tool.execution.")) {
         emitted.push(evt);
       }
+    });
+    const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
+    try {
+      await run(emitted, flush);
+    } finally {
+      stop();
+    }
+  }
+
+  async function withDiagnosticEvents(
+    run: (emitted: DiagnosticEventPayload[], flush: () => Promise<void>) => Promise<void>,
+  ) {
+    const emitted: DiagnosticEventPayload[] = [];
+    const stop = onInternalDiagnosticEvent((evt) => {
+      emitted.push(evt);
     });
     const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
     try {
@@ -475,6 +493,220 @@ describe("before_tool_call loop detection behavior", () => {
       expect(typeof completed.durationMs).toBe("number");
       expect(JSON.stringify(emitted)).not.toContain("sk-1234567890abcdef1234567890abcdef");
       expect(JSON.stringify(emitted)).not.toContain("pwd");
+    });
+  });
+
+  it("classifies plugin and MCP tool execution diagnostics with bounded owner labels", async () => {
+    const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "ok" }] });
+    const rawTool = { name: "mcp_search", execute } as unknown as AnyAgentTool;
+    setPluginToolMeta(rawTool, { pluginId: "bundle-mcp", optional: false });
+    const tool = wrapToolWithBeforeToolCallHook(rawTool, {
+      agentId: "main",
+      sessionKey: "session-key",
+      loopDetection: { enabled: false },
+    });
+
+    await withToolExecutionEvents(async (emitted, flush) => {
+      await tool.execute("tool-call-mcp", { query: "status" }, undefined, undefined);
+      await flush();
+
+      expectEventFields(emitted[0], {
+        type: "tool.execution.started",
+        toolName: "mcp_search",
+        toolSource: "mcp",
+        toolOwner: "bundle-mcp",
+      });
+      expectEventFields(emitted[1], {
+        type: "tool.execution.completed",
+        toolSource: "mcp",
+        toolOwner: "bundle-mcp",
+      });
+    });
+  });
+
+  it("emits skill usage diagnostics when a run reads a known skill instruction file", async () => {
+    const workspaceDir = path.join("/tmp", "openclaw-skill-usage");
+    const skillBaseDir = path.join(workspaceDir, ".agents", "skills", "demo-skill");
+    const skillFilePath = path.join(skillBaseDir, "SKILL.md");
+    const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "skill" }] });
+    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+      agentId: "main",
+      sessionKey: "session-key",
+      sessionId: "session-id",
+      runId: "run-1",
+      workspaceDir,
+      skillsSnapshot: {
+        prompt: "",
+        skills: [{ name: "demo-skill" }],
+        resolvedSkills: [
+          createCanonicalFixtureSkill({
+            name: "demo-skill",
+            description: "Demo",
+            filePath: skillFilePath,
+            baseDir: skillBaseDir,
+            source: "workspace",
+          }),
+        ],
+      },
+      loopDetection: { enabled: false },
+    });
+
+    await withDiagnosticEvents(async (emitted, flush) => {
+      await tool.execute(
+        "tool-call-skill-read",
+        { path: path.join(".agents", "skills", "demo-skill", "SKILL.md") },
+        undefined,
+        undefined,
+      );
+      await flush();
+
+      expect(emitted.map((evt) => evt.type)).toEqual([
+        "tool.execution.started",
+        "skill.used",
+        "tool.execution.completed",
+      ]);
+      expectEventFields(emitted[1], {
+        type: "skill.used",
+        agentId: "main",
+        runId: "run-1",
+        sessionKey: "session-key",
+        sessionId: "session-id",
+        skillName: "demo-skill",
+        skillSource: "workspace",
+        activation: "read",
+        toolName: "read",
+        toolCallId: "tool-call-skill-read",
+      });
+      expect(JSON.stringify(emitted)).not.toContain("SKILL.md");
+      expect(JSON.stringify(emitted)).not.toContain(skillBaseDir);
+    });
+  });
+
+  it("matches home-compacted skill instruction paths from prompts", async () => {
+    const skillBaseDir = path.join(os.homedir(), ".openclaw", "skills", "home-skill");
+    const skillFilePath = path.join(skillBaseDir, "SKILL.md");
+    const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "skill" }] });
+    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+      agentId: "main",
+      sessionKey: "session-key",
+      workspaceDir: "/tmp/openclaw-workspace",
+      skillsSnapshot: {
+        prompt: "",
+        skills: [{ name: "home-skill" }],
+        resolvedSkills: [
+          createCanonicalFixtureSkill({
+            name: "home-skill",
+            description: "Home skill",
+            filePath: skillFilePath,
+            baseDir: skillBaseDir,
+            source: "openclaw-managed",
+          }),
+        ],
+      },
+      loopDetection: { enabled: false },
+    });
+
+    await withDiagnosticEvents(async (emitted, flush) => {
+      await tool.execute(
+        "tool-call-home-skill",
+        { path: "~/.openclaw/skills/home-skill/SKILL.md" },
+        undefined,
+        undefined,
+      );
+      await flush();
+
+      expectEventFields(emitted[1], {
+        type: "skill.used",
+        skillName: "home-skill",
+        skillSource: "workspace",
+        activation: "read",
+        toolName: "read",
+      });
+      expect(JSON.stringify(emitted)).not.toContain(os.homedir());
+    });
+  });
+
+  it("does not count unused read params as skill usage", async () => {
+    const workspaceDir = path.join("/tmp", "openclaw-skill-unused-param");
+    const skillBaseDir = path.join(workspaceDir, ".agents", "skills", "demo-skill");
+    const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "readme" }] });
+    const tool = wrapToolWithBeforeToolCallHook({ name: "read", execute } as any, {
+      agentId: "main",
+      sessionKey: "session-key",
+      workspaceDir,
+      skillsSnapshot: {
+        prompt: "",
+        skills: [{ name: "demo-skill" }],
+        resolvedSkills: [
+          createCanonicalFixtureSkill({
+            name: "demo-skill",
+            description: "Demo",
+            filePath: path.join(skillBaseDir, "SKILL.md"),
+            baseDir: skillBaseDir,
+            source: "workspace",
+          }),
+        ],
+      },
+      loopDetection: { enabled: false },
+    });
+
+    await withDiagnosticEvents(async (emitted, flush) => {
+      await tool.execute(
+        "tool-call-unused-skill-param",
+        {
+          path: "README.md",
+          file: path.join(".agents", "skills", "demo-skill", "SKILL.md"),
+        },
+        undefined,
+        undefined,
+      );
+      await flush();
+
+      expect(emitted.map((evt) => evt.type)).toEqual([
+        "tool.execution.started",
+        "tool.execution.completed",
+      ]);
+    });
+  });
+
+  it("emits skill usage diagnostics for command-dispatched skill tools", async () => {
+    const execute = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "sent" }] });
+    const tool = wrapToolWithBeforeToolCallHook({ name: "message", execute } as any, {
+      agentId: "main",
+      sessionKey: "session-key",
+      sessionId: "session-id",
+      skillCommand: {
+        commandName: "set_profile",
+        skillName: "matrix-profile",
+        skillSource: "workspace",
+        toolName: "message",
+      },
+      loopDetection: { enabled: false },
+    });
+
+    await withDiagnosticEvents(async (emitted, flush) => {
+      await tool.execute(
+        "tool-call-skill-command",
+        { command: "display name", commandName: "set_profile", skillName: "matrix-profile" },
+        undefined,
+        undefined,
+      );
+      await flush();
+
+      expect(emitted.map((evt) => evt.type)).toEqual([
+        "tool.execution.started",
+        "skill.used",
+        "tool.execution.completed",
+      ]);
+      expectEventFields(emitted[1], {
+        type: "skill.used",
+        skillName: "matrix-profile",
+        skillSource: "workspace",
+        activation: "command",
+        toolName: "message",
+        toolCallId: "tool-call-skill-command",
+      });
+      expect(JSON.stringify(emitted)).not.toContain("display name");
     });
   });
 

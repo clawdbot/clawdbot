@@ -1,9 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
-import { collectBundledPluginBuildEntries } from "./bundled-plugin-build-entries.mjs";
+import {
+  NON_PACKAGED_BUNDLED_PLUGIN_DIRS,
+  collectBundledPluginBuildEntries,
+} from "./bundled-plugin-build-entries.mjs";
 
 const MANIFEST_NAMES = ["openclaw.plugin.json", "openclaw.plugin.json5"];
+const ANSI_PATTERN = new RegExp(String.raw`\u001B\[[0-9;]*m`, "gu");
 
 function isPlainObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -154,6 +158,9 @@ function discoverBundledPluginManifests(repoRoot) {
       const pluginDir = path.join(extensionsDir, entry.name);
       const manifestName = MANIFEST_NAMES.find((name) => fs.existsSync(path.join(pluginDir, name)));
       if (!manifestName) {
+        return [];
+      }
+      if (NON_PACKAGED_BUNDLED_PLUGIN_DIRS.has(entry.name)) {
         return [];
       }
       const manifestPath = path.join(pluginDir, manifestName);
@@ -350,6 +357,14 @@ function buildGauntletPrebuildEnv(env, options = {}) {
   };
 }
 
+function detectCommandDiagnosticFailure(stdout, stderr) {
+  const output = `${stdout}\n${stderr}`.replace(ANSI_PATTERN, "");
+  if (/^\[plugins\]\s+\S+\s+failed to load from\s+/mu.test(output)) {
+    return "plugin-load-failure";
+  }
+  return null;
+}
+
 function collectGatewayCpuObservations(params) {
   const observations = [];
   for (const result of params.startup?.results ?? []) {
@@ -392,6 +407,7 @@ export {
   collectGatewayCpuObservations,
   collectMetricObservations,
   buildGauntletPrebuildEnv,
+  detectCommandDiagnosticFailure,
   discoverBundledPluginManifests,
   schemaHasRequiredFields,
   selectPluginEntries,

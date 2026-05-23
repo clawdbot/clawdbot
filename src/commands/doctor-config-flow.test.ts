@@ -1098,59 +1098,63 @@ vi.mock("./doctor/shared/preview-warnings.js", () => {
     ];
   }
 
-  return {
-    collectDoctorPreviewWarnings: vi.fn(
-      async ({
-        cfg,
-      }: {
-        cfg: {
-          channels?: Record<string, unknown>;
-          plugins?: { enabled?: boolean; entries?: Record<string, { enabled?: boolean }> };
-        };
-        doctorFixCommand: string;
-      }) => {
-        const warnings: string[] = [];
-        const telegram = asRecord(cfg.channels?.telegram);
-        if (telegram) {
-          const telegramBlocked =
-            cfg.plugins?.enabled === false || cfg.plugins?.entries?.telegram?.enabled === false;
-          if (telegramBlocked) {
-            warnings.push(
-              cfg.plugins?.enabled === false
-                ? "- channels.telegram: channel is configured, but plugins.enabled=false blocks channel plugins globally. Fix plugin enablement before relying on setup guidance for this channel."
-                : '- channels.telegram: channel is configured, but plugin "telegram" is disabled by plugins.entries.telegram.enabled=false. Fix plugin enablement before relying on setup guidance for this channel.',
-            );
-          } else {
+  async function collectWarnings({
+    cfg,
+  }: {
+    cfg: {
+      channels?: Record<string, unknown>;
+      plugins?: { enabled?: boolean; entries?: Record<string, { enabled?: boolean }> };
+    };
+    doctorFixCommand: string;
+  }): Promise<string[]> {
+    const warnings: string[] = [];
+    const telegram = asRecord(cfg.channels?.telegram);
+    if (telegram) {
+      const telegramBlocked =
+        cfg.plugins?.enabled === false || cfg.plugins?.entries?.telegram?.enabled === false;
+      if (telegramBlocked) {
+        warnings.push(
+          cfg.plugins?.enabled === false
+            ? "- channels.telegram: channel is configured, but plugins.enabled=false blocks channel plugins globally. Fix plugin enablement before relying on setup guidance for this channel."
+            : '- channels.telegram: channel is configured, but plugin "telegram" is disabled by plugins.entries.telegram.enabled=false. Fix plugin enablement before relying on setup guidance for this channel.',
+        );
+      } else {
+        warnings.push(
+          ...telegramFirstTimeWarnings({
+            account: telegram,
+            prefix: "channels.telegram",
+          }),
+        );
+        const accounts = asRecord(telegram.accounts);
+        for (const [accountId, accountRaw] of Object.entries(accounts ?? {})) {
+          const account = asRecord(accountRaw);
+          if (account) {
             warnings.push(
               ...telegramFirstTimeWarnings({
-                account: telegram,
-                prefix: "channels.telegram",
+                account,
+                parent: telegram,
+                prefix: `channels.telegram.accounts.${accountId}`,
               }),
             );
-            const accounts = asRecord(telegram.accounts);
-            for (const [accountId, accountRaw] of Object.entries(accounts ?? {})) {
-              const account = asRecord(accountRaw);
-              if (account) {
-                warnings.push(
-                  ...telegramFirstTimeWarnings({
-                    account,
-                    parent: telegram,
-                    prefix: `channels.telegram.accounts.${accountId}`,
-                  }),
-                );
-              }
-            }
           }
         }
-        const imessage = asRecord(cfg.channels?.imessage);
-        if (imessage?.groupPolicy === "allowlist" && !hasStringEntries(imessage.groupAllowFrom)) {
-          warnings.push(
-            '- channels.imessage.groupPolicy is "allowlist" but groupAllowFrom is empty — this channel does not fall back to allowFrom, so all group messages will be silently dropped.',
-          );
-        }
-        return warnings;
-      },
-    ),
+      }
+    }
+    const imessage = asRecord(cfg.channels?.imessage);
+    if (imessage?.groupPolicy === "allowlist" && !hasStringEntries(imessage.groupAllowFrom)) {
+      warnings.push(
+        '- channels.imessage.groupPolicy is "allowlist" but groupAllowFrom is empty — this channel does not fall back to allowFrom, so all group messages will be silently dropped.',
+      );
+    }
+    return warnings;
+  }
+
+  return {
+    collectDoctorPreviewNotes: vi.fn(async (params) => ({
+      infoNotes: [],
+      warningNotes: await collectWarnings(params),
+    })),
+    collectDoctorPreviewWarnings: vi.fn(collectWarnings),
   };
 });
 

@@ -34,9 +34,8 @@ skill roots. In Codex harness mode, local app-server launches use isolated
 per-agent Codex homes, so skills in the operator's personal `~/.codex/skills`
 are not loaded implicitly. Codex-native `.agents` discovery uses inherited
 `HOME` separately; OpenClaw's own skill roots above already include
-`~/.agents/skills`. Use `openclaw migrate codex --dry-run` to inventory skills
-from the Codex home, then `openclaw migrate codex` to choose skill directories
-with an interactive
+`~/.agents/skills`. Use `openclaw migrate plan codex` to inventory skills from
+the Codex home, then `openclaw migrate codex` to choose skill directories with an interactive
 checkbox prompt before copying them into the current OpenClaw agent workspace.
 For non-interactive runs, repeat `--skill <name>` for the exact skills to copy.
 

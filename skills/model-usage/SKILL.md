@@ -28,7 +28,7 @@ metadata:
 
 Get per-model usage cost from CodexBar's local cost logs. Supports "current model" (most recent daily entry) or "all models" summaries for Codex or Claude.
 
-TODO: add Linux CLI support guidance once CodexBar CLI install path is documented for Linux.
+Live CodexBar CLI invocation is currently documented for macOS only. The bundled Python summarizer is portable: if you already have exported CodexBar JSON, `--input` mode works anywhere Python is available.
 
 ## Quick start
 
@@ -51,6 +51,8 @@ python {baseDir}/scripts/model_usage.py --provider claude --mode all --format js
 ## Inputs
 
 - Default: runs `codexbar cost --format json --provider <codex|claude>`.
+- macOS: use the bundled CodexBar CLI install path above for live local usage reads.
+- Linux/other platforms: use `--input` with exported CodexBar JSON until this skill documents a supported local CodexBar install path for that platform.
 - File or stdin:
 
 ```bash

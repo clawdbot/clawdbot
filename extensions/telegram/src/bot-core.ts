@@ -372,6 +372,7 @@ export function createTelegramBotCore(
     groupAllowFrom,
     replyToMode,
     textLimit,
+    mediaMaxBytes,
     useAccessGroups,
     nativeEnabled,
     nativeSkillsEnabled,

@@ -112,6 +112,7 @@ export function archiveSessionTranscriptsForSession(params: {
   sessionFile?: string;
   agentId?: string;
   reason: "reset" | "deleted";
+  onArchiveError?: (err: unknown, sourcePath: string) => void;
 }): string[] {
   return archiveSessionTranscriptsForSessionDetailed(params).map((entry) => entry.archivedPath);
 }
@@ -122,6 +123,7 @@ export function archiveSessionTranscriptsForSessionDetailed(params: {
   sessionFile?: string;
   agentId?: string;
   reason: "reset" | "deleted";
+  onArchiveError?: (err: unknown, sourcePath: string) => void;
 }): ArchivedSessionTranscript[] {
   if (!params.sessionId) {
     return [];
@@ -132,6 +134,7 @@ export function archiveSessionTranscriptsForSessionDetailed(params: {
     sessionFile: params.sessionFile,
     agentId: params.agentId,
     reason: params.reason,
+    onArchiveError: params.onArchiveError,
   });
 }
 

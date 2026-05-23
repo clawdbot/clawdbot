@@ -194,6 +194,32 @@ describe("resolveMemoryBackendConfig", () => {
     expect(custom.path).toBe(path.resolve("/workspace/root", "notes"));
   });
 
+  it("normalizes direct file qmd paths to escaped exact-file patterns", async () => {
+    const workspaceDir = await createFixtureDir("direct-file-path");
+    const notesPath = path.join(workspaceDir, "notes{a,b}[1].md");
+    await fs.writeFile(notesPath, "# Notes\n", "utf8");
+
+    const cfg = {
+      agents: {
+        defaults: { workspace: workspaceDir },
+        list: [{ id: "main", workspace: workspaceDir }],
+      },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          paths: [{ path: "notes{a,b}[1].md", name: "direct-note", pattern: "**/*.md" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+    const custom = resolved.qmd?.collections.find((c) => c.name.startsWith("direct-note"));
+    expect(custom).toMatchObject({
+      path: workspaceDir,
+      pattern: String.raw`notes\{a,b\}\[1\].md`,
+    });
+  });
+
   it("scopes qmd collection names per agent", () => {
     const cfg = {
       agents: {

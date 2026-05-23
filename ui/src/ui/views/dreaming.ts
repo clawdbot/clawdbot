@@ -5,6 +5,7 @@ import type {
   DreamingEntry,
   WikiImportInsights,
   WikiMemoryPalace,
+  WikiMemoryPalaceItem,
 } from "../controllers/dreaming.ts";
 import { toSanitizedMarkdownHtml } from "../markdown.ts";
 
@@ -521,6 +522,14 @@ function toggleExpandedCard(bucket: Set<string>, key: string, requestUpdate?: ()
     bucket.add(key);
   }
   requestUpdate?.();
+}
+
+function handleMemoryPalaceCardClick(item: WikiMemoryPalaceItem, props: DreamingProps): void {
+  if (item.kind === "report") {
+    void openWikiPreview(item.pagePath, props);
+    return;
+  }
+  toggleExpandedCard(expandedPalaceCards, item.pagePath, props.onRequestUpdate);
 }
 
 async function openWikiPreview(lookup: string, props: DreamingProps): Promise<void> {
@@ -1180,8 +1189,7 @@ function renderMemoryPalaceSection(props: DreamingProps) {
             <article
               class="dreams-diary__insight-card dreams-diary__insight-card--clickable"
               data-palace-page=${item.pagePath}
-              @click=${() =>
-                toggleExpandedCard(expandedPalaceCards, item.pagePath, props.onRequestUpdate)}
+              @click=${() => handleMemoryPalaceCardClick(item, props)}
             >
               <div class="dreams-diary__insight-topline">
                 <div class="dreams-diary__insight-title">${item.title}</div>

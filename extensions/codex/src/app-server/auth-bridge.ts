@@ -414,6 +414,9 @@ async function resolveLoginParamsForCredential(
   credential: AuthProfileCredential,
   params: { agentDir: string; forceOAuthRefresh: boolean; config?: AuthProfileOrderConfig },
 ): Promise<CodexLoginAccountParams | undefined> {
+  // Runtime honors the persisted auth profile type. Shape-based remediation
+  // belongs at credential entry time so request handling does not preemptively
+  // reject opaque provider credentials.
   if (credential.type === "api_key") {
     const resolved = await resolveApiKeyForProfile({
       store: ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false }),

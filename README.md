@@ -92,7 +92,7 @@ Works with npm, pnpm, or bun.
 
 - **[OpenAI](https://openai.com/)** (ChatGPT/Codex)
 
-Model note: while many providers and models are supported, prefer a current flagship model from the provider you trust and already use. See [Onboarding](https://docs.openclaw.ai/start/onboarding).
+Model note: while many providers and models are supported, prefer a current flagship model from the provider you trust and already use. See [Onboarding](https://docs.openclaw.ai/start/wizard).
 
 ## Install (recommended)
 
@@ -113,11 +113,23 @@ Runtime: **Node 24 (recommended) or Node 22.19+**.
 
 Full beginner guide (auth, pairing, channels): [Getting started](https://docs.openclaw.ai/start/getting-started)
 
+Recommended daemon mode:
+
 ```bash
 openclaw onboard --install-daemon
+openclaw gateway status
+```
 
+Foreground/debug mode:
+
+```bash
+openclaw gateway stop
 openclaw gateway --port 18789 --verbose
+```
 
+Send a test message or ask the assistant after either startup mode is running:
+
+```bash
 # Send a message
 openclaw message send --target +1234567890 --message "Hello from OpenClaw"
 

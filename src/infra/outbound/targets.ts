@@ -34,6 +34,7 @@ export type HeartbeatTarget = OutboundChannel;
 export type OutboundTarget = {
   channel: OutboundChannel;
   to?: string;
+  chatType?: ChatType;
   reason?: string;
   accountId?: string;
   threadId?: string | number;
@@ -236,6 +237,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
   return {
     channel: resolvedTarget.channel,
     to: resolved.to,
+    chatType: deliveryChatType,
     reason,
     accountId: effectiveAccountId,
     // Heartbeats normally avoid inheriting session reply-thread IDs, but some

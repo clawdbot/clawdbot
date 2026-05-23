@@ -35,6 +35,8 @@ type OtlpResourceSpans = {
   scopeSpans?: OtlpScopeSpans[];
 };
 
+type OtlpSignal = "logs" | "metrics" | "traces";
+
 type CliOptions = {
   outputDir: string;
   providerMode: string;
@@ -46,9 +48,12 @@ type CliOptions = {
 
 type CapturedRequest = {
   path: string;
+  signal: OtlpSignal;
   bytes: number;
   status: number;
   spanCount: number;
+  metricCount: number;
+  logCount: number;
 };
 
 type CapturedSpan = {
@@ -57,13 +62,29 @@ type CapturedSpan = {
   attributes: Record<string, string | number | boolean | string[]>;
 };
 
+type CapturedMetric = {
+  name: string;
+};
+
+type CapturedLogRecord = {
+  body: string | number | boolean | string[];
+};
+
 const DEFAULT_SCENARIO_ID = "otel-trace-smoke";
+const OTLP_SIGNAL_PATHS = new Map<string, OtlpSignal>([
+  ["/v1/traces", "traces"],
+  ["/v1/metrics", "metrics"],
+  ["/v1/logs", "logs"],
+]);
 const REQUIRED_SPAN_NAMES = [
   "openclaw.run",
   "openclaw.harness.run",
   "openclaw.model.call",
   "openclaw.context.assembled",
   "openclaw.message.delivery",
+] as const;
+const REQUIRED_METRIC_NAMES = [
+  "openclaw.harness.duration_ms",
 ] as const;
 const DISALLOWED_ATTRIBUTE_KEYS = new Set([
   "openclaw.runId",
@@ -73,13 +94,25 @@ const DISALLOWED_ATTRIBUTE_KEYS = new Set([
   "openclaw.sessionId",
   "openclaw.callId",
   "openclaw.toolCallId",
+  "openclaw.run_id",
+  "openclaw.chat_id",
+  "openclaw.message_id",
+  "openclaw.session_key",
+  "openclaw.session_id",
+  "openclaw.call_id",
+  "openclaw.tool_call_id",
 ]);
+const DISALLOWED_BODY_NEEDLES = [
+  "OTEL-QA-SECRET",
+  "OTEL-QA-OK",
+  "agent:qa:otel-trace-smoke",
+];
 
 function usage(): string {
   return `Usage: pnpm qa:otel:smoke [--output-dir <path>] [--provider-mode <mode>] [--scenario <id>] [--model <ref>] [--alt-model <ref>]
 
 Runs a QA-lab scenario with diagnostics-otel enabled against a local OTLP/HTTP
-trace receiver, then asserts the emitted span shape and privacy contract.
+receiver, then asserts the emitted signal shape and privacy contract.
 `;
 }
 
@@ -388,24 +421,165 @@ function decodeTraceRequest(body: Buffer): CapturedSpan[] {
   return spans;
 }
 
-function startLocalOtlpTraceReceiver() {
+function decodeMetric(message: Uint8Array): CapturedMetric | undefined {
+  const reader = new ProtoReader(message);
+  let name = "";
+  while (!reader.done()) {
+    const { field, wire } = reader.tag();
+    if (field === 1 && wire === 2) {
+      name = reader.string();
+    } else {
+      reader.skip(wire);
+    }
+  }
+  const normalizedName = name.trim();
+  return normalizedName ? { name: normalizedName } : undefined;
+}
+
+function decodeScopeMetrics(message: Uint8Array): CapturedMetric[] {
+  const reader = new ProtoReader(message);
+  const metrics: CapturedMetric[] = [];
+  while (!reader.done()) {
+    const { field, wire } = reader.tag();
+    if (field === 2 && wire === 2) {
+      const metric = decodeMetric(reader.bytes());
+      if (metric) {
+        metrics.push(metric);
+      }
+    } else {
+      reader.skip(wire);
+    }
+  }
+  return metrics;
+}
+
+function decodeResourceMetrics(message: Uint8Array): CapturedMetric[] {
+  const reader = new ProtoReader(message);
+  const metrics: CapturedMetric[] = [];
+  while (!reader.done()) {
+    const { field, wire } = reader.tag();
+    if (field === 2 && wire === 2) {
+      metrics.push(...decodeScopeMetrics(reader.bytes()));
+    } else {
+      reader.skip(wire);
+    }
+  }
+  return metrics;
+}
+
+function decodeMetricRequest(body: Buffer): CapturedMetric[] {
+  const reader = new ProtoReader(body);
+  const metrics: CapturedMetric[] = [];
+  while (!reader.done()) {
+    const { field, wire } = reader.tag();
+    if (field === 1 && wire === 2) {
+      metrics.push(...decodeResourceMetrics(reader.bytes()));
+    } else {
+      reader.skip(wire);
+    }
+  }
+  return metrics;
+}
+
+function decodeLogRecord(message: Uint8Array): CapturedLogRecord {
+  const reader = new ProtoReader(message);
+  let body: string | number | boolean | string[] = "";
+  while (!reader.done()) {
+    const { field, wire } = reader.tag();
+    if (field === 5 && wire === 2) {
+      body = normalizeOtlpValue(decodeAnyValue(reader.bytes()));
+    } else {
+      reader.skip(wire);
+    }
+  }
+  return { body };
+}
+
+function decodeScopeLogs(message: Uint8Array): CapturedLogRecord[] {
+  const reader = new ProtoReader(message);
+  const records: CapturedLogRecord[] = [];
+  while (!reader.done()) {
+    const { field, wire } = reader.tag();
+    if (field === 2 && wire === 2) {
+      records.push(decodeLogRecord(reader.bytes()));
+    } else {
+      reader.skip(wire);
+    }
+  }
+  return records;
+}
+
+function decodeResourceLogs(message: Uint8Array): CapturedLogRecord[] {
+  const reader = new ProtoReader(message);
+  const records: CapturedLogRecord[] = [];
+  while (!reader.done()) {
+    const { field, wire } = reader.tag();
+    if (field === 2 && wire === 2) {
+      records.push(...decodeScopeLogs(reader.bytes()));
+    } else {
+      reader.skip(wire);
+    }
+  }
+  return records;
+}
+
+function decodeLogRequest(body: Buffer): CapturedLogRecord[] {
+  const reader = new ProtoReader(body);
+  const records: CapturedLogRecord[] = [];
+  while (!reader.done()) {
+    const { field, wire } = reader.tag();
+    if (field === 1 && wire === 2) {
+      records.push(...decodeResourceLogs(reader.bytes()));
+    } else {
+      reader.skip(wire);
+    }
+  }
+  return records;
+}
+
+function startLocalOtlpReceiver() {
   const capturedRequests: CapturedRequest[] = [];
   const capturedSpans: CapturedSpan[] = [];
+  const capturedMetrics: CapturedMetric[] = [];
+  const capturedLogRecords: CapturedLogRecord[] = [];
+  const capturedBodyText: Partial<Record<OtlpSignal, string[]>> = {};
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
-    if (req.method !== "POST" || req.url !== "/v1/traces") {
+    if (req.method !== "POST" || !req.url) {
+      res.writeHead(404, { "content-type": "text/plain" });
+      res.end("not found");
+      return;
+    }
+    const requestPath = req.url;
+    const signal = OTLP_SIGNAL_PATHS.get(requestPath);
+    if (!signal) {
       res.writeHead(404, { "content-type": "text/plain" });
       res.end("not found");
       return;
     }
 
     const body = await readRequestBody(req);
-    const spans = decodeTraceRequest(body);
-    capturedSpans.push(...spans);
+    const spans = signal === "traces" ? decodeTraceRequest(body) : [];
+    const metrics = signal === "metrics" ? decodeMetricRequest(body) : [];
+    const logRecords = signal === "logs" ? decodeLogRequest(body) : [];
+    if (spans.length > 0) {
+      capturedSpans.push(...spans);
+    }
+    if (metrics.length > 0) {
+      capturedMetrics.push(...metrics);
+    }
+    if (logRecords.length > 0) {
+      capturedLogRecords.push(...logRecords);
+    }
+    capturedBodyText[signal] ??= [];
+    capturedBodyText[signal]?.push(body.toString("utf8"));
     capturedRequests.push({
-      path: req.url,
+      path: requestPath,
+      signal,
       bytes: body.length,
       status: 200,
       spanCount: spans.length,
+      metricCount: metrics.length,
+      logCount: logRecords.length,
     });
     res.writeHead(200, { "content-type": "application/x-protobuf" });
     res.end();
@@ -414,6 +588,9 @@ function startLocalOtlpTraceReceiver() {
   return {
     capturedRequests,
     capturedSpans,
+    capturedMetrics,
+    capturedLogRecords,
+    capturedBodyText,
     async listen(): Promise<number> {
       await new Promise<void>((resolve) => {
         server.listen(0, "127.0.0.1", resolve);
@@ -457,9 +634,9 @@ function buildQaEnv(port: number): NodeJS.ProcessEnv {
   delete env.OTEL_SDK_DISABLED;
   delete env.OTEL_TRACES_EXPORTER;
   delete env.OTEL_EXPORTER_OTLP_ENDPOINT;
-  delete env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT;
-  delete env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT;
   env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = `http://127.0.0.1:${port}/v1/traces`;
+  env.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT = `http://127.0.0.1:${port}/v1/metrics`;
+  env.OTEL_EXPORTER_OTLP_LOGS_ENDPOINT = `http://127.0.0.1:${port}/v1/logs`;
   env.OTEL_SERVICE_NAME = "openclaw-qa-lab-otel-smoke";
   env.OTEL_SEMCONV_STABILITY_OPT_IN = "gen_ai_latest_experimental";
   env.OPENCLAW_QA_SUITE_PROGRESS = env.OPENCLAW_QA_SUITE_PROGRESS ?? "1";
@@ -499,20 +676,59 @@ function collectAttributeKeys(spans: CapturedSpan[]): Set<string> {
   return keys;
 }
 
+function printableContext(value: string): string {
+  return value.replace(/[^\x20-\x7e]/g, ".");
+}
+
+function findNeedleContexts(body: string, needles: string[]): string[] {
+  const contexts: string[] = [];
+  for (const needle of needles) {
+    const index = body.indexOf(needle);
+    if (index < 0) {
+      continue;
+    }
+    const start = Math.max(0, index - 80);
+    const end = Math.min(body.length, index + needle.length + 80);
+    contexts.push(printableContext(body.slice(start, end)).replaceAll(needle, "[needle]"));
+  }
+  return contexts;
+}
+
+function capturedValueKind(value: string | number | boolean | string[]): string {
+  return Array.isArray(value) ? "array" : typeof value;
+}
+
 function assertSmoke(params: {
   childExitCode: number;
   spans: CapturedSpan[];
+  metrics: CapturedMetric[];
+  logRecords: CapturedLogRecord[];
   requests: CapturedRequest[];
+  bodyText: Partial<Record<OtlpSignal, string[]>>;
 }) {
   const failures: string[] = [];
+  const leakContexts: Partial<Record<OtlpSignal, string[]>> = {};
   if (params.childExitCode !== 0) {
     failures.push(`qa suite exited with ${params.childExitCode}`);
   }
-  if (params.requests.length === 0) {
-    failures.push("no OTLP trace requests were received");
+  for (const signal of ["traces", "metrics", "logs"] as const) {
+    const requests = params.requests.filter((request) => request.signal === signal);
+    if (requests.length === 0) {
+      failures.push(`no OTLP ${signal} requests were received`);
+    }
+    const emptyRequests = requests.filter((request) => request.bytes === 0);
+    if (emptyRequests.length > 0) {
+      failures.push(`empty OTLP ${signal} request received`);
+    }
   }
   if (params.spans.length === 0) {
     failures.push("no OTLP trace spans were decoded");
+  }
+  if (params.metrics.length === 0) {
+    failures.push("no OTLP metrics were decoded");
+  }
+  if (params.logRecords.length === 0) {
+    failures.push("no OTLP log records were decoded");
   }
 
   const spanNames = new Set(params.spans.map((span) => span.name));
@@ -520,6 +736,20 @@ function assertSmoke(params: {
     if (!spanNames.has(name)) {
       failures.push(`missing required span ${name}`);
     }
+  }
+  const metricNames = new Set(params.metrics.map((metric) => metric.name));
+  for (const name of REQUIRED_METRIC_NAMES) {
+    if (!metricNames.has(name)) {
+      failures.push(`missing required metric ${name}`);
+    }
+  }
+  const rawLogBodies = params.logRecords
+    .map((record) => record.body)
+    .filter((body) => body !== "log");
+  if (rawLogBodies.length > 0) {
+    failures.push(
+      `OTLP log records exported ${rawLogBodies.length} non-placeholder bodies`,
+    );
   }
 
   const attributeKeys = collectAttributeKeys(params.spans);
@@ -553,14 +783,33 @@ function assertSmoke(params: {
     failures.push("StreamAbandoned leaked into OTEL attributes");
   }
 
+  for (const signal of ["traces", "metrics", "logs"] as const) {
+    const signalBodies = (params.bodyText[signal] ?? []).join("\n");
+    const leakedNeedles = DISALLOWED_BODY_NEEDLES.filter((needle) =>
+      signalBodies.includes(needle),
+    );
+    if (leakedNeedles.length > 0) {
+      leakContexts[signal] = findNeedleContexts(signalBodies, leakedNeedles);
+      failures.push(`OTLP ${signal} payload leaked content: ${leakedNeedles.join(", ")}`);
+    }
+  }
+
   return {
     passed: failures.length === 0,
     failures,
     spanNames: [...spanNames].toSorted(),
+    metricNames: [...metricNames].toSorted(),
+    logRecordCount: params.logRecords.length,
     modelSpanCount: modelSpans.length,
     modelErrorSpanCount: modelErrorSpans.length,
     disallowedAttributeKeys: disallowed,
     contentAttributeKeys: contentKeys,
+    leakContexts,
+    signalRequestCounts: {
+      traces: params.requests.filter((request) => request.signal === "traces").length,
+      metrics: params.requests.filter((request) => request.signal === "metrics").length,
+      logs: params.requests.filter((request) => request.signal === "logs").length,
+    },
   };
 }
 
@@ -572,10 +821,10 @@ async function main() {
   }
 
   await mkdir(options.outputDir, { recursive: true });
-  const receiver = startLocalOtlpTraceReceiver();
+  const receiver = startLocalOtlpReceiver();
   const port = await receiver.listen();
   process.stdout.write(
-    `qa-otel-smoke: local OTLP trace receiver listening on http://127.0.0.1:${port}/v1/traces\n`,
+    `qa-otel-smoke: local OTLP receiver listening on http://127.0.0.1:${port}\n`,
   );
 
   let childExitCode = 1;
@@ -592,7 +841,10 @@ async function main() {
   const assertion = assertSmoke({
     childExitCode,
     spans: receiver.capturedSpans,
+    metrics: receiver.capturedMetrics,
+    logRecords: receiver.capturedLogRecords,
     requests: receiver.capturedRequests,
+    bodyText: receiver.capturedBodyText,
   });
   const summary = {
     passed: assertion.passed,
@@ -602,16 +854,24 @@ async function main() {
     providerMode: options.providerMode,
     requests: receiver.capturedRequests,
     spanCount: receiver.capturedSpans.length,
+    metricCount: receiver.capturedMetrics.length,
+    logRecordCount: receiver.capturedLogRecords.length,
     spanNames: assertion.spanNames,
+    metricNames: assertion.metricNames,
+    signalRequestCounts: assertion.signalRequestCounts,
     modelSpanCount: assertion.modelSpanCount,
     modelErrorSpanCount: assertion.modelErrorSpanCount,
     disallowedAttributeKeys: assertion.disallowedAttributeKeys,
     contentAttributeKeys: assertion.contentAttributeKeys,
+    leakContexts: assertion.leakContexts,
     spans: receiver.capturedSpans.map((span) => ({
       name: span.name,
       parent: span.parent,
       attributeKeys: Object.keys(span.attributes).toSorted(),
     })),
+    logBodyKinds: [
+      ...new Set(receiver.capturedLogRecords.map((record) => capturedValueKind(record.body))),
+    ],
   };
   const summaryPath = path.join(options.outputDir, "otel-smoke-summary.json");
   await writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
@@ -621,11 +881,20 @@ async function main() {
     for (const failure of assertion.failures) {
       process.stderr.write(`qa-otel-smoke: ${failure}\n`);
     }
+    for (const [signal, contexts] of Object.entries(assertion.leakContexts)) {
+      for (const context of contexts ?? []) {
+        process.stderr.write(`qa-otel-smoke: ${signal} leak context: ${context}\n`);
+      }
+    }
     process.exitCode = 1;
     return;
   }
   process.stdout.write(
-    `qa-otel-smoke: passed spans=${receiver.capturedSpans.length} requests=${receiver.capturedRequests.length}\n`,
+    `qa-otel-smoke: passed spans=${receiver.capturedSpans.length} ` +
+      `metrics=${receiver.capturedMetrics.length} logs=${receiver.capturedLogRecords.length} ` +
+      `traces=${assertion.signalRequestCounts.traces} ` +
+      `metricRequests=${assertion.signalRequestCounts.metrics} ` +
+      `logRequests=${assertion.signalRequestCounts.logs}\n`,
   );
 }
 

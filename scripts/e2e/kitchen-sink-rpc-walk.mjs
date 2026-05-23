@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const PLUGIN_SPEC =
   process.env.OPENCLAW_KITCHEN_SINK_NPM_SPEC || "npm:@openclaw/kitchen-sink@latest";
@@ -517,12 +517,21 @@ function assertToolInvokeResult(payload) {
   }
 }
 
-async function sampleProcess(pid) {
-  if (!pid || process.platform === "win32") {
+export async function sampleProcess(pid, options = {}) {
+  const platform = options.platform ?? process.platform;
+  const run = options.runCommand ?? runCommand;
+  if (!pid) {
     return null;
   }
+  if (platform === "win32") {
+    return sampleWindowsProcess(pid, run);
+  }
+  return samplePosixProcess(pid, run);
+}
+
+async function samplePosixProcess(pid, run) {
   try {
-    const { stdout } = await runCommand("ps", ["-o", "rss=,pcpu=", "-p", String(pid)], {
+    const { stdout } = await run("ps", ["-o", "rss=,pcpu=", "-p", String(pid)], {
       timeoutMs: 5000,
     });
     const [rssKbRaw, cpuRaw] = stdout.trim().split(/\s+/u);
@@ -540,7 +549,44 @@ async function sampleProcess(pid) {
   }
 }
 
-function assertResourceCeiling(sample) {
+async function sampleWindowsProcess(pid, run) {
+  const safePid = Number(pid);
+  if (!Number.isInteger(safePid) || safePid <= 0) {
+    return null;
+  }
+  const command = [
+    "$ErrorActionPreference = 'Stop'",
+    `$process = Get-Process -Id ${safePid} -ErrorAction Stop`,
+    "$cpu = 0",
+    "if ($null -ne $process.CPU) { $cpu = $process.CPU }",
+    "[Console]::Out.Write(('{0} {1}' -f $process.WorkingSet64, $cpu))",
+  ].join("; ");
+  for (const powershell of ["powershell.exe", "powershell"]) {
+    try {
+      const { stdout } = await run(
+        powershell,
+        ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
+        { timeoutMs: 5000 },
+      );
+      const [workingSetBytesRaw, cpuSecondsRaw] = stdout.trim().split(/\s+/u);
+      const workingSetBytes = Number.parseInt(workingSetBytesRaw ?? "", 10);
+      const cpuSeconds = Number.parseFloat(cpuSecondsRaw ?? "");
+      if (!Number.isFinite(workingSetBytes)) {
+        return null;
+      }
+      return {
+        rssMiB: Math.round((workingSetBytes / 1024 / 1024) * 10) / 10,
+        cpuPercent: null,
+        cpuSeconds: Number.isFinite(cpuSeconds) ? cpuSeconds : null,
+      };
+    } catch {
+      // Try the next Windows PowerShell command name.
+    }
+  }
+  return null;
+}
+
+export function assertResourceCeiling(sample) {
   if (!sample) {
     return;
   }
@@ -590,7 +636,7 @@ function isNonEmptyString(value) {
   return typeof value === "string" && value.trim().length > 0;
 }
 
-async function main() {
+export async function main() {
   const runner = resolveOpenClawRunner();
   const port = readPositiveInt(process.env.OPENCLAW_KITCHEN_SINK_RPC_PORT, DEFAULT_PORT);
   const { root, env } = makeEnv();
@@ -725,4 +771,6 @@ async function main() {
   }
 }
 
-await main();
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  await main();
+}

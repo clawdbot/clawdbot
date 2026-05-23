@@ -1,5 +1,9 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveSandboxRuntimeStatus } from "openclaw/plugin-sdk/sandbox";
+import {
+  formatCodexNativeNodeExecBlock,
+  resolveCodexNativeExecutionPolicy,
+} from "./native-execution-policy.js";
 
 type DirectMethodPolicy =
   | "allowed-control-plane"
@@ -56,6 +60,10 @@ const DIRECT_METHOD_POLICIES = new Map<string, DirectMethodPolicy>([
 ]);
 
 const BLOCKED_DIRECT_METHOD_PREFIXES = ["command/", "fs/", "windowsSandbox/"] as const;
+const NODE_EXEC_BLOCKED_CONTROL_PLANE_METHODS = new Set<string>([
+  // Reloading MCP servers can start app-backed processes in the Codex app-server environment.
+  "config/mcpServer/reload",
+]);
 
 export function resolveCodexAppServerDirectSandboxBypassBlock(params: {
   method: string;
@@ -64,19 +72,40 @@ export function resolveCodexAppServerDirectSandboxBypassBlock(params: {
   sessionKey?: string;
   sessionId?: string;
 }): string | undefined {
+  const policy = resolveDirectMethodPolicy(params.method);
+  if (NODE_EXEC_BLOCKED_CONTROL_PLANE_METHODS.has(params.method)) {
+    const nodeExecBlock = resolveCodexNativeNodeExecBlock({
+      config: params.config,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+      surface: `app-server method \`${params.method}\``,
+    });
+    if (nodeExecBlock) {
+      return nodeExecBlock;
+    }
+  }
+  if (policy === "allowed-control-plane") {
+    return undefined;
+  }
+  const nodeExecBlock = resolveCodexNativeNodeExecBlock({
+    config: params.config,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    surface: `app-server method \`${params.method}\``,
+  });
+  if (nodeExecBlock) {
+    return nodeExecBlock;
+  }
   const sessionKey = params.sessionKey?.trim() || params.sessionId?.trim();
   if (!sessionKey) {
     return undefined;
   }
-  const runtime = resolveSandboxRuntimeStatus({
-    cfg: params.config,
+  const sandboxBlock = resolveCodexNativeSandboxBlock({
+    config: params.config,
     sessionKey,
+    surface: `app-server method \`${params.method}\``,
   });
-  if (!runtime.sandboxed) {
-    return undefined;
-  }
-  const policy = resolveDirectMethodPolicy(params.method);
-  if (policy === "allowed-control-plane") {
+  if (!sandboxBlock) {
     return undefined;
   }
   if (
@@ -85,9 +114,16 @@ export function resolveCodexAppServerDirectSandboxBypassBlock(params: {
   ) {
     return undefined;
   }
-  return formatCodexNativeSandboxBlock({
-    surface: `app-server method \`${params.method}\``,
-  });
+  return sandboxBlock;
+}
+
+export function resolveCodexNativeExecutionBlock(params: {
+  config?: OpenClawConfig;
+  sessionKey?: string;
+  sessionId?: string;
+  surface: string;
+}): string | undefined {
+  return resolveCodexNativeSandboxBlock(params) ?? resolveCodexNativeNodeExecBlock(params);
 }
 
 export function resolveCodexNativeSandboxBlock(params: {
@@ -150,4 +186,25 @@ function formatCodexNativeSandboxBlock(params: { surface: string }): string {
     "This mode cannot route execution through the OpenClaw sandbox backend.",
     "Use a normal Codex harness turn, or run an intentionally unsandboxed session.",
   ].join(" ");
+}
+
+function resolveCodexNativeNodeExecBlock(params: {
+  config?: OpenClawConfig;
+  sessionKey?: string;
+  sessionId?: string;
+  surface: string;
+}): string | undefined {
+  const sessionKey = params.sessionKey?.trim() || params.sessionId?.trim();
+  const policy = resolveCodexNativeExecutionPolicy({
+    config: params.config,
+    sessionKey,
+    readRuntimeSessionEntry: Boolean(sessionKey),
+  });
+  if (policy.nativeToolSurfaceAllowed) {
+    return undefined;
+  }
+  return formatCodexNativeNodeExecBlock({
+    surface: params.surface,
+    reason: policy.blockReason,
+  });
 }

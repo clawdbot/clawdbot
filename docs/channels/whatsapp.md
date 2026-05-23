@@ -66,6 +66,10 @@ fallback. Pin an exact version only when you need a reproducible install.
 openclaw channels login --channel whatsapp
 ```
 
+    Current login is QR-based. In remote or headless environments, make sure you
+    have a reliable path to deliver the live QR code to the phone that will scan
+    it before starting login.
+
     For a specific account:
 
 ```bash
@@ -104,6 +108,13 @@ openclaw pairing approve whatsapp <CODE>
 <Note>
 OpenClaw recommends running WhatsApp on a separate number when possible. (The channel metadata and setup flow are optimized for that setup, but personal-number setups are also supported.)
 </Note>
+
+<Warning>
+The current WhatsApp setup flow is QR-only. Terminal-rendered QRs, screenshots,
+PDFs, or chat attachments can expire or become unreadable while being relayed
+from a remote machine. For remote/headless hosts, prefer a direct QR image
+handoff path over manual terminal capture.
+</Warning>
 
 ## Deployment patterns
 
@@ -586,8 +597,20 @@ Behavior notes:
     Fix:
 
     ```bash
+    openclaw channels status --probe
     openclaw doctor
     openclaw logs --follow
+    openclaw gateway status
+    ```
+
+    If the loop persists after host connectivity and timing are fixed, back up
+    the account auth directory and re-link that account:
+
+    ```bash
+    cp -a ~/.openclaw/credentials/whatsapp/<accountId> \
+      ~/.openclaw/credentials/whatsapp/<accountId>.bak
+    openclaw channels logout --channel whatsapp --account <accountId>
+    openclaw channels login --channel whatsapp --account <accountId>
     ```
 
     If `~/.openclaw/logs/whatsapp-health.log` says `Gateway inactive` but

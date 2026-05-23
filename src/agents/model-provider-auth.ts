@@ -1,6 +1,5 @@
 import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { ProviderAuthEvidence } from "../secrets/provider-env-vars.js";
 import {
   listAgentIds,
   resolveAgentDir,
@@ -16,13 +15,12 @@ import {
   type AuthProfileStore,
 } from "./auth-profiles.js";
 import {
-  resolveProviderEnvApiKeyCandidates,
-  resolveProviderEnvAuthEvidence,
-} from "./model-auth-env-vars.js";
-import { hasRuntimeAvailableProviderAuth } from "./model-auth.js";
+  createRuntimeProviderAuthLookup,
+  hasRuntimeAvailableProviderAuth,
+  type RuntimeProviderAuthLookup,
+} from "./model-auth.js";
 import { loadModelCatalog } from "./model-catalog.js";
 import { normalizeProviderId } from "./model-selection.js";
-import { resolveProviderAuthAliasMap } from "./provider-auth-aliases.js";
 import { resolveDefaultAgentWorkspaceDir } from "./workspace.js";
 
 // Prepared runtime fact: which providers have available auth given the
@@ -35,12 +33,6 @@ type PreparedProviderAuthState = {
   agentId: string;
   configFingerprint: string;
   providers: ReadonlyMap<string, boolean>;
-};
-
-type ProviderEnvAuthLookup = {
-  aliasMap?: Readonly<Record<string, string>>;
-  candidateMap?: Readonly<Record<string, readonly string[]>>;
-  authEvidenceMap?: Readonly<Record<string, readonly ProviderAuthEvidence[]>>;
 };
 
 // One entry per configured agent, keyed by agentId. Populated by
@@ -97,7 +89,8 @@ export async function hasAuthForModelProvider(params: {
   store?: AuthProfileStore;
   allowPluginSyntheticAuth?: boolean;
   discoverExternalCliAuth?: boolean;
-  envAuthLookup?: ProviderEnvAuthLookup;
+  runtimeAuthLookup?: RuntimeProviderAuthLookup;
+  resolveRuntimeAuthLookup?: () => RuntimeProviderAuthLookup;
 }): Promise<boolean> {
   const provider = normalizeProviderId(params.provider);
   // The prepared map is built by warmCurrentProviderAuthState — one entry per
@@ -144,7 +137,7 @@ export async function hasAuthForModelProvider(params: {
       workspaceDir: params.workspaceDir,
       env: params.env,
       allowPluginSyntheticAuth: params.allowPluginSyntheticAuth,
-      envAuthLookup: params.envAuthLookup,
+      runtimeLookup: params.runtimeAuthLookup ?? params.resolveRuntimeAuthLookup?.(),
     })
   ) {
     return true;
@@ -175,6 +168,7 @@ export function createProviderAuthChecker(params: {
   discoverExternalCliAuth?: boolean;
 }): (provider: string) => Promise<boolean> {
   const authCache = new Map<string, boolean>();
+  let runtimeAuthLookup: RuntimeProviderAuthLookup | undefined;
   return async (provider: string) => {
     const key = normalizeProviderId(provider);
     const cached = authCache.get(key);
@@ -189,6 +183,12 @@ export function createProviderAuthChecker(params: {
       env: params.env,
       allowPluginSyntheticAuth: params.allowPluginSyntheticAuth,
       discoverExternalCliAuth: params.discoverExternalCliAuth,
+      resolveRuntimeAuthLookup: () =>
+        (runtimeAuthLookup ??= createRuntimeProviderAuthLookup({
+          cfg: params.cfg,
+          workspaceDir: params.workspaceDir,
+          env: params.env,
+        })),
     });
     authCache.set(key, value);
     return value;
@@ -225,11 +225,10 @@ export async function warmCurrentProviderAuthState(
     }
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
     const agentDir = resolveAgentDir(cfg, agentId);
-    const envAuthLookup = {
-      aliasMap: resolveProviderAuthAliasMap({ config: cfg, workspaceDir }),
-      candidateMap: resolveProviderEnvApiKeyCandidates({ config: cfg, workspaceDir }),
-      authEvidenceMap: resolveProviderEnvAuthEvidence({ config: cfg, workspaceDir }),
-    };
+    const runtimeAuthLookup = createRuntimeProviderAuthLookup({
+      cfg,
+      workspaceDir,
+    });
     // One AuthProfileStore scoped to every candidate provider; without this
     // the per-provider externalCli discovery rebuilds the store ~N times.
     const store = ensureAuthProfileStore(agentDir, {
@@ -250,7 +249,7 @@ export async function warmCurrentProviderAuthState(
         workspaceDir,
         agentId,
         store,
-        envAuthLookup,
+        runtimeAuthLookup,
       });
       state.set(provider, value);
     }

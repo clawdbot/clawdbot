@@ -1,5 +1,6 @@
 import { readConfigFileSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { withSuppressedNotes } from "../../terminal/note.js";
 import { shouldMigrateStateFromPath } from "../argv.js";
 
 const ALLOWED_INVALID_COMMANDS = new Set(["doctor", "logs", "health", "help", "status"]);
@@ -62,20 +63,7 @@ export async function ensureConfigReady(params: {
     if (!params.suppressDoctorStdout) {
       preflightSnapshot = (await runDoctorConfigPreflight()).snapshot;
     } else {
-      const originalStdoutWrite = process.stdout.write.bind(process.stdout);
-      const originalSuppressNotes = process.env.OPENCLAW_SUPPRESS_NOTES;
-      process.stdout.write = (() => true) as unknown as typeof process.stdout.write;
-      process.env.OPENCLAW_SUPPRESS_NOTES = "1";
-      try {
-        preflightSnapshot = (await runDoctorConfigPreflight()).snapshot;
-      } finally {
-        process.stdout.write = originalStdoutWrite;
-        if (originalSuppressNotes === undefined) {
-          delete process.env.OPENCLAW_SUPPRESS_NOTES;
-        } else {
-          process.env.OPENCLAW_SUPPRESS_NOTES = originalSuppressNotes;
-        }
-      }
+      preflightSnapshot = (await withSuppressedNotes(runDoctorConfigPreflight)).snapshot;
     }
   }
 

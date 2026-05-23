@@ -195,6 +195,43 @@ Related:
 - [Token use and costs](/reference/token-use)
 - [Why am I seeing HTTP 429 from Anthropic?](/help/faq-first-run#why-am-i-seeing-http-429-ratelimiterror-from-anthropic)
 
+## Upstream 403 blocked responses
+
+Use this when an upstream LLM provider returns a generic `403` such as
+`Your request was blocked`.
+
+Do not assume this is always an OpenClaw configuration issue. The response can
+come from an upstream security layer such as a CDN, WAF, bot-management rule, or
+reverse proxy in front of an OpenAI-compatible endpoint.
+
+```bash
+openclaw status
+openclaw gateway status
+openclaw logs --follow
+```
+
+Look for:
+
+- multiple models under the same provider failing in the same way
+- HTML or generic security text instead of a normal provider API error
+- provider-side security events for the same request time
+- a tiny direct `curl` probe succeeding while normal SDK-shaped requests fail
+
+Fix the provider-side filtering first when the evidence points to a WAF/CDN
+block. Prefer a narrowly scoped allow or skip rule for the API path OpenClaw
+uses, and avoid disabling protection for the whole site.
+
+<Warning>
+A successful minimal `curl` does not guarantee that real SDK-style requests will
+pass through the same upstream security layer.
+</Warning>
+
+Related:
+
+- [OpenAI-compatible endpoints](/gateway/configuration-reference#openai-compatible-endpoints)
+- [Provider configuration](/providers)
+- [Logs](/logging)
+
 ## Local OpenAI-compatible backend passes direct probes but agent runs fail
 
 Use this when:
@@ -293,6 +330,21 @@ Look for:
 - Correct probe URL and dashboard URL.
 - Auth mode/token mismatch between client and gateway.
 - HTTP usage where device identity is required.
+
+If a local browser cannot connect to `127.0.0.1:18789` after an update, first
+recover the local Gateway service and confirm it is serving the dashboard:
+
+```bash
+openclaw gateway restart
+lsof -i :18789
+curl http://127.0.0.1:18789
+```
+
+If `curl` returns OpenClaw HTML, the Gateway is working and the remaining issue
+is likely browser cache, an old deep link, or stale tab state. Open
+`http://127.0.0.1:18789` directly and navigate from the dashboard. If restart
+does not leave the service running, run `openclaw gateway start` and recheck
+`openclaw gateway status`.
 
 <AccordionGroup>
   <Accordion title="Connect / auth signatures">

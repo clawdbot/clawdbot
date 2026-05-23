@@ -188,7 +188,7 @@ function authorizeFallbackModelOverride(params: {
       allowed: false,
       reason:
         `plugin "${pluginId}" is not trusted for fallback provider/model override requests. ` +
-        "See https://docs.openclaw.ai/gateway/configuration-reference#plugins and search for: " +
+        "See https://docs.openclaw.ai/plugins/sdk-runtime#api-runtime-subagent and search for: " +
         "plugins.entries.<id>.subagent.allowModelOverride",
     };
   }

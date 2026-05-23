@@ -1,3 +1,5 @@
+import os from "node:os";
+import path from "node:path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import {
@@ -7,6 +9,7 @@ import {
 import {
   emitTrustedDiagnosticEvent,
   type DiagnosticToolParamsSummary,
+  type DiagnosticToolSource,
 } from "../infra/diagnostic-events.js";
 import {
   createChildDiagnosticTraceContext,
@@ -17,7 +20,7 @@ import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { deriveToolParams } from "../plugins/host-tool-param-parsers.js";
-import { copyPluginToolMeta } from "../plugins/tools.js";
+import { copyPluginToolMeta, getPluginToolMeta } from "../plugins/tools.js";
 import { hasTrustedToolPolicies, runTrustedToolPolicies } from "../plugins/trusted-tool-policy.js";
 import {
   PluginApprovalResolutions,
@@ -28,7 +31,7 @@ import {
 } from "../plugins/types.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { isPlainObject } from "../utils.js";
-import { copyChannelAgentToolMeta } from "./channel-tools.js";
+import { copyChannelAgentToolMeta, getChannelAgentToolMeta } from "./channel-tools.js";
 import {
   getCodeModeExecBeforeHookMetadata,
   getCodeModeExecBeforeHookMetadataForToolKind,
@@ -38,6 +41,8 @@ import {
 } from "./code-mode-control-tools.js";
 import { adjustedParamsByToolCallId } from "./pi-tools.before-tool-call.state.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
+import { resolveSkillTelemetrySource, resolveSkillTelemetrySourceValue } from "./skills/source.js";
+import type { SkillSnapshot, SkillTelemetrySource } from "./skills/types.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -65,6 +70,8 @@ export type HookContext = {
   config?: OpenClawConfig;
   /** Tool execution cwd for host-derived path facts. */
   cwd?: string;
+  /** Host workspace used to resolve relative tool params for diagnostics only. */
+  workspaceDir?: string;
   sessionKey?: string;
   /** Ephemeral session UUID — regenerated on /new and /reset. */
   sessionId?: string;
@@ -73,6 +80,13 @@ export type HookContext = {
   channelId?: string;
   loopDetection?: ToolLoopDetectionConfig;
   onToolOutcome?: ToolOutcomeObserver;
+  skillsSnapshot?: SkillSnapshot;
+  skillCommand?: {
+    commandName: string;
+    skillName: string;
+    skillSource?: SkillTelemetrySource;
+    toolName?: string;
+  };
   sandbox?: {
     root: string;
     bridge: SandboxFsBridge;
@@ -178,6 +192,137 @@ function unwrapErrorCause(err: unknown): unknown {
     return err;
   }
   return err;
+}
+
+type ToolDiagnosticIdentity = {
+  toolSource: DiagnosticToolSource;
+  toolOwner?: string;
+};
+
+function resolveToolDiagnosticIdentity(tool: AnyAgentTool): ToolDiagnosticIdentity {
+  const pluginMeta = getPluginToolMeta(tool);
+  if (pluginMeta) {
+    return pluginMeta.pluginId === "bundle-mcp"
+      ? { toolSource: "mcp", toolOwner: pluginMeta.pluginId }
+      : { toolSource: "plugin", toolOwner: pluginMeta.pluginId };
+  }
+  const channelMeta = getChannelAgentToolMeta(tool as never);
+  if (channelMeta) {
+    return { toolSource: "channel", toolOwner: channelMeta.channelId };
+  }
+  return { toolSource: "core" };
+}
+
+type SkillUsageMatch = {
+  skillName: string;
+  skillSource: SkillTelemetrySource;
+  activation: "command" | "read";
+};
+
+function resolveRelativeToolPath(candidate: string, ctx?: HookContext): string | undefined {
+  const trimmed = candidate.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (trimmed === "~") {
+    return os.homedir();
+  }
+  if (trimmed.startsWith("~/")) {
+    return path.resolve(os.homedir(), trimmed.slice(2));
+  }
+  if (path.isAbsolute(trimmed)) {
+    return path.resolve(trimmed);
+  }
+  const base = ctx?.workspaceDir ?? ctx?.cwd;
+  return base ? path.resolve(base, trimmed) : undefined;
+}
+
+function readToolPathCandidates(params: unknown, ctx?: HookContext): string[] {
+  if (!isPlainObject(params)) {
+    return [];
+  }
+  const candidates = typeof params.path === "string" ? [params.path] : [];
+  return candidates
+    .map((candidate) => resolveRelativeToolPath(candidate, ctx))
+    .filter((candidate): candidate is string => Boolean(candidate));
+}
+
+function skillInstructionPaths(snapshot: SkillSnapshot | undefined): Map<string, SkillUsageMatch> {
+  const matches = new Map<string, SkillUsageMatch>();
+  for (const skill of snapshot?.resolvedSkills ?? []) {
+    const skillName = typeof skill.name === "string" ? skill.name.trim() : "";
+    if (!skillName) {
+      continue;
+    }
+    const match = {
+      skillName,
+      skillSource: resolveSkillTelemetrySource(skill),
+      activation: "read" as const,
+    };
+    const filePath = typeof skill.filePath === "string" ? skill.filePath.trim() : "";
+    if (filePath && path.isAbsolute(filePath)) {
+      matches.set(path.resolve(filePath), match);
+    }
+    const baseDir = typeof skill.baseDir === "string" ? skill.baseDir.trim() : "";
+    if (baseDir && path.isAbsolute(baseDir)) {
+      matches.set(path.resolve(baseDir, "SKILL.md"), match);
+    }
+  }
+  return matches;
+}
+
+function findSkillUsageMatch(params: {
+  toolName: string;
+  toolParams: unknown;
+  ctx?: HookContext;
+}): SkillUsageMatch | undefined {
+  const command = params.ctx?.skillCommand;
+  if (command) {
+    const commandToolName = normalizeToolName(command.toolName ?? params.toolName);
+    if (!commandToolName || commandToolName === params.toolName) {
+      return {
+        skillName: command.skillName,
+        skillSource: resolveSkillTelemetrySourceValue(command.skillSource),
+        activation: "command",
+      };
+    }
+  }
+
+  if (params.toolName !== "read" || !params.ctx?.skillsSnapshot?.resolvedSkills?.length) {
+    return undefined;
+  }
+  const skillPaths = skillInstructionPaths(params.ctx.skillsSnapshot);
+  for (const candidate of readToolPathCandidates(params.toolParams, params.ctx)) {
+    const match = skillPaths.get(candidate);
+    if (match) {
+      return match;
+    }
+  }
+  return undefined;
+}
+
+function emitSkillUsedDiagnostic(params: {
+  ctx?: HookContext;
+  match: SkillUsageMatch;
+  toolName: string;
+  toolCallId?: string;
+}): void {
+  const trace = params.ctx?.trace
+    ? freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(params.ctx.trace))
+    : undefined;
+  emitTrustedDiagnosticEvent({
+    type: "skill.used",
+    ...(params.ctx?.runId && { runId: params.ctx.runId }),
+    ...(params.ctx?.sessionKey && { sessionKey: params.ctx.sessionKey }),
+    ...(params.ctx?.sessionId && { sessionId: params.ctx.sessionId }),
+    ...(params.ctx?.agentId && { agentId: params.ctx.agentId }),
+    ...(trace && { trace }),
+    skillName: params.match.skillName,
+    skillSource: params.match.skillSource,
+    activation: params.match.activation,
+    toolName: params.toolName,
+    ...(params.toolCallId && { toolCallId: params.toolCallId }),
+  });
 }
 
 async function requestPluginToolApproval(params: {
@@ -740,6 +885,7 @@ export function wrapToolWithBeforeToolCallHook(
     return tool;
   }
   const toolName = tool.name || "tool";
+  const diagnosticIdentity = resolveToolDiagnosticIdentity(tool);
   const diagnosticOptions = { emitDiagnostics: options.emitDiagnostics !== false };
   const wrappedTool: AnyAgentTool = {
     ...tool,
@@ -768,6 +914,7 @@ export function wrapToolWithBeforeToolCallHook(
           ...(ctx?.sessionId && { sessionId: ctx.sessionId }),
           ...(trace && { trace }),
           toolName: normalizedToolName,
+          ...diagnosticIdentity,
           ...(toolCallId && { toolCallId }),
           paramsSummary: summarizeToolParams(outcome.params ?? hookParams),
         };
@@ -809,6 +956,7 @@ export function wrapToolWithBeforeToolCallHook(
         ...(ctx?.sessionId && { sessionId: ctx.sessionId }),
         ...(trace && { trace }),
         toolName: normalizedToolName,
+        ...diagnosticIdentity,
         ...(toolCallId && { toolCallId }),
         paramsSummary: summarizeToolParams(executeParams),
       };
@@ -829,7 +977,20 @@ export function wrapToolWithBeforeToolCallHook(
           toolCallId,
           result,
         });
+        const skillMatch = findSkillUsageMatch({
+          toolName: normalizedToolName,
+          toolParams: executeParams,
+          ctx,
+        });
         if (diagnosticOptions.emitDiagnostics) {
+          if (skillMatch) {
+            emitSkillUsedDiagnostic({
+              ctx,
+              match: skillMatch,
+              toolName: normalizedToolName,
+              toolCallId,
+            });
+          }
           emitTrustedDiagnosticEvent({
             type: "tool.execution.completed",
             ...eventBase,

@@ -141,6 +141,43 @@ function normalizeCodexTransportFields(params: {
   return { api, baseUrl };
 }
 
+function hasImageInput(input: unknown): boolean {
+  return Array.isArray(input) && input.includes("image");
+}
+
+function matchesOpenAICodexImageCapableModel(modelId: string, modelName?: string): boolean {
+  return [modelId, modelName]
+    .filter((value): value is string => typeof value === "string")
+    .some((candidate) => matchesExactOrPrefix(candidate, OPENAI_CODEX_MODERN_MODEL_IDS));
+}
+
+/**
+ * Restore native `["text", "image"]` input capability on resolved Codex rows
+ * for the known modern model IDs (gpt-5.4, gpt-5.4-mini, gpt-5.4-pro, gpt-5.5,
+ * gpt-5.5-pro). Persisted/configured model rows can omit the `input` field
+ * entirely when they were written by older OpenClaw versions. When that row wins
+ * the catalog merge, `modelSupportsInput(entry, "image")` returns false and the
+ * gateway's `chat.send` handler offloads inbound images as `media://inbound/<id>`
+ * claim-check URIs instead of inlining them.
+ *
+ * Mirrors the Anthropic precedent set by upstream #83756.
+ */
+function applyOpenAICodexImageInputCapability(params: {
+  modelId: string;
+  model: ProviderRuntimeModel;
+}): ProviderRuntimeModel | undefined {
+  if (hasImageInput(params.model.input)) {
+    return undefined;
+  }
+  if (!matchesOpenAICodexImageCapableModel(params.modelId, params.model.name)) {
+    return undefined;
+  }
+  return {
+    ...params.model,
+    input: ["text", "image"],
+  };
+}
+
 function normalizeCodexTransport(model: ProviderRuntimeModel): ProviderRuntimeModel {
   const lowerModelId = normalizeLowercaseStringOrEmpty(model.id);
   const canonicalModelId =
@@ -570,7 +607,13 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
       if (normalizeProviderId(ctx.provider) !== PROVIDER_ID) {
         return undefined;
       }
-      return normalizeCodexTransport(ctx.model);
+      const transportNormalized = normalizeCodexTransport(ctx.model);
+      const imageCapable =
+        applyOpenAICodexImageInputCapability({
+          modelId: ctx.modelId,
+          model: transportNormalized,
+        }) ?? transportNormalized;
+      return imageCapable === ctx.model ? undefined : imageCapable;
     },
     normalizeTransport: ({ provider, api, baseUrl }) => {
       if (normalizeProviderId(provider) !== PROVIDER_ID) {

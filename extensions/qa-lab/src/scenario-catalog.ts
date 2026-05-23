@@ -230,6 +230,7 @@ export type QaBootstrapScenarioCatalog = {
 };
 
 export {
+  QA_OBSERVABILITY_SCENARIO_IDS,
   QA_PERSONAL_AGENT_SCENARIO_IDS,
   QA_SCENARIO_PACKS,
   resolveQaScenarioPackScenarioIds,

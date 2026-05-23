@@ -42,7 +42,7 @@ export function describeSessionsSpawnTool(options?: {
   const baseDescription = [
     runtimeDescription,
     options?.threadAvailable
-      ? '`mode="run"` one-shot; `mode="session"` persistent/thread-bound.'
+      ? '`mode="run"` one-shot; `mode="session"` persistent/thread-bound, only when requester channel supports thread bindings.'
       : '`mode="run"` one-shot background work.',
     "Subagents inherit parent workspace.",
     "Native subagents get task in first visible `[Subagent Task]` message.",

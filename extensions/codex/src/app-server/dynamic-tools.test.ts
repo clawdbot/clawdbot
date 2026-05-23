@@ -219,6 +219,44 @@ describe("createCodexDynamicToolBridge", () => {
     expectNoNamespace(bridge.specs[0]);
   });
 
+  it("can register a durable tool schema while denying execution for the current turn", async () => {
+    const heartbeatExecute = vi.fn(async () => textToolResult("heartbeat recorded"));
+    const bridge = createCodexDynamicToolBridge({
+      tools: [createTool({ name: "message" })],
+      registeredTools: [
+        createTool({ name: "message" }),
+        createTool({ name: HEARTBEAT_RESPONSE_TOOL_NAME, execute: heartbeatExecute }),
+      ],
+      signal: new AbortController().signal,
+    });
+
+    expect(bridge.availableSpecs.map((tool) => tool.name)).toEqual(["message"]);
+    expect(bridge.specs.map((tool) => tool.name)).toEqual([
+      "message",
+      HEARTBEAT_RESPONSE_TOOL_NAME,
+    ]);
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      namespace: null,
+      tool: HEARTBEAT_RESPONSE_TOOL_NAME,
+      arguments: {},
+    });
+
+    expect(result).toEqual({
+      success: false,
+      contentItems: [
+        {
+          type: "inputText",
+          text: `OpenClaw tool is not available for this turn: ${HEARTBEAT_RESPONSE_TOOL_NAME}`,
+        },
+      ],
+    });
+    expect(heartbeatExecute).not.toHaveBeenCalled();
+  });
+
   it("can expose all dynamic tools directly for compatibility", () => {
     const bridge = createCodexDynamicToolBridge({
       tools: [createTool({ name: "web_search" }), createTool({ name: "message" })],
@@ -762,6 +800,28 @@ describe("createCodexDynamicToolBridge", () => {
     const event = requireRecord(callArg(handler, 0, 0, "middleware event"), "middleware event");
     expect(event.isError).toBe(true);
     expectContextFields(callArg(handler, 0, 1, "middleware context"), { runtime: "codex" });
+  });
+
+  it("preserves terminal async tool results without marking them as errors", async () => {
+    const bridge = createBridgeWithToolResult("image_generate", {
+      content: [{ type: "text", text: "Background task started." }],
+      details: { async: true, status: "started", taskId: "task-1" },
+      terminate: true,
+    });
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      namespace: null,
+      tool: "image_generate",
+      arguments: { prompt: "lighthouse" },
+    });
+
+    expect(result).toEqual(expectInputText("Background task started."));
+    expect(result.sideEffectEvidence).toBe(true);
+    expect(result.terminate).toBe(true);
+    expect(Object.keys(result)).not.toContain("terminate");
   });
 
   it("marks executed dynamic tool results as side-effect evidence", async () => {

@@ -33,19 +33,34 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     tmpDir: string;
     storePath: string;
     visibleReplies?: "automatic" | "message_tool";
+    groupVisibleReplies?: "automatic" | "message_tool";
     agentRuntimeId?: string;
+    modelRuntimeId?: string;
     model?: string;
+    target?: "telegram" | "last";
   }): OpenClawConfig {
     return {
       agents: {
         defaults: {
           workspace: params.tmpDir,
-          heartbeat: { every: "5m", target: "telegram" },
+          heartbeat: { every: "5m", target: params.target ?? "telegram" },
           ...(params.model ? { model: params.model } : {}),
+          ...(params.model && params.modelRuntimeId
+            ? { models: { [params.model]: { agentRuntime: { id: params.modelRuntimeId } } } }
+            : {}),
           ...(params.agentRuntimeId ? { agentRuntime: { id: params.agentRuntimeId } } : {}),
         },
       },
-      ...(params.visibleReplies ? { messages: { visibleReplies: params.visibleReplies } } : {}),
+      ...(params.visibleReplies || params.groupVisibleReplies
+        ? {
+            messages: {
+              ...(params.visibleReplies ? { visibleReplies: params.visibleReplies } : {}),
+              ...(params.groupVisibleReplies
+                ? { groupChat: { visibleReplies: params.groupVisibleReplies } }
+                : {}),
+            },
+          }
+        : {}),
       channels: {
         telegram: {
           token: "test-token",
@@ -228,6 +243,15 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     expectHeartbeatToolPrompt(result, ["notify=false"]);
   });
 
+  it("uses the heartbeat response tool prompt for group message-tool mode", async () => {
+    const result = await runPromptScenario({
+      config: { groupVisibleReplies: "message_tool", target: "last" },
+      session: { lastTo: "group:redacted" },
+    });
+
+    expectHeartbeatToolPrompt(result, ["notify=false"]);
+  });
+
   it("uses the heartbeat response tool prompt for Codex harness sessions by default", async () => {
     const result = await runPromptScenario({
       session: { agentHarnessId: "codex" },
@@ -314,6 +338,31 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
     });
 
     expectHeartbeatToolPrompt(result);
+  });
+
+  it("uses the heartbeat response tool prompt for model-specific Codex runtimes", async () => {
+    const result = await runPromptScenario({
+      config: {
+        model: "openai/gpt-5.5",
+        modelRuntimeId: "codex",
+      },
+    });
+
+    expectHeartbeatToolPrompt(result);
+  });
+
+  it("honors model-specific non-Codex runtimes over default Codex heartbeat mode", async () => {
+    const result = await runPromptScenario({
+      config: {
+        agentRuntimeId: "codex",
+        model: "openai/gpt-5.5",
+        modelRuntimeId: "pi",
+      },
+    });
+
+    expect(result.calledCtx.Body).toContain("HEARTBEAT_OK");
+    expect(result.calledCtx.Body).not.toContain("heartbeat_respond");
+    expect(result.calledOpts.sourceReplyDeliveryMode).toBeUndefined();
   });
 
   it("uses the heartbeat response tool prompt when the Codex runtime is env-forced", async () => {

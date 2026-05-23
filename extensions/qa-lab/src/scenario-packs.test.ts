@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  QA_OBSERVABILITY_SCENARIO_IDS,
   QA_PERSONAL_AGENT_SCENARIO_IDS,
   QA_SCENARIO_PACKS,
   readQaScenarioById,
@@ -57,6 +58,12 @@ describe("qa scenario packs", () => {
     ]);
   });
 
+  it("expands the observability pack in pack order", () => {
+    expect(resolveQaScenarioPackScenarioIds({ pack: "observability" })).toEqual([
+      ...QA_OBSERVABILITY_SCENARIO_IDS,
+    ]);
+  });
+
   it("combines explicit scenarios with pack scenarios", () => {
     expect(
       resolveQaScenarioPackScenarioIds({
@@ -68,7 +75,7 @@ describe("qa scenario packs", () => {
 
   it("rejects unknown scenario packs", () => {
     expect(() => resolveQaScenarioPackScenarioIds({ pack: "personal-admin" })).toThrow(
-      '--pack must be one of personal-agent, got "personal-admin"',
+      '--pack must be one of personal-agent, observability, got "personal-admin"',
     );
   });
 

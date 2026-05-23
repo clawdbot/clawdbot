@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { note as clackNote } from "@clack/prompts";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { visibleWidth } from "./ansi.js";
@@ -7,6 +8,7 @@ const MIN_NOTE_COLUMNS = 80;
 const URL_PREFIX_RE = /^(https?:\/\/|file:\/\/)/i;
 const WINDOWS_DRIVE_RE = /^[a-zA-Z]:[\\/]/;
 const FILE_LIKE_RE = /^[a-zA-Z0-9._-]+$/;
+const suppressNotesStorage = new AsyncLocalStorage<boolean>();
 
 function isSuppressedByEnv(value: string | undefined): boolean {
   if (!value) {
@@ -197,7 +199,10 @@ function createNoteOutput(columns: number): NodeJS.WriteStream {
 }
 
 export function note(message: unknown, title?: string) {
-  if (isSuppressedByEnv(process.env.OPENCLAW_SUPPRESS_NOTES)) {
+  if (
+    suppressNotesStorage.getStore() === true ||
+    isSuppressedByEnv(process.env.OPENCLAW_SUPPRESS_NOTES)
+  ) {
     return;
   }
   const columns = resolveNoteColumns(process.stdout.columns);
@@ -205,4 +210,8 @@ export function note(message: unknown, title?: string) {
     output: createNoteOutput(columns),
     format: (line) => line,
   });
+}
+
+export function withSuppressedNotes<T>(callback: () => T): T {
+  return suppressNotesStorage.run(true, callback);
 }

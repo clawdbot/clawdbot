@@ -387,20 +387,34 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       break;
     case "tool.execution.started":
       record.toolName = event.toolName;
+      record.source = event.toolSource;
+      record.pluginId = event.toolOwner;
       break;
     case "tool.execution.completed":
       record.toolName = event.toolName;
+      record.source = event.toolSource;
+      record.pluginId = event.toolOwner;
       record.durationMs = event.durationMs;
       break;
     case "tool.execution.error":
       record.toolName = event.toolName;
+      record.source = event.toolSource;
+      record.pluginId = event.toolOwner;
       record.durationMs = event.durationMs;
       assignReasonCode(record, event.errorCategory);
       break;
     case "tool.execution.blocked":
       record.toolName = event.toolName;
+      record.source = event.toolSource;
+      record.pluginId = event.toolOwner;
       record.outcome = "blocked";
       assignReasonCode(record, event.deniedReason);
+      break;
+    case "skill.used":
+      record.toolName = event.toolName;
+      record.source = event.skillSource;
+      record.action = event.activation;
+      record.target = event.skillName;
       break;
     case "exec.process.completed":
       record.target = event.target;

@@ -1130,7 +1130,7 @@ describe("statusCommand", () => {
       "Plugin compatibility",
       "Channels",
       "WhatsApp",
-      "bootstrap files",
+      "no workspaces bootstrapping",
       "Tasks",
       "Sessions",
       "+1000",
@@ -1148,6 +1148,7 @@ describe("statusCommand", () => {
     expectLogsInclude(logs, "Cache");
     expectLogsInclude(logs, "40% hit");
     expectLogsInclude(logs, "read 2.0k");
+    expect(logs.join("\n")).not.toContain("no bootstrap files");
   });
 
   it("shows a maintenance hint when task audit errors are present", async () => {

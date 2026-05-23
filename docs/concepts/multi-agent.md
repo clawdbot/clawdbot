@@ -357,6 +357,11 @@ Common channels supporting this pattern include:
 
     - Create one bot per agent with BotFather and copy each token.
     - Tokens live in `channels.telegram.accounts.<id>.botToken` (default account can use `TELEGRAM_BOT_TOKEN`).
+    - For multiple bots in the same Telegram group, invite each bot and mention the bot that should answer.
+    - Disable BotFather Privacy Mode for each group bot, then re-add the bot so Telegram applies the setting.
+    - Allow groups with `channels.telegram.groups`, or use `groupPolicy: "open"` only for trusted group deployments.
+    - Put sender user IDs in `groupAllowFrom`. Group and supergroup IDs belong in `channels.telegram.groups`, not `groupAllowFrom`.
+    - Bind by `accountId` so each bot routes to its own agent.
 
   </Accordion>
   <Accordion title="WhatsApp numbers per agent">

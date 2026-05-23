@@ -362,7 +362,11 @@ function createGatewayStartupTrace() {
         timelineOptions(),
       );
     },
-    async measure<T>(name: string, run: () => Promise<T> | T): Promise<T> {
+    async measure<T>(
+      name: string,
+      run: () => Promise<T> | T,
+      options: { omitErrorMessage?: boolean } = {},
+    ): Promise<T> {
       const before = performance.now();
       const spanId = `gateway-startup-${++spanSequence}`;
       emitDiagnosticsTimelineEvent(
@@ -401,7 +405,9 @@ function createGatewayStartupTrace() {
             durationMs: now - before,
             attributes: name === mapTimelineName(name) ? undefined : { traceName: name },
             errorName: error instanceof Error ? error.name : typeof error,
-            errorMessage: error instanceof Error ? error.message : String(error),
+            ...(options.omitErrorMessage
+              ? {}
+              : { errorMessage: error instanceof Error ? error.message : String(error) }),
           },
           timelineOptions(),
         );
@@ -601,14 +607,17 @@ export async function startGatewayServer(
   const startupRuntimeConfig = applyConfigOverrides(configSnapshot.config);
   startupTrace.setConfig(startupRuntimeConfig);
   const { prepareGatewayStartupConfig } = await startupConfigModulePromise;
-  const authBootstrap = await startupTrace.measure("config.auth", () =>
-    prepareGatewayStartupConfig({
-      configSnapshot,
-      authOverride: opts.auth,
-      tailscaleOverride: opts.tailscale,
-      activateRuntimeSecrets,
-      measure: (name, run) => startupTrace.measure(name, run),
-    }),
+  const authBootstrap = await startupTrace.measure(
+    "config.auth",
+    () =>
+      prepareGatewayStartupConfig({
+        configSnapshot,
+        authOverride: opts.auth,
+        tailscaleOverride: opts.tailscale,
+        activateRuntimeSecrets,
+        measure: (name, run, measureOptions) => startupTrace.measure(name, run, measureOptions),
+      }),
+    { omitErrorMessage: true },
   );
   cfgAtStart = authBootstrap.cfg;
   startupTrace.setConfig(cfgAtStart);

@@ -23,6 +23,7 @@ import {
 import * as piEmbedded from "./pi-embedded-runner/runs.js";
 import { testing as subagentAnnounceDeliveryTesting } from "./subagent-announce-delivery.js";
 import { runSubagentAnnounceDispatch } from "./subagent-announce-dispatch.js";
+import { testing as subagentAnnounceOutputTesting } from "./subagent-announce-output.js";
 import * as agentStep from "./tools/agent-step.js";
 
 type AgentCallRequest = {
@@ -328,6 +329,7 @@ describe("subagent announce formatting", () => {
 
   afterAll(() => {
     subagentAnnounceTesting.setDepsForTest();
+    subagentAnnounceOutputTesting.setDepsForTest();
     subagentAnnounceDeliveryTesting.setDepsForTest();
     clearRuntimeConfigSnapshot();
     if (previousFastTestEnv === undefined) {
@@ -396,6 +398,17 @@ describe("subagent announce formatting", () => {
         req: Parameters<typeof gatewayCall.callGateway>[0],
       ) => (await callGatewaySpy(req)) as T,
       getRuntimeConfig: () => configOverride,
+    });
+    subagentAnnounceOutputTesting.setDepsForTest({
+      callGateway: async <T = Record<string, unknown>>(
+        req: Parameters<typeof gatewayCall.callGateway>[0],
+      ) => (await callGatewaySpy(req)) as T,
+      getRuntimeConfig: () => configOverride,
+      readLatestAssistantReply: async (params) =>
+        await readLatestAssistantReplyMock(params?.sessionKey),
+      readSessionEntry: (_storePath, sessionKey) => loadSessionStoreFixture()[sessionKey],
+      resolveAgentIdFromSessionKey: () => "main",
+      resolveStorePath: () => "/tmp/sessions.json",
     });
     loadSessionStoreSpy.mockReset().mockImplementation(() => loadSessionStoreFixture());
     resolveAgentIdFromSessionKeySpy.mockReset().mockImplementation(() => "main");
