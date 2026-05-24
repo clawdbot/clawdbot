@@ -29,6 +29,7 @@ let writeBase64ToFile: typeof import("./nodes-camera.js").writeBase64ToFile;
 let writeUrlToFile: typeof import("./nodes-camera.js").writeUrlToFile;
 let parseScreenRecordPayload: typeof import("./nodes-screen.js").parseScreenRecordPayload;
 let screenRecordTempPath: typeof import("./nodes-screen.js").screenRecordTempPath;
+let writeScreenRecordToFile: typeof import("./nodes-screen.js").writeScreenRecordToFile;
 
 async function withCameraTempDir<T>(run: (dir: string) => Promise<T>): Promise<T> {
   return await withTempDir("openclaw-test-", run);
@@ -54,7 +55,8 @@ describe("nodes camera helpers", () => {
       writeBase64ToFile,
       writeUrlToFile,
     } = await import("./nodes-camera.js"));
-    ({ parseScreenRecordPayload, screenRecordTempPath } = await import("./nodes-screen.js"));
+    ({ parseScreenRecordPayload, screenRecordTempPath, writeScreenRecordToFile } =
+      await import("./nodes-screen.js"));
   });
 
   beforeEach(() => {
@@ -109,6 +111,24 @@ describe("nodes camera helpers", () => {
       id: "id1",
     });
     expect(p).toBe(path.join("/tmp", "openclaw-camera-snap-front-id1.jpg"));
+  });
+
+  it("rejects media format path traversal", () => {
+    expect(() =>
+      cameraTempPath({
+        kind: "snap",
+        ext: "../escaped",
+        tmpDir: "/tmp",
+        id: "id1",
+      }),
+    ).toThrow(/invalid media format/i);
+    expect(() =>
+      screenRecordTempPath({
+        ext: "mp4/../../escaped",
+        tmpDir: "/tmp",
+        id: "id1",
+      }),
+    ).toThrow(/invalid media format/i);
   });
 
   it("writes camera clip payload to temp path", async () => {
@@ -170,6 +190,18 @@ describe("nodes camera helpers", () => {
       const out = path.join(dir, "x.bin");
       await writeBase64ToFile(out, "aGk=");
       await expect(readFileUtf8AndCleanup(out)).resolves.toBe("hi");
+    });
+  });
+
+  it("rejects oversized base64 payloads before writing", async () => {
+    await withCameraTempDir(async (dir) => {
+      const out = path.join(dir, "x.bin");
+      await expect(writeBase64ToFile(out, "aGk=", { maxBytes: 1 })).rejects.toThrow(/exceeds max/i);
+      await expectPathMissing(out);
+      await expect(writeScreenRecordToFile(out, "aGk=", { maxBytes: 1 })).rejects.toThrow(
+        /exceeds max/i,
+      );
+      await expectPathMissing(out);
     });
   });
 

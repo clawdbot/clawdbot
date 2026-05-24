@@ -68,7 +68,7 @@ export function resolveUbuntuVmName(requested: string, explicit = false): string
         parts: item.version.split(".").map(Number),
       }))
       .filter((item) => item.parts[0] >= 24)
-      .toSorted((a, b) => compareVersions(a.parts, b.parts))[0]?.name ??
+      .toSorted((a, b) => compareVersions(b.parts, a.parts))[0]?.name ??
     names.find((name) => /ubuntu/i.test(name));
   if (!fallback) {
     die(`VM not found: ${requested}`);

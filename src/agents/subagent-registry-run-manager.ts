@@ -8,10 +8,15 @@ import { createRunningTaskRun } from "../tasks/detached-task-runtime.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { removeInternalSessionEffectsTranscript } from "./internal-session-effects.js";
+import { isAbortedAgentStopReason } from "./run-termination.js";
 import { isRecoverableAgentWaitError, waitForAgentRun } from "./run-wait.js";
 import type { ensureRuntimePluginsLoaded as ensureRuntimePluginsLoadedFn } from "./runtime-plugins.js";
 import { type SubagentRunOutcome, withSubagentOutcomeTiming } from "./subagent-announce-output.js";
-import { ensureCompletionState, normalizeSubagentRunState } from "./subagent-delivery-state.js";
+import {
+  clearDeliveryState,
+  ensureCompletionState,
+  normalizeSubagentRunState,
+} from "./subagent-delivery-state.js";
 import {
   SUBAGENT_ENDED_OUTCOME_KILLED,
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -192,6 +197,7 @@ export function createSubagentRunManager(params: {
         return;
       }
       const waitBlocked = isBlockedLivenessState(wait.livenessState);
+      const waitAborted = isAbortedAgentStopReason(wait.stopReason);
       if (wait.yielded === true && !waitBlocked) {
         if (
           markSubagentRunPausedAfterYield({
@@ -204,8 +210,8 @@ export function createSubagentRunManager(params: {
         }
         return;
       }
-      const waitStatus = waitBlocked ? "error" : wait.status;
-      if (waitStatus === "error" && isRecoverableAgentWaitError(wait.error)) {
+      const waitStatus = waitBlocked || waitAborted ? "error" : wait.status;
+      if (waitStatus === "error" && !waitAborted && isRecoverableAgentWaitError(wait.error)) {
         scheduleWaitRetry(entry, "subagent wait interrupted; scheduling recovery", wait.error);
         return;
       }
@@ -268,7 +274,11 @@ export function createSubagentRunManager(params: {
         mutated = true;
       }
       const rawWaitError = typeof wait.error === "string" ? wait.error : undefined;
-      const waitError = waitBlocked ? formatBlockedLivenessError(rawWaitError) : rawWaitError;
+      const waitError = waitAborted
+        ? "subagent run terminated"
+        : waitBlocked
+          ? formatBlockedLivenessError(rawWaitError)
+          : rawWaitError;
       const baseOutcome: SubagentRunOutcome =
         waitStatus === "error" ? { status: "error", error: waitError } : { status: "ok" };
       const outcome = withSubagentOutcomeTiming(baseOutcome, {
@@ -286,8 +296,11 @@ export function createSubagentRunManager(params: {
         runId,
         endedAt: entry.endedAt,
         outcome,
-        reason:
-          waitStatus === "error" ? SUBAGENT_ENDED_REASON_ERROR : SUBAGENT_ENDED_REASON_COMPLETE,
+        reason: waitAborted
+          ? SUBAGENT_ENDED_REASON_KILLED
+          : waitStatus === "error"
+            ? SUBAGENT_ENDED_REASON_ERROR
+            : SUBAGENT_ENDED_REASON_COMPLETE,
         sendFarewell: true,
         accountId: entry.requesterOrigin?.accountId,
         triggerCleanup: true,
@@ -454,6 +467,7 @@ export function createSubagentRunManager(params: {
       archiveAtMs,
       runTimeoutSeconds,
     });
+    clearDeliveryState(next);
 
     params.runs.set(nextRunId, next);
     params.ensureListener();

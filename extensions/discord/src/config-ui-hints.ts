@@ -233,6 +233,14 @@ export const discordChannelConfigUiHints = {
     label: "Discord Realtime Consult Policy",
     help: "Use always to strongly prefer the OpenClaw agent brain for substantive realtime turns. agent-proxy defaults to always.",
   },
+  "voice.realtime.requireWakeName": {
+    label: "Discord Realtime Require Wake Name",
+    help: "Require a configured wake name before OpenAI agent-proxy Discord realtime voice responds. If wakeNames is unset, the routed agent name is used, falling back to the agent id.",
+  },
+  "voice.realtime.wakeNames": {
+    label: "Discord Realtime Wake Names",
+    help: "Names that allow OpenAI agent-proxy Discord realtime voice to respond when requireWakeName is enabled.",
+  },
   "voice.realtime.bootstrapContextFiles": {
     label: "Discord Realtime Bootstrap Context Files",
     help: "Agent profile bootstrap files included in realtime provider instructions for direct voice identity/persona grounding. Defaults to IDENTITY.md, USER.md, and SOUL.md; set [] to disable.",

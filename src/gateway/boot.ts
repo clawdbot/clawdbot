@@ -54,6 +54,11 @@ function buildBootPrompt(content: string) {
   ].join("\n");
 }
 
+function resolveBootSessionKey(sessionKey: string): string {
+  const agentId = resolveAgentIdFromSessionKey(sessionKey);
+  return `agent:${agentId}:boot`;
+}
+
 async function loadBootFile(
   workspaceDir: string,
 ): Promise<{ content?: string; status: "ok" | "missing" | "empty" }> {
@@ -74,7 +79,7 @@ async function loadBootFile(
   }
 }
 
-function snapshotMainSessionMapping(params: {
+function snapshotSessionMapping(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
 }): SessionMappingSnapshot {
@@ -99,7 +104,7 @@ function snapshotMainSessionMapping(params: {
       entry: structuredClone(entry),
     };
   } catch (err) {
-    log.debug("boot: could not snapshot main session mapping", {
+    log.debug("boot: could not snapshot session mapping", {
       sessionKey: params.sessionKey,
       error: String(err),
     });
@@ -112,7 +117,7 @@ function snapshotMainSessionMapping(params: {
   }
 }
 
-async function restoreMainSessionMapping(
+async function restoreSessionMapping(
   snapshot: SessionMappingSnapshot,
 ): Promise<string | undefined> {
   if (!snapshot.canRestore) {
@@ -160,12 +165,13 @@ export async function runBootOnce(params: {
     return { status: "skipped", reason: result.status };
   }
 
-  const sessionKey = params.agentId
+  const mainSessionKey = params.agentId
     ? resolveAgentMainSessionKey({ cfg: params.cfg, agentId: params.agentId })
     : resolveMainSessionKey(params.cfg);
+  const sessionKey = resolveBootSessionKey(mainSessionKey);
   const message = buildBootPrompt(result.content ?? "");
   const sessionId = generateBootSessionId();
-  const mappingSnapshot = snapshotMainSessionMapping({
+  const mappingSnapshot = snapshotSessionMapping({
     cfg: params.cfg,
     sessionKey,
   });
@@ -178,6 +184,7 @@ export async function runBootOnce(params: {
         sessionKey,
         sessionId,
         deliver: false,
+        suppressPromptPersistence: true,
       },
       bootRuntime,
       params.deps,
@@ -187,9 +194,9 @@ export async function runBootOnce(params: {
     log.error(`boot: agent run failed: ${agentFailure}`);
   }
 
-  const mappingRestoreFailure = await restoreMainSessionMapping(mappingSnapshot);
+  const mappingRestoreFailure = await restoreSessionMapping(mappingSnapshot);
   if (mappingRestoreFailure) {
-    log.error(`boot: failed to restore main session mapping: ${mappingRestoreFailure}`);
+    log.error(`boot: failed to restore session mapping: ${mappingRestoreFailure}`);
   }
 
   if (!agentFailure && !mappingRestoreFailure) {

@@ -1,3 +1,4 @@
+import { AGENT_RUN_ABORTED_ERROR, isAbortedAgentStopReason } from "../../agents/run-termination.js";
 import {
   normalizeAgentRunTimeoutPhase,
   normalizeProviderStarted,
@@ -124,12 +125,15 @@ function readTerminalSnapshotFromDedupeEntry(entry: DedupeEntry): AgentWaitTermi
       : typeof payload?.summary === "string"
         ? payload.summary
         : entry.error?.message;
+  const abortedStopReason = isAbortedAgentStopReason(stopReason);
+  const normalizedError =
+    abortedStopReason && !errorMessage ? AGENT_RUN_ABORTED_ERROR : errorMessage;
 
   if (status === "ok" || status === "timeout") {
     const normalized = normalizeBlockedLivenessWaitStatus({
-      status,
+      status: abortedStopReason ? "error" : status,
       livenessState,
-      error: errorMessage,
+      error: normalizedError,
     });
     return {
       status: normalized.status,
@@ -139,7 +143,7 @@ function readTerminalSnapshotFromDedupeEntry(entry: DedupeEntry): AgentWaitTermi
         normalized.status === "error"
           ? normalized.error
           : normalized.status === "timeout"
-            ? errorMessage
+            ? normalizedError
             : undefined,
       stopReason,
       livenessState,

@@ -388,6 +388,21 @@ describe("handleTelegramAction", () => {
     });
   });
 
+  it("normalizes legacy group targets for sendMessage actions", async () => {
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "group:-1001234567890:topic:77",
+        content: "Recovered",
+      },
+      telegramConfig(),
+    );
+
+    const call = mockCall(sendMessageTelegram, 0, "legacy group target");
+    expect(call[0]).toBe("-1001234567890:topic:77");
+    expect(call[1]).toBe("Recovered");
+  });
+
   it("marks the matching inbound event delivered after a successful send", async () => {
     let count = 0;
     const end = beginTelegramInboundEventDeliveryCorrelation("telegram-session", {

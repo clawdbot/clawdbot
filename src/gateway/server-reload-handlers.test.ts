@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ConfigWriteNotification } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { consumeGatewaySigusr1RestartIntent } from "../infra/restart.js";
 import type { ChannelKind, GatewayReloadPlan } from "./config-reload-plan.js";
 import type { GatewayPluginReloadResult } from "./server-reload-handlers.js";
 import {
@@ -380,6 +381,10 @@ describe("gateway restart deferral preflight", () => {
       await Promise.resolve();
 
       expect(signalSpy).toHaveBeenCalledTimes(1);
+      expect(consumeGatewaySigusr1RestartIntent()).toEqual({
+        force: true,
+        reason: "config reload forced restart",
+      });
       expect(hoisted.markRestartAbortedMainSessions).toHaveBeenCalledWith({
         cfg: {
           gateway: { reload: { deferralTimeoutMs: 1_000 } },

@@ -9,7 +9,9 @@ import {
   measureDiagnosticsTimelineSpan,
   measureDiagnosticsTimelineSpanSync,
 } from "../infra/diagnostics-timeline.js";
+import { isOutboundDeliveryError } from "../infra/outbound/deliver-types.js";
 import { logMessageReceived } from "../logging/diagnostic.js";
+import { hasOutboundReplyContent } from "../plugin-sdk/reply-payload.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { SilentReplyConversationType } from "../shared/silent-reply-policy.js";
 import {
@@ -34,7 +36,10 @@ import type { GetReplyOptions, ReplyPayload } from "./types.js";
 
 type ForegroundReplyFenceState = {
   generation: number;
+  visibleDeliveryGeneration: number;
   activeDispatches: number;
+  activeGenerations: Map<number, number>;
+  waiters: Set<() => void>;
 };
 
 type ForegroundReplyFenceSnapshot = {
@@ -87,10 +92,17 @@ function beginForegroundReplyFence(
   }
   const state = foregroundReplyFenceByKey.get(key) ?? {
     generation: 0,
+    visibleDeliveryGeneration: 0,
     activeDispatches: 0,
+    activeGenerations: new Map<number, number>(),
+    waiters: new Set<() => void>(),
   };
   state.generation += 1;
   state.activeDispatches += 1;
+  state.activeGenerations.set(
+    state.generation,
+    (state.activeGenerations.get(state.generation) ?? 0) + 1,
+  );
   foregroundReplyFenceByKey.set(key, state);
   return {
     key,
@@ -98,13 +110,127 @@ function beginForegroundReplyFence(
   };
 }
 
-function isForegroundReplyFenceSuperseded(
-  snapshot: ForegroundReplyFenceSnapshot | undefined,
+function notifyForegroundReplyFenceWaiters(state: ForegroundReplyFenceState): void {
+  const waiters = [...state.waiters];
+  state.waiters.clear();
+  for (const resolve of waiters) {
+    resolve();
+  }
+}
+
+function hasNewerActiveForegroundReplyFenceGeneration(
+  state: ForegroundReplyFenceState,
+  generation: number,
 ): boolean {
-  return Boolean(
-    snapshot &&
-    (foregroundReplyFenceByKey.get(snapshot.key)?.generation ?? 0) !== snapshot.generation,
+  for (const [activeGeneration, count] of state.activeGenerations) {
+    if (activeGeneration > generation && count > 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function shouldCancelForegroundReplyDelivery(
+  snapshot: ForegroundReplyFenceSnapshot | undefined,
+): Promise<boolean> {
+  if (!snapshot) {
+    return false;
+  }
+  while (true) {
+    const state = foregroundReplyFenceByKey.get(snapshot.key);
+    if (!state) {
+      return false;
+    }
+    if (state.visibleDeliveryGeneration > snapshot.generation) {
+      return true;
+    }
+    if (!hasNewerActiveForegroundReplyFenceGeneration(state, snapshot.generation)) {
+      return false;
+    }
+    await new Promise<void>((resolve) => {
+      state.waiters.add(resolve);
+    });
+  }
+}
+
+function markForegroundReplyFenceVisibleDelivery(
+  snapshot: ForegroundReplyFenceSnapshot | undefined,
+  payload: ReplyPayload,
+  deliveryResult: unknown,
+): void {
+  if (!snapshot || !hasOutboundReplyContent(payload, { trimText: true })) {
+    return;
+  }
+  if (isExplicitlyNonVisibleDelivery(deliveryResult)) {
+    return;
+  }
+  markForegroundReplyFenceVisibleDeliveryGeneration(snapshot);
+}
+
+function markForegroundReplyFenceVisibleDeliveryGeneration(
+  snapshot: ForegroundReplyFenceSnapshot | undefined,
+): void {
+  if (!snapshot) {
+    return;
+  }
+  const state = foregroundReplyFenceByKey.get(snapshot.key);
+  if (!state) {
+    return;
+  }
+  state.visibleDeliveryGeneration = Math.max(state.visibleDeliveryGeneration, snapshot.generation);
+  notifyForegroundReplyFenceWaiters(state);
+}
+
+function isExplicitlyNonVisibleDelivery(deliveryResult: unknown): boolean {
+  return (
+    typeof deliveryResult === "object" &&
+    deliveryResult !== null &&
+    !Array.isArray(deliveryResult) &&
+    "visibleReplySent" in deliveryResult &&
+    (deliveryResult as { visibleReplySent?: unknown }).visibleReplySent === false
   );
+}
+
+function isExplicitlyVisibleDelivery(deliveryResult: unknown): boolean {
+  return (
+    typeof deliveryResult === "object" &&
+    deliveryResult !== null &&
+    !Array.isArray(deliveryResult) &&
+    (deliveryResult as { visibleReplySent?: unknown }).visibleReplySent === true
+  );
+}
+
+function isVisiblePartialDeliveryError(error: unknown): boolean {
+  if (isOutboundDeliveryError(error)) {
+    return error.sentBeforeError;
+  }
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    !Array.isArray(error) &&
+    ((error as { visibleReplySent?: unknown }).visibleReplySent === true ||
+      (error as { sentBeforeError?: unknown }).sentBeforeError === true)
+  );
+}
+
+async function runForegroundReplyFenceSettledDelivery(
+  snapshot: ForegroundReplyFenceSnapshot | undefined,
+  onSettled: (() => unknown) | undefined,
+): Promise<void> {
+  if (!onSettled) {
+    return;
+  }
+  try {
+    const deliveryResult = await onSettled();
+    if (isExplicitlyVisibleDelivery(deliveryResult)) {
+      markForegroundReplyFenceVisibleDeliveryGeneration(snapshot);
+    }
+  } catch (err: unknown) {
+    if (isVisiblePartialDeliveryError(err)) {
+      markForegroundReplyFenceVisibleDeliveryGeneration(snapshot);
+    }
+    throw err;
+  }
 }
 
 function endForegroundReplyFence(snapshot: ForegroundReplyFenceSnapshot): void {
@@ -112,7 +238,14 @@ function endForegroundReplyFence(snapshot: ForegroundReplyFenceSnapshot): void {
   if (!state) {
     return;
   }
+  const activeGenerationCount = state.activeGenerations.get(snapshot.generation) ?? 0;
+  if (activeGenerationCount <= 1) {
+    state.activeGenerations.delete(snapshot.generation);
+  } else {
+    state.activeGenerations.set(snapshot.generation, activeGenerationCount - 1);
+  }
   state.activeDispatches -= 1;
+  notifyForegroundReplyFenceWaiters(state);
   if (state.activeDispatches <= 0) {
     foregroundReplyFenceByKey.delete(snapshot.key);
   }
@@ -306,21 +439,39 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
   const beforeDeliver: ReplyDispatchBeforeDeliver | undefined =
     foregroundReplyFence || configuredBeforeDeliver
       ? async (payload, info) => {
-          if (isForegroundReplyFenceSuperseded(foregroundReplyFence)) {
+          if (await shouldCancelForegroundReplyDelivery(foregroundReplyFence)) {
             return null;
           }
           const deliverPayload = configuredBeforeDeliver
             ? await configuredBeforeDeliver(payload, info)
             : payload;
-          if (!deliverPayload || isForegroundReplyFenceSuperseded(foregroundReplyFence)) {
+          if (
+            !deliverPayload ||
+            (await shouldCancelForegroundReplyDelivery(foregroundReplyFence))
+          ) {
             return null;
           }
           return deliverPayload;
         }
       : undefined;
+  const deliver: ReplyDispatcherWithTypingOptions["deliver"] = async (payload, info) => {
+    try {
+      const result = await params.dispatcherOptions.deliver(payload, info);
+      markForegroundReplyFenceVisibleDelivery(foregroundReplyFence, payload, result);
+      return result;
+    } catch (err: unknown) {
+      if (isVisiblePartialDeliveryError(err)) {
+        markForegroundReplyFenceVisibleDelivery(foregroundReplyFence, payload, {
+          visibleReplySent: true,
+        });
+      }
+      throw err;
+    }
+  };
   const { dispatcher, replyOptions, markDispatchIdle, markRunComplete } =
     createReplyDispatcherWithTyping({
       ...params.dispatcherOptions,
+      deliver,
       beforeDeliver,
       silentReplyContext: params.dispatcherOptions.silentReplyContext ?? silentReplyContext,
     });
@@ -336,11 +487,18 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
       },
     });
   } finally {
-    if (foregroundReplyFence) {
-      endForegroundReplyFence(foregroundReplyFence);
+    try {
+      await runForegroundReplyFenceSettledDelivery(
+        foregroundReplyFence,
+        params.dispatcherOptions.onSettled,
+      );
+    } finally {
+      if (foregroundReplyFence) {
+        endForegroundReplyFence(foregroundReplyFence);
+      }
+      markRunComplete();
+      markDispatchIdle();
     }
-    markRunComplete();
-    markDispatchIdle();
   }
 }
 

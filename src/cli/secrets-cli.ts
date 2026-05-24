@@ -181,11 +181,15 @@ export function registerSecretsCli(program: Command): void {
           const { writeFileSync } = await import("node:fs");
           writeFileSync(opts.planOut, `${JSON.stringify(configured.plan, null, 2)}\n`, "utf8");
         }
+
+        let shouldApply = Boolean(opts.apply || opts.yes);
         if (opts.json) {
-          defaultRuntime.writeJson({
-            plan: configured.plan,
-            preflight: configured.preflight,
-          });
+          if (!shouldApply) {
+            defaultRuntime.writeJson({
+              plan: configured.plan,
+              preflight: configured.preflight,
+            });
+          }
         } else {
           defaultRuntime.log(
             `Preflight: changed=${configured.preflight.changed}, files=${configured.preflight.changedFiles.length}, warnings=${configured.preflight.warningCount}.`,
@@ -213,7 +217,6 @@ export function registerSecretsCli(program: Command): void {
           }
         }
 
-        let shouldApply = Boolean(opts.apply);
         if (!shouldApply && !opts.json) {
           const { confirm } = await import("@clack/prompts");
           const approved = await confirm({

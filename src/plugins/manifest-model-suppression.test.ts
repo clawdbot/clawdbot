@@ -2,10 +2,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   loadPluginMetadataSnapshot: vi.fn(),
+  resolvePluginMetadataSnapshot: vi.fn(),
 }));
 
 vi.mock("./plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: mocks.loadPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot: mocks.resolvePluginMetadataSnapshot,
 }));
 
 import {
@@ -49,6 +51,10 @@ describe("manifest model suppression", () => {
           },
         },
       ]),
+    );
+    mocks.resolvePluginMetadataSnapshot.mockImplementation(
+      (params?: Parameters<typeof mocks.loadPluginMetadataSnapshot>[0]) =>
+        mocks.loadPluginMetadataSnapshot(params),
     );
   });
 

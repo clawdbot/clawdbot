@@ -602,6 +602,56 @@ describe("subagent registry seam flow", () => {
     expect(run?.outcome?.status).toBe("error");
   });
 
+  it("announces aborted agent.wait snapshots as killed subagent failures", async () => {
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        return {
+          status: "ok",
+          startedAt: 100,
+          endedAt: 250,
+          stopReason: "aborted",
+        };
+      }
+      return {};
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-aborted-wait",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "aborted wait",
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+    });
+
+    await waitForFast(() => {
+      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+    });
+    const announceParams = expectRecordFields(
+      getMockCallArg(mocks.runSubagentAnnounceFlow, 0, 0, "aborted wait announce"),
+      { childRunId: "run-aborted-wait" },
+      "aborted wait announce params",
+    );
+    expectRecordFields(
+      announceParams.outcome,
+      {
+        status: "error",
+        error: "subagent run terminated",
+        startedAt: 100,
+        endedAt: 250,
+        elapsedMs: 150,
+      },
+      "aborted wait announce outcome",
+    );
+
+    const run = mod
+      .listSubagentRunsForRequester("agent:main:main")
+      .find((entry) => entry.runId === "run-aborted-wait");
+    expect(run?.endedReason).toBe("subagent-killed");
+    expect(run?.outcome?.status).toBe("error");
+  });
+
   it("reconciles stale active runs from persisted terminal session state during sweep", async () => {
     mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
       if (request.method === "agent.wait") {
@@ -915,6 +965,83 @@ describe("subagent registry seam flow", () => {
       .find((entry) => entry.runId === "run-blocked-end");
     expect(run?.endedReason).toBe("subagent-error");
     expect(run?.outcome?.status).toBe("error");
+  });
+
+  it("announces aborted lifecycle end events as killed subagent failures", async () => {
+    mocks.callGateway.mockImplementation(async (request: { method?: string }) => {
+      if (request.method === "agent.wait") {
+        return { status: "pending" };
+      }
+      return {};
+    });
+
+    mod.registerSubagentRun({
+      runId: "run-aborted-end",
+      childSessionKey: "agent:main:subagent:child",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "aborted task",
+      cleanup: "keep",
+      expectsCompletionMessage: true,
+    });
+
+    const lastOnAgentEventCall = mocks.onAgentEvent.mock.calls[
+      mocks.onAgentEvent.mock.calls.length - 1
+    ] as unknown as
+      | [(evt: { runId: string; stream: string; data: Record<string, unknown> }) => void]
+      | undefined;
+    const lifecycleHandler = lastOnAgentEventCall?.[0];
+    expect(lifecycleHandler).toBeTypeOf("function");
+
+    lifecycleHandler?.({
+      runId: "run-aborted-end",
+      stream: "lifecycle",
+      data: {
+        phase: "start",
+        startedAt: 10,
+      },
+    });
+    lifecycleHandler?.({
+      runId: "run-aborted-end",
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        startedAt: 10,
+        endedAt: 20,
+        aborted: true,
+        livenessState: "blocked",
+        stopReason: "aborted",
+      },
+    });
+
+    await waitForFast(() => {
+      expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
+    });
+    const announceParams = expectRecordFields(
+      getMockCallArg(mocks.runSubagentAnnounceFlow, 0, 0, "aborted announce"),
+      { childRunId: "run-aborted-end" },
+      "aborted announce params",
+    );
+    expectRecordFields(
+      announceParams.outcome,
+      {
+        status: "error",
+        error: "subagent run terminated",
+        startedAt: 10,
+        endedAt: 20,
+        elapsedMs: 10,
+      },
+      "aborted announce outcome",
+    );
+
+    const run = mod
+      .listSubagentRunsForRequester("agent:main:main")
+      .find((entry) => entry.runId === "run-aborted-end");
+    expect(run?.endedReason).toBe("subagent-killed");
+    expect(run?.outcome?.status).toBe("error");
+
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
   });
 
   it("preserves run-mode keep entries past SESSION_RUN_TTL_MS sweep", async () => {

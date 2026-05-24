@@ -76,6 +76,7 @@ describe("waitForAgentJob", () => {
     startedAt: number;
     endedAt: number;
     aborted?: boolean;
+    stopReason?: string;
   }) {
     const runId = `${params.runIdPrefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const waitPromise = waitForAgentJob({ runId, timeoutMs: 1_000 });
@@ -88,7 +89,12 @@ describe("waitForAgentJob", () => {
     emitAgentEvent({
       runId,
       stream: "lifecycle",
-      data: { phase: "end", endedAt: params.endedAt, aborted: params.aborted },
+      data: {
+        phase: "end",
+        endedAt: params.endedAt,
+        aborted: params.aborted,
+        ...(params.stopReason ? { stopReason: params.stopReason } : {}),
+      },
     });
 
     return waitPromise;
@@ -141,6 +147,22 @@ describe("waitForAgentJob", () => {
       status: "ok",
       startedAt: 300,
       endedAt: 400,
+    });
+  });
+
+  it("maps aborted stop reasons to error snapshots instead of ok", async () => {
+    const snapshot = await runLifecycleScenario({
+      runIdPrefix: "run-aborted-stop-reason",
+      startedAt: 410,
+      endedAt: 420,
+      stopReason: "aborted",
+    });
+    expectRecordFields(snapshot, {
+      status: "error",
+      startedAt: 410,
+      endedAt: 420,
+      stopReason: "aborted",
+      error: "agent run aborted",
     });
   });
 
@@ -684,6 +706,82 @@ describe("projectRecentChatDisplayMessages", () => {
         role: "user",
         content: [{ type: "text", text: "status" }],
         timestamp: 1,
+      },
+    ]);
+  });
+
+  it("drops duplicate ACP gateway-injected assistant replies from chat history", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "good morning" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "acp-runtime",
+        content: [{ type: "text", text: "Good morning." }],
+        timestamp: 2,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "gateway-injected",
+        content: [{ type: "text", text: "Good morning." }],
+        idempotencyKey: "run-1",
+        timestamp: 3,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "good morning" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "acp-runtime",
+        content: [{ type: "text", text: "Good morning." }],
+        timestamp: 2,
+      },
+    ]);
+  });
+
+  it("keeps gateway-injected assistant replies when they are not duplicate ACP text", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "acp-runtime",
+        content: [{ type: "text", text: "First answer." }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "gateway-injected",
+        content: [{ type: "text", text: "Second answer." }],
+        timestamp: 2,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "acp-runtime",
+        content: [{ type: "text", text: "First answer." }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "gateway-injected",
+        content: [{ type: "text", text: "Second answer." }],
+        timestamp: 2,
       },
     ]);
   });

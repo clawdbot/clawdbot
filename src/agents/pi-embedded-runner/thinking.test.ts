@@ -279,7 +279,58 @@ describe("stripInvalidThinkingSignatures", () => {
     expect(result).toBe(messages);
   });
 
-  it("strips thinking blocks with missing, empty, or blank signatures", () => {
+  it("preserves invalid thinking signatures on the latest assistant message", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({ role: "user", content: "hello" }),
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "missing" },
+          { type: "thinking", thinking: "empty", thinkingSignature: "" },
+          { type: "thinking", thinking: "blank", thinkingSignature: "   " },
+          { type: "thinking", thinking: "signed", thinkingSignature: "sig" },
+          { type: "text", text: "answer" },
+        ],
+      }),
+    ];
+
+    const result = stripInvalidThinkingSignatures(messages);
+    const assistant = result[1] as Extract<AgentMessage, { role: "assistant" }>;
+
+    expect(result).toBe(messages);
+    expect(assistant.content).toEqual([
+      { type: "thinking", thinking: "missing" },
+      { type: "thinking", thinking: "empty", thinkingSignature: "" },
+      { type: "thinking", thinking: "blank", thinkingSignature: "   " },
+      { type: "thinking", thinking: "signed", thinkingSignature: "sig" },
+      { type: "text", text: "answer" },
+    ]);
+  });
+
+  it("can strip invalid thinking signatures from the latest assistant message", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({ role: "user", content: "hello" }),
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "missing" },
+          { type: "thinking", thinking: "signed", thinkingSignature: "sig" },
+          { type: "text", text: "answer" },
+        ],
+      }),
+    ];
+
+    const result = stripInvalidThinkingSignatures(messages, { preserveLatestAssistant: false });
+    const assistant = result[1] as Extract<AgentMessage, { role: "assistant" }>;
+
+    expect(result).not.toBe(messages);
+    expect(assistant.content).toEqual([
+      { type: "thinking", thinking: "signed", thinkingSignature: "sig" },
+      { type: "text", text: "answer" },
+    ]);
+  });
+
+  it("strips thinking blocks with missing, empty, or blank signatures from older assistant messages", () => {
     const messages: AgentMessage[] = [
       castAgentMessage({
         role: "assistant",
@@ -291,6 +342,8 @@ describe("stripInvalidThinkingSignatures", () => {
           { type: "text", text: "answer" },
         ],
       }),
+      castAgentMessage({ role: "user", content: "follow up" }),
+      castAgentMessage({ role: "assistant", content: [{ type: "text", text: "latest" }] }),
     ];
 
     const result = stripInvalidThinkingSignatures(messages);
@@ -309,6 +362,8 @@ describe("stripInvalidThinkingSignatures", () => {
         role: "assistant",
         content: [{ type: "thinking", thinking: "reasoning", thinkingSignature: "" }],
       }),
+      castAgentMessage({ role: "user", content: "follow up" }),
+      castAgentMessage({ role: "assistant", content: [{ type: "text", text: "latest" }] }),
     ];
 
     const result = stripInvalidThinkingSignatures(messages);
@@ -317,7 +372,7 @@ describe("stripInvalidThinkingSignatures", () => {
     expect(assistant.content).toEqual([{ type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT }]);
   });
 
-  it("strips redacted thinking blocks with invalid opaque signatures", () => {
+  it("strips redacted thinking blocks with invalid opaque signatures from older assistant messages", () => {
     const messages: AgentMessage[] = [
       castAgentMessage({
         role: "assistant",
@@ -328,6 +383,8 @@ describe("stripInvalidThinkingSignatures", () => {
           { type: "text", text: "answer" },
         ],
       }),
+      castAgentMessage({ role: "user", content: "follow up" }),
+      castAgentMessage({ role: "assistant", content: [{ type: "text", text: "latest" }] }),
     ];
 
     const result = stripInvalidThinkingSignatures(messages);
@@ -497,6 +554,36 @@ describe("wrapAnthropicStreamWithRecovery", () => {
     expect(retryMessage.content).toEqual([{ type: "text", text: "visible answer" }]);
   });
 
+  it("retries Bedrock-style invalid thinking signature errors", async () => {
+    let callCount = 0;
+    const bedrockThinkingError = new Error(
+      "ValidationException: invalid signature on thinking block in message history",
+    );
+    const wrapped = wrapAnthropicStreamWithRecovery(
+      (() => {
+        callCount += 1;
+        return Promise.reject(bedrockThinkingError);
+      }) as Parameters<typeof wrapAnthropicStreamWithRecovery>[0],
+      { id: "test-session" },
+    );
+
+    await expect(
+      wrapped(
+        {} as never,
+        {
+          messages: castAgentMessages([
+            {
+              role: "assistant",
+              content: [{ type: "thinking", thinking: "secret", thinkingSignature: "" }],
+            },
+          ]),
+        } as never,
+        {} as never,
+      ),
+    ).rejects.toBe(bedrockThinkingError);
+    expect(callCount).toBe(2);
+  });
+
   it("does not retry when the stream fails after yielding a chunk", async () => {
     let callCount = 0;
     const wrapped = wrapAnthropicStreamWithRecovery(
@@ -538,6 +625,34 @@ describe("wrapAnthropicStreamWithRecovery", () => {
       rateLimitError,
     );
     expect(callCount).toBe(1);
+  });
+
+  it("allows each provider call to recover once", async () => {
+    let callCount = 0;
+    const wrapped = wrapAnthropicStreamWithRecovery(
+      (() => {
+        callCount += 1;
+        return Promise.reject(anthropicThinkingError);
+      }) as Parameters<typeof wrapAnthropicStreamWithRecovery>[0],
+      { id: "test-session" },
+    );
+    const context = {
+      messages: castAgentMessages([
+        {
+          role: "assistant",
+          content: [{ type: "thinking", thinking: "secret", thinkingSignature: "sig" }],
+        },
+      ]),
+    };
+
+    await expect(wrapped({} as never, context as never, {} as never)).rejects.toBe(
+      anthropicThinkingError,
+    );
+    await expect(wrapped({} as never, context as never, {} as never)).rejects.toBe(
+      anthropicThinkingError,
+    );
+
+    expect(callCount).toBe(4);
   });
 
   it("preserves result() for synchronous event streams", async () => {

@@ -310,7 +310,8 @@ ComfyUI support 1.
     transparent outputs require `outputFormat` `png` or `webp` and a
     transparency-capable OpenAI image model. OpenClaw routes default
     `gpt-image-2` transparent-background requests to `gpt-image-1.5`.
-    `openai.outputCompression` applies to JPEG/WebP outputs.
+    `openai.outputCompression` applies to JPEG/WebP outputs and is ignored
+    for PNG outputs.
 
     The top-level `background` hint is provider-neutral and currently maps
     to the same OpenAI `background` request field when the OpenAI provider

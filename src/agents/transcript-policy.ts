@@ -32,17 +32,26 @@ export type TranscriptPolicy = {
   allowSyntheticToolResults: boolean;
 };
 
+const SIGNED_THINKING_PROVIDERS = new Set(["anthropic", "amazon-bedrock", "anthropic-vertex"]);
+
+export function providerRequiresSignedThinking(provider?: string | null): boolean {
+  return SIGNED_THINKING_PROVIDERS.has(normalizeProviderId(provider ?? ""));
+}
+
 export function shouldAllowProviderOwnedThinkingReplay(params: {
   modelApi?: string | null;
+  provider?: string | null;
   policy: Pick<
     TranscriptPolicy,
     "validateAnthropicTurns" | "preserveSignatures" | "dropThinkingBlocks"
   >;
 }): boolean {
+  const hasProviderOwnedSignedThinking =
+    params.policy.preserveSignatures || providerRequiresSignedThinking(params.provider);
   return (
     isAnthropicApi(params.modelApi) &&
     params.policy.validateAnthropicTurns &&
-    params.policy.preserveSignatures &&
+    hasProviderOwnedSignedThinking &&
     !params.policy.dropThinkingBlocks
   );
 }

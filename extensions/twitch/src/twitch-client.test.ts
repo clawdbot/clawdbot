@@ -15,7 +15,11 @@ import { TwitchClientManager } from "./twitch-client.js";
 import type { ChannelLogSink, TwitchAccountConfig, TwitchChatMessage } from "./types.js";
 
 // Mock @twurple dependencies
-const mockConnect = vi.fn().mockResolvedValue(undefined);
+const mockConnect = vi.fn(() => {
+  for (const handler of authSuccessHandlers) {
+    handler();
+  }
+});
 const mockJoin = vi.fn().mockResolvedValue(undefined);
 const mockSay = vi.fn().mockResolvedValue({ messageId: "test-msg-123" });
 const mockQuit = vi.fn();
@@ -24,10 +28,25 @@ const mockUnbind = vi.fn();
 // Event handler storage for testing
 const messageHandlers: Array<(channel: string, user: string, message: string, msg: any) => void> =
   [];
+const authSuccessHandlers: Array<() => void> = [];
+const authFailureHandlers: Array<(text: string, retryCount: number) => void> = [];
+const disconnectHandlers: Array<(manual: boolean, reason?: Error) => void> = [];
 
 // Mock functions that track handlers and return unbind objects
 const mockOnMessage = vi.fn((handler: any) => {
   messageHandlers.push(handler);
+  return { unbind: mockUnbind };
+});
+const mockOnAuthenticationSuccess = vi.fn((handler: () => void) => {
+  authSuccessHandlers.push(handler);
+  return { unbind: mockUnbind };
+});
+const mockOnAuthenticationFailure = vi.fn((handler: (text: string, retryCount: number) => void) => {
+  authFailureHandlers.push(handler);
+  return { unbind: mockUnbind };
+});
+const mockOnDisconnect = vi.fn((handler: (manual: boolean, reason?: Error) => void) => {
+  disconnectHandlers.push(handler);
   return { unbind: mockUnbind };
 });
 
@@ -38,6 +57,9 @@ const mockOnRefreshFailure = vi.fn();
 vi.mock("@twurple/chat", () => ({
   ChatClient: class {
     onMessage = mockOnMessage;
+    onAuthenticationSuccess = mockOnAuthenticationSuccess;
+    onAuthenticationFailure = mockOnAuthenticationFailure;
+    onDisconnect = mockOnDisconnect;
     connect = mockConnect;
     join = mockJoin;
     say = mockSay;
@@ -108,6 +130,9 @@ describe("TwitchClientManager", () => {
 
     // Clear handler arrays
     messageHandlers.length = 0;
+    authSuccessHandlers.length = 0;
+    authFailureHandlers.length = 0;
+    disconnectHandlers.length = 0;
 
     // Re-set up the default token mock implementation after clearing
     resolveTwitchTokenMock.mockReturnValue({
@@ -159,6 +184,75 @@ describe("TwitchClientManager", () => {
 
       expect(client1).toBe(client2);
       expect(mockConnect).toHaveBeenCalledTimes(1);
+    });
+
+    it("deduplicates concurrent client creation for the same account", async () => {
+      mockConnect.mockImplementationOnce(() => {});
+
+      const first = manager.getClient(testAccount);
+      const second = manager.getClient(testAccount);
+      await Promise.resolve();
+
+      expect(mockConnect).toHaveBeenCalledTimes(1);
+      expect(authSuccessHandlers).toHaveLength(1);
+      authSuccessHandlers[0]?.();
+
+      const [client1, client2] = await Promise.all([first, second]);
+      expect(client1).toBe(client2);
+    });
+
+    it("waits through authentication failure retry disconnects", async () => {
+      mockConnect.mockImplementationOnce(() => {});
+
+      const connection = manager.getClient(testAccount);
+      await Promise.resolve();
+      authFailureHandlers[0]?.("bad token", 1);
+
+      let settled = false;
+      void connection.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        "Twitch authentication failed for testbot; waiting for retry, disconnect, or timeout: bad token",
+      );
+
+      disconnectHandlers[0]?.(false, new Error("disconnected"));
+      await Promise.resolve();
+      expect(settled).toBe(false);
+
+      authSuccessHandlers[0]?.();
+      await expect(connection).resolves.toBeTruthy();
+    });
+
+    it("rejects pending auth retry connections on manual disconnect", async () => {
+      mockConnect.mockImplementationOnce(() => {});
+
+      const connection = manager.getClient(testAccount);
+      await Promise.resolve();
+      authFailureHandlers[0]?.("bad token", 1);
+      disconnectHandlers[0]?.(true);
+
+      await expect(connection).rejects.toThrow("Twitch connection cancelled");
+    });
+
+    it("does not cache pending connections after disconnectAll", async () => {
+      mockConnect.mockImplementationOnce(() => {});
+
+      const connection = manager.getClient(testAccount);
+      await Promise.resolve();
+
+      await manager.disconnectAll();
+      authSuccessHandlers[0]?.();
+
+      await expect(connection).rejects.toThrow("Twitch connection cancelled");
+      expect(mockQuit).toHaveBeenCalledTimes(2);
     });
 
     it("should create separate clients for different accounts", async () => {
@@ -385,6 +479,36 @@ describe("TwitchClientManager", () => {
       const key = manager.getAccountKey(testAccount);
       expect((manager as any).clients.has(key)).toBe(false);
       expect((manager as any).messageHandlers.has(key)).toBe(false);
+    });
+
+    it("clears pending client message handlers when disconnect cancels connection", async () => {
+      mockConnect.mockImplementationOnce(() => {});
+      const handler = vi.fn();
+      manager.onMessage(testAccount, handler);
+
+      const connection = manager.getClient(testAccount);
+      await Promise.resolve();
+      await manager.disconnect(testAccount);
+
+      const key = manager.getAccountKey(testAccount);
+      expect((manager as any).messageHandlers.has(key)).toBe(false);
+      authSuccessHandlers[0]?.();
+      await expect(connection).rejects.toThrow("Twitch connection cancelled");
+
+      messageHandlers[0]?.("#testchannel", "testuser", "stale", {
+        userInfo: {
+          userName: "testuser",
+          displayName: "TestUser",
+          userId: "123",
+          isMod: false,
+          isBroadcaster: false,
+          isVip: false,
+          isSubscriber: false,
+        },
+        id: "msg-stale",
+      });
+
+      expect(handler).not.toHaveBeenCalled();
     });
 
     it("should handle disconnecting non-existent client gracefully", async () => {

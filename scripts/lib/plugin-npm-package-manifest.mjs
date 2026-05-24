@@ -8,6 +8,7 @@ import {
   listPluginNpmRuntimeBuildOutputs,
   resolvePluginNpmRuntimeBuildPlan,
 } from "./plugin-npm-runtime-build.mjs";
+import { resolveNpmRunner } from "../npm-runner.mjs";
 
 const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA_PATH =
   "src/config/bundled-channel-config-metadata.generated.ts";
@@ -136,28 +137,26 @@ function listConfiguredBundledDependencyNames(packageJson) {
   return [];
 }
 
-function npmInvocation() {
-  if (process.platform !== "win32") {
-    return { args: [], command: "npm" };
-  }
-  const npmCliPath = path.join(
-    path.dirname(process.execPath),
-    "node_modules",
-    "npm",
-    "bin",
-    "npm-cli.js",
-  );
-  if (fs.existsSync(npmCliPath)) {
-    return { args: [npmCliPath], command: process.execPath };
-  }
-  return { args: [], command: "npm.cmd", shell: true };
+export function resolvePluginNpmCommand(args, params = {}) {
+  return resolveNpmRunner({
+    comSpec: params.comSpec,
+    env: params.env,
+    execPath: params.execPath,
+    existsSync: params.existsSync,
+    npmArgs: args,
+    platform: params.platform,
+  });
 }
 
-function spawnNpmSync(args, options) {
-  const invocation = npmInvocation();
-  return spawnSync(invocation.command, [...invocation.args, ...args], {
+function spawnNpmSync(args, options = {}) {
+  const invocation = resolvePluginNpmCommand(args, { env: options.env ?? process.env });
+  return spawnSync(invocation.command, invocation.args, {
     ...options,
-    ...(invocation.shell ? { shell: invocation.shell } : {}),
+    ...(invocation.env ? { env: invocation.env } : {}),
+    ...(invocation.shell !== undefined ? { shell: invocation.shell } : {}),
+    ...(invocation.windowsVerbatimArguments !== undefined
+      ? { windowsVerbatimArguments: invocation.windowsVerbatimArguments }
+      : {}),
   });
 }
 
@@ -294,7 +293,7 @@ function installMissingOptionalBundledDependencies(params) {
       {
         cwd: params.packageDir,
         env: process.env,
-        stdio: ["ignore", "ignore", "inherit"],
+        stdio: ["ignore", "inherit", "inherit"],
       },
     );
     if (result.error) {
@@ -353,22 +352,34 @@ function installPackageLocalBundledDependencies(params) {
 
   console.error(`[plugin-npm-publish] installing bundled dependencies for ${params.pluginDir}`);
   const packageJsonPath = resolvePackageJsonPath(params.packageDir);
-  const publishPackageJsonText = fs.readFileSync(packageJsonPath, "utf8");
+  const packedPackageJsonText = fs.readFileSync(packageJsonPath, "utf8");
+  const installPackageJsonBase = {
+    ...params.packageJson,
+  };
+  delete installPackageJsonBase.peerDependencies;
+  delete installPackageJsonBase.peerDependenciesMeta;
+  const installPackageJson = packageJsonForShrinkwrap(
+    installPackageJsonBase,
+    readShrinkwrapOverrides(),
+  );
+  const installPackageJsonText = `${JSON.stringify(installPackageJson, null, 2)}\n`;
+  if (installPackageJsonText !== packedPackageJsonText) {
+    // npm validates peer edges against the shrinkwrap during ci even when peers are omitted.
+    // The peer metadata belongs in the packed plugin, not in this temporary dependency install.
+    fs.writeFileSync(packageJsonPath, installPackageJsonText, "utf8");
+  }
   try {
-    const installPackageJson = packageJsonForShrinkwrap(packageJson, readShrinkwrapOverrides());
-    const installPackageJsonText = `${JSON.stringify(installPackageJson, null, 2)}\n`;
-    if (installPackageJsonText !== publishPackageJsonText) {
-      fs.writeFileSync(packageJsonPath, installPackageJsonText, "utf8");
-    }
     const result = spawnNpmSync(
       [
         "ci",
+        "--install-strategy=shallow",
         "--omit=dev",
         "--omit=peer",
         "--legacy-peer-deps",
         "--ignore-scripts",
         "--no-audit",
         "--no-fund",
+        "--workspaces=false",
         "--loglevel=error",
       ],
       {
@@ -387,7 +398,7 @@ function installPackageLocalBundledDependencies(params) {
     }
     installMissingOptionalBundledDependencies(params);
   } finally {
-    fs.writeFileSync(packageJsonPath, publishPackageJsonText, "utf8");
+    fs.writeFileSync(packageJsonPath, packedPackageJsonText, "utf8");
   }
   return () => {
     fs.rmSync(nodeModulesPath, { recursive: true, force: true });

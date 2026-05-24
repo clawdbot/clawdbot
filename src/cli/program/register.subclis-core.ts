@@ -59,10 +59,11 @@ async function registerGatewayRunOnly(program: Command): Promise<void> {
 
 async function registerSubCliWithPluginCommands(
   program: Command,
+  argv: string[],
   registerSubCli: () => Promise<void>,
   pluginCliPosition: "before" | "after",
 ) {
-  const invocation = resolveCliArgvInvocation(process.argv);
+  const invocation = resolveCliArgvInvocation(argv);
   const shouldRegisterPluginCommands =
     !invocation.hasHelpOrVersion &&
     resolveCliCommandPathPolicy(invocation.commandPath).loadPlugins !== "never";
@@ -204,9 +205,10 @@ const entrySpecs: readonly CommandGroupDescriptorSpec<SubCliRegistrar>[] = [
   ]),
   {
     commandNames: ["pairing"],
-    register: async (program) => {
+    register: async (program, argv) => {
       await registerSubCliWithPluginCommands(
         program,
+        argv,
         async () => {
           const mod = await import("../pairing-cli.js");
           mod.registerPairingCli(program);
@@ -217,9 +219,10 @@ const entrySpecs: readonly CommandGroupDescriptorSpec<SubCliRegistrar>[] = [
   },
   {
     commandNames: ["plugins"],
-    register: async (program) => {
+    register: async (program, argv) => {
       await registerSubCliWithPluginCommands(
         program,
+        argv,
         async () => {
           const mod = await import("../plugins-cli.js");
           mod.registerPluginsCli(program);

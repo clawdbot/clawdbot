@@ -114,10 +114,15 @@ export const discordVoiceMeetingNotesSourceProvider: MeetingNotesSourceProviderP
     if (!guildId) {
       return { ok: false, error: "Discord meeting notes require guildId." };
     }
-    const result = await manager.leave({
-      guildId,
-      channelId: request.source.channelId,
-    });
+    const result = await manager.leave(
+      {
+        guildId,
+        channelId: request.source.channelId,
+      },
+      {
+        meetingNotesSessionId: request.sessionId,
+      },
+    );
     if (!result.ok) {
       return { ok: false, error: result.message };
     }

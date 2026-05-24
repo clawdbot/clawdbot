@@ -1,5 +1,6 @@
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { formatBlockedLivenessError, isBlockedLivenessState } from "../shared/agent-liveness.js";
+import { isAbortedAgentStopReason } from "./run-termination.js";
 import { wrapPromptDataBlock } from "./sanitize-for-prompt.js";
 import {
   captureSubagentCompletionReplyUsing,
@@ -280,6 +281,8 @@ export function applySubagentWaitOutcome(params: {
   // Capture/announcement callers can pass raw wait snapshots that bypass the primary normalizers.
   if (isBlockedLivenessState(params.wait?.livenessState)) {
     outcome = { status: "error", error: formatBlockedLivenessError(waitError) };
+  } else if (isAbortedAgentStopReason(params.wait?.stopReason)) {
+    outcome = { status: "error", error: "subagent run terminated" };
   } else if (params.wait?.status === "timeout") {
     outcome = { status: "timeout" };
   } else if (params.wait?.status === "error") {

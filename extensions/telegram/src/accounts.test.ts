@@ -227,6 +227,23 @@ describe("resolveDefaultTelegramAccountId", () => {
     expectNoMissingDefaultWarning();
   });
 
+  it("does not warn when explicit defaultAccount is first in multi-account fallback order (#83948)", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          defaultAccount: "alerts",
+          accounts: {
+            alerts: { botToken: "tok-alerts" },
+            work: { botToken: "tok-work" },
+          },
+        },
+      },
+    };
+
+    expect(resolveDefaultTelegramAccountId(cfg)).toBe("alerts");
+    expectNoMissingDefaultWarning();
+  });
+
   it("does not warn when only one non-default account is configured", () => {
     const cfg: OpenClawConfig = {
       channels: {

@@ -127,6 +127,7 @@ describe("Dockerfile", () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile");
     const postinstallIndex = dockerfile.indexOf("COPY scripts/postinstall-bundled-plugins.mjs");
+    const prepareIndex = dockerfile.indexOf("scripts/prepare-git-hooks.mjs");
     const distImportHelperIndex = dockerfile.indexOf(
       "COPY scripts/lib/package-dist-imports.mjs ./scripts/lib/package-dist-imports.mjs",
     );
@@ -138,6 +139,7 @@ describe("Dockerfile", () => {
     );
 
     expect(postinstallIndex).toBeGreaterThan(-1);
+    expect(prepareIndex).toBeGreaterThan(-1);
     expect(distImportHelperIndex).toBeGreaterThan(-1);
     expect(packageManifestIndex).toBeGreaterThan(-1);
     expect(extensionManifestIndex).toBeGreaterThan(-1);
@@ -146,9 +148,40 @@ describe("Dockerfile", () => {
       `if [ -f "/tmp/\${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext/package.json" ]; then`,
     );
     expect(postinstallIndex).toBeLessThan(installIndex);
+    expect(prepareIndex).toBeLessThan(installIndex);
     expect(distImportHelperIndex).toBeLessThan(installIndex);
     expect(packageManifestIndex).toBeLessThan(installIndex);
     expect(extensionManifestIndex).toBeLessThan(installIndex);
+  });
+
+  it("copies root package lifecycle scripts before pnpm install", async () => {
+    const [dockerfile, packageJsonText] = await Promise.all([
+      readFile(dockerfilePath, "utf8"),
+      readFile(join(repoRoot, "package.json"), "utf8"),
+    ]);
+    const installIndex = dockerfile.indexOf("pnpm install --frozen-lockfile");
+    const packageJson = JSON.parse(packageJsonText) as {
+      scripts?: Record<string, string>;
+    };
+    const installLifecycleScripts = ["preinstall", "install", "postinstall", "prepare"] as const;
+
+    for (const lifecycleScript of installLifecycleScripts) {
+      const command = packageJson.scripts?.[lifecycleScript];
+      const scriptPath = command?.match(/\bnode\s+(scripts\/[^\s]+)/)?.[1];
+      if (!scriptPath) {
+        continue;
+      }
+
+      const copyIndex = dockerfile.indexOf(scriptPath);
+      expect(
+        copyIndex,
+        `${lifecycleScript} must copy ${scriptPath} before pnpm install`,
+      ).toBeGreaterThan(-1);
+      expect(
+        copyIndex,
+        `${lifecycleScript} must copy ${scriptPath} before pnpm install`,
+      ).toBeLessThan(installIndex);
+    }
   });
 
   it("does not let pnpm resync the full source workspace during Docker build scripts", async () => {

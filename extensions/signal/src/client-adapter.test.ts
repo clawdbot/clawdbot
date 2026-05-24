@@ -159,6 +159,31 @@ describe("detectSignalApiMode", () => {
     expect(result).toBe("native");
   });
 
+  it("prefers native even when the container probe resolves first", async () => {
+    mockNativeCheck.mockImplementation(
+      () => new Promise((resolve) => setTimeout(() => resolve({ ok: true, status: 200 }), 1)),
+    );
+    mockContainerCheck.mockResolvedValue({ ok: true, status: 200 });
+
+    const result = await detectSignalApiMode("http://localhost:8080");
+    expect(result).toBe("native");
+  });
+
+  it("returns container after the native preference grace when native does not respond", async () => {
+    vi.useFakeTimers();
+    try {
+      mockNativeCheck.mockImplementation(() => new Promise(() => {}));
+      mockContainerCheck.mockResolvedValue({ ok: true, status: 200 });
+
+      const result = detectSignalApiMode("http://localhost:8080");
+      await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(50);
+      await expect(result).resolves.toBe("container");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("throws error when neither endpoint responds", async () => {
     mockNativeCheck.mockResolvedValue({ ok: false, status: null, error: "Connection refused" });
     mockContainerCheck.mockResolvedValue({ ok: false, status: null, error: "Connection refused" });
@@ -529,6 +554,26 @@ describe("streamSignalEvents", () => {
       10000,
       "+14259798283",
     );
+  });
+
+  it("does not reuse a cached container mode for no-account receive streams", async () => {
+    setApiMode("auto");
+    mockNativeCheck.mockResolvedValue({ ok: false, status: 404 });
+    mockContainerCheck.mockResolvedValue({ ok: true, status: 200 });
+
+    await expect(signalCheck("http://auto-cache-no-account.local:8080")).resolves.toEqual({
+      ok: true,
+      status: 200,
+    });
+
+    await expect(
+      streamSignalEvents({
+        baseUrl: "http://auto-cache-no-account.local:8080",
+        onEvent: vi.fn(),
+      }),
+    ).rejects.toThrow("Signal API not reachable at http://auto-cache-no-account.local:8080");
+    expect(mockStreamContainerEvents).not.toHaveBeenCalled();
+    expect(mockContainerCheck).toHaveBeenCalledTimes(2);
   });
 });
 

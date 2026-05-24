@@ -275,6 +275,25 @@ describe("waitForAgentRun", () => {
       livenessState: "blocked",
     });
   });
+
+  it("normalizes aborted stop reasons to errors even when gateway reports ok", async () => {
+    callGatewayMock.mockResolvedValue({
+      status: "ok",
+      startedAt: 100,
+      endedAt: 200,
+      stopReason: "aborted",
+    });
+
+    const result = await waitForAgentRun({ runId: "run-aborted", timeoutMs: 500 });
+
+    expect(result).toEqual({
+      status: "error",
+      error: "agent run aborted",
+      startedAt: 100,
+      endedAt: 200,
+      stopReason: "aborted",
+    });
+  });
 });
 
 describe("waitForAgentRunAndReadUpdatedAssistantReply", () => {

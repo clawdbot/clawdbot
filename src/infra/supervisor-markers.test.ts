@@ -13,12 +13,34 @@ describe("SUPERVISOR_HINT_ENV_VARS", () => {
 });
 
 describe("detectRespawnSupervisor", () => {
-  it("detects launchd and systemd only from non-blank platform-specific hints", () => {
-    expect(detectRespawnSupervisor({ LAUNCH_JOB_LABEL: " ai.openclaw.gateway " }, "darwin")).toBe(
+  it("detects launchd from OpenClaw's explicit marker or current gateway launchd job", () => {
+    expect(
+      detectRespawnSupervisor({ OPENCLAW_LAUNCHD_LABEL: " ai.openclaw.gateway " }, "darwin"),
+    ).toBe("launchd");
+    expect(detectRespawnSupervisor({ OPENCLAW_LAUNCHD_LABEL: "   " }, "darwin")).toBeNull();
+    expect(detectRespawnSupervisor({ LAUNCH_JOB_LABEL: "ai.openclaw.gateway" }, "darwin")).toBe(
       "launchd",
     );
-    expect(detectRespawnSupervisor({ LAUNCH_JOB_LABEL: "   " }, "darwin")).toBeNull();
+    expect(
+      detectRespawnSupervisor(
+        { LAUNCH_JOB_NAME: "ai.openclaw.work", OPENCLAW_PROFILE: "work" },
+        "darwin",
+      ),
+    ).toBe("launchd");
+    expect(detectRespawnSupervisor({ LAUNCH_JOB_LABEL: "ai.openclaw.mac" }, "darwin")).toBeNull();
+    expect(detectRespawnSupervisor({ XPC_SERVICE_NAME: "ai.openclaw.mac" }, "darwin")).toBeNull();
+    expect(
+      detectRespawnSupervisor(
+        { XPC_SERVICE_NAME: "ai.openclaw.mac", OPENCLAW_PROFILE: "mac" },
+        "darwin",
+      ),
+    ).toBeNull();
+    expect(detectRespawnSupervisor({ XPC_SERVICE_NAME: "ai.openclaw.gateway" }, "darwin")).toBe(
+      "launchd",
+    );
+  });
 
+  it("detects systemd only from non-blank platform-specific hints", () => {
     expect(detectRespawnSupervisor({ INVOCATION_ID: "abc123" }, "linux")).toBe("systemd");
     expect(detectRespawnSupervisor({ JOURNAL_STREAM: "" }, "linux")).toBeNull();
   });

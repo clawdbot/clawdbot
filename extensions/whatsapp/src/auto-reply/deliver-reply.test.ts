@@ -466,6 +466,30 @@ describe("deliverWebReply", () => {
     expect(logVerbose).toHaveBeenCalled();
   });
 
+  it("marks errors visible after accepted media delivery", async () => {
+    const msg = makeMsg();
+    const error = new Error("tail send failed");
+    mockLoadedImageMedia();
+    vi.mocked(msg.reply).mockRejectedValue(error);
+
+    await expect(
+      deliverWebReply({
+        replyResult: { text: "captiontail", mediaUrl: "http://example.com/img.jpg" },
+        msg,
+        maxMediaBytes: 1024 * 1024,
+        textLimit: 7,
+        replyLogger,
+        skipLog: true,
+      }),
+    ).rejects.toMatchObject({
+      sentBeforeError: true,
+      visibleReplySent: true,
+    });
+
+    expect(msg.sendMedia).toHaveBeenCalledTimes(1);
+    expect(msg.reply).toHaveBeenCalled();
+  });
+
   it("preserves leading indentation after trimming only leading blank lines", async () => {
     const msg = makeMsg();
 

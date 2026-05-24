@@ -279,7 +279,7 @@ function formatBrowserConnectionSummary(params: {
       : "transport: chrome-mcp";
   }
   if (params.isRemote) {
-    return `cdpUrl: ${params.cdpUrl ?? "(unset)"}`;
+    return `cdpUrl: ${params.cdpUrl ? redactCdpUrl(params.cdpUrl) : "(unset)"}`;
   }
   return `port: ${params.cdpPort ?? "(unset)"}`;
 }

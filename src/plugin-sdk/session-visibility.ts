@@ -94,30 +94,92 @@ export function resolveSandboxSessionToolsVisibility(cfg: OpenClawConfig): "spaw
   return cfg.agents?.defaults?.sandbox?.sessionToolsVisibility ?? "spawned";
 }
 
+type CompiledAgentAllowPattern =
+  | { kind: "all" }
+  | { kind: "deny" }
+  | { kind: "exact"; value: string }
+  | {
+      kind: "wildcard";
+      first: string;
+      last: string;
+      interior: string[];
+    };
+
+function compileAgentAllowPattern(pattern: string): CompiledAgentAllowPattern {
+  const raw = normalizeOptionalString(pattern) ?? "";
+  if (!raw) {
+    return { kind: "deny" };
+  }
+  if (raw === "*") {
+    return { kind: "all" };
+  }
+  if (!raw.includes("*")) {
+    return { kind: "exact", value: raw };
+  }
+  const parts = raw.toLowerCase().split("*");
+  return {
+    kind: "wildcard",
+    first: parts[0] ?? "",
+    last: parts[parts.length - 1] ?? "",
+    interior: parts.slice(1, -1).filter(Boolean),
+  };
+}
+
+/**
+ * Linear-time case-insensitive glob matcher for precompiled `*` patterns.
+ * Checks prefix, suffix, then ordered interior segments without entering the
+ * regex engine, avoiding polynomial backtracking on repeated wildcards.
+ */
+function matchesCompiledWildcard(
+  pattern: Extract<CompiledAgentAllowPattern, { kind: "wildcard" }>,
+  lower: string,
+): boolean {
+  let pos = 0;
+  if (pattern.first) {
+    if (!lower.startsWith(pattern.first)) {
+      return false;
+    }
+    pos = pattern.first.length;
+  }
+
+  const endBound = pattern.last ? lower.length - pattern.last.length : lower.length;
+  if (pattern.last && (!lower.endsWith(pattern.last) || endBound < pos)) {
+    return false;
+  }
+
+  for (const part of pattern.interior) {
+    const idx = lower.indexOf(part, pos);
+    if (idx === -1 || idx + part.length > endBound) {
+      return false;
+    }
+    pos = idx + part.length;
+  }
+
+  return true;
+}
+
 export function createAgentToAgentPolicy(cfg: OpenClawConfig): AgentToAgentPolicy {
   const routingA2A = cfg.tools?.agentToAgent;
   const enabled = routingA2A?.enabled === true;
-  const allowPatterns = Array.isArray(routingA2A?.allow) ? routingA2A.allow : [];
+  const rawAllowPatterns = Array.isArray(routingA2A?.allow) ? routingA2A.allow : [];
+  const allowPatterns = rawAllowPatterns.map((pattern) => compileAgentAllowPattern(pattern));
+  const hasWildcardPatterns = allowPatterns.some((pattern) => pattern.kind === "wildcard");
   const matchesAllow = (agentId: string) => {
     if (allowPatterns.length === 0) {
       return true;
     }
+    const lowerAgentId = hasWildcardPatterns ? agentId.toLowerCase() : "";
     return allowPatterns.some((pattern) => {
-      const raw =
-        normalizeOptionalString(typeof pattern === "string" ? pattern : String(pattern ?? "")) ??
-        "";
-      if (!raw) {
-        return false;
-      }
-      if (raw === "*") {
+      if (pattern.kind === "all") {
         return true;
       }
-      if (!raw.includes("*")) {
-        return raw === agentId;
+      if (pattern.kind === "deny") {
+        return false;
       }
-      const escaped = raw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const re = new RegExp(`^${escaped.replaceAll("\\*", ".*")}$`, "i");
-      return re.test(agentId);
+      if (pattern.kind === "exact") {
+        return pattern.value === agentId;
+      }
+      return matchesCompiledWildcard(pattern, lowerAgentId);
     });
   };
   const isAllowed = (requesterAgentId: string, targetAgentId: string) => {

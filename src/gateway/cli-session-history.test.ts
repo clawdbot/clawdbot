@@ -275,6 +275,45 @@ describe("cli session history", () => {
     });
   });
 
+  it("does not dedupe external ids from different imported sessions", () => {
+    const localMessages = [
+      {
+        role: "user",
+        content: "hello from first session",
+        __openclaw: {
+          importedFrom: "claude-cli",
+          externalId: "same-id",
+          cliSessionId: "session-1",
+        },
+      },
+    ];
+    const importedMessages = [
+      {
+        role: "user",
+        content: "hello from second session",
+        __openclaw: {
+          importedFrom: "claude-cli",
+          externalId: "same-id",
+          cliSessionId: "session-2",
+        },
+      },
+    ];
+
+    const merged = mergeImportedChatHistoryMessages({ localMessages, importedMessages });
+    expect(merged).toHaveLength(2);
+  });
+
+  it("keeps untimestamped local messages in place when importing timestamped history", () => {
+    const localMessages = [{ role: "user", content: "local without timestamp" }];
+    const importedMessages = [
+      { role: "assistant", content: "older imported", timestamp: Date.parse("2020-01-01") },
+    ];
+
+    const merged = mergeImportedChatHistoryMessages({ localMessages, importedMessages });
+    expect(merged[0]).toBe(localMessages[0]);
+    expect(merged[1]).toBe(importedMessages[0]);
+  });
+
   it("augments chat history when a session has a claude-cli binding", async () => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId }) => {
       const messages = augmentChatHistoryWithCliSessionImports({

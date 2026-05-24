@@ -117,7 +117,7 @@ export function hasRootVersionAlias(argv: string[]): boolean {
       continue;
     }
     if (arg.startsWith("-")) {
-      continue;
+      return false;
     }
     return false;
   }

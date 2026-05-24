@@ -4,6 +4,7 @@ import type { ProviderPlugin } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   loadPluginMetadataSnapshot: vi.fn(),
+  resolvePluginMetadataSnapshot: vi.fn(),
   resolveDiscoveredProviderPluginIds: vi.fn(),
   resolvePluginProviders: vi.fn(),
   loadSource: vi.fn(),
@@ -14,6 +15,7 @@ vi.mock("./plugin-metadata-snapshot.js", async (importOriginal) => {
   return {
     ...actual,
     loadPluginMetadataSnapshot: mocks.loadPluginMetadataSnapshot,
+    resolvePluginMetadataSnapshot: mocks.resolvePluginMetadataSnapshot,
   };
 });
 
@@ -125,6 +127,10 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
         diagnostics: [],
       },
     });
+    mocks.resolvePluginMetadataSnapshot.mockImplementation(
+      (params?: { pluginMetadataSnapshot?: unknown }) =>
+        params?.pluginMetadataSnapshot ?? mocks.loadPluginMetadataSnapshot(params),
+    );
   });
 
   it("falls back to full provider plugins when discovery entries only expose static catalogs", () => {
@@ -230,10 +236,12 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
 
     resolvePluginDiscoveryProvidersRuntime({ config: {}, env: {} as NodeJS.ProcessEnv });
 
-    expect(mocks.loadPluginMetadataSnapshot).toHaveBeenCalledWith({
-      config: {},
-      env: {},
-    });
+    expect(mocks.loadPluginMetadataSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: {},
+        env: {},
+      }),
+    );
     expect(mocks.loadPluginMetadataSnapshot).toHaveBeenCalledOnce();
     expect(mocks.resolveDiscoveredProviderPluginIds).toHaveBeenCalledTimes(1);
     const params = requireDiscoveredProviderIdsParams();

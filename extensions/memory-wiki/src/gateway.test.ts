@@ -355,7 +355,15 @@ describe("memory-wiki gateway methods", () => {
     const { config } = await createVault({ prefix: "memory-wiki-gateway-" });
     const { api, registerGatewayMethod } = createPluginApi();
     vi.mocked(listMemoryWikiPalace).mockResolvedValue({
-      totalItems: 3,
+      totalItems: 1,
+      totalPages: 3,
+      pageCounts: {
+        synthesis: 1,
+        entity: 0,
+        concept: 0,
+        source: 1,
+        report: 1,
+      },
       totalClaims: 4,
       totalQuestions: 1,
       totalContradictions: 1,
@@ -399,7 +407,15 @@ describe("memory-wiki gateway methods", () => {
     expect(syncMemoryWikiImportedSources).toHaveBeenCalledWith({ config, appConfig: undefined });
     expect(listMemoryWikiPalace).toHaveBeenCalledWith(config);
     expect(readRespondPayload(respond)).toEqual({
-      totalItems: 3,
+      totalItems: 1,
+      totalPages: 3,
+      pageCounts: {
+        synthesis: 1,
+        entity: 0,
+        concept: 0,
+        source: 1,
+        report: 1,
+      },
       totalClaims: 4,
       totalQuestions: 1,
       totalContradictions: 1,

@@ -4,6 +4,11 @@ import {
   filterSparseMissingOxlintTargets,
   shouldPrepareExtensionPackageBoundaryArtifacts,
 } from "../../scripts/run-oxlint.mjs";
+import {
+  createOxlintShards,
+  createWindowsExtensionShards,
+  resolveWindowsExtensionChunkSize,
+} from "../../scripts/run-oxlint-shards.mjs";
 
 describe("run-oxlint", () => {
   it("prepares extension package boundary artifacts for normal lint runs", () => {
@@ -52,7 +57,83 @@ describe("run-oxlint", () => {
     const shardedLintRunner = readFileSync("scripts/run-oxlint-shards.mjs", "utf8");
 
     expect(shardedLintRunner).toContain("OPENCLAW_OXLINT_SHARDS_SERIAL");
+    expect(shardedLintRunner).toContain('process.platform === "win32"');
     expect(shardedLintRunner).toContain("runShardsSerial");
+  });
+
+  it("chunks extension oxlint shards on Windows", () => {
+    const shards = createOxlintShards({
+      cwd: "/repo",
+      env: {
+        OPENCLAW_OXLINT_WINDOWS_EXTENSION_CHUNK_SIZE: "2",
+      },
+      platform: "win32",
+      readDir: () =>
+        [
+          { name: "zeta", isDirectory: () => true, isFile: () => false },
+          { name: "ignored.txt", isDirectory: () => false, isFile: () => true },
+          { name: "root.live.test.ts", isDirectory: () => false, isFile: () => true },
+          { name: "notes.md", isDirectory: () => false, isFile: () => true },
+          { name: "alpha", isDirectory: () => true, isFile: () => false },
+          { name: "beta", isDirectory: () => true, isFile: () => false },
+        ] as never,
+    });
+
+    expect(shards).toEqual([
+      {
+        name: "core",
+        args: ["--tsconfig", "config/tsconfig/oxlint.core.json", "src", "ui", "packages"],
+      },
+      {
+        name: "extensions:root",
+        args: [
+          "--tsconfig",
+          "config/tsconfig/oxlint.extensions.json",
+          "extensions/root.live.test.ts",
+        ],
+      },
+      {
+        name: "extensions:01",
+        args: [
+          "--tsconfig",
+          "config/tsconfig/oxlint.extensions.json",
+          "extensions/alpha",
+          "extensions/beta",
+        ],
+      },
+      {
+        name: "extensions:02",
+        args: ["--tsconfig", "config/tsconfig/oxlint.extensions.json", "extensions/zeta"],
+      },
+      {
+        name: "scripts",
+        args: ["--tsconfig", "config/tsconfig/oxlint.scripts.json", "scripts"],
+      },
+    ]);
+  });
+
+  it("falls back to the full extension shard when Windows extension dirs are unavailable", () => {
+    const shards = createWindowsExtensionShards({
+      cwd: "/repo",
+      readDir: () => {
+        throw new Error("missing extensions");
+      },
+    });
+
+    expect(shards).toEqual([
+      {
+        name: "extensions",
+        args: ["--tsconfig", "config/tsconfig/oxlint.extensions.json", "extensions"],
+      },
+    ]);
+  });
+
+  it("keeps the default Windows oxlint extension chunk size for invalid overrides", () => {
+    expect(resolveWindowsExtensionChunkSize({})).toBe(8);
+    expect(resolveWindowsExtensionChunkSize({ OPENCLAW_OXLINT_WINDOWS_EXTENSION_CHUNK_SIZE: "0" }))
+      .toBe(8);
+    expect(resolveWindowsExtensionChunkSize({ OPENCLAW_OXLINT_WINDOWS_EXTENSION_CHUNK_SIZE: "abc" }))
+      .toBe(8);
   });
 
   it("filters tracked targets missing from sparse checkouts", () => {

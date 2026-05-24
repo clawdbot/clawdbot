@@ -215,6 +215,7 @@ describe("durable inbound reply delivery", () => {
       }),
     });
 
-    expect(result).toEqual({ status: "failed", error });
+    expect(result).toEqual({ status: "failed", error, sentBeforeError: true });
+    expect(error).toMatchObject({ sentBeforeError: true, visibleReplySent: true });
   });
 });

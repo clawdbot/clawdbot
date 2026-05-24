@@ -129,16 +129,21 @@ export function resolveDefaultTelegramAccountSelection(cfg: OpenClawConfig): {
     };
   }
   const accountIds = listTelegramAccountIds(cfg);
+  const configuredDefaultAccountId =
+    normalizeOptionalAccountId(cfg.channels?.telegram?.defaultAccount) ?? undefined;
+  const hasExplicitDefaultAccount = configuredDefaultAccountId
+    ? accountIds.includes(configuredDefaultAccountId)
+    : false;
   const resolved = resolveListedDefaultAccountId({
     accountIds,
-    configuredDefaultAccountId:
-      normalizeOptionalAccountId(cfg.channels?.telegram?.defaultAccount) ?? undefined,
+    configuredDefaultAccountId,
   });
   return {
     accountId: resolved,
     accountIds,
     shouldWarnMissingDefault:
       resolved === accountIds[0] &&
+      !hasExplicitDefaultAccount &&
       !accountIds.includes(DEFAULT_ACCOUNT_ID) &&
       accountIds.length > 1,
   };

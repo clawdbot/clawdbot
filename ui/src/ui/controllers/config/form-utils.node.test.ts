@@ -620,4 +620,84 @@ describe("coerceFormValues", () => {
     const coerced = coerceFormValues(form, schema) as Record<string, unknown>;
     expect(coerced.flag).toBe(true);
   });
+
+  it("returns undefined for empty string with minLength constraint", () => {
+    const schema: JsonSchema = {
+      type: "object",
+      properties: {
+        baseUrl: { type: "string", minLength: 1 },
+      },
+    };
+    const form = { baseUrl: "" };
+    const coerced = coerceFormValues(form, schema) as Record<string, unknown>;
+
+    expect(coerced.baseUrl).toBeUndefined();
+    expect("baseUrl" in coerced).toBe(false);
+  });
+
+  it("returns empty string when no minLength constraint", () => {
+    const schema: JsonSchema = {
+      type: "object",
+      properties: {
+        description: { type: "string" },
+      },
+    };
+    const form = { description: "" };
+    const coerced = coerceFormValues(form, schema) as Record<string, unknown>;
+
+    expect(coerced.description).toBe("");
+    expect("description" in coerced).toBe(true);
+  });
+
+  it("returns non-empty string with minLength constraint unchanged", () => {
+    const schema: JsonSchema = {
+      type: "object",
+      properties: {
+        baseUrl: { type: "string", minLength: 1 },
+      },
+    };
+    const form = { baseUrl: "https://api.example.com" };
+    const coerced = coerceFormValues(form, schema) as Record<string, unknown>;
+
+    expect(coerced.baseUrl).toBe("https://api.example.com");
+  });
+
+  it("handles minLength: 0 as no constraint (empty string allowed)", () => {
+    const schema: JsonSchema = {
+      type: "object",
+      properties: {
+        optional: { type: "string", minLength: 0 },
+      },
+    };
+    const form = { optional: "" };
+    const coerced = coerceFormValues(form, schema) as Record<string, unknown>;
+
+    expect(coerced.optional).toBe("");
+  });
+
+  it("clears empty nested string field with minLength in object graph", () => {
+    const schema: JsonSchema = {
+      type: "object",
+      properties: {
+        provider: {
+          type: "object",
+          properties: {
+            baseUrl: { type: "string", minLength: 1 },
+            apiKey: { type: "string" },
+          },
+        },
+      },
+    };
+    const form = {
+      provider: {
+        baseUrl: "",
+        apiKey: "test-key",
+      },
+    };
+    const coerced = coerceFormValues(form, schema) as Record<string, unknown>;
+    const provider = coerced.provider as Record<string, unknown>;
+
+    expect("baseUrl" in provider).toBe(false);
+    expect(provider.apiKey).toBe("test-key");
+  });
 });

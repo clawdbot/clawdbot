@@ -1,11 +1,4 @@
-import {
-  chmodSync,
-  copyFileSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { chmodSync, copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { delimiter, join, win32 } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -67,11 +60,7 @@ function fakePrlctlEnv(tempDir: string): Record<string, string> {
   return { NODE_OPTIONS: nodeOptions, PATH: pathValue, Path: pathValue };
 }
 
-function writeFakePrlctl(
-  tempDir: string,
-  posixScript: string,
-  windowsBootstrap: string,
-): void {
+function writeFakePrlctl(tempDir: string, posixScript: string, windowsBootstrap: string): void {
   const prlctlPath = join(tempDir, "prlctl");
   writeFileSync(prlctlPath, posixScript);
   chmodSync(prlctlPath, 0o755);
@@ -243,6 +232,56 @@ console.log([snapshot.id, snapshot.state, snapshot.name].join("\\t"));
     }
   });
 
+  it("resolves a latest snapshot hint to the matching version before older LATEST labels", () => {
+    const tempDir = mkdtempSync(join(tmpdir(), "openclaw-parallels-snapshot-latest-"));
+    writeFakePrlctl(
+      tempDir,
+      `#!/usr/bin/env bash
+set -euo pipefail
+if [[ "$1" == "snapshot-list" ]]; then
+  cat <<'JSON'
+{
+  "{old}": {"name": "macOS 26.3.1 LATEST", "state": "poweron"},
+  "{wanted}": {"name": "macOS 26.5", "state": "poweron"}
+}
+JSON
+  exit 0
+fi
+exit 1
+`,
+      `import { basename } from "node:path";
+const isPrlctl = [process.argv0, process.execPath].some((value) =>
+  basename(value).toLowerCase() === "prlctl.exe",
+);
+if (isPrlctl) {
+  if (process.argv.some((arg) => arg.includes("snapshot-list"))) {
+    console.log(JSON.stringify({
+      "{old}": { name: "macOS 26.3.1 LATEST", state: "poweron" },
+      "{wanted}": { name: "macOS 26.5", state: "poweron" },
+    }));
+    process.exit(0);
+  }
+  process.exit(1);
+}
+`,
+    );
+
+    try {
+      const output = runTsEval(
+        `
+import { resolveSnapshot } from "./${TS_PATHS.common}";
+const snapshot = resolveSnapshot("vm", "macOS 26.5 latest");
+console.log([snapshot.id, snapshot.state, snapshot.name].join("\\t"));
+`,
+        fakePrlctlEnv(tempDir),
+      );
+
+      expect(output.trim()).toBe("{wanted}\tpoweron\tmacOS 26.5");
+    } finally {
+      rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
   it("uses one Ubuntu VM fallback resolver for Linux lanes", () => {
     const tempDir = mkdtempSync(join(tmpdir(), "openclaw-parallels-vm-helper-"));
     writeFakePrlctl(
@@ -252,6 +291,7 @@ set -euo pipefail
 if [[ "$1" == "list" ]]; then
   cat <<'JSON'
 [
+  {"name": "Ubuntu 26.04"},
   {"name": "Ubuntu 25.10"},
   {"name": "Ubuntu 23.10"},
   {"name": "Ubuntu 24.04.3 ARM64"}
@@ -268,6 +308,7 @@ const isPrlctl = [process.argv0, process.execPath].some((value) =>
 if (isPrlctl) {
   if (process.argv.some((arg) => arg.includes("list"))) {
     console.log(JSON.stringify([
+      { name: "Ubuntu 26.04" },
       { name: "Ubuntu 25.10" },
       { name: "Ubuntu 23.10" },
       { name: "Ubuntu 24.04.3 ARM64" },
@@ -288,7 +329,7 @@ console.log(resolveUbuntuVmName("Ubuntu missing"));
         fakePrlctlEnv(tempDir),
       );
 
-      expect(output.trim()).toBe("Ubuntu 24.04.3 ARM64");
+      expect(output.trim()).toBe("Ubuntu 26.04");
     } finally {
       rmSync(tempDir, { force: true, recursive: true });
     }

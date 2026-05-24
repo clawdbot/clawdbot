@@ -659,6 +659,27 @@ describe("resolvePermissionRequest", () => {
     expect(res).toEqual({ outcome: { outcome: "selected", optionId: "reject-always" } });
   });
 
+  it("cancels auto-approved requests when no allow option is available", async () => {
+    const prompt = vi.fn(async () => true);
+    const log = vi.fn();
+    const res = await resolvePermissionRequest(
+      makePermissionRequest({
+        toolCall: {
+          toolCallId: "tool-read-no-allow",
+          title: "read: src/index.ts",
+          status: "pending",
+          kind: "read",
+        },
+        options: [{ kind: "reject_once", name: "Reject", optionId: "reject" }],
+      }),
+      { prompt, log },
+    );
+
+    expect(prompt).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith("[permission cancelled] read: missing allow option");
+    expect(res).toEqual({ outcome: { outcome: "cancelled" } });
+  });
+
   it("prompts when tool identity is unknown and can still approve", async () => {
     const prompt = vi.fn(async () => true);
     const res = await resolvePermissionRequest(

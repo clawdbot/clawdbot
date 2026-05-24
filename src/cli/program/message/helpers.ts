@@ -35,7 +35,7 @@ function normalizeMessageOptions(opts: Record<string, unknown>): Record<string, 
   const { account, ...rest } = opts;
   return {
     ...rest,
-    accountId: typeof account === "string" ? account : undefined,
+    accountId: typeof account === "string" ? account : rest.accountId,
   };
 }
 

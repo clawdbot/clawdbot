@@ -386,7 +386,7 @@ describe("runGatewayUpdate", () => {
     { name: "target ref", options: { devTargetRef: "main" } },
   ] as const)("stops dev update when fetch fails before resolving $name", async ({ options }) => {
     await setupGitCheckout();
-    const fetchCommand = `git -C ${tempDir} fetch --all --prune --tags`;
+    const fetchCommand = `git -C ${tempDir} fetch --all --prune --no-tags`;
     const { runner, calls } = createRunner({
       ...buildGitWorktreeProbeResponses(),
       [fetchCommand]: {
@@ -401,6 +401,102 @@ describe("runGatewayUpdate", () => {
     expect(result.reason).toBe("fetch-failed");
     expect(calls).toContain(fetchCommand);
     expect(calls.slice(calls.indexOf(fetchCommand) + 1)).toStrictEqual([]);
+  });
+
+  it("does not fetch tags for dev updates", async () => {
+    await setupGitPackageManagerFixture();
+    const upstreamSha = "upstream123";
+    const doctorNodePath = await resolveStableNodePath(process.execPath);
+    const doctorCommand = `${doctorNodePath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive --fix`;
+    const { runner, calls } = createRunner({
+      ...buildGitWorktreeProbeResponses(),
+      [`git -C ${tempDir} fetch --all --prune --no-tags`]: { stdout: "" },
+      [`git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`]: {
+        stdout: "origin/main",
+      },
+      [`git -C ${tempDir} rev-parse @{upstream}`]: { stdout: upstreamSha },
+      [`git -C ${tempDir} rev-list --max-count=10 ${upstreamSha}`]: {
+        stdout: `${upstreamSha}\n`,
+      },
+      [`git -C ${tempDir} rebase ${upstreamSha}`]: { stdout: "" },
+      "pnpm --version": { stdout: "10.0.0" },
+      "pnpm install": { stdout: "" },
+      "pnpm build": { stdout: "" },
+      "pnpm ui:build": { stdout: "" },
+      [doctorCommand]: { stdout: "" },
+    });
+
+    const result = await runWithRunner(runner, { channel: "dev" });
+
+    expect(result.status).toBe("ok");
+    expect(calls).toContain(`git -C ${tempDir} fetch --all --prune --no-tags`);
+    expect(calls).not.toContain(`git -C ${tempDir} fetch --all --prune --tags`);
+  });
+
+  it("fetches only the requested tag for explicit dev tag target refs", async () => {
+    await setupGitPackageManagerFixture();
+    const targetSha = "2222222222222222222222222222222222222222";
+    const doctorNodePath = await resolveStableNodePath(process.execPath);
+    const doctorCommand = `${doctorNodePath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive --fix`;
+    const { runner, calls } = createRunner({
+      ...buildGitWorktreeProbeResponses(),
+      [`git -C ${tempDir} fetch --all --prune --no-tags`]: { stdout: "" },
+      [`git -C ${tempDir} remote`]: { stdout: "origin\n" },
+      [`git -C ${tempDir} fetch origin +refs/tags/v2026.5.19-beta.2:refs/tags/v2026.5.19-beta.2`]: {
+        stdout: "",
+      },
+      [`git -C ${tempDir} rev-parse refs/tags/v2026.5.19-beta.2^{}`]: {
+        stdout: `${targetSha}\n`,
+      },
+      [`git -C ${tempDir} rev-list --max-count=10 ${targetSha}`]: {
+        stdout: `${targetSha}\n`,
+      },
+      [`git -C ${tempDir} checkout --detach ${targetSha}`]: { stdout: "" },
+      "pnpm --version": { stdout: "10.0.0" },
+      "pnpm install": { stdout: "" },
+      "pnpm build": { stdout: "" },
+      "pnpm ui:build": { stdout: "" },
+      [doctorCommand]: { stdout: "" },
+    });
+
+    const result = await runWithRunner(runner, {
+      channel: "dev",
+      devTargetRef: "refs/tags/v2026.5.19-beta.2",
+    });
+
+    expect(result.status).toBe("ok");
+    expect(calls).toContain(`git -C ${tempDir} fetch --all --prune --no-tags`);
+    expect(calls).not.toContain(`git -C ${tempDir} fetch --all --prune --tags`);
+    expect(calls).toContain(
+      `git -C ${tempDir} fetch origin +refs/tags/v2026.5.19-beta.2:refs/tags/v2026.5.19-beta.2`,
+    );
+    expect(calls).toContain(`git -C ${tempDir} rev-parse refs/tags/v2026.5.19-beta.2^{}`);
+  });
+
+  it("does not resolve stale local dev tag target refs after targeted tag fetch failure", async () => {
+    await setupGitCheckout();
+    const { runner, calls } = createRunner({
+      ...buildGitWorktreeProbeResponses(),
+      [`git -C ${tempDir} fetch --all --prune --no-tags`]: { stdout: "" },
+      [`git -C ${tempDir} remote`]: { stdout: "origin\n" },
+      [`git -C ${tempDir} fetch origin +refs/tags/v2026.5.19-beta.2:refs/tags/v2026.5.19-beta.2`]: {
+        code: 1,
+        stderr: "would clobber existing tag",
+      },
+    });
+
+    const result = await runWithRunner(runner, {
+      channel: "dev",
+      devTargetRef: "refs/tags/v2026.5.19-beta.2",
+    });
+
+    expect(result.status).toBe("error");
+    expect(result.reason).toBe("no-target-sha");
+    expect(calls).toContain(
+      `git -C ${tempDir} fetch origin +refs/tags/v2026.5.19-beta.2:refs/tags/v2026.5.19-beta.2`,
+    );
+    expect(calls).not.toContain(`git -C ${tempDir} rev-parse refs/tags/v2026.5.19-beta.2^{}`);
+    expect(calls).not.toContain(`git -C ${tempDir} rev-parse refs/tags/v2026.5.19-beta.2`);
   });
 
   it("aborts rebase on failure", async () => {
@@ -537,7 +633,7 @@ describe("runGatewayUpdate", () => {
       if (key === `git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`) {
         return { stdout: "origin/main", stderr: "", code: 0 };
       }
-      if (key === `git -C ${tempDir} fetch --all --prune --tags`) {
+      if (key === `git -C ${tempDir} fetch --all --prune --no-tags`) {
         return { stdout: "", stderr: "", code: 0 };
       }
       if (key === `git -C ${tempDir} rev-parse @{upstream}`) {
@@ -758,7 +854,7 @@ describe("runGatewayUpdate", () => {
       if (key === `git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`) {
         return { stdout: "origin/main", stderr: "", code: 0 };
       }
-      if (key === `git -C ${tempDir} fetch --all --prune --tags`) {
+      if (key === `git -C ${tempDir} fetch --all --prune --no-tags`) {
         return { stdout: "", stderr: "", code: 0 };
       }
       if (key === `git -C ${tempDir} rev-parse @{upstream}`) {
@@ -873,7 +969,7 @@ describe("runGatewayUpdate", () => {
       if (key === `git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`) {
         return { stdout: "origin/main", stderr: "", code: 0 };
       }
-      if (key === `git -C ${tempDir} fetch --all --prune --tags`) {
+      if (key === `git -C ${tempDir} fetch --all --prune --no-tags`) {
         return { stdout: "", stderr: "", code: 0 };
       }
       if (key === `git -C ${tempDir} rev-parse @{upstream}`) {
@@ -970,7 +1066,7 @@ describe("runGatewayUpdate", () => {
         if (key === `git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`) {
           return { stdout: "origin/main", stderr: "", code: 0 };
         }
-        if (key === `git -C ${tempDir} fetch --all --prune --tags`) {
+        if (key === `git -C ${tempDir} fetch --all --prune --no-tags`) {
           return { stdout: "", stderr: "", code: 0 };
         }
         if (key === `git -C ${tempDir} rev-parse @{upstream}`) {
@@ -1084,7 +1180,7 @@ describe("runGatewayUpdate", () => {
         if (key === `git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`) {
           return { stdout: "origin/main", stderr: "", code: 0 };
         }
-        if (key === `git -C ${tempDir} fetch --all --prune --tags`) {
+        if (key === `git -C ${tempDir} fetch --all --prune --no-tags`) {
           return { stdout: "", stderr: "", code: 0 };
         }
         if (key === `git -C ${tempDir} rev-parse @{upstream}`) {
@@ -1182,7 +1278,7 @@ describe("runGatewayUpdate", () => {
       if (key === `git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`) {
         return { stdout: "origin/main", stderr: "", code: 0 };
       }
-      if (key === `git -C ${tempDir} fetch --all --prune --tags`) {
+      if (key === `git -C ${tempDir} fetch --all --prune --no-tags`) {
         return { stdout: "", stderr: "", code: 0 };
       }
       if (key === `git -C ${tempDir} rev-parse @{upstream}`) {
@@ -1275,7 +1371,7 @@ describe("runGatewayUpdate", () => {
       if (key === `git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`) {
         return { stdout: "origin/main", stderr: "", code: 0 };
       }
-      if (key === `git -C ${tempDir} fetch --all --prune --tags`) {
+      if (key === `git -C ${tempDir} fetch --all --prune --no-tags`) {
         return { stdout: "", stderr: "", code: 0 };
       }
       if (key === `git -C ${tempDir} rev-parse @{upstream}`) {
@@ -1367,7 +1463,7 @@ describe("runGatewayUpdate", () => {
       if (key === `git -C ${tempDir} status --porcelain -- :!dist/control-ui/`) {
         return { stdout: "", stderr: "", code: 0 };
       }
-      if (key === `git -C ${tempDir} fetch --all --prune --tags`) {
+      if (key === `git -C ${tempDir} fetch --all --prune --no-tags`) {
         return { stdout: "", stderr: "", code: 0 };
       }
       if (key === `git -C ${tempDir} rev-parse ${targetSha}`) {
@@ -1447,7 +1543,7 @@ describe("runGatewayUpdate", () => {
       if (key === `git -C ${tempDir} status --porcelain -- :!dist/control-ui/`) {
         return { stdout: "", stderr: "", code: 0 };
       }
-      if (key === `git -C ${tempDir} fetch --all --prune --tags`) {
+      if (key === `git -C ${tempDir} fetch --all --prune --no-tags`) {
         return { stdout: "", stderr: "", code: 0 };
       }
       if (key === `git -C ${tempDir} rev-parse refs/remotes/origin/main`) {
@@ -1530,7 +1626,7 @@ describe("runGatewayUpdate", () => {
       if (key === `git -C ${gitRoot} status --porcelain -- :!dist/control-ui/`) {
         return { stdout: "", stderr: "", code: 0 };
       }
-      if (key === `git -C ${gitRoot} fetch --all --prune --tags`) {
+      if (key === `git -C ${gitRoot} fetch --all --prune --no-tags`) {
         return { stdout: "", stderr: "", code: 0 };
       }
       if (key === `git -C ${gitRoot} rev-parse refs/remotes/origin/main`) {
@@ -1606,7 +1702,7 @@ describe("runGatewayUpdate", () => {
       if (key === `git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`) {
         return { stdout: "origin/main", stderr: "", code: 0 };
       }
-      if (key === `git -C ${tempDir} fetch --all --prune --tags`) {
+      if (key === `git -C ${tempDir} fetch --all --prune --no-tags`) {
         return { stdout: "", stderr: "", code: 0 };
       }
       if (key === `git -C ${tempDir} rev-parse @{upstream}`) {

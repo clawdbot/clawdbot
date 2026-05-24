@@ -183,20 +183,33 @@ function resolveOutputMime(outputFormat?: ImageGenerationOutputFormat): {
   return { mimeType: DEFAULT_OUTPUT_MIME, extension: DEFAULT_OUTPUT_EXTENSION };
 }
 
+type OpenAIImageRequest = Parameters<ImageGenerationProvider["generateImage"]>[0];
+type OpenAIImageOptions = NonNullable<OpenAIImageRequest["providerOptions"]>["openai"];
+
+function resolveOpenAIImageOutputCompression(
+  req: OpenAIImageRequest,
+  openai: OpenAIImageOptions,
+): number | undefined {
+  if (openai?.outputCompression === undefined) {
+    return undefined;
+  }
+  const outputFormat = req.outputFormat ?? "png";
+  return outputFormat === "jpeg" || outputFormat === "webp" ? openai.outputCompression : undefined;
+}
+
 function appendOpenAIImageOptions(
   target: Record<string, unknown> | FormData,
   req: Parameters<ImageGenerationProvider["generateImage"]>[0],
 ): void {
   const openai = req.providerOptions?.openai;
   const background = openai?.background ?? req.background;
+  const outputCompression = resolveOpenAIImageOutputCompression(req, openai);
   const entries: Record<string, unknown> = {
     ...(req.quality !== undefined ? { quality: req.quality } : {}),
     ...(req.outputFormat !== undefined ? { output_format: req.outputFormat } : {}),
     ...(background !== undefined ? { background } : {}),
     ...(openai?.moderation !== undefined ? { moderation: openai.moderation } : {}),
-    ...(openai?.outputCompression !== undefined
-      ? { output_compression: openai.outputCompression }
-      : {}),
+    ...(outputCompression !== undefined ? { output_compression: outputCompression } : {}),
     ...(openai?.user !== undefined ? { user: openai.user } : {}),
   };
   for (const [key, value] of Object.entries(entries)) {
@@ -637,6 +650,7 @@ async function generateOpenAICodexImage(params: {
   const timeoutMs = resolveOpenAIImageTimeoutMs(req.timeoutMs);
   const openai = req.providerOptions?.openai;
   const background = openai?.background ?? req.background;
+  const outputCompression = resolveOpenAIImageOutputCompression(req, openai);
   headers.set("Content-Type", "application/json");
   const content: Array<Record<string, unknown>> = [
     { type: "input_text", text: req.prompt },
@@ -668,9 +682,7 @@ async function generateOpenAICodexImage(params: {
             ...(req.quality !== undefined ? { quality: req.quality } : {}),
             ...(req.outputFormat !== undefined ? { output_format: req.outputFormat } : {}),
             ...(background !== undefined ? { background } : {}),
-            ...(openai?.outputCompression !== undefined
-              ? { output_compression: openai.outputCompression }
-              : {}),
+            ...(outputCompression !== undefined ? { output_compression: outputCompression } : {}),
           },
         ],
         tool_choice: { type: "image_generation" },

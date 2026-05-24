@@ -48,7 +48,7 @@ export function registerNodeCli(program: Command) {
     .description("Run the headless node host (foreground)")
     .option("--host <host>", "Gateway host")
     .option("--port <port>", "Gateway port")
-    .option("--tls", "Use TLS for the gateway connection", false)
+    .option("--tls", "Use TLS for the gateway connection")
     .option("--tls-fingerprint <sha256>", "Expected TLS certificate fingerprint (sha256)")
     .option("--node-id <id>", "Override node id (clears pairing token)")
     .option("--display-name <name>", "Override node display name")
@@ -64,11 +64,16 @@ export function registerNodeCli(program: Command) {
         defaultRuntime.exit(1);
         return;
       }
+      const retargetedGateway = opts.host !== undefined || opts.port !== undefined;
+      const tlsFingerprint =
+        opts.tlsFingerprint ?? (retargetedGateway ? undefined : existing?.gateway?.tlsFingerprint);
+      const inheritedTls = retargetedGateway ? undefined : existing?.gateway?.tls;
       await runNodeHost({
         gatewayHost: host,
         gatewayPort: port,
-        gatewayTls: Boolean(opts.tls) || Boolean(opts.tlsFingerprint),
-        gatewayTlsFingerprint: opts.tlsFingerprint,
+        gatewayTls:
+          typeof opts.tls === "boolean" ? opts.tls : Boolean(tlsFingerprint) || inheritedTls,
+        gatewayTlsFingerprint: tlsFingerprint,
         nodeId: opts.nodeId,
         displayName: opts.displayName,
       });

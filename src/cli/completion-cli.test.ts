@@ -14,9 +14,17 @@ function createCompletionProgram(): Command {
 
   const gateway = program.command("gateway").description("Gateway commands");
   gateway.option("--force", "Force the action");
+  gateway.option("-t, --token <token>", "Gateway token");
 
   gateway.command("status").description("Show gateway status").option("--json", "JSON output");
   gateway.command("restart").description("Restart gateway");
+  program
+    .command("agent")
+    .description("Agent commands")
+    .option("--verbose <on|off>", "Set verbosity");
+  const sessions = program.command("sessions").description("Session commands");
+  sessions.option("--verbose", "Verbose output");
+  sessions.command("cleanup").description("Clean sessions").option("--dry-run", "Preview cleanup");
 
   return program;
 }
@@ -90,7 +98,8 @@ describe("completion-cli", () => {
     expect(script).toContain("if ($commandPath -eq 'gateway') {");
     expect(script).toContain("if ($commandPath -eq 'gateway status') {");
     expect(script).not.toContain("if ($commandPath -eq 'openclaw gateway') {");
-    expect(script).toContain("$completions = @('status','restart','--force')");
+    expect(script).toContain("$completions = @('status','restart','--force','--token')");
+    expect(script).not.toContain("'-t,'");
   });
 
   it("generates fish completions for root and nested command contexts", () => {
@@ -100,10 +109,33 @@ describe("completion-cli", () => {
       'complete -c openclaw -n "__fish_use_subcommand" -a "gateway" -d \'Gateway commands\'',
     );
     expect(script).toContain(
-      'complete -c openclaw -n "__fish_seen_subcommand_from gateway" -a "status" -d \'Show gateway status\'',
+      'complete -c openclaw -n "__openclaw_command_path_matches gateway -- -t --token" -a "status" -d \'Show gateway status\'',
     );
     expect(script).toContain(
-      "complete -c openclaw -n \"__fish_seen_subcommand_from gateway\" -l force -d 'Force the action'",
+      "complete -c openclaw -n \"__openclaw_command_path_matches gateway -- -t --token\" -l force -d 'Force the action'",
     );
+    expect(script).toContain(
+      "complete -c openclaw -n \"__openclaw_command_path_matches gateway status -- -t --token\" -l json -d 'JSON output'",
+    );
+    expect(script).toContain("__openclaw_command_path_matches gateway -- -t --token");
+    expect(script).toContain("if contains -- $flag $value_options");
+  });
+
+  it("scopes fish value-taking option skips to the active command path", () => {
+    const script = getCompletionScript("fish", createCompletionProgram());
+
+    expect(script).toContain("__openclaw_command_path_matches agent -- --verbose");
+    expect(script).toContain("__openclaw_command_path_matches sessions cleanup --");
+    expect(script).not.toContain("__openclaw_command_path_matches sessions cleanup -- --verbose");
+    expect(script).toContain(
+      "complete -c openclaw -n \"__openclaw_command_path_matches sessions cleanup --\" -l dry-run -d 'Preview cleanup'",
+    );
+  });
+
+  it("generates Bash completions without comma-suffixed short flags", () => {
+    const script = getCompletionScript("bash", createCompletionProgram());
+
+    expect(script).toContain("--token");
+    expect(script).not.toContain("-t,");
   });
 });

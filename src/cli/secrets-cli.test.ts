@@ -293,6 +293,21 @@ describe("secrets CLI", () => {
     expect(runtimeLogs.at(-1)).toContain("Secrets applied");
   });
 
+  it("emits one JSON document when --yes applies configure output", async () => {
+    runSecretsConfigureInteractive.mockResolvedValue(createConfigureInteractiveResult());
+    runSecretsApply.mockResolvedValue(createSecretsApplyResult({ mode: "write", changed: true }));
+
+    await createProgram().parseAsync(["secrets", "configure", "--json", "--yes"], {
+      from: "user",
+    });
+
+    expect(runSecretsApply).toHaveBeenCalledTimes(1);
+    expect(defaultRuntime.writeJson).toHaveBeenCalledTimes(1);
+    expect(mockFirstObjectArg(defaultRuntime.writeJson)).toEqual(
+      createSecretsApplyResult({ mode: "write", changed: true }),
+    );
+  });
+
   it("shows the irreversibility warning on the interactive apply path (#83883)", async () => {
     runSecretsConfigureInteractive.mockResolvedValue(
       createConfigureInteractiveResult({ changed: true }),

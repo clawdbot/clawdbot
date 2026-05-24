@@ -249,9 +249,10 @@ Each file has one job:
   and provider metadata.
 - `transcript.jsonl`: append-only speaker utterances. Each line is one JSON
   object with the utterance text and the session id.
-- `summary.json`: structured summary data used by tooling.
+- `summary.json`: structured summary data used by tooling, including the
+  speaker-labeled transcript window used for the generated summary.
 - `summary.md`: human-readable notes for terminals, editors, and document
-  workflows.
+  workflows, including a speaker-labeled transcript section.
 
 The date directory comes from the session start time, so multiple meetings per
 day stay grouped. If a human session id repeats across days, use the
@@ -299,7 +300,8 @@ multi-hour call does not require unbounded summary memory.
 
 This means the transcript can keep growing on disk, while summarization stays
 bounded. Increase `maxUtterances` when you need more of a multi-hour meeting in
-the generated summary. Decrease it when summaries are too slow or too large.
+the generated summary and speaker-labeled transcript section. Decrease it when
+summaries are too slow or too large.
 
 Current summaries are generated when a session stops, after an import, or when
 the `summarize` action runs. They are not continuously rewritten for every

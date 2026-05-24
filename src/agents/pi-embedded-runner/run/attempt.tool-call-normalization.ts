@@ -919,6 +919,7 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
     TranscriptPolicy,
     "validateGeminiTurns" | "validateAnthropicTurns" | "preserveSignatures" | "dropThinkingBlocks"
   >,
+  provider?: string | null,
 ): StreamFn {
   return (model, context, options) => {
     const ctx = context as unknown as { messages?: unknown };
@@ -928,6 +929,7 @@ export function wrapStreamFnSanitizeMalformedToolCalls(
     }
     const allowProviderOwnedThinkingReplay = shouldAllowProviderOwnedThinkingReplay({
       modelApi: (model as { api?: unknown })?.api as string | null | undefined,
+      provider,
       policy: {
         validateAnthropicTurns: transcriptPolicy?.validateAnthropicTurns === true,
         preserveSignatures: transcriptPolicy?.preserveSignatures === true,

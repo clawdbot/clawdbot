@@ -241,7 +241,7 @@ jobs:
           set -euo pipefail
           timeout --foreground --kill-after=30s 35m docker build \
             --target runtime-assets \
-            --build-arg OPENCLAW_EXTENSIONS="matrix" \
+            --build-arg OPENCLAW_EXTENSIONS="diagnostics-otel,codex" \
             .
 
   normal_ci:

@@ -1,10 +1,11 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, win32 } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   resolveAugmentedPluginNpmPackageJson,
   resolveAugmentedPluginNpmManifest,
+  resolvePluginNpmCommand,
   withAugmentedPluginNpmManifestForPackage,
 } from "../scripts/lib/plugin-npm-package-manifest.mjs";
 import { cleanupTempDirs, makeTempRepoRoot, writeJsonFile } from "./helpers/temp-repo.js";
@@ -51,10 +52,16 @@ function writeFileText(filePath: string, text: string): void {
 }
 
 function listNpmPackDryRunFiles(packageDir: string): string[] {
-  const result = spawnSync("npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], {
+  const invocation = resolvePluginNpmCommand(["pack", "--dry-run", "--json", "--ignore-scripts"]);
+  const result = spawnSync(invocation.command, invocation.args, {
     cwd: packageDir,
     encoding: "utf8",
+    ...(invocation.env ? { env: invocation.env } : {}),
+    ...(invocation.shell !== undefined ? { shell: invocation.shell } : {}),
     stdio: ["ignore", "pipe", "pipe"],
+    ...(invocation.windowsVerbatimArguments !== undefined
+      ? { windowsVerbatimArguments: invocation.windowsVerbatimArguments }
+      : {}),
   });
   if (result.error) {
     throw result.error;
@@ -132,6 +139,41 @@ function writeOptionalPlatformDependencyPackage(packageDir: string): string {
 }
 
 describe("plugin npm package manifest staging", () => {
+  it("wraps Windows npm.cmd staging through cmd.exe without shell mode", () => {
+    const nodeDir = "C:\\Program Files\\nodejs";
+    const npmCmdPath = win32.resolve(nodeDir, "npm.cmd");
+
+    expect(
+      resolvePluginNpmCommand(["install", "--package-lock-only"], {
+        comSpec: "C:\\Windows\\System32\\cmd.exe",
+        env: { PATH: "C:\\bin" },
+        execPath: win32.join(nodeDir, "node.exe"),
+        existsSync: (candidate: string) => candidate === npmCmdPath,
+        platform: "win32",
+      }),
+    ).toEqual({
+      command: "C:\\Windows\\System32\\cmd.exe",
+      args: [
+        "/d",
+        "/s",
+        "/c",
+        '""C:\\Program Files\\nodejs\\npm.cmd" install --package-lock-only"',
+      ],
+      shell: false,
+      windowsVerbatimArguments: true,
+    });
+  });
+
+  it("rejects bare npm fallback on Windows plugin package staging", () => {
+    expect(() =>
+      resolvePluginNpmCommand(["install"], {
+        execPath: "C:\\nodejs\\node.exe",
+        existsSync: () => false,
+        platform: "win32",
+      }),
+    ).toThrow("OpenClaw refuses to shell out to bare npm on Windows");
+  });
+
   it("overlays generated channel configs while packing and restores source manifest", () => {
     const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-package-manifest-");
     const packageDir = join(repoDir, "extensions", "twitch");

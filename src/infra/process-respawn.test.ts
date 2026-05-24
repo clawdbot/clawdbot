@@ -86,9 +86,33 @@ describe("restartGatewayProcessWithFreshPid", () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
-  it("returns supervised when launchd hints are present on macOS (no kickstart)", () => {
+  it("returns supervised when OpenClaw launchd markers are present on macOS (no kickstart)", () => {
     clearSupervisorHints();
     expectLaunchdSupervisedWithoutKickstart({ launchJobLabel: "ai.openclaw.gateway" });
+  });
+
+  it("returns supervised for a real gateway launchd job without the injected marker", () => {
+    clearSupervisorHints();
+    setPlatform("darwin");
+    process.env.LAUNCH_JOB_LABEL = "ai.openclaw.gateway";
+
+    const result = restartGatewayProcessWithFreshPid();
+
+    expect(result.mode).toBe("supervised");
+    expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("returns supervised for a real gateway XPC launchd job without the injected marker", () => {
+    clearSupervisorHints();
+    setPlatform("darwin");
+    process.env.XPC_SERVICE_NAME = "ai.openclaw.gateway";
+
+    const result = restartGatewayProcessWithFreshPid();
+
+    expect(result.mode).toBe("supervised");
+    expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
+    expect(spawnMock).not.toHaveBeenCalled();
   });
 
   it("returns supervised on macOS when launchd label is set (no kickstart)", () => {
@@ -123,12 +147,18 @@ describe("restartGatewayProcessWithFreshPid", () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
-  it("returns supervised when XPC_SERVICE_NAME is set by launchd", () => {
+  it("does not treat inherited XPC_SERVICE_NAME as launchd supervision", () => {
     clearSupervisorHints();
     setPlatform("darwin");
-    process.env.XPC_SERVICE_NAME = "ai.openclaw.gateway";
+    process.env.XPC_SERVICE_NAME = "ai.openclaw.mac";
+    process.env.OPENCLAW_PROFILE = "mac";
+
     const result = restartGatewayProcessWithFreshPid();
-    expect(result.mode).toBe("supervised");
+
+    expect(result).toEqual({
+      mode: "disabled",
+      detail: "unmanaged: use in-process restart to keep custom supervisor PID tracking stable",
+    });
     expect(triggerOpenClawRestartMock).not.toHaveBeenCalled();
     expect(spawnMock).not.toHaveBeenCalled();
   });
@@ -280,6 +310,29 @@ describe("respawnGatewayProcessForUpdate", () => {
     expect(spawnMock).toHaveBeenCalledWith(
       process.execPath,
       ["C:\\openclaw\\dist\\index.js", "gateway", "run"],
+      {
+        detached: true,
+        env: process.env,
+        stdio: "inherit",
+      },
+    );
+  });
+
+  it("spawns a detached update process when macOS only has inherited XPC state", () => {
+    clearSupervisorHints();
+    setPlatform("darwin");
+    process.env.XPC_SERVICE_NAME = "ai.openclaw.mac";
+    process.execArgv = [];
+    process.argv = ["/usr/local/bin/node", "/repo/dist/index.js", "gateway", "run"];
+    spawnMock.mockReturnValue({ pid: 6161, unref: vi.fn(), kill: vi.fn() });
+
+    const result = respawnGatewayProcessForUpdate();
+
+    expect(result.mode).toBe("spawned");
+    expect(result.pid).toBe(6161);
+    expect(spawnMock).toHaveBeenCalledWith(
+      process.execPath,
+      ["/repo/dist/index.js", "gateway", "run"],
       {
         detached: true,
         env: process.env,

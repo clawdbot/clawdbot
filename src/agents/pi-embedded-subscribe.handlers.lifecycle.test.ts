@@ -3,8 +3,12 @@ import { createInlineCodeState } from "../markdown/code-spans.js";
 import { handleAgentEnd } from "./pi-embedded-subscribe.handlers.lifecycle.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
 
+const { emitAgentEventMock } = vi.hoisted(() => ({
+  emitAgentEventMock: vi.fn(),
+}));
+
 vi.mock("../infra/agent-events.js", () => ({
-  emitAgentEvent: vi.fn(),
+  emitAgentEvent: emitAgentEventMock,
 }));
 
 function createContext(
@@ -110,6 +114,31 @@ describe("handleAgentEnd", () => {
         phase: "error",
         error: "LLM request failed: connection refused by the provider endpoint.",
         livenessState: "blocked",
+      },
+    });
+  });
+
+  it("emits aborted terminal stop reasons on lifecycle end events", async () => {
+    emitAgentEventMock.mockClear();
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(undefined, { onAgentEvent });
+    ctx.state.terminalStopReason = "aborted";
+
+    await handleAgentEnd(ctx);
+
+    expect(emitAgentEventMock).toHaveBeenCalledWith({
+      runId: "run-1",
+      stream: "lifecycle",
+      data: expect.objectContaining({
+        phase: "end",
+        stopReason: "aborted",
+      }),
+    });
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        stopReason: "aborted",
       },
     });
   });

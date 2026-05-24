@@ -97,4 +97,33 @@ describe("discordVoiceMeetingNotesSourceProvider", () => {
       error: "Discord voice manager is not available.",
     });
   });
+
+  it("stops Discord meeting notes without owning promoted voice sessions", async () => {
+    const leave = vi.fn(async () => ({ ok: true, message: "stopped notes" }));
+    setDiscordMeetingNotesVoiceManager({
+      accountId: "primary",
+      manager: { leave } as unknown as DiscordVoiceManager,
+    });
+
+    const result = await discordVoiceMeetingNotesSourceProvider.stop?.({
+      sessionId: "notes-1",
+      source: {
+        providerId: "discord-voice",
+        accountId: "primary",
+        guildId: "g1",
+        channelId: "c1",
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true, sessionId: "notes-1" });
+    expect(leave).toHaveBeenCalledWith(
+      {
+        guildId: "g1",
+        channelId: "c1",
+      },
+      {
+        meetingNotesSessionId: "notes-1",
+      },
+    );
+  });
 });

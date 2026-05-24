@@ -81,6 +81,7 @@ export type ReplyDispatcherWithTypingOptions = Omit<ReplyDispatcherOptions, "onI
   typingCallbacks?: TypingCallbacks;
   onReplyStart?: () => Promise<void> | void;
   onIdle?: () => void;
+  onSettled?: () => unknown;
   /** Called when the typing controller is cleaned up (e.g., on NO_REPLY). */
   onCleanup?: () => void;
 };

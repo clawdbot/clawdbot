@@ -579,6 +579,8 @@ const DiscordVoiceRealtimeSchema = z
     instructions: z.string().min(1).optional(),
     toolPolicy: DiscordVoiceRealtimeToolPolicySchema.optional(),
     consultPolicy: DiscordVoiceRealtimeConsultPolicySchema.optional(),
+    requireWakeName: z.boolean().optional(),
+    wakeNames: z.array(z.string().min(1)).optional(),
     bootstrapContextFiles: z.array(DiscordVoiceRealtimeBootstrapContextFileSchema).optional(),
     bargeIn: z.boolean().optional(),
     minBargeInAudioEndMs: z.number().int().min(0).max(10_000).optional(),

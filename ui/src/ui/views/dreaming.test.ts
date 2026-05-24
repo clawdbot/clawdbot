@@ -142,8 +142,16 @@ function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
     wikiMemoryPalaceLoading: false,
     wikiMemoryPalaceError: null,
     wikiMemoryPalace: {
-      totalItems: 2,
-      totalClaims: 3,
+      totalItems: 1,
+      totalPages: 2,
+      pageCounts: {
+        synthesis: 1,
+        entity: 0,
+        concept: 0,
+        source: 1,
+        report: 0,
+      },
+      totalClaims: 2,
       totalQuestions: 1,
       totalContradictions: 1,
       clusters: [
@@ -398,7 +406,13 @@ describe("dreaming view", () => {
     setDreamDiarySubTab("palace");
     const container = renderInto(buildProps());
     expect(compactText(container.querySelector(".dreams-diary__date"))).toBe(
-      "Syntheses · 1 pages · 2 claims · 1 questions · 1 contradictions",
+      "Vault · 2 pages · 2 claim rows · 1 open question · 1 contradiction",
+    );
+    expect(compactText(container.querySelectorAll(".dreams-diary__para")[0])).toBe(
+      "Full vault breakdown: Sources · 1 page; Syntheses · 1 page.",
+    );
+    expect(compactText(container.querySelectorAll(".dreams-diary__para")[1])).toContain(
+      "Selected section: Syntheses: 1 page · 2 claim rows · 1 open question on 1 page · 1 contradiction.",
     );
     const insight = container.querySelector(".dreams-diary__insight-card");
     expect(insight?.querySelector(".dreams-diary__insight-title")?.textContent).toBe(
@@ -449,6 +463,14 @@ describe("dreaming view", () => {
       onRequestUpdate: rerender,
       wikiMemoryPalace: {
         totalItems: 1,
+        totalPages: 1,
+        pageCounts: {
+          synthesis: 0,
+          entity: 0,
+          concept: 0,
+          source: 1,
+          report: 0,
+        },
         totalClaims: 0,
         totalQuestions: 0,
         totalContradictions: 0,

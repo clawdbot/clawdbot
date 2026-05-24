@@ -197,6 +197,9 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
       timer = null;
     }
     if (!started) {
+      if (isTty) {
+        unregisterActiveProgressLine(stream);
+      }
       activeProgress = Math.max(0, activeProgress - 1);
       return;
     }

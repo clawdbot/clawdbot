@@ -260,7 +260,7 @@ export class CodexAppServerClient {
         return;
       }
       try {
-        this.writeMessage(message);
+        this.writeMessage(message, (error) => rejectPending(error));
       } catch (error) {
         rejectPending(error instanceof Error ? error : new Error(String(error)));
       }
@@ -301,7 +301,7 @@ export class CodexAppServerClient {
     await closeCodexAppServerTransportAndWait(this.child, options);
   }
 
-  private writeMessage(message: RpcRequest | RpcResponse): void {
+  private writeMessage(message: RpcRequest | RpcResponse, onError?: (error: Error) => void): void {
     if (this.closed) {
       return;
     }
@@ -312,6 +312,7 @@ export class CodexAppServerClient {
       (error?: Error | null) => {
         if (error) {
           embeddedAgentLog.warn("codex app-server write failed", { error, id, method });
+          onError?.(error);
         }
       },
     );
@@ -353,6 +354,7 @@ export class CodexAppServerClient {
     } catch (error) {
       const lineCount = pending.lineCount + 1;
       if (
+        shouldBufferCodexAppServerParseFailure(candidate.trim(), error) &&
         candidate.length <= CODEX_APP_SERVER_PARSE_BUFFER_MAX &&
         lineCount <= CODEX_APP_SERVER_PARSE_BUFFER_MAX_LINES
       ) {

@@ -65,7 +65,9 @@ vi.mock("../../media/store.js", () => ({
 
 vi.mock("./agent.shared.js", () => ({
   getPwAiModule: vi.fn(async () => null),
-  handleRouteError: vi.fn(),
+  handleRouteError: vi.fn((_ctx, _res, err) => {
+    throw err;
+  }),
   readBody: vi.fn((req: { body?: unknown }) => req.body ?? {}),
   requirePwAi: vi.fn(async () => null),
   resolveProfileContext: vi.fn(() => profileContext),
@@ -78,7 +80,7 @@ const { registerBrowserAgentSnapshotRoutes } = await import("./agent.snapshot.js
 function getSnapshotHandler() {
   const { app, getHandlers } = createBrowserRouteApp();
   registerBrowserAgentSnapshotRoutes(app, {
-    state: () => ({ resolved: {} }),
+    state: () => ({ resolved: { extraArgs: [] } }),
   } as never);
   const handler = getHandlers.get("/snapshot");
   expect(handler).toBeTypeOf("function");

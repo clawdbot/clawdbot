@@ -94,7 +94,7 @@ interface NpmUpdateSummary {
 
 const macosVm = "macOS Tahoe";
 const windowsVm = "Windows 11";
-const linuxVmDefault = "Ubuntu 24.04.3 ARM64";
+const linuxVmDefault = "Ubuntu 26.04";
 const updateTimeoutSeconds = Number(process.env.OPENCLAW_PARALLELS_NPM_UPDATE_TIMEOUT_S || 1200);
 
 function usage(): string {

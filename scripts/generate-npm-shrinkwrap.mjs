@@ -609,9 +609,9 @@ export {
   exactOverrideRulesFromOverrides,
   exactVersionFromOverrideSpec,
   normalizeNpmVersionDrift,
+  packageJsonForShrinkwrap,
   parsePnpmPackageKey,
   parseLockPackagePath,
-  packageJsonForShrinkwrap,
   readShrinkwrapOverrides,
   shrinkwrapPackageDirsForChangedPaths,
 };

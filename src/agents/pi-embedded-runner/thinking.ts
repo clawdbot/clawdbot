@@ -8,7 +8,8 @@ type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
 type RecoveryAssessment = "valid" | "incomplete-thinking" | "incomplete-text";
 type RecoverySessionMeta = { id: string; recoveredAnthropicThinking?: boolean };
 
-const THINKING_BLOCK_ERROR_PATTERN = /thinking or redacted_thinking blocks?.* cannot be modified/i;
+const THINKING_BLOCK_ERROR_PATTERN =
+  /(?:thinking|redacted_thinking).*?(?:cannot be modified|signature|invalid|missing|empty|blank)|(?:signature|invalid|missing|empty|blank).*?(?:thinking|redacted_thinking)/i;
 export const OMITTED_ASSISTANT_REASONING_TEXT = "[assistant reasoning omitted]";
 
 export function isAssistantMessageWithContent(message: AgentMessage): message is AssistantMessage {
@@ -106,13 +107,38 @@ function hasReplayableThinkingSignature(block: AssistantContentBlock): boolean {
  * Anthropic and Bedrock reject persisted thinking blocks when the signature is
  * absent, empty, or blank. They are also the authority for opaque signature
  * validity, so this intentionally avoids local length or shape heuristics.
+ *
+ * By default, the latest assistant turn is exempt: providers reject modified
+ * latest thinking blocks, so corrupted latest turns must flow through recovery
+ * rather than being rewritten before the request. Callers that append a new
+ * user turn before provider replay can disable that exemption because the
+ * stored assistant turn is no longer latest in the outbound request.
  */
-export function stripInvalidThinkingSignatures(messages: AgentMessage[]): AgentMessage[] {
+export function stripInvalidThinkingSignatures(
+  messages: AgentMessage[],
+  options: { preserveLatestAssistant?: boolean } = {},
+): AgentMessage[] {
+  const preserveLatestAssistant = options.preserveLatestAssistant ?? true;
+  let latestAssistantIndex = -1;
+  if (preserveLatestAssistant) {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      if (isAssistantMessageWithContent(messages[i])) {
+        latestAssistantIndex = i;
+        break;
+      }
+    }
+  }
+
   let touched = false;
   const out: AgentMessage[] = [];
 
-  for (const message of messages) {
+  for (let i = 0; i < messages.length; i += 1) {
+    const message = messages[i];
     if (!isAssistantMessageWithContent(message)) {
+      out.push(message);
+      continue;
+    }
+    if (i === latestAssistantIndex) {
       out.push(message);
       continue;
     }
@@ -433,6 +459,7 @@ export function wrapAnthropicStreamWithRecovery(
   sessionMeta: RecoverySessionMeta,
 ): StreamFn {
   return (model, context, options) => {
+    const requestMeta: RecoverySessionMeta = { id: sessionMeta.id };
     const contextRecord = context as unknown as { messages?: unknown };
     const originalMessages = Array.isArray(contextRecord.messages)
       ? (contextRecord.messages as AgentMessage[])
@@ -449,18 +476,18 @@ export function wrapAnthropicStreamWithRecovery(
     const stream = innerStreamFn(model, context, options);
     if (stream instanceof Promise) {
       return stream.catch((error: unknown) => {
-        if (!shouldRecoverAnthropicThinkingError(error, sessionMeta)) {
+        if (!shouldRecoverAnthropicThinkingError(error, requestMeta)) {
           throw error;
         }
-        sessionMeta.recoveredAnthropicThinking = true;
+        requestMeta.recoveredAnthropicThinking = true;
         log.warn(
-          `[session-recovery] Anthropic thinking request rejected; retrying once without thinking blocks: sessionId=${sessionMeta.id}`,
+          `[session-recovery] Anthropic thinking request rejected; retrying once without thinking blocks: sessionId=${requestMeta.id}`,
         );
         return retry();
       }) as ReturnType<StreamFn>;
     }
     const outer = createAssistantMessageEventStream();
-    const finalResultPromise = pumpStreamWithRecovery(outer, stream, sessionMeta, retry).finally(
+    const finalResultPromise = pumpStreamWithRecovery(outer, stream, requestMeta, retry).finally(
       () => {
         outer.end();
       },

@@ -38,7 +38,7 @@ import {
   sendStickerTelegram,
 } from "./send.js";
 import { getCacheStats, searchStickers } from "./sticker-cache.js";
-import { parseTelegramTarget } from "./targets.js";
+import { normalizeTelegramOutboundTarget, parseTelegramTarget } from "./targets.js";
 import { resolveTelegramToken } from "./token.js";
 
 export const telegramActionRuntime = {
@@ -391,7 +391,7 @@ export async function handleTelegramAction(
     if (!isActionEnabled("sendMessage")) {
       throw new Error("Telegram sendMessage is disabled.");
     }
-    const to = readStringParam(params, "to", { required: true });
+    const to = normalizeTelegramOutboundTarget(readStringParam(params, "to", { required: true }));
     const mediaUrls = readTelegramSendMediaUrls(params);
     const firstMediaUrl = mediaUrls[0];
     const presentation = normalizeMessagePresentation(params.presentation);

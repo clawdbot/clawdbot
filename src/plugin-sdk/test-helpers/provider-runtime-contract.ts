@@ -156,7 +156,7 @@ export function describeAnthropicProviderRuntimeContract(
         modelId: "claude-sonnet-4.6-20260219",
         modelRegistry: {
           find: (_provider: string, id: string) =>
-            id === "claude-sonnet-4.5-20260219"
+            id === "claude-sonnet-4-6-20260219"
               ? createModel({
                   id,
                   api: "anthropic-messages",
@@ -295,7 +295,7 @@ export function describeGithubCopilotProviderRuntimeContract(
         expectFields(model, {
           id: "gpt-5.4",
           provider: "github-copilot",
-          api: "openai-codex-responses",
+          api: "openai-responses",
         });
       });
     },

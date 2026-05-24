@@ -39,6 +39,23 @@ mktempfile() {
     echo "$f"
 }
 
+resolve_openclaw_effective_home() {
+    local openclaw_home="${OPENCLAW_HOME:-}"
+    if [[ -z "$openclaw_home" ]]; then
+        echo "$HOME"
+        return
+    fi
+    if [[ "$openclaw_home" == "~" ]]; then
+        echo "$HOME"
+        return
+    fi
+    if [[ "$openclaw_home" == \~/* ]]; then
+        echo "${HOME}${openclaw_home:1}"
+        return
+    fi
+    echo "$openclaw_home"
+}
+
 DOWNLOADER=""
 detect_downloader() {
     if command -v curl &> /dev/null; then
@@ -1024,7 +1041,7 @@ DRY_RUN=${OPENCLAW_DRY_RUN:-0}
 INSTALL_METHOD=${OPENCLAW_INSTALL_METHOD:-}
 OPENCLAW_VERSION=${OPENCLAW_VERSION:-latest}
 USE_BETA=${OPENCLAW_BETA:-0}
-GIT_DIR_DEFAULT="${HOME}/openclaw"
+GIT_DIR_DEFAULT="$(resolve_openclaw_effective_home)/openclaw"
 GIT_DIR=${OPENCLAW_GIT_DIR:-$GIT_DIR_DEFAULT}
 GIT_UPDATE=${OPENCLAW_GIT_UPDATE:-1}
 SHARP_IGNORE_GLOBAL_LIBVIPS="${SHARP_IGNORE_GLOBAL_LIBVIPS:-1}"
@@ -2388,6 +2405,7 @@ install_openclaw_from_git() {
     ensure_pnpm_binary_for_scripts
 
     if [[ ! -d "$repo_dir" ]]; then
+        mkdir -p "$(dirname "$repo_dir")"
         run_quiet_step "Cloning OpenClaw" git clone "$repo_url" "$repo_dir"
     fi
 
@@ -2585,10 +2603,12 @@ maybe_open_dashboard() {
 
 resolve_workspace_dir() {
     local profile="${OPENCLAW_PROFILE:-default}"
+    local effective_home
+    effective_home="$(resolve_openclaw_effective_home)"
     if [[ "${profile}" != "default" ]]; then
-        echo "${HOME}/.openclaw/workspace-${profile}"
+        echo "${effective_home}/.openclaw/workspace-${profile}"
     else
-        echo "${HOME}/.openclaw/workspace"
+        echo "${effective_home}/.openclaw/workspace"
     fi
 }
 
@@ -2597,9 +2617,18 @@ run_bootstrap_onboarding_if_needed() {
         return
     fi
 
-    local config_path="${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}"
-    if [[ -f "${config_path}" || -f "$HOME/.clawdbot/clawdbot.json" ]]; then
+    local effective_home
+    effective_home="$(resolve_openclaw_effective_home)"
+    local config_path="${OPENCLAW_CONFIG_PATH:-$effective_home/.openclaw/openclaw.json}"
+    local legacy_config_path="${HOME}/.openclaw/openclaw.json"
+    local legacy_clawdbot_path="${HOME}/.clawdbot/clawdbot.json"
+    if [[ -f "${config_path}" || -f "$effective_home/.clawdbot/clawdbot.json" ]]; then
         return
+    fi
+    if [[ -z "${OPENCLAW_CONFIG_PATH:-}" && "${effective_home}" != "${HOME}" ]]; then
+        if [[ -f "$legacy_config_path" || -f "$legacy_clawdbot_path" ]]; then
+            return
+        fi
     fi
 
     local workspace
@@ -3033,8 +3062,10 @@ main() {
             user_claw="$(openclaw_command_for_user "${OPENCLAW_BIN:-}")"
             ui_info "Skipping onboard (requested); run ${user_claw} onboard later"
         else
-            local config_path="${OPENCLAW_CONFIG_PATH:-$HOME/.openclaw/openclaw.json}"
-            if [[ -f "${config_path}" || -f "$HOME/.clawdbot/clawdbot.json" ]]; then
+            local effective_home
+            effective_home="$(resolve_openclaw_effective_home)"
+            local config_path="${OPENCLAW_CONFIG_PATH:-$effective_home/.openclaw/openclaw.json}"
+            if [[ -f "${config_path}" || -f "$effective_home/.clawdbot/clawdbot.json" ]]; then
                 ui_info "Config already present; running doctor"
                 run_doctor
                 should_open_dashboard=true

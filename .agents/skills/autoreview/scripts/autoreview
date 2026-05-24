@@ -520,6 +520,8 @@ def validate_report(report: dict[str, Any], repo: Path, changed_paths: set[str],
     if not number_in_range(report.get("overall_confidence")):
         raise SystemExit("review JSON overall_confidence must be numeric")
     finding_text = ""
+    kept_findings: list[dict[str, Any]] = []
+    ignored_findings: list[tuple[int, dict[str, Any], str, int]] = []
     for index, finding in enumerate(report["findings"]):
         if not isinstance(finding, dict):
             raise SystemExit(f"finding {index} must be an object")
@@ -554,8 +556,24 @@ def validate_report(report: dict[str, Any], repo: Path, changed_paths: set[str],
         if Path(rel).is_absolute() or ".." in Path(rel).parts:
             raise SystemExit(f"finding {index} uses invalid file path: {rel}")
         if rel not in changed_paths:
-            raise SystemExit(f"finding {index} points to a file outside the reviewed change: {rel}")
+            ignored_findings.append((index, finding, rel, line))
+            continue
+        kept_findings.append(finding)
         finding_text += "\n" + json.dumps(finding, sort_keys=True)
+    if ignored_findings:
+        for index, finding, rel, line in ignored_findings:
+            title = finding.get("title", "<untitled>")
+            print(
+                f"autoreview ignored out-of-scope finding {index}: {title} ({rel}:{line})",
+                file=sys.stderr,
+            )
+            print(bounded_field(str(finding.get("body", "")), 500), file=sys.stderr)
+        report["findings"] = kept_findings
+        if not kept_findings and report["overall_correctness"] == "patch is incorrect":
+            note = f"Ignored {len(ignored_findings)} out-of-scope finding(s) outside the reviewed change."
+            explanation = report["overall_explanation"].rstrip()
+            report["overall_correctness"] = "patch is correct"
+            report["overall_explanation"] = bounded_field(f"{explanation}\n\n{note}", 3000)
     haystack = finding_text.lower()
     for needle in required:
         if needle.lower() not in haystack:

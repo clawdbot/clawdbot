@@ -202,6 +202,8 @@ describe("discord config schema", () => {
           voice: "cedar",
           toolPolicy: "safe-read-only",
           consultPolicy: "always",
+          requireWakeName: true,
+          wakeNames: ["Molty"],
           bootstrapContextFiles: ["IDENTITY.md", "USER.md", "SOUL.md"],
           bargeIn: true,
           minBargeInAudioEndMs: 500,
@@ -224,6 +226,8 @@ describe("discord config schema", () => {
     expect(cfg.voice?.realtime?.voice).toBe("cedar");
     expect(cfg.voice?.realtime?.toolPolicy).toBe("safe-read-only");
     expect(cfg.voice?.realtime?.consultPolicy).toBe("always");
+    expect(cfg.voice?.realtime?.requireWakeName).toBe(true);
+    expect(cfg.voice?.realtime?.wakeNames).toEqual(["Molty"]);
     expect(cfg.voice?.realtime?.bootstrapContextFiles).toEqual([
       "IDENTITY.md",
       "USER.md",
@@ -240,6 +244,7 @@ describe("discord config schema", () => {
       { mode: "bidi", realtime: { toolPolicy: "dangerous" } },
       { mode: "agent-proxy", realtime: { consultPolicy: "substantive" } },
       { mode: "bidi", realtime: { bootstrapContextFiles: ["AGENTS.md"] } },
+      { mode: "agent-proxy", realtime: { wakeNames: [""] } },
       { mode: "agent-proxy", realtime: { debounceMs: 10_001 } },
       { mode: "agent-proxy", realtime: { minBargeInAudioEndMs: -1 } },
       { mode: "agent-proxy", realtime: { minBargeInAudioEndMs: 10_001 } },

@@ -406,10 +406,15 @@ export async function runRestartScript(scriptPath: string): Promise<void> {
   const file = isWindows ? "cmd.exe" : "/bin/sh";
   const args = isWindows ? ["/d", "/s", "/c", quoteCmdScriptArg(scriptPath)] : [scriptPath];
 
-  const child = spawn(file, args, {
-    detached: true,
-    stdio: "ignore",
-    windowsHide: true,
-  });
-  child.unref();
+  try {
+    const child = spawn(file, args, {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    child.on("error", () => {});
+    child.unref();
+  } catch {
+    // Restart handoff is best-effort; update completion must not crash here.
+  }
 }

@@ -168,6 +168,7 @@ describe("applyCliProfileEnv", () => {
 
   it("does not override explicit env values", () => {
     const env: Record<string, string | undefined> = {
+      OPENCLAW_PROFILE: "prod",
       OPENCLAW_STATE_DIR: "/custom",
       OPENCLAW_GATEWAY_PORT: "19099",
     };
@@ -176,6 +177,7 @@ describe("applyCliProfileEnv", () => {
       env,
       homedir: () => "/home/peter",
     });
+    expect(env.OPENCLAW_PROFILE).toBe("dev");
     expect(env.OPENCLAW_STATE_DIR).toBe("/custom");
     expect(env.OPENCLAW_GATEWAY_PORT).toBe("19099");
     expect(env.OPENCLAW_CONFIG_PATH).toBe(path.join("/custom", "openclaw.json"));

@@ -339,7 +339,7 @@ describe("resolveNpmCommandInvocation", () => {
         "/d",
         "/s",
         "/c",
-        '"C:\\Program Files\\nodejs\\npm.cmd" install -g "C:\\tmp\\openclaw package.tgz"',
+        '""C:\\Program Files\\nodejs\\npm.cmd" install -g "C:\\tmp\\openclaw package.tgz""',
       ],
       windowsVerbatimArguments: true,
     });

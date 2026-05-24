@@ -119,8 +119,7 @@ describe("anthropic provider policy public artifact", () => {
     });
 
     expect(
-      nextConfig.agents?.defaults?.models?.["anthropic/claude-sonnet-4-20250514"]?.params
-        ?.cacheRetention,
+      nextConfig.agents?.defaults?.models?.["anthropic/claude-sonnet-4-6"]?.params?.cacheRetention,
     ).toBe("short");
   });
 

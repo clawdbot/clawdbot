@@ -13,6 +13,8 @@ const TWITCH_CHAT_AUTH_INTENTS = ["chat"];
  */
 export class TwitchClientManager {
   private clients = new Map<string, ChatClient>();
+  private pendingClients = new Map<string, ChatClient>();
+  private connectionPromises = new Map<string, Promise<ChatClient>>();
   private messageHandlers = new Map<string, (message: TwitchChatMessage) => void>();
   private messageHandlerTokens = new Map<string, symbol>();
 
@@ -35,8 +37,8 @@ export class TwitchClientManager {
         clientSecret: account.clientSecret,
       });
 
-      await authProvider
-        .addUserForToken(
+      try {
+        const userId = await authProvider.addUserForToken(
           {
             accessToken: normalizedToken,
             refreshToken: account.refreshToken ?? null,
@@ -44,20 +46,16 @@ export class TwitchClientManager {
             obtainmentTimestamp: account.obtainmentTimestamp ?? Date.now(),
           },
           TWITCH_CHAT_AUTH_INTENTS,
-        )
-        .then((userId) => {
-          this.logger.info(
-            `Added user ${userId} to RefreshingAuthProvider for ${account.username}`,
-          );
-        })
-        .catch((err) => {
-          this.logger.error(
-            `Failed to add user to RefreshingAuthProvider: ${formatErrorMessage(err)}`,
-          );
-          // Re-throw so getClient rejects and does not cache a client backed
-          // by an auth provider with no bound user (would fail later on send).
-          throw err;
-        });
+        );
+        this.logger.info(`Added user ${userId} to RefreshingAuthProvider for ${account.username}`);
+      } catch (err) {
+        throw new Error(
+          `Failed to add user to RefreshingAuthProvider: ${formatErrorMessage(err)}`,
+          {
+            cause: err,
+          },
+        );
+      }
 
       authProvider.onRefresh((userId, token) => {
         this.logger.info(
@@ -95,7 +93,28 @@ export class TwitchClientManager {
     if (existing) {
       return existing;
     }
+    const pending = this.connectionPromises.get(key);
+    if (pending) {
+      return pending;
+    }
 
+    const connection = this.createConnectedClient(key, account, cfg, accountId);
+    this.connectionPromises.set(key, connection);
+    try {
+      return await connection;
+    } finally {
+      if (this.connectionPromises.get(key) === connection) {
+        this.connectionPromises.delete(key);
+      }
+    }
+  }
+
+  private async createConnectedClient(
+    key: string,
+    account: TwitchAccountConfig,
+    cfg?: OpenClawConfig,
+    accountId?: string,
+  ): Promise<ChatClient> {
     const tokenResolution = resolveTwitchToken(cfg, {
       accountId,
     });
@@ -154,12 +173,92 @@ export class TwitchClientManager {
 
     this.setupClientHandlers(client, account);
 
-    client.connect();
+    this.pendingClients.set(key, client);
+    try {
+      await this.connectClient(client, account);
+      if (this.pendingClients.get(key) !== client) {
+        client.quit();
+        throw new Error(`Twitch connection cancelled for ${account.username}`);
+      }
+      this.pendingClients.delete(key);
+    } catch (error) {
+      if (this.pendingClients.get(key) === client) {
+        this.pendingClients.delete(key);
+      }
+      throw error;
+    }
 
     this.clients.set(key, client);
     this.logger.info(`Connected to Twitch as ${account.username}`);
 
     return client;
+  }
+
+  private async connectClient(client: ChatClient, account: TwitchAccountConfig): Promise<void> {
+    const connectTimeoutMs = 15000;
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      let authRetryPending = false;
+      const listeners: Array<{ unbind: () => void }> = [];
+      let timeout: NodeJS.Timeout | undefined;
+      const finish = (error?: Error) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        if (timeout) {
+          clearTimeout(timeout);
+        }
+        for (const listener of listeners) {
+          listener.unbind();
+        }
+        if (error) {
+          try {
+            client.quit();
+          } catch {
+            // Best effort: connection setup already failed.
+          }
+          reject(error);
+          return;
+        }
+        resolve();
+      };
+      listeners.push(
+        client.onAuthenticationSuccess(() => finish()),
+        client.onAuthenticationFailure((text) => {
+          authRetryPending = true;
+          this.logger.warn(
+            `Twitch authentication failed for ${account.username}; waiting for retry, disconnect, or timeout: ${text}`,
+          );
+        }),
+        client.onDisconnect((manual, reason) => {
+          if (authRetryPending && !manual) {
+            this.logger.debug?.(
+              `Twitch disconnected during auth retry for ${account.username}: ${formatErrorMessage(reason)}`,
+            );
+            return;
+          }
+          finish(
+            reason ??
+              new Error(
+                manual
+                  ? `Twitch connection cancelled for ${account.username}`
+                  : `Twitch disconnected before ready for ${account.username}`,
+              ),
+          );
+        }),
+      );
+      timeout = setTimeout(
+        () => finish(new Error(`Timed out connecting to Twitch as ${account.username}`)),
+        connectTimeoutMs,
+      );
+      timeout.unref?.();
+      try {
+        client.connect();
+      } catch (error) {
+        finish(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
   }
 
   /**
@@ -221,18 +320,30 @@ export class TwitchClientManager {
     };
   }
 
+  private clearMessageHandler(key: string): void {
+    this.messageHandlers.delete(key);
+    this.messageHandlerTokens.delete(key);
+  }
+
   /**
    * Disconnect a client
    */
   async disconnect(account: TwitchAccountConfig): Promise<void> {
     const key = this.getAccountKey(account);
     const client = this.clients.get(key);
+    const pendingClient = this.pendingClients.get(key);
+
+    if (pendingClient) {
+      pendingClient.quit();
+      this.pendingClients.delete(key);
+      this.connectionPromises.delete(key);
+      this.clearMessageHandler(key);
+    }
 
     if (client) {
       client.quit();
       this.clients.delete(key);
-      this.messageHandlers.delete(key);
-      this.messageHandlerTokens.delete(key);
+      this.clearMessageHandler(key);
       this.logger.info(`Disconnected ${key}`);
     }
   }
@@ -241,7 +352,10 @@ export class TwitchClientManager {
    * Disconnect all clients
    */
   async disconnectAll(): Promise<void> {
+    this.pendingClients.forEach((client) => client.quit());
     this.clients.forEach((client) => client.quit());
+    this.pendingClients.clear();
+    this.connectionPromises.clear();
     this.clients.clear();
     this.messageHandlers.clear();
     this.messageHandlerTokens.clear();
@@ -289,6 +403,8 @@ export class TwitchClientManager {
    */
   clearForTest(): void {
     this.clients.clear();
+    this.pendingClients.clear();
+    this.connectionPromises.clear();
     this.messageHandlers.clear();
   }
 }

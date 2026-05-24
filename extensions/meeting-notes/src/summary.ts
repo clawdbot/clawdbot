@@ -8,6 +8,7 @@ export type MeetingNotesSummary = {
   title: string;
   generatedAt: string;
   overview: string;
+  transcript: string[];
   decisions: string[];
   actionItems: string[];
   risks: string[];
@@ -36,12 +37,22 @@ function firstSentences(utterances: MeetingNotesUtterance[], limit: number): str
 function collectMatches(utterances: MeetingNotesUtterance[], pattern: RegExp): string[] {
   return utterances
     .filter((utterance) => pattern.test(utterance.text))
-    .map((utterance) => {
-      const speaker = utterance.speaker?.label ? `${utterance.speaker.label}: ` : "";
-      return `${speaker}${utterance.text.trim()}`;
-    })
+    .map(formatSpeakerLine)
     .filter(Boolean)
     .slice(0, 12);
+}
+
+function formatSpeakerLine(utterance: MeetingNotesUtterance): string {
+  const text = utterance.text.trim();
+  if (!text) {
+    return "";
+  }
+  const speaker = utterance.speaker?.label?.trim();
+  return speaker ? `${speaker}: ${text}` : text;
+}
+
+function formatTranscript(utterances: MeetingNotesUtterance[]): string[] {
+  return utterances.map(formatSpeakerLine).filter(Boolean);
 }
 
 export function summarizeMeetingNotes(params: {
@@ -55,6 +66,7 @@ export function summarizeMeetingNotes(params: {
     title,
     generatedAt: new Date().toISOString(),
     overview,
+    transcript: formatTranscript(params.utterances),
     decisions: collectMatches(params.utterances, DECISION_PATTERNS),
     actionItems: collectMatches(params.utterances, ACTION_PATTERNS),
     risks: collectMatches(params.utterances, RISK_PATTERNS),
@@ -75,6 +87,9 @@ export function renderMeetingNotesMarkdown(summary: MeetingNotesSummary): string
     "",
     "## Overview",
     summary.overview,
+    "",
+    "## Transcript",
+    renderList(summary.transcript),
     "",
     "## Decisions",
     renderList(summary.decisions),

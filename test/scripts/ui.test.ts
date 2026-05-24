@@ -25,7 +25,7 @@ describe("scripts/ui windows spawn behavior", () => {
         "/d",
         "/s",
         "/c",
-        '"C:\\Program Files\\nodejs\\pnpm.cmd" run build -t "path with spaces"',
+        '""C:\\Program Files\\nodejs\\pnpm.cmd" run build -t "path with spaces""',
       ],
       options: {
         cwd: "C:\\repo\\ui",

@@ -22,6 +22,8 @@ import { resolveGatewaySessionStoreTarget } from "../gateway/session-utils.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { CommandLane } from "../process/lanes.js";
 import { isAcpSessionKey, isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { deliveryContextFromSession } from "../utils/delivery-context.shared.js";
 import { resolveAgentSessionDirs } from "./session-dirs.js";
 import type { SessionLockInspection } from "./session-write-lock.js";
 
@@ -30,6 +32,9 @@ const log = createSubsystemLogger("main-session-restart-recovery");
 const DEFAULT_RECOVERY_DELAY_MS = 5_000;
 const MAX_RECOVERY_RETRIES = 3;
 const RETRY_BACKOFF_MULTIPLIER = 2;
+const UNRESUMABLE_SESSION_NOTICE =
+  "I was interrupted by a gateway restart and couldn't safely resume the previous turn. " +
+  "Please send that last request again and I'll pick it up cleanly.";
 
 function shouldSkipMainRecovery(entry: SessionEntry, sessionKey: string): boolean {
   if (typeof entry.spawnDepth === "number" && entry.spawnDepth > 0) {
@@ -274,6 +279,57 @@ async function markSessionFailed(params: {
   log.warn(`marked interrupted main session failed: ${params.sessionKey} (${params.reason})`);
 }
 
+async function sendUnresumableSessionNotice(params: {
+  entry: SessionEntry;
+  reason: string;
+  sessionKey: string;
+}): Promise<boolean> {
+  const deliveryContext = deliveryContextFromSession(params.entry);
+  const channel = normalizeOptionalString(deliveryContext?.channel);
+  const to = normalizeOptionalString(deliveryContext?.to);
+  if (!channel || !to) {
+    return false;
+  }
+
+  const messageParams: Record<string, unknown> = {
+    to,
+    message: UNRESUMABLE_SESSION_NOTICE,
+    bestEffort: true,
+  };
+  if (deliveryContext?.threadId != null) {
+    messageParams.threadId = deliveryContext.threadId;
+  }
+  const actionParams: Record<string, unknown> = {
+    channel,
+    action: "send",
+    sessionKey: params.sessionKey,
+    sessionId: params.entry.sessionId,
+    idempotencyKey: `main-session-restart-recovery:${params.entry.sessionId}:failed-notice`,
+    params: messageParams,
+  };
+  const accountId = normalizeOptionalString(deliveryContext?.accountId);
+  if (accountId) {
+    actionParams.accountId = accountId;
+  }
+
+  try {
+    await callGateway({
+      method: "message.action",
+      params: actionParams,
+      timeoutMs: 10_000,
+    });
+    log.info(
+      `sent interrupted main session recovery notice: ${params.sessionKey} (${params.reason})`,
+    );
+    return true;
+  } catch (err) {
+    log.warn(
+      `failed to send interrupted main session recovery notice ${params.sessionKey}: ${String(err)}`,
+    );
+    return false;
+  }
+}
+
 async function resumeMainSession(params: {
   storePath: string;
   sessionKey: string;
@@ -432,6 +488,11 @@ async function recoverStore(params: {
 
     const resumeBlockReason = resolveMainSessionResumeBlockReason(messages);
     if (resumeBlockReason) {
+      await sendUnresumableSessionNotice({
+        entry,
+        sessionKey,
+        reason: resumeBlockReason,
+      });
       await markSessionFailed({
         storePath: params.storePath,
         sessionKey,

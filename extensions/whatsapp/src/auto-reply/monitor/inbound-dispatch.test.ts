@@ -12,11 +12,27 @@ type CapturedReplyPayload = {
   mediaUrls?: string[];
 };
 
+type CapturedDispatchParams = {
+  ctx?: unknown;
+  dispatcherOptions?: {
+    deliver?: (
+      payload: CapturedReplyPayload,
+      info: { kind: "tool" | "block" | "final" },
+    ) => Promise<unknown>;
+    onError?: (err: unknown, info: { kind: "tool" | "block" | "final" }) => void;
+    onSettled?: () => Promise<unknown>;
+  };
+  replyOptions?: {
+    disableBlockStreaming?: boolean;
+    sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
+  };
+};
+
 const {
   dispatchReplyWithBufferedBlockDispatcherMock,
   deliverInboundReplyWithMessageSendContextMock,
 } = vi.hoisted(() => ({
-  dispatchReplyWithBufferedBlockDispatcherMock: vi.fn(async (params: { ctx: unknown }) => {
+  dispatchReplyWithBufferedBlockDispatcherMock: vi.fn(async (params: CapturedDispatchParams) => {
     capturedDispatchParams = params;
     return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
   }),
@@ -168,37 +184,19 @@ function makeMsg(overrides: Partial<TestMsg> = {}): TestMsg {
 }
 
 function getCapturedDeliver() {
-  return (
-    capturedDispatchParams as {
-      dispatcherOptions?: {
-        deliver?: (
-          payload: CapturedReplyPayload,
-          info: { kind: "tool" | "block" | "final" },
-        ) => Promise<void>;
-      };
-    }
-  )?.dispatcherOptions?.deliver;
+  return (capturedDispatchParams as CapturedDispatchParams)?.dispatcherOptions?.deliver;
 }
 
 function getCapturedOnError() {
-  return (
-    capturedDispatchParams as {
-      dispatcherOptions?: {
-        onError?: (err: unknown, info: { kind: "tool" | "block" | "final" }) => void;
-      };
-    }
-  )?.dispatcherOptions?.onError;
+  return (capturedDispatchParams as CapturedDispatchParams)?.dispatcherOptions?.onError;
+}
+
+function getCapturedOnSettled() {
+  return (capturedDispatchParams as CapturedDispatchParams)?.dispatcherOptions?.onSettled;
 }
 
 function getCapturedReplyOptions() {
-  return (
-    capturedDispatchParams as {
-      replyOptions?: {
-        disableBlockStreaming?: boolean;
-        sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
-      };
-    }
-  )?.replyOptions;
+  return (capturedDispatchParams as CapturedDispatchParams)?.replyOptions;
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -597,12 +595,14 @@ describe("whatsapp inbound dispatch", () => {
     expect(deliverReply).not.toHaveBeenCalled();
     expect(rememberSentText).not.toHaveBeenCalled();
 
-    await deliver?.(
-      { text: "tool image", mediaUrls: ["/tmp/generated.jpg"] },
-      {
-        kind: "tool",
-      },
-    );
+    await expect(
+      deliver?.(
+        { text: "tool image", mediaUrls: ["/tmp/generated.jpg"] },
+        {
+          kind: "tool",
+        },
+      ),
+    ).resolves.toMatchObject({ visibleReplySent: false });
     expect(deliverReply).not.toHaveBeenCalled();
     expect(rememberSentText).not.toHaveBeenCalled();
 
@@ -694,7 +694,9 @@ describe("whatsapp inbound dispatch", () => {
     });
 
     const deliver = getCapturedDeliver();
-    await deliver?.({ text: "cancelled by hook" }, { kind: "final" });
+    expect(await deliver?.({ text: "cancelled by hook" }, { kind: "final" })).toMatchObject({
+      visibleReplySent: false,
+    });
 
     const durableParams = requireMockArg(
       deliverInboundReplyWithMessageSendContextMock,
@@ -711,6 +713,155 @@ describe("whatsapp inbound dispatch", () => {
     });
     expect(deliverReply).not.toHaveBeenCalled();
     expect(rememberSentText).not.toHaveBeenCalled();
+  });
+
+  it("reports deferred media visible only after an accepted flush", async () => {
+    deliverInboundReplyWithMessageSendContextMock.mockResolvedValueOnce({
+      status: "handled_no_send",
+      reason: "no_visible_result",
+      delivery: {
+        messageIds: [],
+        visibleReplySent: false,
+      },
+    });
+    const deliverReply = vi.fn(async () => acceptedDeliveryResult());
+
+    await dispatchBufferedReply({
+      deliverReply,
+    });
+
+    const deliver = getCapturedDeliver();
+    await expect(
+      deliver?.({ text: "tool image", mediaUrls: ["/tmp/generated.jpg"] }, { kind: "tool" }),
+    ).resolves.toMatchObject({ visibleReplySent: false });
+    await expect(deliver?.({ text: "cancelled final" }, { kind: "final" })).resolves.toMatchObject({
+      visibleReplySent: true,
+    });
+    expect(deliverReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("flushes deferred media through the settled delivery hook", async () => {
+    const deliverReply = vi.fn(async () => acceptedDeliveryResult());
+    const rememberSentText = vi.fn();
+    let settledResult: unknown;
+    dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(
+      async (params: CapturedDispatchParams) => {
+        capturedDispatchParams = params;
+        const deliver = params.dispatcherOptions?.deliver;
+        if (!deliver) {
+          throw new Error("expected captured deliver callback");
+        }
+        const onSettled = params.dispatcherOptions?.onSettled;
+        const deferred = await deliver(
+          { text: "tool image", mediaUrls: ["/tmp/generated.jpg"] },
+          { kind: "tool" },
+        );
+        expect(deferred).toMatchObject({ visibleReplySent: false });
+        settledResult = await onSettled?.();
+        return {
+          queuedFinal: false,
+          counts: { tool: 1, block: 0, final: 0 },
+        };
+      },
+    );
+
+    await expect(
+      dispatchBufferedReply({
+        deliverReply,
+        rememberSentText,
+      }),
+    ).resolves.toBe(true);
+
+    expect(settledResult).toMatchObject({ visibleReplySent: true });
+    expect(getCapturedOnSettled()).toBeTypeOf("function");
+    expect(deliverReply).toHaveBeenCalledTimes(1);
+    expectRememberSentContextFields(rememberSentText, undefined, {
+      combinedBody: "hi",
+      combinedBodySessionKey: "agent:main:whatsapp:direct:+1000",
+    });
+  });
+
+  it("marks deferred media flush failures visible after an earlier accepted flush", async () => {
+    const error = new Error("second deferred media failed");
+    const deliverReply = vi
+      .fn()
+      .mockResolvedValueOnce(acceptedDeliveryResult())
+      .mockRejectedValueOnce(error);
+    dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(
+      async (params: CapturedDispatchParams) => {
+        capturedDispatchParams = params;
+        const deliver = params.dispatcherOptions?.deliver;
+        if (!deliver) {
+          throw new Error("expected captured deliver callback");
+        }
+        const onSettled = params.dispatcherOptions?.onSettled;
+        await deliver({ text: "first image", mediaUrls: ["/tmp/first.jpg"] }, { kind: "tool" });
+        await deliver({ text: "second image", mediaUrls: ["/tmp/second.jpg"] }, { kind: "tool" });
+        await onSettled?.();
+        return {
+          queuedFinal: false,
+          counts: { tool: 2, block: 0, final: 0 },
+        };
+      },
+    );
+
+    await expect(dispatchBufferedReply({ deliverReply })).rejects.toMatchObject({
+      sentBeforeError: true,
+      visibleReplySent: true,
+    });
+    expect(error).toMatchObject({
+      sentBeforeError: true,
+      visibleReplySent: true,
+    });
+    expect(deliverReply).toHaveBeenCalledTimes(2);
+  });
+
+  it("marks downstream failures visible after deferred media flushes", async () => {
+    const error = new Error("durable text failed");
+    deliverInboundReplyWithMessageSendContextMock.mockResolvedValueOnce({
+      status: "failed",
+      error,
+    });
+    const deliverReply = vi.fn(async () => acceptedDeliveryResult());
+
+    await dispatchBufferedReply({
+      deliverReply,
+    });
+
+    const deliver = getCapturedDeliver();
+    await expect(
+      deliver?.({ text: "tool image", mediaUrls: ["/tmp/generated.jpg"] }, { kind: "tool" }),
+    ).resolves.toMatchObject({ visibleReplySent: false });
+    await expect(deliver?.({ text: "final text" }, { kind: "final" })).rejects.toMatchObject({
+      sentBeforeError: true,
+      visibleReplySent: true,
+    });
+    expect(error).toMatchObject({
+      sentBeforeError: true,
+      visibleReplySent: true,
+    });
+    expect(deliverReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("marks durable partial send failures as visible before rethrowing", async () => {
+    const error = new Error("second chunk failed");
+    deliverInboundReplyWithMessageSendContextMock.mockResolvedValueOnce({
+      status: "failed",
+      error,
+      sentBeforeError: true,
+    });
+    const deliverReply = vi.fn(async () => acceptedDeliveryResult());
+
+    await dispatchBufferedReply({
+      deliverReply,
+    });
+
+    const deliver = getCapturedDeliver();
+    await expect(deliver?.({ text: "partial final" }, { kind: "final" })).rejects.toMatchObject({
+      sentBeforeError: true,
+      visibleReplySent: true,
+    });
+    expect(deliverReply).not.toHaveBeenCalled();
   });
 
   it("keeps media replies on the WhatsApp owner delivery path", async () => {
@@ -920,15 +1071,7 @@ describe("whatsapp inbound dispatch", () => {
     const deliverReply = vi.fn(async () => acceptedDeliveryResult());
     const rememberSentText = vi.fn();
     dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(
-      async (params: {
-        ctx: unknown;
-        dispatcherOptions?: {
-          deliver?: (
-            payload: { text?: string },
-            info: { kind: "tool" | "block" | "final" },
-          ) => Promise<void>;
-        };
-      }) => {
+      async (params: CapturedDispatchParams) => {
         capturedDispatchParams = params;
         await params.dispatcherOptions?.deliver?.({ text: "partial block" }, { kind: "block" });
         return { queuedFinal: false, counts: { tool: 0, block: 1, final: 0 } };
@@ -956,15 +1099,7 @@ describe("whatsapp inbound dispatch", () => {
       debug: vi.fn(),
     } as unknown as BufferedReplyParams["replyLogger"];
     dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(
-      async (params: {
-        ctx: unknown;
-        dispatcherOptions?: {
-          deliver?: (
-            payload: { text?: string },
-            info: { kind: "tool" | "block" | "final" },
-          ) => Promise<void>;
-        };
-      }) => {
+      async (params: CapturedDispatchParams) => {
         capturedDispatchParams = params;
         await params.dispatcherOptions?.deliver?.({ text: "final text" }, { kind: "final" });
         return { queuedFinal: false, counts: { tool: 0, block: 0, final: 1 } };
@@ -994,20 +1129,13 @@ describe("whatsapp inbound dispatch", () => {
     const deliverReply = vi.fn(async () => acceptedDeliveryResult());
     const rememberSentText = vi.fn();
     dispatchReplyWithBufferedBlockDispatcherMock.mockImplementationOnce(
-      async (params: {
-        ctx: unknown;
-        dispatcherOptions?: {
-          deliver?: (
-            payload: CapturedReplyPayload,
-            info: { kind: "tool" | "block" | "final" },
-          ) => Promise<void>;
-        };
-      }) => {
+      async (params: CapturedDispatchParams) => {
         capturedDispatchParams = params;
         await params.dispatcherOptions?.deliver?.(
           { text: "tool image", mediaUrls: ["/tmp/generated.jpg"] },
           { kind: "tool" },
         );
+        await params.dispatcherOptions?.onSettled?.();
         return { queuedFinal: false, counts: { tool: 1, block: 0, final: 0 } };
       },
     );

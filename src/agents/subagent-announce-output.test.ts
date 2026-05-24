@@ -279,4 +279,24 @@ describe("applySubagentWaitOutcome", () => {
       elapsedMs: 50,
     });
   });
+
+  it("treats aborted ok wait snapshots as terminated subagent errors", () => {
+    const applied = applySubagentWaitOutcome({
+      wait: {
+        status: "ok",
+        startedAt: 100,
+        endedAt: 150,
+        stopReason: "aborted",
+      },
+      outcome: undefined,
+    });
+
+    expect(applied.outcome).toEqual({
+      status: "error",
+      error: "subagent run terminated",
+      startedAt: 100,
+      endedAt: 150,
+      elapsedMs: 50,
+    });
+  });
 });

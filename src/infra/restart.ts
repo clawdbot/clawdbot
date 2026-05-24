@@ -39,6 +39,7 @@ let restartCycleToken = 0;
 let emittedRestartToken = 0;
 let consumedRestartToken = 0;
 let emittedRestartReason: string | undefined;
+let emittedRestartIntent: GatewayRestartIntent | undefined;
 let lastRestartEmittedAt = 0;
 let pendingRestartTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingRestartDueAt = 0;
@@ -291,7 +292,10 @@ export function setPreRestartDeferralCheck(fn: () => number): void {
  * Both scheduleGatewaySigusr1Restart and the config watcher should use this
  * to ensure only one restart fires.
  */
-export function emitGatewayRestart(reasonOverride?: string): boolean {
+export function emitGatewayRestart(
+  reasonOverride?: string,
+  intent?: GatewayRestartIntent,
+): boolean {
   if (hasUnconsumedRestartSignal()) {
     clearActiveDeferralPolls();
     clearPendingScheduledRestart();
@@ -301,7 +305,8 @@ export function emitGatewayRestart(reasonOverride?: string): boolean {
   clearPendingScheduledRestart();
   const cycleToken = ++restartCycleToken;
   emittedRestartToken = cycleToken;
-  emittedRestartReason = reasonOverride ?? pendingRestartReason;
+  emittedRestartReason = reasonOverride ?? intent?.reason ?? pendingRestartReason;
+  emittedRestartIntent = intent;
   authorizeGatewaySigusr1Restart();
   try {
     if (process.listenerCount("SIGUSR1") > 0) {
@@ -378,6 +383,19 @@ export function peekGatewaySigusr1RestartReason(): string | undefined {
 }
 
 /**
+ * Reads and clears only the in-memory intent for the current emitted SIGUSR1 cycle.
+ * The restart reason and cycle token are advanced by markGatewaySigusr1RestartHandled().
+ */
+export function consumeGatewaySigusr1RestartIntent(): GatewayRestartIntent | null {
+  if (!hasUnconsumedRestartSignal()) {
+    return null;
+  }
+  const intent = emittedRestartIntent ?? null;
+  emittedRestartIntent = undefined;
+  return intent;
+}
+
+/**
  * Mark the currently emitted SIGUSR1 restart cycle as consumed by the run loop.
  * This explicitly advances the cycle state instead of resetting emit guards inside
  * consumeGatewaySigusr1RestartAuthorization().
@@ -386,12 +404,14 @@ export function markGatewaySigusr1RestartHandled(): void {
   if (hasUnconsumedRestartSignal()) {
     consumedRestartToken = emittedRestartToken;
     emittedRestartReason = undefined;
+    emittedRestartIntent = undefined;
   }
 }
 
 function rollBackGatewayRestartEmission(): void {
   emittedRestartToken = consumedRestartToken;
   emittedRestartReason = undefined;
+  emittedRestartIntent = undefined;
   consumeGatewaySigusr1RestartAuthorization();
 }
 
@@ -427,6 +447,7 @@ function updatePendingRestartEmitHooks(hooks?: RestartEmitHooks): void {
 async function emitPreparedGatewayRestart(
   hooks?: RestartEmitHooks,
   reasonOverride?: string,
+  intent?: GatewayRestartIntent,
 ): Promise<void> {
   let nextHooks = hooks ?? pendingRestartEmitHooks;
   if (!hooks) {
@@ -453,7 +474,7 @@ async function emitPreparedGatewayRestart(
     pendingRestartEmitHooks = undefined;
   }
 
-  const emitted = emitGatewayRestart(reasonOverride);
+  const emitted = emitGatewayRestart(reasonOverride, intent);
   if (!emitted) {
     await preparedHooks?.afterEmitRejected?.().catch(() => undefined);
   }
@@ -471,6 +492,7 @@ export function deferGatewayRestartUntilIdle(opts: {
   pollMs?: number;
   maxWaitMs?: number;
   reason?: string;
+  timeoutIntent?: GatewayRestartIntent;
 }): void {
   const pollMsRaw = opts.pollMs ?? DEFAULT_DEFERRAL_POLL_MS;
   const pollMs = Math.max(10, Math.floor(pollMsRaw));
@@ -523,7 +545,7 @@ export function deferGatewayRestartUntilIdle(opts: {
       clearInterval(poll);
       activeDeferralPolls.delete(poll);
       opts.hooks?.onTimeout?.(current, elapsedMs);
-      void emitPreparedGatewayRestart(opts.emitHooks, opts.reason);
+      void emitPreparedGatewayRestart(opts.emitHooks, opts.reason, opts.timeoutIntent);
     }
   }, pollMs);
   activeDeferralPolls.add(poll);
@@ -725,6 +747,10 @@ export function scheduleGatewaySigusr1Restart(opts?: {
   if (hasUnconsumedRestartSignal()) {
     if (shouldPreferRestartReason(reason, emittedRestartReason)) {
       emittedRestartReason = reason;
+      if (emittedRestartIntent) {
+        // Preserve the already-authorized force bit; only the display/recovery reason is upgraded.
+        emittedRestartIntent = { ...emittedRestartIntent, reason };
+      }
     }
     restartLog.warn(
       `restart request coalesced (already in-flight) reason=${reason ?? "unspecified"} ${formatRestartAudit(opts?.audit)}`,
@@ -812,10 +838,14 @@ export function scheduleGatewaySigusr1Restart(opts?: {
         return;
       }
       const cfg = getRuntimeConfig();
+      const deferralTimeoutMs = resolveGatewayRestartDeferralTimeoutMs(
+        cfg.gateway?.reload?.deferralTimeoutMs,
+      );
       deferGatewayRestartUntilIdle({
         getPendingCount: pendingCheck,
-        maxWaitMs: resolveGatewayRestartDeferralTimeoutMs(cfg.gateway?.reload?.deferralTimeoutMs),
+        maxWaitMs: deferralTimeoutMs,
         reason: scheduledReason,
+        timeoutIntent: { force: true, ...(scheduledReason ? { reason: scheduledReason } : {}) },
       });
     },
     Math.max(0, requestedDueAt - nowMs),
@@ -842,6 +872,7 @@ export const testing = {
     emittedRestartToken = 0;
     consumedRestartToken = 0;
     emittedRestartReason = undefined;
+    emittedRestartIntent = undefined;
     lastRestartEmittedAt = 0;
     clearActiveDeferralPolls();
     clearPendingScheduledRestart();

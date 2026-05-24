@@ -29,6 +29,7 @@ import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { resolveProviderTransportTurnStateWithPlugin } from "../plugins/provider-runtime.js";
+import { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../utils/cjk-chars.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
 import { createDeepSeekTextFilter } from "./deepseek-text-filter.js";
 import { resolveMaxTokensParam } from "./model-max-tokens-params.js";
@@ -2950,6 +2951,111 @@ function resolveOpenAICompletionsMaxTokens(
   return (options?.maxTokens || undefined) ?? (paramsMaxTokens || undefined) ?? model.maxTokens;
 }
 
+const OPENAI_COMPLETIONS_INPUT_TOKEN_SAFETY_MARGIN = 1.25;
+const OPENAI_COMPLETIONS_IMAGE_CHAR_ESTIMATE = 8_000;
+
+// Used only to bound `max_completion_tokens` below the effective context cap
+// for strict OpenAI-compatible servers (e.g. vLLM, StepFun). The CJK-aware
+// helper avoids undercounting non-Latin prompts enough to trigger server-side
+// context rejections; wrong-high here just trims output a little. Estimate the
+// final shaped payload, not the raw context, so compat transforms and dropped
+// replay turns are reflected in the output cap.
+function estimateOpenAICompletionsInputTokens(payload: {
+  messages?: unknown;
+  tools?: unknown;
+  response_format?: unknown;
+}): number {
+  let adjustedChars = 0;
+  adjustedChars += estimateOpenAICompletionsMessagesChars(payload.messages);
+  if (Array.isArray(payload.tools) && payload.tools.length > 0) {
+    try {
+      adjustedChars += estimateStringChars(JSON.stringify(payload.tools));
+    } catch {
+      adjustedChars += 1024;
+    }
+  }
+  if (payload.response_format !== undefined) {
+    try {
+      adjustedChars += estimateStringChars(JSON.stringify(payload.response_format));
+    } catch {
+      adjustedChars += 256;
+    }
+  }
+  return Math.ceil(
+    (adjustedChars / CHARS_PER_TOKEN_ESTIMATE) * OPENAI_COMPLETIONS_INPUT_TOKEN_SAFETY_MARGIN,
+  );
+}
+
+function estimateOpenAICompletionsMessagesChars(messages: unknown): number {
+  if (!Array.isArray(messages)) {
+    return 0;
+  }
+  let adjustedChars = 0;
+  for (const message of messages) {
+    if (!message || typeof message !== "object") {
+      continue;
+    }
+    const record = message as Record<string, unknown>;
+    adjustedChars += estimateOpenAICompletionsContentChars(record.content);
+    for (const field of COMPLETIONS_REASONING_REPLAY_FIELDS) {
+      adjustedChars += estimateOpenAICompletionsContentChars(record[field]);
+    }
+    if (record.tool_calls !== undefined) {
+      try {
+        adjustedChars += estimateStringChars(JSON.stringify(record.tool_calls));
+      } catch {
+        adjustedChars += 256;
+      }
+    }
+  }
+  return adjustedChars;
+}
+
+function estimateOpenAICompletionsContentChars(value: unknown): number {
+  if (typeof value === "string") {
+    return estimateStringChars(value);
+  }
+  if (!Array.isArray(value)) {
+    return 0;
+  }
+  let adjustedChars = 0;
+  for (const block of value) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const record = block as Record<string, unknown>;
+    if (record.type === "image_url" || record.type === "input_image") {
+      adjustedChars += OPENAI_COMPLETIONS_IMAGE_CHAR_ESTIMATE;
+      continue;
+    }
+    const text = record.text;
+    if (typeof text === "string") {
+      adjustedChars += estimateStringChars(text);
+      continue;
+    }
+    try {
+      adjustedChars += estimateStringChars(JSON.stringify(block));
+    } catch {
+      adjustedChars += 256;
+    }
+  }
+  return adjustedChars;
+}
+
+function resolveOpenAICompletionsEffectiveContextTokens(
+  model: OpenAIModeModel,
+): number | undefined {
+  const contextTokens = (model as { contextTokens?: number }).contextTokens;
+  if (typeof contextTokens === "number" && Number.isFinite(contextTokens) && contextTokens > 0) {
+    return contextTokens;
+  }
+  return typeof model.contextWindow === "number" &&
+    Number.isFinite(model.contextWindow) &&
+    model.contextWindow > 0
+    ? model.contextWindow
+    : undefined;
+}
+
 function isQwenOpenAICompletionsThinkingFormat(format: string): boolean {
   return format === "qwen" || format === "qwen-chat-template";
 }
@@ -3369,16 +3475,6 @@ export function buildOpenAICompletionsParams(
   if (compat.supportsPromptCacheKey && cacheRetention !== "none" && options?.sessionId) {
     params.prompt_cache_key = options.sessionId;
   }
-  {
-    const effectiveMaxTokens = resolveOpenAICompletionsMaxTokens(model, options);
-    if (effectiveMaxTokens) {
-      if (compat.maxTokensField === "max_tokens") {
-        params.max_tokens = effectiveMaxTokens;
-      } else {
-        params.max_completion_tokens = effectiveMaxTokens;
-      }
-    }
-  }
   if (options?.temperature !== undefined) {
     params.temperature = options.temperature;
   }
@@ -3410,6 +3506,35 @@ export function buildOpenAICompletionsParams(
     ) {
       delete params.tools;
       delete params.tool_choice;
+    }
+  }
+  {
+    const effectiveMaxTokens = resolveOpenAICompletionsMaxTokens(model, options);
+    const effectiveContextTokens = resolveOpenAICompletionsEffectiveContextTokens(model);
+    let clampedMaxTokens = effectiveMaxTokens;
+    if (
+      compatDetection.capabilities.usesExplicitProxyLikeEndpoint &&
+      effectiveMaxTokens !== undefined &&
+      effectiveContextTokens !== undefined
+    ) {
+      const estimatedInputTokens = estimateOpenAICompletionsInputTokens(params);
+      const remainingBudget = Math.max(1, effectiveContextTokens - estimatedInputTokens - 1);
+      if (effectiveMaxTokens > remainingBudget) {
+        clampedMaxTokens = remainingBudget;
+        emitModelTransportDebug(
+          log,
+          `[completions] clamp_max_tokens provider=${model.provider} api=${model.api} ` +
+            `model=${model.id} requested=${effectiveMaxTokens} output=${clampedMaxTokens} ` +
+            `effectiveContext=${effectiveContextTokens} estimatedInput=${estimatedInputTokens}`,
+        );
+      }
+    }
+    if (clampedMaxTokens) {
+      if (compat.maxTokensField === "max_tokens") {
+        params.max_tokens = clampedMaxTokens;
+      } else {
+        params.max_completion_tokens = clampedMaxTokens;
+      }
     }
   }
   const completionsReasoningEffort = resolveOpenAICompletionsReasoningEffort(options);

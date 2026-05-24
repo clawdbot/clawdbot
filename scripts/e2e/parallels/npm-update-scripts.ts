@@ -1,5 +1,6 @@
 import { posixAgentWorkspaceScript, windowsAgentWorkspaceScript } from "./agent-workspace.ts";
 import { shellQuote } from "./host-command.ts";
+import { posixProviderOnlyPluginIsolationScript } from "./plugin-isolation.ts";
 import {
   psSingleQuote,
   windowsAgentTurnConfigPatchScript,
@@ -42,7 +43,11 @@ if [ "$provider_config_exit" -ne 0 ]; then exit "$provider_config_exit"; fi`;
 }
 
 function posixAssertAgentOkScript(command: string, input: NpmUpdateScriptInput, sessionId: string) {
-  return `agent_ok=false
+  return `${posixProviderOnlyPluginIsolationScript({
+    fallbackPluginId: input.auth.modelId.split("/", 1)[0] || "openai",
+    modelId: input.auth.modelId,
+  })}
+agent_ok=false
 for attempt in 1 2; do
   session_id=${shellQuote(sessionId)}
   if [ "$attempt" -gt 1 ]; then session_id=${shellQuote(`${sessionId}-retry`)}"-$attempt"; fi

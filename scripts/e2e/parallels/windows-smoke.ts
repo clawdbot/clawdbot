@@ -34,6 +34,7 @@ import { runWindowsBackgroundPowerShell, WindowsGuest } from "./guest-transports
 import { runSmokeLane, type SmokeLane, type SmokeLaneStatus } from "./lane-runner.ts";
 import { waitForVmStatus } from "./parallels-vm.ts";
 import { PhaseRunner } from "./phase-runner.ts";
+import { windowsProviderOnlyPluginIsolationScript } from "./plugin-isolation.ts";
 import {
   psSingleQuote,
   windowsAgentTurnConfigPatchScript,
@@ -650,9 +651,17 @@ if ($LASTEXITCODE -ne 0) { throw "openclaw --version failed with exit code $LAST
 $PSNativeCommandUseErrorActionPreference = $false
 Set-Item -Path ('Env:' + ${psSingleQuote(this.auth.apiKeyEnv)}) -Value ${psSingleQuote(this.auth.apiKeyValue)}
 Invoke-OpenClaw onboard --non-interactive --mode local --auth-choice ${psSingleQuote(this.auth.authChoice)} --secret-input-mode ref --gateway-port 18789 --gateway-bind loopback --install-daemon --skip-skills --skip-health --accept-risk --json
-if ($LASTEXITCODE -ne 0) { throw "openclaw onboard failed with exit code $LASTEXITCODE" }`,
+if ($LASTEXITCODE -ne 0) { throw "openclaw onboard failed with exit code $LASTEXITCODE" }
+${this.windowsPluginIsolationScript()}`,
       720_000,
     );
+  }
+
+  private windowsPluginIsolationScript(): string {
+    return windowsProviderOnlyPluginIsolationScript({
+      fallbackPluginId: this.options.provider,
+      modelId: this.auth.modelId,
+    });
   }
 
   private async guestPowerShellBackground(

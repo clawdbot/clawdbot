@@ -14,6 +14,7 @@ export {
 export {
   resolveGatewayRestartDeferralTimeoutMs,
   consumeGatewayRestartIntentPayloadSync,
+  consumeGatewaySigusr1RestartIntent,
   consumeGatewayRestartIntentSync,
   consumeGatewaySigusr1RestartAuthorization,
   isGatewaySigusr1RestartExternallyAllowed,

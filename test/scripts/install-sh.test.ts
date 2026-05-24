@@ -41,6 +41,86 @@ describe("install.sh", () => {
     expect(script).toContain('cmd+=(--no-fund --no-audit "$freshness_flag" install -g "$spec")');
   });
 
+  it("uses OPENCLAW_HOME for git and onboarding defaults", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-home-"));
+    const osHome = join(tmp, "os-home");
+    const openclawHome = join(tmp, "openclaw-home");
+    mkdirSync(osHome, { recursive: true });
+    mkdirSync(openclawHome, { recursive: true });
+
+    let result: ReturnType<typeof runInstallShell> | undefined;
+    try {
+      result = runInstallShell(
+        [
+          `cd ${JSON.stringify(process.cwd())}`,
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          'printf "git=%s\\nworkspace=%s\\n" "$GIT_DIR" "$(resolve_workspace_dir)"',
+          "OPENCLAW_PROFILE=work",
+          'printf "workspaceProfile=%s\\n" "$(resolve_workspace_dir)"',
+        ].join("\n"),
+        {
+          HOME: osHome,
+          OPENCLAW_HOME: openclawHome,
+          OPENCLAW_GIT_DIR: undefined,
+          TERM: "dumb",
+        },
+      );
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+
+    expect(result?.status).toBe(0);
+    const output = result?.stdout ?? "";
+    expect(output).toContain(`git=${join(openclawHome, "openclaw")}`);
+    expect(output).toContain(`workspace=${join(openclawHome, ".openclaw", "workspace")}`);
+    expect(output).toContain(
+      `workspaceProfile=${join(openclawHome, ".openclaw", "workspace-work")}`,
+    );
+    const mkdirParentIndex = script.indexOf('mkdir -p "$(dirname "$repo_dir")"');
+    const cloneIndex = script.indexOf(
+      'run_quiet_step "Cloning OpenClaw" git clone "$repo_url" "$repo_dir"',
+    );
+    expect(mkdirParentIndex).toBeGreaterThan(-1);
+    expect(cloneIndex).toBeGreaterThan(-1);
+    expect(mkdirParentIndex).toBeLessThan(cloneIndex);
+  });
+
+  it("skips bootstrap onboarding when legacy HOME config exists with OPENCLAW_HOME", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-legacy-config-"));
+    const osHome = join(tmp, "os-home");
+    const openclawHome = join(tmp, "openclaw-home");
+    const legacyConfigDir = join(osHome, ".openclaw");
+    const bootstrapDir = join(openclawHome, ".openclaw", "workspace");
+    mkdirSync(legacyConfigDir, { recursive: true });
+    mkdirSync(bootstrapDir, { recursive: true });
+    writeFileSync(join(legacyConfigDir, "openclaw.json"), "{}\n");
+    writeFileSync(join(bootstrapDir, "BOOTSTRAP.md"), "# bootstrap\n");
+
+    let result: ReturnType<typeof runInstallShell> | undefined;
+    try {
+      result = runInstallShell(
+        [
+          `cd ${JSON.stringify(process.cwd())}`,
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          "NO_ONBOARD=0",
+          "run_bootstrap_onboarding_if_needed",
+        ].join("\n"),
+        {
+          HOME: osHome,
+          OPENCLAW_HOME: openclawHome,
+          OPENCLAW_CONFIG_PATH: undefined,
+          TERM: "dumb",
+        },
+      );
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+
+    expect(result?.status).toBe(0);
+    expect(result?.stdout ?? "").not.toContain("BOOTSTRAP.md found");
+    expect(result?.stderr ?? "").toBe("");
+  });
+
   it("rejects OpenClaw GitHub source targets for npm installs", () => {
     const result = runInstallShell(`
       set -euo pipefail

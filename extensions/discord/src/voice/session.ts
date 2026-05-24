@@ -68,12 +68,14 @@ export type VoiceSessionEntry = {
   playbackQueue: Promise<void>;
   processingQueue: Promise<void>;
   capture: VoiceCaptureState;
+  pendingRealtime?: VoiceRealtimeSession;
   realtime?: VoiceRealtimeSession;
   meetingNotes?: {
     sessionId: string;
     onUtterance: (utterance: MeetingNotesUtterance) => void | Promise<void>;
   };
   receiveRecovery: VoiceReceiveRecoveryState;
+  isStopped: () => boolean;
   stop: () => void;
 };
 

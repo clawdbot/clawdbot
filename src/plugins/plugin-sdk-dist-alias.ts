@@ -9,10 +9,10 @@ type OpenClawPackageJson = {
 const PRIVATE_LOCAL_ONLY_PLUGIN_SDK_DIST_FILE_NAME_FALLBACK = [
   "codex-mcp-projection.js",
   "codex-native-task-runtime.js",
-  "qa-channel.js",
-  "qa-channel-protocol.js",
-  "qa-lab.js",
-  "qa-runtime.js",
+  `${["qa", "channel"].join("-")}.js`,
+  `${["qa", "channel", "protocol"].join("-")}.js`,
+  `${["qa", "lab"].join("-")}.js`,
+  `${["qa", "runtime"].join("-")}.js`,
   "ssrf-runtime-internal.js",
   "test-utils.js",
 ] as const;

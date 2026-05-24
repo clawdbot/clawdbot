@@ -194,11 +194,15 @@ export function buildToolPluginPackageManifest(params: {
     !Array.isArray(params.packageManifest.openclaw)
       ? { ...(params.packageManifest.openclaw as JsonObject) }
       : {};
+  const existingExtensions = Array.isArray(openclaw.extensions)
+    ? openclaw.extensions.filter((entry): entry is string => typeof entry === "string")
+    : [];
+  const extensions = [...new Set([...existingExtensions, params.entry])];
   return {
     ...params.packageManifest,
     openclaw: {
       ...openclaw,
-      extensions: [params.entry],
+      extensions,
     },
   };
 }

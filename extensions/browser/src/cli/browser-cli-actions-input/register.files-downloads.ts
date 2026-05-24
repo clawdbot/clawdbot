@@ -103,24 +103,29 @@ export function registerBrowserFilesAndDownloadsCommands(
       (v: string) => Number(v),
     )
     .action(async (paths: string[], opts, cmd) => {
-      const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
-      const normalizedPaths = await normalizeUploadPaths(paths);
-      const { timeoutMs, targetId } = resolveTimeoutAndTarget(opts);
-      await runBrowserPostAction({
-        parent,
-        profile,
-        path: "/hooks/file-chooser",
-        body: {
-          paths: normalizedPaths,
-          ref: normalizeOptionalString(opts.ref),
-          inputRef: normalizeOptionalString(opts.inputRef),
-          element: normalizeOptionalString(opts.element),
-          targetId,
-          timeoutMs,
-        },
-        timeoutMs: timeoutMs ?? DEFAULT_BROWSER_HOOK_TIMEOUT_MS,
-        describeSuccess: () => `upload armed for ${paths.length} file(s)`,
-      });
+      try {
+        const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
+        const normalizedPaths = await normalizeUploadPaths(paths);
+        const { timeoutMs, targetId } = resolveTimeoutAndTarget(opts);
+        await runBrowserPostAction({
+          parent,
+          profile,
+          path: "/hooks/file-chooser",
+          body: {
+            paths: normalizedPaths,
+            ref: normalizeOptionalString(opts.ref),
+            inputRef: normalizeOptionalString(opts.inputRef),
+            element: normalizeOptionalString(opts.element),
+            targetId,
+            timeoutMs,
+          },
+          timeoutMs: timeoutMs ?? DEFAULT_BROWSER_HOOK_TIMEOUT_MS,
+          describeSuccess: () => `upload armed for ${paths.length} file(s)`,
+        });
+      } catch (err) {
+        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.exit(1);
+      }
     });
 
   browser

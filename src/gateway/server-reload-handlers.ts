@@ -551,6 +551,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         maxWaitMs: resolveGatewayRestartDeferralTimeoutMs(
           nextConfig.gateway?.reload?.deferralTimeoutMs,
         ),
+        timeoutIntent: { force: true, reason: "config reload forced restart" },
         emitHooks: {
           beforeEmit: () =>
             markActiveMainSessionsForRestart(nextConfig, "config reload forced restart"),

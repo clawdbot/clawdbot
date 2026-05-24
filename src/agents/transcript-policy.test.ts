@@ -617,6 +617,24 @@ describe("resolveTranscriptPolicy", () => {
     ).toBe(true);
   });
 
+  it.each(["anthropic", "amazon-bedrock"] as const)(
+    "allows provider-owned thinking replay for signed-thinking %s recovery policies",
+    (provider) => {
+      expect(
+        shouldAllowProviderOwnedThinkingReplay({
+          provider,
+          modelApi:
+            provider === "amazon-bedrock" ? "bedrock-converse-stream" : "anthropic-messages",
+          policy: {
+            validateAnthropicTurns: true,
+            preserveSignatures: false,
+            dropThinkingBlocks: false,
+          },
+        }),
+      ).toBe(true);
+    },
+  );
+
   it("does not allow immutable provider-owned thinking replay for github-copilot claude models", () => {
     const policy = resolveTranscriptPolicy({
       provider: "github-copilot",

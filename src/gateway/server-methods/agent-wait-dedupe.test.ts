@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { AGENT_RUN_ABORTED_ERROR } from "../../agents/run-termination.js";
 import type { DedupeEntry } from "../server-shared.js";
 import {
   testing,
@@ -180,6 +181,74 @@ describe("agent wait dedupe helper", () => {
       error: "Context overflow: prompt too large for the model.",
       livenessState: "blocked",
     });
+  });
+
+  it("normalizes aborted ok agent snapshots to errors", () => {
+    const dedupe = new Map();
+    const runId = "run-aborted-agent";
+
+    setRunEntry({
+      dedupe,
+      kind: "agent",
+      runId,
+      payload: {
+        runId,
+        status: "ok",
+        startedAt: 100,
+        endedAt: 200,
+        result: {
+          meta: {
+            stopReason: "aborted",
+          },
+        },
+      },
+    });
+
+    expect(
+      readTerminalSnapshotFromGatewayDedupe({
+        dedupe,
+        runId,
+      }),
+    ).toEqual({
+      status: "error",
+      startedAt: 100,
+      endedAt: 200,
+      error: AGENT_RUN_ABORTED_ERROR,
+      stopReason: "aborted",
+    });
+  });
+
+  it("unblocks waiters with normalized aborted snapshots", async () => {
+    const dedupe = new Map();
+    const runId = "run-wait-aborted";
+    const waiter = waitForTerminalGatewayDedupe({
+      dedupe,
+      runId,
+      timeoutMs: 1_000,
+    });
+
+    await Promise.resolve();
+    expect(testing.getWaiterCount(runId)).toBe(1);
+
+    setRunEntry({
+      dedupe,
+      kind: "agent",
+      runId,
+      payload: {
+        runId,
+        status: "ok",
+        stopReason: "aborted",
+        endedAt: 300,
+      },
+    });
+
+    await expect(waiter).resolves.toEqual({
+      status: "error",
+      endedAt: 300,
+      error: AGENT_RUN_ABORTED_ERROR,
+      stopReason: "aborted",
+    });
+    expect(testing.getWaiterCount(runId)).toBe(0);
   });
 
   it("keeps stale chat dedupe blocked while agent dedupe is in-flight", async () => {

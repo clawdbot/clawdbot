@@ -12,6 +12,7 @@ import {
 } from "./nodes-media-utils.js";
 
 const MAX_CAMERA_URL_DOWNLOAD_BYTES = 250 * 1024 * 1024;
+const MAX_CAMERA_BASE64_BYTES = MAX_CAMERA_URL_DOWNLOAD_BYTES;
 
 export type CameraFacing = "front" | "back";
 
@@ -176,8 +177,25 @@ export async function writeUrlToFile(
   return { path: filePath, bytes };
 }
 
-export async function writeBase64ToFile(filePath: string, base64: string) {
+function estimateDecodedBase64Bytes(base64: string): number {
+  const normalized = base64.replace(/\s+/g, "");
+  const padding = normalized.endsWith("==") ? 2 : normalized.endsWith("=") ? 1 : 0;
+  return Math.floor((normalized.length * 3) / 4) - padding;
+}
+
+export async function writeBase64ToFile(
+  filePath: string,
+  base64: string,
+  opts: { maxBytes?: number } = {},
+) {
+  const maxBytes = opts.maxBytes ?? MAX_CAMERA_BASE64_BYTES;
+  if (estimateDecodedBase64Bytes(base64) > maxBytes) {
+    throw new Error(`writeBase64ToFile: decoded payload exceeds max ${maxBytes}`);
+  }
   const buf = Buffer.from(base64, "base64");
+  if (buf.length > maxBytes) {
+    throw new Error(`writeBase64ToFile: decoded ${buf.length} bytes, exceeds max ${maxBytes}`);
+  }
   await fs.writeFile(filePath, buf);
   return { path: filePath, bytes: buf.length };
 }

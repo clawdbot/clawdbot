@@ -60,10 +60,11 @@ describe("createGlobalCommandRunner", () => {
       expect(parseTimeoutMsOrExit("0")).toBeNull();
       expect(parseTimeoutMsOrExit("-1")).toBeNull();
       expect(parseTimeoutMsOrExit("   ")).toBeNull();
+      expect(parseTimeoutMsOrExit(String(Number.MAX_SAFE_INTEGER))).toBeNull();
 
-      expect(error).toHaveBeenCalledTimes(5);
+      expect(error).toHaveBeenCalledTimes(6);
       expect(error).toHaveBeenCalledWith("--timeout must be a positive integer (seconds)");
-      expect(exit).toHaveBeenCalledTimes(5);
+      expect(exit).toHaveBeenCalledTimes(6);
       expect(exit).toHaveBeenCalledWith(1);
     } finally {
       error.mockRestore();

@@ -15,6 +15,8 @@ export type BrowserExecutable = {
 
 const CHROME_VERSION_RE = /\b(\d+)(?:\.\d+){1,3}\b/g;
 const PLAYWRIGHT_BROWSERS_PATH_ENV = "PLAYWRIGHT_BROWSERS_PATH";
+const BROWSER_VERSION_TIMEOUT_MS = 6000;
+const MAC_PLISTBUDDY_TIMEOUT_MS = 800;
 
 const CHROMIUM_BUNDLE_IDS = new Set([
   "com.google.Chrome",
@@ -732,11 +734,40 @@ export function resolveGoogleChromeExecutableForPlatform(
 }
 
 export function readBrowserVersion(executablePath: string): string | null {
-  const output = execText(executablePath, ["--version"], 2000);
+  if (process.platform === "darwin") {
+    const bundleVersion = readMacBundleBrowserVersion(executablePath);
+    if (bundleVersion) {
+      return bundleVersion;
+    }
+  }
+
+  const output = execText(executablePath, ["--version"], BROWSER_VERSION_TIMEOUT_MS);
   if (!output) {
     return null;
   }
   return output.replace(/\s+/g, " ").trim();
+}
+
+function readMacBundleBrowserVersion(executablePath: string): string | null {
+  const appBundlePath = resolveMacAppBundlePath(executablePath);
+  if (!appBundlePath) {
+    return null;
+  }
+  const plistPath = path.join(appBundlePath, "Contents", "Info.plist");
+  return execText(
+    "/usr/libexec/PlistBuddy",
+    ["-c", "Print :CFBundleShortVersionString", plistPath],
+    MAC_PLISTBUDDY_TIMEOUT_MS,
+  );
+}
+
+function resolveMacAppBundlePath(executablePath: string): string | null {
+  const parts = path.normalize(executablePath).split(path.sep);
+  const appIndex = parts.findIndex((part) => part.endsWith(".app"));
+  if (appIndex < 0) {
+    return null;
+  }
+  return parts.slice(0, appIndex + 1).join(path.sep) || path.sep;
 }
 
 export function parseBrowserMajorVersion(rawVersion: string | null | undefined): number | null {

@@ -115,6 +115,15 @@ export function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
     return value;
   }
 
+  if (type === "string") {
+    // Empty string with minLength constraint should be treated as unset
+    // This handles cases like baseUrl where schema is z.string().min(1)
+    if (typeof value === "string" && value.length === 0 && schema.minLength) {
+      return undefined;
+    }
+    return value;
+  }
+
   if (type === "object") {
     if (typeof value !== "object" || Array.isArray(value)) {
       return value;

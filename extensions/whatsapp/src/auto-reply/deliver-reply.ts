@@ -83,6 +83,20 @@ function createWhatsAppReplyDeliveryReceipt(
   });
 }
 
+function markWhatsAppVisibleDeliveryError(error: unknown): unknown {
+  if (typeof error === "object" && error !== null && !Array.isArray(error)) {
+    try {
+      Object.assign(error, { sentBeforeError: true, visibleReplySent: true });
+      return error;
+    } catch {
+      // Fall back to a wrapper when a platform error object is non-extensible.
+    }
+  }
+  const visibleError = new Error("visible WhatsApp reply delivery failed", { cause: error });
+  Object.assign(visibleError, { sentBeforeError: true, visibleReplySent: true });
+  return visibleError;
+}
+
 export async function deliverWebReply(params: {
   replyResult: ReplyPayload;
   normalizedReplyResult?: DeliverableWhatsAppOutboundPayload<ReplyPayload>;
@@ -150,15 +164,22 @@ export async function deliverWebReply(params: {
   };
 
   const sendWithRetry = async <T>(fn: () => Promise<T>, label: string, maxAttempts = 3) => {
-    return await sendWhatsAppOutboundWithRetry({
-      send: fn,
-      maxAttempts,
-      onRetry: ({ attempt, maxAttempts: retryMaxAttempts, backoffMs, errorText }) => {
-        logVerbose(
-          `Retrying ${label} to ${msg.from} after failure (${attempt}/${retryMaxAttempts - 1}) in ${backoffMs}ms: ${errorText}`,
-        );
-      },
-    });
+    try {
+      return await sendWhatsAppOutboundWithRetry({
+        send: fn,
+        maxAttempts,
+        onRetry: ({ attempt, maxAttempts: retryMaxAttempts, backoffMs, errorText }) => {
+          logVerbose(
+            `Retrying ${label} to ${msg.from} after failure (${attempt}/${retryMaxAttempts - 1}) in ${backoffMs}ms: ${errorText}`,
+          );
+        },
+      });
+    } catch (error: unknown) {
+      if (sendResults.some((result) => result.providerAccepted)) {
+        throw markWhatsAppVisibleDeliveryError(error);
+      }
+      throw error;
+    }
   };
 
   // Text-only replies

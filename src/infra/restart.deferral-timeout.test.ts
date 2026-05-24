@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { testing, deferGatewayRestartUntilIdle, type RestartDeferralHooks } from "./restart.js";
+import {
+  testing,
+  consumeGatewaySigusr1RestartIntent,
+  deferGatewayRestartUntilIdle,
+  type RestartDeferralHooks,
+} from "./restart.js";
 
 describe("deferGatewayRestartUntilIdle timeout", () => {
   beforeEach(() => {
@@ -59,6 +64,28 @@ describe("deferGatewayRestartUntilIdle timeout", () => {
     // Advance past 2 minutes
     vi.advanceTimersByTime(1);
     expect(hooks.onTimeout).toHaveBeenCalledOnce();
+  });
+
+  it("carries timeout restart intent when the deferral budget is exhausted", () => {
+    const hooks: RestartDeferralHooks = {
+      onTimeout: vi.fn(),
+      onReady: vi.fn(),
+    };
+
+    deferGatewayRestartUntilIdle({
+      getPendingCount: () => 1,
+      maxWaitMs: 1_000,
+      hooks,
+      timeoutIntent: { force: true, reason: "gateway.restart.deferral-timeout" },
+    });
+
+    vi.advanceTimersByTime(1_000);
+
+    expect(hooks.onTimeout).toHaveBeenCalledOnce();
+    expect(consumeGatewaySigusr1RestartIntent()).toEqual({
+      force: true,
+      reason: "gateway.restart.deferral-timeout",
+    });
   });
 
   it("calls onReady and does not timeout when pending count drops to 0", () => {

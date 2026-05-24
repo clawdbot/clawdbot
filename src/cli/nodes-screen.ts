@@ -33,6 +33,10 @@ export function screenRecordTempPath(opts: { ext: string; tmpDir?: string; id?: 
   return path.join(tmpDir, `openclaw-screen-record-${id}${ext}`);
 }
 
-export async function writeScreenRecordToFile(filePath: string, base64: string) {
-  return writeBase64ToFile(filePath, base64);
+export async function writeScreenRecordToFile(
+  filePath: string,
+  base64: string,
+  opts?: { maxBytes?: number },
+) {
+  return writeBase64ToFile(filePath, base64, opts);
 }

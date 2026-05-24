@@ -130,6 +130,46 @@ describe("sanitizeReplayToolCallIdsForStream", () => {
     });
   });
 
+  it("preserves signed-thinking replay ids when requested by provider policy", () => {
+    const rawId = "call_1";
+    const out = sanitizeReplayToolCallIdsForStream({
+      messages: [
+        {
+          role: "assistant",
+          content: [
+            { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" },
+            { type: "toolUse", id: rawId, name: "read", input: { path: "." } },
+          ],
+        } as never,
+        {
+          role: "toolResult",
+          toolCallId: rawId,
+          toolUseId: rawId,
+          toolName: "read",
+          content: [{ type: "text", text: "ok" }],
+          isError: false,
+        } as never,
+      ],
+      mode: "strict",
+      preserveReplaySafeThinkingToolCallIds: true,
+      repairToolUseResultPairing: true,
+    });
+
+    expect(out.map((message) => message.role)).toEqual(["assistant", "toolResult"]);
+    expect(requireAssistantMessage(out[0]).content[1]).toMatchObject({
+      type: "toolUse",
+      id: "call_1",
+      name: "read",
+    });
+    expect(toolResultSummary(out[1])).toEqual({
+      role: "toolResult",
+      toolCallId: "call_1",
+      toolUseId: "call_1",
+      toolName: "read",
+      isError: false,
+    });
+  });
+
   it("synthesizes missing tool results after strict id sanitization", () => {
     const rawId = "call_function_av7cbkigmk7x1";
     const out = sanitizeReplayToolCallIdsForStream({

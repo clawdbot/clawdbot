@@ -146,7 +146,7 @@ describe("resolvePnpmRunner", () => {
         "/d",
         "/s",
         "/c",
-        '"C:\\Program Files\\pnpm\\pnpm.cmd" exec vitest run -t "path with spaces"',
+        '""C:\\Program Files\\pnpm\\pnpm.cmd" exec vitest run -t "path with spaces""',
       ],
       shell: false,
       windowsVerbatimArguments: true,

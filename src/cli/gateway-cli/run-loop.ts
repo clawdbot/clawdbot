@@ -17,7 +17,6 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 const gatewayLog = createSubsystemLogger("gateway");
 const LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS = 1500;
 const DEFAULT_RESTART_DRAIN_TIMEOUT_MS = 300_000;
-const RESTART_ACTIVE_EMBEDDED_RUN_ABORT_GRACE_MS = 30_000;
 const RESTART_DRAIN_STILL_PENDING_WARN_MS = 30_000;
 const RESTART_CLOSE_REPLY_DRAIN_SHUTDOWN_RESERVE_MS = 10_000;
 const UPDATE_RESPAWN_HEALTH_TIMEOUT_MS = 10_000;
@@ -434,15 +433,6 @@ export async function runGatewayLoop(params: {
         restartDrainTimeoutMs === undefined
           ? "without a timeout"
           : `with timeout ${restartDrainTimeoutMs}ms`;
-      const resolveActiveRunDrainWaitMs = (activeRuns: number): RestartDrainTimeoutMs => {
-        if (activeRuns <= 0) {
-          return restartDrainTimeoutMs;
-        }
-        if (restartDrainTimeoutMs === undefined) {
-          return RESTART_ACTIVE_EMBEDDED_RUN_ABORT_GRACE_MS;
-        }
-        return Math.min(restartDrainTimeoutMs, RESTART_ACTIVE_EMBEDDED_RUN_ABORT_GRACE_MS);
-      };
       const armCloseForceExitTimerForIndefiniteRestart = () => {
         if (isRestart && restartDrainTimeoutMs === undefined) {
           armForceExitTimer(SHUTDOWN_TIMEOUT_MS);
@@ -570,12 +560,13 @@ export async function runGatewayLoop(params: {
                 }
                 if (restartIntent?.force) {
                   gatewayLog.warn("forced restart requested; skipping active work drain");
-                  await markActiveMainSessionsForRestart("forced gateway restart");
+                  await markActiveMainSessionsForRestart(
+                    restartIntent.reason ?? "forced gateway restart",
+                  );
                   abortEmbeddedPiRun(undefined, { mode: "all" });
                 } else {
-                  const activeRunDrainWaitMs = resolveActiveRunDrainWaitMs(activeRuns);
                   const stillPendingDrainLogger = createStillPendingDrainLogger();
-                  let abortedAfterRunGrace = false;
+                  let abortedAfterRunTimeout = false;
                   let tasksDrain: { drained: boolean } = { drained: true };
                   let runsDrain: { drained: boolean } = { drained: true };
                   try {
@@ -585,14 +576,14 @@ export async function runGatewayLoop(params: {
                         : Promise.resolve({ drained: true });
                     runsDrain =
                       activeRuns > 0
-                        ? await waitForActiveEmbeddedRuns(activeRunDrainWaitMs)
+                        ? await waitForActiveEmbeddedRuns(restartDrainTimeoutMs)
                         : { drained: true };
                     if (!runsDrain.drained && activeRuns > 0) {
                       gatewayLog.warn(
-                        "active embedded run drain grace reached; aborting active run(s) before restart",
+                        "active embedded run drain timeout reached; aborting active run(s) before restart",
                       );
                       abortEmbeddedPiRun(undefined, { mode: "all" });
-                      abortedAfterRunGrace = true;
+                      abortedAfterRunTimeout = true;
                     }
                     tasksDrain = await tasksDrainPromise;
                   } finally {
@@ -606,7 +597,7 @@ export async function runGatewayLoop(params: {
                     await markActiveMainSessionsForRestart("gateway restart drain timeout");
                     // Final best-effort abort to avoid carrying active runs into the
                     // next lifecycle when drain time budget is exhausted.
-                    if (!abortedAfterRunGrace) {
+                    if (!abortedAfterRunTimeout) {
                       abortEmbeddedPiRun(undefined, { mode: "all" });
                     }
                   }
@@ -730,6 +721,7 @@ export async function runGatewayLoop(params: {
     void (async () => {
       const {
         consumeGatewayRestartIntentPayloadSync,
+        consumeGatewaySigusr1RestartIntent,
         consumeGatewaySigusr1RestartAuthorization,
         isGatewaySigusr1RestartExternallyAllowed,
         markGatewaySigusr1RestartHandled,
@@ -738,6 +730,9 @@ export async function runGatewayLoop(params: {
       } = await loadGatewayLifecycleRuntimeModule();
       const restartIntent = consumeGatewayRestartIntentPayloadSync();
       if (restartIntent) {
+        if (consumeGatewaySigusr1RestartAuthorization()) {
+          markGatewaySigusr1RestartHandled();
+        }
         request("restart", "SIGUSR1", restartIntent.reason ?? "gateway.restart", restartIntent);
         return;
       }
@@ -759,9 +754,15 @@ export async function runGatewayLoop(params: {
         scheduleGatewaySigusr1Restart({ delayMs: 0, reason: "SIGUSR1" });
         return;
       }
+      const sigusr1RestartIntent = consumeGatewaySigusr1RestartIntent();
       const restartReason = peekGatewaySigusr1RestartReason();
       markGatewaySigusr1RestartHandled();
-      request("restart", "SIGUSR1", restartReason);
+      request(
+        "restart",
+        "SIGUSR1",
+        sigusr1RestartIntent?.reason ?? restartReason,
+        sigusr1RestartIntent ?? undefined,
+      );
     })().catch((err) => {
       // Defense in depth: if anything in the listener body rejects, the
       // SIGUSR1 emit has already advanced emittedRestartToken but no one

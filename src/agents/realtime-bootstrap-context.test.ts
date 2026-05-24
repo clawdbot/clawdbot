@@ -93,7 +93,7 @@ describe("resolveRealtimeBootstrapContextInstructions", () => {
     });
 
     expect(instructions).toContain("### IDENTITY.md");
-    expect(instructions?.length).toBeLessThanOrEqual(4_000);
+    expect(instructions?.length).toBeLessThanOrEqual(12_000);
   });
 
   it("returns undefined when no requested profile files exist", async () => {

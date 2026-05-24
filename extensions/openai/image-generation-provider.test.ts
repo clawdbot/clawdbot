@@ -605,6 +605,28 @@ describe("openai image generation provider", () => {
     expect(result.images[0]?.fileName).toBe("image-1.jpg");
   });
 
+  it("omits output compression for PNG direct generations", async () => {
+    mockGeneratedPngResponse();
+
+    const provider = buildOpenAIImageGenerationProvider();
+    await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-2",
+      prompt: "Transparent PNG",
+      cfg: {},
+      outputFormat: "png",
+      providerOptions: {
+        openai: {
+          outputCompression: 60,
+        },
+      },
+    });
+
+    const body = jsonRequestCall().body as Record<string, unknown>;
+    expect(body.output_format).toBe("png");
+    expect(body.output_compression).toBeUndefined();
+  });
+
   it("routes transparent default-model requests to the OpenAI image model that supports alpha", async () => {
     mockGeneratedPngResponse();
 
@@ -1078,6 +1100,30 @@ describe("openai image generation provider", () => {
     expect(body.tools?.[0]?.output_format).toBe("png");
     expect(body.tools?.[0]?.background).toBe("transparent");
     expect(result.model).toBe("gpt-image-1.5");
+  });
+
+  it("omits output compression for PNG Codex image requests", async () => {
+    mockCodexAuthOnly();
+    mockCodexImageStream({ imageData: "codex-png-image" });
+
+    const provider = buildOpenAIImageGenerationProvider();
+    await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-2",
+      prompt: "Draw a transparent Codex badge",
+      cfg: {},
+      authStore: { version: 1, profiles: {} },
+      outputFormat: "png",
+      providerOptions: {
+        openai: {
+          outputCompression: 55,
+        },
+      },
+    });
+
+    const body = jsonRequestCall().body as { tools?: Array<Record<string, unknown>> };
+    expect(body.tools?.[0]?.output_format).toBe("png");
+    expect(body.tools?.[0]?.output_compression).toBeUndefined();
   });
 
   it("uses configured Codex OAuth directly instead of probing an available OpenAI API key", async () => {

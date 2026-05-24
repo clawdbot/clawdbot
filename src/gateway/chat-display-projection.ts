@@ -1130,6 +1130,40 @@ function shouldHideProjectedHistoryMessage(message: Record<string, unknown>): bo
   return isHeartbeatOkResponse(roleContent);
 }
 
+function openclawAssistantModel(message: Record<string, unknown>): string | undefined {
+  return message.role === "assistant" &&
+    message.provider === "openclaw" &&
+    typeof message.model === "string"
+    ? message.model
+    : undefined;
+}
+
+function displayTextForDuplicateCheck(message: Record<string, unknown>): string | undefined {
+  const text = extractProjectedText(message.content ?? message.text).trim();
+  return text ? text : undefined;
+}
+
+function isDuplicateAcpGatewayInjectedMessage(
+  current: Record<string, unknown>,
+  previousVisible: Record<string, unknown> | undefined,
+): boolean {
+  if (!previousVisible) {
+    return false;
+  }
+  if (
+    openclawAssistantModel(previousVisible) !== "acp-runtime" ||
+    openclawAssistantModel(current) !== "gateway-injected"
+  ) {
+    return false;
+  }
+  if (hasAssistantNonTextContent(previousVisible) || hasAssistantNonTextContent(current)) {
+    return false;
+  }
+  const previousText = displayTextForDuplicateCheck(previousVisible);
+  const currentText = displayTextForDuplicateCheck(current);
+  return Boolean(previousText && currentText && previousText === currentText);
+}
+
 function toProjectedMessages(messages: unknown[]): Array<Record<string, unknown>> {
   return messages.filter(
     (message): message is Record<string, unknown> =>
@@ -1164,6 +1198,10 @@ function filterVisibleProjectedHistoryMessages(
       continue;
     }
     if (shouldHideProjectedHistoryMessage(current)) {
+      changed = true;
+      continue;
+    }
+    if (isDuplicateAcpGatewayInjectedMessage(current, visible.at(-1))) {
       changed = true;
       continue;
     }

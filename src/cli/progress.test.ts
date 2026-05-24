@@ -99,4 +99,35 @@ describe("cli progress", () => {
 
     expect(writes).toStrictEqual([]);
   });
+
+  it("unregisters a delayed tty progress line when done before start", () => {
+    const firstWrites: string[] = [];
+    const firstStream = {
+      isTTY: true,
+      write: vi.fn((chunk: string) => {
+        firstWrites.push(chunk);
+      }),
+    } as unknown as NodeJS.WriteStream;
+    const secondStream = {
+      isTTY: true,
+      write: vi.fn(),
+    } as unknown as NodeJS.WriteStream;
+
+    const delayed = createCliProgress({
+      label: "Delayed",
+      stream: firstStream,
+      fallback: "line",
+      delayMs: 10_000,
+    });
+    delayed.done();
+
+    const next = createCliProgress({
+      label: "Next",
+      stream: secondStream,
+      fallback: "line",
+    });
+    next.done();
+
+    expect(firstWrites).toStrictEqual([]);
+  });
 });

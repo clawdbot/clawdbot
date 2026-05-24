@@ -395,6 +395,7 @@ type IMessageInboundDispatchDecision = {
   replyContext: IMessageReplyContext | null;
   effectiveWasMentioned: boolean;
   commandAuthorized: boolean;
+  hasControlCommand: boolean;
   // Forwarded as ctxPayload.GroupSystemPrompt for group messages. Resolved
   // from `channels.imessage.groups.<chat_id>.systemPrompt` (or the `"*"`
   // wildcard) at gate time. Always undefined for DMs.
@@ -884,6 +885,7 @@ export async function resolveIMessageInboundDecision(params: {
     replyContext: filteredReplyContext,
     effectiveWasMentioned,
     commandAuthorized,
+    hasControlCommand: hasControlCommandInMessage,
     groupSystemPrompt,
   };
 }
@@ -1031,6 +1033,8 @@ export function buildIMessageInboundContext(params: {
     MediaRemoteHost: params.remoteHost,
     WasMentioned: decision.effectiveWasMentioned,
     CommandAuthorized: decision.commandAuthorized,
+    CommandSource:
+      decision.commandAuthorized && decision.hasControlCommand ? ("text" as const) : undefined,
     OriginatingChannel: "imessage" as const,
     OriginatingTo: imessageTo,
   });

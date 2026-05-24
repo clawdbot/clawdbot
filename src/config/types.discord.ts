@@ -157,6 +157,10 @@ export type DiscordVoiceRealtimeConfig = {
   toolPolicy?: DiscordVoiceRealtimeToolPolicy;
   /** Whether bidi should force the OpenClaw agent brain for every substantive turn. */
   consultPolicy?: DiscordVoiceRealtimeConsultPolicy;
+  /** Require a wake name before OpenAI agent-proxy realtime Discord voice responds. */
+  requireWakeName?: boolean;
+  /** Wake names that allow OpenAI agent-proxy realtime Discord voice to respond. Defaults to the routed agent name, then agent id. */
+  wakeNames?: string[];
   /** Agent profile bootstrap files to include in realtime provider instructions. Defaults to IDENTITY.md, USER.md, and SOUL.md; set [] to disable. */
   bootstrapContextFiles?: DiscordVoiceRealtimeBootstrapContextFile[];
   /** Allow Discord speaker-start events to interrupt active realtime playback. */

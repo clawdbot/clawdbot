@@ -91,7 +91,8 @@ Options:
 When you switch channels explicitly (`--channel ...`), OpenClaw also keeps the
 install method aligned:
 
-- `dev` → ensures a git checkout (default: `~/openclaw`, override with `OPENCLAW_GIT_DIR`),
+- `dev` → ensures a git checkout (default: `~/openclaw`, or `$OPENCLAW_HOME/openclaw` when
+  `OPENCLAW_HOME` is set; override with `OPENCLAW_GIT_DIR`),
   updates it, and installs the global CLI from that checkout.
 - `stable` → installs from npm using `latest`.
 - `beta` → prefers npm dist-tag `beta`, but falls back to `latest` when beta is

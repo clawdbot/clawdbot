@@ -330,12 +330,14 @@ describe("matrix thread bindings", () => {
         placement: "current",
       });
 
+      const sendCallCount = sendMessageMatrixMock.mock.calls.length;
       await vi.advanceTimersByTimeAsync(61_000);
 
       await vi.waitFor(
-        () => expect(sendMessageMatrixMock.mock.calls.length).toBeGreaterThanOrEqual(2),
+        () =>
+          expect(sendMessageMatrixMock.mock.calls.length).toBeGreaterThanOrEqual(sendCallCount + 2),
         {
-          interval: 1,
+          interval: 10,
           timeout: 1_000,
         },
       );
@@ -346,7 +348,7 @@ describe("matrix thread bindings", () => {
           expect(persisted.version).toBe(1);
           expect(persisted.bindings).toEqual([]);
         },
-        { interval: 1, timeout: 100 },
+        { interval: 10, timeout: 1_000 },
       );
     } finally {
       vi.useRealTimers();

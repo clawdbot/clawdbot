@@ -218,6 +218,8 @@ const CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS = 30 * 60_000;
 const CODEX_NATIVE_HOOK_RELAY_MIN_TTL_MS = 30 * 60_000;
 const CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS = 5 * 60_000;
 const CODEX_NATIVE_HOOK_RELAY_RENEW_INTERVAL_MS = 60_000;
+const CODEX_NATIVE_HOOK_RELAY_UNREGISTER_GRACE_MS = 10_000;
+const CODEX_NATIVE_HOOK_RELAY_UNREGISTER_EXTRA_GRACE_MS = 5_000;
 const CODEX_STEER_ALL_DEBOUNCE_MS = 500;
 const LOG_FIELD_MAX_LENGTH = 160;
 const CODEX_NATIVE_SANDBOX_TOOL_REQUIREMENTS = [
@@ -275,6 +277,67 @@ type CodexWorkspaceBootstrapContext = CodexBootstrapContext & {
 };
 
 let openClawCodingToolsFactoryForTests: OpenClawCodingToolsFactory | undefined;
+
+type PendingCodexNativeHookRelayUnregister = {
+  timeout: ReturnType<typeof setTimeout>;
+  unregister: () => void;
+};
+
+const pendingCodexNativeHookRelayUnregisters = new Set<PendingCodexNativeHookRelayUnregister>();
+
+function scheduleCodexNativeHookRelayUnregister(params: {
+  relay: NativeHookRelayRegistrationHandle;
+  hookTimeoutSec?: number;
+}): void {
+  let pending: PendingCodexNativeHookRelayUnregister | undefined;
+  const unregister = () => {
+    if (!pending) {
+      return;
+    }
+    const current = pending;
+    pending = undefined;
+    if (!pendingCodexNativeHookRelayUnregisters.delete(current)) {
+      return;
+    }
+    params.relay.unregister();
+  };
+  const timeout = setTimeout(
+    unregister,
+    resolveCodexNativeHookRelayUnregisterGraceMs(params.hookTimeoutSec),
+  );
+  pending = { timeout, unregister };
+  pendingCodexNativeHookRelayUnregisters.add(pending);
+  timeout.unref();
+}
+
+function resolveCodexNativeHookRelayUnregisterGraceMs(hookTimeoutSec: number | undefined): number {
+  const hookTimeoutMs =
+    typeof hookTimeoutSec === "number" && Number.isFinite(hookTimeoutSec) && hookTimeoutSec > 0
+      ? Math.ceil(hookTimeoutSec) * 1000
+      : 0;
+  return Math.max(
+    CODEX_NATIVE_HOOK_RELAY_UNREGISTER_GRACE_MS,
+    hookTimeoutMs + CODEX_NATIVE_HOOK_RELAY_UNREGISTER_EXTRA_GRACE_MS,
+  );
+}
+
+function flushPendingCodexNativeHookRelayUnregistersForTests(): void {
+  while (pendingCodexNativeHookRelayUnregisters.size > 0) {
+    const pending = pendingCodexNativeHookRelayUnregisters.values().next().value;
+    if (!pending) {
+      return;
+    }
+    clearTimeout(pending.timeout);
+    pending.unregister();
+  }
+}
+
+function clearPendingCodexNativeHookRelayUnregistersForTests(): void {
+  for (const pending of pendingCodexNativeHookRelayUnregisters) {
+    clearTimeout(pending.timeout);
+  }
+  pendingCodexNativeHookRelayUnregisters.clear();
+}
 
 function emitCodexAppServerEvent(
   params: EmbeddedRunAttemptParams,
@@ -1810,6 +1873,7 @@ export async function runCodexAppServerAttempt(
   let turnCompletionIdleTimeoutMessage: string | undefined;
   let clientClosedPromptError: string | undefined;
   let clientClosedAbort = false;
+  let shouldDelayNativeHookRelayUnregister = false;
   let lifecycleStarted = false;
   let lifecycleTerminalEmitted = false;
   let resolveCompletion: (() => void) | undefined;
@@ -3250,6 +3314,13 @@ export async function runCodexAppServerAttempt(
       },
       ctx: hookContext,
     });
+    const completedTurnStatus = activeProjector.getCompletedTurnStatus();
+    shouldDelayNativeHookRelayUnregister =
+      completedTurnStatus === "completed" &&
+      !timedOut &&
+      !runAbortController.signal.aborted &&
+      !finalAborted &&
+      !finalPromptError;
     return {
       ...result,
       timedOut,
@@ -3316,7 +3387,19 @@ export async function runCodexAppServerAttempt(
     notificationCleanup();
     requestCleanup();
     closeCleanup?.();
-    nativeHookRelay?.unregister();
+    if (nativeHookRelay) {
+      if (shouldDelayNativeHookRelayUnregister) {
+        // Codex hook subprocesses can outlive a completed app-server turn by a
+        // few seconds. Keep the relay available briefly so late
+        // nativeHook.invoke RPCs can still reach before_tool_call enforcement.
+        scheduleCodexNativeHookRelayUnregister({
+          relay: nativeHookRelay,
+          hookTimeoutSec: options.nativeHookRelay?.hookTimeoutSec,
+        });
+      } else {
+        nativeHookRelay.unregister();
+      }
+    }
     await releaseSandboxExecEnvironment();
     runAbortController.signal.removeEventListener("abort", abortListener);
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
@@ -5759,5 +5842,8 @@ export const testing = {
   resetOpenClawCodingToolsFactoryForTests(): void {
     openClawCodingToolsFactoryForTests = undefined;
   },
+  flushPendingCodexNativeHookRelayUnregistersForTests,
+  clearPendingCodexNativeHookRelayUnregistersForTests,
+  resolveCodexNativeHookRelayUnregisterGraceMs,
 } as const;
 export { testing as __testing };

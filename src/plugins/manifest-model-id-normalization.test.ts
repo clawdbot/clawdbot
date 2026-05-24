@@ -221,7 +221,7 @@ describe("manifest model id normalization", () => {
     expect(normalizeDemoModel()).toBe("bravo/demo-model");
   });
 
-  it("does not reuse workspace-scoped current metadata without a workspace context", () => {
+  it("reuses workspace-scoped current metadata for unscoped normalization", () => {
     setCurrentPluginMetadataSnapshot(
       createCurrentSnapshot({
         manifestHash: "alpha",
@@ -231,7 +231,7 @@ describe("manifest model id normalization", () => {
       { config: {}, env: process.env },
     );
 
-    expect(normalizeDemoModel()).toBeUndefined();
+    expect(normalizeDemoModel()).toBe("alpha/demo-model");
   });
 
   it("reflects manifest edits and state-dir changes on the next lookup", () => {

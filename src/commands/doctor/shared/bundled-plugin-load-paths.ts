@@ -1,8 +1,11 @@
+import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   buildBundledPluginLoadPathAliases,
   normalizeBundledLookupPath,
+  parseLegacyBundledPluginPath,
+  parsePackagedBundledPluginPath,
 } from "../../../plugins/bundled-load-path-aliases.js";
 import { resolveBundledPluginSources } from "../../../plugins/bundled-sources.js";
 import { sanitizeForLog } from "../../../terminal/ansi.js";
@@ -18,6 +21,13 @@ type BundledPluginLoadPathHit = {
 
 function resolveBundledWorkspaceDir(cfg: OpenClawConfig): string | undefined {
   return resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)) ?? undefined;
+}
+
+function isOpenClawNodeModulesPackageRoot(packageRoot: string): boolean {
+  const normalized = normalizeBundledLookupPath(packageRoot);
+  const packageDir = path.basename(normalized);
+  const parentDir = path.basename(path.dirname(normalized));
+  return packageDir === "openclaw" && parentDir === "node_modules";
 }
 
 export function scanBundledPluginLoadPathMigrations(
@@ -40,9 +50,17 @@ export function scanBundledPluginLoadPathMigrations(
   }
 
   const bundledPathMap = new Map<string, { pluginId: string; toPath: string }>();
+  const packagedBundledLeafMap = new Map<string, { pluginId: string; toPath: string }>();
   for (const source of bundled.values()) {
     for (const alias of buildBundledPluginLoadPathAliases(source.localPath)) {
       bundledPathMap.set(normalizeBundledLookupPath(alias.path), {
+        pluginId: source.pluginId,
+        toPath: source.localPath,
+      });
+    }
+    const packaged = parsePackagedBundledPluginPath(source.localPath);
+    if (packaged) {
+      packagedBundledLeafMap.set(normalizeBundledLookupPath(packaged.bundledLeaf), {
         pluginId: source.pluginId,
         toPath: source.localPath,
       });
@@ -57,6 +75,23 @@ export function scanBundledPluginLoadPathMigrations(
     const normalized = normalizeBundledLookupPath(resolveUserPath(rawPath, env));
     const match = bundledPathMap.get(normalized);
     if (!match) {
+      const oldPackaged = parsePackagedBundledPluginPath(normalized);
+      const oldLegacy = oldPackaged ? null : parseLegacyBundledPluginPath(normalized);
+      const oldPackageRoot = oldPackaged?.packageRoot ?? oldLegacy?.packageRoot;
+      const oldBundledLeaf = oldPackaged?.bundledLeaf ?? oldLegacy?.bundledLeaf;
+      const oldPackageMatch =
+        oldPackageRoot && oldBundledLeaf && isOpenClawNodeModulesPackageRoot(oldPackageRoot)
+          ? packagedBundledLeafMap.get(normalizeBundledLookupPath(oldBundledLeaf))
+          : undefined;
+      if (!oldPackageMatch) {
+        continue;
+      }
+      hits.push({
+        pluginId: oldPackageMatch.pluginId,
+        fromPath: rawPath,
+        toPath: oldPackageMatch.toPath,
+        pathLabel: "plugins.load.paths",
+      });
       continue;
     }
     hits.push({

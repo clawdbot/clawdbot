@@ -75,9 +75,11 @@ if ($providerTimeoutExit -ne 0) { throw "model provider timeout config set faile
 
 export function windowsAgentTurnConfigPatchScript(modelId: string): string {
   const batchJson = modelProviderConfigBatchJson(modelId, "windows");
+  const pluginId = providerIdFromModelId(modelId) || modelId.split("/", 1)[0] || "openai";
   const payloadJson = JSON.stringify({
     modelId,
     operations: batchJson ? (JSON.parse(batchJson) as unknown) : [],
+    pluginId,
   });
   return `$agentTurnConfigPatchPath = $env:OPENCLAW_CONFIG_PATH
 if (-not $agentTurnConfigPatchPath) { $agentTurnConfigPatchPath = Join-Path $env:USERPROFILE '.openclaw\\openclaw.json' }
@@ -113,6 +115,11 @@ cfg.agents.defaults.model = { ...existingModel, primary: payload.modelId };
 cfg.agents.defaults.models = cfg.agents.defaults.models && typeof cfg.agents.defaults.models === "object" ? cfg.agents.defaults.models : {};
 cfg.tools = cfg.tools && typeof cfg.tools === "object" ? cfg.tools : {};
 cfg.tools.profile = "minimal";
+cfg.plugins = cfg.plugins && typeof cfg.plugins === "object" && !Array.isArray(cfg.plugins) ? cfg.plugins : {};
+cfg.plugins.entries = { [payload.pluginId]: { enabled: true } };
+cfg.plugins.allow = [payload.pluginId];
+const stateDir = path.dirname(configPath);
+fs.rmSync(path.join(stateDir, "npm", "node_modules", "@openclaw", "codex"), { recursive: true, force: true });
 for (const op of payload.operations || []) {
   const segments = String(op.path || "").match(/(?:[^.[\\]]+)|(?:\\["((?:\\\\.|[^"\\\\])*)"\\])/g) || [];
   let cursor = cfg;

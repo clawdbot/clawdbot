@@ -333,6 +333,7 @@ describe("gateway hot reload", () => {
     prevSkipProviders = process.env.OPENCLAW_SKIP_PROVIDERS;
     prevOpenAiApiKey = process.env.OPENAI_API_KEY;
     process.env.OPENCLAW_SKIP_CHANNELS = "0";
+    process.env.OPENAI_API_KEY = "sk-test-reload"; // pragma: allowlist secret
     delete process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
     delete process.env.OPENCLAW_SKIP_PROVIDERS;
     hoisted.cronInstances.length = 0;

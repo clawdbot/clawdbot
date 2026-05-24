@@ -125,6 +125,39 @@ describe("browser manage output", () => {
     expect(output).not.toContain("port: 0");
   });
 
+  it("redacts remote cdpUrl details in browser profiles output", async () => {
+    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) =>
+      req.path === "/profiles"
+        ? {
+            profiles: [
+              {
+                name: "remote",
+                driver: "openclaw",
+                transport: "cdp",
+                running: true,
+                tabCount: 1,
+                isDefault: false,
+                isRemote: true,
+                cdpPort: null,
+                cdpUrl:
+                  "https://alice:supersecretpasswordvalue1234@example.com/chrome?token=supersecrettokenvalue1234567890",
+                color: "#00AA00",
+              },
+            ],
+          }
+        : {},
+    );
+
+    const program = createBrowserManageProgram();
+    await program.parseAsync(["browser", "profiles"], { from: "user" });
+
+    const output = lastRuntimeLog();
+    expect(output).toContain("cdpUrl: https://example.com/chrome?token=supers…7890");
+    expect(output).not.toContain("alice");
+    expect(output).not.toContain("supersecretpasswordvalue1234");
+    expect(output).not.toContain("supersecrettokenvalue1234567890");
+  });
+
   it("shows chrome-mcp transport after creating an existing-session profile", async () => {
     getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) =>
       req.path === "/profiles/create"
@@ -151,6 +184,43 @@ describe("browser manage output", () => {
     expect(output).toContain('Created profile "chrome-live"');
     expect(output).toContain("transport: chrome-mcp");
     expect(output).not.toContain("port: 0");
+  });
+
+  it("redacts remote cdpUrl details after creating a remote profile", async () => {
+    getBrowserManageCallBrowserRequestMock().mockImplementation(async (_opts: unknown, req) =>
+      req.path === "/profiles/create"
+        ? {
+            ok: true,
+            profile: "remote",
+            transport: "cdp",
+            cdpPort: null,
+            cdpUrl:
+              "https://alice:supersecretpasswordvalue1234@example.com/chrome?token=supersecrettokenvalue1234567890",
+            userDataDir: null,
+            color: "#00AA00",
+            isRemote: true,
+          }
+        : {},
+    );
+
+    const program = createBrowserManageProgram();
+    await program.parseAsync(
+      [
+        "browser",
+        "create-profile",
+        "--name",
+        "remote",
+        "--cdp-url",
+        "https://alice:supersecretpasswordvalue1234@example.com/chrome?token=supersecrettokenvalue1234567890",
+      ],
+      { from: "user" },
+    );
+
+    const output = lastRuntimeLog();
+    expect(output).toContain("cdpUrl: https://example.com/chrome?token=supers…7890");
+    expect(output).not.toContain("alice");
+    expect(output).not.toContain("supersecretpasswordvalue1234");
+    expect(output).not.toContain("supersecrettokenvalue1234567890");
   });
 
   it("redacts sensitive remote cdpUrl details in status output", async () => {

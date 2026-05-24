@@ -103,6 +103,61 @@ describe("bundled plugin load path repair", () => {
     expect(result.config.plugins?.load?.paths).toStrictEqual([]);
   });
 
+  it("removes stale bundled paths from old versioned OpenClaw package roots", () => {
+    const currentPackageRoot = path.resolve("node_modules", "openclaw");
+    const stalePackageRoot = path.resolve(
+      "pnpm-global",
+      ".pnpm",
+      "openclaw@2026.3.28_@napi-rs+canvas@0.1.97",
+      "node_modules",
+      "openclaw",
+    );
+    const currentBundledPath = bundledDistPluginRootAt(currentPackageRoot, "feishu");
+    const staleBundledPath = bundledDistPluginRootAt(stalePackageRoot, "feishu");
+    mockBundledSource("feishu", currentBundledPath);
+
+    const result = maybeRepairBundledPluginLoadPaths(
+      createPluginLoadPathConfig([staleBundledPath, "/custom/path"]),
+    );
+
+    expect(result.changes).toEqual([
+      `- plugins.load.paths: removed bundled feishu path alias ${staleBundledPath}`,
+    ]);
+    expect(result.config.plugins?.load?.paths).toStrictEqual(["/custom/path"]);
+  });
+
+  it("removes stale legacy bundled paths from old versioned OpenClaw package roots", () => {
+    const currentPackageRoot = path.resolve("node_modules", "openclaw");
+    const stalePackageRoot = path.resolve(
+      "pnpm-global",
+      ".pnpm",
+      "openclaw@2026.3.28_@napi-rs+canvas@0.1.97",
+      "node_modules",
+      "openclaw",
+    );
+    const currentBundledPath = bundledDistPluginRootAt(currentPackageRoot, "feishu");
+    const staleLegacyPath = bundledPluginRootAt(stalePackageRoot, "feishu");
+    mockBundledSource("feishu", currentBundledPath);
+
+    const result = maybeRepairBundledPluginLoadPaths(createPluginLoadPathConfig([staleLegacyPath]));
+
+    expect(result.changes).toEqual([
+      `- plugins.load.paths: removed bundled feishu path alias ${staleLegacyPath}`,
+    ]);
+    expect(result.config.plugins?.load?.paths).toStrictEqual([]);
+  });
+
+  it("does not remove arbitrary missing paths that happen to use the bundled dist layout", () => {
+    const currentPackageRoot = path.resolve("node_modules", "openclaw");
+    const customPath = path.resolve("elsewhere", "dist", "extensions", "feishu");
+    mockBundledSource("feishu", bundledDistPluginRootAt(currentPackageRoot, "feishu"));
+
+    const result = maybeRepairBundledPluginLoadPaths(createPluginLoadPathConfig([customPath]));
+
+    expect(result.changes).toEqual([]);
+    expect(result.config).toEqual(createPluginLoadPathConfig([customPath]));
+  });
+
   it("derives legacy paths from the bundled directory name instead of plugin id", () => {
     const packageRoot = path.resolve("app-node-modules", "openclaw");
     const legacyPath = bundledPluginRootAt(packageRoot, "kimi-coding");

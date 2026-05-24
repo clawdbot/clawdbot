@@ -96,7 +96,13 @@ describe("meeting-notes plugin", () => {
         path.join(stateDir, "meeting-notes", currentDateDir(), "design-review", "summary.md"),
         "utf8",
       ),
-    ).resolves.toContain("Action item: add Slack import later.");
+    ).resolves.toContain("Sam: Action item: add Slack import later.");
+    await expect(
+      fs.readFile(
+        path.join(stateDir, "meeting-notes", currentDateDir(), "design-review", "summary.json"),
+        "utf8",
+      ),
+    ).resolves.toContain('"Alex: We decided to ship Discord first."');
     await expect(
       fs.readFile(
         path.join(stateDir, "meeting-notes", currentDateDir(), "design-review", "transcript.jsonl"),
@@ -129,6 +135,8 @@ describe("meeting-notes plugin", () => {
     );
     expect(summary).toContain("Decision: ship the final plan.");
     expect(summary).not.toContain("Action item: write the first draft.");
+    expect(summary).toContain("## Transcript");
+    expect(summary).toContain("Sam: Decision: ship the final plan.");
     const transcript = await fs.readFile(
       path.join(stateDir, "meeting-notes", currentDateDir(), "long-meeting", "transcript.jsonl"),
       "utf8",

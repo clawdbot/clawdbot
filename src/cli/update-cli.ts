@@ -131,7 +131,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
           channel: opts.channel as string | undefined,
           timeout: inheritedUpdateTimeout(opts, command),
           yes: Boolean(opts.yes),
-          restart: Boolean(opts.restart),
+          restart: false,
         });
       } catch (err) {
         defaultRuntime.error(String(err));

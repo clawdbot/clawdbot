@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   loadPluginMetadataSnapshot: vi.fn(),
+  resolvePluginMetadataSnapshot: vi.fn(),
   resolveBundledExplicitWebSearchProvidersFromPublicArtifacts: vi.fn(() => null),
   resolveBundledExplicitWebFetchProvidersFromPublicArtifacts: vi.fn(() => null),
   loadBundledWebSearchProviderEntriesFromDir: vi.fn(),
@@ -10,6 +11,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: mocks.loadPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot: mocks.resolvePluginMetadataSnapshot,
 }));
 
 vi.mock("./web-search-providers.shared.js", () => ({
@@ -58,6 +60,10 @@ describe("web provider public artifact manifest fallback", () => {
         },
       ],
     });
+    mocks.resolvePluginMetadataSnapshot.mockImplementation(
+      (params?: { pluginMetadataSnapshot?: unknown }) =>
+        params?.pluginMetadataSnapshot ?? mocks.loadPluginMetadataSnapshot(params),
+    );
     mocks.loadBundledWebSearchProviderEntriesFromDir.mockReturnValue([
       { id: "fallback-search", pluginId: "fallback-search" },
     ]);

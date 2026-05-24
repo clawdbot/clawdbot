@@ -2,25 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { resolvePluginDocumentExtractors } from "./document-extractors.runtime.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 
-vi.mock("./document-extractor-public-artifacts.js", () => ({
-  loadBundledDocumentExtractorEntriesFromDir: vi.fn(
-    ({ dirName }: { dirName: string; pluginId: string }) =>
-      dirName === "document-extract"
-        ? [
-            {
-              id: "pdf",
-              label: "PDF",
-              mimeTypes: ["application/pdf"],
-              pluginId: "document-extract",
-              extract: vi.fn(),
-            },
-          ]
-        : null,
-  ),
-}));
-
-vi.mock("./plugin-metadata-snapshot.js", () => ({
-  loadPluginMetadataSnapshot: vi.fn(() => ({
+const mocks = vi.hoisted(() => ({
+  loadPluginMetadataSnapshot: vi.fn((_params?: unknown) => ({
     plugins: [
       {
         id: "document-extract",
@@ -44,6 +27,31 @@ vi.mock("./plugin-metadata-snapshot.js", () => ({
       },
     ],
   })),
+}));
+
+vi.mock("./document-extractor-public-artifacts.js", () => ({
+  loadBundledDocumentExtractorEntriesFromDir: vi.fn(
+    ({ dirName }: { dirName: string; pluginId: string }) =>
+      dirName === "document-extract"
+        ? [
+            {
+              id: "pdf",
+              label: "PDF",
+              mimeTypes: ["application/pdf"],
+              pluginId: "document-extract",
+              extract: vi.fn(),
+            },
+          ]
+        : null,
+  ),
+}));
+
+vi.mock("./plugin-metadata-snapshot.js", () => ({
+  loadPluginMetadataSnapshot: mocks.loadPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot: vi.fn(
+    (params?: { pluginMetadataSnapshot?: unknown }) =>
+      params?.pluginMetadataSnapshot ?? mocks.loadPluginMetadataSnapshot(params),
+  ),
 }));
 
 vi.mock("./manifest-registry.js", () => ({

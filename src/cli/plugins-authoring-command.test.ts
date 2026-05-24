@@ -188,7 +188,7 @@ describe("plugin authoring commands", () => {
       name: "demo",
       openclaw: {
         setupEntry: "./setup.ts",
-        extensions: ["./src/index.ts"],
+        extensions: ["./src/other.ts", "./src/index.ts"],
       },
     });
   });

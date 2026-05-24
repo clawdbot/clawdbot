@@ -176,6 +176,10 @@ export class CodexAppServerEventProjector {
     private readonly options: CodexAppServerEventProjectorOptions = {},
   ) {}
 
+  getCompletedTurnStatus(): CodexTurn["status"] | undefined {
+    return this.completedTurn?.status;
+  }
+
   async handleNotification(notification: CodexServerNotification): Promise<void> {
     const params = isJsonObject(notification.params) ? notification.params : undefined;
     if (!params) {

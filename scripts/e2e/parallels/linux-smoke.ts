@@ -13,6 +13,7 @@ import {
   parseMode,
   parseProvider,
   modelProviderConfigBatchJson,
+  posixProviderOnlyPluginIsolationScript,
   repoRoot,
   resolveParallelsModelTimeoutSeconds,
   resolveHostIp,
@@ -126,7 +127,7 @@ const defaultOptions = (): LinuxOptions => ({
   provider: "openai",
   snapshotHint: "fresh",
   targetPackageSpec: "",
-  vmName: "Ubuntu 24.04.3 ARM64",
+  vmName: "Ubuntu 26.04",
   vmNameExplicit: false,
 });
 
@@ -134,7 +135,7 @@ function usage(): string {
   return `Usage: bash scripts/e2e/parallels-linux-smoke.sh [options]
 
 Options:
-  --vm <name>                Parallels VM name. Default: "Ubuntu 24.04.3 ARM64"
+  --vm <name>                Parallels VM name. Default: "Ubuntu 26.04"
                              Falls back to the closest Ubuntu VM when omitted and unavailable.
   --snapshot-hint <name>     Snapshot name substring/fuzzy match. Default: "fresh"
   --mode <fresh|upgrade|both>
@@ -758,6 +759,15 @@ PY
 rm -rf /root/.openclaw/test-bad-plugin`);
   }
 
+  private restrictAgentTurnPlugins(): void {
+    this.guestBash(
+      posixProviderOnlyPluginIsolationScript({
+        fallbackPluginId: this.options.provider,
+        modelId: this.auth.modelId,
+      }),
+    );
+  }
+
   private verifyLocalTurn(): void {
     this.guestExec(["openclaw", "models", "set", this.auth.modelId]);
     const modelProviderConfigBatch = modelProviderConfigBatchJson(this.auth.modelId, "linux");
@@ -778,6 +788,7 @@ rm -f "$provider_config_batch"`);
       "--strict-json",
     ]);
     this.guestExec(["openclaw", "config", "set", "tools.profile", "minimal"]);
+    this.restrictAgentTurnPlugins();
     this.prepareAgentWorkspace();
     this.guestBash(
       `agent_ok=false

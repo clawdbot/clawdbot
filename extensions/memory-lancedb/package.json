@@ -32,6 +32,7 @@
       "openclawVersion": "2026.5.24"
     },
     "release": {
+      "bundleRuntimeDependencies": false,
       "publishToClawHub": true,
       "publishToNpm": true
     }

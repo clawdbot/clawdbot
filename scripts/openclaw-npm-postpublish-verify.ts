@@ -13,7 +13,14 @@ import {
 import { builtinModules } from "node:module";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { dirname, isAbsolute, join, relative } from "node:path";
+import {
+  dirname,
+  isAbsolute,
+  join,
+  posix as pathPosix,
+  relative,
+  win32 as pathWin32,
+} from "node:path";
 import { pathToFileURL } from "node:url";
 import { formatErrorMessage } from "../src/infra/errors.ts";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/runtime-sidecar-paths.ts";
@@ -24,6 +31,7 @@ import {
 } from "./lib/plugin-package-dependencies.mjs";
 import { runInstalledWorkspaceBootstrapSmoke } from "./lib/workspace-bootstrap-smoke.mjs";
 import { parseReleaseVersion, resolveNpmCommandInvocation } from "./openclaw-npm-release-check.ts";
+import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
 
 type InstalledPackageJson = {
   version?: string;
@@ -496,8 +504,33 @@ function isBundledExtensionOwnedRuntimeImport(params: {
 
 export function resolveInstalledBinaryPath(prefixDir: string, platform = process.platform): string {
   return platform === "win32"
-    ? join(prefixDir, "openclaw.cmd")
-    : join(prefixDir, "bin", "openclaw");
+    ? pathWin32.join(prefixDir, "openclaw.cmd")
+    : pathPosix.join(prefixDir, "bin", "openclaw");
+}
+
+export function resolveInstalledBinaryCommandInvocation(
+  prefixDir: string,
+  args: string[],
+  params: { comSpec?: string; platform?: NodeJS.Platform } = {},
+): {
+  args: string[];
+  command: string;
+  windowsVerbatimArguments?: boolean;
+} {
+  const platform = params.platform ?? process.platform;
+  const binaryPath = resolveInstalledBinaryPath(prefixDir, platform);
+  if (platform === "win32") {
+    return {
+      command: params.comSpec ?? process.env.ComSpec ?? "cmd.exe",
+      args: ["/d", "/s", "/c", buildCmdExeCommandLine(binaryPath, args)],
+      windowsVerbatimArguments: true,
+    };
+  }
+
+  return {
+    command: binaryPath,
+    args,
+  };
 }
 
 function collectExpectedBundledExtensionPackageIds(): ReadonlySet<string> {
@@ -604,11 +637,12 @@ function installSpec(prefixDir: string, spec: string, cwd: string): void {
 }
 
 function readInstalledBinaryVersion(prefixDir: string, cwd: string): string {
-  return execFileSync(resolveInstalledBinaryPath(prefixDir), ["--version"], {
+  const invocation = resolveInstalledBinaryCommandInvocation(prefixDir, ["--version"]);
+  return execFileSync(invocation.command, invocation.args, {
     cwd,
     encoding: "utf8",
-    shell: process.platform === "win32",
     stdio: ["ignore", "pipe", "pipe"],
+    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
   }).trim();
 }
 

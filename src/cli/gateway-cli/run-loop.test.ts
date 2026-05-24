@@ -9,6 +9,9 @@ const acquireGatewayLock = vi.fn(async (_opts?: { port?: number }) => ({
 const consumeGatewayRestartIntentPayloadSync = vi.fn<
   () => { reason?: string; force?: boolean; waitMs?: number } | null
 >(() => null);
+const consumeGatewaySigusr1RestartIntent = vi.fn<
+  () => { reason?: string; force?: boolean; waitMs?: number } | null
+>(() => null);
 const consumeGatewaySigusr1RestartAuthorization = vi.fn(() => true);
 const consumeGatewayRestartIntentSync = vi.fn(() => false);
 const isGatewaySigusr1RestartExternallyAllowed = vi.fn(() => false);
@@ -81,6 +84,8 @@ const markRestartAbortedMainSessions = vi.fn(async (_params: unknown) => ({
 }));
 const waitForActiveEmbeddedRuns = vi.fn(async (_timeoutMs?: number) => ({ drained: true }));
 const DRAIN_TIMEOUT_LOG = "drain timeout reached; proceeding with restart";
+const ACTIVE_RUN_DRAIN_TIMEOUT_LOG =
+  "active embedded run drain timeout reached; aborting active run(s) before restart";
 const DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS = 300_000;
 const loadConfig = vi.fn<() => { gateway: { reload: { deferralTimeoutMs?: number } } }>(() => ({
   gateway: {
@@ -101,6 +106,7 @@ vi.mock("../../infra/gateway-lock.js", () => ({
 
 vi.mock("../../infra/restart.js", () => ({
   consumeGatewayRestartIntentPayloadSync: () => consumeGatewayRestartIntentPayloadSync(),
+  consumeGatewaySigusr1RestartIntent: () => consumeGatewaySigusr1RestartIntent(),
   consumeGatewaySigusr1RestartAuthorization: () => consumeGatewaySigusr1RestartAuthorization(),
   consumeGatewayRestartIntentSync: () => consumeGatewayRestartIntentSync(),
   isGatewaySigusr1RestartExternallyAllowed: () => isGatewaySigusr1RestartExternallyAllowed(),
@@ -430,6 +436,7 @@ describe("runGatewayLoop", () => {
     vi.clearAllMocks();
     consumeGatewayRestartIntentPayloadSync.mockReturnValueOnce({ waitMs: 2_500 });
     getActiveTaskCount.mockReturnValueOnce(1).mockReturnValue(0);
+    getActiveEmbeddedRunCount.mockReturnValueOnce(1).mockReturnValue(0);
 
     await withIsolatedSignals(async ({ captureSignal }) => {
       const { start, exited } = await createSignaledLoopHarness();
@@ -441,6 +448,7 @@ describe("runGatewayLoop", () => {
       await new Promise<void>((resolve) => setImmediate(resolve));
 
       expect(waitForActiveTasks).toHaveBeenCalledWith(2_500);
+      expect(waitForActiveEmbeddedRuns).toHaveBeenCalledWith(2_500);
       expect(start).toHaveBeenCalledTimes(2);
 
       sigint();
@@ -469,7 +477,65 @@ describe("runGatewayLoop", () => {
     });
   });
 
-  it("aborts active embedded runs after a short restart drain grace", async () => {
+  it("waits indefinitely for active embedded runs on unbounded restarts", async () => {
+    vi.clearAllMocks();
+    consumeGatewayRestartIntentPayloadSync.mockReturnValueOnce({ waitMs: 0 });
+    getActiveEmbeddedRunCount.mockReturnValueOnce(1).mockReturnValue(0);
+    waitForActiveEmbeddedRuns.mockResolvedValueOnce({ drained: true });
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { close, start, exited } = await createSignaledLoopHarness();
+      const sigterm = captureSignal("SIGTERM");
+      const sigint = captureSignal("SIGINT");
+
+      sigterm();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(waitForActiveEmbeddedRuns).toHaveBeenCalledWith(undefined);
+      expect(abortEmbeddedPiRun).toHaveBeenCalledWith(undefined, { mode: "compacting" });
+      expect(abortEmbeddedPiRun).not.toHaveBeenCalledWith(undefined, { mode: "all" });
+      expectRestartCloseCall(close, 15_000);
+      expect(start).toHaveBeenCalledTimes(2);
+
+      sigint();
+      await expect(exited).resolves.toBe(0);
+    });
+  });
+
+  it("waits indefinitely for active embedded runs when reload config disables deferral timeout", async () => {
+    vi.clearAllMocks();
+    loadConfig.mockReturnValueOnce({
+      gateway: {
+        reload: {
+          deferralTimeoutMs: 0,
+        },
+      },
+    });
+    getActiveEmbeddedRunCount.mockReturnValueOnce(1).mockReturnValue(0);
+    waitForActiveEmbeddedRuns.mockResolvedValueOnce({ drained: true });
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { close, start, exited } = await createSignaledLoopHarness();
+      const sigusr1 = captureSignal("SIGUSR1");
+      const sigint = captureSignal("SIGINT");
+
+      sigusr1();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(waitForActiveEmbeddedRuns).toHaveBeenCalledWith(undefined);
+      expect(abortEmbeddedPiRun).toHaveBeenCalledWith(undefined, { mode: "compacting" });
+      expect(abortEmbeddedPiRun).not.toHaveBeenCalledWith(undefined, { mode: "all" });
+      expectRestartCloseCall(close, 15_000);
+      expect(start).toHaveBeenCalledTimes(2);
+
+      sigint();
+      await expect(exited).resolves.toBe(0);
+    });
+  });
+
+  it("uses the restart drain timeout for active embedded runs before aborting", async () => {
     vi.clearAllMocks();
     consumeGatewayRestartIntentPayloadSync.mockReturnValueOnce({});
     getActiveTaskCount.mockReturnValueOnce(1).mockReturnValue(0);
@@ -490,12 +556,10 @@ describe("runGatewayLoop", () => {
       await new Promise<void>((resolve) => setImmediate(resolve));
 
       expect(waitForActiveTasks).toHaveBeenCalledWith(90_000);
-      expect(waitForActiveEmbeddedRuns).toHaveBeenCalledWith(30_000);
+      expect(waitForActiveEmbeddedRuns).toHaveBeenCalledWith(90_000);
       expect(abortEmbeddedPiRun).toHaveBeenCalledWith(undefined, { mode: "compacting" });
       expect(abortEmbeddedPiRun).toHaveBeenCalledWith(undefined, { mode: "all" });
-      expect(gatewayLog.warn).toHaveBeenCalledWith(
-        "active embedded run drain grace reached; aborting active run(s) before restart",
-      );
+      expect(gatewayLog.warn).toHaveBeenCalledWith(ACTIVE_RUN_DRAIN_TIMEOUT_LOG);
       expect(gatewayLog.warn).toHaveBeenCalledWith(DRAIN_TIMEOUT_LOG);
       expect(markRestartAbortedMainSessions).toHaveBeenCalledWith({
         cfg: {
@@ -513,6 +577,51 @@ describe("runGatewayLoop", () => {
         "failed to mark interrupted main sessions for restart recovery: Error: store read-only",
       );
       expectRestartCloseCall(close, 90_000);
+      expect(start).toHaveBeenCalledTimes(2);
+
+      sigint();
+      await expect(exited).resolves.toBe(0);
+    });
+  });
+
+  it("skips a second active-work drain after a SIGUSR1 deferral timeout intent", async () => {
+    vi.clearAllMocks();
+    consumeGatewaySigusr1RestartIntent.mockReturnValueOnce({
+      force: true,
+      reason: "config reload forced restart",
+    });
+    getActiveTaskCount.mockReturnValueOnce(1).mockReturnValue(0);
+    getActiveEmbeddedRunCount.mockReturnValueOnce(1).mockReturnValue(0);
+    listActiveEmbeddedRunSessionIds.mockReturnValueOnce(["session-deferral-timeout"]);
+    listActiveEmbeddedRunSessionKeys.mockReturnValueOnce(["agent:main:deferral-timeout"]);
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { close, start, exited } = await createSignaledLoopHarness();
+      const sigusr1 = captureSignal("SIGUSR1");
+      const sigint = captureSignal("SIGINT");
+
+      sigusr1();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(waitForActiveTasks).not.toHaveBeenCalled();
+      expect(waitForActiveEmbeddedRuns).not.toHaveBeenCalled();
+      expect(abortEmbeddedPiRun).toHaveBeenCalledWith(undefined, { mode: "compacting" });
+      expect(abortEmbeddedPiRun).toHaveBeenCalledWith(undefined, { mode: "all" });
+      expect(markRestartAbortedMainSessions).toHaveBeenCalledWith({
+        cfg: {
+          gateway: {
+            reload: {
+              deferralTimeoutMs: 90_000,
+            },
+          },
+        },
+        sessionIds: new Set(["session-deferral-timeout"]),
+        sessionKeys: new Set(["agent:main:deferral-timeout"]),
+        reason: "config reload forced restart",
+      });
+      expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledOnce();
+      expectRestartCloseCall(close, 0);
       expect(start).toHaveBeenCalledTimes(2);
 
       sigint();
@@ -1029,6 +1138,7 @@ describe("runGatewayLoop", () => {
 
     await withIsolatedSignals(async ({ captureSignal }) => {
       getActiveTaskCount.mockReturnValueOnce(1).mockReturnValue(0);
+      getActiveEmbeddedRunCount.mockReturnValueOnce(1).mockReturnValue(0);
 
       const { start } = await createSignaledLoopHarness();
       const sigusr1 = captureSignal("SIGUSR1");
@@ -1038,6 +1148,7 @@ describe("runGatewayLoop", () => {
       await new Promise<void>((resolve) => setImmediate(resolve));
 
       expect(waitForActiveTasks).toHaveBeenCalledWith(DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS);
+      expect(waitForActiveEmbeddedRuns).toHaveBeenCalledWith(DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS);
       expect(markGatewayDraining).toHaveBeenCalledOnce();
       expect(start).toHaveBeenCalledTimes(2);
     });
@@ -1087,6 +1198,53 @@ describe("runGatewayLoop", () => {
       expect(gatewayLog.warn).toHaveBeenCalledWith(
         "SIGUSR1 restart ignored (not authorized; commands.restart=false or use gateway tool).",
       );
+    });
+  });
+
+  it("clears the in-flight restart token when a file intent handles authorized SIGUSR1", async () => {
+    vi.clearAllMocks();
+    consumeGatewayRestartIntentPayloadSync.mockReturnValueOnce({
+      force: true,
+      reason: "file-intent restart",
+    });
+    loadConfig.mockReturnValueOnce({
+      gateway: {
+        reload: {
+          deferralTimeoutMs: 90_000,
+        },
+      },
+    });
+    getActiveEmbeddedRunCount.mockReturnValueOnce(1).mockReturnValue(0);
+    listActiveEmbeddedRunSessionIds.mockReturnValueOnce(["session-file-intent"]);
+    listActiveEmbeddedRunSessionKeys.mockReturnValueOnce(["agent:main:file-intent"]);
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { start, exited } = await createSignaledLoopHarness();
+      const sigusr1 = captureSignal("SIGUSR1");
+      const sigint = captureSignal("SIGINT");
+
+      sigusr1();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(consumeGatewaySigusr1RestartAuthorization).toHaveBeenCalledOnce();
+      expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledOnce();
+      expect(markRestartAbortedMainSessions).toHaveBeenCalledWith({
+        cfg: {
+          gateway: {
+            reload: {
+              deferralTimeoutMs: 90_000,
+            },
+          },
+        },
+        sessionIds: new Set(["session-file-intent"]),
+        sessionKeys: new Set(["agent:main:file-intent"]),
+        reason: "file-intent restart",
+      });
+      expect(start).toHaveBeenCalledTimes(2);
+
+      sigint();
+      await expect(exited).resolves.toBe(0);
     });
   });
 

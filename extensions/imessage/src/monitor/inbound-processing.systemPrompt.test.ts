@@ -213,6 +213,7 @@ describe("buildIMessageInboundContext forwards GroupSystemPrompt", () => {
         replyContext: null,
         effectiveWasMentioned: false,
         commandAuthorized: false,
+        hasControlCommand: false,
         effectiveDmAllowFrom: [],
         effectiveGroupAllowFrom: [],
         groupSystemPrompt: decision.groupSystemPrompt,

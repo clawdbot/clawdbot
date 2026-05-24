@@ -29,13 +29,34 @@ ensure_home_env() {
 
 ensure_home_env
 
+resolve_openclaw_effective_home() {
+  local openclaw_home="${OPENCLAW_HOME:-}"
+  if [[ -z "$openclaw_home" ]]; then
+    echo "$HOME"
+    return 0
+  fi
+
+  case "$openclaw_home" in
+    \~)
+      echo "$HOME"
+      ;;
+    \~/*)
+      echo "${HOME}/${openclaw_home#~/}"
+      ;;
+    *)
+      echo "$openclaw_home"
+      ;;
+  esac
+}
+
+OPENCLAW_EFFECTIVE_HOME="$(resolve_openclaw_effective_home)"
 PREFIX="${OPENCLAW_PREFIX:-${HOME}/.openclaw}"
 OPENCLAW_VERSION="${OPENCLAW_VERSION:-latest}"
 NODE_VERSION="${OPENCLAW_NODE_VERSION:-22.22.0}"
 SHARP_IGNORE_GLOBAL_LIBVIPS="${SHARP_IGNORE_GLOBAL_LIBVIPS:-1}"
 NPM_LOGLEVEL="${OPENCLAW_NPM_LOGLEVEL:-error}"
 INSTALL_METHOD="${OPENCLAW_INSTALL_METHOD:-npm}"
-GIT_DIR="${OPENCLAW_GIT_DIR:-${HOME}/openclaw}"
+GIT_DIR="${OPENCLAW_GIT_DIR:-${OPENCLAW_EFFECTIVE_HOME}/openclaw}"
 GIT_UPDATE="${OPENCLAW_GIT_UPDATE:-1}"
 JSON=0
 RUN_ONBOARD=0
@@ -46,11 +67,11 @@ print_usage() {
   cat <<EOF
 Usage: install-cli.sh [options]
   --json                              Emit NDJSON events (no human output)
-  --prefix <path>                     Install prefix (default: ~/.openclaw)
+  --prefix <path>                     Install prefix (default: ~/.openclaw; use \$OPENCLAW_PREFIX to override)
   --install-method, --method npm|git  Install via npm (default) or from a git checkout
   --npm                               Shortcut for --install-method npm
   --git, --github                     Shortcut for --install-method git
-  --git-dir, --dir <path>             Checkout directory (default: ~/openclaw)
+  --git-dir, --dir <path>             Checkout directory (default: ~/openclaw, or \$OPENCLAW_HOME/openclaw)
   --version <ver>                     OpenClaw version (default: latest)
   --node-version <ver>                Node version (default: 22.22.0)
   --onboard                           Run "openclaw onboard" after install
@@ -61,6 +82,8 @@ Environment variables:
   SHARP_IGNORE_GLOBAL_LIBVIPS=0|1    Default: 1 (avoid sharp building against global libvips)
   OPENCLAW_NPM_LOGLEVEL=error|warn|notice  Default: error (hide npm deprecation noise)
   OPENCLAW_INSTALL_METHOD=git|npm
+  OPENCLAW_HOME=...
+  OPENCLAW_PREFIX=...
   OPENCLAW_VERSION=latest|next|<semver>
   OPENCLAW_GIT_DIR=...
   OPENCLAW_GIT_UPDATE=0|1
@@ -100,7 +123,7 @@ download_file() {
 }
 
 cleanup_legacy_submodules() {
-  local repo_dir="${1:-${OPENCLAW_GIT_DIR:-${HOME}/openclaw}}"
+  local repo_dir="${1:-${OPENCLAW_GIT_DIR:-${OPENCLAW_EFFECTIVE_HOME}/openclaw}}"
   local legacy_dir="${repo_dir}/Peekaboo"
   if [[ -d "$legacy_dir" ]]; then
     emit_json "{\"event\":\"step\",\"name\":\"legacy-submodule\",\"status\":\"start\",\"path\":\"${legacy_dir//\"/\\\"}\"}"
