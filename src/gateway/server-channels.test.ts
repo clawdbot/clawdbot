@@ -2925,6 +2925,35 @@ describe("server-channels auto restart", () => {
     await manager.stopChannel("discord");
   });
 
+  it("does not include known accounts on ordinary caller-owned restarts", async () => {
+    let accountIds = ["account-a"];
+    const startAccount = vi.fn(
+      async ({ abortSignal, accountId, setStatus }: ChannelGatewayContext<TestAccount>) => {
+        setStatus({ accountId, running: true, connected: true });
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      },
+    );
+    installTestRegistry(createTestPlugin({ startAccount, listAccountIds: () => accountIds }));
+    const manager = createManager();
+
+    await manager.startChannel("discord");
+
+    accountIds = ["account-b"];
+    await manager.stopChannel("discord", undefined, { manual: false });
+    await manager.startChannel("discord");
+
+    const startedAccountIds = startAccount.mock.calls.map(([ctx]) => ctx?.accountId);
+    expect(startedAccountIds).toEqual(["account-a", "account-b"]);
+
+    const snapshot = manager.getRuntimeSnapshot();
+    expect(snapshot.channelAccounts.discord?.["account-a"]).toBeUndefined();
+    expect(snapshot.channelAccounts.discord?.["account-b"]?.running).toBe(true);
+
+    await manager.stopChannel("discord");
+  });
+
   it("does not resurrect stopped stale accounts from the known-account safety net", async () => {
     let accountIds = ["account-a"];
     const startAccount = vi.fn(
