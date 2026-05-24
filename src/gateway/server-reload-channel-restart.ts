@@ -188,9 +188,13 @@ export async function restartGatewayChannels(options: {
           if (isLifecycleReloadAborted()) {
             return;
           }
-          await runOutsideGatewayRootWorkAdmission(() =>
-            params.startChannel(name, undefined, { includeKnownAccounts: true }),
-          );
+          if (plan.reloadPlugins) {
+            await runOutsideGatewayRootWorkAdmission(() =>
+              params.startChannel(name, undefined, { includeKnownAccounts: true }),
+            );
+          } else {
+            await runOutsideGatewayRootWorkAdmission(() => params.startChannel(name));
+          }
         };
         const restartFailures = await collectChannelOperationFailures({
           channels: channelsToRestart,
